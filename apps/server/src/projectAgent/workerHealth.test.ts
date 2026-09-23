@@ -6,6 +6,7 @@ import {
   formatWorkerWatchLine,
   isFailedWorkerSessionStatus,
   isManagedWorkerThread,
+  isWorkerAlertEvent,
   lastAssistantTextFromMessages,
   shouldMaterializeWorkerSettlementReport,
   workerInboxReportPath,
@@ -20,24 +21,39 @@ describe("worker health", () => {
     expect(isFailedWorkerSessionStatus("ready")).toBe(false);
   });
 
-  it("recognizes indexed workers and hides the coordinator", () => {
+  it("recognizes only task-assigned workers and hides the coordinator", () => {
     expect(
       isManagedWorkerThread({
         threadId: "worker-1",
         coordinatorThreadId: "coord-1",
-        index: [
-          { threadId: "coord-1", excluded: false, archived: false },
-          { threadId: "worker-1", excluded: false, archived: false },
-        ],
+        assignedThreadIds: new Set(["coord-1", "worker-1"]),
       }),
     ).toBe(true);
     expect(
       isManagedWorkerThread({
-        threadId: "coord-1",
+        threadId: "user-chat",
         coordinatorThreadId: "coord-1",
-        index: [{ threadId: "coord-1", excluded: false, archived: false }],
+        assignedThreadIds: new Set(["worker-1"]),
       }),
     ).toBe(false);
+    expect(
+      isManagedWorkerThread({
+        threadId: "coord-1",
+        coordinatorThreadId: "coord-1",
+        assignedThreadIds: new Set(["coord-1"]),
+      }),
+    ).toBe(false);
+  });
+
+  it("treats errors and needs-user settles as wake-eligible alerts", () => {
+    expect(isWorkerAlertEvent("worker.error")).toBe(true);
+    expect(isWorkerAlertEvent("worker.interrupted")).toBe(true);
+    expect(isWorkerAlertEvent("worker.missing")).toBe(true);
+    expect(isWorkerAlertEvent("worker.stopped")).toBe(true);
+    expect(isWorkerAlertEvent("thread.approval-response-requested")).toBe(true);
+    expect(isWorkerAlertEvent("thread.user-input-response-requested")).toBe(true);
+    expect(isWorkerAlertEvent("thread.turn-diff-completed")).toBe(false);
+    expect(isWorkerAlertEvent("thread.session-set")).toBe(false);
   });
 
   it("formats a quota failure for the coordinator packet", () => {
@@ -156,7 +172,6 @@ describe("worker health", () => {
       status: "ready",
       lastError: null,
       lastAssistantText: "Top-level folders: apps, packages, docs.",
-      createdAt: "2026-09-17T19:14:00.000Z",
     });
     expect(report).toContain("Outcome: completed");
     expect(report).toContain("Top-level folders: apps, packages, docs.");

@@ -23,6 +23,7 @@ import {
   ThreadId,
   type OrchestrationCommand,
   type ProjectActivity,
+  type ProjectInboxEvent,
   type ProjectAgentOverview,
   type ProjectAgentSummary,
   type ProjectAgentStreamEvent,
@@ -37,7 +38,7 @@ import {
   isGroupCoordinatorHostProject,
 } from "../groupCoordinatorHost.ts";
 import { assertLibraryRootLocation, moveLibraryRoot, resolveLibraryRoot } from "../libraryStore.ts";
-import { withLibraryQueue } from "../libraryGit.ts";
+import { withLibraryQueues, withLibraryRootLock } from "../libraryGit.ts";
 import {
   canWriteMemoryDocument,
   decodeProjectAgentListCursor,
@@ -55,7 +56,19 @@ import {
   sanitizeProjectDigestSummary,
   truncateToContextBudget,
 } from "@synara/shared/projectAgent";
-import { Cause, Duration, Effect, Exit, Layer, Option, PubSub, Queue, Ref, Stream } from "effect";
+import {
+  Cause,
+  Duration,
+  Effect,
+  Exit,
+  Layer,
+  Option,
+  PubSub,
+  Queue,
+  Ref,
+  Semaphore,
+  Stream,
+} from "effect";
 
 import { AutomationService } from "../../automation/Services/AutomationService.ts";
 import { ServerConfig } from "../../config.ts";
@@ -98,7 +111,7 @@ import {
   formatWorkerSettlementReport,
   formatWorkerWatchLine,
   isFailedWorkerSessionStatus,
-  isManagedWorkerThread,
+  isWorkerAlertEvent,
   lastAssistantTextFromMessages,
   shouldMaterializeWorkerSettlementReport,
   workerInboxReportPath,
@@ -112,6 +125,20 @@ const fail = (message: string, code?: ProjectAgentServiceError["code"]) =>
   new ProjectAgentServiceError({ message, ...(code ? { code } : {}) });
 
 const isoNow = () => new Date().toISOString();
+
+// A wake claim stays fresh long enough to cover crash-vs-slow dispatch; an
+// expired claim means the earlier runNow threw and the range is re-dispatched.
+const WAKE_CLAIM_TTL_MS = 10 * 60_000;
+// A busy marker younger than this while the coordinator thread is mid-turn
+// (or awaiting approvals) is live work, not a crash: recovery must not
+// re-dispatch a second continuation on top of it.
+const COORDINATOR_BUSY_LIVE_MS = 15 * 60_000;
+
+// The dispatch claim for a wake range lives on a sibling receipt id —
+// receipts are insert-only, so it is written before runNow and a crash
+// between run start and receipt save can never queue a second run.
+const wakeClaimRequestId = (receiptId: string) => `${receiptId}:claim`;
+
 const branded = {
   thread: (id = randomUUID()) => ThreadId.makeUnsafe(id),
   command: (id = randomUUID()) => CommandId.makeUnsafe(id),
@@ -172,7 +199,59 @@ export const makeProjectAgentService = Effect.gen(function* () {
       cause,
     });
 
-  // Unused until increment 3 (linked ordinary repos).
+  // Per-project serialization: the wake check-then-act, configure, and the
+  // health-check dispatch paths all read-then-write the same coordinator
+  // state, so they run under one keyed semaphore per project.
+  const projectLocks = new Map<ProjectId, Semaphore.Semaphore>();
+  const projectLockFor = (projectId: ProjectId) => {
+    const existing = projectLocks.get(projectId);
+    if (existing) return existing;
+    const created = Effect.runSync(Semaphore.make(1));
+    projectLocks.set(projectId, created);
+    return created;
+  };
+  const withProjectLock = <A, E, R>(projectId: ProjectId, effect: Effect.Effect<A, E, R>) =>
+    projectLockFor(projectId).withPermits(1)(effect);
+
+  const clearWakeCursor = (
+    projectId: ProjectId,
+    cursor: {
+      readonly processedThroughInboxId: string | null;
+      readonly processedThroughCreatedAt: string | null;
+    },
+  ) =>
+    repository
+      .saveCursor({
+        projectId,
+        processedThroughInboxId: cursor.processedThroughInboxId,
+        processedThroughCreatedAt: cursor.processedThroughCreatedAt,
+        frozenFromInboxId: null,
+        frozenToInboxId: null,
+        coordinatorBusy: false,
+        coordinatorBusySince: null,
+        updatedAt: isoNow(),
+      })
+      .pipe(Effect.mapError(toServiceError("Failed to release the coordinator busy marker.")));
+
+  // Worker threads are the ones the coordinator assigned to a task — NOT every
+  // indexed group thread (which includes ordinary user chats in the group).
+  const assignedWorkerThreadIds = (projectId: ProjectId) =>
+    repository.listTasks({ projectId, includeArchived: false, limit: 500 }).pipe(
+      Effect.map(
+        (tasks) =>
+          new Set(
+            tasks
+              .map((task) => task.assignedThreadId)
+              .filter((threadId): threadId is ThreadId => threadId !== null),
+          ),
+      ),
+      Effect.mapError(toServiceError("Failed to load worker assignments.")),
+    );
+
+  // A digest left "running" by a crash or restart would block refresh forever;
+  // reset those rows once at startup so the next schedule regenerates them.
+  yield* repository.resetInterruptedDigests().pipe(Effect.catch(() => Effect.succeed(0)));
+
   const requireOrdinaryRepoProject = (projectId: ProjectId) =>
     snapshotQuery.getProjectShellById(projectId).pipe(
       Effect.mapError(toServiceError("Failed to load project.")),
@@ -242,16 +321,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
 
   const appendActivity = (input: Omit<ProjectActivity, "id" | "sequence">) =>
     Effect.gen(function* () {
-      const sequence = yield* repository
-        .nextActivitySequence(input.projectId)
-        .pipe(Effect.mapError(toServiceError("Failed to allocate activity sequence.")));
-      const activity: ProjectActivity = {
-        ...input,
-        id: branded.activity(),
-        sequence,
-      };
+      // The repository allocates the sequence inside the INSERT itself so two
+      // fibers cannot race MAX+1 onto the same (project_id, sequence) key.
       const saved = yield* repository
-        .appendActivity(activity)
+        .appendActivity({ ...input, id: branded.activity() })
         .pipe(Effect.mapError(toServiceError("Failed to record project activity.")));
       yield* publish({ type: "activity-appended", activity: saved });
       return saved;
@@ -435,28 +508,48 @@ export const makeProjectAgentService = Effect.gen(function* () {
           .filter((entry) => entry.summaryStatus === "covered" && !entry.excluded)
           .map((entry) => entry.threadId),
       );
+      const existingByThreadId = new Map(existing.map((entry) => [entry.threadId, entry] as const));
       const persistent = threads.filter((thread) => thread.deletedAt === null);
       const sorted = [...persistent].toSorted((left, right) =>
         right.updatedAt.localeCompare(left.updatedAt),
       );
       let assignedCoverage = coveredIds.size;
       for (const thread of sorted) {
+        const prior = existingByThreadId.get(thread.threadId);
         const excluded = excludedIds.has(thread.threadId);
         const alreadyCovered = coveredIds.has(thread.threadId);
         const covered =
           alreadyCovered ||
           (!excluded && assignedCoverage < PROJECT_AGENT_INITIAL_SUMMARY_THREAD_COUNT);
         if (covered && !alreadyCovered && !excluded) assignedCoverage += 1;
+        // Only write when something actually changed: this runs inside every
+        // digest refresh, and unconditional upserts reset lastSummarizedAt and
+        // churn the row for every indexed thread each time.
+        const next = {
+          projectId,
+          threadId: thread.threadId,
+          excluded,
+          archived: thread.archivedAt !== null,
+          summaryStatus: excluded
+            ? ("skipped" as const)
+            : covered
+              ? ("covered" as const)
+              : ("pending" as const),
+          lastUpdatedAt: thread.updatedAt,
+          lastSummarizedAt: covered
+            ? (prior?.lastSummarizedAt ?? isoNow())
+            : (prior?.lastSummarizedAt ?? null),
+        };
+        const unchanged =
+          prior !== undefined &&
+          prior.excluded === next.excluded &&
+          prior.archived === next.archived &&
+          prior.summaryStatus === next.summaryStatus &&
+          prior.lastUpdatedAt === next.lastUpdatedAt &&
+          prior.lastSummarizedAt === next.lastSummarizedAt;
+        if (unchanged) continue;
         yield* repository
-          .upsertThreadIndex({
-            projectId,
-            threadId: thread.threadId,
-            excluded,
-            archived: thread.archivedAt !== null,
-            summaryStatus: excluded ? "skipped" : covered ? "covered" : "pending",
-            lastUpdatedAt: thread.updatedAt,
-            lastSummarizedAt: covered && !excluded ? isoNow() : null,
-          })
+          .upsertThreadIndex(next)
           .pipe(Effect.mapError(toServiceError("Failed to store thread index.")));
       }
       const index = yield* repository
@@ -473,6 +566,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
 
   const buildOverview = (
     projectId: ProjectId,
+    principal?: ProjectAgentPrincipal,
   ): Effect.Effect<ProjectAgentOverview, ProjectAgentServiceError> =>
     Effect.gen(function* () {
       const config = yield* repository
@@ -521,10 +615,24 @@ export const makeProjectAgentService = Effect.gen(function* () {
           reason: task.acceptanceCriteria ?? "Blocked",
         }));
       const goalValue = Option.getOrNull(goal);
+      // Library hosting fields (remote URL may carry credentials) are only
+      // surfaced to the user; agent principals get the config without them.
+      const visibleConfig =
+        principal !== undefined && principal.kind !== "user"
+          ? (() => {
+              const {
+                libraryPath: _libraryPath,
+                libraryRemoteUrl: _libraryRemoteUrl,
+                libraryPushOnChange: _libraryPushOnChange,
+                ...rest
+              } = config.value;
+              return rest;
+            })()
+          : config.value;
       return {
         projectId,
         configured: true,
-        config: config.value,
+        config: visibleConfig,
         goal: goalValue,
         digest: digestValue,
         blockers,
@@ -554,6 +662,68 @@ export const makeProjectAgentService = Effect.gen(function* () {
         createdAt: isoNow(),
       })
       .pipe(Effect.mapError(toServiceError("Failed to persist request receipt.")));
+
+  interface WakeReceiptResult {
+    readonly runId?: string;
+    readonly claimedAt?: string;
+  }
+
+  const readWakeReceipt = (projectId: ProjectId, requestId: string) =>
+    repository.getReceipt({ requestId, projectId }).pipe(
+      Effect.mapError(toServiceError("Failed to load wake receipt.")),
+      Effect.map((option) =>
+        Option.isSome(option) ? (JSON.parse(option.value.resultJson) as WakeReceiptResult) : null,
+      ),
+    );
+
+  // Dispatches the coordinator continuation for an inbox range exactly once.
+  // Receipts are insert-only, so the range's claim lives on a sibling id:
+  // `${receiptId}:claim` is written BEFORE runNow, meaning a crash between run
+  // start and receipt save can never enqueue a second run. On re-drive a young
+  // claim resolves the run it launched from the automation history; an expired
+  // one means the earlier dispatch threw and the range is re-dispatched.
+  const dispatchWakeContinuation = (input: {
+    readonly projectId: ProjectId;
+    readonly receiptId: string;
+    readonly automationId: AutomationId;
+    readonly existingWake: WakeReceiptResult | null;
+  }) =>
+    Effect.gen(function* () {
+      if (input.existingWake?.runId) {
+        return { runId: input.existingWake.runId, dispatched: false as const };
+      }
+      const claimId = wakeClaimRequestId(input.receiptId);
+      const claim = yield* repository
+        .getReceipt({ requestId: claimId, projectId: input.projectId })
+        .pipe(Effect.mapError(toServiceError("Failed to load wake claim.")));
+      if (Option.isSome(claim)) {
+        const claimAge = Date.now() - Date.parse(claim.value.createdAt);
+        if (claimAge < WAKE_CLAIM_TTL_MS) {
+          // The earlier dispatch claimed this range — adopt the run it
+          // launched rather than queueing a duplicate continuation.
+          const runs = yield* automationService
+            .listRunsForDefinition({ automationId: input.automationId, limit: 1 })
+            .pipe(Effect.mapError(toServiceError("Failed to list coordinator runs.")));
+          const runId = runs[0]?.id;
+          if (runId === undefined) {
+            // The claimed run is not visible yet; leave the range for the
+            // next wake rather than racing a second dispatch.
+            return { runId: null, dispatched: false as const };
+          }
+          yield* storeReceipt(input.receiptId, input.projectId, "wake", { runId });
+          return { runId, dispatched: false as const };
+        }
+      }
+      yield* storeReceipt(claimId, input.projectId, "wake-claim", {
+        claimedAt: isoNow(),
+      });
+      const run = yield* automationService
+        .runNow({ automationId: input.automationId })
+        .pipe(Effect.mapError(toServiceError("Failed to dispatch coordinator continuation.")));
+      const runId = run.run.id;
+      yield* storeReceipt(input.receiptId, input.projectId, "wake", { runId });
+      return { runId, dispatched: true as const };
+    });
 
   const createCoordinatorThread = (input: {
     readonly projectId: ProjectId;
@@ -636,12 +806,17 @@ export const makeProjectAgentService = Effect.gen(function* () {
 
   const generateDigestNow = (projectId: ProjectId) =>
     Effect.gen(function* () {
-      const inflight = yield* Ref.get(digestInflight);
-      if (inflight.has(projectId)) {
+      // Claim the inflight slot atomically: two callers must not both pass
+      // the check-then-set and run the same generation twice.
+      const claimed = yield* Ref.modify(digestInflight, (current) =>
+        current.has(projectId)
+          ? ([false, current] as const)
+          : ([true, new Set(current).add(projectId)] as const),
+      );
+      if (!claimed) {
         yield* Ref.update(digestPending, (pending) => new Set(pending).add(projectId));
         return;
       }
-      yield* Ref.update(digestInflight, (current) => new Set(current).add(projectId));
       yield* Ref.update(digestPending, (pending) => {
         const next = new Set(pending);
         next.delete(projectId);
@@ -742,16 +917,27 @@ export const makeProjectAgentService = Effect.gen(function* () {
         .saveDigest(digest)
         .pipe(Effect.mapError(toServiceError("Failed to save digest.")));
       yield* publish({ type: "digest-upserted", digest });
-      yield* Ref.update(digestInflight, (current) => {
-        const next = new Set(current);
-        next.delete(projectId);
-        return next;
-      });
-      const stillPending = yield* Ref.get(digestPending);
-      if (stillPending.has(projectId)) {
-        yield* impl.scheduleDigest(projectId);
-      }
+      // Work that arrived while this generation ran stays flagged in
+      // digestPending; the owning drain loop (timer or caller) picks it up.
     }).pipe(
+      // A failure mid-run must not leave the digest row stuck in "running":
+      // mark it failed so later schedules know to regenerate.
+      Effect.onError(() =>
+        repository.getDigest(projectId).pipe(
+          Effect.flatMap((digest) =>
+            Option.isSome(digest) && digest.value.generationState === "running"
+              ? repository
+                  .saveDigest({
+                    ...digest.value,
+                    generationState: "failed",
+                    lastError: "Digest generation was interrupted.",
+                  })
+                  .pipe(Effect.catch(() => Effect.void))
+              : Effect.void,
+          ),
+          Effect.catch(() => Effect.void),
+        ),
+      ),
       Effect.ensuring(
         Ref.update(digestInflight, (current) => {
           const next = new Set(current);
@@ -761,10 +947,27 @@ export const makeProjectAgentService = Effect.gen(function* () {
       ),
     );
 
+  // Runs generations until the pending flag for this project stays clear:
+  // a schedule that lands mid-run queues another pass instead of being
+  // dropped while the timer still holds its slot.
+  const runDigestQueue = (projectId: ProjectId) =>
+    Effect.gen(function* () {
+      for (;;) {
+        yield* generateDigestNow(projectId).pipe(Effect.catch(() => Effect.void));
+        const pending = yield* Ref.get(digestPending);
+        if (!pending.has(projectId)) return;
+        yield* Ref.update(digestPending, (set) => {
+          const next = new Set(set);
+          next.delete(projectId);
+          return next;
+        });
+      }
+    });
+
   const impl: ProjectAgentServiceShape = {
     getOverview: (input, principal) =>
       requireProjectAccess(principal, input.projectId).pipe(
-        Effect.andThen(buildOverview(input.projectId)),
+        Effect.andThen(buildOverview(input.projectId, principal)),
       ),
 
     listSummaries: (_input, principal) =>
@@ -809,246 +1012,312 @@ export const makeProjectAgentService = Effect.gen(function* () {
       ),
 
     configure: (input, principal) =>
-      Effect.gen(function* () {
-        if (!canConfigureProject(principal)) {
-          return yield* Effect.fail(
-            fail("Only the user can configure Project Coordinator.", "forbidden"),
-          );
-        }
-        const existingReceipt = yield* replayReceipt(
-          input.requestId,
-          input.projectId,
-          (json) => JSON.parse(json) as ProjectAgentOverview,
-        );
-        if (existingReceipt) return existingReceipt;
-        const project = yield* resolveGroupCoordinatorProject(input.projectId);
-        const existing = yield* repository
-          .getConfig(input.projectId)
-          .pipe(Effect.mapError(toServiceError("Failed to load project coordinator.")));
-        const now = isoNow();
-        const coordinatorName = input.coordinatorName ?? `${project.title} Coordinator`;
-        let coordinatorThreadId: ThreadId;
-        let automationId: ProjectAgentConfig["automationId"] = null;
-        let revision = 1;
-        if (Option.isSome(existing)) {
-          if (
-            input.expectedRevision !== undefined &&
-            input.expectedRevision !== existing.value.revision
-          ) {
+      // Serialized per project: two concurrent first configures would otherwise
+      // each create an orphan coordinator thread, and a retry after a partial
+      // failure must reuse what the first attempt already made.
+      withProjectLock(
+        input.projectId,
+        Effect.gen(function* () {
+          if (!canConfigureProject(principal)) {
             return yield* Effect.fail(
-              fail("Coordinator settings changed. Reload and retry.", "conflict"),
+              fail("Only the user can configure Project Coordinator.", "forbidden"),
             );
           }
-          coordinatorThreadId = existing.value.coordinatorThreadId;
-          automationId = existing.value.automationId;
-          revision = existing.value.revision + 1;
-        } else {
-          coordinatorThreadId = yield* createCoordinatorThread({
-            projectId: input.projectId,
-            title: coordinatorName,
-            modelSelection: input.coordinatorModelSelection,
-          });
-        }
-        const existingConfig = Option.isSome(existing) ? existing.value : null;
-        if (input.libraryPath !== undefined && input.libraryPath !== null) {
-          yield* assertAbsoluteLibraryPath(input.libraryPath);
-        }
-        // Changing libraryPath relocates the store: copy the whole tree
-        // (including .git history) to the new root before re-pointing the
-        // config. The previous location is left untouched so a failed save
-        // never strands the data.
-        if (input.libraryPath !== undefined && input.libraryPath !== existingConfig?.libraryPath) {
-          const previousRoot = yield* resolveLibraryRoot({
-            stateDir: serverConfig.stateDir,
-            projectId: input.projectId,
-            libraryPath: existingConfig?.libraryPath,
-          }).pipe(Effect.mapError(toServiceError("Failed to resolve the current library.")));
-          const nextRoot = yield* resolveLibraryRoot({
-            stateDir: serverConfig.stateDir,
-            projectId: input.projectId,
-            // `null` clears to the default per-project library root.
-            libraryPath: input.libraryPath ?? undefined,
-          }).pipe(Effect.mapError(toServiceError("Failed to resolve the new library.")));
-          yield* assertLibraryRootLocation({
-            root: nextRoot,
-            stateDir: serverConfig.stateDir,
-            groupsWorkspaceRoot: serverConfig.groupsWorkspaceRoot,
-            studioWorkspaceRoot: serverConfig.studioWorkspaceRoot,
-            isCustomPath: true,
-          }).pipe(Effect.mapError(toServiceError("Failed to validate the new library path.")));
-          // Serialize with in-flight library mutations so a concurrent upload
-          // cannot write into the tree mid-copy.
-          const moveResult = yield* withLibraryQueue(
+          const existingReceipt = yield* replayReceipt(
+            input.requestId,
             input.projectId,
-            moveLibraryRoot({ fromRoot: previousRoot, toRoot: nextRoot }),
-          ).pipe(
-            Effect.mapError((cause) =>
-              fail(`Could not move the group library: ${cause.message}`, "invalid"),
-            ),
+            (json) => JSON.parse(json) as ProjectAgentOverview,
           );
-          if (moveResult.moved) {
-            yield* Effect.logInfo(`moved the group library from ${previousRoot} to ${nextRoot}`);
+          if (existingReceipt) return existingReceipt;
+          const project = yield* resolveGroupCoordinatorProject(input.projectId);
+          const existing = yield* repository
+            .getConfig(input.projectId)
+            .pipe(Effect.mapError(toServiceError("Failed to load project coordinator.")));
+          const now = isoNow();
+          const coordinatorName = input.coordinatorName ?? `${project.title} Coordinator`;
+          let coordinatorThreadId: ThreadId;
+          let automationId: ProjectAgentConfig["automationId"];
+          let revision = 1;
+          if (Option.isSome(existing)) {
+            if (
+              input.expectedRevision !== undefined &&
+              input.expectedRevision !== existing.value.revision
+            ) {
+              return yield* Effect.fail(
+                fail("Coordinator settings changed. Reload and retry.", "conflict"),
+              );
+            }
+            coordinatorThreadId = existing.value.coordinatorThreadId;
+            automationId = existing.value.automationId;
+            revision = existing.value.revision + 1;
+          } else {
+            automationId = null;
+            // A previous attempt may have created the coordinator thread but died
+            // before the config save; adopt it instead of orphaning a second one.
+            const threads = yield* projectionThreads
+              .listByProjectId({ projectId: input.projectId })
+              .pipe(Effect.mapError(toServiceError("Failed to list project threads.")));
+            const reusable = threads.find(
+              (thread) => thread.deletedAt === null && thread.title === coordinatorName,
+            );
+            coordinatorThreadId =
+              reusable?.threadId ??
+              (yield* createCoordinatorThread({
+                projectId: input.projectId,
+                title: coordinatorName,
+                modelSelection: input.coordinatorModelSelection,
+              }));
           }
-        }
-        const config: ProjectAgentConfig = {
-          projectId: input.projectId,
-          coordinatorThreadId,
-          coordinatorName,
-          coordinatorModelSelection: input.coordinatorModelSelection,
-          ...(input.coordinatorProviderOptions
-            ? { coordinatorProviderOptions: input.coordinatorProviderOptions }
-            : {}),
-          ...(input.workerRouting ? { workerRouting: input.workerRouting } : {}),
-          limits: input.limits ?? { ...DEFAULT_PROJECT_AGENT_LIMITS },
-          captureEnabled: input.captureEnabled ?? true,
-          enabled: true,
-          automationId,
-          revision,
-          createdAt: existingConfig?.createdAt ?? now,
-          updatedAt: now,
-          disabledAt: null,
-          ...(input.goal !== undefined
-            ? { goal: input.goal }
-            : existingConfig?.goal
-              ? { goal: existingConfig.goal }
-              : {}),
-          // `null` clears the field; absent keeps the stored value.
-          ...(input.icon === null
-            ? {}
-            : input.icon !== undefined
-              ? { icon: input.icon }
-              : existingConfig?.icon
-                ? { icon: existingConfig.icon }
-                : {}),
-          ...(input.coordinatorIcon === null
-            ? {}
-            : input.coordinatorIcon !== undefined
-              ? { coordinatorIcon: input.coordinatorIcon }
-              : existingConfig?.coordinatorIcon
-                ? { coordinatorIcon: existingConfig.coordinatorIcon }
-                : {}),
-          ...(input.coordinatorColor === null
-            ? {}
-            : input.coordinatorColor !== undefined
-              ? { coordinatorColor: input.coordinatorColor }
-              : existingConfig?.coordinatorColor
-                ? { coordinatorColor: existingConfig.coordinatorColor }
-                : {}),
-          autoMemoryEnabled: input.autoMemoryEnabled ?? existingConfig?.autoMemoryEnabled ?? false,
-          linkedProjectIds: existingConfig?.linkedProjectIds ?? [],
-          ...(input.libraryPath === null
-            ? {}
-            : input.libraryPath !== undefined
-              ? { libraryPath: input.libraryPath }
-              : existingConfig?.libraryPath
-                ? { libraryPath: existingConfig.libraryPath }
-                : {}),
-          ...(input.libraryRemoteUrl === null
-            ? {}
-            : input.libraryRemoteUrl !== undefined
-              ? { libraryRemoteUrl: input.libraryRemoteUrl }
-              : existingConfig?.libraryRemoteUrl
-                ? { libraryRemoteUrl: existingConfig.libraryRemoteUrl }
-                : {}),
-          libraryPushOnChange:
-            input.libraryPushOnChange ?? existingConfig?.libraryPushOnChange ?? false,
-        };
-        const saved = yield* repository
-          .saveConfig(config, Option.isSome(existing) ? existing.value.revision : null)
-          .pipe(Effect.mapError(toServiceError("Failed to save coordinator configuration.")));
-        const documentHeads = yield* repository
-          .listDocumentHeads(input.projectId)
-          .pipe(Effect.mapError(toServiceError("Failed to list project documents.")));
-        if (documentHeads.length === 0) {
-          for (const seed of SEED_DOCUMENTS) {
-            const content =
-              seed.path === "instructions.md" && input.importedInstructions?.trim()
-                ? input.importedInstructions
-                : seed.content;
-            yield* writeSeedDocument(input.projectId, seed.path, content, "system");
+          if (!automationId) {
+            // Same idempotency for the heartbeat automation: if a past attempt
+            // created it before failing, adopt its id rather than duplicating it.
+            const listed = yield* automationService
+              .list({ projectId: input.projectId })
+              .pipe(Effect.mapError(toServiceError("Failed to load project heartbeat.")));
+            automationId =
+              listed.definitions.find(
+                (definition) =>
+                  definition.mode === "heartbeat" &&
+                  definition.schedule.type === "project-event" &&
+                  definition.sourceThreadId === coordinatorThreadId,
+              )?.id ?? null;
           }
-          if (input.importedInstructions?.trim()) {
-            yield* appendActivity({
-              projectId: input.projectId,
-              kind: "document-written",
-              actorKind: "user",
-              actorThreadId: null,
-              goalId: null,
-              taskId: null,
-              source: { path: "instructions.md" },
-              summary:
-                "Imported existing project instructions without overwriting newer server content.",
-              createdAt: now,
-            });
+          const existingConfig = Option.isSome(existing) ? existing.value : null;
+          if (input.libraryPath !== undefined && input.libraryPath !== null) {
+            yield* assertAbsoluteLibraryPath(input.libraryPath);
           }
-          const coverage = yield* indexProjectThreads(input.projectId);
-          yield* repository
-            .saveDigest({
-              projectId: input.projectId,
-              summary: INITIAL_PROJECT_DIGEST_SUMMARY,
-              focusItems: [],
-              coverageFromSequence: 0,
-              coverageToSequence: 0,
-              historicalCoverage: coverage.pendingThreadCount > 0 ? "partial" : "none",
-              summarizedThreadCount: coverage.summarizedThreadCount,
-              pendingThreadCount: coverage.pendingThreadCount,
-              generationState: "idle",
-              generatedAt: now,
-              lastGoodAt: now,
-              lastError: null,
-            })
-            .pipe(Effect.mapError(toServiceError("Failed to store initial digest.")));
-        }
-        yield* importCoordinatorGreeting({
-          threadId: coordinatorThreadId,
-          userDisplayName: input.userDisplayName,
-        });
-        if (!automationId) {
-          const automation = yield* automationService
-            .createProjectManaged({
-              projectId: input.projectId,
-              sourceThreadId: coordinatorThreadId,
-              name: `${coordinatorName} events`,
-              prompt: PROJECT_BOT_HEARTBEAT_PROMPT,
-              schedule: { type: "project-event", projectId: input.projectId },
-              enabled: true,
-              modelSelection: input.coordinatorModelSelection,
-              mode: "heartbeat",
-              targetThreadId: coordinatorThreadId,
-              stopOnError: true,
-            })
-            .pipe(Effect.mapError(toServiceError("Failed to create project-event automation.")));
-          const withAutomation: ProjectAgentConfig = {
-            ...saved,
-            automationId: automation.id,
-            revision: saved.revision + 1,
-            updatedAt: isoNow(),
+          const config: ProjectAgentConfig = {
+            projectId: input.projectId,
+            coordinatorThreadId,
+            coordinatorName,
+            coordinatorModelSelection: input.coordinatorModelSelection,
+            // Omitted fields keep their stored values; `null` clears (handled
+            // per-field below for the clearable ones).
+            ...(input.coordinatorProviderOptions
+              ? { coordinatorProviderOptions: input.coordinatorProviderOptions }
+              : existingConfig?.coordinatorProviderOptions
+                ? { coordinatorProviderOptions: existingConfig.coordinatorProviderOptions }
+                : {}),
+            ...(input.workerRouting
+              ? { workerRouting: input.workerRouting }
+              : existingConfig?.workerRouting
+                ? { workerRouting: existingConfig.workerRouting }
+                : {}),
+            limits: input.limits ?? existingConfig?.limits ?? { ...DEFAULT_PROJECT_AGENT_LIMITS },
+            captureEnabled: input.captureEnabled ?? existingConfig?.captureEnabled ?? true,
+            enabled: true,
+            automationId,
+            revision,
+            createdAt: existingConfig?.createdAt ?? now,
+            updatedAt: now,
+            disabledAt: null,
+            ...(input.goal !== undefined
+              ? { goal: input.goal }
+              : existingConfig?.goal
+                ? { goal: existingConfig.goal }
+                : {}),
+            // `null` clears the field; absent keeps the stored value.
+            ...(input.icon === null
+              ? {}
+              : input.icon !== undefined
+                ? { icon: input.icon }
+                : existingConfig?.icon
+                  ? { icon: existingConfig.icon }
+                  : {}),
+            ...(input.coordinatorIcon === null
+              ? {}
+              : input.coordinatorIcon !== undefined
+                ? { coordinatorIcon: input.coordinatorIcon }
+                : existingConfig?.coordinatorIcon
+                  ? { coordinatorIcon: existingConfig.coordinatorIcon }
+                  : {}),
+            ...(input.coordinatorColor === null
+              ? {}
+              : input.coordinatorColor !== undefined
+                ? { coordinatorColor: input.coordinatorColor }
+                : existingConfig?.coordinatorColor
+                  ? { coordinatorColor: existingConfig.coordinatorColor }
+                  : {}),
+            autoMemoryEnabled:
+              input.autoMemoryEnabled ?? existingConfig?.autoMemoryEnabled ?? false,
+            linkedProjectIds: existingConfig?.linkedProjectIds ?? [],
+            ...(input.libraryPath === null
+              ? {}
+              : input.libraryPath !== undefined
+                ? { libraryPath: input.libraryPath }
+                : existingConfig?.libraryPath
+                  ? { libraryPath: existingConfig.libraryPath }
+                  : {}),
+            ...(input.libraryRemoteUrl === null
+              ? {}
+              : input.libraryRemoteUrl !== undefined
+                ? { libraryRemoteUrl: input.libraryRemoteUrl }
+                : existingConfig?.libraryRemoteUrl
+                  ? { libraryRemoteUrl: existingConfig.libraryRemoteUrl }
+                  : {}),
+            libraryPushOnChange:
+              input.libraryPushOnChange ?? existingConfig?.libraryPushOnChange ?? false,
           };
-          yield* repository
-            .saveConfig(withAutomation, saved.revision)
-            .pipe(Effect.mapError(toServiceError("Failed to link project automation.")));
-        }
-        yield* ensureProjectBotPlaybook(input.projectId);
-        const latestConfig = yield* requireConfig(input.projectId);
-        yield* ensureProjectBotHeartbeat(latestConfig).pipe(Effect.catch(() => Effect.void));
-        yield* publish({ type: "config-upserted", config: saved });
-        yield* appendActivity({
-          projectId: input.projectId,
-          kind: "config-updated",
-          actorKind: "user",
-          actorThreadId: null,
-          goalId: null,
-          taskId: null,
-          source: null,
-          summary: Option.isSome(existing)
-            ? "Updated Project Coordinator settings."
-            : "Configured Project Coordinator.",
-          createdAt: now,
-        });
-        const overview = yield* buildOverview(input.projectId);
-        yield* storeReceipt(input.requestId, input.projectId, "configure", overview);
-        return overview;
-      }),
+          const expectedConfigRevision = Option.isSome(existing) ? existing.value.revision : null;
+          // Changing libraryPath relocates the store: copy the whole tree
+          // (including .git history) to the new root and persist the config
+          // inside the same root lock so a concurrent upload can neither write
+          // into the tree mid-copy nor resolve a stale root after the repoint.
+          const saved = yield* input.libraryPath !== undefined &&
+          input.libraryPath !== existingConfig?.libraryPath
+            ? withLibraryRootLock(
+                input.projectId,
+                Effect.gen(function* () {
+                  const previousRoot = yield* resolveLibraryRoot({
+                    stateDir: serverConfig.stateDir,
+                    projectId: input.projectId,
+                    libraryPath: existingConfig?.libraryPath,
+                  }).pipe(
+                    Effect.mapError(toServiceError("Failed to resolve the current library.")),
+                  );
+                  const nextRoot = yield* resolveLibraryRoot({
+                    stateDir: serverConfig.stateDir,
+                    projectId: input.projectId,
+                    // `null` clears to the default per-project library root.
+                    libraryPath: input.libraryPath ?? undefined,
+                  }).pipe(Effect.mapError(toServiceError("Failed to resolve the new library.")));
+                  yield* assertLibraryRootLocation({
+                    root: nextRoot,
+                    stateDir: serverConfig.stateDir,
+                    groupsWorkspaceRoot: serverConfig.groupsWorkspaceRoot,
+                    studioWorkspaceRoot: serverConfig.studioWorkspaceRoot,
+                    isCustomPath: true,
+                    projectId: input.projectId,
+                  }).pipe(
+                    Effect.mapError(toServiceError("Failed to validate the new library path.")),
+                  );
+                  // Both queues are taken in canonical sorted order: equal
+                  // keys (same folder via slash/default/symlink) collapse to
+                  // one acquisition — the keyed locks are not re-entrant — and
+                  // opposite moves cannot interleave into a deadlock.
+                  const moveResult = yield* withLibraryQueues(
+                    [previousRoot, nextRoot],
+                    moveLibraryRoot({
+                      fromRoot: previousRoot,
+                      toRoot: nextRoot,
+                      projectId: input.projectId,
+                    }),
+                  ).pipe(
+                    Effect.mapError((cause) =>
+                      fail(`Could not move the group library: ${cause.message}`, "invalid"),
+                    ),
+                  );
+                  if (moveResult.moved) {
+                    yield* Effect.logInfo(
+                      `moved the group library from ${previousRoot} to ${nextRoot}`,
+                    );
+                  }
+                  return yield* repository
+                    .saveConfig(config, expectedConfigRevision)
+                    .pipe(
+                      Effect.mapError(toServiceError("Failed to save coordinator configuration.")),
+                    );
+                }),
+              )
+            : repository
+                .saveConfig(config, expectedConfigRevision)
+                .pipe(Effect.mapError(toServiceError("Failed to save coordinator configuration.")));
+          const documentHeads = yield* repository
+            .listDocumentHeads(input.projectId)
+            .pipe(Effect.mapError(toServiceError("Failed to list project documents.")));
+          if (documentHeads.length === 0) {
+            for (const seed of SEED_DOCUMENTS) {
+              const content =
+                seed.path === "instructions.md" && input.importedInstructions?.trim()
+                  ? input.importedInstructions
+                  : seed.content;
+              yield* writeSeedDocument(input.projectId, seed.path, content, "system");
+            }
+            if (input.importedInstructions?.trim()) {
+              yield* appendActivity({
+                projectId: input.projectId,
+                kind: "document-written",
+                actorKind: "user",
+                actorThreadId: null,
+                goalId: null,
+                taskId: null,
+                source: { path: "instructions.md" },
+                summary:
+                  "Imported existing project instructions without overwriting newer server content.",
+                createdAt: now,
+              });
+            }
+            const coverage = yield* indexProjectThreads(input.projectId);
+            yield* repository
+              .saveDigest({
+                projectId: input.projectId,
+                summary: INITIAL_PROJECT_DIGEST_SUMMARY,
+                focusItems: [],
+                coverageFromSequence: 0,
+                coverageToSequence: 0,
+                historicalCoverage: coverage.pendingThreadCount > 0 ? "partial" : "none",
+                summarizedThreadCount: coverage.summarizedThreadCount,
+                pendingThreadCount: coverage.pendingThreadCount,
+                generationState: "idle",
+                generatedAt: now,
+                lastGoodAt: now,
+                lastError: null,
+              })
+              .pipe(Effect.mapError(toServiceError("Failed to store initial digest.")));
+          }
+          yield* importCoordinatorGreeting({
+            threadId: coordinatorThreadId,
+            userDisplayName: input.userDisplayName,
+          });
+          if (!saved.automationId) {
+            const automation = yield* automationService
+              .createProjectManaged({
+                projectId: input.projectId,
+                sourceThreadId: coordinatorThreadId,
+                name: `${coordinatorName} events`,
+                prompt: PROJECT_BOT_HEARTBEAT_PROMPT,
+                schedule: { type: "project-event", projectId: input.projectId },
+                enabled: true,
+                modelSelection: input.coordinatorModelSelection,
+                mode: "heartbeat",
+                targetThreadId: coordinatorThreadId,
+                stopOnError: true,
+              })
+              .pipe(Effect.mapError(toServiceError("Failed to create project-event automation.")));
+            const withAutomation: ProjectAgentConfig = {
+              ...saved,
+              automationId: automation.id,
+              revision: saved.revision + 1,
+              updatedAt: isoNow(),
+            };
+            yield* repository
+              .saveConfig(withAutomation, saved.revision)
+              .pipe(Effect.mapError(toServiceError("Failed to link project automation.")));
+          }
+          yield* ensureProjectBotPlaybook(input.projectId);
+          const latestConfig = yield* requireConfig(input.projectId);
+          yield* ensureProjectBotHeartbeat(latestConfig).pipe(Effect.catch(() => Effect.void));
+          // Publish the persisted row (with automationId and the real revision),
+          // not the pre-link `saved` snapshot.
+          yield* publish({ type: "config-upserted", config: latestConfig });
+          yield* appendActivity({
+            projectId: input.projectId,
+            kind: "config-updated",
+            actorKind: "user",
+            actorThreadId: null,
+            goalId: null,
+            taskId: null,
+            source: null,
+            summary: Option.isSome(existing)
+              ? "Updated Project Coordinator settings."
+              : "Configured Project Coordinator.",
+            createdAt: now,
+          });
+          const overview = yield* buildOverview(input.projectId);
+          yield* storeReceipt(input.requestId, input.projectId, "configure", overview);
+          return overview;
+        }),
+      ),
 
     linkProject: (input, principal) =>
       Effect.gen(function* () {
@@ -1295,7 +1564,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         Effect.map((tasks) => ({
           tasks,
           nextCursor:
-            tasks.length === input.limit
+            tasks.length === (input.limit ?? 50)
               ? encodeProjectAgentListCursor({
                   createdAt: tasks[tasks.length - 1]!.createdAt,
                   id: tasks[tasks.length - 1]!.id,
@@ -1421,11 +1690,24 @@ export const makeProjectAgentService = Effect.gen(function* () {
         if (current.projectId !== input.projectId) {
           return yield* Effect.fail(fail("Task does not belong to this project.", "forbidden"));
         }
-        if (input.accept) {
+        // A worker may only update the task it was assigned; every other
+        // principal may update any task in the project (project access was
+        // already checked above).
+        if (principal.kind === "worker" && principal.taskId !== current.id) {
+          return yield* Effect.fail(
+            fail("A worker can only update the task it was assigned.", "forbidden"),
+          );
+        }
+        // "done" is routed through the same acceptance path as accept=true so
+        // it also requires evidence and unblocks dependents.
+        const wantsAccept = input.accept === true || input.status === "done";
+        if (wantsAccept) {
           if (!canAcceptTask(principal, input.projectId)) {
             return yield* Effect.fail(
               fail(
-                "A worker cannot mark a task accepted. Acceptance requires the coordinator or user.",
+                principal.kind === "worker"
+                  ? "A finished provider turn updates an attempt. It cannot mark a task done."
+                  : "A worker cannot mark a task accepted. Acceptance requires the coordinator or user.",
                 "forbidden",
               ),
             );
@@ -1446,14 +1728,6 @@ export const makeProjectAgentService = Effect.gen(function* () {
             return yield* Effect.fail(fail("Acceptance requires recorded evidence.", "invalid"));
           }
         }
-        if (principal.kind === "worker" && input.status === "done") {
-          return yield* Effect.fail(
-            fail(
-              "A finished provider turn updates an attempt. It cannot mark a task done.",
-              "forbidden",
-            ),
-          );
-        }
         const dependsOnTaskIds = input.dependsOnTaskIds ?? current.dependsOnTaskIds;
         if (input.dependsOnTaskIds) {
           const edges = yield* repository
@@ -1468,8 +1742,20 @@ export const makeProjectAgentService = Effect.gen(function* () {
           ) {
             return yield* Effect.fail(fail("Task dependencies cannot form a cycle.", "cycle"));
           }
+          // Dependencies must point at tasks in the same project (same check
+          // createTask performs).
+          for (const dependencyId of dependsOnTaskIds) {
+            const dependency = yield* repository
+              .getTask(dependencyId)
+              .pipe(Effect.mapError(toServiceError("Failed to load a task dependency.")));
+            if (Option.isNone(dependency) || dependency.value.projectId !== input.projectId) {
+              return yield* Effect.fail(
+                fail("Task dependencies must belong to the same project.", "invalid"),
+              );
+            }
+          }
         }
-        const nextStatus: ProjectTaskStatus = input.accept
+        const nextStatus: ProjectTaskStatus = wantsAccept
           ? "done"
           : (input.status ?? current.status);
         const updated: ProjectTask = {
@@ -1494,13 +1780,13 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const saved = yield* repository
           .saveTask(updated, input.expectedRevision)
           .pipe(Effect.mapError(toServiceError("Failed to update project task.")));
-        if (input.accept) {
+        if (wantsAccept) {
           yield* unblockDependents(saved);
         }
         yield* publish({ type: "task-upserted", task: saved });
         yield* appendActivity({
           projectId: input.projectId,
-          kind: input.accept ? "task-accepted" : "task-updated",
+          kind: wantsAccept ? "task-accepted" : "task-updated",
           actorKind:
             principal.kind === "worker"
               ? "worker"
@@ -1511,7 +1797,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
           goalId: saved.goalId,
           taskId: saved.id,
           source: null,
-          summary: input.accept ? `Accepted task: ${saved.title}` : `Updated task: ${saved.title}`,
+          summary: wantsAccept ? `Accepted task: ${saved.title}` : `Updated task: ${saved.title}`,
           createdAt: saved.updatedAt,
         });
         yield* storeReceipt(input.requestId, input.projectId, "updateTask", saved);
@@ -1534,10 +1820,12 @@ export const makeProjectAgentService = Effect.gen(function* () {
         Effect.map((activity) => ({
           activity,
           nextCursor:
-            activity.length === input.limit
+            activity.length === (input.limit ?? 50)
               ? encodeProjectAgentListCursor({
                   createdAt: activity[activity.length - 1]!.createdAt,
                   id: activity[activity.length - 1]!.id,
+                  // Activity pages by sequence (the sort key), not timestamps.
+                  sequence: activity[activity.length - 1]!.sequence,
                 })
               : null,
         })),
@@ -1591,7 +1879,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
           logicalPath,
         }).pipe(Effect.catch(() => Effect.succeed(null)));
         const diskHash = disk === null ? null : hashDocumentContent(disk);
-        const conflictPending = diskHash !== null && diskHash !== head.contentHash;
+        // External change = the file differs from the disk state the DB last
+        // synced (diskHash marker; legacy heads fall back to the content hash).
+        const syncedMarker = head.diskHash ?? head.contentHash;
+        const conflictPending =
+          diskHash !== null && diskHash !== syncedMarker && diskHash !== head.contentHash;
         const history = yield* repository
           .listDocumentHistory({ projectId: input.projectId, logicalPath })
           .pipe(Effect.mapError(toServiceError("Failed to load document history.")));
@@ -1642,17 +1934,39 @@ export const makeProjectAgentService = Effect.gen(function* () {
             fail("Only the user can edit project instructions and notes.", "forbidden"),
           );
         }
-        if (isInboxDocumentPath(logicalPath) && principal.kind === "worker") {
-          const expectedPrefix = `inbox/${principal.threadId}/`;
-          if (!logicalPath.startsWith(expectedPrefix)) {
+        if (isInboxDocumentPath(logicalPath)) {
+          const allowed =
+            principal.kind === "user" ||
+            principal.kind === "coordinator" ||
+            (principal.kind === "worker" && logicalPath.startsWith(`inbox/${principal.threadId}/`));
+          if (!allowed) {
             return yield* Effect.fail(
               fail("Workers can only write their own inbox entries.", "forbidden"),
             );
           }
         }
-        if (isCoordinatorCuratedDocumentPath(logicalPath) && principal.kind === "worker") {
+        // Curated docs (decisions.md, docs/**) are written by the user and the
+        // coordinator only — never by workers, group members, or unmanaged threads.
+        if (
+          isCoordinatorCuratedDocumentPath(logicalPath) &&
+          principal.kind !== "user" &&
+          principal.kind !== "coordinator"
+        ) {
           return yield* Effect.fail(
-            fail("Workers cannot rewrite curated project knowledge.", "forbidden"),
+            fail(
+              "Only the user or the coordinator can rewrite curated project knowledge.",
+              "forbidden",
+            ),
+          );
+        }
+        // Unmanaged threads and plain group members get no write access outside
+        // the memory tree (their own-thread memory file was handled above).
+        if (
+          (principal.kind === "group-member" || principal.kind === "unmanaged") &&
+          !isMemoryDocumentPath(logicalPath)
+        ) {
+          return yield* Effect.fail(
+            fail("This thread has no write access to project documents.", "forbidden"),
           );
         }
         const head = yield* repository
@@ -1670,18 +1984,20 @@ export const makeProjectAgentService = Effect.gen(function* () {
           logicalPath,
         }).pipe(Effect.catch(() => Effect.succeed(null)));
         const diskHash = disk === null ? null : hashDocumentContent(disk);
-        if (
-          !input.importExternal &&
-          Option.isSome(head) &&
-          diskHash !== null &&
-          diskHash !== head.value.contentHash
-        ) {
-          return yield* Effect.fail(
-            fail(
-              "The Markdown file changed outside Synara. Import the external copy explicitly instead of overwriting it.",
-              "conflict",
-            ),
-          );
+        // External change = the file differs from the disk state the DB last
+        // synced (diskHash marker; legacy heads fall back to contentHash). A
+        // stale mirror from a previous failed materialize is NOT an external
+        // change — the write below simply overwrites it.
+        if (Option.isSome(head) && !input.importExternal && diskHash !== null) {
+          const syncedMarker = head.value.diskHash ?? head.value.contentHash;
+          if (diskHash !== syncedMarker && diskHash !== head.value.contentHash) {
+            return yield* Effect.fail(
+              fail(
+                "The Markdown file changed outside Synara. Import the external copy explicitly instead of overwriting it.",
+                "conflict",
+              ),
+            );
+          }
         }
         const content = input.importExternal && disk !== null ? disk : input.content;
         const now = isoNow();
@@ -1706,7 +2022,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
           .writeDocument({
             revision,
             expectedRevision: currentRevision === 0 ? null : currentRevision,
-            diskHash: revision.contentHash,
+            // Keep the previous disk marker until the mirror write below
+            // confirms; a failed materialize then leaves head.diskHash equal
+            // to the real file state instead of pretending it synced.
+            diskHash: Option.isSome(head) ? head.value.diskHash : revision.contentHash,
             conflictPending: false,
           })
           .pipe(Effect.mapError(toServiceError("Failed to write project document.")));
@@ -1716,6 +2035,13 @@ export const makeProjectAgentService = Effect.gen(function* () {
           logicalPath,
           content,
         }).pipe(Effect.mapError(toServiceError("Failed to materialize project document.")));
+        yield* repository
+          .markDocumentDiskSynced({
+            projectId: input.projectId,
+            logicalPath,
+            diskHash: revision.contentHash,
+          })
+          .pipe(Effect.mapError(toServiceError("Failed to record the synced document.")));
         yield* publish({
           type: "document-head-updated",
           head: {
@@ -1793,13 +2119,21 @@ export const makeProjectAgentService = Effect.gen(function* () {
         if (timers.has(projectId)) return;
         yield* Ref.update(digestTimer, (current) => new Set(current).add(projectId));
         yield* Effect.sleep(Duration.millis(PROJECT_AGENT_DIGEST_DEBOUNCE_MS)).pipe(
-          Effect.andThen(generateDigestNow(projectId)),
+          Effect.andThen(runDigestQueue(projectId)),
           Effect.catch(() => Effect.void),
           Effect.ensuring(
-            Ref.update(digestTimer, (current) => {
-              const next = new Set(current);
-              next.delete(projectId);
-              return next;
+            Effect.gen(function* () {
+              yield* Ref.update(digestTimer, (current) => {
+                const next = new Set(current);
+                next.delete(projectId);
+                return next;
+              });
+              // A schedule that landed between the last pending check and the
+              // timer release must not be dropped: re-arm so it is picked up.
+              const pending = yield* Ref.get(digestPending);
+              if (pending.has(projectId)) {
+                yield* impl.scheduleDigest(projectId);
+              }
             }),
           ),
           Effect.forkChild,
@@ -1807,14 +2141,25 @@ export const makeProjectAgentService = Effect.gen(function* () {
       }).pipe(Effect.asVoid),
 
     listEvidence: (input, principal) =>
-      requireProjectAccess(principal, input.projectId).pipe(
-        Effect.andThen(
-          repository
-            .listEvidenceForTask(input.taskId)
-            .pipe(Effect.mapError(toServiceError("Failed to list task evidence."))),
-        ),
-        Effect.map((evidence) => ({ evidence })),
-      ),
+      Effect.gen(function* () {
+        yield* requireProjectAccess(principal, input.projectId);
+        const task = yield* repository.getTask(input.taskId).pipe(
+          Effect.mapError(toServiceError("Failed to load project task.")),
+          Effect.flatMap(
+            Option.match({
+              onNone: () => Effect.fail(fail("Task was not found.", "not-found")),
+              onSome: Effect.succeed,
+            }),
+          ),
+        );
+        if (task.projectId !== input.projectId) {
+          return yield* Effect.fail(fail("Task does not belong to this project.", "forbidden"));
+        }
+        const evidence = yield* repository
+          .listEvidenceForTask(input.taskId)
+          .pipe(Effect.mapError(toServiceError("Failed to list task evidence.")));
+        return { evidence };
+      }),
 
     listThreadIndex: (input, principal) =>
       requireProjectAccess(principal, input.projectId).pipe(
@@ -1883,7 +2228,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
     formatContextPacketForTurn: (threadId) =>
       Effect.gen(function* () {
         const principal = yield* impl.resolvePrincipalForThread(threadId);
-        if (principal.kind !== "coordinator" && principal.kind !== "worker") {
+        const isCoordinatorLike = principal.kind === "coordinator" || principal.kind === "worker";
+        // Every thread in a group gets the group's instructions and memory;
+        // unmanaged threads outside groups get nothing.
+        if (!isCoordinatorLike && principal.kind !== "group-member") {
           return "";
         }
         const config = yield* repository
@@ -1904,43 +2252,45 @@ export const makeProjectAgentService = Effect.gen(function* () {
             logicalPath: PROJECT_BOT_PLAYBOOK_PATH,
           })
           .pipe(Effect.catch(() => Effect.succeed(Option.none())));
-        const index = yield* repository
-          .listThreadIndex(principal.projectId)
-          .pipe(Effect.catch(() => Effect.succeed([])));
         const coordinatorThreadId = Option.isSome(config) ? config.value.coordinatorThreadId : null;
+        // Batched worker context: one read for thread shells and one for all
+        // report docs instead of two lookups per worker per turn.
+        const assigned = isCoordinatorLike
+          ? yield* assignedWorkerThreadIds(principal.projectId).pipe(
+              Effect.catch(() => Effect.succeed(new Set<ThreadId>())),
+            )
+          : new Set<ThreadId>();
+        const workerThreadIds = [...assigned].filter((id) => id !== coordinatorThreadId);
+        const workerShells =
+          workerThreadIds.length > 0
+            ? yield* snapshotQuery
+                .getThreadShellsByIds(workerThreadIds)
+                .pipe(Effect.catch(() => Effect.succeed([])))
+            : [];
+        const workerShellById = new Map(workerShells.map((shell) => [shell.id, shell] as const));
         const workerLines: string[] = [];
-        const workerReports: string[] = [];
-        for (const entry of index) {
-          if (
-            !coordinatorThreadId ||
-            !isManagedWorkerThread({
-              threadId: entry.threadId,
-              coordinatorThreadId,
-              index,
-            })
-          ) {
-            continue;
-          }
-          const shell = yield* snapshotQuery
-            .getThreadShellById(entry.threadId)
-            .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+        for (const workerThreadId of workerThreadIds) {
+          const shell = workerShellById.get(workerThreadId);
           workerLines.push(
             formatWorkerWatchLine({
-              title: Option.isSome(shell) ? shell.value.title : "Worker thread",
-              status: Option.isSome(shell) ? shell.value.session?.status : "missing",
-              lastError: Option.isSome(shell) ? shell.value.session?.lastError : "thread is gone",
+              title: shell?.title ?? "Worker thread",
+              status: shell?.session?.status ?? "missing",
+              lastError: shell?.session?.lastError ?? "thread is gone",
             }),
           );
-          const report = yield* repository
-            .readDocumentRevision({
-              projectId: principal.projectId,
-              logicalPath: workerInboxReportPath(entry.threadId),
-            })
-            .pipe(Effect.catch(() => Effect.succeed(Option.none())));
-          if (Option.isSome(report) && report.value.content.trim().length > 0) {
-            workerReports.push(report.value.content.trim());
-          }
         }
+        const reports =
+          workerThreadIds.length > 0
+            ? yield* repository
+                .readDocumentRevisions({
+                  projectId: principal.projectId,
+                  logicalPaths: workerThreadIds.map((id) => workerInboxReportPath(id)),
+                })
+                .pipe(Effect.catch(() => Effect.succeed([])))
+            : [];
+        const workerReports = reports
+          .map((report) => report.content.trim())
+          .filter((content) => content.length > 0);
         const groupGoal = Option.isSome(config) ? config.value.goal?.trim() : "";
         const memoryEnabled = Option.isSome(config)
           ? Boolean(config.value.autoMemoryEnabled)
@@ -1956,23 +2306,34 @@ export const makeProjectAgentService = Effect.gen(function* () {
               )
               .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt))
           : [];
+        const memoryDocuments =
+          memoryHeads.length > 0
+            ? yield* repository
+                .readDocumentRevisions({
+                  projectId: principal.projectId,
+                  logicalPaths: memoryHeads.map((head) => head.logicalPath),
+                })
+                .pipe(Effect.catch(() => Effect.succeed([])))
+            : [];
+        const memoryByPath = new Map(
+          memoryDocuments.map((document) => [document.logicalPath, document.content] as const),
+        );
         const memorySections: string[] = [];
         for (const head of memoryHeads) {
-          const document = yield* repository
-            .readDocumentRevision({
-              projectId: principal.projectId,
-              logicalPath: head.logicalPath,
-            })
-            .pipe(Effect.catch(() => Effect.succeed(Option.none())));
-          if (Option.isSome(document) && document.value.content.trim().length > 0) {
-            memorySections.push(`### ${head.logicalPath}\n${document.value.content.trim()}`);
+          const content = memoryByPath.get(head.logicalPath)?.trim();
+          if (content) {
+            memorySections.push(`### ${head.logicalPath}\n${content}`);
           }
         }
         const budget = truncateToContextBudget([
-          {
-            label: "Playbook",
-            text: Option.isSome(playbook) ? playbook.value.content : PROJECT_BOT_PLAYBOOK,
-          },
+          ...(isCoordinatorLike
+            ? [
+                {
+                  label: "Playbook",
+                  text: Option.isSome(playbook) ? playbook.value.content : PROJECT_BOT_PLAYBOOK,
+                },
+              ]
+            : []),
           ...(groupGoal ? [{ label: "Objective", text: groupGoal }] : []),
           ...(memoryEnabled ? [{ label: "Memory", text: memorySections.join("\n\n") }] : []),
           {
@@ -1987,21 +2348,25 @@ export const makeProjectAgentService = Effect.gen(function* () {
               return shells.map((shell) => `- ${shell.title} (${shell.workspaceRoot})`).join("\n");
             }),
           },
-          { label: "Watch", text: PROJECT_BOT_WATCH_RULES },
-          {
-            label: "Workers",
-            text:
-              workerLines.length > 0
-                ? `${workerLines.join("\n")}\nIf a worker is error/interrupted/stopped, redelegate or choose an alternate. Do not wait.`
-                : "No workers yet.",
-          },
-          {
-            label: "Worker reports",
-            text:
-              workerReports.length > 0
-                ? workerReports.join("\n\n")
-                : "None yet. Synara writes inbox/<threadId>/report.md when a worker finishes or dies.",
-          },
+          ...(isCoordinatorLike ? [{ label: "Watch", text: PROJECT_BOT_WATCH_RULES }] : []),
+          ...(isCoordinatorLike
+            ? [
+                {
+                  label: "Workers",
+                  text:
+                    workerLines.length > 0
+                      ? `${workerLines.join("\n")}\nIf a worker is error/interrupted/stopped, redelegate or choose an alternate. Do not wait.`
+                      : "No workers yet.",
+                },
+                {
+                  label: "Worker reports",
+                  text:
+                    workerReports.length > 0
+                      ? workerReports.join("\n\n")
+                      : "None yet. Synara writes inbox/<threadId>/report.md when a worker finishes or dies.",
+                },
+              ]
+            : []),
           {
             label: "Goal",
             text: packet.goal?.objective ?? "None. Only create a goal if the user asked for one.",
@@ -2030,12 +2395,14 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const principal = yield* impl.resolvePrincipalForThread(input.callerThreadId);
         if (principal.kind !== "coordinator") return;
         const config = yield* requireConfig(principal.projectId);
+        // The user's configured limits apply, clamped to the hard caps — the
+        // defaults act as the ceiling, not a floor the user cannot go below.
         const limits = {
-          maxNewWorkersPerTurn: Math.max(
+          maxNewWorkersPerTurn: Math.min(
             config.limits.maxNewWorkersPerTurn,
             DEFAULT_PROJECT_AGENT_LIMITS.maxNewWorkersPerTurn,
           ),
-          maxConcurrentWorkers: Math.max(
+          maxConcurrentWorkers: Math.min(
             config.limits.maxConcurrentWorkers,
             DEFAULT_PROJECT_AGENT_LIMITS.maxConcurrentWorkers,
           ),
@@ -2095,15 +2462,26 @@ export const makeProjectAgentService = Effect.gen(function* () {
               },
               principal,
             );
+            // createTask's receipt replay may return a stale revision; reload
+            // the row before writing the assignment on top of it.
+            const currentTask = yield* repository.getTask(task.id).pipe(
+              Effect.mapError(toServiceError("Failed to reload worker task.")),
+              Effect.flatMap(
+                Option.match({
+                  onNone: () => Effect.fail(fail("Task was not found.", "not-found")),
+                  onSome: Effect.succeed,
+                }),
+              ),
+            );
             const assigned = {
-              ...task,
+              ...currentTask,
               status: "running" as const,
               assignedThreadId: threadId,
-              revision: task.revision + 1,
+              revision: currentTask.revision + 1,
               updatedAt: now,
             };
             yield* repository
-              .saveTask(assigned, task.revision)
+              .saveTask(assigned, currentTask.revision)
               .pipe(Effect.mapError(toServiceError("Failed to assign worker thread.")));
             yield* repository
               .saveAttempt({
@@ -2134,17 +2512,32 @@ export const makeProjectAgentService = Effect.gen(function* () {
           });
         }
         if (activeGoal) {
-          yield* repository
-            .saveGoal(
-              {
-                ...activeGoal,
-                workerCreationCount: activeGoal.workerCreationCount + input.threadIds.length,
-                revision: activeGoal.revision + 1,
-                updatedAt: now,
-              },
-              activeGoal.revision,
-            )
-            .pipe(Effect.mapError(toServiceError("Failed to count worker creations.")));
+          // processPendingWakes may bump this goal concurrently — reload the
+          // latest row each attempt so a revision conflict just retries.
+          const bumpWorkerCount = Effect.gen(function* () {
+            const latest = yield* repository
+              .getGoal(activeGoal.id)
+              .pipe(Effect.mapError(toServiceError("Failed to reload authorized goal.")));
+            if (Option.isNone(latest)) return;
+            yield* repository
+              .saveGoal(
+                {
+                  ...latest.value,
+                  workerCreationCount: latest.value.workerCreationCount + input.threadIds.length,
+                  revision: latest.value.revision + 1,
+                  updatedAt: now,
+                },
+                latest.value.revision,
+              )
+              .pipe(Effect.mapError(toServiceError("Failed to count worker creations.")));
+          });
+          yield* bumpWorkerCount.pipe(
+            Effect.retry({
+              times: 2,
+              while: (error) =>
+                error instanceof ProjectAgentServiceError && error.code === "conflict",
+            }),
+          );
         }
         yield* impl.scheduleDigest(principal.projectId);
       }),
@@ -2254,6 +2647,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
             }),
           ),
         );
+        if (task.projectId !== input.projectId) {
+          return yield* Effect.fail(fail("Task does not belong to this project.", "forbidden"));
+        }
         if (principal.kind === "worker" && principal.taskId !== task.id) {
           return yield* Effect.fail(fail("Workers can only report their own task.", "forbidden"));
         }
@@ -2300,9 +2696,13 @@ export const makeProjectAgentService = Effect.gen(function* () {
         });
       }),
 
-    buildContextPacket: (projectId, _threadId) =>
+    buildContextPacket: (projectId, threadId) =>
       Effect.gen(function* () {
-        const config = yield* requireConfig(projectId);
+        // Resolve the caller and require access to the project — any agent
+        // thread must not read another group's goal, instructions, or tasks.
+        const principal = yield* impl.resolvePrincipalForThread(threadId);
+        yield* requireProjectAccess(principal, projectId);
+        yield* requireConfig(projectId);
         const goal = yield* repository
           .getActiveGoal(projectId)
           .pipe(Effect.mapError(toServiceError("Failed to load project goal.")));
@@ -2404,15 +2804,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
           });
           return;
         }
-        const index = yield* repository
-          .listThreadIndex(projectId)
-          .pipe(Effect.mapError(toServiceError("Failed to load worker index.")));
-        const managedWorker = isManagedWorkerThread({
-          threadId: input.threadId,
-          coordinatorThreadId: config.value.coordinatorThreadId,
-          index,
-        });
-        const eligibleWake = Option.isSome(task) || managedWorker;
+        // A worker is a thread the coordinator assigned to a task. Wakes come
+        // from those threads or from any group thread that ends in an alert
+        // (error / needs the user) — never from routine turns in group chats.
+        const managedWorker = Option.isSome(task);
+        const eligibleWake = managedWorker || isWorkerAlertEvent(input.eventType);
         const inserted = yield* repository
           .insertInboxEvent({
             id: branded.inbox(),
@@ -2451,7 +2847,6 @@ export const makeProjectAgentService = Effect.gen(function* () {
             status: Option.isSome(shell) ? shell.value.session?.status : null,
             lastError: Option.isSome(shell) ? shell.value.session?.lastError : null,
             lastAssistantText,
-            createdAt: input.createdAt,
           });
           const written = yield* upsertSystemDocument({
             projectId,
@@ -2513,147 +2908,280 @@ export const makeProjectAgentService = Effect.gen(function* () {
         yield* impl.scheduleDigest(projectId);
         if (eligibleWake) {
           yield* impl.processPendingWakes(projectId);
-        } else {
-          yield* appendActivity({
-            projectId,
-            kind: "wake-skipped",
-            actorKind: "system",
-            actorThreadId: input.threadId,
-            goalId: null,
-            taskId: null,
-            source: null,
-            summary:
-              "Unrelated project thread updated activity without granting execution authority.",
-            createdAt: input.createdAt,
-          });
         }
       }),
 
     processPendingWakes: (projectId) =>
-      Effect.gen(function* () {
-        const config = yield* requireConfig(projectId);
-        const goal = yield* repository
-          .getActiveGoal(projectId)
-          .pipe(Effect.mapError(toServiceError("Failed to load goal for wake.")));
-        const activeGoal =
-          Option.isSome(goal) && goal.value.status === "active" ? goal.value : null;
-        if (
-          activeGoal &&
-          activeGoal.continuationCount >= activeGoal.limits.maxAutomaticContinuationsPerGoal
-        ) {
-          yield* repository
-            .saveGoal(
-              {
-                ...activeGoal,
-                status: "paused",
-                revision: activeGoal.revision + 1,
-                updatedAt: isoNow(),
-              },
-              activeGoal.revision,
-            )
-            .pipe(Effect.mapError(toServiceError("Failed to pause exhausted goal.")));
-          yield* appendActivity({
-            projectId,
-            kind: "goal-paused",
-            actorKind: "system",
-            actorThreadId: null,
-            goalId: activeGoal.id,
-            taskId: null,
-            source: null,
-            summary:
-              "Automatic coordinator continuations reached the goal limit. Resume after reviewing outcomes.",
-            createdAt: isoNow(),
-          });
-          return;
-        }
-        const cursor = yield* repository
-          .getCursor(projectId)
-          .pipe(Effect.mapError(toServiceError("Failed to load project event cursor.")));
-        if (cursor.coordinatorBusy) return;
-        const pending = yield* repository
-          .listInboxAfter({
-            projectId,
-            afterId: cursor.processedThroughInboxId,
-            limit: 50,
-          })
-          .pipe(Effect.mapError(toServiceError("Failed to load project inbox.")));
-        const eligible = pending.filter((event) => event.eligibleWake);
-        if (eligible.length === 0) return;
-        const coordinator = yield* snapshotQuery
-          .getThreadShellById(config.coordinatorThreadId)
-          .pipe(Effect.mapError(toServiceError("Failed to load coordinator thread.")));
-        if (Option.isSome(coordinator)) {
-          const liveTurn = coordinator.value.latestTurn?.state === "running";
-          const busy = liveTurn || coordinator.value.hasPendingApprovals === true;
-          if (busy) return;
-        }
-        if (!config.automationId) return;
-        const fromInboxId = eligible[0]!.id;
-        const toInboxId = eligible[eligible.length - 1]!.id;
-        const receiptId = wakeReceiptRequestId({
-          projectId,
-          fromInboxId,
-          toInboxId,
-        });
-        const existingWake = yield* repository
-          .getReceipt({ requestId: receiptId, projectId })
-          .pipe(Effect.mapError(toServiceError("Failed to load wake receipt.")));
-        yield* repository
-          .saveCursor({
-            projectId,
-            processedThroughInboxId: cursor.processedThroughInboxId,
-            frozenFromInboxId: fromInboxId,
-            frozenToInboxId: toInboxId,
-            coordinatorBusy: true,
-            updatedAt: isoNow(),
-          })
-          .pipe(Effect.mapError(toServiceError("Failed to freeze project event range.")));
-        let runId = Option.isSome(existingWake)
-          ? (JSON.parse(existingWake.value.resultJson) as { runId?: string }).runId
-          : undefined;
-        if (!runId) {
-          const run = yield* automationService
-            .runNow({ automationId: config.automationId })
-            .pipe(Effect.mapError(toServiceError("Failed to dispatch coordinator continuation.")));
-          runId = run.run.id;
-          yield* storeReceipt(receiptId, projectId, "wake", { runId });
-          if (activeGoal) {
+      // Serialized per project: the busy check, freeze, and cursor advance are
+      // one atomic unit — the event handler and the health-check timer would
+      // otherwise both dispatch the same wake.
+      withProjectLock(
+        projectId,
+        Effect.gen(function* () {
+          const config = yield* requireConfig(projectId);
+          const goal = yield* repository
+            .getActiveGoal(projectId)
+            .pipe(Effect.mapError(toServiceError("Failed to load goal for wake.")));
+          const activeGoal =
+            Option.isSome(goal) && goal.value.status === "active" ? goal.value : null;
+          if (
+            activeGoal &&
+            activeGoal.continuationCount >= activeGoal.limits.maxAutomaticContinuationsPerGoal
+          ) {
             yield* repository
               .saveGoal(
                 {
                   ...activeGoal,
-                  continuationCount: activeGoal.continuationCount + 1,
+                  status: "paused",
                   revision: activeGoal.revision + 1,
                   updatedAt: isoNow(),
                 },
                 activeGoal.revision,
               )
-              .pipe(Effect.mapError(toServiceError("Failed to count coordinator continuation.")));
+              .pipe(Effect.mapError(toServiceError("Failed to pause exhausted goal.")));
+            yield* appendActivity({
+              projectId,
+              kind: "goal-paused",
+              actorKind: "system",
+              actorThreadId: null,
+              goalId: activeGoal.id,
+              taskId: null,
+              source: null,
+              summary:
+                "Automatic coordinator continuations reached the goal limit. Resume after reviewing outcomes.",
+              createdAt: isoNow(),
+            });
+            return;
           }
-        }
-        yield* repository
-          .saveCursor({
+          let cursor = yield* repository
+            .getCursor(projectId)
+            .pipe(Effect.mapError(toServiceError("Failed to load project event cursor.")));
+          if (
+            cursor.coordinatorBusy &&
+            cursor.frozenFromInboxId !== null &&
+            cursor.frozenToInboxId !== null
+          ) {
+            // Recovery path: the process died (or runNow failed) after freezing
+            // this range. Re-drive the SAME receipt id — if a run was already
+            // dispatched its id sits in the receipt and we just advance.
+            const fromInboxId = cursor.frozenFromInboxId;
+            const toInboxId = cursor.frozenToInboxId;
+            const receiptId = wakeReceiptRequestId({ projectId, fromInboxId, toInboxId });
+            const existingWake = yield* readWakeReceipt(projectId, receiptId);
+            let runId = existingWake?.runId;
+            if (!runId) {
+              if (!config.automationId) {
+                yield* clearWakeCursor(projectId, cursor);
+                return;
+              }
+              // A busy marker younger than the live window while the
+              // coordinator thread is mid-turn (or awaiting approvals) is live
+              // work, not a crash — leave the range frozen for the next wake
+              // instead of stacking a second continuation on top of it.
+              if (cursor.coordinatorBusySince !== null) {
+                const busyAge = Date.now() - Date.parse(cursor.coordinatorBusySince);
+                if (busyAge < COORDINATOR_BUSY_LIVE_MS) {
+                  const coordinator = yield* snapshotQuery
+                    .getThreadShellById(config.coordinatorThreadId)
+                    .pipe(Effect.mapError(toServiceError("Failed to load coordinator thread.")));
+                  const midTurn =
+                    Option.isSome(coordinator) &&
+                    (coordinator.value.latestTurn?.state === "running" ||
+                      coordinator.value.hasPendingApprovals === true);
+                  if (midTurn) return;
+                }
+              }
+              const dispatch = yield* dispatchWakeContinuation({
+                projectId,
+                receiptId,
+                automationId: config.automationId,
+                existingWake,
+              });
+              if (dispatch.runId === null) return;
+              runId = dispatch.runId;
+              if (dispatch.dispatched && activeGoal) {
+                yield* repository
+                  .saveGoal(
+                    {
+                      ...activeGoal,
+                      continuationCount: activeGoal.continuationCount + 1,
+                      revision: activeGoal.revision + 1,
+                      updatedAt: isoNow(),
+                    },
+                    activeGoal.revision,
+                  )
+                  .pipe(
+                    Effect.mapError(toServiceError("Failed to count coordinator continuation.")),
+                  );
+              }
+            }
+            // The keyset cursor needs the frozen range's last row's createdAt;
+            // fetch the boundary row by id — a page scan can miss a row that
+            // sits beyond the window and would keep a stale timestamp.
+            const toRow = yield* repository
+              .getInboxEvent({ projectId, inboxId: toInboxId })
+              .pipe(Effect.mapError(toServiceError("Failed to load frozen inbox boundary.")));
+            yield* repository
+              .saveCursor({
+                projectId,
+                processedThroughInboxId: toInboxId,
+                processedThroughCreatedAt: Option.isSome(toRow)
+                  ? toRow.value.createdAt
+                  : cursor.processedThroughCreatedAt,
+                frozenFromInboxId: null,
+                frozenToInboxId: null,
+                coordinatorBusy: false,
+                coordinatorBusySince: null,
+                updatedAt: isoNow(),
+              })
+              .pipe(Effect.mapError(toServiceError("Failed to advance project event cursor.")));
+            yield* appendActivity({
+              projectId,
+              kind: "wake-enqueued",
+              actorKind: "system",
+              actorThreadId: config.coordinatorThreadId,
+              goalId: activeGoal?.id ?? null,
+              taskId: null,
+              source: null,
+              summary: `Resumed interrupted coordinator continuation ${runId}.`,
+              createdAt: isoNow(),
+            });
+            yield* impl.scheduleDigest(projectId);
+            return;
+          }
+          if (cursor.coordinatorBusy) {
+            // Busy with no frozen range means a crash between the busy mark and
+            // the freeze — clear it so events are not stuck forever.
+            yield* clearWakeCursor(projectId, cursor);
+            cursor = { ...cursor, coordinatorBusy: false, coordinatorBusySince: null };
+          }
+          // Pages the inbox until a wake-eligible row appears or the tail is
+          // exhausted. Every consumed row advances the keyset cursor, so a
+          // page of non-wake rows can no longer hide later worker alerts
+          // behind the 50-row read window.
+          let eligible: ReadonlyArray<ProjectInboxEvent> = [];
+          let scanAfterId = cursor.processedThroughInboxId;
+          let scanAfterCreatedAt = cursor.processedThroughCreatedAt;
+          for (;;) {
+            const pending = yield* repository
+              .listInboxAfter({
+                projectId,
+                afterCreatedAt: scanAfterCreatedAt,
+                afterId: scanAfterId,
+                limit: 50,
+              })
+              .pipe(Effect.mapError(toServiceError("Failed to load project inbox.")));
+            if (pending.length === 0) break;
+            const found = pending.filter((event) => event.eligibleWake);
+            if (found.length > 0) {
+              eligible = found;
+              break;
+            }
+            const last = pending[pending.length - 1]!;
+            yield* repository
+              .saveCursor({
+                projectId,
+                processedThroughInboxId: last.id,
+                processedThroughCreatedAt: last.createdAt,
+                frozenFromInboxId: null,
+                frozenToInboxId: null,
+                coordinatorBusy: false,
+                coordinatorBusySince: null,
+                updatedAt: isoNow(),
+              })
+              .pipe(Effect.mapError(toServiceError("Failed to advance project event cursor.")));
+            scanAfterId = last.id;
+            scanAfterCreatedAt = last.createdAt;
+          }
+          if (eligible.length === 0) return;
+          const coordinator = yield* snapshotQuery
+            .getThreadShellById(config.coordinatorThreadId)
+            .pipe(Effect.mapError(toServiceError("Failed to load coordinator thread.")));
+          if (Option.isSome(coordinator)) {
+            const liveTurn = coordinator.value.latestTurn?.state === "running";
+            const busy = liveTurn || coordinator.value.hasPendingApprovals === true;
+            if (busy) return;
+          }
+          if (!config.automationId) return;
+          const fromInboxId = eligible[0]!.id;
+          const toInboxId = eligible[eligible.length - 1]!.id;
+          const receiptId = wakeReceiptRequestId({
             projectId,
-            processedThroughInboxId: toInboxId,
-            frozenFromInboxId: null,
-            frozenToInboxId: null,
-            coordinatorBusy: false,
-            updatedAt: isoNow(),
-          })
-          .pipe(Effect.mapError(toServiceError("Failed to advance project event cursor.")));
-        yield* appendActivity({
-          projectId,
-          kind: "wake-enqueued",
-          actorKind: "system",
-          actorThreadId: config.coordinatorThreadId,
-          goalId: activeGoal?.id ?? null,
-          taskId: eligible[0]?.taskId ?? null,
-          source: null,
-          summary: `Dispatched coordinator continuation ${runId}. Later events remain queued.`,
-          createdAt: isoNow(),
-        });
-        yield* impl.scheduleDigest(projectId);
-      }),
+            fromInboxId,
+            toInboxId,
+          });
+          const existingWake = yield* readWakeReceipt(projectId, receiptId);
+          yield* repository
+            .saveCursor({
+              projectId,
+              processedThroughInboxId: scanAfterId,
+              processedThroughCreatedAt: scanAfterCreatedAt,
+              frozenFromInboxId: fromInboxId,
+              frozenToInboxId: toInboxId,
+              coordinatorBusy: true,
+              coordinatorBusySince: isoNow(),
+              updatedAt: isoNow(),
+            })
+            .pipe(Effect.mapError(toServiceError("Failed to freeze project event range.")));
+          let runId = existingWake?.runId;
+          if (!runId) {
+            const dispatch = yield* dispatchWakeContinuation({
+              projectId,
+              receiptId,
+              automationId: config.automationId,
+              existingWake,
+            });
+            if (dispatch.runId === null) return;
+            runId = dispatch.runId;
+            if (dispatch.dispatched && activeGoal) {
+              yield* repository
+                .saveGoal(
+                  {
+                    ...activeGoal,
+                    continuationCount: activeGoal.continuationCount + 1,
+                    revision: activeGoal.revision + 1,
+                    updatedAt: isoNow(),
+                  },
+                  activeGoal.revision,
+                )
+                .pipe(Effect.mapError(toServiceError("Failed to count coordinator continuation.")));
+            }
+          }
+          yield* repository
+            .saveCursor({
+              projectId,
+              processedThroughInboxId: toInboxId,
+              processedThroughCreatedAt: eligible[eligible.length - 1]!.createdAt,
+              frozenFromInboxId: null,
+              frozenToInboxId: null,
+              coordinatorBusy: false,
+              coordinatorBusySince: null,
+              updatedAt: isoNow(),
+            })
+            .pipe(Effect.mapError(toServiceError("Failed to advance project event cursor.")));
+          yield* appendActivity({
+            projectId,
+            kind: "wake-enqueued",
+            actorKind: "system",
+            actorThreadId: config.coordinatorThreadId,
+            goalId: activeGoal?.id ?? null,
+            taskId: eligible[0]?.taskId ?? null,
+            source: null,
+            summary: `Dispatched coordinator continuation ${runId}. Later events remain queued.`,
+            createdAt: isoNow(),
+          });
+          yield* impl.scheduleDigest(projectId);
+        }).pipe(
+          // Any failure while a range is frozen must release the busy flag;
+          // otherwise every future wake bails on coordinatorBusy forever.
+          Effect.onError(() =>
+            repository.getCursor(projectId).pipe(
+              Effect.flatMap((latest) => clearWakeCursor(projectId, latest)),
+              Effect.catch(() => Effect.void),
+            ),
+          ),
+        ),
+      ),
 
     inspectWorkerHealth: () =>
       Effect.gen(function* () {
@@ -2662,20 +3190,21 @@ export const makeProjectAgentService = Effect.gen(function* () {
           .pipe(Effect.mapError(toServiceError("Failed to list project coordinators.")));
         for (const config of configs) {
           if (!config.enabled) continue;
-          const index = yield* repository
-            .listThreadIndex(config.projectId)
-            .pipe(Effect.mapError(toServiceError("Failed to load worker index.")));
-          for (const entry of index) {
-            if (entry.excluded || entry.threadId === config.coordinatorThreadId) {
+          // Only task-assigned threads are workers. Ordinary group chats stay
+          // indexed for context but a healthy idle/finished one must never
+          // produce reports, wakes, or digests.
+          const workerThreadIds = yield* assignedWorkerThreadIds(config.projectId);
+          for (const threadId of workerThreadIds) {
+            if (threadId === config.coordinatorThreadId) {
               continue;
             }
             const shell = yield* snapshotQuery
-              .getThreadShellById(entry.threadId)
+              .getThreadShellById(threadId)
               .pipe(Effect.catch(() => Effect.succeed(Option.none())));
             if (Option.isNone(shell)) {
               yield* impl.ingestSettledThreadEvent({
-                threadId: entry.threadId,
-                sourceEventId: `worker-health:${entry.threadId}:missing`,
+                threadId,
+                sourceEventId: `worker-health:${threadId}:missing`,
                 eventType: "worker.missing",
                 createdAt: isoNow(),
               });
@@ -2685,8 +3214,8 @@ export const makeProjectAgentService = Effect.gen(function* () {
             if (!isFailedWorkerSessionStatus(status)) continue;
             const updatedAt = shell.value.session?.updatedAt ?? shell.value.updatedAt;
             yield* impl.ingestSettledThreadEvent({
-              threadId: entry.threadId,
-              sourceEventId: `worker-health:${entry.threadId}:${status}:${updatedAt}`,
+              threadId,
+              sourceEventId: `worker-health:${threadId}:${status}:${updatedAt}`,
               eventType: `worker.${status}`,
               createdAt: isoNow(),
             });
@@ -2724,6 +3253,42 @@ export const makeProjectAgentService = Effect.gen(function* () {
           .pipe(Effect.mapError(toServiceError("Failed to resolve thread project.")));
         if (Option.isNone(shell)) {
           return yield* Effect.fail(fail("Thread was not found.", "not-found"));
+        }
+        // Every thread living in a group is a group member: it gets the
+        // group's instructions and memory, may write its own memory file, and
+        // reads curated docs — it cannot rewrite them.
+        const hostProject = yield* resolveGroupCoordinatorProject(shell.value.projectId).pipe(
+          Effect.option,
+        );
+        if (Option.isSome(hostProject)) {
+          const config = yield* repository
+            .getConfig(shell.value.projectId)
+            .pipe(Effect.mapError(toServiceError("Failed to resolve group coordinator.")));
+          if (Option.isSome(config)) {
+            return {
+              kind: "group-member" as const,
+              threadId,
+              projectId: shell.value.projectId,
+            };
+          }
+        }
+        // Threads a group created outside its own project (e.g. linked-repo
+        // workers whose task already ended) still belong to that group when
+        // the thread index recorded them.
+        const configs = yield* repository
+          .listConfigs()
+          .pipe(Effect.mapError(toServiceError("Failed to resolve group membership.")));
+        for (const config of configs) {
+          const index = yield* repository
+            .listThreadIndex(config.projectId)
+            .pipe(Effect.mapError(toServiceError("Failed to resolve group membership.")));
+          if (index.some((entry) => entry.threadId === threadId)) {
+            return {
+              kind: "group-member" as const,
+              threadId,
+              projectId: config.projectId,
+            };
+          }
         }
         return {
           kind: "unmanaged" as const,
@@ -2914,6 +3479,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
       if (current.projectId !== input.projectId) {
         return yield* Effect.fail(fail("Goal does not belong to this project.", "forbidden"));
       }
+      // A stopped goal is terminal: resuming it would silently reopen scope
+      // the user explicitly closed.
+      if (status === "active" && current.status === "stopped") {
+        return yield* Effect.fail(fail("A stopped goal cannot be resumed.", "invalid"));
+      }
       const updated: ProjectGoal = {
         ...current,
         status,
@@ -2969,27 +3539,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
       return saved;
     });
 
-  return {
-    ...impl,
-    pauseGoal: (input, principal) =>
-      updateGoalStatus(
-        input,
-        principal,
-        "paused",
-        "goal-paused",
-        "Paused the project goal. Current tasks may settle.",
-      ),
-    resumeGoal: (input, principal) =>
-      updateGoalStatus(input, principal, "active", "goal-resumed", "Resumed the project goal."),
-    stopGoal: (input, principal) =>
-      updateGoalStatus(
-        input,
-        principal,
-        "stopped",
-        "goal-stopped",
-        "Stopped the project goal. Pending continuations were cancelled.",
-      ),
-  } satisfies ProjectAgentServiceShape;
+  return impl satisfies ProjectAgentServiceShape;
 });
 
 export const ProjectAgentServiceLive = Layer.effect(ProjectAgentService, makeProjectAgentService);

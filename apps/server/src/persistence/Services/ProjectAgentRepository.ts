@@ -146,17 +146,29 @@ export interface ProjectAgentRepositoryShape {
     readonly diskHash?: string | null;
     readonly conflictPending?: boolean;
   }) => Effect.Effect<ProjectDocumentRevision, ProjectAgentRepositoryError>;
-  readonly nextActivitySequence: (
-    projectId: ProjectId,
-  ) => Effect.Effect<number, ProjectAgentRepositoryError>;
+  /** Update only the head row's disk-sync marker after the mirror write lands. */
+  readonly markDocumentDiskSynced: (input: {
+    readonly projectId: ProjectId;
+    readonly logicalPath: string;
+    readonly diskHash: string;
+  }) => Effect.Effect<void, ProjectAgentRepositoryError>;
+  readonly readDocumentRevisions: (input: {
+    readonly projectId: ProjectId;
+    readonly logicalPaths: ReadonlyArray<string>;
+  }) => Effect.Effect<ReadonlyArray<ProjectDocumentRevision>, ProjectAgentRepositoryError>;
   readonly appendActivity: (
-    activity: ProjectActivity,
+    activity: Omit<ProjectActivity, "sequence">,
   ) => Effect.Effect<ProjectActivity, ProjectAgentRepositoryError>;
   readonly listActivity: (input: {
     readonly projectId: ProjectId;
     readonly limit: number;
-    readonly cursor?: { readonly createdAt: string; readonly id: string };
+    readonly cursor?: {
+      readonly sequence?: number;
+      readonly createdAt?: string;
+      readonly id?: string;
+    };
   }) => Effect.Effect<ReadonlyArray<ProjectActivity>, ProjectAgentRepositoryError>;
+  readonly resetInterruptedDigests: () => Effect.Effect<number, ProjectAgentRepositoryError>;
   readonly getDigest: (
     projectId: ProjectId,
   ) => Effect.Effect<Option.Option<ProjectDigest>, ProjectAgentRepositoryError>;
@@ -177,24 +189,33 @@ export interface ProjectAgentRepositoryShape {
   >;
   readonly listInboxAfter: (input: {
     readonly projectId: ProjectId;
+    readonly afterCreatedAt?: string | null;
     readonly afterId?: string | null;
     readonly limit: number;
   }) => Effect.Effect<ReadonlyArray<ProjectInboxEvent>, ProjectAgentRepositoryError>;
+  readonly getInboxEvent: (input: {
+    readonly projectId: ProjectId;
+    readonly inboxId: string;
+  }) => Effect.Effect<Option.Option<ProjectInboxEvent>, ProjectAgentRepositoryError>;
   readonly getCursor: (projectId: ProjectId) => Effect.Effect<
     {
       readonly processedThroughInboxId: string | null;
+      readonly processedThroughCreatedAt: string | null;
       readonly frozenFromInboxId: string | null;
       readonly frozenToInboxId: string | null;
       readonly coordinatorBusy: boolean;
+      readonly coordinatorBusySince: string | null;
     },
     ProjectAgentRepositoryError
   >;
   readonly saveCursor: (input: {
     readonly projectId: ProjectId;
     readonly processedThroughInboxId: string | null;
+    readonly processedThroughCreatedAt: string | null;
     readonly frozenFromInboxId: string | null;
     readonly frozenToInboxId: string | null;
     readonly coordinatorBusy: boolean;
+    readonly coordinatorBusySince: string | null;
     readonly updatedAt: string;
   }) => Effect.Effect<void, ProjectAgentRepositoryError>;
   readonly getReceipt: (input: {

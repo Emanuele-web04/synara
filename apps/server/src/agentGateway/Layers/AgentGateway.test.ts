@@ -819,6 +819,7 @@ function makeHarnessLayer(
     buildContextPacket: () => Effect.fail(new Error("not configured")),
     formatContextPacketForTurn: () => Effect.succeed(""),
     authorizeManagedGoalCreation: () => Effect.void,
+    assertCallerMayCreateThreadInProject: () => Effect.void,
     recordManagedWorkerThreads: () => Effect.void,
     scheduleDigest: () => Effect.void,
     reconcilePendingWakes: () => Effect.void,
