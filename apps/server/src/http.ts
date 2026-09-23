@@ -43,6 +43,7 @@ import {
   commitLibraryChange,
   pushLibraryIfConfigured,
   withLibraryQueue,
+  withLibraryRootLock,
 } from "./projectAgent/libraryGit";
 import {
   assertLibraryRootLocation,
@@ -937,9 +938,13 @@ const binaryUploadEffectHandler = Effect.gen(function* () {
   if (request.method !== "POST") {
     return HttpServerResponse.text("Method Not Allowed", { status: 405, headers: corsHeaders });
   }
-  const attachmentPrincipal = isLegacyTokenAuthorized({ config, url })
-    ? LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL
-    : attachmentPrincipalForSession((yield* requireAuthenticatedMutationRequest).sessionId);
+  const mutationSession = isLegacyTokenAuthorized({ config, url })
+    ? null
+    : yield* requireAuthenticatedMutationRequest;
+  const attachmentPrincipal =
+    mutationSession === null
+      ? LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL
+      : attachmentPrincipalForSession(mutationSession.sessionId);
 
   if (url.pathname === ATTACHMENT_UPLOAD_ROUTE_PATH) {
     const type = url.searchParams.get("type");
@@ -1057,6 +1062,14 @@ const binaryUploadEffectHandler = Effect.gen(function* () {
       );
     }
     return yield* Effect.gen(function* () {
+      // Library writes are owner-only: a non-owner session gets read access
+      // through the RPC surface but cannot mutate the library over HTTP.
+      if (mutationSession !== null && mutationSession.role !== "owner") {
+        return yield* new LibraryError({
+          message: "Owner authorization is required for this operation.",
+          code: "forbidden",
+        });
+      }
       const projectId = ProjectId.makeUnsafe(projectIdParam);
       const projectionReadModelQuery = yield* ProjectionSnapshotQuery;
       const shell = yield* projectionReadModelQuery.getProjectShellById(projectId);
@@ -1074,21 +1087,6 @@ const binaryUploadEffectHandler = Effect.gen(function* () {
           code: "forbidden",
         });
       }
-      const agentConfig = Option.getOrNull(
-        yield* (yield* ProjectAgentRepository).getConfig(projectId),
-      );
-      const root = yield* resolveLibraryRoot({
-        stateDir: config.stateDir,
-        projectId,
-        libraryPath: agentConfig?.libraryPath,
-      });
-      yield* assertLibraryRootLocation({
-        root,
-        stateDir: config.stateDir,
-        groupsWorkspaceRoot: config.groupsWorkspaceRoot,
-        studioWorkspaceRoot: config.studioWorkspaceRoot,
-        isCustomPath: agentConfig?.libraryPath !== undefined,
-      });
       const normalizedName = yield* normalizeLibraryRelativePath(name);
       if (normalizedName !== name || normalizedName.includes("/")) {
         return yield* new LibraryError({
@@ -1098,34 +1096,60 @@ const binaryUploadEffectHandler = Effect.gen(function* () {
       }
       const bytes = yield* readEffectBinary(request, PROVIDER_SEND_TURN_MAX_FILE_BYTES);
       const git = yield* GitCore;
-      return yield* withLibraryQueue(
+      // The root resolves inside the project lock so a configure-time move
+      // cannot have an upload land in the pre-move directory.
+      return yield* withLibraryRootLock(
         projectId,
         Effect.gen(function* () {
-          yield* ensureLibraryRepo(git, root);
-          const relativePath = relativeDirectory
-            ? `${yield* normalizeLibraryRelativePath(relativeDirectory)}/${normalizedName}`
-            : normalizedName;
-          const target = yield* resolveLibraryWriteTarget(root, relativePath);
-          yield* writeFileStringAtomically({ filePath: target, contents: bytes });
-          yield* commitLibraryChange(git, root, `Add ${relativePath}`);
-          yield* pushLibraryIfConfigured({
-            git,
-            root,
+          const agentConfig = Option.getOrNull(
+            yield* (yield* ProjectAgentRepository).getConfig(projectId),
+          );
+          const root = yield* resolveLibraryRoot({
+            stateDir: config.stateDir,
             projectId,
-            libraryRemoteUrl: agentConfig?.libraryRemoteUrl,
-            libraryPushOnChange: agentConfig?.libraryPushOnChange,
+            libraryPath: agentConfig?.libraryPath,
           });
-          const stat = yield* Effect.tryPromise({
-            try: () => fs.stat(target),
-            catch: () => new LibraryError({ message: "Library upload did not persist." }),
+          yield* assertLibraryRootLocation({
+            root,
+            stateDir: config.stateDir,
+            groupsWorkspaceRoot: config.groupsWorkspaceRoot,
+            studioWorkspaceRoot: config.studioWorkspaceRoot,
+            isCustomPath: agentConfig?.libraryPath !== undefined,
           });
-          return {
-            name: normalizedName,
-            relativePath,
-            kind: "file" as const,
-            sizeBytes: bytes.length,
-            modifiedAt: stat.mtime.toISOString(),
-          };
+          return yield* withLibraryQueue(
+            root,
+            Effect.gen(function* () {
+              yield* ensureLibraryRepo(git, root);
+              const relativePath = relativeDirectory
+                ? `${yield* normalizeLibraryRelativePath(relativeDirectory)}/${normalizedName}`
+                : normalizedName;
+              const target = yield* resolveLibraryWriteTarget(root, relativePath);
+              yield* writeFileStringAtomically({ filePath: target, contents: bytes });
+              yield* commitLibraryChange(git, root, `Add ${relativePath}`);
+              const stat = yield* Effect.tryPromise({
+                try: () => fs.stat(target),
+                catch: () => new LibraryError({ message: "Library upload did not persist." }),
+              });
+              yield* Effect.forkDetach(
+                withLibraryQueue(
+                  root,
+                  pushLibraryIfConfigured({
+                    git,
+                    root,
+                    libraryRemoteUrl: agentConfig?.libraryRemoteUrl,
+                    libraryPushOnChange: agentConfig?.libraryPushOnChange,
+                  }),
+                ),
+              );
+              return {
+                name: normalizedName,
+                relativePath,
+                kind: "file" as const,
+                sizeBytes: bytes.length,
+                modifiedAt: stat.mtime.toISOString(),
+              };
+            }),
+          );
         }),
       );
     }).pipe(

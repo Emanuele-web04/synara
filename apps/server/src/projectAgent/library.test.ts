@@ -24,6 +24,8 @@ import {
 } from "./libraryGit.ts";
 import {
   assertLibraryRootLocation,
+  createLibraryDirectory,
+  deleteLibraryEntry,
   ensureLibraryRepo,
   listLibraryEntries,
   moveLibraryRoot,
@@ -356,35 +358,38 @@ it.layer(TestLayer)("group library", (it) => {
           return Effect.succeed({ code: 0, stdout: "", stderr: "" });
         },
       } as unknown as GitCoreShape;
-      const projectId = "project-remote-url";
+      const root = yield* makeTmpDir;
+      yield* Effect.promise(() => fs.mkdir(path.join(root, ".git"), { recursive: true }));
 
       // A remote-helper URL would execute on push; it must be rejected before
       // `git remote add` ever runs.
       yield* pushLibraryIfConfigured({
         git,
-        root: "/nonexistent",
-        projectId,
+        root,
         libraryRemoteUrl: 'ext::sh -c "echo pwned"',
         libraryPushOnChange: true,
       });
       expect(executed).toEqual([]);
-      expect(readLibraryPushStatus(projectId).lastPushError).toContain("https://");
+      const rejected = yield* readLibraryPushStatus(root);
+      expect(rejected.lastPushError).toContain("https://");
 
       const leadingOption = "-upload-pack=sh";
       yield* pushLibraryIfConfigured({
         git,
-        root: "/nonexistent",
-        projectId,
+        root,
         libraryRemoteUrl: leadingOption,
         libraryPushOnChange: true,
       });
       expect(executed).toEqual([]);
 
-      // A well-formed https remote reaches `git remote add`.
+      // A well-formed https remote reaches `git remote add`. The earlier
+      // rejections put the push into failure backoff — clear the record first.
+      yield* Effect.promise(() =>
+        fs.rm(path.join(root, ".git", "synara-push-status.json"), { force: true }),
+      );
       yield* pushLibraryIfConfigured({
         git,
-        root: "/nonexistent",
-        projectId,
+        root,
         libraryRemoteUrl: "https://example.com/library.git",
         libraryPushOnChange: true,
       });
@@ -443,21 +448,86 @@ it.layer(TestLayer)("group library", (it) => {
     }),
   );
 
-  it.effect("backfills the marker onto a pre-marker library repository", () =>
+  it.effect("rejects a git repository that lacks the Synara marker", () =>
     Effect.gen(function* () {
       const root = yield* makeTmpDir;
       const git = yield* GitCore;
       yield* ensureLibraryRepo(git, root);
-      // Libraries created before the marker existed have .git but no marker;
-      // ensureLibraryRepo adopts them and lazily writes the marker.
+      // A .git without our marker is a foreign repository — never adopted.
       yield* Effect.promise(() => fs.rm(path.join(root, ".synara-library")));
+      const error = yield* failureOf(ensureLibraryRepo(git, root));
+      expect(error).toBeInstanceOf(LibraryError);
+      if (error instanceof LibraryError) {
+        expect(error.code).toBe("forbidden");
+      }
+
+      const foreign = yield* makeTmpDir;
+      yield* Effect.promise(() => fs.mkdir(path.join(foreign, ".git"), { recursive: true }));
+      const foreignError = yield* failureOf(ensureLibraryRepo(git, foreign));
+      expect(foreignError).toBeInstanceOf(LibraryError);
+      if (foreignError instanceof LibraryError) {
+        expect(foreignError.code).toBe("forbidden");
+      }
+    }),
+  );
+
+  it.effect("creates empty folders with a hidden .gitkeep that commits", () =>
+    Effect.gen(function* () {
+      const root = yield* makeTmpDir;
+      const git = yield* GitCore;
       yield* ensureLibraryRepo(git, root);
-      const marker = yield* Effect.promise(() =>
-        fs.readFile(path.join(root, ".synara-library"), "utf8"),
+
+      const { dir } = yield* createLibraryDirectory(root, "Notes/Inbox");
+      yield* commitLibraryChange(git, root, "Add Notes/Inbox");
+
+      const keep = yield* Effect.promise(() => fs.readFile(path.join(dir, ".gitkeep"), "utf8"));
+      expect(keep).toBe("");
+      const names = yield* Effect.promise(() => fs.readdir(dir));
+      expect(names).toEqual([".gitkeep"]);
+      // .gitkeep is reserved plumbing: hidden from listings, and the folder
+      // itself is tracked by git so it survives clones.
+      const history = yield* libraryHistory(git, root, "Notes/Inbox/.gitkeep");
+      expect(history[0]?.message).toBe("Add Notes/Inbox");
+      const entries = yield* listLibraryEntries(root, "Notes/Inbox");
+      expect(entries).toEqual([]);
+    }),
+  );
+
+  it.effect("deletes a symlink leaf instead of following it", () =>
+    Effect.gen(function* () {
+      const root = yield* makeTmpDir;
+      const git = yield* GitCore;
+      const outside = yield* makeTmpDir;
+      yield* ensureLibraryRepo(git, root);
+      yield* Effect.promise(() => fs.writeFile(path.join(outside, "keep.txt"), "safe", "utf8"));
+      yield* Effect.promise(() => fs.symlink(outside, path.join(root, "link"), "dir"));
+
+      yield* deleteLibraryEntry(root, "link");
+
+      const gone = yield* Effect.promise(() =>
+        fs.lstat(path.join(root, "link")).then(
+          () => false,
+          () => true,
+        ),
       );
-      expect(marker).toBe("synara-library\n");
-      const history = yield* libraryHistory(git, root);
-      expect(history.length).toBe(1);
+      expect(gone).toBe(true);
+      const stillThere = yield* Effect.promise(() =>
+        fs.readFile(path.join(outside, "keep.txt"), "utf8"),
+      );
+      expect(stillThere).toBe("safe");
+    }),
+  );
+
+  it.effect("rejects reserved plumbing names on mutations", () =>
+    Effect.gen(function* () {
+      const root = yield* makeTmpDir;
+      for (const reserved of [".gitkeep", ".git/config", ".synara-library"]) {
+        const error = yield* failureOf(resolveLibraryWriteTarget(root, reserved));
+        expect(error).toBeInstanceOf(LibraryError);
+        if (error instanceof LibraryError) {
+          expect(error.code).toBe("forbidden");
+        }
+      }
     }),
   );
 
