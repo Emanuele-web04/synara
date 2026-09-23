@@ -9,7 +9,8 @@
 //          GROUP_THREAD_STATE_LABELS, groupThreadStateLabel,
 //          canSessionAnswerPendingRequests, isLatestTurnSettled,
 //          hasLiveLatestTurn, isThreadActivelyWorking,
-//          groupThreadNeedsAttention, resolveGroupThreadState
+//          groupThreadNeedsAttention, resolveGroupThreadState,
+//          GroupCoordinatorStatusId, resolveGroupCoordinatorStatus
 
 /**
  * The five buckets `resolveGroupThreadState` can return. "landing" exists only
@@ -168,6 +169,65 @@ export function groupThreadNeedsAttention(thread: GroupThreadStateThread): boole
     canSessionAnswerPendingRequests(session) === true &&
     (thread.hasPendingApprovals === true || thread.hasPendingUserInput === true)
   );
+}
+
+/**
+ * Coordinator status vocabulary used by the Group panel row, the project
+ * summaries feed, and `ProjectAgentOverview["coordinatorStatus"]`. Deriving it
+ * in one place keeps every surface on the same mapping.
+ */
+export type GroupCoordinatorStatusId =
+  | "unconfigured"
+  | "idle"
+  | "running"
+  | "paused"
+  | "stopped";
+
+/**
+ * The coordinator row is driven by live thread state (same inputs the sidebar
+ * uses) so it reads "running" while a turn is actually in flight — the goal
+ * lifecycle alone cannot distinguish "watching" from "idle". Goal pause/stop
+ * still wins over liveness: a paused group must not report its coordinator as
+ * running. Pending approvals and user-input requests count as running because
+ * the coordinator's turn is still in flight, waiting on an answer it can
+ * receive. An explicitly active goal reports "running" even without a live
+ * turn, matching the established goal→status contract.
+ */
+export function resolveGroupCoordinatorStatus(input: {
+  readonly configured: boolean;
+  readonly goalStatus?: string | null | undefined;
+  readonly thread?: GroupThreadStateThread | null | undefined;
+}): GroupCoordinatorStatusId {
+  if (!input.configured) {
+    return "unconfigured";
+  }
+  if (input.goalStatus === "paused") {
+    return "paused";
+  }
+  if (input.goalStatus === "stopped" || input.goalStatus === "cancelled") {
+    return "stopped";
+  }
+  if (input.goalStatus === "active") {
+    return "running";
+  }
+  const thread = input.thread ?? null;
+  if (thread === null || thread.archivedAt != null) {
+    return "idle";
+  }
+  const session = thread.session ?? null;
+  const pendingRequest =
+    canSessionAnswerPendingRequests(session) === true &&
+    (thread.hasPendingApprovals === true || thread.hasPendingUserInput === true);
+  if (
+    pendingRequest ||
+    isThreadActivelyWorking(thread) ||
+    (session != null &&
+      (resolveGroupSessionStatus(session) === "connecting" ||
+        resolveGroupSessionStatus(session) === "starting"))
+  ) {
+    return "running";
+  }
+  return "idle";
 }
 
 /**

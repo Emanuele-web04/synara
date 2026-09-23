@@ -121,6 +121,10 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(TextGenerationLayerLive),
     Layer.provideMerge(ServerSettingsLive),
     Layer.provideMerge(AgentGatewayOperationRepositoryLive),
+    // Persistence-level only: the reactor must recognize coordinator threads to
+    // pre-approve Synara group tools, but the ProjectAgent service itself sits
+    // above the reactor in this graph.
+    Layer.provideMerge(ProjectAgentRepositoryLive),
   );
   const checkpointReactorLayer = CheckpointReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),

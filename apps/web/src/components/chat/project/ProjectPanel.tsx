@@ -1,5 +1,6 @@
 import type { ModelSelection, ProjectId, ThreadId } from "@synara/contracts";
 import { PROJECT_CONTEXT_PREVIEW_DOCUMENTS } from "@synara/shared/projectAgent";
+import { resolveGroupCoordinatorStatus } from "@synara/shared/groupThreadState";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import ChatMarkdown from "~/components/ChatMarkdown";
@@ -153,6 +154,22 @@ export function ProjectPanel({
   const configured =
     projectAgentOverviewConfigured(agent.overview) ||
     (projectId !== null && summariesByProjectId.get(projectId)?.configured === true);
+  // The coordinator row reads live state off the same sidebar thread summary
+  // the thread list uses, so it reports "running" while a coordinator turn is
+  // in flight instead of echoing the overview's slower goal-derived value.
+  const coordinatorStatus = (() => {
+    if (!configured) {
+      return "unconfigured";
+    }
+    const thread = coordinatorThreadId
+      ? (sidebarThreads.find((entry) => entry.id === coordinatorThreadId) ?? null)
+      : null;
+    return resolveGroupCoordinatorStatus({
+      configured: true,
+      goalStatus: agent.overview?.goal?.status ?? null,
+      thread,
+    });
+  })();
   const coordinatorModel =
     agent.overview?.config?.coordinatorModelSelection ?? defaultModelSelection;
   const coordinatorAppearance = resolveCoordinatorAppearance({
@@ -222,9 +239,7 @@ export function ProjectPanel({
           icon={<CoordinatorGlyph className={coordinatorIconClassName} aria-hidden />}
           label={coordinatorName}
           trailing={
-            <span className="text-ui-xs text-muted-foreground">
-              {agent.overview.coordinatorStatus}
-            </span>
+            <span className="text-ui-xs text-muted-foreground">{coordinatorStatus}</span>
           }
           onClick={() => onOpenCoordinator(agent.overview!.config!.coordinatorThreadId)}
         />

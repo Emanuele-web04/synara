@@ -116,6 +116,7 @@ import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
 import { providerDisabledSettingsMessage } from "../../provider/enabledProviderAdapter.ts";
 import { ProjectAgentService } from "../../projectAgent/Services/ProjectAgentService.ts";
+import { ProjectAgentRepository } from "../../persistence/Services/ProjectAgentRepository.ts";
 import { resolveProviderDispatchAttachments } from "../../provider/providerAttachmentPaths.ts";
 import { OrchestrationEventDeliveryRepositoryLive } from "../../persistence/Layers/OrchestrationEventDeliveries.ts";
 import { ProjectionPendingInteractionRepositoryLive } from "../../persistence/Layers/ProjectionPendingInteractions.ts";
@@ -755,6 +756,10 @@ const make = Effect.gen(function* () {
   const studioOutputReactor = yield* StudioOutputReactor;
   const git = yield* GitCore;
   const gatewayOperations = yield* AgentGatewayOperationRepository;
+  // Captured at build like the rest of the reactor's services: the command
+  // handlers run inside the dispatching fiber, so a serviceOption lookup at
+  // call time would see that fiber's (possibly empty) environment instead.
+  const projectAgentRepository = yield* Effect.serviceOption(ProjectAgentRepository);
   const acceptedCompletionContexts = new Set<number>();
   const textGeneration = yield* TextGeneration;
   const serverSettings = yield* ServerSettingsService;
@@ -1698,13 +1703,17 @@ const make = Effect.gen(function* () {
         .pipe(Effect.map((sessions) => sessions.find((session) => session.threadId === threadId)));
     // The runtime-session lookup costs a provider round-trip. It can only change
     // the binding decision when a session row exists but no turn has run yet
-    // (an optimistic placeholder) AND the turn contests the row's provider.
-    // Every other case resolves identically without it, so skip the lookup.
+    // (an optimistic placeholder) AND the turn contests the row's provider, or
+    // when the stored selection diverges from the row's provider — a durable
+    // rebind waiting for a live session that the projection may already have
+    // repainted to the new provider. Every other case resolves identically
+    // without it, so skip the lookup.
     const activeSession =
       currentProvider !== undefined &&
-      thread.latestTurn === null &&
-      requestedModelSelection !== undefined &&
-      requestedModelSelection.provider !== currentProvider
+      ((thread.latestTurn === null &&
+        requestedModelSelection !== undefined &&
+        requestedModelSelection.provider !== currentProvider) ||
+        thread.modelSelection.provider !== currentProvider)
         ? yield* resolveActiveSession(threadId)
         : undefined;
     // A session row alone can be an optimistic placeholder written before the
@@ -1714,22 +1723,46 @@ const make = Effect.gen(function* () {
       currentProvider !== undefined && (activeSession !== undefined || thread.latestTurn !== null)
         ? currentProvider
         : undefined;
+    // The projected provider name is optimistic: it is repainted from the
+    // stored selection on every turn-start request, so after a stored rebind
+    // it already reads the NEW provider while the live session still runs the
+    // old one. The provider the session was actually spawned with — the live
+    // session, then the recorded spawn selection, then the projected row — is
+    // the binding turns must honor.
+    const boundProvider: ProviderKind | undefined =
+      activeSession?.provider ??
+      threadSessionModelSelections.get(threadId)?.provider ??
+      establishedProvider;
+    // A stored thread.modelSelection naming a different provider than the
+    // bound session is an intentional rebind (only a durable meta update can
+    // create that divergence — e.g. Group settings changing the coordinator
+    // model). The next turn restarts the session on the stored provider and
+    // carries the transcript through the prior-transcript bootstrap, the same
+    // mechanism Hand off uses. A turn may still explicitly pick the bound
+    // provider, which keeps running it until it stops doing so.
+    const providerRebindRequested =
+      boundProvider !== undefined &&
+      boundProvider !== thread.modelSelection.provider &&
+      (requestedModelSelection === undefined ||
+        requestedModelSelection.provider === thread.modelSelection.provider);
     if (
-      establishedProvider !== undefined &&
+      boundProvider !== undefined &&
       requestedModelSelection !== undefined &&
-      requestedModelSelection.provider !== establishedProvider
+      requestedModelSelection.provider !== boundProvider &&
+      requestedModelSelection.provider !== thread.modelSelection.provider
     ) {
       return yield* new ProviderAdapterValidationError({
-        provider: establishedProvider,
+        provider: boundProvider,
         operation: "thread.turn.start",
-        issue: `Thread '${threadId}' is bound to provider '${establishedProvider}' and cannot switch to '${requestedModelSelection.provider}'.`,
+        issue: `Thread '${threadId}' is bound to provider '${boundProvider}' and cannot switch to '${requestedModelSelection.provider}'.`,
       });
     }
-    const preferredProvider: ProviderKind =
-      establishedProvider ??
-      requestedModelSelection?.provider ??
-      currentProvider ??
-      thread.modelSelection.provider;
+    const preferredProvider: ProviderKind = providerRebindRequested
+      ? thread.modelSelection.provider
+      : (boundProvider ??
+        requestedModelSelection?.provider ??
+        currentProvider ??
+        thread.modelSelection.provider);
     const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
     const settings = yield* serverSettings.getSettings;
     if (!settings.providers[preferredProvider].enabled) {
@@ -1752,6 +1785,20 @@ const make = Effect.gen(function* () {
         issue: `Thread '${threadId}' targets a worktree that has not been created yet.`,
       });
     }
+    // A group coordinator must not stall its turn on interactive approval for
+    // the Synara group tools — the gateway authorizes every call server-side
+    // anyway. File edits, shell, and every non-Synara tool still ask.
+    // The repository sits below this layer in the server graph (the project
+    // agent service itself depends on the reactor's outputs), so the
+    // coordinator check must come straight from the persisted config rather
+    // than the service's principal resolver — the same lookup the service
+    // performs first.
+    const autoApproveSynaraTools = Option.isNone(projectAgentRepository)
+      ? false
+      : yield* projectAgentRepository.value.getConfigByCoordinatorThread(threadId).pipe(
+          Effect.map(Option.isSome),
+          Effect.catch(() => Effect.succeed(false)),
+        );
     const providerSessionOptions = {
       threadId,
       ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
@@ -1760,6 +1807,7 @@ const make = Effect.gen(function* () {
       ...(options?.enableComputerControl !== undefined
         ? { enableComputerControl: options.enableComputerControl }
         : {}),
+      ...(autoApproveSynaraTools ? { autoApproveSynaraTools: true } : {}),
       runtimeMode: desiredRuntimeMode,
     };
 
@@ -1834,8 +1882,9 @@ const make = Effect.gen(function* () {
       const existingSessionThreadId = thread.id;
       const runtimeModeChanged = desiredRuntimeMode !== thread.session?.runtimeMode;
       const providerChanged =
-        requestedModelSelection !== undefined &&
-        requestedModelSelection.provider !== currentProvider;
+        providerRebindRequested ||
+        (requestedModelSelection !== undefined &&
+          requestedModelSelection.provider !== boundProvider);
       const sessionModelSwitch =
         currentProvider === undefined
           ? "in-session"
@@ -1960,16 +2009,21 @@ const make = Effect.gen(function* () {
       // Keep the provider cursor when only cwd changes. The existing lifecycle
       // proves teardown before replacement and persists transcript fallback when
       // a provider cannot restore its native context at the new location.
+      // A provider change (including a stored rebind) or a restart-forced
+      // model change drops the native resume cursor, so the fresh session
+      // would start blank. Register the prior-transcript bootstrap for those
+      // restarts — the same context carry Hand off relies on — so the thread
+      // keeps its history in the new session's first turn.
       const restartedOutcome = yield* startProviderSessionWithOutcome(
         resumeCursor,
-        workspaceChanged && shouldRegisterContextBootstrap,
+        (workspaceChanged || providerChanged || shouldRestartForModelChange) &&
+          shouldRegisterContextBootstrap,
       );
       const restartedSession = restartedOutcome.session;
       if (
         shouldRegisterContextBootstrap &&
-        currentProvider === "droid" &&
-        !providerChanged &&
-        resumeCursor === undefined
+        ((currentProvider === "droid" && !providerChanged && resumeCursor === undefined) ||
+          restartedOutcome.priorTranscriptBootstrapPending === true)
       ) {
         freshSessionContextBootstrapThreadIds.add(threadId);
       }
@@ -2075,7 +2129,8 @@ const make = Effect.gen(function* () {
 
     const registerPriorTranscriptBootstrapOnFreshStart =
       shouldRegisterContextBootstrap &&
-      options?.registerPriorTranscriptBootstrapOnFreshStart === true;
+      (options?.registerPriorTranscriptBootstrapOnFreshStart === true ||
+        providerRebindRequested);
     const startOutcome = yield* startProviderSessionWithOutcome(
       undefined,
       registerPriorTranscriptBootstrapOnFreshStart,
@@ -2613,6 +2668,7 @@ const make = Effect.gen(function* () {
         hasPendingPriorTranscriptBootstrap) &&
       !shouldBootstrapHandoff &&
       !shouldBootstrapSidechatContext;
+
     const priorTranscriptMessages = listPriorTranscriptMessages(
       thread,
       transcriptBoundaryMessageId,

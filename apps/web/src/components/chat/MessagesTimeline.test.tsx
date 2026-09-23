@@ -3593,4 +3593,65 @@ describe("MessagesTimeline", () => {
       markup.indexOf("Edited 1 file"),
     );
   });
+
+  it("renders an automation-dispatched coordinator prompt as a compact check-in row", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        conversationOnly
+        timelineEntries={[
+          {
+            id: "checkin-row",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:29.000Z",
+            message: {
+              id: MessageId.makeUnsafe("checkin-message"),
+              role: "user",
+              text: "Automation: Alpha events\nAutomation ID: automation-1\nRun: manual\n\nCoordinator events",
+              createdAt: "2026-03-17T19:12:29.000Z",
+              streaming: false,
+              source: "native",
+              dispatchOrigin: "automation",
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("Coordinator check-in");
+    expect(markup).toContain("Show details");
+    // The compact system row must not render the user bubble chrome.
+    expect(markup).not.toContain("--app-user-message-background");
+    expect(markup).not.toContain("Sent via Automation");
+  });
+
+  it("keeps automation-origin user messages as bubbles outside coordinator conversations", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        timelineEntries={[
+          {
+            id: "automation-row",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:29.000Z",
+            message: {
+              id: MessageId.makeUnsafe("automation-message"),
+              role: "user",
+              text: "Automation: Alpha events\nRun: scheduled",
+              createdAt: "2026-03-17T19:12:29.000Z",
+              streaming: false,
+              source: "native",
+              dispatchOrigin: "automation",
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).not.toContain("Coordinator check-in");
+    expect(markup).toContain("--app-user-message-background");
+    expect(markup).toContain("Sent via Automation");
+  });
 });

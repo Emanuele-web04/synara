@@ -5963,8 +5963,9 @@ export default function ChatView({
         />
       ) : null}
 
-      {/* Thread-level errors render as a toast (see `useThreadErrorToast`) so they
-          never displace the transcript. */}
+      {/* Thread-level errors surface inline over the transcript (see
+          `ThreadErrorBanner`) so they never displace it; a toast only fires
+          for a live error event (see `useThreadErrorToast`). */}
       <ProviderHealthBanner
         status={shouldShowProviderHealthBanner ? visibleActiveProviderStatus : null}
         onDismiss={dismissActiveProviderHealthBanner}
@@ -6116,6 +6117,10 @@ export default function ChatView({
                     messageChangeSignal={timelineMessages}
                     turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
                     conversationOnly={isCoordinatorConversation}
+                    threadError={activeThread?.error ?? null}
+                    unblockingThread={unblockingActiveThread}
+                    onDismissThreadError={dismissActiveThreadError}
+                    onUnblockThread={unblockActiveThread}
                     onOpenTurnDiff={onOpenTurnDiff}
                     onOpenThread={onNavigateToThread}
                     onOpenAutomation={onOpenAutomation}

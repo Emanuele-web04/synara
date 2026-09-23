@@ -32,8 +32,23 @@ describe("project bot playbook", () => {
     expect(PROJECT_BOT_PLAYBOOK).toContain("synara_project_library_add");
     expect(PROJECT_BOT_PLAYBOOK).toContain("synara_project_list_threads");
     expect(PROJECT_BOT_PLAYBOOK).toContain("synara_send_message");
+    expect(PROJECT_BOT_PLAYBOOK).toContain("synara_create_thread");
+    expect(PROJECT_BOT_PLAYBOOK).toContain("synara_create_threads");
     expect(PROJECT_BOT_PLAYBOOK).toContain("linked repository");
     expect(PROJECT_BOT_PLAYBOOK).toContain("Suggested threads");
+  });
+
+  it("requires every part of a request to be dispatched before the turn ends", () => {
+    expect(PROJECT_BOT_PLAYBOOK).toContain("## Completing a request");
+    expect(PROJECT_BOT_PLAYBOOK).toContain("Every part of a user message counts as asked-for work");
+    expect(PROJECT_BOT_PLAYBOOK).toContain("Never end a turn with work you promised but did not dispatch");
+    expect(PROJECT_BOT_PLAYBOOK).toContain("before you finish the turn");
+    expect(PROJECT_BOT_PLAYBOOK).toContain("forgotten preference");
+  });
+
+  it("routes repository work to threads instead of doing it itself", () => {
+    expect(PROJECT_BOT_PLAYBOOK).toContain("You do not write application code yourself");
+    expect(PROJECT_BOT_PLAYBOOK).toContain("goes to a thread, not to you");
   });
 
   it("tells heartbeat wakes to report in chat instead of asking for a goal", () => {

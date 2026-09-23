@@ -161,6 +161,53 @@ export function computerToolNameFromProviderPermission(input: {
 }
 
 /**
+ * Any tool Synara's agent gateway serves under its reserved MCP server name —
+ * the whole `synara_*` catalog (thread, project, automation, diagnostics,
+ * computer). The session token is what authorizes each call server-side, so
+ * providers that were granted the gateway may let these names skip their own
+ * interactive permission prompt when the start input opts in
+ * (`ProviderSessionStartInput.autoApproveSynaraTools`).
+ *
+ * Name matching accepts both spellings the provider can report: the fully
+ * qualified `mcp__synara__*` name and the bare `synara_*` name (the gateway's
+ * catalog names are already namespaced). Other MCP servers' tools keep the
+ * ordinary permission path.
+ */
+export function isSynaraGatewayToolName(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized.startsWith("mcp__synara__") || normalized.startsWith("synara_");
+}
+
+/**
+ * Namespace-insensitive matcher across the fields a provider permission
+ * prompt may report a tool name through — the direct name, or a tool-name
+ * field nested in raw input / metadata the way some adapters deliver MCP
+ * calls.
+ */
+export function isSynaraGatewayToolCall(input: {
+  readonly name?: unknown;
+  readonly title?: unknown;
+  readonly rawInput?: unknown;
+  readonly metadata?: unknown;
+}): boolean {
+  const explicitName = typeof input.name === "string" ? input.name : undefined;
+  if (explicitName !== undefined) return isSynaraGatewayToolName(explicitName);
+
+  const rawToolName = firstRecordString(input.rawInput, ["_toolName", "toolName", "tool_name"]);
+  if (rawToolName !== undefined) return isSynaraGatewayToolName(rawToolName);
+
+  const metadataToolName = firstRecordString(input.metadata, [
+    "_toolName",
+    "toolName",
+    "tool_name",
+  ]);
+  if (metadataToolName !== undefined) return isSynaraGatewayToolName(metadataToolName);
+
+  return isSynaraGatewayToolName(input.title);
+}
+
+/**
  * Provider permission prompts are redundant for an active Synara Computer
  * capability: the gateway performs the authoritative task-scoped approval.
  * Plan mode and requests outside an active turn remain fail-closed.

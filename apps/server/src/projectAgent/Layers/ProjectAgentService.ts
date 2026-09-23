@@ -25,6 +25,7 @@ import {
   type OrchestrationCommand,
   type ProjectActivity,
   type ProjectInboxEvent,
+  type OrchestrationThreadShell,
   type ProjectAgentDeleteGroupResult,
   type ProjectAgentGroupThreadEntry,
   type ProjectAgentOverview,
@@ -82,6 +83,7 @@ import {
   Cause,
   Duration,
   Effect,
+  Equal,
   Exit,
   Layer,
   Option,
@@ -728,6 +730,12 @@ export const makeProjectAgentService = Effect.gen(function* () {
           reason: task.acceptanceCriteria ?? "Blocked",
         }));
       const goalValue = Option.getOrNull(goal);
+      // The coordinator row must reflect the live thread session (same source
+      // the sidebar uses), not just the goal lifecycle — a coordinator whose
+      // turn is in flight is "running" even when no goal is active.
+      const coordinatorShell = yield* snapshotQuery
+        .getThreadShellById(config.value.coordinatorThreadId)
+        .pipe(Effect.catch(() => Effect.succeed(Option.none())));
       // Library hosting fields (remote URL may carry credentials) are only
       // surfaced to the user; agent principals get the config without them.
       const visibleConfig =
@@ -751,7 +759,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
         digest: digestValue,
         blockers,
         recentOutcomes: activity,
-        coordinatorStatus: coordinatorStatusFromGoal(true, goalValue?.status ?? null),
+        coordinatorStatus: coordinatorStatusFromGoal(
+          true,
+          goalValue?.status ?? null,
+          Option.getOrNull(coordinatorShell),
+        ),
       };
     });
 
@@ -1460,6 +1472,16 @@ export const makeProjectAgentService = Effect.gen(function* () {
               .getProjectShellsByIds(rows.map((row) => row.projectId))
               .pipe(Effect.mapError(toServiceError("Failed to list project agents.")));
             const shellById = new Map(shells.map((shell) => [shell.id, shell] as const));
+            // Coordinator status is live: resolve it off the coordinator
+            // thread's session/turn state (same inputs as the sidebar), so the
+            // summaries feed reports "running" while a check-in turn is in
+            // flight rather than deriving it from the goal lifecycle alone.
+            const coordinatorShells = yield* snapshotQuery
+              .getThreadShellsByIds(rows.map((row) => row.coordinatorThreadId))
+              .pipe(Effect.catch(() => Effect.succeed([] as OrchestrationThreadShell[])));
+            const coordinatorShellById = new Map(
+              coordinatorShells.map((shell) => [shell.id, shell] as const),
+            );
             const visible: ProjectAgentSummary[] = [];
             for (const row of rows) {
               const shell = shellById.get(row.projectId);
@@ -1481,7 +1503,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
                 coordinatorThreadId: row.coordinatorThreadId,
                 coordinatorIcon: row.coordinatorIcon,
                 coordinatorColor: row.coordinatorColor,
-                coordinatorStatus: coordinatorStatusFromGoal(true, row.goalStatus),
+                coordinatorStatus: coordinatorStatusFromGoal(
+                  true,
+                  row.goalStatus,
+                  coordinatorShellById.get(row.coordinatorThreadId) ?? null,
+                ),
                 revision: row.revision,
                 pausedAt: row.pausedAt,
                 archivedAt: row.archivedAt,
@@ -1784,6 +1810,50 @@ export const makeProjectAgentService = Effect.gen(function* () {
           }
           yield* ensureProjectBotPlaybook(input.projectId);
           const latestConfig = yield* requireConfig(input.projectId);
+          const coordinatorModelChanged =
+            Option.isSome(existing) &&
+            !Equal.equals(
+              existing.value.coordinatorModelSelection,
+              input.coordinatorModelSelection,
+            );
+          if (coordinatorModelChanged) {
+            // Apply the new model to the live coordinator thread. The stored
+            // selection diverging from the bound session is the rebind signal
+            // ProviderCommandReactor keys off: the next turn (or an immediate
+            // restart when no turn is in flight) restarts the session on the
+            // new provider/model and carries the transcript through the
+            // prior-transcript bootstrap — the same mechanism Hand off uses.
+            // Do not also dispatch thread.session.stop here: the explicit-stop
+            // path clears pending context bootstraps, which would delete the
+            // transcript carry the rebind just registered.
+            yield* orchestrationEngine
+              .dispatch({
+                type: "thread.meta.update",
+                commandId: branded.command(),
+                threadId: coordinatorThreadId,
+                modelSelection: input.coordinatorModelSelection,
+                createdAt: now,
+              } as OrchestrationCommand)
+              .pipe(Effect.catch(() => Effect.void));
+            if (latestConfig.automationId !== null) {
+              yield* automationService
+                .update({
+                  id: latestConfig.automationId,
+                  modelSelection: input.coordinatorModelSelection,
+                })
+                .pipe(Effect.catch(() => Effect.void));
+            }
+            if (
+              latestConfig.enabled &&
+              latestConfig.pausedAt === null &&
+              latestConfig.archivedAt === null &&
+              latestConfig.automationId !== null
+            ) {
+              yield* automationService
+                .runNow({ automationId: latestConfig.automationId })
+                .pipe(Effect.catch(() => Effect.void));
+            }
+          }
           yield* ensureProjectBotHeartbeat(latestConfig).pipe(Effect.catch(() => Effect.void));
           // Publish the persisted row (with automationId and the real revision),
           // not the pre-link `saved` snapshot.

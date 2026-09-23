@@ -111,6 +111,7 @@ import {
   makeProviderCommandReactorLive,
 } from "./ProviderCommandReactor.ts";
 import { ProjectAgentService } from "../../projectAgent/Services/ProjectAgentService.ts";
+import { ProjectAgentRepository } from "../../persistence/Services/ProjectAgentRepository.ts";
 import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
@@ -300,6 +301,7 @@ describe("ProviderCommandReactor", () => {
       ProviderServiceShape["getClaudeCacheObservation"]
     >;
     readonly startClaudeCompaction?: NonNullable<ProviderServiceShape["startClaudeCompaction"]>;
+    readonly coordinatorThreadIds?: readonly string[];
   }) {
     const now = new Date().toISOString();
     const baseDir = input?.baseDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "synara-reactor-"));
@@ -310,6 +312,10 @@ describe("ProviderCommandReactor", () => {
     let nextSessionIndex = 1;
     const runtimeSessions: Array<ProviderSession> = [];
     const persistedResumeCursors = new Map<ThreadId, unknown>();
+    // The provider that minted each persisted cursor: a cursor can only
+    // natively resume a session on its own provider, so a cross-provider
+    // restart that drops the input cursor must not pick it back up here.
+    const persistedResumeCursorProviders = new Map<ThreadId, ProviderKind>();
     const pendingPriorTranscriptBootstraps = new Set<ThreadId>();
     const listSessions = vi.fn<ProviderServiceShape["listSessions"]>(() =>
       Effect.succeed(runtimeSessions),
@@ -360,8 +366,11 @@ describe("ProviderCommandReactor", () => {
     const startSessionWithOutcome = vi.fn<
       NonNullable<ProviderServiceShape["startSessionWithOutcome"]>
     >((threadId, sessionInput, outcomeOptions) => {
-      const effectiveResumeCursor =
-        sessionInput.resumeCursor ?? persistedResumeCursors.get(threadId);
+      const persistedCursor =
+        persistedResumeCursorProviders.get(threadId) === sessionInput.provider
+          ? persistedResumeCursors.get(threadId)
+          : undefined;
+      const effectiveResumeCursor = sessionInput.resumeCursor ?? persistedCursor;
       const nativeResumeAttempted =
         effectiveResumeCursor !== undefined && effectiveResumeCursor !== null;
       const nativeResumeSucceeded =
@@ -385,6 +394,7 @@ describe("ProviderCommandReactor", () => {
             runtimeSessions[runtimeIndex] = resolvedSession;
           }
           persistedResumeCursors.set(threadId, resolvedSession.resumeCursor);
+          persistedResumeCursorProviders.set(threadId, resolvedSession.provider);
           return {
             session: resolvedSession,
             nativeResumeAttempted,
@@ -515,6 +525,7 @@ describe("ProviderCommandReactor", () => {
           runtimeSessions.splice(index, 1);
         }
         persistedResumeCursors.delete(threadId);
+        persistedResumeCursorProviders.delete(threadId);
         pendingPriorTranscriptBootstraps.delete(threadId);
       }),
     );
@@ -553,6 +564,7 @@ describe("ProviderCommandReactor", () => {
           return;
         }
         persistedResumeCursors.set(threadId, null);
+        persistedResumeCursorProviders.delete(threadId);
         const index = runtimeSessions.findIndex((session) => session.threadId === threadId);
         if (index >= 0) {
           runtimeSessions.splice(index, 1);
@@ -657,12 +669,21 @@ describe("ProviderCommandReactor", () => {
     const projectAgentLayer = Layer.succeed(ProjectAgentService, {
       formatContextPacketForTurn: () => Effect.succeed(""),
     } as unknown as (typeof ProjectAgentService)["Service"]);
+    const projectAgentRepositoryLayer = Layer.succeed(ProjectAgentRepository, {
+      getConfigByCoordinatorThread: (threadId: ThreadId) =>
+        Effect.succeed(
+          (input?.coordinatorThreadIds ?? []).includes(threadId)
+            ? Option.some({ projectId: asProjectId("project-1") })
+            : Option.none(),
+        ),
+    } as unknown as (typeof ProjectAgentRepository)["Service"]);
     const layer = makeProviderCommandReactorLive(
       input?.commandEventTimeout === undefined
         ? undefined
         : { commandEventTimeout: input.commandEventTimeout },
     ).pipe(
       Layer.provideMerge(projectAgentLayer),
+      Layer.provideMerge(projectAgentRepositoryLayer),
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
       Layer.provideMerge(TurnCheckpointCoordinatorLive),
@@ -13264,6 +13285,331 @@ describe("ProviderCommandReactor", () => {
         options: {
           effort: "max",
         },
+      },
+    });
+  });
+
+  it.each([
+    { coordinatorThreadIds: ["thread-1"] as readonly string[], expected: true },
+    { coordinatorThreadIds: [] as readonly string[], expected: false },
+  ])(
+    "pre-approves Synara group tools only for coordinator sessions (coordinator: $expected)",
+    async ({ coordinatorThreadIds, expected }) => {
+      const harness = await createHarness({ coordinatorThreadIds });
+      const now = new Date().toISOString();
+
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe(`cmd-turn-start-autoapprove-${expected}`),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          message: {
+            messageId: asMessageId(`user-message-autoapprove-${expected}`),
+            role: "user",
+            text: "delegate this",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        }),
+      );
+
+      await waitFor(() => harness.startSession.mock.calls.length === 1);
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      const startInput = harness.startSession.mock.calls[0]?.[1];
+      if (expected) {
+        expect(startInput).toMatchObject({ autoApproveSynaraTools: true });
+      } else {
+        expect(startInput).not.toHaveProperty("autoApproveSynaraTools");
+      }
+      // File edits and shell still ask: the flag must never widen into
+      // blanket approval, so it travels as a dedicated start option and not
+      // through the runtime mode.
+      expect(startInput).toMatchObject({ runtimeMode: "approval-required" });
+    },
+  );
+
+  it("rebinds the session to a stored provider change and keeps the transcript bootstrap", async () => {
+    const harness = await createHarness({
+      threadModelSelection: { provider: "grok", model: "grok-code-fast-1" },
+    });
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-rebind-1"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-rebind-1"),
+          role: "user",
+          text: "first turn on grok",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      modelSelection: { provider: "grok", model: "grok-code-fast-1" },
+    });
+
+    // Group settings applies a new coordinator model by writing the stored
+    // selection durably; the next turn must rebind rather than error.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-rebind-meta-update"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-rebind-2"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-rebind-2"),
+          role: "user",
+          text: "now on claude",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 2);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+      provider: "claudeAgent",
+      modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+    });
+    // The grok resume cursor is meaningless to Claude — dropped, with the
+    // prior-transcript bootstrap standing in for continuity (Hand off's
+    // mechanism), so the second sendTurn carries the thread context.
+    expect(harness.startSession.mock.calls[1]?.[1]).not.toHaveProperty("resumeCursor");
+    expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("<thread_context>");
+    expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("first turn on grok");
+
+    const thread = await readHarnessThread(harness);
+    expect(thread?.session?.providerName).toBe("claudeAgent");
+  });
+
+  it("applies a stored provider rebind deferred behind an in-flight turn", async () => {
+    const harness = await createHarness({
+      threadModelSelection: { provider: "grok", model: "grok-code-fast-1" },
+    });
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-deferred-1"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-deferred-1"),
+          role: "user",
+          text: "first turn on grok",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    // Turn in flight: the settings save must not tear it down — the rebind
+    // waits for the turn boundary.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-deferred-session-running"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "running",
+          providerName: "grok",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-deferred-live"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-meta-deferred-claude"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+        createdAt: now,
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(harness.startSession.mock.calls.length).toBe(1);
+
+    // The turn ends on the old provider; the projected row settles ready.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-deferred-session-ready"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "ready",
+          providerName: "grok",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    // The next bare turn's turn-start-requested repaints the projected
+    // providerName to the stored selection BEFORE ensure runs — detecting the
+    // rebind requires the provider the session was actually spawned with (the
+    // live session / recorded spawn selection), not the optimistic row.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-deferred-2"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-deferred-2"),
+          role: "user",
+          text: "now on claude",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 2);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+      provider: "claudeAgent",
+      modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+    });
+    expect(harness.startSession.mock.calls[1]?.[1]).not.toHaveProperty("resumeCursor");
+    expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("<thread_context>");
+    expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("first turn on grok");
+
+    const thread = await readHarnessThread(harness);
+    expect(thread?.session?.providerName).toBe("claudeAgent");
+  });
+
+  it("rejects an explicit turn for a provider that is neither bound nor stored", async () => {
+    const harness = await createHarness({
+      threadModelSelection: { provider: "grok", model: "grok-code-fast-1" },
+    });
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-keepbound-1"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-keepbound-1"),
+          role: "user",
+          text: "first turn on grok",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-keepbound-meta-update"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+      }),
+    );
+    // The stored update rebinds the live session eagerly — the bound provider
+    // is now claudeAgent.
+    await waitFor(() => harness.startSession.mock.calls.length === 2);
+    expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+      provider: "claudeAgent",
+    });
+
+    // An explicit turn naming the new bound provider keeps running on it.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-keepbound-2"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-keepbound-2"),
+          role: "user",
+          text: "continue on claude",
+          attachments: [],
+        },
+        modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    expect(harness.startSession.mock.calls.length).toBe(2);
+    expect(harness.sendTurn.mock.calls[1]?.[0]).toMatchObject({
+      modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+    });
+
+    // A turn explicitly requesting the pre-rebind provider is now a foreign
+    // request — neither bound nor stored — and must be rejected rather than
+    // silently resurrecting grok.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-keepbound-3"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-keepbound-3"),
+          role: "user",
+          text: "back to grok",
+          attachments: [],
+        },
+        modelSelection: { provider: "grok", model: "grok-code-fast-1" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => {
+      const thread = await readHarnessThread(harness);
+      return (
+        thread?.activities.some((activity) => activity.kind === "provider.turn.start.failed") ??
+        false
+      );
+    });
+    expect(harness.sendTurn.mock.calls.length).toBe(2);
+    const thread = await readHarnessThread(harness);
+    expect(
+      thread?.activities.find((activity) => activity.kind === "provider.turn.start.failed"),
+    ).toMatchObject({
+      payload: {
+        detail: expect.stringContaining("cannot switch to 'grok'"),
       },
     });
   });

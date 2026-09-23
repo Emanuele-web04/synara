@@ -138,7 +138,11 @@ function makeTestLayer(options?: {
     readonly archivedAt: string | null;
     readonly prompt: string;
   }> = [];
-  const automationUpdates: Array<{ readonly id: string; readonly enabled?: boolean }> = [];
+  const automationUpdates: Array<{
+    readonly id: string;
+    readonly enabled?: boolean;
+    readonly modelSelection?: unknown;
+  }> = [];
   const automationDeletes: string[] = [];
   const runNowCalls: string[] = [];
   const automationRuns: Array<{ readonly id: string }> = [];
@@ -284,10 +288,17 @@ function makeTestLayer(options?: {
       automationDeletes.push(String(input.id));
       return Effect.succeed({ deleted: true });
     },
-    update: (input: { readonly id: string; readonly enabled?: boolean }) => {
+    update: (input: {
+      readonly id: string;
+      readonly enabled?: boolean;
+      readonly modelSelection?: unknown;
+    }) => {
       automationUpdates.push({
         id: String(input.id),
         ...(input.enabled === undefined ? {} : { enabled: input.enabled }),
+        ...(input.modelSelection === undefined
+          ? {}
+          : { modelSelection: input.modelSelection }),
       });
       return Effect.succeed({ id: input.id, prompt: "" });
     },
@@ -994,6 +1005,147 @@ it.effect("round-trips library hosting fields and rejects a relative libraryPath
     assert.equal(cleared.config?.libraryPath, undefined);
     assert.equal(cleared.config?.libraryRemoteUrl, undefined);
     assert.equal(cleared.config?.libraryPushOnChange, true);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("applies a saved coordinator model to the live thread and heartbeat", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const first = yield* service.configure(
+      {
+        requestId: "req-model-1",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    const coordinatorThreadId = first.config?.coordinatorThreadId;
+    assert.isNotNull(coordinatorThreadId);
+    harness.dispatched.length = 0;
+    harness.runNowCalls.length = 0;
+    harness.automationUpdates.length = 0;
+
+    const nextModel = { provider: "claudeAgent" as const, model: "claude-sonnet-4-6" };
+    yield* service.configure(
+      {
+        requestId: "req-model-2",
+        projectId: groupId,
+        coordinatorModelSelection: nextModel,
+      },
+      { kind: "user" },
+    );
+
+    // The stored thread selection becomes the rebind signal the reactor
+    // consumes: its own meta-updated path restarts the session on the new
+    // provider and registers the prior-transcript bootstrap. An explicit
+    // thread.session.stop would run the stop cleanup AFTER that registration
+    // and wipe the bootstrap just created — so configure must not send one;
+    // a check-in then runs the new model immediately.
+    const metaUpdate = harness.dispatched.find(
+      (command) =>
+        command.type === "thread.meta.update" && command.modelSelection !== undefined,
+    );
+    assert.isOk(metaUpdate);
+    if (metaUpdate?.type !== "thread.meta.update") {
+      assert.fail("expected a thread.meta.update dispatch");
+    }
+    assert.equal(metaUpdate.threadId, coordinatorThreadId);
+    assert.deepEqual(metaUpdate.modelSelection, nextModel);
+    assert.equal(
+      harness.dispatched.some((command) => command.type === "thread.session.stop"),
+      false,
+    );
+    assert.deepEqual(harness.runNowCalls, ["automation-1"]);
+    assert.deepEqual(harness.automationUpdates, [
+      { id: "automation-1", modelSelection: nextModel },
+    ]);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("does not stop the session when the coordinator model keeps the same provider", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    yield* service.configure(
+      {
+        requestId: "req-model-same-1",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    harness.dispatched.length = 0;
+    harness.runNowCalls.length = 0;
+
+    const nextModel = { provider: "codex" as const, model: "gpt-5.3-codex" };
+    yield* service.configure(
+      {
+        requestId: "req-model-same-2",
+        projectId: groupId,
+        coordinatorModelSelection: nextModel,
+      },
+      { kind: "user" },
+    );
+
+    assert.equal(
+      harness.dispatched.some((command) => command.type === "thread.session.stop"),
+      false,
+    );
+    const metaUpdate = harness.dispatched.find(
+      (command) =>
+        command.type === "thread.meta.update" && command.modelSelection !== undefined,
+    );
+    assert.isOk(metaUpdate);
+    if (metaUpdate?.type !== "thread.meta.update") {
+      assert.fail("expected a thread.meta.update dispatch");
+    }
+    assert.deepEqual(metaUpdate.modelSelection, nextModel);
+    assert.deepEqual(harness.runNowCalls, ["automation-1"]);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("skips the model apply block when the coordinator model is unchanged", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    yield* service.configure(
+      {
+        requestId: "req-model-same-3",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    harness.dispatched.length = 0;
+    harness.runNowCalls.length = 0;
+    harness.automationUpdates.length = 0;
+
+    yield* service.configure(
+      {
+        requestId: "req-model-same-4",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+
+    assert.equal(
+      harness.dispatched.some(
+        (command) =>
+          command.type === "thread.meta.update" && command.modelSelection !== undefined,
+      ),
+      false,
+    );
+    assert.equal(
+      harness.dispatched.some((command) => command.type === "thread.session.stop"),
+      false,
+    );
+    assert.deepEqual(harness.runNowCalls, []);
+    assert.deepEqual(
+      harness.automationUpdates.filter((update) => update.modelSelection !== undefined),
+      [],
+    );
   }).pipe(Effect.provide(harness.layer));
 });
 

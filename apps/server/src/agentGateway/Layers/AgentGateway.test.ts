@@ -2072,6 +2072,20 @@ describe("AgentGateway", () => {
         "synara_cancel_automation",
         "synara_update_automation_memory",
         "synara_report_automation_result",
+        // Group tools the coordinator delegates through — the playbook names
+        // these, so a capability regression would silently gut delegation.
+        "synara_project_get_overview",
+        "synara_project_list_tasks",
+        "synara_project_read_document",
+        "synara_project_write_document",
+        "synara_project_report_result",
+        "synara_project_context",
+        "synara_project_remember",
+        "synara_project_forget",
+        "synara_project_link_repository",
+        "synara_project_library_list",
+        "synara_project_library_add",
+        "synara_project_list_threads",
       ]);
       const createThreadProperties = tools.find((tool) => tool.name === "synara_create_thread")
         ?.inputSchema.properties;
