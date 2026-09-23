@@ -12,6 +12,38 @@ inside the compositor, which is exactly the privilege level macOS computer use
 uses on its side (WindowServer). See the design doc for the full rationale and
 the macOS comparison.
 
+## Setup and packaged builds
+
+The plugin requires KWin 6, Qt 6, KDE Frameworks 6 and ECM 5.240 or newer.
+Stock Ubuntu 24.04 and Debian 12 ship the older Qt 5 toolchain. Synara rejects
+setup on those releases before requesting system installation. Use Ubuntu 26.04
+LTS, Debian 13 or another release with the required toolchain. This is a build
+requirement, not a claim that every desktop configuration has been tested.
+
+Packaged builds match the exact KWin version, architecture and distribution
+release. Current build targets are Fedora 43 and 44, Debian 13 trixie, Ubuntu
+26.04, openSUSE Tumbleweed and Arch. A derivative's `ID_LIKE` is not enough to
+select its parent distribution's binary. Unknown distributions and legacy
+manifests without distro metadata fall back to a local source build. Installation
+stamps include the host distribution so setup rechecks an install after a distro
+upgrade. Matching these fields does not replace testing the packaged plugin with
+the target distribution's Qt and KDE libraries.
+
+Each packaged binary is listed in `prebuilt/manifest.json` with its SHA-256,
+and setup verifies the bytes it read against that hash before writing them to
+the plugin directory (through a temp file, fsync and rename, so a half-written
+`.so` never sits under the final name). The hash guards against corruption and
+truncation of a bundle that ships inside the app - a damaged update, a
+packaging step that copied the wrong file under a name - not against
+tampering: anyone who can alter a binary in the bundle can alter the manifest
+beside it in the same operation. Provenance of the bundle as a whole is the
+job of the package and update signing, not of this checksum.
+
+Clipboard support requires both `wl-copy` and `wl-paste` from `wl-clipboard`.
+Setup installs them when missing, including on an already configured desktop.
+Availability checks report the missing capability without requesting installation.
+The system package step only runs after an explicit Set up request.
+
 ## How it works
 
 - Runs inside KWin as a `KWin::Plugin`, so it has the compositor's authority over

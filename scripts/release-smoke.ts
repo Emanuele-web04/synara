@@ -14,6 +14,7 @@ import {
   SYNARA_PRODUCTION_BUNDLE_ID,
 } from "@synara/shared/desktopIdentity";
 
+import { createDesktopPlatformBuildConfig } from "./lib/desktop-platform-build-config.ts";
 import {
   readReleaseUpdatePolicyConfig,
   resolveReleaseUpdatePolicy,
@@ -187,6 +188,87 @@ function verifyReleaseWorkflowSafety(): void {
     "pkg-config libssl-dev libx11-dev libxtst-dev libxrandr-dev libxfixes-dev libxrender-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libwayland-dev",
     "Expected the Linux release to install the native driver's build dependencies.",
   );
+  // The prebuild workflow runs inside this release run — per-run artifacts are
+  // the only way its output can reach the packaging jobs — and must stay
+  // read-only like every other build job. It never blocks a release: no
+  // strict mode, and no packaging job is gated on its result.
+  assertContains(
+    workflow,
+    "  kwin_plugin_prebuilds:\n    name: KWin plugin prebuilds\n    needs: preflight\n    if: ${{ needs.preflight.outputs.build_native == 'true' || needs.preflight.outputs.build_server == 'true' }}\n    permissions:\n      contents: read\n    uses: ./.github/workflows/kwin-plugin-prebuilds.yml",
+    "Expected the release run to build the KWin plugin prebuilts itself, read-only.",
+  );
+  assertContains(
+    workflow,
+    "      ref: ${{ needs.preflight.outputs.ref }}\n      strict: false",
+    "Expected the release's KWin plugin prebuilds to skip a distribution rather than fail the run.",
+  );
+  assertNotContains(
+    workflow,
+    "needs.kwin_plugin_prebuilds.result == 'success' &&",
+    "No release job may be gated on the KWin plugin prebuilds succeeding.",
+  );
+  assertContains(
+    workflow,
+    "  publish_cli:\n    name: Publish CLI to npm\n    # kwin_plugin_prebuilds orders the job after the prebuilds but never gates\n    # it: a failed or skipped prebuild run publishes without them.\n    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.build.result == 'success' && needs.build_portable.result == 'success' && needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_PUBLISH_CLI == '1' }}",
+    "Expected CLI publication to keep every original gate and run whatever the prebuilds did.",
+  );
+  // The portable build is verified native-free by every consumer, so the
+  // binaries must never be staged into it: the Linux desktop leg polls for
+  // the artifact after the verified import and hands it to the packaging
+  // stage, and the two Linux server jobs stage it into the restored dist.
+  assertNotContains(
+    workflow.slice(
+      workflow.indexOf("  build_portable:\n"),
+      workflow.indexOf("  build_mac_icon:\n"),
+    ),
+    "kwin",
+    "The portable build must not stage or wait for the KWin plugin prebuilts.",
+  );
+  assertContains(
+    buildJob,
+    "      - name: Download KWin plugin prebuilts\n        if: matrix.platform == 'linux' && needs.preflight.outputs.package_artifacts == 'true'",
+    "Expected only the Linux desktop leg to fetch the KWin plugin prebuilts.",
+  );
+  assertContains(
+    buildJob,
+    'gh run download "$GITHUB_RUN_ID" --name kwin-plugin-prebuilt --dir "$prebuilt_dir"',
+    "Expected the Linux desktop leg to poll for this run's prebuilt artifact instead of a job dependency.",
+  );
+  for (const warning of [
+    "::warning::The KWin plugin prebuild jobs of this run concluded without a prebuilt artifact",
+    "::warning::The KWin plugin prebuilds of this run did not finish in time",
+  ]) {
+    assertContains(
+      buildJob,
+      warning,
+      "Expected a Linux desktop build without prebuilts to warn and continue, never fail.",
+    );
+  }
+  assertNotContains(
+    buildJob.slice(
+      buildJob.indexOf("      - name: Download KWin plugin prebuilts"),
+      buildJob.indexOf("      - id: build_artifact"),
+    ),
+    "exit 1",
+    "The prebuilt download must never fail the Linux desktop build.",
+  );
+  assertNotContains(
+    buildJob,
+    "kwin_plugin_prebuilds",
+    "The desktop build matrix must not wait on the Linux prebuild matrix.",
+  );
+  const stagedPrebuilts =
+    "        if: needs.kwin_plugin_prebuilds.result == 'success'\n        continue-on-error: true\n        uses: actions/download-artifact@v8\n        with:\n          name: kwin-plugin-prebuilt\n          path: apps/server/dist/computer-use-kwin/prebuilt";
+  if (workflow.split(stagedPrebuilts).length - 1 !== 2) {
+    throw new Error(
+      "Expected the CLI publication and server tarball jobs to each stage the KWin plugin prebuilts into the restored server dist, best effort.",
+    );
+  }
+  if (workflow.split("      - name: Report missing KWin plugin prebuilts").length - 1 !== 2) {
+    throw new Error(
+      "Expected the CLI publication and server tarball jobs to warn when they ship without prebuilts.",
+    );
+  }
   assertContains(
     workflow,
     "    permissions:\n      contents: read\n      id-token: write\n    steps:",
@@ -194,7 +276,7 @@ function verifyReleaseWorkflowSafety(): void {
   );
   assertContains(
     workflow,
-    "  build_server_tarball:\n    name: Build server tarball\n    if: needs.preflight.outputs.build_server == 'true'\n    needs: [preflight, build_portable]\n    runs-on: ubuntu-24.04\n    timeout-minutes: 10\n    permissions:\n      contents: read",
+    "  build_server_tarball:\n    name: Build server tarball\n    # kwin_plugin_prebuilds orders the job after the prebuilds but never gates\n    # it: a failed or skipped prebuild run packs the tarball without them.\n    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.build_portable.result == 'success' && needs.preflight.outputs.build_server == 'true' }}\n    needs: [preflight, build_portable, kwin_plugin_prebuilds]\n    runs-on: ubuntu-24.04\n    timeout-minutes: 10\n    permissions:\n      contents: read",
     "Expected server tarball builds to receive read-only repository access.",
   );
   assertContains(
@@ -469,12 +551,32 @@ function verifyDesktopStageLockAuthority(): void {
   }
 }
 
+// The KWin plugin sources are read by bash and cmake, which cannot read inside
+// app.asar, so the Linux desktop build must leave them as real files under
+// app.asar.unpacked, at the path the stage copies the server dist to.
+function verifyLinuxComputerUseAssetsUnpacked(): void {
+  const buildScript = readFileSync(resolve(repoRoot, "scripts/build-desktop-artifact.ts"), "utf8");
+  assertContains(
+    buildScript,
+    'fs.copy(distDirs.serverDist, path.join(stageAppDir, "apps/server/dist"))',
+    "Expected the desktop stage to place the server dist at apps/server/dist in the app root.",
+  );
+  const asarUnpack =
+    createDesktopPlatformBuildConfig({ platform: "linux", target: "AppImage" }).asarUnpack ?? [];
+  for (const glob of ["apps/server/dist/computer-use-kwin/**"]) {
+    if (!asarUnpack.includes(glob)) {
+      throw new Error(`Expected the Linux desktop build to unpack ${glob} from app.asar.`);
+    }
+  }
+}
+
 const tempRoot = mkdtempSync(join(tmpdir(), "synara-release-smoke-"));
 
 try {
   verifyCanonicalIdentity();
   verifyReleaseWorkflowSafety();
   verifyDesktopStageLockAuthority();
+  verifyLinuxComputerUseAssetsUnpacked();
   copyWorkspaceManifestFixture(tempRoot);
 
   execFileSync(

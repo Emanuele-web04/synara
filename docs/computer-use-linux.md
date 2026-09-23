@@ -164,6 +164,40 @@ changes owner.
   `healthJson.xAuthority` names the cookie file of the compositor's own
   Xwayland, which X11 apps launched into a nested session need.
 
+### Provisioning and packaging
+
+Everything except distribution packages installs under the user's home,
+without root, from the server process: `provisionKWinPlugin`
+(`kwinPluginProvisioning.ts`) and the steps under `provisioning/`, with
+distribution packages behind one `pkexec` prompt. With no matching prebuilt,
+`scripts/install-and-load.sh --build-only` compiles against the local headers
+(KWin 6, Qt 6, KF6, ECM; Ubuntu before 24.10 and Debian before 13 are refused
+by name). Each install lands as a new `SynaraComputerUsePluginV<n>.so`, since
+the compositor keeps a loaded library mapped; the first install on a machine
+takes effect at the next login because Qt reads `QT_PLUGIN_PATH` at compositor
+start.
+
+Prebuilds come from `.github/workflows/kwin-plugin-prebuilds.yml` (one job per
+distribution image and architecture, assembled by
+`scripts/assemble-kwin-plugin-prebuilds.mjs` into `manifest.json` with
+`kwinVersion`, `arch`, `builtOn`, `file`, `sha256`); `selectPrebuilt` matches
+all three fields exactly, with SHA-256 verified before install. The release
+builds them inside the release run, best effort: prebuilds never block or
+delay a release. A distribution the matrix cannot build is skipped and
+reported, and a prebuild run that fails or finishes late leaves the packaging
+jobs to ship with a `::warning::`; the users concerned keep the source-build
+fallback. The binaries never enter the portable build, which every packaging
+job verifies native-free: the Linux desktop leg polls for the artifact after
+the verified import — stopping as soon as the prebuild jobs have concluded —
+and passes it to the desktop build (`--kwin-plugin-prebuilt-dir`), which
+stages it under the packaged server dist, and the CLI and server-tarball jobs
+stage it into the restored dist when the prebuild run succeeded. No packaging
+job waits on or is gated by the prebuild matrix.
+
+The plugin sources ship outside ASAR (`LINUX_COMPUTER_USE_ASAR_UNPACK_GLOBS`):
+bash and cmake read them off the disk. `apps/server/scripts/cli.ts` copies them
+into `dist/`, and `scripts/release-smoke.ts` checks the packaging.
+
 ### Testing
 
 The plugin's fixture tests (`native/computer-use-kwin/tests`) compile

@@ -49,3 +49,8 @@ __screenshots__/
 .unlazy/
 # Claude Code worktrees are local scratch checkouts, not part of the repo.
 .claude/worktrees/
+
+# Prebuilt KWin plugin binaries, downloaded from the KWin Plugin Prebuilds
+# workflow into the directory the server reads at install time. Built artifacts,
+# never sources.
+apps/server/native/computer-use-kwin/prebuilt/
