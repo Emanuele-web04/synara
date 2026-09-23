@@ -21,13 +21,6 @@ const FREEZE_MOTION = `
 `;
 
 export async function preparePage(page: Page, theme: "light" | "dark") {
-  await page.route("**/api/installer-count", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({ count: 11990 }),
-    }),
-  );
   await page.goto("/", { waitUntil: "domcontentloaded" });
   await page.evaluate((selectedTheme) => {
     document.documentElement.classList.toggle("dark", selectedTheme === "dark");
@@ -41,13 +34,6 @@ export async function preparePage(page: Page, theme: "light" | "dark") {
 }
 
 export async function prepareRoute(page: Page, pathname: string, theme: "light" | "dark") {
-  await page.route("**/api/installer-count", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({ count: 11990 }),
-    }),
-  );
   await page.goto(pathname, { waitUntil: "domcontentloaded" });
   await page.evaluate((selectedTheme) => {
     document.documentElement.classList.toggle("dark", selectedTheme === "dark");

@@ -6,6 +6,7 @@ import {
   WsAutomationResolveProposalRpc,
   WsBootstrapRpcGroup,
   WsFeatureRpcGroup,
+  WsComputerRpcGroup,
   WsProjectAgentLinkRpcGroup,
   WsProjectsDiscoverScriptsRpc,
   WsProjectsProvisionFromGitHubRpc,
@@ -13,6 +14,7 @@ import {
   WsPullRequestsReviewRequestCountRpc,
   WsRpcError,
 } from "./rpc";
+import { COMPUTER_WS_METHODS } from "./computer";
 import { ORCHESTRATION_WS_METHODS } from "./orchestration";
 
 describe("WS RPC contracts", () => {
@@ -25,6 +27,12 @@ describe("WS RPC contracts", () => {
     expect(WsFeatureRpcGroup.requests.has(ORCHESTRATION_WS_METHODS.reconcileProviderDelivery)).toBe(
       true,
     );
+  });
+
+  it("registers every computer method, including setup", () => {
+    for (const method of Object.values(COMPUTER_WS_METHODS)) {
+      expect(WsComputerRpcGroup.requests.has(method)).toBe(true);
+    }
   });
 
   it("uses a schema-backed transport error", () => {

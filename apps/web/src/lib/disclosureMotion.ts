@@ -27,6 +27,19 @@ export const DISCLOSURE_CONTENT_MOTION_CLASS =
 export const DISCLOSURE_CONTENT_OPEN_CLASS = "translate-y-0 opacity-100";
 export const DISCLOSURE_CONTENT_CLOSED_CLASS = "-translate-y-1 opacity-0 pointer-events-none";
 
+/**
+ * Opacity-only reveal for elements that hold their place in the layout while
+ * they show and hide: overlay hints, status lines, and anything absolutely
+ * positioned, where collapsing the box would move the thing it annotates.
+ * Same duration and curve as the collapsing disclosures.
+ */
+export const DISCLOSURE_FADE_MOTION_CLASS =
+  "transition-opacity duration-220 ease-out motion-reduce:transition-none";
+
+export function disclosureFadeClassName(open: boolean, className?: string) {
+  return cn(DISCLOSURE_FADE_MOTION_CLASS, open ? "opacity-100" : "opacity-0", className);
+}
+
 /** Chevron rotation paired with the shell motion. */
 export const DISCLOSURE_CHEVRON_MOTION_CLASS =
   "size-3.5 shrink-0 text-muted-foreground transition-transform duration-220 ease-out motion-reduce:transition-none";
@@ -69,4 +82,28 @@ export function disclosureContentClassName(open: boolean, className?: string) {
 
 export function disclosureChevronClassName(open: boolean, className?: string) {
   return cn(DISCLOSURE_CHEVRON_MOTION_CLASS, open && "rotate-90", className);
+}
+
+/**
+ * Pop reveal for a floating card that materializes from its top-right corner.
+ * Asymmetric timing: slow deliberate arrival, snappy exit. Same ease-out
+ * curve as the other disclosures.
+ */
+export const DISCLOSURE_POP_OPEN_MS = 280;
+export const DISCLOSURE_POP_CLOSE_MS = 160;
+
+/** Base transition covering opacity+transform with the open duration. */
+export const DISCLOSURE_POP_MOTION_CLASS =
+  "origin-top-right transition-[opacity,transform] duration-280 ease-out motion-reduce:transition-none";
+
+export const DISCLOSURE_POP_OPEN_CLASS = "translate-y-0 scale-100 opacity-100";
+export const DISCLOSURE_POP_CLOSED_CLASS =
+  "translate-y-1.5 scale-[0.97] opacity-0 pointer-events-none duration-160";
+
+export function disclosurePopClassName(open: boolean, className?: string) {
+  return cn(
+    DISCLOSURE_POP_MOTION_CLASS,
+    open ? DISCLOSURE_POP_OPEN_CLASS : DISCLOSURE_POP_CLOSED_CLASS,
+    className,
+  );
 }

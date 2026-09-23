@@ -1,3 +1,4 @@
+import { requestCurrentAppSnap } from "../appSnap.logic";
 // FILE: BranchToolbar.tsx
 // Purpose: Renders the chat thread's compact workspace controls, including the
 // local usage popover, inline workspace environment picker, and runtime access toggle.
@@ -44,7 +45,6 @@ import {
   RUNTIME_AUTO_ACCENT_CLASS_NAME,
   RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME,
   COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
-  COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME,
 } from "./chat/composerPickerStyles";
 import {
   ENVIRONMENT_ROW_CLASS_NAME,
@@ -98,7 +98,7 @@ function RuntimeModeMenuItem({
           <span>{presentation.label}</span>
           <span
             className={cn(
-              "runtime-mode-menu-description text-xs font-normal",
+              "runtime-mode-menu-description text-ui leading-snug font-normal",
               accent ? "text-current" : "text-muted-foreground",
             )}
           >
@@ -238,6 +238,12 @@ export function RuntimeUsageControls({
                 icon={<CentralIcon name="shield-access" className="size-4 shrink-0" />}
               />
             </MenuRadioGroup>
+            {typeof window !== "undefined" && window.desktopBridge?.appSnap?.captureCurrentApp ? (
+              <>
+                <MenuSeparator />
+                <MenuItem onClick={requestCurrentAppSnap}>Share current app</MenuItem>
+              </>
+            ) : null}
           </ComposerPickerMenuPopup>
         </Menu>
       ) : null}
@@ -502,7 +508,7 @@ export default function BranchToolbar({
             />
           </div>
         ) : (
-          <span className="inline-flex items-center gap-2 px-1.5 text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-[var(--color-text-foreground-secondary)]">
+          <span className="inline-flex items-center gap-2 px-1.5 text-ui-sm font-normal text-[var(--color-text-foreground-secondary)]">
             <WorktreeGlyph className="size-3.5" />
             {environmentPresentation.shortLabel}
           </span>

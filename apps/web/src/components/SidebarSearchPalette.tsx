@@ -7,7 +7,9 @@
 import {
   BugReportIcon,
   CheckIcon,
+  ChevronRightIcon,
   DeviceLaptopIcon,
+  DownloadIcon,
   FolderAddIcon,
   FolderOpenFrontIcon,
   ImportThreadIcon,
@@ -18,11 +20,15 @@ import {
   SunIcon,
   UsageGaugeIcon,
 } from "~/lib/icons";
-import { type FilesystemBrowseResult, type ProviderKind } from "@synara/contracts";
+import {
+  type FilesystemBrowseResult,
+  type ProjectImportProvider,
+  type ProviderKind,
+} from "@synara/contracts";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
 import { Autocomplete as AutocompletePrimitive } from "@base-ui/react/autocomplete";
 import { LuArrowLeft, LuCornerLeftUp } from "react-icons/lu";
-import { type ComponentType, useEffect, useState, type KeyboardEvent } from "react";
+import { type ComponentType, useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { FolderClosed } from "./FolderClosed";
 import { ProviderIcon as SharedProviderIcon } from "./ProviderIcon";
@@ -70,19 +76,16 @@ import { Input } from "./ui/input";
 // Palette skin — shared with the ⌘P workspace palette so both surfaces read as one
 // menu: 44px bare input, settings-scale type, 30px squircle rows, single keycap pills.
 const PALETTE_INPUT_CLASS =
-  "font-system-ui h-11 w-full min-w-0 bg-transparent px-3.5 text-[length:var(--app-font-size-ui-lg,13px)] text-foreground outline-none placeholder:text-muted-foreground/70";
+  "font-system-ui h-11 w-full min-w-0 bg-transparent px-3.5 text-ui-lg text-foreground outline-none placeholder:text-muted-foreground/70";
 const PALETTE_GROUP_LABEL_CLASS =
-  "flex items-center justify-between px-2.5 pt-2 pb-1 font-normal text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/70";
+  "flex items-center justify-between px-2.5 pt-2 pb-1 font-normal text-ui-xs text-muted-foreground/70";
 const PALETTE_ITEM_CLASS =
   "palette-row min-h-[30px] cursor-pointer items-center gap-3 rounded-[20px] px-2.5 py-0 text-foreground data-highlighted:bg-zinc-500/8 data-highlighted:text-foreground sm:min-h-[30px] dark:data-highlighted:bg-zinc-400/10";
 const PALETTE_ICON_CLASS = "size-3.5 shrink-0 text-muted-foreground";
-const PALETTE_TEXT_CLASS = "min-w-0 flex-1 truncate text-[length:var(--app-font-size-ui,12px)]";
-const PALETTE_META_CLASS =
-  "max-w-[45%] shrink-0 truncate text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/70";
-const PALETTE_KBD_CLASS =
-  "h-[17px] min-w-0 rounded-md px-1.5 text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/80";
-const PALETTE_STATUS_CLASS =
-  "px-4 pt-1 pb-3 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/79";
+const PALETTE_TEXT_CLASS = "min-w-0 flex-1 truncate text-ui";
+const PALETTE_META_CLASS = "max-w-[45%] shrink-0 truncate text-ui-meta text-muted-foreground/70";
+const PALETTE_KBD_CLASS = "h-[17px] min-w-0 rounded-md px-1.5 text-ui-xs text-muted-foreground/80";
+const PALETTE_STATUS_CLASS = "px-4 pt-1 pb-3 text-ui text-muted-foreground/79";
 
 // Actions that live under the "Settings" heading when the palette is idle.
 const SETTINGS_ACTION_IDS: ReadonlySet<string> = new Set([
@@ -91,7 +94,7 @@ const SETTINGS_ACTION_IDS: ReadonlySet<string> = new Set([
   "feedback",
 ]);
 
-export type SidebarSearchPaletteMode = "search" | "import";
+export type SidebarSearchPaletteMode = "search" | "import" | "import-projects";
 
 interface SidebarSearchPaletteProps {
   open: boolean;
@@ -112,7 +115,19 @@ interface SidebarSearchPaletteProps {
   onOpenThread: (threadId: string) => void;
   importProviders: readonly ImportProviderKind[];
   onImportThread: (provider: ImportProviderKind, externalId: string) => Promise<void>;
+  onImportProjects: (providers: readonly ProjectImportProvider[]) => void;
 }
+
+// Second page of the "Import projects" command: pick which local tool to import from.
+const IMPORT_PROJECTS_SOURCES: readonly {
+  id: string;
+  label: string;
+  providers: readonly ProjectImportProvider[];
+}[] = [
+  { id: "claude-code", label: "From Claude Code", providers: ["claudeAgent"] },
+  { id: "codex", label: "From Codex", providers: ["codex"] },
+  { id: "all", label: "From Claude Code and Codex", providers: ["claudeAgent", "codex"] },
+];
 
 export type ImportProviderKind = Extract<
   ProviderKind,
@@ -149,6 +164,7 @@ const ACTION_ICONS: Record<string, IconComponent> = {
   "new-thread": NewThreadIcon,
   "add-project": FolderAddIcon,
   "import-thread": ImportThreadIcon,
+  "import-projects": DownloadIcon,
   feedback: BugReportIcon,
   settings: SettingsIcon,
   "usage-settings": UsageGaugeIcon,
@@ -269,7 +285,7 @@ function CodeThemeBadge(props: { accent: string; background: string; foreground:
   return (
     <span
       aria-hidden="true"
-      className="inline-flex size-6 shrink-0 items-center justify-center rounded-full border font-medium text-[10px] leading-none tracking-[-0.01em]"
+      className="inline-flex size-6 shrink-0 items-center justify-center rounded-full border font-medium text-ui-xs leading-none tracking-[-0.01em]"
       style={{
         backgroundColor: props.background,
         borderColor: `${props.foreground}26`,
@@ -475,7 +491,13 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
     query.trim().length > 0 &&
     (themeCommandItems.length > 0 || matchedCurrentThemes.length > 0);
   const matchedProjects = isBrowsing ? [] : matchSidebarSearchProjects(props.projects, query);
-  const matchedThreads = isBrowsing ? [] : matchSidebarSearchThreads(props.threads, query);
+  // Scoring normalizes and scans every message of every thread; keep it keyed
+  // on the thread set and query so highlight/keyboard/state re-renders and
+  // unrelated store flushes do not rescore the whole workspace.
+  const matchedThreads = useMemo(
+    () => (isBrowsing ? [] : matchSidebarSearchThreads(props.threads, query)),
+    [isBrowsing, props.threads, query],
+  );
   const hasSearchResults =
     matchedActions.length > 0 ||
     themeCommandItems.length > 0 ||
@@ -621,6 +643,11 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
             props.onModeChange("import");
             return;
           }
+          if (action.id === "import-projects") {
+            setQuery("");
+            props.onModeChange("import-projects");
+            return;
+          }
           if (!onSelect) return;
           props.onOpenChange(false);
           onSelect();
@@ -635,9 +662,17 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
         {action.shortcutLabel ? (
           <Kbd className={PALETTE_KBD_CLASS}>{action.shortcutLabel}</Kbd>
         ) : null}
+        {action.id === "import-projects" ? (
+          <ChevronRightIcon className={PALETTE_ICON_CLASS} />
+        ) : null}
       </CommandItem>
     );
   };
+
+  const normalizedSourceQuery = query.trim().toLowerCase();
+  const importProjectsSources = IMPORT_PROJECTS_SOURCES.filter((source) =>
+    source.label.toLowerCase().includes(normalizedSourceQuery),
+  );
 
   return (
     <CommandDialog open={props.open} onOpenChange={props.onOpenChange}>
@@ -658,8 +693,10 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                   <LuArrowLeft className="size-4" />
                 </Button>
                 <div>
-                  <p className="text-sm font-medium text-foreground">Import thread from provider</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
+                  <p className="text-ui-lg leading-snug font-medium text-foreground">
+                    Import thread from provider
+                  </p>
+                  <p className="mt-1 text-ui leading-snug text-muted-foreground">
                     Create a local app thread and resume it from an existing provider id.
                   </p>
                 </div>
@@ -667,7 +704,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
             </div>
             <div className="space-y-4 px-4 py-4">
               <div className="space-y-2">
-                <p className="text-xs font-medium text-muted-foreground">Provider</p>
+                <p className="text-ui leading-snug font-medium text-muted-foreground">Provider</p>
                 <div className="flex gap-2">
                   {props.importProviders.map((provider) => (
                     <Button
@@ -692,13 +729,15 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                   ))}
                 </div>
                 {props.importProviders.length === 0 ? (
-                  <p className="text-xs text-muted-foreground">
+                  <p className="text-ui leading-snug text-muted-foreground">
                     No connected providers expose chat import in this build.
                   </p>
                 ) : null}
               </div>
               <div className="space-y-2">
-                <p className="text-xs font-medium text-muted-foreground">{importFieldLabel}</p>
+                <p className="text-ui leading-snug font-medium text-muted-foreground">
+                  {importFieldLabel}
+                </p>
                 <Input
                   autoFocus
                   nativeInput
@@ -713,7 +752,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                     }
                   }}
                 />
-                <p className="text-xs text-muted-foreground">
+                <p className="text-ui leading-snug text-muted-foreground">
                   {importProvider === "claudeAgent"
                     ? "Claude resumes a persisted session by session id."
                     : importProvider === "cursor"
@@ -724,7 +763,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                 </p>
               </div>
               {importError ? (
-                <p className="rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                <p className="rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-ui leading-snug text-destructive">
                   {importError}
                 </p>
               ) : null}
@@ -751,6 +790,75 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
               </div>
             </div>
           </div>
+        ) : props.mode === "import-projects" ? (
+          <Command autoHighlight="always" mode="none">
+            <div className="flex items-center ps-2">
+              <Button
+                size="icon"
+                variant="ghost"
+                aria-label="Back to commands"
+                className="size-7 shrink-0"
+                onClick={() => {
+                  setQuery("");
+                  props.onModeChange("search");
+                }}
+              >
+                <LuArrowLeft className="size-3.5" />
+              </Button>
+              <AutocompletePrimitive.Input
+                autoFocus
+                className={cn(PALETTE_INPUT_CLASS, "ps-2")}
+                placeholder="Import projects from…"
+                value={query}
+                onChange={(event) => setQuery(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Backspace" && query.length === 0) {
+                    event.preventDefault();
+                    props.onModeChange("search");
+                  }
+                }}
+              />
+            </div>
+            <CommandList className="max-h-[min(30rem,60vh)] not-empty:px-1.5 not-empty:pt-0 not-empty:pb-2">
+              {importProjectsSources.length > 0 ? (
+                <CommandGroup>
+                  <CommandGroupLabel className={PALETTE_GROUP_LABEL_CLASS}>
+                    <span>Import projects</span>
+                  </CommandGroupLabel>
+                  {importProjectsSources.map((source) => (
+                    <CommandItem
+                      key={source.id}
+                      value={`import-projects:${source.id}`}
+                      className={PALETTE_ITEM_CLASS}
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                      }}
+                      onClick={() => {
+                        props.onOpenChange(false);
+                        props.onImportProjects(source.providers);
+                      }}
+                    >
+                      <span className="flex shrink-0 items-center gap-1">
+                        {source.providers.map((provider) => (
+                          <SharedProviderIcon
+                            key={provider}
+                            provider={provider}
+                            className={PALETTE_ICON_CLASS}
+                          />
+                        ))}
+                      </span>
+                      <span className={PALETTE_TEXT_CLASS}>{source.label}</span>
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              ) : null}
+            </CommandList>
+            <CommandStatus className="p-0">
+              {importProjectsSources.length === 0 ? (
+                <div className={PALETTE_STATUS_CLASS}>No matching import source.</div>
+              ) : null}
+            </CommandStatus>
+          </Command>
         ) : (
           <>
             <Command
@@ -907,11 +1015,11 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                             </div>
                             {matchContext ? (
                               <div className="flex items-start gap-3">
-                                <div className="min-w-0 flex-1 line-clamp-1 text-[length:var(--app-font-size-ui-meta,10px)] leading-4 text-muted-foreground/78">
+                                <div className="min-w-0 flex-1 line-clamp-1 text-ui-meta leading-4 text-muted-foreground/78">
                                   <HighlightedText text={matchContext} query={query} />
                                 </div>
                                 {matchLabel ? (
-                                  <span className="shrink-0 text-[length:var(--app-font-size-ui-meta,10px)] leading-4 text-muted-foreground/58">
+                                  <span className="shrink-0 text-ui-meta leading-4 text-muted-foreground/58">
                                     {matchLabel}
                                   </span>
                                 ) : null}
@@ -1082,14 +1190,14 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                         <div className={PALETTE_STATUS_CLASS}>No matching folders.</div>
                       ) : null}
                       {willCreateMissingFolder ? (
-                        <div className="palette-row mx-3 mb-2 rounded-lg border border-dashed border-[color:var(--color-border)] px-3 py-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground">
+                        <div className="palette-row mx-3 mb-2 rounded-lg border border-dashed border-[color:var(--color-border)] px-3 py-2 text-ui text-muted-foreground">
                           Press Enter to create{" "}
                           <span className="text-foreground">{trimmedQuery}</span> and add it as a
                           project.
                         </div>
                       ) : null}
                       {addProjectError ? (
-                        <div className="palette-row mx-3 mb-2 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-[length:var(--app-font-size-ui,12px)] text-destructive">
+                        <div className="palette-row mx-3 mb-2 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-ui text-destructive">
                           {addProjectError}
                         </div>
                       ) : null}

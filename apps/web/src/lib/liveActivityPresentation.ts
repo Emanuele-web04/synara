@@ -6,11 +6,12 @@ import { useSyncExternalStore } from "react";
 
 import type { WorkLogLiveActivity } from "../workLog";
 import { formatClockDuration } from "../session-logic";
+import { startVisibleInterval } from "./visibleInterval";
 
 const NO_ACTIVITY_THRESHOLD_MS = 30_000;
 const LIVE_ACTIVITY_TICK_MS = 1_000;
 const liveActivityClockListeners = new Set<() => void>();
-let liveActivityClockIntervalId: number | null = null;
+let stopLiveActivityClock: (() => void) | null = null;
 let liveActivityClockNowMs = Date.now();
 
 function emitLiveActivityClockTick(): void {
@@ -24,17 +25,14 @@ function subscribeLiveActivityClock(listener: () => void): () => void {
   liveActivityClockListeners.add(listener);
   if (liveActivityClockListeners.size === 1) {
     liveActivityClockNowMs = Date.now();
-    liveActivityClockIntervalId = window.setInterval(
-      emitLiveActivityClockTick,
-      LIVE_ACTIVITY_TICK_MS,
-    );
+    stopLiveActivityClock = startVisibleInterval(emitLiveActivityClockTick, LIVE_ACTIVITY_TICK_MS);
   }
 
   return () => {
     liveActivityClockListeners.delete(listener);
-    if (liveActivityClockListeners.size === 0 && liveActivityClockIntervalId !== null) {
-      window.clearInterval(liveActivityClockIntervalId);
-      liveActivityClockIntervalId = null;
+    if (liveActivityClockListeners.size === 0) {
+      stopLiveActivityClock?.();
+      stopLiveActivityClock = null;
     }
   };
 }

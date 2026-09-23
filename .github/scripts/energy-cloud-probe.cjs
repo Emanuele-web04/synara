@@ -1,0 +1,135 @@
+// Trigger cloud probe after workflow registration.
+const { app, BrowserWindow } = require("electron");
+// A probe intentionally destroys every window between paired runs.
+app.on("window-all-closed", () => {});
+const numericArgs = process.argv
+  .slice(1)
+  .filter((x) => /^\d+$/.test(x))
+  .map(Number);
+const repeats = numericArgs.at(-2) ?? 3;
+const durationMs = numericArgs.at(-1) ?? 10000;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function snapshot() {
+  return app
+    .getAppMetrics()
+    .map((m) => ({ pid: m.pid, type: m.type, cpu: m.cpu.cumulativeCPUUsage }));
+}
+function delta(a, b) {
+  const m = new Map(a.map((x) => [x.pid, x]));
+  const rows = b.map((x) => ({
+    type: x.type,
+    cpuSeconds: m.has(x.pid) ? Math.max(0, x.cpu - m.get(x.pid).cpu) : 0,
+  }));
+  const totalCpuSeconds = rows.reduce((s, x) => s + x.cpuSeconds, 0);
+  return { totalCpuSeconds, averageCorePercent: (totalCpuSeconds / (durationMs / 1000)) * 100 };
+}
+async function freshWindow() {
+  const w = new BrowserWindow({
+    width: 900,
+    height: 700,
+    show: true,
+    webPreferences: { backgroundThrottling: true, sandbox: true },
+  });
+  await w.loadURL("data:text/html,<body>probe</body>");
+  await sleep(500);
+  return w;
+}
+const baselineClock = `window.__ticks=0;const ids=[setInterval(()=>window.__ticks++,1000),setInterval(()=>window.__ticks++,1000)];window.__cleanup=()=>ids.forEach(clearInterval);true;`;
+const candidateClock = `window.__ticks=0;const ids=new Set();let refresh=null;const tick=()=>window.__ticks++;const stop=()=>{if(refresh!==null){clearTimeout(refresh);refresh=null;}for(const id of ids)clearInterval(id);ids.clear();};const sync=()=>{if(document.visibilityState!=="visible"){stop();return;}if(ids.size)return;refresh=setTimeout(()=>{refresh=null;tick();},0);ids.add(setInterval(tick,1000));ids.add(setInterval(tick,1000));};document.addEventListener("visibilitychange",sync);sync();window.__cleanup=()=>{document.removeEventListener("visibilitychange",sync);stop();};true;`;
+async function hidden(variant, repeat) {
+  const w = await freshWindow();
+  await w.webContents.executeJavaScript(variant === "baseline" ? baselineClock : candidateClock);
+  await sleep(1500);
+  w.hide();
+  await sleep(500);
+  const visibility = await w.webContents.executeJavaScript("document.visibilityState");
+  const a = snapshot();
+  await sleep(durationMs);
+  const b = snapshot();
+  const ticks = await w.webContents.executeJavaScript("window.__ticks");
+  await w.webContents.executeJavaScript("window.__cleanup?.()");
+  w.destroy();
+  return {
+    scenario: "hidden-clock",
+    variant,
+    repeat,
+    durationMs,
+    visibility,
+    ticks,
+    ...delta(a, b),
+  };
+}
+const baseStep = `function step(s,n,t,e){const p=s.lastFrameAt;const dt=p?Math.min((n-p)/1000,.05):0;s.lastFrameAt=n;if(s.shown>t)s.shown=t;const backlog=t-s.shown;if(backlog<=0){s.velocity=0;s.lastFrameAt=0;return{emitCount:null,done:true};}const tv=Math.min(2000,backlog/.16);s.velocity+=(tv-s.velocity)*.15;s.shown=Math.min(t,s.shown+s.velocity*dt);const next=Math.floor(s.shown);const caught=next>=t;const due=next!==e&&(caught||s.lastEmitAt===0||n-s.lastEmitAt>=40);if(due)s.lastEmitAt=n;const done=t-s.shown<=0;if(done){s.velocity=0;s.lastFrameAt=0;}return{emitCount:due?next:null,done};}`;
+const candStep = baseStep.replace(
+  "const next=Math.floor(s.shown);",
+  "if(t-s.shown<.001)s.shown=t;const next=Math.floor(s.shown);",
+);
+async function reveal(variant, repeat) {
+  const w = await freshWindow();
+  const code =
+    (variant === "baseline" ? baseStep : candStep) +
+    `window.__callbacks=0;window.__emitted=0;window.__state={shown:0,velocity:0,lastFrameAt:0,lastEmitAt:0};window.__now=1000;window.__timer=setInterval(()=>{window.__callbacks++;window.__now+=1000/240;const r=step(window.__state,window.__now,100,window.__emitted);if(r.emitCount!==null)window.__emitted=r.emitCount;if(r.done&&"${variant}"==="candidate"){clearInterval(window.__timer);window.__timer=null;}},4);`;
+  await w.webContents.executeJavaScript(code);
+  const a = snapshot();
+  await sleep(durationMs);
+  const b = snapshot();
+  const state = await w.webContents.executeJavaScript(
+    `({callbacks:window.__callbacks,emitted:window.__emitted,shown:window.__state.shown,timerActive:window.__timer!==null})`,
+  );
+  await w.webContents.executeJavaScript("if(window.__timer)clearInterval(window.__timer)");
+  w.destroy();
+  return {
+    scenario: "synthetic-240hz-stepper",
+    variant,
+    repeat,
+    durationMs,
+    ...state,
+    ...delta(a, b),
+  };
+}
+function summary(rows) {
+  const g = {};
+  for (const r of rows) (g[r.scenario + ":" + r.variant] ??= []).push(r);
+  const o = {};
+  for (const [k, v] of Object.entries(g)) {
+    const xs = v.map((x) => x.totalCpuSeconds);
+    const mean = xs.reduce((a, b) => a + b, 0) / xs.length;
+    const variance =
+      xs.length > 1 ? xs.reduce((s, x) => s + (x - mean) ** 2, 0) / (xs.length - 1) : 0;
+    o[k] = {
+      runs: v.length,
+      meanCpuSeconds: mean,
+      stdevCpuSeconds: Math.sqrt(variance),
+      meanAverageCorePercent: v.reduce((s, x) => s + x.averageCorePercent, 0) / v.length,
+      meanTicksOrCallbacks: v.reduce((s, x) => s + (x.ticks ?? x.callbacks ?? 0), 0) / v.length,
+      emitted: v.map((x) => x.emitted).filter((x) => x !== undefined),
+      visibility: v.map((x) => x.visibility).filter(Boolean),
+    };
+  }
+  return o;
+}
+app.whenReady().then(async () => {
+  const rows = [];
+  let exitCode = 0;
+  try {
+    for (let r = 0; r < repeats; r++) {
+      for (const v of r % 2 ? ["candidate", "baseline"] : ["baseline", "candidate"]) {
+        const x = await hidden(v, r);
+        rows.push(x);
+        console.log("ROW " + JSON.stringify(x));
+      }
+    }
+    for (let r = 0; r < repeats; r++) {
+      for (const v of r % 2 ? ["candidate", "baseline"] : ["baseline", "candidate"]) {
+        const x = await reveal(v, r);
+        rows.push(x);
+        console.log("ROW " + JSON.stringify(x));
+      }
+    }
+    console.log("SUMMARY " + JSON.stringify(summary(rows)));
+  } catch (e) {
+    console.error(e);
+    exitCode = 1;
+  }
+  app.exit(exitCode);
+});

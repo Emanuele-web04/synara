@@ -7,13 +7,13 @@ import { NextResponse } from "next/server";
 
 import { getInstallerCount } from "@/lib/installerCount";
 
-// COST FIX (Vercel audit): the homepage mounts InstallerCount twice (hero + closing CTA),
-// each polling this route every 30s. With force-dynamic + no-store every poll ran a
-// function invocation + GitHub API call. Caching the route for 60s makes the polls
-// free CDN cache hits; the GitHub fetch now runs at most once per 60s per PoP.
-export const revalidate = 60;
+// The installer total is a once-a-day number: the count itself is cached for a
+// day in getInstallerCount and the homepage no longer polls this route, so the
+// CDN can hold the response for a day as well.
+const ONE_DAY_SECONDS = 24 * 60 * 60;
+export const revalidate = 86400;
 
-// Returns the current installer total so the homepage can refresh it while open.
+// Returns the current installer total.
 export async function GET() {
   const count = await getInstallerCount();
 
@@ -33,7 +33,7 @@ export async function GET() {
     { count },
     {
       headers: {
-        "Cache-Control": "public, s-maxage=60, stale-while-revalidate=300",
+        "Cache-Control": `public, s-maxage=${ONE_DAY_SECONDS}, stale-while-revalidate=${ONE_DAY_SECONDS}`,
       },
     },
   );

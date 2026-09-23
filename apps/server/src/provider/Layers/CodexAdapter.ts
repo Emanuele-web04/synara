@@ -7,6 +7,7 @@
  * @module CodexAdapterLive
  */
 import {
+  AsyncUserInputQuestions,
   type ChatAttachment,
   type CanonicalItemType,
   type CanonicalRequestType,
@@ -54,7 +55,11 @@ import {
   resolveAcpTurnIdleTimeoutMs,
 } from "../acp/AcpTurnIdleWatchdog.ts";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
-import { acquireAgentGatewaySessionLease } from "../../agentGateway/sessionLease.ts";
+import {
+  acquireAgentGatewaySessionLease,
+  AGENT_GATEWAY_NO_CAPABILITIES,
+  captureAgentGatewayCapabilityInput,
+} from "../../agentGateway/sessionLease.ts";
 import { filterProviderPromptImageAttachments } from "../promptAttachments.ts";
 import { resolveProviderAttachmentPath } from "../providerAttachmentPaths.ts";
 import {
@@ -269,6 +274,7 @@ function providerErrorMapsToWarning(event: ProviderEvent): boolean {
   return (
     event.kind === "error" &&
     (event.method === "process/stderr" ||
+      event.method === "mcpServer/elicitation/request/unrenderable" ||
       (event.method === "error" &&
         typeof event.message === "string" &&
         isNonFatalCodexErrorMessage(event.message)))
@@ -386,7 +392,27 @@ function toCanonicalItemType(raw: unknown): CanonicalItemType {
   return "unknown";
 }
 
-function itemTitle(itemType: CanonicalItemType): string | undefined {
+function toolItemTitle(item: Record<string, unknown> | undefined): string | undefined {
+  if (!item) return undefined;
+  const appContext = asObject(item.appContext);
+  const action =
+    asTrimmedString(appContext?.actionName) ??
+    asTrimmedString(item.title) ??
+    asTrimmedString(item.tool) ??
+    asTrimmedString(item.name);
+  if (!action) return undefined;
+
+  const appName = asTrimmedString(appContext?.appName);
+  if (!appName || action.toLowerCase().includes(appName.toLowerCase())) {
+    return action;
+  }
+  return `${action} in ${appName}`;
+}
+
+function itemTitle(
+  itemType: CanonicalItemType,
+  item?: Record<string, unknown>,
+): string | undefined {
   switch (itemType) {
     case "assistant_message":
       return "Assistant message";
@@ -401,9 +427,9 @@ function itemTitle(itemType: CanonicalItemType): string | undefined {
     case "file_change":
       return "File change";
     case "mcp_tool_call":
-      return "MCP tool call";
+      return toolItemTitle(item) ?? "MCP tool call";
     case "dynamic_tool_call":
-      return "Tool call";
+      return toolItemTitle(item) ?? "Tool call";
     case "web_search":
       return "Web search";
     case "image_generation":
@@ -490,6 +516,8 @@ function toRequestTypeFromMethod(method: string): CanonicalRequestType {
       return "file_change_approval";
     case "item/permissions/requestApproval":
       return "permissions_approval";
+    case "mcpServer/elicitation/request":
+      return "tool_approval";
     case "applyPatchApproval":
       return "apply_patch_approval";
     case "execCommandApproval":
@@ -515,6 +543,8 @@ function toRequestTypeFromKind(kind: unknown): CanonicalRequestType {
       return "file_change_approval";
     case "permissions":
       return "permissions_approval";
+    case "tool":
+      return "tool_approval";
     default:
       return "unknown";
   }
@@ -903,6 +933,20 @@ function mapItemLifecycle(
   const detail =
     itemType === "reasoning" ? reasoningSummaryDetail(source) : itemDetail(source, payload ?? {});
   const status = itemStatus(lifecycle, source.status);
+  const title = itemTitle(canonicalItemType, source);
+  const asyncQuestions =
+    itemType === "assistant_message" && Array.isArray(source.questions)
+      ? Schema.decodeUnknownOption(AsyncUserInputQuestions)(
+          source.questions.map((value: unknown) => {
+            const question = asObject(value);
+            return question
+              ? question.options == null
+                ? { title: question.title }
+                : { title: question.title, options: question.options }
+              : value;
+          }),
+        )
+      : Option.none();
 
   return {
     ...(generatedImageReference
@@ -915,8 +959,9 @@ function mapItemLifecycle(
     type: lifecycle,
     payload: {
       itemType: canonicalItemType,
+      ...(Option.isSome(asyncQuestions) ? { asyncQuestions: asyncQuestions.value } : {}),
       ...(status ? { status } : {}),
-      ...(itemTitle(canonicalItemType) ? { title: itemTitle(canonicalItemType) } : {}),
+      ...(title ? { title } : {}),
       ...(generatedImageReference
         ? { detail: generatedImageReference.path }
         : detail
@@ -1123,7 +1168,10 @@ function mapToRuntimeEvents(
     }
 
     const detail =
-      asString(payload?.command) ?? asString(payload?.reason) ?? asString(payload?.prompt);
+      asString(payload?.command) ??
+      asString(payload?.reason) ??
+      asString(payload?.prompt) ??
+      asString(payload?.message);
     return [
       {
         ...runtimeEventBase(event, canonicalThreadId),
@@ -1505,14 +1553,16 @@ function mapToRuntimeEvents(
   }
 
   if (event.method === "item/mcpToolCall/progress") {
+    const toolUseId = asString(payload?.toolUseId) ?? asString(payload?.itemId);
+    const summary = asString(payload?.summary) ?? asString(payload?.message);
     return [
       {
         ...runtimeEventBase(event, canonicalThreadId),
         type: "tool.progress",
         payload: {
-          ...(asString(payload?.toolUseId) ? { toolUseId: asString(payload?.toolUseId) } : {}),
+          ...(toolUseId ? { toolUseId } : {}),
           ...(asString(payload?.toolName) ? { toolName: asString(payload?.toolName) } : {}),
-          ...(asString(payload?.summary) ? { summary: asString(payload?.summary) } : {}),
+          ...(summary ? { summary } : {}),
           ...(asNumber(payload?.elapsedSeconds) !== undefined
             ? { elapsedSeconds: asNumber(payload?.elapsedSeconds) }
             : {}),
@@ -1904,8 +1954,16 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
               ? {
                   agentGatewayMcp: {
                     endpointUrl: () => agentGatewayCredentials.mcpEndpointUrl,
-                    acquireSessionLease: (threadId) =>
-                      acquireAgentGatewaySessionLease(agentGatewayCredentials, threadId, PROVIDER)!,
+                    // Codex leases inside the app-server manager, which owns
+                    // session restarts. The manager carries the start input's
+                    // capability facts; review runtimes request none.
+                    acquireSessionLease: (threadId, capabilityInput) =>
+                      acquireAgentGatewaySessionLease(
+                        agentGatewayCredentials,
+                        threadId,
+                        PROVIDER,
+                        capabilityInput ?? AGENT_GATEWAY_NO_CAPABILITIES,
+                      )!,
                   },
                 }
               : {}),
@@ -2062,6 +2120,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           ? { forkSourceResumeCursor: input.forkSourceResumeCursor }
           : {}),
         ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
+        agentGatewayCapabilityInput: captureAgentGatewayCapabilityInput(input),
         runtimeMode: input.runtimeMode,
         ...codexModelSelectionOverrides(input.modelSelection),
       };
@@ -2215,7 +2274,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
 
     const forkThread: CodexAdapterShape["forkThread"] = (input) =>
       Effect.tryPromise({
-        try: () => manager.forkThread(input),
+        try: (signal) => manager.forkThread(input, signal),
         catch: (cause) => toRequestError(input.sourceThreadId, "thread/fork", cause),
       });
 

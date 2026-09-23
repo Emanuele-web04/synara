@@ -27,6 +27,9 @@ export const ClaudeServerProviderSettings = Schema.Struct({
   launchArgs: Schema.String.check(Schema.isMaxLength(4096)).pipe(
     Schema.withDecodingDefault(() => ""),
   ),
+  // Claude Code keeps Artifact publishing (and `/design`, `/slides`) off for
+  // Agent SDK sessions unless the host opts in.
+  enableArtifacts: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
 });
 export type ClaudeServerProviderSettings = typeof ClaudeServerProviderSettings.Type;
 
@@ -158,6 +161,7 @@ export const ServerSettingsPatch = Schema.Struct({
         Schema.Struct({
           ...ProviderSettingsBasePatch,
           launchArgs: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(4096))),
+          enableArtifacts: Schema.optionalKey(Schema.Boolean),
         }),
       ),
       cursor: Schema.optionalKey(

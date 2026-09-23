@@ -1,3 +1,4 @@
+import { makeCompletionRepository } from "../completionRepository.ts";
 import { Effect, Layer } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -30,6 +31,7 @@ const mapSqlError = (operation: string) => (cause: unknown) =>
 
 export const makeAgentGatewayOperationRepository = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+  const completions = yield* makeCompletionRepository;
 
   const readByScope = (input: {
     readonly callerThreadId: string;
@@ -179,6 +181,15 @@ export const makeAgentGatewayOperationRepository = Effect.gen(function* () {
             WHERE operation_id = ${input.operationId}
           `;
           yield* sql`
+            INSERT OR IGNORE INTO agent_gateway_completions
+              (child_thread_id, creator_thread_id, initial_message_id, created_at)
+            SELECT json_extract(entry.value, '$.ids.threadId'), op.caller_thread_id,
+              json_extract(entry.value, '$.ids.messageId'), op.created_at
+            FROM agent_gateway_operations AS op, json_each(op.plan_json) AS entry
+            WHERE op.operation_id = ${input.operationId}
+              AND json_extract(entry.value, '$.notifyCreatorOnComplete') = 1
+          `;
+          yield* sql`
             DELETE FROM agent_gateway_operations
             WHERE operation_id = ${input.operationId}
               AND caller_purged_at IS NOT NULL
@@ -279,6 +290,7 @@ export const makeAgentGatewayOperationRepository = Effect.gen(function* () {
     `.pipe(Effect.mapError(mapSqlError("listNonTerminal")));
 
   return {
+    completions,
     reserve,
     markDispatching,
     recordWorktreeCreated,

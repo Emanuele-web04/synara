@@ -19,7 +19,7 @@ import {
   EMPTY_PANE_ID_SET,
   reconcileKeepMountedPaneIds,
 } from "~/lib/dockPaneActivation";
-import { Maximize2, Minimize2, PanelRightCloseIcon, PlusIcon } from "~/lib/icons";
+import { PanelCollapseIcon, PanelExpandIcon, PanelRightCloseIcon, PlusIcon } from "~/lib/icons";
 import type {
   RightDockPane,
   RightDockPaneKind,
@@ -108,7 +108,7 @@ function RightDockLauncher(props: {
             key={kind}
             variant="subtle"
             size="xl"
-            className="h-11 w-full justify-start gap-3 rounded-xl px-4 text-[length:var(--app-font-size-ui-lg,13px)] font-normal"
+            className="h-11 w-full justify-start gap-3 rounded-xl px-4 text-ui-lg font-normal"
             aria-label={`Open ${label}`}
             onClick={() => props.onOpen(kind)}
           >
@@ -372,8 +372,7 @@ export function RightDock(props: RightDockProps) {
                 </ComposerPickerMenuPopup>
               </Menu>
             ) : null}
-            {!isMobile &&
-            (maximized || activePane?.kind === "file" || activePane?.kind === "explorer") ? (
+            {!isMobile && (maximized || activePane !== null) ? (
               <IconButton
                 variant="chrome"
                 size="icon-xs"
@@ -383,7 +382,7 @@ export function RightDock(props: RightDockProps) {
                 className={DOCK_HEADER_ICON_BUTTON_CLASS}
                 onClick={() => setExpandedKey(maximized ? null : expansionKey)}
               >
-                {maximized ? <Minimize2 /> : <Maximize2 />}
+                {maximized ? <PanelCollapseIcon /> : <PanelExpandIcon />}
               </IconButton>
             ) : null}
             <IconButton

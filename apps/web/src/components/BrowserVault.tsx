@@ -127,7 +127,7 @@ export function BrowserVaultDialog() {
         <DialogPanel>
           {error || snapshot?.error ? (
             <div
-              className="flex items-center justify-between gap-3 py-3 text-sm text-destructive"
+              className="flex items-center justify-between gap-3 py-3 text-ui leading-snug text-destructive"
               role="alert"
             >
               <span>{error ?? snapshot?.error}</span>
@@ -145,13 +145,13 @@ export function BrowserVaultDialog() {
             </div>
           ) : null}
           {!snapshot ? (
-            <p className="py-6 text-sm text-muted-foreground" role="status">
+            <p className="py-6 text-ui leading-snug text-muted-foreground" role="status">
               Loading saved logins...
             </p>
           ) : (
             <>
               {snapshot.protection.locked ? (
-                <div className="flex items-center justify-between gap-3 py-4 text-sm">
+                <div className="flex items-center justify-between gap-3 py-4 text-ui leading-snug">
                   <span>Saved logins are locked.</span>
                   <Button
                     size="sm"
@@ -176,11 +176,13 @@ export function BrowserVaultDialog() {
               ) : null}
               {snapshot.pending.map((prompt) => (
                 <section key={prompt.id} className="border-b py-4">
-                  <h3 className="text-sm font-medium">
+                  <h3 className="text-ui-lg font-medium">
                     {prompt.mode === "update" ? "Update password?" : "Save password?"}
                   </h3>
-                  <p className="mt-1 break-words text-sm">{prompt.origin}</p>
-                  <p className="break-words text-sm text-muted-foreground">{prompt.username}</p>
+                  <p className="mt-1 break-words text-ui leading-snug">{prompt.origin}</p>
+                  <p className="break-words text-ui leading-snug text-muted-foreground">
+                    {prompt.username}
+                  </p>
                   <div className="mt-3 flex justify-end gap-2">
                     <Button
                       size="sm"
@@ -205,14 +207,14 @@ export function BrowserVaultDialog() {
                 </section>
               ))}
               <section aria-label="Saved accounts" className="pt-3">
-                <div className="flex items-center justify-between pb-2 text-xs font-medium text-muted-foreground">
+                <div className="flex items-center justify-between pb-2 text-ui leading-snug font-medium text-muted-foreground">
                   <h3>Logins</h3>
                   <span>{snapshot.logins.length}</span>
                 </div>
                 {snapshot.logins.length === 0 ? (
                   <div className="flex flex-col items-center gap-3 py-6 text-center">
                     <CentralIcon name="keyhole" className="size-7 text-muted-foreground/60" />
-                    <p className="text-sm text-muted-foreground">No saved logins.</p>
+                    <p className="text-ui leading-snug text-muted-foreground">No saved logins.</p>
                     <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>
                       Back to browser
                     </Button>
@@ -224,11 +226,13 @@ export function BrowserVaultDialog() {
                         <div className="flex items-start gap-3">
                           <CentralIcon name="key-1" className="mt-1 size-4 text-muted-foreground" />
                           <div className="min-w-0 flex-1">
-                            <p className="break-words text-sm font-medium">{login.origin}</p>
-                            <p className="break-words text-sm text-muted-foreground">
+                            <p className="break-words text-ui leading-snug font-medium">
+                              {login.origin}
+                            </p>
+                            <p className="break-words text-ui leading-snug text-muted-foreground">
                               {login.username || "No username"}
                             </p>
-                            <p className="mt-1 text-xs text-muted-foreground">
+                            <p className="mt-1 text-ui leading-snug text-muted-foreground">
                               {login.source === "agent"
                                 ? "Saved by an agent"
                                 : login.source === "user"
@@ -236,7 +240,7 @@ export function BrowserVaultDialog() {
                                   : "Saved login"}
                             </p>
                             {login.status !== "saved" ? (
-                              <p className="mt-1 text-xs text-muted-foreground">
+                              <p className="mt-1 text-ui leading-snug text-muted-foreground">
                                 Unfinished signup{login.status === "expired" ? " (expired)" : ""}
                               </p>
                             ) : null}
@@ -281,7 +285,7 @@ export function BrowserVaultDialog() {
                           ) : null}
                         </DisclosureRegion>
                         <DisclosureRegion open={deleting === login.id}>
-                          <div className="flex flex-wrap items-center justify-between gap-3 pt-3 text-sm">
+                          <div className="flex flex-wrap items-center justify-between gap-3 pt-3 text-ui leading-snug">
                             <span>Delete this saved login?</span>
                             <div className="flex gap-2">
                               <Button
@@ -314,10 +318,12 @@ export function BrowserVaultDialog() {
                 )}
               </section>
               <section
-                className="mt-3 space-y-4 border-t pt-4 pb-1 text-sm"
+                className="mt-3 space-y-4 border-t pt-4 pb-1 text-ui leading-snug"
                 aria-label="Saving and access"
               >
-                <h3 className="text-xs font-medium text-muted-foreground">Saving &amp; access</h3>
+                <h3 className="text-ui leading-snug font-medium text-muted-foreground">
+                  Saving &amp; access
+                </h3>
                 <div className="flex items-center justify-between gap-4">
                   <span>Master password</span>
                   <Button
@@ -343,7 +349,7 @@ export function BrowserVaultDialog() {
                     onCheckedChange={(agentUse) => configure({ agentUse })}
                   />
                 </label>
-                <p className="text-xs text-muted-foreground">
+                <p className="text-ui leading-snug text-muted-foreground">
                   Agent password filling and generation are unavailable.
                 </p>
                 <label className="flex items-center justify-between gap-4">

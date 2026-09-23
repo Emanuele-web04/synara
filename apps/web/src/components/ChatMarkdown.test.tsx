@@ -68,6 +68,23 @@ describe("ChatMarkdown", () => {
     HEAVY_MODULE_TEST_TIMEOUT_MS,
   );
 
+  it("renders GitHub alert blockquotes with a title and strips the marker", async () => {
+    const markup = await renderMarkdown("> [!NOTE]\n> **Medium Risk**\n> Details");
+
+    expect(markup).toContain('data-github-alert="note"');
+    expect(markup).toContain('class="markdown-alert-title"');
+    expect(markup).toContain(">Note</p>");
+    expect(markup).not.toContain("[!NOTE]");
+    expect(markup).toContain("<strong>Medium Risk</strong>");
+  });
+
+  it("leaves blockquotes with inline text after the marker as plain quotes", async () => {
+    const markup = await renderMarkdown("> [!NOTE] not an alert");
+
+    expect(markup).not.toContain("data-github-alert");
+    expect(markup).toContain("[!NOTE] not an alert");
+  });
+
   it("renders inline math with KaTeX", async () => {
     const markup = await renderMarkdown("Euler wrote $e^{i\\\\pi} + 1 = 0$.");
 
@@ -541,6 +558,23 @@ it("opens Obsidian aliases relative to the vault and leaves code unchanged", asy
   expect(markup).not.toContain("[[03-Resources");
 });
 
+it.each(["\n", "\r\n"])(
+  "keeps wiki links on the first line of a GitHub alert (%j)",
+  async (eol) => {
+    const { default: ChatMarkdown } = await import("./ChatMarkdown");
+    const markup = renderWithQueryClient(
+      <ChatMarkdown
+        text={`> [!NOTE]${eol}> See [[My note]] now`}
+        cwd="/vault"
+        wikiLinkRoot="/vault"
+      />,
+    );
+    expect(markup).toContain('data-github-alert="note"');
+    expect(markup).toContain('href="/vault/My%20note.md"');
+    expect(markup).not.toContain("[[My note]]");
+  },
+);
+
 describe("workspace Wiki links", () => {
   it.each([
     ["/vault/root #1", "/vault/root%20%231/My%20%2520%20note.md", "/vault/root #1/My %20 note.md"],
@@ -571,6 +605,8 @@ describe("workspace Wiki links", () => {
     "First line\r\nBefore [[note]] after",
     "> First line\r\n> [[note]] after",
     "> First line\n> [[note]] after",
+    "> [!NOTE]\n> Before [[note]] after",
+    "> [!TIP]\r\n>   Before [[note]] after",
     "- First line\n  [[note]] after",
     "[[note]] &amp; \\* after",
     "[[note|after]]",

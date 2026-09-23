@@ -1353,17 +1353,20 @@ export function sortProjectsForSidebar<
     threadsByProjectId.set(thread.projectId, existing);
   }
 
+  // Resolve each project's recency once; the comparator otherwise rescanned
+  // that project's threads on every comparison (O(P log P × threads)).
+  const timestampByProjectId = new Map(
+    projects.map(
+      (project) =>
+        [
+          project.id,
+          getProjectSortTimestamp(project, threadsByProjectId.get(project.id) ?? [], sortOrder),
+        ] as const,
+    ),
+  );
   return [...projects].toSorted((left, right) => {
-    const rightTimestamp = getProjectSortTimestamp(
-      right,
-      threadsByProjectId.get(right.id) ?? [],
-      sortOrder,
-    );
-    const leftTimestamp = getProjectSortTimestamp(
-      left,
-      threadsByProjectId.get(left.id) ?? [],
-      sortOrder,
-    );
+    const rightTimestamp = timestampByProjectId.get(right.id) ?? Number.NEGATIVE_INFINITY;
+    const leftTimestamp = timestampByProjectId.get(left.id) ?? Number.NEGATIVE_INFINITY;
     const byTimestamp =
       rightTimestamp === leftTimestamp ? 0 : rightTimestamp > leftTimestamp ? 1 : -1;
     if (byTimestamp !== 0) return byTimestamp;

@@ -16,6 +16,7 @@ import {
   EventId,
   MessageId,
   DEVICE_WS_METHODS,
+  COMPUTER_WS_METHODS,
   ORCHESTRATION_WS_METHODS,
   type OrchestrationReadModel,
   type ProjectId,
@@ -70,6 +71,7 @@ import {
 } from "../test/effectRpcWebSocketMock";
 import { makeDomainEvent } from "../storeTestFixtures";
 import {
+  acknowledgeProjectImportAnnouncementForTest,
   createBrowserTestServerConfig,
   createBrowserTestServerSettings,
   createFullscreenTestHost,
@@ -1459,7 +1461,8 @@ const worker = setupWorker(
         // default below answers with an Exit, which a stream RPC reads as the
         // socket dying and answers with a full reconnect. That loops forever
         // and starves the RPCs these tests are actually asserting on.
-        method === DEVICE_WS_METHODS.subscribeEvents
+        method === DEVICE_WS_METHODS.subscribeEvents ||
+        method === COMPUTER_WS_METHODS.subscribeEvents
       ) {
         return;
       }
@@ -2133,6 +2136,7 @@ describe("ChatView transcript geometry (full app)", () => {
     attachmentUploadBarrier = null;
     attachmentCancelBarrier = null;
     localStorage.clear();
+    acknowledgeProjectImportAnnouncementForTest(createBaseServerConfig());
     useProjectEnvironmentStore.setState({ envModeByProjectId: {} });
     useLatestProjectStore.setState({ latestProjectId: null });
     useWorkspacePathsStore.setState({
@@ -2439,86 +2443,180 @@ describe("ChatView transcript geometry (full app)", () => {
       { name: "near-cap", messageCount: 81, activityCount: 1_609 },
     ] as const;
     const reports: Array<{
+      sample: number;
       name: (typeof cases)[number]["name"];
       inputP95Ms: number;
       reactCommitTotalMs: number;
     }> = [];
 
-    const warmup = await mountChatView({
-      viewport: DEFAULT_VIEWPORT,
-      snapshot: createIssue550Snapshot(cases[0]),
-    });
-    await warmup.cleanup();
-    useComposerDraftStore.setState({ draftsByThreadId: {} });
-
     for (const benchmarkCase of cases) {
-      const commits: number[] = [];
-      const mounted = await mountChatView({
+      const warmup = await mountChatView({
         viewport: DEFAULT_VIEWPORT,
         snapshot: createIssue550Snapshot(benchmarkCase),
-        onRender: (_id, phase, actualDuration) => {
-          if (phase === "update") commits.push(actualDuration);
-        },
       });
-      try {
-        const editor = await waitForComposerEditor();
-        await userEvent.click(editor);
-        commits.length = 0;
-
-        const inputToPaintMs: number[] = [];
-        for (let index = 0; index < 12; index += 1) {
-          const startedAt = performance.now();
-          useStore.getState().applyOrchestrationEventsHotPath([
-            makeDomainEvent(
-              "thread.activity-appended",
-              {
-                threadId: THREAD_ID,
-                activity: {
-                  id: EventId.makeUnsafe(`activity-issue-550-live-${index}`),
-                  createdAt: isoAt(
-                    benchmarkCase.messageCount * 2 + benchmarkCase.activityCount + index,
-                  ),
-                  kind: "tool.completed",
-                  summary: `live tool ${index}`,
-                  tone: "tool",
-                  turnId: null,
-                  payload: {
-                    itemType: "dynamic_tool_call",
-                    toolName: `live-tool-${index}`,
-                  },
-                },
-              },
-              { sequence: benchmarkCase.activityCount + index + 1 },
-            ),
-          ]);
-          await userEvent.keyboard("x");
-          await nextFrame();
-          inputToPaintMs.push(performance.now() - startedAt);
-        }
-
-        expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(
-          "x".repeat(12),
-        );
-        expect(useStore.getState().activityIdsByThreadId?.[THREAD_ID]).toHaveLength(
-          benchmarkCase.activityCount + 12,
-        );
-        reports.push({
-          name: benchmarkCase.name,
-          inputP95Ms: percentile(inputToPaintMs, 0.95),
-          reactCommitTotalMs: commits.reduce((total, duration) => total + duration, 0),
-        });
-      } finally {
-        await mounted.cleanup();
-        useComposerDraftStore.setState({ draftsByThreadId: {} });
-      }
+      await warmup.cleanup();
+      useComposerDraftStore.setState({ draftsByThreadId: {} });
     }
 
-    const short = reports.find((report) => report.name === "short")!;
-    const nearCap = reports.find((report) => report.name === "near-cap")!;
+    // Pair each short run with a near-cap run. One noisy profiler sample on a
+    // shared CI worker must not decide whether the same 1.6x limit is met.
+    const ratios: number[] = [];
+    for (let sample = 0; sample < 3; sample += 1) {
+      const sampleReports: typeof reports = [];
+      for (const benchmarkCase of cases) {
+        const commits: number[] = [];
+        const mounted = await mountChatView({
+          viewport: DEFAULT_VIEWPORT,
+          snapshot: createIssue550Snapshot(benchmarkCase),
+          onRender: (_id, phase, actualDuration) => {
+            if (phase === "update") commits.push(actualDuration);
+          },
+        });
+        try {
+          const editor = await waitForComposerEditor();
+          await userEvent.click(editor);
+          commits.length = 0;
+
+          const inputToPaintMs: number[] = [];
+          for (let index = 0; index < 12; index += 1) {
+            const startedAt = performance.now();
+            useStore.getState().applyOrchestrationEventsHotPath([
+              makeDomainEvent(
+                "thread.activity-appended",
+                {
+                  threadId: THREAD_ID,
+                  activity: {
+                    id: EventId.makeUnsafe(`activity-issue-550-live-${index}`),
+                    createdAt: isoAt(
+                      benchmarkCase.messageCount * 2 + benchmarkCase.activityCount + index,
+                    ),
+                    kind: "tool.completed",
+                    summary: `live tool ${index}`,
+                    tone: "tool",
+                    turnId: null,
+                    payload: {
+                      itemType: "dynamic_tool_call",
+                      toolName: `live-tool-${index}`,
+                    },
+                  },
+                },
+                { sequence: benchmarkCase.activityCount + index + 1 },
+              ),
+            ]);
+            await userEvent.keyboard("x");
+            await nextFrame();
+            inputToPaintMs.push(performance.now() - startedAt);
+          }
+
+          expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(
+            "x".repeat(12),
+          );
+          expect(useStore.getState().activityIdsByThreadId?.[THREAD_ID]).toHaveLength(
+            benchmarkCase.activityCount + 12,
+          );
+          sampleReports.push({
+            sample,
+            name: benchmarkCase.name,
+            inputP95Ms: percentile(inputToPaintMs, 0.95),
+            reactCommitTotalMs: commits.reduce((total, duration) => total + duration, 0),
+          });
+        } finally {
+          await mounted.cleanup();
+          useComposerDraftStore.setState({ draftsByThreadId: {} });
+        }
+      }
+      reports.push(...sampleReports);
+      const short = sampleReports.find((report) => report.name === "short")!;
+      const nearCap = sampleReports.find((report) => report.name === "near-cap")!;
+      ratios.push(nearCap.reactCommitTotalMs / short.reactCommitTotalMs);
+    }
+
+    const medianRatio = ratios.sort((left, right) => left - right)[1]!;
     expect(
-      nearCap.reactCommitTotalMs,
-      `Issue #550 benchmark: ${JSON.stringify(reports)}`,
-    ).toBeLessThan(short.reactCommitTotalMs * 1.6);
+      medianRatio,
+      `Issue #550 benchmark: ${JSON.stringify({ reports, ratios })}`,
+    ).toBeLessThan(1.6);
+  });
+
+  it("cancels a multi-question prompt with choices through the orchestration command", async () => {
+    const requestId = ApprovalRequestId.makeUnsafe("question-cancel");
+    const lifecycleGeneration = "cancel-generation";
+    const questions = [1, 2].map((id) => ({
+      id: String(id),
+      header: `Question ${id}`,
+      question: `Choose option ${id}?`,
+      options: [{ label: `Choice ${id}`, description: "Selected answer" }],
+    }));
+    const snapshot = createSnapshotForTargetUser({
+      targetMessageId: MessageId.makeUnsafe("msg-question-cancel"),
+      targetText: "Ask for a decision",
+    });
+    const thread = snapshot.threads[0]!;
+    const pendingThread = {
+      ...thread,
+      activities: [
+        {
+          id: EventId.makeUnsafe("question-cancel-request"),
+          createdAt: NOW_ISO,
+          kind: "user-input.requested",
+          summary: "Questions",
+          tone: "info" as const,
+          turnId: null,
+          sequence: 900,
+          payload: { requestId, lifecycleGeneration, questions },
+        },
+      ],
+      pendingInteractions: [
+        {
+          interactionKind: "userInput" as const,
+          requestId,
+          threadId: thread.id,
+          turnId: null,
+          lifecycleGeneration,
+          status: "pending" as const,
+          decision: null,
+          responseCommandId: null,
+          responseRequestedAt: null,
+          createdAt: NOW_ISO,
+          resolvedAt: null,
+        },
+      ],
+    };
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: { ...snapshot, threads: [pendingThread] },
+    });
+    const previousNativeApi = window.nativeApi;
+    const api = readNativeApi()!;
+    const dispatchCommand = vi.fn(async () => {});
+    Object.defineProperty(window, "nativeApi", {
+      configurable: true,
+      value: { ...api, orchestration: { ...api.orchestration, dispatchCommand } },
+    });
+    try {
+      await page.getByRole("button", { name: /Choice 1/ }).click();
+      await page.getByRole("button", { name: "Cancel", exact: true }).click();
+      await vi.waitFor(() => expect(dispatchCommand).toHaveBeenCalledTimes(1));
+      expect(dispatchCommand).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "thread.user-input.respond",
+          threadId: THREAD_ID,
+          requestId,
+          lifecycleGeneration,
+          answers: {},
+        }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      await expect.element(page.getByText("Choose option 2?")).not.toBeInTheDocument();
+    } finally {
+      if (previousNativeApi)
+        Object.defineProperty(window, "nativeApi", {
+          configurable: true,
+          value: previousNativeApi,
+        });
+      else Reflect.deleteProperty(window, "nativeApi");
+      await mounted.cleanup();
+    }
   });
 
   it("dispatches a rapid access-mode reversal while the server projection is stale", async () => {
@@ -3994,6 +4092,12 @@ describe("ChatView transcript geometry (full app)", () => {
         container.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -0.1 }));
         await waitForLayout();
       } else if (action === "nested wheel" || action === "nested key") {
+        if (action === "nested key") {
+          // The first native input activates the test iframe and replays pending
+          // composer focus. Settle that activation before testing a nested key.
+          await page.getByTestId("composer-editor").click();
+          await waitForLayout();
+        }
         const nested = document.createElement("div");
         const bounds = container.getBoundingClientRect();
         nested.style.cssText = `position: fixed; left: ${bounds.left + 20}px; top: ${bounds.top + 20}px; width: 180px; height: 96px; overflow: auto; overscroll-behavior: contain; z-index: 100;`;
@@ -4003,8 +4107,21 @@ describe("ChatView transcript geometry (full app)", () => {
           nested.scrollTop = 100;
           if (action === "nested key") {
             nested.tabIndex = 0;
-            nested.focus();
-            await userEvent.keyboard("{ArrowUp}");
+            // Focus through native input so Chromium directs keyboard scrolling
+            // to this nested viewport as it would after a reader clicks it.
+            await userEvent.click(nested);
+            expect(document.activeElement).toBe(nested);
+            let keyTarget: EventTarget | null = null;
+            const captureKeyTarget = (event: KeyboardEvent) => {
+              if (event.key === "ArrowUp") keyTarget = event.target;
+            };
+            nested.addEventListener("keydown", captureKeyTarget);
+            try {
+              await userEvent.keyboard("{ArrowUp}");
+            } finally {
+              nested.removeEventListener("keydown", captureKeyTarget);
+            }
+            expect(keyTarget).toBe(nested);
           } else {
             await userEvent.wheel(nested, { delta: { y: -30 } });
           }
@@ -5406,15 +5523,45 @@ describe("ChatView transcript geometry (full app)", () => {
         targetMessageId: "msg-user-effort-picker-shortcut" as MessageId,
         targetText: "effort picker shortcut",
       }),
+      configureFixture: (nextFixture) => {
+        const providers: ServerConfig["providers"] = [
+          ...nextFixture.serverConfig.providers,
+          {
+            provider: "claudeAgent",
+            status: "ready",
+            available: true,
+            authStatus: "authenticated",
+            checkedAt: NOW_ISO,
+          },
+        ];
+        nextFixture.serverConfig = { ...nextFixture.serverConfig, providers };
+        nextFixture.providerStatusesSnapshot = providers;
+      },
     });
 
     try {
       const composerEditor = await waitForComposerEditor();
       await waitForServerConfigToApply();
+      const queryClient = mounted.router.options.context.queryClient;
+      const catalogKey = ["provider-discovery", "models", "claudeAgent"];
+      await vi.waitFor(() => expect(queryClient.isFetching({ queryKey: catalogKey })).toBe(0));
+      // Simulate a cold non-selected catalog after any route-level prewarming.
+      queryClient.removeQueries({ queryKey: catalogKey });
+      wsRequests.length = 0;
       composerEditor.focus();
       dispatchComposerPickerShortcut(composerEditor, "e");
 
       await waitForComposerPickerSurfaceOpen();
+      await vi.waitFor(() => {
+        expect(wsRequests).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              _tag: WS_METHODS.providerListModels,
+              provider: "claudeAgent",
+            }),
+          ]),
+        );
+      });
     } finally {
       await mounted.cleanup();
     }
@@ -6842,6 +6989,13 @@ describe("ChatView transcript geometry (full app)", () => {
         .element()
         .querySelector<HTMLElement>("[class*='transition-opacity']");
       expect(inlineFolderIcon).not.toBeNull();
+      // Opening the draft autofocuses the composer on a later frame; let that settle so it
+      // cannot steal focus back between focusing the trigger and pressing Tab.
+      await vi.waitFor(() => {
+        expect(page.getByTestId("composer-editor").element().contains(document.activeElement)).toBe(
+          true,
+        );
+      });
       projectPickerTrigger.element().focus();
       await vi.waitFor(() => {
         expect(getComputedStyle(inlineResetButton.element()).opacity).toBe("0");
@@ -7069,6 +7223,49 @@ describe("ChatView transcript geometry (full app)", () => {
         },
         { timeout: 8_000, interval: 16 },
       );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps the temporary-chat accent while the selected button stays hovered", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withHomeChatProject(
+        createSnapshotForTargetUser({
+          targetMessageId: "msg-user-temporary-chat-hover-test" as MessageId,
+          targetText: "temporary chat hover test",
+        }),
+      ),
+      configureFixture: (nextFixture) => {
+        nextFixture.welcome = {
+          ...nextFixture.welcome,
+          homeDir: "/Users/tester",
+          chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+        };
+      },
+    });
+
+    try {
+      await page.getByLabelText("Create new thread in Project").click();
+      await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should have changed to a new draft thread UUID.",
+      );
+
+      const temporaryChatButton = page.getByLabelText("Temporary chat");
+      await temporaryChatButton.hover();
+      await temporaryChatButton.click();
+      await expect.element(temporaryChatButton).toHaveAttribute("aria-pressed", "true");
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 200));
+
+      const accentColorProbe = document.createElement("span");
+      accentColorProbe.style.color = "var(--color-text-accent)";
+      document.body.append(accentColorProbe);
+      const temporaryAccentColor = getComputedStyle(accentColorProbe).color;
+      accentColorProbe.remove();
+      expect(getComputedStyle(temporaryChatButton.element()).color).toBe(temporaryAccentColor);
     } finally {
       await mounted.cleanup();
     }

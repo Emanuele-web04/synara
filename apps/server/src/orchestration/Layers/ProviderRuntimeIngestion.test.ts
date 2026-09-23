@@ -7,6 +7,7 @@ import path from "node:path";
 import type {
   OrchestrationEvent,
   OrchestrationReadModel,
+  OrchestrationThread,
   ProviderKind,
   ProviderRuntimeEvent,
   ProviderSession,
@@ -22,7 +23,7 @@ import {
   ThreadId,
   TurnId,
 } from "@synara/contracts";
-import { Effect, Exit, Layer, ManagedRuntime, PubSub, Scope, Stream } from "effect";
+import { Effect, Exit, Layer, ManagedRuntime, Option, PubSub, Scope, Stream } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
@@ -52,6 +53,10 @@ import {
   type OrchestrationEngineShape,
 } from "../Services/OrchestrationEngine.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
+import { ComputerManager } from "../../computer/ComputerManager.ts";
+import { FakeComputerBackend } from "../../computer/FakeComputerBackend.ts";
+import { ComputerService } from "../../computer/Services/ComputerService.ts";
+import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { ServerConfig } from "../../config.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -190,6 +195,97 @@ async function waitForThread(
   return poll();
 }
 
+function emitPendingUserInputRequest(
+  harness: { readonly emit: (event: LegacyProviderRuntimeEvent) => void },
+  input: {
+    readonly eventId: string;
+    readonly requestId: string;
+    readonly turnId: string;
+    readonly lifecycleGeneration: string;
+  },
+): void {
+  harness.emit({
+    type: "user-input.requested",
+    eventId: asEventId(input.eventId),
+    provider: "codex",
+    createdAt: new Date().toISOString(),
+    threadId: asThreadId("thread-1"),
+    turnId: asTurnId(input.turnId),
+    lifecycleGeneration: input.lifecycleGeneration,
+    requestId: ApprovalRequestId.makeUnsafe(input.requestId),
+    payload: {
+      questions: [
+        {
+          id: "question-1",
+          header: "Question",
+          question: "Which option should be used?",
+          options: [{ label: "one", description: "The first option" }],
+        },
+      ],
+    },
+  });
+}
+
+/**
+ * Emits an approval request that names no turn, the shape a Codex MCP
+ * elicitation (no `turnId` in its JSON-RPC params) or a Claude `canUseTool`
+ * callback with no bound turn state produces.
+ */
+function emitTurnlessPendingApprovalRequest(
+  harness: { readonly emit: (event: LegacyProviderRuntimeEvent) => void },
+  input: {
+    readonly eventId: string;
+    readonly requestId: string;
+    readonly lifecycleGeneration: string;
+  },
+): void {
+  harness.emit({
+    type: "request.opened",
+    eventId: asEventId(input.eventId),
+    provider: "codex",
+    createdAt: new Date().toISOString(),
+    threadId: asThreadId("thread-1"),
+    lifecycleGeneration: input.lifecycleGeneration,
+    requestId: ApprovalRequestId.makeUnsafe(input.requestId),
+    payload: {
+      requestType: "tool_approval",
+      detail: "An MCP tool wants to run",
+    },
+  });
+}
+
+const pendingInteractionStatus = (
+  thread: OrchestrationThread | undefined,
+  requestId: string,
+): string | undefined =>
+  thread?.pendingInteractions?.find((row) => row.requestId === requestId)?.status;
+
+const userInputFailureActivities = (thread: OrchestrationThread | undefined) =>
+  thread?.activities.filter((activity) => activity.kind === "provider.user-input.respond.failed") ??
+  [];
+
+const approvalFailureActivities = (thread: OrchestrationThread | undefined) =>
+  thread?.activities.filter((activity) => activity.kind === "provider.approval.respond.failed") ??
+  [];
+
+async function waitForProjectedThread(
+  read: () => Promise<OrchestrationThread | undefined>,
+  predicate: (thread: OrchestrationThread) => boolean,
+  timeoutMs = 2000,
+): Promise<OrchestrationThread> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const thread = await read();
+    if (thread && predicate(thread)) {
+      return thread;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error("Timed out waiting for projected thread state");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 type ProviderRuntimeTestReadModel = OrchestrationReadModel;
 type ProviderRuntimeTestThread = ProviderRuntimeTestReadModel["threads"][number];
 type ProviderRuntimeTestMessage = ProviderRuntimeTestThread["messages"][number];
@@ -244,7 +340,8 @@ describe("ProviderRuntimeIngestion", () => {
     | OrchestrationEngineService
     | ProviderRuntimeIngestionService
     | ProviderRuntimeEventRepository
-    | SqlClient.SqlClient,
+    | SqlClient.SqlClient
+    | ProjectionSnapshotQuery,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -273,6 +370,7 @@ describe("ProviderRuntimeIngestion", () => {
   async function createHarness(options?: {
     readonly startIngestion?: boolean;
     readonly persistedStream?: boolean;
+    readonly computerManager?: ComputerManager;
   }) {
     const workspaceRoot = makeTempDir("synara-provider-project-");
     fs.mkdirSync(path.join(workspaceRoot, ".git"));
@@ -289,6 +387,15 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provideMerge(SqlitePersistenceMemory),
     );
     const layer = ProviderRuntimeIngestionLive.pipe(
+      Layer.provideMerge(
+        options?.computerManager
+          ? Layer.succeed(ComputerService, {
+              supported: true,
+              availability: { kind: "available", backend: "test" },
+              manager: options.computerManager,
+            })
+          : Layer.empty,
+      ),
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
       Layer.provideMerge(SqlitePersistenceMemory),
@@ -303,6 +410,7 @@ describe("ProviderRuntimeIngestion", () => {
     const runtimeEventRepository = await runtime.runPromise(
       Effect.service(ProviderRuntimeEventRepository),
     );
+    const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
     scope = await Effect.runPromise(Scope.make("sequential"));
     let ingestionStarted = false;
     const startIngestion = async () => {
@@ -374,6 +482,13 @@ describe("ProviderRuntimeIngestion", () => {
       updatedAt: createdAt,
     });
 
+    // `engine.getReadModel()` is the command-side model; pending-interaction
+    // rows and their counts only exist in the projection, so read them there.
+    const readProjectedThread = async (
+      threadId: ThreadId = ThreadId.makeUnsafe("thread-1"),
+    ): Promise<OrchestrationThread | undefined> =>
+      Option.getOrUndefined(await runtime!.runPromise(snapshotQuery.getThreadDetailById(threadId)));
+
     return {
       engine,
       emit: provider.emit,
@@ -382,8 +497,174 @@ describe("ProviderRuntimeIngestion", () => {
       drain,
       startIngestion,
       runtimeEventRepository,
+      readProjectedThread,
     };
   }
+
+  it.each([
+    { type: "turn.completed", payload: { state: "completed" } },
+    { type: "turn.completed", payload: { state: "failed" } },
+    { type: "turn.completed", payload: { state: "interrupted" } },
+    { type: "turn.aborted", payload: { reason: "User interrupted" } },
+    { type: "session.exited", payload: { exitKind: "graceful" } },
+    { type: "session.state.changed", payload: { state: "stopped" } },
+    { type: "session.state.changed", payload: { state: "error" } },
+    { type: "runtime.error", payload: { message: "Provider stopped" } },
+  ])("releases computer control on $type $payload without idle expiry", async (terminal) => {
+    const manager = new ComputerManager({ backend: new FakeComputerBackend(), now: () => 0 });
+    try {
+      const harness = await createHarness({ computerManager: manager });
+      const threadId = asThreadId("thread-1");
+      const turnId = asTurnId("computer-turn-1");
+      harness.emit({
+        type: "turn.started",
+        eventId: asEventId("computer-turn-started"),
+        provider: "codex",
+        threadId,
+        turnId,
+        createdAt: new Date().toISOString(),
+      });
+      await waitForThread(harness.engine, (thread) => thread.session?.activeTurnId === turnId);
+      await manager.withAgentActivity(
+        threadId,
+        () => manager.typeText(threadId, "first"),
+        undefined,
+        turnId,
+      );
+      await expect(manager.typeText("thread-2", "second")).rejects.toMatchObject({
+        code: "computer_controlled_by_other_thread",
+      });
+      harness.emit({
+        ...terminal,
+        eventId: asEventId("computer-turn-terminal"),
+        provider: "codex",
+        threadId,
+        turnId,
+        createdAt: new Date().toISOString(),
+      });
+      await harness.drain();
+      await expect(manager.typeText("thread-2", "second")).resolves.toMatchObject({
+        action: "computer_type_text",
+      });
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it.each([
+    { type: "turn.completed", payload: { state: "completed" } },
+    { type: "session.exited", payload: { exitKind: "graceful" } },
+    { type: "runtime.error", payload: { message: "Old provider stopped" } },
+  ])(
+    "does not let a delayed computer terminal $type release a newer turn's desktop",
+    async (terminal) => {
+      const manager = new ComputerManager({ backend: new FakeComputerBackend(), now: () => 0 });
+      try {
+        const harness = await createHarness({ computerManager: manager });
+        const threadId = asThreadId("thread-1");
+        const oldTurnId = asTurnId("computer-old-turn");
+        const newTurnId = asTurnId("computer-new-turn");
+        harness.emit({
+          type: "turn.started",
+          eventId: asEventId("computer-old-started"),
+          provider: "codex",
+          threadId,
+          turnId: oldTurnId,
+          createdAt: new Date().toISOString(),
+        });
+        await waitForThread(harness.engine, (thread) => thread.session?.activeTurnId === oldTurnId);
+        // The gateway has already admitted the next turn while ingestion is
+        // still catching up with the previous turn's terminal event.
+        await manager.withAgentActivity(
+          threadId,
+          () => manager.typeText(threadId, "new turn"),
+          undefined,
+          newTurnId,
+        );
+        harness.emit({
+          ...terminal,
+          eventId: asEventId("computer-old-completed"),
+          provider: "codex",
+          threadId,
+          turnId: oldTurnId,
+          createdAt: new Date().toISOString(),
+        });
+        await harness.drain();
+        await expect(manager.typeText("thread-2", "second")).rejects.toMatchObject({
+          code: "computer_controlled_by_other_thread",
+        });
+        harness.emit({
+          type: "turn.completed",
+          eventId: asEventId("computer-new-completed"),
+          provider: "codex",
+          threadId,
+          turnId: newTurnId,
+          createdAt: new Date().toISOString(),
+          payload: { state: "completed" },
+        });
+        await harness.drain();
+        await expect(manager.typeText("thread-2", "second")).resolves.toMatchObject({
+          action: "computer_type_text",
+        });
+      } finally {
+        await manager.dispose();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "keeps computer control on an ambiguous turnless terminal (session ready: %s)",
+    async (sessionReady) => {
+      const manager = new ComputerManager({ backend: new FakeComputerBackend(), now: () => 0 });
+      try {
+        const harness = await createHarness({ computerManager: manager });
+        const threadId = asThreadId("thread-1");
+        for (const turnId of ["computer-overlap-one", "computer-overlap-two"]) {
+          harness.emit({
+            type: "turn.started",
+            eventId: asEventId(`${turnId}-started`),
+            provider: "codex",
+            threadId,
+            turnId: asTurnId(turnId),
+            createdAt: new Date().toISOString(),
+          });
+          await harness.drain();
+        }
+        if (sessionReady) {
+          harness.emit({
+            type: "session.state.changed",
+            eventId: asEventId("computer-overlap-session-ready"),
+            provider: "codex",
+            threadId,
+            createdAt: new Date().toISOString(),
+            payload: { state: "ready" },
+          });
+          await harness.drain();
+          await waitForThread(harness.engine, (thread) => thread.session?.activeTurnId === null);
+        }
+        await manager.withAgentActivity(
+          threadId,
+          () => manager.typeText(threadId, "active overlapping turn"),
+          undefined,
+          "computer-overlap-two",
+        );
+        harness.emit({
+          type: "turn.completed",
+          eventId: asEventId("computer-ambiguous-completed"),
+          provider: "codex",
+          threadId,
+          createdAt: new Date().toISOString(),
+          payload: { state: "completed" },
+        });
+        await harness.drain();
+        await expect(manager.typeText("thread-2", "second")).rejects.toMatchObject({
+          code: "computer_controlled_by_other_thread",
+        });
+      } finally {
+        await manager.dispose();
+      }
+    },
+  );
 
   it("REL-01C gate: replays output persisted before subscription without duplicate acceptance", async () => {
     const harness = await createHarness({ startIngestion: false });
@@ -1690,6 +1971,348 @@ describe("ProviderRuntimeIngestion", () => {
       expect(failuresAfter).toHaveLength(1);
     },
   );
+
+  it("settles a pending user-input request when its turn ends without a session restart", async () => {
+    const harness = await createHarness();
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-interrupted-user-input"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-interrupted"),
+    });
+    emitPendingUserInputRequest(harness, {
+      eventId: "evt-user-input-requested-interrupted",
+      requestId: "req-interrupted-user-input",
+      turnId: "turn-interrupted",
+      lifecycleGeneration: "generation-interrupted",
+    });
+
+    const pendingThread = await waitForProjectedThread(
+      harness.readProjectedThread,
+      (thread) => thread.hasPendingUserInput === true,
+    );
+    expect(pendingInteractionStatus(pendingThread, "req-interrupted-user-input")).toBe("pending");
+
+    // A Stop rotates the lifecycle generation without emitting `session.started`,
+    // so the interrupted turn's terminal event is the only settlement signal
+    // left. Without it the row stayed `pending` forever and the sidebar kept
+    // showing "Awaiting Input" on an idle thread.
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-turn-completed-interrupted-user-input"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-interrupted"),
+      payload: { state: "interrupted" },
+    });
+
+    const settledThread = await waitForProjectedThread(
+      harness.readProjectedThread,
+      (thread) => thread.hasPendingUserInput === false,
+    );
+    expect(pendingInteractionStatus(settledThread, "req-interrupted-user-input")).toBe("uncertain");
+    const failures = userInputFailureActivities(settledThread);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.payload).toMatchObject({
+      requestId: "req-interrupted-user-input",
+      lifecycleGeneration: "generation-interrupted",
+      detail: expect.stringContaining(
+        "Stale pending user-input request: req-interrupted-user-input",
+      ),
+    });
+  });
+
+  it("keeps a Claude background approval answerable after foreground completion", async () => {
+    const harness = await createHarness();
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("claude-foreground");
+    const requestId = ApprovalRequestId.makeUnsafe("claude-background-approval");
+    const common = {
+      provider: "claudeAgent" as const,
+      threadId,
+      turnId,
+      createdAt: new Date().toISOString(),
+      lifecycleGeneration: "claude-generation",
+    };
+    harness.emit({
+      ...common,
+      type: "turn.started",
+      eventId: asEventId("claude-started"),
+      payload: {},
+    });
+    harness.emit({
+      ...common,
+      type: "request.opened",
+      eventId: asEventId("claude-approval-opened"),
+      requestId,
+      payload: { requestType: "tool_approval", detail: "Background computer operation" },
+    });
+    await waitForProjectedThread(
+      harness.readProjectedThread,
+      (thread) => pendingInteractionStatus(thread, requestId) === "pending",
+    );
+    harness.emit({
+      ...common,
+      type: "turn.completed",
+      eventId: asEventId("claude-foreground-ended"),
+      payload: { state: "completed" },
+    });
+    await harness.drain();
+    const pending = await harness.readProjectedThread();
+    expect(pendingInteractionStatus(pending, requestId)).toBe("pending");
+
+    // Only the provider's live callback owner can settle this request.
+    harness.emit({
+      ...common,
+      type: "request.resolved",
+      eventId: asEventId("claude-approval-resolved"),
+      requestId,
+      payload: { requestType: "tool_approval", decision: "accept" },
+    });
+    await waitForProjectedThread(
+      harness.readProjectedThread,
+      (thread) => thread.hasPendingApprovals === false,
+    );
+  });
+
+  it("leaves a concurrent turn's pending user-input request open when another turn ends", async () => {
+    const harness = await createHarness();
+
+    // ProviderService permits overlapping sends on one thread, so two turns can
+    // share a lifecycle generation. A terminal event for one of them must not
+    // settle the other's still-answerable request.
+    emitPendingUserInputRequest(harness, {
+      eventId: "evt-user-input-requested-overlap-a",
+      requestId: "req-overlap-turn-a",
+      turnId: "turn-overlap-a",
+      lifecycleGeneration: "generation-overlap",
+    });
+    emitPendingUserInputRequest(harness, {
+      eventId: "evt-user-input-requested-overlap-b",
+      requestId: "req-overlap-turn-b",
+      turnId: "turn-overlap-b",
+      lifecycleGeneration: "generation-overlap",
+    });
+    await waitForProjectedThread(
+      harness.readProjectedThread,
+      (thread) => (thread.pendingInteractions?.length ?? 0) === 2,
+    );
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-turn-completed-overlap-a"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-overlap-a"),
+      payload: { state: "interrupted" },
+    });
+
+    const settledThread = await waitForProjectedThread(
+      harness.readProjectedThread,
+      (thread) => pendingInteractionStatus(thread, "req-overlap-turn-a") === "uncertain",
+    );
+    expect(pendingInteractionStatus(settledThread, "req-overlap-turn-b")).toBe("pending");
+    expect(settledThread.hasPendingUserInput).toBe(true);
+    const failures = userInputFailureActivities(settledThread);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.payload).toMatchObject({ requestId: "req-overlap-turn-a" });
+  });
+
+  it("settles a turnless pending approval when the thread's last turn ends", async () => {
+    const harness = await createHarness();
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-turnless-approval"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-turnless-approval"),
+      lifecycleGeneration: "generation-turnless",
+    });
+    // The row carries no turn id at all, so a strictly turn-scoped filter can
+    // never match it. An interrupt emits no session.exited either, which left
+    // the row `pending` until the next server boot.
+    emitTurnlessPendingApprovalRequest(harness, {
+      eventId: "evt-request-opened-turnless",
+      requestId: "req-turnless-approval",
+      lifecycleGeneration: "generation-turnless",
+    });
+
+    const pendingThread = await waitForProjectedThread(
+      harness.readProjectedThread,
+      (thread) => pendingInteractionStatus(thread, "req-turnless-approval") === "pending",
+    );
+    expect(pendingThread.pendingInteractions?.[0]?.turnId ?? null).toBeNull();
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-turn-completed-turnless-approval"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-turnless-approval"),
+      lifecycleGeneration: "generation-turnless",
+      payload: { state: "interrupted" },
+    });
+
+    const settledThread = await waitForProjectedThread(
+      harness.readProjectedThread,
+      (thread) => pendingInteractionStatus(thread, "req-turnless-approval") === "uncertain",
+    );
+    expect(settledThread.hasPendingApprovals).toBe(false);
+    const failures = approvalFailureActivities(settledThread);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.payload).toMatchObject({
+      requestId: "req-turnless-approval",
+      lifecycleGeneration: "generation-turnless",
+    });
+  });
+
+  it("keeps a turnless pending approval open while another turn is still running", async () => {
+    const harness = await createHarness();
+
+    for (const turnId of ["turn-turnless-overlap-a", "turn-turnless-overlap-b"]) {
+      harness.emit({
+        type: "turn.started",
+        eventId: asEventId(`evt-turn-started-${turnId}`),
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId(turnId),
+        lifecycleGeneration: "generation-turnless-overlap",
+      });
+    }
+    emitTurnlessPendingApprovalRequest(harness, {
+      eventId: "evt-request-opened-turnless-overlap",
+      requestId: "req-turnless-overlap",
+      lifecycleGeneration: "generation-turnless-overlap",
+    });
+    await waitForProjectedThread(
+      harness.readProjectedThread,
+      (thread) => pendingInteractionStatus(thread, "req-turnless-overlap") === "pending",
+    );
+
+    // Overlapping sends share a generation, and the surviving turn may be the
+    // one blocked on this request, so the first terminal event must leave it
+    // answerable.
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-turn-completed-turnless-overlap-a"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-turnless-overlap-a"),
+      lifecycleGeneration: "generation-turnless-overlap",
+      payload: { state: "interrupted" },
+    });
+    await harness.drain();
+    const untouchedThread = await harness.readProjectedThread();
+    expect(pendingInteractionStatus(untouchedThread, "req-turnless-overlap")).toBe("pending");
+    expect(approvalFailureActivities(untouchedThread)).toHaveLength(0);
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-turn-completed-turnless-overlap-b"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-turnless-overlap-b"),
+      lifecycleGeneration: "generation-turnless-overlap",
+      payload: { state: "interrupted" },
+    });
+
+    const settledThread = await waitForProjectedThread(
+      harness.readProjectedThread,
+      (thread) => pendingInteractionStatus(thread, "req-turnless-overlap") === "uncertain",
+    );
+    expect(approvalFailureActivities(settledThread)).toHaveLength(1);
+  });
+
+  it("leaves a turnless pending approval from another generation answerable", async () => {
+    const harness = await createHarness();
+
+    emitTurnlessPendingApprovalRequest(harness, {
+      eventId: "evt-request-opened-turnless-generation-a",
+      requestId: "req-turnless-generation-a",
+      lifecycleGeneration: "generation-a",
+    });
+    await waitForProjectedThread(
+      harness.readProjectedThread,
+      (thread) => pendingInteractionStatus(thread, "req-turnless-generation-a") === "pending",
+    );
+
+    // A stale terminal event is accepted upstream when it still names the
+    // binding's active turn. It says nothing about a row a newer generation
+    // opened, so it must not settle it.
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-turn-completed-turnless-generation-b"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-turnless-generation-b"),
+      lifecycleGeneration: "generation-b",
+      payload: { state: "interrupted" },
+    });
+    await harness.drain();
+    const untouchedThread = await harness.readProjectedThread();
+    expect(pendingInteractionStatus(untouchedThread, "req-turnless-generation-a")).toBe("pending");
+    expect(approvalFailureActivities(untouchedThread)).toHaveLength(0);
+  });
+
+  it("scopes session.exited settlement to the exited lifecycle generation", async () => {
+    const harness = await createHarness();
+
+    emitPendingUserInputRequest(harness, {
+      eventId: "evt-user-input-requested-exit-generation",
+      requestId: "req-exit-generation-a",
+      turnId: "turn-exit-generation-a",
+      lifecycleGeneration: "generation-a",
+    });
+    await waitForProjectedThread(
+      harness.readProjectedThread,
+      (thread) => thread.hasPendingUserInput === true,
+    );
+
+    // A session.exited from a different generation says nothing about this
+    // row's runtime, so it must leave the request answerable.
+    harness.emit({
+      type: "session.exited",
+      eventId: asEventId("evt-session-exited-other-generation"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      lifecycleGeneration: "generation-b",
+      payload: { reason: "exit from a different generation" },
+    });
+    await harness.drain();
+    const untouchedThread = await harness.readProjectedThread();
+    expect(pendingInteractionStatus(untouchedThread, "req-exit-generation-a")).toBe("pending");
+    expect(userInputFailureActivities(untouchedThread)).toHaveLength(0);
+
+    harness.emit({
+      type: "session.exited",
+      eventId: asEventId("evt-session-exited-matching-generation"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      lifecycleGeneration: "generation-a",
+      payload: { reason: "exit from the owning generation" },
+    });
+
+    const settledThread = await waitForProjectedThread(
+      harness.readProjectedThread,
+      (thread) => pendingInteractionStatus(thread, "req-exit-generation-a") === "uncertain",
+    );
+    expect(settledThread.hasPendingUserInput).toBe(false);
+    expect(userInputFailureActivities(settledThread)).toHaveLength(1);
+  });
 
   it("clears running turn state when a stop emits turn.aborted without a turn id", async () => {
     const harness = await createHarness();
@@ -6790,6 +7413,63 @@ describe("ProviderRuntimeIngestion", () => {
         candidate.summary === "Context compaction failed",
     );
     expect(failed?.tone).toBe("error");
+  });
+
+  it("keeps async question completion separate from independent streaming text", async () => {
+    const harness = await createHarness();
+    const createdAt = new Date().toISOString();
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("async-turn");
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("async-start"),
+      provider: "codex",
+      createdAt,
+      threadId,
+      turnId,
+      payload: {},
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("independent-text"),
+      provider: "codex",
+      createdAt,
+      threadId,
+      turnId,
+      itemId: RuntimeItemId.makeUnsafe("independent"),
+      payload: { streamKind: "assistant_text", delta: "Inspecting the code." },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("async-question"),
+      provider: "codex",
+      createdAt,
+      threadId,
+      turnId,
+      itemId: RuntimeItemId.makeUnsafe("question"),
+      payload: {
+        itemType: "assistant_message",
+        detail: "When does it happen?",
+        asyncQuestions: [{ title: "When does it happen?", options: ["On launch", "On reconnect"] }],
+      },
+    });
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.messages.some((message) => message.asyncUserInput !== undefined),
+    );
+    expect(thread.messages.find((message) => message.id === "assistant:question")).toMatchObject({
+      text: "When does it happen?",
+      streaming: false,
+      asyncUserInput: {
+        questions: [{ title: "When does it happen?", options: ["On launch", "On reconnect"] }],
+      },
+    });
+    expect(thread.messages.find((message) => message.id === "assistant:independent")).toMatchObject(
+      { text: "Inspecting the code.", streaming: true },
+    );
+    expect(thread.session?.status).toBe("running");
+    expect(thread.activities.some((activity) => activity.kind === "user-input.requested")).toBe(
+      false,
+    );
   });
 
   it("projects Codex task lifecycle chunks into thread activities", async () => {

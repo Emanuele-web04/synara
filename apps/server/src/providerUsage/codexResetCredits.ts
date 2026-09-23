@@ -190,7 +190,7 @@ async function withAppServer<T>(
     writer.close(closed);
     for (const waiter of pending.values()) waiter.reject(closed);
     pending.clear();
-    framer.reset();
+    framer.close();
     try {
       signalOwnedChildProcess(child, "SIGTERM");
     } catch {

@@ -1,6 +1,6 @@
 {
   "name": "@synara/desktop",
-  "version": "0.8.4",
+  "version": "0.9.1",
   "private": true,
   "main": "dist-electron/main.js",
   "scripts": {
@@ -9,12 +9,14 @@
     "dev:electron": "bun run scripts/dev-electron.mjs",
     "build": "tsdown",
     "start": "bun run scripts/start-electron.mjs",
-    "typecheck": "node ../../node_modules/@typescript/native/bin/tsc --noEmit --tsBuildInfoFile node_modules/.cache/typescript-native.tsbuildinfo",
+    "typecheck": "node ../../node_modules/@typescript/native/bin/tsc --noEmit --tsBuildInfoFile node_modules/.cache/typescript-native.tsbuildinfo && bun run typecheck:fixtures",
+    "typecheck:fixtures": "node ../../node_modules/@typescript/native/bin/tsc --project tsconfig.fixtures.json",
     "typecheck:native": "bun run typecheck",
-    "typecheck:legacy": "tsc --noEmit",
+    "typecheck:legacy": "tsc --noEmit && tsc --project tsconfig.fixtures.json",
     "test": "vitest run --passWithNoTests",
     "smoke-test": "node scripts/smoke-test.mjs",
-    "smoke:browser-lifecycle": "bun build scripts/browser-lifecycle-smoke.ts --target=node --external=electron --external=betterwright --external=betterwright/* --external=ws --external=effect --outfile=.smoke/browser-lifecycle.mjs && electron .smoke/browser-lifecycle.mjs"
+    "smoke:browser-lifecycle": "bun build scripts/browser-lifecycle-smoke.ts --target=node --external=electron --external=betterwright --external=betterwright/* --external=ws --external=effect --outfile=.smoke/browser-lifecycle.mjs && electron .smoke/browser-lifecycle.mjs && electron ../../.github/scripts/energy-cloud-probe.cjs 3 10000",
+    "smoke:browser-viewport": "bun build scripts/browser-viewport-smoke.ts --target=node --external=electron --external=betterwright --outfile=.smoke/browser-viewport.mjs && electron .smoke/browser-viewport.mjs"
   },
   "dependencies": {
     "betterwright": "2.7.3",

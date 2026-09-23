@@ -10,6 +10,7 @@ import {
   dedupeActivitiesByIdAfterAppend,
   mergeReadModelThreadDetailWithLiveHotPath,
   normalizeActivities,
+  normalizeChatMessage,
   normalizeThreadFromReadModel,
   normalizeThreadShellSnapshot,
   threadShellsEqual,
@@ -507,4 +508,29 @@ it("keeps the source-message signal stable for equivalent snapshots and work-onl
   );
   expect(textDelta.messages).not.toBe(initial.messages);
   expect(textDelta.messages[0]?.text).toBe("Hello world");
+});
+
+describe("asynchronous question hydration", () => {
+  it("keeps the accepted answer when a lagging snapshot still has a pending question", () => {
+    const createdAt = "2026-09-15T00:00:00.000Z";
+    const pending = {
+      id: MessageId.makeUnsafe("question"),
+      role: "assistant" as const,
+      text: "When does it happen?",
+      streaming: false,
+      source: "native" as const,
+      turnId: null,
+      createdAt,
+      updatedAt: createdAt,
+      asyncUserInput: { questions: [{ title: "When does it happen?" }] },
+    };
+    const response = { messageId: MessageId.makeUnsafe("answer"), answers: ["On reconnect"] };
+    const answered = normalizeChatMessage(
+      { ...pending, asyncUserInput: { ...pending.asyncUserInput, response } },
+      undefined,
+    );
+    const restored = normalizeChatMessage(pending, answered);
+    expect(restored.asyncUserInput?.response).toEqual(response);
+    expect(restored.completedAt).toBe(createdAt);
+  });
 });

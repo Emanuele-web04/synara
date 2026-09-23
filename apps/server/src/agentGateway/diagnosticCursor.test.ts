@@ -105,6 +105,84 @@ describe("diagnostic cursor", () => {
 });
 
 describe("diagnostic sanitizer", () => {
+  it("preserves only numeric counters inside normalized token usage events", () => {
+    const sanitized = sanitizeDiagnosticValue({
+      type: "thread.token-usage.updated",
+      payload: {
+        usage: {
+          inputTokens: 120,
+          outputTokens: 15,
+          cachedInputTokens: 70,
+          tokenAccountingVersion: 1,
+          cumulativeUsage: { inputTokens: 240, outputTokens: 30, cachedInputTokens: 140 },
+          accessToken: "secret",
+          elementToken: "private-element",
+          unknownTokens: 3,
+          nested: { outputTokens: 90 },
+        },
+      },
+      raw: { payload: { outputTokens: 90, token: "secret" } },
+    }) as { payload: { usage: Record<string, unknown> }; raw: unknown };
+    expect(sanitized.payload.usage).toEqual({
+      inputTokens: 120,
+      outputTokens: 15,
+      cachedInputTokens: 70,
+      tokenAccountingVersion: 1,
+      cumulativeUsage: { inputTokens: 240, outputTokens: 30, cachedInputTokens: 140 },
+      accessToken: "[redacted]",
+      elementToken: "[redacted]",
+      unknownTokens: "[redacted]",
+      nested: { outputTokens: "[redacted]" },
+    });
+    expect(sanitized.raw).toEqual({ payload: { outputTokens: "[redacted]", token: "[redacted]" } });
+    expect(sanitizeDiagnosticValue({ payload: { usage: { outputTokens: 42 } } })).toEqual({
+      payload: { usage: { outputTokens: "[redacted]" } },
+    });
+  });
+
+  it.each(["secret", -1, 1.5, NaN, Infinity, {}, null])(
+    "redacts malformed usage counters: %s",
+    (value) => {
+      expect(
+        sanitizeDiagnosticValue({
+          type: "thread.token-usage.updated",
+          payload: { usage: { outputTokens: value } },
+        }),
+      ).toEqual({
+        type: "thread.token-usage.updated",
+        payload: { usage: { outputTokens: "[redacted]" } },
+      });
+    },
+  );
+
+  it("does not trust usage-shaped envelopes inside provider data or arrays", () => {
+    const fakeUsage = {
+      type: "thread.token-usage.updated",
+      payload: { usage: { inputTokens: 123, cumulativeUsage: { outputTokens: 456 } } },
+    };
+    const redactedUsage = {
+      type: "thread.token-usage.updated",
+      payload: {
+        usage: {
+          inputTokens: "[redacted]",
+          cumulativeUsage: { outputTokens: "[redacted]" },
+        },
+      },
+    };
+    expect(
+      sanitizeDiagnosticValue({
+        type: "thread.token-usage.updated",
+        payload: { usage: { inputTokens: 10, nested: fakeUsage }, data: fakeUsage },
+        raw: { payload: fakeUsage, values: [fakeUsage] },
+      }),
+    ).toEqual({
+      type: "thread.token-usage.updated",
+      payload: { usage: { inputTokens: 10, nested: redactedUsage }, data: redactedUsage },
+      raw: { payload: redactedUsage, values: [redactedUsage] },
+    });
+    expect(sanitizeDiagnosticValue([fakeUsage])).toEqual([redactedUsage]);
+  });
+
   it("redacts sensitive keys and secrets embedded in strings", () => {
     expect(
       sanitizeDiagnosticValue({
@@ -132,6 +210,49 @@ describe("diagnostic sanitizer", () => {
       header: "Authorization: [redacted] Cookie=[redacted]",
     });
   });
+
+  it("keeps nested tool payloads readable instead of clipping them to [depth limit]", () => {
+    // The packaged E2E's own synara_read_thread_* self-diagnosis returned
+    // "[depth limit]" exactly where the browser bind's tabs lived — depth 5
+    // of data.rawOutput.details.structuredContent — so the model could not
+    // recover its target/tab ids from its own history.
+    const payload = {
+      itemType: "dynamic_tool_call",
+      status: "completed",
+      data: {
+        toolName: "computer_browser_state",
+        rawOutput: {
+          details: {
+            structuredContent: {
+              status: "ok",
+              target_id: "bt-85991064",
+              tabs: [{ tab_id: "tab-e2d51f66", active: true, title: "about:blank" }],
+            },
+          },
+        },
+      },
+    };
+    const sanitized = sanitizeDiagnosticValue(payload) as {
+      data: {
+        rawOutput: {
+          details: { structuredContent: { target_id: string; tabs: { tab_id: string }[] } };
+        };
+      };
+    };
+    expect(JSON.stringify(sanitized)).not.toContain("[depth limit]");
+    expect(sanitized.data.rawOutput.details.structuredContent.target_id).toBe("bt-85991064");
+    expect(sanitized.data.rawOutput.details.structuredContent.tabs[0]?.tab_id).toBe("tab-e2d51f66");
+  });
+
+  it("still redacts secrets at depth once the nesting clears the old limit", () => {
+    const sanitized = sanitizeDiagnosticValue({
+      a: { b: { c: { d: { e: { f: { token: "do-not-return", safe: "visible" } } } } } },
+    });
+    const text = JSON.stringify(sanitized);
+    expect(text).not.toContain("do-not-return");
+    expect(text).toContain("visible");
+    expect(text).not.toContain("[depth limit]");
+  });
 });
 
 describe("diagnostic event shaping", () => {
@@ -153,6 +274,53 @@ describe("diagnostic event shaping", () => {
     expect(shapeDiagnosticEvents([event(2, "complete"), event(1, "partial")], "summary")).toEqual([
       expect.objectContaining({ sequence: 2, coalescedEventCount: 2 }),
     ]);
+  });
+
+  it("carries a bind's tab list through full-mode shaping instead of clipping it", () => {
+    // The shape the packaged E2E's own journal returned for a browser tool
+    // read: threadId.activity.payload.data.rawOutput.details.structuredContent
+    // sits at depth 6, which the old depth 5 replaced with "[depth limit]".
+    const event = {
+      sequence: 7,
+      type: "thread.activity-appended",
+      eventId: "event-7",
+      aggregateKind: "thread",
+      aggregateId: "thread-1",
+      occurredAt: "2026-09-19T17:14:09.596Z",
+      commandId: null,
+      causationEventId: null,
+      correlationId: null,
+      metadata: {},
+      payload: {
+        threadId: "thread-1",
+        activity: {
+          id: "activity-7",
+          kind: "tool.completed",
+          summary: "computer_browser_state",
+          payload: {
+            itemType: "dynamic_tool_call",
+            status: "completed",
+            data: {
+              toolName: "computer_browser_state",
+              rawOutput: {
+                details: {
+                  structuredContent: {
+                    status: "ok",
+                    target_id: "bt-85991064",
+                    tabs: [{ tab_id: "tab-e2d51f66", active: true }],
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as unknown as OrchestrationEvent;
+    const shaped = shapeDiagnosticEvents([event], "full");
+    const text = JSON.stringify(shaped);
+    expect(text).not.toContain("[depth limit]");
+    expect(text).toContain("tab-e2d51f66");
+    expect(text).toContain("bt-85991064");
   });
 
   it("keeps separated updates distinct so cursor pagination cannot skip intervening events", () => {

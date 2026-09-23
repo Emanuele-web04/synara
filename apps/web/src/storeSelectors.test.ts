@@ -13,6 +13,7 @@ import {
   createSidechatSummariesForSourceSelector,
   createSidebarTreeThreadsSelector,
   createThreadExistsSelector,
+  createThreadGitActionsMetadataSelector,
   createThreadProjectIdSelector,
   createThreadShellsSelector,
   createThreadWorkspaceMetadataSelector,
@@ -566,5 +567,65 @@ describe("createProjectLastActivityAtSelector", () => {
     );
 
     expect(after).toBe(before);
+  });
+});
+
+describe("createThreadGitActionsMetadataSelector", () => {
+  it("keeps git action metadata stable while streaming messages change", () => {
+    const selectGitActionsMetadata = createThreadGitActionsMetadataSelector(threadIdA);
+    const threadIds = [threadIdA];
+    const threadShellById = {
+      [threadIdA]: {
+        ...shellA,
+        branch: "feature",
+        worktreePath: "/repo/.worktrees/feature",
+        associatedWorktreeBranch: "feature",
+        createBranchFlowCompleted: true,
+      },
+    };
+
+    const before = selectGitActionsMetadata(makeState({ threadIds, threadShellById }));
+    const after = selectGitActionsMetadata(
+      makeState({
+        threadIds,
+        threadShellById,
+        messageIdsByThreadId: { [threadIdA]: [messageId] },
+      }),
+    );
+
+    expect(after).toBe(before);
+    expect(after).toEqual({
+      worktreePath: "/repo/.worktrees/feature",
+      branch: "feature",
+      associatedWorktreeBranch: "feature",
+      createBranchFlowCompleted: true,
+      title: "A",
+    });
+  });
+
+  it("re-derives when a git field or the title changes and empties for unknown threads", () => {
+    const selectGitActionsMetadata = createThreadGitActionsMetadataSelector(threadIdA);
+    const before = selectGitActionsMetadata(
+      makeState({ threadIds: [threadIdA], threadShellById: { [threadIdA]: shellA } }),
+    );
+    const after = selectGitActionsMetadata(
+      makeState({
+        threadIds: [threadIdA],
+        threadShellById: { [threadIdA]: { ...shellA, title: "Renamed", branch: "main" } },
+      }),
+    );
+    expect(after).not.toBe(before);
+    expect(after.title).toBe("Renamed");
+    expect(after.branch).toBe("main");
+    expect(selectGitActionsMetadata(makeState({}))).toEqual({
+      worktreePath: null,
+      branch: null,
+      associatedWorktreeBranch: null,
+      createBranchFlowCompleted: false,
+      title: undefined,
+    });
+    expect(createThreadGitActionsMetadataSelector(null)(makeState({}))).toBe(
+      createThreadGitActionsMetadataSelector(undefined)(makeState({})),
+    );
   });
 });

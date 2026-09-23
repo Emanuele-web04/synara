@@ -1,4 +1,5 @@
 import { Option, Schema } from "effect";
+import { AsyncUserInputQuestions } from "./asyncUserInput";
 import {
   EventId,
   IsoDateTime,
@@ -147,6 +148,7 @@ export const CanonicalRequestType = Schema.Literals([
   "apply_patch_approval",
   "exec_command_approval",
   "tool_user_input",
+  "tool_approval",
   "dynamic_tool_call",
   "auth_tokens_refresh",
   "unknown",
@@ -436,6 +438,7 @@ const TurnDiffUpdatedPayload = Schema.Struct({
 export type TurnDiffUpdatedPayload = typeof TurnDiffUpdatedPayload.Type;
 
 export const ItemLifecyclePayload = Schema.Struct({
+  asyncQuestions: Schema.optional(AsyncUserInputQuestions),
   itemType: CanonicalItemType,
   status: Schema.optional(RuntimeItemStatus),
   title: Schema.optional(TrimmedNonEmptyStringSchema),

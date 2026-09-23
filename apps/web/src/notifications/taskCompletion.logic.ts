@@ -32,7 +32,7 @@ export interface ThreadAttentionCandidate {
   title: string;
   requestId: string;
   createdAt: string;
-  requestKind?: "command" | "file-read" | "file-change" | "permissions";
+  requestKind?: "command" | "file-read" | "file-change" | "permissions" | "tool";
   summary?: string;
 }
 
@@ -647,7 +647,7 @@ export function collectCompletedTerminalCandidates(
 }
 
 function approvalSummary(
-  requestKind: "command" | "file-read" | "file-change" | "permissions",
+  requestKind: "command" | "file-read" | "file-change" | "permissions" | "tool",
 ): string {
   switch (requestKind) {
     case "command":
@@ -658,6 +658,8 @@ function approvalSummary(
       return "File-change approval requested.";
     case "permissions":
       return "Permission approval requested.";
+    case "tool":
+      return "Tool approval requested.";
   }
 }
 
@@ -694,6 +696,20 @@ export function collectThreadAttentionCandidates(
   for (const thread of nextThreads) {
     const previousThread = previousById.get(thread.id);
     if (!previousThread) {
+      continue;
+    }
+    // Both derivations below are pure functions of these inputs. When none of
+    // them changed (the whole workspace during ordinary text streaming, where
+    // only message text moves), every next request id already sits in the
+    // previous id set and nothing can be emitted, so replaying every thread's
+    // activities per streamed token is skipped outright.
+    if (
+      previousThread.activities === thread.activities &&
+      previousThread.pendingInteractions === thread.pendingInteractions &&
+      previousThread.hasPendingApprovals === thread.hasPendingApprovals &&
+      previousThread.hasPendingUserInput === thread.hasPendingUserInput &&
+      previousThread.latestTurn?.turnId === thread.latestTurn?.turnId
+    ) {
       continue;
     }
 

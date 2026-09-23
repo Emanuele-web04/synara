@@ -8,7 +8,10 @@ This document covers build-only native validation and publishing desktop release
   - Manual dispatch defaults to build-only validation and uploads workflow artifacts without publishing anything.
   - A pushed tag matching `v*.*.*` publishes after successful builds.
   - Manual publication requires the explicit `publish_release=true` input.
-- Runs quality gates first: lint, typecheck, test.
+- Runs quality gates first: lint, typecheck, test. Narrow `native`, `icon`, and
+  `js` validation stages cannot publish and omit these full-suite gates.
+- Builds portable JavaScript once, verifies its source/lockfile/settings and
+  output checksums on each consumer, and stages native dependencies per platform.
 - Builds four artifacts in parallel:
   - macOS `arm64` DMG
   - macOS `x64` DMG
@@ -51,6 +54,8 @@ This document covers build-only native validation and publishing desktop release
   - Clean-release publication fails closed if either the default Latest manifests or the dedicated `synara` aliases are missing.
 - Production desktop builds omit web/server/desktop source maps by default to keep update payloads small. Set `SYNARA_WEB_SOURCEMAP=1`, `SYNARA_SERVER_SOURCEMAP=1`, or `SYNARA_DESKTOP_SOURCEMAP=1` only for a diagnostic release that needs them.
 - macOS metadata note:
+  - Installed macOS apps persist alternate icon choices using `NSWorkspace` custom-icon metadata, and reapply the saved choice on launch after an update. Default removes the override so the bundled icon follows system appearance. This requires a writable app bundle; development Electron bundles are not customized.
+  - Custom icons leave signed `Contents` unchanged, but add Finder metadata that `codesign --verify --strict` rejects on a customized installation. Validate pristine distribution artifacts with the strict checks below. A local notarized app copy retained normal signature verification and Gatekeeper acceptance after customization; signed release/update testing must still cover this path.
   - The build initially emits `latest-mac.yml` for both Intel and Apple Silicon.
   - The workflow merges the per-arch macOS metadata, then keeps the merged manifest as `latest-mac.yml` and copies it to `synara-mac.yml` for stable releases.
   - The desktop build script repacks the macOS update `.zip` with `ditto`, verifies Electron framework symlinks, extracts the zip, validates the extracted app signature, patches the matching `latest-mac*.yml` hash/size, and removes the stale `.zip.blockmap`.
@@ -90,7 +95,7 @@ Checklist:
 
 ## 1) Build-only native CI validation
 
-Use this before publication to validate the real native macOS, Linux, and Windows build matrix. Build-only mode does not create a tag, GitHub Release, npm package, updater manifest, or version-bump commit.
+Use this before publication to validate the real native macOS, Linux, and Windows build matrix. Build-only mode produces workflow artifacts and local updater metadata without creating a tag, GitHub Release, npm publication, or version-bump commit, or changing public updater feeds.
 
 1. Push the release-candidate branch so GitHub Actions can check it out.
 2. Start the workflow in build-only mode:
@@ -100,6 +105,154 @@ Use this before publication to validate the real native macOS, Linux, and Window
 5. Download the workflow artifacts and sanity-check installation on each OS.
 
 To publish from a manual dispatch instead of a tag push, pass `publish_release=true`. This is intentionally opt-in.
+
+For one-platform qualification, add `-f platform=mac-arm64`, `mac-x64`,
+`linux-x64`, or `win-x64`. `-f stage=artifact` (the default) still runs quality
+gates, packaging, provenance checks, and isolated startup smoke for that platform.
+For a narrower diagnosis:
+
+```bash
+gh workflow run release.yml --ref BRANCH -f version=X.Y.Z -f publish_release=false -f platform=linux-x64 -f stage=native
+gh workflow run release.yml --ref BRANCH -f version=X.Y.Z -f publish_release=false -f platform=mac-arm64 -f stage=icon
+gh workflow run release.yml --ref BRANCH -f version=X.Y.Z -f publish_release=false -f stage=js
+gh workflow run release.yml --ref BRANCH -f version=X.Y.Z -f publish_release=false -f stage=preflight
+```
+
+`stage=preflight` runs only the quality gates (lint, typecheck and every test
+package, with the server suite in three shards) on Ubuntu runners. Use it to
+measure or debug the gates without native builds, packaging or publication.
+
+For a paired cold Cua build comparison, add `-f cua_benchmark_baseline=FULL_COMMIT`
+to a single-Mac `stage=native` invocation. The baseline must use the same Cua
+source/version/native revision/compiler. This experiment bypasses artifact caches,
+builds baseline then candidate on the same runner with separate empty Cargo/target
+directories, and uploads Cargo timing reports, native linkage and isolated daemon
+probe results. It checks that only the baseline emits the unused SDK dynamic
+library. No app packaging or publication runs; the native job is capped at 25 minutes.
+Validate both archived inputs locally before considering a CI dispatch:
+
+```bash
+node scripts/benchmark-cua-build.ts FULL_COMMIT /tmp/cua-benchmark-inputs --prepare-only
+```
+
+This preparation check includes the license, patch checksum and instrumentation
+for both snapshots and performs no native compilation or network operation.
+The [first paired attempt](release-build-optimization.md#sdk-only-follow-up-attempt)
+failed before reaching the candidate and does not establish an SDK build speedup.
+
+`native` verifies the pinned Cua artifact/source path only; `icon` compiles the
+macOS catalog only; `js` builds and records portable outputs only. These stages
+do not qualify an installer or provider runtime. Publication rejects any scope
+other than `platform=all, stage=artifact` and still requires every desktop gate.
+Server tarball preparation runs alongside desktop jobs; publication waits for both.
+
+### Release build caches and measurements
+
+See [build optimization evidence](release-build-optimization.md) for the measured
+baseline, signed Intel CI comparison, local measurements, remaining validation,
+and timing interpretation.
+
+`.github/workflows/cua-release-cache.yml` builds a credential-free Cua cache on
+relevant changes to `main`, with a default-branch guard. To warm an evicted cache
+or validate a runner-image update, dispatch it on the default branch:
+
+```bash
+gh workflow run cua-release-cache.yml --ref main
+```
+
+Release tags restore only exact keys. GitHub scopes caches by ref: a cache made
+on one release tag cannot seed the next tag, whereas the default-branch cache is
+visible to release jobs. PR workflows do not populate this cache. Keys cover the
+pinned release manifest, all patches, provisioning/validation/cache logic, actual
+Rust/compiler/OS/architecture/Xcode/SDK identity, Linux development packages, and
+build flags. Arbitrary compiler overrides/wrappers are rejected. Signing keys,
+certificates, signed release bundles and user state are never cached.
+
+Each restore checks the build key, existing executable provenance/checksum and
+Mach-O/ELF identity, plus all Linux sidecar checksums. Non-exact matches are
+discarded before a source build. A corrupt exact hit fails instead of silently
+substituting a different binary. Delete that cache entry in GitHub Actions and
+rerun the producer, or intentionally bump the `cua-v1` key schema when invalidating
+the whole cache. Never edit provenance to make a hit pass. Packaging re-signs a
+separate staged copy, preserving cached bytes.
+
+Portable outputs are same-run artifacts, never cross-release caches. Import
+rejects archive links and unexpected paths before extraction into an isolated
+directory, verifies the complete file inventory, source, lockfile and build
+settings, then copies only the two allowed output roots. Frozen production
+installs, dependency patches and native ABI checks still run on each platform.
+
+The Intel Mac job no longer retries the whole artifact command. Diagnose the
+failed stage and rerun only its platform. With `--keep-stage` (used by CI), the
+logged stage directory retains Apple submission IDs and exact payload hashes
+for same-run recovery; it is not uploaded or persisted across runners. A failed
+wait does not cancel Apple's processing. With the same credentials in the
+environment, resume finalization without re-signing the app:
+
+```bash
+node scripts/notarize-mac-app.ts /PATH/TO/STAGE/app/dist/mac-arm64/Synara.app
+node scripts/finalize-mac-dmg.ts /PATH/TO/STAGE/app/dist
+```
+
+The first command is for an interrupted app notarization stage; DMG finalization
+requires an already-created signed DMG. Changed payloads reject saved state;
+remove only the matching stale `.app-notary-*` or `.notary-state` entry before
+submitting changed bytes. Recovery checks Apple's status and retains signature,
+stapling, Gatekeeper and final update-ZIP validation. Startup smoke and release
+provenance checks must still pass before publication.
+
+### macOS release toolchains
+
+Both native macOS release runners use macOS 15. Native helpers and the pinned
+Cua apple-metal bridge build with Xcode 16.4's macOS 15 SDK. A separate macOS 26
+job compiles the architecture-independent Icon Composer catalog with Xcode 26.3
+from the same release checkout and passes it through a required workflow artifact.
+`SYNARA_MAC_ICON_CATALOG` points packaging at that catalog; a missing file fails
+the build. This avoids Apple's AssetRuntime framework crash on macOS 15 without
+changing the native SDK. Local builds without that variable compile icons with
+the selected Xcode on the local host.
+
+An older `actool` can exit successfully without creating `Assets.car`; that is a
+packaging failure, not permission to silently omit the Liquid Glass icon.
+
+### Linux native build dependencies
+
+The release job installs the Cua driver's OpenSSL, X11, XCB, xkbcommon and
+Wayland development libraries before provisioning. This matches the build
+prerequisites in `cua-linux-check.yml`; it does not qualify Linux Computer Use
+as a supported 0.9.0 feature.
+
+### Local DMG appearance validation
+
+On an Apple Silicon Mac, build the DMG and macOS update ZIP in `release/` with:
+
+```bash
+SYNARA_DESKTOP_UPDATE_REPOSITORY=Emanuele-web04/synara bun run dist:desktop:dmg:arm64
+```
+
+Use `dist:desktop:dmg:x64` on Intel. The updater repository setting is needed for
+ZIP manifest finalization outside GitHub Actions. The build passes
+`--publish never` to electron-builder and defaults to unsigned; release signing,
+notarization, and updater settings remain controlled by the existing release flow.
+
+The Dmgly layout lives in `scripts/lib/desktop-platform-build-config.ts` and uses
+`apps/desktop/resources/dmgly/assets/dmg-background.png`. The packaging script
+copies this resources directory into its staging app, keeping the background path
+valid there. `scripts/lib/desktop-runtime-resources.ts` excludes the `dmgly`
+directory from the runtime resource copy on every platform, so installer artwork
+and the reference icon stay out of the installed app and update ZIP. The supplied
+642×406 PNG is a 1× background with its text and arrow
+already baked in. Do not add duplicate text or arrows. It has no baked label
+backgrounds. The exported `app-icon.png` is retained alongside it as a reference;
+the app continues to use the existing production ICNS generation pipeline.
+
+Mount the resulting DMG in Finder and check the 642×406 window, 128px icons,
+and icon centers at (172, 135) for `Synara.app` and (514, 241) for `Applications`.
+Verify both real filename labels remain readable and unclipped. Finder renders
+the app icon and Applications link, so their appearance can differ from Dmgly's
+preview; Retina displays also scale the supplied 1× background. Local Finder
+preferences can override the DMG's saved hidden path/status bars, reducing the
+visible background and requiring scrolling to reveal the Applications label.
 
 ## 2) Apple signing + notarization setup (macOS)
 
@@ -184,7 +337,7 @@ full subject distinguished name.
 5. Create release tag: `vX.Y.Z`.
 6. Push tag.
 7. Verify workflow steps:
-   - preflight passes
+   - preflight, quality gates and all three server test shards pass
    - all matrix builds pass
    - release job uploads expected files
 8. For a stable clean-lane release, confirm the new versioned release is GitHub Latest, contains all three default `latest` manifests plus all three `synara` aliases, and left the historical compatibility release unchanged.

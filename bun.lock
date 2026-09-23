@@ -17,7 +17,7 @@
     },
     "apps/desktop": {
       "name": "@synara/desktop",
-      "version": "0.8.4",
+      "version": "0.9.1",
       "dependencies": {
         "betterwright": "2.7.3",
         "effect": "catalog:",
@@ -76,7 +76,7 @@
     },
     "apps/server": {
       "name": "@synara/cli",
-      "version": "0.8.4",
+      "version": "0.9.1",
       "bin": {
         "synara": "dist/index.mjs",
         "synara-restore-migration-backup": "dist/restoreMigrationBackup.mjs",
@@ -90,7 +90,7 @@
         "@earendil-works/pi-coding-agent": "^0.85.1",
         "@effect/platform-node": "catalog:",
         "@effect/sql-sqlite-bun": "catalog:",
-        "@opencode-ai/sdk": "^1.15.13",
+        "@opencode-ai/sdk": "1.18.31",
         "@pierre/diffs": "^1.2.12",
         "@xterm/headless": "^6.0.0",
         "effect": "catalog:",
@@ -116,7 +116,7 @@
     },
     "apps/web": {
       "name": "@synara/web",
-      "version": "0.8.4",
+      "version": "0.9.1",
       "dependencies": {
         "@base-ui/react": "^1.5.0",
         "@dnd-kit/core": "^6.3.1",
@@ -187,7 +187,7 @@
     },
     "packages/contracts": {
       "name": "@synara/contracts",
-      "version": "0.8.4",
+      "version": "0.9.1",
       "dependencies": {
         "effect": "catalog:",
       },
@@ -941,7 +941,7 @@
 
     "@open-draft/until": ["@open-draft/until@2.1.0", "", {}, "sha512-U69T3ItWHvLwGg5eJ0n3I62nWuE6ilHlmz7zM0npLBRvPRd7e6NYmg54vvRtP5mZG7kZqZCFVdsTWo7BPtBujg=="],
 
-    "@opencode-ai/sdk": ["@opencode-ai/sdk@1.15.13", "", { "dependencies": { "cross-spawn": "7.0.6" } }, "sha512-4TwojIoQ8EG6/mVBuUVYZXiFcwNmiiytEnjnvyuvSJjGwFIlw2YIBFxtSVC3FbwwbwHT63teh1RHiQUUC4U5xw=="],
+    "@opencode-ai/sdk": ["@opencode-ai/sdk@1.18.31", "", { "dependencies": { "cross-spawn": "7.0.6" } }, "sha512-Raouthf8Lhe9edjvYeeSK7SgvdoU6bBjH9qV3f70dHoa6h+z0X2TMz/e22/wKp/StlFUZ4kIRpYYxFnY8/k01w=="],
 
     "@opennextjs/aws": ["@opennextjs/aws@4.1.0", "", { "dependencies": { "@ast-grep/napi": "^0.40.5", "@aws-sdk/client-cloudfront": "3.984.0", "@aws-sdk/client-dynamodb": "3.984.0", "@aws-sdk/client-lambda": "3.984.0", "@aws-sdk/client-s3": "3.984.0", "@aws-sdk/client-sqs": "3.984.0", "@node-minify/core": "^8.0.6", "@node-minify/terser": "^8.0.6", "@tsconfig/node18": "^1.0.3", "aws4fetch": "^1.0.20", "chalk": "^5.6.2", "cookie": "^1.0.2", "esbuild": "0.25.4", "express": "^5.1.0", "path-to-regexp": "^6.3.0", "urlpattern-polyfill": "^10.1.0", "yaml": "^2.8.1" }, "peerDependencies": { "next": ">=15.5.21 <16 || >=16.2.11" }, "bin": { "open-next": "dist/index.js" } }, "sha512-GuKkdUbnJhLvtwTiJlytNtWIcSYN3+Dzi+OusUlRgf+Ur7dGoXdzBopd+VFiSdTBduPOvr9lPFDg6BYNjEV3wQ=="],
 

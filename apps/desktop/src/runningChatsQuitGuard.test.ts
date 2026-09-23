@@ -153,6 +153,30 @@ describe("running chats quit guard", () => {
     await expect(decision).resolves.toBe(false);
   });
 
+  it("allows a pending ask when the renderer dies mid-confirmation, without latching", async () => {
+    const requestIds = ["q1", "q2"];
+    const guard = makeRunningChatsQuitGuard(() => requestIds.shift() ?? "unexpected");
+    const first = guard.askRenderer({
+      send: vi.fn(),
+      isRendererAvailable: () => true,
+    });
+    expect(guard.hasPendingAsk()).toBe(true);
+
+    // The renderer hosting the ask is gone — the quit it was part of must
+    // proceed, but no user said yes, so the allowed latch must not set.
+    guard.allowPending();
+
+    await expect(first).resolves.toBe(true);
+    expect(guard.hasPendingAsk()).toBe(false);
+    expect(guard.hasAllowedQuit()).toBe(false);
+
+    const send = vi.fn();
+    const second = guard.askRenderer({ send, isRendererAvailable: () => true });
+    expect(send).toHaveBeenCalledWith({ requestId: "q2", presentation: "in-app" });
+    guard.receiveResponse({ requestId: "q2", phase: "decision", allow: true });
+    await expect(second).resolves.toBe(true);
+  });
+
   it("cancels a pending decision when the renderer is replaced and can prompt again", async () => {
     const requestIds = ["q1", "q2"];
     const guard = makeRunningChatsQuitGuard(() => requestIds.shift() ?? "unexpected");

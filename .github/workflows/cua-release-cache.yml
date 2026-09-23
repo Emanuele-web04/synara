@@ -1,0 +1,36 @@
+name: Prepare release Cua cache
+on:
+  push:
+    branches: [main]
+    paths:
+      - packages/shared/src/cuaDriverRelease.json
+      - apps/desktop/patches/cua-driver/**
+      - apps/desktop/scripts/provision-cua-driver.mjs
+      - apps/desktop/scripts/cua-artifact-provenance.mjs
+      - apps/desktop/scripts/cua-cache-key.mjs
+      - scripts/lib/build-timing.ts
+      - .github/actions/provision-cua/action.yml
+      - .github/workflows/cua-release-cache.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: cua-release-cache-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  prepare:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel, ubuntu-24.04]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - uses: ./.github/actions/provision-cua
+        with:
+          save-cache: "true"

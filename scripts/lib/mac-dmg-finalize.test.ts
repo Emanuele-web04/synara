@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildMacDmgFinalizationCommands,
+  buildUnsignedMacDmgCommands,
   resolveSingleMacDmgFileName,
 } from "./mac-dmg-finalize.ts";
 
@@ -42,7 +43,6 @@ describe("macOS DMG finalization", () => {
       credentials.appleApiKeyId,
       "--issuer",
       credentials.appleApiIssuer,
-      "--wait",
     ]);
   });
 
@@ -54,5 +54,35 @@ describe("macOS DMG finalization", () => {
         appleApiIssuer: undefined,
       }),
     ).toThrow("requires APPLE_API_KEY");
+  });
+
+  it("copies the final app and rebuilds the unsigned DMG from that payload", () => {
+    expect(
+      buildUnsignedMacDmgCommands(
+        "/tmp/dist/mac-arm64/Synara.app",
+        "/tmp/image-root",
+        "/tmp/dist/Synara-arm64.dmg",
+        "Synara",
+      ),
+    ).toEqual([
+      {
+        command: "ditto",
+        args: ["/tmp/dist/mac-arm64/Synara.app", "/tmp/image-root/Synara.app"],
+      },
+      {
+        command: "hdiutil",
+        args: [
+          "create",
+          "-volname",
+          "Synara",
+          "-srcfolder",
+          "/tmp/image-root",
+          "-ov",
+          "-format",
+          "UDZO",
+          "/tmp/dist/Synara-arm64.dmg",
+        ],
+      },
+    ]);
   });
 });

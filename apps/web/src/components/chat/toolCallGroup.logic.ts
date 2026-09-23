@@ -3,7 +3,8 @@
 //          label ("Ran 2 commands, Edited 2 files, Searched 3 files") for the
 //          collapsed tool-group disclosure in the transcript.
 // Layer: Web chat presentation helpers
-// Exports: MIN_COLLAPSIBLE_TOOL_GROUP_SIZE, ToolCallSummaryCategory,
+// Exports: MIN_COLLAPSIBLE_TOOL_GROUP_SIZE, workEntryRowCount,
+//          multiFileEditLabel, ToolCallSummaryCategory,
 //          ToolCallGroupSummary, isSummarizableToolCallEntry,
 //          classifyToolCallSummaryCategory, summarizeToolCallGroup
 
@@ -11,8 +12,21 @@ import { pluralize } from "@synara/shared/text";
 import { isFileChangeWorkLogEntry, type WorkLogEntry } from "../../session-logic";
 import { deriveReadableCommandDisplay } from "../../lib/toolCallLabel";
 
-// A single tool row collapses into nothing useful; only runs of 2+ fold.
+// A single tool row collapses into nothing useful; only runs of 2+ rows fold.
 export const MIN_COLLAPSIBLE_TOOL_GROUP_SIZE = 2;
+
+// Rows an entry occupies when listed: a file-change call renders one
+// "Edited <file>" row per changed file, so one patch can be a whole column.
+// Fold thresholds count these rows, not calls.
+export function workEntryRowCount(entry: WorkLogEntry): number {
+  return isFileChangeWorkLogEntry(entry) ? Math.max(1, entry.changedFiles?.length ?? 0) : 1;
+}
+
+// One-line label for a call that would list several edited-file rows.
+export function multiFileEditLabel(entry: WorkLogEntry): string | null {
+  const rowCount = workEntryRowCount(entry);
+  return rowCount > 1 ? summaryPartLabel("edit", rowCount, true) : null;
+}
 
 export type ToolCallSummaryCategory =
   | "command"
@@ -68,6 +82,9 @@ export function classifyToolCallSummaryCategory(entry: WorkLogEntry): ToolCallSu
   }
   if (entry.requestKind === "file-read") {
     return "read";
+  }
+  if (entry.requestKind === "tool") {
+    return "tool";
   }
   if (entry.itemType === "web_search") {
     return "search";
@@ -156,7 +173,8 @@ export function summarizeToolCallGroup(
   entries: ReadonlyArray<WorkLogEntry>,
 ): ToolCallGroupSummary | null {
   const summarizable = entries.filter(isSummarizableToolCallEntry);
-  if (summarizable.length < MIN_COLLAPSIBLE_TOOL_GROUP_SIZE) {
+  const rowCount = summarizable.reduce((total, entry) => total + workEntryRowCount(entry), 0);
+  if (rowCount < MIN_COLLAPSIBLE_TOOL_GROUP_SIZE) {
     return null;
   }
 

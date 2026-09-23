@@ -7,6 +7,7 @@
  * @module ProjectionThreadMessageRepository
  */
 import {
+  AsyncUserInput,
   ChatAttachment,
   MessageDispatchOrigin,
   OrchestrationMessageRole,
@@ -34,6 +35,7 @@ export const ProjectionThreadMessageTextSegment = Schema.Struct({
 export type ProjectionThreadMessageTextSegment = typeof ProjectionThreadMessageTextSegment.Type;
 
 export const ProjectionThreadMessage = Schema.Struct({
+  asyncUserInput: Schema.optional(AsyncUserInput),
   messageId: MessageId,
   threadId: ThreadId,
   turnId: Schema.NullOr(TurnId),
@@ -112,6 +114,11 @@ export interface ProjectionThreadMessageRepositoryShape {
   readonly listByThreadId: (
     input: ListProjectionThreadMessagesInput,
   ) => Effect.Effect<ReadonlyArray<ProjectionThreadMessage>, ProjectionRepositoryError>;
+
+  /** Last human send, excluding agent and automation dispatches. */
+  readonly getLatestHumanMessageAt: (
+    input: ListProjectionThreadMessagesInput,
+  ) => Effect.Effect<string | null, ProjectionRepositoryError>;
 
   /** Read the newest user-message timestamp used by sidebar summary state. */
   readonly getLatestUserMessageAt: (

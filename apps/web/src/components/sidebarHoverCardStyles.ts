@@ -26,7 +26,7 @@ export const SIDEBAR_HOVER_CARD_ROW_PADDING_CLASS_NAME = "px-1.5 py-1";
  * add only their own color (and the title overrides leading to wrap). Padding
  * and font here are the single source of truth for both cards' rhythm.
  */
-export const SIDEBAR_HOVER_CARD_ROW_CLASS_NAME = `flex w-full min-w-0 items-center gap-2.5 rounded-md ${SIDEBAR_HOVER_CARD_ROW_PADDING_CLASS_NAME} text-[length:var(--app-font-size-ui-sm,11px)] leading-none`;
+export const SIDEBAR_HOVER_CARD_ROW_CLASS_NAME = `flex w-full min-w-0 items-center gap-2.5 rounded-md ${SIDEBAR_HOVER_CARD_ROW_PADDING_CLASS_NAME} text-ui-sm leading-none`;
 
 /**
  * Frosted surface chrome shared by both hover-card popups: the same shared tooltip

@@ -1,3 +1,6 @@
+import * as OS from "node:os";
+import { join } from "node:path";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { ServerProviderStatus } from "@synara/contracts";
 import { DEFAULT_SERVER_SETTINGS, ServerProviderUpdateError } from "@synara/contracts";
@@ -54,7 +57,7 @@ function mockHandle(
   options?: { readonly exitCode?: Effect.Effect<ChildProcessSpawner.ExitCode> },
 ) {
   return ChildProcessSpawner.makeHandle({
-    pid: ChildProcessSpawner.ProcessId(1),
+    pid: ChildProcessSpawner.ProcessId(0x7ff_f_fffe),
     exitCode: options?.exitCode ?? Effect.succeed(ChildProcessSpawner.ExitCode(result.code)),
     isRunning: Effect.succeed(false),
     kill: () => Effect.void,
@@ -124,7 +127,7 @@ function hangingSpawnerLayer(input: {
   readonly shouldHang: (args: ReadonlyArray<string>, command: string) => boolean;
 }) {
   const handle = ChildProcessSpawner.makeHandle({
-    pid: ChildProcessSpawner.ProcessId(2),
+    pid: ChildProcessSpawner.ProcessId(0x7fff_fffe),
     exitCode: Effect.never,
     isRunning: Effect.succeed(true),
     kill: () => Effect.sync(input.onKill),
@@ -2005,6 +2008,22 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       ),
     );
 
+    it.effect("expands a tilde opencode binary path for the version probe", () =>
+      Effect.gen(function* () {
+        const status = yield* makeCheckOpenCodeProviderStatus("~/bin/opencode");
+        assert.strictEqual(status.status, "ready");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, join(OS.homedir(), "bin/opencode"));
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "opencode 1.3.17\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
     it.effect("returns unavailable when opencode is missing", () =>
       Effect.gen(function* () {
         const status = yield* checkOpenCodeProviderStatus;
@@ -2290,9 +2309,15 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       );
     });
 
-    it.effect("returns ready with auth guidance when no Devin API key is set", () =>
-      Effect.gen(function* () {
-        const status = yield* checkDevinProviderStatus;
+    it.effect("returns ready with auth guidance when no Devin API key is set", () => {
+      const previousWindsurfKey = process.env.WINDSURF_API_KEY;
+      const previousDevinKey = process.env.DEVIN_API_KEY;
+      delete process.env.WINDSURF_API_KEY;
+      delete process.env.DEVIN_API_KEY;
+      return Effect.gen(function* () {
+        // Stub the credential read so a real `devin auth login` on the host
+        // cannot leak an "authenticated" result into this test.
+        const status = yield* makeCheckDevinProviderStatus(undefined, async () => undefined);
         assert.strictEqual(status.status, "ready");
         assert.strictEqual(status.available, true);
         assert.strictEqual(status.authStatus, "unknown");
@@ -2305,8 +2330,22 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             throw new Error(`Unexpected args: ${joined}`);
           }),
         ),
-      ),
-    );
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (previousWindsurfKey === undefined) {
+              delete process.env.WINDSURF_API_KEY;
+            } else {
+              process.env.WINDSURF_API_KEY = previousWindsurfKey;
+            }
+            if (previousDevinKey === undefined) {
+              delete process.env.DEVIN_API_KEY;
+            } else {
+              process.env.DEVIN_API_KEY = previousDevinKey;
+            }
+          }),
+        ),
+      );
+    });
 
     it.effect("recognizes credentials saved by devin auth login", () => {
       let credentialsRead = false;

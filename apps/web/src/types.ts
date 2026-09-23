@@ -112,6 +112,7 @@ export interface ChatMessage {
   text: string;
   /** Slices of streamed assistant text between row-making provider events. */
   textSegments?: OrchestrationMessageTextSegment[];
+  asyncUserInput?: import("@synara/contracts").AsyncUserInput;
   attachments?: ChatAttachment[];
   skills?: ProviderSkillReference[];
   mentions?: ProviderMentionReference[];
@@ -120,6 +121,7 @@ export interface ChatMessage {
   startsNewTurn?: boolean;
   turnId?: TurnId | null;
   createdAt: string;
+  updatedAt?: string;
   completedAt?: string | undefined;
   streaming: boolean;
   source?: OrchestrationMessageSource;
@@ -272,6 +274,7 @@ export interface Thread extends ThreadWorkspaceState {
   claudeCacheReviewSequence?: number;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
   latestUserMessageAt?: string | null;
+  latestHumanMessageAt?: string | null;
   hasPendingApprovals?: boolean;
   hasPendingUserInput?: boolean;
   hasActionableProposedPlan?: boolean;
@@ -319,6 +322,7 @@ export interface ThreadShell extends ThreadWorkspaceState {
   claudeCacheReviewSequence?: number;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
   latestUserMessageAt?: string | null;
+  latestHumanMessageAt?: string | null;
   hasPendingApprovals?: boolean;
   hasPendingUserInput?: boolean;
   hasActionableProposedPlan?: boolean;
@@ -358,6 +362,7 @@ export interface SidebarThreadSummary {
   subagentNickname?: string | null;
   subagentRole?: string | null;
   latestUserMessageAt: string | null;
+  latestHumanMessageAt?: string | null;
   hasPendingApprovals: boolean;
   hasPendingUserInput: boolean;
   hasActionableProposedPlan: boolean;

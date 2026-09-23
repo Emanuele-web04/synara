@@ -40,14 +40,12 @@ export const SynaraThreadCreationCard = memo(function SynaraThreadCreationCard({
           <SynaraLogo className="h-[22px] w-auto" aria-label="Synara" />
         </span>
         <div className="min-w-0 flex-1">
-          <p className="truncate font-system-ui text-[length:var(--app-font-size-ui-lg,13px)] font-medium text-foreground/95">
+          <p className="truncate font-system-ui text-ui-lg font-medium text-foreground/95">
             {title}
           </p>
-          <p className="truncate font-system-ui text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground/65">
-            {summary}
-          </p>
+          <p className="truncate font-system-ui text-ui-sm text-muted-foreground/65">{summary}</p>
           {singleThread ? (
-            <div className="mt-1 flex min-w-0 items-center gap-1.5 text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/52">
+            <div className="mt-1 flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground/52">
               <ProviderIcon provider={singleThread.provider} className="size-3 shrink-0" />
               <span className="truncate">{threadMeta(singleThread)}</span>
             </div>
@@ -75,10 +73,10 @@ export const SynaraThreadCreationCard = memo(function SynaraThreadCreationCard({
             >
               <ProviderIcon provider={thread.provider} className="size-4 shrink-0" />
               <div className="min-w-0 flex-1">
-                <p className="truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-medium text-foreground/90">
+                <p className="truncate font-system-ui text-ui font-medium text-foreground/90">
                   {thread.title}
                 </p>
-                <p className="truncate font-system-ui text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground/52">
+                <p className="truncate font-system-ui text-ui-xs text-muted-foreground/52">
                   {threadMeta(thread)}
                 </p>
               </div>

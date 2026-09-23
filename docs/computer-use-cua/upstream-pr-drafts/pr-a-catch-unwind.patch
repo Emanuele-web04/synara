@@ -1,0 +1,19 @@
+diff --git a/libs/cua-driver/rust/crates/cua-driver/src/main.rs b/libs/cua-driver/rust/crates/cua-driver/src/main.rs
+index 5d6ac1f14..e772ddaf6 100644
+--- a/libs/cua-driver/rust/crates/cua-driver/src/main.rs
++++ b/libs/cua-driver/rust/crates/cua-driver/src/main.rs
+@@ -652,7 +652,13 @@ fn main() {
+             let serve_handle = std::thread::Builder::new()
+                 .name("cua-serve".into())
+                 .spawn(move || {
+-                    serve::run_serve_cmd(driver, &sp, Some(&pid_path));
++                    // A panic unwinding this thread leaves the main thread
++                    // parked in the AppKit run loop forever — an immortal
++                    // orphan with a dead serve loop. Catch it so exit(0)
++                    // always runs; the panic text still reaches stderr.
++                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++                        serve::run_serve_cmd(driver, &sp, Some(&pid_path));
++                    }));
+                     std::process::exit(0);
+                 })
+                 .expect("spawn serve thread");

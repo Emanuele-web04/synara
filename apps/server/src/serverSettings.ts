@@ -67,15 +67,18 @@ export interface ServerSettingsSnapshot {
   readonly settings: ServerSettings;
 }
 
-const SERVER_SETTINGS_MIGRATION_VERSION = 2;
+const SERVER_SETTINGS_MIGRATION_VERSION = 3;
 const PREVIOUS_GIT_TEXT_GENERATION_MODEL = "gpt-5.4-mini";
+const PREVIOUS_LUNA_GIT_TEXT_GENERATION_MODEL = "gpt-5.6-luna";
 
 function migrateSettings(settings: ServerSettings, migrationVersion: number): ServerSettings {
   const selection = settings.textGenerationModelSelection;
   if (
-    migrationVersion >= 2 ||
     selection.provider !== "codex" ||
-    selection.model !== PREVIOUS_GIT_TEXT_GENERATION_MODEL
+    !(
+      (migrationVersion < 2 && selection.model === PREVIOUS_GIT_TEXT_GENERATION_MODEL) ||
+      (migrationVersion < 3 && selection.model === PREVIOUS_LUNA_GIT_TEXT_GENERATION_MODEL)
+    )
   ) {
     return settings;
   }

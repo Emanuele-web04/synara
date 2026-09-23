@@ -1838,7 +1838,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("+2 more tool calls");
   });
 
-  it("renders reasoning activity as iconless tool text while Thinking remains live", async () => {
+  it("folds a live run to its latest status description while Thinking remains live", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const activeTurnId = TurnId.makeUnsafe("turn-reasoning-live");
     const markup = renderToStaticMarkup(
@@ -1923,9 +1923,56 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup.match(/data-codex-status-row="true"/g) ?? []).toHaveLength(3);
-    expect(markup.match(/data-work-entry-icon="true"/g) ?? []).toHaveLength(1);
+    expect(markup.match(/data-tool-group-live="true"/g) ?? []).toHaveLength(1);
+    expect(markup).toContain("Running the focused tests");
+    expect(markup).not.toContain("MCP tool call");
+    expect(markup).not.toContain('data-codex-status-row="true"');
     expect(markup).toContain(">Thinking<");
+  });
+
+  it("renders a lone reasoning update as iconless tool text", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const activeTurnId = TurnId.makeUnsafe("turn-reasoning-lone");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking
+        activeTurnInProgress
+        activeTurnId={activeTurnId}
+        activeTurnStartedAt="2026-03-17T19:12:28.000Z"
+        timelineEntries={[
+          {
+            id: "entry-reasoning-trace",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.100Z",
+            entry: {
+              id: "reasoning-trace",
+              createdAt: "2026-03-17T19:12:28.100Z",
+              turnId: activeTurnId,
+              label: "Reasoning trace",
+              toolTitle: "Reasoning trace",
+              detail: "**Inspecting apps/web/src/store.ts**\n\n<!-- -->",
+              tone: "tool",
+            },
+          },
+        ]}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup.match(/data-codex-status-row="true"/g) ?? []).toHaveLength(1);
+    expect(markup).not.toContain('data-work-entry-icon="true"');
     expect(markup).toContain("Inspecting apps/web/src/store.ts");
     expect(markup).not.toContain("Reasoning trace Inspecting");
   });
@@ -2154,7 +2201,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain('data-timeline-row-kind="work"');
   });
 
-  it("expands live inline tool calls past the cap when the group is toggled open", async () => {
+  it("folds live inline tool calls to one line wearing the newest call", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -2164,7 +2211,7 @@ describe("MessagesTimeline", () => {
         activeTurnStartedAt="2026-03-17T19:12:28.000Z"
         timelineEntries={[
           // The message comes first so the tools are the turn's live inline
-          // tail: the run stays expanded and keeps the +N cap behavior.
+          // tail: the run renders as one line for its newest call, uncapped.
           {
             id: "entry-assistant-inline-tools-expanded",
             kind: "message",
@@ -2249,8 +2296,11 @@ describe("MessagesTimeline", () => {
       />,
     );
 
+    expect(markup.match(/data-tool-group-live="true"/g) ?? []).toHaveLength(1);
     expect(markup).toContain("Tool 5");
-    expect(markup).toContain("Show less");
+    expect(markup).not.toContain("Tool 4");
+    expect(markup).not.toContain("Show less");
+    expect(markup).not.toContain("more tool calls");
   });
 
   it("renders inline file-change tool calls as edited rows with diff stats", async () => {
@@ -2448,8 +2498,8 @@ describe("MessagesTimeline", () => {
 
   it("uses the GitHub logo for git and GitHub CLI command rows", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
-    // Rendered as a live turn: once settled, consecutive command rows fold into
-    // a closed "Ran N commands" summary and individual rows are not in markup.
+    // A thinking boundary keeps the two commands in separate singleton runs:
+    // consecutive command rows fold into one line and leave the markup.
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         hasMessages
@@ -2469,6 +2519,17 @@ describe("MessagesTimeline", () => {
               itemType: "command_execution",
               toolTitle: "Checked",
               command: "git status --short",
+            },
+          },
+          {
+            id: "entry-git-boundary",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.500Z",
+            entry: {
+              id: "work-git-boundary",
+              createdAt: "2026-03-17T19:12:28.500Z",
+              label: "Thinking",
+              tone: "thinking",
             },
           },
           {
@@ -2990,6 +3051,52 @@ describe("MessagesTimeline", () => {
     expect(presentationOnlyMarkup).toContain('data-tool-icon="browser"');
   });
 
+  it.each([
+    "computer_click",
+    "mcp__synara__computer_click",
+    "synara_computer_click",
+    "computer_browser_click",
+    "mcp__synara__computer_browser_click",
+  ])("uses the requested cursor and contextual label for %s", async (toolName) => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const [entry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "computer-human-label",
+          kind: "tool.completed",
+          summary: "Tool",
+          payload: {
+            itemType: "mcp_tool_call",
+            toolName,
+            arguments: { label: "Search", app: "Safari", x: 123, y: 456 },
+          },
+        }),
+      ],
+      undefined,
+    );
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        timelineEntries={[
+          {
+            id: "computer-row",
+            kind: "work",
+            createdAt: entry!.createdAt,
+            entry: entry!,
+          },
+        ]}
+      />,
+    );
+    expect(markup).toContain('data-tool-icon="computer"');
+    expect(markup).toContain("central-icons-reversed/cursor-1.svg");
+    expect(markup).toContain(
+      toolName.includes("browser") ? "Click in the browser" : "Click on “Search” in Safari",
+    );
+    expect(markup).not.toContain("Synara clicked the desktop");
+    expect(markup).not.toContain("123, 456");
+    expect(markup).not.toContain('data-tool-icon="mcp"');
+  });
+
   it("hides raw `ToolName: {json}` argument details behind the humanized heading", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const baseProps = makeTimelineBaseProps();
@@ -3175,6 +3282,68 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Claude Sonnet 5");
     expect(markup.indexOf("Both threads are running.")).toBeLessThan(
       markup.indexOf('data-synara-thread-creation-card="true"'),
+    );
+  });
+
+  it("shows the Computer setup card after the answer instead of inside the settled fold", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={new QueryClient()}>
+        <MessagesTimeline
+          {...makeTimelineBaseProps()}
+          nowIso="2026-03-17T19:12:31.000Z"
+          isWorking={false}
+          activeTurnInProgress={false}
+          timelineEntries={[
+            {
+              id: "entry-computer-tool",
+              kind: "work",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              entry: {
+                id: "work-computer-tool",
+                createdAt: "2026-03-17T19:12:28.000Z",
+                label: "MCP tool call",
+                tone: "tool",
+                itemType: "mcp_tool_call",
+                toolTitle: "Listed windows",
+                activityKind: "tool.completed",
+              },
+            },
+            {
+              id: "entry-computer-setup",
+              kind: "work",
+              createdAt: "2026-03-17T19:12:29.000Z",
+              entry: {
+                id: "work-computer-setup",
+                createdAt: "2026-03-17T19:12:29.000Z",
+                label: "Computer setup required",
+                tone: "error",
+                computerSetupRequired: { missing: ["screenRecording"] },
+              },
+            },
+            {
+              id: "entry-computer-setup-assistant",
+              kind: "message",
+              createdAt: "2026-03-17T19:12:30.000Z",
+              message: {
+                id: MessageId.makeUnsafe("message-computer-setup"),
+                role: "assistant",
+                text: "Synara needs macOS permissions first.",
+                createdAt: "2026-03-17T19:12:30.000Z",
+                completedAt: "2026-03-17T19:12:31.000Z",
+                streaming: false,
+              },
+            },
+          ]}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(markup).toContain("Worked for");
+    expect(markup.match(/Computer control needs Screen Recording/g)).toHaveLength(1);
+    expect(markup.indexOf("Synara needs macOS permissions first.")).toBeLessThan(
+      markup.indexOf("Computer control needs Screen Recording"),
     );
   });
 

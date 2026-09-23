@@ -1,6 +1,6 @@
 {
   "name": "@synara/cli",
-  "version": "0.8.4",
+  "version": "0.9.1",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -34,7 +34,7 @@
     "@earendil-works/pi-coding-agent": "^0.85.1",
     "@effect/platform-node": "catalog:",
     "@effect/sql-sqlite-bun": "catalog:",
-    "@opencode-ai/sdk": "^1.15.13",
+    "@opencode-ai/sdk": "1.18.31",
     "@pierre/diffs": "^1.2.12",
     "@xterm/headless": "^6.0.0",
     "effect": "catalog:",

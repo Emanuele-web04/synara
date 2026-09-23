@@ -16,7 +16,11 @@
   </p>
 </div>
 
-<details>
+<p align="center">
+  <img src="./assets/prod/readme-workspace-light.png" width="1200" alt="Synara workspace with an agent conversation and pull request review side by side">
+</p>
+
+<details open>
   <summary><strong>Table of contents</strong></summary>
 
 | Workspace layer      | Responsibility                                                |

@@ -593,7 +593,76 @@ export function getModelCapabilities(
     // returns a descriptor.
     return grokCapabilitiesForFamily(resolveGrokEffortFamily(slug));
   }
+  if (provider === "claudeAgent" && slug) {
+    const newestKnown = resolveNewestKnownClaudeFamilyModel(slug);
+    if (newestKnown) {
+      return MODEL_CAPABILITIES_INDEX.claudeAgent[newestKnown] ?? EMPTY_MODEL_CAPABILITIES;
+    }
+  }
   return EMPTY_MODEL_CAPABILITIES;
+}
+
+// Claude Code ships new models before Synara's catalog lists them. Catalog
+// entries always win; only an id that is newer than every catalog model of its
+// family borrows that family's newest capabilities. Older or unrecognized ids
+// keep the empty fallback so custom and legacy selections do not gain options.
+const CLAUDE_FAMILY_MODEL_PATTERN =
+  /^claude-(fable|opus|sonnet|haiku)-(\d{1,2})(?:-(\d{1,2}))?(?:-\d{8})?$/u;
+
+type ClaudeFamilyModelVersion = {
+  readonly family: string;
+  readonly major: number;
+  readonly minor: number;
+};
+
+function parseClaudeFamilyModelVersion(slug: string): ClaudeFamilyModelVersion | null {
+  const match = CLAUDE_FAMILY_MODEL_PATTERN.exec(slug.trim().toLowerCase());
+  if (!match?.[1] || !match[2]) {
+    return null;
+  }
+  return { family: match[1], major: Number(match[2]), minor: Number(match[3] ?? 0) };
+}
+
+function compareClaudeFamilyModelVersions(
+  left: ClaudeFamilyModelVersion,
+  right: ClaudeFamilyModelVersion,
+): number {
+  return left.major - right.major || left.minor - right.minor;
+}
+
+const NEWEST_CLAUDE_CATALOG_MODEL_BY_FAMILY = (() => {
+  const newest = new Map<string, { slug: ModelSlug; version: ClaudeFamilyModelVersion }>();
+  for (const model of MODEL_OPTIONS_BY_PROVIDER.claudeAgent) {
+    const version = parseClaudeFamilyModelVersion(model.slug);
+    const current = version ? newest.get(version.family) : undefined;
+    if (version && (!current || compareClaudeFamilyModelVersions(version, current.version) > 0)) {
+      newest.set(version.family, { slug: model.slug, version });
+    }
+  }
+  return newest;
+})();
+
+/**
+ * Returns the newest catalog model of `slug`'s Claude family when `slug` is a
+ * newer release the catalog does not list yet (e.g. `claude-opus-6` → the
+ * newest catalog Opus). Catalog, older, and unrecognized ids return `null`.
+ */
+export function resolveNewestKnownClaudeFamilyModel(
+  model: string | null | undefined,
+): ModelSlug | null {
+  const normalized = normalizeModelSlug(model, "claudeAgent");
+  if (!normalized) {
+    return null;
+  }
+  const slug = stripClaudeContextWindowSuffix(normalized) as ModelSlug;
+  if (MODEL_SLUG_SET_BY_PROVIDER.claudeAgent.has(slug)) {
+    return null;
+  }
+  const version = parseClaudeFamilyModelVersion(slug);
+  const newest = version ? NEWEST_CLAUDE_CATALOG_MODEL_BY_FAMILY.get(version.family) : undefined;
+  return version && newest && compareClaudeFamilyModelVersions(version, newest.version) > 0
+    ? newest.slug
+    : null;
 }
 
 export function resolveGrokEffortFamily(model: string): "build" | "4.5" | "4.6" {
@@ -784,8 +853,8 @@ export function normalizeClaudeModelOptions(
 export function resolveApiModelId(modelSelection: ModelSelection): string {
   if (
     modelSelection.provider === "claudeAgent" &&
-    (modelSelection.options?.autoCompactWindow ?? modelSelection.options?.contextWindow) === "1m" &&
-    hasAutoCompactWindowOption(getModelCapabilities("claudeAgent", modelSelection.model), "1m") &&
+    normalizeClaudeModelOptions(modelSelection.model, modelSelection.options)?.autoCompactWindow ===
+      "1m" &&
     getClaudeContextWindowSuffix(modelSelection.model) === null
   ) {
     return `${modelSelection.model}[1m]`;
@@ -809,31 +878,23 @@ export function getEffectiveClaudeCodeEffort(
 
 interface ClaudeSpawnProfile {
   readonly maxEffort: boolean;
+  readonly autoCompactWindow: string | undefined;
 }
 
-// Mirrors the spawn-time option derivation in the Claude adapter's startSession:
-// only `max` effort is fixed at subprocess spawn (the query `effort` option;
-// the flag-settings `effortLevel` key caps at xhigh). Every other effort level
-// plus fastMode/ultracode are Settings keys applied live via the SDK's
-// flag-settings control, and model/context window switch via `setModel`.
+// Claude's live flag settings do not refresh the runtime auto-compaction window.
+// Keep this profile aligned with the adapter's normalized spawn settings.
 function claudeSpawnProfile(selection: Extract<ModelSelection, { provider: "claudeAgent" }>) {
   const caps = getModelCapabilities("claudeAgent", selection.model);
   const requestedEffort = trimOrNull(selection.options?.effort ?? null);
   const effort = requestedEffort && hasEffortLevel(caps, requestedEffort) ? requestedEffort : null;
   return {
     maxEffort: getEffectiveClaudeCodeEffort(effort) === "max",
+    autoCompactWindow: normalizeClaudeModelOptions(selection.model, selection.options)
+      ?.autoCompactWindow,
   } satisfies ClaudeSpawnProfile;
 }
 
-/**
- * Whether switching from `previous` to `next` requires restarting the Claude
- * subprocess. Restarting resumes via `--resume`; an unchanged conversation
- * prefix can still use the provider cache until its TTL expires. Restart only for options
- * fixed at spawn — currently only `max` effort, which has no live Settings
- * equivalent. Model changes use `setModel`; other effort levels, fast mode,
- * ultracode, the auto-compact budget, and the thinking toggle all use the
- * SDK's live flag-settings control.
- */
+/** Restart only for spawn-fixed settings; resume preserves identity, not guaranteed cache hits. */
 export function claudeSelectionRequiresRestart(
   previous: ModelSelection | undefined,
   next: ModelSelection,
@@ -854,7 +915,9 @@ export function claudeSelectionRequiresRestart(
   // selected model's capabilities change.
   const prev = claudeSpawnProfile(previous);
   const desired = claudeSpawnProfile(next);
-  return prev.maxEffort !== desired.maxEffort;
+  return (
+    prev.maxEffort !== desired.maxEffort || prev.autoCompactWindow !== desired.autoCompactWindow
+  );
 }
 
 export function normalizeCursorModelOptions(

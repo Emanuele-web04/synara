@@ -22,6 +22,20 @@ describe("clipboard permissions", () => {
       ),
     ).toBe(true);
   });
+  it.each(["synara://app", "synara-canary://app", "synara-cua://app"])(
+    "allows foreground copy buttons on the %s desktop origin",
+    (origin) => {
+      const url = `${origin}/index.html`;
+      expect(
+        isClipboardWritePermission(
+          requester(url),
+          "clipboard-sanitized-write",
+          { isMainFrame: true, requestingUrl: url, embeddingOrigin: origin },
+          origin,
+        ),
+      ).toBe(true);
+    },
+  );
   it.each(["clipboard-read", "deprecated-sync-clipboard-read", "media", "unknown"])(
     "does not grant %s",
     (permission) => {

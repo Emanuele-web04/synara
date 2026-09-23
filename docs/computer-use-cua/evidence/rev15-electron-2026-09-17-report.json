@@ -1,0 +1,2189 @@
+{
+  "fixtureRevision": 11,
+  "fixture": "Synara Cua Fixture 94199",
+  "pid": 94199,
+  "runtime": {
+    "node": "24.18.1",
+    "acorn": "8.16.0",
+    "ada": "3.4.4",
+    "amaro": "1.1.9",
+    "ares": "1.34.6",
+    "brotli": "1.2.0",
+    "cldr": "48.0",
+    "icu": "78.2",
+    "llhttp": "9.4.3",
+    "merve": "1.2.2",
+    "modules": "148",
+    "napi": "10",
+    "nbytes": "0.1.4",
+    "ncrypto": "0.0.1",
+    "nghttp2": "1.69.0",
+    "nghttp3": "",
+    "ngtcp2": "",
+    "openssl": "0.0.0",
+    "simdjson": "4.6.4",
+    "simdutf": "7.7.0",
+    "sqlite": "3.53.1",
+    "tz": "2025c",
+    "undici": "7.29.0",
+    "unicode": "17.0",
+    "uv": "1.52.1",
+    "uvwasi": "0.0.23",
+    "v8": "15.0.245.28-electron.0",
+    "zlib": "1.3.2.1-motley",
+    "zstd": "1.6.0",
+    "electron": "43.4.1",
+    "chrome": "150.0.7871.224"
+  },
+  "cases": [
+    {
+      "name": "one-click-one-effect",
+      "result": {
+        "windowId": "cua:94199:56126",
+        "point": {
+          "x": 208.5546875,
+          "y": 274.484375
+        },
+        "deliveryPath": "cua-synthetic_events-background",
+        "verified": "unverifiable",
+        "effect": "dispatched-unknown"
+      },
+      "appState": {
+        "clicks": 1,
+        "text": "abc",
+        "changes": 0
+      },
+      "status": "passed"
+    },
+    {
+      "name": "identical-text-replacement",
+      "status": "refused",
+      "error": "ComputerBackendError: Background input refused (same_pid_keyboard_ambiguity): pid 94199 owns 2 other eligible top-level window(s); process-scoped key events cannot be proven to reach window 56126 and could mutate a sibling window. Use an exact element action, the page tool for browser content, or delivery_mode:\"foreground\" [effect=not-dispatched; automatic replay is forbidden]",
+      "appState": {
+        "clicks": 1,
+        "text": "abc",
+        "changes": 0
+      }
+    },
+    {
+      "name": "three-window-focus-neutral-semantic-text",
+      "status": "failed",
+      "results": [
+        {
+          "windowId": "cua:94199:56126",
+          "deliveryPath": "cua-accessibility-background",
+          "verified": "unverifiable",
+          "effect": "dispatched-unknown"
+        },
+        {
+          "windowId": "cua:94199:56127",
+          "deliveryPath": "cua-accessibility-background",
+          "verified": "unverifiable",
+          "effect": "dispatched-unknown"
+        },
+        {
+          "windowId": "cua:94199:56128",
+          "deliveryPath": "cua-accessibility-background",
+          "verified": "unverifiable",
+          "effect": "dispatched-unknown"
+        }
+      ],
+      "expected": ["agent-a-background", "agent-b-background", "agent-c-background"],
+      "actual": ["", "", ""],
+      "sentinelWindowId": 4,
+      "focusSamples": [
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+        4, 4, 4, 4, 4, 4
+      ],
+      "spans": [
+        {
+          "label": "Fixture text",
+          "started": 4877.855291,
+          "finished": 6478.934583
+        },
+        {
+          "label": "Fixture text B",
+          "started": 4878.093541,
+          "finished": 7550.973541
+        },
+        {
+          "label": "Fixture text C",
+          "started": 4878.183416,
+          "finished": 8630.053
+        }
+      ],
+      "overlap": true
+    },
+    {
+      "name": "single-window-identical-text",
+      "result": {
+        "windowId": "cua:94199:56126",
+        "deliveryPath": "cua-synthetic_events-background",
+        "verified": "unverifiable",
+        "effect": "dispatched-unknown"
+      },
+      "appState": {
+        "clicks": 1,
+        "text": "abc",
+        "changes": 3,
+        "selectionStart": 3,
+        "selectionEnd": 3
+      },
+      "status": "passed"
+    },
+    {
+      "name": "explicit-foreground-text",
+      "status": "not-run",
+      "reason": "Requires explicit authorization for this one foreground action."
+    },
+    {
+      "name": "ax-set-value",
+      "result": {
+        "windowId": "cua:94199:56126",
+        "deliveryPath": "cua-accessibility-background",
+        "verified": "unverifiable",
+        "effect": "dispatched-unknown"
+      },
+      "actualText": "fixture-value",
+      "status": "passed"
+    },
+    {
+      "name": "moved-target",
+      "status": "passed",
+      "error": "ComputerBackendError: Window geometry changed since observation; obtain a new screenshot. [effect=not-dispatched; automatic replay is forbidden]",
+      "appState": {
+        "clicks": 1,
+        "text": "fixture-value",
+        "changes": 4
+      }
+    },
+    {
+      "name": "closed-target",
+      "status": "passed",
+      "error": "ComputerBackendError: Background input refused (off_space_or_ax_unresolved): window 56126 is not among the process's current AXWindows (another Space, or its AX surface is unresolved), and no retained semantic element was freshly proven to belong to it; background input is refused so a sibling window cannot receive it. Observation (capture/list_windows) remains available [effect=not-dispatched; automatic replay is forbidden]"
+    }
+  ],
+  "measurements": [
+    {
+      "name": "window-observation",
+      "milliseconds": 1033.654667
+    },
+    {
+      "name": "click",
+      "milliseconds": 860.4357919999998
+    },
+    {
+      "name": "identical-text",
+      "milliseconds": 30.25104199999987
+    },
+    {
+      "name": "single-window-identical-text",
+      "milliseconds": 633.8110830000005
+    },
+    {
+      "name": "semantic-observation",
+      "milliseconds": 186.15920899999946
+    },
+    {
+      "name": "set-value",
+      "milliseconds": 1027.7014589999999
+    }
+  ],
+  "nativeActions": [
+    {
+      "name": "click",
+      "result": {
+        "delivery": {
+          "mode": "background"
+        },
+        "effect": "unverifiable",
+        "route": "synthetic_events"
+      }
+    },
+    {
+      "name": "type_text",
+      "result": {
+        "code": "same_pid_keyboard_ambiguity",
+        "effect": "refused",
+        "escalation": {
+          "reason": "pid 94199 owns 2 other eligible top-level window(s); process-scoped key events cannot be proven to reach window 56126 and could mutate a sibling window. Use an exact element action, the page tool for browser content, or delivery_mode:\"foreground\"",
+          "recommended": "accessibility"
+        },
+        "pid": 94199,
+        "reason": "pid 94199 owns 2 other eligible top-level window(s); process-scoped key events cannot be proven to reach window 56126 and could mutate a sibling window. Use an exact element action, the page tool for browser content, or delivery_mode:\"foreground\"",
+        "window_id": 56126
+      }
+    },
+    {
+      "name": "type_text",
+      "result": {
+        "delivery": {
+          "mode": "background"
+        },
+        "effect": "unverifiable",
+        "escalation": {
+          "reason": "delivery_failed",
+          "target": "foreground"
+        },
+        "route": "accessibility"
+      }
+    },
+    {
+      "name": "type_text",
+      "result": {
+        "delivery": {
+          "mode": "background"
+        },
+        "effect": "unverifiable",
+        "escalation": {
+          "reason": "delivery_failed",
+          "target": "foreground"
+        },
+        "route": "accessibility"
+      }
+    },
+    {
+      "name": "type_text",
+      "result": {
+        "delivery": {
+          "mode": "background"
+        },
+        "effect": "unverifiable",
+        "escalation": {
+          "reason": "delivery_failed",
+          "target": "foreground"
+        },
+        "route": "accessibility"
+      }
+    },
+    {
+      "name": "type_text",
+      "result": {
+        "delivery": {
+          "delivered_count": 3,
+          "mode": "background"
+        },
+        "effect": "unverifiable",
+        "escalation": {
+          "reason": "effect_unconfirmed",
+          "target": "pixel"
+        },
+        "route": "synthetic_events"
+      }
+    },
+    {
+      "name": "set_value",
+      "result": {
+        "delivery": {
+          "mode": "background"
+        },
+        "effect": "unverifiable",
+        "route": "accessibility"
+      }
+    },
+    {
+      "name": "type_text",
+      "result": {
+        "code": "off_space_or_ax_unresolved",
+        "effect": "refused",
+        "escalation": {
+          "reason": "window 56126 is not among the process's current AXWindows (another Space, or its AX surface is unresolved), and no retained semantic element was freshly proven to belong to it; background input is refused so a sibling window cannot receive it. Observation (capture/list_windows) remains available",
+          "recommended": "foreground"
+        },
+        "pid": 94199,
+        "reason": "window 56126 is not among the process's current AXWindows (another Space, or its AX surface is unresolved), and no retained semantic element was freshly proven to belong to it; background input is refused so a sibling window cannot receive it. Observation (capture/list_windows) remains available",
+        "window_id": 56126
+      }
+    },
+    {
+      "name": "click",
+      "result": {
+        "delivery": {
+          "mode": "background"
+        },
+        "effect": "unverifiable",
+        "route": "synthetic_events"
+      }
+    },
+    {
+      "name": "type_text",
+      "result": {
+        "code": "same_pid_keyboard_ambiguity",
+        "effect": "refused",
+        "escalation": {
+          "reason": "pid 94667 owns 1 other eligible top-level window(s); process-scoped key events cannot be proven to reach window 56175 and could mutate a sibling window. Use an exact element action, the page tool for browser content, or delivery_mode:\"foreground\"",
+          "recommended": "accessibility"
+        },
+        "pid": 94667,
+        "reason": "pid 94667 owns 1 other eligible top-level window(s); process-scoped key events cannot be proven to reach window 56175 and could mutate a sibling window. Use an exact element action, the page tool for browser content, or delivery_mode:\"foreground\"",
+        "window_id": 56175
+      }
+    },
+    {
+      "name": "type_text",
+      "result": {
+        "delivery": {
+          "delivered_count": 3,
+          "mode": "background"
+        },
+        "effect": "confirmed",
+        "evidence": [
+          {
+            "kind": "value_readback"
+          }
+        ],
+        "route": "synthetic_events"
+      }
+    },
+    {
+      "name": "set_value",
+      "result": {
+        "delivery": {
+          "mode": "background"
+        },
+        "effect": "confirmed",
+        "evidence": [
+          {
+            "kind": "value_readback"
+          }
+        ],
+        "route": "accessibility"
+      }
+    },
+    {
+      "name": "click"
+    },
+    {
+      "name": "type_text"
+    }
+  ],
+  "nativeObservations": [
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 220,
+            "width": 420,
+            "x": 700,
+            "y": 330
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 C",
+          "window_id": 56128,
+          "z_index": 133
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 220,
+            "width": 420,
+            "x": 700,
+            "y": 80
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 B",
+          "window_id": 56127,
+          "z_index": 132
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 A",
+          "window_id": 56126,
+          "z_index": 131
+        }
+      ]
+    },
+    {
+      "name": "get_window_state",
+      "pid": 94199,
+      "windowId": 56126,
+      "bounds": {
+        "height": 420,
+        "width": 640,
+        "x": 80,
+        "y": 80
+      }
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 220,
+            "width": 420,
+            "x": 700,
+            "y": 330
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 C",
+          "window_id": 56128,
+          "z_index": 133
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 220,
+            "width": 420,
+            "x": 700,
+            "y": 80
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 B",
+          "window_id": 56127,
+          "z_index": 132
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 A",
+          "window_id": 56126,
+          "z_index": 131
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 220,
+            "width": 420,
+            "x": 700,
+            "y": 330
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 C",
+          "window_id": 56128,
+          "z_index": 133
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 220,
+            "width": 420,
+            "x": 700,
+            "y": 80
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 B",
+          "window_id": 56127,
+          "z_index": 132
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 A",
+          "window_id": 56126,
+          "z_index": 131
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 220,
+            "width": 420,
+            "x": 700,
+            "y": 330
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 C",
+          "window_id": 56128,
+          "z_index": 133
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 220,
+            "width": 420,
+            "x": 700,
+            "y": 80
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 B",
+          "window_id": 56127,
+          "z_index": 132
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 A",
+          "window_id": 56126,
+          "z_index": 131
+        }
+      ]
+    },
+    {
+      "name": "get_window_state",
+      "pid": 94199,
+      "windowId": 56126
+    },
+    {
+      "name": "get_window_state",
+      "pid": 94199,
+      "windowId": 56127
+    },
+    {
+      "name": "get_window_state",
+      "pid": 94199,
+      "windowId": 56128
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 220,
+            "width": 420,
+            "x": 700,
+            "y": 330
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 C",
+          "window_id": 56128,
+          "z_index": 133
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 220,
+            "width": 420,
+            "x": 700,
+            "y": 80
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 B",
+          "window_id": 56127,
+          "z_index": 132
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 A",
+          "window_id": 56126,
+          "z_index": 131
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 220,
+            "width": 420,
+            "x": 700,
+            "y": 330
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 C",
+          "window_id": 56128,
+          "z_index": 133
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 220,
+            "width": 420,
+            "x": 700,
+            "y": 80
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 B",
+          "window_id": 56127,
+          "z_index": 132
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 A",
+          "window_id": 56126,
+          "z_index": 131
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 220,
+            "width": 420,
+            "x": 700,
+            "y": 330
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 C",
+          "window_id": 56128,
+          "z_index": 133
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 220,
+            "width": 420,
+            "x": 700,
+            "y": 80
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 B",
+          "window_id": 56127,
+          "z_index": 132
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 A",
+          "window_id": 56126,
+          "z_index": 131
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 216,
+            "width": 412,
+            "x": 704,
+            "y": 332
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 C",
+          "window_id": 56128,
+          "z_index": 133
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 216,
+            "width": 412,
+            "x": 704,
+            "y": 82
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 B",
+          "window_id": 56127,
+          "z_index": 132
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 A",
+          "window_id": 56126,
+          "z_index": 131
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 A",
+          "window_id": 56126,
+          "z_index": 131
+        }
+      ]
+    },
+    {
+      "name": "get_window_state",
+      "pid": 94199,
+      "windowId": 56126,
+      "bounds": {
+        "height": 420,
+        "width": 640,
+        "x": 80,
+        "y": 80
+      }
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 A",
+          "window_id": 56126,
+          "z_index": 131
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 180,
+            "y": 80
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 A",
+          "window_id": 56126,
+          "z_index": 131
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 180,
+            "y": 80
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 A",
+          "window_id": 56126,
+          "z_index": 131
+        }
+      ]
+    },
+    {
+      "name": "get_window_state",
+      "pid": 94199,
+      "windowId": 56126,
+      "bounds": {
+        "height": 420,
+        "width": 640,
+        "x": 180,
+        "y": 80
+      }
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 412,
+            "width": 628,
+            "x": 186,
+            "y": 84
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 A",
+          "window_id": 56126,
+          "z_index": 131
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 720,
+            "y": 617
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94667,
+          "space_ids": [5],
+          "title": "Synara Native Fixture 94667 B",
+          "window_id": 56177,
+          "z_index": 145
+        },
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 100,
+            "y": 617
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94667,
+          "space_ids": [5],
+          "title": "Synara Native Fixture 94667 A",
+          "window_id": 56175,
+          "z_index": 143
+        }
+      ]
+    },
+    {
+      "name": "get_window_state",
+      "pid": 94667,
+      "windowId": 56175,
+      "bounds": {
+        "height": 352,
+        "width": 540,
+        "x": 100,
+        "y": 617
+      }
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 720,
+            "y": 617
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94667,
+          "space_ids": [5],
+          "title": "Synara Native Fixture 94667 B",
+          "window_id": 56177,
+          "z_index": 145
+        },
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 100,
+            "y": 617
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94667,
+          "space_ids": [5],
+          "title": "Synara Native Fixture 94667 A",
+          "window_id": 56175,
+          "z_index": 143
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 720,
+            "y": 617
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94667,
+          "space_ids": [5],
+          "title": "Synara Native Fixture 94667 B",
+          "window_id": 56177,
+          "z_index": 145
+        },
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 100,
+            "y": 617
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94667,
+          "space_ids": [5],
+          "title": "Synara Native Fixture 94667 A",
+          "window_id": 56175,
+          "z_index": 143
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 720,
+            "y": 617
+          },
+          "current_space_id": null,
+          "is_on_screen": false,
+          "layer": 0,
+          "on_current_space": null,
+          "pid": 94667,
+          "space_ids": null,
+          "title": "Synara Native Fixture 94667 B",
+          "window_id": 56177,
+          "z_index": 145
+        },
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 100,
+            "y": 617
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94667,
+          "space_ids": [5],
+          "title": "Synara Native Fixture 94667 A",
+          "window_id": 56175,
+          "z_index": 143
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 720,
+            "y": 617
+          },
+          "current_space_id": null,
+          "is_on_screen": false,
+          "layer": 0,
+          "on_current_space": null,
+          "pid": 94667,
+          "space_ids": null,
+          "title": "Synara Native Fixture 94667 B",
+          "window_id": 56177,
+          "z_index": 143
+        },
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 100,
+            "y": 617
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94667,
+          "space_ids": [5],
+          "title": "Synara Native Fixture 94667 A",
+          "window_id": 56175,
+          "z_index": 141
+        }
+      ]
+    },
+    {
+      "name": "get_window_state",
+      "pid": 94667,
+      "windowId": 56175,
+      "bounds": {
+        "height": 352,
+        "width": 540,
+        "x": 100,
+        "y": 617
+      }
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 720,
+            "y": 617
+          },
+          "current_space_id": null,
+          "is_on_screen": false,
+          "layer": 0,
+          "on_current_space": null,
+          "pid": 94667,
+          "space_ids": null,
+          "title": "Synara Native Fixture 94667 B",
+          "window_id": 56177,
+          "z_index": 143
+        },
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 100,
+            "y": 617
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94667,
+          "space_ids": [5],
+          "title": "Synara Native Fixture 94667 A",
+          "window_id": 56175,
+          "z_index": 141
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 720,
+            "y": 617
+          },
+          "current_space_id": null,
+          "is_on_screen": false,
+          "layer": 0,
+          "on_current_space": null,
+          "pid": 94667,
+          "space_ids": null,
+          "title": "Synara Native Fixture 94667 B",
+          "window_id": 56177,
+          "z_index": 143
+        },
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 100,
+            "y": 617
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94667,
+          "space_ids": [5],
+          "title": "Synara Native Fixture 94667 A",
+          "window_id": 56175,
+          "z_index": 141
+        }
+      ]
+    },
+    {
+      "name": "get_window_state",
+      "pid": 94667,
+      "windowId": 56175,
+      "bounds": {
+        "height": 352,
+        "width": 540,
+        "x": 100,
+        "y": 617
+      }
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 352,
+            "width": 540,
+            "x": 720,
+            "y": 617
+          },
+          "current_space_id": null,
+          "is_on_screen": false,
+          "layer": 0,
+          "on_current_space": null,
+          "pid": 94667,
+          "space_ids": null,
+          "title": "Synara Native Fixture 94667 B",
+          "window_id": 56177,
+          "z_index": 143
+        },
+        {
+          "app_name": "native-fixture",
+          "bounds": {
+            "height": 353,
+            "width": 808,
+            "x": 100,
+            "y": 617
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94667,
+          "space_ids": [5],
+          "title": "Synara Native Fixture 94667 A",
+          "window_id": 56175,
+          "z_index": 141
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 422,
+            "width": 642,
+            "x": 79,
+            "y": 79
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 C",
+          "window_id": 56195,
+          "z_index": 141
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 C",
+          "window_id": 56195,
+          "z_index": 141
+        }
+      ]
+    },
+    {
+      "name": "get_window_state",
+      "pid": 94199,
+      "windowId": 56195,
+      "bounds": {
+        "height": 420,
+        "width": 640,
+        "x": 80,
+        "y": 80
+      }
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 C",
+          "window_id": 56195,
+          "z_index": 141
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 C",
+          "window_id": 56195,
+          "z_index": 138
+        }
+      ]
+    },
+    {
+      "name": "get_window_state",
+      "pid": 94199,
+      "windowId": 56195,
+      "bounds": {
+        "height": 420,
+        "width": 640,
+        "x": 80,
+        "y": 80
+      }
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 C",
+          "window_id": 56195,
+          "z_index": 138
+        }
+      ]
+    },
+    {
+      "name": "list_windows",
+      "windows": [
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 220,
+            "width": 320,
+            "x": 760,
+            "y": 100
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 B",
+          "window_id": 56200,
+          "z_index": 141
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 5,
+          "is_on_screen": true,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 A",
+          "window_id": 56199,
+          "z_index": 140
+        },
+        {
+          "app_name": "Synara Cua Fixture",
+          "bounds": {
+            "height": 420,
+            "width": 640,
+            "x": 80,
+            "y": 80
+          },
+          "current_space_id": 5,
+          "is_on_screen": false,
+          "layer": 0,
+          "on_current_space": true,
+          "pid": 94199,
+          "space_ids": [5],
+          "title": "Synara Cua Fixture 94199 C",
+          "window_id": 56195,
+          "z_index": 137
+        }
+      ]
+    },
+    {
+      "name": "get_window_state",
+      "pid": 94199,
+      "windowId": 56199,
+      "bounds": {
+        "height": 420,
+        "width": 640,
+        "x": 80,
+        "y": 80
+      }
+    }
+  ],
+  "nativeBuild": {
+    "source": {
+      "version": "0.28.2",
+      "source": "fc188250b4ca8549b8e61f937fdb1fb560770e86",
+      "sha256": "386db225a3080714a0f9f935525e61efaf46709587ef8b94dd2df81aeb2f6daa",
+      "nativeRevision": 15,
+      "patchSha256": "94261ed962199becebe450f226d5a80bbae88c8730cd39d1a002bde9353c749a",
+      "rustVersion": "1.97.1"
+    },
+    "preSigningBinarySha256": "0bc257bddd44a61c90982301eaa74bb202f9e1c1127cc2b0e5da1674e6ba0f3d",
+    "fixtureDriverOverride": false
+  },
+  "nativePermissions": {
+    "accessibility": true,
+    "direct_capture_error": null,
+    "direct_capture_status": "not_checked",
+    "screen_recording": true,
+    "screen_recording_capturable": null,
+    "source": {
+      "attribution": "host",
+      "direct_runtime": false,
+      "disclaim_env": false,
+      "embedded": true,
+      "executable": "/Users/user/Applications/Synara Cua Fixture.app/Contents/Resources/cua-driver/cua-driver",
+      "host_bundle_id": "com.synara.cua-fixture",
+      "note": "Embedded mode: these booleans reflect the HOST app's TCC grant (the driver is a child in the host's responsibility chain). No separate driver grant exists or is needed. If a permission is NOT granted, the host app must request it — the driver never raises its own prompt.",
+      "pid": 94293,
+      "responsible_ppid": 94199
+    }
+  },
+  "nativeFixtureWindows": [
+    {
+      "app_name": "Synara Cua Fixture",
+      "bounds": {
+        "height": 39,
+        "width": 1800,
+        "x": 0,
+        "y": 0
+      },
+      "current_space_id": null,
+      "is_on_screen": false,
+      "layer": 0,
+      "on_current_space": null,
+      "pid": 94199,
+      "space_ids": null,
+      "title": "",
+      "window_id": 56132,
+      "z_index": 137
+    },
+    {
+      "app_name": "Synara Cua Fixture",
+      "bounds": {
+        "height": 39,
+        "width": 1800,
+        "x": 0,
+        "y": 0
+      },
+      "current_space_id": null,
+      "is_on_screen": false,
+      "layer": 0,
+      "on_current_space": null,
+      "pid": 94199,
+      "space_ids": null,
+      "title": "",
+      "window_id": 56131,
+      "z_index": 136
+    },
+    {
+      "app_name": "Synara Cua Fixture",
+      "bounds": {
+        "height": 39,
+        "width": 1800,
+        "x": 0,
+        "y": 0
+      },
+      "current_space_id": null,
+      "is_on_screen": false,
+      "layer": 0,
+      "on_current_space": null,
+      "pid": 94199,
+      "space_ids": null,
+      "title": "",
+      "window_id": 56130,
+      "z_index": 135
+    },
+    {
+      "app_name": "Synara Cua Fixture",
+      "bounds": {
+        "height": 39,
+        "width": 1800,
+        "x": 0,
+        "y": 0
+      },
+      "current_space_id": null,
+      "is_on_screen": false,
+      "layer": 0,
+      "on_current_space": null,
+      "pid": 94199,
+      "space_ids": null,
+      "title": "",
+      "window_id": 56129,
+      "z_index": 134
+    },
+    {
+      "app_name": "Synara Cua Fixture",
+      "bounds": {
+        "height": 220,
+        "width": 422,
+        "x": 699,
+        "y": 330
+      },
+      "current_space_id": 5,
+      "is_on_screen": true,
+      "layer": 0,
+      "on_current_space": true,
+      "pid": 94199,
+      "space_ids": [5],
+      "title": "Synara Cua Fixture 94199 C",
+      "window_id": 56128,
+      "z_index": 133
+    },
+    {
+      "app_name": "Synara Cua Fixture",
+      "bounds": {
+        "height": 220,
+        "width": 422,
+        "x": 699,
+        "y": 80
+      },
+      "current_space_id": 5,
+      "is_on_screen": true,
+      "layer": 0,
+      "on_current_space": true,
+      "pid": 94199,
+      "space_ids": [5],
+      "title": "Synara Cua Fixture 94199 B",
+      "window_id": 56127,
+      "z_index": 132
+    },
+    {
+      "app_name": "Synara Cua Fixture",
+      "bounds": {
+        "height": 420,
+        "width": 640,
+        "x": 80,
+        "y": 80
+      },
+      "current_space_id": 5,
+      "is_on_screen": true,
+      "layer": 0,
+      "on_current_space": true,
+      "pid": 94199,
+      "space_ids": [5],
+      "title": "Synara Cua Fixture 94199 A",
+      "window_id": 56126,
+      "z_index": 131
+    }
+  ],
+  "availability": {
+    "kind": "available",
+    "backend": "cua"
+  },
+  "target": {
+    "id": "cua:94199:56126",
+    "pid": 94199,
+    "title": "Synara Cua Fixture 94199 A",
+    "siblingId": "cua:94199:56127",
+    "thirdId": "cua:94199:56128"
+  },
+  "native": {
+    "target": {
+      "pid": 94667,
+      "windowId": "cua:94667:56175",
+      "title": "Synara Native Fixture 94667 A"
+    },
+    "cases": [
+      {
+        "name": "one-click-one-effect",
+        "result": {
+          "windowId": "cua:94667:56175",
+          "point": {
+            "x": 220,
+            "y": 729
+          },
+          "deliveryPath": "cua-synthetic_events-background",
+          "verified": "unverifiable",
+          "effect": "dispatched-unknown"
+        },
+        "actual": {
+          "minimized": false,
+          "key": true,
+          "title": "Synara Native Fixture 94667 A",
+          "clicks": 1,
+          "pid": 94667,
+          "text": "abc",
+          "visible": true,
+          "event": "state",
+          "label": "A",
+          "edits": 0,
+          "mouseEvents": [
+            {
+              "windowId": 56175,
+              "type": "down",
+              "y": 970,
+              "buttonContains": false,
+              "x": -101
+            },
+            {
+              "type": "up",
+              "windowId": 56175,
+              "buttonContains": false,
+              "y": 970,
+              "x": -101
+            },
+            {
+              "windowId": 56175,
+              "x": 120,
+              "type": "down",
+              "y": 240,
+              "buttonContains": true
+            },
+            {
+              "y": 240,
+              "type": "up",
+              "x": 120,
+              "buttonContains": true,
+              "windowId": 56175
+            }
+          ],
+          "windowId": 56175
+        },
+        "status": "passed"
+      },
+      {
+        "name": "same-pid-keyboard",
+        "status": "passed-refusal",
+        "error": "ComputerBackendError: Background input refused (same_pid_keyboard_ambiguity): pid 94667 owns 1 other eligible top-level window(s); process-scoped key events cannot be proven to reach window 56175 and could mutate a sibling window. Use an exact element action, the page tool for browser content, or delivery_mode:\"foreground\" [effect=not-dispatched; automatic replay is forbidden]"
+      },
+      {
+        "name": "single-window-identical-text",
+        "result": {
+          "windowId": "cua:94667:56175",
+          "deliveryPath": "cua-synthetic_events-background",
+          "verified": "confirmed",
+          "effect": "verified"
+        },
+        "actual": {
+          "minimized": false,
+          "key": true,
+          "title": "Synara Native Fixture 94667 A",
+          "clicks": 1,
+          "pid": 94667,
+          "text": "abc",
+          "visible": true,
+          "event": "state",
+          "label": "A",
+          "edits": 3,
+          "mouseEvents": [
+            {
+              "windowId": 56175,
+              "type": "down",
+              "y": 970,
+              "buttonContains": false,
+              "x": -101
+            },
+            {
+              "type": "up",
+              "windowId": 56175,
+              "buttonContains": false,
+              "y": 970,
+              "x": -101
+            },
+            {
+              "windowId": 56175,
+              "x": 120,
+              "type": "down",
+              "y": 240,
+              "buttonContains": true
+            },
+            {
+              "y": 240,
+              "type": "up",
+              "x": 120,
+              "buttonContains": true,
+              "windowId": 56175
+            }
+          ],
+          "windowId": 56175
+        },
+        "status": "passed"
+      },
+      {
+        "name": "ax-set-value",
+        "result": {
+          "windowId": "cua:94667:56175",
+          "deliveryPath": "cua-accessibility-background",
+          "verified": "confirmed",
+          "effect": "verified"
+        },
+        "actual": {
+          "minimized": false,
+          "key": true,
+          "title": "Synara Native Fixture 94667 A",
+          "clicks": 1,
+          "pid": 94667,
+          "text": "fixture-value",
+          "visible": true,
+          "event": "state",
+          "label": "A",
+          "edits": 4,
+          "mouseEvents": [
+            {
+              "windowId": 56175,
+              "type": "down",
+              "y": 970,
+              "buttonContains": false,
+              "x": -101
+            },
+            {
+              "type": "up",
+              "windowId": 56175,
+              "buttonContains": false,
+              "y": 970,
+              "x": -101
+            },
+            {
+              "windowId": 56175,
+              "x": 120,
+              "type": "down",
+              "y": 240,
+              "buttonContains": true
+            },
+            {
+              "y": 240,
+              "type": "up",
+              "x": 120,
+              "buttonContains": true,
+              "windowId": 56175
+            }
+          ],
+          "windowId": 56175
+        },
+        "status": "passed"
+      },
+      {
+        "name": "minimized-target",
+        "status": "passed",
+        "error": "ComputerBackendError: Window geometry changed since observation; obtain a new screenshot. [effect=not-dispatched; automatic replay is forbidden]"
+      }
+    ],
+    "measurements": [
+      {
+        "name": "observation",
+        "milliseconds": 254.7340830000012
+      },
+      {
+        "name": "click",
+        "milliseconds": 736.649707999999
+      },
+      {
+        "name": "same-pid-keyboard",
+        "milliseconds": 40.92450000000099
+      },
+      {
+        "name": "identical-text",
+        "milliseconds": 760.8156670000008
+      },
+      {
+        "name": "set-value",
+        "milliseconds": 1050.7861250000005
+      }
+    ]
+  },
+  "cancellation": {
+    "target": {
+      "id": "cua:94199:56195",
+      "pid": 94199,
+      "title": "Synara Cua Fixture 94199 C"
+    },
+    "cases": [
+      {
+        "name": "cancel-held-click",
+        "status": "passed",
+        "before": {
+          "mouseDown": 1,
+          "mouseUp": 0,
+          "dragged": 0,
+          "keyDown": 0,
+          "keyUp": 0,
+          "text": "",
+          "buttons": 1
+        },
+        "after": {
+          "mouseDown": 1,
+          "mouseUp": 1,
+          "dragged": 0,
+          "keyDown": 0,
+          "keyUp": 0,
+          "text": "",
+          "buttons": 0
+        },
+        "settled": {
+          "mouseDown": 1,
+          "mouseUp": 1,
+          "dragged": 0,
+          "keyDown": 0,
+          "keyUp": 0,
+          "text": "",
+          "buttons": 0
+        },
+        "stopMilliseconds": 411.42854199999783,
+        "outcome": {
+          "error": "ComputerBackendError: click failed: native_input_cancelled: driver input generation is retired [effect=dispatched-unknown; automatic replay is forbidden]"
+        }
+      },
+      {
+        "name": "cancel-typing",
+        "status": "passed",
+        "before": {
+          "mouseDown": 1,
+          "mouseUp": 1,
+          "dragged": 0,
+          "keyDown": 1,
+          "keyUp": 0,
+          "text": "",
+          "buttons": 0
+        },
+        "after": {
+          "mouseDown": 1,
+          "mouseUp": 1,
+          "dragged": 0,
+          "keyDown": 1,
+          "keyUp": 1,
+          "text": "c",
+          "buttons": 0
+        },
+        "settled": {
+          "mouseDown": 1,
+          "mouseUp": 1,
+          "dragged": 0,
+          "keyDown": 1,
+          "keyUp": 1,
+          "text": "c",
+          "buttons": 0
+        },
+        "stopMilliseconds": 436.9177920000002,
+        "outcome": {
+          "error": "ComputerBackendError: type_text failed: native_input_cancelled: driver input generation is retired [effect=dispatched-unknown; automatic replay is forbidden]"
+        }
+      },
+      {
+        "name": "foreground-cancel-drag-and-modified-click",
+        "status": "not-run",
+        "reason": "Requires explicit authorization for these two foreground actions."
+      }
+    ]
+  },
+  "gateway": {
+    "caller": "controlled-provider-context",
+    "target": {
+      "pid": 94199,
+      "id": "cua:94199:56199",
+      "title": "Synara Cua Fixture 94199 A"
+    },
+    "approvals": [
+      {
+        "name": "computer_click",
+        "turnId": "fixture-gateway-94199-turn",
+        "allowed": false
+      },
+      {
+        "name": "computer_click",
+        "turnId": "fixture-gateway-94199-turn",
+        "allowed": false
+      },
+      {
+        "name": "computer_type_text",
+        "turnId": "fixture-gateway-94199-turn",
+        "allowed": false
+      },
+      {
+        "name": "computer_click",
+        "turnId": "fixture-gateway-94199-turn",
+        "allowed": false
+      },
+      {
+        "name": "computer_click",
+        "turnId": "fixture-gateway-94199-turn",
+        "allowed": false
+      }
+    ],
+    "cases": [
+      {
+        "name": "different-window-frame",
+        "status": "passed",
+        "error": "Computer action was denied or cancelled; no input was sent."
+      },
+      {
+        "name": "gateway-native-click",
+        "status": "failed",
+        "clicks": 0,
+        "nativeSubmissions": 0,
+        "error": "Computer action was denied or cancelled; no input was sent."
+      },
+      {
+        "name": "foreground-denial-before-native",
+        "status": "failed",
+        "nativeSubmissions": 0
+      },
+      {
+        "name": "off-refuses-native-input",
+        "status": "passed",
+        "nativeSubmissions": 0,
+        "error": "Computer action was denied or cancelled; no input was sent."
+      },
+      {
+        "name": "ended-turn-refuses-native-input",
+        "status": "passed",
+        "nativeSubmissions": 0,
+        "error": "Computer action was denied or cancelled; no input was sent."
+      }
+    ]
+  },
+  "processMemory": {
+    "rss": 225394688,
+    "heapTotal": 25346048,
+    "heapUsed": 21460316,
+    "external": 8782791,
+    "arrayBuffers": 0
+  }
+}

@@ -335,6 +335,17 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           ),
         );
       }
+      if (
+        context.kind !== "provider-session" &&
+        input.threads.some((spec) => spec.notifyCreatorOnComplete)
+      ) {
+        return yield* Effect.fail(
+          new GatewayToolError(
+            "capability_denied",
+            "Completion delivery requires an authenticated creating thread.",
+          ),
+        );
+      }
       const callerTurnId = context.kind === "provider-session" ? context.callerTurnId! : null;
       const caller =
         context.kind === "provider-session"
@@ -553,6 +564,23 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
               ),
             );
           }
+          if (spec.enableComputerControl === true) {
+            if (context.kind === "provider-session") {
+              return yield* Effect.fail(
+                new ToolInputError(
+                  "Threads cannot delegate computer control to tasks they create.",
+                ),
+              );
+            }
+            if (!context.capabilities.has("computer:control")) {
+              return yield* Effect.fail(
+                new GatewayToolError(
+                  "capability_denied",
+                  'Computer control requires the explicit "computer:control" scope.',
+                ),
+              );
+            }
+          }
           const title = spec.title ?? buildPromptThreadTitleFallback(spec.prompt);
           let worktreeRef: string | null = null;
           let copyChangesFrom: string | null = null;
@@ -587,10 +615,18 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                         cwd: project.workspaceRoot,
                         prNumber: pullRequest.number,
                         ...(pullRequest.repositoryNameWithOwner
-                          ? { expectedRepositoryNameWithOwner: pullRequest.repositoryNameWithOwner }
+                          ? {
+                              expectedRepositoryNameWithOwner: pullRequest.repositoryNameWithOwner,
+                            }
                           : {}),
                       })
-                      .pipe(Effect.map((ref) => ({ code: 0, stdout: ref, stderr: "" }))),
+                      .pipe(
+                        Effect.map((ref) => ({
+                          code: 0,
+                          stdout: ref,
+                          stderr: "",
+                        })),
+                      ),
                   )
             ).pipe(
               Effect.map((result) => result.stdout.trim()),
@@ -906,6 +942,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
               planJson: canonicalJson(
                 prepared.map((entry) => ({
                   index: entry.index,
+                  notifyCreatorOnComplete: entry.spec.notifyCreatorOnComplete === true,
                   projectId: entry.projectId,
                   workspaceRoot: entry.workspaceRoot,
                   environment: entry.environment,
@@ -1142,6 +1179,12 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                     dispatchOrigin: "agent",
                     runtimeMode: entry.runtimeMode,
                     interactionMode,
+                    ...(entry.spec.enableComputerControl === true
+                      ? {
+                          enableComputerControl: true,
+                          computerControlMode: "request" as const,
+                        }
+                      : {}),
                     createdAt: gatewayIsoNow(),
                   });
                   // The dispatch can outlive the caller turn. Recheck after it returns so

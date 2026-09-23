@@ -1,8 +1,13 @@
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
   findBrandIdentityViolations,
   findVisualBrandAssetViolations,
+  readTrackedFiles,
 } from "./check-brand-identity";
 
 const characters = (...codes: number[]): string => String.fromCharCode(...codes);
@@ -12,12 +17,43 @@ const firstDisplayName = characters(84, 51, 67, 111, 100, 101);
 const firstSpacedDisplayName = `${characters(84, 51)} Code`;
 const secondName = characters(100, 112, 99, 111, 100, 101);
 const companyDisplayName = `${characters(84, 51)} ${characters(84, 111, 111, 108, 115)}`;
+const fixtureBundleDomain = characters(99, 111, 109, 46, 115, 121, 110, 97, 114, 97);
 const legalNotice = `Copyright (c) 2026 ${companyDisplayName} Inc.`;
 const originsAttribution = `Synara began as a clone of [${firstDisplayName}](https://github.com/pingdotgg/${firstName}), but it has since become a substantially different product with its own branding, packaging, release system, provider orchestration, desktop app behavior, and product direction.`;
 const releaseAttribution = `**A review of the Synara codebase found an analytics configuration that came from the original ${firstSpacedDisplayName} codebase when Synara was created as a clone in March. We did not add it, and we have no access to the PostHog project receiving the events.**`;
 const inAppReleaseAttribution = `"A review of the Synara codebase found an analytics configuration that came from the original ${firstSpacedDisplayName} codebase when Synara was created as a clone in March.",`;
 
 describe("brand identity guard", () => {
+  it("scans owned files while ignoring initialized and absent gitlinks", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "synara-brand-"));
+    const git = (...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+    try {
+      git("init", "--quiet");
+      const path = "source with spaces.ts";
+      writeFileSync(join(cwd, path), `const value = "${secondName}:state";`);
+      git("add", "--", path);
+      const oid = git("hash-object", "-w", path);
+      git("update-index", "--add", "--cacheinfo", `160000,${oid},nested`);
+      git("update-index", "--add", "--cacheinfo", `160000,${oid},absent`);
+      mkdirSync(join(cwd, "nested"));
+      writeFileSync(join(cwd, "nested", "outside.ts"), firstName);
+
+      const files = readTrackedFiles(cwd);
+      expect(files.map((file) => file.path)).toEqual([path]);
+      expect(
+        findBrandIdentityViolations(
+          files.map((file) => ({ ...file, contents: Buffer.from(file.contents).toString("utf8") })),
+        ),
+      ).toHaveLength(1);
+
+      // Missing owned files must still fail rather than silently weakening the guard.
+      rmSync(join(cwd, path));
+      expect(() => readTrackedFiles(cwd)).toThrow();
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("detects retired names in paths and text", () => {
     const violations = findBrandIdentityViolations([
       { path: `docs/${firstName}.md`, contents: "Synara" },
@@ -83,6 +119,97 @@ describe("brand identity guard", () => {
         { path: "apps/web/src/other.ts", contents: inAppReleaseAttribution },
       ]),
     ).toHaveLength(2);
+  });
+
+  it("preserves exact Computer license attribution without exempting surrounding prose", () => {
+    const path = "docs/computer-use-cua/extraction-plan.md";
+    const section = "## Upstream license and PR-back feasibility";
+    const attribution = `also MIT (LICENSE, ${companyDisplayName} Inc and Emanuele Di Pietro). There is no license`;
+    expect(findBrandIdentityViolations([{ path, contents: `${section}\n${attribution}` }])).toEqual(
+      [],
+    );
+    for (const contents of [
+      `## Other\n${attribution}`,
+      `${section}\n${attribution}\n${attribution}`,
+      `${section}\n${attribution} ${firstName}`,
+      `${section}\n${attribution}\n${secondName}`,
+    ]) {
+      expect(findBrandIdentityViolations([{ path, contents }])).toHaveLength(1);
+    }
+    expect(
+      findBrandIdentityViolations([
+        { path: "docs/computer-use-cua/other.md", contents: `${section}\n${attribution}` },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  it("allows only the two reviewed cubic expressions in the native patch", () => {
+    const path = "apps/desktop/patches/cua-driver/0001-synara-native.patch";
+    const firstExpression = `+                            + ${shortName} * self.to.0`;
+    const expressions = [firstExpression, firstExpression.replace("self.to.0", "self.to.1")];
+    expect(findBrandIdentityViolations([{ path, contents: expressions.join("\n") }])).toEqual([]);
+    for (const contents of [
+      `${firstExpression}\n${firstExpression}`,
+      firstExpression.replace("self.to.0", "self.from.0"),
+      `${firstExpression} // ${firstName}`,
+      `${expressions.join("\n")}\n+ ${secondName}`,
+    ]) {
+      expect(findBrandIdentityViolations([{ path, contents }])).toHaveLength(1);
+    }
+    expect(
+      findBrandIdentityViolations([
+        { path: "apps/desktop/patches/cua-driver/other.patch", contents: expressions.join("\n") },
+      ]),
+    ).toHaveLength(2);
+  });
+
+  it.each([
+    ["apps/desktop/src/cuaFixtures/electron.ts", "cua-fixture"],
+    ["scripts/computer-use-fixtures/build-canary.mjs", "cua-canary"],
+    ["scripts/computer-use-fixtures/multi-display-cert.ts", "cua-display-cert"],
+    ["apps/server/src/computer/computerSignatureChange.test.ts", "test"],
+    ["docs/computer-use-cua/evidence/native-fixture-report.json", "cua-fixture"],
+    ["docs/computer-use-cua/evidence/rev17-native-2026-09-17-notes.md", "cua-fixture-external"],
+    ["docs/computer-use-cua/evidence/latency-rev17-probe.ts", "latency-probe"],
+    ["docs/computer-use-cua/belief-canary-runbook.md", "cua-canary"],
+  ])("preserves only the reviewed fixture identity at %s", (path, suffix) => {
+    const bundleId = `${fixtureBundleDomain}.${suffix}`;
+    expect(
+      findBrandIdentityViolations([
+        { path, contents: `bundleId: "${bundleId}",\n"tccutil reset ScreenCapture ${bundleId}"` },
+      ]),
+    ).toEqual([]);
+    for (const forbidden of [
+      firstName,
+      companyDisplayName,
+      secondName,
+      fixtureBundleDomain,
+      `${fixtureBundleDomain}.other-fixture`,
+      `${bundleId}.child`,
+      `${bundleId}-copy`,
+      `${bundleId}_copy`,
+      `prefix${bundleId}`,
+      bundleId.toUpperCase(),
+    ]) {
+      expect(
+        findBrandIdentityViolations([{ path, contents: `"${bundleId}" "${forbidden}"` }]),
+      ).toHaveLength(1);
+    }
+  });
+
+  it("does not extend fixture identity exemptions to other paths or fixture families", () => {
+    const bundleId = `${fixtureBundleDomain}.cua-fixture`;
+    expect(
+      findBrandIdentityViolations([
+        { path: "apps/desktop/src/main.ts", contents: bundleId },
+        { path: "apps/desktop/src/cuaFixtures/new.ts", contents: bundleId },
+        { path: "scripts/computer-use-fixtures/new.mjs", contents: bundleId },
+        { path: "apps/server/src/computer/new.test.ts", contents: bundleId },
+        { path: "docs/computer-use-cua/evidence/new-report.json", contents: bundleId },
+        { path: "scripts/computer-use-fixtures/build-canary.mjs", contents: bundleId },
+        { path: "apps/desktop/src/cuaFixtures/electron.ts", contents: `${bundleId}-external` },
+      ]),
+    ).toHaveLength(7);
   });
 
   it("requires user-facing raster assets to match a visually approved digest", () => {

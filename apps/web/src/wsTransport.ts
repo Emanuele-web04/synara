@@ -20,9 +20,12 @@ import {
   WS_PROJECT_FILE_WATCH_CAPABILITY,
   DEVICE_WS_CHANNELS,
   DEVICE_WS_METHODS,
+  COMPUTER_WS_CHANNELS,
+  COMPUTER_WS_METHODS,
   WsBootstrapNegotiateResult,
   WsBootstrapRpcGroup,
   WsDeviceRpcGroup,
+  WsComputerRpcGroup,
   WS_METHODS,
   WsCompatibilityError,
   WsFeatureRpcGroup,
@@ -46,6 +49,7 @@ import {
   type ServerProviderStatusesUpdatedPayload,
   type ServerSettingsUpdatedPayload,
   type DeviceEvent,
+  type ComputerEvent,
   type TerminalEvent,
   type WsPush,
   type WsPushChannel,
@@ -69,6 +73,7 @@ import * as Socket from "effect/unstable/socket/Socket";
 
 import { APP_VERSION } from "./branding";
 import { useDeviceStateStore } from "./deviceStateStore";
+import { useComputerStateStore } from "./computerStateStore";
 import {
   getUnaryRpcCapacityRetryDelayMs,
   MAX_UNARY_RPC_CAPACITY_RETRY_ATTEMPTS,
@@ -214,7 +219,9 @@ function awaitWithAbort<A>(promise: Promise<A>, signal: AbortSignal | undefined)
 // real RPC error (or an `unsupported-platform` availability) to render its
 // blocked state. Merging here keeps one socket and one client.
 const makeRpcClient = RpcClient.make(
-  WsFeatureRpcGroup.merge(WsDeviceRpcGroup).merge(WsProjectAgentLinkRpcGroup),
+  WsFeatureRpcGroup.merge(WsDeviceRpcGroup)
+    .merge(WsComputerRpcGroup)
+    .merge(WsProjectAgentLinkRpcGroup),
 );
 const makeBootstrapRpcClient = RpcClient.make(WsBootstrapRpcGroup);
 const REQUEST_TIMEOUT_MS = 60_000;
@@ -1172,6 +1179,7 @@ export class WsTransport {
       // snapshots as stragglers and leave the pane showing pre-restart devices
       // and attachments forever, so the cache is dropped with the cursors.
       useDeviceStateStore.getState().clear();
+      useComputerStateStore.getState().clear();
     }
     this.lastServerInstanceId = compatibility.serverInstanceId;
     this.setCompatibility(compatibility);
@@ -1601,6 +1609,14 @@ export class WsTransport {
             (event: DeviceEvent) => this.emit(DEVICE_WS_CHANNELS.event, event),
             restartChannel,
           );
+        } else if (channel === COMPUTER_WS_CHANNELS.event) {
+          this.startStream(
+            client,
+            "computer.events",
+            client[COMPUTER_WS_METHODS.subscribeEvents]({}),
+            (event: ComputerEvent) => this.emit(COMPUTER_WS_CHANNELS.event, event),
+            restartChannel,
+          );
         } else if (channel === ORCHESTRATION_WS_CHANNELS.domainEvent) {
           this.startStream(
             client,
@@ -1635,6 +1651,7 @@ export class WsTransport {
     else if (channel === WS_CHANNELS.projectDevServerEvent) this.stopStream("project.devServers");
     else if (channel === WS_CHANNELS.automationEvent) this.stopStream("automation.events");
     else if (channel === DEVICE_WS_CHANNELS.event) this.stopStream("device.events");
+    else if (channel === COMPUTER_WS_CHANNELS.event) this.stopStream("computer.events");
     else if (channel === ORCHESTRATION_WS_CHANNELS.domainEvent)
       this.stopStream("orchestration.domain");
   }

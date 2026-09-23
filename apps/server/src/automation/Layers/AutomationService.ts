@@ -1814,13 +1814,33 @@ export const AutomationServiceLive = Layer.effect(
         }),
       );
 
-    const enqueueCompletionEvaluationForRun = (run: AutomationRun) => {
+    const enqueueCompletionEvaluationForRun = (
+      run: AutomationRun,
+      // Rescans list up to 100 runs that often share a few automations; a
+      // per-scan cache turns the per-run definition query into one per automation.
+      // Runs are processed sequentially, so a plain value cache needs no locking.
+      definitionCache?: Map<string, Option.Option<AutomationDefinition>>,
+    ) => {
       if (run.status !== "succeeded" || run.result?.completionEvaluation !== undefined) {
         return Effect.void;
       }
+      // Already queued runs are dropped as duplicates after the lookup below;
+      // checking first spares the query entirely on every worker-cycle rescan.
+      if (queuedCompletionEvaluationRunIds.has(run.id)) {
+        return Effect.void;
+      }
 
-      return automationRepository.getDefinitionById({ id: run.automationId }).pipe(
-        Effect.mapError(toServiceError("Failed to load automation.")),
+      const cachedDefinition = definitionCache?.get(run.automationId);
+      const loadDefinition = cachedDefinition
+        ? Effect.succeed(cachedDefinition)
+        : automationRepository.getDefinitionById({ id: run.automationId }).pipe(
+            Effect.mapError(toServiceError("Failed to load automation.")),
+            Effect.tap((definitionOption) =>
+              Effect.sync(() => definitionCache?.set(run.automationId, definitionOption)),
+            ),
+          );
+
+      return loadDefinition.pipe(
         Effect.flatMap((definitionOption) =>
           Option.match(definitionOption, {
             onNone: () => Effect.void,
@@ -1855,9 +1875,14 @@ export const AutomationServiceLive = Layer.effect(
     const enqueuePendingCompletionEvaluations = () =>
       automationRepository.listRunsNeedingCompletionEvaluation({ limit: 100 }).pipe(
         Effect.mapError(toServiceError("Failed to list pending stop evaluations.")),
-        Effect.flatMap((runs) =>
-          Effect.forEach(runs, enqueueCompletionEvaluationForRun, { concurrency: 1 }),
-        ),
+        Effect.flatMap((runs) => {
+          const definitionCache = new Map<string, Option.Option<AutomationDefinition>>();
+          return Effect.forEach(
+            runs,
+            (run) => enqueueCompletionEvaluationForRun(run, definitionCache),
+            { concurrency: 1 },
+          );
+        }),
         Effect.asVoid,
       );
 

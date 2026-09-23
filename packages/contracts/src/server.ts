@@ -17,6 +17,55 @@ import { AutomationCompletionPolicy, AutomationMode, AutomationSchedule } from "
 export const SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES = 10 * 1024 * 1024;
 const SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BASE64_CHARS = 14_000_000;
 
+/** Owner-only diagnostic pages reuse the provider diagnostic readers and sanitizer. */
+export const ServerReadThreadDiagnosticsInput = Schema.Struct({
+  source: Schema.Literals(["events", "runtime"]),
+  threadId: ThreadId.check(Schema.isMaxLength(256)),
+  cursor: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(4_096))),
+  limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 200 }))),
+  eventTypes: Schema.optional(
+    Schema.Array(TrimmedNonEmptyString.check(Schema.isMaxLength(128))).check(
+      Schema.isMaxLength(64),
+    ),
+  ),
+  turnId: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(256))),
+  payloadMode: Schema.optional(Schema.Literals(["none", "summary", "full"])),
+  includeDetails: Schema.optional(Schema.Boolean),
+});
+export type ServerReadThreadDiagnosticsInput = typeof ServerReadThreadDiagnosticsInput.Type;
+
+/**
+ * RPC JSON codecs must describe JSON values explicitly. `Schema.Unknown`
+ * has no JSON representation and encodes successful pages as null.
+ * The existing diagnostic readers own payload redaction and bounded detail.
+ */
+export const ServerReadThreadDiagnosticsResult = Schema.Struct({
+  threadId: ThreadId.check(Schema.isMaxLength(256)),
+  events: Schema.Array(Schema.Json).check(Schema.isMaxLength(200)),
+  coverage: Schema.Union([
+    Schema.Struct({
+      source: Schema.Literal("orchestration_events"),
+      highWaterSequence: NonNegativeInt,
+      durableSourceComplete: Schema.Literal(true),
+      pageHasOlder: Schema.Boolean,
+      coalescingScanTruncated: Schema.optional(Schema.Boolean),
+    }),
+    Schema.Struct({
+      source: Schema.Literal("provider_runtime_events"),
+      highWaterSequence: NonNegativeInt,
+      oldestRetainedSequence: Schema.NullOr(NonNegativeInt),
+      retainedForThread: NonNegativeInt,
+      globalAcceptedEventCap: PositiveInt,
+      sourceComplete: Schema.Literal(false),
+      pageHasOlder: Schema.Boolean,
+    }),
+  ]),
+  nextCursor: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(4_096))),
+  requestedLimit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 200 }))),
+  appliedLimit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 200 }))),
+});
+export type ServerReadThreadDiagnosticsResult = typeof ServerReadThreadDiagnosticsResult.Type;
+
 const KeybindingsMalformedConfigIssue = Schema.Struct({
   kind: Schema.Literal("keybindings.malformed-config"),
   message: TrimmedNonEmptyString,

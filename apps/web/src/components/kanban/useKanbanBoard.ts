@@ -4,7 +4,7 @@
 // Exports: useKanbanBoard
 
 import type { ProjectId, ThreadId } from "@synara/contracts";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 import { useAppSettings } from "~/appSettings";
 import { useStableValue } from "~/hooks/useStableValue";
@@ -37,9 +37,15 @@ const OPTIMISTIC_DISPATCH_EXPIRY_CHECK_MS = 5_000;
 
 export function useKanbanBoard(): KanbanBoard {
   const { settings } = useAppSettings();
-  const selectDisplayThreads = createSidebarDisplayThreadsSelector({
-    hideAutomationRunThreads: !settings.showAutomationRunThreads,
-  });
+  // Memoized so the selector's internal reference cache survives across
+  // renders (mirroring Sidebar.tsx); rebuilding it inline each render returned
+  // a fresh `threads` array every time, which re-fired the effects below and
+  // rebuilt the whole board once per second while any card had active work.
+  const hideAutomationRunThreads = !settings.showAutomationRunThreads;
+  const selectDisplayThreads = useMemo(
+    () => createSidebarDisplayThreadsSelector({ hideAutomationRunThreads }),
+    [hideAutomationRunThreads],
+  );
   const threads = useStore(selectDisplayThreads);
   const allProjects = useStore((state) => state.projects);
   const threadsHydrated = useStore((state) => state.threadsHydrated);
@@ -53,35 +59,49 @@ export function useKanbanBoard(): KanbanBoard {
   // "Chats" board for the hidden home chat container. Stale duplicate containers (cleaned
   // up lazily by chatProjects fixup) are aliased into the canonical one — mirroring
   // findCanonicalHomeProject — so they never surface as extra empty boards.
-  const chatContainers = allProjects.filter((project) =>
-    isHomeChatContainerProject(project, { homeDir, chatWorkspaceRoot }),
-  );
-  // Group containers are intentionally excluded: a group coordinates chats rather
-  // than owning a task board, and its threads surface on the Groups view, not Kanban.
-  const otherProjects = allProjects.filter(
-    (project) =>
-      !isHomeChatContainerProject(project, { homeDir, chatWorkspaceRoot }) &&
-      !isGroupContainerProject(project, {
-        homeDir,
-        chatWorkspaceRoot,
-        studioWorkspaceRoot,
-        groupsWorkspaceRoot,
-      }),
-  );
-  const canonicalContainer =
-    chatContainers.find((project) => project.kind === "chat") ?? chatContainers[0] ?? null;
-  const projectIdAliases: Record<string, ProjectId> = {};
-  for (const container of chatContainers) {
-    if (canonicalContainer && container.id !== canonicalContainer.id) {
-      projectIdAliases[container.id] = canonicalContainer.id;
+  const { projects, projectIdAliases } = useMemo(() => {
+    const chatContainers = allProjects.filter((project) =>
+      isHomeChatContainerProject(project, { homeDir, chatWorkspaceRoot }),
+    );
+    // Group containers are intentionally excluded: a group coordinates chats
+    // rather than owning a task board, and its threads surface on the Groups
+    // view, not Kanban.
+    const otherProjects = allProjects.filter(
+      (project) =>
+        !isHomeChatContainerProject(project, { homeDir, chatWorkspaceRoot }) &&
+        !isGroupContainerProject(project, {
+          homeDir,
+          chatWorkspaceRoot,
+          studioWorkspaceRoot,
+          groupsWorkspaceRoot,
+        }),
+    );
+    const canonicalContainer =
+      chatContainers.find((project) => project.kind === "chat") ?? chatContainers[0] ?? null;
+    const aliases: Record<string, ProjectId> = {};
+    for (const container of chatContainers) {
+      if (canonicalContainer && container.id !== canonicalContainer.id) {
+        aliases[container.id] = canonicalContainer.id;
+      }
     }
-  }
-  const projects = [
-    ...sortProjectsForSidebar(otherProjects, threads, projectSortOrder),
-    ...(canonicalContainer
-      ? [{ id: canonicalContainer.id, kind: canonicalContainer.kind, name: "Chats" }]
-      : []),
-  ];
+    return {
+      projects: [
+        ...sortProjectsForSidebar(otherProjects, threads, projectSortOrder),
+        ...(canonicalContainer
+          ? [{ id: canonicalContainer.id, kind: canonicalContainer.kind, name: "Chats" }]
+          : []),
+      ],
+      projectIdAliases: aliases,
+    };
+  }, [
+    allProjects,
+    chatWorkspaceRoot,
+    groupsWorkspaceRoot,
+    homeDir,
+    projectSortOrder,
+    studioWorkspaceRoot,
+    threads,
+  ]);
   const draftsByThreadId = useComposerDraftStore((state) => state.draftsByThreadId);
   const draftThreadsByThreadId = useComposerDraftStore((state) => state.draftThreadsByThreadId);
   const draftOrderByProjectId = useKanbanUiStore((state) => state.draftOrderByProjectId);
@@ -92,12 +112,15 @@ export function useKanbanBoard(): KanbanBoard {
 
   // Terminal-first threads are terminals, not provider chats — same rule as the
   // sidebar, which swaps the provider avatar for the terminal glyph.
-  const terminalEntryThreadIds = new Set<string>();
-  for (const [threadId, terminalState] of Object.entries(terminalStateByThreadId)) {
-    if (terminalState.entryPoint === "terminal") {
-      terminalEntryThreadIds.add(threadId);
+  const terminalEntryThreadIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const [threadId, terminalState] of Object.entries(terminalStateByThreadId)) {
+      if (terminalState.entryPoint === "terminal") {
+        ids.add(threadId);
+      }
     }
-  }
+    return ids;
+  }, [terminalStateByThreadId]);
 
   // Drop persisted manual draft orders for projects that no longer exist, so the
   // localStorage payload doesn't grow forever as projects come and go.
@@ -184,43 +207,64 @@ export function useKanbanBoard(): KanbanBoard {
   // are dropped so routine composer churn (focus, selections, modes) rarely
   // changes the content — and useStableValue keeps the same object when it
   // doesn't, sparing the downstream board rebuild entirely.
-  const computedComposerDraftByThreadId: Record<string, KanbanComposerDraftSnapshot> = {};
-  for (const [threadId, draft] of Object.entries(draftsByThreadId)) {
-    const snapshot = buildKanbanComposerDraftSnapshot(draft);
-    if (snapshot && (snapshot.prompt.trim().length > 0 || snapshot.hasAttachments)) {
-      computedComposerDraftByThreadId[threadId] = snapshot;
+  const computedComposerDraftByThreadId = useMemo(() => {
+    const snapshots: Record<string, KanbanComposerDraftSnapshot> = {};
+    for (const [threadId, draft] of Object.entries(draftsByThreadId)) {
+      const snapshot = buildKanbanComposerDraftSnapshot(draft);
+      if (snapshot && (snapshot.prompt.trim().length > 0 || snapshot.hasAttachments)) {
+        snapshots[threadId] = snapshot;
+      }
     }
-  }
+    return snapshots;
+  }, [draftsByThreadId]);
   const composerDraftByThreadId = useStableValue(
     computedComposerDraftByThreadId,
     areKanbanComposerDraftSnapshotsEqual,
   );
 
-  const draftThreads: KanbanDraftThreadSnapshot[] = [];
-  for (const [threadId, draftThread] of Object.entries(draftThreadsByThreadId)) {
-    // Promoted drafts already surface through their durable thread; temporary and
-    // terminal-first drafts have no chat prompt to track on the board.
-    if (draftThread.promotedTo || draftThread.isTemporary || draftThread.entryPoint !== "chat") {
-      continue;
+  const draftThreads = useMemo(() => {
+    const snapshots: KanbanDraftThreadSnapshot[] = [];
+    for (const [threadId, draftThread] of Object.entries(draftThreadsByThreadId)) {
+      // Promoted drafts already surface through their durable thread; temporary and
+      // terminal-first drafts have no chat prompt to track on the board.
+      if (draftThread.promotedTo || draftThread.isTemporary || draftThread.entryPoint !== "chat") {
+        continue;
+      }
+      snapshots.push({
+        threadId: threadId as ThreadId,
+        projectId: draftThread.projectId,
+        createdAt: draftThread.createdAt,
+        branch: draftThread.branch,
+        envMode: draftThread.envMode,
+        worktreePath: draftThread.worktreePath,
+      });
     }
-    draftThreads.push({
-      threadId: threadId as ThreadId,
-      projectId: draftThread.projectId,
-      createdAt: draftThread.createdAt,
-      branch: draftThread.branch,
-      envMode: draftThread.envMode,
-      worktreePath: draftThread.worktreePath,
-    });
-  }
+    return snapshots;
+  }, [draftThreadsByThreadId]);
 
-  return buildKanbanBoard({
-    projects,
-    threads,
-    draftThreads,
-    composerDraftByThreadId,
-    draftOrderByProjectId,
-    projectIdAliases,
-    terminalEntryThreadIds,
-    optimisticDispatchByThreadId,
-  });
+  // The board is only rebuilt when one of its inputs changes; the 1s `useNowMs`
+  // tick and unrelated store notifications in KanbanView reuse the last board.
+  return useMemo(
+    () =>
+      buildKanbanBoard({
+        projects,
+        threads,
+        draftThreads,
+        composerDraftByThreadId,
+        draftOrderByProjectId,
+        projectIdAliases,
+        terminalEntryThreadIds,
+        optimisticDispatchByThreadId,
+      }),
+    [
+      composerDraftByThreadId,
+      draftOrderByProjectId,
+      draftThreads,
+      optimisticDispatchByThreadId,
+      projectIdAliases,
+      projects,
+      terminalEntryThreadIds,
+      threads,
+    ],
+  );
 }

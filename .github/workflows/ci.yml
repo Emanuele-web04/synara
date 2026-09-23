@@ -116,7 +116,8 @@ jobs:
 
   # Keep each server shard serial internally, but use three independent runners.
   # The measured native 3-way split lowers the slowest shard without changing
-  # collected tests. Turbo still runs each package's build prerequisites.
+  # collected tests. Tests import @synara/contracts from source (its ESM export),
+  # so no package build precedes them; every lane starts at the test files.
   unit:
     name: Unit Tests (${{ matrix.pkg }})
     runs-on: ubuntu-24.04
@@ -151,8 +152,6 @@ jobs:
 
       - name: Setup workspace
         uses: ./.github/actions/setup-workspace
-        with:
-          turbo: "true"
 
       - name: Verify Linux terminal PTY native dependency
         if: matrix.filters == '--filter=@synara/cli'
@@ -347,6 +346,7 @@ jobs:
         run: >-
           bun run --cwd apps/server test
           src/platform/processTreeController.test.ts
+          src/platform/effectProcessSignals.test.ts
           src/provider/supervisedProcessTeardown.test.ts
           src/provider/providerStartupLifecycle.test.ts
           src/processRunner.test.ts

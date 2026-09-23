@@ -10,12 +10,14 @@ import type {
   ProviderModelDescriptor,
 } from "@synara/contracts";
 import {
+  getClaudeContextWindowSuffix,
   getDefaultEffort,
   getModelCapabilities,
   normalizeModelSlug,
   trimOrNull,
 } from "@synara/shared/model";
 import { normalizeCursorModelVariantBaseId } from "../../cursorModelVariants";
+import { normalizeClaudeModelOptionSlug } from "../../providerModelOptions";
 
 function runtimeEffortLabel(value: string): string {
   switch (value) {
@@ -58,7 +60,7 @@ export function resolveRuntimeModelDescriptor(input: {
     return undefined;
   }
 
-  return runtimeModels.find((candidate) => {
+  const exactMatch = runtimeModels.find((candidate) => {
     const normalizedCandidate = normalizeModelSlug(candidate.slug, provider) ?? candidate.slug;
     const normalizedResolvedModel =
       normalizeModelSlug(candidate.resolvedModel, provider) ?? candidate.resolvedModel;
@@ -71,6 +73,16 @@ export function resolveRuntimeModelDescriptor(input: {
         normalizeCursorModelVariantBaseId(normalizedModel)
     );
   });
+  if (exactMatch || provider !== "claudeAgent" || getClaudeContextWindowSuffix(model)) {
+    return exactMatch;
+  }
+
+  // The Claude picker hides context qualifiers and may replace an alias with
+  // a newer resolved id. Use the same projection to recover its metadata,
+  // while preserving exact matches and explicitly qualified selections above.
+  return runtimeModels.find(
+    (candidate) => normalizeClaudeModelOptionSlug(candidate) === normalizedModel,
+  );
 }
 
 // Reuses static capability flags but lets runtime-discovered models override exposed effort menus.

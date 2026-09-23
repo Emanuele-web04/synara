@@ -419,6 +419,13 @@ describe("EditorWorkspaceView", () => {
     // to the Open-in picker, whose editor menu trigger is always rendered.
     expect(markup).toContain('aria-label="Markdown view"');
     expect(markup).toContain('aria-label="Editor options"');
+    // Editor view matches the dock file pane: first open lands on Preview.
+    expect(markup).toMatch(
+      /aria-checked="false"[^>]*title="Source view[^"]*"|title="Source view[^"]*"[^>]*aria-checked="false"/,
+    );
+    expect(markup).toMatch(
+      /aria-checked="true"[^>]*title="Rendered preview[^"]*"|title="Rendered preview[^"]*"[^>]*aria-checked="true"/,
+    );
   });
 
   it("renders a search item in the activity bar below files and diff", () => {

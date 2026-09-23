@@ -28,7 +28,7 @@ import { cn } from "~/lib/utils";
 import { ELEVATED_HOVER_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 import { ensureNativeApi } from "~/nativeApi";
 import { useStore } from "~/store";
-import { createAllThreadsSelector } from "~/storeSelectors";
+import { createSidebarThreadSummariesSelector } from "~/storeSelectors";
 import {
   type AutomationFormState,
   AutomationDialog,
@@ -53,7 +53,10 @@ export const Route = createFileRoute("/_chat/automations/")({
   component: AutomationsRouteView,
 });
 
-const selectAllThreads = createAllThreadsSelector();
+// Sidebar summaries carry every field these surfaces read (id, projectId, title,
+// sidechatSourceThreadId) and do not rebuild on streamed message/activity deltas
+// the way the fully derived thread list does.
+const selectAllThreads = createSidebarThreadSummariesSelector();
 
 /** Unread successful result the user has not opened yet — surfaced as quiet row meta. */
 function hasUnreadResult(run: AutomationRun | null): boolean {
@@ -107,7 +110,7 @@ function AutomationListRow({
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span
           className={cn(
-            "truncate text-[0.8125rem]",
+            "truncate text-ui-lg",
             dimmed ? "text-muted-foreground" : "text-foreground",
           )}
         >
@@ -115,7 +118,7 @@ function AutomationListRow({
         </span>
         <span
           className={cn(
-            "truncate text-xs",
+            "truncate text-ui leading-snug",
             dimmed ? "text-muted-foreground/60" : "text-muted-foreground",
           )}
         >
@@ -123,7 +126,7 @@ function AutomationListRow({
         </span>
       </span>
       {meta == null ? null : (
-        <span className="shrink-0 self-center text-xs tabular-nums text-muted-foreground">
+        <span className="shrink-0 self-center text-ui leading-snug tabular-nums text-muted-foreground">
           {meta}
         </span>
       )}
@@ -314,7 +317,7 @@ function AutomationsRouteView() {
           type="button"
           onClick={() => setStatusFilter(value)}
           className={cn(
-            "rounded-lg px-2.5 py-1 text-xs font-medium capitalize transition-colors",
+            "rounded-lg px-2.5 py-1 text-ui leading-snug font-medium capitalize transition-colors",
             statusFilter === value
               ? "bg-[var(--color-background-elevated-secondary)] text-foreground"
               : "text-muted-foreground hover:text-foreground",
@@ -330,7 +333,7 @@ function AutomationsRouteView() {
     <section className="flex flex-col gap-2">
       {renderStatusFilter()}
       {filteredDefinitions.length === 0 ? (
-        <div className="px-2 py-4 text-xs text-muted-foreground">
+        <div className="px-2 py-4 text-ui leading-snug text-muted-foreground">
           {statusFilter === "paused" ? "No paused automations." : "No active automations."}
         </div>
       ) : (
@@ -389,13 +392,13 @@ function AutomationsRouteView() {
               Automations
             </h1>
             {isLoading ? (
-              <div className="py-16 text-center text-sm text-muted-foreground">
+              <div className="py-16 text-center text-ui leading-snug text-muted-foreground">
                 Loading automations...
               </div>
             ) : data.definitions.length === 0 ? (
               <div className="flex flex-col items-center gap-1 py-16 text-center">
-                <p className="text-sm font-medium text-foreground">No automations yet</p>
-                <p className="max-w-xs text-xs text-muted-foreground">
+                <p className="text-ui-lg font-medium text-foreground">No automations yet</p>
+                <p className="max-w-xs text-ui leading-snug text-muted-foreground">
                   Schedule a prompt to run on its own, or wake an existing thread on a loop.
                 </p>
               </div>

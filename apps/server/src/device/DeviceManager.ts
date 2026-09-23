@@ -160,6 +160,11 @@ export class DeviceManager {
   private readonly now: () => number;
 
   private readonly threads = new Map<string, ThreadAttachment>();
+  /** Availability + device list from the most recent discovery; see `snapshot`. */
+  private lastDiscovery: {
+    readonly availability: DeviceAvailability;
+    readonly devices: readonly DeviceDescriptor[];
+  } | null = null;
   /** Devices this manager booted, and therefore may shut down again. */
   private readonly synaraBooted = new Set<string>();
   private readonly idleTimers = new Map<string, NodeJS.Timeout>();
@@ -718,12 +723,13 @@ export class DeviceManager {
   async withAgentActivity<A>(threadId: string, action: () => Promise<A>): Promise<A> {
     const attachment = this.threadState(threadId);
     attachment.agentActiveCount += 1;
-    if (attachment.agentActiveCount === 1) await this.publish(threadId);
+    // Only the badge changes here; the device list the pane shows does not.
+    if (attachment.agentActiveCount === 1) await this.publish(threadId, { reuseDiscovery: true });
     try {
       return await action();
     } finally {
       attachment.agentActiveCount = Math.max(0, attachment.agentActiveCount - 1);
-      if (attachment.agentActiveCount === 0) await this.publish(threadId);
+      if (attachment.agentActiveCount === 0) await this.publish(threadId, { reuseDiscovery: true });
     }
   }
 
@@ -765,7 +771,7 @@ export class DeviceManager {
 
   async recordThreadError(threadId: string, message: string): Promise<void> {
     this.threadState(threadId).lastError = message;
-    await this.publish(threadId);
+    await this.publish(threadId, { reuseDiscovery: true });
   }
 
   // ── Lifecycle ──────────────────────────────────────────────────────
@@ -995,10 +1001,28 @@ export class DeviceManager {
     this.idleTimers.delete(udid);
   }
 
-  private async snapshot(threadId: string): Promise<ThreadDeviceState> {
+  /**
+   * Build a thread's state. `reuseDiscovery` serves the last availability and
+   * device list this manager already published instead of re-running the
+   * subprocess-backed toolchain and simulator discovery; it is only used by
+   * publishes that change nothing about the device list (the agent-activity
+   * badge, a recorded error), which previously cost ~a dozen process spawns
+   * per agent tool call. Boot, shutdown, attach and explicit reads keep
+   * discovering fresh state, and the first publish always discovers.
+   */
+  private async snapshot(
+    threadId: string,
+    options: { readonly reuseDiscovery?: boolean } = {},
+  ): Promise<ThreadDeviceState> {
     const attachment = this.threadState(threadId);
-    const availability = await this.backend.availability();
-    const devices = await this.discover(availability, { includeShutdown: true });
+    let discovery = options.reuseDiscovery ? this.lastDiscovery : null;
+    if (discovery === null) {
+      const availability = await this.backend.availability();
+      const devices = await this.discover(availability, { includeShutdown: true });
+      discovery = { availability, devices };
+      this.lastDiscovery = discovery;
+    }
+    const { availability, devices } = discovery;
     return {
       threadId: threadId as ThreadDeviceState["threadId"],
       version: attachment.version,
@@ -1011,10 +1035,13 @@ export class DeviceManager {
     };
   }
 
-  private async publish(threadId: string): Promise<ThreadDeviceState> {
+  private async publish(
+    threadId: string,
+    options: { readonly reuseDiscovery?: boolean } = {},
+  ): Promise<ThreadDeviceState> {
     const attachment = this.threadState(threadId);
     attachment.version += 1;
-    const state = await this.snapshot(threadId);
+    const state = await this.snapshot(threadId, options);
     this.emit({ type: "device.thread-state", state });
     return state;
   }

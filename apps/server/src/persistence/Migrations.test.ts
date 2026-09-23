@@ -306,9 +306,13 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [102, "ProjectionThreadMessagesTurnBoundary"],
         [103, "ClaudeTokenAccounting"],
         [104, "ProjectionThreadsClaudeCacheReview"],
-        [105, "ProjectAgent"],
-        [106, "Groups"],
-        [107, "GroupLibraryHosting"],
+        [105, "AsyncUserInput"],
+        [106, "ProjectImportOrigins"],
+        [107, "ProjectionThreadsHumanMessage"],
+        [108, "GatewayCompletions"],
+        [109, "ProjectAgent"],
+        [110, "Groups"],
+        [111, "GroupLibraryHosting"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -365,9 +369,13 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 102, name: "ProjectionThreadMessagesTurnBoundary" },
           { migration_id: 103, name: "ClaudeTokenAccounting" },
           { migration_id: 104, name: "ProjectionThreadsClaudeCacheReview" },
-          { migration_id: 105, name: "ProjectAgent" },
-          { migration_id: 106, name: "Groups" },
-          { migration_id: 107, name: "GroupLibraryHosting" },
+          { migration_id: 105, name: "AsyncUserInput" },
+          { migration_id: 106, name: "ProjectImportOrigins" },
+          { migration_id: 107, name: "ProjectionThreadsHumanMessage" },
+          { migration_id: 108, name: "GatewayCompletions" },
+          { migration_id: 109, name: "ProjectAgent" },
+          { migration_id: 110, name: "Groups" },
+          { migration_id: 111, name: "GroupLibraryHosting" },
         ],
       );
       const groupConfigColumns = yield* sql<{ readonly name: string }>`
@@ -496,9 +504,13 @@ agentGatewayRetentionLegacyLayer(
           [102, "ProjectionThreadMessagesTurnBoundary"],
           [103, "ClaudeTokenAccounting"],
           [104, "ProjectionThreadsClaudeCacheReview"],
-          [105, "ProjectAgent"],
-          [106, "Groups"],
-          [107, "GroupLibraryHosting"],
+          [105, "AsyncUserInput"],
+          [106, "ProjectImportOrigins"],
+          [107, "ProjectionThreadsHumanMessage"],
+          [108, "GatewayCompletions"],
+          [109, "ProjectAgent"],
+          [110, "Groups"],
+          [111, "GroupLibraryHosting"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -598,9 +610,13 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [102, "ProjectionThreadMessagesTurnBoundary"],
         [103, "ClaudeTokenAccounting"],
         [104, "ProjectionThreadsClaudeCacheReview"],
-        [105, "ProjectAgent"],
-        [106, "Groups"],
-        [107, "GroupLibraryHosting"],
+        [105, "AsyncUserInput"],
+        [106, "ProjectImportOrigins"],
+        [107, "ProjectionThreadsHumanMessage"],
+        [108, "GatewayCompletions"],
+        [109, "ProjectAgent"],
+        [110, "Groups"],
+        [111, "GroupLibraryHosting"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -641,9 +657,13 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [102, "ProjectionThreadMessagesTurnBoundary"],
           [103, "ClaudeTokenAccounting"],
           [104, "ProjectionThreadsClaudeCacheReview"],
-          [105, "ProjectAgent"],
-          [106, "Groups"],
-          [107, "GroupLibraryHosting"],
+          [105, "AsyncUserInput"],
+          [106, "ProjectImportOrigins"],
+          [107, "ProjectionThreadsHumanMessage"],
+          [108, "GatewayCompletions"],
+          [109, "ProjectAgent"],
+          [110, "Groups"],
+          [111, "GroupLibraryHosting"],
         ],
       );
 
@@ -738,9 +758,13 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [102, "ProjectionThreadMessagesTurnBoundary"],
         [103, "ClaudeTokenAccounting"],
         [104, "ProjectionThreadsClaudeCacheReview"],
-        [105, "ProjectAgent"],
-        [106, "Groups"],
-        [107, "GroupLibraryHosting"],
+        [105, "AsyncUserInput"],
+        [106, "ProjectImportOrigins"],
+        [107, "ProjectionThreadsHumanMessage"],
+        [108, "GatewayCompletions"],
+        [109, "ProjectAgent"],
+        [110, "Groups"],
+        [111, "GroupLibraryHosting"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -777,9 +801,13 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [102, "ProjectionThreadMessagesTurnBoundary"],
           [103, "ClaudeTokenAccounting"],
           [104, "ProjectionThreadsClaudeCacheReview"],
-          [105, "ProjectAgent"],
-          [106, "Groups"],
-          [107, "GroupLibraryHosting"],
+          [105, "AsyncUserInput"],
+          [106, "ProjectImportOrigins"],
+          [107, "ProjectionThreadsHumanMessage"],
+          [108, "GatewayCompletions"],
+          [109, "ProjectAgent"],
+          [110, "Groups"],
+          [111, "GroupLibraryHosting"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`

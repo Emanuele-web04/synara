@@ -1,6 +1,7 @@
 import type {
   ProjectEntry,
   ProviderAgentDescriptor,
+  ProviderArtifactsState,
   ProviderNativeCommandDescriptor,
   ProviderKind,
   ProviderMentionReference,
@@ -32,6 +33,7 @@ import { threadMentionPathForThreadId } from "@synara/shared/threadMentions";
 
 import type { ComposerCommandItem } from "../components/chat/ComposerCommandMenu";
 import type { ProviderModelOption } from "../providerModelOptions";
+import { getClaudeArtifactCommandNotice } from "../lib/claudeArtifactCommands";
 import { compareProvidersByOrder } from "../providerOrdering";
 import type { ComposerThreadMentionSource, Project } from "../types";
 
@@ -167,14 +169,13 @@ function withDisambiguatedMentionNames(
   });
 }
 
-export function buildThreadMentionComposerItems(input: {
+function buildThreadMentionCandidates(input: {
   readonly threads: readonly ComposerThreadMentionSource[];
   readonly projects: readonly Project[];
   readonly currentThreadId: string | null;
-  readonly query: string;
-}): ComposerCommandItem[] {
+}): ThreadMentionCandidate[] {
   const projectById = new Map(input.projects.map((project) => [project.id, project]));
-  const candidates = withDisambiguatedMentionNames(
+  return withDisambiguatedMentionNames(
     input.threads
       .filter(
         (thread) => thread.id !== input.currentThreadId && (thread.archivedAt ?? null) === null,
@@ -185,6 +186,33 @@ export function buildThreadMentionComposerItems(input: {
         projectName: threadSuggestionContainerName(projectById.get(thread.projectId)),
       })),
   );
+}
+
+// Resolves the mention a dropped chat row should insert: the exact name/path the
+// `@` menu would produce, or null when that chat is not mentionable here.
+export function resolveThreadMentionForThreadId(input: {
+  readonly threads: readonly ComposerThreadMentionSource[];
+  readonly projects: readonly Project[];
+  readonly currentThreadId: string | null;
+  readonly threadId: string;
+}): { name: string; path: string } | null {
+  const candidate = buildThreadMentionCandidates(input).find(
+    ({ thread }) => thread.id === input.threadId,
+  );
+  if (!candidate) return null;
+  return {
+    name: candidate.mentionName,
+    path: threadMentionPathForThreadId(candidate.thread.id),
+  };
+}
+
+export function buildThreadMentionComposerItems(input: {
+  readonly threads: readonly ComposerThreadMentionSource[];
+  readonly projects: readonly Project[];
+  readonly currentThreadId: string | null;
+  readonly query: string;
+}): ComposerCommandItem[] {
+  const candidates = buildThreadMentionCandidates(input);
   const query = normalizeProviderDiscoveryText(input.query);
   const ranked = (
     query
@@ -255,6 +283,8 @@ export function useComposerCommandMenuItems(input: {
   canOfferSideCommand: boolean;
   canOfferExportCommand: boolean;
   surfaceAppSlashCommands?: ReadonlySet<string>;
+  /** Artifact publishing state reported by provider command discovery. */
+  providerArtifacts?: ProviderArtifactsState | undefined;
   dynamicAgents: readonly ProviderAgentDescriptor[];
   threadMentionSources?: {
     readonly threads: readonly ComposerThreadMentionSource[];
@@ -277,6 +307,7 @@ export function useComposerCommandMenuItems(input: {
     canOfferSideCommand,
     canOfferExportCommand,
     surfaceAppSlashCommands,
+    providerArtifacts,
     dynamicAgents,
     threadMentionSources,
   } = input;
@@ -413,6 +444,11 @@ export function useComposerCommandMenuItems(input: {
       command: command.name,
       label: `/${command.name}`,
       description: command.description ?? `Run ${provider} native command`,
+      notice: getClaudeArtifactCommandNotice({
+        provider,
+        command: command.name,
+        artifacts: providerArtifacts,
+      }),
     }));
     // `/` is the universal picker surface; provider dispatch can adapt the
     // visible slash token to backend-specific skill syntax when needed.

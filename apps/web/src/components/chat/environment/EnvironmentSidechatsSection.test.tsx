@@ -17,6 +17,7 @@ describe("EnvironmentSidechatsSection", () => {
         ]}
         onCreate={() => undefined}
         onOpen={() => undefined}
+        onDelete={() => undefined}
       />,
     );
 
@@ -24,6 +25,7 @@ describe("EnvironmentSidechatsSection", () => {
     expect(markup).toContain("Start side chat");
     expect(markup).toContain("Old investigation");
     expect(markup).toContain("Expired");
+    expect(markup).toContain("Delete side chat Old investigation");
   });
 
   it("renders nothing when there are no side chats yet", () => {
@@ -32,6 +34,7 @@ describe("EnvironmentSidechatsSection", () => {
         sidechats={[]}
         onCreate={() => undefined}
         onOpen={() => undefined}
+        onDelete={() => undefined}
       />,
     );
 

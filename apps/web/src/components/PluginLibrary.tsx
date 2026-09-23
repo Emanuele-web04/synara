@@ -240,7 +240,7 @@ function TabButton({
     <button
       type="button"
       className={cn(
-        "inline-flex h-10 items-center border-b-2 px-1 text-[13px] font-medium transition-colors",
+        "inline-flex h-10 items-center border-b-2 px-1 text-ui-lg font-medium transition-colors",
         active
           ? "border-foreground text-foreground"
           : "border-transparent text-muted-foreground hover:text-foreground/80",
@@ -271,7 +271,7 @@ function ProviderToggleButton({
     <button
       type="button"
       className={cn(
-        "inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[12px] font-medium transition-colors",
+        "inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-ui font-medium transition-colors",
         active
           ? "bg-[var(--color-text-foreground)] text-[var(--color-background-surface)] shadow-xs"
           : "text-muted-foreground hover:bg-[var(--sidebar-accent)] hover:text-foreground",
@@ -291,8 +291,8 @@ function EmptyPanel({ title, description }: { title: string; description: string
   return (
     <div className="flex min-h-40 items-center justify-center rounded-xl border border-dashed border-border/60 bg-background/40 px-5 py-6 text-center">
       <div className="max-w-sm space-y-1">
-        <p className="text-sm font-medium text-foreground">{title}</p>
-        <p className="text-xs text-muted-foreground">{description}</p>
+        <p className="text-ui-lg leading-snug font-medium text-foreground">{title}</p>
+        <p className="text-ui leading-snug text-muted-foreground">{description}</p>
       </div>
     </div>
   );
@@ -300,7 +300,7 @@ function EmptyPanel({ title, description }: { title: string; description: string
 
 function InlineWarning({ children }: { children: ReactNode }) {
   return (
-    <div className="flex items-start gap-2 rounded-xl border border-amber-500/20 bg-amber-500/6 px-3 py-2.5 text-xs text-muted-foreground">
+    <div className="flex items-start gap-2 rounded-xl border border-amber-500/20 bg-amber-500/6 px-3 py-2.5 text-ui leading-snug text-muted-foreground">
       <CircleAlertIcon className="mt-0.5 size-3.5 shrink-0 text-amber-500" />
       <div>{children}</div>
     </div>
@@ -328,10 +328,10 @@ function PluginGridItem({ entry }: { entry: PluginEntry }) {
     <div className="flex items-center gap-3 rounded-xl px-3 py-3 transition-colors hover:bg-[var(--sidebar-accent)]">
       <PluginGlyph plugin={entry.plugin} />
       <div className="min-w-0 flex-1">
-        <p className="text-[13px] font-semibold leading-snug text-foreground">
+        <p className="text-ui-lg font-semibold leading-snug text-foreground">
           {entry.plugin.interface?.displayName ?? entry.plugin.name}
         </p>
-        <p className="mt-0.5 truncate text-[12px] text-muted-foreground">{description}</p>
+        <p className="mt-0.5 truncate text-ui text-muted-foreground">{description}</p>
       </div>
       <InstalledStatus installed={isInstalledProviderPlugin(entry.plugin)} />
     </div>
@@ -346,10 +346,10 @@ function SkillGridItem({ skill }: { skill: ProviderSkillDescriptor }) {
     <div className="flex items-center gap-3 rounded-xl px-3 py-3 transition-colors hover:bg-[var(--sidebar-accent)]">
       <SkillGlyph skill={skill} />
       <div className="min-w-0 flex-1">
-        <p className="text-[13px] font-semibold leading-snug text-foreground">
+        <p className="text-ui-lg font-semibold leading-snug text-foreground">
           {skill.interface?.displayName ?? skill.name}
         </p>
-        <p className="mt-0.5 truncate text-[12px] text-muted-foreground">{description}</p>
+        <p className="mt-0.5 truncate text-ui text-muted-foreground">{description}</p>
       </div>
       <InstalledStatus installed={skill.enabled} />
     </div>
@@ -605,7 +605,7 @@ export function PluginLibrary(props?: {
               else setSkillSearch(e.target.value);
             }}
             placeholder={selectedTab === "plugins" ? "Search plugins" : "Search skills"}
-            className="text-sm"
+            className="text-ui leading-snug"
           />
         </InputGroup>
       </div>

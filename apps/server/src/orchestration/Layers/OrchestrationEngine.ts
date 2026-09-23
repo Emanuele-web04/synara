@@ -546,6 +546,36 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           ? loadThreadDetailForDecider(command, commandReadModel, command.threadId)
           : Effect.succeed(commandReadModel);
       case "thread.turn.start":
+        if (command.asyncUserInputResponse) {
+          return messageRepository
+            .getByThreadAndMessageId({
+              threadId: command.threadId,
+              messageId: command.asyncUserInputResponse.messageId,
+            })
+            .pipe(
+              Effect.mapError(
+                (error) =>
+                  new OrchestrationCommandInternalError({
+                    commandId: command.commandId,
+                    commandType: command.type,
+                    detail: `Failed to load the asynchronous question: ${error.message}`,
+                  }),
+              ),
+              Effect.map((message) => {
+                const thread = commandReadModel.threads.find(
+                  (entry) => entry.id === command.threadId,
+                );
+                if (!thread || Option.isNone(message)) return commandReadModel;
+                return overlayThread(commandReadModel, {
+                  ...thread,
+                  messages: [
+                    ...thread.messages.filter((entry) => entry.id !== message.value.messageId),
+                    orchestrationMessageFromStoredMessage(message.value),
+                  ],
+                });
+              }),
+            );
+        }
         return command.sourceProposedPlan
           ? loadThreadDetailForDecider(
               command,
@@ -753,6 +783,18 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
       let command: OrchestrationCommand = envelope.command;
       if (command.type === "thread.turn.start") {
+        const pendingImport = yield* sql<{ readonly thread_id: string }>`
+          SELECT thread_id FROM project_import_origins
+          WHERE thread_id = ${command.threadId} AND status = 'pending'
+          LIMIT 1
+        `.pipe(Effect.mapError(toPersistenceSqlError("OrchestrationEngine.pendingProjectImport")));
+        if (pendingImport.length > 0) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail:
+              "This conversation is still being imported. Finish or retry its import before sending a message.",
+          });
+        }
         const startCommand = command;
         const attachments = yield* Effect.forEach(
           startCommand.message.attachments,

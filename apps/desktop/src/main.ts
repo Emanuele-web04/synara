@@ -1,3 +1,12 @@
+import { CuaDriverHost, sweepOrphanedCuaDrivers } from "./cuaDriverHost";
+import { createLinuxCuaDriverHost } from "./linuxCuaDriverHost";
+import { LinuxEscapeKillSwitchMonitor, linuxEscapeSession } from "./linuxEscapeKillSwitchMonitor";
+import { ComputerFrameTap } from "./computerFrameTap";
+import { ComputerShield } from "./computerShield";
+import { registerComputerDesktopLifecycle } from "./computerDesktopLifecycle";
+import { COMPUTER_PERMISSION_KINDS } from "@synara/shared/computerGrants";
+import { CUA_HOST_SOCKET_ENV } from "@synara/shared/cuaDriverProtocol";
+import { MODEL_SCREEN_IMAGE_MAX_DIMENSION } from "@synara/shared/modelImageBudget";
 // FILE: main.ts
 // Purpose: Starts the Electron shell, backend process, native menus, IPC bridges, and updater.
 // Layer: Desktop main process
@@ -24,6 +33,7 @@ import {
   nativeImage,
   nativeTheme,
   protocol,
+  powerMonitor,
   screen,
   safeStorage,
   session,
@@ -57,9 +67,11 @@ import { getMacTrafficLightPosition } from "@synara/shared/desktopChrome";
 import { DEVICE_HELPER_SOURCE_DIR_ENV } from "@synara/shared/deviceHelperCache";
 import {
   SYNARA_DESKTOP_SMOKE_USER_DATA_ENV,
+  SYNARA_DESKTOP_BUNDLE_ID_ENV,
   SYNARA_DESKTOP_UPDATE_CHANNEL,
   SYNARA_SOURCE_DESKTOP_BUILD_MARKER,
-  resolveSynaraDesktopFlavor,
+  canOverrideDesktopSmokeUserData,
+  resolveSynaraDesktopRuntimeFlavor,
   synaraDesktopIdentity,
 } from "@synara/shared/desktopIdentity";
 import { NetService } from "@synara/shared/Net";
@@ -95,6 +107,7 @@ import {
   desktopAppIconResourceName,
   isDesktopAppIcon,
   shouldUpdateDesktopAppIcon,
+  usesMacBundleAppIcon,
 } from "./desktopAppIcon";
 import {
   applyWindowsTaskbarIcon,
@@ -146,6 +159,7 @@ import {
   serializeLaunchVersionRecord,
   shouldRefreshIconCache,
 } from "./macIconCacheRefresh";
+import { persistMacAppIcon } from "./macAppIcon";
 import { collectMacUpdateDiagnostics } from "./macUpdateDiagnostics";
 import { openInitialBackendWindow } from "./initialBackendWindowOpen";
 import { isTrustedMediaPermissionRequest } from "./mediaPermissions";
@@ -266,6 +280,11 @@ import {
   writeCustomTitleBarPreference,
 } from "./desktopCustomTitleBar";
 import {
+  normalizeAgentCursorStylePreference,
+  readAgentCursorPreference,
+  writeAgentCursorPreference,
+} from "./agentCursorPreference";
+import {
   readDesktopWindowState,
   resolveVisibleWindowBounds,
   writeDesktopWindowState,
@@ -277,12 +296,16 @@ import {
 } from "./desktopStorageMigration";
 import { DESKTOP_IPC_CHANNELS } from "./ipcChannels";
 import { DesktopAppSnapManager } from "./appSnapManager";
+import { notifyBackendComputerEmergencyStop } from "./computerEmergencyStopNotice";
+import { EscapeKillSwitchMonitor } from "./escapeKillSwitchMonitor";
 import { hardenBrowserAnnotationWebviewPreferences } from "./browserAnnotations/webviewSecurity";
 import { LOCAL_HTML_PREVIEW_SCHEME } from "./localHtmlPreviewProtocol";
 import {
+  APP_SNAP_SETTINGS_PANE_URLS,
   registerAppSnapIpcHandlers,
   sendAppSnapCaptured,
   sendAppSnapError,
+  sendAppSnapPermissionGuideState,
   sendAppSnapState,
 } from "./appSnapIpc";
 
@@ -314,11 +337,24 @@ const shellEnvironmentSync = syncShellEnvironment();
 
 const IPC = DESKTOP_IPC_CHANNELS;
 const MAX_CLIPBOARD_IMAGE_DATA_URL_LENGTH = 16 * 1024 * 1024;
-const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
-const desktopFlavor = resolveSynaraDesktopFlavor({
+const packagedDesktopFlavor = app.isPackaged
+  ? (
+      JSON.parse(FS.readFileSync(Path.join(app.getAppPath(), "package.json"), "utf8")) as {
+        synaraDesktopFlavor?: unknown;
+      }
+    ).synaraDesktopFlavor
+  : undefined;
+const isSourceDesktopBuild =
+  requestedSourceBuildMarker === SYNARA_SOURCE_DESKTOP_BUILD_MARKER &&
+  packagedDesktopFlavor === undefined;
+const isDevelopment =
+  (!app.isPackaged || isSourceDesktopBuild) && Boolean(process.env.VITE_DEV_SERVER_URL);
+const desktopFlavor = resolveSynaraDesktopRuntimeFlavor({
+  isPackaged: app.isPackaged,
   isDevelopment,
+  packagedFlavor: packagedDesktopFlavor,
   requestedFlavor: process.env.SYNARA_DESKTOP_FLAVOR,
-  allowDevelopmentOverride: requestedSourceBuildMarker === SYNARA_SOURCE_DESKTOP_BUILD_MARKER,
+  allowDevelopmentOverride: isSourceDesktopBuild,
 });
 const desktopIdentity = synaraDesktopIdentity(desktopFlavor);
 const BASE_DIR =
@@ -328,6 +364,9 @@ const STATE_DIR = Path.join(BASE_DIR, "userdata");
 const DESKTOP_WINDOW_STATE_PATH = Path.join(STATE_DIR, "desktop-window-state.json");
 const DESKTOP_APP_ICON_PATH = Path.join(STATE_DIR, "desktop-app-icon");
 const DESKTOP_CUSTOM_TITLE_BAR_PATH = Path.join(STATE_DIR, "desktop-custom-title-bar.json");
+// Written by the renderer-mirrored agent cursor colors; read at each driver
+// session open so a persisted custom cursor survives app restarts.
+const AGENT_CURSOR_PREFERENCE_PATH = Path.join(STATE_DIR, "agent-cursor-colors.json");
 const DESKTOP_SCHEME = desktopIdentity.scheme;
 const ROOT_DIR = Path.resolve(__dirname, "../../..");
 const APP_DISPLAY_NAME = desktopIdentity.displayName;
@@ -364,6 +403,10 @@ const AUTO_UPDATE_STALLED_DOWNLOAD_CANCELLATION_SUPPRESSION_MS = 2 * 60 * 1000;
 // install dir, blocked NSIS run) and surface the manual-download fallback.
 const AUTO_UPDATE_INSTALL_WATCHDOG_MS = 15 * 1000;
 const AUTO_UPDATE_DIAGNOSTICS_TIMEOUT_MS = 2_800;
+// The OS key store can pend forever on an unanswered securityd prompt (locked
+// keychain, signature change, wedged SecurityAgent). Startup must not wait on
+// it: session cookies are disposable, a bricked launch is not.
+const BROWSER_SESSION_RESTORE_TIMEOUT_MS = 5_000;
 // User-driven like the menu and renderer reasons, so it must not be filtered
 // out by the automatic-activity suppression a previous install failure arms.
 const UPDATE_CHECK_REASON_MIGRATION_RECOVERY = "migration recovery";
@@ -1891,6 +1934,17 @@ function resolveAppSnapHelperPath(): string {
   return Path.resolve(__dirname, "..", ".electron-runtime", "appsnap", "synara-appsnap-helper");
 }
 
+/// The .app bundle that owns this process; the permission guide drags this
+/// bundle into the System Settings privacy lists.
+function resolveAppSnapAppBundlePath(): string {
+  let directory = Path.dirname(app.getPath("exe"));
+  while (directory !== Path.dirname(directory)) {
+    if (directory.endsWith(".app")) return directory;
+    directory = Path.dirname(directory);
+  }
+  return app.getPath("exe");
+}
+
 function ensureMainWindowForAppSnap(): BrowserWindow | null {
   if (mainWindow?.isDestroyed()) {
     mainWindow = null;
@@ -1928,9 +1982,35 @@ function initializeDesktopAppSnap(): void {
     helperPath: resolveAppSnapHelperPath(),
     captureDirectory: Path.join(app.getPath("userData"), "appsnap", "tmp"),
     excludedBundleId: APP_USER_MODEL_ID,
+    appDisplayName: APP_DISPLAY_NAME,
+    appBundlePath: resolveAppSnapAppBundlePath(),
     shortcutRegistry: globalShortcut,
+    openSettingsPane: (pane) => {
+      const paneUrl = APP_SNAP_SETTINGS_PANE_URLS[pane];
+      if (paneUrl) void shell.openExternal(paneUrl).catch(() => undefined);
+    },
+    // Best effort: quit System Settings after a permission setup session lands
+    // every grant, so the user is not left staring at a pane they are done with.
+    closeSettingsApp: () => {
+      try {
+        const child = ChildProcess.execFile("/usr/bin/osascript", [
+          "-e",
+          'tell application "System Settings" to quit',
+          "-e",
+          'tell application "System Preferences" to quit',
+        ]);
+        child.on("error", () => undefined);
+      } catch {
+        // Grants already landed; a lingering Settings window is not a failure.
+      }
+    },
     onState: (state) => {
       sendAppSnapEvent(mainWindow, (webContents) => sendAppSnapState(webContents, state));
+    },
+    onPermissionGuideState: (state) => {
+      sendAppSnapEvent(mainWindow, (webContents) =>
+        sendAppSnapPermissionGuideState(webContents, state),
+      );
     },
     onCaptured: (capture) => {
       const window = ensureMainWindowForAppSnap();
@@ -2062,10 +2142,12 @@ function resolveUserDataPath(): string {
   return resolveDesktopUserDataPath({
     appDataBase,
     userDataDirectoryName: desktopIdentity.userDataDirectoryName,
-    testOverridePath:
-      requestedSourceBuildMarker === SYNARA_SOURCE_DESKTOP_BUILD_MARKER
-        ? process.env[SYNARA_DESKTOP_SMOKE_USER_DATA_ENV]
-        : undefined,
+    testOverridePath: canOverrideDesktopSmokeUserData({
+      packagedFlavor: packagedDesktopFlavor,
+      sourceBuildMarker: requestedSourceBuildMarker,
+    })
+      ? process.env[SYNARA_DESKTOP_SMOKE_USER_DATA_ENV]
+      : undefined,
   });
 }
 
@@ -2101,9 +2183,8 @@ function configureAppIdentity(): void {
   }
 }
 
-// The packaged bundle icon is a solid, pre-rounded ICNS so Tahoe does not reinterpret
-// the mark as Icon Composer glass. Older macOS gets the same literal rounded artwork as
-// a runtime dock override because it does not apply the modern system mask itself.
+// Older macOS needs pre-rounded artwork as a runtime Dock override. macOS 26+
+// renders the appearance-aware Icon Composer asset when Default is selected.
 function usesLegacyMacDockIcon(): boolean {
   if (process.platform !== "darwin") return false;
   const darwinMajor = Number.parseInt(OS.release().split(".")[0] ?? "", 10);
@@ -2258,6 +2339,23 @@ function toWindowsTaskbarIcoBytes(sourcePath: string): Buffer {
 let windowsShellStampTimer: ReturnType<typeof setImmediate> | null = null;
 let windowsShellStampResolve: (() => void) | null = null;
 let desktopAppIconApplyTail: Promise<void> = Promise.resolve();
+let lastPersistedMacAppIcon: DesktopAppIcon | null = null;
+
+async function syncMacAppBundleIcon(
+  icon: DesktopAppIcon,
+  image: Electron.NativeImage | null,
+): Promise<void> {
+  // Do not customize the shared Electron executable used by development runs.
+  if (!app.isPackaged || lastPersistedMacAppIcon === icon) return;
+  const bundlePath = resolveMacAppBundlePath(process.execPath, process.platform);
+  if (!bundlePath) return;
+  await persistMacAppIcon({
+    bundlePath,
+    cacheDirectory: Path.join(STATE_DIR, "mac-app-icons"),
+    png: icon === "default" ? null : (image?.toPNG() ?? null),
+  });
+  lastPersistedMacAppIcon = icon;
+}
 
 function cancelDeferredWindowsShellStamp(): void {
   if (windowsShellStampTimer === null) return;
@@ -2344,6 +2442,20 @@ async function applyDesktopAppIconUnlocked(
   ) {
     return;
   }
+  if (
+    usesMacBundleAppIcon({
+      icon,
+      platform: process.platform,
+      usesLegacyDockIcon: usesLegacyMacDockIcon(),
+    })
+  ) {
+    // Remove the persistent override before asking AppKit to reload the bundle
+    // icon, otherwise it can read the previous custom artwork again.
+    await syncMacAppBundleIcon(icon, null);
+    app.dock?.setIcon(null as unknown as Electron.NativeImage);
+    return;
+  }
+
   const resourceName = desktopAppIconResourceName({
     icon,
     platform: process.platform,
@@ -2357,6 +2469,7 @@ async function applyDesktopAppIconUnlocked(
 
   if (process.platform === "darwin") {
     app.dock?.setIcon(image);
+    await syncMacAppBundleIcon(icon, image);
     return;
   }
   if (process.platform === "win32") {
@@ -2430,22 +2543,22 @@ function applyInitialMacDockIcon(): void {
   if (process.platform !== "darwin" || !app.dock) {
     return;
   }
-  const icon = readDesktopAppIcon();
-  if (icon === "default" && !usesLegacyMacDockIcon() && !nativeTheme.shouldUseDarkColors) {
-    return;
-  }
-  applyDesktopAppIcon(icon);
+  void applyPersistedDesktopAppIcon().catch((error) => {
+    console.warn("[desktop] Failed to persist the macOS app icon", error);
+  });
 }
 
 function registerMacAppearanceIconSync(): void {
   if (process.platform !== "darwin") {
     return;
   }
-  // The bundled ICNS is the light artwork; macOS does not swap third-party dock
-  // icons when the system appearance changes, so re-apply the persisted
-  // preference so the default icon follows light/dark mode at runtime.
+  // macOS does not swap a runtime dock image when the system appearance
+  // changes, so re-apply the persisted preference. On macOS 26 the default
+  // preference short-circuits to the bundle icon, which adapts on its own.
   nativeTheme.on("updated", () => {
-    applyDesktopAppIcon(readDesktopAppIcon());
+    void applyPersistedDesktopAppIcon().catch((error) => {
+      console.warn("[desktop] Failed to persist the macOS app icon", error);
+    });
   });
 }
 
@@ -3593,6 +3706,169 @@ function backendNodeArgs(): string[] {
   });
 }
 
+let cuaDriverHost: CuaDriverHost | undefined;
+let disposeComputerDesktopLifecycle: (() => void) | undefined;
+let cuaHostEndpoint: string | undefined;
+let escapeKillSwitchMonitor: EscapeKillSwitchMonitor | undefined;
+let linuxEscapeKillSwitchMonitor: LinuxEscapeKillSwitchMonitor | undefined;
+
+function stopComputerInputFromEscape(): void {
+  // Native interruption owns the drain. The backend notice only relays the
+  // interrupted state; a slow provider must not delay the local stop.
+  if (!cuaDriverHost?.emergencyStopInput()) return;
+  notifyBackendComputerEmergencyStop({
+    backendHttpUrl,
+    shutdownToken: DESKTOP_BACKEND_SHUTDOWN_TOKEN,
+    onError: (message) => safeConsoleError(`[desktop] ${message}`),
+  });
+}
+
+async function attachCuaHost(host: CuaDriverHost): Promise<void> {
+  cuaHostEndpoint = await host.listen();
+  cuaDriverHost = host;
+  disposeComputerDesktopLifecycle = registerComputerDesktopLifecycle(powerMonitor, host, (error) =>
+    safeConsoleError("[desktop] computer input pause failed", error),
+  );
+}
+
+async function startCuaHost(): Promise<void> {
+  if ((process.platform !== "darwin" && process.platform !== "linux") || cuaDriverHost) return;
+  sweepOrphanedCuaDrivers();
+  if (process.platform === "linux") {
+    linuxEscapeKillSwitchMonitor ??= new LinuxEscapeKillSwitchMonitor({
+      shortcutRegistry: globalShortcut,
+      sessionType: linuxEscapeSession(
+        app.commandLine.getSwitchValue("ozone-platform") ||
+          app.commandLine.getSwitchValue("ozone-platform-hint") ||
+          process.env.ELECTRON_OZONE_PLATFORM_HINT,
+      ),
+      onEscape: stopComputerInputFromEscape,
+      onStateChange: (state) => cuaDriverHost?.inputMonitorStateChanged(state),
+      onError: (message) => safeConsoleError(`[desktop] Escape monitor: ${message}`),
+    });
+    await attachCuaHost(
+      createLinuxCuaDriverHost({
+        isPackaged: app.isPackaged,
+        resourcesPath: process.resourcesPath,
+        appRoot: resolveAppRoot(),
+        bundleId: desktopIdentity.bundleId,
+        capability: DESKTOP_BROWSER_HOST_CAPABILITY,
+        inputMonitor: linuxEscapeKillSwitchMonitor,
+        ownPids: () => new Set([process.pid, ...app.getAppMetrics().map((metric) => metric.pid)]),
+      }),
+    );
+    return;
+  }
+  const host = new CuaDriverHost({
+    onInputMonitorArmedChange: (armed) => escapeKillSwitchMonitor?.setArmed(armed),
+    inputMonitorState: () =>
+      escapeKillSwitchMonitor?.state ?? { ready: false, error: "input_monitor_starting" },
+    activateInputMonitor: async () => {
+      await escapeKillSwitchMonitor?.activate();
+    },
+    binaryPath: app.isPackaged
+      ? Path.join(process.resourcesPath, "cua-driver", "cua-driver")
+      : Path.join(resolveAppRoot(), "apps/desktop/resources/cua-driver/cua-driver"),
+    bundleId: desktopIdentity.bundleId,
+    capability: DESKTOP_BROWSER_HOST_CAPABILITY,
+    // Computer use must never bind the app hosting it: the integrated
+    // browser's webviews live in this app's own renderer pids.
+    ownPids: () => new Set([process.pid, ...app.getAppMetrics().map((m) => m.pid)]),
+    // Stock by default: a missing preference file reads as null and the host
+    // sends no style call at all.
+    cursorStyle: () => readAgentCursorPreference(AGENT_CURSOR_PREFERENCE_PATH),
+    checkPermissions: async (options) => {
+      // The AppSnap manager owns the shared native permission helper; lazily
+      // starting it here keeps the CUA host working even when AppSnap itself is
+      // still disabled.
+      initializeDesktopAppSnap();
+      const state = await appSnapManager!.refreshState(COMPUTER_PERMISSION_KINDS, {
+        force: options?.force === true,
+      });
+      if (
+        state.status === "error" &&
+        (state.accessibilityPermission === "unknown" ||
+          state.inputMonitoringPermission === "unknown" ||
+          state.screenRecordingPermission === "unknown")
+      ) {
+        throw new Error(state.message ?? "The native helper could not verify macOS permissions.");
+      }
+      if (
+        host.isInputMonitorRequested &&
+        state.inputMonitoringPermission === "granted" &&
+        escapeKillSwitchMonitor?.state.error === "input-monitoring-required"
+      ) {
+        await escapeKillSwitchMonitor.activate(true);
+      }
+      return {
+        accessibility: state.accessibilityPermission === "granted",
+        inputMonitoring: state.inputMonitoringPermission === "granted",
+        screenRecording: state.screenRecordingPermission === "granted",
+      };
+    },
+    setup: async () => {
+      initializeDesktopAppSnap();
+      await appSnapManager!.startPermissionSetup(COMPUTER_PERMISSION_KINDS);
+    },
+    releaseHeldInput: async () => {
+      // Same lazily-started shared helper as the permission checks: the AppSnap
+      // binary posts the releases, and it exists whether or not AppSnap itself
+      // is enabled.
+      initializeDesktopAppSnap();
+      await appSnapManager!.releaseHeldInput();
+    },
+    frameTap: new ComputerFrameTap({
+      helperPath: resolveAppSnapHelperPath(),
+      send: (channel, frame) => {
+        if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
+          mainWindow.webContents.send(channel, frame);
+        }
+      },
+      onError: (error) => safeConsoleError("[desktop] computer frame tap failed", error),
+    }),
+    // The masked-activation shield host: same AppSnap helper binary, its own
+    // long-lived process, lazily spawned on the first engage. Always wired —
+    // the server decides per call whether the armed flag + per-app opt-in
+    // name a masked activation, and a missing surface must fail closed there
+    // rather than degrade to an unmasked raise.
+    shield: new ComputerShield({
+      helperPath: resolveAppSnapHelperPath(),
+      onError: (error) => safeConsoleError("[desktop] computer shield failed", error),
+    }),
+    normalizeOverview: (result) => {
+      const image = result.content?.find((part) => part.type === "image" && part.data);
+      if (!image?.data) return result;
+      const native = nativeImage.createFromBuffer(Buffer.from(image.data, "base64"));
+      const size = native.getSize();
+      if (Math.max(size.width, size.height) <= MODEL_SCREEN_IMAGE_MAX_DIMENSION) return result;
+      const ratio = MODEL_SCREEN_IMAGE_MAX_DIMENSION / Math.max(size.width, size.height);
+      const scaled = native.resize({
+        width: Math.round(size.width * ratio),
+        height: Math.round(size.height * ratio),
+        quality: "best",
+      });
+      image.data = scaled.toPNG().toString("base64");
+      return result;
+    },
+  });
+  await attachCuaHost(host);
+  // The physical Escape kill switch lives in a dedicated helper process: its
+  // listen-only event tap can report a hardware Escape even while Electron's
+  // main process is busy. Readiness is exposed through Computer status and
+  // gates input until Input Monitoring and the listener are both healthy.
+  if (!escapeKillSwitchMonitor) {
+    escapeKillSwitchMonitor = new EscapeKillSwitchMonitor({
+      helperPath: resolveAppSnapHelperPath(),
+      onPhysicalInput: (event) => {
+        cuaDriverHost?.physicalInput(event);
+      },
+      onStateChange: (state) => cuaDriverHost?.inputMonitorStateChanged(state),
+      onEscape: stopComputerInputFromEscape,
+      onError: (message) => safeConsoleError(`[desktop] Escape monitor: ${message}`),
+    });
+  }
+}
+
 function backendEnv(): NodeJS.ProcessEnv {
   const servedStaticRoot = resolveServedStaticRoot();
   const migrationSourceDigest = embeddedDesktopMigrationRuntimeSourceDigest();
@@ -3615,6 +3891,8 @@ function backendEnv(): NodeJS.ProcessEnv {
     ...(migrationDivergenceConsent
       ? { [MIGRATION_DIVERGENCE_CONSENT_ENV]: migrationDivergenceConsent }
       : {}),
+    ...(cuaHostEndpoint ? { [CUA_HOST_SOCKET_ENV]: cuaHostEndpoint } : {}),
+    [SYNARA_DESKTOP_BUNDLE_ID_ENV]: desktopIdentity.bundleId,
     SYNARA_MODE: "desktop",
     SYNARA_NO_BROWSER: "1",
     SYNARA_PORT: String(backendPort),
@@ -4114,6 +4392,7 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
   const outputTailDetector = new BackendOutputTailDetector();
   backendListeningDetector = listeningDetector;
   backendProcess = child;
+  cuaDriverHost?.resume();
   let backendSessionClosed = false;
   const closeBackendSession = (details: string) => {
     if (backendSessionClosed) return;
@@ -4206,6 +4485,7 @@ function takeBackendProcessForShutdown(): ChildProcess.ChildProcess | null {
 }
 
 async function stopBackendAndWaitForExit(): Promise<void> {
+  await cuaDriverHost?.suspend();
   const child = takeBackendProcessForShutdown();
   if (!child) return;
   const backendChild = child;
@@ -4244,6 +4524,15 @@ async function stopBackendAndWaitForExit(): Promise<void> {
 }
 
 async function disposeBrowserHostPipeServerForShutdown(reason: string): Promise<void> {
+  disposeComputerDesktopLifecycle?.();
+  disposeComputerDesktopLifecycle = undefined;
+  escapeKillSwitchMonitor?.dispose();
+  escapeKillSwitchMonitor = undefined;
+  linuxEscapeKillSwitchMonitor?.dispose();
+  linuxEscapeKillSwitchMonitor = undefined;
+  await cuaDriverHost?.dispose();
+  cuaDriverHost = undefined;
+  cuaHostEndpoint = undefined;
   const pipeServer = browserHostPipeServer;
   browserHostPipeServer = null;
   if (!pipeServer) return;
@@ -4476,10 +4765,9 @@ function registerIpcHandlers(): void {
   const enqueueDesktopAppIconApply = createExclusiveApplyQueue(async (icon: DesktopAppIcon) => {
     const shouldPersist = shouldUpdateDesktopAppIcon(readDesktopAppIcon(), icon);
     if (shouldPersist) persistDesktopAppIcon(icon);
-    // Renderer hydration mirrors this native preference. Avoid reapplying the
-    // icon selected during boot on macOS. Windows still reapplies so a click
-    // on the already-selected icon can retry a failed Explorer refresh.
-    if (!shouldPersist && process.platform !== "win32") return;
+    // Renderer hydration mirrors this native preference. Explicit clicks on
+    // macOS/Windows can retry a failed shell update even if the choice is saved.
+    if (!shouldPersist && process.platform !== "win32" && process.platform !== "darwin") return;
     await applyDesktopAppIcon(icon, mainWindow, { flushShellIconCache: true });
   });
   ipcMain.handle(IPC.setAppIcon, async (_event, rawIcon: unknown) => {
@@ -4685,6 +4973,20 @@ function registerIpcHandlers(): void {
     requestGracefulAppQuit("custom-title-bar-relaunch");
   });
 
+  ipcMain.removeHandler(IPC.computerSetCursorStyle);
+  ipcMain.handle(IPC.computerSetCursorStyle, async (_event, rawStyle: unknown) => {
+    // The renderer's mirrored value is the authority for this preference: the
+    // normalized style is persisted first, so even a failed live push leaves
+    // the next generation correct. Stock removes the stored override.
+    const style = normalizeAgentCursorStylePreference(rawStyle);
+    writeAgentCursorPreference(AGENT_CURSOR_PREFERENCE_PATH, style);
+    if (cuaDriverHost) {
+      await cuaDriverHost.setCursorStyle(style).catch((error: unknown) => {
+        safeConsoleError("[desktop] live cursor style push failed", error);
+      });
+    }
+  });
+
   ipcMain.removeHandler(IPC.updateGetState);
   ipcMain.handle(IPC.updateGetState, async () => updateState);
 
@@ -4749,7 +5051,20 @@ function registerIpcHandlers(): void {
       }),
   );
   if (appSnapManager) {
-    registerAppSnapIpcHandlers(ipcMain, appSnapManager);
+    registerAppSnapIpcHandlers(ipcMain, appSnapManager, {
+      openPermissionSettingsPane: (pane) => {
+        const paneUrl = APP_SNAP_SETTINGS_PANE_URLS[pane];
+        if (!paneUrl) return Promise.resolve(false);
+        return shell
+          .openExternal(paneUrl)
+          .then(() => true)
+          .catch(() => false);
+      },
+      restartApp: () => {
+        app.relaunch();
+        requestGracefulAppQuit("appsnap-permission-relaunch");
+      },
+    });
   }
   registerDesktopVoiceTranscriptionHandler();
   startBrowserPerformanceLogging();
@@ -5066,14 +5381,19 @@ function attachRendererCrashRecovery(window: BrowserWindow): void {
   };
 
   window.webContents.on("render-process-gone", (_event, details) => {
-    runningChatsQuitGuard.cancelPending();
+    // A renderer that dies while hosting the quit-confirmation ask can never
+    // answer it — declining would abandon a requested quit and (worse) show
+    // the recovery prompt below, leaving a dead-UI app alive forever. Allow
+    // the pending ask and count it as quitting for the crash policy.
+    const quitAskPending = runningChatsQuitGuard.hasPendingAsk();
+    runningChatsQuitGuard.allowPending();
     const description = `reason=${details.reason} exitCode=${details.exitCode}`;
     writeDesktopLogHeader(`renderer process gone ${description}`);
     safeConsoleError(`[desktop] renderer process gone (${description})`);
 
     const response = rendererCrashPolicy.respondToCrash({
       reason: details.reason,
-      quitting: isQuitting,
+      quitting: isQuitting || quitAskPending,
       nowMs: Date.now(),
     });
 
@@ -5295,7 +5615,20 @@ async function bootstrap(): Promise<void> {
     browserOsKeyStore,
   );
   try {
-    await browserSessionRestore.initialize();
+    let restoreTimer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        browserSessionRestore.initialize().finally(() => clearTimeout(restoreTimer)),
+        new Promise<never>((_, reject) => {
+          restoreTimer = setTimeout(
+            () => reject(new Error("Browser session restoration timed out.")),
+            BROWSER_SESSION_RESTORE_TIMEOUT_MS,
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(restoreTimer);
+    }
   } catch {
     console.warn(
       "[Synara browser] Secure session restoration is unavailable; no saved session cookies were restored.",
@@ -5309,6 +5642,7 @@ async function bootstrap(): Promise<void> {
   } catch (error) {
     console.warn("[Synara browser] Failed to start browser host pipe", error);
   }
+  await startCuaHost();
   startBackend();
   writeDesktopLogHeader("bootstrap backend start requested");
 

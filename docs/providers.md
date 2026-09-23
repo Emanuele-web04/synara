@@ -77,10 +77,32 @@ Providers expose different selection models:
 Synara normalizes these choices into the composer where possible without pretending that every
 provider has identical capabilities.
 
-Favorite models can be surfaced above larger catalogs, and supported provider executables can be
-pointed at custom binary locations.
+Claude Code may discover a model under an alias while reporting its concrete model ID separately.
+For a release newer than Synara's catalog, the picker shows the concrete ID. Agent Gateway accepts
+that ID when it resolves to one discovered non-default model; ambiguous IDs require an exact
+advertised alias.
+
+For Codex, successful model discovery determines the built-in choices, including when the returned
+catalog is empty. Models absent from that catalog are not added back from Synara's static list.
+Custom models remain available. Until discovery succeeds, Synara uses a static fallback; a failed
+refresh keeps the last successful catalog. The shared discovery cache refreshes catalogs in the
+background after its ten-minute fresh window.
+
+The composer model picker has one tab per connected provider and a Starred tab. Starring a model
+saves it together with its current effort and speed, so one click (or `mod+1`…`mod+9` while the
+picker is open) restores the whole combination. A task that has started stays on its provider: only
+that provider's tab and starred entries are offered. Supported provider executables can be pointed
+at custom binary locations.
+
+Starred models absent from the current catalog remain saved and can be removed, but cannot be
+selected. They become selectable again when discovery or custom model settings add them to the
+catalog.
 
 ## Provider sessions
+
+Use [Import projects](project-import.md) to bring local Codex and Claude Code projects and
+conversations into Synara. The flow links existing folders, merges matching project destinations,
+and creates independent conversation copies without replacing your existing Synara work.
 
 Each task owns a provider session.
 
@@ -96,6 +118,41 @@ The session may preserve provider-specific behavior such as:
 - Provider-native subagents or workflows
 
 Capabilities vary. Do not assume a control available for one provider exists for all of them.
+
+### Claude Auto / 200k / 1M selection
+
+The auto-compact selector chooses an override, not a measured context limit. Auto leaves the
+window to Claude Code's settings and runtime. Explicit 200k or 1M targets are applied when the
+Claude process starts. Changing this override resumes the same native conversation in a new
+process once it is idle. Model-only changes, non-max effort, thinking and fast mode retain their
+existing live controls; max effort also requires a restart.
+
+On Claude CLI 2.1.259 and 2.1.274, the SDK's live `applyFlagSettings` accepts an auto-compact
+window without updating the window used by the runtime. Synara therefore never announces that
+live setting as applied. A replacement is refused while a turn, background task, workflow,
+subagent, approval, question or send preparation is active. The existing session and event
+ownership remain intact. Finish that work and retry; the desired selection remains saved.
+Persistent TODO entries survive resume and do not by themselves block replacement.
+
+The meter uses fresh runtime reporting for its denominator and percentage. The applied target
+comes from the configuration event, including an explicit Auto state; when that history is
+unavailable, Synara does not infer a target from a threshold. Output reserves, environment
+settings and model caps can make the effective threshold differ from the target (for example,
+967k for 1M or 167k for 200k). Old usage is invalidated after a new configuration or compaction.
+The composer model button shows the observed budget after the model and effort, for example
+`Fable 5.1 High (1M)`. Auto can show `(1M)` when matching-model runtime reporting supports it;
+the tooltip still identifies Auto as the target. A pending change shows `(200k · 1M next)`.
+A new thread or missing/mismatched runtime provenance shows the explicit choice as `(1M next)`;
+an applied target with an unrecognized runtime budget is labeled `(1M target)`, not confirmed.
+No budget is inferred from the model catalog. Compact layouts retain the suffix in the button's
+title and accessible text alongside the hidden effort. Other providers are unchanged.
+See [Claude context configuration](https://code.claude.com/docs/en/model-config#context-window-and-auto-compaction).
+
+Restart/resume preserves the conversation and Synara's cache observations and counters, but
+cannot guarantee a cache hit. The existing large cold-context preflight still applies after
+resume. This behavior does not change SDK `snapshot` configuration: enabling prompt recording
+with appended system instructions can change instruction freshness on resume and needs separate
+validation. See the [implementation plan and evidence](claude-context-switch-plan.md).
 
 ### Claude prompt caching and resumed sessions
 
@@ -145,6 +202,30 @@ keeps the message on hold. If delivery is uncertain, Synara does not automatical
 See [cache recovery behavior and verification](claude-cache-recovery.md) for the implementation
 boundaries and remaining live validation.
 
+### OpenCode
+
+Synara uses OpenCode's legacy endpoint family, including `/session` and MCP
+for the Synara tools attached to managed sessions. Startup checks `GET /provider`
+and rejects a server that reports that route as unavailable; this does not identify
+the CLI's version. The SDK is pinned exactly (`1.18.31`) — bump it deliberately,
+never by range.
+
+The `opencode` executable resolves from `PATH` first, then the standard install
+locations (`~/.opencode/bin`, `~/.bun/bin`, npm/pnpm/yarn global bins, Homebrew,
+Volta, asdf, mise, proto, Deno, nvm/fnm). Set an explicit binary path in
+provider settings only when the install lives somewhere else entirely.
+
+### Claude Artifacts, `/design` and `/slides`
+
+Claude Code keeps [Artifacts](https://code.claude.com/docs/en/artifacts) off by default for Agent
+SDK sessions, so `/design` and `/slides` cannot publish until the host opts in. Turn on **Settings →
+Providers → Claude → Artifacts, /design and /slides** and start a new session; Synara then launches
+Claude with `CLAUDE_CODE_ARTIFACT=1`. Claude's own requirements still apply: a claude.ai login on a
+Pro, Max, Team, or Enterprise plan, Claude Code 2.1.234 or later, and an organization policy that
+allows Artifacts. While Artifacts are off or unavailable, the composer marks both commands with a
+warning that explains what is missing. Published pages are hosted on claude.ai; Claude returns the
+link in its reply.
+
 ## Switching providers
 
 A [provider handoff](https://www.trysynara.com/docs/workflows/handoffs) allows another provider to
@@ -171,3 +252,93 @@ runtime works independently but remains unavailable in Synara.
 Use the dedicated [provider guides](https://www.trysynara.com/docs/providers) for exact
 installation, authentication, verification, capabilities, update paths, and provider-specific
 failure checks.
+
+## Cancel a blocking question
+
+Blocking questions show **Cancel** whether or not they offer choices. Cancel applies to
+the whole pending request, including any later questions in the same set. Once an
+answer or cancellation is being submitted, the form disables Cancel until the
+request settles. For OpenCode, cancellation uses its `question.reject` operation;
+submitting completed answers uses `question.reply`. Both requests are scoped to
+the task's OpenCode working directory.
+
+## Codex asynchronous questions
+
+On Codex versions and models that expose `request_user_input_async`, Synara shows
+a question-mark capsule labeled with the number of questions. Opening it reuses
+the same question form as blocking prompts: numbered choices, previous/next
+navigation, and a separate text answer. Closing the capsule preserves the current
+answer draft. A suggested answer is never submitted automatically. The composer
+remains available and the agent can continue working while the question is unanswered.
+
+The shared form keeps blocking prompts' existing auto-advance behavior. Async
+questions require an explicit submission and scope keyboard shortcuts to the
+opened form, so separate questions and the main composer cannot consume each
+other's input.
+
+Questions and submitted answers are stored with the assistant message. Refreshing
+or restarting Synara restores that state. Concurrent submissions are admitted once
+by the server; a second client refreshes the accepted answer. Normal turn-delivery
+errors remain visible on the conversation, as for any other user message.
+
+Rolling back a turn or reverting a checkpoint that removes an answer reopens its
+question. Formatted question replies do not offer plain-text edit-and-resend, so
+the capsule and the submitted message cannot show different answers. Answer updates
+preserve the original assistant message's completion time and turn summary.
+
+### App-server protocol
+
+Verified with codex-cli **0.154.0**, its generated experimental TypeScript schemas,
+and an isolated native app-server session:
+
+- `request_user_input_async` is a model-facing tool, not a client RPC. It emits
+  `item/started` and `item/completed` for an `agentMessage` with
+  `delivery: "async"` and `questions: [{ title, options }]`, and immediately
+  returns to the agent. `options` may be null for a free-text-only question.
+- The answer is an ordinary user message containing the questions and answers.
+  Synara uses its existing turn dispatch: `turn/steer` with `expectedTurnId` while
+  a turn is active, and `turn/start` once the turn has finished. The existing
+  dispatch path also handles the turn finishing while the answer is being sent.
+- This differs from `item/tool/requestUserInput`, which carries a JSON-RPC request
+  ID and uses a response with an answer map. Its `isBlocking` field and deprecated
+  `autoResolutionMs` do not define the native asynchronous tool's answer path.
+  The inline asynchronous cards never enter Synara's pending approval/input queues.
+- Synara does not force a model or enable experimental model features. Older
+  app-server versions retain their existing text and blocking-question behavior;
+  malformed structured questions fall back to the provider's message text.
+
+Scope: native Codex questions in a top-level conversation. Other providers and
+subagent question routing are outside this implementation.
+
+Sources: [OpenAI app-server documentation](https://developers.openai.com/codex/app-server),
+[upstream asynchronous tool handler](https://github.com/openai/codex/blob/b0d95427c2443e90998f48065902309187564085/codex-rs/core/src/tools/handlers/request_user_input_async.rs).
+
+## Passive results from delegated tasks
+
+An authenticated agent can pass `notifyCreatorOnComplete: true` to
+`synara_create_thread`, or on individual entries in `synara_create_threads`.
+The default is off. The destination is always the authenticated creating task;
+there is no destination-ID parameter, and the new task remains standalone.
+
+Synara persists one result for the initial message/run when it completes, fails,
+or is interrupted. The creator sees an attributed activity with the child and
+run IDs, up to 2,000 characters of final response (with truncation indicated),
+and a `synara_read_thread` reference for the full result. Delivery does not start,
+queue, steer, or interrupt a creator turn, and does not update human-message
+recency. The result is supplied as untrusted reference context on a subsequent
+human-started turn; rejected sends retain it, retries keep their assignment, and
+uncertain sends remain held by the existing delivery-reconciliation mechanism.
+Context is bounded to 16,000 characters per send, so larger fan-outs drain over
+subsequent human turns. Native control commands, reviews, and steering do not
+consume completion context.
+
+This option covers only the initial delegated run. Approval/question waits and
+provider idle alone are not completion. Goals are unsupported: if a goal was
+set during the initial run, Synara reports that limitation rather than claiming
+the goal finished at an intermediate turn. Later conversational turns do not
+produce further notifications. External MCP integrations cannot opt in because
+they have no authenticated creating task.
+
+Delivery survives restart and duplicate events. An archived or deleted creator
+is not reopened; the result remains in the child and delivery is recorded as
+unavailable. Delivery is checked approximately once per second.

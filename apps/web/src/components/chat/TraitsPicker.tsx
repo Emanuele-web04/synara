@@ -38,12 +38,12 @@ import { useComposerTraitCommit } from "./useComposerTraitCommit";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ShortcutKbd } from "../ui/shortcut-kbd";
 
-function defaultAgentForProvider(provider: ProviderKind): string | null {
+export function defaultAgentForProvider(provider: ProviderKind): string | null {
   if (provider === "opencode") return "build";
   return null;
 }
 
-function getAgentOptions(
+export function getAgentOptions(
   provider: ProviderKind,
   runtimeAgents: ReadonlyArray<ProviderAgentDescriptor> | null | undefined,
 ): ReadonlyArray<ProviderAgentDescriptor> {
@@ -51,7 +51,7 @@ function getAgentOptions(
   return runtimeAgents ?? [];
 }
 
-function getSelectedAgentValue(
+export function getSelectedAgentValue(
   provider: ProviderKind,
   modelOptions: ProviderOptions | null | undefined,
 ): string | null {
@@ -422,7 +422,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
             }
             note={
               ultrathinkPromptControlled ? (
-                <div className="px-2 pb-1.5 text-muted-foreground/80 text-xs">
+                <div className="px-2 pb-1.5 text-muted-foreground/80 text-ui leading-snug">
                   Remove Ultrathink from the prompt to change effort.
                 </div>
               ) : undefined
@@ -656,7 +656,7 @@ export const TraitsPicker = memo(function TraitsPicker({
                 <span>Change effort, context, and speed</span>
                 <ShortcutKbd
                   shortcutLabel={shortcutLabel}
-                  className="h-4 min-w-4 px-1 text-[length:var(--app-font-size-ui-2xs,9px)] text-muted-foreground"
+                  className="h-4 min-w-4 px-1 text-ui-2xs text-muted-foreground"
                 />
               </span>
             </TooltipPopup>

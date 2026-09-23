@@ -3,6 +3,7 @@
 // Layer: Web unit tests
 // Depends on: providerModelOptions shared formatting helpers.
 
+import { MODEL_OPTIONS_BY_PROVIDER } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import { getAppModelOptions } from "./appSettings";
 
@@ -288,7 +289,7 @@ describe("mergeDynamicModelOptions", () => {
     ]);
   });
 
-  it("keeps discovered Claude models the catalog does not know yet at the top", () => {
+  it("places discovered Claude releases the catalog does not know yet at the top of their family", () => {
     expect(
       mergeDynamicModelOptions({
         provider: "claudeAgent",
@@ -299,9 +300,60 @@ describe("mergeDynamicModelOptions", () => {
         dynamicModels: [
           { slug: "claude-opus-5", name: "Claude Opus 5" },
           { slug: "claude-opus-6", name: "Claude Opus 6" },
+          { slug: "claude-fable-6[1m]", name: "Fable" },
+          { slug: "enterprise-model", name: "Enterprise Model" },
         ],
-      }).map((option) => option.slug),
-    ).toEqual(["claude-opus-6", "claude-fable-5", "claude-opus-5"]);
+      }).map((option) => ({ slug: option.slug, name: option.name })),
+    ).toEqual([
+      { slug: "enterprise-model", name: "Enterprise Model" },
+      { slug: "claude-fable-6", name: "Claude Fable 6" },
+      { slug: "claude-fable-5", name: "Claude Fable 5" },
+      { slug: "claude-opus-6", name: "Claude Opus 6" },
+      { slug: "claude-opus-5", name: "Claude Opus 5" },
+    ]);
+  });
+
+  // Claude Code 2.1.280's supportedModels() payload, captured from the live CLI.
+  const LIVE_CLAUDE_DISCOVERY = [
+    { slug: "default", resolvedModel: "claude-opus-5-5[1m]", name: "Default (recommended)" },
+    { slug: "opus[1m]", resolvedModel: "claude-opus-5-5[1m]", name: "Opus (1M context)" },
+    { slug: "claude-fable-5-1[1m]", resolvedModel: "claude-fable-5-1", name: "Fable" },
+    { slug: "sonnet", resolvedModel: "claude-sonnet-5", name: "Sonnet" },
+    { slug: "haiku", resolvedModel: "claude-haiku-4-5-20251001", name: "Haiku" },
+  ];
+
+  it("keeps the curated Claude catalog order and names for the live CLI catalog", () => {
+    expect(
+      mergeDynamicModelOptions({
+        provider: "claudeAgent",
+        staticOptions: getAppModelOptions("claudeAgent", []),
+        dynamicModels: LIVE_CLAUDE_DISCOVERY,
+      }).map((option) => ({ slug: option.slug, name: option.name })),
+    ).toEqual(
+      MODEL_OPTIONS_BY_PROVIDER.claudeAgent.map((model) => ({
+        slug: model.slug,
+        name: model.name,
+      })),
+    );
+  });
+
+  it("lists a newer release behind a Claude alias under its own id below Fable", () => {
+    const options = mergeDynamicModelOptions({
+      provider: "claudeAgent",
+      staticOptions: getAppModelOptions("claudeAgent", []),
+      dynamicModels: LIVE_CLAUDE_DISCOVERY.map((model) =>
+        model.slug === "opus[1m]" ? { ...model, resolvedModel: "claude-opus-6[1m]" } : model,
+      ),
+    }).map((option) => ({ slug: option.slug, name: option.name }));
+
+    expect(options.slice(0, 5)).toEqual([
+      { slug: "claude-fable-5-1", name: "Claude Fable 5.1" },
+      { slug: "claude-fable-5", name: "Claude Fable 5" },
+      { slug: "claude-opus-6", name: "Claude Opus 6" },
+      { slug: "claude-opus-5-5", name: "Claude Opus 5.5" },
+      { slug: "claude-opus-5", name: "Claude Opus 5" },
+    ]);
+    expect(options).toHaveLength(MODEL_OPTIONS_BY_PROVIDER.claudeAgent.length + 1);
   });
 
   it("normalizes Devin family labels to canonical brand casing", () => {

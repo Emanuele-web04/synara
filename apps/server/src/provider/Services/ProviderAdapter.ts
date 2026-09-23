@@ -34,6 +34,7 @@ import type {
   ProviderSteerTurnInput,
   ProviderSession,
   ProviderSessionStartInput,
+  ProviderStartOptions,
   ServerVoicePrewarmInput,
   ServerVoicePrewarmResult,
   ServerVoiceTranscriptionInput,
@@ -88,6 +89,9 @@ export interface ProviderAdapterCapabilities {
 export interface ProviderThreadTurnSnapshot {
   readonly id: TurnId;
   readonly items: ReadonlyArray<unknown>;
+  readonly startedAt?: number | string;
+  readonly completedAt?: number | string;
+  readonly status?: string;
 }
 
 export interface ProviderThreadSnapshot {
@@ -199,6 +203,16 @@ export interface ProviderAdapterShape<TError> {
    */
   readonly stopSession: (threadId: ThreadId) => Effect.Effect<void, TError>;
 
+  /** Validate and retire before generation rotation; the returned start retains per-attempt preflight. */
+  readonly prepareSessionReplacement?: (input: ProviderSessionStartInput) => Effect.Effect<
+    | {
+        readonly previousSession: ProviderSession;
+        readonly startSession: ProviderAdapterShape<TError>["startSession"];
+      }
+    | undefined,
+    TError
+  >;
+
   /**
    * List currently active provider sessions for this adapter.
    */
@@ -220,6 +234,7 @@ export interface ProviderAdapterShape<TError> {
   readonly readExternalThread?: (input: {
     readonly externalThreadId: string;
     readonly cwd?: string;
+    readonly providerOptions?: ProviderStartOptions;
   }) => Effect.Effect<ProviderThreadSnapshot, TError>;
 
   /**

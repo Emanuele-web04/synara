@@ -10,6 +10,7 @@ import path from "node:path";
 import type {
   ProviderApprovalDecision,
   ProviderForkThreadInput,
+  ProviderForkThreadResult,
   ProviderRuntimeEvent,
   ProviderSendTurnInput,
   ProviderSession,
@@ -22,6 +23,7 @@ import {
   EventId,
   type ProviderKind,
   ProviderSessionStartInput,
+  RuntimeRequestId,
   ThreadId,
   TurnId,
 } from "@synara/contracts";
@@ -46,6 +48,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import {
   ProviderAdapterProcessError,
+  ProviderAdapterValidationError,
   ProviderAdapterRequestError,
   ProviderAdapterSessionNotFoundError,
   ProviderSessionDirectoryPersistenceError,
@@ -283,10 +286,7 @@ function makeFakeCodexAdapter(
   const forkThread = vi.fn(
     (
       input: ProviderForkThreadInput,
-    ): Effect.Effect<
-      { readonly threadId: ThreadId; readonly resumeCursor: { readonly opaque: string } },
-      ProviderAdapterError
-    > =>
+    ): Effect.Effect<ProviderForkThreadResult, ProviderAdapterError> =>
       Effect.succeed({
         threadId: input.threadId,
         resumeCursor: { opaque: `fork-${String(input.threadId)}` },
@@ -300,6 +300,9 @@ function makeFakeCodexAdapter(
       }),
   );
 
+  const prepareSessionReplacement = vi.fn<
+    NonNullable<ProviderAdapterShape<ProviderAdapterError>["prepareSessionReplacement"]>
+  >(() => Effect.succeed(undefined));
   const adapter: ProviderAdapterShape<ProviderAdapterError> = {
     provider,
     capabilities: {
@@ -310,6 +313,7 @@ function makeFakeCodexAdapter(
         : {}),
     },
     startSession,
+    ...(provider === "claudeAgent" ? { prepareSessionReplacement } : {}),
     ...(options?.didResumeSession ? { didResumeSession: options.didResumeSession } : {}),
     sendTurn,
     steerTurn,
@@ -353,6 +357,7 @@ function makeFakeCodexAdapter(
 
   return {
     adapter,
+    prepareSessionReplacement,
     emit,
     waitForRuntimeSubscribers,
     updateSession,
@@ -482,6 +487,131 @@ function makeProviderServiceLayer(
 }
 
 const routing = makeProviderServiceLayer();
+const replacementEvents = new Map<string, ProviderRuntimeEvent>();
+const replacementRouting = makeProviderServiceLayer({
+  persistRuntimeEvent: (event) =>
+    Effect.sync(() => {
+      replacementEvents.set(String(event.eventId), event);
+      return { sequence: replacementEvents.size, event };
+    }),
+});
+replacementRouting.layer("Claude replacement preparation", (it) => {
+  for (const failure of ["background", "unsupported-auto", "missing-binary"] as const) {
+    it.effect(
+      `preserves events and generation when preparation rejects (${failure}), then resumes idle`,
+      () =>
+        Effect.gen(function* () {
+          const provider = yield* ProviderService;
+          const directory = yield* ProviderSessionDirectory;
+          const threadId = asThreadId(`claude-replacement-${failure}`);
+          const startInput = {
+            threadId,
+            provider: "claudeAgent" as const,
+            runtimeMode: "full-access" as const,
+            providerOptions: { claudeAgent: { binaryPath: "/persisted/bin/claude" } },
+          };
+          yield* replacementRouting.claude.waitForRuntimeSubscribers();
+          yield* provider.startSession(threadId, startInput);
+          const before = Option.getOrThrow(yield* directory.getBinding(threadId));
+          const starts = replacementRouting.claude.startSession.mock.calls.length;
+          const stops = replacementRouting.claude.stopSession.mock.calls.length;
+          replacementRouting.claude.prepareSessionReplacement.mockImplementationOnce(
+            (preparedInput) =>
+              Effect.gen(function* () {
+                assert.equal(
+                  preparedInput.providerOptions?.claudeAgent?.binaryPath,
+                  "/persisted/bin/claude",
+                );
+                assert.equal(
+                  preparedInput.runtimeMode,
+                  failure === "background" ? "full-access" : "auto",
+                );
+                // Background output arrives during asynchronous preparation with no activeTurnId.
+                replacementRouting.claude.emit({
+                  type: "content.delta",
+                  eventId: asEventId(`${failure}-background-output`),
+                  provider: "claudeAgent",
+                  threadId,
+                  lifecycleGeneration: before.lifecycleGeneration,
+                  createdAt: "2026-09-17T20:00:00.000Z",
+                  payload: { streamKind: "assistant_text", delta: "still working" },
+                });
+                yield* waitUntil(() => replacementEvents.has(`${failure}-background-output`));
+                return yield* new ProviderAdapterValidationError({
+                  provider: "claudeAgent",
+                  operation: "session/reconfigure",
+                  issue:
+                    failure === "background"
+                      ? "Background work is active"
+                      : failure === "unsupported-auto"
+                        ? "Claude CLI 2.1.110 does not support Auto mode"
+                        : "Could not verify Auto mode support: ENOENT",
+                });
+              }),
+          );
+          const rejected = yield* provider
+            .startSession(threadId, {
+              threadId,
+              provider: "claudeAgent",
+              runtimeMode: failure === "background" ? "full-access" : "auto",
+            })
+            .pipe(Effect.result);
+          assert.equal(rejected._tag, "Failure");
+          assert.equal(replacementRouting.claude.startSession.mock.calls.length, starts);
+          assert.equal(replacementRouting.claude.stopSession.mock.calls.length, stops);
+          assert.isTrue(yield* replacementRouting.claude.hasSession(threadId));
+          assert.equal(
+            Option.getOrThrow(yield* directory.getBinding(threadId)).lifecycleGeneration,
+            before.lifecycleGeneration,
+          );
+          const latestCursor = {
+            resume: "same-native-session",
+            trackedTasks: [{ id: "todo", status: "pending" }],
+          };
+          replacementRouting.claude.prepareSessionReplacement.mockImplementationOnce(() =>
+            Effect.gen(function* () {
+              const session = (yield* replacementRouting.claude.listSessions()).find(
+                (item) => item.threadId === threadId,
+              )!;
+              yield* replacementRouting.claude.stopSession(threadId);
+              return {
+                previousSession: { ...session, resumeCursor: latestCursor },
+                startSession: replacementRouting.claude.startSession,
+              };
+            }),
+          );
+          yield* provider.startSession(threadId, startInput);
+          assert.deepEqual(
+            replacementRouting.claude.startSession.mock.calls.at(-1)?.[0].resumeCursor,
+            latestCursor,
+          );
+          assert.notEqual(
+            Option.getOrThrow(yield* directory.getBinding(threadId)).lifecycleGeneration,
+            before.lifecycleGeneration,
+          );
+          replacementRouting.claude.prepareSessionReplacement.mockImplementationOnce(() =>
+            Effect.gen(function* () {
+              const session = (yield* replacementRouting.claude.listSessions()).find(
+                (item) => item.threadId === threadId,
+              )!;
+              yield* replacementRouting.claude.stopSession(threadId);
+              return {
+                previousSession: { ...session, resumeCursor: latestCursor },
+                startSession: replacementRouting.claude.startSession,
+              };
+            }),
+          );
+          const explicitCursor = { resume: "intentional-other-boundary" };
+          yield* provider.startSession(threadId, { ...startInput, resumeCursor: explicitCursor });
+          assert.deepEqual(
+            replacementRouting.claude.startSession.mock.calls.at(-1)?.[0].resumeCursor,
+            explicitCursor,
+          );
+        }),
+    );
+  }
+});
+
 const rotationRetryPersistAttempts = new Map<string, number>();
 const ROTATION_RETRY_FAILURE_EVENT_ID = "terminal-rotation-settlement-retry";
 const rotationRetry = makeProviderServiceLayer({
@@ -1198,6 +1328,147 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("imports a native copy once and preserves it across runtime stop and retries", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("external-import-copy");
+      const forkCallCount = routing.codex.forkThread.mock.calls.length;
+      const starts = routing.codex.startSession.mock.calls.length;
+      const input = {
+        threadId,
+        provider: "codex" as const,
+        externalThreadId: "external-original",
+        sourceCwd: "/repo/original",
+        cwd: "/repo/original",
+        modelSelection: { provider: "codex" as const, model: "gpt-5.4" },
+        providerOptions: { codex: { homePath: "/custom/codex", binaryPath: "/custom/bin/codex" } },
+        runtimeMode: "full-access" as const,
+      };
+      routing.codex.forkThread.mockImplementationOnce(() =>
+        Effect.succeed({
+          threadId,
+          resumeCursor: { threadId: "independent-copy" },
+        }),
+      );
+      const first = yield* provider.importExternalThread!(input);
+      const firstBinding = Option.getOrThrow(yield* directory.getBinding(threadId));
+      assert.equal(typeof firstBinding.lifecycleGeneration, "string");
+      assert.deepEqual(routing.codex.forkThread.mock.calls.at(-1)?.[0], {
+        threadId,
+        sourceThreadId: asThreadId("external-original"),
+        sourceResumeCursor: { threadId: "external-original" },
+        sourceCwd: input.sourceCwd,
+        cwd: input.cwd,
+        modelSelection: input.modelSelection,
+        providerOptions: input.providerOptions,
+        runtimeMode: input.runtimeMode,
+        lifecycleGeneration: firstBinding.lifecycleGeneration,
+        requireCompletedSource: true,
+      });
+      yield* provider.stopRuntimeSession!({ threadId });
+      const second = yield* provider.importExternalThread!(input);
+      assert.deepEqual(second, first);
+      assert.equal(routing.codex.forkThread.mock.calls.length - forkCallCount, 1);
+      assert.equal(routing.codex.startSession.mock.calls.length, starts);
+      const stopped = Option.getOrThrow(yield* directory.getBinding(threadId));
+      assert.equal(stopped.status, "stopped");
+      assert.deepEqual(stopped.resumeCursor, { threadId: "independent-copy" });
+      assert.equal(asRuntimePayloadRecord(stopped.runtimePayload).cwd, input.cwd);
+      assert.deepEqual(
+        asRuntimePayloadRecord(stopped.runtimePayload).providerOptions,
+        input.providerOptions,
+      );
+      const mismatch = yield* Effect.result(
+        provider.importExternalThread!({ ...input, externalThreadId: "different-source" }),
+      );
+      assert.equal(mismatch._tag, "Failure");
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("fails native imports without transcript fallback and retires failed runtimes", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("external-import-failure");
+      const stops = routing.codex.stopSession.mock.calls.length;
+      routing.codex.forkThread.mockImplementationOnce(() =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: "codex",
+            method: "thread/fork",
+            detail: "native copy failed",
+          }),
+        ),
+      );
+      const result = yield* Effect.result(
+        provider.importExternalThread!({
+          threadId,
+          provider: "codex",
+          externalThreadId: "source",
+          sourceCwd: "/missing/project",
+          modelSelection: { provider: "codex", model: "gpt-5.4" },
+          runtimeMode: "full-access",
+        }),
+      );
+      assert.equal(result._tag, "Failure");
+      assert.equal(routing.codex.stopSession.mock.calls.length - stops, 2);
+      assert.equal(Option.isNone(yield* directory.getBinding(threadId)), true);
+    }),
+  );
+
+  it.effect("retires an interrupted native import before releasing its lifecycle lock", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("external-import-interrupted");
+      const started = yield* Deferred.make<void>();
+      const stops = routing.codex.stopSession.mock.calls.length;
+      routing.codex.forkThread.mockImplementationOnce(() =>
+        Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+      );
+      const fiber = yield* provider.importExternalThread!({
+        threadId,
+        provider: "codex",
+        externalThreadId: "source",
+        sourceCwd: "/repo/source",
+        modelSelection: { provider: "codex", model: "gpt-5.4" },
+        runtimeMode: "full-access",
+      }).pipe(Effect.forkChild);
+      yield* Deferred.await(started);
+      yield* Fiber.interrupt(fiber);
+      assert.equal(routing.codex.stopSession.mock.calls.length - stops, 2);
+      assert.equal(Option.isNone(yield* directory.getBinding(threadId)), true);
+    }),
+  );
+
+  it.effect("rejects native imports that accidentally return the original cursor", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("external-import-original-cursor");
+      routing.claude.forkThread.mockImplementationOnce(() =>
+        Effect.succeed({
+          threadId,
+          resumeCursor: { resume: "source" },
+        }),
+      );
+      const result = yield* Effect.result(
+        provider.importExternalThread!({
+          threadId,
+          provider: "claudeAgent",
+          externalThreadId: "source",
+          sourceCwd: "/repo/project",
+          modelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
+          runtimeMode: "full-access",
+        }),
+      );
+      assert.equal(result._tag, "Failure");
+      assert.equal(Option.isNone(yield* directory.getBinding(threadId)), true);
+    }),
+  );
+
   it.effect("fork source overrides explicit and persisted resume cursors", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
@@ -1480,6 +1751,145 @@ routing.layer("ProviderServiceLive routing", (it) => {
         assert.equal(asRuntimePayloadRecord(settledBinding?.runtimePayload).activeTurnId, null);
         assert.equal(settledBinding?.status, "stopped");
         assert.equal(staleSettlementPersistedEvents.has("stale-abort-other-turn"), false);
+      }),
+    );
+
+    it.effect("settles a stale interaction resolution naming the binding's active turn", () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId("thread-stale-interaction-resolution");
+        yield* staleSettlementRouting.codex.waitForRuntimeSubscribers();
+
+        yield* provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          cwd: "/tmp/project",
+          runtimeMode: "full-access",
+        });
+        yield* provider.sendTurn({ threadId, input: "hello", attachments: [] });
+        const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        const activeTurnId = asRuntimePayloadRecord(binding?.runtimePayload).activeTurnId;
+        assert.equal(typeof activeTurnId, "string");
+
+        // A dying runtime cancels its outstanding user-input request during
+        // teardown, after the generation has already rotated. That resolution is
+        // the only signal that can settle the durable pending row, so it must
+        // pass the stale-generation gate like a terminal event does. Ordinary
+        // stale stream events stay dropped.
+        staleSettlementRouting.codex.emit({
+          type: "user-input.resolved",
+          eventId: asEventId("stale-user-input-resolved-matching-turn"),
+          provider: "codex",
+          threadId,
+          turnId: TurnId.makeUnsafe(String(activeTurnId)),
+          requestId: RuntimeRequestId.makeUnsafe("request-cancelled-by-teardown"),
+          createdAt: "2026-07-14T14:00:00.000Z",
+          lifecycleGeneration: "old-generation",
+          payload: { answers: { cancelled: true } },
+        });
+        staleSettlementRouting.codex.emit({
+          type: "content.delta",
+          eventId: asEventId("stale-delta-matching-turn"),
+          provider: "codex",
+          threadId,
+          turnId: TurnId.makeUnsafe(String(activeTurnId)),
+          createdAt: "2026-07-14T14:00:01.000Z",
+          lifecycleGeneration: "old-generation",
+          payload: { streamKind: "assistant_text", delta: "invisible" },
+        });
+        staleSettlementRouting.codex.emit({
+          type: "user-input.resolved",
+          eventId: asEventId("stale-user-input-resolved-other-turn"),
+          provider: "codex",
+          threadId,
+          turnId: TurnId.makeUnsafe("turn-some-other"),
+          requestId: RuntimeRequestId.makeUnsafe("request-from-another-turn"),
+          createdAt: "2026-07-14T14:00:02.000Z",
+          lifecycleGeneration: "old-generation",
+          payload: { answers: { cancelled: true } },
+        });
+
+        yield* waitUntil(
+          () => staleSettlementPersistedEvents.has("stale-user-input-resolved-matching-turn"),
+          500,
+          10,
+          "matching stale user-input.resolved to be persisted",
+        );
+        assert.equal(
+          staleSettlementPersistedEvents.get("stale-user-input-resolved-matching-turn")?.type,
+          "user-input.resolved",
+        );
+        assert.equal(staleSettlementPersistedEvents.has("stale-delta-matching-turn"), false);
+        assert.equal(
+          staleSettlementPersistedEvents.has("stale-user-input-resolved-other-turn"),
+          false,
+        );
+
+        // Accepting a resolution must not settle the turn: it is not a terminal
+        // event, so the binding keeps running the turn it still owns.
+        const bindingAfter = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        assert.equal(
+          asRuntimePayloadRecord(bindingAfter?.runtimePayload).activeTurnId,
+          activeTurnId,
+        );
+        assert.equal(bindingAfter?.status, "running");
+      }),
+    );
+
+    it.effect("settles a stale resolution without reviving a stopped thread's binding", () =>
+      Effect.gen(function* () {
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId("thread-stale-resolution-stopped-binding");
+        yield* staleSettlementRouting.codex.waitForRuntimeSubscribers();
+
+        // A stopped thread: the user stopped the turn, the generation was
+        // retired (no current generation), and `session.exited` already parked
+        // the binding. The dying runtime's cancellation still has to settle the
+        // durable pending row, but it must never flip the binding back to a
+        // live-looking "running" with a fresh liveness stamp — the UI would
+        // show "Working" for a process that no longer exists.
+        yield* directory.upsert({
+          threadId,
+          provider: "codex",
+          status: "stopped",
+          lifecycleGeneration: "old-generation",
+          runtimePayload: {
+            activeTurnId: null,
+            lastRuntimeEvent: "session.exited",
+            lastRuntimeEventAt: "2026-07-14T13:59:00.000Z",
+          },
+        });
+
+        staleSettlementRouting.codex.emit({
+          type: "user-input.resolved",
+          eventId: asEventId("stale-resolution-stopped-binding"),
+          provider: "codex",
+          threadId,
+          turnId: TurnId.makeUnsafe("turn-stopped-by-user"),
+          requestId: RuntimeRequestId.makeUnsafe("request-cancelled-after-stop"),
+          createdAt: "2026-07-14T14:00:00.000Z",
+          lifecycleGeneration: "old-generation",
+          payload: { answers: { cancelled: true } },
+        });
+
+        yield* waitUntil(
+          () => staleSettlementPersistedEvents.has("stale-resolution-stopped-binding"),
+          500,
+          10,
+          "stale user-input.resolved on a stopped thread to be persisted",
+        );
+        assert.equal(
+          staleSettlementPersistedEvents.get("stale-resolution-stopped-binding")?.type,
+          "user-input.resolved",
+        );
+
+        const bindingAfter = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        assert.equal(bindingAfter?.status, "stopped");
+        const payloadAfter = asRuntimePayloadRecord(bindingAfter?.runtimePayload);
+        assert.equal(payloadAfter.activeTurnId, null);
+        assert.equal(payloadAfter.lastRuntimeEvent, "session.exited");
+        assert.equal(payloadAfter.lastRuntimeEventAt, "2026-07-14T13:59:00.000Z");
       }),
     );
 
@@ -6196,6 +6606,23 @@ const disabledProviderStart = makeProviderServiceLayer({
   providerIsEnabled: (provider) => Effect.succeed(provider !== "codex"),
 });
 disabledProviderStart.layer("ProviderServiceLive enablement", (it) => {
+  it.effect("rejects native imports for disabled providers before touching the source", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const result = yield* Effect.result(
+        provider.importExternalThread!({
+          threadId: asThreadId("disabled-import"),
+          provider: "codex",
+          externalThreadId: "source",
+          sourceCwd: "/repo/source",
+          modelSelection: { provider: "codex", model: "gpt-5.4" },
+          runtimeMode: "full-access",
+        }),
+      );
+      assert.equal(result._tag, "Failure");
+      assert.equal(disabledProviderStart.codex.forkThread.mock.calls.length, 0);
+    }),
+  );
   it.effect("rejects session starts for disabled providers before reaching the adapter", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;

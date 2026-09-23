@@ -9,6 +9,16 @@ Long-running agent work produces a lot of conversation. These features keep it n
 
 Projects, threads, and individual transcript messages can be pinned. Pinned messages live in the Environment panel next to editable, autosaving thread notes — a scratchpad that stays with the task.
 
+## Activity order
+
+Activity orders chats by your last sent message, including edits you resend. Agent responses, completions, approvals,
+opening a chat, automatic continuation after reopening the app, and messages sent by another agent or an automation update its indicators
+without changing that order. Chats with no human message use their creation time.
+
+Recent shows up to five chats you sent a message to during the current working day, which
+starts at 4am. Grouping by project uses the same message dates. Pinned chats stay in Pinned;
+chats marked Done stay in Settled until you restore them or send a new message.
+
 ## Find text in the current conversation
 
 Press `mod+f` to open the floating transcript search. Synara highlights matching message text, shows the active result and total count, and supports previous/next navigation without treating tool-only activity as conversation text.
@@ -66,3 +76,9 @@ The Environment panel can start, view, and stop tracked project dev servers, so 
 ## Export a thread
 
 In a saved, idle chat, run `/export` (or use the command menu) to download a ZIP containing `thread.json` and a readable `transcript.md`. Good for sharing a session, filing an issue, or archiving how a change was made.
+
+## Imported history and recent activity
+
+[Import projects](/docs/features/project-import) brings local Codex and Claude Code conversations into Synara, including a replacement-folder choice for moved projects. Activity ordering follows the latest human message, so background assistant work does not continually promote untouched conversations.
+
+Drag a chat into another pane to open a split view, or into the composer to add a chat mention. The command palette and recent-view switcher share the file picker's visual layout.

@@ -19,6 +19,7 @@ export const ExternalMcpCapability = Schema.Literals([
   "tasks:read-project",
   "runtime:local",
   "runtime:full-access",
+  "computer:control",
 ]);
 export type ExternalMcpCapability = typeof ExternalMcpCapability.Type;
 
@@ -132,6 +133,9 @@ export const ExternalMcpCreateTaskInput = Schema.Struct({
   environment: Schema.optional(Schema.Literals(["local", "worktree"])),
   runtimeMode: Schema.optional(RuntimeMode),
   baseRef: Schema.optional(TrimmedNonEmptyString),
+  // Requires the "computer:control" integration capability. Created tasks get
+  // the computer tool family with per-action approval gating unchanged.
+  enableComputerControl: Schema.optional(Schema.Boolean),
 }).annotate({ parseOptions: { onExcessProperty: "error" } });
 export type ExternalMcpCreateTaskInput = typeof ExternalMcpCreateTaskInput.Type;
 

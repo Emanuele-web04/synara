@@ -46,10 +46,12 @@ const OverviewProjectColumn = function OverviewProjectColumn({
             "hover:bg-muted/50 focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
           )}
         >
-          <h2 className="min-w-0 truncate text-[13px] font-semibold text-foreground/90">
+          <h2 className="min-w-0 truncate text-ui-lg font-semibold text-foreground/90">
             {projectBoard.projectName}
           </h2>
-          <span className="text-xs text-muted-foreground/70">{projectBoard.totalCount}</span>
+          <span className="text-ui leading-snug text-muted-foreground/70">
+            {projectBoard.totalCount}
+          </span>
           <ChevronRightIcon className="ml-auto size-3.5 shrink-0 text-muted-foreground/50 opacity-0 transition-opacity group-hover/kanban-project:opacity-100 group-focus-visible/kanban-project:opacity-100" />
         </button>
         <Button
@@ -80,7 +82,7 @@ const OverviewProjectColumn = function OverviewProjectColumn({
             <button
               type="button"
               onClick={() => onOpenProject(projectBoard.projectId)}
-              className="w-full rounded-lg px-3 py-1.5 text-center text-xs text-muted-foreground/80 transition-colors hover:bg-muted/40 hover:text-foreground"
+              className="w-full rounded-lg px-3 py-1.5 text-center text-ui leading-snug text-muted-foreground/80 transition-colors hover:bg-muted/40 hover:text-foreground"
             >
               Show {hiddenCount} more
             </button>
@@ -116,8 +118,8 @@ export function KanbanOverview({
     return (
       <div className="flex h-full items-center justify-center px-6">
         <div className="max-w-sm text-center">
-          <div className="text-sm font-medium text-foreground/85">Nothing on the board yet</div>
-          <div className="mt-1 text-sm text-muted-foreground">
+          <div className="text-ui-lg font-medium text-foreground/85">Nothing on the board yet</div>
+          <div className="mt-1 text-ui leading-snug text-muted-foreground">
             Drafted prompts, running turns, and completed chats will show up here automatically.
           </div>
         </div>

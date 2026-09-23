@@ -507,6 +507,7 @@ export function gitBranchesQueryOptions(cwd: string | null) {
 export function gitResolvePullRequestQueryOptions(input: {
   cwd: string | null;
   reference: string | null;
+  pollIntervalMs?: number;
 }) {
   return queryOptions({
     queryKey: [...gitQueryKeys.pullRequest(input.cwd), input.reference] as const,
@@ -519,6 +520,11 @@ export function gitResolvePullRequestQueryOptions(input: {
     },
     enabled: input.cwd !== null && input.reference !== null,
     staleTime: 30_000,
+    // A merged pull request is final; polling it forever only burns GitHub rate limit.
+    refetchInterval: (query) =>
+      input.pollIntervalMs === undefined || query.state.data?.pullRequest.state === "merged"
+        ? false
+        : input.pollIntervalMs,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });
