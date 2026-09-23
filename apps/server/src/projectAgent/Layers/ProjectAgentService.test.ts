@@ -18,7 +18,7 @@ import {
   type ServerProviderStatus,
   type ServerSettings,
 } from "@synara/contracts";
-import { memoryThreadDocumentPath } from "@synara/shared/projectAgent";
+import { MEMORY_AUTO_DOCUMENT_PATH, memoryThreadDocumentPath } from "@synara/shared/projectAgent";
 import { Cause, Deferred, Effect, Fiber, Layer, Option, Stream } from "effect";
 import { TestClock } from "effect/testing";
 
@@ -4049,5 +4049,192 @@ it.effect("gives the coordinator thread its playbook packet on every turn", () =
     assert.equal(memberPacket.includes("Group context packet"), true);
     assert.equal(memberPacket.includes("## Playbook"), false);
     assert.equal(memberPacket.includes("## Group tools"), true);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("only the coordinator packet claims the welcome message", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-welcome-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+
+    const coordinatorPacket = yield* service.formatContextPacketForTurn(coordinatorThreadId);
+    assert.equal(
+      coordinatorPacket.includes(
+        "This thread opened with a welcome message from you; the user may be replying to it.",
+      ),
+      true,
+    );
+
+    // Member threads explain they are not the coordinator instead.
+    const memberPacket = yield* service.formatContextPacketForTurn(groupMemberThreadId);
+    assert.equal(memberPacket.includes("welcome message from you"), false);
+    assert.equal(memberPacket.includes("member thread of this group"), true);
+
+    // Workers resolve through their assigned task. They carry coordinator-like
+    // sections, but the welcome line still describes them as member threads.
+    const workerThreadId = ThreadId.makeUnsafe("thread-packet-worker");
+    yield* repository.saveGoal(
+      {
+        id: ProjectGoalId.makeUnsafe("goal-packet-worker"),
+        projectId: groupId,
+        objective: "Fix every flaky test",
+        authorizationSource: "user",
+        scopeVersion: 1,
+        acceptanceCriteria: null,
+        limits,
+        status: "active",
+        continuationCount: 0,
+        workerCreationCount: 0,
+        authorizedAt: now,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+      },
+      null,
+    );
+    yield* repository.saveTask(
+      {
+        id: ProjectTaskId.makeUnsafe("task-packet-worker"),
+        projectId: groupId,
+        goalId: ProjectGoalId.makeUnsafe("goal-packet-worker"),
+        title: "Fix the flaky suite",
+        description: null,
+        acceptanceCriteria: null,
+        status: "running",
+        dependsOnTaskIds: [],
+        assignedThreadId: workerThreadId,
+        repairCount: 0,
+        archivedAt: null,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+      },
+      null,
+    );
+    const workerPacket = yield* service.formatContextPacketForTurn(workerThreadId);
+    assert.equal(workerPacket.includes("welcome message from you"), false);
+    assert.equal(workerPacket.includes("member thread of this group"), true);
+    assert.equal(workerPacket.includes("## Playbook"), true);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("shows the group goal once when the active goal repeats it", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-goal-dedup", {
+      goal: "Ship the mobile app",
+    });
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+
+    const beforeGoal = yield* service.formatContextPacketForTurn(coordinatorThreadId);
+    assert.equal(beforeGoal.includes("## Objective\nShip the mobile app"), true);
+    // No active goal — the fallback copy still shows under its own label.
+    assert.equal(beforeGoal.includes("## Goal\nNone."), true);
+
+    yield* repository.saveGoal(
+      {
+        id: ProjectGoalId.makeUnsafe("goal-dup"),
+        projectId: groupId,
+        objective: "Ship the mobile app",
+        authorizationSource: "user",
+        scopeVersion: 1,
+        acceptanceCriteria: null,
+        limits,
+        status: "active",
+        continuationCount: 0,
+        workerCreationCount: 0,
+        authorizedAt: now,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+      },
+      null,
+    );
+    const packet = yield* service.formatContextPacketForTurn(coordinatorThreadId);
+    assert.equal(packet.includes("## Objective\nShip the mobile app"), true);
+    assert.equal(packet.includes("## Goal"), false);
+    assert.equal(packet.split("Ship the mobile app").length - 1, 1);
+
+    // An active goal with different wording keeps its own section.
+    yield* repository.saveGoal(
+      {
+        id: ProjectGoalId.makeUnsafe("goal-dup"),
+        projectId: groupId,
+        objective: "Ship the mobile app to beta testers",
+        authorizationSource: "user",
+        scopeVersion: 1,
+        acceptanceCriteria: null,
+        limits,
+        status: "active",
+        continuationCount: 0,
+        workerCreationCount: 0,
+        authorizedAt: now,
+        revision: 2,
+        createdAt: now,
+        updatedAt: now,
+      },
+      1,
+    );
+    const updated = yield* service.formatContextPacketForTurn(coordinatorThreadId);
+    assert.equal(updated.includes("## Objective\nShip the mobile app"), true);
+    assert.equal(updated.includes("## Goal\nShip the mobile app to beta testers"), true);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("keeps instructions and the memory index when the packet truncates", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const overview = yield* configureTestGroup(service, "req-trunc-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+
+    const instructions = `# Instructions\n\n${"Always run the full check matrix before shipping. ".repeat(280)}`;
+    const decisions = `# Decisions\n\n${"Long decision record. ".repeat(2_400)}\nUNIQUE-DECISION-TAIL`;
+    const memoryIndex =
+      "# Memory\n\n- [preferences](memory/2026-01-01-prefs.md) — user preferences";
+    const user = { kind: "user" as const };
+    yield* service.writeDocument(
+      {
+        requestId: "req-trunc-instructions",
+        projectId: groupId,
+        logicalPath: "instructions.md",
+        content: instructions,
+      },
+      user,
+    );
+    yield* service.writeDocument(
+      {
+        requestId: "req-trunc-decisions",
+        projectId: groupId,
+        logicalPath: "decisions.md",
+        content: decisions,
+      },
+      user,
+    );
+    yield* service.writeDocument(
+      {
+        requestId: "req-trunc-memory",
+        projectId: groupId,
+        logicalPath: MEMORY_AUTO_DOCUMENT_PATH,
+        content: memoryIndex,
+      },
+      user,
+    );
+
+    const packet = yield* service.formatContextPacketForTurn(coordinatorThreadId);
+    assert.equal(packet.includes("[truncated]"), true);
+    // The highest-priority sections survive the budget cut intact.
+    assert.equal(packet.includes(instructions), true);
+    assert.equal(packet.includes(memoryIndex), true);
+    // The oversized Decisions section is what the budget cut, and the trailing
+    // task list never made it in.
+    assert.equal(packet.includes("## Decisions"), true);
+    assert.equal(packet.includes("UNIQUE-DECISION-TAIL"), false);
+    assert.equal(packet.includes("## Tasks"), false);
   }).pipe(Effect.provide(harness.layer));
 });

@@ -13,6 +13,7 @@ import { Button } from "~/components/ui/button";
 import { SettingsCard, SettingsSectionShell } from "~/components/settings/SettingsPanelPrimitives";
 import { toastManager } from "~/components/ui/toast";
 
+import { buildGroupDeletedNotice } from "./groupLifecycle.logic";
 import type { useProjectAgent } from "../project/useProjectAgent";
 
 export function GroupLifecycleSection(props: {
@@ -56,20 +57,13 @@ export function GroupLifecycleSection(props: {
       });
       return;
     }
-    if (result.libraryLeftOnDiskPath) {
+    const notice = buildGroupDeletedNotice(result);
+    if (notice) {
       toastManager.add({
         type: "info",
         title: "Group deleted",
-        description: `The library folder was left on disk at ${result.libraryLeftOnDiskPath}.`,
-        data: { copyText: result.libraryLeftOnDiskPath },
-      });
-    }
-    if (result.workspaceLeftOnDiskPath) {
-      toastManager.add({
-        type: "info",
-        title: "Group deleted",
-        description: `Folder kept because it has your files: ${result.workspaceLeftOnDiskPath}.`,
-        data: { copyText: result.workspaceLeftOnDiskPath },
+        description: notice.description,
+        data: { copyItems: notice.copyItems },
       });
     }
     props.onDeleted();
@@ -157,7 +151,10 @@ export function GroupLifecycleSection(props: {
               <p className="text-ui font-medium text-destructive">Delete group</p>
               <p className="text-ui-sm text-muted-foreground">
                 Deletes the group, its coordinator, context, and automations. The Library is moved
-                to the trash when possible. Linked repositories and their threads are untouched.
+                to the trash when possible. The group folder under ~/Documents/Synara/Groups is
+                removed only when it holds nothing but Synara-generated files; if it has your files
+                it is kept and you get its path. Linked repositories and their threads are
+                untouched.
               </p>
             </div>
             {confirmOpen ? (
