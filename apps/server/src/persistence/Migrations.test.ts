@@ -314,6 +314,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [110, "Groups"],
         [111, "GroupLibraryHosting"],
         [112, "CoordinatorAppearance"],
+          [113, "ProjectAgentWakeCursor"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -378,6 +379,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 110, name: "Groups" },
           { migration_id: 111, name: "GroupLibraryHosting" },
           { migration_id: 112, name: "CoordinatorAppearance" },
+          { migration_id: 113, name: "ProjectAgentWakeCursor" },
         ],
       );
       const groupConfigColumns = yield* sql<{ readonly name: string }>`
@@ -522,6 +524,7 @@ agentGatewayRetentionLegacyLayer(
           [110, "Groups"],
           [111, "GroupLibraryHosting"],
           [112, "CoordinatorAppearance"],
+          [113, "ProjectAgentWakeCursor"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -629,6 +632,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [110, "Groups"],
         [111, "GroupLibraryHosting"],
         [112, "CoordinatorAppearance"],
+          [113, "ProjectAgentWakeCursor"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -677,6 +681,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [110, "Groups"],
           [111, "GroupLibraryHosting"],
           [112, "CoordinatorAppearance"],
+          [113, "ProjectAgentWakeCursor"],
         ],
       );
 
@@ -779,6 +784,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [110, "Groups"],
         [111, "GroupLibraryHosting"],
         [112, "CoordinatorAppearance"],
+          [113, "ProjectAgentWakeCursor"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -823,6 +829,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [110, "Groups"],
           [111, "GroupLibraryHosting"],
           [112, "CoordinatorAppearance"],
+          [113, "ProjectAgentWakeCursor"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`
