@@ -54,6 +54,7 @@ import {
 import {
   COMPUTER_STATUS_VISIBLE_REFETCH_INTERVAL_MS,
   computerStatusQueryOptions,
+  serverEnvironmentQueryOptions,
 } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
 import { settingRowAnchorId } from "~/settingsNavigation";
@@ -175,6 +176,8 @@ export function ComputerSettingsPanel({
     refetchInterval: active ? COMPUTER_STATUS_VISIBLE_REFETCH_INTERVAL_MS : false,
   });
 
+  const environmentQuery = useQuery({ ...serverEnvironmentQueryOptions(), enabled: active });
+  const windowsBeta = environmentQuery.data?.platform.os === "windows";
   const status = statusQuery.data;
   const [appSnapState, setAppSnapState] = useState<DesktopAppSnapState | null>(null);
   const [guidePane, setGuidePane] = useState<DesktopAppSnapSettingsPane | null>(null);
@@ -294,13 +297,15 @@ export function ComputerSettingsPanel({
   const capabilitiesDescription =
     backend === "cua" && status?.capabilities.input === false
       ? "This backend can observe desktop windows, but native desktop input is unavailable. Isolated headless browser actions require a verified browser runtime and an available task-scoped Escape shortcut. Use Stop in the chat to interrupt the task."
-      : backend === COMPUTER_MAC_BACKEND || backend === "cua"
-        ? "The agent shares your Mac desktop and works in the background by default. It can bring a window forward when your task asks to watch. Background input may still affect focus. Use Stop in the chat to interrupt the task. Physical Escape interrupts the current action when Input Monitoring is granted; it does not disable future tasks."
-        : backend !== null &&
-            COMPUTER_RELEASE_HOTKEY_BACKENDS.includes(backend) &&
-            status?.capabilities.visibleDesktop === true
-          ? `The agent shares the computer described by this backend. Press ${COMPUTER_RELEASE_CONTROL_HOTKEY} at any time to stop it from acting on the desktop, and press it again to let it resume.`
-          : "The agent drives its own seat, so your cursor and focus stay untouched.";
+      : windowsBeta && backend === "cua"
+        ? "The agent uses your Windows desktop. App compatibility varies; it does not run in a separate desktop."
+        : backend === COMPUTER_MAC_BACKEND || backend === "cua"
+          ? "The agent shares your Mac desktop and works in the background by default. It can bring a window forward when your task asks to watch. Background input may still affect focus. Use Stop in the chat to interrupt the task. Physical Escape interrupts the current action when Input Monitoring is granted; it does not disable future tasks."
+          : backend !== null &&
+              COMPUTER_RELEASE_HOTKEY_BACKENDS.includes(backend) &&
+              status?.capabilities.visibleDesktop === true
+            ? `The agent shares the computer described by this backend. Press ${COMPUTER_RELEASE_CONTROL_HOTKEY} at any time to stop it from acting on the desktop, and press it again to let it resume.`
+            : "The agent drives its own seat, so your cursor and focus stay untouched.";
   /**
    * Screen capture is granted separately from input on every backend that has a
    * permission model at all, so a desktop can be fully driveable and still
@@ -396,7 +401,7 @@ export function ComputerSettingsPanel({
           preferences that shape a session. */}
       <SettingsSectionShell
         id={settingRowAnchorId("Computer control")}
-        title="Computer control"
+        title={windowsBeta ? "Computer control (Windows beta)" : "Computer control"}
         action={
           <div className="flex items-center gap-1.5">
             {settings.computerControlEnabled !== defaults.computerControlEnabled ? (
@@ -421,6 +426,12 @@ export function ComputerSettingsPanel({
           Enable Computer by default in any chat. Leave this off and use /computer-use for one
           request without adding Computer tools to ordinary turns.
         </p>
+        {windowsBeta ? (
+          <p className="px-2 text-ui-sm text-muted-foreground">
+            Windows beta: app compatibility varies. Actions may interrupt your desktop use; stopping
+            an action already in progress is not yet reliable.
+          </p>
+        ) : null}
         <SettingsCard>
           {showAttentionRow ? (
             <SettingsRow

@@ -1927,6 +1927,23 @@ describe("Cua native boundary", () => {
     expect(await f.backend.provision()).toContain("permissions are ready");
   });
 
+  it("recovers Windows capture only after real pixels, not the static UIA availability flag", async () => {
+    const f = fixture({ hostPlatform: "win32", nativeRevision: null });
+    f.onTool("check_permissions", () => ({ structuredContent: { uia: true, post_message: true } }));
+    await f.backend.availability();
+    f.failOverview();
+    await expect(f.backend.getState({ includeScreenshot: true })).rejects.toThrow("Capture denied");
+    expect(f.backend.health().captureAvailable).toBe(false);
+    await f.backend.provision();
+    expect(f.backend.health().captureAvailable).toBe(false);
+    await f.backend.captureScreenshot({ kind: "window", windowId: "cua:10:20" });
+    expect(f.backend.health()).toMatchObject({
+      status: "connected",
+      captureAvailable: true,
+      consecutiveFailures: 0,
+    });
+  });
+
   it("keeps Windows setup blocked without UIA availability", async () => {
     const f = fixture({ hostPlatform: "win32", nativeRevision: null });
     f.onTool("check_permissions", () => ({ structuredContent: { uia: false } }));
