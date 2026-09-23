@@ -96,6 +96,7 @@ import {
   COMPUTER_HELP_INDEX,
   COMPUTER_HELP_SECTIONS,
   COMPUTER_HELP_TOPICS,
+  computerHelpSections,
   type ComputerHelpTopic,
 } from "./computerGuidance.ts";
 import { mcpToolResultError, type McpToolCallResult } from "./protocol.ts";
@@ -141,7 +142,7 @@ const COMPUTER_TOOL_REFRESH_GUIDANCE =
  * matters, and the description alone does not stop a relaunch loop.
  */
 const INPUT_PAUSE_REQUERY_HINT =
-  "To resume, call computer_get_state with the paused window_id, or with include_screenshot: true when no window is named; never replay an uncertain action.";
+  "To resume, call computer_get_state with the paused window_id, or with include_screenshot: true and no window_id when the pause names no window; never replay an uncertain action.";
 
 const LAUNCH_NULL_WINDOW_GUIDANCE =
   "No usable window was established. The launch may already have started the app; never launch again automatically. Inspect computer_list_windows once using the returned app identity. If no usable target exists, report the limitation instead of looping. An isolated browser via computer_browser_prepare is an alternative only when compatible with the requested task; do not silently replace a requested personal browser or incognito window.";
@@ -3893,8 +3894,9 @@ export function makeAgentGatewayComputerTools(
         }
         // The tools chapter's static intro gains the generated catalog index
         // on the way out — same text for "tools" alone and inside "all".
+        const sections = computerHelpSections(manager.guidanceProfile);
         const sectionText = (name: string): string | undefined => {
-          const text = COMPUTER_HELP_SECTIONS[name as ComputerHelpTopic];
+          const text = sections[name as ComputerHelpTopic];
           return name === "tools" && text !== undefined
             ? `${text}\n\n${computerToolIndexText()}`
             : text;
@@ -3902,7 +3904,7 @@ export function makeAgentGatewayComputerTools(
         if (topic === undefined || topic === "all") {
           const chapters =
             topic === "all"
-              ? Object.keys(COMPUTER_HELP_SECTIONS)
+              ? Object.keys(sections)
                   .map((name) => `## ${name}\n${sectionText(name)}`)
                   .join("\n\n")
               : undefined;

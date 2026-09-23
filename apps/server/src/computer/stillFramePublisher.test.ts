@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { StillFramePublisher } from "./stillFramePublisher.ts";
+import { StillFramePublisher, type StillFrameCapture } from "./stillFramePublisher.ts";
 import type { ComputerStreamFrame } from "./ComputerBackend.ts";
 
 const FRAME_A = new Uint8Array([1, 2, 3]);
@@ -14,7 +14,7 @@ interface Harness {
 }
 
 function makePublisher(
-  capture: (force: boolean) => Promise<Uint8Array | undefined>,
+  capture: (force: boolean) => Promise<Uint8Array | StillFrameCapture | undefined>,
   options: {
     readonly captureAvailable?: () => boolean;
     readonly intervalMs?: number;
@@ -43,6 +43,28 @@ function makePublisher(
 }
 
 describe("StillFramePublisher", () => {
+  it("tags a non-PNG still with its image type and leaves a PNG still untagged", async () => {
+    const stills: (Uint8Array | StillFrameCapture)[] = [
+      { data: FRAME_A, mimeType: "image/jpeg" },
+      FRAME_B,
+      { data: FRAME_A, mimeType: "image/png" },
+    ];
+    const harness = makePublisher(async () => stills.shift());
+    try {
+      await harness.publisher.attach((frame) => harness.frames.push(frame));
+      await harness.publisher.publish();
+      await harness.publisher.publish();
+      expect(harness.frames.map((frame) => [Array.from(frame.data), frame.mimeType])).toEqual([
+        [Array.from(FRAME_A), "image/jpeg"],
+        [Array.from(FRAME_B), undefined],
+        [Array.from(FRAME_A), undefined],
+      ]);
+      expect(harness.observed).toEqual(harness.frames);
+    } finally {
+      await harness.publisher.detach();
+    }
+  });
+
   it("does not start capturing when detached during preparation", async () => {
     vi.useFakeTimers();
     const preparation = Promise.withResolvers<void>();
@@ -310,5 +332,102 @@ describe("StillFramePublisher", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("StillFramePublisher adaptive cadence", () => {
+  function adaptive(options: {
+    readonly capture: () => Promise<Uint8Array | undefined>;
+    readonly paused?: () => boolean;
+  }): { readonly publisher: StillFramePublisher; readonly captureTimes: number[] } {
+    const captureTimes: number[] = [];
+    const publisher = new StillFramePublisher({
+      capture: async () => {
+        captureTimes.push(Date.now());
+        return await options.capture();
+      },
+      isCaptureAvailable: () => true,
+      emit: () => undefined,
+      now: () => Date.now(),
+      intervalMs: 100,
+      idleIntervalMs: 1_000,
+      idleAfterUnchanged: 2,
+      ...(options.paused ? { paused: options.paused } : {}),
+    });
+    return { publisher, captureTimes };
+  }
+
+  it("backs off after a run of identical stills and snaps back when one differs", async () => {
+    vi.useFakeTimers({ now: 0 });
+    let frame = FRAME_A;
+    const { publisher, captureTimes } = adaptive({ capture: async () => frame });
+    try {
+      await publisher.attach(() => undefined);
+      await vi.advanceTimersByTimeAsync(250);
+      // Attach, then two identical ticks at 100 and 200.
+      expect(captureTimes).toEqual([0, 100, 200]);
+      await vi.advanceTimersByTimeAsync(1_000);
+      // The second unchanged still moved the next tick out to the idle interval.
+      expect(captureTimes).toEqual([0, 100, 200, 1_200]);
+      frame = FRAME_B;
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(captureTimes.at(-1)).toBe(2_200);
+      await vi.advanceTimersByTimeAsync(100);
+      // A changed still restores the fast cadence.
+      expect(captureTimes.at(-1)).toBe(2_300);
+    } finally {
+      await publisher.detach();
+      vi.useRealTimers();
+    }
+  });
+
+  it("wake pulls a backed-off tick forward to the fast cadence", async () => {
+    vi.useFakeTimers({ now: 0 });
+    const { publisher, captureTimes } = adaptive({ capture: async () => FRAME_A });
+    try {
+      await publisher.attach(() => undefined);
+      await vi.advanceTimersByTimeAsync(350);
+      expect(captureTimes).toEqual([0, 100, 200]);
+      publisher.wake();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(captureTimes).toEqual([0, 100, 200, 450]);
+    } finally {
+      await publisher.detach();
+      vi.useRealTimers();
+    }
+  });
+
+  it("holds stills while paused and takes one right after", async () => {
+    vi.useFakeTimers({ now: 0 });
+    let paused = false;
+    let frame = FRAME_A;
+    const { publisher, captureTimes } = adaptive({
+      capture: async () => frame,
+      paused: () => paused,
+    });
+    try {
+      await publisher.attach(() => undefined);
+      paused = true;
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(captureTimes).toEqual([0]);
+      frame = FRAME_B;
+      paused = false;
+      await vi.advanceTimersByTimeAsync(50);
+      expect(captureTimes).toEqual([0, 2_050]);
+    } finally {
+      await publisher.detach();
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops the adaptive loop on detach", async () => {
+    vi.useFakeTimers({ now: 0 });
+    const { publisher, captureTimes } = adaptive({ capture: async () => FRAME_A });
+    await publisher.attach(() => undefined);
+    await publisher.detach();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(captureTimes).toEqual([0]);
+    expect(vi.getTimerCount()).toBe(0);
+    vi.useRealTimers();
   });
 });

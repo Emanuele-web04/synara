@@ -1,0 +1,197 @@
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+  "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<!--
+  The Synara Hyprland computer-use plugin, service org.synara.ComputerUse.
+
+  This is the same interface the KWin plugin exports
+  (../computer-use-kwin/org.synara.ComputerUse.xml): the server drives both
+  compositors through one proxy, so the method set, signatures and error
+  names here must stay identical to that file. The Hyprland plugin registers
+  every method below with sdbus-c++ in setupDbus() of synarahyprlandplugin.cpp;
+  the capture methods and waitForSettle are asynchronous on the bus (the image
+  is encoded off the compositor thread, a settle wait is a timer, and the
+  reply follows), which changes nothing for a caller.
+
+  Interface version 2 added the methods marked "version 2" below. healthJson
+  reports "interfaceVersion" and lists the ones a build implements in
+  "features" ("captureEx", "keys", "waitForSettle", "windowsStateJson"); a
+  caller uses a version-2 method only when it is listed, so an older plugin
+  keeps working with a newer server.
+
+  Every method but healthJson answers org.synara.ComputerUse.Error.Unauthorized
+  until the calling connection has authenticated. Other errors a method can
+  return, all retryable on the server side unless noted:
+    org.synara.ComputerUse.Error.SessionLocked   screen locked or session inactive
+    org.synara.ComputerUse.Error.HumanActive     the human is using the target,
+                                                 or holds a mouse button down
+    org.synara.ComputerUse.Error.SeatUnsupported the client holds no input object
+    org.synara.ComputerUse.Error.ControlReleased latched by the panic shortcut
+    org.synara.ComputerUse.Error.CaptureFailed   a capture could not be rendered
+-->
+<node name="/org/synara/ComputerUse">
+  <interface name="org.synara.ComputerUse1">
+    <!-- Binds the capability to the calling connection; empty on refusal. -->
+    <method name="authenticate">
+      <arg name="token" type="s" direction="in"/>
+      <arg name="instance" type="s" direction="out"/>
+    </method>
+
+    <!-- Public diagnostics (no pixels, titles or input); the server's poll.
+         modulePath, gitHash and buildTimestamp are included only for the
+         authenticated connection. -->
+    <method name="healthJson">
+      <arg name="json" type="s" direction="out"/>
+    </method>
+    <method name="stateJson">
+      <arg name="json" type="s" direction="out"/>
+    </method>
+    <method name="windowsJson">
+      <arg name="json" type="s" direction="out"/>
+    </method>
+    <!-- Version 2: {"windows": <windowsJson's array>, "targetWindowId": <id or
+         null>, "workspace": {x, y, width, height}, "outputs": [{x, y, width,
+         height}, ...] (each monitor's logical rect), "locked": <bool>} in one
+         call. Locked, it answers with no windows and a null target instead
+         of refusing. -->
+    <method name="windowsStateJson">
+      <arg name="json" type="s" direction="out"/>
+    </method>
+
+    <!-- Session lifetime. -->
+    <method name="start">
+      <arg name="started" type="b" direction="out"/>
+    </method>
+    <method name="stop">
+      <arg name="stopped" type="b" direction="out"/>
+    </method>
+    <method name="setIdleTimeout">
+      <arg name="milliseconds" type="u" direction="in"/>
+      <arg name="accepted" type="b" direction="out"/>
+    </method>
+    <method name="setHumanActiveGuardMs">
+      <arg name="milliseconds" type="u" direction="in"/>
+      <arg name="accepted" type="b" direction="out"/>
+    </method>
+    <method name="setAgentName">
+      <arg name="name" type="s" direction="in"/>
+      <arg name="accepted" type="b" direction="out"/>
+    </method>
+
+    <!-- Targeting. -->
+    <method name="focusWindow">
+      <arg name="windowId" type="s" direction="in"/>
+      <arg name="focused" type="b" direction="out"/>
+    </method>
+    <method name="raiseWindow">
+      <arg name="windowId" type="s" direction="in"/>
+      <arg name="raised" type="b" direction="out"/>
+    </method>
+    <method name="clearFocusWindow">
+      <arg name="cleared" type="b" direction="out"/>
+    </method>
+    <!-- Lease handover: clears the target, releases held input, hands every
+         shared client object back to the human's seat. Works while stopped. -->
+    <method name="resetInputDelivery">
+      <arg name="reset" type="b" direction="out"/>
+    </method>
+
+    <!-- Input. Coordinates and deltas are desktop pixels. -->
+    <method name="movePointer">
+      <arg name="x" type="d" direction="in"/>
+      <arg name="y" type="d" direction="in"/>
+      <arg name="delivered" type="b" direction="out"/>
+    </method>
+    <method name="button">
+      <arg name="button" type="u" direction="in"/>
+      <arg name="pressed" type="b" direction="in"/>
+      <arg name="delivered" type="b" direction="out"/>
+    </method>
+    <method name="axis">
+      <arg name="horizontal" type="d" direction="in"/>
+      <arg name="vertical" type="d" direction="in"/>
+      <arg name="delivered" type="b" direction="out"/>
+    </method>
+    <method name="key">
+      <arg name="keyCode" type="u" direction="in"/>
+      <arg name="pressed" type="b" direction="in"/>
+      <arg name="delivered" type="b" direction="out"/>
+    </method>
+    <!-- Version 2: (keyCode, pressed) strokes in order, each with every check
+         `key` makes. A refusal of the first stroke is the call's error,
+         exactly as `key` answers it; after that the call stops at the first
+         stroke not delivered and returns how many were. A batch that stops
+         early does not release the keys its delivered strokes pressed: the
+         caller knows which they are and releases them. At most 256 strokes
+         (org.freedesktop.DBus.Error.InvalidArgs beyond). -->
+    <method name="keys">
+      <arg name="strokes" type="a(ub)" direction="in"/>
+      <arg name="delivered" type="u" direction="out"/>
+    </method>
+    <!-- Version 2: replies once the window (any window, for an empty id) has
+         committed damaged content after the agent's last input (pointer,
+         keys, focusWindow, raiseWindow) - or after this call, when no input
+         is waiting for a settle - and then stayed quiet for quietMs. A commit
+         that damages nothing, a client only asking for its next frame, does
+         not count. settled is false at timeoutMs (clamped to 30 s), when the
+         window closes, and for every pending wait when the session stops or
+         the plugin unloads; at once when no session is running or windowId
+         names no usable window. elapsedMs is the time the call waited. A
+         delayed reply: the compositor never waits on it. Locking answers the
+         call, and every pending wait,
+         org.synara.ComputerUse.Error.SessionLocked. More than 16 waits in
+         flight answer org.freedesktop.DBus.Error.LimitsExceeded, and a wait
+         the plugin could not schedule org.freedesktop.DBus.Error.Failed. -->
+    <method name="waitForSettle">
+      <arg name="windowId" type="s" direction="in"/>
+      <arg name="quietMs" type="u" direction="in"/>
+      <arg name="timeoutMs" type="u" direction="in"/>
+      <arg name="settled" type="b" direction="out"/>
+      <arg name="elapsedMs" type="u" direction="out"/>
+    </method>
+
+    <!-- Capture. PNG bytes; maxDimension 0 keeps native pixels. Failures are
+         errors, never an empty array. -->
+    <method name="captureWindow">
+      <arg name="windowId" type="s" direction="in"/>
+      <arg name="maxDimension" type="u" direction="in"/>
+      <arg name="png" type="ay" direction="out"/>
+    </method>
+    <method name="captureRegion">
+      <arg name="x" type="i" direction="in"/>
+      <arg name="y" type="i" direction="in"/>
+      <arg name="width" type="u" direction="in"/>
+      <arg name="height" type="u" direction="in"/>
+      <arg name="maxDimension" type="u" direction="in"/>
+      <arg name="png" type="ay" direction="out"/>
+    </method>
+    <!-- Version 2: the captures above with flags, answering the image and its
+         MIME type. Flags: 1 passive (an observer's frame: not agent activity,
+         no idle-timer reset, no badge repaint), 2 JPEG quality 85
+         ("image/jpeg"), 4 raw 8-bit luma ("image/x-luma8; width=<w>;
+         height=<h>", rows top to bottom, no padding; outranks 2). Neither 2
+         nor 4: PNG at fast compression ("image/png"). Errors as above. -->
+    <method name="captureWindowEx">
+      <arg name="windowId" type="s" direction="in"/>
+      <arg name="maxDimension" type="u" direction="in"/>
+      <arg name="flags" type="u" direction="in"/>
+      <arg name="image" type="ay" direction="out"/>
+      <arg name="mime" type="s" direction="out"/>
+    </method>
+    <method name="captureRegionEx">
+      <arg name="x" type="i" direction="in"/>
+      <arg name="y" type="i" direction="in"/>
+      <arg name="width" type="u" direction="in"/>
+      <arg name="height" type="u" direction="in"/>
+      <arg name="maxDimension" type="u" direction="in"/>
+      <arg name="flags" type="u" direction="in"/>
+      <arg name="image" type="ay" direction="out"/>
+      <arg name="mime" type="s" direction="out"/>
+    </method>
+
+    <!-- A running session ended: request, idle-timeout, user-release, or
+         session-locked. -->
+    <signal name="sessionStopped">
+      <arg name="reason" type="s"/>
+    </signal>
+  </interface>
+</node>

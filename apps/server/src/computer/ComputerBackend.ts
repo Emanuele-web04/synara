@@ -11,6 +11,7 @@ import {
   type ComputerCapabilities,
   type ComputerCursorPosition,
   type ComputerDeliveryVerification,
+  type ComputerFrameMimeType,
   type ComputerHealth,
   type ComputerId,
   type ComputerInputModifier,
@@ -101,12 +102,27 @@ export type ComputerCaptureRequest =
   | { readonly kind: "window"; readonly windowId: string; readonly maxDimension?: number }
   | { readonly kind: "region"; readonly region: ComputerRect; readonly maxDimension?: number };
 
+/** A single-channel capture; see `ComputerBackend.captureLuma`. */
+export interface ComputerLumaCapture {
+  readonly width: number;
+  readonly height: number;
+  /** Row-major, one byte per pixel, no row padding: `width * height` bytes. */
+  readonly data: Uint8Array;
+  /** Capture pixels per desktop pixel, as on `ComputerScreenshot.scale`. */
+  readonly scale: number;
+}
+
 export interface ComputerStreamFrame {
   readonly sequence: number;
   readonly timestampMs: number;
   readonly keyframe: boolean;
   readonly codecConfig: boolean;
   readonly data: Uint8Array;
+  /**
+   * The still's image type, carried to the pane per frame. Absent means PNG.
+   * Only the preview may use JPEG: every screenshot a model reads stays PNG.
+   */
+  readonly mimeType?: ComputerFrameMimeType;
 }
 
 export interface ComputerResolvedTarget {
@@ -209,6 +225,19 @@ export type ComputerBackendEvent =
        */
       readonly pauses: readonly string[];
     }
+  /**
+   * The desktop this backend was bound to no longer exists and will not come
+   * back on its own — the compositor instance it drove exited, as when a
+   * Hyprland session ends while the server keeps running. Distinct from a
+   * reconnect, which the backend handles itself. The service may re-run
+   * backend selection and swap in whatever it picks, except for a backend an
+   * explicit override named, which stays and reports. When selection picks
+   * the same tier again, nothing is swapped and the event is spent: a backend
+   * that emits it therefore owns the retry, and keeps looking for its desktop
+   * (at a slow cadence) so one that comes back later is picked up without an
+   * agent action. `message` says what was lost.
+   */
+  | { readonly type: "desktop-gone"; readonly message: string }
   | { readonly type: "frame"; readonly frame: ComputerStreamFrame };
 
 /**
@@ -272,6 +301,16 @@ export interface ComputerBrowserBackend {
    * owner disappears, so this is the explicit form of the same cleanup.
    */
   endThread?(threadId: string): Promise<void>;
+}
+
+/** One pending single-use clipboard offer; see `ComputerBackend.writeClipboardForPaste`. */
+export interface ComputerClipboardPasteOffer {
+  /**
+   * Resolves once a paste target has read the payload. Rejects, or never
+   * settles, when the offer ended some other way (replaced, the helper died);
+   * the manager treats both as "not observed" and falls back to its bound.
+   */
+  readonly consumed: Promise<void>;
 }
 
 export type ComputerFrameListener = (frame: ComputerStreamFrame) => void;
@@ -370,7 +409,37 @@ export const NO_COMPUTER_CAPABILITIES: ComputerCapabilities = {
  */
 export type ComputerAgentDialect = "linux" | "macos";
 
-/** Provider-side contract shared by real display backends and the CI fake. */
+/**
+ * The two facts about a desktop that the model is told once, at session start,
+ * by guidance rendered far from the backend (`agentGateway/computerGuidance.ts`).
+ */
+export interface ComputerGuidanceProfile {
+  readonly dialect: ComputerAgentDialect;
+  /** See `ComputerBackend.dedicatedSeat`. */
+  readonly dedicatedSeat: boolean;
+}
+
+export function computerGuidanceProfile(
+  backend: Pick<ComputerBackend, "agentDialect" | "dedicatedSeat">,
+): ComputerGuidanceProfile {
+  return {
+    dialect: backend.agentDialect ?? "linux",
+    dedicatedSeat: backend.dedicatedSeat === true,
+  };
+}
+
+/**
+ * Provider-side contract shared by real display backends and the CI fake.
+ *
+ * Optional members are read by presence, on every use. The manager may be
+ * built on a `SwitchableComputerBackend` slot, a Proxy that resolves each
+ * member against whichever backend occupies it at that moment, and backends
+ * may also expose a member through a getter that comes and goes (a method
+ * offered only while the connected desktop supports it). So a caller checks
+ * `backend.member !== undefined` where it is about to use the member, never
+ * caches the verdict across awaits, and when one use spans awaits, binds the
+ * member once and keeps that reference (`backend.member?.bind(backend)`).
+ */
 export interface ComputerBackend {
   /**
    * The vocabulary this desktop speaks, for the tool descriptions that differ
@@ -378,6 +447,24 @@ export interface ComputerBackend {
    * but the macOS one uses.
    */
   readonly agentDialect?: ComputerAgentDialect;
+  /**
+   * The agent drives this desktop through a seat of its own — a compositor
+   * plugin's dedicated seat, or a private compositor — so its input never
+   * touches the human's cursor, focus or keystrokes, and it has no browser
+   * route. Only the Linux compositor backends set it. Guidance reads it rather
+   * than the live capability set because the model is told about its desktop
+   * once, at session start, and a backend whose desktop has not booted yet
+   * reports no capabilities at all until its first real use. Absent means the
+   * desktop is described the way it always was: the Cua host's wording.
+   */
+  readonly dedicatedSeat?: boolean;
+  /**
+   * Whether `selectText` can succeed on this desktop. `false` refuses the call
+   * in the manager before the lease is claimed and the window restacked and
+   * aimed for a dispatch the backend would refuse anyway. Absent means
+   * supported.
+   */
+  readonly textRangeSelection?: boolean;
   readonly computerId: ComputerId;
   /**
    * Whether this host could drive a desktop, answered without doing anything to
@@ -398,6 +485,22 @@ export interface ComputerBackend {
    * user the feature.
    */
   probeAvailability(): Promise<ComputerAvailability>;
+  /**
+   * The passive status read, for a backend whose desktop boots on demand and
+   * must not be respawned by a status poll.
+   *
+   * `ComputerManager.getStatus` answers the settings screen's ten-second poll
+   * from `availability({ refresh: true })` once something real has engaged
+   * the backend, which is right for a desktop that is always there: the read
+   * reports what it finds. A backend that starts a private compositor on first
+   * use cannot afford it — the poll would boot a desktop nobody asked for, and
+   * re-boot the one the human just closed. Such a backend implements this to
+   * report the last established state without touching the desktop, and the
+   * manager uses it for every status read, before and after engagement; the
+   * desktop starts again on the next real use or from Set up. Absent means
+   * `availability()` is safe to poll.
+   */
+  statusAvailability?(): Promise<ComputerAvailability>;
   /**
    * Availability as established, not as guessed: this may connect, install, and
    * load whatever the backend needs, so it belongs on paths that are about to
@@ -509,6 +612,38 @@ export interface ComputerBackend {
    * `region` + `scale` mapping so pixels still convert to desktop coordinates.
    */
   captureScreenshot(request: ComputerCaptureRequest): Promise<ComputerScreenshot>;
+  /**
+   * The same capture as `captureScreenshot(request)`, as raw 8-bit luma instead
+   * of an encoded image, for a picture that is only ever measured.
+   *
+   * Scroll calibration photographs the window before every measured scroll and
+   * never shows that frame to anyone; encoding it to PNG, base64-encoding it
+   * and decoding it back costs more than the correlation it feeds. A backend
+   * that can hand back pixels implements this and the manager uses it for that
+   * baseline. The next capture is still an ordinary screenshot (it becomes the
+   * action's observation) and is correlated against this one, so the two must
+   * agree: the same `width`, `height` and `scale` a `captureScreenshot` of this
+   * request would report, and luma computed exactly as `decodePngLuma` derives
+   * it — `floor((299 R + 587 G + 114 B) / 1000)` per pixel. A failure falls
+   * back to the PNG baseline. Absent means every baseline is a screenshot.
+   */
+  captureLuma?(request: ComputerCaptureRequest): Promise<ComputerLumaCapture>;
+  /**
+   * The desktop rect a model observation photographs when it names no window
+   * and no window holds the agent's focus — for a multi-monitor desktop, the
+   * one output the agent is working on (the output of its focus target or its
+   * cursor, the scoping the preview's stills already use), because the whole
+   * workspace downscaled into one model image is several screens squeezed too
+   * small to read.
+   *
+   * `ComputerManager.captureFocusedWindow` asks it before falling back to the
+   * whole workspace, and refuses the region only where a visible denied window
+   * intersects it. `undefined` (or a throw) keeps the workspace. The unscoped
+   * `getState` screenshot is the backend's own capture, not the manager's: a
+   * backend that implements this should scope that shot the same way.
+   * Absent means the workspace, which is right for a single screen.
+   */
+  defaultObservationRegion?(): Promise<ComputerRect | undefined>;
   /** Pin or release the plugin's per-seat target window when supported. */
   focusWindow?(windowId: string): Promise<void>;
   /**
@@ -520,6 +655,16 @@ export interface ComputerBackend {
   raiseWindow?(windowId: string): Promise<void>;
   clearFocusWindow?(): Promise<void>;
   /**
+   * The seat as the next owner must find it: nothing aimed, nothing held,
+   * nothing remembered about the previous owner's targets. The manager calls
+   * it on every desktop lease change and release, where `clearFocusWindow`
+   * alone would leave a button or modifier the previous owner pressed still
+   * held for the next one — a compositor seat outlives the thread that drove
+   * it. Absent means the backend has nothing to hold: the manager clears the
+   * aim through `clearFocusWindow` instead.
+   */
+  resetInputDelivery?(): Promise<void>;
+  /**
    * Names the thread currently holding the desktop, for backends that draw an
    * agent cursor the human can see. `null` when nobody holds it. Best effort by
    * design: a label is presentation, so failing to set one must never fail the
@@ -528,6 +673,16 @@ export interface ComputerBackend {
   setDrivingAgent?(name: string | null): Promise<void>;
   /** Cosmetic activity only: never activates a window or sends input. */
   setCursorActivity?(text: string | null): Promise<void>;
+  /**
+   * Start `app` and report what the launch established. `pid` is the process
+   * the launch started; window readiness matches it exactly unless the result
+   * also names `appId`, the app identity its windows report as `appName`
+   * (a desktop entry or flatpak id). A backend sets `appId` when its launch may
+   * hand the window to another process — a flatpak or `gio launch` wrapper, a
+   * single-instance app forwarding to its running copy — and readiness then
+   * accepts a window of that app, or of the launch name, when none carries the
+   * pid. Leaving it unset keeps the exact pid rule.
+   */
   launchApp(
     app: string,
     args: readonly string[],
@@ -548,17 +703,58 @@ export interface ComputerBackend {
    * Pure read — no input, no mutation lease — so it is safe to run between an
    * action's dispatch and its observation. Optional because only the macOS
    * driver exposes an AX observer; callers must fall back to a fixed wait
-   * when it is absent or refused.
+   * when it is absent or refused. Read by presence on every use, so a backend
+   * may offer it only while what it drives can answer (a getter returning
+   * `undefined` for an older compositor plugin).
    */
-  waitForSettle?(options: {
-    readonly windowId: string;
-    readonly timeoutMs: number;
+  readonly waitForSettle?:
+    | ((options: {
+        readonly windowId: string;
+        readonly timeoutMs: number;
+        readonly quietMs: number;
+        /**
+         * How long `quietMs` of quiet is looked for. Past it, a surface that
+         * has changed since the action counts as settled even though it keeps
+         * repainting — an animation (a fading scrollbar, a button transition)
+         * never goes quiet — and one that has not changed yet is waited for
+         * until `timeoutMs` (or `changeWithinMs`), for a slow application's
+         * first repaint. Absent: quiet is waited for until `timeoutMs`.
+         */
+        readonly quietWithinMs?: number;
+        /**
+         * How long a first change is looked for. A surface that has not
+         * changed at all by then counts as settled: the action changed nothing
+         * it paints (a click on a label, a key the focused control ignored),
+         * and waiting on for a repaint that is not coming only delays the
+         * observation. One that has changed is waited on for its quiet as
+         * `quietWithinMs` says. Absent: a first change is waited for as long
+         * as quiet is.
+         */
+        readonly changeWithinMs?: number;
+      }) => Promise<{
+        readonly settled: boolean;
+        readonly waitedMs: number;
+        readonly eventsSeen?: number;
+      }>)
+    | undefined;
+  /**
+   * The post-action settle this backend's `waitForSettle` is tuned for, when
+   * it is not the AX observer's. A compositor that answers from surface
+   * commits sees an update the frame it lands, so a short quiet window after
+   * the first commit is enough, and a window that keeps repainting (a video,
+   * a spinner) should not hold the observation for the observer's full bound.
+   * The manager waits `min(quietMs, its configured settle)` of quiet, capped
+   * at `timeoutMs` and passing `quietWithinMs` and `changeWithinMs` through,
+   * after an action; an
+   * explicit `computer_wait` keeps its own timeout and waits for real quiet.
+   * Absent means the manager's defaults.
+   */
+  readonly actionSettle?: {
     readonly quietMs: number;
-  }): Promise<{
-    readonly settled: boolean;
-    readonly waitedMs: number;
-    readonly eventsSeen?: number;
-  }>;
+    readonly timeoutMs: number;
+    readonly quietWithinMs?: number;
+    readonly changeWithinMs?: number;
+  };
   /**
    * The process-level app list — name, pid, bundle id, active state — for
    * backends that can enumerate it. Optional because a compositor plugin may
@@ -737,6 +933,24 @@ export interface ComputerBackend {
   readClipboard?(): Promise<string>;
   /** Writes the same shared system clipboard `readClipboard` reads. */
   writeClipboard?(text: string): Promise<void>;
+  /**
+   * Writes `text` to the shared clipboard for exactly one paste, and says when
+   * that paste has read it.
+   *
+   * Paste has to put the human's clipboard back, and without this the manager
+   * can only guess when the target application has finished reading the
+   * payload (`COMPUTER_PASTE_RESTORE_MS`): a slow app reads after the guess and
+   * pastes the human's text instead. A backend whose clipboard can serve a
+   * single request and observe it (Wayland's `wl-copy --paste-once`) implements
+   * this; the manager then restores as soon as `consumed` settles, bounded by
+   * `COMPUTER_PASTE_CONSUME_TIMEOUT_MS` for a paste that never reads.
+   *
+   * The method resolves once the payload is on the clipboard, like
+   * `writeClipboard`. The backend owns the offer's lifetime: a later
+   * `writeClipboard` (the restore) must replace an unconsumed offer, and the
+   * offer must not outlive the backend. Absent means the fixed restore wait.
+   */
+  writeClipboardForPaste?(text: string): Promise<ComputerClipboardPasteOffer>;
   setValue(
     target: ComputerResolvedTarget,
     value: string,

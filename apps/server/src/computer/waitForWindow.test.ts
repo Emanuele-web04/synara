@@ -155,6 +155,56 @@ describe("launch window readiness", () => {
       ),
     ).toEqual({ window: launched, windowStatus: "ready" });
   });
+  it("keeps the exact pid rule when the launch names no app identity", async () => {
+    // The macOS (Cua) launch reports a pid and no appId: a same-name window of
+    // another process is never adopted, even when the pid has no window yet.
+    expect(
+      await waitForWindow(async () => [{ ...window, pid: 10 }], "Helium", 0, undefined, {
+        pid: 20,
+      }),
+    ).toEqual({ window: null, windowStatus: "no_usable_window", windowReason: "no_window" });
+  });
+  it("adopts a window of the launched app identity when a wrapper's pid owns none", async () => {
+    // `flatpak run` / `gio launch`: the reported pid exits, the app's own
+    // process owns the window, and its appName is the desktop id.
+    const kate = { ...window, appName: "org.kde.kate", pid: 4242 };
+    expect(
+      await waitForWindow(async () => [kate], "kate", 0, undefined, {
+        pid: 1111,
+        appId: "org.kde.kate.desktop",
+      }),
+    ).toEqual({ window: kate, windowStatus: "ready" });
+  });
+  it("still matches the launch name when an identity-reporting launch names another id", async () => {
+    const kate = { ...window, appName: "kate", pid: 4242 };
+    expect(
+      await waitForWindow(async () => [kate], "kate", 0, undefined, {
+        pid: 1111,
+        appId: "org.kde.kate",
+      }),
+    ).toEqual({ window: kate, windowStatus: "ready" });
+  });
+  it("prefers the launched pid over same-identity siblings", async () => {
+    const launched = { ...window, appName: "org.kde.kate", pid: 20 };
+    expect(
+      await waitForWindow(
+        async () => [{ ...launched, id: "8", pid: 10 }, launched],
+        "kate",
+        0,
+        undefined,
+        { pid: 20, appId: "org.kde.kate" },
+      ),
+    ).toEqual({ window: launched, windowStatus: "ready" });
+  });
+  it("keeps identity matches across processes ambiguous", async () => {
+    const kate = { ...window, appName: "org.kde.kate", pid: 10 };
+    expect(
+      await waitForWindow(async () => [kate, { ...kate, id: "8", pid: 11 }], "kate", 0, undefined, {
+        pid: 1111,
+        appId: "org.kde.kate",
+      }),
+    ).toEqual({ window: null, windowStatus: "no_usable_window", windowReason: "ambiguous" });
+  });
   it.each([
     [{ visible: false }, "hidden"],
     [{ minimized: true }, "hidden"],

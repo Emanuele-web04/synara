@@ -1,0 +1,32 @@
+# shellcheck shell=bash
+# cmake as far as scripts/install-and-load.sh can tell, for
+# apps/server/src/computer/kwinInstallScript.test.ts: configure writes the
+# cache and the build-info header, build writes the .so. It keeps real cmake's
+# refusal of a cache configured from another source directory (checked against
+# cmake 4.4: "The source ... does not match the source ... used to generate
+# cache").
+if [[ "$1" == "--build" ]]; then
+    mkdir -p "$2/kwin/plugins"
+    printf 'fake plugin\n' >"$2/kwin/plugins/SynaraComputerUsePlugin.so"
+    exit 0
+fi
+src=""
+build=""
+while (( $# )); do
+    case "$1" in
+        -S) src="$2"; shift 2 ;;
+        -B) build="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+if [[ -f "$build/CMakeCache.txt" ]]; then
+    cached="$(sed -n 's/^CMAKE_HOME_DIRECTORY:INTERNAL=//p' "$build/CMakeCache.txt")"
+    if [[ "$cached" != "$src" ]]; then
+        printf 'CMake Error: The source "%s/CMakeLists.txt" does not match the source "%s/CMakeLists.txt" used to generate cache.  Re-run cmake with a different source directory.\n' "$src" "$cached" >&2
+        exit 1
+    fi
+fi
+mkdir -p "$build/CMakeFiles"
+printf 'CMAKE_HOME_DIRECTORY:INTERNAL=%s\n' "$src" >"$build/CMakeCache.txt"
+printf '#define SYNARA_COMPUTER_USE_KWIN_VERSION "%s"\n#define SYNARA_COMPUTER_USE_BUILD_ID "fake-build"\n' \
+    "${STUB_KWIN_VERSION:-6.7.4}" >"$build/synaracomputerusebuildinfo.h"

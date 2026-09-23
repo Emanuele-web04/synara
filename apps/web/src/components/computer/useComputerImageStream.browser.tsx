@@ -57,6 +57,13 @@ async function pngBytes() {
   return new Uint8Array(await blob.arrayBuffer());
 }
 
+async function jpegBytes() {
+  const blob = await new Promise<Blob>((resolve) =>
+    sourceCanvas().toBlob((value) => resolve(value!), "image/jpeg", 0.85),
+  );
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
 function setVisibility(value: DocumentVisibilityState) {
   visibility = value;
   document.dispatchEvent(new Event("visibilitychange"));
@@ -87,6 +94,17 @@ it("closes hidden streams and restores dimensions when equal-sized frames resume
   await expect.element(screen.getByTestId("status")).toHaveTextContent("streaming");
   await screen.unmount();
   expect(sources.close).toHaveBeenCalledTimes(2);
+});
+
+it("draws a JPEG preview frame named by its header", async () => {
+  const screen = await render(<Probe />);
+  await expect.poll(() => sources.handlers.length).toBe(1);
+  const payload = await jpegBytes();
+  const jpeg = frame(payload);
+  sources.handlers[0]!.onFrame({ ...jpeg, header: { ...jpeg.header, mimeType: "image/jpeg" } });
+  await expect.element(screen.getByTestId("dimensions")).toHaveTextContent("4x3");
+  await expect.element(screen.getByTestId("status")).toHaveTextContent("streaming");
+  await screen.unmount();
 });
 
 it("closes an in-flight bitmap without drawing it after the document hides", async () => {

@@ -27,6 +27,21 @@ export interface LumaImage {
   readonly luma: Uint8Array;
 }
 
+/**
+ * One side of a travel measurement: a captured PNG, or luma a backend produced
+ * directly (`ComputerBackend.captureLuma`) for a capture nobody looks at.
+ */
+export type ScrollMeasurementFrame =
+  | { readonly kind: "png"; readonly bytes: Uint8Array }
+  | { readonly kind: "luma"; readonly image: LumaImage };
+
+/** The luma a measurement frame carries, decoding a PNG on the way; see `decodePngLuma`. */
+export function measurementFrameLuma(
+  frame: ScrollMeasurementFrame,
+): Promise<LumaImage | undefined> {
+  return frame.kind === "png" ? decodePngLuma(frame.bytes) : Promise.resolve(frame.image);
+}
+
 const PNG_SIGNATURE = Uint8Array.of(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a);
 
 /** Color types a backend image encoder can produce, and their sample counts. */

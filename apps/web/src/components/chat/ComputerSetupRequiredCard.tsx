@@ -102,10 +102,13 @@ export function ComputerSetupRequiredCard({
         ? "Choose Set up to request missing permissions or open System Settings. Allow access for this Synara app, then return here to recheck."
         : (availabilityView?.description ??
           "Choose Set up to check permissions and prepare computer control.");
+  // "Checking" ends by itself once the server knows its desktop; Set up would
+  // only race that detection.
   const canSetUp =
     !ready &&
     !statusError &&
     availability?.kind !== "unsupported-platform" &&
+    availability?.kind !== "checking" &&
     status?.provisionable !== false;
   // Only ever non-null on a locally built copy with a grant outstanding: on a
   // signed build the switch in System Settings means what it says, and the
