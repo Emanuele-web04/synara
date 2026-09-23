@@ -42,6 +42,10 @@ function existing(id: string, workspaceRoot: string, title = "My project") {
   return { id: ProjectId.makeUnsafe(id), title, workspaceRoot, kind: "project", deletedAt: null };
 }
 
+function unavailableImportPath(code: string): Error & { code: string } {
+  return Object.assign(new Error(code), { code });
+}
+
 async function worktreeFixture(home: string) {
   const root = path.join(home, "repository");
   const worktree = path.join(home, "worktree");
@@ -356,6 +360,120 @@ describe("buildProjectImportCatalog", () => {
       ),
     ).toEqual([]);
   });
+
+  it("keeps available Codex and Claude entries when other filesystem paths are inaccessible", async () => {
+    const home = await fixtureDirectory();
+    const codexRoot = path.join(home, "codex-repo");
+    const claudeRoot = path.join(home, "claude-repo");
+    const missingRoot = path.join(home, "deleted-repo");
+    const deniedRoot = path.join(home, "denied-repo");
+    const deniedGitRoot = path.join(home, "denied-git-repo");
+    const deniedStatRoot = path.join(home, "denied-stat-repo");
+    await Promise.all([fs.mkdir(codexRoot), fs.mkdir(claudeRoot)]);
+
+    const canonical = paths.canonicalImportPath;
+    const gitWorkspace = paths.findImportGitWorkspace;
+    const directoryExists = paths.importDirectoryExists;
+    vi.spyOn(paths, "canonicalImportPath").mockImplementation((value) =>
+      value === deniedRoot ? Promise.reject(unavailableImportPath("EPERM")) : canonical(value),
+    );
+    vi.spyOn(paths, "findImportGitWorkspace").mockImplementation((value) =>
+      value === deniedGitRoot
+        ? Promise.reject(unavailableImportPath("EACCES"))
+        : gitWorkspace(value),
+    );
+    vi.spyOn(paths, "importDirectoryExists").mockImplementation((value) =>
+      value === deniedStatRoot
+        ? Promise.reject(unavailableImportPath("EPERM"))
+        : directoryExists(value),
+    );
+
+    const projects = await buildProjectImportCatalog(
+      [
+        source(
+          "codex",
+          home,
+          [
+            session("codex-good", codexRoot, "native"),
+            session("codex-missing", missingRoot),
+            session("codex-denied", deniedRoot),
+            session("codex-denied-git", deniedGitRoot),
+            session("codex-denied-stat", deniedStatRoot),
+          ],
+          [
+            {
+              id: "native",
+              title: "Codex project",
+              roots: [codexRoot, deniedRoot, deniedStatRoot],
+            },
+          ],
+        ),
+        source("claudeAgent", home, [session("claude-good", claudeRoot)]),
+      ],
+      [existing("inaccessible", deniedRoot)],
+    );
+
+    expect(projects.map((project) => project.workspaceRoot).toSorted()).toEqual(
+      [codexRoot, claudeRoot, missingRoot].toSorted(),
+    );
+    expect(projects.find((project) => project.workspaceRoot === missingRoot)?.directoryExists).toBe(
+      false,
+    );
+    expect(
+      projects.flatMap((project) => project.threads.map((thread) => thread.id)).toSorted(),
+    ).toEqual(["codex-good", "codex-missing", "claude-good"].toSorted());
+  });
+
+  it("does not hide unexpected filesystem errors", async () => {
+    const home = await fixtureDirectory();
+    const failedRoot = path.join(home, "io-error");
+    const failure = Object.assign(new Error("device failed"), { code: "EIO" });
+    vi.spyOn(paths, "canonicalImportPath").mockImplementation((value) =>
+      value === failedRoot ? Promise.reject(failure) : Promise.resolve(value),
+    );
+    await expect(
+      buildProjectImportCatalog([source("codex", home, [session("broken", failedRoot)])], []),
+    ).rejects.toBe(failure);
+  });
+
+  it.runIf(process.platform === "win32")(
+    "keeps mixed providers and marks missing extended-length Codex folders absent",
+    async () => {
+      const home = await fixtureDirectory();
+      const root = path.join(home, "repo");
+      const missing = path.join(home, "deleted-repo");
+      await fs.mkdir(root);
+      const projects = await buildProjectImportCatalog(
+        [
+          source("codex", home, [
+            session("codex-good", path.win32.toNamespacedPath(root)),
+            session("codex-missing", path.win32.toNamespacedPath(missing)),
+          ]),
+          source("claudeAgent", home, [session("claude-good", root)]),
+        ],
+        [],
+      );
+      expect(projects).toHaveLength(2);
+      expect(
+        projects.find(
+          (project) =>
+            paths.importPathIdentity(project.workspaceRoot) === paths.importPathIdentity(root),
+        ),
+      ).toMatchObject({
+        directoryExists: true,
+        providers: ["claudeAgent", "codex"],
+      });
+      expect(
+        projects.find(
+          (project) =>
+            paths.importPathIdentity(project.workspaceRoot) === paths.importPathIdentity(missing),
+        ),
+      ).toMatchObject({
+        directoryExists: false,
+        providers: ["codex"],
+      });
+    },
+  );
 
   it("deduplicates native origins and caches repeated filesystem lookups within one scan", async () => {
     const home = await fixtureDirectory();
