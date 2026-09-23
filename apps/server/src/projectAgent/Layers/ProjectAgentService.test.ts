@@ -5,6 +5,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   AutomationId,
+  DEFAULT_SERVER_SETTINGS,
   ProjectDocumentRevisionId,
   ProjectGoalId,
   ProjectId,
@@ -12,6 +13,9 @@ import {
   ProjectTaskId,
   ThreadId,
   type OrchestrationCommand,
+  type ProviderKind,
+  type ServerProviderStatus,
+  type ServerSettings,
 } from "@synara/contracts";
 import { memoryThreadDocumentPath } from "@synara/shared/projectAgent";
 import { Effect, Layer, Option, Stream } from "effect";
@@ -34,6 +38,8 @@ import {
 } from "../projectBotPlaybook.ts";
 import { wakeReceiptRequestId } from "../digest.ts";
 import { resolveLibraryRoot } from "../libraryStore.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
+import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
 import { ProjectAgentService } from "../Services/ProjectAgentService.ts";
 import { ProjectAgentServiceLive } from "./ProjectAgentService.ts";
 
@@ -63,6 +69,8 @@ function makeTestLayer(options?: {
   readonly failFirstImport?: boolean;
   readonly shellLookupError?: boolean;
   readonly failCommandTypes?: ReadonlyArray<OrchestrationCommand["type"]>;
+  readonly disabledProviders?: ReadonlyArray<ProviderKind>;
+  readonly unavailableProviders?: ReadonlyArray<ProviderKind>;
 }) {
   const threadShells: Record<
     string,
@@ -138,7 +146,11 @@ function makeTestLayer(options?: {
     readonly archivedAt: string | null;
     readonly prompt: string;
   }> = [];
-  const automationUpdates: Array<{ readonly id: string; readonly enabled?: boolean }> = [];
+  const automationUpdates: Array<{
+    readonly id: string;
+    readonly enabled?: boolean;
+    readonly modelSelection?: unknown;
+  }> = [];
   const automationDeletes: string[] = [];
   const runNowCalls: string[] = [];
   const automationRuns: Array<{ readonly id: string }> = [];
@@ -274,6 +286,37 @@ function makeTestLayer(options?: {
         }
       }),
   } as unknown as OrchestrationEngineService["Service"]);
+  const serverSettings: ServerSettings = {
+    ...DEFAULT_SERVER_SETTINGS,
+    providers: {
+      ...DEFAULT_SERVER_SETTINGS.providers,
+      ...Object.fromEntries(
+        (options?.disabledProviders ?? []).map((provider) => [
+          provider,
+          { ...DEFAULT_SERVER_SETTINGS.providers[provider], enabled: false },
+        ]),
+      ),
+    },
+  };
+  const providerStatuses: ServerProviderStatus[] = (
+    Object.keys(DEFAULT_SERVER_SETTINGS.providers) as ProviderKind[]
+  ).map((provider) => {
+    const unavailable = (options?.unavailableProviders ?? []).includes(provider);
+    return {
+      provider,
+      status: unavailable ? "error" : "ready",
+      available: !unavailable,
+      authStatus: "authenticated",
+      checkedAt: now,
+      message: unavailable ? `${provider} CLI is not installed or not on PATH.` : undefined,
+    };
+  });
+  const serverSettingsLayer = Layer.succeed(ServerSettingsService, {
+    getSettings: Effect.succeed(serverSettings),
+  } as unknown as ServerSettingsService["Service"]);
+  const providerHealthLayer = Layer.succeed(ProviderHealth, {
+    getStatuses: Effect.succeed(providerStatuses),
+  } as unknown as ProviderHealth["Service"]);
   const automationLayer = Layer.succeed(AutomationService, {
     createProjectManaged: () =>
       Effect.succeed({
@@ -284,10 +327,15 @@ function makeTestLayer(options?: {
       automationDeletes.push(String(input.id));
       return Effect.succeed({ deleted: true });
     },
-    update: (input: { readonly id: string; readonly enabled?: boolean }) => {
+    update: (input: {
+      readonly id: string;
+      readonly enabled?: boolean;
+      readonly modelSelection?: unknown;
+    }) => {
       automationUpdates.push({
         id: String(input.id),
         ...(input.enabled === undefined ? {} : { enabled: input.enabled }),
+        ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
       });
       return Effect.succeed({ id: input.id, prompt: "" });
     },
@@ -310,6 +358,8 @@ function makeTestLayer(options?: {
       Layer.provide(snapshotLayer),
       Layer.provide(orchestrationLayer),
       Layer.provide(automationLayer),
+      Layer.provide(serverSettingsLayer),
+      Layer.provide(providerHealthLayer),
       Layer.provide(Layer.succeed(TextGeneration, {} as unknown as TextGeneration["Service"])),
       Layer.provide(
         Layer.succeed(GitCore, {
@@ -829,6 +879,37 @@ it.effect("links an ordinary repository to a group and is idempotent", () => {
   }).pipe(Effect.provide(harness.layer));
 });
 
+it.effect("surfaces linked projects in the overview before the group is configured", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const linked = yield* service.linkProject(
+      {
+        requestId: "req-link-preconfig",
+        projectId: groupId,
+        linkedProjectId: ordinaryId,
+      },
+      { kind: "user" },
+    );
+    assert.equal(linked.config, null);
+    assert.equal(linked.configured, false);
+    assert.deepEqual(linked.linkedProjectIds, [ordinaryId]);
+    const overview = yield* service.getOverview({ projectId: groupId }, { kind: "user" });
+    assert.equal(overview.config, null);
+    assert.deepEqual(overview.linkedProjectIds, [ordinaryId]);
+    const configured = yield* service.configure(
+      {
+        requestId: "req-link-preconfig-configure",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    assert.deepEqual(configured.linkedProjectIds, [ordinaryId]);
+    assert.deepEqual(configured.config?.linkedProjectIds, [ordinaryId]);
+  }).pipe(Effect.provide(harness.layer));
+});
+
 it.effect("rejects linking a container, the group itself, or an unknown project", () => {
   const harness = makeTestLayer();
   return Effect.gen(function* () {
@@ -963,6 +1044,225 @@ it.effect("round-trips library hosting fields and rejects a relative libraryPath
     assert.equal(cleared.config?.libraryPath, undefined);
     assert.equal(cleared.config?.libraryRemoteUrl, undefined);
     assert.equal(cleared.config?.libraryPushOnChange, true);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("applies a saved coordinator model to the live thread and heartbeat", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const first = yield* service.configure(
+      {
+        requestId: "req-model-1",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    const coordinatorThreadId = first.config?.coordinatorThreadId;
+    assert.isNotNull(coordinatorThreadId);
+    harness.dispatched.length = 0;
+    harness.runNowCalls.length = 0;
+    harness.automationUpdates.length = 0;
+
+    const nextModel = { provider: "claudeAgent" as const, model: "claude-sonnet-4-6" };
+    yield* service.configure(
+      {
+        requestId: "req-model-2",
+        projectId: groupId,
+        coordinatorModelSelection: nextModel,
+      },
+      { kind: "user" },
+    );
+
+    // The stored thread selection becomes the rebind signal the reactor
+    // consumes: its own meta-updated path restarts the session on the new
+    // provider and registers the prior-transcript bootstrap. An explicit
+    // thread.session.stop would run the stop cleanup AFTER that registration
+    // and wipe the bootstrap just created — so configure must not send one;
+    // a check-in then runs the new model immediately.
+    const metaUpdate = harness.dispatched.find(
+      (command) => command.type === "thread.meta.update" && command.modelSelection !== undefined,
+    );
+    assert.isOk(metaUpdate);
+    if (metaUpdate?.type !== "thread.meta.update") {
+      assert.fail("expected a thread.meta.update dispatch");
+    }
+    assert.equal(metaUpdate.threadId, coordinatorThreadId);
+    assert.deepEqual(metaUpdate.modelSelection, nextModel);
+    assert.equal(
+      harness.dispatched.some((command) => command.type === "thread.session.stop"),
+      false,
+    );
+    assert.deepEqual(harness.runNowCalls, ["automation-1"]);
+    assert.deepEqual(harness.automationUpdates, [
+      { id: "automation-1", modelSelection: nextModel },
+    ]);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("does not stop the session when the coordinator model keeps the same provider", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    yield* service.configure(
+      {
+        requestId: "req-model-same-1",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    harness.dispatched.length = 0;
+    harness.runNowCalls.length = 0;
+
+    const nextModel = { provider: "codex" as const, model: "gpt-5.3-codex" };
+    yield* service.configure(
+      {
+        requestId: "req-model-same-2",
+        projectId: groupId,
+        coordinatorModelSelection: nextModel,
+      },
+      { kind: "user" },
+    );
+
+    assert.equal(
+      harness.dispatched.some((command) => command.type === "thread.session.stop"),
+      false,
+    );
+    const metaUpdate = harness.dispatched.find(
+      (command) => command.type === "thread.meta.update" && command.modelSelection !== undefined,
+    );
+    assert.isOk(metaUpdate);
+    if (metaUpdate?.type !== "thread.meta.update") {
+      assert.fail("expected a thread.meta.update dispatch");
+    }
+    assert.deepEqual(metaUpdate.modelSelection, nextModel);
+    assert.deepEqual(harness.runNowCalls, ["automation-1"]);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("skips the model apply block when the coordinator model is unchanged", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    yield* service.configure(
+      {
+        requestId: "req-model-same-3",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    harness.dispatched.length = 0;
+    harness.runNowCalls.length = 0;
+    harness.automationUpdates.length = 0;
+
+    yield* service.configure(
+      {
+        requestId: "req-model-same-4",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+
+    assert.equal(
+      harness.dispatched.some(
+        (command) => command.type === "thread.meta.update" && command.modelSelection !== undefined,
+      ),
+      false,
+    );
+    assert.equal(
+      harness.dispatched.some((command) => command.type === "thread.session.stop"),
+      false,
+    );
+    assert.deepEqual(harness.runNowCalls, []);
+    assert.deepEqual(
+      harness.automationUpdates.filter((update) => update.modelSelection !== undefined),
+      [],
+    );
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("rejects a coordinator model whose provider is disabled in settings", () => {
+  const harness = makeTestLayer({ disabledProviders: ["claudeAgent"] });
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    yield* service.configure(
+      {
+        requestId: "req-disabled-provider-1",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    harness.dispatched.length = 0;
+    harness.runNowCalls.length = 0;
+
+    const error = yield* Effect.flip(
+      service.configure(
+        {
+          requestId: "req-disabled-provider-2",
+          projectId: groupId,
+          coordinatorModelSelection: {
+            provider: "claudeAgent" as const,
+            model: "claude-sonnet-4-6",
+          },
+        },
+        { kind: "user" },
+      ),
+    );
+
+    assert.match(error.message, /disabled in Settings > Providers/);
+    // The old binding survives: no rebind signal was stored or dispatched and
+    // no extra check-in was queued.
+    assert.equal(
+      harness.dispatched.some((command) => command.type === "thread.meta.update"),
+      false,
+    );
+    const stored = yield* repository.getConfig(groupId);
+    assert.isTrue(Option.isSome(stored));
+    if (Option.isSome(stored)) {
+      assert.deepEqual(stored.value.coordinatorModelSelection, modelSelection);
+    }
+    assert.deepEqual(harness.runNowCalls, []);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("rejects a coordinator model whose provider is not installed", () => {
+  const harness = makeTestLayer({ unavailableProviders: ["grok"] });
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    yield* service.configure(
+      {
+        requestId: "req-unavailable-provider-1",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    harness.dispatched.length = 0;
+    harness.runNowCalls.length = 0;
+
+    const error = yield* Effect.flip(
+      service.configure(
+        {
+          requestId: "req-unavailable-provider-2",
+          projectId: groupId,
+          coordinatorModelSelection: { provider: "grok" as const, model: "grok-code-fast-1" },
+        },
+        { kind: "user" },
+      ),
+    );
+
+    assert.match(error.message, /not installed or not on PATH/);
+    assert.equal(
+      harness.dispatched.some((command) => command.type === "thread.meta.update"),
+      false,
+    );
+    assert.deepEqual(harness.runNowCalls, []);
   }).pipe(Effect.provide(harness.layer));
 });
 
@@ -2162,6 +2462,84 @@ it.effect("remember writes a dated note + MEMORY.md line and dedupes repeats", (
   }).pipe(Effect.provide(harness.layer));
 });
 
+it.effect("user memory notes are indexed into MEMORY.md like remember notes", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    yield* configureTestGroup(service, "req-mem-notes-setup");
+    const user = { kind: "user" as const };
+
+    const saved = yield* service.writeDocument(
+      {
+        requestId: "req-note-1",
+        projectId: groupId,
+        logicalPath: "memory/notes/2026-09-22-releases-go-out-on-tuesdays.md",
+        content: "# Releases\nReleases go out on Tuesdays.\n",
+      },
+      user,
+    );
+    assert.equal(saved.logicalPath, "memory/notes/2026-09-22-releases-go-out-on-tuesdays.md");
+
+    const index = yield* repository.readDocumentRevision({
+      projectId: groupId,
+      logicalPath: "memory/MEMORY.md",
+    });
+    assert.equal(Option.isSome(index), true);
+    if (Option.isSome(index)) {
+      const line = `- [Releases](${saved.logicalPath}) — Releases go out on Tuesdays.`;
+      assert.equal(index.value.content.includes(line), true);
+    }
+
+    // A note without a heading indexes under its first line of text.
+    yield* service.writeDocument(
+      {
+        requestId: "req-note-2",
+        projectId: groupId,
+        logicalPath: "memory/notes/2026-09-22-standup-is-at-ten.md",
+        content: "Standup is at ten.\nBring the notes file.\n",
+      },
+      user,
+    );
+    const indexAfter = yield* repository.readDocumentRevision({
+      projectId: groupId,
+      logicalPath: "memory/MEMORY.md",
+    });
+    assert.equal(Option.isSome(indexAfter), true);
+    if (Option.isSome(indexAfter)) {
+      assert.equal(
+        indexAfter.value.content.includes(
+          "- [Standup is at ten.](memory/notes/2026-09-22-standup-is-at-ten.md)",
+        ),
+        true,
+      );
+    }
+
+    // Re-writing a note refreshes its index line in place — never duplicates it.
+    yield* service.writeDocument(
+      {
+        requestId: "req-note-3",
+        projectId: groupId,
+        logicalPath: "memory/notes/2026-09-22-releases-go-out-on-tuesdays.md",
+        content: "# Releases\nReleases moved to Wednesdays.\n",
+      },
+      user,
+    );
+    const indexFinal = yield* repository.readDocumentRevision({
+      projectId: groupId,
+      logicalPath: "memory/MEMORY.md",
+    });
+    assert.equal(Option.isSome(indexFinal), true);
+    if (Option.isSome(indexFinal)) {
+      const matches = indexFinal.value.content
+        .split("\n")
+        .filter((line) => line.includes("memory/notes/2026-09-22-releases-go-out-on-tuesdays.md"));
+      assert.equal(matches.length, 1);
+      assert.equal(matches[0]?.includes("Releases moved to Wednesdays."), true);
+    }
+  }).pipe(Effect.provide(harness.layer));
+});
+
 it.effect("linkRepository links by project id or workspace path and records activity", () => {
   const harness = makeTestLayer();
   return Effect.gen(function* () {
@@ -3274,5 +3652,32 @@ it.effect("upgrades a stock playbook but never a user-edited one", () => {
     if (Option.isSome(kept)) {
       assert.equal(kept.value.content, "# My custom coordinator rules\n");
     }
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("gives the coordinator thread its playbook packet on every turn", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const overview = yield* configureTestGroup(service, "req-coordinator-packet");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+
+    // Called once per dispatchTurnForThread — the coordinator must see its
+    // playbook and watch state on every turn, not just the first.
+    for (let turn = 0; turn < 2; turn += 1) {
+      const packet = yield* service.formatContextPacketForTurn(coordinatorThreadId);
+      assert.equal(packet.includes("Group context packet"), true);
+      assert.equal(packet.includes("## Playbook\n# Group coordinator playbook"), true);
+      assert.equal(packet.includes("## Watch"), true);
+      assert.equal(packet.includes("## Workers"), true);
+      // The member-only tools section never leaks into the coordinator packet.
+      assert.equal(packet.includes("## Group tools"), false);
+    }
+
+    // Member threads get the shared packet without the coordinator playbook.
+    const memberPacket = yield* service.formatContextPacketForTurn(groupMemberThreadId);
+    assert.equal(memberPacket.includes("Group context packet"), true);
+    assert.equal(memberPacket.includes("## Playbook"), false);
+    assert.equal(memberPacket.includes("## Group tools"), true);
   }).pipe(Effect.provide(harness.layer));
 });

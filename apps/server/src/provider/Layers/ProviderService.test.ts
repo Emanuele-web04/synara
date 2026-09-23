@@ -1328,6 +1328,46 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("carries autoApproveSynaraTools through session recovery", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-autoapprove-recovery");
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+        autoApproveSynaraTools: true,
+      });
+      const persisted = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.strictEqual(
+        asRuntimePayloadRecord(persisted?.runtimePayload).autoApproveSynaraTools,
+        true,
+      );
+
+      // Kill the runtime out from under the binding: the next turn must
+      // recover the session with the same approval set it was spawned with.
+      yield* routing.codex.stopSession(threadId);
+      yield* provider.sendTurn({
+        threadId,
+        input: "keep going",
+        attachments: [],
+      });
+
+      const recoveredStart = routing.codex.startSession.mock.calls.at(-1)?.[0];
+      assert.strictEqual(recoveredStart?.threadId, threadId);
+      assert.strictEqual(recoveredStart?.autoApproveSynaraTools, true);
+      const recovered = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.strictEqual(
+        asRuntimePayloadRecord(recovered?.runtimePayload).autoApproveSynaraTools,
+        true,
+      );
+
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
   it.effect("imports a native copy once and preserves it across runtime stop and retries", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;

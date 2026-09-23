@@ -1,5 +1,6 @@
 import "../../../index.css";
 
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { LibraryEntry } from "@synara/contracts";
 import { ProjectId } from "@synara/contracts";
 import { page } from "vitest/browser";
@@ -33,6 +34,20 @@ const harness = vi.hoisted(() => ({
     },
     contextMenu: {
       show: vi.fn(async () => null),
+    },
+    projects: {
+      readFile: vi.fn(async () => ({
+        relativePath: "note.md",
+        contents: "# note\n",
+        truncated: false,
+        version: null,
+        encoding: "utf8",
+        lineEnding: "lf",
+      })),
+      onFileChange: vi.fn(() => () => undefined),
+    },
+    git: {
+      readWorkingTreeDiff: vi.fn(async () => ({ patch: "", truncated: false })),
     },
   },
 }));
@@ -91,10 +106,13 @@ beforeEach(() => {
 });
 
 function renderPanel() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <div style={{ position: "relative", width: 480, height: 640 }}>
-      <LibraryPanel open variant="docked" projectId={projectId} onClose={() => {}} />
-    </div>,
+    <QueryClientProvider client={queryClient}>
+      <div style={{ position: "relative", width: 480, height: 640 }}>
+        <LibraryPanel open variant="docked" projectId={projectId} onClose={() => {}} />
+      </div>
+    </QueryClientProvider>,
   );
 }
 
@@ -182,6 +200,21 @@ describe("LibraryPanel", () => {
     release();
 
     await vi.waitFor(() => expect(harness.listCalls.length).toBe(callsBeforeFocus + 4));
+  });
+
+  it("goes back to the file list through the preview breadcrumb button", async () => {
+    harness.rootEntries = [fileEntry("note.md")];
+    const { container } = await renderPanel();
+
+    await page.getByRole("button", { name: "note.md" }).click();
+    const back = page.getByRole("button", { name: "Back to library from note.md" });
+    await expect.element(back).toBeVisible();
+    // The file name itself is part of the single back button.
+    await expect.element(back).toHaveTextContent("note.md");
+
+    await back.click();
+    await expect.element(page.getByRole("button", { name: "note.md" })).toBeVisible();
+    expect(container.querySelector('[aria-label^="Back to library"]')).toBeNull();
   });
 
   it("uploads a file through the hidden input and refetches", async () => {

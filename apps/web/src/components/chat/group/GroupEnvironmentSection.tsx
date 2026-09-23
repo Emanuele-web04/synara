@@ -42,7 +42,7 @@ export function GroupEnvironmentSection(props: {
     () => new Map(projects.map((project) => [project.id, project] as const)),
     [projects],
   );
-  const linkedProjectIds = props.agent.overview?.config?.linkedProjectIds ?? [];
+  const linkedProjectIds = props.agent.overview?.linkedProjectIds ?? [];
   const linkedProjects = linkedProjectIds
     .map((id) => projectById.get(id))
     .filter((project): project is Project => project !== undefined);

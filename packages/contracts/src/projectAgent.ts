@@ -351,6 +351,9 @@ export const ProjectAgentOverview = Schema.Struct({
   projectId: ProjectId,
   configured: Schema.Boolean,
   config: Schema.NullOr(ProjectAgentConfig),
+  // Linked projects are a project-level relation that exists before the group is
+  // configured, so they surface outside `config`.
+  linkedProjectIds: Schema.Array(ProjectId),
   goal: Schema.NullOr(ProjectGoal),
   digest: Schema.NullOr(ProjectDigest),
   blockers: Schema.Array(ProjectAgentBlocker),
@@ -535,6 +538,9 @@ export type ProjectAgentDeleteGroupInput = typeof ProjectAgentDeleteGroupInput.T
 export const ProjectAgentDeleteGroupResult = Schema.Struct({
   deletedProjectId: ProjectId,
   libraryLeftOnDiskPath: Schema.NullOr(Schema.String),
+  // Set when the managed group workspace folder stayed on disk because it
+  // contains files the user (or an agent) added — the UI tells them where.
+  workspaceLeftOnDiskPath: Schema.NullOr(Schema.String),
 });
 export type ProjectAgentDeleteGroupResult = typeof ProjectAgentDeleteGroupResult.Type;
 

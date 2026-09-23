@@ -33,6 +33,7 @@ import { createActiveTrailStore, deriveMessageTrailItems } from "./messageTrail.
 import { createThreadFindHighlightStore, type ThreadFindHighlightStore } from "./threadFind.logic";
 import { AgentActivityDetailView } from "./AgentActivityDetailView";
 import type { AgentActivityDetail } from "./agentActivity.logic";
+import { ThreadErrorBanner } from "./ThreadErrorBanner";
 
 interface ChatTranscriptPaneProps {
   activeThreadId: string;
@@ -106,6 +107,11 @@ interface ChatTranscriptPaneProps {
   timestampFormat: TimestampFormat;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   conversationOnly?: boolean;
+  /** Stored thread-level error, rendered inline over the transcript. */
+  threadError?: string | null;
+  unblockingThread?: boolean;
+  onDismissThreadError?: () => void;
+  onUnblockThread?: () => void;
   workspaceRoot: string | undefined;
   keybindings?: ComponentProps<typeof MessagesTimeline>["keybindings"];
   availableEditors?: ComponentProps<typeof MessagesTimeline>["availableEditors"];
@@ -185,6 +191,10 @@ export function ChatTranscriptPane({
   timestampFormat,
   turnDiffSummaryByAssistantMessageId,
   conversationOnly,
+  threadError,
+  unblockingThread,
+  onDismissThreadError,
+  onUnblockThread,
   workspaceRoot,
   keybindings,
   availableEditors,
@@ -356,6 +366,18 @@ export function ChatTranscriptPane({
             >
               <ArrowDownIcon className="size-3.5" />
             </button>
+          </div>
+        ) : null}
+
+        {!agentActivityDetail && threadError ? (
+          <div className="pointer-events-none absolute inset-x-0 top-2 z-30 flex justify-center px-3">
+            <ThreadErrorBanner
+              className="pointer-events-auto"
+              error={threadError}
+              unblocking={unblockingThread === true}
+              {...(onDismissThreadError ? { onDismiss: onDismissThreadError } : {})}
+              {...(onUnblockThread ? { onUnblock: onUnblockThread } : {})}
+            />
           </div>
         ) : null}
 

@@ -68,6 +68,7 @@ import { ProviderDiscoveryServiceLive } from "../../provider/Layers/ProviderDisc
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { isSynaraGatewayToolName } from "../computerToolPermission.ts";
 import { AgentGateway } from "../Services/AgentGateway.ts";
 import { AgentGatewayCredentials } from "../Services/AgentGatewayCredentials.ts";
 import {
@@ -808,6 +809,7 @@ function makeHarnessLayer(
         config: null,
         goal: null,
         digest: null,
+        linkedProjectIds: [],
         blockers: [],
         recentOutcomes: [],
         coordinatorStatus: "unconfigured",
@@ -1726,6 +1728,32 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
+  it.effect("covers every served tool under the auto-approve matcher", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.postRaw({
+        authorizationHeader: "Bearer token-parent",
+        body: { jsonrpc: "2.0", id: 1, method: "tools/list" },
+      });
+      assert.equal(response.status, 200);
+      const tools =
+        (response.body as { result?: { tools?: Array<{ name: string }> } } | undefined)?.result
+          ?.tools ?? [];
+      assert.isAbove(tools.length, 0);
+      for (const tool of tools) {
+        assert.isTrue(
+          isSynaraGatewayToolName(`synara_${tool.name}`),
+          `synara_${tool.name} must auto-approve`,
+        );
+        assert.isTrue(
+          isSynaraGatewayToolName(`mcp__synara__${tool.name}`),
+          `mcp__synara__${tool.name} must auto-approve`,
+        );
+      }
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
   it.effect("rejects malformed JSON-RPC ids before invoking a tool", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
     return Effect.gen(function* () {
@@ -2071,6 +2099,20 @@ describe("AgentGateway", () => {
         "synara_cancel_automation",
         "synara_update_automation_memory",
         "synara_report_automation_result",
+        // Group tools the coordinator delegates through — the playbook names
+        // these, so a capability regression would silently gut delegation.
+        "synara_project_get_overview",
+        "synara_project_list_tasks",
+        "synara_project_read_document",
+        "synara_project_write_document",
+        "synara_project_report_result",
+        "synara_project_context",
+        "synara_project_remember",
+        "synara_project_forget",
+        "synara_project_link_repository",
+        "synara_project_library_list",
+        "synara_project_library_add",
+        "synara_project_list_threads",
       ]);
       const createThreadProperties = tools.find((tool) => tool.name === "synara_create_thread")
         ?.inputSchema.properties;

@@ -439,18 +439,19 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
 
       {previewPath !== null && library.root ? (
         <div className="flex min-h-0 flex-1 flex-col">
-          <div className="flex items-center gap-1 px-2 pb-1">
-            <IconButton
+          <div className="flex items-center px-2 pb-1">
+            <button
               type="button"
-              label="Back to library"
-              tooltip="Back"
+              aria-label={`Back to library from ${previewPath}`}
+              title="Back to library"
+              className="flex min-w-0 flex-1 items-center gap-1 rounded-md px-1.5 py-0.5 text-left text-ui-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
               onClick={() => setPreviewPath(null)}
             >
-              <ArrowLeftIcon className="size-3.5" />
-            </IconButton>
-            <span className="min-w-0 truncate text-ui-sm text-muted-foreground" title={previewPath}>
-              {previewPath}
-            </span>
+              <ArrowLeftIcon className="size-3.5 shrink-0" />
+              <span className="min-w-0 truncate" title={previewPath}>
+                {previewPath}
+              </span>
+            </button>
           </div>
           <div className="min-h-0 flex-1 overflow-hidden">
             <WorkspaceFilePreview
@@ -463,24 +464,25 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
         </div>
       ) : historyPath !== null ? (
         <div className="flex min-h-0 flex-1 flex-col">
-          <div className="flex items-center gap-1 px-2 pb-1">
-            <IconButton
+          <div className="flex items-center px-2 pb-1">
+            <button
               type="button"
-              label="Back to library"
-              tooltip="Back"
+              aria-label="Back to library from history"
+              title="Back to library"
+              className="flex min-w-0 flex-1 items-center gap-1 rounded-md px-1.5 py-0.5 text-left text-ui-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
               onClick={() => {
                 setHistoryPath(null);
                 setHistoryCommits(null);
               }}
             >
-              <ArrowLeftIcon className="size-3.5" />
-            </IconButton>
-            <span
-              className="min-w-0 truncate text-ui-sm text-muted-foreground"
-              title={historyScope === "library" ? "Library" : historyPath}
-            >
-              {historyScope === "library" ? "History" : `History — ${historyPath}`}
-            </span>
+              <ArrowLeftIcon className="size-3.5 shrink-0" />
+              <span
+                className="min-w-0 truncate"
+                title={historyScope === "library" ? "Library" : historyPath}
+              >
+                {historyScope === "library" ? "History" : `History — ${historyPath}`}
+              </span>
+            </button>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto px-1">
             {historyCommits === null ? (

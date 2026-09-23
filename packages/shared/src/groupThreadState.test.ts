@@ -6,6 +6,7 @@ import {
   groupThreadStateLabel,
   isLatestTurnSettled,
   isThreadActivelyWorking,
+  resolveGroupCoordinatorStatus,
   resolveGroupThreadState,
   type GroupThreadStateThread,
 } from "./groupThreadState";
@@ -126,6 +127,85 @@ describe("resolveGroupThreadState", () => {
         pullRequest: { state: "merged" },
       }),
     ).toBe("resolved");
+  });
+});
+
+describe("resolveGroupCoordinatorStatus", () => {
+  const coordinatorStatus = (input: {
+    configured?: boolean;
+    goalStatus?: string | null;
+    thread?: GroupThreadStateThread | null;
+  }) =>
+    resolveGroupCoordinatorStatus({
+      configured: input.configured ?? true,
+      goalStatus: input.goalStatus ?? null,
+      thread: input.thread ?? null,
+    });
+
+  it("reports unconfigured before the group has a coordinator", () => {
+    expect(coordinatorStatus({ configured: false })).toBe("unconfigured");
+  });
+
+  it("lets goal pause and stop win over live thread state", () => {
+    const liveThread: GroupThreadStateThread = {
+      session: { status: "running" },
+      latestTurn: { state: "running", startedAt: "2026-01-01T00:00:00.000Z" },
+    };
+    expect(coordinatorStatus({ goalStatus: "paused", thread: liveThread })).toBe("paused");
+    expect(coordinatorStatus({ goalStatus: "stopped", thread: liveThread })).toBe("stopped");
+  });
+
+  it("reports running while a coordinator turn is in flight", () => {
+    expect(
+      coordinatorStatus({
+        goalStatus: null,
+        thread: {
+          session: { status: "running" },
+          latestTurn: { state: "running", startedAt: "2026-01-01T00:00:00.000Z" },
+        },
+      }),
+    ).toBe("running");
+    expect(
+      coordinatorStatus({
+        goalStatus: "draft",
+        thread: { session: { status: "starting" } },
+      }),
+    ).toBe("running");
+  });
+
+  it("counts a pending approval or user-input request as running", () => {
+    expect(
+      coordinatorStatus({
+        thread: { session: { status: "ready" }, hasPendingApprovals: true },
+      }),
+    ).toBe("running");
+    expect(
+      coordinatorStatus({
+        thread: { session: { status: "ready" }, hasPendingUserInput: true },
+      }),
+    ).toBe("running");
+  });
+
+  it("keeps the established goal-driven mappings", () => {
+    expect(coordinatorStatus({ goalStatus: "active", thread: null })).toBe("running");
+    expect(coordinatorStatus({ goalStatus: "draft", thread: null })).toBe("idle");
+    expect(coordinatorStatus({ goalStatus: null, thread: null })).toBe("idle");
+  });
+
+  it("stays idle for a stopped session and an archived thread", () => {
+    expect(
+      coordinatorStatus({
+        thread: {
+          session: { status: "stopped" },
+          hasPendingApprovals: true,
+        },
+      }),
+    ).toBe("idle");
+    expect(
+      coordinatorStatus({
+        thread: { archivedAt: "2026-01-01T00:00:00.000Z", session: { status: "running" } },
+      }),
+    ).toBe("idle");
   });
 });
 

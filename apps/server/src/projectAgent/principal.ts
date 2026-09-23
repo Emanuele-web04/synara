@@ -5,6 +5,10 @@ import type {
   ProjectTaskId,
   ThreadId,
 } from "@synara/contracts";
+import {
+  resolveGroupCoordinatorStatus,
+  type GroupThreadStateThread,
+} from "@synara/shared/groupThreadState";
 
 export type ProjectAgentPrincipal =
   | { readonly kind: "user" }
@@ -64,12 +68,9 @@ export function canConfigureProject(principal: ProjectAgentPrincipal): boolean {
 export function coordinatorStatusFromGoal(
   configured: boolean,
   goalStatus: ProjectGoalStatus | null,
+  thread?: GroupThreadStateThread | null,
 ): ProjectAgentOverview["coordinatorStatus"] {
-  if (!configured) return "unconfigured";
-  if (goalStatus === "paused") return "paused";
-  if (goalStatus === "stopped") return "stopped";
-  if (goalStatus === "active") return "running";
-  return "idle";
+  return resolveGroupCoordinatorStatus({ configured, goalStatus, thread });
 }
 
 export function projectAgentSummariesForPrincipal<T extends { readonly projectId: ProjectId }>(
