@@ -96,9 +96,13 @@ identity at runtime; on packaged builds the embedded value wins over the env var
 
 The stable app offers a one-click handoff under **Settings → General → Synara Beta**:
 
-- **Get Synara Beta** opens the public download page when no beta install is
-  detected.
-- **Copy my data and open** writes a marker at
+- **Install Synara Beta** (macOS) downloads the newest `v*-beta.N` release's
+  `beta-mac.yml`, picks the zip for the current architecture, verifies its
+  sha512, unpacks it with `ditto`, checks the bundle id is
+  `com.emanueledipietro.synara.beta`, and moves `Synara Beta.app` into
+  `/Applications` — then opens it. On other platforms the card opens the public
+  download page instead.
+- **Copy my data and open** installs first when needed, then writes a marker at
   `~/.synara-beta/import-requested.json` and launches the beta app. On its next
   startup the beta server consumes the marker, snapshots stable's database,
   copies settings and provider secrets, then deletes the marker. The snapshot
@@ -113,11 +117,37 @@ The stable app offers a one-click handoff under **Settings → General → Synar
 - The import button is disabled while a beta server is running so an in-flight
   beta never reads a half-written snapshot; quit beta first, then import.
 - Launch/import are refused unless the running app is a production-flavor build.
+- On macOS the beta app is spawned by executable path
+  (`Synara Beta.app/Contents/MacOS/Synara Beta`) with a sanitized environment:
+  stable's `SYNARA_HOME`, `SYNARA_DESKTOP_SMOKE_USER_DATA`, and server auth
+  variables are stripped, and beta gets `SYNARA_BETA_HOME` (plus
+  `SYNARA_DESKTOP_SMOKE_USER_DATA` when `SYNARA_BETA_USER_DATA` is set).
 
 The marker format lives in `packages/shared/src/betaChannel.ts`
 (`BetaImportRequest`, `BetaImportResult`); the desktop side is
-`apps/desktop/src/betaChannel.ts` and the consuming import is
+`apps/desktop/src/betaChannel.ts`, the download/install flow is
+`apps/desktop/src/betaInstaller.ts`, and the consuming import is
 `apps/server/src/betaImport.ts`.
+
+### Local demo
+
+Everything about the install location and data home can be redirected with
+environment variables, so a demo never touches a real `~/.synara`,
+`~/Library/Application Support/synara`, or `/Applications`:
+
+- `SYNARA_BETA_FEED_URL` — base URL serving `beta-mac.yml` and the files it
+  lists (for example a local static server). Without it, the newest GitHub
+  `v*-beta.N` release is used.
+- `SYNARA_BETA_INSTALL_DIR` — directory the app bundle is moved into and
+  probed in first (default `/Applications`).
+- `SYNARA_BETA_HOME` — overrides `~/.synara-beta` everywhere it is resolved:
+  stable's import marker path, the beta app's own base dir, and the
+  running-server probe.
+- `SYNARA_BETA_USER_DATA` — Electron `userData` dir handed to the launched
+  beta (only honored on beta, canary-style test flavors, and source builds).
+- `SYNARA_HOME` / `HOME` — stable's data dir and the `userData` base,
+  respectively; overriding `HOME` isolates the Electron profile exactly like
+  `scripts/verify-packaged-desktop-startup.ts` does.
 
 The import copies settings, provider secrets, and a database snapshot. It never
 copies logs, diagnostics queues, runtime files, other import markers, database
