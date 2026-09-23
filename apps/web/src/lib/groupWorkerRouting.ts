@@ -7,7 +7,7 @@
 // Exports: resolveGroupWorkerRoutingDefaults, applyGroupWorkerRoutingDefaults,
 //          resolveGroupContainerThreadDefaults
 
-import { type ProjectId, type ThreadId } from "@synara/contracts";
+import { type ProjectId, type ServerProviderStatus, type ThreadId } from "@synara/contracts";
 
 import { useComposerDraftStore } from "../composerDraftStore";
 import { readNativeApi } from "../nativeApi";
@@ -15,6 +15,7 @@ import { useStore } from "../store";
 import type { ThreadPrimarySurface } from "../types";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { isGroupContainerProject } from "./groupProjects";
+import { findProviderStatus, isProviderUsable } from "./providerAvailability";
 import type { ContainerThreadDefaults } from "./startContainerChat";
 
 // New chats inside a group inherit the coordinator's worker routing defaults.
@@ -42,13 +43,28 @@ export async function resolveGroupWorkerRoutingDefaults(input: {
   };
 }
 
+// The group's Thread model is a draft *default*, not a lock: it is pinned as
+// the active provider only while that provider is usable (installed and
+// authenticated). When it is not, the configured model is still recorded as
+// the draft's per-provider default but the usable fallback the composer
+// already resolved stays active, so a send is never blocked by the group's
+// routing. An empty `providerStatuses` means availability has not been
+// reconciled yet — the seed pins optimistically and the send-time
+// availability check decides, matching the sticky-seed behavior.
 export function applyGroupWorkerRoutingDefaults(input: {
   readonly threadId: ThreadId;
   readonly defaults: ContainerThreadDefaults;
+  readonly providerStatuses: readonly ServerProviderStatus[];
 }): void {
   const draftStore = useComposerDraftStore.getState();
-  if (input.defaults.modelSelection) {
-    draftStore.setModelSelection(input.threadId, input.defaults.modelSelection);
+  const modelSelection = input.defaults.modelSelection;
+  if (modelSelection) {
+    const status = findProviderStatus(input.providerStatuses, modelSelection.provider);
+    if (input.providerStatuses.length === 0 || isProviderUsable(status)) {
+      draftStore.setModelSelection(input.threadId, modelSelection);
+    } else {
+      draftStore.seedModelSelection(input.threadId, modelSelection);
+    }
   }
   if (input.defaults.providerOptions) {
     draftStore.setProviderOptionsForDispatch(input.threadId, input.defaults.providerOptions);

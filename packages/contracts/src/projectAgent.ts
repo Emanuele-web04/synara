@@ -538,6 +538,9 @@ export type ProjectAgentDeleteGroupInput = typeof ProjectAgentDeleteGroupInput.T
 export const ProjectAgentDeleteGroupResult = Schema.Struct({
   deletedProjectId: ProjectId,
   libraryLeftOnDiskPath: Schema.NullOr(Schema.String),
+  // Set when the managed group workspace folder stayed on disk because it
+  // contains files the user (or an agent) added — the UI tells them where.
+  workspaceLeftOnDiskPath: Schema.NullOr(Schema.String),
 });
 export type ProjectAgentDeleteGroupResult = typeof ProjectAgentDeleteGroupResult.Type;
 

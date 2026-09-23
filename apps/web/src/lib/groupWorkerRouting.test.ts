@@ -3,6 +3,7 @@ import {
   type ProjectAgentConfig,
   type ProjectAgentOverview,
   ProjectId,
+  type ServerProviderStatus,
   ThreadId,
 } from "@synara/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -216,6 +217,22 @@ describe("resolveGroupWorkerRoutingDefaults", () => {
   });
 });
 
+const GROUP_PROVIDER_STATUS: ServerProviderStatus = {
+  provider: "claudeAgent",
+  status: "ready",
+  available: true,
+  authStatus: "authenticated",
+  checkedAt: "2026-09-01T00:00:00.000Z",
+};
+
+const FALLBACK_PROVIDER_STATUS: ServerProviderStatus = {
+  provider: "codex",
+  status: "ready",
+  available: true,
+  authStatus: "authenticated",
+  checkedAt: "2026-09-01T00:00:00.000Z",
+};
+
 describe("applyGroupWorkerRoutingDefaults", () => {
   it("seeds the draft's model selection and dispatch provider options", () => {
     applyGroupWorkerRoutingDefaults({
@@ -224,11 +241,82 @@ describe("applyGroupWorkerRoutingDefaults", () => {
         modelSelection: GROUP_MODEL,
         providerOptions: GROUP_PROVIDER_OPTIONS,
       },
+      providerStatuses: [GROUP_PROVIDER_STATUS, FALLBACK_PROVIDER_STATUS],
     });
 
     const draft = useComposerDraftStore.getState().draftsByThreadId[THREAD_ID];
     expect(draft?.activeProvider).toBe("claudeAgent");
     expect(draft?.modelSelectionByProvider.claudeAgent?.model).toBe("claude-opus-4-5");
     expect(draft?.providerOptionsForDispatch).toEqual(GROUP_PROVIDER_OPTIONS);
+  });
+
+  it("pins the group's model optimistically while provider statuses are still loading", () => {
+    applyGroupWorkerRoutingDefaults({
+      threadId: THREAD_ID,
+      defaults: { modelSelection: GROUP_MODEL },
+      providerStatuses: [],
+    });
+
+    const draft = useComposerDraftStore.getState().draftsByThreadId[THREAD_ID];
+    expect(draft?.activeProvider).toBe("claudeAgent");
+    expect(draft?.modelSelectionByProvider.claudeAgent?.model).toBe("claude-opus-4-5");
+  });
+
+  it("keeps the usable fallback active when the group's provider is not installed", () => {
+    // The composer's usable-provider fallback already ran (sticky mint): the
+    // draft is on codex because claudeAgent is not installed.
+    useComposerDraftStore
+      .getState()
+      .setModelSelection(THREAD_ID, { provider: "codex", model: "gpt-5.4" });
+    applyGroupWorkerRoutingDefaults({
+      threadId: THREAD_ID,
+      defaults: {
+        modelSelection: GROUP_MODEL,
+        providerOptions: GROUP_PROVIDER_OPTIONS,
+      },
+      providerStatuses: [
+        {
+          provider: "claudeAgent",
+          status: "error",
+          available: false,
+          authStatus: "unknown",
+          checkedAt: "2026-09-01T00:00:00.000Z",
+          message: "Claude Code is not installed.",
+        },
+        FALLBACK_PROVIDER_STATUS,
+      ],
+    });
+
+    const draft = useComposerDraftStore.getState().draftsByThreadId[THREAD_ID];
+    // The configured model stays as the per-provider default, but the active
+    // provider is not pinned to an unusable one — a send would dispatch codex.
+    expect(draft?.activeProvider).toBe("codex");
+    expect(draft?.modelSelectionByProvider.codex?.model).toBe("gpt-5.4");
+    expect(draft?.modelSelectionByProvider.claudeAgent?.model).toBe("claude-opus-4-5");
+    expect(draft?.providerOptionsForDispatch).toEqual(GROUP_PROVIDER_OPTIONS);
+  });
+
+  it("keeps the usable fallback active when the group's provider is signed out", () => {
+    useComposerDraftStore
+      .getState()
+      .setModelSelection(THREAD_ID, { provider: "codex", model: "gpt-5.4" });
+    applyGroupWorkerRoutingDefaults({
+      threadId: THREAD_ID,
+      defaults: { modelSelection: GROUP_MODEL },
+      providerStatuses: [
+        {
+          provider: "claudeAgent",
+          status: "warning",
+          available: true,
+          authStatus: "unauthenticated",
+          checkedAt: "2026-09-01T00:00:00.000Z",
+        },
+        FALLBACK_PROVIDER_STATUS,
+      ],
+    });
+
+    const draft = useComposerDraftStore.getState().draftsByThreadId[THREAD_ID];
+    expect(draft?.activeProvider).toBe("codex");
+    expect(draft?.modelSelectionByProvider.claudeAgent?.model).toBe("claude-opus-4-5");
   });
 });

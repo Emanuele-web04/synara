@@ -63,6 +63,13 @@ export function GroupLifecycleSection(props: {
         description: `The library folder was left on disk at ${result.libraryLeftOnDiskPath}.`,
       });
     }
+    if (result.workspaceLeftOnDiskPath) {
+      toastManager.add({
+        type: "info",
+        title: "Group deleted",
+        description: `Folder kept because it has your files: ${result.workspaceLeftOnDiskPath}.`,
+      });
+    }
     props.onDeleted();
   };
 
