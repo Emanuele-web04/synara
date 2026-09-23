@@ -1382,6 +1382,53 @@ export function getProviderStartOptions(
 }
 
 /**
+ * Layers `overlay` over `base` per provider and per option key: the overlay
+ * wins only for the provider options it names, so a seeded routing overlay
+ * (e.g. a group's worker routing) never wipes the user's own start options
+ * for other providers — or the untouched keys of a provider it does name.
+ */
+export function mergeProviderStartOptions(
+  base: ProviderStartOptions | undefined,
+  overlay: ProviderStartOptions | undefined,
+): ProviderStartOptions | undefined {
+  if (overlay === undefined) {
+    return base;
+  }
+  if (base === undefined) {
+    return overlay;
+  }
+  return {
+    ...(base.codex !== undefined || overlay.codex !== undefined
+      ? { codex: { ...base.codex, ...overlay.codex } }
+      : {}),
+    ...(base.claudeAgent !== undefined || overlay.claudeAgent !== undefined
+      ? { claudeAgent: { ...base.claudeAgent, ...overlay.claudeAgent } }
+      : {}),
+    ...(base.cursor !== undefined || overlay.cursor !== undefined
+      ? { cursor: { ...base.cursor, ...overlay.cursor } }
+      : {}),
+    ...(base.devin !== undefined || overlay.devin !== undefined
+      ? { devin: { ...base.devin, ...overlay.devin } }
+      : {}),
+    ...(base.antigravity !== undefined || overlay.antigravity !== undefined
+      ? { antigravity: { ...base.antigravity, ...overlay.antigravity } }
+      : {}),
+    ...(base.grok !== undefined || overlay.grok !== undefined
+      ? { grok: { ...base.grok, ...overlay.grok } }
+      : {}),
+    ...(base.droid !== undefined || overlay.droid !== undefined
+      ? { droid: { ...base.droid, ...overlay.droid } }
+      : {}),
+    ...(base.opencode !== undefined || overlay.opencode !== undefined
+      ? { opencode: { ...base.opencode, ...overlay.opencode } }
+      : {}),
+    ...(base.pi !== undefined || overlay.pi !== undefined
+      ? { pi: { ...base.pi, ...overlay.pi } }
+      : {}),
+  };
+}
+
+/**
  * Single source of truth for mapping the streaming preference onto the orchestration
  * delivery mode used when dispatching turns (composer, chat, and kanban share this).
  */

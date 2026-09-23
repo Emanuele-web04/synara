@@ -400,7 +400,11 @@ export function useHandleNewThread() {
           // reopens with the model and options used most recently.
           applyUsableStickyState(threadId);
           if (containerDefaults) {
-            applyGroupWorkerRoutingDefaults({ threadId, defaults: containerDefaults });
+            applyGroupWorkerRoutingDefaults({
+              threadId,
+              defaults: containerDefaults,
+              providerStatuses: providerStatusesReconciled ? providerStatuses : [],
+            });
           }
           applyProviderOverride(threadId);
         },

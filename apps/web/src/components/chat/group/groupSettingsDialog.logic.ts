@@ -1,5 +1,6 @@
 import type {
   ModelSelection,
+  ProviderKind,
   ProjectAgentConfig,
   ProjectAgentConfigureInput,
   ProjectAgentOverview,
@@ -101,6 +102,19 @@ function modelSelectionFingerprint(selection: ModelSelection): string {
 
 export function modelSelectionsEqual(a: ModelSelection, b: ModelSelection): boolean {
   return modelSelectionFingerprint(a) === modelSelectionFingerprint(b);
+}
+
+/**
+ * Provider keys warmed for the group model catalog. While the picker is open
+ * every visible provider's catalog warms — same as the composer picker — so
+ * each provider lists its real models; when closed, only the row's own
+ * provider needs runtime discovery (effort levels, selected-model hint).
+ */
+export function resolveGroupModelCatalogPrefetchProviders(
+  pickerOpen: boolean,
+  selectedProvider: ProviderKind,
+): ReadonlyArray<ProviderKind> | undefined {
+  return pickerOpen ? undefined : [selectedProvider];
 }
 
 export function buildGroupSettingsDraft(input: {
