@@ -25,6 +25,7 @@ import {
 } from "@synara/shared/cuaDriverProtocol";
 import type { ComputerFrameTapHost } from "./computerFrameTap";
 import { linuxBrowserCallIsReadOnly, linuxCuaAdmissionRefusal } from "./linuxCuaAdmission";
+import { windowsCuaAdmissionRefusal } from "./windowsCuaAdmission";
 import {
   cuaHostProcessIsAlive,
   markCuaRuntimeDirectory,
@@ -360,6 +361,26 @@ function isDriverSessionDeath(reply: CuaReply): boolean {
   if (typeof message === "string") texts.push(message);
   const joined = texts.join("\n");
   return joined.includes("has ended") && joined.includes("start_session");
+}
+
+/**
+ * Whether retiring a live generation without a cleanup acknowledgement must
+ * fail closed instead of spawning a replacement.
+ *
+ * The pinned upstream Windows driver answers "Unknown method" to both
+ * `cancel_input` and `interrupt_input`, and this platform ships no OS-level
+ * held-input release — so terminating a generation with native (non-browser)
+ * input in flight leaves held buttons or modifiers unprovable. Fail closed:
+ * keep the generation referenced so later requests refuse instead of acting
+ * over unknown held state. Pure so the matrix is pinned by unit tests on any
+ * host platform; the retire path passes the live values.
+ */
+export function shouldFailClosedOnUnacknowledgedRetire(input: {
+  readonly platform: NodeJS.Platform;
+  readonly cancellationReady: boolean;
+  readonly nativeInputInFlight: boolean;
+}): boolean {
+  return input.platform === "win32" && !input.cancellationReady && input.nativeInputInFlight;
 }
 
 /** Lives in Electron's main process on macOS — only that GUI process spawns
@@ -840,6 +861,10 @@ export class CuaDriverHost {
       throw new Error("Unsupported computer host request.");
     if (process.platform === "linux" && !CUA_BROWSER_TOOLS.has(name)) {
       const refusal = linuxCuaAdmissionRefusal(name, request.args, request.deliveryMode);
+      if (refusal) return refusal;
+    }
+    if (process.platform === "win32" && !CUA_BROWSER_TOOLS.has(name)) {
+      const refusal = windowsCuaAdmissionRefusal(name);
       if (refusal) return refusal;
     }
     // Browser calls mint session-scoped capabilities. Without task attribution
@@ -2177,7 +2202,20 @@ export class CuaDriverHost {
       // Before the validated handshake no action can have been dispatched.
       // Otherwise the authenticated acknowledgement above covers all matching
       // releases and native context restoration before termination is allowed.
+      // Windows has no acknowledgement route at all: terminating a live
+      // generation mid native-input leaves held state unprovable, so fail
+      // closed instead of spawning a replacement over it.
       await this.terminate(generation);
+      if (
+        shouldFailClosedOnUnacknowledgedRetire({
+          platform: process.platform,
+          cancellationReady: generation.cancellationReady,
+          nativeInputInFlight: inputUncertain && !generation.browserInputInFlight,
+        })
+      )
+        throw new Error(
+          "Cua Driver was terminated during native input without confirming cleanup. Computer admission is closed.",
+        );
       if (this.generation === generation) this.generation = undefined;
       await rm(generation.socket, { force: true });
     });
