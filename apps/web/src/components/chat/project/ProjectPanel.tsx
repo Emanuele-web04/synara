@@ -238,9 +238,7 @@ export function ProjectPanel({
         <EnvironmentRow
           icon={<CoordinatorGlyph className={coordinatorIconClassName} aria-hidden />}
           label={coordinatorName}
-          trailing={
-            <span className="text-ui-xs text-muted-foreground">{coordinatorStatus}</span>
-          }
+          trailing={<span className="text-ui-xs text-muted-foreground">{coordinatorStatus}</span>}
           onClick={() => onOpenCoordinator(agent.overview!.config!.coordinatorThreadId)}
         />
       ) : (

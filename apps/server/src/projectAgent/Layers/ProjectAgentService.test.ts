@@ -296,9 +296,7 @@ function makeTestLayer(options?: {
       automationUpdates.push({
         id: String(input.id),
         ...(input.enabled === undefined ? {} : { enabled: input.enabled }),
-        ...(input.modelSelection === undefined
-          ? {}
-          : { modelSelection: input.modelSelection }),
+        ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
       });
       return Effect.succeed({ id: input.id, prompt: "" });
     },
@@ -1043,8 +1041,7 @@ it.effect("applies a saved coordinator model to the live thread and heartbeat", 
     // and wipe the bootstrap just created — so configure must not send one;
     // a check-in then runs the new model immediately.
     const metaUpdate = harness.dispatched.find(
-      (command) =>
-        command.type === "thread.meta.update" && command.modelSelection !== undefined,
+      (command) => command.type === "thread.meta.update" && command.modelSelection !== undefined,
     );
     assert.isOk(metaUpdate);
     if (metaUpdate?.type !== "thread.meta.update") {
@@ -1093,8 +1090,7 @@ it.effect("does not stop the session when the coordinator model keeps the same p
       false,
     );
     const metaUpdate = harness.dispatched.find(
-      (command) =>
-        command.type === "thread.meta.update" && command.modelSelection !== undefined,
+      (command) => command.type === "thread.meta.update" && command.modelSelection !== undefined,
     );
     assert.isOk(metaUpdate);
     if (metaUpdate?.type !== "thread.meta.update") {
@@ -1132,8 +1128,7 @@ it.effect("skips the model apply block when the coordinator model is unchanged",
 
     assert.equal(
       harness.dispatched.some(
-        (command) =>
-          command.type === "thread.meta.update" && command.modelSelection !== undefined,
+        (command) => command.type === "thread.meta.update" && command.modelSelection !== undefined,
       ),
       false,
     );

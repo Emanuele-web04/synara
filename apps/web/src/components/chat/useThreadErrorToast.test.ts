@@ -63,29 +63,29 @@ describe("decideThreadErrorToastAction", () => {
   const error = "Provider adapter request failed (grok): connect ETIMEDOUT";
 
   it("keeps the hydrated stored error off the toast surface", () => {
-    expect(
-      decideThreadErrorToastAction({ previous: undefined, error, liveToastOpen: false }),
-    ).toBe("none");
+    expect(decideThreadErrorToastAction({ previous: undefined, error, liveToastOpen: false })).toBe(
+      "none",
+    );
   });
 
   it("toasts when the stored error changes under a mounted thread", () => {
     expect(
       decideThreadErrorToastAction({ previous: "an earlier failure", error, liveToastOpen: false }),
     ).toBe("toast");
-    expect(
-      decideThreadErrorToastAction({ previous: null, error, liveToastOpen: false }),
-    ).toBe("toast");
+    expect(decideThreadErrorToastAction({ previous: null, error, liveToastOpen: false })).toBe(
+      "toast",
+    );
   });
 
   it("does not re-toast the same stored value on re-render", () => {
-    expect(
-      decideThreadErrorToastAction({ previous: error, error, liveToastOpen: false }),
-    ).toBe("none");
+    expect(decideThreadErrorToastAction({ previous: error, error, liveToastOpen: false })).toBe(
+      "none",
+    );
   });
 
   it("refreshes in place while a live toast is already open", () => {
-    expect(
-      decideThreadErrorToastAction({ previous: error, error, liveToastOpen: true }),
-    ).toBe("refresh");
+    expect(decideThreadErrorToastAction({ previous: error, error, liveToastOpen: true })).toBe(
+      "refresh",
+    );
   });
 });

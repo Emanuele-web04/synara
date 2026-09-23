@@ -871,10 +871,14 @@ describe("ClaudeAdapterLive", () => {
           "synara_project_link_repository",
         ].entries()) {
           const result = (yield* Effect.promise(() =>
-            canUseTool(toolName, {}, {
-              signal: new AbortController().signal,
-              toolUseID: `tool-use-synara-${index}`,
-            }),
+            canUseTool(
+              toolName,
+              {},
+              {
+                signal: new AbortController().signal,
+                toolUseID: `tool-use-synara-${index}`,
+              },
+            ),
           )) as PermissionResult;
           assert.equal(result.behavior, "allow");
         }
@@ -910,54 +914,51 @@ describe("ClaudeAdapterLive", () => {
     },
   );
 
-  it.effect(
-    "keeps Synara group tools on the approval path when the session did not opt in",
-    () => {
-      const gateway = makeGatewayCredentialsHarness();
-      const harness = makeMultiQueryHarness({ gatewayCredentials: gateway.credentials });
-      return Effect.gen(function* () {
-        const adapter = yield* ClaudeAdapter;
-        yield* adapter.startSession({
-          threadId: THREAD_ID,
-          provider: "claudeAgent",
-          runtimeMode: "approval-required",
-        });
+  it.effect("keeps Synara group tools on the approval path when the session did not opt in", () => {
+    const gateway = makeGatewayCredentialsHarness();
+    const harness = makeMultiQueryHarness({ gatewayCredentials: gateway.credentials });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "approval-required",
+      });
 
-        const canUseTool = harness.createInputs[0]?.options.canUseTool;
-        if (!canUseTool) {
-          return assert.fail("Expected a canUseTool hook on the query options.");
-        }
+      const canUseTool = harness.createInputs[0]?.options.canUseTool;
+      if (!canUseTool) {
+        return assert.fail("Expected a canUseTool hook on the query options.");
+      }
 
-        const pending = canUseTool(
-          "mcp__synara__synara_create_thread",
-          {},
-          {
-            signal: new AbortController().signal,
-            toolUseID: "tool-use-synara-no-opt-in",
-            requestId: "request-synara-no-opt-in",
-          },
-        );
-        const requested = yield* Stream.filter(
-          adapter.streamEvents,
-          (event) => event.type === "request.opened",
-        ).pipe(Stream.runHead);
-        if (requested._tag !== "Some" || requested.value.type !== "request.opened") {
-          return assert.fail("A non-opted-in session must still ask for gateway tools.");
-        }
-        yield* adapter.respondToRequest(
-          THREAD_ID,
-          ApprovalRequestId.makeUnsafe(requested.value.requestId),
-          "decline",
-        );
-        yield* Stream.runHead(adapter.streamEvents);
-        const result = (yield* Effect.promise(() => pending)) as PermissionResult;
-        assert.equal(result.behavior, "deny");
-      }).pipe(
-        Effect.provideService(Random.Random, makeDeterministicRandomService()),
-        Effect.provide(harness.layer),
+      const pending = canUseTool(
+        "mcp__synara__synara_create_thread",
+        {},
+        {
+          signal: new AbortController().signal,
+          toolUseID: "tool-use-synara-no-opt-in",
+          requestId: "request-synara-no-opt-in",
+        },
       );
-    },
-  );
+      const requested = yield* Stream.filter(
+        adapter.streamEvents,
+        (event) => event.type === "request.opened",
+      ).pipe(Stream.runHead);
+      if (requested._tag !== "Some" || requested.value.type !== "request.opened") {
+        return assert.fail("A non-opted-in session must still ask for gateway tools.");
+      }
+      yield* adapter.respondToRequest(
+        THREAD_ID,
+        ApprovalRequestId.makeUnsafe(requested.value.requestId),
+        "decline",
+      );
+      yield* Stream.runHead(adapter.streamEvents);
+      const result = (yield* Effect.promise(() => pending)) as PermissionResult;
+      assert.equal(result.behavior, "deny");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
 
   it.effect("rejects Auto on an unsupported selected Claude binary before session startup", () => {
     const query = new FakeClaudeQuery();

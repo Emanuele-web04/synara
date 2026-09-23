@@ -2129,8 +2129,7 @@ const make = Effect.gen(function* () {
 
     const registerPriorTranscriptBootstrapOnFreshStart =
       shouldRegisterContextBootstrap &&
-      (options?.registerPriorTranscriptBootstrapOnFreshStart === true ||
-        providerRebindRequested);
+      (options?.registerPriorTranscriptBootstrapOnFreshStart === true || providerRebindRequested);
     const startOutcome = yield* startProviderSessionWithOutcome(
       undefined,
       registerPriorTranscriptBootstrapOnFreshStart,

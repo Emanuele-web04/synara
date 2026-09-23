@@ -176,12 +176,7 @@ export function groupThreadNeedsAttention(thread: GroupThreadStateThread): boole
  * summaries feed, and `ProjectAgentOverview["coordinatorStatus"]`. Deriving it
  * in one place keeps every surface on the same mapping.
  */
-export type GroupCoordinatorStatusId =
-  | "unconfigured"
-  | "idle"
-  | "running"
-  | "paused"
-  | "stopped";
+export type GroupCoordinatorStatusId = "unconfigured" | "idle" | "running" | "paused" | "stopped";
 
 /**
  * The coordinator row is driven by live thread state (same inputs the sidebar

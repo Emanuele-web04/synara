@@ -39,7 +39,12 @@ export function ThreadErrorBanner({
       {canUnblock || onDismiss ? (
         <AlertAction className="items-center">
           {canUnblock ? (
-            <Button size="xs" variant="destructive-outline" disabled={unblocking} onClick={onUnblock}>
+            <Button
+              size="xs"
+              variant="destructive-outline"
+              disabled={unblocking}
+              onClick={onUnblock}
+            >
               {unblocking ? "Unblocking…" : "Unblock thread"}
             </Button>
           ) : null}

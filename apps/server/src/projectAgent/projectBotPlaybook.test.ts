@@ -41,7 +41,9 @@ describe("project bot playbook", () => {
   it("requires every part of a request to be dispatched before the turn ends", () => {
     expect(PROJECT_BOT_PLAYBOOK).toContain("## Completing a request");
     expect(PROJECT_BOT_PLAYBOOK).toContain("Every part of a user message counts as asked-for work");
-    expect(PROJECT_BOT_PLAYBOOK).toContain("Never end a turn with work you promised but did not dispatch");
+    expect(PROJECT_BOT_PLAYBOOK).toContain(
+      "Never end a turn with work you promised but did not dispatch",
+    );
     expect(PROJECT_BOT_PLAYBOOK).toContain("before you finish the turn");
     expect(PROJECT_BOT_PLAYBOOK).toContain("forgotten preference");
   });

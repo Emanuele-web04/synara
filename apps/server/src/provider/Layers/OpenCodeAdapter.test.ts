@@ -102,9 +102,7 @@ describe("OpenCode permission policy", () => {
     ).toBe("once");
     // File edits and shell still ask in approval-required mode.
     expect(resolveOpenCodePermissionPolicyReply({ ...base, permission: "edit" })).toBeUndefined();
-    expect(
-      resolveOpenCodePermissionPolicyReply({ ...base, permission: "bash" }),
-    ).toBeUndefined();
+    expect(resolveOpenCodePermissionPolicyReply({ ...base, permission: "bash" })).toBeUndefined();
     // The flag is inert without a live gateway session and when not opted in.
     expect(
       resolveOpenCodePermissionPolicyReply({
