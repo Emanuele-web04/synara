@@ -146,6 +146,14 @@ The intended loop is:
 Synara's checkpoint and revert controls can help recover task work, but committed Git history remains
 the strongest boundary for important changes.
 
+## Groups
+
+A group is a coordinated home for related work. You talk to one coordinator conversation, and it
+answers directly or starts threads (tasks) that run in parallel — in the group's own folder or in
+linked repositories. Every thread in the group receives the group's instructions and memory, and
+files the threads deliver collect in a Git-versioned Library. A group needs no repository, so it
+also suits non-code work. Read the [Groups guide](./groups.md) to set one up.
+
 ## Parallel work
 
 Parallelism is useful only when ownership is clear.
