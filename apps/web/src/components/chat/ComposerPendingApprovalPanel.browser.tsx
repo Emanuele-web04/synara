@@ -102,6 +102,30 @@ describe("ComposerPendingApprovalPanel", () => {
       await mounted.cleanup();
     }
   });
+  it("asks to show the screen as its own decision, without session approval", async () => {
+    const mounted = await mountApprovalPanel({
+      approval: makeApproval({
+        requestKind: "tool",
+        approvalScope: "computer-foreground",
+        toolName: "computer_activate_window",
+      }),
+    });
+    try {
+      await expect.element(page.getByText(/^Show this on your screen\?/)).toBeInTheDocument();
+      await expect
+        .element(page.getByRole("button", { name: /Always allow this session/ }))
+        .not.toBeInTheDocument();
+      await page.getByRole("button", { name: /Keep it in the background/ }).click();
+      expect(mounted.onRespond).toHaveBeenCalledExactlyOnceWith(
+        APPROVAL_REQUEST_ID,
+        "decline",
+        LIFECYCLE_GENERATION,
+        "tool",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
   it.each([
     ["Approve once", "accept"],
     ["Always allow this session", "acceptForSession"],

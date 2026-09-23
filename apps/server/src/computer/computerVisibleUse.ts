@@ -50,24 +50,43 @@ export const COMPUTER_USER_INTERACTION_QUIET_MS = 2_000;
  * The phrases that count as the user asking to see the desktop. Deliberately
  * explicit and visible-use-only: "use Chrome" is not "show me Chrome", and a
  * task that only names an app stays background. A false negative costs one
- * refusal that asks the model to have the user confirm; a false positive
+ * click on the approval card; a false positive skips the card and
  * re-opens the exact focus theft this gate exists to stop, so the list errs
  * toward refusing.
  */
+const APOSTROPHE = "['’]";
+/** The phrase must end its clause: "watch" is a request, "watch it offline" is not. */
+const CLAUSE_END = String.raw`(?=\s*(?:[.!?,;:]|$))`;
+const WHAT_YOU_ARE_DOING = `what you(?:${APOSTROPHE}re| are) doing`;
+const WHAT_IS_HAPPENING = `what(?:${APOSTROPHE}s| is) (?:going on|happening)${CLAUSE_END}`;
+const WANT_TO = `i (?:want|would like|${APOSTROPHE}d like) to`;
+const SO_WE_CAN = "so (?:that )?(?:i|we) can (?:all )?";
+
 const VISIBLE_USE_PATTERNS: readonly RegExp[] = [
   /\bshow (?:me )?(?:the |my )?(?:[\w-]+ ){0,3}(?:window|app|screen|desktop|browser|page)(?=\s*(?:[.!?,;:]|$))/i,
-  /\bshow me what you(?: are|'re) doing\b/i,
-  /\b(?:i (?:want|would like|'d like) to |let me )watch (?:you|it|the (?:app|browser|window))\b/i,
+  new RegExp(
+    String.raw`\b(?:show me|let me see|${WANT_TO} see|${SO_WE_CAN}see) (?:${WHAT_YOU_ARE_DOING}\b|${WHAT_IS_HAPPENING})`,
+    "i",
+  ),
+  new RegExp(
+    String.raw`\b(?:${WANT_TO} |let me )watch (?:you|it|the (?:app|browser|window))\b|\b${SO_WE_CAN}watch(?: (?:you|along))?${CLAUSE_END}`,
+    "i",
+  ),
   /\blet me see (?:it|you) work(?:ing)?\b/i,
-  /\bi (?:want|would like|'d like) to see (?:the |my )?(?:[\w-]+ ){0,3}(?:window|app|screen|desktop|browser|page)(?=\s*(?:[.!?,;:]|$))/i,
+  /\bi (?:want|would like|['’]d like) to see (?:the |my )?(?:[\w-]+ ){0,3}(?:window|app|screen|desktop|browser|page)(?=\s*(?:[.!?,;:]|$))/i,
   /\b(?:put|show|display)\b[^.!?\n]{0,40}\bon (?:my|the) screen\b/i,
   /\b(?:make|keep) (?:it|(?:the |my )?(?:[\w-]+ ){0,3}(?:app|window|browser)) visible\b/i,
-  /\b(?:bring|put|move)\b[^.!?]{0,40}\b(?:front|foreground)(?=\s*(?:[.!?,;:]|$))/i,
+  // "Bring Dia to the front so I can watch" may continue past "front", but
+  // "the front end", "the front desk" and "the front of the list" are places,
+  // and "move the foreground layer" is not a destination.
+  /\b(?:bring|put|move|pull|raise)\b[^.!?\n]{0,40}\b(?:to the front|(?:to|in|into) (?:the )?foreground)\b(?![- ]?(?:end|desk|door|row|page|of)\b)/i,
+  // "Forward" needs a window-shaped object: "move forward with the plan" is not a request to watch.
+  /\b(?:bring|pull)(?: up)? (?:the |my |its |their )?(?:[\w-]+ ){0,2}(?:window|app|browser|it|them) (?:forward|up front)\b/i,
   /\buse (?:the )?foreground(?: mode)?(?=\s*(?:[.!?,;:]|$))/i,
   /\btake over (?:my|the) (?:screen|desktop|computer)\b/i,
   /\bdrive (?:my|the) (?:screen|desktop|computer)\b/i,
   /\b(?:mostra(?:mi|re)?|porta(?:re)?|metti|mettere)\b[^.!?\n]{0,60}\b(?:sullo schermo|in primo piano)\b/i,
-  /\bvoglio vedere (?:la finestra|il browser|lo schermo|il desktop)\b/i,
+  /\b(?:voglio|vorrei|fammi) vedere (?:la finestra|il browser|lo schermo|il desktop|cosa (?:fai|stai facendo))\b/i,
 ];
 
 // Explicit background/negative instructions take precedence, even when the

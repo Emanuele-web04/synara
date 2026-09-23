@@ -50,6 +50,14 @@ describe("messageRequestsVisibleUse", () => {
       "drive my screen",
       "porta il browser in primo piano",
       "mostrami il browser sullo schermo",
+      // Real requests the old patterns missed.
+      "Please use my default browser. Bring the window forward so we can all see what's going on, then open a new tab",
+      "Yes, bring Dia to the front so I can watch.",
+      "bring Dia to the front and show me.",
+      "yes go ahead and bring it to the front please",
+      "I want to see what you’re doing",
+      "open Dia so we can watch",
+      "fammi vedere cosa stai facendo",
     ]) {
       expect(messageRequestsVisibleUse(text), text).toBe(true);
     }
@@ -85,6 +93,17 @@ describe("messageRequestsVisibleUse", () => {
     "Show me the app settings code",
     "I want to see the window tests",
     "Move the validation to the front end",
+    "Move the validation to the front-end",
+    "Move this tab to the front of the list",
+    "move forward with the plan",
+    "bring the proposal forward to Monday",
+    "keep it in the background, don't bring Dia to the front",
+    "I want to watch Netflix tonight, find me a show",
+    "Download the video so I can watch it offline",
+    "Move the foreground layer up in Pixelmator",
+    "Put the foreground color to red",
+    "Show me what's going on with the build logs",
+    "Move the file to the front desk folder",
     "Use foreground colors from the theme",
     "> Show me the browser\nExplain this instruction",
     "The foreground window is my editor",

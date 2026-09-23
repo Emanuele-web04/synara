@@ -70,6 +70,55 @@ const APPROVAL_ACTIONS: ReadonlyArray<ApprovalAction> = [
   },
 ];
 
+const WITHOUT_SESSION_APPROVAL = APPROVAL_ACTIONS.filter(
+  (action) => action.decision !== "acceptForSession",
+);
+
+// Synara-owned Computer consent: never session-wide, and each scope names its
+// own decision. Visible use is separate from routine consent: allowing desktop
+// actions never covers taking the user's screen.
+const COMPUTER_SCOPES: Record<
+  NonNullable<PendingApproval["approvalScope"]>,
+  { readonly prompt: string; readonly actions: ReadonlyArray<ApprovalAction> }
+> = {
+  "computer-task": {
+    prompt: "Allow Computer for this task?",
+    actions: WITHOUT_SESSION_APPROVAL.map((action) =>
+      action.decision === "accept"
+        ? {
+            ...action,
+            label: "Allow Computer for this task",
+            description:
+              "Continue routine desktop actions until this response ends. Stop cancels access. Clipboard reads still ask separately.",
+          }
+        : action.decision === "decline"
+          ? { ...action, description: "Stop desktop for this turn, agent continues without tools" }
+          : {
+              ...action,
+              description: "Stop revokes new input; keys/buttons already sent may still land.",
+            },
+    ),
+  },
+  "computer-foreground": {
+    prompt: "Show this on your screen?",
+    actions: WITHOUT_SESSION_APPROVAL.map((action) =>
+      action.decision === "accept"
+        ? {
+            ...action,
+            label: "Show on screen for this task",
+            description: "Computer may bring windows to the front until this response ends.",
+          }
+        : action.decision === "decline"
+          ? {
+              ...action,
+              label: "Keep it in the background",
+              description: "No window is raised; the agent continues in the background",
+            }
+          : action,
+    ),
+  },
+};
+
 const KIND_PROMPT: Record<PendingApproval["requestKind"], string> = {
   command: "Approve this command?",
   "file-read": "Approve reading this file?",
@@ -89,30 +138,12 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
   const requestKey = pendingRequestInstanceKey(requestId, approval.lifecycleGeneration);
   const submissionKey = JSON.stringify([requestKey, approval.responseAttemptKey ?? null]);
   const submittedRequestKeyRef = useRef<string | null>(null);
-  const computerTask = approval.approvalScope === "computer-task";
-  const baseActions = computerTask
-    ? APPROVAL_ACTIONS.filter((action) => action.decision !== "acceptForSession").map((action) =>
-        action.decision === "accept"
-          ? {
-              ...action,
-              label: "Allow Computer for this task",
-              description:
-                "Continue routine desktop actions until this response ends. Stop cancels access. Clipboard reads still ask separately.",
-            }
-          : action.decision === "decline"
-            ? {
-                ...action,
-                description: "Stop desktop for this turn, agent continues without tools",
-              }
-            : {
-                ...action,
-                description: "Stop revokes new input; keys/buttons already sent may still land.",
-              },
-      )
-    : approval.sessionApprovalAvailable === false
-      ? APPROVAL_ACTIONS.filter((action) => action.decision !== "acceptForSession")
-      : APPROVAL_ACTIONS;
-  const actions = baseActions;
+  const computerScope = approval.approvalScope
+    ? COMPUTER_SCOPES[approval.approvalScope]
+    : undefined;
+  const actions =
+    computerScope?.actions ??
+    (approval.sessionApprovalAvailable === false ? WITHOUT_SESSION_APPROVAL : APPROVAL_ACTIONS);
 
   const respondOnce = (action: ApprovalAction) => {
     if (isResponding || submittedRequestKeyRef.current === submissionKey) return;
@@ -159,8 +190,8 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
     >
       <div className="flex items-start justify-between gap-3">
         <p className="min-w-0 text-ui-lg font-medium leading-snug text-foreground/90">
-          {computerTask ? "Allow Computer for this task?" : KIND_PROMPT[approval.requestKind]}
-          {!computerTask && (approval.toolName ?? parsed.tool) ? (
+          {computerScope?.prompt ?? KIND_PROMPT[approval.requestKind]}
+          {!computerScope && (approval.toolName ?? parsed.tool) ? (
             <span className="ml-1.5 text-ui-sm font-normal text-muted-foreground/50">
               {approval.toolName ?? parsed.tool}
             </span>
