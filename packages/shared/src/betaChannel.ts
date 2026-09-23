@@ -9,6 +9,12 @@ export const SYNARA_BETA_HOME_DIR_NAME = ".synara-beta";
 export const BETA_IMPORT_REQUEST_FILE_NAME = "import-requested.json";
 export const BETA_IMPORT_RESULT_FILE_NAME = "import-result.json";
 
+/**
+ * electron-builder NSIS `guid` for beta builds. The uninstall registry key is
+ * the raw GUID (no braces — see app-builder-lib NsisTarget / multiUser.nsh).
+ */
+export const SYNARA_BETA_WINDOWS_INSTALLER_GUID = "a8e63b48-d4f3-4db5-9e12-368107afe65d";
+
 /** Public release listing; the newest `v*-beta.N` prerelease is the current beta build. */
 export const SYNARA_BETA_RELEASES_URL =
   "https://github.com/Emanuele-web04/synara/releases?q=prerelease%3Atrue";

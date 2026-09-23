@@ -302,6 +302,20 @@ function verifyReleaseWorkflowSafety(): void {
     "--app-icon Synara",
     "Expected every flavor's icon catalog to keep the Synara asset name.",
   );
+  const collectStep = workflow.slice(
+    workflow.indexOf("  - name: Collect release assets"),
+    workflow.indexOf("  - name: Verify and record artifact provenance"),
+  );
+  assertContains(
+    collectStep,
+    '"release/*.',
+    "Expected the collect step to glob the release/ output directory.",
+  );
+  assertContains(
+    workflow,
+    "--output-dir release",
+    "Expected every flavor's build to write into the collected release/ directory.",
+  );
   assertContains(
     workflow,
     "SYNARA_PUBLISH_RELEASE: ${{ needs.preflight.outputs.publish_release }}",

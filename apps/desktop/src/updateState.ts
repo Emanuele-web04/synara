@@ -148,9 +148,10 @@ export function isUpdateVersionAllowedForFlavor(
 ): boolean {
   const candidate = parseUpdateVersion(candidateVersion);
   if (!candidate) {
-    // Unparseable versions keep the pre-existing "differs means newer"
-    // behavior in isUpdateVersionNewer; gate only what we can identify.
-    return true;
+    // Beta and production fail closed: an unparseable version can never be
+    // proven to be on the right lane, so it is not offered. Canary/cua keep
+    // the pre-existing "differs means newer" behavior.
+    return flavor !== "beta" && flavor !== "production";
   }
   if (flavor === "beta") {
     return candidate.prerelease === "beta" || (candidate.prerelease?.startsWith("beta.") ?? false);

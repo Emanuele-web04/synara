@@ -5,6 +5,7 @@
 
 import { fileURLToPath } from "node:url";
 
+import { SYNARA_BETA_WINDOWS_INSTALLER_GUID } from "@synara/shared/betaChannel";
 import type { SynaraPackagedDesktopFlavor } from "@synara/shared/desktopIdentity";
 
 import {
@@ -31,7 +32,7 @@ export const MAC_ICON_ASSET_NAME = "Synara";
 export const MAC_ICON_COMPOSER_DEPLOYMENT_TARGET = "26.0";
 export const MAC_ICON_ASSETS_CAR_STAGE_PATH = "apps/desktop/resources/Assets.car";
 export const MAC_ICON_ASSETS_CAR_BUNDLE_PATH = "Resources/Assets.car";
-export const WINDOWS_BETA_INSTALLER_GUID = "a8e63b48-d4f3-4db5-9e12-368107afe65d";
+export { SYNARA_BETA_WINDOWS_INSTALLER_GUID };
 const MAC_DMG_ICON_PATH = "icon.icns";
 export const NODE_PTY_ASAR_UNPACK_GLOBS = ["node_modules/node-pty/**"] as const;
 
@@ -209,7 +210,7 @@ export function createDesktopPlatformBuildConfig(
     // Keep the Windows product registration stable while the public app ID changes.
     // This lets NSIS updates replace the existing installation and own its uninstaller.
     nsis: {
-      guid: input.flavor === "beta" ? WINDOWS_BETA_INSTALLER_GUID : WINDOWS_INSTALLER_GUID,
+      guid: input.flavor === "beta" ? SYNARA_BETA_WINDOWS_INSTALLER_GUID : WINDOWS_INSTALLER_GUID,
     },
     win: {
       target: [input.target],

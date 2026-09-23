@@ -208,9 +208,11 @@ describe("isUpdateVersionAllowedForFlavor", () => {
     expect(isUpdateVersionAllowedForFlavor("0.8.4", "development")).toBe(true);
   });
 
-  it("leaves unparseable versions to the newer-version check", () => {
-    expect(isUpdateVersionAllowedForFlavor("nightly-build", "beta")).toBe(true);
-    expect(isUpdateVersionAllowedForFlavor("nightly-build", "production")).toBe(true);
+  it("fails closed on unparseable versions for beta and production", () => {
+    expect(isUpdateVersionAllowedForFlavor("nightly-build", "beta")).toBe(false);
+    expect(isUpdateVersionAllowedForFlavor("nightly-build", "production")).toBe(false);
+    // Canary keeps the pre-existing "differs means newer" passthrough.
+    expect(isUpdateVersionAllowedForFlavor("nightly-build", "canary")).toBe(true);
   });
 });
 

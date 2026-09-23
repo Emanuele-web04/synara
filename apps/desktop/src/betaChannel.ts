@@ -17,6 +17,7 @@ import {
   BETA_IMPORT_RESULT_FILE_NAME,
   SYNARA_BETA_HOME_DIR_NAME,
   SYNARA_BETA_RELEASES_URL,
+  SYNARA_BETA_WINDOWS_INSTALLER_GUID,
   type BetaImportResult,
 } from "@synara/shared/betaChannel";
 import type {
@@ -25,7 +26,9 @@ import type {
   DesktopBetaChannelState,
 } from "@synara/contracts";
 
-export const BETA_WINDOWS_UNINSTALL_GUID = "a8e63b48-d4f3-4db5-9e12-368107afe65d";
+// electron-builder registers the uninstall key under the raw NSIS guid (no
+// braces); the value itself lives in @synara/shared/betaChannel.
+export const BETA_WINDOWS_UNINSTALL_GUID = SYNARA_BETA_WINDOWS_INSTALLER_GUID;
 const BETA_MAC_APP_NAME = "Synara Beta.app";
 const BETA_WINDOWS_EXE_NAME = "Synara Beta.exe";
 const BETA_LINUX_DESKTOP_FILE = "synara-beta.desktop";
@@ -87,7 +90,7 @@ export function detectBetaInstall(
   }
   if (platform === "win32") {
     for (const hive of ["HKCU", "HKLM"]) {
-      const key = `${hive}\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{${BETA_WINDOWS_UNINSTALL_GUID}}`;
+      const key = `${hive}\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${BETA_WINDOWS_UNINSTALL_GUID}`;
       const installLocation = readRegistryValue(key, "InstallLocation");
       const displayVersion = readRegistryValue(key, "DisplayVersion");
       if (installLocation) {

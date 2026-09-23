@@ -445,6 +445,10 @@ jobs:
             --build-version "${{ needs.preflight.outputs.version }}"
             --source-commit "$SOURCE_COMMIT"
             --lockfile-sha256 "$LOCKFILE_SHA256"
+            # Non-production flavors default to release-<flavor>/, but the
+            # collect step below only globs release/. Each matrix leg has its
+            # own runner, so a fixed dir is safe.
+            --output-dir release
             --skip-build
             --keep-stage
             --verbose
