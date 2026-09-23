@@ -1064,12 +1064,13 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         .withTransaction(
           Effect.forEach(
             [
-              "project_agent_configs",
-              "project_agent_goals",
-              "project_agent_tasks",
+              // Referencing tables first: goals FK to configs, tasks FK to
+              // goals, attempts FK to tasks — parents are deleted last.
               "project_agent_task_dependencies",
               "project_agent_task_attempts",
               "project_agent_evidence",
+              "project_agent_tasks",
+              "project_agent_goals",
               "project_agent_documents",
               "project_agent_document_heads",
               "project_agent_activity",
@@ -1079,6 +1080,7 @@ const makeProjectAgentRepository = Effect.gen(function* () {
               "project_agent_thread_index",
               "project_agent_linked_projects",
               "project_agent_receipts",
+              "project_agent_configs",
             ] as const,
             (table) =>
               sql

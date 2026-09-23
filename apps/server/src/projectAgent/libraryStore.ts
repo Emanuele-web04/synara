@@ -80,7 +80,7 @@ const IGNORED_ENTRY_NAMES = new Set([
   LIBRARY_MARKER_NAME,
 ]);
 
-const isGitDirName = (name: string) => name.toLowerCase() === GIT_DIR_SEGMENT;
+export const isGitDirName = (name: string) => name.toLowerCase() === GIT_DIR_SEGMENT;
 
 // Repo plumbing and marker/keep files are reserved everywhere, not just hidden
 // in listings: an upload or rename onto `.gitignore` would rewrite repo policy,

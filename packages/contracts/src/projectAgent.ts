@@ -523,6 +523,15 @@ export const ProjectAgentGroupControlInput = Schema.Struct({
 });
 export type ProjectAgentGroupControlInput = typeof ProjectAgentGroupControlInput.Type;
 
+// Deleting a group additionally requires the group's current title, checked
+// server-side — the typed-name confirmation is not just a client nicety.
+export const ProjectAgentDeleteGroupInput = Schema.Struct({
+  requestId: ProjectAgentRequestId,
+  projectId: ProjectId,
+  confirmName: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
+});
+export type ProjectAgentDeleteGroupInput = typeof ProjectAgentDeleteGroupInput.Type;
+
 export const ProjectAgentDeleteGroupResult = Schema.Struct({
   deletedProjectId: ProjectId,
   libraryLeftOnDiskPath: Schema.NullOr(Schema.String),

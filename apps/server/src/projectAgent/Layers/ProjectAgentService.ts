@@ -45,6 +45,7 @@ import {
 import {
   assertLibraryRootLocation,
   ensureLibraryRepo,
+  isGitDirName,
   listLibraryEntries,
   moveLibraryRoot,
   normalizeLibraryRelativePath,
@@ -191,6 +192,59 @@ const memoryNoteSummary = (note: string) =>
     .find((line) => line.trim().length > 0)
     ?.trim()
     .slice(0, 140) ?? note.slice(0, 140);
+
+// A memory title becomes both the `# heading` line and the single-line
+// `- [title](path)` index entry — strip control characters so a title can
+// never inject extra lines into MEMORY.md.
+const sanitizeMemoryTitle = (value: string) =>
+  value
+    // eslint-disable-next-line no-control-regex -- stripping control characters is the point
+    .replace(/[\x00-\x1F\x7F-\x9F]+/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+
+// Library adds walk the source with lstat at every step: symlinks are never
+// followed (a swapped link cannot redirect the copy into or out of the
+// workspace), `.git`/`node_modules` stay behind, and the walk is bounded so
+// a runaway tree fails with a clear error instead of copying forever.
+const LIBRARY_ADD_MAX_FILES = 10_000;
+const LIBRARY_ADD_MAX_BYTES = 256 * 1024 * 1024;
+
+class LibraryAddTooLargeError extends Error {}
+
+const copyLibrarySourceTree = async (source: string, target: string) => {
+  let fileCount = 0;
+  let totalBytes = 0;
+  const visit = async (src: string, dst: string, filterName: boolean): Promise<void> => {
+    const stat = await fs.lstat(src);
+    if (stat.isSymbolicLink()) return;
+    if (stat.isDirectory()) {
+      const name = path.basename(src);
+      if (filterName && (isGitDirName(name) || name === "node_modules")) return;
+      await fs.mkdir(dst, { recursive: true });
+      for (const entry of await fs.readdir(src)) {
+        await visit(path.join(src, entry), path.join(dst, entry), true);
+      }
+      return;
+    }
+    if (!stat.isFile()) return;
+    fileCount += 1;
+    totalBytes += stat.size;
+    if (fileCount > LIBRARY_ADD_MAX_FILES) {
+      throw new LibraryAddTooLargeError(
+        `A library add is limited to ${LIBRARY_ADD_MAX_FILES} files.`,
+      );
+    }
+    if (totalBytes > LIBRARY_ADD_MAX_BYTES) {
+      throw new LibraryAddTooLargeError(
+        `A library add is limited to ${Math.floor(LIBRARY_ADD_MAX_BYTES / (1024 * 1024))} MB total.`,
+      );
+    }
+    await fs.mkdir(path.dirname(dst), { recursive: true });
+    await fs.copyFile(src, dst);
+  };
+  await visit(source, target, false);
+};
 
 const branded = {
   thread: (id = randomUUID()) => ThreadId.makeUnsafe(id),
@@ -906,8 +960,16 @@ export const makeProjectAgentService = Effect.gen(function* () {
         .pipe(Effect.mapError(toServiceError("Failed to load the memory index.")));
       const content = Option.isSome(current) ? current.value.content : "# Memory\n";
       const lines = content.split("\n");
-      const marker = `](${input.logicalPath})`;
-      const index = lines.findIndex((line) => line.includes(marker));
+      // Match index lines by their exact link target — substring includes()
+      // would let one note's path hit inside another's longer path or a
+      // title carrying forged `](...)` text. Entries are `- [t](path) — s`,
+      // so the target must close the link segment before the summary dash.
+      const lineTargetsPath = (line: string) => {
+        if (!line.startsWith("- [")) return false;
+        const linkSegment = line.split(" — ", 1)[0] ?? line;
+        return linkSegment.endsWith(`](${input.logicalPath})`);
+      };
+      const index = lines.findIndex(lineTargetsPath);
       if (input.summary === null) {
         if (index < 0) return;
         lines.splice(index, 1);
@@ -920,7 +982,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const entryCount = () => lines.filter((line) => line.startsWith("- [")).length;
         while (entryCount() > MEMORY_INDEX_MAX_ENTRIES) {
           const oldest = lines.findIndex(
-            (line) => line.startsWith("- [") && !line.includes(marker),
+            (line) => line.startsWith("- [") && !lineTargetsPath(line),
           );
           if (oldest < 0) break;
           lines.splice(oldest, 1);
@@ -1040,18 +1102,21 @@ export const makeProjectAgentService = Effect.gen(function* () {
   const dispatchGroupThreadCommand = (
     threadIds: ReadonlyArray<ThreadId>,
     type: "thread.turn.interrupt" | "thread.archive" | "thread.unarchive" | "thread.delete",
+    options?: { readonly stopOnError?: boolean },
   ) =>
     Effect.forEach(
       threadIds,
-      (threadId) =>
-        orchestrationEngine
-          .dispatch({
-            type,
-            commandId: branded.command(),
-            threadId,
-            createdAt: isoNow(),
-          } as OrchestrationCommand)
-          .pipe(Effect.catch(() => Effect.void)),
+      (threadId) => {
+        const dispatch = orchestrationEngine.dispatch({
+          type,
+          commandId: branded.command(),
+          threadId,
+          createdAt: isoNow(),
+        } as OrchestrationCommand);
+        return options?.stopOnError === true
+          ? dispatch.pipe(Effect.mapError(toServiceError("Failed to update group threads.")))
+          : dispatch.pipe(Effect.catch(() => Effect.void));
+      },
       { discard: true },
     );
 
@@ -1090,19 +1155,20 @@ export const makeProjectAgentService = Effect.gen(function* () {
     }).pipe(Effect.catch(() => Effect.succeed(false)));
 
   // Deleting a group moves its library to the OS trash (rename inside the
-  // user-owned trash dir) — never an rm -rf, and never of a custom
-  // libraryPath's contents beyond the move itself.
+  // trash dir) — never an rm -rf, and never of a custom libraryPath at all:
+  // a user-chosen library folder is left exactly where the user put it.
   const moveLibraryToTrash = (root: string) =>
     Effect.tryPromise({
       try: async () => {
         const platform = os.platform();
         const home = os.homedir();
         const trashDir =
-          platform === "darwin"
+          serverConfig.trashDir ??
+          (platform === "darwin"
             ? path.join(home, ".Trash")
             : platform === "win32"
               ? null
-              : path.join(home, ".local", "share", "Trash", "files");
+              : path.join(home, ".local", "share", "Trash", "files"));
         if (trashDir === null) return false;
         await fs.mkdir(trashDir, { recursive: true });
         const target = path.join(trashDir, `${path.basename(root)}-${randomUUID().slice(0, 8)}`);
@@ -1568,6 +1634,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
                   : {}),
             libraryPushOnChange:
               input.libraryPushOnChange ?? existingConfig?.libraryPushOnChange ?? false,
+            // Pause/archive state is lifecycle-owned, never an editable
+            // settings field — saving settings must not drop it.
+            pausedAt: existingConfig?.pausedAt ?? null,
+            archivedAt: existingConfig?.archivedAt ?? null,
+            pausedAutomationIds: existingConfig?.pausedAutomationIds ?? [],
           };
           const expectedConfigRevision = Option.isSome(existing) ? existing.value.revision : null;
           // Changing libraryPath relocates the store: copy the whole tree
@@ -1790,7 +1861,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
         );
         if (existingReceipt) return existingReceipt;
         const note = input.note.trim();
-        const title = input.title?.trim() || memoryNoteSummary(note).slice(0, 60) || "Note";
+        // Titles land in the single-line index entry and `# heading` — control
+        // characters (newlines especially) would inject fake `- [..](..)` rows.
+        const title =
+          sanitizeMemoryTitle(input.title ?? "") || memoryNoteSummary(note).slice(0, 60) || "Note";
         const existing = yield* readGroupMemoryNoteRevisions(input.projectId);
         const wanted = normalizeMemoryNote(note);
         const duplicate = existing.find((revision) => {
@@ -1803,13 +1877,30 @@ export const makeProjectAgentService = Effect.gen(function* () {
           );
         });
         if (duplicate) {
+          const have = memoryNoteBody(duplicate.content);
+          // "New note contains the old one" is a revision of the same memory:
+          // write the longer body into the existing file instead of dropping
+          // it or forking a suffixed sibling the index would double-list.
+          const extendsExisting = wanted !== have && wanted.includes(have);
+          if (extendsExisting) {
+            yield* upsertSystemDocument({
+              projectId: input.projectId,
+              logicalPath: duplicate.logicalPath,
+              content: `# ${title}\n\n${note}\n`,
+              authorThreadId: principal.threadId,
+            });
+          }
           yield* updateMemoryIndex({
             projectId: input.projectId,
             logicalPath: duplicate.logicalPath,
             title,
             summary: memoryNoteSummary(note),
           });
-          const result = { path: duplicate.logicalPath, updated: false, deduplicated: true };
+          const result = {
+            path: duplicate.logicalPath,
+            updated: extendsExisting,
+            deduplicated: true,
+          };
           yield* storeReceipt(input.requestId, input.projectId, "remember", result);
           return result;
         }
@@ -1817,32 +1908,14 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const today = isoNow().slice(0, 10);
         const slug = slugifyMemoryTitle(title);
         let logicalPath = `memory/${today}-${slug}.md`;
-        const content = `# ${title}\n\n${note}\n`;
-        if (existingPaths.has(logicalPath)) {
-          // Same dated slug, different note: the file holds an earlier
-          // version of this memory — replace its body instead of forking a
-          // suffixed sibling the index would double-list.
-          yield* upsertSystemDocument({
-            projectId: input.projectId,
-            logicalPath,
-            content,
-            authorThreadId: principal.threadId,
-          });
-          yield* updateMemoryIndex({
-            projectId: input.projectId,
-            logicalPath,
-            title,
-            summary: memoryNoteSummary(note),
-          });
-          const result = { path: logicalPath, updated: true, deduplicated: false };
-          yield* storeReceipt(input.requestId, input.projectId, "remember", result);
-          return result;
-        }
+        // Distinct notes that slug to the same dated path fork into `-2`,
+        // `-3`… siblings; overwriting the unrelated note is never allowed.
         let counter = 2;
         while (existingPaths.has(logicalPath)) {
           logicalPath = `memory/${today}-${slug}-${counter}.md`;
           counter += 1;
         }
+        const content = `# ${title}\n\n${note}\n`;
         yield* upsertSystemDocument({
           projectId: input.projectId,
           logicalPath,
@@ -1969,21 +2042,23 @@ export const makeProjectAgentService = Effect.gen(function* () {
           (json) => JSON.parse(json) as { path: string; commitSha: string },
         );
         if (existingReceipt) return existingReceipt;
-        const caller = yield* resolveLibraryCallerSource(principal, input.sourcePath);
         return yield* withLibraryRootLock(
           input.projectId,
           Effect.gen(function* () {
             const { root, agentConfig, libraryIsManaged } = yield* resolveGroupLibraryRoot(
               input.projectId,
             );
-            const result = yield* withLibraryQueue(
+            const { result, threadTitle } = yield* withLibraryQueue(
               root,
               Effect.gen(function* () {
+                // Re-resolve inside the lock: checking containment before it
+                // lets a swapped symlink redirect the copy after the check.
+                const caller = yield* resolveLibraryCallerSource(principal, input.sourcePath);
                 yield* ensureLibraryRepo(git, root, input.projectId, {
                   isManaged: libraryIsManaged,
                 }).pipe(Effect.mapError(toServiceError("Failed to prepare the group library.")));
-                const stat = yield* Effect.tryPromise({
-                  try: () => fs.stat(caller.source),
+                yield* Effect.tryPromise({
+                  try: () => fs.lstat(caller.source),
                   catch: () =>
                     fail(`Library source "${input.sourcePath}" was not found.`, "not-found"),
                 });
@@ -2005,18 +2080,21 @@ export const makeProjectAgentService = Effect.gen(function* () {
                   Effect.mapError(toServiceError("Failed to resolve the library destination.")),
                 );
                 yield* Effect.tryPromise({
-                  try: () =>
-                    stat.isDirectory()
-                      ? fs.cp(caller.source, target, { recursive: true, verbatimSymlinks: true })
-                      : fs.copyFile(caller.source, target),
-                  catch: toServiceError("Failed to copy into the group library."),
+                  try: () => copyLibrarySourceTree(caller.source, target),
+                  catch: (cause) =>
+                    cause instanceof LibraryAddTooLargeError
+                      ? fail(cause.message, "invalid")
+                      : toServiceError("Failed to copy into the group library.")(cause),
                 });
                 const { commitSha } = yield* commitLibraryChange(
                   git,
                   root,
                   `Add ${relativePath} from ${caller.threadTitle}`,
                 ).pipe(Effect.mapError(toServiceError("Failed to commit the group library.")));
-                return { path: relativePath, commitSha };
+                return {
+                  result: { path: relativePath, commitSha },
+                  threadTitle: caller.threadTitle,
+                };
               }),
             );
             yield* pushLibraryInBackground(root, agentConfig);
@@ -2028,7 +2106,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
               goalId: null,
               taskId: principal.kind === "worker" ? principal.taskId : null,
               source: null,
-              summary: `Added ${result.path} to the library from ${caller.threadTitle}`,
+              summary: `Added ${result.path} to the library from ${threadTitle}`,
               createdAt: isoNow(),
             });
             yield* storeReceipt(input.requestId, input.projectId, "libraryAdd", result);
@@ -2269,10 +2347,16 @@ export const makeProjectAgentService = Effect.gen(function* () {
               projectId: input.projectId,
               coordinatorThreadId: config.coordinatorThreadId,
             });
+            // Only threads living IN the group project belong to the group —
+            // linked-repo workers stay untouched.
             yield* dispatchGroupThreadCommand(
               [
                 config.coordinatorThreadId,
-                ...shells.filter((shell) => shell.archivedAt == null).map((shell) => shell.id),
+                ...shells
+                  .filter(
+                    (shell) => shell.projectId === input.projectId && shell.archivedAt == null,
+                  )
+                  .map((shell) => shell.id),
               ],
               "thread.archive",
             );
@@ -2335,7 +2419,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
               yield* dispatchGroupThreadCommand(
                 [
                   config.coordinatorThreadId,
-                  ...shells.filter((shell) => shell.archivedAt != null).map((shell) => shell.id),
+                  ...shells
+                    .filter(
+                      (shell) => shell.projectId === input.projectId && shell.archivedAt != null,
+                    )
+                    .map((shell) => shell.id),
                 ],
                 "thread.unarchive",
               );
@@ -2408,96 +2496,122 @@ export const makeProjectAgentService = Effect.gen(function* () {
       }),
 
     deleteGroup: (input, principal) =>
-      Effect.gen(function* () {
-        yield* requireUserLifecycleAction("Deleting a group", principal);
-        const existingReceipt = yield* replayReceipt(
-          input.requestId,
-          input.projectId,
-          (json) => JSON.parse(json) as ProjectAgentDeleteGroupResult,
-        );
-        if (existingReceipt) return existingReceipt;
-        yield* resolveGroupCoordinatorProject(input.projectId);
-        const result = yield* withLibraryRootLock(
-          input.projectId,
-          Effect.gen(function* () {
-            const agentConfig = yield* repository
-              .getConfig(input.projectId)
-              .pipe(Effect.mapError(toServiceError("Failed to load project coordinator.")))
-              .pipe(Effect.map(Option.getOrNull));
-            // Collect group threads up front: deleteProjectData wipes the
-            // thread index, and project.delete only accepts a threadless
-            // project, so every group thread must be dispatched for deletion
-            // before the project delete.
-            const { shells } = yield* listGroupThreadShells({
-              projectId: input.projectId,
-              coordinatorThreadId: agentConfig?.coordinatorThreadId ?? null,
-            });
-            const root = yield* resolveLibraryRoot({
-              stateDir: serverConfig.stateDir,
-              projectId: input.projectId,
-              libraryPath: agentConfig?.libraryPath,
-            }).pipe(Effect.mapError(toServiceError("Failed to resolve the group library.")));
-            yield* assertLibraryRootLocation({
-              root,
-              stateDir: serverConfig.stateDir,
-              groupsWorkspaceRoot: serverConfig.groupsWorkspaceRoot,
-              studioWorkspaceRoot: serverConfig.studioWorkspaceRoot,
-              isCustomPath: agentConfig?.libraryPath !== undefined,
-              projectId: input.projectId,
-            }).pipe(Effect.mapError(toServiceError("Failed to resolve the group library.")));
-            let libraryLeftOnDiskPath: string | null = null;
-            if (yield* libraryPathExists(root)) {
-              const moved = yield* moveLibraryToTrash(root);
-              if (!moved) libraryLeftOnDiskPath = root;
-            }
-            const listed = yield* automationService
-              .list({ projectId: input.projectId, includeArchived: true })
-              .pipe(Effect.mapError(toServiceError("Failed to load group automations.")));
-            for (const definition of listed.definitions) {
-              yield* automationService
-                .delete({ id: definition.id })
-                .pipe(Effect.catch(() => Effect.void));
-            }
-            yield* repository
-              .deleteProjectData(input.projectId)
-              .pipe(Effect.mapError(toServiceError("Failed to delete group coordinator data.")));
-            // The context mirror directory is app-owned state (documents +
-            // managed default library when it lived under project-context).
-            yield* Effect.tryPromise({
-              try: () =>
-                fs.rm(projectContextRoot(serverConfig.stateDir, input.projectId), {
-                  recursive: true,
-                  force: true,
-                }),
-              catch: toServiceError("Failed to remove group context files."),
-            });
-            // The project delete dispatch keeps the projection layer in step:
-            // threads tombstone, shells drop, the project row disappears.
-            yield* dispatchGroupThreadCommand(
-              [
-                ...(agentConfig?.coordinatorThreadId ? [agentConfig.coordinatorThreadId] : []),
-                ...shells.map((shell) => shell.id),
-              ],
-              "thread.delete",
+      withProjectLock(
+        input.projectId,
+        Effect.gen(function* () {
+          yield* requireUserLifecycleAction("Deleting a group", principal);
+          const existingReceipt = yield* replayReceipt(
+            input.requestId,
+            input.projectId,
+            (json) => JSON.parse(json) as ProjectAgentDeleteGroupResult,
+          );
+          if (existingReceipt) return existingReceipt;
+          const project = yield* resolveGroupCoordinatorProject(input.projectId);
+          if (input.confirmName.trim() !== project.title.trim()) {
+            return yield* Effect.fail(
+              fail("Type the group's name exactly to confirm deletion.", "forbidden"),
             );
-            yield* orchestrationEngine
-              .dispatch({
-                type: "project.delete",
-                commandId: branded.command(),
+          }
+          const result = yield* withLibraryRootLock(
+            input.projectId,
+            Effect.gen(function* () {
+              const agentConfig = yield* repository
+                .getConfig(input.projectId)
+                .pipe(Effect.mapError(toServiceError("Failed to load project coordinator.")))
+                .pipe(Effect.map(Option.getOrNull));
+              // Collect group threads up front: deleteProjectData wipes the
+              // thread index, and project.delete only accepts a threadless
+              // project, so every group thread must be dispatched for deletion
+              // before the project delete.
+              const { shells } = yield* listGroupThreadShells({
                 projectId: input.projectId,
-                createdAt: isoNow(),
-              } as OrchestrationCommand)
-              .pipe(Effect.mapError(toServiceError("Failed to delete the group project.")));
-            const deleted: ProjectAgentDeleteGroupResult = {
-              deletedProjectId: input.projectId,
-              libraryLeftOnDiskPath,
-            };
-            return deleted;
-          }),
-        );
-        yield* storeReceipt(input.requestId, input.projectId, "deleteGroup", result);
-        return result;
-      }),
+                coordinatorThreadId: agentConfig?.coordinatorThreadId ?? null,
+              });
+              // Only threads living IN the group project are deleted —
+              // linked-repo workers are detached (their task rows die with the
+              // group's data) and left running.
+              const groupShells = shells.filter((shell) => shell.projectId === input.projectId);
+              const root = yield* resolveLibraryRoot({
+                stateDir: serverConfig.stateDir,
+                projectId: input.projectId,
+                libraryPath: agentConfig?.libraryPath,
+              }).pipe(Effect.mapError(toServiceError("Failed to resolve the group library.")));
+              const libraryIsCustom = agentConfig?.libraryPath !== undefined;
+              if (!libraryIsCustom) {
+                yield* assertLibraryRootLocation({
+                  root,
+                  stateDir: serverConfig.stateDir,
+                  groupsWorkspaceRoot: serverConfig.groupsWorkspaceRoot,
+                  studioWorkspaceRoot: serverConfig.studioWorkspaceRoot,
+                  isCustomPath: false,
+                  projectId: input.projectId,
+                }).pipe(Effect.mapError(toServiceError("Failed to resolve the group library.")));
+              }
+              // Threads first, and stop on any failure: a thread that refuses
+              // to delete must abort the whole delete while the group is still
+              // fully intact — the alternative is a half-deleted group whose
+              // coordinator data and library are already gone.
+              yield* dispatchGroupThreadCommand(
+                [
+                  ...(agentConfig?.coordinatorThreadId ? [agentConfig.coordinatorThreadId] : []),
+                  ...groupShells.map((shell) => shell.id),
+                ],
+                "thread.delete",
+                { stopOnError: true },
+              );
+              yield* orchestrationEngine
+                .dispatch({
+                  type: "project.delete",
+                  commandId: branded.command(),
+                  projectId: input.projectId,
+                  createdAt: isoNow(),
+                } as OrchestrationCommand)
+                .pipe(Effect.mapError(toServiceError("Failed to delete the group project.")));
+              // Only once the project is gone: automations, coordinator rows,
+              // the context mirror, and the managed library come down too.
+              const listed = yield* automationService
+                .list({ projectId: input.projectId, includeArchived: true })
+                .pipe(Effect.mapError(toServiceError("Failed to load group automations.")));
+              for (const definition of listed.definitions) {
+                yield* automationService
+                  .delete({ id: definition.id })
+                  .pipe(Effect.catch(() => Effect.void));
+              }
+              yield* repository
+                .deleteProjectData(input.projectId)
+                .pipe(Effect.mapError(toServiceError("Failed to delete group coordinator data.")));
+              let libraryLeftOnDiskPath: string | null = null;
+              if (libraryIsCustom) {
+                // A user-chosen library folder is never moved or deleted.
+                if (yield* libraryPathExists(root)) libraryLeftOnDiskPath = root;
+              } else if (yield* libraryPathExists(root)) {
+                // The managed library lives under the context root — trash it
+                // before the context dir is removed or it is gone for good.
+                const moved = yield* moveLibraryToTrash(root);
+                if (!moved) libraryLeftOnDiskPath = root;
+              }
+              // The context mirror directory is app-owned state (documents +
+              // the managed default library root when it lived under
+              // project-context).
+              yield* Effect.tryPromise({
+                try: () =>
+                  fs.rm(projectContextRoot(serverConfig.stateDir, input.projectId), {
+                    recursive: true,
+                    force: true,
+                  }),
+                catch: toServiceError("Failed to remove group context files."),
+              });
+              const deleted: ProjectAgentDeleteGroupResult = {
+                deletedProjectId: input.projectId,
+                libraryLeftOnDiskPath,
+              };
+              return deleted;
+            }),
+          );
+          yield* storeReceipt(input.requestId, input.projectId, "deleteGroup", result);
+          return result;
+        }),
+      ),
 
     unlinkProject: (input, principal) =>
       Effect.gen(function* () {
@@ -4522,6 +4636,30 @@ export const makeProjectAgentService = Effect.gen(function* () {
             "forbidden",
           ),
         );
+      }),
+
+    // thread.turn.start on a group's coordinator must refuse while the group
+    // is paused or archived — client-side pickers filter, but the server is
+    // the gate.
+    assertGroupCoordinatorTurnAllowed: (input) =>
+      Effect.gen(function* () {
+        const config = yield* repository
+          .getConfigByCoordinatorThread(input.threadId)
+          .pipe(Effect.mapError(toServiceError("Failed to load group coordinator state.")));
+        if (Option.isNone(config)) return;
+        if (config.value.pausedAt !== null) {
+          return yield* Effect.fail(
+            fail("This group is paused — resume it before driving the coordinator.", "conflict"),
+          );
+        }
+        if (config.value.archivedAt !== null) {
+          return yield* Effect.fail(
+            fail(
+              "This group is archived — unarchive it before driving the coordinator.",
+              "conflict",
+            ),
+          );
+        }
       }),
 
     onProjectDeleted: (projectId) =>

@@ -46,7 +46,7 @@ export function GroupLifecycleSection(props: {
   const handleDelete = async () => {
     if (!nameMatches || busy) return;
     setDeleting(true);
-    const result = await agent.deleteGroup(config.projectId);
+    const result = await agent.deleteGroup(config.projectId, confirmName);
     setDeleting(false);
     if (result === null) {
       toastManager.add({

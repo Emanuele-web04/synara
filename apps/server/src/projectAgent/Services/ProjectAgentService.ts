@@ -2,6 +2,7 @@ import type {
   ProjectActivity,
   ProjectAgentBackfillInput,
   ProjectAgentConfigureInput,
+  ProjectAgentDeleteGroupInput,
   ProjectAgentDeleteGroupResult,
   ProjectAgentForgetInput,
   ProjectAgentForgetResult,
@@ -126,9 +127,12 @@ export interface ProjectAgentServiceShape {
     principal: ProjectAgentPrincipal,
   ) => Effect.Effect<ProjectAgentOverview, ProjectAgentServiceError>;
   readonly deleteGroup: (
-    input: ProjectAgentGroupControlInput,
+    input: ProjectAgentDeleteGroupInput,
     principal: ProjectAgentPrincipal,
   ) => Effect.Effect<ProjectAgentDeleteGroupResult, ProjectAgentServiceError>;
+  readonly assertGroupCoordinatorTurnAllowed: (input: {
+    readonly threadId: ThreadId;
+  }) => Effect.Effect<void, ProjectAgentServiceError>;
   readonly assertCallerMayCreateThreadInProject: (input: {
     readonly callerThreadId: ThreadId;
     readonly targetProjectId: ProjectId;

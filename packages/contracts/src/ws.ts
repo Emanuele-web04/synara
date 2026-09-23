@@ -45,6 +45,7 @@ import {
   ProjectAgentLibraryMkdirInput,
   ProjectAgentLibraryRenameInput,
   ProjectAgentLibraryRestoreInput,
+  ProjectAgentDeleteGroupInput,
   ProjectAgentGroupControlInput,
   ProjectAgentLibraryStatusInput,
 } from "./projectAgent";
@@ -620,7 +621,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.projectAgentArchiveGroup, ProjectAgentGroupControlInput),
   tagRequestBody(WS_METHODS.projectAgentUnarchiveGroup, ProjectAgentGroupControlInput),
   tagRequestBody(WS_METHODS.projectAgentRestartCoordinator, ProjectAgentGroupControlInput),
-  tagRequestBody(WS_METHODS.projectAgentDeleteGroup, ProjectAgentGroupControlInput),
+  tagRequestBody(WS_METHODS.projectAgentDeleteGroup, ProjectAgentDeleteGroupInput),
   tagRequestBody(WS_METHODS.projectAgentLibraryList, ProjectAgentLibraryListInput),
   tagRequestBody(WS_METHODS.projectAgentLibraryMkdir, ProjectAgentLibraryMkdirInput),
   tagRequestBody(WS_METHODS.projectAgentLibraryRename, ProjectAgentLibraryRenameInput),

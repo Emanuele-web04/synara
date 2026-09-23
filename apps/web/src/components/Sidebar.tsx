@@ -2999,6 +2999,11 @@ export default function Sidebar() {
     async (coordinatorThreadId: ThreadId, text: string): Promise<boolean> => {
       const api = readNativeApi();
       if (!api) return false;
+      // Run the coordinator under its configured runtime mode — never a
+      // blanket full-access turn.
+      const runtimeMode =
+        useStore.getState().threadShellById?.[coordinatorThreadId]?.runtimeMode ??
+        "approval-required";
       try {
         await api.orchestration.dispatchCommand({
           type: "thread.turn.start",
@@ -3010,7 +3015,7 @@ export default function Sidebar() {
             text,
             attachments: [],
           },
-          runtimeMode: "full-access",
+          runtimeMode,
           interactionMode: "default",
           createdAt: new Date().toISOString(),
         });
@@ -3362,10 +3367,16 @@ export default function Sidebar() {
         return;
       }
       if (clicked === "move-to-group") {
-        const eligibleGroups = projects.filter(
-          (project) =>
-            groupProjectIdSet.has(project.id) && summaryFor(project.id)?.archivedAt == null,
-        );
+        // Paused and archived groups can't run a coordinator turn, so they
+        // aren't move targets — the server refuses the turn either way.
+        const eligibleGroups = projects.filter((project) => {
+          const summary = summaryFor(project.id);
+          return (
+            groupProjectIdSet.has(project.id) &&
+            summary?.archivedAt == null &&
+            summary?.pausedAt == null
+          );
+        });
         if (eligibleGroups.length === 0) {
           toastManager.add({
             type: "info",

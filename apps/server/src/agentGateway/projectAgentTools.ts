@@ -1,11 +1,24 @@
 import { randomUUID } from "node:crypto";
 
-import { ProjectId, ProjectTaskId, ThreadId } from "@synara/contracts";
-import { Effect } from "effect";
+import {
+  ProjectAgentForgetInput,
+  ProjectAgentGetOverviewInput,
+  ProjectAgentLibraryAddInput,
+  ProjectAgentLibraryListInput,
+  ProjectAgentLinkRepositoryInput,
+  ProjectAgentListTasksInput,
+  ProjectAgentListThreadsInput,
+  ProjectAgentReadDocumentInput,
+  ProjectAgentRememberInput,
+  ProjectAgentReportResultInput,
+  ProjectAgentWriteDocumentInput,
+  ThreadId,
+} from "@synara/contracts";
+import { Effect, Schema } from "effect";
 
 import type { ProjectAgentServiceShape } from "../projectAgent/Services/ProjectAgentService.ts";
 import { mcpToolResultError, mcpToolResultJson } from "./protocol.ts";
-import { ToolInputError, errorText, readBooleanArg, readStringArg } from "./toolInput.ts";
+import { ToolInputError, errorText } from "./toolInput.ts";
 import {
   READ_ONLY_TOOL_ANNOTATIONS,
   WRITE_TOOL_ANNOTATIONS,
@@ -26,6 +39,18 @@ export function makeProjectAgentTools(
       .resolvePrincipalForThread(ThreadId.makeUnsafe(threadId))
       .pipe(Effect.mapError((error) => new ToolInputError(error.message)));
 
+  // Tool args are untrusted agent input — decode them through the same
+  // contract schemas the service enforces for its own callers so limits like
+  // note/title/path length apply to tool calls too.
+  const decodeInput = <S extends Schema.Top & { readonly DecodingServices: never }>(
+    schema: S,
+    args: unknown,
+  ): Effect.Effect<S["Type"], ToolInputError> =>
+    Effect.try({
+      try: () => Schema.decodeUnknownSync(schema)(args),
+      catch: (error) => new ToolInputError(`Invalid tool input: ${errorText(error)}`),
+    });
+
   const getOverview: ToolEntry = {
     requiredCapability: "thread:read",
     definition: {
@@ -42,15 +67,9 @@ export function makeProjectAgentTools(
     handler: (args, context) =>
       Effect.gen(function* () {
         const principal = yield* resolvePrincipal(context.callerThreadId);
+        const input = yield* decodeInput(ProjectAgentGetOverviewInput, args);
         const overview = yield* projectAgent
-          .getOverview(
-            {
-              projectId: ProjectId.makeUnsafe(
-                readStringArg(args, "projectId", { required: true })!,
-              ),
-            },
-            principal,
-          )
+          .getOverview(input, principal)
           .pipe(Effect.mapError((error) => new ToolInputError(error.message)));
         return mcpToolResultJson(overview);
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
@@ -74,16 +93,9 @@ export function makeProjectAgentTools(
     handler: (args, context) =>
       Effect.gen(function* () {
         const principal = yield* resolvePrincipal(context.callerThreadId);
+        const input = yield* decodeInput(ProjectAgentListTasksInput, args);
         const result = yield* projectAgent
-          .listTasks(
-            {
-              projectId: ProjectId.makeUnsafe(
-                readStringArg(args, "projectId", { required: true })!,
-              ),
-              includeArchived: readBooleanArg(args, "includeArchived") ?? false,
-            },
-            principal,
-          )
+          .listTasks(input, principal)
           .pipe(Effect.mapError((error) => new ToolInputError(error.message)));
         return mcpToolResultJson(result);
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
@@ -108,16 +120,9 @@ export function makeProjectAgentTools(
     handler: (args, context) =>
       Effect.gen(function* () {
         const principal = yield* resolvePrincipal(context.callerThreadId);
+        const input = yield* decodeInput(ProjectAgentReadDocumentInput, args);
         const result = yield* projectAgent
-          .readDocument(
-            {
-              projectId: ProjectId.makeUnsafe(
-                readStringArg(args, "projectId", { required: true })!,
-              ),
-              logicalPath: readStringArg(args, "logicalPath", { required: true })!,
-            },
-            principal,
-          )
+          .readDocument(input, principal)
           .pipe(Effect.mapError((error) => new ToolInputError(error.message)));
         return mcpToolResultJson(result);
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
@@ -146,21 +151,9 @@ export function makeProjectAgentTools(
     handler: (args, context) =>
       Effect.gen(function* () {
         const principal = yield* resolvePrincipal(context.callerThreadId);
+        const input = yield* decodeInput(ProjectAgentWriteDocumentInput, args);
         const result = yield* projectAgent
-          .writeDocument(
-            {
-              requestId: readStringArg(args, "requestId", { required: true })!,
-              projectId: ProjectId.makeUnsafe(
-                readStringArg(args, "projectId", { required: true })!,
-              ),
-              logicalPath: readStringArg(args, "logicalPath", { required: true })!,
-              content: readStringArg(args, "content", { required: true })!,
-              ...(typeof args.expectedRevision === "number"
-                ? { expectedRevision: args.expectedRevision }
-                : {}),
-            },
-            principal,
-          )
+          .writeDocument(input, principal)
           .pipe(Effect.mapError((error) => new ToolInputError(error.message)));
         return mcpToolResultJson(result);
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
@@ -188,18 +181,9 @@ export function makeProjectAgentTools(
     handler: (args, context) =>
       Effect.gen(function* () {
         const principal = yield* resolvePrincipal(context.callerThreadId);
+        const input = yield* decodeInput(ProjectAgentReportResultInput, args);
         const result = yield* projectAgent
-          .reportResult(
-            {
-              requestId: readStringArg(args, "requestId", { required: true })!,
-              projectId: ProjectId.makeUnsafe(
-                readStringArg(args, "projectId", { required: true })!,
-              ),
-              taskId: ProjectTaskId.makeUnsafe(readStringArg(args, "taskId", { required: true })!),
-              summary: readStringArg(args, "summary", { required: true })!,
-            },
-            principal,
-          )
+          .reportResult(input, principal)
           .pipe(Effect.mapError((error) => new ToolInputError(error.message)));
         return mcpToolResultJson(result);
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
@@ -222,7 +206,7 @@ export function makeProjectAgentTools(
       Effect.gen(function* () {
         const packet = yield* projectAgent
           .buildContextPacket(
-            ProjectId.makeUnsafe(readStringArg(args, "projectId", { required: true })!),
+            (yield* decodeInput(ProjectAgentGetOverviewInput, args)).projectId,
             ThreadId.makeUnsafe(context.callerThreadId),
           )
           .pipe(Effect.mapError((error) => new ToolInputError(error.message)));
@@ -252,18 +236,12 @@ export function makeProjectAgentTools(
     handler: (args, context) =>
       Effect.gen(function* () {
         const principal = yield* resolvePrincipal(context.callerThreadId);
+        const input = yield* decodeInput(ProjectAgentRememberInput, {
+          ...args,
+          requestId: args.requestId ?? randomUUID(),
+        });
         const result = yield* projectAgent
-          .remember(
-            {
-              requestId: readStringArg(args, "requestId") ?? randomUUID(),
-              projectId: ProjectId.makeUnsafe(
-                readStringArg(args, "projectId", { required: true })!,
-              ),
-              note: readStringArg(args, "note", { required: true })!,
-              title: readStringArg(args, "title"),
-            },
-            principal,
-          )
+          .remember(input, principal)
           .pipe(Effect.mapError((error) => new ToolInputError(error.message)));
         return mcpToolResultJson(result);
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
@@ -290,17 +268,12 @@ export function makeProjectAgentTools(
     handler: (args, context) =>
       Effect.gen(function* () {
         const principal = yield* resolvePrincipal(context.callerThreadId);
+        const input = yield* decodeInput(ProjectAgentForgetInput, {
+          ...args,
+          requestId: args.requestId ?? randomUUID(),
+        });
         const result = yield* projectAgent
-          .forget(
-            {
-              requestId: readStringArg(args, "requestId") ?? randomUUID(),
-              projectId: ProjectId.makeUnsafe(
-                readStringArg(args, "projectId", { required: true })!,
-              ),
-              path: readStringArg(args, "path", { required: true })!,
-            },
-            principal,
-          )
+          .forget(input, principal)
           .pipe(Effect.mapError((error) => new ToolInputError(error.message)));
         return mcpToolResultJson(result);
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
@@ -328,27 +301,17 @@ export function makeProjectAgentTools(
     handler: (args, context) =>
       Effect.gen(function* () {
         const principal = yield* resolvePrincipal(context.callerThreadId);
-        const linkedProjectId = readStringArg(args, "linkedProjectId");
-        const workspacePath = readStringArg(args, "workspacePath");
-        if ((linkedProjectId === undefined) === (workspacePath === undefined)) {
+        const input = yield* decodeInput(ProjectAgentLinkRepositoryInput, {
+          ...args,
+          requestId: args.requestId ?? randomUUID(),
+        });
+        if ((input.linkedProjectId === undefined) === (input.workspacePath === undefined)) {
           return yield* Effect.fail(
             new ToolInputError("Pass exactly one of linkedProjectId or workspacePath."),
           );
         }
         const result = yield* projectAgent
-          .linkRepository(
-            {
-              requestId: readStringArg(args, "requestId") ?? randomUUID(),
-              projectId: ProjectId.makeUnsafe(
-                readStringArg(args, "projectId", { required: true })!,
-              ),
-              ...(linkedProjectId !== undefined
-                ? { linkedProjectId: ProjectId.makeUnsafe(linkedProjectId) }
-                : {}),
-              ...(workspacePath !== undefined ? { workspacePath } : {}),
-            },
-            principal,
-          )
+          .linkRepository(input, principal)
           .pipe(Effect.mapError((error) => new ToolInputError(error.message)));
         return mcpToolResultJson(result);
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
@@ -373,16 +336,9 @@ export function makeProjectAgentTools(
     handler: (args, context) =>
       Effect.gen(function* () {
         const principal = yield* resolvePrincipal(context.callerThreadId);
+        const input = yield* decodeInput(ProjectAgentLibraryListInput, args);
         const result = yield* projectAgent
-          .libraryList(
-            {
-              projectId: ProjectId.makeUnsafe(
-                readStringArg(args, "projectId", { required: true })!,
-              ),
-              relativePath: readStringArg(args, "relativePath"),
-            },
-            principal,
-          )
+          .libraryList(input, principal)
           .pipe(Effect.mapError((error) => new ToolInputError(error.message)));
         return mcpToolResultJson(result);
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
@@ -410,18 +366,12 @@ export function makeProjectAgentTools(
     handler: (args, context) =>
       Effect.gen(function* () {
         const principal = yield* resolvePrincipal(context.callerThreadId);
+        const input = yield* decodeInput(ProjectAgentLibraryAddInput, {
+          ...args,
+          requestId: args.requestId ?? randomUUID(),
+        });
         const result = yield* projectAgent
-          .libraryAdd(
-            {
-              requestId: readStringArg(args, "requestId") ?? randomUUID(),
-              projectId: ProjectId.makeUnsafe(
-                readStringArg(args, "projectId", { required: true })!,
-              ),
-              sourcePath: readStringArg(args, "sourcePath", { required: true })!,
-              destinationPath: readStringArg(args, "destinationPath"),
-            },
-            principal,
-          )
+          .libraryAdd(input, principal)
           .pipe(Effect.mapError((error) => new ToolInputError(error.message)));
         return mcpToolResultJson(result);
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
@@ -443,15 +393,9 @@ export function makeProjectAgentTools(
     handler: (args, context) =>
       Effect.gen(function* () {
         const principal = yield* resolvePrincipal(context.callerThreadId);
+        const input = yield* decodeInput(ProjectAgentListThreadsInput, args);
         const result = yield* projectAgent
-          .listGroupThreads(
-            {
-              projectId: ProjectId.makeUnsafe(
-                readStringArg(args, "projectId", { required: true })!,
-              ),
-            },
-            principal,
-          )
+          .listGroupThreads(input, principal)
           .pipe(Effect.mapError((error) => new ToolInputError(error.message)));
         return mcpToolResultJson(result);
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),

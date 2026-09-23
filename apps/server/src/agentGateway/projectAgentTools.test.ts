@@ -91,4 +91,45 @@ describe("project agent tool surface", () => {
     const neither = await Effect.runPromise(run({ projectId: "p" }));
     expect(JSON.stringify(neither)).toContain("exactly one");
   });
+
+  it("enforces contract limits on tool inputs before reaching the service", async () => {
+    const context = {
+      principal: { kind: "provider-session" as const },
+      callerThreadId: "thread-1",
+      callerThreadLabel: null,
+      callerSessionKey: "session-1",
+      callerProvider: "codex" as const,
+      callerCapabilities: new Set(["thread:read", "thread:write"]),
+      callerTurnId: "turn-1",
+      assertCallerTurnActive: () => Effect.void,
+      jsonRpcRequestId: 1,
+    } as unknown as ToolContext;
+
+    // note > 4000 chars and title > 160 chars are contract violations.
+    const remember = byName.get("synara_project_remember")!;
+    const bigNote = await Effect.runPromise(
+      remember.handler({ projectId: "p", note: "x".repeat(4_001) }, context),
+    );
+    expect(JSON.stringify(bigNote)).toContain("Invalid tool input");
+    const bigTitle = await Effect.runPromise(
+      remember.handler({ projectId: "p", note: "n", title: "t".repeat(161) }, context),
+    );
+    expect(JSON.stringify(bigTitle)).toContain("Invalid tool input");
+    const missingProject = await Effect.runPromise(remember.handler({ note: "n" }, context));
+    expect(JSON.stringify(missingProject)).toContain("Invalid tool input");
+
+    // library_add paths are capped at 4096 chars.
+    const libraryAdd = byName.get("synara_project_library_add")!;
+    const longPath = await Effect.runPromise(
+      libraryAdd.handler({ projectId: "p", sourcePath: "a".repeat(4_097) }, context),
+    );
+    expect(JSON.stringify(longPath)).toContain("Invalid tool input");
+
+    // read_document rejects paths over the 512-char contract cap.
+    const readDocument = byName.get("synara_project_read_document")!;
+    const badPath = await Effect.runPromise(
+      readDocument.handler({ projectId: "p", logicalPath: `${"x".repeat(513)}.md` }, context),
+    );
+    expect(JSON.stringify(badPath)).toContain("Invalid tool input");
+  });
 });

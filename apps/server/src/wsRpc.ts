@@ -1073,6 +1073,13 @@ const makeWsRpcHandlersLayer = () =>
             Effect.gen(function* () {
               const { command: normalizedCommand, prepareWorkspaceRoot } =
                 yield* normalizeDispatchCommand({ command });
+              // A paused/archived group's coordinator must not run turns —
+              // the picker filters them out, but the server enforces it.
+              if (normalizedCommand.type === "thread.turn.start") {
+                yield* projectAgentService.assertGroupCoordinatorTurnAllowed({
+                  threadId: normalizedCommand.threadId,
+                });
+              }
               const result = yield* dispatchOrchestrationCommand(normalizedCommand);
               // Only scaffold managed workspace-root subdirectories (Inbox/Outbox/work/outputs)
               // AFTER the decider has accepted the command. A rejected dispatch (e.g. a

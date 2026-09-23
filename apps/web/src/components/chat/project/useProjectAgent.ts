@@ -411,7 +411,7 @@ export function useProjectAgent(input: {
     [groupControl],
   );
 
-  const deleteGroup = useCallback(async (projectId: ProjectId) => {
+  const deleteGroup = useCallback(async (projectId: ProjectId, confirmName: string) => {
     const api = readNativeApi();
     if (!api?.projectAgent) return null;
     setBusy(true);
@@ -419,6 +419,7 @@ export function useProjectAgent(input: {
       const result: ProjectAgentDeleteGroupResult = await api.projectAgent.deleteGroup({
         requestId: crypto.randomUUID(),
         projectId,
+        confirmName,
       });
       return result;
     } catch (cause) {

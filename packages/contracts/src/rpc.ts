@@ -51,6 +51,7 @@ import {
   ProjectAgentCreateTaskInput,
   ProjectAgentExcludeThreadInput,
   ProjectAgentBackfillInput,
+  ProjectAgentDeleteGroupInput,
   ProjectAgentDeleteGroupResult,
   ProjectAgentGroupControlInput,
   ProjectAgentListThreadIndexInput,
@@ -1629,7 +1630,7 @@ export const WsProjectAgentRestartCoordinatorRpc = Rpc.make(
   },
 );
 export const WsProjectAgentDeleteGroupRpc = Rpc.make(WS_METHODS.projectAgentDeleteGroup, {
-  payload: ProjectAgentGroupControlInput,
+  payload: ProjectAgentDeleteGroupInput,
   success: ProjectAgentDeleteGroupResult,
   error: WsRpcError,
 });
