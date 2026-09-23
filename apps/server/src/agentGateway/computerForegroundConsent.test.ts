@@ -123,6 +123,25 @@ describe("makeComputerForegroundConsent", () => {
     });
   });
 
+  it("honors a card after pre-existing agent-origin user rows", async () => {
+    const agentMessage = {
+      ...userMessage("Inspect the app"),
+      dispatchOrigin: "agent",
+    } as OrchestrationMessage;
+    const { consent } = setup([agentMessage], "accept");
+    expect(
+      await consent.requestForegroundConsent(
+        "computer_activate_window",
+        {},
+        context(),
+        new AbortController().signal,
+      ),
+    ).toBe(true);
+    expect(await consent.resolveForegroundAuthorization(context())).toEqual({
+      userRequestedVisibleUse: true,
+    });
+  });
+
   it("keeps a declined card declined and never asks without a turn", async () => {
     const { consent, cards } = setup([], "decline");
     const signal = new AbortController().signal;

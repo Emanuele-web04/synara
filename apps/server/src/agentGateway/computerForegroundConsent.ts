@@ -6,11 +6,15 @@ import {
   COMPUTER_FOREGROUND_NOT_AUTHORIZED,
   computerForegroundScopeChangedSince,
   computerForegroundAuthorizationForMessages,
-  latestUserAuthoredMessage,
   type ComputerForegroundAuthorization,
 } from "../computer/computerVisibleUse.ts";
 import type { AgentGatewayComputerToolsOptions } from "./computerTools.ts";
 import type { ToolContext } from "./toolRuntime.ts";
+
+/** Include agent-origin rows so an existing row cannot look like new steering. */
+function lastUserRowId(messages: readonly OrchestrationMessage[]): string | undefined {
+  return messages.findLast((message) => message.role === "user")?.id;
+}
 
 export interface ComputerForegroundConsentOptions {
   readonly gate: Pick<ComputerApprovalGate, "hasForegroundGrant" | "requestForegroundTask">;
@@ -77,7 +81,7 @@ export function makeComputerForegroundConsent(options: ComputerForegroundConsent
     }
     const before = await options.loadMessages(context.callerThreadId);
     if (before === undefined) return false;
-    const beforeMessageId = latestUserAuthoredMessage(before)?.id;
+    const beforeMessageId = lastUserRowId(before);
     const accepted = await options.gate.requestForegroundTask({
       threadId: context.callerThreadId,
       turnId: context.callerTurnId,
@@ -90,7 +94,7 @@ export function makeComputerForegroundConsent(options: ComputerForegroundConsent
       return false;
     cardGrantFrontiers.set(context.callerThreadId, {
       turnId: context.callerTurnId,
-      lastMessageId: latestUserAuthoredMessage(messages)?.id,
+      lastMessageId: lastUserRowId(messages),
     });
     return true;
   };
