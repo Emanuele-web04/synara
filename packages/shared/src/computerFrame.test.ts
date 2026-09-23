@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ComputerFrameEncodeError,
+  computerFrameMimeType,
   decodeComputerFrame,
   encodeComputerFrame,
 } from "./computerFrame";
@@ -29,8 +30,29 @@ describe("encodeComputerFrame / decodeComputerFrame", () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.frame.header).toEqual(header);
+    // A frame that names no format is a PNG still, as every frame was before.
+    expect(result.frame.header).toEqual({ ...header, mimeType: "image/png" });
     expect(Array.from(result.frame.payload)).toEqual(Array.from(payload));
+  });
+
+  it("carries the preview image type per frame", () => {
+    const jpeg = decodeComputerFrame(
+      encodeComputerFrame({ header: { ...header, mimeType: "image/jpeg" }, payload }),
+    );
+    const png = decodeComputerFrame(
+      encodeComputerFrame({ header: { ...header, mimeType: "image/png" }, payload }),
+    );
+    expect(jpeg.ok && jpeg.frame.header.mimeType).toBe("image/jpeg");
+    expect(png.ok && png.frame.header.mimeType).toBe("image/png");
+    expect(jpeg.ok && computerFrameMimeType(jpeg.frame.header)).toBe("image/jpeg");
+    expect(computerFrameMimeType(header)).toBe("image/png");
+  });
+
+  it("writes a PNG frame byte-identically to the pre-format envelope", () => {
+    // Older clients read the flags byte as keyframe/codec-config only; a PNG
+    // frame must not set anything they do not know.
+    const bytes = encodeComputerFrame({ header: { ...header, mimeType: "image/png" }, payload });
+    expect(bytes[3]).toBe(0);
   });
 
   it("round-trips an empty payload and independent flags", () => {
@@ -101,6 +123,12 @@ describe("decodeComputerFrame malformed input", () => {
       ok: false,
       reason: "unsupported-version",
     });
+  });
+
+  it("rejects a format code this build cannot display", () => {
+    const unknown = encoded.slice();
+    unknown[3] = (unknown[3] ?? 0) | 0b0000_1100;
+    expect(decodeComputerFrame(unknown)).toEqual({ ok: false, reason: "unsupported-format" });
   });
 
   it("rejects zero-length and invalid UTF-8 computer ids", () => {

@@ -1,6 +1,9 @@
+import { types } from "node:util";
+
 import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
+import { CuaComputerBackend } from "../CuaComputerBackend.ts";
 import { FakeComputerBackend } from "../FakeComputerBackend.ts";
 import { ComputerService, type ComputerServiceShape } from "../Services/ComputerService.ts";
 import { makeComputerServiceLayer } from "./ComputerService.ts";
@@ -18,6 +21,11 @@ async function withComputerService(
       }).pipe(Effect.provide(makeComputerServiceLayer({ backend }))),
     ),
   );
+}
+
+/** The backend the layer chose; a private field, read only to name it in assertions. */
+function backendOf(service: ComputerServiceShape): unknown {
+  return (service.manager as unknown as { readonly backend: unknown }).backend;
 }
 
 describe("ComputerServiceLive", () => {
@@ -118,7 +126,9 @@ describe("ComputerServiceLive", () => {
             kind: "unsupported-platform",
             platform: "win32",
           });
-        }).pipe(Effect.provide(makeComputerServiceLayer({ platform: "win32" }))),
+        }).pipe(
+          Effect.provide(makeComputerServiceLayer({ platform: "win32", selection: { env: {} } })),
+        ),
       ),
     );
   });
@@ -150,6 +160,132 @@ describe("ComputerServiceLive", () => {
     }
   });
 
+  /**
+   * The Electron app configures the Cua host socket on every platform, Linux
+   * included, so socket presence cannot be what routes a Linux desktop: the
+   * Linux tiers decide first, and Cua is what remains when none claims the
+   * host. Naming it explicitly reaches it on any platform.
+   */
+  it("keeps Cua as the Linux fallback and the explicit choice", async () => {
+    vi.stubEnv("SYNARA_CUA_HOST_SOCKET", "/tmp/synara-cua-test.sock");
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const service = yield* ComputerService;
+            expect(service.supported).toBe(true);
+            expect(service.availability).not.toMatchObject({ kind: "unsupported-platform" });
+            // The Cua host, observing a Linux desktop it does not drive.
+            expect(backendOf(service)).toBeInstanceOf(CuaComputerBackend);
+            expect(service.manager.guidanceProfile).toEqual({
+              dialect: "linux",
+              dedicatedSeat: false,
+            });
+          }).pipe(
+            Effect.provide(
+              makeComputerServiceLayer({
+                platform: "linux",
+                selection: { env: { SYNARA_CUA_HOST_SOCKET: "/tmp/synara-cua-test.sock" } },
+              }),
+            ),
+          ),
+        ),
+      );
+      vi.stubEnv("SYNARA_COMPUTER_BACKEND", "cua");
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const service = yield* ComputerService;
+            expect(service.supported).toBe(true);
+            expect(service.availability).not.toMatchObject({ kind: "unsupported-platform" });
+            expect(backendOf(service)).toBeInstanceOf(CuaComputerBackend);
+          }).pipe(Effect.provide(makeComputerServiceLayer({ platform: "win32" }))),
+        ),
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("refuses a Linux host with no tier and no host endpoint rather than faking one", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* ComputerService;
+          expect(service.supported).toBe(false);
+          expect(service.availability).toEqual({
+            kind: "backend-unavailable",
+            message: "No computer backend is available on this server.",
+          });
+        }).pipe(
+          Effect.provide(
+            makeComputerServiceLayer({
+              platform: "linux",
+              selection: { env: {}, busNameHasOwner: async () => false },
+            }),
+          ),
+        ),
+      ),
+    );
+  });
+
+  /**
+   * An override is honored or refused, never bypassed. A typo that fell through
+   * to auto-detection would boot a different backend and look like the variable
+   * does nothing; the unavailable backend carries the reason and the names that
+   * do exist instead.
+   */
+  it("turns a malformed override into an availability card, not another backend", async () => {
+    vi.stubEnv("SYNARA_COMPUTER_BACKEND", "protal");
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const service = yield* ComputerService;
+            expect(service.supported).toBe(false);
+            expect(service.availability).toMatchObject({ kind: "backend-unavailable" });
+            expect(
+              service.availability.kind === "backend-unavailable"
+                ? service.availability.message
+                : "",
+            ).toContain('SYNARA_COMPUTER_BACKEND="protal"');
+          }).pipe(Effect.provide(makeComputerServiceLayer({ platform: "darwin" }))),
+        ),
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("routes a KDE Wayland host to the KWin backend without touching the compositor", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* ComputerService;
+          expect(service.supported).toBe(true);
+          // Construction and the boot probe never connect: a host whose bus
+          // says KWin is up but that has no plugin anywhere reports exactly
+          // that, and nothing is installed or loaded to find out.
+          expect(service.availability).toMatchObject({ kind: "backend-unavailable" });
+          expect(service.manager.guidanceProfile).toEqual({
+            dialect: "linux",
+            dedicatedSeat: true,
+          });
+        }).pipe(
+          Effect.provide(
+            makeComputerServiceLayer({
+              platform: "linux",
+              selection: {
+                env: { XDG_SESSION_TYPE: "wayland" },
+                busNameHasOwner: async (name) => name === "org.kde.KWin",
+              },
+            }),
+          ),
+        ),
+      ),
+    );
+  });
+
   it("selects the fake backend only when explicitly requested", async () => {
     vi.stubEnv("SYNARA_COMPUTER_BACKEND", "fake");
     try {
@@ -168,5 +304,23 @@ describe("ComputerServiceLive", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+});
+
+describe("ComputerServiceLive startup selection", () => {
+  it("hands the macOS host its Cua backend directly, probed before startup continues", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* ComputerService;
+          const backend = backendOf(service);
+          expect(types.isProxy(backend)).toBe(false);
+          expect(backend).toBeInstanceOf(CuaComputerBackend);
+          expect(service.availability.kind).not.toBe("checking");
+        }).pipe(
+          Effect.provide(makeComputerServiceLayer({ platform: "darwin", selection: { env: {} } })),
+        ),
+      ),
+    );
   });
 });

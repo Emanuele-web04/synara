@@ -14,13 +14,20 @@ import {
   type ComputerBackendActionResult,
 } from "./ComputerBackend.ts";
 import { computerApprovalGate } from "./ComputerApprovalGate.ts";
-import { COMPUTER_CONTROL_ENABLE_TIMEOUT_MS, ComputerManager } from "./ComputerManager.ts";
+import {
+  COMPUTER_CONTROL_ENABLE_TIMEOUT_MS,
+  COMPUTER_PASTE_CONSUME_TIMEOUT_MS,
+  COMPUTER_PASTE_RESTORE_MS,
+  ComputerManager,
+} from "./ComputerManager.ts";
 import {
   ComputerCallContext,
   ComputerCallTiming,
   withComputerCallContext,
 } from "./computerCallContext.ts";
 import { withComputerTask } from "./computerTaskContext.ts";
+import type { ComputerCaptureRequest } from "./ComputerBackend.ts";
+import { ComputerDenylistError } from "./computerDenylist.ts";
 import { FakeComputerBackend } from "./FakeComputerBackend.ts";
 import type { FrameSink } from "@synara/shared/frameTransport";
 
@@ -581,6 +588,114 @@ describe("ComputerManager and FakeComputerBackend", () => {
     });
 
     await manager.dispose();
+  });
+
+  it("does not call a desktop the backend let go of on purpose disconnected", async () => {
+    const backend = new FakeComputerBackend();
+    const manager = new ComputerManager({ backend });
+    await manager.listWindows();
+    const idle = {
+      status: "unavailable" as const,
+      consecutiveFailures: 0,
+      reconnects: 0,
+      captureAvailable: false,
+    };
+
+    // An idle shutdown or release: the next use brings the desktop back, so
+    // the panel keeps the verdict the last availability read gave.
+    backend.emitHealthChanged({ ...idle, dormant: true });
+    expect((await manager.getStatus()).availability).toEqual({
+      kind: "available",
+      backend: "fake",
+    });
+    expect((await manager.getThreadState("thread-dormant")).availability.kind).toBe("available");
+
+    // The same reading without the backend's marker is still a lost desktop,
+    // which is what every backend that never sets it (Cua) keeps reporting.
+    backend.emitHealthChanged(idle);
+    expect((await manager.getStatus()).availability).toMatchObject({
+      kind: "backend-unavailable",
+      message: expect.stringContaining("not connected"),
+    });
+
+    await manager.dispose();
+  });
+
+  it("keeps a status poll passive on a backend with a dedicated status read", async () => {
+    // The panel polls every ten seconds. A poll that establishes the desktop is
+    // a poll that installs a plugin and boots a compositor nobody asked for.
+    const statusReads: number[] = [];
+    const backend = Object.assign(new FakeComputerBackend(), {
+      statusAvailability: async () => {
+        statusReads.push(1);
+        return { kind: "available", backend: "fake" } as const;
+      },
+    });
+    const manager = new ComputerManager({ backend });
+
+    // Before engagement and after: the passive read answers both, and the
+    // establishing read is left to the next real use of the desktop.
+    await manager.getStatus();
+    expect(statusReads).toHaveLength(1);
+    await manager.listWindows();
+    const establishedReads = backend.callsFor("availability").length;
+    await manager.getStatus();
+    expect(statusReads).toHaveLength(2);
+    expect(backend.callsFor("availability")).toHaveLength(establishedReads);
+
+    await manager.dispose();
+  });
+
+  it("refuses a text selection the backend cannot make before touching the desktop", async () => {
+    const backend = Object.assign(new FakeComputerBackend(), { textRangeSelection: false });
+    const manager = new ComputerManager({ backend });
+    try {
+      await expect(
+        manager.selectText("thread-1", { windowId: "fake-calculator" }, { start: 0, length: 1 }),
+      ).rejects.toMatchObject({ rejectedOperation: "selectText" });
+      // Nothing was claimed, restacked or aimed for a dispatch that could
+      // never have happened.
+      for (const method of ["clearFocusWindow", "raiseWindow", "focusWindow", "selectText"]) {
+        expect(backend.callsFor(method), method).toHaveLength(0);
+      }
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("resets input delivery, not only the aim, when the desktop changes hands", async () => {
+    // A compositor seat outlives the thread that drove it: a button or modifier
+    // the previous owner still held would be held for the next one, and for the
+    // human once the lease is released.
+    const resets: string[] = [];
+    const backend = Object.assign(new FakeComputerBackend(), {
+      resetInputDelivery: async () => {
+        resets.push("reset");
+      },
+    });
+    const manager = new ComputerManager({ backend });
+    try {
+      await manager.withAgentActivity(
+        "a",
+        () => manager.pressKey("a", "enter"),
+        undefined,
+        "turn-a",
+      );
+      expect(resets).toEqual(["reset"]);
+      await manager.releaseDesktopControl("a", "turn-a");
+      expect(resets).toEqual(["reset", "reset"]);
+      await manager.withAgentActivity(
+        "b",
+        () => manager.pressKey("b", "enter"),
+        undefined,
+        "turn-b",
+      );
+      expect(resets).toEqual(["reset", "reset", "reset"]);
+      // The full reset replaces the aim-only clear on both transitions.
+      expect(backend.callsFor("clearFocusWindow")).toHaveLength(0);
+    } finally {
+      await manager.dispose();
+    }
   });
 
   it("answers getStatus without a thread, corrected by live health", async () => {
@@ -1305,6 +1420,51 @@ describe("ComputerManager and FakeComputerBackend", () => {
       });
       // The observer answered the settle itself; no blind timer ran beside it.
       expect(settleWaitedFor(spy, 60)).toBe(false);
+      await manager.dispose();
+    });
+
+    it("asks the observer again once the backend's capabilities change", async () => {
+      setEnv("SYNARA_CUA_CONDITIONAL_SETTLE", undefined);
+      let known = false;
+      const backend = new ProvenBackend({
+        waitForSettle: () => {
+          if (!known) throw new Error("Unknown tool: waitForSettle");
+          return { settled: true, waitedMs: 0 };
+        },
+      });
+      const manager = new ComputerManager({ backend, actionSettleMs: 60 });
+      await pressThenObserveWindow(manager);
+      await pressThenObserveWindow(manager);
+      // "Unsupported" is remembered for this backend...
+      expect(backend.callsFor("waitForSettle")).toHaveLength(1);
+
+      // ...but not across a new occupant or a reconnect to a newer plugin.
+      known = true;
+      backend.emitCapabilitiesChanged();
+      await pressThenObserveWindow(manager);
+      expect(backend.callsFor("waitForSettle")).toHaveLength(2);
+      await manager.dispose();
+    });
+
+    it("uses the backend's own post-action settle policy when it names one", async () => {
+      setEnv("SYNARA_CUA_CONDITIONAL_SETTLE", undefined);
+      const backend = new ProvenBackend({ waitForSettle: true });
+      Object.assign(backend, {
+        actionSettle: { quietMs: 25, timeoutMs: 1_500, quietWithinMs: 250, changeWithinMs: 200 },
+      });
+      const manager = new ComputerManager({ backend, actionSettleMs: 60 });
+      await pressThenObserveWindow(manager);
+      expect(backend.callsFor("waitForSettle")[0]?.args[0]).toMatchObject({
+        windowId: "fake-terminal",
+        timeoutMs: 1_500,
+        quietMs: 25,
+        quietWithinMs: 250,
+        changeWithinMs: 200,
+      });
+      // The configured settle stays a ceiling on the quiet window.
+      Object.assign(backend, { actionSettle: { quietMs: 500, timeoutMs: 1_500 } });
+      await pressThenObserveWindow(manager);
+      expect(backend.callsFor("waitForSettle")[1]?.args[0]).toMatchObject({ quietMs: 60 });
       await manager.dispose();
     });
 
@@ -2545,6 +2705,14 @@ describe("ComputerManager and FakeComputerBackend", () => {
     expect(decodeComputerFrame(sink.received[0]!).ok).toBe(true);
     backend.emitFrame(false, false, Uint8Array.of(7, 8));
     expect(sink.received).toHaveLength(3);
+    // A backend's JPEG preview still reaches the pane labelled as one.
+    backend.emitFrame(true, false, Uint8Array.of(0xff, 0xd8), "image/jpeg");
+    const jpeg = decodeComputerFrame(sink.received[3]!);
+    expect(jpeg.ok && jpeg.frame.header.mimeType).toBe("image/jpeg");
+    expect(decodeComputerFrame(sink.received[2]!)).toMatchObject({
+      ok: true,
+      frame: { header: { mimeType: "image/png" } },
+    });
 
     unsubscribe();
     await manager.flushStreamTransitions();
@@ -2724,6 +2892,43 @@ describe("ComputerManager and FakeComputerBackend", () => {
     });
 
     await manager.dispose();
+  });
+
+  it("narrows the untargeted fallback to the backend's observation region", async () => {
+    const rightMonitor = { x: 960, y: 0, width: 960, height: 1_080 };
+    const backend = Object.assign(new FakeComputerBackend(), {
+      defaultObservationRegion: async () => rightMonitor,
+    });
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    try {
+      const vault = {
+        id: "vault",
+        title: "Vault",
+        appName: "1Password",
+        bounds: { x: 0, y: 0, width: 500, height: 500 },
+        focused: false,
+        minimized: false,
+        visible: true,
+      };
+      // Nothing holds the agent's focus; the human's denied window sits on the
+      // other monitor, which the scoped shot does not photograph.
+      backend.emitWindowsChanged([vault]);
+      const scoped = await manager.captureFocusedWindow(1_024, { agentFocusOnly: true });
+      expect(scoped.windowId).toBeUndefined();
+      expect(backend.callsFor("captureScreenshot").at(-1)?.args[0]).toEqual({
+        kind: "region",
+        region: rightMonitor,
+        maxDimension: 1_024,
+      });
+
+      // On the observed monitor it refuses, exactly as a region capture does.
+      backend.emitWindowsChanged([{ ...vault, bounds: { ...vault.bounds, x: 1_000 } }]);
+      await expect(
+        manager.captureFocusedWindow(1_024, { agentFocusOnly: true }),
+      ).rejects.toBeInstanceOf(ComputerDenylistError);
+    } finally {
+      await manager.dispose();
+    }
   });
 
   it("captures the action's window on a hint, reports a vanished target, and never throws", async () => {
@@ -3057,6 +3262,71 @@ describe("ComputerManager and FakeComputerBackend", () => {
     backend.queueScreenshots(Array.from({ length: 12 }, (_unused, index) => `capture-${index}`));
     return { backend, manager, measurements: measured };
   }
+
+  /** A backend that can hand back raw luma for a capture nobody looks at. */
+  class LumaCaptureBackend extends FakeComputerBackend {
+    lumaCaptures = 0;
+    malformed = false;
+    async captureLuma(request: ComputerCaptureRequest) {
+      this.lumaCaptures += 1;
+      // Same geometry an ordinary capture of this request reports.
+      const shot = await super.captureScreenshot(request);
+      const pixels = shot.width * shot.height;
+      return {
+        width: shot.width,
+        height: shot.height,
+        data: new Uint8Array(this.malformed ? pixels - 1 : pixels),
+        scale: shot.scale!,
+      };
+    }
+  }
+
+  function scrollMeasurementKinds(backend: FakeComputerBackend) {
+    const kinds: string[] = [];
+    const manager = new ComputerManager({
+      backend,
+      actionSettleMs: 0,
+      measureScrollTravel: (before, after) => {
+        kinds.push(`${before.kind}->${after.kind}`);
+        return 40;
+      },
+    });
+    backend.queueScreenshots(Array.from({ length: 12 }, (_unused, index) => `capture-${index}`));
+    return { manager, kinds };
+  }
+
+  it("measures a scroll from a luma baseline when the backend can capture one", async () => {
+    const backend = new LumaCaptureBackend();
+    const { manager, kinds } = scrollMeasurementKinds(backend);
+    try {
+      const scrolled = await manager.scrollCalibrated("thread-1", { x: 1_100, y: 200 }, 0, 40, {
+        observe: true,
+      });
+      expect(backend.lumaCaptures).toBe(1);
+      // The baseline is luma; the capture after the scroll is still a PNG,
+      // because it is the observation the caller is handed.
+      expect(kinds).toEqual(["luma->png"]);
+      expect(scrolled.result.scroll?.traveledY).toBe(40);
+      expect(scrolled.observation !== undefined && "screenshot" in scrolled.observation).toBe(true);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("keeps the PNG baseline on a backend without luma capture, or a malformed one", async () => {
+    for (const backend of [
+      new FakeComputerBackend(),
+      Object.assign(new LumaCaptureBackend(), { malformed: true }),
+    ]) {
+      const { manager, kinds } = scrollMeasurementKinds(backend);
+      try {
+        await manager.scrollCalibrated("thread-1", { x: 1_100, y: 200 }, 0, 40, { observe: true });
+        expect(kinds).toEqual(["png->png"]);
+      } finally {
+        await manager.dispose();
+      }
+    }
+  });
 
   it("probes an unmeasured window, then delivers the remainder pre-corrected", async () => {
     // A GTK-hosted browser gears a pixel delta up by ~7x, and nothing in the
@@ -3482,6 +3752,49 @@ describe("ComputerManager and FakeComputerBackend", () => {
   });
 });
 
+it("clears a pause that names no window only through an unscoped screenshot observation", async () => {
+  // A locked session refuses with a pause naming no window when nothing was
+  // aimed. There is no window to observe for it, so the hint's other route —
+  // an unscoped observation with a screenshot — reads readiness through the
+  // focused window; an observation of some other window, or one without a
+  // screenshot, leaves the pause standing.
+  class LockedBackend extends FakeComputerBackend {
+    locked = true;
+    readonly checked: string[] = [];
+    override async typeText(text: string) {
+      if (this.locked)
+        throw new ComputerBackendError("computer_session_locked: the session is locked.", {
+          retryable: true,
+          inputPause: { message: "computer_session_locked: the session is locked." },
+        });
+      return super.typeText(text);
+    }
+    async checkInputReady(windowId: string) {
+      this.checked.push(windowId);
+      if (this.locked) throw new Error("still locked");
+    }
+  }
+  const backend = new LockedBackend();
+  const manager = new ComputerManager({ backend });
+  await expect(manager.typeText("thread-a", "hello")).rejects.toHaveProperty("inputPause");
+  await manager.releaseDesktopControl("thread-a");
+  expect((await manager.getThreadState("thread-a")).inputPause?.windowId).toBeUndefined();
+
+  await manager.getState({ includeScreenshot: false });
+  expect(backend.checked).toEqual([]);
+  await manager.getState({ includeScreenshot: true });
+  expect(backend.checked).toEqual(["fake-terminal"]);
+  expect((await manager.getThreadState("thread-a")).inputPause).toBeDefined();
+  // A scoped observation of any window is the other route, as it always was.
+  await manager.getState({ windowId: "fake-calculator" });
+  expect(backend.checked).toEqual(["fake-terminal", "fake-calculator"]);
+  backend.locked = false;
+  await manager.getState({ includeScreenshot: true });
+  expect(backend.checked).toEqual(["fake-terminal", "fake-calculator", "fake-terminal"]);
+  expect((await manager.getThreadState("thread-a")).inputPause).toBeUndefined();
+  await manager.dispose();
+});
+
 it("holds refused input until a scoped observation establishes readiness", async () => {
   class PausedBackend extends FakeComputerBackend {
     ready = false;
@@ -3562,6 +3875,35 @@ it("clears an app pause only for the observing task and a ready same-pid sibling
     );
     expect(backend.checks).toBe(1);
     expect((await manager.getThreadState("owner")).inputPause).toBeUndefined();
+  } finally {
+    await manager.dispose();
+  }
+});
+
+it("binds a launched app's window by its reported identity when the pid was a wrapper's", async () => {
+  class WrappedLaunchBackend extends FakeComputerBackend {
+    override async launchApp(app: string) {
+      // `flatpak run` reports its own pid, which never owns a window.
+      return { computerId: "desktop", app, pid: 999, appId: "org.kde.kate", window: null };
+    }
+  }
+  const kate: ComputerWindow = {
+    id: "kate-1",
+    title: "Untitled — Kate",
+    appName: "org.kde.kate",
+    pid: 4242,
+    bounds: { x: 0, y: 0, width: 800, height: 600 },
+    focused: false,
+    minimized: false,
+    visible: true,
+  };
+  const manager = new ComputerManager({ backend: new WrappedLaunchBackend({ windows: [kate] }) });
+  try {
+    expect(await manager.launchApp("owner", "kate", [], 2_000)).toMatchObject({
+      appId: "org.kde.kate",
+      window: { id: "kate-1" },
+      windowStatus: "ready",
+    });
   } finally {
     await manager.dispose();
   }
@@ -4703,4 +5045,140 @@ it("thread removal completes on a wedged stop — the teardown wait is bounded",
   } finally {
     vi.useRealTimers();
   }
+});
+
+describe("paste clipboard restore", () => {
+  /** Records when the human's text went back, relative to the paste call. */
+  class RestoreTimingBackend extends FakeComputerBackend {
+    pasteStartedAt = Number.NaN;
+    restoredAfterMs: number | undefined;
+    override async writeClipboard(text: string) {
+      if (text === "human text" && !Number.isNaN(this.pasteStartedAt)) {
+        this.restoredAfterMs ??= performance.now() - this.pasteStartedAt;
+      }
+      await super.writeClipboard(text);
+    }
+  }
+
+  /** A backend whose clipboard can serve one paste and report when it did. */
+  class PasteOnceBackend extends RestoreTimingBackend {
+    consume: (() => void) | undefined;
+    async writeClipboardForPaste(text: string) {
+      await super.writeClipboard(text);
+      return {
+        consumed: new Promise<void>((resolve) => {
+          this.consume = resolve;
+        }),
+      };
+    }
+  }
+
+  async function pasteRestoredAfterMs(backend: RestoreTimingBackend): Promise<number> {
+    await backend.writeClipboard("human text");
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    try {
+      backend.pasteStartedAt = performance.now();
+      await expect(manager.paste("thread-1", "agent text")).resolves.toMatchObject({
+        clipboardRestored: true,
+      });
+      expect(await backend.readClipboard()).toBe("human text");
+      return backend.restoredAfterMs!;
+    } finally {
+      await manager.dispose();
+    }
+  }
+
+  it("keeps the fixed restore wait on a backend that cannot observe the paste", async () => {
+    const backend = new RestoreTimingBackend();
+    const restoredAfter = await pasteRestoredAfterMs(backend);
+    expect(restoredAfter).toBeGreaterThanOrEqual(COMPUTER_PASTE_RESTORE_MS - 5);
+    expect(restoredAfter).toBeLessThan(COMPUTER_PASTE_CONSUME_TIMEOUT_MS);
+  });
+
+  it("restores only once a paste-once offer reports the payload read", async () => {
+    const backend = new PasteOnceBackend();
+    // A slow app: it reads the offer well after the fixed guess would have put
+    // the human's text back under it.
+    const hotkey = backend.hotkey.bind(backend);
+    backend.hotkey = async (...args) => {
+      const result = await hotkey(...args);
+      setTimeout(() => backend.consume?.(), 600);
+      return result;
+    };
+    const restoredAfter = await pasteRestoredAfterMs(backend);
+    expect(restoredAfter).toBeGreaterThanOrEqual(600 - 5);
+    expect(restoredAfter).toBeLessThan(COMPUTER_PASTE_CONSUME_TIMEOUT_MS - 500);
+  });
+
+  it("never restores sooner than the fixed settle after the shortcut", async () => {
+    const backend = new PasteOnceBackend();
+    const hotkey = backend.hotkey.bind(backend);
+    backend.hotkey = async (...args) => {
+      const result = await hotkey(...args);
+      // Read quickly, well inside the settle.
+      setTimeout(() => backend.consume?.(), 50);
+      return result;
+    };
+    const restoredAfter = await pasteRestoredAfterMs(backend);
+    expect(restoredAfter).toBeGreaterThanOrEqual(COMPUTER_PASTE_RESTORE_MS - 5);
+    expect(restoredAfter).toBeLessThan(COMPUTER_PASTE_CONSUME_TIMEOUT_MS - 500);
+  });
+
+  it("takes an offer read before the shortcut for a clipboard watcher's, not the paste", async () => {
+    // Klipper or a `wl-paste --watch` history daemon reads every new
+    // selection at once; restoring on that read would put the human's text
+    // back before the target ever saw the paste.
+    const backend = new PasteOnceBackend();
+    const writeForPaste = backend.writeClipboardForPaste.bind(backend);
+    backend.writeClipboardForPaste = async (text: string) => {
+      const offer = await writeForPaste(text);
+      backend.consume?.();
+      return offer;
+    };
+    const restoredAfter = await pasteRestoredAfterMs(backend);
+    expect(restoredAfter).toBeGreaterThanOrEqual(COMPUTER_PASTE_CONSUME_TIMEOUT_MS - 5);
+  });
+
+  it("restores at the bound when a paste-once offer is never read", async () => {
+    const backend = new PasteOnceBackend();
+    const restoredAfter = await pasteRestoredAfterMs(backend);
+    expect(restoredAfter).toBeGreaterThanOrEqual(COMPUTER_PASTE_CONSUME_TIMEOUT_MS - 5);
+  });
+});
+
+describe("ComputerManager backend members read once per use", () => {
+  it("keeps the readiness check it started a launch wait with", async () => {
+    const backend = new FakeComputerBackend();
+    const launch = backend.launchApp.bind(backend);
+    const ready: string[] = [];
+    let launched = false;
+    Object.assign(backend, {
+      checkInputReady: async (windowId: string) => {
+        ready.push(windowId);
+      },
+      // The window is not there yet when the launch returns.
+      launchApp: async (app: string, args: readonly string[]) => {
+        const result = await launch(app, args);
+        launched = true;
+        return { ...result, window: undefined, pid: result.window?.pid };
+      },
+    });
+    const listWindows = backend.listWindows.bind(backend);
+    Object.assign(backend, {
+      // The member goes away between the launch and the wait's first poll,
+      // as it does when the slot's occupant changes.
+      listWindows: async () => {
+        if (launched) Object.assign(backend, { checkInputReady: undefined });
+        return await listWindows();
+      },
+    });
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    try {
+      const result = await manager.launchApp("thread-1", "Editor", [], 1_000);
+      expect(result.windowStatus).toBe("ready");
+      expect(ready).toHaveLength(1);
+    } finally {
+      await manager.dispose();
+    }
+  });
 });

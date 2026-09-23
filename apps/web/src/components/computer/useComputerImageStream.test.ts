@@ -2,7 +2,35 @@ import type { ComputerId } from "@synara/contracts";
 import type { ComputerFrame } from "@synara/shared/computerFrame";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { mergeComputerImageStreamStatus, useComputerImageStream } from "./useComputerImageStream";
+import {
+  computerFrameImageBlob,
+  mergeComputerImageStreamStatus,
+  useComputerImageStream,
+} from "./useComputerImageStream";
+
+describe("computerFrameImageBlob", () => {
+  const header = {
+    computerId: "desktop" as ComputerId,
+    sequence: 1,
+    timestampMs: 1,
+    keyframe: true,
+    codecConfig: false,
+  };
+
+  it("types a frame that names no format as the PNG every older frame was", async () => {
+    const blob = computerFrameImageBlob({ header, payload: new Uint8Array([1, 2, 3]) });
+    expect(blob.type).toBe("image/png");
+    expect(Array.from(new Uint8Array(await blob.arrayBuffer()))).toEqual([1, 2, 3]);
+  });
+
+  it("types a JPEG preview frame as JPEG", () => {
+    const blob = computerFrameImageBlob({
+      header: { ...header, mimeType: "image/jpeg" },
+      payload: new Uint8Array([0xff, 0xd8]),
+    });
+    expect(blob.type).toBe("image/jpeg");
+  });
+});
 
 describe("mergeComputerImageStreamStatus", () => {
   it("keeps the previous object when a frame reports streaming again", () => {
