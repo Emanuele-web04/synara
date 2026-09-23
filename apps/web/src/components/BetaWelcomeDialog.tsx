@@ -15,6 +15,8 @@ import { isElectron } from "../env";
 import { useAppSettings } from "../appSettings";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useOnboardingDialogStore } from "../onboarding/onboardingDialogStore";
+import { CentralIcon } from "../lib/central-icons";
+import { cn } from "../lib/utils";
 import { AnnouncementSheet } from "./AnnouncementSheet";
 
 const BETA_WELCOME_STORAGE_KEY = "synara:beta-welcome:v1";
@@ -25,6 +27,12 @@ const BetaWelcomeStorageSchema = Schema.Struct({
 type BetaWelcomeStorage = typeof BetaWelcomeStorageSchema.Type;
 
 const INITIAL_STORAGE: BetaWelcomeStorage = { acknowledged: false };
+
+const WELCOME_POINTS = [
+  { icon: "shield-check", text: "Synara stays separate and untouched." },
+  { icon: "bug", text: "Crash and error reports are on, with private info removed." },
+  { icon: "arrow-left-circle", text: "Switch back to Synara any time in Settings." },
+] as const;
 
 export function BetaWelcomeDialog() {
   const [storage, setStorage] = useLocalStorage(
@@ -86,40 +94,67 @@ export function BetaWelcomeDialog() {
     setBetaWelcomePending(false);
   };
 
+  const status =
+    imported === true
+      ? {
+          icon: "circle-check",
+          text: "Your chats and settings came over from Synara.",
+          className: "bg-[color-mix(in_srgb,var(--beta-accent)_12%,transparent)] text-foreground",
+          iconClassName: "text-[var(--beta-accent)]",
+        }
+      : imported === false
+        ? importFailed
+          ? {
+              icon: "exclamation-circle",
+              text: "Your Synara data couldn't be copied, so you're starting fresh.",
+              className:
+                "bg-[color-mix(in_srgb,var(--destructive)_12%,transparent)] text-foreground",
+              iconClassName: "text-destructive",
+            }
+          : {
+              icon: "circle-info",
+              text: "Starting fresh. Nothing was copied over.",
+              className:
+                "bg-[color-mix(in_srgb,var(--foreground)_6%,transparent)] text-muted-foreground",
+              iconClassName: "",
+            }
+        : null;
+
   return (
     <AnnouncementSheet
       open={open && !storage.acknowledged}
       hero={
-        <img src="/app-icons/beta.png" alt="Synara Beta" className="size-16 shrink-0 rounded-2xl" />
+        <div className="relative">
+          <div className="absolute -inset-5 rounded-full bg-[radial-gradient(closest-side,color-mix(in_srgb,var(--beta-accent)_45%,transparent),transparent)]" />
+          <img src="/app-icons/beta.png" alt="" className="relative size-16 rounded-2xl" />
+        </div>
       }
       title="Welcome to Synara Beta"
-      description={
-        <>
-          New features land here first.
-          <br />
-          Your Synara app stays separate and untouched.
-          <br />
-          Crash and error reports are on, with private info removed.
-          <br />
-          You can switch back to Synara any time in Settings.
-          {imported === true ? (
-            <>
-              <br />
-              <span className="text-foreground">
-                Your chats and settings came over from Synara.
-              </span>
-            </>
-          ) : imported === false ? (
-            <>
-              <br />
-              <span className="text-foreground">
-                {importFailed
-                  ? "Your Synara data could not be copied, so you're starting fresh."
-                  : "Starting fresh. Nothing was copied over."}
-              </span>
-            </>
+      description="New features land here first, before they reach Synara."
+      details={
+        <div className="flex flex-col gap-4 pt-4">
+          <ul className="m-0 flex list-none flex-col gap-2.5 p-0">
+            {WELCOME_POINTS.map((point) => (
+              <li key={point.icon} className="flex items-center gap-3">
+                <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--beta-accent)_14%,transparent)] text-[var(--beta-accent)]">
+                  <CentralIcon name={point.icon} className="size-4" />
+                </span>
+                <span className="text-ui text-foreground">{point.text}</span>
+              </li>
+            ))}
+          </ul>
+          {status ? (
+            <p
+              className={cn(
+                "m-0 flex items-center gap-2 rounded-xl px-3 py-2.5 text-ui",
+                status.className,
+              )}
+            >
+              <CentralIcon name={status.icon} className={cn("size-4", status.iconClassName)} />
+              {status.text}
+            </p>
           ) : null}
-        </>
+        </div>
       }
       confirmLabel="Get started"
       onDismiss={acknowledge}

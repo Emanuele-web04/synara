@@ -33,6 +33,9 @@ export function AnnouncementSheet(props: {
   // Two lines at 378px wide is the reference sheet's proportion; longer copy wraps to
   // three and throws the whole vertical rhythm off.
   description: ReactNode;
+  // Optional structured content (rows, a status note) below the pitch. Kept out of
+  // the description because that renders as a paragraph.
+  details?: ReactNode;
   // Omitted on single-action sheets; the confirm button still closes via onConfirm.
   dismissLabel?: string;
   confirmLabel: string;
@@ -72,6 +75,8 @@ export function AnnouncementSheet(props: {
               {props.description}
             </DialogDescription>
           </DialogHeader>
+
+          {props.details}
 
           <DialogFooter className="gap-2 p-0 pt-3">
             {props.dismissLabel !== undefined ? (
