@@ -1,11 +1,24 @@
 // FILE: betaChannel.test.ts
 // Purpose: Unit coverage for the stable→beta handoff helpers.
 
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    spawn: (...args: Parameters<typeof actual.spawn>) => {
+      if (String(args[0]).includes("failing-beta")) {
+        throw new Error("spawn ENOENT");
+      }
+      return actual.spawn(...args);
+    },
+  };
+});
 
 import {
   BETA_IMPORT_REQUEST_FILE_NAME,
@@ -83,6 +96,23 @@ describe("DesktopBetaChannel", () => {
     // "not-installed" wins first on this machine; running detection is
     // independently covered by isBetaServerRunning.
     expect(["beta-running", "not-installed"]).toContain(result.error);
+  });
+
+  it("removes the import marker when launching beta throws", () => {
+    const root = makeRoot();
+    const betaHome = join(root, ".synara-beta");
+    // Fake a linux install through its desktop file so detection resolves a
+    // (failing) executable path.
+    const desktopDir = join(root, ".local", "share", "applications");
+    mkdirSync(desktopDir, { recursive: true });
+    writeFileSync(join(desktopDir, "synara-beta.desktop"), "Exec=/opt/failing-beta\n");
+
+    const result = makeChannel(root).importAndLaunch(join(root, ".synara"));
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("internal");
+    // The marker must not outlive the failed launch; a leftover would import
+    // on the next unrelated beta start.
+    expect(existsSync(join(betaHome, BETA_IMPORT_REQUEST_FILE_NAME))).toBe(false);
   });
 });
 

@@ -190,6 +190,79 @@ describe("runBetaImportIfRequested", () => {
     expect(outcome.error).toContain("stable database not found");
   });
 
+  it("copies no state entries when the database snapshot fails", async () => {
+    const root = makeRoot();
+    const stableHome = join(root, ".synara");
+    const stableState = join(stableHome, "userdata");
+    mkdirSync(stableState, { recursive: true });
+    // A corrupt source db fails both VACUUM INTO paths, so the import must
+    // fail before any non-db entries land on top of beta's own database.
+    writeFileSync(join(stableState, "state.sqlite"), "not a sqlite database");
+    writeFileSync(join(stableState, "settings.json"), JSON.stringify({ theme: "dark" }));
+    writeFileSync(join(stableState, "secrets.json"), JSON.stringify({ token: "x" }));
+
+    const betaHome = join(root, ".synara-beta");
+    const betaState = join(betaHome, "userdata");
+    writeMarker(betaHome, stableHome);
+
+    const outcome = await runBetaImportIfRequested({
+      betaHomeDir: betaHome,
+      stateDir: betaState,
+    });
+    expect(outcome.consumed).toBe(true);
+    expect(outcome.ok).toBe(false);
+    expect(existsSync(join(betaState, "settings.json"))).toBe(false);
+    expect(existsSync(join(betaState, "secrets.json"))).toBe(false);
+    expect(existsSync(join(betaState, "state.sqlite"))).toBe(false);
+  });
+
+  it("removes a directory-shaped marker without failing startup", async () => {
+    const root = makeRoot();
+    const betaHome = join(root, ".synara-beta");
+    // A stray directory named like the marker must not throw out of finish()
+    // — that throw is a StartupError on every launch.
+    mkdirSync(join(betaHome, BETA_IMPORT_REQUEST_FILE_NAME), { recursive: true });
+
+    const outcome = await runBetaImportIfRequested({
+      betaHomeDir: betaHome,
+      stateDir: join(betaHome, "userdata"),
+    });
+    expect(outcome.consumed).toBe(true);
+    expect(outcome.ok).toBe(false);
+    expect(existsSync(join(betaHome, BETA_IMPORT_REQUEST_FILE_NAME))).toBe(false);
+  });
+
+  it("discards a stale import request instead of importing over newer data", async () => {
+    const stableHome = await seedStableHome(makeRoot());
+    const betaHome = join(stableHome, "..", ".synara-beta");
+    const betaState = join(betaHome, "userdata");
+    mkdirSync(betaHome, { recursive: true });
+    writeFileSync(
+      join(betaHome, BETA_IMPORT_REQUEST_FILE_NAME),
+      JSON.stringify({
+        version: 1,
+        requestedAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+        sourceHomeDir: stableHome,
+      }),
+    );
+    // An existing success result must survive a stale-marker cleanup.
+    writeFileSync(
+      join(betaHome, BETA_IMPORT_RESULT_FILE_NAME),
+      JSON.stringify({ version: 1, completedAt: new Date().toISOString(), ok: true }),
+    );
+
+    const outcome = await runBetaImportIfRequested({
+      betaHomeDir: betaHome,
+      stateDir: betaState,
+    });
+    expect(outcome).toEqual({ consumed: true, ok: true });
+    expect(existsSync(join(betaHome, BETA_IMPORT_REQUEST_FILE_NAME))).toBe(false);
+    expect(existsSync(join(betaState, "state.sqlite"))).toBe(false);
+    expect(existsSync(join(betaState, "settings.json"))).toBe(false);
+    const result = JSON.parse(readFileSync(join(betaHome, BETA_IMPORT_RESULT_FILE_NAME), "utf8"));
+    expect(result.ok).toBe(true);
+  });
+
   it("replaces a stale marker without retry loops", async () => {
     const root = await seedStableHome(makeRoot());
     const betaHome = join(root, ".synara-beta");

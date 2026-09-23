@@ -8,7 +8,7 @@
 // `<betaHome>/import-result.json`, which this module reads for the UI.
 
 import { spawn, execFileSync } from "node:child_process";
-import { existsSync, readFileSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, isAbsolute, join, resolve } from "node:path";
 
@@ -315,6 +315,16 @@ export class DesktopBetaChannel {
       launchBetaInstall(detection, this.deps.platform);
       return action(true);
     } catch (error) {
+      // A marker without a launched beta would run the import on some later,
+      // unrelated beta start; remove it so nothing consumes it by surprise.
+      try {
+        rmSync(join(this.deps.betaHomeDir, BETA_IMPORT_REQUEST_FILE_NAME), {
+          recursive: true,
+          force: true,
+        });
+      } catch {
+        // best effort
+      }
       return action(false, "internal", error instanceof Error ? error.message : String(error));
     }
   }

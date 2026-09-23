@@ -47,6 +47,13 @@ const EXCLUDED_STATE_ENTRIES = new Set([
  */
 const STATE_DB_ENTRY_PATTERN = /^state\.sqlite(?:[.-].*)?$/;
 
+/**
+ * A marker left behind by an aborted handoff must never import over a beta
+ * home that has since accumulated its own data. Requests older than this are
+ * discarded instead of consumed.
+ */
+const IMPORT_REQUEST_MAX_AGE_MS = 60 * 60 * 1000;
+
 const sqlStringLiteral = (value: string): string => `'${value.replaceAll("'", "''")}'`;
 
 function readImportRequest(markerPath: string): BetaImportRequest | null {
@@ -173,8 +180,15 @@ export async function runBetaImportIfRequested(input: {
   const finish = (ok: boolean, error?: string) => {
     try {
       writeImportResult(input.betaHomeDir, { ok, ...(error ? { error } : {}) });
-    } finally {
-      rmSync(markerPath, { force: true });
+    } catch {
+      // Result reporting is best-effort.
+    }
+    try {
+      // recursive: a stray directory named like the marker must not throw
+      // here — any throw out of this path is a StartupError on every launch.
+      rmSync(markerPath, { recursive: true, force: true });
+    } catch {
+      // The marker is gone or unremovable; startup continues either way.
     }
     return { consumed: true, ok, ...(error ? { error } : {}) };
   };
@@ -182,6 +196,19 @@ export async function runBetaImportIfRequested(input: {
   const request = readImportRequest(markerPath);
   if (!request) {
     return finish(false, "import marker was malformed");
+  }
+
+  const requestedAtMs = Date.parse(request.requestedAt);
+  if (Number.isFinite(requestedAtMs) && Date.now() - requestedAtMs > IMPORT_REQUEST_MAX_AGE_MS) {
+    // A stale marker would overwrite beta data accumulated since it was
+    // written; delete it without importing and without touching any older
+    // import-result the stable UI may still show.
+    try {
+      rmSync(markerPath, { recursive: true, force: true });
+    } catch {
+      // best effort
+    }
+    return { consumed: true, ok: true };
   }
 
   const sourceHomeDir = resolve(request.sourceHomeDir);
@@ -196,8 +223,11 @@ export async function runBetaImportIfRequested(input: {
   }
 
   try {
-    copyStateEntries(sourceStateDir, input.stateDir);
+    // Snapshot the database first: if it fails, beta must keep its own db and
+    // receive none of stable's files — copying entries first would leave
+    // stable's settings/secrets on top of beta's existing database.
     await snapshotStableDatabase(sourceDbPath, join(input.stateDir, "state.sqlite"));
+    copyStateEntries(sourceStateDir, input.stateDir);
     return finish(true);
   } catch (error) {
     return finish(false, error instanceof Error ? error.message : String(error));
