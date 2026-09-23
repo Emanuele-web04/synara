@@ -1,17 +1,17 @@
 import type { GroupSettingsSection } from "../group/groupSettingsDialog.logic";
 
 export const COORDINATOR_SUGGESTION_CHIPS = [
-  "Help me set up my code connection",
+  "Connect repositories",
   "Add a goal",
-  "Give me instructions",
+  "Write instructions",
 ] as const;
 
 export type CoordinatorSuggestionChip = (typeof COORDINATOR_SUGGESTION_CHIPS)[number];
 
 const COORDINATOR_SUGGESTION_SECTIONS: Record<CoordinatorSuggestionChip, GroupSettingsSection> = {
-  "Help me set up my code connection": "environment",
+  "Connect repositories": "environment",
   "Add a goal": "general",
-  "Give me instructions": "memory",
+  "Write instructions": "memory",
 };
 
 export function coordinatorSuggestionSection(label: string): GroupSettingsSection {

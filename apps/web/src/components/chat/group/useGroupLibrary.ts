@@ -43,12 +43,60 @@ export function useGroupLibrary(input: {
   const [status, setStatus] = useState<ProjectAgentLibraryStatusResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [reloadNonce, setReloadNonce] = useState(0);
   const projectIdRef = useRef(input.projectId);
   const loadGeneration = useRef(0);
   const loadedDirs = useRef<ReadonlySet<string>>(new Set());
+  // One listing refresh in flight at a time: focus + turn-finished bursts
+  // coalesce into a single follow-up instead of stacking sequential reloads.
+  const refreshInFlightRef = useRef<Promise<void> | null>(null);
+  const refreshQueuedRef = useRef(false);
 
-  const load = () => setReloadNonce((nonce) => nonce + 1);
+  // Refresh in place: keep every cached listing until its directory's fresh one
+  // lands, so expanded subfolders never flash empty. The root plus every
+  // directory already fetched (including collapsed ones) is re-listed and
+  // replaced as each result arrives.
+  const load = () => {
+    const api = readNativeApi();
+    const projectId = projectIdRef.current;
+    if (!input.enabled || !projectId || !api?.projectAgent) return;
+    if (refreshInFlightRef.current !== null) {
+      refreshQueuedRef.current = true;
+      return;
+    }
+    const generation = loadGeneration.current;
+    const stillCurrent = () =>
+      projectIdRef.current === projectId && loadGeneration.current === generation;
+    const dirs = new Set(loadedDirs.current);
+    dirs.add(ROOT_DIRECTORY);
+    let refreshFailed = false;
+    const run = (async () => {
+      await Promise.all(
+        Array.from(dirs, async (dir) => {
+          const listArgs =
+            dir === ROOT_DIRECTORY ? { projectId } : { projectId, relativePath: dir };
+          try {
+            const listed = await api.projectAgent.library.list(listArgs);
+            if (!stillCurrent()) return;
+            setEntriesByDir((current) => new Map(current).set(dir, listed.entries));
+            if (dir === ROOT_DIRECTORY) setRoot(listed.root);
+          } catch (cause) {
+            if (!stillCurrent()) return;
+            refreshFailed = true;
+            setError(libraryErrorMessage(cause, "Failed to refresh the library."));
+          }
+        }),
+      );
+      await refreshStatus(projectId);
+      if (stillCurrent() && !refreshFailed) setError(null);
+    })();
+    refreshInFlightRef.current = run;
+    void run.finally(() => {
+      refreshInFlightRef.current = null;
+      if (!refreshQueuedRef.current) return;
+      refreshQueuedRef.current = false;
+      if (stillCurrent()) load();
+    });
+  };
 
   useEffect(() => {
     const projectId = input.projectId;
@@ -109,7 +157,7 @@ export function useGroupLibrary(input: {
         setError(libraryErrorMessage(cause, "Failed to load the library."));
       }
     })();
-  }, [input.enabled, input.projectId, reloadNonce]);
+  }, [input.enabled, input.projectId]);
 
   const loadDirectory = async (relativePath: string | undefined) => {
     const api = readNativeApi();

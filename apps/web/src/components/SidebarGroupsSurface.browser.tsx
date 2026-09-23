@@ -14,12 +14,21 @@ const harness = vi.hoisted(() => ({
   listSummaries: vi.fn(
     async (): Promise<{ summaries: ProjectAgentSummary[] }> => ({ summaries: [] }),
   ),
+  automationListeners: new Set<(event: unknown) => void>(),
 }));
 
 const api = {
   projectAgent: {
     listSummaries: harness.listSummaries,
     onEvent: () => () => {},
+  },
+  automation: {
+    onEvent: (listener: (event: unknown) => void) => {
+      harness.automationListeners.add(listener);
+      return () => {
+        harness.automationListeners.delete(listener);
+      };
+    },
   },
   orchestration: { dispatchCommand: harness.dispatchCommand },
 };
@@ -213,6 +222,7 @@ describe("SidebarGroupsSurface", () => {
     harness.dispatchCommand.mockClear();
     harness.listSummaries.mockReset();
     harness.listSummaries.mockResolvedValue({ summaries: [] });
+    harness.automationListeners.clear();
     resetStudioAdoptionDispatchedIdsForTests();
     useStore.setState({ projects: [], threadsHydrated: true });
     useProjectAgentSummariesStore.setState({ summariesByProjectId: new Map(), loaded: true });
@@ -227,7 +237,7 @@ describe("SidebarGroupsSurface", () => {
 
   it("shows the Groups empty state before and after hydration", async () => {
     await mount({ projects: [], threadsHydrated: false });
-    await waitForText("Loading Groups...");
+    await waitForText("Loading groups…");
 
     await mount({ projects: [], threadsHydrated: true });
     await waitForText("No groups yet");
@@ -310,6 +320,43 @@ describe("SidebarGroupsSurface", () => {
     });
   });
 
+  it("activates the coordinator row from the keyboard", async () => {
+    const coordinatorThreadId = ThreadId.makeUnsafe("coordinator-thread");
+    const group = makeGroupProject({
+      id: GROUP_A_ID,
+      kind: "group",
+      name: "Team Alpha",
+      cwd: `${GROUPS_ROOT}/team-alpha`,
+      expanded: true,
+    });
+    harness.listSummaries.mockResolvedValue({
+      summaries: [
+        {
+          projectId: GROUP_A_ID,
+          configured: true,
+          coordinatorName: "Team lead",
+          coordinatorThreadId,
+          coordinatorIcon: null,
+          coordinatorColor: null,
+          coordinatorStatus: "idle",
+          revision: 1,
+        },
+      ],
+    });
+    const { callbacks } = await mount({ projects: [group], threadsHydrated: true });
+
+    const label = await waitForText("Team lead");
+    const coordinatorRow = label.closest<HTMLElement>('[role="button"]');
+    expect(coordinatorRow).not.toBeNull();
+    coordinatorRow!.focus();
+    coordinatorRow!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    coordinatorRow!.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+    await vi.waitFor(() => {
+      expect(callbacks.onOpenThread).toHaveBeenCalledWith(coordinatorThreadId);
+    });
+    expect(callbacks.onOpenThread).toHaveBeenCalledTimes(2);
+  });
+
   it("shows just the coordinator row in an expanded group with no chats", async () => {
     const group = makeGroupProject({
       id: GROUP_B_ID,
@@ -337,6 +384,54 @@ describe("SidebarGroupsSurface", () => {
     expect(
       document.querySelector<HTMLButtonElement>('button[aria-label*="New group chat"]'),
     ).toBeNull();
+  });
+
+  it("announces the needs-you dot through the row's accessible name", async () => {
+    const group = makeGroupProject({
+      id: GROUP_A_ID,
+      kind: "group",
+      name: "Team Alpha",
+      cwd: `${GROUPS_ROOT}/team-alpha`,
+    });
+    const waiting = makeThreadSummary(THREAD_A, GROUP_A_ID, "Chat one");
+    waiting.hasPendingApprovals = true;
+    useStore.setState({ sidebarThreadSummaryById: { [THREAD_A]: waiting } });
+    await mount({ projects: [group], threadsHydrated: true });
+
+    await vi.waitFor(() => {
+      const row = Array.from(
+        document.querySelectorAll<HTMLButtonElement>("button[aria-expanded]"),
+      ).find((button) => button.textContent?.includes("A thread needs you"));
+      expect(row, document.body.innerHTML.slice(0, 2500)).not.toBeUndefined();
+      expect(row?.textContent).toContain("Team Alpha");
+    });
+  });
+
+  it("re-lists summaries when a coordinator automation event lands while closed", async () => {
+    const group = makeGroupProject({
+      id: GROUP_A_ID,
+      kind: "group",
+      name: "Team Alpha",
+      cwd: `${GROUPS_ROOT}/team-alpha`,
+      expanded: true,
+    });
+    await mount({ projects: [group], threadsHydrated: true });
+    await vi.waitFor(() => expect(harness.listSummaries).toHaveBeenCalledOnce());
+
+    vi.useFakeTimers();
+    try {
+      const emit = (type: string) => {
+        harness.automationListeners.forEach((listener) => listener({ type }));
+      };
+      emit("run-upserted");
+      // A burst of events coalesces into a single re-list.
+      emit("definition-upserted");
+      emit("run-upserted");
+      await vi.advanceTimersByTimeAsync(600);
+      expect(harness.listSummaries).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("adopts the legacy Studio container by retitling it Groups once across remounts", async () => {

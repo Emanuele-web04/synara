@@ -15,6 +15,7 @@ import {
   type ModelSlug,
   type PinnedMessage,
   type PendingClaudeCacheReview,
+  type ProjectId,
   type ProjectScript,
   type ProviderKind,
   type ResolvedKeybindingsConfig,
@@ -331,10 +332,13 @@ import { LibraryPanel } from "./chat/group/LibraryPanel";
 import { useProjectAgentSummaries } from "./chat/project/useProjectAgentSummaries";
 import { useProjectInstructionsSource } from "./chat/project/useProjectInstructionsSource";
 import {
-  resolveAuxiliarySurface,
   resolveProjectPanelEnabled,
   type ChatAuxiliarySurface,
 } from "./chat/auxiliary/auxiliaryPanel.logic";
+import {
+  createGroupNeedsAttentionSelector,
+  type GroupNeedsAttentionGroup,
+} from "./chat/project/groupOverview.logic";
 import { usePinnedMessageActions } from "./chat/environment/usePinnedMessageActions";
 import {
   CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
@@ -1683,7 +1687,7 @@ export default function ChatView({
     );
     return derivePromptHistoryFromMessages([...activeMessages, ...pendingOptimisticMessages]);
   }, [activeThread?.messages, optimisticUserMessages]);
-  const { coordinatorThreadIds } = useProjectAgentSummaries();
+  const { coordinatorThreadIds, summariesByProjectId } = useProjectAgentSummaries();
   const isCoordinatorConversation = Boolean(
     activeThread && coordinatorThreadIds.has(activeThread.id),
   );
@@ -2814,29 +2818,24 @@ export default function ChatView({
   );
   const setProjectFromAuxiliary = useCallback(
     (open: boolean) => {
-      setAuxiliarySurface((current) =>
-        resolveAuxiliarySurface({ current, next: "project" }) && open
-          ? "project"
-          : open
-            ? "project"
-            : current === "project"
-              ? null
-              : current,
-      );
+      setAuxiliarySurface((current) => (open ? "project" : current === "project" ? null : current));
+      // Another surface claims the dock, but the user's persisted env-panel
+      // preference stays untouched — environmentPanelVisibleEffective already
+      // hides Environment while a sibling panel is open.
       if (open) {
-        setEnvironmentPanelOpenPreference(false);
+        closeEnvironmentPanelAfterAction();
       }
     },
-    [setEnvironmentPanelOpenPreference],
+    [closeEnvironmentPanelAfterAction],
   );
   const setLibraryFromAuxiliary = useCallback(
     (open: boolean) => {
       setAuxiliarySurface((current) => (open ? "library" : current === "library" ? null : current));
       if (open) {
-        setEnvironmentPanelOpenPreference(false);
+        closeEnvironmentPanelAfterAction();
       }
     },
-    [setEnvironmentPanelOpenPreference],
+    [closeEnvironmentPanelAfterAction],
   );
   const githubRepositoryQuery = useQuery(
     gitGithubRepositoryQueryOptions(gitBranchSourceCwd, environmentPanelVisible),
@@ -4698,6 +4697,26 @@ export default function ChatView({
     },
     [navigate],
   );
+  // The Overview row menu's "Open in split view" mirrors SingleChatSurface's
+  // split helper: seed a split view off the thread, then swap the route to it.
+  const onOpenThreadSplit = useCallback(
+    (nextThreadId: ThreadId) => {
+      const ownerProjectId =
+        useStore.getState().sidebarThreadSummaryById[nextThreadId]?.projectId ?? activeProjectId;
+      if (!ownerProjectId) return;
+      const splitViewId = useSplitViewStore.getState().createFromThread({
+        sourceThreadId: nextThreadId,
+        ownerProjectId,
+      });
+      void navigate({
+        to: "/$threadId",
+        params: { threadId: nextThreadId },
+        replace: true,
+        search: () => ({ splitViewId }),
+      });
+    },
+    [activeProjectId, navigate],
+  );
   const activeProjectIdForNewChat = activeProject?.id ?? null;
   const onNewEditorChat = useCallback(() => {
     if (!activeProjectIdForNewChat) {
@@ -4828,6 +4847,32 @@ export default function ChatView({
     updateSettings({ dismissedComputerControlEffortHint: true });
     scheduleComposerFocus();
   }, [scheduleComposerFocus, updateSettings]);
+
+  // Only built when the Group panel applies — in every other chat view the
+  // needs-attention selector has no consumer and stays empty. No manual
+  // useMemo: the compiler owns this scope (see chatHotPath.compiler.test.ts).
+  const projectPanelAttentionGroups = new Map<ProjectId, GroupNeedsAttentionGroup>();
+  if (projectPanelEnabled && activeProject) {
+    projectPanelAttentionGroups.set(activeProject.id, {
+      projectId: activeProject.id,
+      coordinatorThreadId: summariesByProjectId.get(activeProject.id)?.coordinatorThreadId ?? null,
+    });
+  }
+  const projectPanelNeedsAttention = useStore(
+    createGroupNeedsAttentionSelector({
+      groups: projectPanelAttentionGroups,
+    }),
+  );
+  // "Use default" in group settings means the app default — the project's default
+  // model first, then the user's default provider, never the active thread's model.
+  const groupPanelDefaultModelSelection = useMemo<ModelSelection>(
+    () =>
+      resolveDraftFallbackModelSelection({
+        projectDefault: activeProject?.defaultModelSelection,
+        settingsDefaultProvider: settings.defaultProvider,
+      }),
+    [activeProject?.defaultModelSelection, settings.defaultProvider],
+  );
 
   // Empty state: no active thread
   if (!activeThread) {
@@ -5206,6 +5251,8 @@ export default function ChatView({
     ? {
         open: projectPanelVisible,
         onOpenChange: setProjectFromAuxiliary,
+        attention:
+          activeProject === undefined ? false : projectPanelNeedsAttention.has(activeProject.id),
       }
     : null;
   const libraryHeaderState = projectPanelEnabled
@@ -5214,7 +5261,6 @@ export default function ChatView({
         onOpenChange: setLibraryFromAuxiliary,
       }
     : null;
-
   const showComposerLiveChangesHeader = latestTurnLive && activeTurnLiveDiffState.hasChanges;
   const showComposerActiveTaskListCard = Boolean(activeTaskList && !planSidebarOpen);
   const showComposerWorkflowRunCard = workflowRunState !== null;
@@ -6232,12 +6278,14 @@ export default function ChatView({
               projectId={activeProjectId}
               projectName={activeProjectDisplayName ?? activeProject?.name ?? "Project"}
               workspacePath={activeProject?.cwd ?? ""}
-              defaultModelSelection={
-                activeThread.modelSelection ?? activeProject?.defaultModelSelection ?? null
-              }
+              // "Use default" must mean the app's default model, not whatever the
+              // active thread happens to run (W14).
+              defaultModelSelection={groupPanelDefaultModelSelection}
               importedInstructions={projectInstructions}
               onOpenCoordinator={(threadId) => onNavigateToThread(threadId)}
               onOpenThread={(threadId) => onNavigateToThread(threadId)}
+              onOpenThreadSplit={onOpenThreadSplit}
+              onOpenAutomation={onOpenAutomation}
               onClose={() => setProjectFromAuxiliary(false)}
               settingsDialogOpen={coordinatorSettingsOpen}
               settingsInitialSection={coordinatorSettingsSection}

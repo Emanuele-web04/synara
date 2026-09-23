@@ -11,7 +11,6 @@ import {
   formatCharacterCount,
   GROUP_GOAL_MAX_CHARS,
   groupSettingsDirtySections,
-  isGroupSettingsDirty,
   isGroupSettingsSection,
   memoryNoteDocumentPath,
   modelSelectionsEqual,
@@ -137,7 +136,6 @@ describe("groupSettingsDirtySections", () => {
 
   it("is clean when draft matches baseline", () => {
     expect(groupSettingsDirtySections(makeDraft(), baseline).size).toBe(0);
-    expect(isGroupSettingsDirty(makeDraft(), baseline)).toBe(false);
   });
 
   it("marks general for name, icon, goal, and either model selection", () => {

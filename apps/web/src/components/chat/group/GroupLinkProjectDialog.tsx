@@ -81,6 +81,7 @@ export function GroupLinkProjectDialog(props: {
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search projects"
+            aria-label="Search projects to link"
           />
           <div className="max-h-72 overflow-y-auto">
             {candidates.length === 0 ? (

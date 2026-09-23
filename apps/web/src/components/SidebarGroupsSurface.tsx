@@ -5,7 +5,7 @@
 // Layer: Web component
 // Exports: SidebarGroupsSurface
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { ProjectId, ThreadId } from "@synara/contracts";
 
 import { createGroupProject, findLegacyStudioContainerForAdoption } from "../lib/groupProjects";
@@ -30,6 +30,10 @@ import {
   resolveGroupsListEmptyState,
 } from "./SidebarGroupsSurface.logic";
 import { resolveCoordinatorAppearance } from "./chat/group/coordinatorAppearance";
+import {
+  createGroupNeedsAttentionSelector,
+  type GroupNeedsAttentionGroup,
+} from "./chat/project/groupOverview.logic";
 import { useProjectAgentSummaries } from "./chat/project/useProjectAgentSummaries";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
 import {
@@ -52,13 +56,17 @@ import {
 import type { SidebarThreadSortOrder } from "../appSettings";
 
 // Rename fires once per project per session; the effect re-runs on every snapshot
-// while the server has not yet echoed the new title.
+// while the server has not yet echoed the new title. `inFlight` only dedupes the
+// outstanding call — an id moves into the done set once the dispatch resolves, so a
+// transient failure retries on the next snapshot instead of being swallowed.
 const studioAdoptionDispatchedIds = new Set<string>();
+const studioAdoptionInFlightIds = new Set<string>();
 
 // Browser tests remount the surface inside one test and must start from a clean
 // slate — the module-level set otherwise leaks "already dispatched" across mounts.
 export function resetStudioAdoptionDispatchedIdsForTests(): void {
   studioAdoptionDispatchedIds.clear();
+  studioAdoptionInFlightIds.clear();
 }
 
 export function SidebarGroupsSurface({
@@ -99,6 +107,23 @@ export function SidebarGroupsSurface({
   const groupsWorkspaceRoot = useWorkspacePathsStore((store) => store.groupsWorkspaceRoot);
   const toggleProject = useStore((store) => store.toggleProject);
   const { summariesByProjectId } = useProjectAgentSummaries();
+  // One shared selector answers "which groups have a thread Waiting on you" for
+  // every row — the chat-header Group toggle reads the same result.
+  const attentionGroups = useMemo(() => {
+    const groups = new Map<ProjectId, GroupNeedsAttentionGroup>();
+    for (const project of groupProjects) {
+      groups.set(project.id, {
+        projectId: project.id,
+        coordinatorThreadId: summariesByProjectId.get(project.id)?.coordinatorThreadId ?? null,
+      });
+    }
+    return groups;
+  }, [groupProjects, summariesByProjectId]);
+  const selectGroupNeedsAttention = useMemo(
+    () => createGroupNeedsAttentionSelector({ groups: attentionGroups }),
+    [attentionGroups],
+  );
+  const groupNeedsAttention = useStore(selectGroupNeedsAttention);
   const pinnedProjectAgentIds = usePinnedProjectAgentsStore((store) => store.pinnedProjectAgentIds);
   const pinnedProjectAgentIdSet = new Set(pinnedProjectAgentIds);
   const toggleProjectAgentPinned = usePinnedProjectAgentsStore(
@@ -121,14 +146,18 @@ export function SidebarGroupsSurface({
       studioWorkspaceRoot,
       groupsWorkspaceRoot,
     });
-    if (!legacy || studioAdoptionDispatchedIds.has(legacy.id)) {
+    if (
+      !legacy ||
+      studioAdoptionDispatchedIds.has(legacy.id) ||
+      studioAdoptionInFlightIds.has(legacy.id)
+    ) {
       return;
     }
     const api = readNativeApi();
     if (!api) {
       return;
     }
-    studioAdoptionDispatchedIds.add(legacy.id);
+    studioAdoptionInFlightIds.add(legacy.id);
     void api.orchestration
       .dispatchCommand({
         type: "project.meta.update",
@@ -136,8 +165,14 @@ export function SidebarGroupsSurface({
         projectId: legacy.id,
         title: "Groups",
       })
+      .then(() => {
+        studioAdoptionDispatchedIds.add(legacy.id);
+      })
       .catch(() => {
-        // Leave the id marked: a transient failure should not spam the command.
+        // Leave unmarked: a transient failure retries on the next snapshot.
+      })
+      .finally(() => {
+        studioAdoptionInFlightIds.delete(legacy.id);
       });
   }, [
     chatWorkspaceRoot,
@@ -227,6 +262,13 @@ export function SidebarGroupsSurface({
                 coordinatorColor: coordinatorSummary?.coordinatorColor,
               });
               const CoordinatorGlyph = coordinatorAppearance.Icon;
+              const activateCoordinatorRow = () => {
+                if (coordinatorConfigured && coordinatorSummary?.coordinatorThreadId) {
+                  onOpenThread(coordinatorSummary.coordinatorThreadId);
+                  return;
+                }
+                onOpenGroupSettings(project.id, "onboarding");
+              };
               const showCoordinatorContextMenu = (position: { x: number; y: number }) => {
                 if (!coordinatorConfigured) return;
                 const api = readNativeApi();
@@ -268,12 +310,11 @@ export function SidebarGroupsSurface({
                         ? `Open ${coordinatorRowLabel}`
                         : `Set up coordinator for ${resolveSidebarProjectRowLabel(project)}`
                     }
-                    onClick={() => {
-                      if (coordinatorConfigured && coordinatorSummary?.coordinatorThreadId) {
-                        onOpenThread(coordinatorSummary.coordinatorThreadId);
-                        return;
-                      }
-                      onOpenGroupSettings(project.id, "onboarding");
+                    onClick={activateCoordinatorRow}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Enter" && event.key !== " ") return;
+                      event.preventDefault();
+                      activateCoordinatorRow();
                     }}
                     onContextMenu={(event) => {
                       event.preventDefault();
@@ -289,9 +330,9 @@ export function SidebarGroupsSurface({
                   {coordinatorConfigured ? (
                     <button
                       type="button"
-                      aria-label={pinActionLabel("project agent", coordinatorPinned)}
+                      aria-label={pinActionLabel("coordinator", coordinatorPinned)}
                       aria-pressed={coordinatorPinned}
-                      title={pinActionLabel("project agent", coordinatorPinned)}
+                      title={pinActionLabel("coordinator", coordinatorPinned)}
                       className={cn(
                         "sidebar-icon-button absolute right-1.5 top-1/2 z-20 inline-flex size-4 -translate-y-1/2 cursor-pointer items-center justify-center rounded-sm transition-opacity hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring",
                         SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
@@ -348,6 +389,16 @@ export function SidebarGroupsSurface({
                       >
                         {resolveSidebarProjectRowLabel(project)}
                       </span>
+                      {groupNeedsAttention.has(project.id) ? (
+                        <>
+                          <span
+                            className="mr-1 size-1.5 shrink-0 rounded-full bg-amber-500 dark:bg-amber-300/90"
+                            aria-hidden
+                            title="A thread needs you"
+                          />
+                          <span className="sr-only">A thread needs you</span>
+                        </>
+                      ) : null}
                     </SidebarMenuButton>
                   </div>
                   {coordinatorPinned ? (
@@ -382,7 +433,7 @@ export function SidebarGroupsSurface({
             })
           ) : (
             <div className="px-2 pt-4 text-center text-ui text-muted-foreground/58">
-              {emptyState === "loading" ? "Loading Groups..." : "No groups yet"}
+              {emptyState === "loading" ? "Loading groups…" : "No groups yet"}
             </div>
           )}
         </SidebarMenu>

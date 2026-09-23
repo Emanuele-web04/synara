@@ -868,28 +868,16 @@ export class WsTransport {
         const projectId = (params as { projectId: string }).projectId;
         const streamKey = `projectAgent.events:${projectId}`;
         this.resetStreamCapacityRetry(streamKey);
+        this.resetStreamCompletionRetry(streamKey);
         this.projectAgentSubscriptions.set(projectId, params);
         const client = await awaitWithAbort(this.getClient(), abortScope.signal);
-        this.startStream(
-          client,
-          streamKey,
-          client[WS_METHODS.subscribeProjectAgentEvents](params as never),
-          (event: ProjectAgentStreamEvent) => this.emit(WS_CHANNELS.projectAgentEvent, event),
-          () => {
-            if (this.projectAgentSubscriptions.has(projectId)) {
-              void this.getClient().then((nextClient) => {
-                this.startStream(
-                  nextClient,
-                  streamKey,
-                  nextClient[WS_METHODS.subscribeProjectAgentEvents](params as never),
-                  (event: ProjectAgentStreamEvent) =>
-                    this.emit(WS_CHANNELS.projectAgentEvent, event),
-                  () => undefined,
-                );
-              });
-            }
-          },
-        );
+        // An unsubscribe that landed during the connect wait already dropped the
+        // registration (and a resubscribe replaced it) — only stream when this
+        // request is still the registered one.
+        if (this.projectAgentSubscriptions.get(projectId) !== params) {
+          return undefined as T;
+        }
+        this.startProjectAgentEventStream(client, projectId, params);
         return undefined as T;
       }
 
@@ -1480,14 +1468,7 @@ export class WsTransport {
           this.startProjectFileChangeStream(client, key, subscription);
         }
         for (const [projectId, params] of this.projectAgentSubscriptions) {
-          const streamKey = `projectAgent.events:${projectId}`;
-          this.startStream(
-            client,
-            streamKey,
-            client[WS_METHODS.subscribeProjectAgentEvents](params as never),
-            (event: ProjectAgentStreamEvent) => this.emit(WS_CHANNELS.projectAgentEvent, event),
-            () => undefined,
-          );
+          this.startProjectAgentEventStream(client, projectId, params);
         }
         this.reconnectFailures = 0;
         return client;
@@ -1997,6 +1978,43 @@ export class WsTransport {
     );
     this.streamCleanups.set(key, cancel);
     this.streamSettled.set(key, settled);
+  }
+
+  /**
+   * Detach a project-agent event stream entirely: drop the resubscribe-on-reconnect
+   * registration and cancel the live stream scope. `subscribeProjectAgentEvents`
+   * re-registers from scratch when needed.
+   */
+  async unsubscribeProjectAgentEvents(projectId: string): Promise<void> {
+    this.projectAgentSubscriptions.delete(projectId);
+    await this.stopStream(`projectAgent.events:${projectId}`);
+  }
+
+  /**
+   * Start (or restart) a project-agent event stream. The restart closure keeps the
+   * standard stream recovery paths alive — unexpected-completion reconnects and
+   * admission retries run through startStream, and the recursion means a restarted
+   * stream can itself restart instead of dying after one completion.
+   */
+  private startProjectAgentEventStream(
+    client: RpcClientInstance,
+    projectId: string,
+    params: unknown,
+  ): void {
+    const streamKey = `projectAgent.events:${projectId}`;
+    this.startStream<ProjectAgentStreamEvent>(
+      client,
+      streamKey,
+      client[WS_METHODS.subscribeProjectAgentEvents](params as never),
+      (event) => this.emit(WS_CHANNELS.projectAgentEvent, event),
+      () => {
+        if (!this.projectAgentSubscriptions.has(projectId)) return;
+        void this.getClient().then((nextClient) => {
+          if (!this.projectAgentSubscriptions.has(projectId)) return;
+          this.startProjectAgentEventStream(nextClient, projectId, params);
+        });
+      },
+    );
   }
 
   private stopStream(

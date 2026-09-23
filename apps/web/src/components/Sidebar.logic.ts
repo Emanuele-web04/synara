@@ -1384,9 +1384,11 @@ export function isHiddenProjectAgentCoordinatorThread(
 export function excludeHiddenProjectAgentCoordinatorThreads<T extends { readonly id: string }>(
   threads: readonly T[],
   coordinatorThreadIds: ReadonlySet<string>,
-): T[] {
+): readonly T[] {
   if (coordinatorThreadIds.size === 0) {
-    return [...threads];
+    // The input array is already the answer — copying it gave every caller a new
+    // reference each render, churning downstream memo deps in dev.
+    return threads;
   }
   return threads.filter(
     (thread) => !isHiddenProjectAgentCoordinatorThread(thread.id, coordinatorThreadIds),

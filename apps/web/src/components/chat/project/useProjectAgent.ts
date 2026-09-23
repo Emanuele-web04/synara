@@ -15,6 +15,10 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { readNativeApi } from "~/nativeApi";
+import {
+  projectAgentOverviewWithConfig,
+  projectAgentOverviewConfigured,
+} from "./projectAgentOverview.logic";
 import { useProjectAgentSummariesStore } from "./useProjectAgentSummaries";
 
 export function useProjectAgent(input: {
@@ -28,10 +32,22 @@ export function useProjectAgent(input: {
   const [documents, setDocuments] = useState<ReadonlyArray<ProjectDocumentHead>>([]);
   const [threads, setThreads] = useState<ReadonlyArray<ProjectThreadIndexEntry>>([]);
   const [error, setError] = useState<string | null>(null);
+  // Mutations fail through `setError`, but the state value only lands on the next
+  // render — callers that need the message synchronously (toasts) read the ref.
+  const errorRef = useRef<string | null>(null);
+  const reportError = useCallback((message: string | null) => {
+    errorRef.current = message;
+    setError(message);
+  }, []);
+  const readError = useCallback(() => errorRef.current, []);
   const [busy, setBusy] = useState(false);
   const projectIdRef = useRef(input.projectId);
   const loadGeneration = useRef(0);
+  // Mirrors the rendered overview's configured flag so stream events can tell a
+  // first-configure transition (load the lists) from a relink (index refresh only).
+  const overviewConfiguredRef = useRef(false);
   projectIdRef.current = input.projectId;
+  overviewConfiguredRef.current = projectAgentOverviewConfigured(overview);
 
   const stillCurrent = (projectId: ProjectId, generation: number) =>
     projectIdRef.current === projectId && loadGeneration.current === generation;
@@ -71,11 +87,43 @@ export function useProjectAgent(input: {
         setDocuments([]);
         setThreads([]);
       }
-      setError(null);
+      reportError(null);
     } catch (cause) {
       if (!stillCurrent(projectId, generation)) return;
-      setError(cause instanceof Error ? cause.message : "Failed to load project coordinator.");
+      reportError(cause instanceof Error ? cause.message : "Failed to load project coordinator.");
     }
+  }, [reportError]);
+
+  // The thread index has no dedicated stream event — re-list it when config
+  // links/unlinks or task upserts change membership. One refresh in flight at a
+  // time; a burst coalesces into a single follow-up listing.
+  const threadIndexRefreshRef = useRef({ inFlight: false, queued: false });
+  const refreshThreadIndex = useCallback(() => {
+    const api = readNativeApi();
+    const projectId = projectIdRef.current;
+    if (!api?.projectAgent || !projectId) return;
+    const pending = threadIndexRefreshRef.current;
+    if (pending.inFlight) {
+      pending.queued = true;
+      return;
+    }
+    pending.inFlight = true;
+    const generation = loadGeneration.current;
+    void (async () => {
+      try {
+        const index = await api.projectAgent.listThreadIndex({ projectId });
+        if (projectIdRef.current === projectId && loadGeneration.current === generation) {
+          setThreads(index.threads);
+        }
+      } catch {
+        // A dropped refresh keeps the last index — the next event retries it.
+      }
+      pending.inFlight = false;
+      if (pending.queued) {
+        pending.queued = false;
+        refreshThreadIndex();
+      }
+    })();
   }, []);
 
   useEffect(() => {
@@ -87,21 +135,99 @@ export function useProjectAgent(input: {
     }
     void load();
     const api = readNativeApi();
-    if (!api?.projectAgent) return;
-    void api.projectAgent.subscribe({ projectId: input.projectId }).catch(() => undefined);
-    const unsubscribe = api.projectAgent.onEvent((event: ProjectAgentStreamEvent) => {
+    const subscribedProjectId = input.projectId;
+    if (!api?.projectAgent || !subscribedProjectId) return;
+    void api.projectAgent.subscribe({ projectId: subscribedProjectId }).catch(() => undefined);
+    const unsubscribeEvents = api.projectAgent.onEvent((event: ProjectAgentStreamEvent) => {
       const current = projectIdRef.current;
       if (!current) return;
-      if (event.type === "snapshot" && event.overview.projectId === current) {
-        setOverview(event.overview);
+      // Events stream for every subscribed project on the client — apply only this
+      // project's events and only the slice each event actually changed.
+      if (event.type === "snapshot") {
+        if (event.overview.projectId === current) setOverview(event.overview);
         return;
       }
-      void load();
+      if (event.type === "config-upserted") {
+        if (event.config.projectId === current) {
+          const wasConfigured = overviewConfiguredRef.current;
+          setOverview((overview) =>
+            overview && overview.projectId === current
+              ? projectAgentOverviewWithConfig(overview, event.config)
+              : overview,
+          );
+          if (wasConfigured) {
+            refreshThreadIndex();
+          } else {
+            // First configure while the panel is open: the task/activity/document/
+            // thread lists behind the overview only exist once loaded.
+            void load();
+          }
+        }
+        return;
+      }
+      if (event.type === "goal-upserted") {
+        if (event.goal.projectId === current) {
+          setOverview((overview) =>
+            overview && overview.projectId === current
+              ? { ...overview, goal: event.goal }
+              : overview,
+          );
+        }
+        return;
+      }
+      if (event.type === "digest-upserted") {
+        if (event.digest.projectId === current) {
+          setOverview((overview) =>
+            overview && overview.projectId === current
+              ? { ...overview, digest: event.digest }
+              : overview,
+          );
+        }
+        return;
+      }
+      if (event.type === "task-upserted") {
+        if (event.task.projectId === current) {
+          setTasks((tasks) => {
+            const index = tasks.findIndex((task) => task.id === event.task.id);
+            if (index === -1) return [...tasks, event.task];
+            const next = [...tasks];
+            next[index] = event.task;
+            return next;
+          });
+          refreshThreadIndex();
+        }
+        return;
+      }
+      if (event.type === "activity-appended") {
+        if (event.activity.projectId === current) {
+          setActivity((activity) =>
+            activity.some((entry) => entry.id === event.activity.id)
+              ? activity
+              : [event.activity, ...activity],
+          );
+        }
+        return;
+      }
+      if (event.type === "document-head-updated") {
+        if (event.head.projectId === current) {
+          setDocuments((documents) => {
+            const index = documents.findIndex(
+              (document) => document.logicalPath === event.head.logicalPath,
+            );
+            if (index === -1) return [...documents, event.head];
+            const next = [...documents];
+            next[index] = event.head;
+            return next;
+          });
+        }
+        return;
+      }
     });
     return () => {
-      unsubscribe();
+      unsubscribeEvents();
+      void api.projectAgent.unsubscribe({ projectId: subscribedProjectId }).catch(() => undefined);
     };
-  }, [input.enabled, input.projectId, load]);
+  }, [input.enabled, input.projectId, load, refreshThreadIndex]);
 
   const runMutation = useCallback(
     async (
@@ -120,14 +246,14 @@ export function useProjectAgent(input: {
         return true;
       } catch (cause) {
         if (projectIdRef.current === projectId) {
-          setError(cause instanceof Error ? cause.message : "Project action failed.");
+          reportError(cause instanceof Error ? cause.message : "Project action failed.");
         }
         return false;
       } finally {
         if (projectIdRef.current === projectId) setBusy(false);
       }
     },
-    [load],
+    [load, reportError],
   );
 
   const configure = useCallback(
@@ -309,6 +435,21 @@ export function useProjectAgent(input: {
     [runMutation],
   );
 
+  const updateTaskStatus = useCallback(
+    async (task: ProjectTask, input: { status?: ProjectTask["status"]; archived?: boolean }) =>
+      runMutation(async (projectAgent, projectId) => {
+        await projectAgent.updateTask({
+          requestId: crypto.randomUUID(),
+          projectId,
+          taskId: task.id,
+          expectedRevision: task.revision,
+          ...(input.status !== undefined ? { status: input.status } : {}),
+          ...(input.archived !== undefined ? { archived: input.archived } : {}),
+        });
+      }),
+    [runMutation],
+  );
+
   const loadEvidence = useCallback(async (taskId: ProjectTask["id"]) => {
     const api = readNativeApi();
     const projectId = projectIdRef.current;
@@ -424,6 +565,7 @@ export function useProjectAgent(input: {
     error,
     busy,
     load,
+    readError,
     configure,
     linkProject,
     unlinkProject,
@@ -434,6 +576,7 @@ export function useProjectAgent(input: {
     createTask,
     acceptTask,
     archiveTask,
+    updateTaskStatus,
     loadEvidence,
     loadMoreActivity,
     excludeThread,

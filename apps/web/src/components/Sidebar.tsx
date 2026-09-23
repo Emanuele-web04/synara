@@ -2552,6 +2552,9 @@ export default function Sidebar() {
     ],
   );
 
+  // The `/groups` route owns the hidden-section redirect (a hidden Groups tab
+  // also hides the section surface only) — the sidebar must not bounce group
+  // threads opened from search, split view, or a link while the tab is hidden.
   useEffect(() => {
     // Persisted paths make homeDir truthy
     // immediately on reload, well before the first shell snapshot arrives.

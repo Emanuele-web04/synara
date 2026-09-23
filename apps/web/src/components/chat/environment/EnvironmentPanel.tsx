@@ -24,8 +24,11 @@ import type { ReactNode } from "react";
 
 import { useAppSettings } from "~/appSettings";
 import { SETTINGS_TARGETS } from "~/settingsNavigation";
-import { ENVIRONMENT_PANEL_SURFACE_CLASS_NAME } from "~/components/chat/composerPickerStyles";
-import { AUXILIARY_PANEL_MOTION_CLASS } from "~/components/chat/auxiliary/ChatAuxiliaryPanel";
+import {
+  ENVIRONMENT_PANEL_MOTION_CLASS,
+  ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME as BASE_ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME,
+  ENVIRONMENT_PANEL_SURFACE_CLASS_NAME,
+} from "~/components/chat/composerPickerStyles";
 import BranchToolbar, { type BranchToolbarProps } from "~/components/BranchToolbar";
 import ChatMarkdown from "~/components/ChatMarkdown";
 import { FolderClosed } from "~/components/FolderClosed";
@@ -39,6 +42,7 @@ import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { ArrowUpRightIcon, ChangesIcon, GitHubIcon, SettingsIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
+import { revealFolderInShell } from "~/lib/revealFolder";
 import { deleteActiveThreadFromClient } from "~/lib/activeThreadDelete";
 import { gitRemoveWorktreeMutationOptions } from "~/lib/gitReactQuery";
 import { waitForSidechatCreator } from "~/lib/sidechatCreatorRegistry";
@@ -83,8 +87,10 @@ import {
 // scrollbar pinned to the viewport's far right.
 export const ENVIRONMENT_DOCKED_CONTENT_INSET_PX = 312;
 
-const ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME =
-  "pointer-events-none absolute inset-y-0 right-0 z-20 flex flex-col items-end gap-3 overflow-y-auto p-3";
+const ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME = cn(
+  BASE_ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME,
+  "items-end gap-3 overflow-y-auto",
+);
 
 export interface EnvironmentPanelProps {
   /** Drives the slide-in/out transition; the panel stays mounted so CSS can interpolate. */
@@ -326,26 +332,7 @@ export function EnvironmentPanel({
           }
           trailing={<ArrowUpRightIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
           onClick={() => {
-            const api = readNativeApi();
-            if (!api) {
-              toastManager.add({
-                type: "error",
-                title: "Unable to open folder",
-                description: "The desktop connection is not available yet.",
-              });
-              return;
-            }
-            void api.shell
-              .showInFolder(groupFolderPath)
-              .then(onClose)
-              .catch((error) => {
-                toastManager.add({
-                  type: "error",
-                  title: "Unable to open folder",
-                  description:
-                    error instanceof Error ? error.message : "An unknown error occurred.",
-                });
-              });
+            revealFolderInShell({ path: groupFolderPath, onRevealed: onClose });
           }}
         />
       ) : null}
@@ -566,11 +553,12 @@ export function EnvironmentPanel({
       className={ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME}
       data-environment-panel-variant={variant}
       aria-hidden={!open}
+      inert={!open}
     >
       <div
         className={cn(
           ENVIRONMENT_PANEL_SURFACE_CLASS_NAME,
-          AUXILIARY_PANEL_MOTION_CLASS,
+          ENVIRONMENT_PANEL_MOTION_CLASS,
           "flex max-h-full w-72 flex-col",
           open
             ? "pointer-events-auto translate-x-0 opacity-100"

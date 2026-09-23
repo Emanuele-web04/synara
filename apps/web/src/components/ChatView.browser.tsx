@@ -7228,6 +7228,64 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it("keeps a group thread open when the Groups section is hidden", async () => {
+    localStorage.setItem("synara:app-settings:v1", JSON.stringify({ showGroupsSection: false }));
+    const groupProjectId = "project-group-alpha" as ProjectId;
+    const snapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-group-thread-hidden-tab" as MessageId,
+      targetText: "group thread",
+    });
+    const groupSnapshot: OrchestrationReadModel = {
+      ...snapshot,
+      projects: [
+        ...snapshot.projects,
+        {
+          id: groupProjectId,
+          kind: "group",
+          title: "Team Alpha",
+          workspaceRoot: "/Users/tester/Groups/team-alpha",
+          defaultModelSelection: { provider: "codex", model: "gpt-5" },
+          scripts: [],
+          createdAt: NOW_ISO,
+          updatedAt: NOW_ISO,
+          deletedAt: null,
+        },
+      ],
+      threads: snapshot.threads.map((thread) =>
+        thread.id === THREAD_ID ? Object.assign({}, thread, { projectId: groupProjectId }) : thread,
+      ),
+    };
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: groupSnapshot,
+      initialEntry: `/${THREAD_ID}`,
+      configureFixture: (nextFixture) => {
+        nextFixture.welcome = {
+          ...nextFixture.welcome,
+          homeDir: "/Users/tester",
+          chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+          studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
+          groupsWorkspaceRoot: "/Users/tester/Groups",
+        };
+      },
+    });
+    try {
+      // The hidden-section guard belongs to the /groups route alone: a group
+      // thread opened from search, split view, or a link stays on its route.
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 400));
+      await vi.waitFor(
+        () => {
+          expect(mounted.router.state.status).toBe("idle");
+          expect(mounted.router.state.location.pathname).toBe(`/${THREAD_ID}`);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("keeps the temporary-chat accent while the selected button stays hovered", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,

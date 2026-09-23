@@ -8,6 +8,7 @@ import { render } from "vitest-browser-react";
 
 const harness = vi.hoisted(() => ({
   rootEntries: [] as LibraryEntry[],
+  dirEntries: {} as Record<string, LibraryEntry[]>,
   listCalls: [] as Array<string | undefined>,
   uploaded: [] as string[],
   fetchImpl: undefined as
@@ -64,6 +65,7 @@ const dirEntry = (name: string): LibraryEntry => ({
 
 beforeEach(() => {
   harness.rootEntries = [];
+  harness.dirEntries = {};
   harness.listCalls = [];
   harness.uploaded = [];
   harness.api.projectAgent.library.list.mockImplementation(
@@ -71,7 +73,9 @@ beforeEach(() => {
       harness.listCalls.push(input.relativePath);
       return {
         root: "/library",
-        entries: input.relativePath ? [] : harness.rootEntries,
+        entries: input.relativePath
+          ? (harness.dirEntries[input.relativePath] ?? [])
+          : harness.rootEntries,
       };
     },
   );
@@ -115,6 +119,69 @@ describe("LibraryPanel", () => {
 
     await page.getByRole("radio", { name: "List" }).click();
     expect(container.querySelector('[data-library-view="list"]')).not.toBeNull();
+  });
+
+  it("refreshes in place on focus without wiping expanded subfolders", async () => {
+    harness.rootEntries = [dirEntry("Artifacts")];
+    harness.dirEntries = {
+      Artifacts: [
+        {
+          name: "deep",
+          relativePath: "Artifacts/deep",
+          kind: "directory",
+          sizeBytes: 0,
+          modifiedAt: "2026-01-01T00:00:00Z",
+        },
+      ],
+      "Artifacts/deep": [fileEntry("inner.md", "Artifacts/deep/inner.md")],
+    };
+    await renderPanel();
+
+    // Artifacts is seeded expanded; deepen the tree once its children render.
+    await expect.element(page.getByRole("button", { name: "deep" })).toBeVisible();
+    await page.getByRole("button", { name: "deep" }).click();
+    await expect.element(page.getByText("inner.md", { exact: true })).toBeVisible();
+
+    const callsBeforeFocus = harness.listCalls.length;
+    window.dispatchEvent(new Event("focus"));
+    await vi.waitFor(() =>
+      expect(harness.listCalls.length).toBeGreaterThanOrEqual(callsBeforeFocus + 3),
+    );
+
+    // The root plus every already-loaded directory is re-listed — the deep
+    // listing is replaced in place, never cleared first.
+    const refreshCalls = harness.listCalls.slice(callsBeforeFocus);
+    expect(refreshCalls).toContain(undefined);
+    expect(refreshCalls).toContain("Artifacts");
+    expect(refreshCalls).toContain("Artifacts/deep");
+    await expect.element(page.getByText("inner.md", { exact: true })).toBeVisible();
+  });
+
+  it("coalesces a focus burst into at most one follow-up refresh", async () => {
+    harness.rootEntries = [dirEntry("Artifacts")];
+    harness.dirEntries = { Artifacts: [] };
+    await renderPanel();
+    await expect.element(page.getByText("Artifacts", { exact: true })).toBeVisible();
+
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const immediateList = harness.api.projectAgent.library.list.getMockImplementation()!;
+    harness.api.projectAgent.library.list.mockImplementation(
+      async (input: { relativePath?: string }) => {
+        await gate;
+        return immediateList(input);
+      },
+    );
+
+    const callsBeforeFocus = harness.listCalls.length;
+    window.dispatchEvent(new Event("focus"));
+    window.dispatchEvent(new Event("focus"));
+    window.dispatchEvent(new Event("focus"));
+    release();
+
+    await vi.waitFor(() => expect(harness.listCalls.length).toBe(callsBeforeFocus + 4));
   });
 
   it("uploads a file through the hidden input and refetches", async () => {
