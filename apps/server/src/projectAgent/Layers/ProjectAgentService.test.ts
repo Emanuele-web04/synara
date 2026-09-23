@@ -3532,3 +3532,30 @@ it.effect("upgrades a stock playbook but never a user-edited one", () => {
     }
   }).pipe(Effect.provide(harness.layer));
 });
+
+it.effect("gives the coordinator thread its playbook packet on every turn", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const overview = yield* configureTestGroup(service, "req-coordinator-packet");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+
+    // Called once per dispatchTurnForThread — the coordinator must see its
+    // playbook and watch state on every turn, not just the first.
+    for (let turn = 0; turn < 2; turn += 1) {
+      const packet = yield* service.formatContextPacketForTurn(coordinatorThreadId);
+      assert.equal(packet.includes("Group context packet"), true);
+      assert.equal(packet.includes("## Playbook\n# Group coordinator playbook"), true);
+      assert.equal(packet.includes("## Watch"), true);
+      assert.equal(packet.includes("## Workers"), true);
+      // The member-only tools section never leaks into the coordinator packet.
+      assert.equal(packet.includes("## Group tools"), false);
+    }
+
+    // Member threads get the shared packet without the coordinator playbook.
+    const memberPacket = yield* service.formatContextPacketForTurn(groupMemberThreadId);
+    assert.equal(memberPacket.includes("Group context packet"), true);
+    assert.equal(memberPacket.includes("## Playbook"), false);
+    assert.equal(memberPacket.includes("## Group tools"), true);
+  }).pipe(Effect.provide(harness.layer));
+});

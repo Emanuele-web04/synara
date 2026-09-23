@@ -301,6 +301,7 @@ describe("ProviderCommandReactor", () => {
       ProviderServiceShape["getClaudeCacheObservation"]
     >;
     readonly startClaudeCompaction?: NonNullable<ProviderServiceShape["startClaudeCompaction"]>;
+    readonly formatContextPacket?: string;
     readonly coordinatorThreadIds?: readonly string[];
   }) {
     const now = new Date().toISOString();
@@ -660,15 +661,19 @@ describe("ProviderCommandReactor", () => {
       streamEvents: Stream.fromPubSub(runtimeEventPubSub),
     };
 
+    const projectAgentLayer = Layer.succeed(ProjectAgentService, {
+      formatContextPacketForTurn: () => Effect.succeed(input?.formatContextPacket ?? ""),
+    } as unknown as (typeof ProjectAgentService)["Service"]);
     const orchestrationLayer = OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionPipelineLive),
       Layer.provide(OrchestrationProjectionSnapshotQueryLive),
       Layer.provide(OrchestrationEventStoreLive),
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
+      // Turn dispatch runs on the engine's fibers: the packet lookup reads
+      // this environment, mirroring projectAgentServiceLayer provideMerge'd
+      // into the reactor in serverLayers.ts.
+      Layer.provideMerge(projectAgentLayer),
     );
-    const projectAgentLayer = Layer.succeed(ProjectAgentService, {
-      formatContextPacketForTurn: () => Effect.succeed(""),
-    } as unknown as (typeof ProjectAgentService)["Service"]);
     const projectAgentRepositoryLayer = Layer.succeed(ProjectAgentRepository, {
       getConfigByCoordinatorThread: (threadId: ThreadId) =>
         Effect.succeed(
@@ -1077,6 +1082,35 @@ describe("ProviderCommandReactor", () => {
       )?.text,
     ).toBe("What happened?");
     expect((await harness.completionState())[0]?.context_consumed).toBe(1);
+  });
+
+  it("prefixes the provider input with the project context packet", async () => {
+    const harness = await createHarness({
+      formatContextPacket: "Project context packet MARKER-PACKET-42",
+    });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        commandId: CommandId.makeUnsafe("context-packet-send"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: MessageId.makeUnsafe("context-packet-message"),
+          role: "user",
+          text: "What happened?",
+          attachments: [],
+        },
+        createdAt: new Date().toISOString(),
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    const sentInput = harness.sendTurn.mock.calls[0]?.[0] as { readonly input?: string };
+    expect(sentInput.input).toContain("Project context packet MARKER-PACKET-42");
+    expect(sentInput.input).toContain("What happened?");
+    expect(sentInput.input?.indexOf("MARKER-PACKET-42") ?? -1).toBeLessThan(
+      sentInput.input?.indexOf("What happened?") ?? Number.POSITIVE_INFINITY,
+    );
   });
 
   it.each(["agent", "automation"] as const)(
