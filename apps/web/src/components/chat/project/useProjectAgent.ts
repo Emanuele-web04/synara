@@ -15,6 +15,10 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { readNativeApi } from "~/nativeApi";
+import {
+  projectAgentOverviewWithConfig,
+  projectAgentOverviewConfigured,
+} from "./projectAgentOverview.logic";
 import { useProjectAgentSummariesStore } from "./useProjectAgentSummaries";
 
 export function useProjectAgent(input: {
@@ -39,7 +43,11 @@ export function useProjectAgent(input: {
   const [busy, setBusy] = useState(false);
   const projectIdRef = useRef(input.projectId);
   const loadGeneration = useRef(0);
+  // Mirrors the rendered overview's configured flag so stream events can tell a
+  // first-configure transition (load the lists) from a relink (index refresh only).
+  const overviewConfiguredRef = useRef(false);
   projectIdRef.current = input.projectId;
+  overviewConfiguredRef.current = projectAgentOverviewConfigured(overview);
 
   const stillCurrent = (projectId: ProjectId, generation: number) =>
     projectIdRef.current === projectId && loadGeneration.current === generation;
@@ -86,6 +94,38 @@ export function useProjectAgent(input: {
     }
   }, [reportError]);
 
+  // The thread index has no dedicated stream event — re-list it when config
+  // links/unlinks or task upserts change membership. One refresh in flight at a
+  // time; a burst coalesces into a single follow-up listing.
+  const threadIndexRefreshRef = useRef({ inFlight: false, queued: false });
+  const refreshThreadIndex = useCallback(() => {
+    const api = readNativeApi();
+    const projectId = projectIdRef.current;
+    if (!api?.projectAgent || !projectId) return;
+    const pending = threadIndexRefreshRef.current;
+    if (pending.inFlight) {
+      pending.queued = true;
+      return;
+    }
+    pending.inFlight = true;
+    const generation = loadGeneration.current;
+    void (async () => {
+      try {
+        const index = await api.projectAgent.listThreadIndex({ projectId });
+        if (projectIdRef.current === projectId && loadGeneration.current === generation) {
+          setThreads(index.threads);
+        }
+      } catch {
+        // A dropped refresh keeps the last index — the next event retries it.
+      }
+      pending.inFlight = false;
+      if (pending.queued) {
+        pending.queued = false;
+        refreshThreadIndex();
+      }
+    })();
+  }, []);
+
   useEffect(() => {
     if (!input.enabled || !input.projectId) {
       setOverview(null);
@@ -109,11 +149,19 @@ export function useProjectAgent(input: {
       }
       if (event.type === "config-upserted") {
         if (event.config.projectId === current) {
+          const wasConfigured = overviewConfiguredRef.current;
           setOverview((overview) =>
             overview && overview.projectId === current
-              ? { ...overview, config: event.config }
+              ? projectAgentOverviewWithConfig(overview, event.config)
               : overview,
           );
+          if (wasConfigured) {
+            refreshThreadIndex();
+          } else {
+            // First configure while the panel is open: the task/activity/document/
+            // thread lists behind the overview only exist once loaded.
+            void load();
+          }
         }
         return;
       }
@@ -146,6 +194,7 @@ export function useProjectAgent(input: {
             next[index] = event.task;
             return next;
           });
+          refreshThreadIndex();
         }
         return;
       }
@@ -178,7 +227,7 @@ export function useProjectAgent(input: {
       unsubscribeEvents();
       void api.projectAgent.unsubscribe({ projectId: subscribedProjectId }).catch(() => undefined);
     };
-  }, [input.enabled, input.projectId, load]);
+  }, [input.enabled, input.projectId, load, refreshThreadIndex]);
 
   const runMutation = useCallback(
     async (

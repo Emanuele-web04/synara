@@ -8,6 +8,7 @@ import { useEffect } from "react";
 import { create } from "zustand";
 
 import { readNativeApi } from "~/nativeApi";
+import { projectAgentOverviewConfigured } from "./projectAgentOverview.logic";
 
 type ProjectAgentSummariesState = {
   summariesByProjectId: ReadonlyMap<ProjectId, ProjectAgentSummary>;
@@ -21,7 +22,7 @@ type ProjectAgentSummariesState = {
 function summaryFromOverview(overview: ProjectAgentOverview): ProjectAgentSummary {
   return {
     projectId: overview.projectId,
-    configured: overview.configured,
+    configured: projectAgentOverviewConfigured(overview),
     coordinatorName: overview.config?.coordinatorName ?? null,
     coordinatorThreadId: overview.config?.coordinatorThreadId ?? null,
     coordinatorIcon: overview.config?.coordinatorIcon ?? null,
@@ -65,7 +66,7 @@ export const useProjectAgentSummariesStore = create<ProjectAgentSummariesState>(
         const next = new Map(current.summariesByProjectId);
         next.set(event.config.projectId, {
           projectId: event.config.projectId,
-          configured: true,
+          configured: projectAgentOverviewConfigured({ config: event.config }),
           coordinatorName: event.config.coordinatorName,
           coordinatorThreadId: event.config.coordinatorThreadId,
           coordinatorIcon: event.config.coordinatorIcon ?? null,
@@ -130,6 +131,20 @@ function cachedCoordinatorThreadIdSet(
   return next;
 }
 
+const SUMMARIES_REFRESH_DEBOUNCE_MS = 400;
+let summariesRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+// Summaries feed the sidebar's configured/status affordances even for projects
+// whose panel is closed, where no open project-agent subscription patches them
+// through. The always-on automation stream schedules one coalesced re-list.
+function scheduleProjectAgentSummariesRefresh() {
+  if (summariesRefreshTimer !== null) return;
+  summariesRefreshTimer = setTimeout(() => {
+    summariesRefreshTimer = null;
+    void loadProjectAgentSummaries();
+  }, SUMMARIES_REFRESH_DEBOUNCE_MS);
+}
+
 export async function loadProjectAgentSummaries(): Promise<void> {
   if (summariesLoadPromise) return summariesLoadPromise;
   summariesLoadPromise = (async () => {
@@ -163,8 +178,19 @@ export function useProjectAgentSummaries() {
     const unsubscribe = api.projectAgent.onEvent((event) => {
       applyEvent(event);
     });
+    const unsubscribeAutomation =
+      api.automation?.onEvent((event) => {
+        if (
+          event.type === "snapshot" ||
+          event.type === "definition-upserted" ||
+          event.type === "run-upserted"
+        ) {
+          scheduleProjectAgentSummariesRefresh();
+        }
+      }) ?? (() => {});
     return () => {
       unsubscribe();
+      unsubscribeAutomation();
     };
   }, [applyEvent]);
 

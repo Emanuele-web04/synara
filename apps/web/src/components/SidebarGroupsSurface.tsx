@@ -390,11 +390,14 @@ export function SidebarGroupsSurface({
                         {resolveSidebarProjectRowLabel(project)}
                       </span>
                       {groupNeedsAttention.has(project.id) ? (
-                        <span
-                          className="mr-1 size-1.5 shrink-0 rounded-full bg-amber-500 dark:bg-amber-300/90"
-                          aria-label="A thread needs you"
-                          title="A thread needs you"
-                        />
+                        <>
+                          <span
+                            className="mr-1 size-1.5 shrink-0 rounded-full bg-amber-500 dark:bg-amber-300/90"
+                            aria-hidden
+                            title="A thread needs you"
+                          />
+                          <span className="sr-only">A thread needs you</span>
+                        </>
                       ) : null}
                     </SidebarMenuButton>
                   </div>

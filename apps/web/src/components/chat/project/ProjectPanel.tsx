@@ -30,6 +30,7 @@ import { resolveCoordinatorAppearance } from "../group/coordinatorAppearance";
 import type { GroupSettingsSection } from "../group/groupSettingsDialog.logic";
 import { GroupOverview } from "./GroupOverview";
 import { defaultProjectAgentName } from "./projectAgentDialog.logic";
+import { projectAgentOverviewConfigured } from "./projectAgentOverview.logic";
 import { collectGroupThreadSummaries } from "./groupOverview.logic";
 import {
   mergeProjectFocusRows,
@@ -145,12 +146,13 @@ export function ProjectPanel({
     agent.overview?.config?.coordinatorName ?? defaultProjectAgentName(projectName);
   const folderLabel = basenameOfPath(workspacePath) || workspacePath || projectName;
   // Configured must not depend on the panel being open — the overview is only
-  // loaded while open, so fall back to the summaries store (which is fed by the
-  // server config stream even while the panel is closed).
+  // loaded while open, so either feed decides it: the panel's own overview, or
+  // the shared summaries store (fed by mutations, the config stream while the
+  // panel is open, and debounced re-lists on automation events). A stale
+  // unconfigured overview must not shadow a fresher configured summary.
   const configured =
-    agent.overview?.configured ??
-    (projectId === null ? undefined : summariesByProjectId.get(projectId)?.configured) ??
-    false;
+    projectAgentOverviewConfigured(agent.overview) ||
+    (projectId !== null && summariesByProjectId.get(projectId)?.configured === true);
   const coordinatorModel =
     agent.overview?.config?.coordinatorModelSelection ?? defaultModelSelection;
   const coordinatorAppearance = resolveCoordinatorAppearance({

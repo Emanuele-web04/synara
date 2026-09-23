@@ -183,6 +183,7 @@ interface WsTransportInternals {
     forceRestart?: boolean,
   ): Promise<void>;
   startProjectFileChangeStream(client: unknown, key: string, subscription: unknown): void;
+  startProjectAgentEventStream(client: unknown, projectId: string, params: unknown): void;
   stopStream(key: string, options?: { readonly resetCapacityRetry?: boolean }): Promise<void>;
   emitThreadStreamFailure(failure: WsThreadStreamFailure): void;
 }
@@ -1319,6 +1320,66 @@ describe("WsTransport", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("does not start the project-agent stream when unsubscribe lands during the connect wait", async () => {
+    const { transport, internals } = makeBareTransport();
+    const client = {};
+    const clientResolvers: Array<(client: unknown) => void> = [];
+    const startProjectAgentEventStream = vi.fn();
+    Object.assign(internals, {
+      getClient: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            clientResolvers.push(resolve);
+          }),
+      ),
+      startProjectAgentEventStream,
+    });
+
+    const projectId = "project-pending";
+    const params = { projectId };
+    const subscribe = transport.request(WS_METHODS.subscribeProjectAgentEvents, params);
+
+    await vi.waitFor(() => expect(internals.projectAgentSubscriptions.get(projectId)).toBe(params));
+    await transport.unsubscribeProjectAgentEvents(projectId);
+
+    for (const resolve of clientResolvers) resolve(client);
+    await subscribe;
+
+    expect(startProjectAgentEventStream).not.toHaveBeenCalled();
+    expect(internals.projectAgentSubscriptions.has(projectId)).toBe(false);
+  });
+
+  it("starts only the newest registered project-agent subscription after the connect wait", async () => {
+    const { transport, internals } = makeBareTransport();
+    const client = {};
+    const clientResolvers: Array<(client: unknown) => void> = [];
+    const startProjectAgentEventStream = vi.fn();
+    Object.assign(internals, {
+      getClient: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            clientResolvers.push(resolve);
+          }),
+      ),
+      startProjectAgentEventStream,
+    });
+
+    const projectId = "project-pending";
+    const first = { projectId };
+    const second = { projectId };
+    const firstSubscribe = transport.request(WS_METHODS.subscribeProjectAgentEvents, first);
+    await vi.waitFor(() => expect(internals.projectAgentSubscriptions.get(projectId)).toBe(first));
+    const secondSubscribe = transport.request(WS_METHODS.subscribeProjectAgentEvents, second);
+    await vi.waitFor(() => expect(internals.projectAgentSubscriptions.get(projectId)).toBe(second));
+
+    for (const resolve of clientResolvers) resolve(client);
+    await firstSubscribe;
+    await secondSubscribe;
+
+    expect(startProjectAgentEventStream).toHaveBeenCalledTimes(1);
+    expect(startProjectAgentEventStream).toHaveBeenCalledWith(client, projectId, second);
   });
 
   it("does not restart an automatically restored shell stream for the initial subscriber", async () => {

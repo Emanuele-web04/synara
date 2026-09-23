@@ -430,7 +430,7 @@ export function SurfacePanelToggle({
             className={SURFACE_PANEL_TOGGLE_CLASS_NAME}
             pressed={state.open}
             onPressedChange={state.onOpenChange}
-            aria-label={ariaLabel}
+            aria-label={state.attention ? `${ariaLabel}, needs attention` : ariaLabel}
             variant="default"
             size="xs"
           >

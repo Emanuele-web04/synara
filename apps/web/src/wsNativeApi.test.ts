@@ -27,6 +27,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const requestMock = vi.fn<(...args: Array<unknown>) => Promise<unknown>>();
 const disposeMock = vi.fn();
+const unsubscribeProjectAgentEventsMock = vi.fn(async (_projectId: string) => undefined);
 const showContextMenuFallbackMock =
   vi.fn<
     <T extends string>(
@@ -63,6 +64,7 @@ vi.mock("./wsTransport", () => {
     WsTransport: class MockWsTransport {
       request = requestMock;
       subscribe = subscribeMock;
+      unsubscribeProjectAgentEvents = unsubscribeProjectAgentEventsMock;
       onStateChange() {
         return () => undefined;
       }
@@ -139,6 +141,7 @@ beforeEach(() => {
   vi.resetModules();
   requestMock.mockReset();
   disposeMock.mockReset();
+  unsubscribeProjectAgentEventsMock.mockClear();
   showContextMenuFallbackMock.mockReset();
   withNativeMenuIconsMock.mockClear();
   subscribeMock.mockClear();
@@ -483,6 +486,45 @@ describe("wsNativeApi", () => {
       kind: "phase_started",
       phase: "worktree",
     });
+  });
+
+  it("ref-counts project-agent subscriptions so an earlier unmount keeps the stream", async () => {
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+    requestMock.mockResolvedValue(undefined);
+    const projectId = ProjectId.makeUnsafe("project-1");
+
+    await api.projectAgent.subscribe({ projectId });
+    await api.projectAgent.subscribe({ projectId });
+    expect(requestMock).toHaveBeenCalledExactlyOnceWith(WS_METHODS.subscribeProjectAgentEvents, {
+      projectId,
+    });
+
+    // The dialog's cleanup fires while the panel still holds a subscription —
+    // the transport stream must stay up.
+    await api.projectAgent.unsubscribe({ projectId });
+    expect(unsubscribeProjectAgentEventsMock).not.toHaveBeenCalled();
+
+    await api.projectAgent.unsubscribe({ projectId });
+    expect(unsubscribeProjectAgentEventsMock).toHaveBeenCalledExactlyOnceWith(projectId);
+  });
+
+  it("re-subscribes the project-agent stream after the last unsubscribe", async () => {
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+    requestMock.mockResolvedValue(undefined);
+    const projectId = ProjectId.makeUnsafe("project-1");
+
+    await api.projectAgent.subscribe({ projectId });
+    await api.projectAgent.unsubscribe({ projectId });
+    await api.projectAgent.subscribe({ projectId });
+
+    expect(
+      requestMock.mock.calls.filter(
+        ([method]) => method === WS_METHODS.subscribeProjectAgentEvents,
+      ),
+    ).toHaveLength(2);
+    expect(unsubscribeProjectAgentEventsMock).toHaveBeenCalledExactlyOnceWith(projectId);
   });
 
   it("forwards automation requests and events", async () => {

@@ -871,6 +871,12 @@ export class WsTransport {
         this.resetStreamCompletionRetry(streamKey);
         this.projectAgentSubscriptions.set(projectId, params);
         const client = await awaitWithAbort(this.getClient(), abortScope.signal);
+        // An unsubscribe that landed during the connect wait already dropped the
+        // registration (and a resubscribe replaced it) — only stream when this
+        // request is still the registered one.
+        if (this.projectAgentSubscriptions.get(projectId) !== params) {
+          return undefined as T;
+        }
         this.startProjectAgentEventStream(client, projectId, params);
         return undefined as T;
       }

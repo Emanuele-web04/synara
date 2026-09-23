@@ -4848,25 +4848,20 @@ export default function ChatView({
     scheduleComposerFocus();
   }, [scheduleComposerFocus, updateSettings]);
 
-  const projectPanelAttentionGroups = useMemo(() => {
-    const groups = new Map<ProjectId, GroupNeedsAttentionGroup>();
-    if (activeProject) {
-      groups.set(activeProject.id, {
-        projectId: activeProject.id,
-        coordinatorThreadId:
-          summariesByProjectId.get(activeProject.id)?.coordinatorThreadId ?? null,
-      });
-    }
-    return groups;
-  }, [activeProject, summariesByProjectId]);
+  // Only built when the Group panel applies — in every other chat view the
+  // needs-attention selector has no consumer and stays empty. No manual
+  // useMemo: the compiler owns this scope (see chatHotPath.compiler.test.ts).
+  const projectPanelAttentionGroups = new Map<ProjectId, GroupNeedsAttentionGroup>();
+  if (projectPanelEnabled && activeProject) {
+    projectPanelAttentionGroups.set(activeProject.id, {
+      projectId: activeProject.id,
+      coordinatorThreadId: summariesByProjectId.get(activeProject.id)?.coordinatorThreadId ?? null,
+    });
+  }
   const projectPanelNeedsAttention = useStore(
-    useMemo(
-      () =>
-        createGroupNeedsAttentionSelector({
-          groups: projectPanelAttentionGroups,
-        }),
-      [projectPanelAttentionGroups],
-    ),
+    createGroupNeedsAttentionSelector({
+      groups: projectPanelAttentionGroups,
+    }),
   );
   // "Use default" in group settings means the app default — the project's default
   // model first, then the user's default provider, never the active thread's model.
