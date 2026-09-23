@@ -564,9 +564,37 @@ function toolParamDisplayValue(names: ReadonlyArray<string | undefined>, value: 
   if (names.some((name) => name !== undefined && isSensitiveKey(name))) {
     return REDACTED_SENSITIVE_VALUE;
   }
+  if (typeof value === "string") {
+    return redactStructuredToolParamString(value);
+  }
   // No unredacted fallback serializer: a value JSON cannot encode is shown as
   // its string form instead.
-  return typeof value === "string" ? value : (safeStringifyToolParamValue(value) ?? String(value));
+  return safeStringifyToolParamValue(value) ?? String(value);
+}
+
+// Codex can supply already-formatted parameter strings. Inspect a complete JSON
+// object or array, but leave ordinary strings and JSON without secrets unchanged.
+function redactStructuredToolParamString(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
+    return value;
+  }
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (parsed === null || typeof parsed !== "object") {
+      return value;
+    }
+    let redacted = false;
+    const serialized = JSON.stringify(parsed, (key, entry: unknown) => {
+      if (isSensitiveKey(key)) {
+        redacted = true;
+      }
+      return redactSensitiveJsonFields(key, entry);
+    });
+    return redacted ? serialized : value;
+  } catch {
+    return value;
+  }
 }
 
 function safeStringifyToolParamValue(value: unknown): string | undefined {

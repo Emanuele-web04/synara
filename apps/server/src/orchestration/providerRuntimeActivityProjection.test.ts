@@ -688,6 +688,11 @@ describe("provider runtime activity projection", () => {
                 { name: "api_key", value: "sk-live-secret" },
                 { name: "target", value: "staging", display_name: "Target" },
                 { name: "options", value: { clientSecret: "live-secret", dryRun: true } },
+                {
+                  name: "headers",
+                  value: '{"Authorization":"Bearer live-secret","Accept":"application/json"}',
+                },
+                { name: "config", value: '{ "dryRun": true }' },
               ],
             },
           },
@@ -711,6 +716,11 @@ describe("provider runtime activity projection", () => {
         { name: "api_key", value: "[redacted]" },
         { name: "target", value: "staging", display_name: "Target" },
         { name: "options", value: '{"clientSecret":"[redacted]","dryRun":true}' },
+        {
+          name: "headers",
+          value: '{"Authorization":"[redacted]","Accept":"application/json"}',
+        },
+        { name: "config", value: '{ "dryRun": true }' },
       ],
     });
     expect(JSON.stringify([claudeApproval, codexApproval])).not.toMatch(/live-secret|ghp_live/);
