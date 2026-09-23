@@ -37,6 +37,7 @@ const api = vi.hoisted(() => {
       listDocuments: vi.fn(async () => ({ documents: [] })),
       listThreadIndex: vi.fn(async () => ({ threads: [] })),
       subscribe: vi.fn(async () => undefined),
+      unsubscribe: vi.fn(async () => undefined),
       onEvent: vi.fn(() => () => undefined),
       configure: vi.fn(),
       readDocument: vi.fn(async () => readDocumentResult),
