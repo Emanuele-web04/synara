@@ -6160,19 +6160,17 @@ export default function ChatView({
                     contentInsetBottomPx={composerTranscriptInsetPx}
                     contentInsetBottomClearancePx={composerOverlayBottomClearancePx}
                   />
-                  {showCoordinatorSuggestions ? (
-                    <CoordinatorSuggestions
-                      onOpenSettings={(section) => {
-                        setCoordinatorSettingsSection(section);
-                        setCoordinatorSettingsOpen(true);
-                      }}
-                    />
-                  ) : null}
-                  {/* In flow with the suggestions, not inside the floating
-                      composer overlay — there both would fight for the band
-                      above the gutter and the chips paint over the label. */}
+                  {/* The composer floats `bottom-full` over this trailing
+                      block, so the last in-flow element must reserve the
+                      same `pb-28` clearance CoordinatorSuggestions does or
+                      the composer surface covers its controls. */}
                   {isCoordinatorConversation && activeGroupSummary?.pausedAt ? (
-                    <div className={CHAT_COLUMN_GUTTER_CLASS_NAME}>
+                    <div
+                      className={cn(
+                        CHAT_COLUMN_GUTTER_CLASS_NAME,
+                        showCoordinatorSuggestions ? "pb-2" : "pb-28",
+                      )}
+                    >
                       <GroupPausedBanner
                         projectId={activeThread!.projectId}
                         onResume={async () => {
@@ -6190,6 +6188,14 @@ export default function ChatView({
                         }}
                       />
                     </div>
+                  ) : null}
+                  {showCoordinatorSuggestions ? (
+                    <CoordinatorSuggestions
+                      onOpenSettings={(section) => {
+                        setCoordinatorSettingsSection(section);
+                        setCoordinatorSettingsOpen(true);
+                      }}
+                    />
                   ) : null}
                 </div>
 
