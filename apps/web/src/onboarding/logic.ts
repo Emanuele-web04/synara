@@ -178,6 +178,12 @@ export function summarizeProviderSetup(
   return { enabled, connected, needsSignIn, notInstalled, detecting, checkFailed };
 }
 
+export function describeOnboardingAgentSummary(summary: ProviderSetupSummary): string {
+  if (summary.detecting > 0) return "Checking agents…";
+  if (summary.checkFailed > 0) return "Could not check all agents";
+  return `${summary.connected} agent${summary.connected === 1 ? "" : "s"} connected`;
+}
+
 export function toggleSelection<T>(selection: ReadonlySet<T>, id: T): ReadonlySet<T> {
   const next = new Set(selection);
   if (next.has(id)) {

@@ -28,6 +28,7 @@ import { CODE_THEME_OPTIONS } from "~/theme/theme.logic";
 import { ONBOARDING_INSET_CLASS_NAME } from "./layout";
 import {
   classifyProviderSetup,
+  describeOnboardingAgentSummary,
   isOnboardingSetupStep,
   nextOnboardingStep,
   ONBOARDING_STEPS,
@@ -98,6 +99,8 @@ function OnboardingFlow(props: {
       state: classifyProviderSetup({
         status: findProviderStatus(statuses, descriptor.kind),
         disabled: settings.disabledProviders.includes(descriptor.kind),
+        detecting: providerDetection.detecting,
+        detectionFailed: providerDetection.failed,
       }),
     })),
   );
@@ -105,7 +108,7 @@ function OnboardingFlow(props: {
     CODE_THEME_OPTIONS.find((option) => option.id === activeTheme.codeThemeId)?.label ??
     activeTheme.codeThemeId;
   const doneSummary = [
-    `${plural(providerSummary.connected, "agent")} connected`,
+    describeOnboardingAgentSummary(providerSummary),
     `${themeLabel} theme`,
     projectResults.length > 0
       ? `${plural(projectResults.length, "project")} added`

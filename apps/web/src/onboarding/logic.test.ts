@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   ONBOARDING_STEPS,
   classifyProviderSetup,
+  describeOnboardingAgentSummary,
   isOnboardingSetupStep,
   nextOnboardingStep,
   previousOnboardingStep,
@@ -258,6 +259,15 @@ describe("summarizeProviderSetup", () => {
       detecting: 1,
       checkFailed: 1,
     });
+  });
+
+  it("keeps the final welcome summary truthful until detection succeeds", () => {
+    const summaryFor = (state: "detecting" | "check-failed" | "connected") =>
+      describeOnboardingAgentSummary(summarizeProviderSetup([{ provider: "codex", state }]));
+
+    expect(summaryFor("detecting")).toBe("Checking agents…");
+    expect(summaryFor("check-failed")).toBe("Could not check all agents");
+    expect(summaryFor("connected")).toBe("1 agent connected");
   });
 });
 
