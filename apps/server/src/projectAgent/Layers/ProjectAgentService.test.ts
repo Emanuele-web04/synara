@@ -2,7 +2,9 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   AutomationId,
+  ProjectGoalId,
   ProjectId,
+  ProjectInboxEventId,
   ProjectTaskId,
   ThreadId,
   type OrchestrationCommand,
@@ -38,10 +40,65 @@ const limits = {
 };
 const now = "2026-09-20T00:00:00.000Z";
 
+const groupMemberThreadId = ThreadId.makeUnsafe("thread-group-member");
+const group2MemberThreadId = ThreadId.makeUnsafe("thread-group2-member");
+const foreignThreadId = ThreadId.makeUnsafe("thread-foreign-project");
+
 function makeTestLayer(options?: {
   readonly failFirstImport?: boolean;
   readonly shellLookupError?: boolean;
 }) {
+  const threadShells: Record<
+    string,
+    {
+      projectId: ProjectId;
+      title: string;
+      session: { status: string; updatedAt: string; lastError: string | null } | null;
+    }
+  > = {
+    [groupMemberThreadId]: {
+      projectId: groupId,
+      title: "Group member chat",
+      session: { status: "ready", updatedAt: now, lastError: null },
+    },
+    [group2MemberThreadId]: {
+      projectId: groupId2,
+      title: "Other group chat",
+      session: { status: "ready", updatedAt: now, lastError: null },
+    },
+    [foreignThreadId]: {
+      projectId: ordinaryId,
+      title: "Foreign thread",
+      session: null,
+    },
+  };
+  const getThreadShellById = (threadId: ThreadId) => {
+    const row = threadShells[threadId];
+    if (!row) return Effect.succeed(Option.none());
+    return Effect.succeed(
+      Option.some({
+        id: threadId,
+        projectId: row.projectId,
+        title: row.title,
+        modelSelection: null,
+        runtimeMode: "full-access",
+        interactionMode: "collaboration",
+        branch: null,
+        worktreePath: null,
+        workingDirectory: null,
+        envMode: "local",
+        messages: [],
+        latestTurn: null,
+        archivedAt: null,
+        deletedAt: null,
+        settledAt: null,
+        handoff: null,
+        session: row.session,
+        createdAt: now,
+        updatedAt: now,
+      }),
+    );
+  };
   const dispatched: OrchestrationCommand[] = [];
   const automationUpdates: Array<{ readonly id: string; readonly enabled?: boolean }> = [];
   let failFirstImport = options?.failFirstImport === true;
@@ -149,6 +206,11 @@ function makeTestLayer(options?: {
           }) as ReturnType<ProjectionSnapshotQuery["Service"]["getProjectShellsByIds"]>;
         },
         getThreadDetailById: () => Effect.succeed(Option.none()),
+        getThreadShellById,
+        getThreadShellsByIds: (threadIds: ReadonlyArray<ThreadId>) =>
+          Effect.forEach(threadIds, getThreadShellById).pipe(
+            Effect.map((options) => options.filter(Option.isSome).map((o) => o.value)),
+          ),
       } as unknown as ProjectionSnapshotQuery["Service"];
     }),
   );
@@ -175,6 +237,7 @@ function makeTestLayer(options?: {
       });
       return Effect.succeed({ id: input.id, prompt: "" });
     },
+    runNow: () => Effect.succeed({ run: { id: "run-test-1" } }),
   } as unknown as AutomationService["Service"]);
   return {
     dispatched,
@@ -826,5 +889,616 @@ it.effect("round-trips library hosting fields and rejects a relative libraryPath
     assert.equal(cleared.config?.libraryPath, undefined);
     assert.equal(cleared.config?.libraryRemoteUrl, undefined);
     assert.equal(cleared.config?.libraryPushOnChange, true);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("forbids a context packet across groups but allows own-group members (S1)", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    yield* service.configure(
+      {
+        requestId: "req-ctx-a",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    yield* service.configure(
+      {
+        requestId: "req-ctx-b",
+        projectId: groupId2,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    const own = yield* service.buildContextPacket(groupId, groupMemberThreadId);
+    assert.equal(own.projectId, groupId);
+    const cross = yield* Effect.exit(service.buildContextPacket(groupId, group2MemberThreadId));
+    assert.equal(cross._tag, "Failure");
+    const foreign = yield* Effect.exit(service.buildContextPacket(groupId, foreignThreadId));
+    assert.equal(foreign._tag, "Failure");
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("indexes routine group turns as non-wake and alert settles as wakeable", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    yield* service.configure(
+      {
+        requestId: "req-wake-setup",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    yield* service.ingestSettledThreadEvent({
+      threadId: groupMemberThreadId,
+      sourceEventId: "routine-turn-1",
+      eventType: "thread.turn-diff-completed",
+      createdAt: now,
+    });
+    const rows = yield* repository.listInboxAfter({ projectId: groupId, limit: 10 });
+    const routine = rows.find((row) => row.sourceEventId === "routine-turn-1");
+    assert.equal(routine?.eligibleWake, false);
+
+    const before = yield* repository.getCursor(groupId);
+    yield* service.ingestSettledThreadEvent({
+      threadId: groupMemberThreadId,
+      sourceEventId: "needs-user-1",
+      eventType: "thread.user-input-response-requested",
+      createdAt: "2026-09-20T00:01:00.000Z",
+    });
+    const after = yield* repository.listInboxAfter({ projectId: groupId, limit: 10 });
+    const alert = after.find((row) => row.sourceEventId === "needs-user-1");
+    assert.equal(alert?.eligibleWake, true);
+    // The alert dispatched a coordinator continuation through the automation.
+    const cursor = yield* repository.getCursor(groupId);
+    assert.equal(cursor.frozenFromInboxId === null || cursor.coordinatorBusy === false, true);
+    assert.equal(before.coordinatorBusy, false);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("resolves linked-repo workers through the task assignment", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    yield* service.configure(
+      {
+        requestId: "req-linked-setup",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    const linkedWorkerThreadId = ThreadId.makeUnsafe("thread-linked-worker");
+    const goalId = ProjectGoalId.makeUnsafe("goal-linked");
+    yield* repository.saveGoal(
+      {
+        id: goalId,
+        projectId: groupId,
+        objective: "Coordinate linked repos",
+        authorizationSource: "user",
+        scopeVersion: 1,
+        acceptanceCriteria: null,
+        limits,
+        status: "active",
+        continuationCount: 0,
+        workerCreationCount: 0,
+        authorizedAt: now,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+      },
+      null,
+    );
+    yield* repository.saveTask(
+      {
+        id: ProjectTaskId.makeUnsafe("task-linked"),
+        projectId: groupId,
+        goalId,
+        title: "Patch linked repo",
+        description: null,
+        acceptanceCriteria: null,
+        status: "running",
+        dependsOnTaskIds: [],
+        assignedThreadId: linkedWorkerThreadId,
+        repairCount: 0,
+        archivedAt: null,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+      },
+      null,
+    );
+    // No thread shell: the worker lives in the linked repo's project, not the
+    // group — it must still resolve as this group's worker.
+    const principal = yield* service.resolvePrincipalForThread(linkedWorkerThreadId);
+    assert.equal(principal.kind, "worker");
+    if (principal.kind === "worker") {
+      assert.equal(principal.projectId, groupId);
+      assert.equal(principal.taskId, ProjectTaskId.makeUnsafe("task-linked"));
+    }
+    yield* service.ingestSettledThreadEvent({
+      threadId: linkedWorkerThreadId,
+      sourceEventId: "linked-turn-1",
+      eventType: "thread.turn-diff-completed",
+      createdAt: "2026-09-20T00:02:00.000Z",
+    });
+    const rows = yield* repository.listInboxAfter({ projectId: groupId, limit: 10 });
+    const wake = rows.find((row) => row.sourceEventId === "linked-turn-1");
+    assert.equal(wake?.eligibleWake, true);
+    const report = yield* repository.getDocumentHead(
+      groupId,
+      `inbox/${linkedWorkerThreadId}/report.md`,
+    );
+    assert.equal(Option.isSome(report), true);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("blocks curated writes for group members and unmanaged threads", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    yield* service.configure(
+      {
+        requestId: "req-s5-setup",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    const member = {
+      kind: "group-member" as const,
+      threadId: groupMemberThreadId,
+      projectId: groupId,
+    };
+    const curated = yield* Effect.exit(
+      service.writeDocument(
+        {
+          requestId: "req-member-curated",
+          projectId: groupId,
+          logicalPath: "decisions.md",
+          content: "nope",
+        },
+        member,
+      ),
+    );
+    assert.equal(curated._tag, "Failure");
+    const otherInbox = yield* Effect.exit(
+      service.writeDocument(
+        {
+          requestId: "req-member-inbox",
+          projectId: groupId,
+          logicalPath: "inbox/thread-other/report.md",
+          content: "nope",
+        },
+        member,
+      ),
+    );
+    assert.equal(otherInbox._tag, "Failure");
+    const ownMemory = yield* service.writeDocument(
+      {
+        requestId: "req-member-memory",
+        projectId: groupId,
+        logicalPath: memoryThreadDocumentPath(groupMemberThreadId),
+        content: "remembered",
+      },
+      member,
+    );
+    assert.equal(ownMemory.logicalPath, memoryThreadDocumentPath(groupMemberThreadId));
+    const unmanaged = {
+      kind: "unmanaged" as const,
+      threadId: foreignThreadId,
+      projectId: groupId,
+    };
+    const unmanagedCurated = yield* Effect.exit(
+      service.writeDocument(
+        {
+          requestId: "req-unmanaged-curated",
+          projectId: groupId,
+          logicalPath: "decisions.md",
+          content: "nope",
+        },
+        unmanaged,
+      ),
+    );
+    assert.equal(unmanagedCurated._tag, "Failure");
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("resumes a frozen busy wake cursor instead of stalling forever", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    yield* service.configure(
+      {
+        requestId: "req-busy-setup",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    yield* repository.insertInboxEvent({
+      id: ProjectInboxEventId.makeUnsafe("inbox-busy-1"),
+      projectId: groupId,
+      sourceThreadId: groupMemberThreadId,
+      sourceEventId: "busy-1",
+      eventType: "worker.error",
+      taskId: null,
+      eligibleWake: true,
+      createdAt: "2026-09-20T00:03:00.000Z",
+    });
+    yield* repository.insertInboxEvent({
+      id: ProjectInboxEventId.makeUnsafe("inbox-busy-2"),
+      projectId: groupId,
+      sourceThreadId: groupMemberThreadId,
+      sourceEventId: "busy-2",
+      eventType: "worker.error",
+      taskId: null,
+      eligibleWake: true,
+      createdAt: "2026-09-20T00:03:30.000Z",
+    });
+    // Simulate the crash: the range was frozen and the busy flag left set.
+    yield* repository.saveCursor({
+      projectId: groupId,
+      processedThroughInboxId: null,
+      processedThroughCreatedAt: null,
+      frozenFromInboxId: "inbox-busy-1",
+      frozenToInboxId: "inbox-busy-2",
+      coordinatorBusy: true,
+      coordinatorBusySince: "2026-09-20T00:03:01.000Z",
+      updatedAt: "2026-09-20T00:03:01.000Z",
+    });
+    yield* service.reconcilePendingWakes();
+    const cursor = yield* repository.getCursor(groupId);
+    assert.equal(cursor.coordinatorBusy, false);
+    assert.equal(cursor.frozenFromInboxId, null);
+    assert.equal(cursor.processedThroughInboxId, "inbox-busy-2");
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("clears a bare busy cursor left by a crash before freezing", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    yield* service.configure(
+      {
+        requestId: "req-barebusy-setup",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    yield* repository.saveCursor({
+      projectId: groupId,
+      processedThroughInboxId: null,
+      processedThroughCreatedAt: null,
+      frozenFromInboxId: null,
+      frozenToInboxId: null,
+      coordinatorBusy: true,
+      coordinatorBusySince: "2026-09-20T00:04:00.000Z",
+      updatedAt: "2026-09-20T00:04:00.000Z",
+    });
+    yield* service.reconcilePendingWakes();
+    const cursor = yield* repository.getCursor(groupId);
+    assert.equal(cursor.coordinatorBusy, false);
+    assert.equal(cursor.coordinatorBusySince, null);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("keeps stored limits and captureEnabled when configure omits them", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const overview = yield* service.configure(
+      {
+        requestId: "req-limits-setup",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+        limits,
+        captureEnabled: false,
+      },
+      { kind: "user" },
+    );
+    assert.equal(overview.config?.limits.maxConcurrentWorkers, 2);
+    assert.equal(overview.config?.captureEnabled, false);
+    const updated = yield* service.configure(
+      {
+        requestId: "req-limits-update",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+        goal: "new goal",
+        expectedRevision: overview.config?.revision,
+      },
+      { kind: "user" },
+    );
+    assert.equal(updated.config?.limits.maxConcurrentWorkers, 2);
+    assert.equal(updated.config?.limits.maxWorkerCreationsPerGoal, 12);
+    assert.equal(updated.config?.captureEnabled, false);
+    assert.equal(updated.config?.goal, "new goal");
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("rejects cross-project task and evidence access", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* service.configure(
+      {
+        requestId: "req-xproj-setup",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    yield* service.configure(
+      {
+        requestId: "req-xproj-other",
+        projectId: groupId2,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    const goalId = ProjectGoalId.makeUnsafe("goal-xproj");
+    yield* repository.saveGoal(
+      {
+        id: goalId,
+        projectId: groupId2,
+        objective: "Other project goal",
+        authorizationSource: "user",
+        scopeVersion: 1,
+        acceptanceCriteria: null,
+        limits,
+        status: "active",
+        continuationCount: 0,
+        workerCreationCount: 0,
+        authorizedAt: now,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+      },
+      null,
+    );
+    const foreignTaskId = ProjectTaskId.makeUnsafe("task-foreign");
+    yield* repository.saveTask(
+      {
+        id: foreignTaskId,
+        projectId: groupId2,
+        goalId,
+        title: "Foreign task",
+        description: null,
+        acceptanceCriteria: null,
+        status: "running",
+        dependsOnTaskIds: [],
+        assignedThreadId: null,
+        repairCount: 0,
+        archivedAt: null,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+      },
+      null,
+    );
+    const evidence = yield* Effect.exit(
+      service.listEvidence({ projectId: groupId, taskId: foreignTaskId }, { kind: "user" }),
+    );
+    assert.equal(evidence._tag, "Failure");
+    const reported = yield* Effect.exit(
+      service.reportResult(
+        {
+          requestId: "req-xproj-report",
+          projectId: groupId,
+          taskId: foreignTaskId,
+          summary: "done",
+        },
+        {
+          kind: "coordinator" as const,
+          threadId: overview.config!.coordinatorThreadId,
+          projectId: groupId,
+        },
+      ),
+    );
+    assert.equal(reported._tag, "Failure");
+    const updated = yield* Effect.exit(
+      service.updateTask(
+        {
+          requestId: "req-xproj-update",
+          projectId: groupId,
+          taskId: foreignTaskId,
+          expectedRevision: 1,
+          title: "hijacked",
+        },
+        { kind: "user" },
+      ),
+    );
+    assert.equal(updated._tag, "Failure");
+    // A worker may not touch tasks that are not its own.
+    const otherWorker = yield* Effect.exit(
+      service.updateTask(
+        {
+          requestId: "req-worker-other",
+          projectId: groupId,
+          taskId: foreignTaskId,
+          expectedRevision: 1,
+          status: "running",
+        },
+        {
+          kind: "worker" as const,
+          threadId: ThreadId.makeUnsafe("thread-some-worker"),
+          projectId: groupId,
+          taskId: ProjectTaskId.makeUnsafe("task-not-this-one"),
+        },
+      ),
+    );
+    assert.equal(otherWorker._tag, "Failure");
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("routes a done update through the accept path and validates dependency projects", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    yield* service.configure(
+      {
+        requestId: "req-done-setup",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    const goalId = ProjectGoalId.makeUnsafe("goal-done");
+    yield* repository.saveGoal(
+      {
+        id: goalId,
+        projectId: groupId,
+        objective: "Done flow",
+        authorizationSource: "user",
+        scopeVersion: 1,
+        acceptanceCriteria: "evidence required",
+        limits,
+        status: "active",
+        continuationCount: 0,
+        workerCreationCount: 0,
+        authorizedAt: now,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+      },
+      null,
+    );
+    const taskId = ProjectTaskId.makeUnsafe("task-done");
+    yield* repository.saveTask(
+      {
+        id: taskId,
+        projectId: groupId,
+        goalId,
+        title: "Finish me",
+        description: null,
+        acceptanceCriteria: "needs evidence",
+        status: "running",
+        dependsOnTaskIds: [],
+        assignedThreadId: null,
+        repairCount: 0,
+        archivedAt: null,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+      },
+      null,
+    );
+    // done without evidence must fail — it goes through the accept path.
+    const noEvidence = yield* Effect.exit(
+      service.updateTask(
+        {
+          requestId: "req-done-noev",
+          projectId: groupId,
+          taskId,
+          expectedRevision: 1,
+          status: "done",
+        },
+        { kind: "user" },
+      ),
+    );
+    assert.equal(noEvidence._tag, "Failure");
+    const task = yield* repository.getTask(taskId);
+    assert.equal(Option.isSome(task) && task.value.status === "running", true);
+    // Cross-project dependsOnTaskIds are rejected.
+    yield* service.configure(
+      {
+        requestId: "req-done-xdep",
+        projectId: groupId2,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    const foreignTask = ProjectTaskId.makeUnsafe("task-other-project");
+    yield* repository.saveGoal(
+      {
+        id: ProjectGoalId.makeUnsafe("goal-xdep"),
+        projectId: groupId2,
+        objective: "x",
+        authorizationSource: "user",
+        scopeVersion: 1,
+        acceptanceCriteria: null,
+        limits,
+        status: "active",
+        continuationCount: 0,
+        workerCreationCount: 0,
+        authorizedAt: now,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+      },
+      null,
+    );
+    yield* repository.saveTask(
+      {
+        id: foreignTask,
+        projectId: groupId2,
+        goalId: ProjectGoalId.makeUnsafe("goal-xdep"),
+        title: "foreign dep",
+        description: null,
+        acceptanceCriteria: null,
+        status: "running",
+        dependsOnTaskIds: [],
+        assignedThreadId: null,
+        repairCount: 0,
+        archivedAt: null,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+      },
+      null,
+    );
+    const badDep = yield* Effect.exit(
+      service.updateTask(
+        {
+          requestId: "req-done-baddep",
+          projectId: groupId,
+          taskId,
+          expectedRevision: 1,
+          dependsOnTaskIds: [foreignTask],
+        },
+        { kind: "user" },
+      ),
+    );
+    assert.equal(badDep._tag, "Failure");
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("configure reuses the existing coordinator thread on retry", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const first = yield* service.configure(
+      {
+        requestId: "req-idem-1",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    const second = yield* service.configure(
+      {
+        requestId: "req-idem-2",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+        expectedRevision: first.config?.revision,
+      },
+      { kind: "user" },
+    );
+    assert.equal(second.config?.coordinatorThreadId, first.config?.coordinatorThreadId);
+    assert.equal(
+      harness.dispatched.filter((command) => command.type === "thread.create").length,
+      1,
+    );
   }).pipe(Effect.provide(harness.layer));
 });

@@ -103,7 +103,11 @@ export function canWriteMemoryDocument(input: {
   }
   const threadId = memoryThreadIdFromDocumentPath(input.logicalPath);
   if (threadId === null) return false;
-  if (input.principalKind !== "worker" && input.principalKind !== "coordinator") {
+  if (
+    input.principalKind !== "worker" &&
+    input.principalKind !== "coordinator" &&
+    input.principalKind !== "group-member"
+  ) {
     return false;
   }
   return input.principalThreadId === threadId;
@@ -198,19 +202,32 @@ export function truncateToContextBudget(
 export function encodeProjectAgentListCursor(input: {
   readonly createdAt: string;
   readonly id: string;
+  readonly sequence?: number;
 }): string {
-  return Buffer.from(`${input.createdAt}\t${input.id}`, "utf8").toString("base64url");
+  const sequence = input.sequence === undefined ? "" : String(input.sequence);
+  return Buffer.from(`${input.createdAt}\t${input.id}\t${sequence}`, "utf8").toString("base64url");
 }
 
-export function decodeProjectAgentListCursor(
-  cursor: string | undefined,
-): { readonly createdAt: string; readonly id: string } | null {
+export function decodeProjectAgentListCursor(cursor: string | undefined): {
+  readonly createdAt: string;
+  readonly id: string;
+  readonly sequence?: number;
+} | null {
   if (!cursor) return null;
   try {
     const decoded = Buffer.from(cursor, "base64url").toString("utf8");
     const split = decoded.indexOf("\t");
     if (split <= 0) return null;
-    return { createdAt: decoded.slice(0, split), id: decoded.slice(split + 1) };
+    const remainder = decoded.slice(split + 1);
+    const sequenceSplit = remainder.indexOf("\t");
+    const id = sequenceSplit === -1 ? remainder : remainder.slice(0, sequenceSplit);
+    const sequenceRaw = sequenceSplit === -1 ? "" : remainder.slice(sequenceSplit + 1);
+    const sequence = sequenceRaw.length > 0 ? Number(sequenceRaw) : undefined;
+    return {
+      createdAt: decoded.slice(0, split),
+      id,
+      ...(sequence !== undefined && Number.isFinite(sequence) ? { sequence } : {}),
+    };
   } catch {
     return null;
   }

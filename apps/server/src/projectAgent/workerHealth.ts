@@ -4,19 +4,31 @@ export function isFailedWorkerSessionStatus(status: string | null | undefined): 
   return status === "error" || status === "interrupted" || status === "stopped";
 }
 
+// A worker is a thread the coordinator assigned to a task — ordinary group
+// chat threads stay indexed for context but are never reported on or woken.
 export function isManagedWorkerThread(input: {
   readonly threadId: string;
   readonly coordinatorThreadId: string;
-  readonly index: ReadonlyArray<{
-    readonly threadId: string;
-    readonly excluded: boolean;
-    readonly archived: boolean;
-  }>;
+  readonly assignedThreadIds: ReadonlySet<string>;
 }): boolean {
   if (input.threadId === input.coordinatorThreadId) return false;
-  return input.index.some(
-    (entry) => entry.threadId === input.threadId && !entry.excluded && !entry.archived,
-  );
+  return input.assignedThreadIds.has(input.threadId);
+}
+
+// Settle events that should wake the coordinator even from a non-worker group
+// thread: a thread ending in error or needing the user is actionable; a normal
+// user turn in a group chat is not.
+const WORKER_ALERT_EVENT_TYPES = new Set([
+  "worker.error",
+  "worker.interrupted",
+  "worker.missing",
+  "worker.stopped",
+  "thread.approval-response-requested",
+  "thread.user-input-response-requested",
+]);
+
+export function isWorkerAlertEvent(eventType: string): boolean {
+  return WORKER_ALERT_EVENT_TYPES.has(eventType);
 }
 
 export function formatWorkerWatchLine(input: {
@@ -98,7 +110,6 @@ export function formatWorkerSettlementReport(input: {
   readonly status: string | null | undefined;
   readonly lastError: string | null | undefined;
   readonly lastAssistantText: string | null | undefined;
-  readonly createdAt: string;
 }): string {
   const outcome = classifyWorkerSettlement({
     eventType: input.eventType,
@@ -106,6 +117,8 @@ export function formatWorkerSettlementReport(input: {
   });
   const error = input.lastError?.trim() || "none";
   const lastReply = input.lastAssistantText?.trim() || "(none)";
+  // No volatile fields (timestamps): identical thread state must produce the
+  // identical report so the unchanged-skip in upsertSystemDocument matches.
   return [
     "# Worker report",
     "",
@@ -114,7 +127,6 @@ export function formatWorkerSettlementReport(input: {
     `- Event: ${input.eventType}`,
     `- Status: ${input.status ?? "unknown"}`,
     `- Outcome: ${outcome}`,
-    `- At: ${input.createdAt}`,
     "",
     "## Error",
     "",

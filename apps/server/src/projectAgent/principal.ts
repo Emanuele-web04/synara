@@ -20,6 +20,11 @@ export type ProjectAgentPrincipal =
       readonly taskId: ProjectTaskId;
     }
   | {
+      readonly kind: "group-member";
+      readonly threadId: ThreadId;
+      readonly projectId: ProjectId;
+    }
+  | {
       readonly kind: "unmanaged";
       readonly threadId: ThreadId;
       readonly projectId: ProjectId;
