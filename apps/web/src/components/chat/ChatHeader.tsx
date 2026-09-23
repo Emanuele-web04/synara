@@ -22,7 +22,6 @@ import GitActionsControl from "../GitActionsControl";
 import {
   ArrowRightIcon,
   CheckIcon,
-  HandoffIcon,
   HistoryIcon,
   MessageCircleIcon,
   PanelRightCloseIcon,
@@ -33,7 +32,6 @@ import {
 import { formatRelativeTime } from "~/lib/relativeTime";
 import {
   CHAT_HEADER_TOGGLE_CLASS_NAME,
-  ChatHeaderButton,
   ChatHeaderIconButton,
   SurfaceChipIcon,
   SurfaceTabChip,
@@ -87,9 +85,9 @@ interface ChatHeaderProps {
   className?: string;
   hideSidebarControls?: boolean;
   hideHandoffControls?: boolean;
-  // Empty-draft landings hide all thread-scoped chrome (title, Hand off, project
-  // scripts, git/open-in) — the chat hasn't started yet — keeping only the sidebar
-  // cluster plus the Environment and right-panel toggles.
+  // Empty-draft landings hide all thread-scoped chrome (title, handoff badge,
+  // project scripts, git/open-in) — the chat hasn't started yet — keeping only
+  // the sidebar cluster plus the Environment and right-panel toggles.
   minimalChrome?: boolean;
   isGitRepo: boolean;
   openInTarget: string | null;
@@ -99,9 +97,6 @@ interface ChatHeaderProps {
   availableEditors: ReadonlyArray<EditorId>;
   diffToggleShortcutLabel: string | null;
   handoffBadgeLabel: string | null;
-  handoffActionLabel: string;
-  handoffDisabled: boolean;
-  handoffActionTargetProviders: ReadonlyArray<ProviderKind>;
   handoffBadgeSourceProvider: ProviderKind | null;
   handoffBadgeTargetProvider: ProviderKind | null;
   gitCwd: string | null;
@@ -149,7 +144,6 @@ interface ChatHeaderProps {
   onDeleteProjectScript: (scriptId: string) => Promise<void>;
   onToggleDiff: () => void;
   onRegisterCommitAndPushTrigger?: (trigger: (() => void) | null) => void;
-  onCreateHandoff: (targetProvider: ProviderKind) => void;
   onNavigateToThread: (threadId: ThreadId) => void;
   onRenameThread: () => void;
   onCloseThreadPane?: () => void;
@@ -524,9 +518,6 @@ export function ChatHeader({
   availableEditors,
   diffToggleShortcutLabel,
   handoffBadgeLabel,
-  handoffActionLabel,
-  handoffDisabled,
-  handoffActionTargetProviders,
   handoffBadgeSourceProvider,
   handoffBadgeTargetProvider,
   gitCwd,
@@ -551,7 +542,6 @@ export function ChatHeader({
   onDeleteProjectScript,
   onToggleDiff,
   onRegisterCommitAndPushTrigger,
-  onCreateHandoff,
   onNavigateToThread,
   onRenameThread,
   onCloseThreadPane,
@@ -803,40 +793,6 @@ export function ChatHeader({
         {!minimalChrome && !hideHandoffControls && !environment ? (
           <ProviderUsageMenuControl provider={activeProvider} />
         ) : null}
-        {!minimalChrome && !hideHandoffControls ? (
-          <Menu modal={false}>
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <MenuTrigger
-                    render={
-                      <ChatHeaderButton
-                        type="button"
-                        tone="outline"
-                        className={compact ? "gap-1" : "gap-1.5"}
-                        aria-label={handoffActionLabel}
-                        disabled={handoffDisabled || handoffActionTargetProviders.length === 0}
-                      />
-                    }
-                  >
-                    <HandoffIcon className="size-[1em] shrink-0 opacity-80" />
-                    {!compact ? <span className="truncate font-normal">Hand off</span> : null}
-                  </MenuTrigger>
-                }
-              />
-              <TooltipPopup side="bottom">{handoffActionLabel}</TooltipPopup>
-            </Tooltip>
-            <ComposerPickerMenuPopup align="end" side="bottom" className="w-48 min-w-48">
-              {handoffActionTargetProviders.map((provider) => (
-                <MenuItem key={provider} onClick={() => onCreateHandoff(provider)}>
-                  {/* opacity-100 opts brand icons out of the option row's 80% icon dim. */}
-                  {renderProviderIcon(provider, "size-3.5 shrink-0 opacity-100")}
-                  <span>Handoff to {PROVIDER_DISPLAY_NAMES[provider]}</span>
-                </MenuItem>
-              ))}
-            </ComposerPickerMenuPopup>
-          </Menu>
-        ) : null}
         {!minimalChrome && activeProjectScripts ? (
           <ProjectScriptsControl
             scripts={activeProjectScripts}
@@ -909,7 +865,7 @@ export function ChatHeader({
         ) : (
           <>
             {/* Open in editor: dedicated split-button with an editor switcher; the project
-                action control now lives beside Hand off as its own project command surface. */}
+                action control sits beside it as its own project command surface. */}
             {!minimalChrome && activeProjectName ? (
               <OpenInPicker
                 keybindings={keybindings}

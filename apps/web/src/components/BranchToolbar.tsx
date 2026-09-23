@@ -1,6 +1,6 @@
 // FILE: BranchToolbar.tsx
 // Purpose: Renders the chat thread's compact workspace controls, including the
-// local usage popover, inline workspace handoff actions, and runtime access toggle.
+// local usage popover, inline workspace environment picker, and runtime access toggle.
 import type {
   ProviderKind,
   ProviderModelDescriptor,
@@ -116,9 +116,6 @@ export interface BranchToolbarProps {
   onEnvModeChange: (mode: EnvMode) => void;
   envLocked: boolean;
   threadDetailReady: boolean;
-  onHandoffToWorktree?: () => void;
-  onHandoffToLocal?: () => void;
-  handoffBusy?: boolean;
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
   // `toolbar` renders the compact composer-footer row; `panel` stacks the env and branch
@@ -254,16 +251,12 @@ export default function BranchToolbar({
   onEnvModeChange,
   envLocked,
   threadDetailReady,
-  onHandoffToWorktree,
-  onHandoffToLocal,
-  handoffBusy: handoffBusyProp,
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
   variant: variantProp,
   showBranchSelector: showBranchSelectorProp,
   fixedLocalWorkspaceCwd,
 }: BranchToolbarProps) {
-  const handoffBusy = handoffBusyProp ?? false;
   const variant = variantProp ?? "toolbar";
   const showBranchSelector = showBranchSelectorProp ?? true;
   const isPanel = variant === "panel";
@@ -433,16 +426,6 @@ export default function BranchToolbar({
     ],
   );
 
-  const canHandoffToWorktree = Boolean(
-    !usesFixedLocalWorkspace &&
-    hasServerThread &&
-    envLocked &&
-    !activeWorktreePath &&
-    effectiveEnvMode === "local",
-  );
-  const canHandoffToLocal = Boolean(
-    !usesFixedLocalWorkspace && hasServerThread && activeWorktreePath,
-  );
   const canSwitchToWorktree = Boolean(
     !usesFixedLocalWorkspace && !envLocked && !activeWorktreePath && effectiveEnvMode === "local",
   );
@@ -476,11 +459,6 @@ export default function BranchToolbar({
             environmentPresentation={environmentPresentation}
             onEnvModeChange={onEnvModeChange}
             canSwitchToWorktree={canSwitchToWorktree}
-            canHandoffToLocal={canHandoffToLocal}
-            canHandoffToWorktree={canHandoffToWorktree}
-            onHandoffToLocal={onHandoffToLocal}
-            onHandoffToWorktree={onHandoffToWorktree}
-            handoffBusy={handoffBusy}
             isPanel={isPanel}
           >
             {/* Rate limits are noise while drafting a new chat — no session has run yet. */}

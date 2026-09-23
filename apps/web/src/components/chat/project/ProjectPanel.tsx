@@ -482,7 +482,7 @@ function ProjectContextFile({
           text={body}
           cwd={undefined}
           isStreaming={false}
-          className={ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME}
+          className={cn(ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME, "pull-request-prose")}
         />
       ) : (
         <p className="text-[12px] text-muted-foreground">Nothing here yet.</p>
