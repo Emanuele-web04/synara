@@ -8,7 +8,15 @@
 // `<betaHome>/import-result.json`, which this module reads for the UI.
 
 import { spawn, execFileSync } from "node:child_process";
-import { existsSync, readFileSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  readFileSync,
+  mkdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, isAbsolute, join, resolve } from "node:path";
 
@@ -70,12 +78,38 @@ interface BetaChannelDeps {
   /** Stable's own executable and data home, handed to beta for the way back. */
   readonly stableExecutablePath?: string | undefined;
   readonly stableHomeDir?: string | undefined;
+  /** Beta only: the running bundle is a packaged `Synara Beta.app` main may trash. */
+  readonly canTrashOwnBundle?: boolean | undefined;
   /** Environment beta was launched with; read for the stable handoff (tests). */
   readonly env?: NodeJS.ProcessEnv | undefined;
   /** Injectable installer (tests). Defaults to the real feed install. */
   readonly install?: (
     onProgress: (progress: DesktopBetaInstallProgress) => void,
   ) => Promise<string>;
+}
+
+function isFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Spawns a detached app and resolves once it has actually started. Spawn
+ * failures (ENOENT, EACCES) arrive asynchronously as an `error` event; without
+ * a listener they would crash the main process.
+ */
+export function spawnDetached(command: string, env: NodeJS.ProcessEnv): Promise<void> {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn(command, [], { detached: true, stdio: "ignore", env });
+    child.once("error", rejectPromise);
+    child.once("spawn", () => {
+      child.unref();
+      resolvePromise();
+    });
+  });
 }
 
 /** Per-process overrides that belong to the launching app, never the launched one. */
@@ -89,6 +123,8 @@ const LAUNCHER_ONLY_ENV_KEYS = [
   "SYNARA_DESKTOP_FLAVOR",
   "VITE_DEV_SERVER_URL",
   "ELECTRON_RUN_AS_NODE",
+  SYNARA_STABLE_EXECUTABLE_ENV,
+  SYNARA_STABLE_HOME_ENV,
 ];
 
 function withoutLauncherOverrides(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -136,14 +172,14 @@ export function detectStableExecutable(
   env: NodeJS.ProcessEnv = process.env,
 ): string | null {
   const handedOver = env[SYNARA_STABLE_EXECUTABLE_ENV]?.trim();
-  if (handedOver && isAbsolute(handedOver) && existsSync(handedOver)) return handedOver;
+  if (handedOver && isAbsolute(handedOver) && isFile(handedOver)) return handedOver;
   if (platform === "darwin") {
     for (const appPath of [
       `/Applications/${STABLE_MAC_APP_NAME}`,
       join(homeDir, "Applications", STABLE_MAC_APP_NAME),
     ]) {
       const executable = join(appPath, "Contents", "MacOS", STABLE_MAC_EXECUTABLE_NAME);
-      if (existsSync(executable)) return executable;
+      if (isFile(executable)) return executable;
     }
     return null;
   }
@@ -154,7 +190,7 @@ export function detectStableExecutable(
         "InstallLocation",
       );
       const executable = installLocation ? join(installLocation, STABLE_WINDOWS_EXE_NAME) : null;
-      if (executable && existsSync(executable)) return executable;
+      if (executable && isFile(executable)) return executable;
     }
   }
   return null;
@@ -354,28 +390,19 @@ export function writeBetaImportRequest(input: {
  * re-activating a different copy, and the env scrub keeps stable's own data
  * overrides from leaking into the beta process.
  */
-export function launchBetaInstall(
+export async function launchBetaInstall(
   detection: BetaInstallDetection,
   platform: NodeJS.Platform = process.platform,
   env?: NodeJS.ProcessEnv,
-): void {
+): Promise<void> {
   if (!detection.installed || !detection.executablePath) {
     throw new Error("Synara Beta is not installed");
   }
-  if (platform === "darwin") {
-    const executable = join(detection.installPath!, "Contents", "MacOS", BETA_MAC_EXECUTABLE_NAME);
-    spawn(executable, [], {
-      detached: true,
-      stdio: "ignore",
-      env: env ?? process.env,
-    }).unref();
-    return;
-  }
-  spawn(detection.executablePath, [], {
-    detached: true,
-    stdio: "ignore",
-    env: env ?? process.env,
-  }).unref();
+  const executable =
+    platform === "darwin"
+      ? join(detection.installPath!, "Contents", "MacOS", BETA_MAC_EXECUTABLE_NAME)
+      : detection.executablePath;
+  await spawnDetached(executable, env ?? process.env);
 }
 
 const action = (
@@ -420,7 +447,7 @@ export class DesktopBetaChannel {
    * Beta side of "Switch back to Synara": opens stable with its own data home.
    * Beta data is never copied back; the caller quits beta once this succeeds.
    */
-  leave(): DesktopBetaActionResult {
+  async leave(): Promise<DesktopBetaActionResult> {
     if (this.deps.flavor !== "beta") {
       return action(false, "not-supported", "Switching back is only available from Synara Beta.");
     }
@@ -429,11 +456,7 @@ export class DesktopBetaChannel {
       return action(false, "not-installed", "Synara isn't installed on this computer.");
     }
     try {
-      spawn(executable, [], {
-        detached: true,
-        stdio: "ignore",
-        env: stableLaunchEnvironment(this.deps.env ?? process.env),
-      }).unref();
+      await spawnDetached(executable, stableLaunchEnvironment(this.deps.env ?? process.env));
       return action(true);
     } catch (error) {
       return action(false, "launch-failed", error instanceof Error ? error.message : String(error));
@@ -449,7 +472,7 @@ export class DesktopBetaChannel {
       supported: true,
       flavor: this.deps.flavor,
       stableInstalled: stableExecutable !== null,
-      canMoveBetaToTrash: this.deps.flavor === "beta" && this.deps.platform === "darwin",
+      canMoveBetaToTrash: this.deps.flavor === "beta" && this.deps.canTrashOwnBundle === true,
       stableDownloadUrl: SYNARA_STABLE_RELEASES_URL,
       installed: detection.installed,
       version: detection.version,
@@ -463,7 +486,7 @@ export class DesktopBetaChannel {
   }
 
   /** Launch beta as-is; refuses only when the install is missing. */
-  launch(): DesktopBetaActionResult {
+  async launch(): Promise<DesktopBetaActionResult> {
     if (this.deps.flavor !== "production") {
       return action(false, "not-supported", "Beta handoff is only available from stable Synara.");
     }
@@ -472,7 +495,7 @@ export class DesktopBetaChannel {
       return action(false, "not-installed", "Synara Beta is not installed yet.");
     }
     try {
-      launchBetaInstall(detection, this.deps.platform, this.launchEnv());
+      await launchBetaInstall(detection, this.deps.platform, this.launchEnv());
       return action(true);
     } catch (error) {
       return action(false, "launch-failed", error instanceof Error ? error.message : String(error));
@@ -566,7 +589,7 @@ export class DesktopBetaChannel {
         sourceHomeDir,
       });
       this.installProgress = { phase: "opening", percent: null };
-      launchBetaInstall(detection, this.deps.platform, this.launchEnv());
+      await launchBetaInstall(detection, this.deps.platform, this.launchEnv());
       this.installProgress = null;
       return action(true);
     } catch (error) {

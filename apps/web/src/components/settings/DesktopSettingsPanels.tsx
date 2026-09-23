@@ -459,7 +459,12 @@ function LeaveBetaDialog({
   async function leave() {
     setPending(true);
     try {
-      const result = await onLeave(canMoveToTrash && moveToTrash);
+      const result = await onLeave(canMoveToTrash && moveToTrash).catch(
+        (error: unknown): DesktopBetaActionResult => ({
+          ok: false,
+          message: error instanceof Error ? error.message : String(error),
+        }),
+      );
       if (!result.ok) {
         toastManager.add({
           type: "warning",
@@ -479,7 +484,8 @@ function LeaveBetaDialog({
         <AlertDialogHeader>
           <AlertDialogTitle>Switch back to Synara?</AlertDialogTitle>
           <AlertDialogDescription>
-            Synara opens with the chats and settings it had before you tried Beta, and Beta closes.
+            Synara opens with the chats and settings it had before you tried Beta. Beta closes, and
+            any chats still running in Beta stop.
           </AlertDialogDescription>
           <AlertDialogDescription>
             Anything you did in Beta stays in Beta. It can't be moved into Synara, because Beta can

@@ -138,6 +138,8 @@ export interface BetaFeedLocation {
 
 export type FetchText = (url: string) => Promise<string>;
 
+const FEED_IDLE_TIMEOUT_MS = 30_000;
+
 /**
  * HTTPS everywhere; plain HTTP is accepted only for loopback hosts so a local
  * demo feed can serve the manifest without a certificate.
@@ -149,16 +151,21 @@ function feedGet(
 ): ReturnType<typeof httpsGet> {
   const parsed = new URL(url);
   const isLoopback = ["127.0.0.1", "localhost", "::1", "[::1]"].includes(parsed.hostname);
-  if (parsed.protocol === "http:") {
-    if (!isLoopback) {
-      throw new Error(`Refusing plain-HTTP beta feed for non-loopback host ${parsed.hostname}.`);
-    }
-    return httpGet(url, options, onResponse) as ReturnType<typeof httpsGet>;
+  if (parsed.protocol === "http:" && !isLoopback) {
+    throw new Error(`Refusing plain-HTTP beta feed for non-loopback host ${parsed.hostname}.`);
   }
-  if (parsed.protocol !== "https:") {
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new Error(`Unsupported beta feed protocol ${parsed.protocol}.`);
   }
-  return httpsGet(url, options, onResponse);
+  const request =
+    parsed.protocol === "http:"
+      ? (httpGet(url, options, onResponse) as ReturnType<typeof httpsGet>)
+      : httpsGet(url, options, onResponse);
+  // Idle timeout: a stalled connection fails the install instead of pinning it forever.
+  request.setTimeout(FEED_IDLE_TIMEOUT_MS, () => {
+    request.destroy(new Error(`Timed out downloading ${url}. Try again.`));
+  });
+  return request;
 }
 
 /** Default fetch over HTTPS, following GitHub's release-asset redirects. */

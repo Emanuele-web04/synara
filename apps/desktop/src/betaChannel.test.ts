@@ -21,7 +21,19 @@ vi.mock("node:child_process", async (importOriginal) => {
         command: String(args[0]),
         env: (args[2] as { env?: NodeJS.ProcessEnv } | undefined)?.env,
       });
-      return { unref: () => {}, on: () => {}, pid: 4321 };
+      const child = {
+        unref: () => {},
+        on: () => child,
+        once: (event: string, listener: (error?: Error) => void) => {
+          const asyncFailure = String(args[0]).includes("async-fail");
+          if (event === (asyncFailure ? "error" : "spawn")) {
+            queueMicrotask(() => listener(asyncFailure ? new Error("spawn EACCES") : undefined));
+          }
+          return child;
+        },
+        pid: 4321,
+      };
+      return child;
     },
   };
 });
@@ -79,7 +91,7 @@ describe("DesktopBetaChannel", () => {
   it("reports unsupported actions on non-production flavors", async () => {
     const root = makeRoot();
     const beta = makeChannel(root, "beta");
-    expect(beta.launch().ok).toBe(false);
+    expect((await beta.launch()).ok).toBe(false);
     expect((await beta.importAndLaunch(root)).error).toBe("not-supported");
     expect(beta.getState().flavor).toBe("beta");
   });
@@ -388,7 +400,7 @@ describe("switching back to stable", () => {
     expect([executable, "/Applications/Synara.app/Contents/MacOS/Synara"]).toContain(found);
   });
 
-  it("leave opens stable with its own home and reports it in state", () => {
+  it("leave opens stable with its own home and reports it in state", async () => {
     const root = makeRoot();
     const executable = fakeStableExecutable(root);
     const env = {
@@ -396,34 +408,61 @@ describe("switching back to stable", () => {
       [SYNARA_STABLE_HOME_ENV]: join(root, "stable-home"),
       [SYNARA_DESKTOP_SMOKE_USER_DATA_ENV]: join(root, "beta-userdata"),
     };
-    const channel = makeChannel(root, "beta", { platform: "darwin", env });
+    const channel = makeChannel(root, "beta", { platform: "darwin", env, canTrashOwnBundle: true });
     const state = channel.getState();
     expect(state.stableInstalled).toBe(true);
     expect(state.canMoveBetaToTrash).toBe(true);
     expect(state.stableDownloadUrl).toContain("releases/latest");
 
-    expect(channel.leave()).toEqual({ ok: true });
+    expect(await channel.leave()).toEqual({ ok: true });
     const last = spawnCalls.at(-1);
     expect(last?.command).toBe(executable);
     expect(last?.env?.SYNARA_HOME).toBe(join(root, "stable-home"));
     expect(last?.env?.[SYNARA_DESKTOP_SMOKE_USER_DATA_ENV]).toBeUndefined();
   });
 
-  it("leave reports not-installed when stable cannot be found", () => {
+  it("leave reports not-installed when stable cannot be found", async () => {
     const root = makeRoot();
     const channel = makeChannel(root, "beta", { env: {} });
     expect(channel.getState().stableInstalled).toBe(false);
-    expect(channel.leave().error).toBe("not-installed");
+    expect((await channel.leave()).error).toBe("not-installed");
   });
 
-  it("leave is refused outside beta", () => {
+  it("leave is refused outside beta", async () => {
     const root = makeRoot();
     const executable = fakeStableExecutable(root);
     const channel = makeChannel(root, "production", {
       env: { [SYNARA_STABLE_EXECUTABLE_ENV]: executable },
     });
-    expect(channel.leave().error).toBe("not-supported");
+    expect((await channel.leave()).error).toBe("not-supported");
     expect(channel.getState().stableInstalled).toBe(false);
     expect(channel.getState().canMoveBetaToTrash).toBe(false);
+  });
+
+  it("does not offer the Trash step unless main says the bundle is trashable", () => {
+    const root = makeRoot();
+    expect(makeChannel(root, "beta", { platform: "darwin" }).getState().canMoveBetaToTrash).toBe(
+      false,
+    );
+  });
+
+  it("detectStableExecutable rejects a handed-over directory", () => {
+    const root = makeRoot();
+    expect(
+      detectStableExecutable("linux", root, { [SYNARA_STABLE_EXECUTABLE_ENV]: root }),
+    ).toBeNull();
+  });
+
+  it("reports an async spawn failure instead of crashing", async () => {
+    const root = makeRoot();
+    const executable = join(root, "async-fail-stable");
+    writeFileSync(executable, "");
+    const channel = makeChannel(root, "beta", {
+      env: { [SYNARA_STABLE_EXECUTABLE_ENV]: executable },
+    });
+    const result = await channel.leave();
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("launch-failed");
+    expect(result.message).toContain("EACCES");
   });
 });

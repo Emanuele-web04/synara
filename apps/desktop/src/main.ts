@@ -366,9 +366,12 @@ const desktopFlavor = resolveSynaraDesktopRuntimeFlavor({
   allowDevelopmentOverride: isSourceDesktopBuild,
 });
 const desktopIdentity = synaraDesktopIdentity(desktopFlavor);
+// Beta never honors SYNARA_HOME: a globally exported stable home would make
+// beta open (and migrate) stable's database.
 const BASE_DIR =
-  (desktopFlavor === "beta" ? process.env.SYNARA_BETA_HOME?.trim() : undefined) ||
-  process.env.SYNARA_HOME?.trim() ||
+  (desktopFlavor === "beta"
+    ? process.env.SYNARA_BETA_HOME?.trim()
+    : process.env.SYNARA_HOME?.trim()) ||
   Path.join(OS.homedir(), desktopIdentity.defaultHomeDirectoryName);
 const STATE_DIR = Path.join(BASE_DIR, "userdata");
 const DESKTOP_WINDOW_STATE_PATH = Path.join(STATE_DIR, "desktop-window-state.json");
@@ -4769,6 +4772,20 @@ async function confirmRunningChatsThenQuit(reason: string): Promise<void> {
   requestGracefulAppQuit(reason);
 }
 
+function ownMacAppBundlePath(): string {
+  return Path.resolve(process.execPath, "..", "..", "..");
+}
+
+/** Only ever trash the packaged beta bundle this process runs from. */
+function isTrashableBetaBundle(): boolean {
+  return (
+    desktopFlavor === "beta" &&
+    process.platform === "darwin" &&
+    app.isPackaged &&
+    Path.basename(ownMacAppBundlePath()) === `${APP_DISPLAY_NAME}.app`
+  );
+}
+
 function requestGracefulAppQuit(reason: string): void {
   if (isUpdaterInstallPreparing) {
     deferDesktopQuitUntilUpdaterSettles(reason);
@@ -5124,6 +5141,7 @@ function registerIpcHandlers(): void {
     betaUserDataDir: process.env.SYNARA_BETA_USER_DATA,
     stableExecutablePath: desktopFlavor === "production" ? process.execPath : undefined,
     stableHomeDir: desktopFlavor === "production" ? BASE_DIR : undefined,
+    canTrashOwnBundle: isTrashableBetaBundle(),
   });
 
   ipcMain.removeHandler(IPC.beta.getState);
@@ -5140,22 +5158,15 @@ function registerIpcHandlers(): void {
 
   ipcMain.removeHandler(IPC.beta.leave);
   ipcMain.handle(IPC.beta.leave, async (_event, rawInput: unknown) => {
-    const result = betaChannel.leave();
+    const result = await betaChannel.leave();
     if (!result.ok) return result;
     const moveToTrash =
       typeof rawInput === "object" &&
       rawInput !== null &&
       (rawInput as { moveToTrash?: unknown }).moveToTrash === true;
-    // Only ever trash the packaged beta bundle this process runs from.
-    const betaBundle = Path.resolve(process.execPath, "..", "..", "..");
-    if (
-      moveToTrash &&
-      process.platform === "darwin" &&
-      app.isPackaged &&
-      Path.basename(betaBundle) === `${APP_DISPLAY_NAME}.app`
-    ) {
+    if (moveToTrash && isTrashableBetaBundle()) {
       try {
-        await shell.trashItem(betaBundle);
+        await shell.trashItem(ownMacAppBundlePath());
       } catch (error) {
         return {
           ok: false,

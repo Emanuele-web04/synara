@@ -9,7 +9,7 @@
 // desktop builds (the bridge reports the baked flavor, not an env guess).
 
 import { Schema } from "effect";
-import { useEffect, useState } from "react";
+import { useEffect, useEffectEvent, useState } from "react";
 
 import { isElectron } from "../env";
 import { useAppSettings } from "../appSettings";
@@ -37,6 +37,11 @@ export function BetaWelcomeDialog() {
   const [importFailed, setImportFailed] = useState(false);
   const { updateSettingsAndWait } = useAppSettings();
   const setBetaWelcomePending = useOnboardingDialogStore((store) => store.setBetaWelcomePending);
+  // updateSettingsAndWait is a new function every render; keeping it out of the
+  // probe's deps stops the probe (and its settings write) from re-running.
+  const markOnboardingCompleted = useEffectEvent(() => {
+    void updateSettingsAndWait({ onboardingCompletedAt: new Date().toISOString() }).catch(() => {});
+  });
 
   useEffect(() => {
     if (storage.acknowledged) return;
@@ -56,9 +61,7 @@ export function BetaWelcomeDialog() {
           setImportFailed(state.lastImportError !== null);
           if (didImport) {
             // Imported installs are already set up; the normal tour never runs.
-            void updateSettingsAndWait({
-              onboardingCompletedAt: new Date().toISOString(),
-            }).catch(() => {});
+            markOnboardingCompleted();
           }
           setOpen(true);
         } else {
@@ -75,7 +78,7 @@ export function BetaWelcomeDialog() {
       disposed = true;
       setBetaWelcomePending(false);
     };
-  }, [storage.acknowledged, setBetaWelcomePending, updateSettingsAndWait]);
+  }, [storage.acknowledged, setBetaWelcomePending]);
 
   const acknowledge = () => {
     setOpen(false);
