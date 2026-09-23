@@ -24,6 +24,8 @@ import {
   DEFAULT_TOAST_TIMEOUT_MS,
   shouldHideCollapsedToastContent,
   shouldRunVisibleToastAutoDismiss,
+  shouldUseCompactToast,
+  type ToastCopyItem,
 } from "./toast.logic";
 import {
   NOTIFICATION_ICON_CLASS_NAME,
@@ -41,6 +43,7 @@ import {
 type ThreadToastData = {
   allowCrossThreadVisibility?: boolean;
   compactContextual?: boolean;
+  copyItems?: ReadonlyArray<ToastCopyItem>;
   copyText?: string;
   onClose?: () => void;
   secondaryActionProps?: React.ComponentProps<typeof Button>;
@@ -65,13 +68,6 @@ const TOAST_ICONS = {
   success: CircleCheckIcon,
   warning: TriangleAlertIcon,
 } as const;
-
-function shouldUseCompactToast(toast: ToastObject<ThreadToastData>): boolean {
-  if (toast.data?.compactContextual) {
-    return true;
-  }
-  return !toast.data?.copyText && !toast.actionProps && !toast.data?.secondaryActionProps;
-}
 
 function isArchiveUndoToast(toast: ToastObject<ThreadToastData>): boolean {
   return Boolean(toast.data?.archiveUndo);
@@ -266,18 +262,41 @@ function ThreadToastVisibleAutoDismiss({
   return null;
 }
 
+// Each copyItems entry owns a hook instance, so its Copied state doesn't
+// clear when a sibling path is copied.
+function ToastCopyItemButton({ item }: { item: ToastCopyItem }) {
+  const { copyToClipboard, isCopied } = useCopyToClipboard();
+  return (
+    <Button
+      aria-label={isCopied ? `Copied ${item.label}` : `Copy ${item.label}`}
+      className={TOAST_ACTION_BUTTON_CLASS_NAME}
+      onClick={() => {
+        copyToClipboard(item.text, undefined);
+      }}
+      size={TOAST_ACTION_BUTTON_SIZE}
+      title={isCopied ? `Copied ${item.label}` : `Copy ${item.label}`}
+      variant={TOAST_ACTION_BUTTON_VARIANT}
+    >
+      {isCopied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
+      <span>{isCopied ? "Copied" : `Copy ${item.label}`}</span>
+    </Button>
+  );
+}
+
 function ToastActions({
   actionProps,
+  copyItems,
   copyText,
   secondaryActionProps,
 }: {
   actionProps: ToastObject<ThreadToastData>["actionProps"];
+  copyItems: ThreadToastData["copyItems"];
   copyText: string | undefined;
   secondaryActionProps: ThreadToastData["secondaryActionProps"];
 }) {
   const { copyToClipboard, isCopied } = useCopyToClipboard();
 
-  if (!actionProps && !copyText && !secondaryActionProps) return null;
+  if (!actionProps && !copyText && !secondaryActionProps && !copyItems?.length) return null;
 
   return (
     <div className="-ms-2 mt-1.5 flex flex-wrap items-center gap-0.5">
@@ -296,6 +315,9 @@ function ToastActions({
           <span>{isCopied ? "Copied" : "Copy"}</span>
         </Button>
       )}
+      {copyItems?.map((item) => (
+        <ToastCopyItemButton item={item} key={item.label} />
+      ))}
       {actionProps && (
         <Toast.Action
           {...actionProps}
@@ -518,6 +540,7 @@ function ToastSurface({
         {!compact ? (
           <ToastActions
             actionProps={toast.actionProps}
+            copyItems={toast.data?.copyItems}
             copyText={toast.data?.copyText}
             secondaryActionProps={toast.data?.secondaryActionProps}
           />

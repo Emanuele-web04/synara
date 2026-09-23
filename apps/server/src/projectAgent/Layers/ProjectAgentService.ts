@@ -3808,7 +3808,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const workerReports = reports
           .map((report) => report.content.trim())
           .filter((content) => content.length > 0);
-        const groupGoal = Option.isSome(config) ? config.value.goal?.trim() : "";
+        const groupGoal = Option.isSome(config) ? (config.value.goal?.trim() ?? "") : "";
         const memoryEnabled = Option.isSome(config)
           ? Boolean(config.value.autoMemoryEnabled)
           : false;
@@ -3860,7 +3860,13 @@ export const makeProjectAgentService = Effect.gen(function* () {
             memorySections.push(`### ${head.logicalPath}\n${content}`);
           }
         }
+        const activeGoalObjective = packet.goal?.objective?.trim() ?? "";
+        // The budget cuts the tail, so ordering is priority: the user's
+        // instructions and the memory index lead; rebuildable state (worker
+        // reports, memory files, decisions, tasks) trails and truncates first.
         const budget = truncateToContextBudget([
+          { label: "Instructions", text: packet.instructions },
+          { label: "Group memory index", text: memoryIndexText },
           ...(isCoordinatorLike
             ? [
                 {
@@ -3870,8 +3876,25 @@ export const makeProjectAgentService = Effect.gen(function* () {
               ]
             : []),
           ...(groupGoal ? [{ label: "Objective", text: groupGoal }] : []),
-          { label: "Group memory index", text: memoryIndexText },
-          ...(memoryEnabled ? [{ label: "Memory", text: memorySections.join("\n\n") }] : []),
+          // An active goal restating the group objective is shown once, as
+          // Objective — not under both labels.
+          ...(groupGoal.length > 0 && activeGoalObjective === groupGoal
+            ? []
+            : [
+                {
+                  label: "Goal",
+                  text:
+                    packet.goal?.objective ?? "None. Only create a goal if the user asked for one.",
+                },
+              ]),
+          ...(principal.kind === "coordinator"
+            ? []
+            : [
+                {
+                  label: "Group tools",
+                  text: "Save shared group memory with synara_project_remember; deliver files to the group Library with synara_project_library_add — sources must be inside your own workspace.",
+                },
+              ]),
           {
             label: "Linked repositories",
             text: yield* Effect.gen(function* () {
@@ -3913,19 +3936,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
                 },
               ]
             : []),
-          ...(principal.kind === "coordinator"
-            ? []
-            : [
-                {
-                  label: "Group tools",
-                  text: "Save shared group memory with synara_project_remember; deliver files to the group Library with synara_project_library_add — sources must be inside your own workspace.",
-                },
-              ]),
-          {
-            label: "Goal",
-            text: packet.goal?.objective ?? "None. Only create a goal if the user asked for one.",
-          },
-          { label: "Instructions", text: packet.instructions },
+          ...(memoryEnabled ? [{ label: "Memory", text: memorySections.join("\n\n") }] : []),
           { label: "Decisions", text: packet.relevantDecisions },
           {
             label: "Tasks",
@@ -3934,7 +3945,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
         ]);
         return [
           "Group context packet (authoritative durable state; additional documents via synara_project_read_document):",
-          "This thread opened with a welcome message from you; the user may be replying to it.",
+          principal.kind === "coordinator"
+            ? "This thread opened with a welcome message from you; the user may be replying to it."
+            : "You are a member thread of this group, not its coordinator — the coordinator's welcome lives on the coordinator's own thread.",
           budget.packet,
           packet.historicalCoverage === "partial"
             ? "Historical coverage is partial; remaining threads are not yet summarized."

@@ -4,11 +4,46 @@ import {
   DEFAULT_TOAST_TIMEOUT_MS,
   shouldHideCollapsedToastContent,
   shouldRunVisibleToastAutoDismiss,
+  shouldUseCompactToast,
 } from "./toast.logic";
 
 describe("DEFAULT_TOAST_TIMEOUT_MS", () => {
   it("auto-dismisses standard toasts after ten seconds", () => {
     assert.equal(DEFAULT_TOAST_TIMEOUT_MS, 10_000);
+  });
+});
+
+describe("shouldUseCompactToast", () => {
+  it("uses the compact layout for a plain toast", () => {
+    assert.equal(shouldUseCompactToast({ data: {} }), true);
+  });
+
+  it("honors the contextual override even with copyable items", () => {
+    assert.equal(
+      shouldUseCompactToast({
+        data: {
+          compactContextual: true,
+          copyItems: [{ label: "path", text: "/tmp" }],
+        },
+      }),
+      true,
+    );
+  });
+
+  it("renders expanded when the toast has copyable items or actions", () => {
+    assert.equal(
+      shouldUseCompactToast({
+        data: { copyItems: [{ label: "path", text: "/tmp" }] },
+      }),
+      false,
+    );
+    assert.equal(shouldUseCompactToast({ data: { copyText: "x" } }), false);
+    assert.equal(shouldUseCompactToast({ actionProps: {} }), false);
+    assert.equal(shouldUseCompactToast({ data: { secondaryActionProps: {} } }), false);
+  });
+
+  it("keeps an empty copy item list compact", () => {
+    assert.equal(shouldUseCompactToast({ data: { copyItems: [] } }), true);
   });
 });
 

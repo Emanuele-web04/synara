@@ -131,6 +131,9 @@ including threads in linked repositories, receives a context packet with:
 - The list of **linked repositories** and the **Library** location
 - The group's default thread model
 
+Only the coordinator's packet notes that its thread opened with the welcome message — member
+threads are told they are members of the group, not its coordinator.
+
 Edit these in group settings → **Memory**:
 
 - **Group instructions** — like a `CLAUDE.md`: rules every new thread reads and follows (up to
@@ -198,8 +201,9 @@ When you delete a group:
 - The default Library folder is moved to the trash when possible.
 - A Library folder you chose yourself is never moved or deleted; Synara tells you where it was left.
 - The group folder under `~/Documents/Synara/Groups/` is removed only when it holds nothing but the
-  files Synara created there. If you or a thread added anything, the folder is kept and Synara
-  shows its path ("Folder kept because it has your files").
+  files Synara created there. If you or a thread added anything, the folder is kept. The delete
+  notice lists every kept folder — the Library, the group folder, or both — with a copy button for
+  each path.
 
 **Change the coordinator's model.** Pick a new **Coordinator model** in settings → **General** and
 save. The coordinator moves to that model and keeps its transcript. If that provider is turned off
@@ -241,7 +245,8 @@ set `SYNARA_HOME`.
 ## Limits and troubleshooting
 
 - A group runs at most 8 threads at once and starts at most 8 new threads per coordinator turn.
-- The context packet is capped at 32,000 characters and is truncated past that.
+- The context packet is capped at 32,000 characters. Past that, lower-priority sections (memory
+  files, decisions, tasks) truncate first — instructions and the MEMORY.md index are always kept.
 - A single Library add is limited to 256 MB. The MEMORY.md index keeps the newest 256 entries.
 - Group name: 160 characters. Goal: 8,000. Instructions: 16,000.
 - Library remotes must be `https://`, `ssh://`, or `git@host:path`.
