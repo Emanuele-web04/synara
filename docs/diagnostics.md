@@ -67,10 +67,11 @@ batches as NDJSON over HTTPS to `https://synara-beta-diagnostics.kartik-9f9.work
 or loopback targets are accepted). Events land in a Cloudflare D1 database and
 are kept for one year, then deleted by a daily job, so crash and error trends
 can be compared across many beta releases. Crash dumps land in the
-`synara-beta-crash-dumps` R2 bucket and are deleted after 90 days. The worker code is
-`infra/diagnostics-worker/worker.ts` — the allowlist is enforced again there
-and unknown events/fields are dropped, so the documented schema is enforced at
-the endpoint, not just the client.
+`synara-beta-crash-dumps` R2 bucket and are deleted after 90 days. The ingest worker
+and its private dashboard live outside this repository (they run on the
+maintainers' Cloudflare account). The worker re-runs the same allowlist and
+`redactDiagnosticText` and drops unknown events/fields, so the documented
+schema is enforced at the endpoint, not just the client.
 
 Ingest is intentionally open. Beta builds are public binaries, so any token
 baked into them would be public too, and Electron's crash uploader cannot send
