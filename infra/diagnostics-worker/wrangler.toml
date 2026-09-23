@@ -44,7 +44,8 @@ simple = { limit = 10, period = 60 }
 # Dashboard auth secrets (required for /api/* and pages):
 #   wrangler secret put DASHBOARD_PASSWORD
 #   wrangler secret put DASHBOARD_SESSION_KEY
-# Optional shared secret; set with `wrangler secret put INGEST_TOKEN` and bake
-# the same value into beta builds only if you want the endpoint closed.
+# Ingest is intentionally open (see docs/diagnostics.md). INGEST_TOKEN only
+# closes /v1/events for callers that send it; shipped beta builds do not, and
+# Electron's crash uploader cannot, so leave it unset for production.
 # [vars]
 # MAX_DUMP_BYTES = "5242880"

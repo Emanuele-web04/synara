@@ -35,20 +35,38 @@ describe("redactDiagnosticText", () => {
     [
       "URL query and fragment dropped",
       "GET https://api.example.com/v1/items?key=secret&id=1#frag failed",
-      "https://api.example.com/v1/items",
+      "https://api.example.com/…",
       "secret",
     ],
     [
       "URL userinfo redacted",
       "GET https://user:password@example.com/x failed",
-      "https://<redacted>@example.com/x",
+      "https://<redacted>@example.com/…",
       "password",
     ],
     [
       "non-http URL userinfo redacted",
       "connect postgres://admin:s3cret@db.internal:5432/app?ssl=true",
-      "postgres://<redacted>@db.internal:5432/app",
+      "postgres://<redacted>@db.internal:5432/…",
       "s3cret",
+    ],
+    [
+      "https git remote keeps only the host",
+      "clone https://github.com/acme/private-repo.git failed",
+      "https://github.com/…",
+      "private-repo",
+    ],
+    [
+      "ticket URL path dropped",
+      "see https://jira.acme.internal/browse/SECRET-42",
+      "https://jira.acme.internal/…",
+      "SECRET-42",
+    ],
+    [
+      "standard base64 secret",
+      "aws_secret wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY1 used",
+      "[redacted]",
+      "wJalrXUtnFEMI",
     ],
     ["scp-style git url", "clone git@github.com:org/repo.git done", "<git-url>", "org/repo"],
     ["ssh git url", "clone ssh://git@gitlab.com/org/repo done", "<git-url>", "org/repo"],
@@ -134,6 +152,19 @@ describe("redactDiagnosticText", () => {
     expect(out).toContain("at fetchFeed");
     expect(out).toContain("update.ts:123:45");
     expect(out).toContain("status 500");
+  });
+
+  it("keeps local-scheme stack frames and relative paths readable", () => {
+    const out = redact(
+      [
+        "at render (synara-beta://app/assets/index-abc123.js:10:5)",
+        "at load (file:///Applications/Synara%20Beta.app/Contents/Resources/app.asar/dist/main.js:88:1)",
+        "at run (node_modules/effect/dist/internal/fiberRuntime.js:1:2)",
+      ].join("\n"),
+    );
+    expect(out).toContain("synara-beta://app/assets/index-abc123.js:10:5");
+    expect(out).toContain("app.asar/dist/main.js:88:1");
+    expect(out).toContain("node_modules/effect/dist/internal/fiberRuntime.js");
   });
 
   it("keeps HH:MM:SS timestamps in log excerpts readable", () => {

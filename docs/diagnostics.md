@@ -12,7 +12,7 @@ never instantiated: no UI, environment variable, or IPC can enable it.)
 
 ## What is collected
 
-Nine event names, each with a small fixed field set. The full allowlist lives
+Ten event names, each with a small fixed field set. The full allowlist lives
 in `apps/desktop/src/betaDiagnostics.ts` (`BetaDiagnosticsEventName` and the
 `sanitizeBetaDiagnosticsPayload` schemas); the ingest worker re-validates the
 same allowlist server-side.
@@ -49,11 +49,12 @@ can't be redacted, so they are deleted after 90 days by an R2 expiry rule.
 The only free-text fields are `message`, `stack`, and `logTail`. Before they
 are written to the queue, each is passed through `redactDiagnosticText`
 (`packages/shared/src/diagnosticsRedaction.ts`), which strips PEM blocks, git
-remote URLs, emails, URL credentials and query strings,
+remote URLs, emails, URL credentials, query strings, and the path of every
+network URL (`https://github.com/org/repo` becomes `https://github.com/…`),
 `Authorization`/`Bearer`/`Cookie` values, known token shapes (API keys,
 GitHub/Slack/AWS/Google tokens, JWTs), sensitive `key=value`/`key: value`
-fields, IP addresses, and any remaining long opaque token. Paths are reduced
-to the file name: `/Users/you/code/my-repo/app.ts` becomes `~/…/app.ts`, so
+fields, IP addresses, and any remaining long opaque token (hex, base64url, or
+standard base64). Paths are reduced to the last segment: `/Users/you/code/my-repo/app.ts` becomes `~/…/app.ts`, so
 folder and repository names are not sent. Redaction is best-effort — error
 text can still include fragments of whatever was on screen. The worker runs
 the same redaction again before storing.
@@ -70,6 +71,12 @@ can be compared across many beta releases. Crash dumps land in the
 `infra/diagnostics-worker/worker.ts` — the allowlist is enforced again there
 and unknown events/fields are dropped, so the documented schema is enforced at
 the endpoint, not just the client.
+
+Ingest is intentionally open. Beta builds are public binaries, so any token
+baked into them would be public too, and Electron's crash uploader cannot send
+custom headers anyway. Abuse is bounded instead: per-IP rate limits (120
+requests a minute for ingest, 10 for login), request and dump size caps, the
+server-side allowlist and redaction, and the retention windows above.
 
 If the endpoint is unreachable the queue stays on disk and retries on the next
 flush; if it grows past 1 MiB the client trims it to the newest 512 KiB of

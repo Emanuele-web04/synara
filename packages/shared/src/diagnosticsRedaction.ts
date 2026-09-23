@@ -20,6 +20,10 @@ const REDACTED = "[redacted]";
 const SENSITIVE_KEY =
   /token|secret|password|api[_-]?key|auth|cookie|session|credential|key|sess|sid/i;
 
+/** URL schemes that address this machine or the app bundle, never a remote org. */
+const LOCAL_URL_SCHEME =
+  /^(?:file|synara(?:-[a-z]+)?|node|electron|devtools|chrome|chrome-extension)$/i;
+
 interface Replacement {
   readonly pattern: RegExp;
   readonly replace: string | ((match: string, ...groups: unknown[]) => string);
@@ -47,14 +51,19 @@ const RULES: ReadonlyArray<Replacement> = [
     pattern: /\/Users\/[^/\s:'"]+|\/home\/[^/\s:'"]+|[A-Za-z]:\\Users\\[^\\:'"]+/g,
     replace: "<user>",
   },
-  // URLs of any scheme: credentials in userinfo become <redacted>@, the query
-  // string and fragment are dropped, scheme + host + path survive. Runs before
-  // the email rule so userinfo is not mistaken for an address.
+  // URLs of any scheme: credentials in userinfo become <redacted>@ and the
+  // query string and fragment are dropped. Network URLs keep only scheme +
+  // host, since their paths carry org, repo, and ticket names; local schemes
+  // (file://, synara://, ...) keep the path so stack frames stay readable.
+  // Runs before the email rule so userinfo is not mistaken for an address.
   {
     pattern:
       /\b([a-z][a-z0-9+.-]{0,31}):\/\/([^\s/?#@]*@)?([^\s/?#]+)(\/[^\s?#]*)?(?:\?[^\s#]*)?(?:#[^\s]*)?/gi,
-    replace: (_match, scheme, userinfo, host, path) =>
-      `${scheme}://${typeof userinfo === "string" ? "<redacted>@" : ""}${host}${typeof path === "string" ? path : ""}`,
+    replace: (_match, scheme, userinfo, host, path) => {
+      const keepPath = typeof scheme === "string" && LOCAL_URL_SCHEME.test(scheme);
+      const tail = typeof path === "string" && path !== "/" ? (keepPath ? path : "/…") : "";
+      return `${scheme}://${typeof userinfo === "string" ? "<redacted>@" : ""}${host}${tail}`;
+    },
   },
   // Email addresses.
   {
@@ -124,6 +133,16 @@ const RULES: ReadonlyArray<Replacement> = [
   },
   // Catch-all: any remaining long hex or base64url run is treated as a secret.
   { pattern: /\b[A-Za-z0-9_-]{32,}\b/g, replace: REDACTED },
+  // Standard base64 secrets (AWS secret keys and similar) use + and /, which
+  // the run above stops at. Mixed case plus a digit and a + or / separates
+  // them from ordinary relative paths.
+  {
+    pattern: /[A-Za-z0-9+/]{40,}={0,2}/g,
+    replace: (match) =>
+      /[+/]/.test(match) && /[0-9]/.test(match) && /[a-z]/.test(match) && /[A-Z]/.test(match)
+        ? REDACTED
+        : match,
+  },
 ];
 
 /**

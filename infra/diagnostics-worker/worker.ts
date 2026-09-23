@@ -622,7 +622,9 @@ export default {
       }
       // Electron's crashReporter POSTs multipart/form-data with the minidump in
       // the `upload_file_minidump` part plus globalExtra fields.
-      const maxBytes = Number(env.MAX_DUMP_BYTES ?? 5 * 1024 * 1024);
+      const configuredMax = Number(env.MAX_DUMP_BYTES);
+      const maxBytes =
+        Number.isFinite(configuredMax) && configuredMax > 0 ? configuredMax : 5 * 1024 * 1024;
       const bodyBytes = await readBodyBytes(request, maxBytes + MULTIPART_OVERHEAD_BYTES);
       if (!bodyBytes) {
         return new Response("dump too large", { status: 413 });
@@ -644,7 +646,10 @@ export default {
       if (dump.size > maxBytes) {
         return new Response("dump too large", { status: 413 });
       }
-      const installId = String(form.get("installId") ?? "unknown").replace(/[^0-9a-f-]/gi, "");
+      // Only a real UUID reaches the R2 key; anything else would bloat it past
+      // R2's 1024-byte key limit or pollute the per-install grouping.
+      const rawInstallId = String(form.get("installId") ?? "");
+      const installId = UUID_PATTERN.test(rawInstallId) ? rawInstallId.toLowerCase() : "";
       // appVersion is our explicit globalExtra; `ver` is Electron's built-in.
       const rawVersion = String(form.get("appVersion") ?? form.get("ver") ?? "");
       const appVersion = VERSION_PATTERN.test(rawVersion) ? rawVersion : "";
@@ -652,7 +657,7 @@ export default {
       await env.CRASH_DUMPS.put(key, dump.stream(), {
         customMetadata: {
           installId,
-          flavor: String(form.get("flavor") ?? ""),
+          flavor: String(form.get("flavor") ?? "").slice(0, 16),
           receivedAt: new Date().toISOString(),
         },
       });
