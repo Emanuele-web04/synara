@@ -11,14 +11,26 @@ const redact = (text: string) => redactDiagnosticText(text, OPTS);
 describe("redactDiagnosticText", () => {
   it.each([
     [
-      "home directory collapses to ~",
+      "home directory collapses to ~ then basename",
       "crash at /Users/kartik/.synara-beta/logs/x.log",
-      "~/",
+      "~/…/x.log",
       "/Users/kartik",
     ],
-    ["macOS user path", "open /Users/alice/project failed", "<user>", "alice"],
-    ["linux user path", "open /home/bob/project failed", "<user>", "bob"],
-    ["windows user path", "open C:\\Users\\carol\\file.txt failed", "<user>", "carol"],
+    ["macOS user path", "open /Users/alice/project failed", "~/…/project", "alice"],
+    ["linux user path", "open /home/bob/project failed", "~/…/project", "bob"],
+    ["windows user path", "open C:\\Users\\carol\\file.txt failed", "~/…/file.txt", "carol"],
+    [
+      "windows user path with spaces",
+      "open C:\\Users\\John Doe\\docs\\file.txt failed",
+      "~/…/file.txt",
+      "Doe",
+    ],
+    [
+      "path collapses to basename, folders dropped",
+      "crash in /Users/kartik/code/secret-repo/main.ts",
+      "~/…/main.ts",
+      "secret-repo",
+    ],
     ["email", "contact user@example.com for help", "<email>", "user@example.com"],
     [
       "URL query and fragment dropped",
@@ -26,6 +38,20 @@ describe("redactDiagnosticText", () => {
       "https://api.example.com/v1/items",
       "secret",
     ],
+    [
+      "URL userinfo redacted",
+      "GET https://user:password@example.com/x failed",
+      "https://<redacted>@example.com/x",
+      "password",
+    ],
+    [
+      "non-http URL userinfo redacted",
+      "connect postgres://admin:s3cret@db.internal:5432/app?ssl=true",
+      "postgres://<redacted>@db.internal:5432/app",
+      "s3cret",
+    ],
+    ["scp-style git url", "clone git@github.com:org/repo.git done", "<git-url>", "org/repo"],
+    ["ssh git url", "clone ssh://git@gitlab.com/org/repo done", "<git-url>", "org/repo"],
     ["Bearer token", "sent Bearer abc.def.ghi upstream", "Bearer [redacted]", "abc.def.ghi"],
     [
       "Authorization header",
@@ -63,6 +89,27 @@ describe("redactDiagnosticText", () => {
       "DATABASE_PASSWORD=[redacted]",
       "hunter2please",
     ],
+    ["colon-style password", "config password: hunter2 loaded", "password: [redacted]", "hunter2"],
+    ["header-style api key", "X-Api-Key: abc123xyz rejected", "X-Api-Key: [redacted]", "abc123xyz"],
+    ["base64-ish secret value", "AccountKey=abc/+= stored", "AccountKey=[redacted]", "abc/+"],
+    [
+      "cookie header redacted whole",
+      "req Cookie: a=b; PHPSESSID=deadbeefcafe sent",
+      "Cookie: [redacted]",
+      "PHPSESSID",
+    ],
+    [
+      "set-cookie header redacted whole",
+      "res Set-Cookie: session=abc123; Path=/ ok",
+      "Set-Cookie: [redacted]",
+      "abc123",
+    ],
+    [
+      "PEM private key block",
+      "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA7\n-----END RSA PRIVATE KEY-----\ndone",
+      "[redacted private key]",
+      "MIIE",
+    ],
     ["IPv4", "dial 192.168.1.20:8080 refused", "<ip>", "192.168.1.20"],
     ["IPv6", "dial fe80::1ff:fe23:4567:890a refused", "<ip>", "fe80::"],
     [
@@ -98,6 +145,26 @@ describe("redactDiagnosticText", () => {
     const out = redactDiagnosticText("log line ".repeat(500), { maxLength: 100 });
     expect(out.length).toBeLessThanOrEqual(100);
     expect(out.endsWith("…")).toBe(true);
+  });
+
+  it("redacts a 64 KiB adversarial string in bounded time", () => {
+    // Long alphanumeric runs used to drive the sensitive-key pattern into
+    // quadratic backtracking.
+    const input = `password: hunter2 ${"a".repeat(64 * 1024)}`;
+    const started = performance.now();
+    const out = redact(input);
+    const elapsed = performance.now() - started;
+    expect(elapsed).toBeLessThan(50);
+    expect(out).toContain("password: [redacted]");
+    expect(out).not.toContain("hunter2");
+  });
+
+  it("redacts a PEM block that spans the maxLength cut", () => {
+    const pem = "-----BEGIN PRIVATE KEY-----\n" + "A".repeat(200) + "\n-----END PRIVATE KEY-----\n";
+    const out = redactDiagnosticText(`${"x".repeat(50)}${pem}${"y".repeat(200)}`, {
+      maxLength: 100,
+    });
+    expect(out).not.toContain("PRIVATE KEY");
   });
 
   it("works without homeDir", () => {
