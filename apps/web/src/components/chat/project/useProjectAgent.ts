@@ -28,6 +28,14 @@ export function useProjectAgent(input: {
   const [documents, setDocuments] = useState<ReadonlyArray<ProjectDocumentHead>>([]);
   const [threads, setThreads] = useState<ReadonlyArray<ProjectThreadIndexEntry>>([]);
   const [error, setError] = useState<string | null>(null);
+  // Mutations fail through `setError`, but the state value only lands on the next
+  // render — callers that need the message synchronously (toasts) read the ref.
+  const errorRef = useRef<string | null>(null);
+  const reportError = useCallback((message: string | null) => {
+    errorRef.current = message;
+    setError(message);
+  }, []);
+  const readError = useCallback(() => errorRef.current, []);
   const [busy, setBusy] = useState(false);
   const projectIdRef = useRef(input.projectId);
   const loadGeneration = useRef(0);
@@ -71,12 +79,12 @@ export function useProjectAgent(input: {
         setDocuments([]);
         setThreads([]);
       }
-      setError(null);
+      reportError(null);
     } catch (cause) {
       if (!stillCurrent(projectId, generation)) return;
-      setError(cause instanceof Error ? cause.message : "Failed to load project coordinator.");
+      reportError(cause instanceof Error ? cause.message : "Failed to load project coordinator.");
     }
-  }, []);
+  }, [reportError]);
 
   useEffect(() => {
     if (!input.enabled || !input.projectId) {
@@ -87,19 +95,88 @@ export function useProjectAgent(input: {
     }
     void load();
     const api = readNativeApi();
-    if (!api?.projectAgent) return;
-    void api.projectAgent.subscribe({ projectId: input.projectId }).catch(() => undefined);
-    const unsubscribe = api.projectAgent.onEvent((event: ProjectAgentStreamEvent) => {
+    const subscribedProjectId = input.projectId;
+    if (!api?.projectAgent || !subscribedProjectId) return;
+    void api.projectAgent.subscribe({ projectId: subscribedProjectId }).catch(() => undefined);
+    const unsubscribeEvents = api.projectAgent.onEvent((event: ProjectAgentStreamEvent) => {
       const current = projectIdRef.current;
       if (!current) return;
-      if (event.type === "snapshot" && event.overview.projectId === current) {
-        setOverview(event.overview);
+      // Events stream for every subscribed project on the client — apply only this
+      // project's events and only the slice each event actually changed.
+      if (event.type === "snapshot") {
+        if (event.overview.projectId === current) setOverview(event.overview);
         return;
       }
-      void load();
+      if (event.type === "config-upserted") {
+        if (event.config.projectId === current) {
+          setOverview((overview) =>
+            overview && overview.projectId === current
+              ? { ...overview, config: event.config }
+              : overview,
+          );
+        }
+        return;
+      }
+      if (event.type === "goal-upserted") {
+        if (event.goal.projectId === current) {
+          setOverview((overview) =>
+            overview && overview.projectId === current
+              ? { ...overview, goal: event.goal }
+              : overview,
+          );
+        }
+        return;
+      }
+      if (event.type === "digest-upserted") {
+        if (event.digest.projectId === current) {
+          setOverview((overview) =>
+            overview && overview.projectId === current
+              ? { ...overview, digest: event.digest }
+              : overview,
+          );
+        }
+        return;
+      }
+      if (event.type === "task-upserted") {
+        if (event.task.projectId === current) {
+          setTasks((tasks) => {
+            const index = tasks.findIndex((task) => task.id === event.task.id);
+            if (index === -1) return [...tasks, event.task];
+            const next = [...tasks];
+            next[index] = event.task;
+            return next;
+          });
+        }
+        return;
+      }
+      if (event.type === "activity-appended") {
+        if (event.activity.projectId === current) {
+          setActivity((activity) =>
+            activity.some((entry) => entry.id === event.activity.id)
+              ? activity
+              : [event.activity, ...activity],
+          );
+        }
+        return;
+      }
+      if (event.type === "document-head-updated") {
+        if (event.head.projectId === current) {
+          setDocuments((documents) => {
+            const index = documents.findIndex(
+              (document) => document.logicalPath === event.head.logicalPath,
+            );
+            if (index === -1) return [...documents, event.head];
+            const next = [...documents];
+            next[index] = event.head;
+            return next;
+          });
+        }
+        return;
+      }
     });
     return () => {
-      unsubscribe();
+      unsubscribeEvents();
+      void api.projectAgent.unsubscribe({ projectId: subscribedProjectId }).catch(() => undefined);
     };
   }, [input.enabled, input.projectId, load]);
 
@@ -120,14 +197,14 @@ export function useProjectAgent(input: {
         return true;
       } catch (cause) {
         if (projectIdRef.current === projectId) {
-          setError(cause instanceof Error ? cause.message : "Project action failed.");
+          reportError(cause instanceof Error ? cause.message : "Project action failed.");
         }
         return false;
       } finally {
         if (projectIdRef.current === projectId) setBusy(false);
       }
     },
-    [load],
+    [load, reportError],
   );
 
   const configure = useCallback(
@@ -309,6 +386,21 @@ export function useProjectAgent(input: {
     [runMutation],
   );
 
+  const updateTaskStatus = useCallback(
+    async (task: ProjectTask, input: { status?: ProjectTask["status"]; archived?: boolean }) =>
+      runMutation(async (projectAgent, projectId) => {
+        await projectAgent.updateTask({
+          requestId: crypto.randomUUID(),
+          projectId,
+          taskId: task.id,
+          expectedRevision: task.revision,
+          ...(input.status !== undefined ? { status: input.status } : {}),
+          ...(input.archived !== undefined ? { archived: input.archived } : {}),
+        });
+      }),
+    [runMutation],
+  );
+
   const loadEvidence = useCallback(async (taskId: ProjectTask["id"]) => {
     const api = readNativeApi();
     const projectId = projectIdRef.current;
@@ -424,6 +516,7 @@ export function useProjectAgent(input: {
     error,
     busy,
     load,
+    readError,
     configure,
     linkProject,
     unlinkProject,
@@ -434,6 +527,7 @@ export function useProjectAgent(input: {
     createTask,
     acceptTask,
     archiveTask,
+    updateTaskStatus,
     loadEvidence,
     loadMoreActivity,
     excludeThread,

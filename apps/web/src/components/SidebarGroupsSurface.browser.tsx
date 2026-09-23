@@ -227,7 +227,7 @@ describe("SidebarGroupsSurface", () => {
 
   it("shows the Groups empty state before and after hydration", async () => {
     await mount({ projects: [], threadsHydrated: false });
-    await waitForText("Loading Groups...");
+    await waitForText("Loading groups…");
 
     await mount({ projects: [], threadsHydrated: true });
     await waitForText("No groups yet");
@@ -308,6 +308,43 @@ describe("SidebarGroupsSurface", () => {
     await vi.waitFor(() => {
       expect(callbacks.onOpenThread).toHaveBeenCalledWith(coordinatorThreadId);
     });
+  });
+
+  it("activates the coordinator row from the keyboard", async () => {
+    const coordinatorThreadId = ThreadId.makeUnsafe("coordinator-thread");
+    const group = makeGroupProject({
+      id: GROUP_A_ID,
+      kind: "group",
+      name: "Team Alpha",
+      cwd: `${GROUPS_ROOT}/team-alpha`,
+      expanded: true,
+    });
+    harness.listSummaries.mockResolvedValue({
+      summaries: [
+        {
+          projectId: GROUP_A_ID,
+          configured: true,
+          coordinatorName: "Team lead",
+          coordinatorThreadId,
+          coordinatorIcon: null,
+          coordinatorColor: null,
+          coordinatorStatus: "idle",
+          revision: 1,
+        },
+      ],
+    });
+    const { callbacks } = await mount({ projects: [group], threadsHydrated: true });
+
+    const label = await waitForText("Team lead");
+    const coordinatorRow = label.closest<HTMLElement>('[role="button"]');
+    expect(coordinatorRow).not.toBeNull();
+    coordinatorRow!.focus();
+    coordinatorRow!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    coordinatorRow!.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+    await vi.waitFor(() => {
+      expect(callbacks.onOpenThread).toHaveBeenCalledWith(coordinatorThreadId);
+    });
+    expect(callbacks.onOpenThread).toHaveBeenCalledTimes(2);
   });
 
   it("shows just the coordinator row in an expanded group with no chats", async () => {

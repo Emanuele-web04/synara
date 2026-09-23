@@ -30,6 +30,7 @@ import {
   shouldHideProviderNativeCommandFromComposerMenu,
 } from "../composerSlashCommands";
 import { threadMentionPathForThreadId } from "@synara/shared/threadMentions";
+import { isGroupContainerKind } from "@synara/shared/projectContainers";
 
 import type { ComposerCommandItem } from "../components/chat/ComposerCommandMenu";
 import type { ProviderModelOption } from "../providerModelOptions";
@@ -63,7 +64,7 @@ function threadSuggestionContainerName(project: Project | undefined): string {
   if (!project) return "Unknown project";
   if (project.kind === "chat") return "Chats";
   // Group containers (legacy "studio" included) use their own title in mentions.
-  if (project.kind === "group" || project.kind === "studio") {
+  if (isGroupContainerKind(project.kind)) {
     return project.name.trim() || "Groups";
   }
   return project.name.trim() || project.folderName.trim() || "Untitled project";

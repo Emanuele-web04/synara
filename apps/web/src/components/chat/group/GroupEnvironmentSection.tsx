@@ -1,3 +1,4 @@
+import type { ProjectId } from "@synara/contracts";
 import { useMemo, useState } from "react";
 
 import type { Project } from "~/types";
@@ -18,6 +19,7 @@ import type { useProjectAgent } from "~/components/chat/project/useProjectAgent"
 import { FolderOpenIcon } from "~/lib/icons";
 import { getNavigatorPlatform } from "~/lib/utils";
 import { getRevealInFolderLabel } from "~/lib/fileReferenceContextMenu";
+import { revealFolderInShell } from "~/lib/revealFolder";
 import { readNativeApi } from "~/nativeApi";
 import { useStore } from "~/store";
 import { useWorkspacePathsStore } from "~/workspacePathsStore";
@@ -52,15 +54,18 @@ export function GroupEnvironmentSection(props: {
   const canPickFolder = typeof window !== "undefined" && Boolean(window.desktopBridge?.pickFolder);
 
   const revealGroupFolder = () => {
-    const api = readNativeApi();
-    if (!api) return;
-    void api.shell.showInFolder(props.workspacePath).catch((error: unknown) => {
+    revealFolderInShell({ path: props.workspacePath });
+  };
+
+  const unlinkProject = async (linkedProjectId: ProjectId) => {
+    const ok = await props.agent.unlinkProject(linkedProjectId);
+    if (!ok) {
       toastManager.add({
         type: "error",
-        title: "Unable to open folder",
-        description: error instanceof Error ? error.message : "An unknown error occurred.",
+        title: "Unable to unlink repository",
+        description: props.agent.readError() ?? "An unknown error occurred.",
       });
-    });
+    }
   };
 
   const pickLibraryPath = async () => {
@@ -93,7 +98,7 @@ export function GroupEnvironmentSection(props: {
                   <Button
                     size="xs"
                     variant="outline"
-                    onClick={() => void props.agent.unlinkProject(project.id)}
+                    onClick={() => void unlinkProject(project.id)}
                   >
                     Remove
                   </Button>
@@ -106,11 +111,7 @@ export function GroupEnvironmentSection(props: {
                 title={id}
                 description="This project is no longer available."
                 actions={
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    onClick={() => void props.agent.unlinkProject(id)}
-                  >
+                  <Button size="xs" variant="outline" onClick={() => void unlinkProject(id)}>
                     Remove
                   </Button>
                 }
@@ -228,7 +229,15 @@ export function GroupEnvironmentSection(props: {
         onOpenChange={setLinkPickerOpen}
         onPick={(projectId) => {
           setLinkPickerOpen(false);
-          void props.agent.linkProject(projectId);
+          void props.agent.linkProject(projectId).then((ok) => {
+            if (!ok) {
+              toastManager.add({
+                type: "error",
+                title: "Unable to link repository",
+                description: props.agent.readError() ?? "An unknown error occurred.",
+              });
+            }
+          });
         }}
       />
     </div>

@@ -58,8 +58,10 @@ export function clampCharacterCount(value: string, max: number): number {
   return Math.min(Math.max(0, value.length), max);
 }
 
+// The counter tells the truth about how long the text is — an over-limit value
+// reads e.g. "8,412 / 8,000" in destructive color, never a clamped "8,000".
 export function formatCharacterCount(value: string, max: number): string {
-  return `${clampCharacterCount(value, max).toLocaleString("en-US")} / ${max.toLocaleString("en-US")}`;
+  return `${Math.max(0, value.length).toLocaleString("en-US")} / ${max.toLocaleString("en-US")}`;
 }
 
 /**
@@ -176,13 +178,6 @@ export function groupSettingsDirtySections(
     dirty.add("environment");
   }
   return dirty;
-}
-
-export function isGroupSettingsDirty(
-  draft: GroupSettingsDraft,
-  baseline: GroupSettingsDraft,
-): boolean {
-  return groupSettingsDirtySections(draft, baseline).size > 0;
 }
 
 export function buildGroupConfigureInput(input: {

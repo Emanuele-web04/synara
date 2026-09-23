@@ -113,6 +113,23 @@ export function coordinatorThreadIdSet(
   return ids;
 }
 
+// One Set per summaries-map reference: returning a fresh Set each render used to churn
+// every downstream memo dep even when no coordinator id changed.
+const coordinatorThreadIdSetCache = new WeakMap<
+  ReadonlyMap<ProjectId, ProjectAgentSummary>,
+  ReadonlySet<string>
+>();
+
+function cachedCoordinatorThreadIdSet(
+  summariesByProjectId: ReadonlyMap<ProjectId, ProjectAgentSummary>,
+): ReadonlySet<string> {
+  const cached = coordinatorThreadIdSetCache.get(summariesByProjectId);
+  if (cached) return cached;
+  const next = coordinatorThreadIdSet(summariesByProjectId.values());
+  coordinatorThreadIdSetCache.set(summariesByProjectId, next);
+  return next;
+}
+
 export async function loadProjectAgentSummaries(): Promise<void> {
   if (summariesLoadPromise) return summariesLoadPromise;
   summariesLoadPromise = (async () => {
@@ -158,6 +175,6 @@ export function useProjectAgentSummaries() {
     refresh: loadProjectAgentSummaries,
     summaryFor: (projectId: ProjectId | null | undefined) =>
       projectId ? (summariesByProjectId.get(projectId) ?? null) : null,
-    coordinatorThreadIds: coordinatorThreadIdSet(summariesByProjectId.values()),
+    coordinatorThreadIds: cachedCoordinatorThreadIdSet(summariesByProjectId),
   };
 }

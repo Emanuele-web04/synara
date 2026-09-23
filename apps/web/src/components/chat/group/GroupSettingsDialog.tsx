@@ -185,7 +185,16 @@ export function GroupSettingsDialog(props: {
       mode: props.mode,
       draft,
       baseline,
-      expectedRevision: props.mode === "edit" ? baseline.config?.revision : undefined,
+      // Edit mode always carries the optimistic-lock token: the baseline config
+      // revision when the dialog loaded it, else the summaries store's latest —
+      // the dialog can open before the panel (and its overview) ever mounted.
+      expectedRevision:
+        props.mode === "edit"
+          ? (baseline.config?.revision ??
+            useProjectAgentSummariesStore.getState().summariesByProjectId.get(props.projectId)
+              ?.revision ??
+            0)
+          : undefined,
       importedInstructions,
       userDisplayName,
       renameProject: async (title) => {
@@ -215,7 +224,15 @@ export function GroupSettingsDialog(props: {
   const title = props.mode === "onboarding" ? "Set up your group" : props.projectName;
 
   return (
-    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+    <Dialog
+      open={props.open}
+      onOpenChange={(open) => {
+        // A close mid-save would drop the in-flight optimistic-lock write and
+        // leave the draft unrecoverable; only Escape/backdrop while idle counts.
+        if (!open && saving) return;
+        props.onOpenChange(open);
+      }}
+    >
       <DialogPopup className="h-[min(80vh,720px)] max-w-4xl">
         <DialogHeader className="border-b border-[color:var(--color-border-light)] px-5 pb-3">
           <DialogTitle>{title}</DialogTitle>

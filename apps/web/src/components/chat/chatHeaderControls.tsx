@@ -20,6 +20,8 @@ import { type LucideIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
 import { Button } from "../ui/button";
+import { Toggle } from "../ui/toggle";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 /**
  * Fixed height of the top chrome bar shared by the chat header, the diff panel
@@ -393,3 +395,56 @@ export const ChatHeaderIconButton = forwardRef<HTMLButtonElement, ChatHeaderIcon
     );
   },
 );
+
+/** State for the right-side surface panel toggles (Group panel, Library panel). */
+export interface SurfacePanelToggleState {
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+  /** Amber needs-you dot: at least one member thread is waiting on the user. */
+  readonly attention?: boolean;
+}
+
+const SURFACE_PANEL_TOGGLE_CLASS_NAME = cn(
+  CHAT_HEADER_TOGGLE_CLASS_NAME,
+  "!size-7 [&_svg,&_[data-slot=central-icon]]:mx-0",
+);
+
+/** Header chip that opens/closes a right-side surface panel — the shared form of
+ *  what used to be identical ProjectToggle/LibraryToggle implementations. */
+export function SurfacePanelToggle({
+  state,
+  icon,
+  ariaLabel,
+  tooltip,
+}: {
+  state: SurfacePanelToggleState;
+  icon: LucideIcon;
+  ariaLabel: string;
+  tooltip: ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Toggle
+            className={SURFACE_PANEL_TOGGLE_CLASS_NAME}
+            pressed={state.open}
+            onPressedChange={state.onOpenChange}
+            aria-label={ariaLabel}
+            variant="default"
+            size="xs"
+          >
+            <SurfaceChipIcon icon={icon} className="size-4" />
+            {state.attention ? (
+              <span
+                className="absolute right-0.5 top-0.5 size-1.5 rounded-full bg-amber-500 dark:bg-amber-300/90"
+                aria-hidden
+              />
+            ) : null}
+          </Toggle>
+        }
+      />
+      <TooltipPopup side="bottom">{tooltip}</TooltipPopup>
+    </Tooltip>
+  );
+}

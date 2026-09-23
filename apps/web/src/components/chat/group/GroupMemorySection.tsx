@@ -175,13 +175,13 @@ export function GroupMemorySection(props: {
       <SettingsSectionShell title="Auto memory">
         <SettingsCard>
           <SettingsRow
-            title="Read every thread"
+            title="Write memory notes"
             description="Notes the coordinator writes itself as it works in this group."
             control={
               <Switch
                 checked={draft.autoMemoryEnabled}
                 onCheckedChange={(checked) => onChange({ autoMemoryEnabled: Boolean(checked) })}
-                aria-label="Read every thread"
+                aria-label="Write memory notes"
               />
             }
           />

@@ -6,11 +6,14 @@ import ChatMarkdown from "~/components/ChatMarkdown";
 import { FolderClosed } from "~/components/FolderClosed";
 import { IconButton } from "~/components/ui/icon-button";
 import { Textarea } from "~/components/ui/textarea";
-import { AUXILIARY_PANEL_MOTION_CLASS } from "~/components/chat/auxiliary/ChatAuxiliaryPanel";
-import { ENVIRONMENT_PANEL_SURFACE_CLASS_NAME } from "~/components/chat/composerPickerStyles";
+import {
+  ENVIRONMENT_PANEL_MOTION_CLASS,
+  ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME,
+  ENVIRONMENT_PANEL_SURFACE_CLASS_NAME,
+} from "~/components/chat/composerPickerStyles";
 import { ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME } from "~/components/chat/environment/environmentPanelStyles";
 import { basenameOfPath } from "~/file-icons";
-import { BotIcon, CheckIcon, PauseIcon, PlayIcon, SettingsIcon } from "~/lib/icons";
+import { BotIcon, PauseIcon, PlayIcon, SettingsIcon, XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { useStore } from "~/store";
 import { createSidebarThreadSummariesSelector } from "~/storeSelectors";
@@ -25,7 +28,9 @@ import {
 import { GroupSettingsDialog } from "../group/GroupSettingsDialog";
 import { resolveCoordinatorAppearance } from "../group/coordinatorAppearance";
 import type { GroupSettingsSection } from "../group/groupSettingsDialog.logic";
+import { GroupOverview } from "./GroupOverview";
 import { defaultProjectAgentName } from "./projectAgentDialog.logic";
+import { collectGroupThreadSummaries } from "./groupOverview.logic";
 import {
   mergeProjectFocusRows,
   partitionProjectFocusRows,
@@ -35,6 +40,7 @@ import {
   type ProjectFocusRow,
 } from "./projectPanel.logic";
 import { useProjectAgent } from "./useProjectAgent";
+import { useProjectAgentSummaries } from "./useProjectAgentSummaries";
 
 export interface ProjectPanelProps {
   open: boolean;
@@ -46,14 +52,13 @@ export interface ProjectPanelProps {
   importedInstructions?: string;
   onOpenCoordinator: (threadId: ThreadId) => void;
   onOpenThread: (threadId: ThreadId) => void;
+  onOpenThreadSplit: (threadId: ThreadId) => void;
+  onOpenAutomation: (automationId: string) => void;
   onClose: () => void;
   settingsDialogOpen?: boolean;
   settingsInitialSection?: GroupSettingsSection | undefined;
   onSettingsDialogOpenChange?: (open: boolean) => void;
 }
-
-const ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME =
-  "pointer-events-none absolute inset-y-0 right-0 z-20 flex flex-col p-3";
 
 export function ProjectPanel({
   open,
@@ -65,6 +70,9 @@ export function ProjectPanel({
   importedInstructions,
   onOpenCoordinator,
   onOpenThread,
+  onOpenThreadSplit,
+  onOpenAutomation,
+  onClose,
   settingsDialogOpen,
   settingsInitialSection,
   onSettingsDialogOpenChange,
@@ -79,22 +87,56 @@ export function ProjectPanel({
     projectId,
     enabled: open && projectId !== null,
   });
+  const { summariesByProjectId } = useProjectAgentSummaries();
   const selectSidebarThreads = useMemo(() => createSidebarThreadSummariesSelector(), []);
   const sidebarThreads = useStore(selectSidebarThreads);
+  const allProjects = useStore((state) => state.projects);
+  const projectNameById = useMemo(
+    () => new Map(allProjects.map((project) => [project.id, project.name] as const)),
+    [allProjects],
+  );
+  const projectCwdById = useMemo(
+    () => new Map(allProjects.map((project) => [project.id, project.cwd] as const)),
+    [allProjects],
+  );
+  const coordinatorThreadId = agent.overview?.config?.coordinatorThreadId ?? null;
   const focusRows = useMemo(() => {
     const titlesById = new Map(sidebarThreads.map((thread) => [thread.id, thread.title] as const));
     return mergeProjectFocusRows(
       partitionProjectFocusRows(agent.tasks),
       projectThreadIndexFocusRows({
         threads: agent.threads,
-        coordinatorThreadId: agent.overview?.config?.coordinatorThreadId,
+        coordinatorThreadId,
         titlesById,
       }),
     );
-  }, [agent.overview?.config?.coordinatorThreadId, agent.tasks, agent.threads, sidebarThreads]);
+  }, [coordinatorThreadId, agent.tasks, agent.threads, sidebarThreads]);
   const digestFocus = useMemo(
     () => projectDigestFocusRows(agent.overview?.digest?.focusItems ?? []),
     [agent.overview?.digest?.focusItems],
+  );
+  const memberThreadIds = useMemo(() => {
+    const ids = new Set<ThreadId>();
+    for (const task of agent.tasks) {
+      if (task.assignedThreadId) ids.add(task.assignedThreadId);
+    }
+    for (const entry of agent.threads) {
+      if (!entry.excluded && !entry.archived) ids.add(entry.threadId);
+    }
+    if (coordinatorThreadId) ids.add(coordinatorThreadId);
+    return ids;
+  }, [agent.tasks, agent.threads, coordinatorThreadId]);
+  const groupThreads = useMemo(
+    () =>
+      projectId === null
+        ? []
+        : collectGroupThreadSummaries({
+            threads: sidebarThreads,
+            groupProjectId: projectId,
+            memberThreadIds,
+            coordinatorThreadId,
+          }),
+    [sidebarThreads, projectId, memberThreadIds, coordinatorThreadId],
   );
   const contextDocuments = PROJECT_CONTEXT_PREVIEW_DOCUMENTS.filter(
     (document) => document.logicalPath !== "notes.md",
@@ -102,7 +144,13 @@ export function ProjectPanel({
   const coordinatorName =
     agent.overview?.config?.coordinatorName ?? defaultProjectAgentName(projectName);
   const folderLabel = basenameOfPath(workspacePath) || workspacePath || projectName;
-  const configured = agent.overview?.configured === true;
+  // Configured must not depend on the panel being open — the overview is only
+  // loaded while open, so fall back to the summaries store (which is fed by the
+  // server config stream even while the panel is closed).
+  const configured =
+    agent.overview?.configured ??
+    (projectId === null ? undefined : summariesByProjectId.get(projectId)?.configured) ??
+    false;
   const coordinatorModel =
     agent.overview?.config?.coordinatorModelSelection ?? defaultModelSelection;
   const coordinatorAppearance = resolveCoordinatorAppearance({
@@ -119,29 +167,37 @@ export function ProjectPanel({
     <div className="flex flex-col gap-0.5 p-1.5">
       <div className="flex items-center justify-between gap-2 px-2 pb-0.5 pt-0.5">
         <EnvironmentPanelTitle>Group</EnvironmentPanelTitle>
-        {configured ? (
-          <div className="flex items-center gap-0.5">
-            {agent.overview?.goal?.status === "active" ? (
-              <IconButton type="button" label="Pause goal" onClick={() => void agent.pauseGoal()}>
-                <PauseIcon className="size-3.5" />
+        <div className="flex items-center gap-0.5">
+          {configured ? (
+            <>
+              {agent.overview?.goal?.status === "active" ? (
+                <IconButton type="button" label="Pause goal" onClick={() => void agent.pauseGoal()}>
+                  <PauseIcon className="size-3.5" />
+                </IconButton>
+              ) : null}
+              {agent.overview?.goal?.status === "paused" ? (
+                <IconButton
+                  type="button"
+                  label="Resume goal"
+                  onClick={() => void agent.resumeGoal()}
+                >
+                  <PlayIcon className="size-3.5" />
+                </IconButton>
+              ) : null}
+              <IconButton
+                type="button"
+                label="Group settings"
+                tooltip="Group settings"
+                onClick={() => setAgentDialogOpen(true)}
+              >
+                <SettingsIcon className="size-3.5" />
               </IconButton>
-            ) : null}
-            {agent.overview?.goal?.status === "paused" ? (
-              <IconButton type="button" label="Resume goal" onClick={() => void agent.resumeGoal()}>
-                <PlayIcon className="size-3.5" />
-              </IconButton>
-            ) : null}
-            <IconButton
-              type="button"
-              label="Group settings"
-              tooltip="Group settings"
-              className="-mr-[7px] sm:-mr-[5px]"
-              onClick={() => setAgentDialogOpen(true)}
-            >
-              <SettingsIcon className="size-3.5" />
-            </IconButton>
-          </div>
-        ) : null}
+            </>
+          ) : null}
+          <IconButton type="button" label="Close group panel" tooltip="Close" onClick={onClose}>
+            <XIcon className="size-3.5" />
+          </IconButton>
+        </div>
       </div>
 
       {agent.error ? (
@@ -173,7 +229,7 @@ export function ProjectPanel({
       ) : (
         <EnvironmentRow
           icon={<BotIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
-          label="Set up project agent"
+          label="Set up coordinator"
           onClick={() => setAgentDialogOpen(true)}
         />
       )}
@@ -184,7 +240,7 @@ export function ProjectPanel({
         </p>
       ) : null}
 
-      {configured ? (
+      {configured && projectId !== null ? (
         <>
           <EnvironmentSectionDivider />
           <ProjectFocusCard
@@ -203,44 +259,41 @@ export function ProjectPanel({
             </p>
           ))}
 
-          <div className="flex flex-col gap-0.5 px-1 py-1">
-            {focusRows.open.map((row) => (
-              <ProjectHistoryRow key={row.id} row={row} onOpenThread={onOpenThread} />
-            ))}
-            {focusRows.done.map((row) => (
-              <ProjectHistoryRow key={row.id} row={row} onOpenThread={onOpenThread} />
-            ))}
-          </div>
-
-          {focusRows.archived.length > 0 ? (
-            <EnvironmentCollapsibleSection label="Archived" defaultOpen={false}>
-              <div className="flex flex-col gap-0.5 px-1 pb-1">
-                {focusRows.archived.map((row) => (
-                  <ProjectHistoryRow key={row.id} row={row} onOpenThread={onOpenThread} />
-                ))}
-              </div>
-            </EnvironmentCollapsibleSection>
+          {open ? (
+            <GroupOverview
+              groupProjectId={projectId}
+              groupName={projectName}
+              memberThreadIds={memberThreadIds}
+              groupThreads={groupThreads}
+              projectNameById={projectNameById}
+              projectCwdById={projectCwdById}
+              agent={agent}
+              onOpenThread={onOpenThread}
+              onOpenThreadSplit={onOpenThreadSplit}
+              onOpenAutomation={onOpenAutomation}
+            />
           ) : null}
 
-          {contextDocuments.map((document) => (
-            <div key={document.logicalPath}>
-              <EnvironmentSectionDivider />
-              <EnvironmentCollapsibleSection label={document.label} defaultOpen={false}>
+          <EnvironmentSectionDivider />
+          <EnvironmentCollapsibleSection label="Context" defaultOpen={false}>
+            <div className="flex flex-col gap-0.5 pb-1">
+              {contextDocuments.map((document) => (
                 <ProjectContextFile
+                  key={document.logicalPath}
                   logicalPath={document.logicalPath}
                   editable={document.editable}
                   enabled={open}
                   projectId={projectId}
                   agent={agent}
                 />
-              </EnvironmentCollapsibleSection>
+              ))}
             </div>
-          ))}
+          </EnvironmentCollapsibleSection>
         </>
       ) : (
         <p className="px-2 py-1 text-ui text-muted-foreground">
-          Shared context, tasks, and summaries live in this project folder after you set up the
-          agent. Setup does not launch a model.
+          Threads, context, and memory for the group live in this folder after you set up the
+          coordinator. Setup does not launch a model.
         </p>
       )}
     </div>
@@ -252,11 +305,12 @@ export function ProjectPanel({
         className={ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME}
         data-environment-panel-variant={variant}
         aria-hidden={!open}
+        inert={!open}
       >
         <div
           className={cn(
             ENVIRONMENT_PANEL_SURFACE_CLASS_NAME,
-            AUXILIARY_PANEL_MOTION_CLASS,
+            ENVIRONMENT_PANEL_MOTION_CLASS,
             "flex max-h-full w-72 flex-col",
             open
               ? "pointer-events-auto translate-x-0 opacity-100"
@@ -327,33 +381,6 @@ function ProjectFocusCard({
   );
 }
 
-function ProjectHistoryRow({
-  row,
-  onOpenThread,
-}: {
-  row: ProjectFocusRow;
-  onOpenThread: (threadId: ThreadId) => void;
-}) {
-  return (
-    <div className="flex items-start gap-2 rounded-lg px-2 py-1.5">
-      <span
-        className={cn(
-          "mt-0.5 flex size-3.5 shrink-0 items-center justify-center rounded-full border",
-          row.state === "done" || row.state === "archived"
-            ? "border-foreground/35 text-foreground/70"
-            : "border-foreground/30",
-        )}
-        aria-hidden
-      >
-        {row.state === "done" || row.state === "archived" ? (
-          <CheckIcon className="size-2.5" />
-        ) : null}
-      </span>
-      <ProjectFocusLink row={row} onOpenThread={onOpenThread} />
-    </div>
-  );
-}
-
 function ProjectFocusLink({
   row,
   onOpenThread,
@@ -400,6 +427,13 @@ function ProjectContextFile({
   const debounceRef = useRef<number | null>(null);
   const revisionRef = useRef(0);
   const focusedRef = useRef(false);
+  // Saves run one at a time per document: two overlapping writes with the same
+  // expectedRevision would produce a false conflict. `lastRequested` is what the
+  // latest input holds — a newer change supersedes an in-flight save.
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const lastRequestedRef = useRef<string | null>(null);
+  const lastSavedRef = useRef<string | null>(null);
+  const readDocument = agent.readDocument;
 
   useEffect(() => {
     revisionRef.current = revision;
@@ -410,12 +444,14 @@ function ProjectContextFile({
     const generation = ++generationRef.current;
     void (async () => {
       try {
-        const read = await agent.readDocument(logicalPath);
+        const read = await readDocument(logicalPath);
         if (generationRef.current !== generation || !read) return;
         if (!focusedRef.current) {
           setBody(read.document.content);
         }
         setRevision(read.document.revision);
+        lastRequestedRef.current = read.document.content;
+        lastSavedRef.current = read.document.content;
         setConflict(
           read.head.conflictPending
             ? "This file changed outside Synara. Keep typing to overwrite, or reopen the panel."
@@ -426,7 +462,7 @@ function ProjectContextFile({
         setConflict(cause instanceof Error ? cause.message : "Failed to load this file.");
       }
     })();
-  }, [agent, enabled, logicalPath, projectId]);
+  }, [readDocument, enabled, logicalPath, projectId]);
 
   useEffect(() => {
     return () => {
@@ -435,19 +471,25 @@ function ProjectContextFile({
   }, []);
 
   const save = (content: string) => {
-    void agent
-      .writeDocument({
-        logicalPath,
-        content,
-        expectedRevision: revisionRef.current,
-      })
-      .then((saved) => {
+    lastRequestedRef.current = content;
+    if (lastSavedRef.current === content) return;
+    saveQueueRef.current = saveQueueRef.current.then(async () => {
+      // A newer keystroke superseded this save while an earlier write was in flight.
+      const pending = lastRequestedRef.current;
+      if (pending === null || pending === lastSavedRef.current) return;
+      try {
+        const saved = await agent.writeDocument({
+          logicalPath,
+          content: pending,
+          expectedRevision: revisionRef.current,
+        });
         setRevision(saved.revision);
+        lastSavedRef.current = pending;
         setConflict(null);
-      })
-      .catch((cause: unknown) => {
+      } catch (cause) {
         setConflict(cause instanceof Error ? cause.message : "Could not save this file.");
-      });
+      }
+    });
   };
 
   return (

@@ -2552,6 +2552,28 @@ export default function Sidebar() {
     ],
   );
 
+  // Keep the user off optional tabs once hidden in Settings: viewing one
+  // (e.g. via a bookmark/deep link) jumps back to the always-visible Threads tab.
+  // Settings is its own route and is never redirected.
+  useEffect(() => {
+    if (isOnSettings) {
+      return;
+    }
+    if (isOnGroups && !groupsSectionVisible) {
+      if (navigateToBackTarget(resolveBackToThreadsTarget())) {
+        return;
+      }
+      void navigate({ to: "/" });
+    }
+  }, [
+    groupsSectionVisible,
+    isOnGroups,
+    isOnSettings,
+    navigate,
+    navigateToBackTarget,
+    resolveBackToThreadsTarget,
+  ]);
+
   useEffect(() => {
     // Persisted paths make homeDir truthy
     // immediately on reload, well before the first shell snapshot arrives.

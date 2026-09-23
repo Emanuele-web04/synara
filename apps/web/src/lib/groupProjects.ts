@@ -6,6 +6,7 @@
 
 import { type ProjectId, type ThreadId } from "@synara/contracts";
 import { isWorkspaceRootWithin, workspaceRootsEqual } from "@synara/shared/threadWorkspace";
+import { isGroupContainerKind } from "@synara/shared/projectContainers";
 
 import type { DraftThreadState } from "../composerDraftStore";
 import { readNativeApi } from "../nativeApi";
@@ -125,10 +126,8 @@ export function findGroupDraftThreadId(input: {
 function findGroupContainerCandidateById<
   T extends { readonly id?: ProjectId | undefined; readonly kind?: Project["kind"] | undefined },
 >(projects: readonly T[], projectId: ProjectId): T | null {
-  return findContainerCandidateById(
-    projects,
-    projectId,
-    (project) => project.kind === "group" || project.kind === "studio",
+  return findContainerCandidateById(projects, projectId, (project) =>
+    isGroupContainerKind(project.kind),
   );
 }
 
