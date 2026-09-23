@@ -567,6 +567,7 @@ function verifyLinuxComputerUseAssetsUnpacked(): void {
   for (const glob of [
     "apps/server/dist/atspi_helper.py",
     "apps/server/dist/computer-use-kwin/**",
+    "apps/server/dist/computer-use-hyprland/**",
   ]) {
     if (!asarUnpack.includes(glob)) {
       throw new Error(`Expected the Linux desktop build to unpack ${glob} from app.asar.`);

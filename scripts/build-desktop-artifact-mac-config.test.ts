@@ -168,6 +168,7 @@ describe("createDesktopPlatformBuildConfig", () => {
       "node_modules/node-pty/**",
       "apps/server/dist/atspi_helper.py",
       "apps/server/dist/computer-use-kwin/**",
+      "apps/server/dist/computer-use-hyprland/**",
     ]);
     assert.deepStrictEqual(linux.linux, {
       target: ["AppImage"],
@@ -225,12 +226,17 @@ describe("createDesktopPlatformBuildConfig", () => {
 
     assert.deepStrictEqual(
       [...LINUX_COMPUTER_USE_ASAR_UNPACK_GLOBS],
-      ["apps/server/dist/atspi_helper.py", "apps/server/dist/computer-use-kwin/**"],
+      [
+        "apps/server/dist/atspi_helper.py",
+        "apps/server/dist/computer-use-kwin/**",
+        "apps/server/dist/computer-use-hyprland/**",
+      ],
     );
     assert.deepStrictEqual(linux.asarUnpack, [
       "node_modules/node-pty/**",
       "apps/server/dist/atspi_helper.py",
       "apps/server/dist/computer-use-kwin/**",
+      "apps/server/dist/computer-use-hyprland/**",
     ]);
 
     // Only Linux ships the KWin plugin and the AT-SPI helper; the other

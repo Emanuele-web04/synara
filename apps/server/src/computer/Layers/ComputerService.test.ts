@@ -304,6 +304,38 @@ describe("ComputerServiceLive", () => {
     );
   });
 
+  it("routes a live Hyprland session to the Hyprland backend ahead of a KWin bus owner", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* ComputerService;
+          expect(service.supported).toBe(true);
+          // The passive probe answers from the host it runs on: a live
+          // Hyprland desktop reports the Hyprland backend, any other host
+          // reports the absent session — never a fake, and never the KWin
+          // plugin the stray bus owner would have suggested.
+          expect(service.availability).not.toMatchObject({ kind: "unsupported-platform" });
+          if (service.availability.kind === "available") {
+            expect(service.availability.backend).toBe("hyprland");
+          } else if (service.availability.kind === "backend-unavailable") {
+            expect(service.availability.message).toContain("Hyprland");
+          }
+        }).pipe(
+          Effect.provide(
+            makeComputerServiceLayer({
+              platform: "linux",
+              selection: {
+                env: { XDG_SESSION_TYPE: "wayland" },
+                busNameHasOwner: async (name) => name === "org.kde.KWin",
+                hyprlandSessionPresent: () => true,
+              },
+            }),
+          ),
+        ),
+      ),
+    );
+  });
+
   it("selects the fake backend only when explicitly requested", async () => {
     vi.stubEnv("SYNARA_COMPUTER_BACKEND", "fake");
     try {
@@ -331,7 +363,8 @@ describe("ComputerServiceLive startup selection", () => {
     options: {
       readonly env?: NodeJS.ProcessEnv;
       readonly busNameHasOwner: (name: string) => Promise<boolean>;
-      readonly backends: Partial<Record<"kwin" | "nested", () => FakeComputerBackend>>;
+      readonly hyprlandSessionPresent: () => boolean;
+      readonly backends: Partial<Record<"kwin" | "hyprland" | "nested", () => FakeComputerBackend>>;
     },
     body: (service: ComputerServiceShape) => Promise<void>,
   ): Promise<void> {
@@ -348,6 +381,7 @@ describe("ComputerServiceLive startup selection", () => {
               selection: {
                 env: options.env ?? {},
                 busNameHasOwner: options.busNameHasOwner,
+                hyprlandSessionPresent: options.hyprlandSessionPresent,
               },
               linuxBackends: options.backends,
             }),
@@ -364,6 +398,7 @@ describe("ComputerServiceLive startup selection", () => {
     await withLinuxService(
       {
         busNameHasOwner: () => bus.promise,
+        hyprlandSessionPresent: () => false,
         backends: { nested: () => nested },
       },
       async (service) => {
@@ -388,6 +423,89 @@ describe("ComputerServiceLive startup selection", () => {
         });
         await service.manager.listWindows();
         expect(nested.callsFor("listWindows")).toHaveLength(1);
+      },
+    );
+  });
+
+  it("re-selects when the selected tier's desktop is gone for good", async () => {
+    let hyprlandLive = true;
+    const hyprland = new FakeComputerBackend();
+    const nested = new FakeComputerBackend();
+    await withLinuxService(
+      {
+        busNameHasOwner: async () => false,
+        hyprlandSessionPresent: () => hyprlandLive,
+        backends: { hyprland: () => hyprland, nested: () => nested },
+      },
+      async (service) => {
+        await service.manager.listWindows();
+        const hyprlandReads = hyprland.callsFor("listWindows").length;
+        expect(hyprlandReads).toBeGreaterThan(0);
+
+        hyprlandLive = false;
+        hyprland.emitDesktopGone("The Hyprland instance exited.");
+        await vi.waitFor(() => expect(hyprland.callsFor("dispose")).toHaveLength(1));
+        await service.manager.listWindows();
+        expect(nested.callsFor("listWindows").length).toBeGreaterThan(0);
+        expect(hyprland.callsFor("listWindows")).toHaveLength(hyprlandReads);
+      },
+    );
+  });
+
+  it("swaps the re-selected tier in between operations, never inside one", async () => {
+    let hyprlandLive = true;
+    const hyprland = new FakeComputerBackend();
+    const nested = new FakeComputerBackend();
+    await withLinuxService(
+      {
+        busNameHasOwner: async () => false,
+        hyprlandSessionPresent: () => hyprlandLive,
+        backends: { hyprland: () => hyprland, nested: () => nested },
+      },
+      async (service) => {
+        const manager = service.manager;
+        const targeted = Promise.withResolvers<void>();
+        const resume = Promise.withResolvers<void>();
+        const action = manager.withAgentActivity("thread-1", async () => {
+          await manager.moveCursor("thread-1", { x: 5, y: 5 });
+          targeted.resolve();
+          await resume.promise;
+          return await manager.click("thread-1", { x: 10, y: 10 });
+        });
+        await targeted.promise;
+
+        hyprlandLive = false;
+        hyprland.emitDesktopGone("The Hyprland instance exited.");
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        // Selection has answered, and the swap is waiting for the action.
+        expect(hyprland.callsFor("dispose")).toHaveLength(0);
+        resume.resolve();
+
+        await expect(action).rejects.toMatchObject({ retryable: true });
+        await vi.waitFor(() => expect(hyprland.callsFor("dispose")).toHaveLength(1));
+        expect(nested.callsFor("click")).toHaveLength(0);
+        expect(hyprland.callsFor("click")).toHaveLength(0);
+      },
+    );
+  });
+
+  it("never re-selects a tier an explicit override named", async () => {
+    const hyprland = new FakeComputerBackend();
+    const nested = new FakeComputerBackend();
+    await withLinuxService(
+      {
+        env: { SYNARA_COMPUTER_BACKEND: "hyprland" },
+        busNameHasOwner: async () => false,
+        hyprlandSessionPresent: () => false,
+        backends: { hyprland: () => hyprland, nested: () => nested },
+      },
+      async (service) => {
+        hyprland.emitDesktopGone();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        await service.manager.listWindows().catch(() => undefined);
+        expect(hyprland.callsFor("listWindows").length).toBeGreaterThan(0);
+        expect(hyprland.callsFor("dispose")).toHaveLength(0);
+        expect(nested.calls).toEqual([]);
       },
     );
   });
