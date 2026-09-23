@@ -112,6 +112,21 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(GitLayerLive),
   );
+  const automationServiceLayer = AutomationServiceLive.pipe(
+    Layer.provideMerge(AutomationRepositoryLive),
+    Layer.provideMerge(ProjectionTurnRepositoryLive),
+    Layer.provideMerge(GitCoreLive),
+    Layer.provideMerge(TextGenerationLayerLive),
+    Layer.provideMerge(ServerSettingsLive),
+    Layer.provideMerge(runtimeServicesLayer),
+  );
+  const projectAgentServiceLayer = ProjectAgentServiceLive.pipe(
+    Layer.provideMerge(ProjectAgentRepositoryLive),
+    Layer.provideMerge(automationServiceLayer),
+    Layer.provideMerge(TextGenerationLayerLive),
+    Layer.provideMerge(GitCoreLive),
+    Layer.provideMerge(runtimeServicesLayer),
+  );
   const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(providerHealthLayer),
@@ -121,6 +136,7 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(TextGenerationLayerLive),
     Layer.provideMerge(ServerSettingsLive),
     Layer.provideMerge(AgentGatewayOperationRepositoryLive),
+    Layer.provideMerge(projectAgentServiceLayer),
   );
   const checkpointReactorLayer = CheckpointReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
@@ -171,27 +187,12 @@ export function makeServerRuntimeServicesLayer(
     authControlPlaneLayer,
     serverAuthLayer,
   );
-  const automationServiceLayer = AutomationServiceLive.pipe(
-    Layer.provideMerge(AutomationRepositoryLive),
-    Layer.provideMerge(ProjectionTurnRepositoryLive),
-    Layer.provideMerge(GitCoreLive),
-    Layer.provideMerge(TextGenerationLayerLive),
-    Layer.provideMerge(ServerSettingsLive),
-    Layer.provideMerge(runtimeServicesLayer),
-  );
   const automationSchedulerLayer = AutomationSchedulerLive.pipe(
     Layer.provideMerge(automationServiceLayer),
     Layer.provideMerge(AutomationRepositoryLive),
   );
   const automationRunReactorLayer = AutomationRunReactorLive.pipe(
     Layer.provideMerge(automationServiceLayer),
-  );
-  const projectAgentServiceLayer = ProjectAgentServiceLive.pipe(
-    Layer.provideMerge(ProjectAgentRepositoryLive),
-    Layer.provideMerge(automationServiceLayer),
-    Layer.provideMerge(TextGenerationLayerLive),
-    Layer.provideMerge(GitCoreLive),
-    Layer.provideMerge(runtimeServicesLayer),
   );
   const projectAgentReactorLayer = ProjectAgentReactorLive.pipe(
     Layer.provideMerge(projectAgentServiceLayer),
