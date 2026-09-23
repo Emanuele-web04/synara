@@ -2088,14 +2088,14 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.strictEqual(status.version, "1.0.11");
         assert.strictEqual(
           status.message,
-          "Antigravity CLI 1.0.11 is too old for Synara. Upgrade to 1.0.12 or newer.",
+          "Antigravity ACP server 1.0.11 is too old for Synara. Upgrade to 1.0.12 or newer.",
         );
       }).pipe(
         Effect.provide(
           mockSpawnerLayer((args) => {
             const joined = args.join(" ");
             if (joined === "--version") {
-              return { stdout: "Antigravity CLI 1.0.11\n", stderr: "", code: 0 };
+              return { stdout: "agy_acp_server 1.0.11\n", stderr: "", code: 0 };
             }
             throw new Error(`Unexpected args: ${joined}`);
           }),
@@ -2114,10 +2114,10 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       }).pipe(
         Effect.provide(
           mockSpawnerLayer((args, command) => {
-            assert.strictEqual(command, "agy");
+            assert.strictEqual(command, "agy_acp_server");
             const joined = args.join(" ");
             if (joined === "--version") {
-              return { stdout: "Antigravity CLI 1.1.2\n", stderr: "", code: 0 };
+              return { stdout: "agy_acp_server 1.1.2\n", stderr: "", code: 0 };
             }
             if (joined === "models") {
               return {
@@ -2134,12 +2134,28 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
 
     it.effect("uses the configured Antigravity binary", () =>
       Effect.gen(function* () {
+        const status = yield* checkAntigravityProviderStatus("/custom/bin/agy_acp_server.exe");
+        assert.strictEqual(status.status, "ready");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "/custom/bin/agy_acp_server.exe");
+            return args.join(" ") === "--version"
+              ? { stdout: "1.1.2\n", stderr: "", code: 0 }
+              : { stdout: "GPT-OSS 120B (Medium)\n", stderr: "", code: 0 };
+          }),
+        ),
+      ),
+    );
+
+    it.effect("ignores a legacy interactive agy binaryPath and falls back to discovery", () =>
+      Effect.gen(function* () {
         const status = yield* checkAntigravityProviderStatus("/custom/bin/agy");
         assert.strictEqual(status.status, "ready");
       }).pipe(
         Effect.provide(
           mockSpawnerLayer((args, command) => {
-            assert.strictEqual(command, "/custom/bin/agy");
+            assert.strictEqual(command, "agy_acp_server");
             return args.join(" ") === "--version"
               ? { stdout: "1.1.2\n", stderr: "", code: 0 }
               : { stdout: "GPT-OSS 120B (Medium)\n", stderr: "", code: 0 };

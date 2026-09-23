@@ -35,7 +35,9 @@ export type ClaudeServerProviderSettings = typeof ClaudeServerProviderSettings.T
 
 export const AntigravityServerProviderSettings = Schema.Struct({
   ...ProviderSettingsBase,
-  binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "agy")),
+  // Points at `agy_acp_server[.par|.exe]`, not the interactive `agy` CLI.
+  // Empty means resolve from env / managed install / PATH.
+  binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
 });
 export type AntigravityServerProviderSettings = typeof AntigravityServerProviderSettings.Type;
 

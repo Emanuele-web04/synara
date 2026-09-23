@@ -230,10 +230,13 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
         kind: "text",
         settingsKey: "antigravityBinaryPath",
         label: "Antigravity binary path",
-        placeholder: "Antigravity CLI binary path",
+        placeholder: "Antigravity ACP server binary path",
         description: (
           <>
-            Leave blank to use <code>agy</code> from your PATH.
+            Leave blank to use <code>agy_acp_server</code> from your PATH,{" "}
+            <code>~/.synara/acp-servers/antigravity/</code>, or{" "}
+            <code>ANTIGRAVITY_ACP_EXECUTABLE</code>. The interactive <code>agy</code> CLI is not a
+            substitute.
           </>
         ),
       },

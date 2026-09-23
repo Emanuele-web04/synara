@@ -64,6 +64,10 @@ import {
   resolveCursorAgentBinaryPath,
 } from "../acp/CursorAcpCommand";
 import { hasDroidApiKeyEnv, resolveDroidCliBinaryPath } from "../acp/DroidAcpSupport";
+import {
+  ANTIGRAVITY_ACP_BINARY_NAME,
+  resolveAntigravityAcpExecutable,
+} from "../acp/AntigravityAcpSupport.ts";
 import { hasGrokApiKeyEnv } from "../acp/GrokAcpSupport";
 import {
   hasDevinApiKeyEnv,
@@ -783,7 +787,7 @@ const runPiCommand = (args: ReadonlyArray<string>, executable = "pi") =>
     ),
   );
 
-const runAntigravityCommand = (args: ReadonlyArray<string>, executable = "agy") =>
+const runAntigravityCommand = (args: ReadonlyArray<string>, executable = "agy_acp_server") =>
   runProviderCommand(executable, args, providerCommandEnv(ANTIGRAVITY_PROVIDER)).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
@@ -1496,7 +1500,9 @@ export const checkAntigravityProviderStatus = (
 ): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
-    const executable = nonEmptyTrimmed(binaryPath) ?? "agy";
+    const resolution = resolveAntigravityAcpExecutable(nonEmptyTrimmed(binaryPath));
+    const executable =
+      resolution.outcome === "resolved" ? resolution.executable : ANTIGRAVITY_ACP_BINARY_NAME;
     const versionProbe = yield* probeProviderCliVersion(
       runAntigravityCommand(["--version"], executable),
       DEFAULT_TIMEOUT_MS,
@@ -1510,8 +1516,8 @@ export const checkAntigravityProviderStatus = (
         checkedAt,
         message:
           versionProbe.outcome === "missing"
-            ? "Antigravity CLI (`agy`) is not installed or is not on PATH."
-            : `Antigravity CLI health check failed: ${String(versionProbe.cause)}`,
+            ? "Antigravity ACP server (`agy_acp_server`) is not installed or is not on PATH. Install it under ~/.synara/acp-servers/antigravity/, put it on PATH, or set ANTIGRAVITY_ACP_EXECUTABLE. The interactive `agy` CLI is not a substitute."
+            : `Antigravity ACP health check failed: ${String(versionProbe.cause)}`,
       } satisfies ServerProviderStatus;
     }
     if (versionProbe.outcome === "timeout") {
@@ -1521,7 +1527,7 @@ export const checkAntigravityProviderStatus = (
         available: true,
         authStatus: "unknown",
         checkedAt,
-        message: "Antigravity CLI version check timed out.",
+        message: "Antigravity ACP server version check timed out.",
       } satisfies ServerProviderStatus;
     }
     if (versionProbe.outcome === "nonzero") {
@@ -1532,7 +1538,7 @@ export const checkAntigravityProviderStatus = (
         available: false,
         authStatus: "unknown",
         checkedAt,
-        message: detailFromResult(version) ?? "Antigravity CLI version check failed.",
+        message: detailFromResult(version) ?? "Antigravity ACP server version check failed.",
       } satisfies ServerProviderStatus;
     }
     const version = versionProbe.result;
@@ -1548,7 +1554,7 @@ export const checkAntigravityProviderStatus = (
         authStatus: "unknown",
         version: parsedVersion,
         checkedAt,
-        message: `Antigravity CLI ${parsedVersion} is too old for Synara. Upgrade to ${MINIMUM_ANTIGRAVITY_CLI_VERSION} or newer.`,
+        message: `Antigravity ACP server ${parsedVersion} is too old for Synara. Upgrade to ${MINIMUM_ANTIGRAVITY_CLI_VERSION} or newer.`,
       } satisfies ServerProviderStatus;
     }
     const models = yield* runAntigravityCommand(["models"], executable).pipe(
@@ -1568,7 +1574,8 @@ export const checkAntigravityProviderStatus = (
         authStatus: "authenticated",
         version: parsedVersion,
         checkedAt,
-        message: "Antigravity CLI is installed, authenticated, and returned available models.",
+        message:
+          "Antigravity ACP server is installed, authenticated, and returned available models.",
       } satisfies ServerProviderStatus;
     }
     return {
@@ -1578,7 +1585,8 @@ export const checkAntigravityProviderStatus = (
       authStatus: "unknown",
       version: parsedVersion,
       checkedAt,
-      message: "Antigravity CLI is installed, but Synara could not verify login by listing models.",
+      message:
+        "Antigravity ACP server is installed, but Synara could not verify login by listing models.",
     } satisfies ServerProviderStatus;
   });
 
