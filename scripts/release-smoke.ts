@@ -272,6 +272,36 @@ function verifyReleaseWorkflowSafety(): void {
     "--executable-name",
     "Expected packaged startup verification to resolve the flavor's executable name.",
   );
+  const iconJob = workflow.slice(
+    workflow.indexOf("  build_mac_icon:\n"),
+    workflow.indexOf("  build:\n"),
+  );
+  assertContains(
+    iconJob,
+    "DESKTOP_FLAVOR: ${{ needs.preflight.outputs.desktop_flavor }}",
+    "Expected the macOS icon job to receive the resolved desktop flavor.",
+  );
+  const brandAssets = readFileSync(resolve(repoRoot, "scripts/lib/brand-assets.ts"), "utf8");
+  const betaComposerPath = /betaMacIconComposer: "([^"]+)"/.exec(brandAssets)?.[1];
+  const prodComposerPath = /productionMacIconComposer: "([^"]+)"/.exec(brandAssets)?.[1];
+  if (betaComposerPath === undefined || prodComposerPath === undefined) {
+    throw new Error("Expected brand-assets.ts to declare Icon Composer sources per flavor.");
+  }
+  assertContains(
+    iconJob,
+    `icon_source="${prodComposerPath}"`,
+    "Expected the macOS icon job to default to the production Icon Composer source.",
+  );
+  assertContains(
+    iconJob,
+    `icon_source="${betaComposerPath}"`,
+    "Expected the macOS icon job to compile the beta Icon Composer source for beta releases.",
+  );
+  assertContains(
+    iconJob,
+    "--app-icon Synara",
+    "Expected every flavor's icon catalog to keep the Synara asset name.",
+  );
   assertContains(
     workflow,
     "SYNARA_PUBLISH_RELEASE: ${{ needs.preflight.outputs.publish_release }}",

@@ -309,11 +309,19 @@ jobs:
       - name: Compile Icon Composer catalog
         env:
           DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+          DESKTOP_FLAVOR: ${{ needs.preflight.outputs.desktop_flavor }}
         run: |
           set -euo pipefail
           xcodebuild -version
           mkdir -p "$RUNNER_TEMP/mac-icon"
-          xcrun actool assets/prod/Synara.icon --compile "$RUNNER_TEMP/mac-icon" --platform macosx --minimum-deployment-target 26.0 --app-icon Synara --include-all-app-icons --output-partial-info-plist "$RUNNER_TEMP/icon-partial.plist" --output-format human-readable-text
+          # Same source selection as scripts/lib/brand-assets.ts
+          # desktopIconAssetPaths(flavor).macIconComposer; --app-icon names the
+          # catalog asset Synara regardless of the .icon bundle filename.
+          icon_source="assets/prod/Synara.icon"
+          if [[ "$DESKTOP_FLAVOR" == "beta" ]]; then
+            icon_source="assets/beta/Synara-Beta.icon"
+          fi
+          xcrun actool "$icon_source" --compile "$RUNNER_TEMP/mac-icon" --platform macosx --minimum-deployment-target 26.0 --app-icon Synara --include-all-app-icons --output-partial-info-plist "$RUNNER_TEMP/icon-partial.plist" --output-format human-readable-text
           test -s "$RUNNER_TEMP/mac-icon/Assets.car"
 
       - name: Upload icon catalog
