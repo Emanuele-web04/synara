@@ -1917,6 +1917,26 @@ describe("Cua native boundary", () => {
     expect(await f.backend.availability()).toMatchObject({ kind: "available" });
   });
 
+  it("treats upstream Windows UIA availability as granted accessibility and capture", async () => {
+    const f = fixture({ hostPlatform: "win32", nativeRevision: null });
+    f.onTool("check_permissions", () => ({
+      structuredContent: { uia: true, post_message: true, elevated: false },
+    }));
+    expect(await f.backend.availability({ refresh: true })).toMatchObject({ kind: "available" });
+    expect(f.backend.health()).toMatchObject({ status: "connected", captureAvailable: true });
+    expect(await f.backend.provision()).toContain("permissions are ready");
+  });
+
+  it("keeps Windows setup blocked without UIA availability", async () => {
+    const f = fixture({ hostPlatform: "win32", nativeRevision: null });
+    f.onTool("check_permissions", () => ({ structuredContent: { uia: false } }));
+    expect(await f.backend.availability({ refresh: true })).toMatchObject({
+      kind: "permission-required",
+      missing: ["accessibility", "screenRecording"],
+    });
+    expect(f.backend.health()).toMatchObject({ captureAvailable: false });
+  });
+
   it("names Input Monitoring when the physical interruption listener lacks its grant", async () => {
     const f = fixture({ hostPlatform: "darwin" });
     f.setInputMonitor(false, false);

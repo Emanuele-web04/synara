@@ -106,6 +106,12 @@ const text = (value: unknown, max = 1024): string =>
 const number = (value: unknown): number =>
   typeof value === "number" && Number.isFinite(value) ? value : NaN;
 function captureAccessAvailable(permission: Record<string, unknown>, platform: string): boolean {
+  if (platform === "win32") {
+    // The upstream Windows driver reports no screen_recording consent gate —
+    // Windows has none for desktop capture. Its UIA availability is the
+    // driver's own signal that observation works (verified with live screenshots).
+    return permission.uia === true;
+  }
   if (platform !== "linux" || typeof permission.screen_recording === "boolean")
     return permission.screen_recording === true;
   // These are display prerequisites, not proof that every compositor exposes
@@ -122,7 +128,11 @@ function missingComputerPermissions(
   const accessibility =
     platform === "linux"
       ? (permission.atspi ?? permission.accessibility)
-      : permission.accessibility;
+      : platform === "win32"
+        ? // The upstream Windows driver reports UIA availability instead of an
+          // accessibility grant; Windows needs no accessibility consent prompt.
+          permission.uia
+        : permission.accessibility;
   if (accessibility !== true) missing.push("accessibility");
   if (!captureAccessAvailable(permission, platform)) missing.push("screenRecording");
   // Only the macOS host with a physical input listener reports this grant.
@@ -791,8 +801,12 @@ export class CuaComputerBackend implements ComputerBackend {
       // pixels flow again, only a fresh probe saying so does.
       // Only macOS's fresh grant proves its capture prerequisite recovered.
       // A Linux compositor connection alone must not erase a capture failure.
-      if (hostPlatform !== "linux" && permission.screen_recording === true)
-        this.captureFailed = false;
+      // Windows has no capture consent gate; a fresh UIA-available probe is
+      // its equivalent recovery signal.
+      const sawCaptureGrant =
+        (hostPlatform !== "linux" && permission.screen_recording === true) ||
+        (hostPlatform === "win32" && permission.uia === true);
+      if (sawCaptureGrant) this.captureFailed = false;
       const bundleId = text(record(permission.source).host_bundle_id, 256);
       const signature = this.buildSignature();
       const monitorUnavailable =
