@@ -147,8 +147,8 @@ function GroupsIndexRouteView() {
   if (groupsEmptyState === "no-groups") {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-1 px-6 text-center">
-        <p className="text-sm font-medium text-foreground">No groups yet</p>
-        <p className="text-xs text-muted-foreground">
+        <p className="text-ui-lg font-medium text-foreground">No groups yet</p>
+        <p className="text-ui text-muted-foreground">
           Create one from the sidebar to coordinate work across repos.
         </p>
       </div>

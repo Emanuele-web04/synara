@@ -94,7 +94,7 @@ function UseDefaultLink(props: { readonly disabled: boolean; readonly onClick: (
       type="button"
       disabled={props.disabled}
       className={cn(
-        "text-[11px] text-muted-foreground hover:text-foreground",
+        "text-ui-sm text-muted-foreground hover:text-foreground",
         props.disabled && "cursor-default opacity-50 hover:text-muted-foreground",
       )}
       onClick={props.onClick}

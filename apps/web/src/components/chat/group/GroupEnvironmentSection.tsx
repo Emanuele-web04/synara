@@ -118,7 +118,7 @@ export function GroupEnvironmentSection(props: {
             ))}
           </SettingsCard>
         )}
-        <p className="mt-2 px-1 text-[11px] text-muted-foreground">
+        <p className="mt-2 px-1 text-ui-sm text-muted-foreground">
           Linking and unlinking apply immediately.
         </p>
       </SettingsSectionShell>
@@ -215,7 +215,7 @@ export function GroupEnvironmentSection(props: {
               />
             }
           />
-          <div className="px-4 py-2.5 text-[11px] text-muted-foreground">
+          <div className="px-4 py-2.5 text-ui-sm text-muted-foreground">
             The library is a git repository; every change is committed.
           </div>
         </SettingsCard>

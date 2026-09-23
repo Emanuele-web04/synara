@@ -2305,7 +2305,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       conversationOnly ? (
                         <p
                           key={creation.operationId}
-                          className="mt-2 flex flex-wrap gap-x-2 gap-y-1 text-[12px]"
+                          className="mt-2 flex flex-wrap gap-x-2 gap-y-1 text-ui"
                         >
                           {creation.threads.map((thread) => (
                             <button

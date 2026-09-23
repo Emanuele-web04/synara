@@ -308,7 +308,7 @@ export function SidebarGroupsSurface({
                       <FolderOpenIcon className="size-3.5 shrink-0" />
                       <span
                         className={cn(
-                          "min-w-0 flex-1 truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal",
+                          "min-w-0 flex-1 truncate font-system-ui text-ui font-normal",
                           SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
                         )}
                       >
@@ -347,7 +347,7 @@ export function SidebarGroupsSurface({
               );
             })
           ) : (
-            <div className="px-2 pt-4 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/58">
+            <div className="px-2 pt-4 text-center text-ui text-muted-foreground/58">
               {emptyState === "loading" ? "Loading Groups..." : "No groups yet"}
             </div>
           )}

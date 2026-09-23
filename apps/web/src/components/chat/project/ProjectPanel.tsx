@@ -135,7 +135,7 @@ export function ProjectPanel({
       </div>
 
       {agent.error ? (
-        <p className="px-2 text-[11px] text-destructive" role="alert">
+        <p className="px-2 text-ui-sm text-destructive" role="alert">
           {agent.error}
         </p>
       ) : null}
@@ -154,7 +154,7 @@ export function ProjectPanel({
           icon={<BotIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
           label={coordinatorName}
           trailing={
-            <span className="text-[10px] text-muted-foreground">
+            <span className="text-ui-xs text-muted-foreground">
               {agent.overview.coordinatorStatus}
             </span>
           }
@@ -169,7 +169,7 @@ export function ProjectPanel({
       )}
 
       {coordinatorModel ? (
-        <p className="px-2 text-[11px] text-muted-foreground">
+        <p className="px-2 text-ui-sm text-muted-foreground">
           {coordinatorModel.provider} / {coordinatorModel.model}
         </p>
       ) : null}
@@ -188,7 +188,7 @@ export function ProjectPanel({
           />
 
           {agent.overview?.blockers.map((blocker) => (
-            <p key={blocker.taskId} className="px-2 text-[11px] text-destructive">
+            <p key={blocker.taskId} className="px-2 text-ui-sm text-destructive">
               Blocked: {blocker.title} — {blocker.reason}
             </p>
           ))}
@@ -228,7 +228,7 @@ export function ProjectPanel({
           ))}
         </>
       ) : (
-        <p className="px-2 py-1 text-[12px] text-muted-foreground">
+        <p className="px-2 py-1 text-ui text-muted-foreground">
           Shared context, tasks, and summaries live in this project folder after you set up the
           agent. Setup does not launch a model.
         </p>
@@ -280,7 +280,7 @@ export function ProjectPanel({
 }
 
 const CONTEXT_TEXTAREA_CLASS_NAME =
-  "relative inline-flex w-full rounded-lg border border-[color:var(--color-border-light)] bg-transparent text-[length:var(--app-font-size-ui,12px)] text-foreground transition-colors has-focus-visible:border-foreground/25 [&_[data-slot=textarea]]:px-3 [&_[data-slot=textarea]]:py-2";
+  "relative inline-flex w-full rounded-lg border border-[color:var(--color-border-light)] bg-transparent text-ui text-foreground transition-colors has-focus-visible:border-foreground/25 [&_[data-slot=textarea]]:px-3 [&_[data-slot=textarea]]:py-2";
 
 function ProjectFocusCard({
   summary,
@@ -295,20 +295,18 @@ function ProjectFocusCard({
 }) {
   return (
     <div className="mx-1 mb-1 rounded-xl bg-[var(--color-background-elevated-secondary)] px-2.5 py-2">
-      <p className="px-0.5 pb-1.5 text-[length:var(--app-font-size-ui-sm,11px)] font-medium text-muted-foreground">
-        Focus
-      </p>
+      <p className="px-0.5 pb-1.5 text-ui-sm font-medium text-muted-foreground">Focus</p>
       {summary ? (
-        <p className="px-0.5 pb-1.5 text-[12px] text-muted-foreground">{summary}</p>
+        <p className="px-0.5 pb-1.5 text-ui text-muted-foreground">{summary}</p>
       ) : updating ? (
-        <p className="px-0.5 pb-1.5 text-[10px] text-muted-foreground">Updating…</p>
+        <p className="px-0.5 pb-1.5 text-ui-xs text-muted-foreground">Updating…</p>
       ) : null}
       {items.length === 0 && !summary ? (
-        <p className="px-0.5 text-[12px] text-muted-foreground">Nothing in focus yet.</p>
+        <p className="px-0.5 text-ui text-muted-foreground">Nothing in focus yet.</p>
       ) : (
         <ul className="flex flex-col gap-1.5">
           {items.map((item) => (
-            <li key={item.id} className="flex gap-1.5 text-[12px] leading-snug">
+            <li key={item.id} className="flex gap-1.5 text-ui leading-snug">
               <span className="mt-1.5 size-1 shrink-0 rounded-full bg-foreground/45" aria-hidden />
               <ProjectFocusLink row={item} onOpenThread={onOpenThread} />
             </li>
@@ -365,7 +363,7 @@ function ProjectFocusLink({
     <span className="font-medium text-foreground">{row.title}</span>
   );
   return (
-    <p className="min-w-0 text-[12px] leading-snug text-muted-foreground">
+    <p className="min-w-0 text-ui leading-snug text-muted-foreground">
       {title}
       {row.detail ? <> — {row.detail}</> : null}
     </p>
@@ -445,7 +443,7 @@ function ProjectContextFile({
   return (
     <div className="px-2 pb-1">
       {conflict ? (
-        <p className="pb-1 text-[11px] text-destructive" role="alert">
+        <p className="pb-1 text-ui-sm text-destructive" role="alert">
           {conflict}
         </p>
       ) : null}
@@ -485,7 +483,7 @@ function ProjectContextFile({
           className={cn(ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME, "pull-request-prose")}
         />
       ) : (
-        <p className="text-[12px] text-muted-foreground">Nothing here yet.</p>
+        <p className="text-ui text-muted-foreground">Nothing here yet.</p>
       )}
     </div>
   );

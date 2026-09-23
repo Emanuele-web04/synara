@@ -272,7 +272,7 @@ export function GroupSettingsDialog(props: {
             {draft === null ? (
               <div className="flex h-full items-center justify-center text-muted-foreground">
                 {agent.error ? (
-                  <p className="text-[12px] text-destructive" role="alert">
+                  <p className="text-ui text-destructive" role="alert">
                     {agent.error}
                   </p>
                 ) : (
@@ -315,7 +315,7 @@ export function GroupSettingsDialog(props: {
         </div>
         <DialogFooter className="border-t border-[color:var(--color-border-light)] px-5 py-3">
           {saveError ? (
-            <p className="me-auto self-center text-[12px] text-destructive" role="alert">
+            <p className="me-auto self-center text-ui text-destructive" role="alert">
               {saveError}
             </p>
           ) : null}

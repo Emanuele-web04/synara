@@ -161,6 +161,7 @@ interface WsTransportInternals {
     string,
     { readonly input: { cwd: string; relativePath: string }; readonly listeners: Set<unknown> }
   >;
+  readonly projectAgentSubscriptions: Map<string, unknown>;
   shellSubscribed: boolean;
   readonly threadStreamFailureListeners: Set<(failure: WsThreadStreamFailure) => void>;
   disposed: boolean;
@@ -206,6 +207,7 @@ function makeBareTransport(): {
     activeThreadStreamInputs: new Map(),
     threadSubscriptions: new Map(),
     projectFileSubscriptions: new Map(),
+    projectAgentSubscriptions: new Map(),
     threadStreamFailureListeners: new Set(),
     disposed: false,
     sessionVersion: 1,
@@ -1403,6 +1405,7 @@ describe("WsTransport", () => {
         shellSubscribed: true,
         threadSubscriptions: new Map([[threadId, input]]),
         projectFileSubscriptions: new Map([[fileKey, watchedFile]]),
+        projectAgentSubscriptions: new Map(),
         startProjectFileChangeStream,
         runtime: null,
         clientScope: null,

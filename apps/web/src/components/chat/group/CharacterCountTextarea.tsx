@@ -25,10 +25,10 @@ export function CharacterCountTextarea({
         {...props}
       />
       <div className="flex items-start justify-between gap-3">
-        {helper ? <p className="text-[11px] text-muted-foreground">{helper}</p> : <span />}
+        {helper ? <p className="text-ui-sm text-muted-foreground">{helper}</p> : <span />}
         <p
           className={cn(
-            "shrink-0 text-[11px] tabular-nums",
+            "shrink-0 text-ui-sm tabular-nums",
             overLimit ? "text-destructive" : "text-muted-foreground",
           )}
         >

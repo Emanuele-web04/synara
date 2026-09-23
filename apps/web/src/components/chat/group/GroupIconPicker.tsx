@@ -21,7 +21,7 @@ export function GroupIconPicker({
             aria-label={`Group icon ${icon}`}
             aria-pressed={selected}
             className={cn(
-              "relative grid size-8 place-items-center rounded-lg border-2 text-base transition-colors motion-reduce:transition-none",
+              "relative grid size-8 place-items-center rounded-lg border-2 text-ui-lg transition-colors motion-reduce:transition-none",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
               selected ? "border-foreground" : "border-transparent hover:border-foreground/25",
             )}

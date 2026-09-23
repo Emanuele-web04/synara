@@ -263,7 +263,7 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
         <select
           id="library-type-filter"
           aria-label="Type"
-          className="h-6 min-w-0 flex-1 rounded-md border border-[color:var(--color-border)] bg-transparent px-1.5 text-[11px] text-foreground"
+          className="h-6 min-w-0 flex-1 rounded-md border border-[color:var(--color-border)] bg-transparent px-1.5 text-ui-sm text-foreground"
           value={typeFilter}
           onChange={(event) => setTypeFilter(event.target.value as LibraryTypeFilter)}
         >
@@ -303,7 +303,7 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
         <div className="flex items-center gap-1.5 px-2 pb-1.5">
           <span
             className={cn(
-              "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px]",
+              "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-ui-xs",
               remoteStatus.lastPushError
                 ? "border-destructive/40 text-destructive"
                 : "border-[color:var(--color-border)] text-muted-foreground",
@@ -321,7 +321,7 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
       ) : null}
 
       {library.error ? (
-        <p className="px-2 pb-1 text-[11px] text-destructive" role="alert">
+        <p className="px-2 pb-1 text-ui-sm text-destructive" role="alert">
           {library.error}
         </p>
       ) : null}
@@ -337,10 +337,7 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
             >
               <ArrowLeftIcon className="size-3.5" />
             </IconButton>
-            <span
-              className="min-w-0 truncate text-[11px] text-muted-foreground"
-              title={previewPath}
-            >
+            <span className="min-w-0 truncate text-ui-sm text-muted-foreground" title={previewPath}>
               {previewPath}
             </span>
           </div>
@@ -367,10 +364,7 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
             >
               <ArrowLeftIcon className="size-3.5" />
             </IconButton>
-            <span
-              className="min-w-0 truncate text-[11px] text-muted-foreground"
-              title={historyPath}
-            >
+            <span className="min-w-0 truncate text-ui-sm text-muted-foreground" title={historyPath}>
               History — {historyPath}
             </span>
           </div>
@@ -388,13 +382,13 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
                 {historyCommits.map((commit) => (
                   <li
                     key={commit.sha}
-                    className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px]"
+                    className="flex items-center gap-1.5 rounded-md px-2 py-1 text-ui"
                   >
                     <div className="min-w-0 flex-1">
                       <p className="truncate font-medium text-foreground" title={commit.message}>
                         {commit.message}
                       </p>
-                      <p className="text-[10px] text-muted-foreground">
+                      <p className="text-ui-xs text-muted-foreground">
                         {commit.sha.slice(0, 7)} · {formatRelativeTime(commit.at)}
                       </p>
                     </div>
@@ -428,7 +422,7 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
         <>
           {viewMode === "list" ? (
             <div
-              className="grid grid-cols-[1fr_auto] items-center gap-1 border-b border-[color:var(--color-border-light)] px-2 pb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
+              className="grid grid-cols-[1fr_auto] items-center gap-1 border-b border-[color:var(--color-border-light)] px-2 pb-1 text-ui-xs font-medium uppercase tracking-wide text-muted-foreground"
               role="rowheader"
             >
               {(
@@ -547,7 +541,7 @@ function LibraryListRow(props: {
             autoFocus
             value={props.renameDraft}
             aria-label={`Rename ${entry.name}`}
-            className="h-6 flex-1 text-[12px]"
+            className="h-6 flex-1 text-ui"
             onChange={(event) => props.onRenameDraftChange(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter") props.onRenameCommit();
@@ -576,7 +570,7 @@ function LibraryListRow(props: {
           <span className="min-w-0 truncate font-medium">{entry.name}</span>
         </button>
       )}
-      <span className="pr-1 text-[10px] text-muted-foreground/80">
+      <span className="pr-1 text-ui-xs text-muted-foreground/80">
         {entry.kind === "file"
           ? `${formatBytes(entry.sizeBytes)} · ${formatRelativeTime(entry.modifiedAt)}`
           : ""}
@@ -603,7 +597,7 @@ function LibraryGridTile(props: {
           autoFocus
           value={props.renameDraft}
           aria-label={`Rename ${entry.name}`}
-          className="h-6 flex-1 text-[12px]"
+          className="h-6 flex-1 text-ui"
           onChange={(event) => props.onRenameDraftChange(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter") props.onRenameCommit();
@@ -630,7 +624,7 @@ function LibraryGridTile(props: {
       <span className="flex min-w-0 flex-1 flex-col items-start overflow-hidden">
         <span className="w-full truncate font-medium">{entry.name}</span>
         {depth > 0 ? (
-          <span className="w-full truncate text-[10px] text-muted-foreground/70">
+          <span className="w-full truncate text-ui-xs text-muted-foreground/70">
             {entry.relativePath}
           </span>
         ) : null}

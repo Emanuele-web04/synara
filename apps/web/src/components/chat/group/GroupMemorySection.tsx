@@ -82,17 +82,17 @@ function MemoryDocumentDialog(props: {
     >
       <DialogPopup className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle className="text-base">{props.logicalPath}</DialogTitle>
+          <DialogTitle className="text-ui-lg">{props.logicalPath}</DialogTitle>
         </DialogHeader>
         <DialogPanel>
           {error ? (
-            <p className="text-[12px] text-destructive" role="alert">
+            <p className="text-ui text-destructive" role="alert">
               {error}
             </p>
           ) : content === null ? (
-            <p className="text-[12px] text-muted-foreground">Loading…</p>
+            <p className="text-ui text-muted-foreground">Loading…</p>
           ) : content.trim().length === 0 ? (
-            <p className="text-[12px] text-muted-foreground">This file is empty.</p>
+            <p className="text-ui text-muted-foreground">This file is empty.</p>
           ) : (
             <ChatMarkdown text={content} cwd={undefined} className="pull-request-prose" />
           )}
@@ -162,10 +162,10 @@ export function GroupMemorySection(props: {
             aria-label="Group instructions"
           />
           {instructionsSource.serverBacked ? (
-            <p className="text-[11px] text-muted-foreground">Applies immediately.</p>
+            <p className="text-ui-sm text-muted-foreground">Applies immediately.</p>
           ) : null}
           {instructionsSource.conflict ? (
-            <p className="text-[11px] text-destructive" role="alert">
+            <p className="text-ui-sm text-destructive" role="alert">
               {instructionsSource.conflict}
             </p>
           ) : null}
@@ -276,9 +276,9 @@ export function GroupMemorySection(props: {
               <ArrowUpIcon className="size-4" />
             </IconButton>
           </div>
-          <p className="mt-1 text-[11px] text-muted-foreground">Notes apply immediately.</p>
+          <p className="mt-1 text-ui-sm text-muted-foreground">Notes apply immediately.</p>
           {noteError ? (
-            <p className="mt-1 text-[11px] text-destructive" role="alert">
+            <p className="mt-1 text-ui-sm text-destructive" role="alert">
               {noteError}
             </p>
           ) : null}
