@@ -808,6 +808,7 @@ function makeHarnessLayer(
         config: null,
         goal: null,
         digest: null,
+        linkedProjectIds: [],
         blockers: [],
         recentOutcomes: [],
         coordinatorStatus: "unconfigured",

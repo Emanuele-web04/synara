@@ -349,6 +349,7 @@ import {
   resolveSidebarProjectRowLabel,
   resolveThreadHoverCardMetadata,
   resolveThreadProjectLabel,
+  resolveThreadRowAriaLabel,
   resolveThreadRowClassName,
   resolveThreadRowTrailingReserveClass,
   resolveThreadStatusPill,
@@ -4869,6 +4870,7 @@ export default function Sidebar() {
             role="button"
             tabIndex={0}
             data-thread-item
+            aria-label={resolveThreadRowAriaLabel(thread)}
             className={cn(
               SIDEBAR_HEADER_ROW_CLASS_NAME,
               // Match the normal thread row: a flex row whose title claims all free
@@ -5033,6 +5035,7 @@ export default function Sidebar() {
                 data-thread-entry-point={threadEntryPoint}
                 size="sm"
                 isActive={isActive}
+                aria-label={resolveThreadRowAriaLabel(thread)}
                 className={cn(
                   resolveThreadRowClassName({
                     isActive,
