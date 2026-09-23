@@ -61,7 +61,11 @@ const VERSION_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SESSION_COOKIE = "synara_beta_dash";
 const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
-const RETENTION_DAYS = 30;
+// Redacted events stay a year so regressions can be compared across releases;
+// raw minidumps (unredactable process memory) and their index rows go sooner.
+const EVENT_RETENTION_DAYS = 365;
+const CRASH_DUMP_RETENTION_DAYS = 90;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -339,7 +343,7 @@ async function hasSession(request: Request, env: Env): Promise<boolean> {
 function rangeDays(url: URL): number {
   const days = Number(url.searchParams.get("days") ?? "7");
   if (!Number.isFinite(days)) return 7;
-  return Math.min(90, Math.max(1, Math.floor(days)));
+  return Math.min(EVENT_RETENTION_DAYS, Math.max(1, Math.floor(days)));
 }
 
 function versionFilter(url: URL): string | null {
@@ -693,12 +697,16 @@ export default {
     return serveSpa(request, env, url);
   },
 
-  // Daily retention: rows older than 30 days are deleted by received_at —
-  // server-side, so client clock skew cannot extend retention.
-  // R2 objects expire via the bucket's own lifecycle rule.
+  // Daily retention by received_at (server-side, so client clock skew cannot
+  // extend it). R2 objects expire via the bucket's own 90-day lifecycle rule,
+  // matching the crash_dumps index sweep below.
   async scheduled(_controller: unknown, env: Env): Promise<void> {
-    const cutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
-    await env.DB.prepare("DELETE FROM events WHERE received_at < ?").bind(cutoff).run();
-    await env.DB.prepare("DELETE FROM crash_dumps WHERE received_at < ?").bind(cutoff).run();
+    const cutoff = (days: number) => new Date(Date.now() - days * DAY_MS).toISOString();
+    await env.DB.prepare("DELETE FROM events WHERE received_at < ?")
+      .bind(cutoff(EVENT_RETENTION_DAYS))
+      .run();
+    await env.DB.prepare("DELETE FROM crash_dumps WHERE received_at < ?")
+      .bind(cutoff(CRASH_DUMP_RETENTION_DAYS))
+      .run();
   },
 } satisfies ExportedHandler<Env>;

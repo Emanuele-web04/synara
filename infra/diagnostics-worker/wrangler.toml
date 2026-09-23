@@ -11,7 +11,8 @@ database_name = "synara-beta-diagnostics"
 database_id = "86e0bd2d-5cad-44de-9f72-e94a890c4860"
 migrations_dir = "migrations"
 
-# Minidumps go to R2. Lifecycle rule recommended: expire objects after 30 days.
+# Minidumps go to R2 with a 90-day expiry rule on the bucket:
+#   wrangler r2 bucket lifecycle add synara-beta-crash-dumps expire-dumps --expire-days 90
 [[r2_buckets]]
 binding = "CRASH_DUMPS"
 bucket_name = "synara-beta-crash-dumps"
@@ -24,7 +25,7 @@ directory = "./dist"
 binding = "ASSETS"
 run_worker_first = true
 
-# Daily retention sweep: events + crash_dumps rows older than 30 days.
+# Daily retention sweep: events after 365 days, crash_dumps rows after 90 days.
 [triggers]
 crons = ["0 4 * * *"]
 

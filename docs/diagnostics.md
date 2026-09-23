@@ -36,8 +36,7 @@ from your hardware, account, or IP.
 Crash dumps: Electron's `crashReporter` uploads minidumps to the diagnostics
 endpoint. Minidumps are memory snapshots of the crashed process and can in
 principle contain fragments of that process's memory; they are stored in R2 and
-should be treated like crash dumps on any platform — kept on a short lifecycle
-(the `wrangler.toml` notes a 30-day object expiration).
+can't be redacted, so they are deleted after 90 days by an R2 expiry rule.
 
 ## What is never collected
 
@@ -65,8 +64,9 @@ Events are buffered to `~/.synara-beta/diagnostics/events.jsonl` and flushed in
 batches as NDJSON over HTTPS to `https://synara-beta-diagnostics.kartik-9f9.workers.dev`
 (override with `SYNARA_BETA_DIAGNOSTICS_URL` for local development; only `https://`
 or loopback targets are accepted). Events land in a Cloudflare D1 database and
-are deleted after 30 days by a scheduled job; crash dumps land in the
-`synara-beta-crash-dumps` R2 bucket. The worker code is
+are kept for one year, then deleted by a daily job, so crash and error trends
+can be compared across many beta releases. Crash dumps land in the
+`synara-beta-crash-dumps` R2 bucket and are deleted after 90 days. The worker code is
 `infra/diagnostics-worker/worker.ts` — the allowlist is enforced again there
 and unknown events/fields are dropped, so the documented schema is enforced at
 the endpoint, not just the client.

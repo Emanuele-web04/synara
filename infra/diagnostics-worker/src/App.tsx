@@ -37,6 +37,8 @@ const DAY_OPTIONS = [
   { label: "24h", value: 1 },
   { label: "7d", value: 7 },
   { label: "30d", value: 30 },
+  { label: "90d", value: 90 },
+  { label: "1y", value: 365 },
 ];
 
 export function App() {

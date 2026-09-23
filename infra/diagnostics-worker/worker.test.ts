@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { normalizeEvent, signSession, verifySessionCookie } from "./worker";
+import worker, { normalizeEvent, signSession, verifySessionCookie, type Env } from "./worker";
 
 const baseEvent = {
   v: 1,
@@ -137,5 +137,27 @@ describe("session cookie", () => {
     expect(await verifySessionCookie(`synara_beta_dash=${expired}`, secret)).toBe(false);
     expect(await verifySessionCookie(null, secret)).toBe(false);
     expect(await verifySessionCookie("other=1", secret)).toBe(false);
+  });
+});
+
+describe("retention sweep", () => {
+  it("keeps events a year and crash dump rows 90 days", async () => {
+    const sweeps: { sql: string; cutoff: string }[] = [];
+    const db = {
+      prepare: (sql: string) => ({
+        bind: (cutoff: string) => ({
+          run: async () => {
+            sweeps.push({ sql, cutoff });
+          },
+        }),
+      }),
+    };
+    const now = Date.now();
+    await worker.scheduled(null, { DB: db } as unknown as Env);
+    const ageDays = (cutoff: string) => Math.round((now - Date.parse(cutoff)) / 86_400_000);
+    expect(sweeps.map((sweep) => [sweep.sql, ageDays(sweep.cutoff)])).toEqual([
+      ["DELETE FROM events WHERE received_at < ?", 365],
+      ["DELETE FROM crash_dumps WHERE received_at < ?", 90],
+    ]);
   });
 });
