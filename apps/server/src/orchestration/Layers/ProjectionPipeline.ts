@@ -5,6 +5,7 @@ import {
 import { ApprovalRequestId, CommandId, type OrchestrationEvent } from "@synara/contracts";
 import { resolveHumanMessageAt } from "@synara/shared/threadSummary";
 import { clearRemovedAsyncUserInputResponses } from "@synara/shared/asyncUserInput";
+import { isGroupContainerKind } from "@synara/shared/projectContainers";
 import {
   addPinnedMessage,
   removePinnedMessage,
@@ -552,7 +553,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           const project = yield* projectionProjectRepository.getById({
             projectId: event.payload.projectId,
           });
-          const isStudio = Option.isSome(project) && project.value.kind === "studio";
+          const isStudio = Option.isSome(project) && isGroupContainerKind(project.value.kind);
           yield* projectionThreadRepository.upsert({
             threadId: event.payload.threadId,
             projectId: event.payload.projectId,
@@ -622,7 +623,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                 projectId: currentThread.value.projectId,
               })
             : Option.none();
-          const isStudio = Option.isSome(project) && project.value.kind === "studio";
+          const isStudio = Option.isSome(project) && isGroupContainerKind(project.value.kind);
           return yield* updateThreadProjection(event.payload.threadId, (thread) => {
             const nextCreateBranchFlowCompleted =
               event.payload.createBranchFlowCompleted !== undefined

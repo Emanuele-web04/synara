@@ -37,6 +37,7 @@ import {
 } from "effect";
 import * as Semaphore from "effect/Semaphore";
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
+import { isGroupContainerKind } from "@synara/shared/projectContainers";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
 import {
   buildSubagentIdentityDirectory,
@@ -1649,7 +1650,7 @@ const make = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       const project = yield* getProjectShell(input.thread);
-      if (!project || project.kind !== "studio") {
+      if (!project || !isGroupContainerKind(project.kind)) {
         return null;
       }
       const workspaceRoot = resolveThreadWorkspaceCwd({
