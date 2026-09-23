@@ -314,7 +314,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [110, "Groups"],
         [111, "GroupLibraryHosting"],
         [112, "CoordinatorAppearance"],
-          [113, "ProjectAgentWakeCursor"],
+        [113, "ProjectAgentWakeCursor"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -632,7 +632,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [110, "Groups"],
         [111, "GroupLibraryHosting"],
         [112, "CoordinatorAppearance"],
-          [113, "ProjectAgentWakeCursor"],
+        [113, "ProjectAgentWakeCursor"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -784,7 +784,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [110, "Groups"],
         [111, "GroupLibraryHosting"],
         [112, "CoordinatorAppearance"],
-          [113, "ProjectAgentWakeCursor"],
+        [113, "ProjectAgentWakeCursor"],
       ]);
 
       const tracker = yield* trackerRows(sql);
