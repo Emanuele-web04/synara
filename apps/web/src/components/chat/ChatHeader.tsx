@@ -22,12 +22,14 @@ import GitActionsControl from "../GitActionsControl";
 import {
   ArrowRightIcon,
   CheckIcon,
+  FoldersIcon,
   HandoffIcon,
   HistoryIcon,
   MessageCircleIcon,
   PanelRightCloseIcon,
   PlusIcon,
   TerminalIcon,
+  WorkflowIcon,
   XIcon,
 } from "~/lib/icons";
 import { formatRelativeTime } from "~/lib/relativeTime";
@@ -64,8 +66,7 @@ import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { ProviderIcon } from "../ProviderIcon";
 import { ProviderUsageMenuControl } from "../ProviderUsageMenuControl";
 import { EnvironmentToggle, type EnvironmentToggleState } from "./environment/EnvironmentToggle";
-import { ProjectToggle, type ProjectToggleState } from "./project/ProjectToggle";
-import { LibraryToggle } from "./group/LibraryToggle";
+import { SurfacePanelToggle, type SurfacePanelToggleState } from "./chatHeaderControls";
 
 /**
  * Width (px) below which collapsible header controls drop their text labels and
@@ -121,8 +122,8 @@ interface ChatHeaderProps {
   // Open-in-editor + git-actions + diff-toggle cluster into one Environment button that
   // drives the Environment panel; otherwise the legacy cluster is rendered.
   environment?: EnvironmentToggleState | null;
-  projectPanel?: ProjectToggleState | null;
-  libraryPanel?: ProjectToggleState | null;
+  projectPanel?: SurfacePanelToggleState | null;
+  libraryPanel?: SurfacePanelToggleState | null;
   chatLayoutAction?: {
     kind: "split" | "maximize";
     label: string;
@@ -907,8 +908,22 @@ export function ChatHeader({
         {environment ? (
           <>
             <EnvironmentToggle environment={environment} />
-            {projectPanel ? <ProjectToggle project={projectPanel} /> : null}
-            {libraryPanel ? <LibraryToggle library={libraryPanel} /> : null}
+            {projectPanel ? (
+              <SurfacePanelToggle
+                state={projectPanel}
+                icon={WorkflowIcon}
+                ariaLabel="Toggle group panel"
+                tooltip="Group"
+              />
+            ) : null}
+            {libraryPanel ? (
+              <SurfacePanelToggle
+                state={libraryPanel}
+                icon={FoldersIcon}
+                ariaLabel="Toggle library panel"
+                tooltip="Library"
+              />
+            ) : null}
             {rightPanelToggleControl}
           </>
         ) : (

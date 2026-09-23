@@ -51,6 +51,9 @@ import {
   ProjectAgentCreateTaskInput,
   ProjectAgentExcludeThreadInput,
   ProjectAgentBackfillInput,
+  ProjectAgentDeleteGroupInput,
+  ProjectAgentDeleteGroupResult,
+  ProjectAgentGroupControlInput,
   ProjectAgentListThreadIndexInput,
   ProjectAgentListThreadIndexResult,
   ProjectAgentListEvidenceInput,
@@ -1598,6 +1601,39 @@ export const WsProjectAgentUnlinkProjectRpc = Rpc.make(WS_METHODS.projectAgentUn
   success: ProjectAgentOverview,
   error: WsRpcError,
 });
+export const WsProjectAgentPauseGroupRpc = Rpc.make(WS_METHODS.projectAgentPauseGroup, {
+  payload: ProjectAgentGroupControlInput,
+  success: ProjectAgentOverview,
+  error: WsRpcError,
+});
+export const WsProjectAgentResumeGroupRpc = Rpc.make(WS_METHODS.projectAgentResumeGroup, {
+  payload: ProjectAgentGroupControlInput,
+  success: ProjectAgentOverview,
+  error: WsRpcError,
+});
+export const WsProjectAgentArchiveGroupRpc = Rpc.make(WS_METHODS.projectAgentArchiveGroup, {
+  payload: ProjectAgentGroupControlInput,
+  success: ProjectAgentOverview,
+  error: WsRpcError,
+});
+export const WsProjectAgentUnarchiveGroupRpc = Rpc.make(WS_METHODS.projectAgentUnarchiveGroup, {
+  payload: ProjectAgentGroupControlInput,
+  success: ProjectAgentOverview,
+  error: WsRpcError,
+});
+export const WsProjectAgentRestartCoordinatorRpc = Rpc.make(
+  WS_METHODS.projectAgentRestartCoordinator,
+  {
+    payload: ProjectAgentGroupControlInput,
+    success: ProjectAgentOverview,
+    error: WsRpcError,
+  },
+);
+export const WsProjectAgentDeleteGroupRpc = Rpc.make(WS_METHODS.projectAgentDeleteGroup, {
+  payload: ProjectAgentDeleteGroupInput,
+  success: ProjectAgentDeleteGroupResult,
+  error: WsRpcError,
+});
 export const WsProjectAgentStartGoalRpc = Rpc.make(WS_METHODS.projectAgentStartGoal, {
   payload: ProjectAgentStartGoalInput,
   success: ProjectGoal,
@@ -1877,6 +1913,12 @@ export const WsProjectAgentRpcGroup = RpcGroup.make(
   WsProjectAgentConfigureRpc,
   WsProjectAgentLinkProjectRpc,
   WsProjectAgentUnlinkProjectRpc,
+  WsProjectAgentPauseGroupRpc,
+  WsProjectAgentResumeGroupRpc,
+  WsProjectAgentArchiveGroupRpc,
+  WsProjectAgentUnarchiveGroupRpc,
+  WsProjectAgentRestartCoordinatorRpc,
+  WsProjectAgentDeleteGroupRpc,
   WsProjectAgentStartGoalRpc,
   WsProjectAgentUpdateGoalRpc,
   WsProjectAgentPauseGoalRpc,

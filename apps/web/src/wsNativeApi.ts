@@ -442,6 +442,10 @@ export function createWsNativeApi(): NativeApi {
 
   const transport = new WsTransport();
   let unsubscribeDomainEventTransport: (() => void) | null = null;
+  // Multiple consumers (Group panel, settings dialog, future surfaces) subscribe to the
+  // same project-agent event stream; the transport stream stays open until the last one
+  // detaches, so a closed panel can never tear down a dialog's subscription.
+  const projectAgentSubscribeCounts = new Map<string, number>();
   transport.onStateChange((state) => emitWsTransportState(state));
   transport.onCompatibilityIssue((issue) => emitWsCompatibilityIssue(issue), {
     replayCurrent: true,
@@ -841,6 +845,13 @@ export function createWsNativeApi(): NativeApi {
       configure: (input) => transport.request(WS_METHODS.projectAgentConfigure, input),
       linkProject: (input) => transport.request(WS_METHODS.projectAgentLinkProject, input),
       unlinkProject: (input) => transport.request(WS_METHODS.projectAgentUnlinkProject, input),
+      pauseGroup: (input) => transport.request(WS_METHODS.projectAgentPauseGroup, input),
+      resumeGroup: (input) => transport.request(WS_METHODS.projectAgentResumeGroup, input),
+      archiveGroup: (input) => transport.request(WS_METHODS.projectAgentArchiveGroup, input),
+      unarchiveGroup: (input) => transport.request(WS_METHODS.projectAgentUnarchiveGroup, input),
+      restartCoordinator: (input) =>
+        transport.request(WS_METHODS.projectAgentRestartCoordinator, input),
+      deleteGroup: (input) => transport.request(WS_METHODS.projectAgentDeleteGroup, input),
       startGoal: (input) => transport.request(WS_METHODS.projectAgentStartGoal, input),
       updateGoal: (input) => transport.request(WS_METHODS.projectAgentUpdateGoal, input),
       pauseGoal: (input) => transport.request(WS_METHODS.projectAgentPauseGoal, input),
@@ -869,8 +880,21 @@ export function createWsNativeApi(): NativeApi {
         restore: (input) => transport.request(WS_METHODS.projectAgentLibraryRestore, input),
         status: (input) => transport.request(WS_METHODS.projectAgentLibraryStatus, input),
       },
-      subscribe: (input) => transport.request(WS_METHODS.subscribeProjectAgentEvents, input),
-      unsubscribe: async () => undefined,
+      subscribe: async (input) => {
+        const count = (projectAgentSubscribeCounts.get(input.projectId) ?? 0) + 1;
+        projectAgentSubscribeCounts.set(input.projectId, count);
+        if (count > 1) return;
+        await transport.request(WS_METHODS.subscribeProjectAgentEvents, input);
+      },
+      unsubscribe: async (input) => {
+        const count = (projectAgentSubscribeCounts.get(input.projectId) ?? 0) - 1;
+        if (count > 0) {
+          projectAgentSubscribeCounts.set(input.projectId, count);
+          return;
+        }
+        projectAgentSubscribeCounts.delete(input.projectId);
+        await transport.unsubscribeProjectAgentEvents(input.projectId);
+      },
       onEvent: projectAgentEventListeners.subscribe,
     },
     automation: {

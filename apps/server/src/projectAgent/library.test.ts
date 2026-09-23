@@ -212,6 +212,54 @@ it.layer(TestLayer)("group library", (it) => {
     }),
   );
 
+  it.effect(
+    "restores a deleted file at an ancestor sha with unrelated commits after the delete",
+    () =>
+      Effect.gen(function* () {
+        const root = yield* makeTmpDir;
+        const git = yield* GitCore;
+        yield* ensureLibraryRepo(git, root, testProjectId);
+
+        const a = yield* resolveLibraryWriteTarget(root, "a.md");
+        yield* Effect.promise(() => fs.writeFile(a, "alpha", "utf8"));
+        yield* commitLibraryChange(git, root, "Add a.md");
+        const b = yield* resolveLibraryWriteTarget(root, "b.md");
+        yield* Effect.promise(() => fs.writeFile(b, "beta", "utf8"));
+        const addB = yield* commitLibraryChange(git, root, "Add b.md");
+
+        // Delete a.md, then land commits that never touched a.md — the UI passes
+        // the commit right before the delete, which is just some ancestor.
+        yield* deleteLibraryEntry(root, "a.md");
+        const del = yield* commitLibraryChange(git, root, "Delete a.md");
+        const renamedB = yield* resolveLibraryCreateTarget(root, "c.md");
+        yield* Effect.promise(() => fs.rename(b, renamedB));
+        yield* commitLibraryChange(git, root, "Rename b.md to c.md");
+
+        yield* restoreLibraryEntry(git, root, "a.md", addB.commitSha);
+
+        const contents = yield* Effect.promise(() => fs.readFile(a, "utf8"));
+        expect(contents).toBe("alpha");
+        const history = yield* libraryHistory(git, root, "a.md");
+        expect(history[0]?.message).toBe(`Restore a.md from ${addB.commitSha.slice(0, 7)}`);
+
+        // The delete commit itself and a sha where the path never existed still
+        // refuse: no resurrection at a commit that saw the file gone.
+        const atDelete = yield* failureOf(restoreLibraryEntry(git, root, "a.md", del.commitSha));
+        expect(atDelete).toBeInstanceOf(GitCommandError);
+        const init = yield* git.execute({
+          operation: "library.testInitSha",
+          cwd: root,
+          args: ["rev-list", "--max-parents=0", "HEAD"],
+          allowNonZeroExit: false,
+        });
+        const beforeExistence = yield* failureOf(
+          restoreLibraryEntry(git, root, "a.md", init.stdout.trim()),
+        );
+        expect(beforeExistence).toBeInstanceOf(GitCommandError);
+        expect(beforeExistence.detail).toContain("did not change");
+      }),
+  );
+
   it.effect("serializes concurrent queued mutations into two commits", () =>
     Effect.gen(function* () {
       const root = yield* makeTmpDir;
@@ -499,13 +547,14 @@ it.layer(TestLayer)("group library", (it) => {
       expect(marker).toBe(`synara-library\n${testProjectId}\n`);
       // The default location stays open for the adoption: .git at the managed
       // root is never foreign; the same state at a custom path is refused.
-      const base = yield* makeTmpDir;
-      const stateDir = path.join(base, "state");
+      // The state dir must be a sibling, not nested: a library root that
+      // contains the state dir is an ancestor of it and correctly refused.
+      const stateDir = path.join(path.dirname(root), "state");
       yield* assertLibraryRootLocation({
         root,
         stateDir,
-        groupsWorkspaceRoot: path.join(base, "groups"),
-        studioWorkspaceRoot: path.join(base, "studio"),
+        groupsWorkspaceRoot: path.join(root, "groups"),
+        studioWorkspaceRoot: path.join(root, "studio"),
         isCustomPath: false,
         projectId: testProjectId,
       });
@@ -515,8 +564,8 @@ it.layer(TestLayer)("group library", (it) => {
         assertLibraryRootLocation({
           root: foreign,
           stateDir,
-          groupsWorkspaceRoot: path.join(base, "groups"),
-          studioWorkspaceRoot: path.join(base, "studio"),
+          groupsWorkspaceRoot: path.join(root, "groups"),
+          studioWorkspaceRoot: path.join(root, "studio"),
           isCustomPath: true,
           projectId: testProjectId,
         }),

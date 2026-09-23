@@ -167,8 +167,8 @@ const HOT_PATH_MODULES: readonly HotPathModule[] = [
     allowedBailoutReasons: [],
   },
   {
-    relativePath: "chat/group/LibraryToggle.tsx",
-    requiredFunction: "LibraryToggle",
+    relativePath: "chat/chatHeaderControls.tsx",
+    requiredFunction: "SurfacePanelToggle",
     allowedBailoutReasons: [],
   },
   {
@@ -178,6 +178,18 @@ const HOT_PATH_MODULES: readonly HotPathModule[] = [
   },
   {
     relativePath: "chat/group/libraryPanel.logic.ts",
+    allowedBailoutReasons: [],
+    requiresCompileSuccess: false,
+  },
+  // The Overview body renders one row per group thread/PR/automation whenever the
+  // Group panel is open — same per-row hot-path budget as the sidebar surfaces.
+  {
+    relativePath: "chat/project/GroupOverview.tsx",
+    requiredFunction: "GroupOverview",
+    allowedBailoutReasons: [],
+  },
+  {
+    relativePath: "chat/project/groupOverview.logic.ts",
     allowedBailoutReasons: [],
     requiresCompileSuccess: false,
   },

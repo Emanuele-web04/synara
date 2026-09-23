@@ -2,16 +2,14 @@
 // Purpose: Starts ordinary AI threads inside a specific Group container project.
 //          Groups are explicit — never auto-created — so the target project id is
 //          always passed in. The group's coordinator worker-routing defaults
-//          (model selection / provider options) are applied to the new chat.
+//          (model selection / provider options) seed the fresh draft inside
+//          handleNewThread, which is the single mint point for every
+//          user-initiated thread in a group.
 // Layer: Web hook
 // Exports: useHandleNewGroupChat
 
 import type { ProjectId } from "@synara/contracts";
 
-import {
-  applyGroupWorkerRoutingDefaults,
-  resolveGroupWorkerRoutingDefaults,
-} from "../lib/groupWorkerRouting";
 import { startContainerChat, type StartContainerChatResult } from "../lib/startContainerChat";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useHandleNewThread } from "./useHandleNewThread";
@@ -43,9 +41,6 @@ export function useHandleNewGroupChat() {
       // A group owns one durable local workspace per chat. Reopening its stored draft
       // must never inherit an old project/worktree environment.
       forceLocalWorkspace: true,
-      resolveThreadDefaults: () => resolveGroupWorkerRoutingDefaults({ groupProjectId }),
-      applyThreadDefaults: (threadId, defaults) =>
-        applyGroupWorkerRoutingDefaults({ threadId, defaults }),
       errorLabel: "Unable to prepare a new group chat.",
     });
 

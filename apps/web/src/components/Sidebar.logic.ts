@@ -242,6 +242,17 @@ export function resolveSidebarProjectRowLabel(
   return nonEmptyDisplayValue(project.name) ?? project.folderName;
 }
 
+/**
+ * Accessible name for a sidebar thread row. The row renders a `role="button"`
+ * div whose only other label comes from the truncated title span — an explicit
+ * name keeps the control identifiable to assistive tech and automation even
+ * when the visible text is clipped or carries status glyphs.
+ */
+export function resolveThreadRowAriaLabel(thread: Pick<SidebarThreadSummary, "title">): string {
+  const title = nonEmptyDisplayValue(thread.title);
+  return title === null ? "Open thread" : `Open ${title}`;
+}
+
 export type SidebarThreadHoverMetadata = {
   projectName: string;
   projectCwd: string | null;
@@ -1384,9 +1395,11 @@ export function isHiddenProjectAgentCoordinatorThread(
 export function excludeHiddenProjectAgentCoordinatorThreads<T extends { readonly id: string }>(
   threads: readonly T[],
   coordinatorThreadIds: ReadonlySet<string>,
-): T[] {
+): readonly T[] {
   if (coordinatorThreadIds.size === 0) {
-    return [...threads];
+    // The input array is already the answer — copying it gave every caller a new
+    // reference each render, churning downstream memo deps in dev.
+    return threads;
   }
   return threads.filter(
     (thread) => !isHiddenProjectAgentCoordinatorThread(thread.id, coordinatorThreadIds),

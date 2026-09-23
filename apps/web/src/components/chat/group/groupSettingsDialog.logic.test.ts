@@ -11,10 +11,10 @@ import {
   formatCharacterCount,
   GROUP_GOAL_MAX_CHARS,
   groupSettingsDirtySections,
-  isGroupSettingsDirty,
   isGroupSettingsSection,
   memoryNoteDocumentPath,
   modelSelectionsEqual,
+  resolveGroupModelCatalogPrefetchProviders,
   resolveSaveAttemptRequestId,
   saveAttemptFingerprint,
   saveGroupSettings,
@@ -137,7 +137,6 @@ describe("groupSettingsDirtySections", () => {
 
   it("is clean when draft matches baseline", () => {
     expect(groupSettingsDirtySections(makeDraft(), baseline).size).toBe(0);
-    expect(isGroupSettingsDirty(makeDraft(), baseline)).toBe(false);
   });
 
   it("marks general for name, icon, goal, and either model selection", () => {
@@ -212,6 +211,19 @@ describe("modelSelectionsEqual", () => {
         model: "claude-opus-4-5",
       }),
     ).toBe(false);
+  });
+});
+
+describe("resolveGroupModelCatalogPrefetchProviders", () => {
+  it("warms only the row's provider while the picker is closed", () => {
+    expect(resolveGroupModelCatalogPrefetchProviders(false, "claudeAgent")).toEqual([
+      "claudeAgent",
+    ]);
+    expect(resolveGroupModelCatalogPrefetchProviders(false, "pi")).toEqual(["pi"]);
+  });
+
+  it("lets every visible provider warm once the picker opens (composer parity)", () => {
+    expect(resolveGroupModelCatalogPrefetchProviders(true, "claudeAgent")).toBeUndefined();
   });
 });
 

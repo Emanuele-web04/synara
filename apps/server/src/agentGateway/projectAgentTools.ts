@@ -1,9 +1,24 @@
-import { ProjectId, ProjectTaskId, ThreadId } from "@synara/contracts";
-import { Effect } from "effect";
+import { randomUUID } from "node:crypto";
+
+import {
+  ProjectAgentForgetInput,
+  ProjectAgentGetOverviewInput,
+  ProjectAgentLibraryAddInput,
+  ProjectAgentLibraryListInput,
+  ProjectAgentLinkRepositoryInput,
+  ProjectAgentListTasksInput,
+  ProjectAgentListThreadsInput,
+  ProjectAgentReadDocumentInput,
+  ProjectAgentRememberInput,
+  ProjectAgentReportResultInput,
+  ProjectAgentWriteDocumentInput,
+  ThreadId,
+} from "@synara/contracts";
+import { Effect, Schema } from "effect";
 
 import type { ProjectAgentServiceShape } from "../projectAgent/Services/ProjectAgentService.ts";
 import { mcpToolResultError, mcpToolResultJson } from "./protocol.ts";
-import { ToolInputError, errorText, readBooleanArg, readStringArg } from "./toolInput.ts";
+import { ToolInputError, errorText } from "./toolInput.ts";
 import {
   READ_ONLY_TOOL_ANNOTATIONS,
   WRITE_TOOL_ANNOTATIONS,
@@ -24,6 +39,18 @@ export function makeProjectAgentTools(
       .resolvePrincipalForThread(ThreadId.makeUnsafe(threadId))
       .pipe(Effect.mapError((error) => new ToolInputError(error.message)));
 
+  // Tool args are untrusted agent input — decode them through the same
+  // contract schemas the service enforces for its own callers so limits like
+  // note/title/path length apply to tool calls too.
+  const decodeInput = <S extends Schema.Top & { readonly DecodingServices: never }>(
+    schema: S,
+    args: unknown,
+  ): Effect.Effect<S["Type"], ToolInputError> =>
+    Effect.try({
+      try: () => Schema.decodeUnknownSync(schema)(args),
+      catch: (error) => new ToolInputError(`Invalid tool input: ${errorText(error)}`),
+    });
+
   const getOverview: ToolEntry = {
     requiredCapability: "thread:read",
     definition: {
@@ -40,15 +67,9 @@ export function makeProjectAgentTools(
     handler: (args, context) =>
       Effect.gen(function* () {
         const principal = yield* resolvePrincipal(context.callerThreadId);
+        const input = yield* decodeInput(ProjectAgentGetOverviewInput, args);
         const overview = yield* projectAgent
-          .getOverview(
-            {
-              projectId: ProjectId.makeUnsafe(
-                readStringArg(args, "projectId", { required: true })!,
-              ),
-            },
-            principal,
-          )
+          .getOverview(input, principal)
           .pipe(Effect.mapError((error) => new ToolInputError(error.message)));
         return mcpToolResultJson(overview);
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
@@ -72,16 +93,9 @@ export function makeProjectAgentTools(
     handler: (args, context) =>
       Effect.gen(function* () {
         const principal = yield* resolvePrincipal(context.callerThreadId);
+        const input = yield* decodeInput(ProjectAgentListTasksInput, args);
         const result = yield* projectAgent
-          .listTasks(
-            {
-              projectId: ProjectId.makeUnsafe(
-                readStringArg(args, "projectId", { required: true })!,
-              ),
-              includeArchived: readBooleanArg(args, "includeArchived") ?? false,
-            },
-            principal,
-          )
+          .listTasks(input, principal)
           .pipe(Effect.mapError((error) => new ToolInputError(error.message)));
         return mcpToolResultJson(result);
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
@@ -106,16 +120,9 @@ export function makeProjectAgentTools(
     handler: (args, context) =>
       Effect.gen(function* () {
         const principal = yield* resolvePrincipal(context.callerThreadId);
+        const input = yield* decodeInput(ProjectAgentReadDocumentInput, args);
         const result = yield* projectAgent
-          .readDocument(
-            {
-              projectId: ProjectId.makeUnsafe(
-                readStringArg(args, "projectId", { required: true })!,
-              ),
-              logicalPath: readStringArg(args, "logicalPath", { required: true })!,
-            },
-            principal,
-          )
+          .readDocument(input, principal)
           .pipe(Effect.mapError((error) => new ToolInputError(error.message)));
         return mcpToolResultJson(result);
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
@@ -144,21 +151,9 @@ export function makeProjectAgentTools(
     handler: (args, context) =>
       Effect.gen(function* () {
         const principal = yield* resolvePrincipal(context.callerThreadId);
+        const input = yield* decodeInput(ProjectAgentWriteDocumentInput, args);
         const result = yield* projectAgent
-          .writeDocument(
-            {
-              requestId: readStringArg(args, "requestId", { required: true })!,
-              projectId: ProjectId.makeUnsafe(
-                readStringArg(args, "projectId", { required: true })!,
-              ),
-              logicalPath: readStringArg(args, "logicalPath", { required: true })!,
-              content: readStringArg(args, "content", { required: true })!,
-              ...(typeof args.expectedRevision === "number"
-                ? { expectedRevision: args.expectedRevision }
-                : {}),
-            },
-            principal,
-          )
+          .writeDocument(input, principal)
           .pipe(Effect.mapError((error) => new ToolInputError(error.message)));
         return mcpToolResultJson(result);
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
@@ -186,18 +181,9 @@ export function makeProjectAgentTools(
     handler: (args, context) =>
       Effect.gen(function* () {
         const principal = yield* resolvePrincipal(context.callerThreadId);
+        const input = yield* decodeInput(ProjectAgentReportResultInput, args);
         const result = yield* projectAgent
-          .reportResult(
-            {
-              requestId: readStringArg(args, "requestId", { required: true })!,
-              projectId: ProjectId.makeUnsafe(
-                readStringArg(args, "projectId", { required: true })!,
-              ),
-              taskId: ProjectTaskId.makeUnsafe(readStringArg(args, "taskId", { required: true })!),
-              summary: readStringArg(args, "summary", { required: true })!,
-            },
-            principal,
-          )
+          .reportResult(input, principal)
           .pipe(Effect.mapError((error) => new ToolInputError(error.message)));
         return mcpToolResultJson(result);
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
@@ -220,7 +206,7 @@ export function makeProjectAgentTools(
       Effect.gen(function* () {
         const packet = yield* projectAgent
           .buildContextPacket(
-            ProjectId.makeUnsafe(readStringArg(args, "projectId", { required: true })!),
+            (yield* decodeInput(ProjectAgentGetOverviewInput, args)).projectId,
             ThreadId.makeUnsafe(context.callerThreadId),
           )
           .pipe(Effect.mapError((error) => new ToolInputError(error.message)));
@@ -228,5 +214,205 @@ export function makeProjectAgentTools(
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
   };
 
-  return [getOverview, listTasks, readDocument, writeDocument, reportResult, contextPacket];
+  const remember: ToolEntry = {
+    requiredCapability: "thread:write",
+    requiresActiveTurn: true,
+    definition: {
+      name: "synara_project_remember",
+      description:
+        "Save a note to the group's shared memory (memory/<date>-<slug>.md) and update the MEMORY.md index every group thread reads. Near-identical notes are deduplicated onto the existing memory file.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          requestId: { type: "string" },
+          projectId: { type: "string" },
+          note: { type: "string" },
+          title: { type: "string" },
+        },
+        required: ["projectId", "note"],
+      },
+      annotations: { title: "Remember group note", ...WRITE_TOOL_ANNOTATIONS },
+    },
+    handler: (args, context) =>
+      Effect.gen(function* () {
+        const principal = yield* resolvePrincipal(context.callerThreadId);
+        const input = yield* decodeInput(ProjectAgentRememberInput, {
+          ...args,
+          requestId: args.requestId ?? randomUUID(),
+        });
+        const result = yield* projectAgent
+          .remember(input, principal)
+          .pipe(Effect.mapError((error) => new ToolInputError(error.message)));
+        return mcpToolResultJson(result);
+      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+  };
+
+  const forget: ToolEntry = {
+    requiredCapability: "thread:write",
+    requiresActiveTurn: true,
+    definition: {
+      name: "synara_project_forget",
+      description:
+        "Remove a group memory note file (memory/<date>-<slug>.md) and its index line in MEMORY.md.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          requestId: { type: "string" },
+          projectId: { type: "string" },
+          path: { type: "string" },
+        },
+        required: ["projectId", "path"],
+      },
+      annotations: { title: "Forget group note", ...WRITE_TOOL_ANNOTATIONS },
+    },
+    handler: (args, context) =>
+      Effect.gen(function* () {
+        const principal = yield* resolvePrincipal(context.callerThreadId);
+        const input = yield* decodeInput(ProjectAgentForgetInput, {
+          ...args,
+          requestId: args.requestId ?? randomUUID(),
+        });
+        const result = yield* projectAgent
+          .forget(input, principal)
+          .pipe(Effect.mapError((error) => new ToolInputError(error.message)));
+        return mcpToolResultJson(result);
+      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+  };
+
+  const linkRepository: ToolEntry = {
+    requiredCapability: "thread:write",
+    requiresActiveTurn: true,
+    definition: {
+      name: "synara_project_link_repository",
+      description:
+        "Coordinator only. Link an existing ordinary Synara project to this group, by linkedProjectId or by its workspacePath. New group threads can then be started in that repository. Unlinking stays a user action.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          requestId: { type: "string" },
+          projectId: { type: "string" },
+          linkedProjectId: { type: "string" },
+          workspacePath: { type: "string" },
+        },
+        required: ["projectId"],
+      },
+      annotations: { title: "Link repository to group", ...WRITE_TOOL_ANNOTATIONS },
+    },
+    handler: (args, context) =>
+      Effect.gen(function* () {
+        const principal = yield* resolvePrincipal(context.callerThreadId);
+        const input = yield* decodeInput(ProjectAgentLinkRepositoryInput, {
+          ...args,
+          requestId: args.requestId ?? randomUUID(),
+        });
+        if ((input.linkedProjectId === undefined) === (input.workspacePath === undefined)) {
+          return yield* Effect.fail(
+            new ToolInputError("Pass exactly one of linkedProjectId or workspacePath."),
+          );
+        }
+        const result = yield* projectAgent
+          .linkRepository(input, principal)
+          .pipe(Effect.mapError((error) => new ToolInputError(error.message)));
+        return mcpToolResultJson(result);
+      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+  };
+
+  const libraryList: ToolEntry = {
+    requiredCapability: "thread:read",
+    definition: {
+      name: "synara_project_library_list",
+      description:
+        "List files in the group's Library (optionally under relativePath). Returns the library root path and entries.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          projectId: { type: "string" },
+          relativePath: { type: "string" },
+        },
+        required: ["projectId"],
+      },
+      annotations: { title: "List group library", ...READ_ONLY_TOOL_ANNOTATIONS },
+    },
+    handler: (args, context) =>
+      Effect.gen(function* () {
+        const principal = yield* resolvePrincipal(context.callerThreadId);
+        const input = yield* decodeInput(ProjectAgentLibraryListInput, args);
+        const result = yield* projectAgent
+          .libraryList(input, principal)
+          .pipe(Effect.mapError((error) => new ToolInputError(error.message)));
+        return mcpToolResultJson(result);
+      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+  };
+
+  const libraryAdd: ToolEntry = {
+    requiredCapability: "thread:write",
+    requiresActiveTurn: true,
+    definition: {
+      name: "synara_project_library_add",
+      description:
+        "Copy a file or folder from this thread's own workspace into the group's Library and commit it. sourcePath must resolve inside your workspace; destinationPath defaults to the source name at the library root.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          requestId: { type: "string" },
+          projectId: { type: "string" },
+          sourcePath: { type: "string" },
+          destinationPath: { type: "string" },
+        },
+        required: ["projectId", "sourcePath"],
+      },
+      annotations: { title: "Add file to group library", ...WRITE_TOOL_ANNOTATIONS },
+    },
+    handler: (args, context) =>
+      Effect.gen(function* () {
+        const principal = yield* resolvePrincipal(context.callerThreadId);
+        const input = yield* decodeInput(ProjectAgentLibraryAddInput, {
+          ...args,
+          requestId: args.requestId ?? randomUUID(),
+        });
+        const result = yield* projectAgent
+          .libraryAdd(input, principal)
+          .pipe(Effect.mapError((error) => new ToolInputError(error.message)));
+        return mcpToolResultJson(result);
+      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+  };
+
+  const listThreads: ToolEntry = {
+    requiredCapability: "thread:read",
+    definition: {
+      name: "synara_project_list_threads",
+      description:
+        "Coordinator only. List every group thread — in the group and in linked repositories — with its live state, PR link, last update time, and task id.",
+      inputSchema: {
+        type: "object",
+        properties: { projectId: { type: "string" } },
+        required: ["projectId"],
+      },
+      annotations: { title: "List group threads", ...READ_ONLY_TOOL_ANNOTATIONS },
+    },
+    handler: (args, context) =>
+      Effect.gen(function* () {
+        const principal = yield* resolvePrincipal(context.callerThreadId);
+        const input = yield* decodeInput(ProjectAgentListThreadsInput, args);
+        const result = yield* projectAgent
+          .listGroupThreads(input, principal)
+          .pipe(Effect.mapError((error) => new ToolInputError(error.message)));
+        return mcpToolResultJson(result);
+      }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
+  };
+
+  return [
+    getOverview,
+    listTasks,
+    readDocument,
+    writeDocument,
+    reportResult,
+    contextPacket,
+    remember,
+    forget,
+    linkRepository,
+    libraryList,
+    libraryAdd,
+    listThreads,
+  ];
 }

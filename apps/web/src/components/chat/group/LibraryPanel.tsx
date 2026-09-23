@@ -9,8 +9,24 @@
 
 import type { LibraryCommit, LibraryEntry, ProjectId } from "@synara/contracts";
 import { formatBytes } from "@synara/shared/formatBytes";
-import { type MouseEvent as ReactMouseEvent, useCallback, useMemo, useRef, useState } from "react";
+import {
+  type MouseEvent as ReactMouseEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+} from "~/components/ui/alert-dialog";
 import { IconButton } from "~/components/ui/icon-button";
 import { SearchInput } from "~/components/ui/search-input";
 import { SettingsSegmentedControl } from "~/components/settings/SettingControls";
@@ -18,8 +34,11 @@ import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
 import { toastManager } from "~/components/ui/toast";
-import { AUXILIARY_PANEL_MOTION_CLASS } from "~/components/chat/auxiliary/ChatAuxiliaryPanel";
-import { ENVIRONMENT_PANEL_SURFACE_CLASS_NAME } from "~/components/chat/composerPickerStyles";
+import {
+  ENVIRONMENT_PANEL_MOTION_CLASS,
+  ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME,
+  ENVIRONMENT_PANEL_SURFACE_CLASS_NAME,
+} from "~/components/chat/composerPickerStyles";
 import { EnvironmentPanelTitle } from "~/components/chat/environment/EnvironmentRow";
 import { FileEntryIcon } from "~/components/chat/FileEntryIcon";
 import { fileRowClassName } from "~/components/chat/fileRowStyles";
@@ -31,6 +50,7 @@ import {
   ArrowUpIcon,
   ArrowDownIcon,
   CloudSyncIcon,
+  HistoryIcon,
   PanelCollapseIcon,
   PanelExpandIcon,
   XIcon,
@@ -38,6 +58,8 @@ import {
 import { formatRelativeTime } from "~/lib/relativeTime";
 import { cn } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
+import { useStore } from "~/store";
+import { createSidebarThreadSummariesSelector } from "~/storeSelectors";
 
 import {
   DEFAULT_EXPANDED_DIRECTORIES,
@@ -60,9 +82,6 @@ export interface LibraryPanelProps {
   onClose: () => void;
 }
 
-const PANEL_OVERLAY_WRAPPER_CLASS_NAME =
-  "pointer-events-none absolute inset-y-0 right-0 z-20 flex flex-col p-3";
-
 const TYPE_FILTER_OPTIONS: ReadonlyArray<{
   readonly value: LibraryTypeFilter;
   readonly label: string;
@@ -79,6 +98,12 @@ const VIEW_MODE_OPTIONS = [
   { value: "grid" as const, label: "Grid" },
 ];
 
+// The server names delete commits "Delete <relativePath>" (wsRpc.ts) — the only
+// whole-library commit kind the row-level Restore button can act on.
+function deletedPathFromCommitMessage(message: string): string | null {
+  return message.startsWith("Delete ") ? message.slice("Delete ".length) : null;
+}
+
 export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanelProps) {
   const library = useGroupLibrary({ projectId, enabled: open && projectId !== null });
   const [query, setQuery] = useState("");
@@ -92,12 +117,18 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [historyPath, setHistoryPath] = useState<string | null>(null);
   const [historyCommits, setHistoryCommits] = useState<readonly LibraryCommit[] | null>(null);
+  // Empty string = the whole-library log (delete/rename commits included); any other
+  // value is a per-entry log.
+  const [historyScope, setHistoryScope] = useState<"entry" | "library">("entry");
+  const [deleteTarget, setDeleteTarget] = useState<LibraryEntry | null>(null);
   const [renameTarget, setRenameTarget] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Set by the row context menu's "Upload here"; cleared after each pick so a
   // plain + Add still lands at the root.
   const uploadDirectoryRef = useRef<string | undefined>(undefined);
+  // Latest history request wins — a slow response must not clobber a newer view.
+  const historyGenerationRef = useRef(0);
 
   const rows = useMemo(
     () =>
@@ -117,15 +148,13 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
 
   const toggleDirectory = useCallback(
     (entry: LibraryEntry) => {
-      setExpandedDirectories((current) => {
-        const next = toggleLibraryDirectory(current, entry.relativePath);
-        if (next.has(entry.relativePath) && !library.entriesByDir.has(entry.relativePath)) {
-          void library.loadDirectory(entry.relativePath);
-        }
-        return next;
-      });
+      const expanding = !expandedDirectories.has(entry.relativePath);
+      setExpandedDirectories((current) => toggleLibraryDirectory(current, entry.relativePath));
+      if (expanding && !library.entriesByDir.has(entry.relativePath)) {
+        void library.loadDirectory(entry.relativePath);
+      }
     },
-    [library],
+    [expandedDirectories, library],
   );
 
   const handleEntryClick = useCallback(
@@ -141,17 +170,54 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
 
   const showHistory = useCallback(
     async (entry: LibraryEntry) => {
+      const generation = ++historyGenerationRef.current;
       setHistoryPath(entry.relativePath);
+      setHistoryScope("entry");
       setHistoryCommits(null);
-      setHistoryCommits(await library.history(entry.relativePath));
+      const commits = await library.history(entry.relativePath);
+      if (historyGenerationRef.current === generation) {
+        setHistoryCommits(commits);
+      }
     },
     [library],
   );
 
+  const showLibraryHistory = useCallback(async () => {
+    const generation = ++historyGenerationRef.current;
+    setHistoryPath("");
+    setHistoryScope("library");
+    setHistoryCommits(null);
+    const commits = await library.history();
+    if (historyGenerationRef.current === generation) {
+      setHistoryCommits(commits);
+    }
+  }, [library]);
+
   const refreshHistory = useCallback(async () => {
     if (historyPath === null) return;
-    setHistoryCommits(await library.history(historyPath));
-  }, [historyPath, library]);
+    const generation = historyGenerationRef.current;
+    const commits =
+      historyScope === "library" ? await library.history() : await library.history(historyPath);
+    if (historyGenerationRef.current === generation) {
+      setHistoryCommits(commits);
+    }
+  }, [historyPath, historyScope, library]);
+
+  // Cancelling the system picker fires no change event — when focus returns with no
+  // files selected, the "Upload here" target would leak into the next root-level Add.
+  const pickUploadDirectory = useCallback((directory: string | undefined) => {
+    uploadDirectoryRef.current = directory;
+    fileInputRef.current?.click();
+    const onFocusReturn = () => {
+      window.setTimeout(() => {
+        const input = fileInputRef.current;
+        if (input && (input.files === null || input.files.length === 0)) {
+          uploadDirectoryRef.current = undefined;
+        }
+      }, 250);
+    };
+    window.addEventListener("focus", onFocusReturn, { once: true });
+  }, []);
 
   const handleContextMenu = useCallback(
     async (entry: LibraryEntry, event: ReactMouseEvent<HTMLElement>) => {
@@ -170,8 +236,7 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
         { x: event.clientX, y: event.clientY },
       );
       if (clicked === "upload-here") {
-        uploadDirectoryRef.current = entry.relativePath;
-        fileInputRef.current?.click();
+        pickUploadDirectory(entry.relativePath);
         return;
       }
       if (clicked === "rename") {
@@ -180,16 +245,23 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
         return;
       }
       if (clicked === "delete") {
-        const deleted = await library.deleteEntry(entry.relativePath);
-        if (deleted && previewPath === entry.relativePath) setPreviewPath(null);
+        setDeleteTarget(entry);
         return;
       }
       if (clicked === "history") {
         void showHistory(entry);
       }
     },
-    [library, previewPath, showHistory],
+    [pickUploadDirectory, showHistory],
   );
+
+  const confirmDelete = useCallback(async () => {
+    const target = deleteTarget;
+    setDeleteTarget(null);
+    if (!target) return;
+    const deleted = await library.deleteEntry(target.relativePath);
+    if (deleted && previewPath === target.relativePath) setPreviewPath(null);
+  }, [deleteTarget, library, previewPath]);
 
   const commitRename = useCallback(async () => {
     const target = renameTarget;
@@ -221,6 +293,37 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
     [library],
   );
 
+  // The coordinator and its threads write into the library on their own — refetch
+  // the loaded listing when the window regains focus and whenever a group thread's
+  // latest turn completes, matching how stale the list actually goes.
+  useEffect(() => {
+    if (!open || !projectId) return;
+    const onFocus = () => void library.load();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [open, projectId, library]);
+
+  const selectSidebarThreads = useMemo(() => createSidebarThreadSummariesSelector(), []);
+  const sidebarThreads = useStore(selectSidebarThreads);
+  const turnCompleteSignature = useMemo(
+    () =>
+      sidebarThreads
+        .filter(
+          (thread) => thread.projectId === projectId && thread.latestTurn?.state === "completed",
+        )
+        .map((thread) => `${thread.id}:${thread.latestTurn?.turnId ?? ""}`)
+        .join(","),
+    [sidebarThreads, projectId],
+  );
+  const lastTurnCompleteSignatureRef = useRef(turnCompleteSignature);
+  useEffect(() => {
+    const changed = lastTurnCompleteSignatureRef.current !== turnCompleteSignature;
+    lastTurnCompleteSignatureRef.current = turnCompleteSignature;
+    if (changed && open && projectId) {
+      void library.load();
+    }
+  }, [turnCompleteSignature, open, projectId, library]);
+
   const remoteStatus = library.status;
   const emptyLibrary = rows.length === 0;
 
@@ -229,6 +332,14 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
       <div className="flex items-center gap-1 px-2 pb-1 pt-0.5">
         <EnvironmentPanelTitle>Library</EnvironmentPanelTitle>
         <div className="ml-auto flex items-center gap-0.5">
+          <IconButton
+            type="button"
+            label="Library history"
+            tooltip="History"
+            onClick={() => void showLibraryHistory()}
+          >
+            <HistoryIcon className="size-3.5" />
+          </IconButton>
           <IconButton
             type="button"
             label={fullHeight ? "Collapse panel" : "Expand to full height"}
@@ -285,7 +396,7 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
           variant="default"
           className="shrink-0"
           disabled={library.busy}
-          onClick={() => fileInputRef.current?.click()}
+          onClick={() => pickUploadDirectory(undefined)}
         >
           <AddPlusIcon className="size-3.5" /> Add
         </Button>
@@ -328,18 +439,19 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
 
       {previewPath !== null && library.root ? (
         <div className="flex min-h-0 flex-1 flex-col">
-          <div className="flex items-center gap-1 px-2 pb-1">
-            <IconButton
+          <div className="flex items-center px-2 pb-1">
+            <button
               type="button"
-              label="Back to library"
-              tooltip="Back"
+              aria-label={`Back to library from ${previewPath}`}
+              title="Back to library"
+              className="flex min-w-0 flex-1 items-center gap-1 rounded-md px-1.5 py-0.5 text-left text-ui-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
               onClick={() => setPreviewPath(null)}
             >
-              <ArrowLeftIcon className="size-3.5" />
-            </IconButton>
-            <span className="min-w-0 truncate text-ui-sm text-muted-foreground" title={previewPath}>
-              {previewPath}
-            </span>
+              <ArrowLeftIcon className="size-3.5 shrink-0" />
+              <span className="min-w-0 truncate" title={previewPath}>
+                {previewPath}
+              </span>
+            </button>
           </div>
           <div className="min-h-0 flex-1 overflow-hidden">
             <WorkspaceFilePreview
@@ -352,21 +464,25 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
         </div>
       ) : historyPath !== null ? (
         <div className="flex min-h-0 flex-1 flex-col">
-          <div className="flex items-center gap-1 px-2 pb-1">
-            <IconButton
+          <div className="flex items-center px-2 pb-1">
+            <button
               type="button"
-              label="Back to library"
-              tooltip="Back"
+              aria-label="Back to library from history"
+              title="Back to library"
+              className="flex min-w-0 flex-1 items-center gap-1 rounded-md px-1.5 py-0.5 text-left text-ui-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
               onClick={() => {
                 setHistoryPath(null);
                 setHistoryCommits(null);
               }}
             >
-              <ArrowLeftIcon className="size-3.5" />
-            </IconButton>
-            <span className="min-w-0 truncate text-ui-sm text-muted-foreground" title={historyPath}>
-              History — {historyPath}
-            </span>
+              <ArrowLeftIcon className="size-3.5 shrink-0" />
+              <span
+                className="min-w-0 truncate"
+                title={historyScope === "library" ? "Library" : historyPath}
+              >
+                {historyScope === "library" ? "History" : `History — ${historyPath}`}
+              </span>
+            </button>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto px-1">
             {historyCommits === null ? (
@@ -379,41 +495,50 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
               </PanelStateMessage>
             ) : (
               <ul className="flex flex-col gap-0.5">
-                {historyCommits.map((commit) => (
-                  <li
-                    key={commit.sha}
-                    className="flex items-center gap-1.5 rounded-md px-2 py-1 text-ui"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate font-medium text-foreground" title={commit.message}>
-                        {commit.message}
-                      </p>
-                      <p className="text-ui-xs text-muted-foreground">
-                        {commit.sha.slice(0, 7)} · {formatRelativeTime(commit.at)}
-                      </p>
-                    </div>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      disabled={library.busy}
-                      onClick={() => {
-                        void library.restore(historyPath, commit.sha).then((restored) => {
-                          if (restored) {
-                            toastManager.add({
-                              type: "success",
-                              title: "Restored",
-                              description: `${historyPath} was restored from ${commit.sha.slice(0, 7)}.`,
-                            });
-                            void refreshHistory();
-                          }
-                        });
-                      }}
+                {historyCommits.map((commit, index) => {
+                  const deletedPath = deletedPathFromCommitMessage(commit.message);
+                  const shaBeforeDelete =
+                    deletedPath !== null ? historyCommits[index + 1]?.sha : undefined;
+                  const restorePath = historyScope === "entry" ? historyPath : deletedPath;
+                  const restoreSha = historyScope === "entry" ? commit.sha : shaBeforeDelete;
+                  return (
+                    <li
+                      key={commit.sha}
+                      className="flex items-center gap-1.5 rounded-md px-2 py-1 text-ui"
                     >
-                      Restore
-                    </Button>
-                  </li>
-                ))}
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate font-medium text-foreground" title={commit.message}>
+                          {commit.message}
+                        </p>
+                        <p className="text-ui-xs text-muted-foreground">
+                          {commit.sha.slice(0, 7)} · {formatRelativeTime(commit.at)}
+                        </p>
+                      </div>
+                      {restorePath !== null && restoreSha !== undefined ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          disabled={library.busy}
+                          onClick={() => {
+                            void library.restore(restorePath, restoreSha).then((restored) => {
+                              if (restored) {
+                                toastManager.add({
+                                  type: "success",
+                                  title: "Restored",
+                                  description: `${restorePath} was restored from ${restoreSha.slice(0, 7)}.`,
+                                });
+                                void refreshHistory();
+                              }
+                            });
+                          }}
+                        >
+                          Restore
+                        </Button>
+                      ) : null}
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </div>
@@ -421,10 +546,7 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
       ) : (
         <>
           {viewMode === "list" ? (
-            <div
-              className="grid grid-cols-[1fr_auto] items-center gap-1 border-b border-[color:var(--color-border-light)] px-2 pb-1 text-ui-xs font-medium uppercase tracking-wide text-muted-foreground"
-              role="rowheader"
-            >
+            <div className="grid grid-cols-[1fr_auto] items-center gap-1 border-b border-[color:var(--color-border-light)] px-2 pb-1 text-ui-xs font-medium uppercase tracking-wide text-muted-foreground">
               {(
                 [
                   ["name", "Name"],
@@ -453,7 +575,11 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
           <div className="min-h-0 flex-1 overflow-y-auto p-1" data-library-view={viewMode}>
             {emptyLibrary ? (
               <PanelStateMessage density="compact" fill="flex">
-                <p>No files yet. Add documents or artifacts for this group.</p>
+                {query || typeFilter !== "all" ? (
+                  <p>No files match.</p>
+                ) : (
+                  <p>No files yet. Add documents or artifacts for this group.</p>
+                )}
               </PanelStateMessage>
             ) : viewMode === "grid" ? (
               <div className="grid grid-cols-2 gap-1 p-1">
@@ -496,25 +622,59 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
   );
 
   return (
-    <div
-      className={PANEL_OVERLAY_WRAPPER_CLASS_NAME}
-      data-environment-panel-variant={variant}
-      aria-hidden={!open}
-    >
+    <>
       <div
-        className={cn(
-          ENVIRONMENT_PANEL_SURFACE_CLASS_NAME,
-          AUXILIARY_PANEL_MOTION_CLASS,
-          "flex w-72 flex-col",
-          fullHeight ? "h-full" : "max-h-full",
-          open
-            ? "pointer-events-auto translate-x-0 opacity-100"
-            : "pointer-events-none translate-x-full opacity-0",
-        )}
+        className={ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME}
+        data-environment-panel-variant={variant}
+        aria-hidden={!open}
+        inert={!open}
       >
-        {content}
+        <div
+          className={cn(
+            ENVIRONMENT_PANEL_SURFACE_CLASS_NAME,
+            ENVIRONMENT_PANEL_MOTION_CLASS,
+            "flex w-72 flex-col",
+            fullHeight ? "h-full" : "max-h-full",
+            open
+              ? "pointer-events-auto translate-x-0 opacity-100"
+              : "pointer-events-none translate-x-full opacity-0",
+          )}
+        >
+          {content}
+        </div>
       </div>
-    </div>
+      <AlertDialog
+        open={deleteTarget !== null}
+        onOpenChange={(next) => {
+          if (!next) setDeleteTarget(null);
+        }}
+      >
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Delete {deleteTarget?.kind === "directory" ? "folder" : "file"} "{deleteTarget?.name}
+              "?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This removes it from the library. It can be restored from History.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogClose render={<Button variant="outline" size="sm" />}>
+              Cancel
+            </AlertDialogClose>
+            <Button
+              size="sm"
+              variant="destructive"
+              disabled={library.busy}
+              onClick={() => void confirmDelete()}
+            >
+              Delete
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
+    </>
   );
 }
 

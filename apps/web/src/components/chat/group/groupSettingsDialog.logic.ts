@@ -1,5 +1,6 @@
 import type {
   ModelSelection,
+  ProviderKind,
   ProjectAgentConfig,
   ProjectAgentConfigureInput,
   ProjectAgentOverview,
@@ -58,8 +59,10 @@ export function clampCharacterCount(value: string, max: number): number {
   return Math.min(Math.max(0, value.length), max);
 }
 
+// The counter tells the truth about how long the text is — an over-limit value
+// reads e.g. "8,412 / 8,000" in destructive color, never a clamped "8,000".
 export function formatCharacterCount(value: string, max: number): string {
-  return `${clampCharacterCount(value, max).toLocaleString("en-US")} / ${max.toLocaleString("en-US")}`;
+  return `${Math.max(0, value.length).toLocaleString("en-US")} / ${max.toLocaleString("en-US")}`;
 }
 
 /**
@@ -99,6 +102,19 @@ function modelSelectionFingerprint(selection: ModelSelection): string {
 
 export function modelSelectionsEqual(a: ModelSelection, b: ModelSelection): boolean {
   return modelSelectionFingerprint(a) === modelSelectionFingerprint(b);
+}
+
+/**
+ * Provider keys warmed for the group model catalog. While the picker is open
+ * every visible provider's catalog warms — same as the composer picker — so
+ * each provider lists its real models; when closed, only the row's own
+ * provider needs runtime discovery (effort levels, selected-model hint).
+ */
+export function resolveGroupModelCatalogPrefetchProviders(
+  pickerOpen: boolean,
+  selectedProvider: ProviderKind,
+): ReadonlyArray<ProviderKind> | undefined {
+  return pickerOpen ? undefined : [selectedProvider];
 }
 
 export function buildGroupSettingsDraft(input: {
@@ -176,13 +192,6 @@ export function groupSettingsDirtySections(
     dirty.add("environment");
   }
   return dirty;
-}
-
-export function isGroupSettingsDirty(
-  draft: GroupSettingsDraft,
-  baseline: GroupSettingsDraft,
-): boolean {
-  return groupSettingsDirtySections(draft, baseline).size > 0;
 }
 
 export function buildGroupConfigureInput(input: {

@@ -333,6 +333,15 @@ export interface ComposerDraftStoreState {
     threadId: ThreadId,
     modelSelection: ModelSelection | null | undefined,
   ) => void;
+  /**
+   * Records a per-provider default model without switching the draft's active
+   * provider — used for seeds (group worker routing) that must not steal the
+   * composer's provider pick.
+   */
+  seedModelSelection: (
+    threadId: ThreadId,
+    modelSelection: ModelSelection | null | undefined,
+  ) => void;
   setModelSelectionAndSticky: (threadId: ThreadId, modelSelection: ModelSelection) => void;
   setProviderOptionsForDispatch: (
     threadId: ThreadId,

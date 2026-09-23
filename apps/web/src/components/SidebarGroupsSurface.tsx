@@ -5,7 +5,7 @@
 // Layer: Web component
 // Exports: SidebarGroupsSurface
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { ProjectId, ThreadId } from "@synara/contracts";
 
 import { createGroupProject, findLegacyStudioContainerForAdoption } from "../lib/groupProjects";
@@ -30,7 +30,14 @@ import {
   resolveGroupsListEmptyState,
 } from "./SidebarGroupsSurface.logic";
 import { resolveCoordinatorAppearance } from "./chat/group/coordinatorAppearance";
-import { useProjectAgentSummaries } from "./chat/project/useProjectAgentSummaries";
+import {
+  createGroupNeedsAttentionSelector,
+  type GroupNeedsAttentionGroup,
+} from "./chat/project/groupOverview.logic";
+import {
+  useProjectAgentSummaries,
+  useProjectAgentSummariesStore,
+} from "./chat/project/useProjectAgentSummaries";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
 import {
   SidebarGroup,
@@ -52,13 +59,17 @@ import {
 import type { SidebarThreadSortOrder } from "../appSettings";
 
 // Rename fires once per project per session; the effect re-runs on every snapshot
-// while the server has not yet echoed the new title.
+// while the server has not yet echoed the new title. `inFlight` only dedupes the
+// outstanding call — an id moves into the done set once the dispatch resolves, so a
+// transient failure retries on the next snapshot instead of being swallowed.
 const studioAdoptionDispatchedIds = new Set<string>();
+const studioAdoptionInFlightIds = new Set<string>();
 
 // Browser tests remount the surface inside one test and must start from a clean
 // slate — the module-level set otherwise leaks "already dispatched" across mounts.
 export function resetStudioAdoptionDispatchedIdsForTests(): void {
   studioAdoptionDispatchedIds.clear();
+  studioAdoptionInFlightIds.clear();
 }
 
 export function SidebarGroupsSurface({
@@ -99,12 +110,48 @@ export function SidebarGroupsSurface({
   const groupsWorkspaceRoot = useWorkspacePathsStore((store) => store.groupsWorkspaceRoot);
   const toggleProject = useStore((store) => store.toggleProject);
   const { summariesByProjectId } = useProjectAgentSummaries();
+  // One shared selector answers "which groups have a thread Waiting on you" for
+  // every row — the chat-header Group toggle reads the same result.
+  const attentionGroups = useMemo(() => {
+    const groups = new Map<ProjectId, GroupNeedsAttentionGroup>();
+    for (const project of groupProjects) {
+      groups.set(project.id, {
+        projectId: project.id,
+        coordinatorThreadId: summariesByProjectId.get(project.id)?.coordinatorThreadId ?? null,
+      });
+    }
+    return groups;
+  }, [groupProjects, summariesByProjectId]);
+  const selectGroupNeedsAttention = useMemo(
+    () => createGroupNeedsAttentionSelector({ groups: attentionGroups }),
+    [attentionGroups],
+  );
+  const groupNeedsAttention = useStore(selectGroupNeedsAttention);
   const pinnedProjectAgentIds = usePinnedProjectAgentsStore((store) => store.pinnedProjectAgentIds);
   const pinnedProjectAgentIdSet = new Set(pinnedProjectAgentIds);
   const toggleProjectAgentPinned = usePinnedProjectAgentsStore(
     (store) => store.toggleProjectAgentPinned,
   );
   const [newGroupDialogOpen, setNewGroupDialogOpen] = useState(false);
+  const [archivedGroupsOpen, setArchivedGroupsOpen] = useState(false);
+
+  const activeGroups = groupProjects.filter(
+    (project) => summariesByProjectId.get(project.id)?.archivedAt == null,
+  );
+  const archivedGroups = groupProjects.filter(
+    (project) => summariesByProjectId.get(project.id)?.archivedAt != null,
+  );
+
+  const unarchiveGroup = async (projectId: ProjectId) => {
+    const api = readNativeApi();
+    if (!api?.projectAgent) return;
+    const overview = await api.projectAgent
+      .unarchiveGroup({ requestId: crypto.randomUUID(), projectId })
+      .catch(() => null);
+    if (overview) {
+      useProjectAgentSummariesStore.getState().applyOverview(overview);
+    }
+  };
 
   // Adopt the pre-Groups Studio container in place: retitle it "Groups" once so its
   // existing chats stay under it. Idempotent — the row stops matching once renamed.
@@ -121,14 +168,18 @@ export function SidebarGroupsSurface({
       studioWorkspaceRoot,
       groupsWorkspaceRoot,
     });
-    if (!legacy || studioAdoptionDispatchedIds.has(legacy.id)) {
+    if (
+      !legacy ||
+      studioAdoptionDispatchedIds.has(legacy.id) ||
+      studioAdoptionInFlightIds.has(legacy.id)
+    ) {
       return;
     }
     const api = readNativeApi();
     if (!api) {
       return;
     }
-    studioAdoptionDispatchedIds.add(legacy.id);
+    studioAdoptionInFlightIds.add(legacy.id);
     void api.orchestration
       .dispatchCommand({
         type: "project.meta.update",
@@ -136,8 +187,14 @@ export function SidebarGroupsSurface({
         projectId: legacy.id,
         title: "Groups",
       })
+      .then(() => {
+        studioAdoptionDispatchedIds.add(legacy.id);
+      })
       .catch(() => {
-        // Leave the id marked: a transient failure should not spam the command.
+        // Leave unmarked: a transient failure retries on the next snapshot.
+      })
+      .finally(() => {
+        studioAdoptionInFlightIds.delete(legacy.id);
       });
   }, [
     chatWorkspaceRoot,
@@ -208,8 +265,8 @@ export function SidebarGroupsSurface({
           />,
         )}
         <SidebarMenu className="gap-1">
-          {groupProjects.length > 0 ? (
-            groupProjects.map((project) => {
+          {activeGroups.length > 0 ? (
+            activeGroups.map((project) => {
               const projectSidebarData = projectSidebarDataById.get(project.id);
               const coordinatorSummary = summariesByProjectId.get(project.id) ?? null;
               const coordinatorConfigured = coordinatorSummary?.configured === true;
@@ -227,6 +284,13 @@ export function SidebarGroupsSurface({
                 coordinatorColor: coordinatorSummary?.coordinatorColor,
               });
               const CoordinatorGlyph = coordinatorAppearance.Icon;
+              const activateCoordinatorRow = () => {
+                if (coordinatorConfigured && coordinatorSummary?.coordinatorThreadId) {
+                  onOpenThread(coordinatorSummary.coordinatorThreadId);
+                  return;
+                }
+                onOpenGroupSettings(project.id, "onboarding");
+              };
               const showCoordinatorContextMenu = (position: { x: number; y: number }) => {
                 if (!coordinatorConfigured) return;
                 const api = readNativeApi();
@@ -268,12 +332,11 @@ export function SidebarGroupsSurface({
                         ? `Open ${coordinatorRowLabel}`
                         : `Set up coordinator for ${resolveSidebarProjectRowLabel(project)}`
                     }
-                    onClick={() => {
-                      if (coordinatorConfigured && coordinatorSummary?.coordinatorThreadId) {
-                        onOpenThread(coordinatorSummary.coordinatorThreadId);
-                        return;
-                      }
-                      onOpenGroupSettings(project.id, "onboarding");
+                    onClick={activateCoordinatorRow}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Enter" && event.key !== " ") return;
+                      event.preventDefault();
+                      activateCoordinatorRow();
                     }}
                     onContextMenu={(event) => {
                       event.preventDefault();
@@ -289,9 +352,9 @@ export function SidebarGroupsSurface({
                   {coordinatorConfigured ? (
                     <button
                       type="button"
-                      aria-label={pinActionLabel("project agent", coordinatorPinned)}
+                      aria-label={pinActionLabel("coordinator", coordinatorPinned)}
                       aria-pressed={coordinatorPinned}
-                      title={pinActionLabel("project agent", coordinatorPinned)}
+                      title={pinActionLabel("coordinator", coordinatorPinned)}
                       className={cn(
                         "sidebar-icon-button absolute right-1.5 top-1/2 z-20 inline-flex size-4 -translate-y-1/2 cursor-pointer items-center justify-center rounded-sm transition-opacity hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring",
                         SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
@@ -348,6 +411,16 @@ export function SidebarGroupsSurface({
                       >
                         {resolveSidebarProjectRowLabel(project)}
                       </span>
+                      {groupNeedsAttention.has(project.id) ? (
+                        <>
+                          <span
+                            className="mr-1 size-1.5 shrink-0 rounded-full bg-amber-500 dark:bg-amber-300/90"
+                            aria-hidden
+                            title="A thread needs you"
+                          />
+                          <span className="sr-only">A thread needs you</span>
+                        </>
+                      ) : null}
                     </SidebarMenuButton>
                   </div>
                   {coordinatorPinned ? (
@@ -382,10 +455,85 @@ export function SidebarGroupsSurface({
             })
           ) : (
             <div className="px-2 pt-4 text-center text-ui text-muted-foreground/58">
-              {emptyState === "loading" ? "Loading Groups..." : "No groups yet"}
+              {emptyState === "loading" ? "Loading groups…" : "No groups yet"}
             </div>
           )}
         </SidebarMenu>
+        {archivedGroups.length > 0 ? (
+          <div className="group/archived-collapsible pt-1">
+            <SidebarMenuButton
+              size="sm"
+              className={cn(
+                SIDEBAR_HEADER_ROW_CLASS_NAME,
+                "cursor-pointer hover:bg-[var(--sidebar-accent)]",
+              )}
+              aria-expanded={archivedGroupsOpen}
+              onClick={() => setArchivedGroupsOpen((open) => !open)}
+            >
+              <DisclosureChevron
+                open={archivedGroupsOpen}
+                className="size-3 shrink-0 text-muted-foreground/70"
+              />
+              <span
+                className={cn(
+                  "min-w-0 flex-1 truncate font-system-ui text-ui font-normal text-muted-foreground",
+                  SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
+                )}
+              >
+                Archived groups
+              </span>
+            </SidebarMenuButton>
+            <DisclosureRegion open={archivedGroupsOpen} className="pt-0.5">
+              <SidebarMenuSub
+                className={cn(
+                  "mx-0 my-0 w-full translate-x-0 border-l-0 px-0 py-0",
+                  SIDEBAR_NESTED_LIST_GAP_CLASS_NAME,
+                )}
+              >
+                {archivedGroups.map((project) => (
+                  <SidebarMenuSubItem
+                    key={project.id}
+                    className="group/archived-row relative w-full"
+                  >
+                    <SidebarMenuSubButton
+                      render={<div role="button" tabIndex={0} />}
+                      size="sm"
+                      className={cn("text-muted-foreground", SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME)}
+                      aria-label={`Archived group ${resolveSidebarProjectRowLabel(project)}`}
+                      onContextMenu={(event) => {
+                        event.preventDefault();
+                        onProjectContextMenu(project.id, {
+                          x: event.clientX,
+                          y: event.clientY,
+                        });
+                      }}
+                    >
+                      <FolderOpenIcon className="size-3.5 shrink-0" />
+                      <span className="min-w-0 flex-1 truncate">
+                        {resolveSidebarProjectRowLabel(project)}
+                      </span>
+                    </SidebarMenuSubButton>
+                    <button
+                      type="button"
+                      className={cn(
+                        "sidebar-icon-button absolute right-1.5 top-1/2 z-20 -translate-y-1/2 cursor-pointer rounded-sm px-1 text-ui-xs text-muted-foreground transition-opacity hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring",
+                        "pointer-events-none opacity-0 md:group-hover/archived-row:pointer-events-auto md:group-hover/archived-row:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100",
+                      )}
+                      aria-label={`Unarchive ${resolveSidebarProjectRowLabel(project)}`}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        void unarchiveGroup(project.id);
+                      }}
+                    >
+                      Unarchive
+                    </button>
+                  </SidebarMenuSubItem>
+                ))}
+              </SidebarMenuSub>
+            </DisclosureRegion>
+          </div>
+        ) : null}
       </SidebarGroup>
       <RenameDialog
         open={newGroupDialogOpen}
