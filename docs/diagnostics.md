@@ -51,7 +51,7 @@ is no free-text channel to sanitize.
 ## Transport and storage
 
 Events are buffered to `~/.synara-beta/diagnostics/events.jsonl` and flushed in
-batches as NDJSON over HTTPS to `https://synara-beta-diagnostics.emanueledipietro.workers.dev`
+batches as NDJSON over HTTPS to `https://synara-beta-diagnostics.kartik-9f9.workers.dev`
 (override with `SYNARA_BETA_DIAGNOSTICS_URL` for local development; only `https://`
 or loopback targets are accepted). Events land in Cloudflare Analytics Engine
 (`synara_beta_events` dataset); crash dumps land in the `synara-beta-crash-dumps`
