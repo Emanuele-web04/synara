@@ -48,7 +48,7 @@ describe("makeComputerForegroundConsent", () => {
     expect(cards).toEqual([]);
   });
 
-  it("lets an approved card authorize the rest of the turn without rereading the thread", async () => {
+  it("lets an approved card authorize the rest of the turn while checking for newer instructions", async () => {
     const { consent, cards, loadMessages } = setup(
       [userMessage("Open Dia and search my site")],
       "accept",
@@ -64,12 +64,63 @@ describe("makeComputerForegroundConsent", () => {
     expect(await consent.resolveForegroundAuthorization(context())).toEqual({
       userRequestedVisibleUse: true,
     });
-    expect(loadMessages).not.toHaveBeenCalled();
+    expect(loadMessages).toHaveBeenCalledOnce();
     // A new turn starts over.
     expect(await consent.resolveForegroundAuthorization(context("turn-2"))).toEqual({
       userRequestedVisibleUse: false,
     });
     expect(cards).toHaveLength(1);
+  });
+
+  it("revokes a card grant when later input asks to stay in the background", async () => {
+    const messages: OrchestrationMessage[] = [userMessage("Open Dia and search my site")];
+    const { consent, cards } = setup(messages, "accept");
+    const signal = new AbortController().signal;
+    expect(
+      await consent.requestForegroundConsent("computer_activate_window", {}, context(), signal),
+    ).toBe(true);
+    messages.push({
+      ...userMessage("Keep the browser in the background"),
+      id: "m2" as OrchestrationMessage["id"],
+      source: "async-user-input",
+    });
+    expect(await consent.resolveForegroundAuthorization(context())).toEqual({
+      userRequestedVisibleUse: false,
+    });
+    expect(
+      await consent.requestForegroundConsent("computer_activate_window", {}, context(), signal),
+    ).toBe(false);
+    expect(cards).toHaveLength(1);
+  });
+
+  it("does not use an approval if task instructions change while the card is open", async () => {
+    const gate = new ComputerApprovalGate();
+    const messages: OrchestrationMessage[] = [userMessage("Open Dia")];
+    const consent = makeComputerForegroundConsent({
+      gate,
+      loadMessages: async () => messages,
+      knownAppNames: () => [],
+      publish: () => async (requestId, decision) => {
+        if (decision !== undefined) return;
+        messages.push({
+          ...userMessage("Keep this in the background"),
+          id: "m2" as OrchestrationMessage["id"],
+          source: "async-user-input",
+        });
+        gate.respond("thread-1", requestId, "accept");
+      },
+    });
+    expect(
+      await consent.requestForegroundConsent(
+        "computer_activate_window",
+        {},
+        context(),
+        new AbortController().signal,
+      ),
+    ).toBe(false);
+    expect(await consent.resolveForegroundAuthorization(context())).toEqual({
+      userRequestedVisibleUse: false,
+    });
   });
 
   it("keeps a declined card declined and never asks without a turn", async () => {

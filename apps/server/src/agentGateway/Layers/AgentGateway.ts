@@ -85,6 +85,7 @@ import { makeCreateThreadsHandler } from "../creationCoordinator.ts";
 import { makeAgentGatewayAutomationTools } from "../automationTools.ts";
 import { makeAgentGatewayBrowserTools } from "../browserTools.ts";
 import { makeAgentGatewayComputerBrowserTools } from "../computerBrowserTools.ts";
+import { computerApprovalDisplayArgs } from "../computerApprovalDisplay.ts";
 import { makeAgentGatewayDeviceTools } from "../deviceTools.ts";
 import { DeviceService } from "../../device/Services/DeviceService.ts";
 import {
@@ -1091,13 +1092,7 @@ export const makeAgentGateway = Effect.gen(function* () {
               requestKind: "tool",
               requestType: "tool",
               toolName: name,
-              toolParamsDisplay: JSON.stringify(
-                Object.fromEntries(
-                  Object.entries(args).filter(
-                    ([key]) => key !== "text" && key !== "value" && key !== "prompt_text",
-                  ),
-                ),
-              ),
+              toolParamsDisplay: computerApprovalDisplayArgs(args),
               sessionApprovalAvailable: false,
               ...(approvalScope !== undefined ? { approvalScope } : {}),
               ...(decision === undefined ? {} : { decision }),

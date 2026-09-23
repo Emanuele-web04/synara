@@ -79,10 +79,10 @@ const VISIBLE_USE_PATTERNS: readonly RegExp[] = [
   // A generic thing brought "to the front" is not necessarily an app. The
   // target must be a screen object, a known app (below), or an explicit wish
   // to watch. Unrecognized names get the consent card instead of a silent raise.
-  /\b(?:bring|put|move|pull|raise)\s+(?:(?:the|my|this|that)\s+)?(?:window|app|browser|screen|desktop|it)\s+(?:to\s+(?:the\s+)?front|(?:to|in|into)\s+(?:the\s+)?foreground)\b/i,
+  /\b(?:bring|put|move|pull|raise)\s+(?:(?:the|my|this|that)\s+)?(?:window|app|browser|screen|desktop|it)\s+(?:to\s+(?:the\s+)?front\b(?!\s+(?:of|desk|door|row|page)\b)|(?:to|in|into)\s+(?:the\s+)?foreground\b)/i,
   /\b(?:bring|put|move|pull|raise)\b[^.!?\n]{0,40}\b(?:to\s+(?:the\s+)?front|(?:to|in|into)\s+(?:the\s+)?foreground)\b(?=\s+(?:so\s+(?:that\s+)?(?:i|we)\s+can\s+(?:all\s+)?(?:watch|see)\b|and\s+show\s+me\b))/i,
-  // "Forward" needs a window-shaped object: "move forward with the plan" is not a request to watch.
-  /\b(?:bring|pull)(?: up)? (?:the |my |its |their )?(?:[\w-]+ ){0,2}(?:window|app|browser|it|them) (?:forward|up front)\b/i,
+  // "Forward" needs a window-shaped object: pronouns also refer to dates and plans.
+  /\b(?:bring|pull)(?: up)? (?:the |my |its |their )?(?:[\w-]+ ){0,2}(?:window|app|browser) (?:forward|up front)\b/i,
   /\buse (?:the )?foreground(?: mode)?(?=\s*(?:[.!?,;:]|$))/i,
   /\btake over (?:my|the) (?:screen|desktop|computer)\b/i,
   /\bdrive (?:my|the) (?:screen|desktop|computer)\b/i,
@@ -240,6 +240,25 @@ export function latestUserAuthoredMessage(
     return message;
   }
   return undefined;
+}
+
+/** A card grant cannot outlive a later change to the user's task instructions. */
+export function computerForegroundScopeChangedSince(
+  messages: readonly OrchestrationMessage[],
+  lastMessageId: string | undefined,
+): boolean {
+  const start =
+    lastMessageId === undefined
+      ? -1
+      : messages.findIndex((message) => message.id === lastMessageId);
+  if (lastMessageId !== undefined && start === -1) return true;
+  return messages
+    .slice(start + 1)
+    .some(
+      (message) =>
+        message.role === "user" &&
+        (!isLocalHumanMessage(message) || !isRoutineContinuation(message)),
+    );
 }
 
 /**

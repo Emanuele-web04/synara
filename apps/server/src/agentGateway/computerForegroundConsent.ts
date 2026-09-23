@@ -4,7 +4,9 @@ import { Effect } from "effect";
 import type { ComputerApprovalGate } from "../computer/ComputerApprovalGate.ts";
 import {
   COMPUTER_FOREGROUND_NOT_AUTHORIZED,
+  computerForegroundScopeChangedSince,
   computerForegroundAuthorizationForMessages,
+  latestUserAuthoredMessage,
   type ComputerForegroundAuthorization,
 } from "../computer/computerVisibleUse.ts";
 import type { AgentGatewayComputerToolsOptions } from "./computerTools.ts";
@@ -40,21 +42,26 @@ export function makeComputerForegroundConsent(options: ComputerForegroundConsent
     AgentGatewayComputerToolsOptions["requestForegroundConsent"]
   >;
 } {
+  const cardGrantFrontiers = new Map<
+    string,
+    { turnId: string; lastMessageId: string | undefined }
+  >();
   const resolveForegroundAuthorization = async (
     context: ToolContext,
   ): Promise<ComputerForegroundAuthorization> => {
-    if (
-      context.callerTurnId !== null &&
-      options.gate.hasForegroundGrant(context.callerThreadId, context.callerTurnId)
-    ) {
-      return { userRequestedVisibleUse: true };
-    }
     const messages = await options.loadMessages(context.callerThreadId);
-    return messages === undefined
-      ? COMPUTER_FOREGROUND_NOT_AUTHORIZED
-      : computerForegroundAuthorizationForMessages(messages, {
-          knownAppNames: options.knownAppNames(),
-        });
+    if (messages === undefined) return COMPUTER_FOREGROUND_NOT_AUTHORIZED;
+    const fromMessages = computerForegroundAuthorizationForMessages(messages, {
+      knownAppNames: options.knownAppNames(),
+    });
+    if (fromMessages.userRequestedVisibleUse) return fromMessages;
+    const frontier = cardGrantFrontiers.get(context.callerThreadId);
+    return context.callerTurnId !== null &&
+      frontier?.turnId === context.callerTurnId &&
+      options.gate.hasForegroundGrant(context.callerThreadId, context.callerTurnId) &&
+      !computerForegroundScopeChangedSince(messages, frontier.lastMessageId)
+      ? { userRequestedVisibleUse: true }
+      : COMPUTER_FOREGROUND_NOT_AUTHORIZED;
   };
 
   const requestForegroundConsent = async (
@@ -65,12 +72,27 @@ export function makeComputerForegroundConsent(options: ComputerForegroundConsent
   ): Promise<boolean> => {
     if (context.callerTurnId === null) return false;
     await Effect.runPromise(context.assertCallerTurnActive(), { signal });
-    return options.gate.requestForegroundTask({
+    if (options.gate.hasForegroundGrant(context.callerThreadId, context.callerTurnId)) {
+      return (await resolveForegroundAuthorization(context)).userRequestedVisibleUse;
+    }
+    const before = await options.loadMessages(context.callerThreadId);
+    if (before === undefined) return false;
+    const beforeMessageId = latestUserAuthoredMessage(before)?.id;
+    const accepted = await options.gate.requestForegroundTask({
       threadId: context.callerThreadId,
       turnId: context.callerTurnId,
       signal,
       publish: options.publish(name, args, context),
     });
+    if (!accepted) return false;
+    const messages = await options.loadMessages(context.callerThreadId);
+    if (messages === undefined || computerForegroundScopeChangedSince(messages, beforeMessageId))
+      return false;
+    cardGrantFrontiers.set(context.callerThreadId, {
+      turnId: context.callerTurnId,
+      lastMessageId: latestUserAuthoredMessage(messages)?.id,
+    });
+    return true;
   };
 
   return { resolveForegroundAuthorization, requestForegroundConsent };

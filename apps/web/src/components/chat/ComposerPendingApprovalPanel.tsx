@@ -95,7 +95,8 @@ const COMPUTER_SCOPES: Record<
           ? { ...action, description: "Stop desktop for this turn, agent continues without tools" }
           : {
               ...action,
-              description: "Stop revokes new input; keys/buttons already sent may still land.",
+              label: "Cancel this request",
+              description: "Deny this request; use Stop to end the agent turn.",
             },
     ),
   },
@@ -114,7 +115,11 @@ const COMPUTER_SCOPES: Record<
               label: "Keep it in the background",
               description: "No window is raised; the agent continues in the background",
             }
-          : action,
+          : {
+              ...action,
+              label: "Cancel this request",
+              description: "Use Stop to end the agent turn.",
+            },
     ),
   },
 };

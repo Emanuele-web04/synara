@@ -115,6 +115,10 @@ describe("ComposerPendingApprovalPanel", () => {
       await expect
         .element(page.getByRole("button", { name: /Always allow this session/ }))
         .not.toBeInTheDocument();
+      await expect
+        .element(page.getByRole("button", { name: /Cancel turn/ }))
+        .not.toBeInTheDocument();
+      await expect.element(page.getByText(/Use Stop to end the agent turn/)).toBeInTheDocument();
       await page.getByRole("button", { name: /Keep it in the background/ }).click();
       expect(mounted.onRespond).toHaveBeenCalledExactlyOnceWith(
         APPROVAL_REQUEST_ID,
