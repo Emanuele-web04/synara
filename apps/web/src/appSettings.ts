@@ -644,12 +644,25 @@ export function resolveTerminalFontFamilyStack(value: string | null | undefined)
   return hasGenericFallback ? family : `${family}, monospace`;
 }
 
+/**
+ * Previous default command names that must keep normalizing to "no override"
+ * after the provider default changed. Antigravity moved from the interactive
+ * `agy` CLI to the `agy_acp_server` ACP binary (empty = auto-resolve), so a
+ * stored `agy` is a stale default, not a custom path.
+ */
+const LEGACY_DEFAULT_BINARY_PATHS: Partial<Record<ProviderKind, ReadonlySet<string>>> = {
+  antigravity: new Set(["agy"]),
+};
+
 function normalizeProviderBinaryPathOverride(
   provider: ProviderKind,
   value: string | null | undefined,
 ): string {
   const trimmed = value?.trim() ?? "";
   if (!trimmed || trimmed === DEFAULT_SERVER_SETTINGS.providers[provider].binaryPath) {
+    return "";
+  }
+  if (LEGACY_DEFAULT_BINARY_PATHS[provider]?.has(trimmed)) {
     return "";
   }
   return trimmed;

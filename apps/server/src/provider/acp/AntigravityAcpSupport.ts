@@ -124,7 +124,9 @@ export type AntigravityAcpResolution =
 
 /** Old print-mode `agy` paths must not be launched as the ACP server. */
 export function isAntigravityAcpBinaryPath(value: string | null | undefined): boolean {
-  const base = nodePath.basename(value?.trim() ?? "").toLowerCase();
+  // Split on both separators so Windows-style paths (`C:\tools\agy_acp_server.exe`)
+  // are recognized on any platform; nodePath.basename only handles the host separator.
+  const base = (value?.trim() ?? "").split(/[/\\]/).pop()?.toLowerCase() ?? "";
   return (
     base === ANTIGRAVITY_ACP_BINARY_NAME ||
     base === `${ANTIGRAVITY_ACP_BINARY_NAME}.par` ||
