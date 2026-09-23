@@ -22,6 +22,7 @@ import {
   ProjectTaskAttemptId,
   ProjectTaskId,
   ThreadId,
+  PROVIDER_DISPLAY_NAMES,
   type OrchestrationCommand,
   type ProjectActivity,
   type ProjectInboxEvent,
@@ -96,6 +97,9 @@ import {
 
 import { AutomationService } from "../../automation/Services/AutomationService.ts";
 import { ServerConfig } from "../../config.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
+import { providerDisabledSettingsMessage } from "../../provider/enabledProviderAdapter.ts";
+import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { TextGeneration } from "../../git/Services/TextGeneration.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
@@ -289,6 +293,8 @@ export const makeProjectAgentService = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const automationService = yield* AutomationService;
   const serverConfig = yield* ServerConfig;
+  const serverSettingsService = yield* ServerSettingsService;
+  const providerHealth = yield* ProviderHealth;
   const textGeneration = yield* TextGeneration;
   const git = yield* GitCore;
   const events = yield* PubSub.unbounded<ProjectAgentStreamEvent>();
@@ -1543,6 +1549,32 @@ export const makeProjectAgentService = Effect.gen(function* () {
           const existing = yield* repository
             .getConfig(input.projectId)
             .pipe(Effect.mapError(toServiceError("Failed to load project coordinator.")));
+          // The stored coordinator selection is the rebind signal
+          // ProviderCommandReactor keys off: saving an unusable provider would
+          // tear the working session down and wedge every heartbeat check-in
+          // behind a failed dispatch. Reject the whole save instead — the old
+          // session keeps running and the settings form surfaces the error.
+          const requestedProvider = input.coordinatorModelSelection.provider;
+          const providerSettings = yield* serverSettingsService.getSettings.pipe(
+            Effect.mapError(toServiceError("Failed to read provider settings.")),
+          );
+          if (!providerSettings.providers[requestedProvider].enabled) {
+            return yield* Effect.fail(
+              fail(providerDisabledSettingsMessage(requestedProvider), "invalid"),
+            );
+          }
+          const providerStatus = (yield* providerHealth.getStatuses.pipe(
+            Effect.mapError(toServiceError("Failed to read provider status.")),
+          )).find((entry) => entry.provider === requestedProvider);
+          if (providerStatus !== undefined && !providerStatus.available) {
+            return yield* Effect.fail(
+              fail(
+                providerStatus.message ??
+                  `${PROVIDER_DISPLAY_NAMES[requestedProvider]} is not installed or not on PATH.`,
+                "invalid",
+              ),
+            );
+          }
           const now = isoNow();
           const coordinatorName = input.coordinatorName ?? `${project.title} Coordinator`;
           let coordinatorThreadId: ThreadId;

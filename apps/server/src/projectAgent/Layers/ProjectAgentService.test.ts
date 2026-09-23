@@ -5,6 +5,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   AutomationId,
+  DEFAULT_SERVER_SETTINGS,
   ProjectDocumentRevisionId,
   ProjectGoalId,
   ProjectId,
@@ -12,6 +13,9 @@ import {
   ProjectTaskId,
   ThreadId,
   type OrchestrationCommand,
+  type ProviderKind,
+  type ServerProviderStatus,
+  type ServerSettings,
 } from "@synara/contracts";
 import { memoryThreadDocumentPath } from "@synara/shared/projectAgent";
 import { Effect, Layer, Option, Stream } from "effect";
@@ -34,6 +38,8 @@ import {
 } from "../projectBotPlaybook.ts";
 import { wakeReceiptRequestId } from "../digest.ts";
 import { resolveLibraryRoot } from "../libraryStore.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
+import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
 import { ProjectAgentService } from "../Services/ProjectAgentService.ts";
 import { ProjectAgentServiceLive } from "./ProjectAgentService.ts";
 
@@ -63,6 +69,8 @@ function makeTestLayer(options?: {
   readonly failFirstImport?: boolean;
   readonly shellLookupError?: boolean;
   readonly failCommandTypes?: ReadonlyArray<OrchestrationCommand["type"]>;
+  readonly disabledProviders?: ReadonlyArray<ProviderKind>;
+  readonly unavailableProviders?: ReadonlyArray<ProviderKind>;
 }) {
   const threadShells: Record<
     string,
@@ -278,6 +286,37 @@ function makeTestLayer(options?: {
         }
       }),
   } as unknown as OrchestrationEngineService["Service"]);
+  const serverSettings: ServerSettings = {
+    ...DEFAULT_SERVER_SETTINGS,
+    providers: {
+      ...DEFAULT_SERVER_SETTINGS.providers,
+      ...Object.fromEntries(
+        (options?.disabledProviders ?? []).map((provider) => [
+          provider,
+          { ...DEFAULT_SERVER_SETTINGS.providers[provider], enabled: false },
+        ]),
+      ),
+    },
+  };
+  const providerStatuses: ServerProviderStatus[] = (
+    Object.keys(DEFAULT_SERVER_SETTINGS.providers) as ProviderKind[]
+  ).map((provider) => {
+    const unavailable = (options?.unavailableProviders ?? []).includes(provider);
+    return {
+      provider,
+      status: unavailable ? "error" : "ready",
+      available: !unavailable,
+      authStatus: "authenticated",
+      checkedAt: now,
+      message: unavailable ? `${provider} CLI is not installed or not on PATH.` : undefined,
+    };
+  });
+  const serverSettingsLayer = Layer.succeed(ServerSettingsService, {
+    getSettings: Effect.succeed(serverSettings),
+  } as unknown as ServerSettingsService["Service"]);
+  const providerHealthLayer = Layer.succeed(ProviderHealth, {
+    getStatuses: Effect.succeed(providerStatuses),
+  } as unknown as ProviderHealth["Service"]);
   const automationLayer = Layer.succeed(AutomationService, {
     createProjectManaged: () =>
       Effect.succeed({
@@ -319,6 +358,8 @@ function makeTestLayer(options?: {
       Layer.provide(snapshotLayer),
       Layer.provide(orchestrationLayer),
       Layer.provide(automationLayer),
+      Layer.provide(serverSettingsLayer),
+      Layer.provide(providerHealthLayer),
       Layer.provide(Layer.succeed(TextGeneration, {} as unknown as TextGeneration["Service"])),
       Layer.provide(
         Layer.succeed(GitCore, {
@@ -1141,6 +1182,87 @@ it.effect("skips the model apply block when the coordinator model is unchanged",
       harness.automationUpdates.filter((update) => update.modelSelection !== undefined),
       [],
     );
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("rejects a coordinator model whose provider is disabled in settings", () => {
+  const harness = makeTestLayer({ disabledProviders: ["claudeAgent"] });
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    yield* service.configure(
+      {
+        requestId: "req-disabled-provider-1",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    harness.dispatched.length = 0;
+    harness.runNowCalls.length = 0;
+
+    const error = yield* Effect.flip(
+      service.configure(
+        {
+          requestId: "req-disabled-provider-2",
+          projectId: groupId,
+          coordinatorModelSelection: {
+            provider: "claudeAgent" as const,
+            model: "claude-sonnet-4-6",
+          },
+        },
+        { kind: "user" },
+      ),
+    );
+
+    assert.match(error.message, /disabled in Settings > Providers/);
+    // The old binding survives: no rebind signal was stored or dispatched and
+    // no extra check-in was queued.
+    assert.equal(
+      harness.dispatched.some((command) => command.type === "thread.meta.update"),
+      false,
+    );
+    const stored = yield* repository.getConfig(groupId);
+    assert.isTrue(Option.isSome(stored));
+    if (Option.isSome(stored)) {
+      assert.deepEqual(stored.value.coordinatorModelSelection, modelSelection);
+    }
+    assert.deepEqual(harness.runNowCalls, []);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("rejects a coordinator model whose provider is not installed", () => {
+  const harness = makeTestLayer({ unavailableProviders: ["grok"] });
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    yield* service.configure(
+      {
+        requestId: "req-unavailable-provider-1",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    harness.dispatched.length = 0;
+    harness.runNowCalls.length = 0;
+
+    const error = yield* Effect.flip(
+      service.configure(
+        {
+          requestId: "req-unavailable-provider-2",
+          projectId: groupId,
+          coordinatorModelSelection: { provider: "grok" as const, model: "grok-code-fast-1" },
+        },
+        { kind: "user" },
+      ),
+    );
+
+    assert.match(error.message, /not installed or not on PATH/);
+    assert.equal(
+      harness.dispatched.some((command) => command.type === "thread.meta.update"),
+      false,
+    );
+    assert.deepEqual(harness.runNowCalls, []);
   }).pipe(Effect.provide(harness.layer));
 });
 

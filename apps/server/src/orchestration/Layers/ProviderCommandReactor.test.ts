@@ -302,6 +302,13 @@ describe("ProviderCommandReactor", () => {
     >;
     readonly startClaudeCompaction?: NonNullable<ProviderServiceShape["startClaudeCompaction"]>;
     readonly coordinatorThreadIds?: readonly string[];
+    readonly coordinatorConfigState?:
+      | {
+          readonly enabled?: boolean;
+          readonly pausedAt?: string | null;
+          readonly archivedAt?: string | null;
+        }
+      | undefined;
     readonly formatContextPacket?: string;
   }) {
     const now = new Date().toISOString();
@@ -678,7 +685,12 @@ describe("ProviderCommandReactor", () => {
       getConfigByCoordinatorThread: (threadId: ThreadId) =>
         Effect.succeed(
           (input?.coordinatorThreadIds ?? []).includes(threadId)
-            ? Option.some({ projectId: asProjectId("project-1") })
+            ? Option.some({
+                projectId: asProjectId("project-1"),
+                enabled: input?.coordinatorConfigState?.enabled ?? true,
+                pausedAt: input?.coordinatorConfigState?.pausedAt ?? null,
+                archivedAt: input?.coordinatorConfigState?.archivedAt ?? null,
+              })
             : Option.none(),
         ),
     } as unknown as (typeof ProjectAgentRepository)["Service"]);
@@ -13324,21 +13336,49 @@ describe("ProviderCommandReactor", () => {
   });
 
   it.each([
-    { coordinatorThreadIds: ["thread-1"] as readonly string[], expected: true },
-    { coordinatorThreadIds: [] as readonly string[], expected: false },
+    {
+      coordinatorThreadIds: ["thread-1"] as readonly string[],
+      coordinatorConfigState: undefined,
+      label: "active",
+      expected: true,
+    },
+    {
+      coordinatorThreadIds: ["thread-1"] as readonly string[],
+      coordinatorConfigState: { pausedAt: new Date(0).toISOString() },
+      label: "paused",
+      expected: false,
+    },
+    {
+      coordinatorThreadIds: ["thread-1"] as readonly string[],
+      coordinatorConfigState: { archivedAt: new Date(0).toISOString() },
+      label: "archived",
+      expected: false,
+    },
+    {
+      coordinatorThreadIds: ["thread-1"] as readonly string[],
+      coordinatorConfigState: { enabled: false },
+      label: "disabled",
+      expected: false,
+    },
+    {
+      coordinatorThreadIds: [] as readonly string[],
+      coordinatorConfigState: undefined,
+      label: "non-coordinator",
+      expected: false,
+    },
   ])(
-    "pre-approves Synara group tools only for coordinator sessions (coordinator: $expected)",
-    async ({ coordinatorThreadIds, expected }) => {
-      const harness = await createHarness({ coordinatorThreadIds });
+    "pre-approves Synara group tools only for an active coordinator session ($label: $expected)",
+    async ({ coordinatorThreadIds, coordinatorConfigState, label, expected }) => {
+      const harness = await createHarness({ coordinatorThreadIds, coordinatorConfigState });
       const now = new Date().toISOString();
 
       await Effect.runPromise(
         harness.engine.dispatch({
           type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe(`cmd-turn-start-autoapprove-${expected}`),
+          commandId: CommandId.makeUnsafe(`cmd-turn-start-autoapprove-${label}`),
           threadId: ThreadId.makeUnsafe("thread-1"),
           message: {
-            messageId: asMessageId(`user-message-autoapprove-${expected}`),
+            messageId: asMessageId(`user-message-autoapprove-${label}`),
             role: "user",
             text: "delegate this",
             attachments: [],
@@ -13363,6 +13403,66 @@ describe("ProviderCommandReactor", () => {
       expect(startInput).toMatchObject({ runtimeMode: "approval-required" });
     },
   );
+
+  it("restarts a live coordinator session when the group loses the flag", async () => {
+    const coordinatorConfigState: {
+      enabled?: boolean;
+      pausedAt?: string | null;
+      archivedAt?: string | null;
+    } = {};
+    const harness = await createHarness({
+      coordinatorThreadIds: ["thread-1"],
+      coordinatorConfigState,
+    });
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-flag-1"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-flag-1"),
+          role: "user",
+          text: "first turn",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      autoApproveSynaraTools: true,
+    });
+
+    // The group is paused between turns: the running session was provisioned
+    // with the flag, so the next turn must restart it rather than keep a
+    // runtime that silently still pre-approves the Synara tools.
+    coordinatorConfigState.pausedAt = new Date(0).toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-flag-2"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-flag-2"),
+          role: "user",
+          text: "second turn",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 2);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    expect(harness.startSession.mock.calls[1]?.[1]).not.toHaveProperty("autoApproveSynaraTools");
+  });
 
   it("rebinds the session to a stored provider change and keeps the transcript bootstrap", async () => {
     const harness = await createHarness({
@@ -13527,6 +13627,88 @@ describe("ProviderCommandReactor", () => {
         },
         runtimeMode: "approval-required",
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 2);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+      provider: "claudeAgent",
+      modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+    });
+    expect(harness.startSession.mock.calls[1]?.[1]).not.toHaveProperty("resumeCursor");
+    expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("<thread_context>");
+    expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("first turn on grok");
+
+    const thread = await readHarnessThread(harness);
+    expect(thread?.session?.providerName).toBe("claudeAgent");
+  });
+
+  it("rebinds across a stopped session and still carries the transcript", async () => {
+    const harness = await createHarness({
+      threadModelSelection: { provider: "grok", model: "grok-code-fast-1" },
+    });
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-stopped-rebind-1"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-stopped-rebind-1"),
+          role: "user",
+          text: "first turn on grok",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    // The coordinator's session is gone when the settings save lands — an
+    // explicit stop even suppresses synthetic context on the next start. A
+    // provider rebind is the one start that must ignore that suppression,
+    // because the new provider cannot resume the old history natively.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.stop",
+        commandId: CommandId.makeUnsafe("cmd-stopped-rebind-stop"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        createdAt: now,
+      }),
+    );
+    await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "stopped");
+
+    // Group settings writes the new coordinator model durably. With no live
+    // session, nothing applies the selection now — the recorded spawn
+    // selection must keep reading 'grok' so the next turn sees the rebind.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-stopped-rebind-meta-update"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-stopped-rebind-2"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-stopped-rebind-2"),
+          role: "user",
+          text: "now on claude",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
         createdAt: now,
       }),
     );

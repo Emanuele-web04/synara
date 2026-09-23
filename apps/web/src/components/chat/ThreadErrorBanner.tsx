@@ -20,7 +20,7 @@ export function ThreadErrorBanner({
   error,
   onDismiss,
   onUnblock,
-  unblocking = false,
+  unblocking,
 }: {
   error: string | null;
   onDismiss?: () => void;
@@ -31,7 +31,10 @@ export function ThreadErrorBanner({
   if (!error) return null;
   const canUnblock = onUnblock !== undefined && isProviderDeliveryBlockDetail(error);
   return (
-    <Alert variant="error" className="w-full max-w-[36rem] shadow-sm">
+    // The transcript overlay wrapper is pointer-events-none so its margins do
+    // not swallow clicks; the banner itself must re-enable them or Dismiss and
+    // Unblock can never be pressed.
+    <Alert variant="error" className="pointer-events-auto w-full max-w-[36rem] shadow-sm">
       <CircleAlertIcon />
       <AlertDescription className="line-clamp-3" title={error}>
         {error}

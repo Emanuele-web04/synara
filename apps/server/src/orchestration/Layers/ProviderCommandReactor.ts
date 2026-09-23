@@ -825,6 +825,10 @@ const make = Effect.gen(function* () {
   // against the old subprocess configuration before the next turn starts.
   const threadSessionModelSelections = new Map<string, ModelSelection>();
   const threadSessionComputerControl = new Map<string, boolean>();
+  // Same contract as the computer-control flag: records the flag the session
+  // was actually spawned with so a changed value restarts the runtime instead
+  // of silently reusing a session provisioned under the old approval set.
+  const threadSessionAutoApproveSynaraTools = new Map<string, boolean>();
   // Seeded from the engine's in-memory command read model, not a second snapshot query.
   // The engine loads that model once after the projection bootstrap and keeps it current
   // as commands commit, so reading it here is both free and strictly fresher than
@@ -1691,10 +1695,9 @@ const make = Effect.gen(function* () {
         new Error(`Thread '${threadId}' was not found in projection state.`),
       );
     }
-    const shouldRegisterContextBootstrap =
-      !suppressContextBootstrapOnNextStartThreadIds.has(threadId);
-
     const desiredRuntimeMode = options?.runtimeMode ?? thread.runtimeMode;
+    const previousAutoApproveSynaraTools =
+      threadSessionAutoApproveSynaraTools.get(threadId) ?? false;
     const currentProvider: ProviderKind | undefined = Schema.is(ProviderKind)(
       thread.session?.providerName,
     )
@@ -1761,6 +1764,14 @@ const make = Effect.gen(function* () {
         issue: `Thread '${threadId}' is bound to provider '${boundProvider}' and cannot switch to '${requestedModelSelection.provider}'.`,
       });
     }
+    // A provider rebind cannot resume the old provider's history natively —
+    // the transcript bootstrap is the only context carry, so an explicit
+    // stop's synthetic-context suppression does not apply to this start.
+    if (providerRebindRequested) {
+      suppressContextBootstrapOnNextStartThreadIds.delete(threadId);
+    }
+    const shouldRegisterContextBootstrap =
+      !suppressContextBootstrapOnNextStartThreadIds.has(threadId);
     const preferredProvider: ProviderKind = providerRebindRequested
       ? thread.modelSelection.provider
       : (boundProvider ??
@@ -1797,7 +1808,16 @@ const make = Effect.gen(function* () {
     const autoApproveSynaraTools = Option.isNone(projectAgentRepository)
       ? false
       : yield* projectAgentRepository.value.getConfigByCoordinatorThread(threadId).pipe(
-          Effect.map(Option.isSome),
+          // Only an active group grants the flag — a paused or archived
+          // group's coordinator still resolves by thread id, but its turns
+          // must go through the normal approval flow again.
+          Effect.map(
+            (config) =>
+              Option.isSome(config) &&
+              config.value.enabled &&
+              config.value.pausedAt === null &&
+              config.value.archivedAt === null,
+          ),
           Effect.catch(() => Effect.succeed(false)),
         );
     const providerSessionOptions = {
@@ -1811,6 +1831,7 @@ const make = Effect.gen(function* () {
       ...(autoApproveSynaraTools ? { autoApproveSynaraTools: true } : {}),
       runtimeMode: desiredRuntimeMode,
     };
+    const autoApproveSynaraToolsChanged = autoApproveSynaraTools !== previousAutoApproveSynaraTools;
 
     const providerSessionStartInput = (resumeCursor?: unknown) => ({
       ...providerSessionOptions,
@@ -1932,7 +1953,8 @@ const make = Effect.gen(function* () {
         !workspaceChanged &&
         !shouldRestartForModelChange &&
         !shouldRestartForModelSelectionChange &&
-        !computerControlChanged
+        !computerControlChanged &&
+        !autoApproveSynaraToolsChanged
       ) {
         return {
           activeSessionBeforeEnsure,
@@ -1962,6 +1984,7 @@ const make = Effect.gen(function* () {
         !workspaceChanged &&
         !shouldRestartForModelChange &&
         !shouldRestartForModelSelectionChange &&
+        !autoApproveSynaraToolsChanged &&
         (yield* hasLiveProviderTurn(threadId))
       ) {
         return {
@@ -2076,6 +2099,7 @@ const make = Effect.gen(function* () {
         ...providerSessionOptions,
         sourceThreadId: thread.forkSourceThreadId,
         enableComputerControl: forkComputerControl,
+        ...(autoApproveSynaraTools ? { autoApproveSynaraTools: true } : {}),
       });
       if (forked) {
         if (
@@ -2089,6 +2113,7 @@ const make = Effect.gen(function* () {
         }
         threadSessionModelSelections.set(threadId, desiredModelSelection);
         threadSessionComputerControl.set(threadId, forkComputerControl);
+        threadSessionAutoApproveSynaraTools.set(threadId, autoApproveSynaraTools);
         const forkedSession =
           (yield* resolveActiveSession(threadId)) ??
           ({
@@ -2189,6 +2214,7 @@ const make = Effect.gen(function* () {
     // restart-necessity checks compare against the live spawn state even when
     // the spawning dispatch carried no explicit model selection.
     threadSessionModelSelections.set(threadId, desiredModelSelection);
+    threadSessionAutoApproveSynaraTools.set(threadId, autoApproveSynaraTools);
     if (options?.enableComputerControl !== undefined) {
       threadSessionComputerControl.set(threadId, options.enableComputerControl);
     }
@@ -5776,7 +5802,11 @@ const make = Effect.gen(function* () {
           }
 
           if (!thread?.session || thread.session.status === "stopped") {
-            threadSessionModelSelections.set(event.payload.threadId, event.payload.modelSelection);
+            // No live session applies the selection now: it stays on the
+            // thread while the session-selection cache keeps the provider the
+            // stopped session was actually spawned with. Overwriting that
+            // record here would make the next turn read the new provider as
+            // already bound — no rebind, no transcript carry.
             return;
           }
 

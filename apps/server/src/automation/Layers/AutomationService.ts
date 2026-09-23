@@ -3137,6 +3137,18 @@ export const AutomationServiceLive = Layer.effect(
                   } as const)
                 : yield* continuationEligibility(runnableDefinition, now);
           if (!eligibility.eligible) {
+            // A pending check-in already queued behind the active run is the
+            // newest durable signal a manual Run now could add — coalesce onto
+            // it instead of queueing a second deferred run per request.
+            const activeRuns = yield* automationRepository
+              .listActiveRunsForDefinition({ automationId: runnableDefinition.id })
+              .pipe(Effect.mapError(toServiceError("Failed to load pending automation runs.")));
+            const pendingRun = activeRuns.find(
+              (run) => run.status === "pending" || run.status === "claimed",
+            );
+            if (pendingRun) {
+              return { run: pendingRun };
+            }
             const deferState = heartbeatDeferState(now, now);
             const deferredRun = yield* claimPendingRun(
               runnableDefinition,
