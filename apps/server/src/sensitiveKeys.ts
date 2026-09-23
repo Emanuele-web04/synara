@@ -101,3 +101,10 @@ export function isSensitiveKey(key: string): boolean {
     tokens.slice(0, -1).some((token) => ["api", "private", "proxy", "secret"].includes(token))
   );
 }
+
+export const REDACTED_SENSITIVE_VALUE = "[redacted]";
+
+/** `JSON.stringify` replacer that hides the value of every credential-named field. */
+export function redactSensitiveJsonFields(key: string, value: unknown): unknown {
+  return isSensitiveKey(key) ? REDACTED_SENSITIVE_VALUE : value;
+}

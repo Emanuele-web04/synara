@@ -7891,6 +7891,57 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     },
   );
 
+  it.effect("keeps credential values out of the tool approval detail", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "approval-required",
+      });
+
+      yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
+
+      const canUseTool = harness.getLastCreateQueryInput()?.options.canUseTool;
+      assert.equal(typeof canUseTool, "function");
+      if (!canUseTool) {
+        return;
+      }
+
+      const permissionPromise = canUseTool(
+        "mcp__github__create_issue",
+        { repo: "synara", apiKey: "ghp_live_secret" },
+        {
+          signal: new AbortController().signal,
+          toolUseID: "tool-use-secret-1",
+          requestId: "request-tool-use-secret-1",
+        },
+      );
+      const requested = yield* Stream.runHead(adapter.streamEvents);
+      if (requested._tag !== "Some" || requested.value.type !== "request.opened") {
+        assert.fail("expected the tool approval to open");
+        return;
+      }
+      assert.equal(
+        requested.value.payload.detail,
+        'mcp__github__create_issue: {"repo":"synara","apiKey":"[redacted]"}',
+      );
+
+      yield* adapter.respondToRequest(
+        session.threadId,
+        ApprovalRequestId.makeUnsafe(String(requested.value.requestId)),
+        "decline",
+      );
+      yield* Stream.runHead(adapter.streamEvents);
+      yield* Effect.promise(() => permissionPromise);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("classifies Agent tools and read-only Claude tools correctly for approvals", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

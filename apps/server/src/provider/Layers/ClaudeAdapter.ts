@@ -88,6 +88,7 @@ import {
   claudeCacheForModel,
 } from "../claudeCacheObservation.ts";
 import { compareSemverVersions } from "../providerMaintenance.ts";
+import { redactSensitiveJsonFields } from "../../sensitiveKeys.ts";
 import {
   Cause,
   DateTime,
@@ -5646,7 +5647,12 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               // calls still reach the user instead of becoming unrestricted.
               const requestId = ApprovalRequestId.makeUnsafe(yield* Random.nextUUIDv4);
               const requestType = classifyRequestType(toolName);
-              const detail = summarizeToolRequest(toolName, toolInput);
+              // The approval detail is persisted with the card; keep credentials out.
+              const detail = summarizeToolRequest(
+                toolName,
+                toolInput,
+                JSON.stringify(toolInput, redactSensitiveJsonFields),
+              );
               const decisionDeferred = yield* Deferred.make<ProviderApprovalDecision>();
               const settledDeferred = yield* Deferred.make<ProviderApprovalDecision>();
               const pendingApproval: PendingApproval = {
