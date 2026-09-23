@@ -8,6 +8,8 @@ import { ComputerManager } from "../ComputerManager.ts";
 import { CuaComputerBackend } from "../CuaComputerBackend.ts";
 import { FakeComputerBackend } from "../FakeComputerBackend.ts";
 import { KWinComputerBackend } from "../KWinComputerBackend.ts";
+import { NestedComputerBackend } from "../nestedComputerBackend.ts";
+import { nestedAtspiMode, parseNestedSizeEnv } from "../nestedKWinSession.ts";
 import { sessionBusNameHasOwner } from "../sessionBusNames.ts";
 import { UnavailableComputerBackend } from "../UnavailableComputerBackend.ts";
 import { ComputerService, type ComputerServiceShape } from "../Services/ComputerService.ts";
@@ -18,6 +20,7 @@ import {
 } from "../switchableComputerBackend.ts";
 import {
   isLinuxBackendChoice,
+  nestedModeForChoice,
   parseComputerBackendOverride,
   selectLinuxBackend,
   type ComputerBackendOverride,
@@ -58,7 +61,24 @@ const LINUX_BACKENDS: Record<LinuxBackendChoice, () => ComputerBackend> = {
   // Constructed, not connected: the backend touches the compositor on first
   // real use, and its `provision()` is the settings panel's one-click setup.
   kwin: () => new KWinComputerBackend(),
+  // Constructed, not booted: the nested compositor is expensive and — in
+  // window mode — visible, so nothing may appear because a server started.
+  // The backend boots its session on first real use. The geometry comes from
+  // `SYNARA_COMPUTER_NESTED_SIZE=WxH`. A session that fails to boot stays
+  // failed: falling back to the real desktop would hand an agent the human's
+  // screen right after an operator asked for an isolated one.
+  nested: () => makeNestedBackend("nested"),
+  "nested-window": () => makeNestedBackend("nested-window"),
 };
+
+function makeNestedBackend(choice: "nested" | "nested-window"): ComputerBackend {
+  const size = parseNestedSizeEnv(process.env.SYNARA_COMPUTER_NESTED_SIZE);
+  return new NestedComputerBackend({
+    mode: nestedModeForChoice(choice) ?? "virtual",
+    ...(size ? { size } : {}),
+    atspiMode: nestedAtspiMode(),
+  });
+}
 
 let warnedMissingControlStatePath = false;
 

@@ -5,6 +5,7 @@ import {
   COMPUTER_BACKEND_OVERRIDES,
   InvalidComputerBackendOverrideError,
   isLinuxBackendChoice,
+  nestedModeForChoice,
   parseComputerBackendOverride,
   selectLinuxBackend,
   waylandSession,
@@ -55,6 +56,8 @@ describe("parseComputerBackendOverride", () => {
     expect(isLinuxBackendChoice("fake")).toBe(false);
     expect(isLinuxBackendChoice("cua")).toBe(false);
     expect(isLinuxBackendChoice("kwin")).toBe(true);
+    expect(isLinuxBackendChoice("nested")).toBe(true);
+    expect(isLinuxBackendChoice("nested-window")).toBe(true);
     expect(isLinuxBackendChoice(undefined)).toBe(false);
   });
 });
@@ -73,24 +76,49 @@ describe("selectLinuxBackend", () => {
     ).resolves.toMatchObject({ choice: "kwin" });
   });
 
-  it("leaves Plasma on X11 unclaimed rather than picking a backend that refuses forever", async () => {
+  it("gives Plasma on X11 a nested desktop rather than a backend that refuses forever", async () => {
     // KWin owns the name on X11 too, and there the plugin's dedicated seat does
-    // not exist: the KWin backend refuses a non-Wayland session outright.
-    await expect(
-      selectLinuxBackend({
-        env: { XDG_SESSION_TYPE: "x11", DISPLAY: ":0" },
-        busNameHasOwner: KDE_HOST,
-      }),
-    ).resolves.toBeUndefined();
-    await expect(
-      selectLinuxBackend({ env: {}, busNameHasOwner: KDE_HOST }),
-    ).resolves.toBeUndefined();
+    // not exist: the KWin backend refuses a non-Wayland session outright, and
+    // nothing falls back, so the old answer was a desktop that never worked.
+    const selection = await selectLinuxBackend({
+      env: { XDG_SESSION_TYPE: "x11", DISPLAY: ":0" },
+      busNameHasOwner: KDE_HOST,
+    });
+
+    expect(selection).toMatchObject({ choice: "nested", forced: false });
+    expect(selection?.reason).toContain("X11 session");
   });
 
-  it("claims nothing when no process owns the KWin name", async () => {
+  it("treats a tty with no session at all as non-Wayland", async () => {
+    await expect(selectLinuxBackend({ env: {}, busNameHasOwner: KDE_HOST })).resolves.toMatchObject(
+      { choice: "nested" },
+    );
+  });
+
+  it("gives the agent its own headless desktop when nothing owns the KWin name", async () => {
+    // The non-KDE default: never the human's seat, and never a window popping
+    // up on the human's desktop either — the headless nested compositor is
+    // the resolution, watched through the Computer pane alone.
+    const selection = await selectLinuxBackend({
+      env: WAYLAND_SESSION,
+      busNameHasOwner: GNOME_HOST,
+    });
+
+    expect(selection).toMatchObject({ choice: "nested", forced: false });
+    expect(selection?.reason).toContain("instead of sharing the human's");
+    expect(selection?.reason).toContain("nothing appears on this desktop");
+  });
+
+  it("puts the nested opt-in ahead of auto-detection, in both modes", async () => {
     await expect(
-      selectLinuxBackend({ env: WAYLAND_SESSION, busNameHasOwner: GNOME_HOST }),
-    ).resolves.toBeUndefined();
+      selectLinuxBackend({ env: { SYNARA_COMPUTER_NESTED: "1" }, busNameHasOwner: KDE_HOST }),
+    ).resolves.toMatchObject({ choice: "nested", forced: false });
+    await expect(
+      selectLinuxBackend({
+        env: { SYNARA_COMPUTER_NESTED: "window" },
+        busNameHasOwner: GNOME_HOST,
+      }),
+    ).resolves.toMatchObject({ choice: "nested-window", forced: false });
   });
 
   it("ignores XDG_CURRENT_DESKTOP entirely, in both directions", async () => {
@@ -107,7 +135,7 @@ describe("selectLinuxBackend", () => {
         env: { ...WAYLAND_SESSION, XDG_CURRENT_DESKTOP: "KDE" },
         busNameHasOwner: GNOME_HOST,
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({ choice: "nested" });
   });
 
   it("puts the override ahead of everything and never consults the bus for it", async () => {
@@ -126,15 +154,26 @@ describe("selectLinuxBackend", () => {
     expect(asked).toBe(0);
   });
 
-  it("treats an unreachable session bus as a host the KWin plugin cannot serve", async () => {
-    // A headless host or a service unit has no ambient bus, and every call to
-    // the plugin goes over that bus.
-    await expect(
-      selectLinuxBackend({
-        env: WAYLAND_SESSION,
-        busNameHasOwner: host({ busError: "connect ENOENT /run/user/1000/bus" }),
-      }),
-    ).resolves.toBeUndefined();
+  it("gives the agent its own desktop when the session bus cannot answer at all", async () => {
+    // A headless host or a service unit has no ambient bus. The KWin plugin
+    // is unreachable without one, while the nested session starts its own, so
+    // this is the one tier that can work - and the reason still names the bus
+    // failure for anyone who expected KWin.
+    const selection = await selectLinuxBackend({
+      env: WAYLAND_SESSION,
+      busNameHasOwner: host({ busError: "connect ENOENT /run/user/1000/bus" }),
+    });
+
+    expect(selection?.choice).toBe("nested");
+    expect(selection?.reason).toContain("ENOENT");
+  });
+});
+
+describe("nestedModeForChoice", () => {
+  it("maps the two nested choices onto the compositor modes and nothing else", () => {
+    expect(nestedModeForChoice("nested")).toBe("virtual");
+    expect(nestedModeForChoice("nested-window")).toBe("window");
+    expect(nestedModeForChoice("kwin")).toBeUndefined();
   });
 });
 

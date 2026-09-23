@@ -22,13 +22,14 @@
  */
 
 import { KWIN_SERVICE } from "./kwinDbus.ts";
+import { nestedSessionMode, type NestedSessionMode } from "./nestedKWinSession.ts";
 
 /**
  * Every Linux backend `SYNARA_COMPUTER_BACKEND` can name. Each backend adds
  * its choice here beside its detection tier in `selectLinuxBackend`, and its
  * constructor in the service layer's factory table, so the three cannot drift.
  */
-export const LINUX_BACKEND_CHOICES = ["kwin"] as const;
+export const LINUX_BACKEND_CHOICES = ["kwin", "nested", "nested-window"] as const;
 export type LinuxBackendChoice = (typeof LINUX_BACKEND_CHOICES)[number];
 
 /**
@@ -100,6 +101,13 @@ export function waylandSession(env: NodeJS.ProcessEnv): boolean {
   return sessionType.toLowerCase() === "wayland";
 }
 
+/** The nested mode a choice implies, or `undefined` for the non-nested tiers. */
+export function nestedModeForChoice(choice: LinuxBackendChoice): NestedSessionMode | undefined {
+  if (choice === "nested") return "virtual";
+  if (choice === "nested-window") return "window";
+  return undefined;
+}
+
 export interface LinuxBackendSelectionDependencies {
   readonly env?: NodeJS.ProcessEnv;
   /** The parsed `SYNARA_COMPUTER_BACKEND`, when it names a Linux tier. */
@@ -112,15 +120,18 @@ export interface LinuxBackendSelectionDependencies {
 }
 
 /**
- * Resolves the Linux backend in order: the override, then each detection tier.
- * `undefined` means no Linux tier claims this host.
+ * Resolves the Linux backend in order: the override, the nested opt-in, the
+ * KWin plugin on a KWin Wayland session, and the headless nested compositor
+ * for every other desktop. Every host gets a tier, so this never answers
+ * `undefined` on Linux; falling back to the human's seat would hand an agent
+ * their screen right after a tier that promised an isolated one, and falling
+ * the other way would hide a broken desktop behind a session nobody can see.
  *
  * The KWin tier asks the session bus who owns `org.kde.KWin` rather than
  * reading `XDG_CURRENT_DESKTOP`. The compositor is the thing that decides
  * whether the KWin plugin can load; the env var is a label a login manager
  * sets and a user can override, and on a KDE session started from a tty it is
- * often simply absent. Plasma on X11 owns the name too, and there the plugin's
- * dedicated seat does not exist, so the tier claims only a Wayland session.
+ * often simply absent.
  */
 export async function selectLinuxBackend(
   dependencies: LinuxBackendSelectionDependencies,
@@ -134,16 +145,61 @@ export async function selectLinuxBackend(
     };
   }
 
-  // An unreachable session bus is not evidence that KWin is absent, but it is
-  // proof that the KWin plugin cannot be reached: every call to it goes over
-  // that bus. It leaves this tier unclaimed rather than failing selection.
-  const kwinUp = await dependencies.busNameHasOwner(KWIN_SERVICE).catch(() => false);
-  if (kwinUp && waylandSession(env)) {
+  const nested = nestedSessionMode(env);
+  if (nested) {
     return {
-      choice: "kwin",
+      choice: nested === "window" ? "nested-window" : "nested",
       forced: false,
-      reason: `${KWIN_SERVICE} is owned on the session bus, so this is a KWin session and the KWin plugin applies.`,
+      reason: `SYNARA_COMPUTER_NESTED=${env.SYNARA_COMPUTER_NESTED} asked for a private compositor this process owns.`,
     };
   }
-  return undefined;
+
+  try {
+    if (await dependencies.busNameHasOwner(KWIN_SERVICE)) {
+      if (waylandSession(env)) {
+        return {
+          choice: "kwin",
+          forced: false,
+          reason: `${KWIN_SERVICE} is owned on the session bus, so this is a KWin session and the KWin plugin applies.`,
+        };
+      }
+      // Plasma on X11 owns the name too, and there the plugin's dedicated seat
+      // does not exist: the KWin backend refuses a non-Wayland session outright
+      // and there is no fallback in any direction, so choosing it here is
+      // choosing a desktop that is refused forever. The nested compositor is a
+      // Wayland session of its own and works on exactly this host.
+      return {
+        choice: "nested",
+        forced: false,
+        reason:
+          `${KWIN_SERVICE} is owned on the session bus, but this is an X11 session ` +
+          "and the KWin plugin's dedicated seat exists only on Wayland; a headless nested " +
+          "compositor brings a Wayland session of its own, with the Computer pane as its screen.",
+      };
+    }
+  } catch (error) {
+    // An unreachable session bus is not evidence that KWin is absent, but it
+    // is proof that the KWin plugin cannot be reached: every call to it goes
+    // over that bus. The nested compositor does not depend on it - the session
+    // it starts brings a private `dbus-daemon` of its own - so a host without
+    // an ambient bus (a headless server, CI, a service unit) gets the desktop
+    // that can actually work rather than one that reports the dead bus.
+    return {
+      choice: "nested",
+      forced: false,
+      reason:
+        `The session bus could not be asked who owns ${KWIN_SERVICE} ` +
+        `(${error instanceof Error ? error.message : String(error)}), which rules out the KWin plugin; ` +
+        "a headless nested compositor starts a bus of its own and does not need this one.",
+    };
+  }
+
+  return {
+    choice: "nested",
+    forced: false,
+    reason:
+      `No process owns ${KWIN_SERVICE}, so this desktop has no seat to dedicate to the agent; ` +
+      "a headless nested compositor gives it one of its own instead of sharing the human's, " +
+      "with the Computer pane as its screen — nothing appears on this desktop.",
+  };
 }

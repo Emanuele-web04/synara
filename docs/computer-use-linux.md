@@ -276,7 +276,8 @@ helper before letting them go, so a second Synara server can drive it (the next
 use connects again); `SYNARA_ATSPI_PYTHON` and `SYNARA_ATSPI_HELPER` point at
 the helper, and `SYNARA_ATSPI_EVENTS` switches its event-fed tree cache (off by
 default on the real desktop, where registering for events makes every
-application emit them, GTK 3 all of them; `1` turns it on).
+application emit them, GTK 3 all of them; on in the nested desktop; `1` or `0`
+overrides either).
 Every variable the server reads for computer use is listed in `turbo.json`'s
 `globalPassThroughEnv`, which turbo strips otherwise in strict mode; a backend
 that reads a new one adds it there.
@@ -290,6 +291,137 @@ a fake `Atspi`. The plugin's fixture tests (`native/computer-use-kwin/tests`)
 compile production functions against stub protocol resources. Seat delivery,
 the same-client rule, the guard, the shortcut and lock refusal need a live
 compositor and are exercised only against a disposable nested `kwin_wayland`.
+
+## Backend: headless nested KWin
+
+`nestedComputerBackend.ts` is `KWinComputerBackend` pointed at a private
+`kwin_wayland` this server boots on demand. It is the tier every Linux host
+gets that is not a KWin Wayland session — GNOME, the wlroots family, Plasma on
+X11, a host with no session bus — and the only tier there. It reports backend
+`nested-kwin` and `visibleDesktop: false`, so the Computer pane opens
+automatically and is the only screen the desktop has. `SYNARA_COMPUTER_NESTED=1`
+selects it ahead of detection; `SYNARA_COMPUTER_BACKEND=nested` forces it.
+
+### Session
+
+`nestedKWinSession.ts` gives each session a private runtime directory
+(`$XDG_RUNTIME_DIR/synara-nested-sessions/<id>`, mode 0700; the user's cache
+directory when there is no runtime directory, never `/tmp`), starts a private
+`dbus-daemon` there, then `kwin_wayland --virtual --xwayland
+--no-global-shortcuts --no-lockscreen` on that bus (without `--no-lockscreen`
+KWin locks along with the human's logind session, and the plugin refuses every
+call with `SessionLocked` until they unlock), waits for `org.kde.KWin`, unloads every
+loaded Synara plugin id and loads the newest installed one. Size comes from
+`SYNARA_COMPUTER_NESTED_SIZE` (`WxH`, default 1920x1080).
+
+The bus runs a generated `--config-file`, not the stock `session.conf`: session
+type, `unix:dir=` in the session's runtime directory, `EXTERNAL` auth and no
+service directories, so nothing is ever activated on it. A portal,
+notification or `org.a11y.Bus` call from an app in the nested desktop fails
+with `ServiceUnknown` instead of starting a service with the bus's environment.
+The bus and the compositor get an allowlisted environment (`PATH`, `HOME`,
+locale, the `XDG_*` base directories, cursor theme, graphics-driver selection)
+plus the session's own runtime directory and bus: never the human's
+`WAYLAND_DISPLAY`, `DISPLAY` or `XAUTHORITY`, a compositor signature, the host
+session bus, or Synara's secrets. The compositor also gets
+`SYNARA_COMPUTER_USE_OWNS_COMPOSITOR=1` and the user's plugin root on
+`QT_PLUGIN_PATH` (no env script, no relogin).
+
+With `SYNARA_COMPUTER_USE_OWNS_COMPOSITOR=1` the plugin adds a virtual input
+device to the compositor's own pipeline instead of a second seat: focus follows
+clicks, KWin owns the xkb state, Xwayland forwards to X11 clients, and the
+human-activity guard is off because no human sits in that compositor. The mode
+is enabled only through the compositor's environment, set by
+`nestedKWinSession.ts`, never by a D-Bus method. The pointer does not glide
+there: the pane shows stills, so nobody would see the motion.
+
+Launched applications get the session's runtime directory, the nested
+`WAYLAND_DISPLAY`, the private bus, and the nested Xwayland's `DISPLAY` on top
+of the scrubbed application environment, plus `XAUTHORITY` when the plugin
+reports a cookie in `healthJson.xAuthority`. A `kwin_wayland` started directly
+(KWin 6.7) runs Xwayland without a cookie and admits its own user through
+`si:localuser`, so X11 clients connect either way and other users' clients do
+not.
+The compositor, the bus, Xwayland and every launched application are children
+of the server (`supervisedProcess.ts`). `dispose()` ends them as process trees,
+and a synchronous `exit` hook SIGKILLs them when the server dies by an uncaught
+exception or `process.exit`. A server that is SIGKILLed runs neither, so each
+session keeps a marker (`nestedSessionRegistry.ts`) naming its processes from
+the first spawn on, with the server's pid and start time; the next server
+sweeps markers whose owner is gone when its nested backend is constructed and
+again before each boot. The sweep only reads a 0700 directory the user owns,
+only signals `kwin_wayland`, `dbus-daemon`, Xwayland, `at-spi-bus-launcher`,
+`at-spi2-registryd` or recorded apps whose argv and start time still match, and only deletes the
+session directory the marker is named after.
+
+### Lifecycle
+
+Construction and `probeAvailability()` boot nothing (construction only starts
+the stale-session sweep). First real use boots the session in about a second,
+installing the plugin into the home directory first when it is missing. A
+failed boot is reported once per call: it ends the connect ladder instead of
+being retried inside it, and arms no reconnect timer. `dispose()` aborts a
+plugin build or boot in progress. `provision()` is the only step that installs
+system packages (`kwin`, `wl-clipboard` and the build toolchain in one `pkexec`
+authorization); it then provisions the plugin and boots the session. An
+authorization dialog nobody answers is cancelled after five minutes, and
+`dispose()` cancels one still waiting; both end only `pkexec` while it still
+runs with the user's real uid. A package manager that is already running as
+root is never interrupted.
+
+A dead compositor is never restarted on a timer: the backend reaps the
+session, reports `dormant`, and the reconnect loop stands down. The next real
+use — an agent action, a pane attach, Set up — boots a fresh session exactly
+as first use did. `statusAvailability()` is what keeps the settings poll from
+being one of those uses: it answers from the passive probe while a boot is in
+flight and reports the desktop as not running after it died, without touching
+it. `capabilities()` reports the empty set until `kwin_wayland` and an
+installed plugin exist, so the panel can offer Set up, and the full KWin set
+afterwards (`capabilities-changed`).
+
+A desktop nobody uses is shut down after `SYNARA_COMPUTER_NESTED_IDLE_MINUTES`
+(default 10, `0` keeps it up): no call in flight, no pane attached, no lease
+held, no app the agent launched still running, and no window on it. Parked
+that way it is not dormant: status reads, `availability()`, `listWindows()`
+(empty) and `getScreenSize()` (the last size) answer without booting it, and
+the next real use boots it again in about a second.
+
+`SYNARA_COMPUTER_NESTED=window` (or `SYNARA_COMPUTER_BACKEND=nested-window`)
+drops `--virtual` and nests the desktop as an ordinary window of the host
+session. It fails the seat policy on purpose — a window appears on the host —
+and exists only for debugging; it refuses to start without a host
+`WAYLAND_DISPLAY` rather than falling back to virtual.
+
+AT-SPI is off by default on the nested desktop. `SYNARA_COMPUTER_NESTED_ATSPI=1`
+opts in: the session then starts `at-spi-bus-launcher --launch-immediately`
+itself, with the session's display, bus and runtime directory, so the
+accessibility bus (and `$XDG_RUNTIME_DIR/at-spi/bus`), its registry, and every
+app that finds them stay inside the nested desktop. The launcher runs with
+`ATSPI_DBUS_IMPLEMENTATION=dbus-daemon`: a launcher built for dbus-broker
+activates services as units of the human's systemd user manager, outside the
+session, where the registry never came up. The session also starts
+`at-spi2-registryd` (found next to the launcher) itself, as one of its own
+children, rather than waiting for activation. Without a launcher the session
+reports no accessibility bus and the reader stays off.
+The nested-only variables (`SYNARA_COMPUTER_NESTED*`,
+`SYNARA_COMPUTER_USE_OWNS_COMPOSITOR`, `SYNARA_NESTED_KWIN_TEST`) are listed in
+`turbo.json` with the KWin ones.
+
+### Testing
+
+`nestedKWinSession.integration.test.ts` runs behind `SYNARA_NESTED_KWIN_TEST=1`
+and boots a real private bus and `kwin_wayland --virtual`. Beyond the plugin
+load, geometry, capture, clipboard and crash cases, it checks that nothing is
+activatable on the private bus, that the bus, Xwayland and accessibility
+launcher carry none of the host's display variables or Synara's secrets, that
+an X11 client launched into the session connects, that `org.a11y.Bus` comes up
+inside the session, that an idle desktop shuts down and reboots on the next
+use, and that building a backend sweeps the desktop of a SIGKILLed server. Run
+it outside any sandbox that kills `kwin_wayland` (for example under
+`systemd-run --user`) with a scrubbed environment and a private
+`XDG_RUNTIME_DIR`, since the sweep case reaps every stale marker there. The unit tests cover
+mode and size parsing, environment construction, load planning, dormancy and
+the status read with fake spawners and the shared plugin doubles.
 
 ## Known gaps
 
