@@ -109,6 +109,8 @@ export const BackToParentIcon: LucideIcon = centralIconWrapper("arrow-share-left
 export const WorkflowIcon: LucideIcon = centralIconWrapper("agents");
 export const SteerIcon: LucideIcon = centralIconWrapper("arrow-corner-down-right");
 export const ComposerSendArrowIcon: LucideIcon = centralIconWrapper("arrow-up");
+export const HANDOFF_ICON_NAME = "arrow-left-right";
+export const HandoffIcon: LucideIcon = centralIconWrapper(HANDOFF_ICON_NAME);
 export const SkillCubeIcon: LucideIcon = centralIconWrapper("building-blocks");
 export const NewThreadIcon: LucideIcon = centralIconWrapper("compose-pencil");
 // Command palette (⌘K) action glyphs: one Central outline set so the rows read as a family.

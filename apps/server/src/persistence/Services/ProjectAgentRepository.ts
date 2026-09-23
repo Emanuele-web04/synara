@@ -37,6 +37,8 @@ export interface ProjectAgentConfigSummaryRow {
   readonly projectId: ProjectId;
   readonly coordinatorName: ProjectAgentConfig["coordinatorName"];
   readonly coordinatorThreadId: ThreadId;
+  readonly coordinatorIcon: string | null;
+  readonly coordinatorColor: string | null;
   readonly revision: ProjectAgentConfig["revision"];
   readonly goalStatus: ProjectGoalStatus | null;
 }

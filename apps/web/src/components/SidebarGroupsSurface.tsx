@@ -9,7 +9,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import type { ProjectId, ThreadId } from "@synara/contracts";
 
 import { createGroupProject, findLegacyStudioContainerForAdoption } from "../lib/groupProjects";
-import { BotIcon, FolderOpenIcon, NewThreadIcon } from "../lib/icons";
+import { FolderOpenIcon, NewThreadIcon, PENCIL_ICON_NAME } from "../lib/icons";
 import { newCommandId } from "../lib/utils";
 import { PinStatusIcon, pinActionLabel } from "../lib/pin";
 import { readNativeApi } from "../nativeApi";
@@ -29,6 +29,7 @@ import {
   resolveGroupCoordinatorRowLabel,
   resolveGroupsListEmptyState,
 } from "./SidebarGroupsSurface.logic";
+import { resolveCoordinatorAppearance } from "./chat/group/coordinatorAppearance";
 import { useProjectAgentSummaries } from "./chat/project/useProjectAgentSummaries";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
 import {
@@ -221,6 +222,32 @@ export function SidebarGroupsSurface({
               const coordinatorThreadActive =
                 coordinatorConfigured &&
                 coordinatorSummary?.coordinatorThreadId === visualActiveThreadId;
+              const coordinatorAppearance = resolveCoordinatorAppearance({
+                coordinatorIcon: coordinatorSummary?.coordinatorIcon,
+                coordinatorColor: coordinatorSummary?.coordinatorColor,
+              });
+              const CoordinatorGlyph = coordinatorAppearance.Icon;
+              const showCoordinatorContextMenu = (position: { x: number; y: number }) => {
+                if (!coordinatorConfigured) return;
+                const api = readNativeApi();
+                if (!api) return;
+                void api.contextMenu
+                  .show(
+                    [
+                      {
+                        id: "change-icon" as const,
+                        label: "Change icon…",
+                        icon: PENCIL_ICON_NAME,
+                      },
+                    ],
+                    position,
+                  )
+                  .then((clicked) => {
+                    if (clicked === "change-icon") {
+                      onOpenGroupSettings(project.id, "edit");
+                    }
+                  });
+              };
               const coordinatorRow = (
                 <SidebarMenuSubItem className="group/project-agent-row relative w-full">
                   <SidebarMenuSubButton
@@ -248,8 +275,15 @@ export function SidebarGroupsSurface({
                       }
                       onOpenGroupSettings(project.id, "onboarding");
                     }}
+                    onContextMenu={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      showCoordinatorContextMenu({ x: event.clientX, y: event.clientY });
+                    }}
                   >
-                    <BotIcon className="size-3.5 shrink-0" />
+                    <CoordinatorGlyph
+                      className={cn("size-3.5 shrink-0", coordinatorAppearance.iconClassName)}
+                    />
                     <span className="min-w-0 truncate">{coordinatorRowLabel}</span>
                   </SidebarMenuSubButton>
                   {coordinatorConfigured ? (

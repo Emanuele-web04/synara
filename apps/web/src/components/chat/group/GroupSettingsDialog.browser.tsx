@@ -176,6 +176,52 @@ describe("GroupSettingsDialog", () => {
     expect(api.orchestration.dispatchCommand).not.toHaveBeenCalled();
   });
 
+  it("saves coordinator icon and color through configure", async () => {
+    await renderDialog();
+
+    const brainButton = page.getByRole("button", { name: "Coordinator icon Brain" });
+    await brainButton.click();
+    await expect.element(brainButton).toHaveAttribute("aria-pressed", "true");
+
+    const violetSwatch = page.getByRole("button", { name: "Coordinator color Violet" });
+    await violetSwatch.click();
+    await expect.element(violetSwatch).toHaveAttribute("aria-pressed", "true");
+
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await vi.waitFor(() => expect(api.projectAgent.configure).toHaveBeenCalledOnce());
+    const payload = api.projectAgent.configure.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(payload.coordinatorIcon).toBe("brain");
+    expect(payload.coordinatorColor).toBe("violet");
+  });
+
+  it("clears stored appearance with Use default", async () => {
+    api.projectAgent.getOverview.mockResolvedValue(
+      overview({
+        config: {
+          ...(overview().config as object),
+          coordinatorIcon: "brain",
+          coordinatorColor: "violet",
+        } as never,
+      }),
+    );
+    await renderDialog();
+
+    await expect
+      .element(page.getByRole("button", { name: "Coordinator icon Brain" }))
+      .toHaveAttribute("aria-pressed", "true");
+
+    await page.getByRole("button", { name: "Use default coordinator appearance" }).click();
+    await expect
+      .element(page.getByRole("button", { name: "Coordinator icon Brain" }))
+      .toHaveAttribute("aria-pressed", "false");
+
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await vi.waitFor(() => expect(api.projectAgent.configure).toHaveBeenCalledOnce());
+    const payload = api.projectAgent.configure.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(payload.coordinatorIcon).toBeNull();
+    expect(payload.coordinatorColor).toBeNull();
+  });
+
   it("dispatches project.meta.update when the group is renamed", async () => {
     await renderDialog();
 

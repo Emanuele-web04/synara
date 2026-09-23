@@ -313,6 +313,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [109, "ProjectAgent"],
         [110, "Groups"],
         [111, "GroupLibraryHosting"],
+        [112, "CoordinatorAppearance"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -376,6 +377,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 109, name: "ProjectAgent" },
           { migration_id: 110, name: "Groups" },
           { migration_id: 111, name: "GroupLibraryHosting" },
+          { migration_id: 112, name: "CoordinatorAppearance" },
         ],
       );
       const groupConfigColumns = yield* sql<{ readonly name: string }>`
@@ -404,6 +406,14 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
       assert.include(
         groupConfigColumns.map((row) => row.name),
         "library_push_on_change",
+      );
+      assert.include(
+        groupConfigColumns.map((row) => row.name),
+        "coordinator_icon",
+      );
+      assert.include(
+        groupConfigColumns.map((row) => row.name),
+        "coordinator_color",
       );
       const linkedTables = yield* sql<{ readonly name: string }>`
         SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'project_agent_linked_projects'
@@ -511,6 +521,7 @@ agentGatewayRetentionLegacyLayer(
           [109, "ProjectAgent"],
           [110, "Groups"],
           [111, "GroupLibraryHosting"],
+          [112, "CoordinatorAppearance"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -617,6 +628,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [109, "ProjectAgent"],
         [110, "Groups"],
         [111, "GroupLibraryHosting"],
+        [112, "CoordinatorAppearance"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -664,6 +676,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [109, "ProjectAgent"],
           [110, "Groups"],
           [111, "GroupLibraryHosting"],
+          [112, "CoordinatorAppearance"],
         ],
       );
 
@@ -765,6 +778,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [109, "ProjectAgent"],
         [110, "Groups"],
         [111, "GroupLibraryHosting"],
+        [112, "CoordinatorAppearance"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -808,6 +822,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [109, "ProjectAgent"],
           [110, "Groups"],
           [111, "GroupLibraryHosting"],
+          [112, "CoordinatorAppearance"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`

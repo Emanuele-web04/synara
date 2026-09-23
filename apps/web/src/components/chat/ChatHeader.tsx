@@ -22,6 +22,7 @@ import GitActionsControl from "../GitActionsControl";
 import {
   ArrowRightIcon,
   CheckIcon,
+  HandoffIcon,
   HistoryIcon,
   MessageCircleIcon,
   PanelRightCloseIcon,
@@ -32,6 +33,7 @@ import {
 import { formatRelativeTime } from "~/lib/relativeTime";
 import {
   CHAT_HEADER_TOGGLE_CLASS_NAME,
+  ChatHeaderButton,
   ChatHeaderIconButton,
   SurfaceChipIcon,
   SurfaceTabChip,
@@ -97,6 +99,12 @@ interface ChatHeaderProps {
   availableEditors: ReadonlyArray<EditorId>;
   diffToggleShortcutLabel: string | null;
   handoffBadgeLabel: string | null;
+  handoffActionLabel: string;
+  handoffDisabled: boolean;
+  handoffActionTargetProviders: ReadonlyArray<ProviderKind>;
+  // Coordinator threads pass false — a hand-off copy would read as a second
+  // coordinator, so the action itself is hidden rather than disabled.
+  showHandoffAction?: boolean;
   handoffBadgeSourceProvider: ProviderKind | null;
   handoffBadgeTargetProvider: ProviderKind | null;
   gitCwd: string | null;
@@ -144,6 +152,7 @@ interface ChatHeaderProps {
   onDeleteProjectScript: (scriptId: string) => Promise<void>;
   onToggleDiff: () => void;
   onRegisterCommitAndPushTrigger?: (trigger: (() => void) | null) => void;
+  onCreateHandoff: (targetProvider: ProviderKind) => void;
   onNavigateToThread: (threadId: ThreadId) => void;
   onRenameThread: () => void;
   onCloseThreadPane?: () => void;
@@ -518,6 +527,10 @@ export function ChatHeader({
   availableEditors,
   diffToggleShortcutLabel,
   handoffBadgeLabel,
+  handoffActionLabel,
+  handoffDisabled,
+  handoffActionTargetProviders,
+  showHandoffAction: showHandoffActionProp,
   handoffBadgeSourceProvider,
   handoffBadgeTargetProvider,
   gitCwd,
@@ -542,12 +555,14 @@ export function ChatHeader({
   onDeleteProjectScript,
   onToggleDiff,
   onRegisterCommitAndPushTrigger,
+  onCreateHandoff,
   onNavigateToThread,
   onRenameThread,
   onCloseThreadPane,
 }: ChatHeaderProps) {
   const hideSidebarControls = hideSidebarControlsProp ?? false;
   const hideHandoffControls = hideHandoffControlsProp ?? false;
+  const showHandoffAction = showHandoffActionProp ?? true;
   const minimalChrome = minimalChromeProp ?? false;
   const showGitActions = showGitActionsProp ?? true;
   const showDiffToggle = showDiffToggleProp ?? true;
@@ -792,6 +807,40 @@ export function ChatHeader({
       <div className="flex shrink-0 items-center gap-2 [-webkit-app-region:no-drag]">
         {!minimalChrome && !hideHandoffControls && !environment ? (
           <ProviderUsageMenuControl provider={activeProvider} />
+        ) : null}
+        {!minimalChrome && !hideHandoffControls && showHandoffAction ? (
+          <Menu modal={false}>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <MenuTrigger
+                    render={
+                      <ChatHeaderButton
+                        type="button"
+                        tone="outline"
+                        className={compact ? "gap-1" : "gap-1.5"}
+                        aria-label={handoffActionLabel}
+                        disabled={handoffDisabled || handoffActionTargetProviders.length === 0}
+                      />
+                    }
+                  >
+                    <HandoffIcon className="size-[1em] shrink-0 opacity-80" />
+                    {!compact ? <span className="truncate font-normal">Hand off</span> : null}
+                  </MenuTrigger>
+                }
+              />
+              <TooltipPopup side="bottom">{handoffActionLabel}</TooltipPopup>
+            </Tooltip>
+            <ComposerPickerMenuPopup align="end" side="bottom" className="w-48 min-w-48">
+              {handoffActionTargetProviders.map((provider) => (
+                <MenuItem key={provider} onClick={() => onCreateHandoff(provider)}>
+                  {/* opacity-100 opts brand icons out of the option row's 80% icon dim. */}
+                  {renderProviderIcon(provider, "size-3.5 shrink-0 opacity-100")}
+                  <span>Handoff to {PROVIDER_DISPLAY_NAMES[provider]}</span>
+                </MenuItem>
+              ))}
+            </ComposerPickerMenuPopup>
+          </Menu>
         ) : null}
         {!minimalChrome && activeProjectScripts ? (
           <ProjectScriptsControl

@@ -83,6 +83,8 @@ export const ProjectAgentConfig = Schema.Struct({
   disabledAt: Schema.NullOr(IsoDateTime),
   goal: Schema.optional(Schema.String.check(Schema.isMaxLength(8_000))),
   icon: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(64))),
+  coordinatorIcon: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(64))),
+  coordinatorColor: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(32))),
   autoMemoryEnabled: Schema.optional(Schema.Boolean),
   linkedProjectIds: Schema.optional(Schema.Array(ProjectId)),
   libraryPath: Schema.optional(TrimmedNonEmptyString),
@@ -373,6 +375,8 @@ export const ProjectAgentSummary = Schema.Struct({
   configured: Schema.Boolean,
   coordinatorName: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(160))),
   coordinatorThreadId: Schema.NullOr(ThreadId),
+  coordinatorIcon: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(64))),
+  coordinatorColor: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(32))),
   coordinatorStatus: Schema.Literals(["unconfigured", "idle", "running", "paused", "stopped"]),
   revision: ProjectAgentRevision,
 });
@@ -403,6 +407,12 @@ export const ProjectAgentConfigureInput = Schema.Struct({
   ),
   goal: Schema.optional(Schema.String.check(Schema.isMaxLength(8_000))),
   icon: Schema.optional(Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(64)))),
+  coordinatorIcon: Schema.optional(
+    Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(64))),
+  ),
+  coordinatorColor: Schema.optional(
+    Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(32))),
+  ),
   autoMemoryEnabled: Schema.optional(Schema.Boolean),
   userDisplayName: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(120))),
   libraryPath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),

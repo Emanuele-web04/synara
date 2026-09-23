@@ -127,6 +127,7 @@ import Migration0107 from "./Migrations/107_ProjectionThreadsHumanMessage.ts";
 import Migration0109 from "./Migrations/109_ProjectAgent.ts";
 import Migration0110 from "./Migrations/110_Groups.ts";
 import Migration0111 from "./Migrations/111_GroupLibraryHosting.ts";
+import Migration0112 from "./Migrations/112_CoordinatorAppearance.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -254,6 +255,7 @@ export const migrationEntries = [
   [109, "ProjectAgent", Migration0109],
   [110, "Groups", Migration0110],
   [111, "GroupLibraryHosting", Migration0111],
+  [112, "CoordinatorAppearance", Migration0112],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

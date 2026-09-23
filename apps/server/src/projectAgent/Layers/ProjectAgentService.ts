@@ -795,6 +795,8 @@ export const makeProjectAgentService = Effect.gen(function* () {
                 configured: true,
                 coordinatorName: row.coordinatorName,
                 coordinatorThreadId: row.coordinatorThreadId,
+                coordinatorIcon: row.coordinatorIcon,
+                coordinatorColor: row.coordinatorColor,
                 coordinatorStatus: coordinatorStatusFromGoal(true, row.goalStatus),
                 revision: row.revision,
               });
@@ -917,6 +919,20 @@ export const makeProjectAgentService = Effect.gen(function* () {
               ? { icon: input.icon }
               : existingConfig?.icon
                 ? { icon: existingConfig.icon }
+                : {}),
+          ...(input.coordinatorIcon === null
+            ? {}
+            : input.coordinatorIcon !== undefined
+              ? { coordinatorIcon: input.coordinatorIcon }
+              : existingConfig?.coordinatorIcon
+                ? { coordinatorIcon: existingConfig.coordinatorIcon }
+                : {}),
+          ...(input.coordinatorColor === null
+            ? {}
+            : input.coordinatorColor !== undefined
+              ? { coordinatorColor: input.coordinatorColor }
+              : existingConfig?.coordinatorColor
+                ? { coordinatorColor: existingConfig.coordinatorColor }
                 : {}),
           autoMemoryEnabled: input.autoMemoryEnabled ?? existingConfig?.autoMemoryEnabled ?? false,
           linkedProjectIds: existingConfig?.linkedProjectIds ?? [],
