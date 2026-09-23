@@ -44,6 +44,7 @@ import {
   resolveSidebarNewThreadEnvMode,
   resolveSidebarProjectRowLabel,
   resolveThreadHoverCardMetadata,
+  resolveThreadRowAriaLabel,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
   resolveThreadStatusTrailingIndicator,
@@ -482,6 +483,20 @@ describe("resolveSidebarProjectRowLabel", () => {
         folderName: "hubspot-support-send-email-extension",
       }),
     ).toBe("Hubspot extension");
+  });
+});
+
+describe("resolveThreadRowAriaLabel", () => {
+  it("names the row for its thread title", () => {
+    expect(resolveThreadRowAriaLabel({ title: "Fixture: working thread" })).toBe(
+      "Open Fixture: working thread",
+    );
+  });
+
+  it("trims whitespace and falls back when the title is empty", () => {
+    expect(resolveThreadRowAriaLabel({ title: "  spaced  " })).toBe("Open spaced");
+    expect(resolveThreadRowAriaLabel({ title: "   " })).toBe("Open thread");
+    expect(resolveThreadRowAriaLabel({ title: "" })).toBe("Open thread");
   });
 });
 

@@ -150,6 +150,13 @@ export function GroupSettingsDialog(props: {
     );
   }, [props.open, props.projectName]);
 
+  // A failed save's error describes the payload that produced it; once the
+  // draft changes the footer error is stale — clear it instead of leaving a
+  // failure pinned under the corrected field while Save re-enables.
+  useEffect(() => {
+    setSaveError(null);
+  }, [draft]);
+
   const dirtySections =
     draft && baseline ? groupSettingsDirtySections(draft, baseline.draft) : new Set();
   const dirty = draft !== null && baseline !== null && dirtySections.size > 0;

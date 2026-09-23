@@ -351,6 +351,9 @@ export const ProjectAgentOverview = Schema.Struct({
   projectId: ProjectId,
   configured: Schema.Boolean,
   config: Schema.NullOr(ProjectAgentConfig),
+  // Linked projects are a project-level relation that exists before the group is
+  // configured, so they surface outside `config`.
+  linkedProjectIds: Schema.Array(ProjectId),
   goal: Schema.NullOr(ProjectGoal),
   digest: Schema.NullOr(ProjectDigest),
   blockers: Schema.Array(ProjectAgentBlocker),

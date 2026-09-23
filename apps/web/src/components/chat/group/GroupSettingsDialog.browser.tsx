@@ -98,6 +98,7 @@ function overview(overrides: Partial<ProjectAgentOverview> = {}): ProjectAgentOv
     },
     goal: null,
     digest: null,
+    linkedProjectIds: [],
     blockers: [],
     recentOutcomes: [],
     coordinatorStatus: "idle",
@@ -175,6 +176,22 @@ describe("GroupSettingsDialog", () => {
     expect(typeof payload.requestId).toBe("string");
     // Name unchanged: no rename command dispatched.
     expect(api.orchestration.dispatchCommand).not.toHaveBeenCalled();
+  });
+
+  it("clears the footer save error when the draft changes", async () => {
+    api.projectAgent.configure.mockRejectedValue(new Error("invalid remote URL"));
+    await renderDialog();
+
+    await page.getByLabelText("Group goal").fill("first attempt");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("invalid remote URL");
+    });
+
+    await page.getByLabelText("Group goal").fill("corrected value");
+    await vi.waitFor(() => {
+      expect(document.body.textContent).not.toContain("invalid remote URL");
+    });
   });
 
   it("saves coordinator icon and color through configure", async () => {
@@ -260,14 +277,7 @@ describe("GroupSettingsDialog", () => {
         makeProject({ id: CANDIDATE_ID, name: "candidate-repo", cwd: "/tmp/candidate" }),
       ],
     });
-    api.projectAgent.getOverview.mockResolvedValue(
-      overview({
-        config: {
-          ...(overview().config as object),
-          linkedProjectIds: [LINKED_ID],
-        } as never,
-      }),
-    );
+    api.projectAgent.getOverview.mockResolvedValue(overview({ linkedProjectIds: [LINKED_ID] }));
     api.projectAgent.linkProject.mockResolvedValue(overview());
     api.projectAgent.unlinkProject.mockResolvedValue(overview());
 

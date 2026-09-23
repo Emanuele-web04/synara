@@ -70,6 +70,7 @@ import {
   isGeneratedDocumentPath,
   isInboxDocumentPath,
   isMemoryDocumentPath,
+  isMemoryNoteDocumentPath,
   isMemoryThreadDocumentPath,
   isUserOwnedDocumentPath,
   MEMORY_AUTO_DOCUMENT_PATH,
@@ -680,11 +681,15 @@ export const makeProjectAgentService = Effect.gen(function* () {
       const config = yield* repository
         .getConfig(projectId)
         .pipe(Effect.mapError(toServiceError("Failed to load project coordinator.")));
+      const linkedProjectIds = yield* repository
+        .listLinkedProjectIds(projectId)
+        .pipe(Effect.mapError(toServiceError("Failed to load linked projects.")));
       if (Option.isNone(config)) {
         return {
           projectId,
           configured: false,
           config: null,
+          linkedProjectIds,
           goal: null,
           digest: null,
           blockers: [],
@@ -741,6 +746,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         projectId,
         configured: true,
         config: visibleConfig,
+        linkedProjectIds,
         goal: goalValue,
         digest: digestValue,
         blockers,
@@ -3313,6 +3319,19 @@ export const makeProjectAgentService = Effect.gen(function* () {
           summary: `Wrote ${logicalPath}`,
           createdAt: now,
         });
+        // User notes under memory/notes/ are user-owned writes, but threads
+        // only ever read MEMORY.md — index them like remember-tool notes so
+        // every group thread can reach them.
+        if (isMemoryNoteDocumentPath(logicalPath)) {
+          const firstLine = content.split("\n").find((line) => line.trim().length > 0) ?? "";
+          const title = sanitizeMemoryTitle(firstLine.replace(/^#+\s*/, "")).slice(0, 60) || "Note";
+          yield* updateMemoryIndex({
+            projectId: input.projectId,
+            logicalPath,
+            title,
+            summary: memoryNoteSummary(content.replace(/^#[^\n]*\n/, "")),
+          });
+        }
         yield* storeReceipt(input.requestId, input.projectId, "writeDocument", saved);
         return saved;
       }),

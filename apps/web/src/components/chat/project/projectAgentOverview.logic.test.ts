@@ -36,6 +36,7 @@ const unconfiguredOverview = ProjectAgentOverview.makeUnsafe({
   projectId: ProjectId.makeUnsafe("project-1"),
   configured: false,
   config: null,
+  linkedProjectIds: [],
   goal: null,
   digest: null,
   blockers: [],

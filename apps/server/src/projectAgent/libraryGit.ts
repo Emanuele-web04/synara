@@ -236,12 +236,37 @@ export function libraryHistory(
   });
 }
 
+// Whether the entry exists under `name` at `sha`, without staging anything.
+const libraryPathExistsAtCommit = (
+  git: GitCoreShape,
+  root: string,
+  name: string,
+  sha: string,
+): Effect.Effect<boolean, GitCommandError> =>
+  Effect.map(
+    git.execute({
+      operation: "library.pathExists",
+      cwd: root,
+      args: ["ls-tree", "-z", "--name-only", sha, "--", name],
+      env: LIBRARY_GIT_ENV,
+      allowNonZeroExit: true,
+    }),
+    (result) => result.code === 0 && result.stdout.split("\0").includes(name),
+  );
+
 // `git log --follow` crosses rename boundaries: replaying its --name-status
 // output backwards from HEAD yields the name the entry had at any ancestor
 // commit, so a restore of "renamed.md" at a pre-rename sha resolves "notes.md".
 // `-z` output is NUL-separated so paths with spaces or quotes cannot break the
 // parse, and a sha that never touched the path resolves to null instead of the
 // oldest walked name.
+//
+// The target sha need not be one of the commits that touched the path: the UI
+// restores deleted entries at the commit before the delete, which is just some
+// ancestor. When the entry still lives under its current name there, the log
+// walk is skipped entirely; otherwise renames that landed after `sha` are
+// undone and the first path-commit that is an ancestor of `sha` decides — the
+// entry existed under the resolved name only if `ls-tree` finds it there.
 function resolveLibraryPathAtCommit(
   git: GitCoreShape,
   root: string,
@@ -249,6 +274,9 @@ function resolveLibraryPathAtCommit(
   sha: string,
 ): Effect.Effect<string | null, GitCommandError> {
   return Effect.gen(function* () {
+    if (yield* libraryPathExistsAtCommit(git, root, relativePath, sha)) {
+      return relativePath;
+    }
     const log = yield* runGitStdout(git, "library.pathHistory", root, [
       "log",
       "--format=%H",
@@ -264,8 +292,16 @@ function resolveLibraryPathAtCommit(
     for (let index = 0; index < tokens.length; index += 1) {
       const token = tokens[index]!;
       if (/^[0-9a-f]{40}$/.test(token)) {
-        if (token === sha) return current;
-        continue;
+        const ancestry = yield* git.execute({
+          operation: "library.pathAncestry",
+          cwd: root,
+          args: ["merge-base", "--is-ancestor", token, sha],
+          env: LIBRARY_GIT_ENV,
+          allowNonZeroExit: true,
+        });
+        if (ancestry.code !== 0) continue;
+        const exists = yield* libraryPathExistsAtCommit(git, root, current, sha);
+        return exists ? current : null;
       }
       // `-z` separates records with NUL but keeps a leading newline on the
       // status field: the rename marker reads "\nR100".

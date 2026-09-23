@@ -4,12 +4,17 @@
 //          container classifiers stay light for broadly-imported modules like
 //          lib/spaces.ts.
 // Layer: Web orchestration helper
-// Exports: resolveGroupWorkerRoutingDefaults, applyGroupWorkerRoutingDefaults
+// Exports: resolveGroupWorkerRoutingDefaults, applyGroupWorkerRoutingDefaults,
+//          resolveGroupContainerThreadDefaults
 
 import { type ProjectId, type ThreadId } from "@synara/contracts";
 
 import { useComposerDraftStore } from "../composerDraftStore";
 import { readNativeApi } from "../nativeApi";
+import { useStore } from "../store";
+import type { ThreadPrimarySurface } from "../types";
+import { useWorkspacePathsStore } from "../workspacePathsStore";
+import { isGroupContainerProject } from "./groupProjects";
 import type { ContainerThreadDefaults } from "./startContainerChat";
 
 // New chats inside a group inherit the coordinator's worker routing defaults.
@@ -48,4 +53,38 @@ export function applyGroupWorkerRoutingDefaults(input: {
   if (input.defaults.providerOptions) {
     draftStore.setProviderOptionsForDispatch(input.threadId, input.defaults.providerOptions);
   }
+}
+
+// A fresh chat draft minted inside a group container inherits the group's
+// coordinator worker-routing defaults (model selection / provider options) as
+// its seed — the app-level sticky/default selection would otherwise win and
+// the composer would silently ignore the group's configured routing. Terminal
+// threads carry no model and ordinary projects have no worker routing, so
+// both resolve to null before any RPC. The overview round trip runs before
+// the draft stage so the apply stays synchronous with the mint.
+export async function resolveGroupContainerThreadDefaults(input: {
+  readonly projectId: ProjectId;
+  readonly entryPoint: ThreadPrimarySurface;
+}): Promise<ContainerThreadDefaults | null> {
+  if (input.entryPoint !== "chat") {
+    return null;
+  }
+  const project = useStore
+    .getState()
+    .projects.find((candidate) => candidate.id === input.projectId);
+  if (!project) {
+    return null;
+  }
+  const paths = useWorkspacePathsStore.getState();
+  if (
+    !isGroupContainerProject(project, {
+      homeDir: paths.homeDir,
+      chatWorkspaceRoot: paths.chatWorkspaceRoot,
+      studioWorkspaceRoot: paths.studioWorkspaceRoot,
+      groupsWorkspaceRoot: paths.groupsWorkspaceRoot,
+    })
+  ) {
+    return null;
+  }
+  return resolveGroupWorkerRoutingDefaults({ groupProjectId: input.projectId });
 }

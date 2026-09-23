@@ -829,6 +829,37 @@ it.effect("links an ordinary repository to a group and is idempotent", () => {
   }).pipe(Effect.provide(harness.layer));
 });
 
+it.effect("surfaces linked projects in the overview before the group is configured", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const linked = yield* service.linkProject(
+      {
+        requestId: "req-link-preconfig",
+        projectId: groupId,
+        linkedProjectId: ordinaryId,
+      },
+      { kind: "user" },
+    );
+    assert.equal(linked.config, null);
+    assert.equal(linked.configured, false);
+    assert.deepEqual(linked.linkedProjectIds, [ordinaryId]);
+    const overview = yield* service.getOverview({ projectId: groupId }, { kind: "user" });
+    assert.equal(overview.config, null);
+    assert.deepEqual(overview.linkedProjectIds, [ordinaryId]);
+    const configured = yield* service.configure(
+      {
+        requestId: "req-link-preconfig-configure",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    assert.deepEqual(configured.linkedProjectIds, [ordinaryId]);
+    assert.deepEqual(configured.config?.linkedProjectIds, [ordinaryId]);
+  }).pipe(Effect.provide(harness.layer));
+});
+
 it.effect("rejects linking a container, the group itself, or an unknown project", () => {
   const harness = makeTestLayer();
   return Effect.gen(function* () {
@@ -2159,6 +2190,84 @@ it.effect("remember writes a dated note + MEMORY.md line and dedupes repeats", (
       coordinator,
     );
     assert.equal(missing.deleted, false);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("user memory notes are indexed into MEMORY.md like remember notes", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    yield* configureTestGroup(service, "req-mem-notes-setup");
+    const user = { kind: "user" as const };
+
+    const saved = yield* service.writeDocument(
+      {
+        requestId: "req-note-1",
+        projectId: groupId,
+        logicalPath: "memory/notes/2026-09-22-releases-go-out-on-tuesdays.md",
+        content: "# Releases\nReleases go out on Tuesdays.\n",
+      },
+      user,
+    );
+    assert.equal(saved.logicalPath, "memory/notes/2026-09-22-releases-go-out-on-tuesdays.md");
+
+    const index = yield* repository.readDocumentRevision({
+      projectId: groupId,
+      logicalPath: "memory/MEMORY.md",
+    });
+    assert.equal(Option.isSome(index), true);
+    if (Option.isSome(index)) {
+      const line = `- [Releases](${saved.logicalPath}) — Releases go out on Tuesdays.`;
+      assert.equal(index.value.content.includes(line), true);
+    }
+
+    // A note without a heading indexes under its first line of text.
+    yield* service.writeDocument(
+      {
+        requestId: "req-note-2",
+        projectId: groupId,
+        logicalPath: "memory/notes/2026-09-22-standup-is-at-ten.md",
+        content: "Standup is at ten.\nBring the notes file.\n",
+      },
+      user,
+    );
+    const indexAfter = yield* repository.readDocumentRevision({
+      projectId: groupId,
+      logicalPath: "memory/MEMORY.md",
+    });
+    assert.equal(Option.isSome(indexAfter), true);
+    if (Option.isSome(indexAfter)) {
+      assert.equal(
+        indexAfter.value.content.includes(
+          "- [Standup is at ten.](memory/notes/2026-09-22-standup-is-at-ten.md)",
+        ),
+        true,
+      );
+    }
+
+    // Re-writing a note refreshes its index line in place — never duplicates it.
+    yield* service.writeDocument(
+      {
+        requestId: "req-note-3",
+        projectId: groupId,
+        logicalPath: "memory/notes/2026-09-22-releases-go-out-on-tuesdays.md",
+        content: "# Releases\nReleases moved to Wednesdays.\n",
+      },
+      user,
+    );
+    const indexFinal = yield* repository.readDocumentRevision({
+      projectId: groupId,
+      logicalPath: "memory/MEMORY.md",
+    });
+    assert.equal(Option.isSome(indexFinal), true);
+    if (Option.isSome(indexFinal)) {
+      const matches = indexFinal.value.content
+        .split("\n")
+        .filter((line) => line.includes("memory/notes/2026-09-22-releases-go-out-on-tuesdays.md"));
+      assert.equal(matches.length, 1);
+      assert.equal(matches[0]?.includes("Releases moved to Wednesdays."), true);
+    }
   }).pipe(Effect.provide(harness.layer));
 });
 

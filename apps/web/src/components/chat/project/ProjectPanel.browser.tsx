@@ -99,6 +99,7 @@ function overview(overrides: Partial<ProjectAgentOverview> = {}): ProjectAgentOv
     config: configPayload(),
     goal: null,
     digest: null,
+    linkedProjectIds: [],
     blockers: [],
     recentOutcomes: [],
     coordinatorStatus: "idle",
