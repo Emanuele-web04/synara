@@ -499,12 +499,13 @@ it.layer(TestLayer)("group library", (it) => {
       expect(marker).toBe(`synara-library\n${testProjectId}\n`);
       // The default location stays open for the adoption: .git at the managed
       // root is never foreign; the same state at a custom path is refused.
-      const stateDir = path.join(root, "state");
+      const base = yield* makeTmpDir;
+      const stateDir = path.join(base, "state");
       yield* assertLibraryRootLocation({
         root,
         stateDir,
-        groupsWorkspaceRoot: path.join(root, "groups"),
-        studioWorkspaceRoot: path.join(root, "studio"),
+        groupsWorkspaceRoot: path.join(base, "groups"),
+        studioWorkspaceRoot: path.join(base, "studio"),
         isCustomPath: false,
         projectId: testProjectId,
       });
@@ -514,8 +515,8 @@ it.layer(TestLayer)("group library", (it) => {
         assertLibraryRootLocation({
           root: foreign,
           stateDir,
-          groupsWorkspaceRoot: path.join(root, "groups"),
-          studioWorkspaceRoot: path.join(root, "studio"),
+          groupsWorkspaceRoot: path.join(base, "groups"),
+          studioWorkspaceRoot: path.join(base, "studio"),
           isCustomPath: true,
           projectId: testProjectId,
         }),
