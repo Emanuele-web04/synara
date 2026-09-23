@@ -59,18 +59,24 @@ beta channel and the beta desktop flavor; every other suffix keeps today's behav
 
 1. Ensure `main` is green and run the build-only validation for the release candidate:
    - `gh workflow run release.yml --ref BRANCH -f version=X.Y.Z-beta.1 -f publish_release=false`
-2. Create and push the tag:
+2. Commit the version, exactly as for a stable release. Release preflight
+   (`scripts/verify-release-source-provenance.ts`) requires the four release
+   `package.json` versions to equal the tag version:
+   - `node scripts/update-release-package-versions.ts X.Y.Z-beta.N`, then commit
+     and merge that change to `main`.
+3. Create and push the tag on that commit:
    - `git tag vX.Y.Z-beta.N <commit>` and `git push upstream vX.Y.Z-beta.N`
    - The base `X.Y.Z` should sit at or ahead of the latest stable version so beta
      builds sort semantically as prereleases of the next stable.
    - `N` starts at `1` and increments per beta cut on the same base version.
-3. The workflow publishes a GitHub **prerelease** named `Synara vX.Y.Z-beta.N` with
+4. The workflow publishes a GitHub **prerelease** named `Synara vX.Y.Z-beta.N` with
    beta installers, `beta-*.yml` manifests, and blockmaps. It is never marked Latest,
    never bumps package versions on `main`, and never publishes the npm `latest`
    dist-tag.
-4. Manual `workflow_dispatch` with `version=X.Y.Z-beta.N` plus `publish_release=true`
-   works the same way; the tag is created on the workflow commit.
-5. Always cut a new beta right after each stable release. The GitHub provider
+5. To re-run publication by hand, dispatch the workflow on the existing tag
+   (`gh workflow run release.yml --ref vX.Y.Z-beta.N -f version=X.Y.Z-beta.N -f publish_release=true`).
+   Publishing from a branch ref is refused by preflight.
+6. Always cut a new beta right after each stable release. The GitHub provider
    picks the newest non-custom-channel release in the feed, so a newer stable
    tag shadows every older beta until a fresh beta prerelease out-sorts it.
 
@@ -108,11 +114,20 @@ The stable app offers a one-click handoff under **Settings → General → Synar
   copies settings and provider secrets, then deletes the marker. The snapshot
   uses `VACUUM INTO` when the source is quiescent; while stable is running it
   holds `state.sqlite` under `PRAGMA locking_mode = EXCLUSIVE`, so the importer
-  falls back to a file-level copy of the database and its WAL/SHM sidecars and
-  vacuums that staged copy into a checkpointed snapshot. Either way the result
-  is a consistent point-in-time copy and the outcome is written to
+  falls back to a file-level copy of the database and its WAL, retried until no
+  checkpoint or WAL restart landed mid-copy (it fails rather than import a torn
+  pair), and vacuums that staged copy into a checkpointed snapshot. Either way
+  the result is a consistent point-in-time copy and the outcome is written to
   `~/.synara-beta/import-result.json` so the stable settings card can report
   success or the failure reason.
+- Only a packaged beta (`SYNARA_DESKTOP_BUNDLE_ID` is the beta bundle id)
+  consumes the marker, and only from stable's data folder (`SYNARA_STABLE_HOME`
+  handed over by stable, else `~/.synara`). A stray marker in any other home
+  is ignored.
+- If stable's database has migrations newer than the installed beta knows, the
+  import fails with "Update Synara Beta" instead of leaving beta unable to
+  start. Any leftover beta `state.sqlite-wal`/`-shm`/`-journal` is removed
+  before the snapshot is swapped in, so an old WAL cannot replay over it.
 - **Open Beta** launches the installed beta app without touching data.
 - The import button is disabled while a beta server is running so an in-flight
   beta never reads a half-written snapshot; quit beta first, then import.
@@ -144,17 +159,18 @@ environment variables, so a demo never touches a real `~/.synara`,
   stable's import marker path, the beta app's own base dir, and the
   running-server probe.
 - `SYNARA_BETA_USER_DATA` — Electron `userData` dir handed to the launched
-  beta (only honored on beta, canary-style test flavors, and source builds).
-- `SYNARA_HOME` / `HOME` — stable's data dir and the `userData` base,
-  respectively; overriding `HOME` isolates the Electron profile exactly like
+  beta (only honored on the beta and cua flavors and source builds).
+- `SYNARA_HOME` / `HOME` — stable's data dir (beta ignores `SYNARA_HOME`, so a
+  globally exported value can never point beta at stable's data) and the
+  `userData` base, respectively; overriding `HOME` isolates the Electron profile exactly like
   `scripts/verify-packaged-desktop-startup.ts` does.
 
 The import copies settings, provider secrets, and a database snapshot. It never
 copies logs, diagnostics queues, runtime files, other import markers, database
 sidecars (`state.sqlite-wal`/`-shm`/`-journal`), or `*.lifecycle-lock`
 directories — a leaked lock directory would make beta refuse to start while the
-stable process is alive. It never writes into the stable home except the one
-marker file.
+stable process is alive. Nothing is ever written into the stable home: the
+marker and the result both live in the beta home.
 
 ## Leaving beta
 
