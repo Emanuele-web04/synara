@@ -117,7 +117,7 @@ const SummaryRow = Schema.Struct({
   goal: Schema.NullOr(Schema.String),
   pausedAt: Schema.NullOr(IsoDateTime),
   archivedAt: Schema.NullOr(IsoDateTime),
-  instructionsContent: Schema.NullOr(Schema.String),
+  instructionsHash: Schema.NullOr(Schema.String),
 });
 
 function toConfig(row: typeof ConfigRow.Type): ProjectAgentConfig {
@@ -596,7 +596,7 @@ const makeProjectAgentRepository = Effect.gen(function* () {
               c.archived_at AS "archivedAt",
               g.status AS "goalStatus",
               c.goal AS "goal",
-              d.content AS "instructionsContent"
+              dh.content_hash AS "instructionsHash"
             FROM project_agent_configs c
             LEFT JOIN project_agent_goals g
               ON g.project_id = c.project_id
@@ -604,22 +604,24 @@ const makeProjectAgentRepository = Effect.gen(function* () {
             LEFT JOIN project_agent_document_heads dh
               ON dh.project_id = c.project_id
               AND dh.logical_path = 'instructions.md'
-            LEFT JOIN project_agent_documents d
-              ON d.project_id = dh.project_id
-              AND d.logical_path = dh.logical_path
-              AND d.revision = dh.revision
           `,
         })({}).pipe(
           Effect.mapError(
             toPersistenceSqlOrDecodeError("ProjectAgentRepository.listSummaries", "summary"),
           ),
         );
+        // Member rows come from live records only: a finished task's worker
+        // belongs in the Overview's Resolved section, not counted under the
+        // group forever; the index leg already carries its own visibility
+        // flags.
         const memberRows = yield* sql`
           SELECT project_id, thread_id FROM project_agent_thread_index
             WHERE excluded = 0 AND archived = 0
           UNION
           SELECT project_id, assigned_thread_id FROM project_agent_tasks
             WHERE assigned_thread_id IS NOT NULL
+              AND archived_at IS NULL
+              AND status IN ('planned', 'ready', 'running', 'blocked', 'review')
         `.pipe(
           Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.listSummaries.members")),
         );
@@ -668,7 +670,7 @@ const makeProjectAgentRepository = Effect.gen(function* () {
             linkedProjectIds: (linkedIdsByProject.get(row.projectId) ?? []).map((id) =>
               ProjectId.makeUnsafe(id),
             ),
-            instructionsContent: row.instructionsContent,
+            instructionsHash: row.instructionsHash,
           }),
         );
       }),

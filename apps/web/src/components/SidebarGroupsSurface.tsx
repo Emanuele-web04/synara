@@ -102,7 +102,11 @@ export function SidebarGroupsSurface({
   readonly renderListSectionHeader: (label: string, toolbar: ReactNode) => ReactNode;
   readonly renderPinnedThreadsSection: () => ReactNode;
   readonly onOpenThread: (threadId: ThreadId) => void;
-  readonly onOpenGroupSettings: (projectId: ProjectId, mode: "onboarding" | "edit") => void;
+  readonly onOpenGroupSettings: (
+    projectId: ProjectId,
+    mode: "onboarding" | "edit",
+    options?: { readonly discardable?: boolean },
+  ) => void;
   readonly onProjectContextMenu: (projectId: ProjectId, position: { x: number; y: number }) => void;
 }) {
   const homeDir = useWorkspacePathsStore((store) => store.homeDir);
@@ -239,7 +243,8 @@ export function SidebarGroupsSurface({
       });
       throw new Error("Group creation is not ready yet.");
     }
-    onOpenGroupSettings(projectId, "onboarding");
+    // This dialog opening just created the group — Cancel may offer discard.
+    onOpenGroupSettings(projectId, "onboarding", { discardable: true });
   };
 
   const emptyState = resolveGroupsListEmptyState({

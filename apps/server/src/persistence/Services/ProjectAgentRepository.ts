@@ -45,11 +45,11 @@ export interface ProjectAgentConfigSummaryRow {
   readonly goal: string | null;
   readonly pausedAt: string | null;
   readonly archivedAt: string | null;
-  /** Visible index ∪ task-assigned member threads (excludes the coordinator). */
+  /** Visible index ∪ open-task-assigned member threads (excludes the coordinator). */
   readonly memberThreadIds: ReadonlyArray<ThreadId>;
   readonly linkedProjectIds: ReadonlyArray<ProjectId>;
-  /** Head content of instructions.md, when the document exists. */
-  readonly instructionsContent: string | null;
+  /** Head content hash of instructions.md, when the document exists. */
+  readonly instructionsHash: string | null;
 }
 
 export interface ProjectAgentRepositoryShape {

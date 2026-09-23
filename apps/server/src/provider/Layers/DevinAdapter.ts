@@ -119,6 +119,7 @@ import {
   stampAcpRuntimeEventLifecycleGeneration,
 } from "../acp/AcpCoreRuntimeEvents.ts";
 import {
+  type AcpPermissionRequest,
   type AcpPlanUpdate,
   type AcpSessionMode,
   type AcpSessionModeState,
@@ -427,10 +428,15 @@ interface DevinSessionContext extends SynaraHarnessPolicyDeliveryState {
   // card. Bounded to the same window as turnToolCallIds.
   readonly devinToolCallStateById: Map<string, AcpToolCallState>;
   readonly devinToolCallLifecycleById: Map<string, "active" | "terminal">;
-  // Canonical request kinds the user already approved with "Always allow this
-  // session". A later request of the same kind resolves without prompting,
-  // mirroring the other adapters' session-scoped allow.
-  readonly devinSessionApprovedRequestKinds: Set<string>;
+  // Session-scoped approval keys recorded by "Always allow this session".
+  // Each key is (canonical request kind + the exact thing approved): the full
+  // command string for execute, the provider's tool name for other tools — so
+  // approving `ls` never silently extends to `rm -rf`, and approving one MCP
+  // tool never extends to another. Destructive and network kinds (delete,
+  // move, fetch) are never remembered at all, matching the other adapters:
+  // Codex/Cursor/Grok/Droid remember nothing, and OpenCode forwards the
+  // choice to the provider instead of caching it.
+  readonly devinSessionApprovedRequestKeys: Set<string>;
   // Wedge detection state, fed by the child's mirrored stderr log stream and
   // consumed by the per-session wedge supervisor. stallWatchDetectedAt records
   // the child's own stall confession (first warning wins; any turn progress
@@ -1271,6 +1277,32 @@ export function pruneDevinToolCallTurnIds(
 
 const DEVIN_PERMISSION_PARAMS_PREVIEW_MAX_CHARS = 400;
 
+// What a session-scoped "Always allow" may safely cover. Only the request
+// kinds that key cleanly to a specific tool or command are eligible: execute
+// keys on the exact command string (Codex remembers nothing and Claude's SDK
+// suggestions scope to concrete commands, so this is never broader); other
+// kinds key on the provider-reported tool name. Destructive and network
+// kinds never get a key — a remembered approval must not extend to them —
+// and a request with no identifiable command/tool is never remembered.
+function devinSessionApprovalKey(
+  permissionRequest: AcpPermissionRequest,
+  toolCall: AcpToolCallState | undefined,
+): string | undefined {
+  const kind = permissionRequest.kind;
+  if (kind === "delete" || kind === "move" || kind === "fetch") {
+    return undefined;
+  }
+  const requestKind = canonicalRequestTypeFromAcpKind(kind);
+  if (kind === "execute") {
+    const command = toolCall?.command;
+    return typeof command === "string" && command.trim().length > 0
+      ? `${requestKind}:${command.trim()}`
+      : undefined;
+  }
+  const toolName = readDevinPermissionToolName(toolCall);
+  return toolName === undefined ? undefined : `${requestKind}:${toolName}`;
+}
+
 function readDevinPermissionToolName(toolCall: AcpToolCallState | undefined): string | undefined {
   const dataName = toolCall?.data.toolName;
   if (typeof dataName === "string" && dataName.trim().length > 0) {
@@ -2030,7 +2062,7 @@ export function makeDevinAdapter(
                   autoApproveSynaraTools: input.autoApproveSynaraTools === true,
                   gatewaySessionActive: gatewaySessionLease !== undefined,
                   toolCall: {
-                    title: toolCall?.title ?? params.toolCall.title,
+                    kind: permissionRequest.kind,
                     rawInput: toolCallRawInput,
                     metadata: params.toolCall._meta ?? params._meta,
                   },
@@ -2039,13 +2071,14 @@ export function makeDevinAdapter(
                   return { outcome: policyOutcome };
                 }
 
-                // "Always allow this session" sticks per request kind: a
-                // subsequent request of the same kind resolves without
-                // prompting again, like the other adapters' session allow.
-                const requestKind = canonicalRequestTypeFromAcpKind(permissionRequest.kind);
+                // "Always allow this session" sticks to the exact request it
+                // covered — same kind AND same command/tool — never the whole
+                // request kind.
+                const sessionApprovalKey = devinSessionApprovalKey(permissionRequest, toolCall);
                 if (
+                  sessionApprovalKey !== undefined &&
                   input.runtimeMode !== "auto" &&
-                  ctx?.devinSessionApprovedRequestKinds.has(requestKind)
+                  ctx?.devinSessionApprovedRequestKeys.has(sessionApprovalKey)
                 ) {
                   const sessionAllowOptionId = selectAcpPermissionOptionId(
                     "acceptForSession",
@@ -2109,8 +2142,12 @@ export function makeDevinAdapter(
                 const resolved = yield* Deferred.await(decision);
                 pendingApprovals.delete(requestId);
 
-                if (resolved === "acceptForSession" && input.runtimeMode !== "auto") {
-                  ctx?.devinSessionApprovedRequestKinds.add(requestKind);
+                if (
+                  resolved === "acceptForSession" &&
+                  input.runtimeMode !== "auto" &&
+                  sessionApprovalKey !== undefined
+                ) {
+                  ctx?.devinSessionApprovedRequestKeys.add(sessionApprovalKey);
                 }
 
                 yield* offerRuntimeEvent(
@@ -2265,7 +2302,7 @@ export function makeDevinAdapter(
             turnToolCallIds: new Map(),
             devinToolCallStateById: new Map(),
             devinToolCallLifecycleById: new Map(),
-            devinSessionApprovedRequestKinds: new Set(),
+            devinSessionApprovedRequestKeys: new Set(),
             devinStallWatchDetectedAt: undefined,
             devinSpawnStalls: new Map(),
             devinWedgeRecoveryAttemptedFor: undefined,

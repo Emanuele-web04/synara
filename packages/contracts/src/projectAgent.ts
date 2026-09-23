@@ -537,10 +537,14 @@ export type ProjectAgentGroupControlInput = typeof ProjectAgentGroupControlInput
 
 // Deleting a group additionally requires the group's current title, checked
 // server-side — the typed-name confirmation is not just a client nicety.
+// `requireEmpty` is the guarded onboarding-discard path: the service re-checks
+// inside the project lock that nothing was ever added to the group and
+// refuses the delete when it is no longer untouched.
 export const ProjectAgentDeleteGroupInput = Schema.Struct({
   requestId: ProjectAgentRequestId,
   projectId: ProjectId,
   confirmName: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
+  requireEmpty: Schema.optional(Schema.Boolean),
 });
 export type ProjectAgentDeleteGroupInput = typeof ProjectAgentDeleteGroupInput.Type;
 
@@ -764,6 +768,15 @@ export const ProjectAgentStreamEvent = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("document-head-updated"),
     head: ProjectDocumentHead,
+  }),
+  // One batch per index write — carries the rows actually written so a
+  // watcher can patch its list without re-listing the whole index (e.g. the
+  // Overview's Threads tab when the coordinator starts a worker thread in a
+  // linked repo).
+  Schema.Struct({
+    type: Schema.Literal("thread-index-upserted"),
+    projectId: ProjectId,
+    threads: Schema.Array(ProjectThreadIndexEntry),
   }),
 ]);
 export type ProjectAgentStreamEvent = typeof ProjectAgentStreamEvent.Type;

@@ -193,6 +193,13 @@ const HOT_PATH_MODULES: readonly HotPathModule[] = [
     allowedBailoutReasons: [],
     requiresCompileSuccess: false,
   },
+  // Onboarding/cancel/discard runs on every group open; a value expression
+  // inside the probe try/catch once bailed the whole dialog.
+  {
+    relativePath: "chat/group/GroupSettingsDialog.tsx",
+    requiredFunction: "GroupSettingsDialog",
+    allowedBailoutReasons: [],
+  },
   { relativePath: "Sidebar.tsx", allowedBailoutReasons: [] },
   // Renders every group/coordinator/chat row on the Groups surface — keep it at a
   // zero-bailout budget like the sidebar itself.

@@ -95,9 +95,10 @@ export function useProjectAgent(input: {
     }
   }, [reportError]);
 
-  // The thread index has no dedicated stream event — re-list it when config
-  // links/unlinks or task upserts change membership. One refresh in flight at a
-  // time; a burst coalesces into a single follow-up listing.
+  // `thread-index-upserted` events patch membership directly; a full re-list
+  // still runs when config links/unlinks or task upserts could change it.
+  // One refresh in flight at a time; a burst coalesces into a single
+  // follow-up listing.
   const threadIndexRefreshRef = useRef({ inFlight: false, queued: false });
   const refreshThreadIndex = useCallback(() => {
     const api = readNativeApi();
@@ -196,6 +197,26 @@ export function useProjectAgent(input: {
             return next;
           });
           refreshThreadIndex();
+        }
+        return;
+      }
+      if (event.type === "thread-index-upserted") {
+        if (event.projectId === current) {
+          // The coordinator's own thread creations (e.g. a worker in a linked
+          // repo) land here — merge rows so the Threads tab shows them without
+          // waiting for the next full index listing.
+          setThreads((threads) => {
+            const next = [...threads];
+            for (const entry of event.threads) {
+              const index = next.findIndex((row) => row.threadId === entry.threadId);
+              if (index === -1) {
+                next.push(entry);
+              } else {
+                next[index] = entry;
+              }
+            }
+            return next;
+          });
         }
         return;
       }
@@ -411,26 +432,30 @@ export function useProjectAgent(input: {
     [groupControl],
   );
 
-  const deleteGroup = useCallback(async (projectId: ProjectId, confirmName: string) => {
-    const api = readNativeApi();
-    if (!api?.projectAgent) return null;
-    setBusy(true);
-    try {
-      const result: ProjectAgentDeleteGroupResult = await api.projectAgent.deleteGroup({
-        requestId: crypto.randomUUID(),
-        projectId,
-        confirmName,
-      });
-      return result;
-    } catch (cause) {
-      if (projectIdRef.current === projectId) {
-        setError(cause instanceof Error ? cause.message : "Group action failed.");
+  const deleteGroup = useCallback(
+    async (projectId: ProjectId, confirmName: string, options?: { requireEmpty?: boolean }) => {
+      const api = readNativeApi();
+      if (!api?.projectAgent) return null;
+      setBusy(true);
+      try {
+        const result: ProjectAgentDeleteGroupResult = await api.projectAgent.deleteGroup({
+          requestId: crypto.randomUUID(),
+          projectId,
+          confirmName,
+          ...(options?.requireEmpty === true ? { requireEmpty: true } : {}),
+        });
+        return result;
+      } catch (cause) {
+        if (projectIdRef.current === projectId) {
+          setError(cause instanceof Error ? cause.message : "Group action failed.");
+        }
+        return null;
+      } finally {
+        if (projectIdRef.current === projectId) setBusy(false);
       }
-      return null;
-    } finally {
-      if (projectIdRef.current === projectId) setBusy(false);
-    }
-  }, []);
+    },
+    [],
+  );
 
   const startGoal = useCallback(
     async (objective: string) =>

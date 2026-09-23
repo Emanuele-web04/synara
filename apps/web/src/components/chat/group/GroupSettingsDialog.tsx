@@ -82,6 +82,9 @@ export function GroupSettingsDialog(props: {
   readonly defaultModelSelection: ModelSelection | null;
   readonly initialSection?: GroupSettingsSection | undefined;
   readonly importedInstructions?: string | undefined;
+  // Only set when this dialog opening also created the group — discard is
+  // "undo create", never an offer for a group that already existed.
+  readonly allowDiscard?: boolean | undefined;
   readonly onOpenChange: (open: boolean) => void;
   readonly onSaved?: ((overview: ProjectAgentOverview) => void) | undefined;
 }) {
@@ -246,27 +249,27 @@ export function GroupSettingsDialog(props: {
   // as "Set up coordinator". When nothing was ever added to it (no threads,
   // no user files, no linked repos), offer to discard the group outright.
   const requestClose = () => {
-    if (props.mode !== "onboarding") {
+    if (props.mode !== "onboarding" || props.allowDiscard !== true) {
       props.onOpenChange(false);
       return;
     }
+    const projectAgent = readNativeApi()?.projectAgent;
+    const sidebarThreadCount = Object.values(useStore.getState().sidebarThreadSummaryById).filter(
+      (summary) => summary?.projectId === props.projectId,
+    ).length;
     void (async () => {
-      const api = readNativeApi();
       let empty = false;
       try {
-        if (api?.projectAgent) {
+        if (projectAgent) {
           const [overview, index, docs] = await Promise.all([
-            api.projectAgent.getOverview({ projectId: props.projectId }),
-            api.projectAgent.listThreadIndex({ projectId: props.projectId }),
-            api.projectAgent.listDocuments({ projectId: props.projectId }),
+            projectAgent.getOverview({ projectId: props.projectId }),
+            projectAgent.listThreadIndex({ projectId: props.projectId }),
+            projectAgent.listDocuments({ projectId: props.projectId }),
           ]);
-          const sidebarThreadCount = Object.values(
-            useStore.getState().sidebarThreadSummaryById,
-          ).filter((summary) => summary?.projectId === props.projectId).length;
           empty = isGroupOnboardingDiscardable({
             threadIndexCount: index.threads.length,
             sidebarThreadCount,
-            linkedProjectIds: overview.linkedProjectIds ?? [],
+            linkedProjectIds: overview.linkedProjectIds,
             documentPaths: docs.documents.map((doc) => doc.logicalPath),
           });
         }
@@ -287,7 +290,9 @@ export function GroupSettingsDialog(props: {
     if (discarding) return;
     setDiscarding(true);
     setDiscardError(null);
-    const result = await agent.deleteGroup(props.projectId, props.projectName);
+    const result = await agent.deleteGroup(props.projectId, props.projectName, {
+      requireEmpty: true,
+    });
     setDiscarding(false);
     if (result === null) {
       setDiscardError("Could not delete this group. Try again from the group's settings.");
@@ -459,7 +464,19 @@ export function GroupSettingsDialog(props: {
             </p>
           ) : null}
           <AlertDialogFooter>
-            <AlertDialogClose render={<Button variant="outline" size="sm" />}>
+            <AlertDialogClose
+              render={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    // Keeping the group also ends onboarding — closing only
+                    // this confirm leaves the setup dialog open to re-prompt.
+                    props.onOpenChange(false);
+                  }}
+                />
+              }
+            >
               Keep group
             </AlertDialogClose>
             <Button

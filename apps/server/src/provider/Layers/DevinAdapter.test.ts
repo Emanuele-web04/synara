@@ -2105,7 +2105,7 @@ describe("Devin permission requests", () => {
     );
   });
 
-  it("sticks 'Always allow this session' for later requests of the same kind", async () => {
+  it("sticks 'Always allow this session' to the exact command or tool approved", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const handles = makePermissionRuntime();
@@ -2138,41 +2138,204 @@ describe("Devin permission requests", () => {
         });
         yield* adapter.sendTurn({ threadId, input: "work", attachments: [] });
 
+        const openedCount = () =>
+          runtimeEvents.filter((event) => event.type === "request.opened").length;
+
+        // Approving `ls` for the session …
         const first = yield* handles
-          .requestPermission(makePermissionParams("call-1", { kind: "execute" }))
+          .requestPermission(
+            makePermissionParams("call-1", {
+              kind: "execute",
+              rawInput: { command: "ls" },
+            }),
+          )
           .pipe(Effect.forkChild);
         yield* flushTimers();
         const opened = runtimeEvents.find((event) => event.type === "request.opened");
         expect(opened?.payload?.requestType).toBe("exec_command_approval");
         yield* adapter.respondToRequest(threadId, opened!.requestId as never, "acceptForSession");
-        const firstResponse = yield* Fiber.join(first);
-        expect(firstResponse).toEqual({
+        expect(yield* Fiber.join(first)).toEqual({
           outcome: { outcome: "selected", optionId: "allow-always" },
         });
 
-        const openedCount = runtimeEvents.filter((event) => event.type === "request.opened").length;
+        // … approves the exact same command without prompting …
         const second = yield* handles.requestPermission(
-          makePermissionParams("call-2", { kind: "execute" }),
+          makePermissionParams("call-2", {
+            kind: "execute",
+            rawInput: { command: "ls" },
+          }),
         );
         expect(second).toEqual({
           outcome: { outcome: "selected", optionId: "allow-always" },
         });
-        expect(runtimeEvents.filter((event) => event.type === "request.opened").length).toBe(
-          openedCount,
-        );
+        expect(openedCount()).toBe(1);
 
-        // A different request kind still prompts.
-        const third = yield* handles
-          .requestPermission(makePermissionParams("call-3", { kind: "read" }))
+        // … but never a different command on the same kind — `rm -rf` still
+        // prompts even though `ls` was always-allowed.
+        const destructive = yield* handles
+          .requestPermission(
+            makePermissionParams("call-3", {
+              kind: "execute",
+              rawInput: { command: "rm -rf x" },
+            }),
+          )
           .pipe(Effect.forkChild);
         yield* flushTimers();
-        expect(runtimeEvents.filter((event) => event.type === "request.opened").length).toBe(
-          openedCount + 1,
+        expect(openedCount()).toBe(2);
+        const rmOpened = runtimeEvents.findLast((event) => event.type === "request.opened");
+        yield* adapter.respondToRequest(threadId, rmOpened!.requestId as never, "acceptForSession");
+        expect(yield* Fiber.join(destructive)).toEqual({
+          outcome: { outcome: "selected", optionId: "allow-always" },
+        });
+
+        // An execute request with no command string can never be remembered:
+        // an unnamed command is not a stable identity, so it always prompts.
+        const unnamed = yield* handles
+          .requestPermission(makePermissionParams("call-4", { kind: "execute" }))
+          .pipe(Effect.forkChild);
+        yield* flushTimers();
+        expect(openedCount()).toBe(3);
+        const unnamedOpened = runtimeEvents.findLast((event) => event.type === "request.opened");
+        yield* adapter.respondToRequest(
+          threadId,
+          unnamedOpened!.requestId as never,
+          "acceptForSession",
         );
-        const readOpened = runtimeEvents.findLast((event) => event.type === "request.opened");
-        expect(readOpened?.payload?.requestType).toBe("file_read_approval");
-        yield* adapter.respondToRequest(threadId, readOpened!.requestId as never, "cancel");
-        expect(yield* Fiber.join(third)).toEqual({ outcome: { outcome: "cancelled" } });
+        expect(yield* Fiber.join(unnamed)).toEqual({
+          outcome: { outcome: "selected", optionId: "allow-always" },
+        });
+        const unnamedAgain = yield* handles
+          .requestPermission(makePermissionParams("call-5", { kind: "execute" }))
+          .pipe(Effect.forkChild);
+        yield* flushTimers();
+        expect(openedCount()).toBe(4);
+        const unnamedAgainOpened = runtimeEvents.findLast(
+          (event) => event.type === "request.opened",
+        );
+        yield* adapter.respondToRequest(threadId, unnamedAgainOpened!.requestId as never, "cancel");
+        expect(yield* Fiber.join(unnamedAgain)).toEqual({
+          outcome: { outcome: "cancelled" },
+        });
+
+        // Approving one MCP tool never approves another — the remembered key
+        // is (kind + exact tool name), not the broad request kind.
+        const firstMcp = yield* handles
+          .requestPermission(
+            makePermissionParams("call-6", {
+              kind: "other",
+              rawInput: { _toolName: "mcp__github__list_issues", arguments: {} },
+            }),
+          )
+          .pipe(Effect.forkChild);
+        yield* flushTimers();
+        const firstMcpOpened = runtimeEvents.findLast((event) => event.type === "request.opened");
+        yield* adapter.respondToRequest(
+          threadId,
+          firstMcpOpened!.requestId as never,
+          "acceptForSession",
+        );
+        expect(yield* Fiber.join(firstMcp)).toEqual({
+          outcome: { outcome: "selected", optionId: "allow-always" },
+        });
+
+        const otherMcp = yield* handles
+          .requestPermission(
+            makePermissionParams("call-7", {
+              kind: "other",
+              rawInput: { _toolName: "mcp__github__create_issue", arguments: {} },
+            }),
+          )
+          .pipe(Effect.forkChild);
+        yield* flushTimers();
+        expect(runtimeEvents.filter((event) => event.type === "request.opened").length).toBe(6);
+        const otherMcpOpened = runtimeEvents.findLast((event) => event.type === "request.opened");
+        yield* adapter.respondToRequest(threadId, otherMcpOpened!.requestId as never, "cancel");
+        expect(yield* Fiber.join(otherMcp)).toEqual({ outcome: { outcome: "cancelled" } });
+
+        // The same tool resolves without prompting again.
+        const sameMcp = yield* handles.requestPermission(
+          makePermissionParams("call-8", {
+            kind: "other",
+            rawInput: { _toolName: "mcp__github__list_issues", arguments: {} },
+          }),
+        );
+        expect(sameMcp).toEqual({
+          outcome: { outcome: "selected", optionId: "allow-always" },
+        });
+        expect(runtimeEvents.filter((event) => event.type === "request.opened").length).toBe(6);
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          makeDevinAdapterTestLayer(handles.runtime, handles.completeProcessedEvent, {
+            turnIdleMs: 3_600_000,
+            toolIdleMs: 3_600_000,
+          }),
+        ),
+      ),
+    );
+  });
+
+  it("never remembers destructive or network request kinds for the session", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const handles = makePermissionRuntime();
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* DevinAdapter;
+        const threadId = ThreadId.makeUnsafe("thread-devin-session-no-memory");
+        const runtimeEvents: Array<{ type: string; requestId?: unknown }> = [];
+        yield* adapter.streamEvents.pipe(
+          Stream.runForEach((event) =>
+            Effect.sync(() => {
+              runtimeEvents.push({ type: event.type, requestId: event.requestId });
+            }),
+          ),
+          Effect.forkScoped,
+        );
+        yield* adapter.startSession({
+          provider: "devin",
+          threadId,
+          runtimeMode: "approval-required",
+          cwd: process.cwd(),
+        });
+        yield* adapter.sendTurn({ threadId, input: "work", attachments: [] });
+
+        for (const kind of ["delete", "move", "fetch"] as const) {
+          const before = runtimeEvents.filter((event) => event.type === "request.opened").length;
+          const first = yield* handles
+            .requestPermission(
+              makePermissionParams(`${kind}-1`, {
+                kind,
+                rawInput: { _toolName: `mcp__fs__${kind}_file`, arguments: {} },
+              }),
+            )
+            .pipe(Effect.forkChild);
+          yield* flushTimers();
+          const opened = runtimeEvents.findLast((event) => event.type === "request.opened");
+          expect(opened).toBeDefined();
+          yield* adapter.respondToRequest(threadId, opened!.requestId as never, "acceptForSession");
+          expect(yield* Fiber.join(first)).toEqual({
+            outcome: { outcome: "selected", optionId: "allow-always" },
+          });
+
+          // The identical request still prompts — these kinds are never
+          // written into the session allow-list.
+          const second = yield* handles
+            .requestPermission(
+              makePermissionParams(`${kind}-2`, {
+                kind,
+                rawInput: { _toolName: `mcp__fs__${kind}_file`, arguments: {} },
+              }),
+            )
+            .pipe(Effect.forkChild);
+          yield* flushTimers();
+          expect(runtimeEvents.filter((event) => event.type === "request.opened").length).toBe(
+            before + 2,
+          );
+          const secondOpened = runtimeEvents.findLast((event) => event.type === "request.opened");
+          yield* adapter.respondToRequest(threadId, secondOpened!.requestId as never, "cancel");
+          expect(yield* Fiber.join(second)).toEqual({ outcome: { outcome: "cancelled" } });
+        }
       }).pipe(
         Effect.scoped,
         Effect.provide(
@@ -2252,6 +2415,116 @@ describe("Devin permission requests", () => {
         expect(opened).toBeDefined();
         yield* adapter.respondToRequest(threadId, opened!.requestId as never, "accept");
         expect(yield* Fiber.join(regular)).toEqual({
+          outcome: { outcome: "selected", optionId: "allow-once" },
+        });
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          makeDevinAdapterTestLayer(handles.runtime, handles.completeProcessedEvent, {
+            turnIdleMs: 3_600_000,
+            toolIdleMs: 3_600_000,
+          }).pipe(Layer.provideMerge(credentialsLayer)),
+        ),
+      ),
+    );
+  });
+
+  it("never auto-approves an execute kind, an unknown catalog name, or a title-only name", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const handles = makePermissionRuntime();
+    const credentialsLayer = Layer.succeed(
+      AgentGatewayCredentials,
+      makeFakeAgentGatewayCredentials(),
+    );
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* DevinAdapter;
+        const threadId = ThreadId.makeUnsafe("thread-devin-gateway-spoof");
+        const runtimeEvents: Array<{
+          type: string;
+          requestId?: unknown;
+          payload?: Record<string, unknown>;
+        }> = [];
+        yield* adapter.streamEvents.pipe(
+          Stream.runForEach((event) =>
+            Effect.sync(() => {
+              runtimeEvents.push({
+                type: event.type,
+                requestId: event.requestId,
+                payload: event.payload as Record<string, unknown>,
+              });
+            }),
+          ),
+          Effect.forkScoped,
+        );
+        yield* adapter.startSession({
+          provider: "devin",
+          threadId,
+          runtimeMode: "approval-required",
+          cwd: process.cwd(),
+          autoApproveSynaraTools: true,
+        });
+        yield* adapter.sendTurn({ threadId, input: "coordinate", attachments: [] });
+
+        const openedCount = () =>
+          runtimeEvents.filter((event) => event.type === "request.opened").length;
+        const promptCases: Array<{
+          toolCallId: string;
+          toolCall: Partial<Acp.RequestPermissionRequest["toolCall"]>;
+        }> = [
+          // An execute request titled like a gateway tool is a shell command —
+          // the kind alone must keep it off the auto-approve path.
+          {
+            toolCallId: "spoof-title-execute",
+            toolCall: { kind: "execute", title: "mcp__synara__x; rm -rf y" },
+          },
+          // Even a real catalog name on an execute-kind request keeps the
+          // normal prompt path.
+          {
+            toolCallId: "spoof-kind-execute",
+            toolCall: {
+              kind: "execute",
+              rawInput: { _toolName: "synara_list_threads", command: "rm -rf y" },
+            },
+          },
+          // The mcp__synara__ prefix alone names nothing: the part after it
+          // must be a real catalog tool.
+          {
+            toolCallId: "spoof-catalog",
+            toolCall: {
+              kind: "other",
+              rawInput: { _toolName: "mcp__synara__not_a_gateway_tool" },
+            },
+          },
+          // A gateway-looking title with no tool name in rawInput/metadata is
+          // presentational text — it never authorizes anything.
+          {
+            toolCallId: "spoof-title-only",
+            toolCall: { kind: "other", title: "mcp__synara__synara_list_threads" },
+          },
+        ];
+        for (const promptCase of promptCases) {
+          const before = openedCount();
+          const pending = yield* handles
+            .requestPermission(makePermissionParams(promptCase.toolCallId, promptCase.toolCall))
+            .pipe(Effect.forkChild);
+          yield* flushTimers();
+          expect(openedCount(), promptCase.toolCallId).toBe(before + 1);
+          const opened = runtimeEvents.findLast((event) => event.type === "request.opened");
+          yield* adapter.respondToRequest(threadId, opened!.requestId as never, "cancel");
+          expect(yield* Fiber.join(pending)).toEqual({ outcome: { outcome: "cancelled" } });
+        }
+
+        // Control: a real catalog name on a non-execute request still
+        // auto-approves.
+        const gateway = yield* handles.requestPermission(
+          makePermissionParams("call-gw", {
+            kind: "other",
+            rawInput: { _toolName: "synara_list_threads", arguments: {} },
+          }),
+        );
+        expect(gateway).toEqual({
           outcome: { outcome: "selected", optionId: "allow-once" },
         });
       }).pipe(

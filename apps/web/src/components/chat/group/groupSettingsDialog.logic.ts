@@ -382,13 +382,13 @@ export const GROUP_SEED_DOCUMENT_PATHS: ReadonlySet<string> = new Set([
 export function isGroupOnboardingDiscardable(input: {
   readonly threadIndexCount: number;
   readonly sidebarThreadCount: number;
-  readonly linkedProjectIds: ReadonlyArray<string>;
+  readonly linkedProjectIds: ReadonlyArray<string> | undefined;
   readonly documentPaths: ReadonlyArray<string>;
 }): boolean {
   return (
     input.threadIndexCount === 0 &&
     input.sidebarThreadCount === 0 &&
-    input.linkedProjectIds.length === 0 &&
+    (input.linkedProjectIds ?? []).length === 0 &&
     input.documentPaths.every((path) => GROUP_SEED_DOCUMENT_PATHS.has(path))
   );
 }

@@ -1647,6 +1647,8 @@ export default function Sidebar() {
     mode: "onboarding" | "edit";
     /** Posted to the coordinator as its first turn once onboarding saves. */
     firstMessage?: string;
+    /** The dialog opening also created the group — Cancel may offer discard. */
+    discardable?: boolean;
   } | null>(null);
   // A coordinator activation scheduled from onboarding outlives the dialog: its
   // poll/timeout must not yank the user to that thread after they have moved on,
@@ -3066,6 +3068,7 @@ export default function Sidebar() {
       projectId: groupId,
       mode: "onboarding",
       firstMessage: groupPickupMessageText(thread),
+      discardable: true,
     });
   }, []);
   const moveThreadToGroup = useCallback(
@@ -6420,8 +6423,8 @@ export default function Sidebar() {
                   renderListSectionHeader={renderListSectionHeader}
                   renderPinnedThreadsSection={renderPinnedThreadsSection}
                   onOpenThread={activateThreadFromSidebarIntent}
-                  onOpenGroupSettings={(projectId, mode) => {
-                    setProjectAgentDialogState({ projectId, mode });
+                  onOpenGroupSettings={(projectId, mode, options) => {
+                    setProjectAgentDialogState({ projectId, mode, ...options });
                   }}
                   onProjectContextMenu={handleProjectContextMenu}
                 />
@@ -7234,6 +7237,7 @@ export default function Sidebar() {
           projectName={projectAgentDialogProject.name}
           workspacePath={projectAgentDialogProject.cwd}
           defaultModelSelection={projectAgentDialogProject.defaultModelSelection ?? null}
+          allowDiscard={projectAgentDialogState?.discardable === true}
           onOpenChange={(open) => {
             if (!open) {
               setProjectAgentDialogState(null);

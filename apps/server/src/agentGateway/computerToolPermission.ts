@@ -161,7 +161,10 @@ export function computerToolNameFromProviderPermission(input: {
   ]);
   if (metadataToolName !== undefined) return qualifiedSynaraComputerToolName(metadataToolName);
 
-  return qualifiedSynaraComputerToolName(input.title);
+  // The display `title` is provider-composed text, not a tool name — a
+  // request that only *renders* as a Synara computer call names no such tool
+  // and must keep the ordinary permission path.
+  return undefined;
 }
 
 /**
@@ -261,7 +264,12 @@ const SYNARA_MCP_SERVER_PREFIX = "synara_";
 export function isSynaraGatewayToolName(value: unknown): boolean {
   if (typeof value !== "string") return false;
   const normalized = value.trim().toLowerCase();
-  if (normalized.startsWith(SYNARA_MCP_QUALIFIED_PREFIX)) return true;
+  if (normalized.startsWith(SYNARA_MCP_QUALIFIED_PREFIX)) {
+    // The `mcp__synara__` prefix pins the server, not the tool — only a real
+    // catalog name after the prefix may take the auto-approve path, so a
+    // look-alike tool name on the same server cannot ride it.
+    return SYNARA_GATEWAY_TOOL_NAME_SET.has(normalized.slice(SYNARA_MCP_QUALIFIED_PREFIX.length));
+  }
   if (SYNARA_GATEWAY_TOOL_NAME_SET.has(normalized)) {
     return normalized.startsWith(SYNARA_MCP_SERVER_PREFIX);
   }
@@ -275,10 +283,13 @@ export function isSynaraGatewayToolName(value: unknown): boolean {
  * Namespace-insensitive matcher across the fields a provider permission
  * prompt may report a tool name through — the direct name, or a tool-name
  * field nested in raw input / metadata the way some adapters deliver MCP
- * calls.
+ * calls. The display `title` is deliberately not consulted: it is
+ * presentational text the provider composes, so it can look like a gateway
+ * name without one ever being called.
  */
 export function isSynaraGatewayToolCall(input: {
   readonly name?: unknown;
+  // Accepted for call-site shape compatibility but never consulted.
   readonly title?: unknown;
   readonly rawInput?: unknown;
   readonly metadata?: unknown;
@@ -296,7 +307,7 @@ export function isSynaraGatewayToolCall(input: {
   ]);
   if (metadataToolName !== undefined) return isSynaraGatewayToolName(metadataToolName);
 
-  return isSynaraGatewayToolName(input.title);
+  return false;
 }
 
 /**

@@ -157,6 +157,7 @@ export function resolveAcpPermissionPolicy(input: {
   readonly autoApproveSynaraTools?: boolean;
   readonly gatewaySessionActive?: boolean;
   readonly toolCall?: {
+    readonly kind?: unknown;
     readonly title?: unknown;
     readonly rawInput?: unknown;
     readonly metadata?: unknown;
@@ -189,13 +190,15 @@ export function resolveAcpPermissionPolicy(input: {
 
   // Coordinator threads pre-approve the Synara gateway catalog: a gateway tool
   // call is Synara's own orchestration surface, so prompting the user for it
-  // would deadlock the coordinator on its own permission request. Exact
-  // catalog matching only — anything else keeps the normal prompt path.
+  // would deadlock the coordinator on its own permission request. The name
+  // must match the catalog exactly (never the composed title), and an
+  // execute-kind request can never claim a gateway tool — a shell command
+  // named like one keeps the normal prompt path.
   if (
     input.autoApproveSynaraTools === true &&
     input.gatewaySessionActive === true &&
+    input.toolCall?.kind !== "execute" &&
     isSynaraGatewayToolCall({
-      title: input.toolCall?.title,
       rawInput: input.toolCall?.rawInput,
       metadata: input.toolCall?.metadata,
     })
