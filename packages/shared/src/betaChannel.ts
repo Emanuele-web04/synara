@@ -19,6 +19,13 @@ export const SYNARA_BETA_WINDOWS_INSTALLER_GUID = "a8e63b48-d4f3-4db5-9e12-36810
 export const SYNARA_BETA_RELEASES_URL =
   "https://github.com/Emanuele-web04/synara/releases?q=prerelease%3Atrue";
 
+/** Latest stable release, offered from beta when stable Synara is not installed. */
+export const SYNARA_STABLE_RELEASES_URL =
+  "https://github.com/Emanuele-web04/synara/releases/latest";
+
+/** electron-builder NSIS `guid` for stable (production) builds. */
+export const SYNARA_STABLE_WINDOWS_INSTALLER_GUID = "368107a8-afe6-5db5-ab3b-d4f331684868";
+
 /** GitHub API releases endpoint probed for the newest `v*-beta.N` tag. */
 export const SYNARA_BETA_RELEASES_API_URL =
   "https://api.github.com/repos/Emanuele-web04/synara/releases?per_page=30";
@@ -34,6 +41,13 @@ export const SYNARA_BETA_HOME_ENV = "SYNARA_BETA_HOME";
 export const SYNARA_BETA_FEED_URL_ENV = "SYNARA_BETA_FEED_URL";
 export const SYNARA_BETA_INSTALL_DIR_ENV = "SYNARA_BETA_INSTALL_DIR";
 export const SYNARA_BETA_USER_DATA_ENV = "SYNARA_BETA_USER_DATA";
+
+/**
+ * Set by stable when it launches beta, so "Switch back to Synara" reopens that
+ * exact stable app with its own data home instead of guessing install paths.
+ */
+export const SYNARA_STABLE_EXECUTABLE_ENV = "SYNARA_STABLE_EXECUTABLE";
+export const SYNARA_STABLE_HOME_ENV = "SYNARA_STABLE_HOME";
 
 /** Tag shape of a beta release: `v<version>-beta.<N>`. */
 export const BETA_RELEASE_TAG_PATTERN = /^v\d+\.\d+\.\d+-beta\.\d+$/;

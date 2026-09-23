@@ -21,6 +21,10 @@ import {
   SYNARA_BETA_RELEASES_URL,
   SYNARA_BETA_USER_DATA_ENV,
   SYNARA_BETA_WINDOWS_INSTALLER_GUID,
+  SYNARA_STABLE_EXECUTABLE_ENV,
+  SYNARA_STABLE_HOME_ENV,
+  SYNARA_STABLE_RELEASES_URL,
+  SYNARA_STABLE_WINDOWS_INSTALLER_GUID,
   type BetaImportResult,
 } from "@synara/shared/betaChannel";
 import { SYNARA_DESKTOP_SMOKE_USER_DATA_ENV } from "@synara/shared/desktopIdentity";
@@ -40,6 +44,9 @@ const BETA_MAC_APP_NAME = "Synara Beta.app";
 const BETA_MAC_EXECUTABLE_NAME = "Synara Beta";
 const BETA_WINDOWS_EXE_NAME = "Synara Beta.exe";
 const BETA_LINUX_DESKTOP_FILE = "synara-beta.desktop";
+const STABLE_MAC_APP_NAME = "Synara.app";
+const STABLE_MAC_EXECUTABLE_NAME = "Synara";
+const STABLE_WINDOWS_EXE_NAME = "Synara.exe";
 
 export interface BetaInstallDetection {
   readonly installed: boolean;
@@ -60,10 +67,34 @@ interface BetaChannelDeps {
   readonly installDirOverride?: string | undefined;
   /** Electron userData handed to the launched beta when set. */
   readonly betaUserDataDir?: string | undefined;
+  /** Stable's own executable and data home, handed to beta for the way back. */
+  readonly stableExecutablePath?: string | undefined;
+  readonly stableHomeDir?: string | undefined;
+  /** Environment beta was launched with; read for the stable handoff (tests). */
+  readonly env?: NodeJS.ProcessEnv | undefined;
   /** Injectable installer (tests). Defaults to the real feed install. */
   readonly install?: (
     onProgress: (progress: DesktopBetaInstallProgress) => void,
   ) => Promise<string>;
+}
+
+/** Per-process overrides that belong to the launching app, never the launched one. */
+const LAUNCHER_ONLY_ENV_KEYS = [
+  "SYNARA_HOME",
+  SYNARA_DESKTOP_SMOKE_USER_DATA_ENV,
+  "SYNARA_PORT",
+  "SYNARA_AUTH_TOKEN",
+  "SYNARA_DESKTOP_WS_URL",
+  "SYNARA_DESKTOP_SHUTDOWN_TOKEN",
+  "SYNARA_DESKTOP_FLAVOR",
+  "VITE_DEV_SERVER_URL",
+  "ELECTRON_RUN_AS_NODE",
+];
+
+function withoutLauncherOverrides(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const next = { ...env };
+  for (const key of LAUNCHER_ONLY_ENV_KEYS) delete next[key];
+  return next;
 }
 
 /** Environment inherited by a launched beta. Stable's own data-home and
@@ -72,27 +103,61 @@ export function betaLaunchEnvironment(input: {
   readonly env?: NodeJS.ProcessEnv;
   readonly betaHomeDir: string;
   readonly betaUserDataDir?: string | undefined;
+  readonly stableExecutablePath?: string | undefined;
+  readonly stableHomeDir?: string | undefined;
 }): NodeJS.ProcessEnv {
-  const env = { ...(input.env ?? process.env) };
-  for (const key of [
-    "SYNARA_HOME",
-    SYNARA_DESKTOP_SMOKE_USER_DATA_ENV,
-    "SYNARA_PORT",
-    "SYNARA_AUTH_TOKEN",
-    "SYNARA_DESKTOP_WS_URL",
-    "SYNARA_DESKTOP_SHUTDOWN_TOKEN",
-    "SYNARA_DESKTOP_FLAVOR",
-    "VITE_DEV_SERVER_URL",
-    "ELECTRON_RUN_AS_NODE",
-  ]) {
-    delete env[key];
-  }
+  const env = withoutLauncherOverrides(input.env ?? process.env);
   env[SYNARA_BETA_HOME_ENV] = input.betaHomeDir;
   const userData = input.betaUserDataDir ?? env[SYNARA_BETA_USER_DATA_ENV];
   if (userData) {
     env[SYNARA_DESKTOP_SMOKE_USER_DATA_ENV] = userData;
   }
+  if (input.stableExecutablePath) env[SYNARA_STABLE_EXECUTABLE_ENV] = input.stableExecutablePath;
+  if (input.stableHomeDir) env[SYNARA_STABLE_HOME_ENV] = input.stableHomeDir;
   return env;
+}
+
+/** Environment for reopening stable from beta: beta's overrides are dropped and
+ * stable gets back the data home it handed over, when it handed one over. */
+export function stableLaunchEnvironment(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const next = withoutLauncherOverrides(env);
+  const stableHome = env[SYNARA_STABLE_HOME_ENV]?.trim();
+  if (stableHome) next.SYNARA_HOME = stableHome;
+  return next;
+}
+
+/**
+ * Finds the stable app to reopen from beta: the exact executable stable handed
+ * over at launch, otherwise the standard install locations.
+ */
+export function detectStableExecutable(
+  platform: NodeJS.Platform = process.platform,
+  homeDir: string = homedir(),
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const handedOver = env[SYNARA_STABLE_EXECUTABLE_ENV]?.trim();
+  if (handedOver && isAbsolute(handedOver) && existsSync(handedOver)) return handedOver;
+  if (platform === "darwin") {
+    for (const appPath of [
+      `/Applications/${STABLE_MAC_APP_NAME}`,
+      join(homeDir, "Applications", STABLE_MAC_APP_NAME),
+    ]) {
+      const executable = join(appPath, "Contents", "MacOS", STABLE_MAC_EXECUTABLE_NAME);
+      if (existsSync(executable)) return executable;
+    }
+    return null;
+  }
+  if (platform === "win32") {
+    for (const hive of ["HKCU", "HKLM"]) {
+      const installLocation = readRegistryValue(
+        `${hive}\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${SYNARA_STABLE_WINDOWS_INSTALLER_GUID}`,
+        "InstallLocation",
+      );
+      const executable = installLocation ? join(installLocation, STABLE_WINDOWS_EXE_NAME) : null;
+      if (executable && existsSync(executable)) return executable;
+    }
+  }
+  return null;
 }
 
 /** The directories macOS installs probe, honoring `SYNARA_BETA_INSTALL_DIR`. */
@@ -338,20 +403,54 @@ export class DesktopBetaChannel {
     return detectBetaInstall(this.deps.platform, this.deps.homeDir);
   }
 
+  private detectStable(): string | null {
+    return detectStableExecutable(this.deps.platform, this.deps.homeDir, this.deps.env);
+  }
+
   private launchEnv(): NodeJS.ProcessEnv {
     return betaLaunchEnvironment({
       betaHomeDir: this.deps.betaHomeDir,
       betaUserDataDir: this.deps.betaUserDataDir,
+      stableExecutablePath: this.deps.stableExecutablePath,
+      stableHomeDir: this.deps.stableHomeDir,
     });
+  }
+
+  /**
+   * Beta side of "Switch back to Synara": opens stable with its own data home.
+   * Beta data is never copied back; the caller quits beta once this succeeds.
+   */
+  leave(): DesktopBetaActionResult {
+    if (this.deps.flavor !== "beta") {
+      return action(false, "not-supported", "Switching back is only available from Synara Beta.");
+    }
+    const executable = this.detectStable();
+    if (!executable) {
+      return action(false, "not-installed", "Synara isn't installed on this computer.");
+    }
+    try {
+      spawn(executable, [], {
+        detached: true,
+        stdio: "ignore",
+        env: stableLaunchEnvironment(this.deps.env ?? process.env),
+      }).unref();
+      return action(true);
+    } catch (error) {
+      return action(false, "launch-failed", error instanceof Error ? error.message : String(error));
+    }
   }
 
   getState(): DesktopBetaChannelState {
     const detection = this.detect();
     const running = isBetaServerRunning(this.deps.betaHomeDir);
     const result = readBetaImportResult(this.deps.betaHomeDir);
+    const stableExecutable = this.deps.flavor === "beta" ? this.detectStable() : null;
     return {
       supported: true,
       flavor: this.deps.flavor,
+      stableInstalled: stableExecutable !== null,
+      canMoveBetaToTrash: this.deps.flavor === "beta" && this.deps.platform === "darwin",
+      stableDownloadUrl: SYNARA_STABLE_RELEASES_URL,
       installed: detection.installed,
       version: detection.version,
       canInstall: this.canInstall,

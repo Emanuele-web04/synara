@@ -34,6 +34,7 @@ export const DESKTOP_IPC_CHANNELS = {
     launch: "desktop:beta-launch",
     install: "desktop:beta-install",
     importAndLaunch: "desktop:beta-import-and-launch",
+    leave: "desktop:beta-leave",
   },
   updateState: "desktop:update-state",
   updateGetState: "desktop:update-get-state",

@@ -5122,6 +5122,8 @@ function registerIpcHandlers(): void {
     feedUrlOverride: process.env.SYNARA_BETA_FEED_URL,
     installDirOverride: process.env.SYNARA_BETA_INSTALL_DIR,
     betaUserDataDir: process.env.SYNARA_BETA_USER_DATA,
+    stableExecutablePath: desktopFlavor === "production" ? process.execPath : undefined,
+    stableHomeDir: desktopFlavor === "production" ? BASE_DIR : undefined,
   });
 
   ipcMain.removeHandler(IPC.beta.getState);
@@ -5135,6 +5137,36 @@ function registerIpcHandlers(): void {
 
   ipcMain.removeHandler(IPC.beta.importAndLaunch);
   ipcMain.handle(IPC.beta.importAndLaunch, async () => betaChannel.importAndLaunch(BASE_DIR));
+
+  ipcMain.removeHandler(IPC.beta.leave);
+  ipcMain.handle(IPC.beta.leave, async (_event, rawInput: unknown) => {
+    const result = betaChannel.leave();
+    if (!result.ok) return result;
+    const moveToTrash =
+      typeof rawInput === "object" &&
+      rawInput !== null &&
+      (rawInput as { moveToTrash?: unknown }).moveToTrash === true;
+    // Only ever trash the packaged beta bundle this process runs from.
+    const betaBundle = Path.resolve(process.execPath, "..", "..", "..");
+    if (
+      moveToTrash &&
+      process.platform === "darwin" &&
+      app.isPackaged &&
+      Path.basename(betaBundle) === `${APP_DISPLAY_NAME}.app`
+    ) {
+      try {
+        await shell.trashItem(betaBundle);
+      } catch (error) {
+        return {
+          ok: false,
+          error: "internal" as const,
+          message: `Synara is open, but Synara Beta could not be moved to the Trash: ${formatErrorMessage(error)}`,
+        };
+      }
+    }
+    setImmediate(() => requestGracefulAppQuit("beta-leave"));
+    return result;
+  });
 
   ipcMain.removeHandler(IPC.updateGetState);
   ipcMain.handle(IPC.updateGetState, async () => updateState);

@@ -6,12 +6,13 @@
 import {
   type DesktopAppSnapSettingsPane,
   type DesktopAppSnapState,
+  type DesktopBetaActionResult,
   type DesktopBetaChannelState,
   type ResolvedKeybindingsConfig,
 } from "@synara/contracts";
 import { appSnapShortcutLabels } from "@synara/shared/appSnapShortcut";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import type { AppSettingsBinding } from "~/appSettings";
 import { createLatestAppSnapRequestGuard } from "~/appSnap.logic";
@@ -37,7 +38,17 @@ import {
 import { AppSnapShortcutControl } from "./AppSnapShortcutControl";
 import { SettingResetButton } from "./SettingControls";
 import { SettingsCard, SettingsRow, SettingsSection } from "./SettingsPanelPrimitives";
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+} from "~/components/ui/alert-dialog";
 import { Button } from "~/components/ui/button";
+import { Checkbox } from "~/components/ui/checkbox";
 import { Switch } from "~/components/ui/switch";
 import { toastManager } from "~/components/ui/toast";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
@@ -426,6 +437,88 @@ export function AppSnapSettingsPanel({
   );
 }
 
+/**
+ * Beta → stable: opens stable Synara and quits beta. Beta data is never copied
+ * back because beta can hold data for features stable does not have yet.
+ */
+function LeaveBetaDialog({
+  open,
+  canMoveToTrash,
+  onOpenChange,
+  onLeave,
+}: {
+  readonly open: boolean;
+  readonly canMoveToTrash: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+  readonly onLeave: (moveToTrash: boolean) => Promise<DesktopBetaActionResult>;
+}) {
+  const [moveToTrash, setMoveToTrash] = useState(true);
+  const [pending, setPending] = useState(false);
+  const trashCheckboxId = useId();
+
+  async function leave() {
+    setPending(true);
+    try {
+      const result = await onLeave(canMoveToTrash && moveToTrash);
+      if (!result.ok) {
+        toastManager.add({
+          type: "warning",
+          title: "Could not switch back to Synara",
+          description: result.message ?? "Open Synara from your Applications folder.",
+        });
+        onOpenChange(false);
+      }
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <AlertDialog open={open} onOpenChange={(next) => !pending && onOpenChange(next)}>
+      <AlertDialogPopup>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Switch back to Synara?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Synara opens with the chats and settings it had before you tried Beta, and Beta closes.
+          </AlertDialogDescription>
+          <AlertDialogDescription>
+            Anything you did in Beta stays in Beta. It can't be moved into Synara, because Beta can
+            include features Synara doesn't have yet.
+          </AlertDialogDescription>
+          {canMoveToTrash ? (
+            <label
+              htmlFor={trashCheckboxId}
+              className="flex cursor-pointer select-none items-start gap-2 pt-2 text-ui text-foreground"
+            >
+              <Checkbox
+                id={trashCheckboxId}
+                className="mt-0.5"
+                checked={moveToTrash}
+                disabled={pending}
+                onCheckedChange={(checked) => setMoveToTrash(checked === true)}
+              />
+              <span className="space-y-0.5">
+                <span className="block">Move Synara Beta to the Trash</span>
+                <span className="block text-ui-sm text-muted-foreground">
+                  Your Beta data is kept, so you can pick up where you left off if you come back.
+                </span>
+              </span>
+            </label>
+          ) : null}
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogClose disabled={pending} render={<Button variant="outline" size="sm" />}>
+            Stay on Beta
+          </AlertDialogClose>
+          <Button size="sm" disabled={pending} onClick={() => void leave()}>
+            {pending ? "Switching…" : "Switch to Synara"}
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogPopup>
+    </AlertDialog>
+  );
+}
+
 function BetaChannelMark() {
   return (
     <img
@@ -452,6 +545,7 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
       query.state.data?.install && query.state.data.install.phase !== "error" ? 500 : 30_000,
   });
   const [actionPending, setActionPending] = useState<"copy" | "open" | "install" | null>(null);
+  const [leaveDialogOpen, setLeaveDialogOpen] = useState(false);
   const state: DesktopBetaChannelState | null = betaStateQuery.data ?? null;
 
   if (!active || !betaBridge || !state?.supported) return null;
@@ -516,6 +610,12 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
     }
   }
 
+  async function openStableDownloadPage() {
+    if (state?.stableDownloadUrl && window.desktopBridge?.openExternal) {
+      await window.desktopBridge.openExternal(state.stableDownloadUrl);
+    }
+  }
+
   async function openDownloadPage() {
     if (state?.downloadUrl && window.desktopBridge?.openExternal) {
       await window.desktopBridge.openExternal(state.downloadUrl);
@@ -526,15 +626,30 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
     return (
       <SettingsCard divided={false} className="flex items-start gap-3 px-4 py-3.5">
         <BetaChannelMark />
-        <div className="min-w-0 space-y-1">
+        <div className="min-w-0 flex-1 space-y-1">
           <p className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>You're on Synara Beta</p>
           <p className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>
-            Beta builds ship early so we can test changes on real workflows. Because you're on beta,
-            Synara sends lightweight diagnostics — crashes, launch and update timings, and feature
-            counters — to help us fix things faster. Your chats, prompts, file contents, and paths
-            are never collected. See docs/diagnostics.md in the repository for the exact schema.
+            New features land here first. Crash and error reports are always on, with private info
+            like emails, keys, and your username removed before anything is sent.
           </p>
+          <div className="flex flex-wrap items-center gap-2 pt-1.5">
+            {state.stableInstalled ? (
+              <Button size="xs" variant="outline" onClick={() => setLeaveDialogOpen(true)}>
+                Switch back to Synara
+              </Button>
+            ) : (
+              <Button size="xs" variant="outline" onClick={() => void openStableDownloadPage()}>
+                Get Synara
+              </Button>
+            )}
+          </div>
         </div>
+        <LeaveBetaDialog
+          open={leaveDialogOpen}
+          canMoveToTrash={state.canMoveBetaToTrash}
+          onOpenChange={setLeaveDialogOpen}
+          onLeave={(moveToTrash) => betaBridge!.leave({ moveToTrash })}
+        />
       </SettingsCard>
     );
   }
@@ -559,8 +674,8 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
           </div>
           <p className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>
             {state.installed
-              ? "Beta installs side-by-side and keeps its own data — nothing here changes your stable setup. Copy your data to move over projects, settings, and provider sign-ins in one shot."
-              : "Try new features before they reach stable. Synara Beta is a separate app with its own data — your stable install stays exactly as it is."}
+              ? "Beta runs next to Synara with its own data, so nothing here changes. Copy your data to bring over projects, settings, and provider sign-ins."
+              : "Try new features before everyone else. Synara Beta is a separate app with its own data, and this app stays exactly as it is."}
           </p>
           {state.lastImportAt ? (
             <p className="text-ui-xs text-muted-foreground">

@@ -31,6 +31,8 @@ import {
   BETA_IMPORT_RESULT_FILE_NAME,
   SYNARA_BETA_HOME_ENV,
   SYNARA_BETA_INSTALL_DIR_ENV,
+  SYNARA_STABLE_EXECUTABLE_ENV,
+  SYNARA_STABLE_HOME_ENV,
 } from "@synara/shared/betaChannel";
 import { SYNARA_DESKTOP_SMOKE_USER_DATA_ENV } from "@synara/shared/desktopIdentity";
 import {
@@ -38,9 +40,11 @@ import {
   DesktopBetaChannel,
   betaLaunchEnvironment,
   detectBetaInstall,
+  detectStableExecutable,
   isBetaServerRunning,
   readBetaImportResult,
   resolveBetaHomeDir,
+  stableLaunchEnvironment,
   writeBetaImportRequest,
 } from "./betaChannel";
 
@@ -309,5 +313,117 @@ describe("environment overrides", () => {
       betaHomeDir: "/beta-home",
     });
     expect(env[SYNARA_DESKTOP_SMOKE_USER_DATA_ENV]).toBeUndefined();
+  });
+});
+
+describe("switching back to stable", () => {
+  function fakeStableExecutable(root: string): string {
+    const executable = join(root, "DemoApps", "Synara.app", "Contents", "MacOS", "Synara");
+    mkdirSync(join(executable, ".."), { recursive: true });
+    writeFileSync(executable, "");
+    return executable;
+  }
+
+  it("stable hands its executable and data home to the beta it launches", () => {
+    const env = betaLaunchEnvironment({
+      env: {},
+      betaHomeDir: "/beta-home",
+      stableExecutablePath: "/Apps/Synara.app/Contents/MacOS/Synara",
+      stableHomeDir: "/stable-home",
+    });
+    expect(env[SYNARA_STABLE_EXECUTABLE_ENV]).toBe("/Apps/Synara.app/Contents/MacOS/Synara");
+    expect(env[SYNARA_STABLE_HOME_ENV]).toBe("/stable-home");
+    expect(env.SYNARA_HOME).toBeUndefined();
+  });
+
+  it("stableLaunchEnvironment restores stable's home and drops beta's overrides", () => {
+    const env = stableLaunchEnvironment({
+      HOME: "/home/test",
+      [SYNARA_BETA_HOME_ENV]: "/beta-home",
+      [SYNARA_STABLE_HOME_ENV]: "/stable-home",
+      [SYNARA_DESKTOP_SMOKE_USER_DATA_ENV]: "/beta-userdata",
+      SYNARA_PORT: "3773",
+      SYNARA_AUTH_TOKEN: "secret",
+    });
+    expect(env.HOME).toBe("/home/test");
+    expect(env.SYNARA_HOME).toBe("/stable-home");
+    expect(env[SYNARA_DESKTOP_SMOKE_USER_DATA_ENV]).toBeUndefined();
+    expect(env.SYNARA_PORT).toBeUndefined();
+    expect(env.SYNARA_AUTH_TOKEN).toBeUndefined();
+    // Stable's beta card keeps working after the round trip.
+    expect(env[SYNARA_BETA_HOME_ENV]).toBe("/beta-home");
+  });
+
+  it("stableLaunchEnvironment leaves SYNARA_HOME unset without a handed-over home", () => {
+    expect(stableLaunchEnvironment({ SYNARA_HOME: "/beta-leak" }).SYNARA_HOME).toBeUndefined();
+  });
+
+  it("detectStableExecutable prefers the executable stable handed over", () => {
+    const root = makeRoot();
+    const executable = fakeStableExecutable(root);
+    expect(
+      detectStableExecutable("darwin", root, { [SYNARA_STABLE_EXECUTABLE_ENV]: executable }),
+    ).toBe(executable);
+  });
+
+  it("detectStableExecutable ignores a missing or relative handed-over path", () => {
+    const root = makeRoot();
+    expect(
+      detectStableExecutable("linux", root, {
+        [SYNARA_STABLE_EXECUTABLE_ENV]: join(root, "gone", "Synara"),
+      }),
+    ).toBeNull();
+    expect(
+      detectStableExecutable("linux", root, { [SYNARA_STABLE_EXECUTABLE_ENV]: "Synara" }),
+    ).toBeNull();
+  });
+
+  it("detectStableExecutable finds ~/Applications/Synara.app on macOS", () => {
+    const root = makeRoot();
+    const executable = join(root, "Applications", "Synara.app", "Contents", "MacOS", "Synara");
+    mkdirSync(join(executable, ".."), { recursive: true });
+    writeFileSync(executable, "");
+    const found = detectStableExecutable("darwin", root, {});
+    // /Applications/Synara.app wins when the machine running the test has it.
+    expect([executable, "/Applications/Synara.app/Contents/MacOS/Synara"]).toContain(found);
+  });
+
+  it("leave opens stable with its own home and reports it in state", () => {
+    const root = makeRoot();
+    const executable = fakeStableExecutable(root);
+    const env = {
+      [SYNARA_STABLE_EXECUTABLE_ENV]: executable,
+      [SYNARA_STABLE_HOME_ENV]: join(root, "stable-home"),
+      [SYNARA_DESKTOP_SMOKE_USER_DATA_ENV]: join(root, "beta-userdata"),
+    };
+    const channel = makeChannel(root, "beta", { platform: "darwin", env });
+    const state = channel.getState();
+    expect(state.stableInstalled).toBe(true);
+    expect(state.canMoveBetaToTrash).toBe(true);
+    expect(state.stableDownloadUrl).toContain("releases/latest");
+
+    expect(channel.leave()).toEqual({ ok: true });
+    const last = spawnCalls.at(-1);
+    expect(last?.command).toBe(executable);
+    expect(last?.env?.SYNARA_HOME).toBe(join(root, "stable-home"));
+    expect(last?.env?.[SYNARA_DESKTOP_SMOKE_USER_DATA_ENV]).toBeUndefined();
+  });
+
+  it("leave reports not-installed when stable cannot be found", () => {
+    const root = makeRoot();
+    const channel = makeChannel(root, "beta", { env: {} });
+    expect(channel.getState().stableInstalled).toBe(false);
+    expect(channel.leave().error).toBe("not-installed");
+  });
+
+  it("leave is refused outside beta", () => {
+    const root = makeRoot();
+    const executable = fakeStableExecutable(root);
+    const channel = makeChannel(root, "production", {
+      env: { [SYNARA_STABLE_EXECUTABLE_ENV]: executable },
+    });
+    expect(channel.leave().error).toBe("not-supported");
+    expect(channel.getState().stableInstalled).toBe(false);
+    expect(channel.getState().canMoveBetaToTrash).toBe(false);
   });
 });

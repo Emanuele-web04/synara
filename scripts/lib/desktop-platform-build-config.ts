@@ -5,7 +5,10 @@
 
 import { fileURLToPath } from "node:url";
 
-import { SYNARA_BETA_WINDOWS_INSTALLER_GUID } from "@synara/shared/betaChannel";
+import {
+  SYNARA_BETA_WINDOWS_INSTALLER_GUID,
+  SYNARA_STABLE_WINDOWS_INSTALLER_GUID,
+} from "@synara/shared/betaChannel";
 import type { SynaraPackagedDesktopFlavor } from "@synara/shared/desktopIdentity";
 
 import {
@@ -24,7 +27,7 @@ export const MAC_APPSNAP_HELPER_ASAR_EXCLUSION = "!apps/desktop/native/appsnap/b
 export const MAC_APPSNAP_HELPER_BUNDLE_PATH = "Contents/Helpers/synara-appsnap-helper";
 export const MAC_DEVICE_HELPER_STAGE_PATH = "apps/server/dist/device-helper";
 export const MAC_DEVICE_HELPER_RESOURCE_PATH = "Resources/device-helper";
-export const WINDOWS_INSTALLER_GUID = "368107a8-afe6-5db5-ab3b-d4f331684868";
+export const WINDOWS_INSTALLER_GUID = SYNARA_STABLE_WINDOWS_INSTALLER_GUID;
 // Asset catalog name of the compiled Icon Composer icon. macOS 26 reads
 // CFBundleIconName out of Assets.car and renders that layered icon with the
 // Liquid Glass material; older releases ignore it and keep using the ICNS.

@@ -394,6 +394,12 @@ export interface DesktopBetaChannelState {
   readonly downloadUrl: string;
   /** Live download/install progress; an `error` phase stays until the next attempt. */
   readonly install: DesktopBetaInstallProgress | null;
+  /** Beta only: a stable Synara app was found to switch back to. */
+  readonly stableInstalled: boolean;
+  /** Beta only: leaving can also move the beta app to the Trash (macOS). */
+  readonly canMoveBetaToTrash: boolean;
+  /** Stable download page offered from beta when stable is not installed. */
+  readonly stableDownloadUrl: string;
 }
 
 export type DesktopBetaActionError =
@@ -810,6 +816,11 @@ export interface DesktopBridge {
      */
     importAndLaunch: () => Promise<DesktopBetaActionResult>;
     launch: () => Promise<DesktopBetaActionResult>;
+    /**
+     * Beta only: opens stable Synara, optionally moves the beta app to the
+     * Trash (macOS), then quits beta. Beta data stays in the beta home.
+     */
+    leave: (input: { readonly moveToTrash: boolean }) => Promise<DesktopBetaActionResult>;
   };
   notifications: {
     isSupported: () => Promise<boolean>;

@@ -45,8 +45,8 @@ published by the same release workflow as stable, and it updates through
   beta install could be offered a stable build, and installing it would
   silently swap the app to the other flavor and home directory. Crossing lanes
   always happens by installing the other app, never by update.
-- `allowDowngrade` stays `false` on both trains; moving back to stable means
-  reinstalling stable.
+- `allowDowngrade` stays `false` on both trains; moving back to stable happens
+  by opening the stable app (see [Leaving beta](#leaving-beta)), never by update.
 - Pending-update caches are scoped per flavor (`~/Library/Caches/synara-desktop-beta-updater`
   on macOS), so a downloaded beta update never collides with stable's pending
   update state.
@@ -155,6 +155,29 @@ sidecars (`state.sqlite-wal`/`-shm`/`-journal`), or `*.lifecycle-lock`
 directories — a leaked lock directory would make beta refuse to start while the
 stable process is alive. It never writes into the stable home except the one
 marker file.
+
+## Leaving beta
+
+Beta shows **Switch back to Synara** under **Settings → General**. It opens
+stable and quits beta; on macOS it can also move `Synara Beta.app` to the Trash
+(checked by default). Stable was never changed by the switch, so it opens with
+the chats and settings it had before.
+
+- Beta data is never copied back. Beta can carry database migrations and data
+  for features stable does not have yet, so a copy could fail or corrupt
+  stable's `state.sqlite`. The dialog says so plainly. `~/.synara-beta` is
+  kept, so reinstalling beta picks up where the user left off.
+- Stable is found through `SYNARA_STABLE_EXECUTABLE`, which stable sets on the
+  beta it launches (with `SYNARA_STABLE_HOME` for its data dir), then through
+  `/Applications/Synara.app`, `~/Applications/Synara.app`, or the stable NSIS
+  uninstall key on Windows. When none is found the card offers the stable
+  download page instead.
+- Stable is spawned with beta's per-process overrides stripped
+  (`SYNARA_DESKTOP_SMOKE_USER_DATA`, server auth variables) and `SYNARA_HOME`
+  restored from `SYNARA_STABLE_HOME` when stable handed one over. An already
+  running stable just comes to the front through its single-instance lock.
+- The Trash step only runs for a packaged bundle named `Synara Beta.app`, so a
+  source or dev build can never trash Electron itself.
 
 ## Diagnostics
 

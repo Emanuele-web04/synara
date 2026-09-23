@@ -97,6 +97,8 @@ export function BetaWelcomeDialog() {
           Your Synara app stays separate and untouched.
           <br />
           Crash and error reports are on, with private info removed.
+          <br />
+          You can switch back to Synara any time in Settings.
           {imported === true ? (
             <>
               <br />
@@ -110,7 +112,7 @@ export function BetaWelcomeDialog() {
               <span className="text-foreground">
                 {importFailed
                   ? "Your Synara data could not be copied, so you're starting fresh."
-                  : "Starting fresh — nothing was copied over."}
+                  : "Starting fresh. Nothing was copied over."}
               </span>
             </>
           ) : null}
