@@ -163,19 +163,29 @@ export async function buildProjectImportCatalog(
   for (const { provider, catalog } of sources) {
     if (!isAbsoluteDirectory(catalog.sourceHome)) continue;
     const sourceHome = await canonical(catalog.sourceHome);
-    const sourceProjects = new Map<string, { title: string; roots: string[] }>();
+    const sourceProjects = new Map<
+      string,
+      { title: string; roots: string[]; hasUnavailableRoot: boolean }
+    >();
     for (const sourceProject of catalog.projects) {
       const roots = new Map<string, string>();
+      let hasUnavailableRoot = false;
       for (const sourceRoot of sourceProject.roots) {
         if (!isAbsoluteDirectory(sourceRoot)) continue;
         const physicalRoot = await availableImportEntry(() => canonical(sourceRoot));
-        if (!physicalRoot) continue;
+        if (!physicalRoot) {
+          hasUnavailableRoot = true;
+          continue;
+        }
         // Claude has no native project IDs: its discovery groups are cwd hints.
         const root =
           provider === "claudeAgent"
             ? await availableImportEntry(() => derivedWorkspace(physicalRoot))
             : physicalRoot;
-        if (!root) continue;
+        if (!root) {
+          hasUnavailableRoot = true;
+          continue;
+        }
         const project = await availableImportEntry(() =>
           ensureProject(
             root,
@@ -185,12 +195,16 @@ export async function buildProjectImportCatalog(
             provider,
           ),
         );
-        if (!project) continue;
+        if (!project) {
+          hasUnavailableRoot = true;
+          continue;
+        }
         roots.set(importPathIdentity(root), root);
       }
       sourceProjects.set(sourceProject.id, {
         title: sourceProject.title,
         roots: [...roots.values()],
+        hasUnavailableRoot,
       });
     }
 
@@ -206,10 +220,10 @@ export async function buildProjectImportCatalog(
           ? sourceProjects.get(session.projectId)
           : undefined;
       let root: string | undefined;
-      if (sourceProject?.roots.length === 1) {
+      if (sourceProject?.roots.length === 1 && !sourceProject.hasUnavailableRoot) {
         // Explicit assignment survives even after a temporary worktree has been deleted.
         root = sourceProject.roots[0];
-      } else if (sourceProject && sourceProject.roots.length > 1) {
+      } else if (sourceProject?.roots.length) {
         root = mostSpecificRoot(sourceProject.roots, cwd);
         if (!root) {
           const git = await availableImportEntry(() => gitWorkspace(cwd));

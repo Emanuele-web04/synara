@@ -424,6 +424,41 @@ describe("buildProjectImportCatalog", () => {
     ).toEqual(["codex-good", "codex-missing", "claude-good"].toSorted());
   });
 
+  it("does not assign an inaccessible multi-root project's sessions to its remaining root", async () => {
+    const home = await fixtureDirectory();
+    const availableRoot = path.join(home, "available-repo");
+    const unavailableRoot = path.join(home, "unavailable-repo");
+    const unavailableCwd = path.join(unavailableRoot, "src");
+    await fs.mkdir(availableRoot);
+    const canonical = paths.canonicalImportPath;
+    vi.spyOn(paths, "canonicalImportPath").mockImplementation((value) =>
+      value === unavailableRoot ? Promise.reject(unavailableImportPath("EPERM")) : canonical(value),
+    );
+
+    const projects = await buildProjectImportCatalog(
+      [
+        source(
+          "codex",
+          home,
+          [
+            session("available", availableRoot, "multi"),
+            session("unavailable", unavailableCwd, "multi"),
+          ],
+          [{ id: "multi", title: "Multi-root", roots: [availableRoot, unavailableRoot] }],
+        ),
+      ],
+      [],
+    );
+
+    expect(projects.find((project) => project.workspaceRoot === availableRoot)?.threads).toEqual([
+      expect.objectContaining({ id: "available" }),
+    ]);
+    expect(projects.find((project) => project.workspaceRoot === unavailableCwd)).toMatchObject({
+      directoryExists: false,
+      threads: [expect.objectContaining({ id: "unavailable" })],
+    });
+  });
+
   it("does not hide unexpected filesystem errors", async () => {
     const home = await fixtureDirectory();
     const failedRoot = path.join(home, "io-error");
