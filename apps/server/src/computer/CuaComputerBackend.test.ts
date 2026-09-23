@@ -4378,6 +4378,15 @@ describe("host-reported platform and native revision", () => {
   const hostReply = (reply: Record<string, unknown>) =>
     (async () => ({ ok: true, ...reply })) as unknown as typeof cuaRequest;
 
+  it("keeps pane input out of its observations: the host serves one request at a time", async () => {
+    const backend = new CuaComputerBackend({
+      endpoint: "/fixture-only",
+      request: hostReply({ hostPlatform: "darwin", driverNativeRevision: 34 }),
+    });
+    await backend.probeAvailability();
+    expect("concurrentObservationInput" in backend).toBe(false);
+  });
+
   it("adopts the host platform and narrows patched-only capabilities for an unpatched driver", async () => {
     const backend = new CuaComputerBackend({
       endpoint: "/fixture-only",

@@ -21,6 +21,7 @@ import {
   withComputerCallContext,
 } from "./computerCallContext.ts";
 import { withComputerTask } from "./computerTaskContext.ts";
+import { withDesktopDeliveryMode } from "./DesktopOperationQueue.ts";
 import { FakeComputerBackend } from "./FakeComputerBackend.ts";
 import type { FrameSink } from "@synara/shared/frameTransport";
 
@@ -4703,4 +4704,248 @@ it("thread removal completes on a wedged stop — the teardown wait is bounded",
   } finally {
     vi.useRealTimers();
   }
+});
+
+/** A backend method that parks until released, reporting when it was entered. */
+function gate() {
+  const released = Promise.withResolvers<void>();
+  const reached = Promise.withResolvers<void>();
+  return {
+    release: () => released.resolve(),
+    released: released.promise,
+    entered: () => reached.resolve(),
+    reached: reached.promise,
+  };
+}
+
+/** Long enough for any queued continuation to have run. */
+const turn = () => new Promise<void>((resolve) => setTimeout(resolve, 10));
+
+/** A backend that serves pane input alongside an agent's observation. */
+function concurrentObservation<B extends FakeComputerBackend>(backend: B): B {
+  return Object.assign(backend, { concurrentObservationInput: true });
+}
+
+describe("pane input during an agent tool call", () => {
+  it.each([
+    ["Linux dialect", () => concurrentObservation(new FakeComputerBackend())],
+    ["macOS dialect", () => concurrentObservation(backgroundTargetBackend())],
+  ] as const)(
+    "answers the pane while the agent reads state, not after (%s)",
+    async (_name, makeBackend) => {
+      const backend = makeBackend();
+      const reading = gate();
+      const getState = backend.getState.bind(backend);
+      backend.getState = async (options) => {
+        reading.entered();
+        await reading.released;
+        return getState(options);
+      };
+      const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+      try {
+        const windows = await backend.listWindows();
+        const target = windows[0]!.bounds!;
+        const point = { x: target.x + 10, y: target.y + 10 };
+        const agent = withComputerTask({ threadId: "thread-1" }, () =>
+          manager.withAgentActivity("thread-1", () => manager.getState({ includeTree: true })),
+        );
+        await reading.reached;
+        const clicked = await Promise.race([
+          manager
+            .withUserPointTarget(point, (userTarget) => manager.click(undefined, userTarget))
+            .then(() => "clicked"),
+          turn().then(() => "still waiting"),
+        ]);
+        // The tree walk is still running; the human's click did not wait for it.
+        expect(clicked).toBe("clicked");
+        expect(backend.callsFor("click")).toHaveLength(1);
+        reading.release();
+        await agent;
+      } finally {
+        reading.release();
+        await manager.dispose();
+      }
+    },
+  );
+
+  it("never lands pane input inside the agent's input", async () => {
+    const backend = concurrentObservation(new FakeComputerBackend());
+    const pressing = gate();
+    const events: string[] = [];
+    const pressKey = backend.pressKey.bind(backend);
+    backend.pressKey = async (key, ...rest) => {
+      events.push(`press ${key}`);
+      if (key === "a") {
+        pressing.entered();
+        await pressing.released;
+      }
+      const result = await pressKey(key, ...rest);
+      events.push(`released ${key}`);
+      return result;
+    };
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    try {
+      const agent = withComputerTask({ threadId: "thread-1" }, () =>
+        manager.withAgentActivity("thread-1", () => manager.pressKey("thread-1", "a")),
+      );
+      await pressing.reached;
+      const pane = manager.pressKey(undefined, "b");
+      await turn();
+      expect(events).toEqual(["press a"]);
+      pressing.release();
+      await Promise.all([agent, pane]);
+      expect(events).toEqual(["press a", "released a", "press b", "released b"]);
+    } finally {
+      pressing.release();
+      await manager.dispose();
+    }
+  });
+
+  it("resumes the agent's input only after the pane's input in flight", async () => {
+    const backend = concurrentObservation(new FakeComputerBackend());
+    const reading = gate();
+    const paneTyping = gate();
+    const events: string[] = [];
+    const getState = backend.getState.bind(backend);
+    backend.getState = async (options) => {
+      reading.entered();
+      await reading.released;
+      events.push("agent observed");
+      return getState(options);
+    };
+    const typeText = backend.typeText.bind(backend);
+    backend.typeText = async (text, ...rest) => {
+      events.push(`type ${text}`);
+      if (text === "human") {
+        paneTyping.entered();
+        await paneTyping.released;
+      }
+      const result = await typeText(text, ...rest);
+      events.push(`typed ${text}`);
+      return result;
+    };
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    try {
+      const agent = withComputerTask({ threadId: "thread-1" }, () =>
+        manager.withAgentActivity("thread-1", async () => {
+          await manager.getState({ includeTree: true });
+          await manager.typeText("thread-1", "agent");
+        }),
+      );
+      await reading.reached;
+      const pane = manager.typeText(undefined, "human");
+      await expect(
+        Promise.race([
+          paneTyping.reached.then(() => "pane typing"),
+          turn().then(() => "pane queued behind the observation"),
+        ]),
+      ).resolves.toBe("pane typing");
+      reading.release();
+      await turn();
+      // The agent finished looking, but its next input waits for the human's.
+      expect(events).toEqual(["type human", "agent observed"]);
+      paneTyping.release();
+      await Promise.all([agent, pane]);
+      expect(events).toEqual([
+        "type human",
+        "agent observed",
+        "typed human",
+        "type agent",
+        "typed agent",
+      ]);
+    } finally {
+      reading.release();
+      paneTyping.release();
+      await manager.dispose();
+    }
+  });
+
+  it("keeps a foreground excursion's observation exclusive", async () => {
+    const backend = concurrentObservation(backgroundTargetBackend());
+    const reading = gate();
+    const events: string[] = [];
+    const getState = backend.getState.bind(backend);
+    backend.getState = async (options) => {
+      reading.entered();
+      await reading.released;
+      events.push("agent observed");
+      return getState(options);
+    };
+    const pressKey = backend.pressKey.bind(backend);
+    backend.pressKey = async (...args) => {
+      events.push("pane key");
+      return pressKey(...args);
+    };
+    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+    try {
+      const agent = withComputerTask({ threadId: "thread-1" }, () =>
+        manager.withAgentActivity("thread-1", () =>
+          withDesktopDeliveryMode("foreground", () => manager.getState({ includeTree: true })),
+        ),
+      );
+      await reading.reached;
+      const pane = manager.pressKey(undefined, "a");
+      await turn();
+      expect(events).toEqual([]);
+      reading.release();
+      await Promise.all([agent, pane]);
+      expect(events).toEqual(["agent observed", "pane key"]);
+    } finally {
+      reading.release();
+      await manager.dispose();
+    }
+  });
+  it.each([
+    ["pointer", "click"],
+    ["key", "pressKey"],
+  ] as const)(
+    "keeps %s pane input behind the agent's whole call on a backend that has not opted in (the Cua host)",
+    async (_name, method) => {
+      // The Cua backend leaves `concurrentObservationInput` unset: its host
+      // serves one request at a time, so pane input waits as it always did.
+      const backend = backgroundTargetBackend();
+      expect("concurrentObservationInput" in backend).toBe(false);
+      const reading = gate();
+      const events: string[] = [];
+      const getState = backend.getState.bind(backend);
+      backend.getState = async (options) => {
+        reading.entered();
+        await reading.released;
+        events.push("agent observed");
+        return getState(options);
+      };
+      const manager = new ComputerManager({ backend, actionSettleMs: 0 });
+      try {
+        const windows = await backend.listWindows();
+        const target = windows[0]!.bounds!;
+        const point = { x: target.x + 10, y: target.y + 10 };
+        const agent = withComputerTask({ threadId: "thread-1" }, () =>
+          manager.withAgentActivity("thread-1", async () => {
+            await manager.getState({ includeTree: true });
+            await manager.observeFor(1);
+            events.push("agent call done");
+          }),
+        );
+        await reading.reached;
+        const pane = (
+          method === "click"
+            ? manager.withUserPointTarget(point, (userTarget) =>
+                manager.click(undefined, userTarget),
+              )
+            : manager.pressKey(undefined, "a")
+        ).then(() => {
+          events.push("pane input");
+        });
+        await turn();
+        expect(events).toEqual([]);
+        expect(backend.callsFor(method)).toHaveLength(0);
+        reading.release();
+        await Promise.all([agent, pane]);
+        expect(events).toEqual(["agent observed", "agent call done", "pane input"]);
+      } finally {
+        reading.release();
+        await manager.dispose();
+      }
+    },
+  );
 });
