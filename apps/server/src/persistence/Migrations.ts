@@ -128,6 +128,7 @@ import Migration0109 from "./Migrations/109_ProjectAgent.ts";
 import Migration0110 from "./Migrations/110_Groups.ts";
 import Migration0111 from "./Migrations/111_GroupLibraryHosting.ts";
 import Migration0112 from "./Migrations/112_CoordinatorAppearance.ts";
+import Migration0113 from "./Migrations/113_ProjectAgentWakeCursor.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -256,6 +257,7 @@ export const migrationEntries = [
   [110, "Groups", Migration0110],
   [111, "GroupLibraryHosting", Migration0111],
   [112, "CoordinatorAppearance", Migration0112],
+  [113, "ProjectAgentWakeCursor", Migration0113],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

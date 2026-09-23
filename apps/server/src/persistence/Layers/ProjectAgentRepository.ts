@@ -4,10 +4,8 @@ import {
   ProjectAgentLimits,
   ProjectAgentWorkerRouting,
   ProjectDigest,
-  ProjectDigestFocusItem,
   ProjectDocumentHead,
   ProjectDocumentRevision,
-  ProjectDocumentSource,
   ProjectEvidence,
   ProjectGoal,
   ProjectGoalId,
@@ -952,75 +950,121 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         LIMIT 50
       `.pipe(Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.listDocumentHistory"))),
     writeDocument: (input) =>
-      Effect.gen(function* () {
-        const { revision, expectedRevision } = input;
-        if (expectedRevision !== null && expectedRevision !== revision.revision - 1) {
-          return yield* Effect.fail(
-            toPersistenceSqlError("ProjectAgentRepository.writeDocument")(
-              revisionMismatch("document"),
-            ),
-          );
-        }
-        if (expectedRevision !== null) {
-          const head = yield* impl.getDocumentHead(revision.projectId, revision.logicalPath);
-          if (Option.isNone(head) || head.value.revision !== expectedRevision) {
-            return yield* Effect.fail(
-              toPersistenceSqlError("ProjectAgentRepository.writeDocument")(
-                revisionMismatch("document"),
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            const { revision, expectedRevision } = input;
+            if (expectedRevision !== null && expectedRevision !== revision.revision - 1) {
+              return yield* Effect.fail(revisionMismatch("document"));
+            }
+            if (expectedRevision !== null) {
+              const head = yield* impl.getDocumentHead(revision.projectId, revision.logicalPath);
+              if (Option.isNone(head) || head.value.revision !== expectedRevision) {
+                return yield* Effect.fail(revisionMismatch("document"));
+              }
+            }
+            yield* sql`
+              INSERT INTO project_agent_documents (
+                revision_id, project_id, logical_path, revision, content, content_hash,
+                author_kind, author_thread_id, sources_json, created_at
+              ) VALUES (
+                ${revision.id}, ${revision.projectId}, ${revision.logicalPath}, ${revision.revision},
+                ${revision.content}, ${revision.contentHash}, ${revision.authorKind},
+                ${revision.authorThreadId}, ${JSON.stringify(revision.sources)}, ${revision.createdAt}
+              )
+            `;
+            yield* sql`
+              INSERT INTO project_agent_document_heads (
+                project_id, logical_path, revision, content_hash, disk_hash, conflict_pending, updated_at
+              ) VALUES (
+                ${revision.projectId}, ${revision.logicalPath}, ${revision.revision}, ${revision.contentHash},
+                ${input.diskHash ?? revision.contentHash}, ${input.conflictPending ? 1 : 0}, ${revision.createdAt}
+              )
+              ON CONFLICT (project_id, logical_path) DO UPDATE SET
+                revision = excluded.revision,
+                content_hash = excluded.content_hash,
+                disk_hash = excluded.disk_hash,
+                conflict_pending = excluded.conflict_pending,
+                updated_at = excluded.updated_at
+            `;
+            return revision;
+          }),
+        )
+        .pipe(
+          Effect.mapError((cause) => {
+            const detail = cause instanceof Error ? cause.message : String(cause);
+            const isConflict =
+              detail.includes("revision mismatch") || /unique constraint failed/i.test(detail);
+            return toPersistenceSqlError("ProjectAgentRepository.writeDocument")(
+              isConflict
+                ? revisionMismatch("document")
+                : cause instanceof Error
+                  ? cause
+                  : new Error(detail),
+            );
+          }),
+        ),
+    markDocumentDiskSynced: (input) =>
+      sql`
+        UPDATE project_agent_document_heads
+        SET disk_hash = ${input.diskHash}, updated_at = ${new Date().toISOString()}
+        WHERE project_id = ${input.projectId} AND logical_path = ${input.logicalPath}
+      `.pipe(
+        Effect.asVoid,
+        Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.markDocumentDiskSynced")),
+      ),
+    readDocumentRevisions: (input) =>
+      (input.logicalPaths.length === 0
+        ? Effect.succeed<ReadonlyArray<Record<string, unknown>>>([])
+        : sql<Record<string, unknown>>`
+          SELECT
+            revision_id AS "id", project_id AS "projectId", logical_path AS "logicalPath", revision,
+            content, content_hash AS "contentHash", author_kind AS "authorKind",
+            author_thread_id AS "authorThreadId", sources_json AS "sources", created_at AS "createdAt"
+          FROM project_agent_documents d
+          WHERE d.project_id = ${input.projectId}
+            AND d.logical_path IN ${sql.in(input.logicalPaths)}
+            AND d.revision = (
+              SELECT MAX(revision) FROM project_agent_documents
+              WHERE project_id = d.project_id AND logical_path = d.logical_path
+            )
+        `.pipe(
+            Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.readDocumentRevisions")),
+          )
+      ).pipe(
+        Effect.flatMap((rows) =>
+          Effect.forEach(rows, (row) => {
+            const sources = typeof row.sources === "string" ? JSON.parse(row.sources) : row.sources;
+            return Schema.decodeUnknownEffect(ProjectDocumentRevision)({
+              ...row,
+              sources,
+            }).pipe(
+              Effect.mapError(
+                toPersistenceDecodeError("ProjectAgentRepository.readDocumentRevisions"),
               ),
             );
-          }
-        }
-        yield* sql`
-          INSERT INTO project_agent_documents (
-            revision_id, project_id, logical_path, revision, content, content_hash,
-            author_kind, author_thread_id, sources_json, created_at
-          ) VALUES (
-            ${revision.id}, ${revision.projectId}, ${revision.logicalPath}, ${revision.revision},
-            ${revision.content}, ${revision.contentHash}, ${revision.authorKind},
-            ${revision.authorThreadId}, ${JSON.stringify(revision.sources)}, ${revision.createdAt}
-          )
-        `.pipe(
-          Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.writeDocument:insert")),
-        );
-        yield* sql`
-          INSERT INTO project_agent_document_heads (
-            project_id, logical_path, revision, content_hash, disk_hash, conflict_pending, updated_at
-          ) VALUES (
-            ${revision.projectId}, ${revision.logicalPath}, ${revision.revision}, ${revision.contentHash},
-            ${input.diskHash ?? revision.contentHash}, ${input.conflictPending ? 1 : 0}, ${revision.createdAt}
-          )
-          ON CONFLICT (project_id, logical_path) DO UPDATE SET
-            revision = excluded.revision,
-            content_hash = excluded.content_hash,
-            disk_hash = excluded.disk_hash,
-            conflict_pending = excluded.conflict_pending,
-            updated_at = excluded.updated_at
-        `.pipe(Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.writeDocument:head")));
-        return revision;
-      }),
-    nextActivitySequence: (projectId) =>
-      sql<{ readonly next: number }>`
-        SELECT COALESCE(MAX(sequence), 0) + 1 AS next
-        FROM project_agent_activity
-        WHERE project_id = ${projectId}
-      `.pipe(
-        Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.nextActivitySequence")),
-        Effect.map((rows) => rows[0]?.next ?? 1),
+          }),
+        ),
       ),
     appendActivity: (activity) =>
-      sql`
+      sql<{ readonly sequence: number }>`
         INSERT INTO project_agent_activity (
           activity_id, project_id, sequence, kind, actor_kind, actor_thread_id, goal_id, task_id,
           source_json, summary, created_at
-        ) VALUES (
-          ${activity.id}, ${activity.projectId}, ${activity.sequence}, ${activity.kind},
-          ${activity.actorKind}, ${activity.actorThreadId}, ${activity.goalId}, ${activity.taskId},
-          ${JSON.stringify(activity.source)}, ${activity.summary}, ${activity.createdAt}
         )
+        SELECT
+          ${activity.id}, ${activity.projectId},
+          COALESCE(
+            (SELECT MAX(sequence) FROM project_agent_activity WHERE project_id = ${activity.projectId}),
+            0
+          ) + 1,
+          ${activity.kind}, ${activity.actorKind}, ${activity.actorThreadId}, ${activity.goalId},
+          ${activity.taskId}, ${JSON.stringify(activity.source)}, ${activity.summary},
+          ${activity.createdAt}
+        RETURNING sequence
       `.pipe(
         Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.appendActivity")),
-        Effect.as(activity),
+        Effect.map((rows): ProjectActivity => ({ ...activity, sequence: rows[0]?.sequence ?? 0 })),
       ),
     listActivity: (input) =>
       sql<Record<string, unknown>>`
@@ -1032,9 +1076,15 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         FROM project_agent_activity
         WHERE project_id = ${input.projectId}
           AND (
-            ${input.cursor?.createdAt ?? null} IS NULL
-            OR created_at < ${input.cursor?.createdAt ?? ""}
-            OR (created_at = ${input.cursor?.createdAt ?? ""} AND activity_id < ${input.cursor?.id ?? ""})
+            (${input.cursor?.sequence ?? null} IS NOT NULL AND sequence < ${input.cursor?.sequence ?? 0})
+            OR (
+              ${input.cursor?.sequence ?? null} IS NULL
+              AND (
+                ${input.cursor?.createdAt ?? null} IS NULL
+                OR created_at < ${input.cursor?.createdAt ?? ""}
+                OR (created_at = ${input.cursor?.createdAt ?? ""} AND activity_id < ${input.cursor?.id ?? ""})
+              )
+            )
           )
         ORDER BY sequence DESC
         LIMIT ${input.limit}
@@ -1051,6 +1101,17 @@ const makeProjectAgentRepository = Effect.gen(function* () {
             );
           }),
         ),
+      ),
+    resetInterruptedDigests: () =>
+      sql<{ readonly reset: number }>`
+        UPDATE project_agent_digests
+        SET generation_state = 'failed',
+            last_error = 'Digest generation was interrupted by a restart.'
+        WHERE generation_state = 'running'
+        RETURNING 1 AS reset
+      `.pipe(
+        Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.resetInterruptedDigests")),
+        Effect.map((rows) => rows.length),
       ),
     getDigest: (projectId) =>
       sql<Record<string, unknown>>`
@@ -1168,7 +1229,14 @@ const makeProjectAgentRepository = Effect.gen(function* () {
           eligible_wake AS "eligibleWake", created_at AS "createdAt"
         FROM project_agent_event_inbox
         WHERE project_id = ${input.projectId}
-          AND (${input.afterId ?? null} IS NULL OR inbox_id > ${input.afterId ?? ""})
+          AND (
+            ${input.afterCreatedAt ?? null} IS NULL
+            OR created_at > ${input.afterCreatedAt ?? ""}
+            OR (
+              created_at = ${input.afterCreatedAt ?? ""}
+              AND inbox_id > ${input.afterId ?? ""}
+            )
+          )
         ORDER BY created_at ASC, inbox_id ASC
         LIMIT ${input.limit}
       `.pipe(
@@ -1184,18 +1252,45 @@ const makeProjectAgentRepository = Effect.gen(function* () {
           ),
         ),
       ),
+    getInboxEvent: (input) =>
+      sql<Record<string, unknown>>`
+        SELECT
+          inbox_id AS "id", project_id AS "projectId", source_thread_id AS "sourceThreadId",
+          source_event_id AS "sourceEventId", event_type AS "eventType", task_id AS "taskId",
+          eligible_wake AS "eligibleWake", created_at AS "createdAt"
+        FROM project_agent_event_inbox
+        WHERE project_id = ${input.projectId} AND inbox_id = ${input.inboxId}
+        LIMIT 1
+      `.pipe(
+        Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.getInboxEvent")),
+        Effect.flatMap((rows) =>
+          rows[0]
+            ? Schema.decodeUnknownEffect(ProjectInboxEvent)({
+                ...rows[0],
+                eligibleWake: rows[0].eligibleWake === 1 || rows[0].eligibleWake === true,
+              }).pipe(
+                Effect.map(Option.some),
+                Effect.mapError(toPersistenceDecodeError("ProjectAgentRepository.getInboxEvent")),
+              )
+            : Effect.succeed(Option.none()),
+        ),
+      ),
     getCursor: (projectId) =>
       sql<{
         readonly processedThroughInboxId: string | null;
+        readonly processedThroughCreatedAt: string | null;
         readonly frozenFromInboxId: string | null;
         readonly frozenToInboxId: string | null;
         readonly coordinatorBusy: number;
+        readonly coordinatorBusySince: string | null;
       }>`
         SELECT
           processed_through_inbox_id AS "processedThroughInboxId",
+          processed_through_created_at AS "processedThroughCreatedAt",
           frozen_from_inbox_id AS "frozenFromInboxId",
           frozen_to_inbox_id AS "frozenToInboxId",
-          coordinator_busy AS "coordinatorBusy"
+          coordinator_busy AS "coordinatorBusy",
+          coordinator_busy_since AS "coordinatorBusySince"
         FROM project_agent_cursors
         WHERE project_id = ${projectId}
       `.pipe(
@@ -1204,26 +1299,32 @@ const makeProjectAgentRepository = Effect.gen(function* () {
           const row = rows[0];
           return {
             processedThroughInboxId: row?.processedThroughInboxId ?? null,
+            processedThroughCreatedAt: row?.processedThroughCreatedAt ?? null,
             frozenFromInboxId: row?.frozenFromInboxId ?? null,
             frozenToInboxId: row?.frozenToInboxId ?? null,
             coordinatorBusy: row?.coordinatorBusy === 1,
+            coordinatorBusySince: row?.coordinatorBusySince ?? null,
           };
         }),
       ),
     saveCursor: (input) =>
       sql`
         INSERT INTO project_agent_cursors (
-          project_id, processed_through_inbox_id, frozen_from_inbox_id, frozen_to_inbox_id,
-          coordinator_busy, updated_at
+          project_id, processed_through_inbox_id, processed_through_created_at,
+          frozen_from_inbox_id, frozen_to_inbox_id,
+          coordinator_busy, coordinator_busy_since, updated_at
         ) VALUES (
-          ${input.projectId}, ${input.processedThroughInboxId}, ${input.frozenFromInboxId},
-          ${input.frozenToInboxId}, ${input.coordinatorBusy ? 1 : 0}, ${input.updatedAt}
+          ${input.projectId}, ${input.processedThroughInboxId}, ${input.processedThroughCreatedAt},
+          ${input.frozenFromInboxId}, ${input.frozenToInboxId},
+          ${input.coordinatorBusy ? 1 : 0}, ${input.coordinatorBusySince}, ${input.updatedAt}
         )
         ON CONFLICT (project_id) DO UPDATE SET
           processed_through_inbox_id = excluded.processed_through_inbox_id,
+          processed_through_created_at = excluded.processed_through_created_at,
           frozen_from_inbox_id = excluded.frozen_from_inbox_id,
           frozen_to_inbox_id = excluded.frozen_to_inbox_id,
           coordinator_busy = excluded.coordinator_busy,
+          coordinator_busy_since = excluded.coordinator_busy_since,
           updated_at = excluded.updated_at
       `.pipe(
         Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.saveCursor")),

@@ -62,7 +62,7 @@ describe("project agent principal", () => {
   it("does not treat unmanaged provider threads as the user", () => {
     const unmanaged = {
       kind: "unmanaged" as const,
-      threadId: ThreadId.makeUnsafe("t3"),
+      threadId: ThreadId.makeUnsafe("thread-3"),
       projectId,
     };
     expect(canStartGoal(unmanaged)).toBe(false);

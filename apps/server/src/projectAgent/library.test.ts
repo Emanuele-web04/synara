@@ -21,9 +21,12 @@ import {
   readLibraryPushStatus,
   restoreLibraryEntry,
   withLibraryQueue,
+  withLibraryQueues,
 } from "./libraryGit.ts";
 import {
   assertLibraryRootLocation,
+  createLibraryDirectory,
+  deleteLibraryEntry,
   ensureLibraryRepo,
   listLibraryEntries,
   moveLibraryRoot,
@@ -34,6 +37,8 @@ import {
   resolveLibraryTarget,
   resolveLibraryWriteTarget,
 } from "./libraryStore.ts";
+
+const testProjectId = ProjectId.makeUnsafe("group-library-owner");
 
 const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
   prefix: "synara-library-test-",
@@ -101,7 +106,7 @@ it.layer(TestLayer)("group library", (it) => {
       const git = yield* GitCore;
       const libraryRoot = path.join(root, "library");
 
-      yield* ensureLibraryRepo(git, libraryRoot);
+      yield* ensureLibraryRepo(git, libraryRoot, testProjectId);
 
       const stat = yield* Effect.promise(() => fs.stat(path.join(libraryRoot, ".git")));
       expect(stat.isDirectory()).toBe(true);
@@ -113,7 +118,7 @@ it.layer(TestLayer)("group library", (it) => {
       expect(history[0]?.author).toBe("Synara Library");
 
       // Second call is a no-op: no extra commits.
-      yield* ensureLibraryRepo(git, libraryRoot);
+      yield* ensureLibraryRepo(git, libraryRoot, testProjectId);
       const again = yield* libraryHistory(git, libraryRoot);
       expect(again.length).toBe(1);
     }),
@@ -123,7 +128,7 @@ it.layer(TestLayer)("group library", (it) => {
     Effect.gen(function* () {
       const root = yield* makeTmpDir;
       const git = yield* GitCore;
-      yield* ensureLibraryRepo(git, root);
+      yield* ensureLibraryRepo(git, root, testProjectId);
 
       const target = yield* resolveLibraryWriteTarget(root, "Artifacts/note.md");
       yield* Effect.promise(() => fs.writeFile(target, "hello library", "utf8"));
@@ -145,7 +150,7 @@ it.layer(TestLayer)("group library", (it) => {
     Effect.gen(function* () {
       const root = yield* makeTmpDir;
       const git = yield* GitCore;
-      yield* ensureLibraryRepo(git, root);
+      yield* ensureLibraryRepo(git, root, testProjectId);
 
       const source = yield* resolveLibraryWriteTarget(root, "a.md");
       yield* Effect.promise(() => fs.writeFile(source, "one", "utf8"));
@@ -164,7 +169,7 @@ it.layer(TestLayer)("group library", (it) => {
     Effect.gen(function* () {
       const root = yield* makeTmpDir;
       const git = yield* GitCore;
-      yield* ensureLibraryRepo(git, root);
+      yield* ensureLibraryRepo(git, root, testProjectId);
 
       const target = yield* resolveLibraryWriteTarget(root, "doc.md");
       yield* Effect.promise(() => fs.writeFile(target, "version-one", "utf8"));
@@ -185,7 +190,7 @@ it.layer(TestLayer)("group library", (it) => {
     Effect.gen(function* () {
       const root = yield* makeTmpDir;
       const git = yield* GitCore;
-      yield* ensureLibraryRepo(git, root);
+      yield* ensureLibraryRepo(git, root, testProjectId);
 
       const source = yield* resolveLibraryWriteTarget(root, "a.md");
       yield* Effect.promise(() => fs.writeFile(source, "original", "utf8"));
@@ -212,7 +217,7 @@ it.layer(TestLayer)("group library", (it) => {
       const root = yield* makeTmpDir;
       const git = yield* GitCore;
       const projectId = "project-serial";
-      yield* ensureLibraryRepo(git, root);
+      yield* ensureLibraryRepo(git, root, testProjectId);
 
       const writeAndCommit = (name: string) =>
         withLibraryQueue(
@@ -257,12 +262,12 @@ it.layer(TestLayer)("group library", (it) => {
       const git = yield* GitCore;
       const fromRoot = path.join(base, "old-library");
       const toRoot = path.join(base, "new-library");
-      yield* ensureLibraryRepo(git, fromRoot);
+      yield* ensureLibraryRepo(git, fromRoot, testProjectId);
       const target = yield* resolveLibraryWriteTarget(fromRoot, "keep.md");
       yield* Effect.promise(() => fs.writeFile(target, "kept", "utf8"));
       yield* commitLibraryChange(git, fromRoot, "Add keep.md");
 
-      const result = yield* moveLibraryRoot({ fromRoot, toRoot });
+      const result = yield* moveLibraryRoot({ fromRoot, toRoot, projectId: testProjectId });
       expect(result.moved).toBe(true);
       // Source left intact; history travels with the copy.
       const sourceKept = yield* Effect.promise(() => fs.readFile(target, "utf8"));
@@ -271,13 +276,14 @@ it.layer(TestLayer)("group library", (it) => {
       expect(copiedHistory.map((commit) => commit.message)).toContain("Add keep.md");
 
       // Re-running the move is idempotent now that the destination is a repo.
-      const again = yield* moveLibraryRoot({ fromRoot, toRoot });
+      const again = yield* moveLibraryRoot({ fromRoot, toRoot, projectId: testProjectId });
       expect(again.moved).toBe(true);
 
       // Missing source is a no-op; a non-empty non-repo destination conflicts.
       const missing = yield* moveLibraryRoot({
         fromRoot: path.join(base, "absent"),
         toRoot: path.join(base, "elsewhere"),
+        projectId: testProjectId,
       });
       expect(missing.moved).toBe(false);
       const conflictDest = path.join(base, "conflict-dest");
@@ -286,13 +292,19 @@ it.layer(TestLayer)("group library", (it) => {
           .mkdir(conflictDest, { recursive: true })
           .then(() => fs.writeFile(path.join(conflictDest, "user.txt"), "mine", "utf8")),
       );
-      const conflict = yield* failureOf(moveLibraryRoot({ fromRoot, toRoot: conflictDest }));
+      const conflict = yield* failureOf(
+        moveLibraryRoot({ fromRoot, toRoot: conflictDest, projectId: testProjectId }),
+      );
       expect(conflict).toBeInstanceOf(LibraryError);
       expect(conflict.code).toBe("conflict");
 
       // A destination nested inside the source would copy the tree into itself.
       const nested = yield* failureOf(
-        moveLibraryRoot({ fromRoot, toRoot: path.join(fromRoot, "inner") }),
+        moveLibraryRoot({
+          fromRoot,
+          toRoot: path.join(fromRoot, "inner"),
+          projectId: testProjectId,
+        }),
       );
       expect(nested).toBeInstanceOf(LibraryError);
       expect(nested.code).toBe("invalid");
@@ -303,7 +315,7 @@ it.layer(TestLayer)("group library", (it) => {
     Effect.gen(function* () {
       const root = yield* makeTmpDir;
       const git = yield* GitCore;
-      yield* ensureLibraryRepo(git, root);
+      yield* ensureLibraryRepo(git, root, testProjectId);
       const a = yield* resolveLibraryWriteTarget(root, "a.md");
       const b = yield* resolveLibraryWriteTarget(root, "b.md");
       yield* Effect.promise(() => fs.writeFile(a, "a", "utf8"));
@@ -325,7 +337,7 @@ it.layer(TestLayer)("group library", (it) => {
     Effect.gen(function* () {
       const root = yield* makeTmpDir;
       const git = yield* GitCore;
-      yield* ensureLibraryRepo(git, root);
+      yield* ensureLibraryRepo(git, root, testProjectId);
       const target = yield* resolveLibraryWriteTarget(root, "doc.md");
       yield* Effect.promise(() => fs.writeFile(target, "v1", "utf8"));
       const { commitSha } = yield* commitLibraryChange(git, root, "Add doc.md");
@@ -356,35 +368,38 @@ it.layer(TestLayer)("group library", (it) => {
           return Effect.succeed({ code: 0, stdout: "", stderr: "" });
         },
       } as unknown as GitCoreShape;
-      const projectId = "project-remote-url";
+      const root = yield* makeTmpDir;
+      yield* Effect.promise(() => fs.mkdir(path.join(root, ".git"), { recursive: true }));
 
       // A remote-helper URL would execute on push; it must be rejected before
       // `git remote add` ever runs.
       yield* pushLibraryIfConfigured({
         git,
-        root: "/nonexistent",
-        projectId,
+        root,
         libraryRemoteUrl: 'ext::sh -c "echo pwned"',
         libraryPushOnChange: true,
       });
       expect(executed).toEqual([]);
-      expect(readLibraryPushStatus(projectId).lastPushError).toContain("https://");
+      const rejected = yield* readLibraryPushStatus(root);
+      expect(rejected.lastPushError).toContain("https://");
 
       const leadingOption = "-upload-pack=sh";
       yield* pushLibraryIfConfigured({
         git,
-        root: "/nonexistent",
-        projectId,
+        root,
         libraryRemoteUrl: leadingOption,
         libraryPushOnChange: true,
       });
       expect(executed).toEqual([]);
 
-      // A well-formed https remote reaches `git remote add`.
+      // A well-formed https remote reaches `git remote add`. The earlier
+      // rejections put the push into failure backoff — clear the record first.
+      yield* Effect.promise(() =>
+        fs.rm(path.join(root, ".git", "synara-push-status.json"), { force: true }),
+      );
       yield* pushLibraryIfConfigured({
         git,
-        root: "/nonexistent",
-        projectId,
+        root,
         libraryRemoteUrl: "https://example.com/library.git",
         libraryPushOnChange: true,
       });
@@ -405,6 +420,7 @@ it.layer(TestLayer)("group library", (it) => {
           groupsWorkspaceRoot: groupsRoot,
           studioWorkspaceRoot: studioRoot,
           isCustomPath,
+          projectId: testProjectId,
         });
 
       // Inside a managed root, a fresh empty folder, and a missing path all
@@ -443,21 +459,244 @@ it.layer(TestLayer)("group library", (it) => {
     }),
   );
 
-  it.effect("backfills the marker onto a pre-marker library repository", () =>
+  it.effect("rejects a git repository that lacks the Synara marker", () =>
     Effect.gen(function* () {
       const root = yield* makeTmpDir;
       const git = yield* GitCore;
-      yield* ensureLibraryRepo(git, root);
-      // Libraries created before the marker existed have .git but no marker;
-      // ensureLibraryRepo adopts them and lazily writes the marker.
+      yield* ensureLibraryRepo(git, root, testProjectId);
+      // A .git without our marker is a foreign repository — never adopted at a
+      // caller that did not prove ownership.
       yield* Effect.promise(() => fs.rm(path.join(root, ".synara-library")));
-      yield* ensureLibraryRepo(git, root);
+      const error = yield* failureOf(ensureLibraryRepo(git, root, testProjectId));
+      expect(error).toBeInstanceOf(LibraryError);
+      if (error instanceof LibraryError) {
+        expect(error.code).toBe("forbidden");
+      }
+
+      const foreign = yield* makeTmpDir;
+      yield* Effect.promise(() => fs.mkdir(path.join(foreign, ".git"), { recursive: true }));
+      const foreignError = yield* failureOf(ensureLibraryRepo(git, foreign, testProjectId));
+      expect(foreignError).toBeInstanceOf(LibraryError);
+      if (foreignError instanceof LibraryError) {
+        expect(foreignError.code).toBe("forbidden");
+      }
+    }),
+  );
+
+  it.effect("adopts a pre-marker repository at the managed default root", () =>
+    Effect.gen(function* () {
+      const root = yield* makeTmpDir;
+      const git = yield* GitCore;
+      yield* ensureLibraryRepo(git, root, testProjectId, { isManaged: true });
+      // A library created before the marker existed carries .git but no
+      // .synara-library: at the Synara-owned root it is adopted once, not
+      // forbidden on every request.
+      yield* Effect.promise(() => fs.rm(path.join(root, ".synara-library")));
+      yield* ensureLibraryRepo(git, root, testProjectId, { isManaged: true });
       const marker = yield* Effect.promise(() =>
         fs.readFile(path.join(root, ".synara-library"), "utf8"),
       );
-      expect(marker).toBe("synara-library\n");
-      const history = yield* libraryHistory(git, root);
-      expect(history.length).toBe(1);
+      expect(marker).toBe(`synara-library\n${testProjectId}\n`);
+      // The default location stays open for the adoption: .git at the managed
+      // root is never foreign; the same state at a custom path is refused.
+      const stateDir = path.join(root, "state");
+      yield* assertLibraryRootLocation({
+        root,
+        stateDir,
+        groupsWorkspaceRoot: path.join(root, "groups"),
+        studioWorkspaceRoot: path.join(root, "studio"),
+        isCustomPath: false,
+        projectId: testProjectId,
+      });
+      const foreign = yield* makeTmpDir;
+      yield* Effect.promise(() => fs.mkdir(path.join(foreign, ".git"), { recursive: true }));
+      const customError = yield* failureOf(
+        assertLibraryRootLocation({
+          root: foreign,
+          stateDir,
+          groupsWorkspaceRoot: path.join(root, "groups"),
+          studioWorkspaceRoot: path.join(root, "studio"),
+          isCustomPath: true,
+          projectId: testProjectId,
+        }),
+      );
+      expect(customError).toBeInstanceOf(LibraryError);
+      if (customError instanceof LibraryError) {
+        expect(customError.code).toBe("forbidden");
+      }
+    }),
+  );
+
+  it.effect("refuses a library owned by another group", () =>
+    Effect.gen(function* () {
+      const base = yield* makeTmpDir;
+      const git = yield* GitCore;
+      const stateDir = path.join(base, "state");
+      const otherProjectId = ProjectId.makeUnsafe("group-library-other");
+      const theirs = path.join(base, "theirs");
+      yield* ensureLibraryRepo(git, theirs, otherProjectId);
+      // A marker pinning another project makes the path foreign everywhere:
+      // the location assert, moveLibraryRoot's destination check, and
+      // ensureLibraryRepo itself all refuse it for this group.
+      const locationError = yield* failureOf(
+        assertLibraryRootLocation({
+          root: theirs,
+          stateDir,
+          groupsWorkspaceRoot: path.join(base, "groups"),
+          studioWorkspaceRoot: path.join(base, "studio"),
+          isCustomPath: true,
+          projectId: testProjectId,
+        }),
+      );
+      expect(locationError).toBeInstanceOf(LibraryError);
+      if (locationError instanceof LibraryError) {
+        expect(locationError.code).toBe("forbidden");
+      }
+      const ensureError = yield* failureOf(
+        ensureLibraryRepo(git, theirs, testProjectId, { isManaged: true }),
+      );
+      expect(ensureError).toBeInstanceOf(LibraryError);
+      const moveError = yield* failureOf(
+        moveLibraryRoot({
+          fromRoot: path.join(base, "ours"),
+          toRoot: theirs,
+          projectId: testProjectId,
+        }),
+      );
+      expect(moveError).toBeInstanceOf(LibraryError);
+      if (moveError instanceof LibraryError) {
+        expect(moveError.code).toBe("conflict");
+      }
+      // A custom path resolving inside another group's managed context dir is
+      // refused even before the marker is consulted.
+      const managedAreaError = yield* failureOf(
+        assertLibraryRootLocation({
+          root: path.join(stateDir, "project-context", "other-group", "library"),
+          stateDir,
+          groupsWorkspaceRoot: path.join(base, "groups"),
+          studioWorkspaceRoot: path.join(base, "studio"),
+          isCustomPath: true,
+          projectId: testProjectId,
+        }),
+      );
+      expect(managedAreaError).toBeInstanceOf(LibraryError);
+      if (managedAreaError instanceof LibraryError) {
+        expect(managedAreaError.code).toBe("forbidden");
+      }
+      // Pointing the same group at its own managed library dir stays allowed.
+      yield* Effect.promise(() =>
+        fs.mkdir(path.join(stateDir, "project-context", testProjectId, "library"), {
+          recursive: true,
+        }),
+      );
+      yield* assertLibraryRootLocation({
+        root: path.join(stateDir, "project-context", testProjectId, "library"),
+        stateDir,
+        groupsWorkspaceRoot: path.join(base, "groups"),
+        studioWorkspaceRoot: path.join(base, "studio"),
+        isCustomPath: true,
+        projectId: testProjectId,
+      });
+    }),
+  );
+
+  it.effect("moves to the same canonical root are a no-op, not a deadlock", () =>
+    Effect.gen(function* () {
+      const base = yield* makeTmpDir;
+      const git = yield* GitCore;
+      const fromRoot = path.join(base, "library");
+      yield* ensureLibraryRepo(git, fromRoot, testProjectId);
+      // Same literal path, a trailing-slash variant, and a symlink back to
+      // the current root all resolve to the one library: the move skips the
+      // copy instead of hanging on a second queue acquisition.
+      const aliasLink = path.join(base, "library-alias");
+      yield* Effect.promise(() => fs.symlink(fromRoot, aliasLink, "dir"));
+      for (const toRoot of [fromRoot, `${fromRoot}/`, aliasLink]) {
+        const result = yield* moveLibraryRoot({
+          fromRoot,
+          toRoot,
+          projectId: testProjectId,
+        });
+        expect(result.moved, toRoot).toBe(false);
+      }
+      // The multi-root queue acquisition dedupes aliases onto one lock: the
+      // keyed semaphores are not re-entrant, so taking the same canonical key
+      // twice would hang. Completion inside the suite timeout is the
+      // assertion; a real move across two distinct roots still serializes.
+      const queued = yield* withLibraryQueues(
+        [fromRoot, `${fromRoot}/`, aliasLink],
+        Effect.succeed("ok"),
+      );
+      expect(queued).toBe("ok");
+      const otherRoot = path.join(base, "elsewhere");
+      const order: string[] = [];
+      yield* withLibraryQueues(
+        [otherRoot, fromRoot],
+        Effect.sync(() => {
+          order.push("ran");
+        }),
+      );
+      expect(order).toEqual(["ran"]);
+    }),
+  );
+
+  it.effect("creates empty folders with a hidden .gitkeep that commits", () =>
+    Effect.gen(function* () {
+      const root = yield* makeTmpDir;
+      const git = yield* GitCore;
+      yield* ensureLibraryRepo(git, root, testProjectId);
+
+      const { dir } = yield* createLibraryDirectory(root, "Notes/Inbox");
+      yield* commitLibraryChange(git, root, "Add Notes/Inbox");
+
+      const keep = yield* Effect.promise(() => fs.readFile(path.join(dir, ".gitkeep"), "utf8"));
+      expect(keep).toBe("");
+      const names = yield* Effect.promise(() => fs.readdir(dir));
+      expect(names).toEqual([".gitkeep"]);
+      // .gitkeep is reserved plumbing: hidden from listings, and the folder
+      // itself is tracked by git so it survives clones.
+      const history = yield* libraryHistory(git, root, "Notes/Inbox/.gitkeep");
+      expect(history[0]?.message).toBe("Add Notes/Inbox");
+      const entries = yield* listLibraryEntries(root, "Notes/Inbox");
+      expect(entries).toEqual([]);
+    }),
+  );
+
+  it.effect("deletes a symlink leaf instead of following it", () =>
+    Effect.gen(function* () {
+      const root = yield* makeTmpDir;
+      const git = yield* GitCore;
+      const outside = yield* makeTmpDir;
+      yield* ensureLibraryRepo(git, root, testProjectId);
+      yield* Effect.promise(() => fs.writeFile(path.join(outside, "keep.txt"), "safe", "utf8"));
+      yield* Effect.promise(() => fs.symlink(outside, path.join(root, "link"), "dir"));
+
+      yield* deleteLibraryEntry(root, "link");
+
+      const gone = yield* Effect.promise(() =>
+        fs.lstat(path.join(root, "link")).then(
+          () => false,
+          () => true,
+        ),
+      );
+      expect(gone).toBe(true);
+      const stillThere = yield* Effect.promise(() =>
+        fs.readFile(path.join(outside, "keep.txt"), "utf8"),
+      );
+      expect(stillThere).toBe("safe");
+    }),
+  );
+
+  it.effect("rejects reserved plumbing names on mutations", () =>
+    Effect.gen(function* () {
+      const root = yield* makeTmpDir;
+      for (const reserved of [".gitkeep", ".git/config", ".synara-library"]) {
+        const error = yield* failureOf(resolveLibraryWriteTarget(root, reserved));
+        expect(error).toBeInstanceOf(LibraryError);
+        if (error instanceof LibraryError) {
+          expect(error.code).toBe("forbidden");
+        }
+      }
     }),
   );
 
@@ -465,7 +704,7 @@ it.layer(TestLayer)("group library", (it) => {
     Effect.gen(function* () {
       const root = yield* makeTmpDir;
       const git = yield* GitCore;
-      yield* ensureLibraryRepo(git, root);
+      yield* ensureLibraryRepo(git, root, testProjectId);
       const file = yield* resolveLibraryWriteTarget(root, "zeta.md");
       yield* Effect.promise(() => fs.writeFile(file, "z", "utf8"));
       const nested = yield* resolveLibraryWriteTarget(root, "Alpha/inner.md");

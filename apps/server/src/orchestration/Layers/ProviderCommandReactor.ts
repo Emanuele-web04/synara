@@ -2228,8 +2228,9 @@ const make = Effect.gen(function* () {
       return;
     }
     const projectContext = yield* Effect.gen(function* () {
-      const projectAgent = yield* ProjectAgentService;
-      return yield* projectAgent.formatContextPacketForTurn(input.threadId);
+      const projectAgent = yield* Effect.serviceOption(ProjectAgentService);
+      if (Option.isNone(projectAgent)) return "";
+      return yield* projectAgent.value.formatContextPacketForTurn(input.threadId);
     }).pipe(Effect.catch(() => Effect.succeed("")));
     const debugPromptOverheadChars = debugModePromptOverheadChars(input.interactionMode);
     const goalPromptOverheadChars = providerGoalPromptOverheadChars(activeThreadGoal(thread));

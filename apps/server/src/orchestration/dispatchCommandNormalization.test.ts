@@ -258,6 +258,134 @@ describe("makeDispatchCommandNormalizer", () => {
     expect(preparedRoots).toEqual(["/Users/tester/Documents/Synara/Groups/alpha-bot"]);
   });
 
+  it("allocates a unique group folder when the slug is already taken", async () => {
+    const groupsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "synara-groups-"));
+    const takenDir = path.join(groupsRoot, "alpha-bot");
+    fs.mkdirSync(takenDir, { recursive: true });
+    const fileSystem = {
+      readDirectory: (dir: string) =>
+        Effect.try({
+          try: () => fs.readdirSync(dir) as ReadonlyArray<string>,
+          catch: () => new Error("readDirectory failed"),
+        }),
+    } as unknown as FileSystem.FileSystem;
+    const normalizer = makeDispatchCommandNormalizer<Error>({
+      attachmentsDir: "/tmp/attachments",
+      groupsWorkspaceRoot: groupsRoot,
+      fileSystem,
+      path: path as unknown as Path.Path,
+      canonicalizeProjectWorkspaceRoot: (workspaceRoot) => Effect.succeed(workspaceRoot),
+      listGroupWorkspaceRoots: () => Effect.succeed([]),
+    });
+
+    try {
+      const result = await Effect.runPromise(
+        normalizer({
+          command: projectCreateCommand({
+            kind: "group",
+            title: "Alpha Bot",
+            workspaceRoot: "/tmp/ignored",
+          }),
+        }),
+      );
+
+      expect(result.command.type).toBe("project.create");
+      if (result.command.type === "project.create") {
+        expect(result.command.workspaceRoot).toBe(path.join(groupsRoot, "alpha-bot-2"));
+      }
+    } finally {
+      fs.rmSync(groupsRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("skips the folder claimed by another group project in the read model", async () => {
+    const groupsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "synara-groups-"));
+    const takenDir = path.join(groupsRoot, "alpha-bot");
+    const normalizer = makeDispatchCommandNormalizer<Error>({
+      attachmentsDir: "/tmp/attachments",
+      groupsWorkspaceRoot: groupsRoot,
+      fileSystem: {} as FileSystem.FileSystem,
+      path: path as unknown as Path.Path,
+      canonicalizeProjectWorkspaceRoot: (workspaceRoot) => Effect.succeed(workspaceRoot),
+      listGroupWorkspaceRoots: () =>
+        Effect.succeed([
+          {
+            projectId: ProjectId.makeUnsafe("project-other-group"),
+            workspaceRoot: takenDir,
+          },
+        ]),
+    });
+
+    try {
+      const result = await Effect.runPromise(
+        normalizer({
+          command: projectCreateCommand({
+            kind: "group",
+            projectId: ProjectId.makeUnsafe("project-new-group"),
+            title: "Alpha Bot",
+            workspaceRoot: "/tmp/ignored",
+          }),
+        }),
+      );
+
+      expect(result.command.type).toBe("project.create");
+      if (result.command.type === "project.create") {
+        expect(result.command.workspaceRoot).toBe(path.join(groupsRoot, "alpha-bot-2"));
+      }
+    } finally {
+      fs.rmSync(groupsRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the group's own folder on meta.update instead of bumping to a suffix", async () => {
+    const groupsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "synara-groups-"));
+    const ownDir = path.join(groupsRoot, "alpha-bot");
+    fs.mkdirSync(ownDir, { recursive: true });
+    const fileSystem = {
+      readDirectory: (dir: string) =>
+        Effect.try({
+          try: () => fs.readdirSync(dir) as ReadonlyArray<string>,
+          catch: () => new Error("readDirectory failed"),
+        }),
+    } as unknown as FileSystem.FileSystem;
+    const normalizer = makeDispatchCommandNormalizer<Error>({
+      attachmentsDir: "/tmp/attachments",
+      groupsWorkspaceRoot: groupsRoot,
+      fileSystem,
+      path: path as unknown as Path.Path,
+      canonicalizeProjectWorkspaceRoot: (workspaceRoot) => Effect.succeed(workspaceRoot),
+      listGroupWorkspaceRoots: () =>
+        Effect.succeed([
+          {
+            projectId: ProjectId.makeUnsafe("project-alpha"),
+            workspaceRoot: ownDir,
+          },
+        ]),
+    });
+
+    try {
+      const result = await Effect.runPromise(
+        normalizer({
+          command: {
+            type: "project.meta.update",
+            commandId: CommandId.makeUnsafe("cmd-meta-update"),
+            projectId: ProjectId.makeUnsafe("project-alpha"),
+            kind: "group",
+            title: "Alpha Bot",
+            workspaceRoot: ownDir,
+          } satisfies Extract<ClientOrchestrationCommand, { type: "project.meta.update" }>,
+        }),
+      );
+
+      expect(result.command.type).toBe("project.meta.update");
+      if (result.command.type === "project.meta.update") {
+        expect(result.command.workspaceRoot).toBe(ownDir);
+      }
+    } finally {
+      fs.rmSync(groupsRoot, { recursive: true, force: true });
+    }
+  });
+
   it("defers binary attachment authority to the transactional managed ledger", async () => {
     const attachmentsDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-dispatch-normalize-"));
     const validId = "thread-rollback-attachments-11111111-1111-4111-8111-111111111111";
