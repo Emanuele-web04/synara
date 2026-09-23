@@ -7,18 +7,27 @@ import {
 
 export interface ProviderDetection {
   readonly detecting: boolean;
+  readonly failed: boolean;
   readonly detect: (options?: RefreshProviderStatusesOptions) => Promise<void>;
 }
 
 export function useProviderDetection(): ProviderDetection {
   const refreshProviderStatuses = useRefreshProviderStatusesNow();
   const [pendingProbes, setPendingProbes] = useState(0);
+  const [failed, setFailed] = useState(false);
+  const hasSuccessfulResultRef = useRef(false);
 
   const detect = useCallback(
     async (options?: RefreshProviderStatusesOptions) => {
       setPendingProbes((count) => count + 1);
       try {
-        await refreshProviderStatuses(options);
+        const statuses = await refreshProviderStatuses(options);
+        if (statuses !== null) {
+          hasSuccessfulResultRef.current = true;
+          setFailed(false);
+        } else if (!hasSuccessfulResultRef.current) {
+          setFailed(true);
+        }
       } finally {
         setPendingProbes((count) => count - 1);
       }
@@ -33,5 +42,5 @@ export function useProviderDetection(): ProviderDetection {
     void detect({ silent: true });
   }, [detect]);
 
-  return { detecting: pendingProbes > 0, detect };
+  return { detecting: pendingProbes > 0, failed, detect };
 }

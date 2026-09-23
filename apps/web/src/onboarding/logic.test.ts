@@ -204,6 +204,19 @@ describe("classifyProviderSetup", () => {
     );
   });
 
+  it("keeps a missing provider unknown if detection fails", () => {
+    expect(classifyProviderSetup({ status: null, disabled: false, detectionFailed: true })).toBe(
+      "check-failed",
+    );
+    expect(
+      classifyProviderSetup({
+        status: { available: false, authStatus: "unknown" },
+        disabled: false,
+        detectionFailed: true,
+      }),
+    ).toBe("not-installed");
+  });
+
   it("only asks for sign-in when auth is known to be missing", () => {
     expect(
       classifyProviderSetup({
@@ -234,9 +247,17 @@ describe("summarizeProviderSetup", () => {
         { provider: "claudeAgent", state: "needs-sign-in" },
         { provider: "cursor", state: "not-installed" },
         { provider: "opencode", state: "detecting" },
+        { provider: "grok", state: "check-failed" },
         { provider: "pi", state: "disabled" },
       ]),
-    ).toEqual({ enabled: 4, connected: 1, needsSignIn: 1, notInstalled: 1, detecting: 1 });
+    ).toEqual({
+      enabled: 5,
+      connected: 1,
+      needsSignIn: 1,
+      notInstalled: 1,
+      detecting: 1,
+      checkFailed: 1,
+    });
   });
 });
 

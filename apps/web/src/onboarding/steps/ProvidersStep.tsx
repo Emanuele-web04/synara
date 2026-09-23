@@ -36,6 +36,7 @@ const STATE_PRESENTATION: Record<ProviderSetupState, { label: string; dotClassNa
   "needs-sign-in": { label: "Needs sign-in", dotClassName: "bg-warning" },
   "not-installed": { label: "Not installed", dotClassName: "bg-muted-foreground/40" },
   detecting: { label: "Detecting", dotClassName: "bg-muted-foreground/40" },
+  "check-failed": { label: "Could not check", dotClassName: "bg-warning" },
   disabled: { label: "Disabled", dotClassName: "bg-muted-foreground/40" },
 };
 
@@ -133,6 +134,7 @@ export function ProvidersStep(props: { readonly detection: ProviderDetection }) 
       status,
       disabled: disabledSet.has(descriptor.kind),
       detecting: detection.detecting,
+      detectionFailed: detection.failed,
     });
     return { descriptor, status, state };
   });
@@ -253,6 +255,8 @@ export function ProvidersStep(props: { readonly detection: ProviderDetection }) 
         <span aria-live="polite">
           {summary.detecting > 0 ? (
             "Detecting agents on this machine…"
+          ) : summary.checkFailed > 0 ? (
+            "Couldn't check all agents. Try Re-detect."
           ) : (
             <>
               {summary.connected} connected · {summary.needsSignIn} need sign-in ·{" "}

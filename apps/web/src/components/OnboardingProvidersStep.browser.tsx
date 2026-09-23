@@ -75,7 +75,7 @@ it("does not report agents as not installed while the first probe is running", a
     .toBeVisible();
 });
 
-it("reports missing agents as not installed once detection fails", async () => {
+it("leaves missing agents unknown after a timeout and recovers on retry", async () => {
   const pendingRefreshes: Array<(error: Error) => void> = [];
   mocks.refreshProviders.mockImplementation(
     () => new Promise((_resolve, reject) => pendingRefreshes.push(reject)),
@@ -86,7 +86,13 @@ it("reports missing agents as not installed once detection fails", async () => {
 
   for (const reject of pendingRefreshes) reject(new Error("WebSocket RPC timed out"));
 
+  await expect.element(page.getByText("Couldn't check all agents. Try Re-detect.")).toBeVisible();
+  expect(page.getByText("Not installed").elements()).toHaveLength(0);
+
+  mocks.refreshProviders.mockResolvedValue({ providers: [codexStatus] });
+  await page.getByRole("button", { name: "Re-detect" }).click();
+  await expect.element(page.getByText("Connected", { exact: true })).toBeVisible();
   await expect
-    .element(page.getByText("0 connected · 0 need sign-in · 9 not installed"))
+    .element(page.getByText("1 connected · 0 need sign-in · 8 not installed"))
     .toBeVisible();
 });
