@@ -182,6 +182,9 @@ describe("redactDiagnosticText", () => {
     // Long alphanumeric runs used to drive the sensitive-key pattern into
     // quadratic backtracking.
     const input = `password: hunter2 ${"a".repeat(64 * 1024)}`;
+    // Warm the regex JIT first: a cold first call on a slow CI runner measures
+    // compilation, not the linear-vs-quadratic behavior this test guards.
+    redact(input);
     const started = performance.now();
     const out = redact(input);
     const elapsed = performance.now() - started;
