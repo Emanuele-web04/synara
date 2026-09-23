@@ -13452,7 +13452,6 @@ describe("ProviderCommandReactor", () => {
         commandId: CommandId.makeUnsafe("cmd-meta-deferred-claude"),
         threadId: ThreadId.makeUnsafe("thread-1"),
         modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
-        createdAt: now,
       }),
     );
     await new Promise((resolve) => setTimeout(resolve, 120));

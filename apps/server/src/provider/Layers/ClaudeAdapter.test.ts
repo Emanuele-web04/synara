@@ -877,6 +877,7 @@ describe("ClaudeAdapterLive", () => {
               {
                 signal: new AbortController().signal,
                 toolUseID: `tool-use-synara-${index}`,
+                requestId: `request-synara-${index}`,
               },
             ),
           )) as PermissionResult;
@@ -898,6 +899,9 @@ describe("ClaudeAdapterLive", () => {
         ).pipe(Stream.runHead);
         if (requested._tag !== "Some" || requested.value.type !== "request.opened") {
           return assert.fail("Bash must still open an approval request.");
+        }
+        if (!requested.value.requestId) {
+          return assert.fail("The approval request must carry a request id.");
         }
         yield* adapter.respondToRequest(
           THREAD_ID,
@@ -945,6 +949,9 @@ describe("ClaudeAdapterLive", () => {
       ).pipe(Stream.runHead);
       if (requested._tag !== "Some" || requested.value.type !== "request.opened") {
         return assert.fail("A non-opted-in session must still ask for gateway tools.");
+      }
+      if (!requested.value.requestId) {
+        return assert.fail("The approval request must carry a request id.");
       }
       yield* adapter.respondToRequest(
         THREAD_ID,

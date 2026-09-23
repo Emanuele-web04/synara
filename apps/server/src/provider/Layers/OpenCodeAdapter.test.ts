@@ -86,6 +86,7 @@ describe("OpenCode permission policy", () => {
       computerControlEnabled: false,
       autoApproveSynaraTools: true,
       gatewaySessionActive: true,
+      metadata: {} as const,
     };
 
     expect(
