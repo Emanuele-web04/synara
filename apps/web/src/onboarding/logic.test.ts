@@ -188,6 +188,22 @@ describe("classifyProviderSetup", () => {
     ).toBe("not-installed");
   });
 
+  it("waits for an in-flight probe before calling a provider without status not installed", () => {
+    expect(classifyProviderSetup({ status: null, disabled: false, detecting: true })).toBe(
+      "detecting",
+    );
+    expect(
+      classifyProviderSetup({
+        status: { available: false, authStatus: "unknown" },
+        disabled: false,
+        detecting: true,
+      }),
+    ).toBe("not-installed");
+    expect(classifyProviderSetup({ status: null, disabled: true, detecting: true })).toBe(
+      "disabled",
+    );
+  });
+
   it("only asks for sign-in when auth is known to be missing", () => {
     expect(
       classifyProviderSetup({
@@ -217,9 +233,10 @@ describe("summarizeProviderSetup", () => {
         { provider: "codex", state: "connected" },
         { provider: "claudeAgent", state: "needs-sign-in" },
         { provider: "cursor", state: "not-installed" },
+        { provider: "opencode", state: "detecting" },
         { provider: "pi", state: "disabled" },
       ]),
-    ).toEqual({ enabled: 3, connected: 1, needsSignIn: 1, notInstalled: 1 });
+    ).toEqual({ enabled: 4, connected: 1, needsSignIn: 1, notInstalled: 1, detecting: 1 });
   });
 });
 

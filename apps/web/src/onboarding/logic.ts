@@ -126,13 +126,24 @@ export function resolveOnboardingCompletionToReconcile(
   return input.projectCount > 0 ? input.now : null;
 }
 
-export type ProviderSetupState = "connected" | "needs-sign-in" | "not-installed" | "disabled";
+export type ProviderSetupState =
+  | "connected"
+  | "needs-sign-in"
+  | "not-installed"
+  | "detecting"
+  | "disabled";
 
 export function classifyProviderSetup(input: {
   readonly status: Pick<ServerProviderStatus, "available" | "authStatus"> | null | undefined;
   readonly disabled: boolean;
+  /**
+   * A detection probe is in flight. A fresh install has no cached statuses, so a missing
+   * status only means "not installed" once that probe has settled.
+   */
+  readonly detecting?: boolean;
 }): ProviderSetupState {
   if (input.disabled) return "disabled";
+  if (!input.status && input.detecting) return "detecting";
   if (!input.status || !input.status.available) return "not-installed";
   // Providers whose auth is not probed report "unknown"; treat a detected binary as
   // usable rather than nagging for a sign-in Synara cannot verify.
@@ -144,6 +155,7 @@ export interface ProviderSetupSummary {
   readonly connected: number;
   readonly needsSignIn: number;
   readonly notInstalled: number;
+  readonly detecting: number;
 }
 
 export function summarizeProviderSetup(
@@ -153,13 +165,15 @@ export function summarizeProviderSetup(
   let connected = 0;
   let needsSignIn = 0;
   let notInstalled = 0;
+  let detecting = 0;
   for (const entry of states) {
     if (entry.state !== "disabled") enabled += 1;
     if (entry.state === "connected") connected += 1;
     if (entry.state === "needs-sign-in") needsSignIn += 1;
     if (entry.state === "not-installed") notInstalled += 1;
+    if (entry.state === "detecting") detecting += 1;
   }
-  return { enabled, connected, needsSignIn, notInstalled };
+  return { enabled, connected, needsSignIn, notInstalled, detecting };
 }
 
 export function toggleSelection<T>(selection: ReadonlySet<T>, id: T): ReadonlySet<T> {

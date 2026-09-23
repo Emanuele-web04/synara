@@ -43,6 +43,7 @@ import { ProjectStep, type OnboardingProjectResult } from "./steps/ProjectStep";
 import { ProvidersStep } from "./steps/ProvidersStep";
 import { ThemeStep } from "./steps/ThemeStep";
 import { WelcomeStep } from "./steps/WelcomeStep";
+import { useProviderDetection } from "./useProviderDetection";
 
 const STEP_TITLES: Record<OnboardingStep, string> = {
   welcome: `Welcome to ${APP_BASE_NAME}`,
@@ -79,6 +80,8 @@ function OnboardingFlow(props: {
   const [projectResults, setProjectResults] = useState<ReadonlyArray<OnboardingProjectResult>>([]);
   const { settings } = useAppSettings();
   const statuses = useProviderStatusesForLocalConfig();
+  // Starts on the welcome step so the agents step rarely has to wait for results.
+  const providerDetection = useProviderDetection();
   const { activeTheme } = useTheme();
 
   const goBack = () => setStep(previousOnboardingStep(step));
@@ -171,7 +174,7 @@ function OnboardingFlow(props: {
       >
         {step === "welcome" ? <WelcomeStep /> : null}
         {step === "tour" ? <FeatureTourStep /> : null}
-        {step === "providers" ? <ProvidersStep /> : null}
+        {step === "providers" ? <ProvidersStep detection={providerDetection} /> : null}
         {step === "theme" ? <ThemeStep /> : null}
         {step === "project" ? (
           <ProjectStep
