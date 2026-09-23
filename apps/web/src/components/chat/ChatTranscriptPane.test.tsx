@@ -103,4 +103,27 @@ describe("ChatTranscriptPane", () => {
     expect(markup).not.toContain('data-testid="thread-find-bar"');
     expect(markup).not.toContain("absolute right-2 top-2");
   });
+
+  it("renders a stored thread error as an inline overlay that never displaces the transcript", () => {
+    const markup = renderTranscriptPaneMarkup({
+      threadError: "Provider adapter request failed (grok): connect ETIMEDOUT",
+      onDismissThreadError: () => {},
+    });
+
+    expect(markup).toContain("Provider adapter request failed (grok): connect ETIMEDOUT");
+    expect(markup).toContain('role="alert"');
+    // The banner rides the same absolute-overlay pattern as the scroll button —
+    // it must not re-enter normal flow above the transcript.
+    expect(markup).toContain("pointer-events-none absolute inset-x-0 top-2");
+    // ...but the banner itself must re-enable pointer input or its
+    // dismiss/unblock buttons are dead to real clicks.
+    expect(markup).toContain("pointer-events-auto");
+    expect(markup).not.toContain("Unblock thread");
+  });
+
+  it("keeps the transcript clean when no thread error is stored", () => {
+    const markup = renderTranscriptPaneMarkup({ threadError: null });
+
+    expect(markup).not.toContain('role="alert"');
+  });
 });

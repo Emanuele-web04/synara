@@ -109,7 +109,10 @@ import {
 
 import { buildClaudeMcpServers } from "../../agentGateway/mcpInjection.ts";
 import { renderSynaraHarnessPolicy } from "../../agentGateway/harnessPolicy.ts";
-import { shouldAllowSynaraComputerProviderTool } from "../../agentGateway/computerToolPermission.ts";
+import {
+  isSynaraGatewayToolName,
+  shouldAllowSynaraComputerProviderTool,
+} from "../../agentGateway/computerToolPermission.ts";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import { PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY } from "../Services/ProviderAdapter.ts";
 import {
@@ -5626,6 +5629,21 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                   runtimeMode,
                   permission: { name: toolName },
                 })
+              ) {
+                return {
+                  behavior: "allow",
+                  updatedInput: toolInput,
+                } satisfies PermissionResult;
+              }
+              // A group coordinator (and any other gateway-only principal the
+              // orchestrator trusts) must not stall its turn on interactive
+              // approval for its own Synara group tools — the gateway already
+              // scopes and authorizes them server-side. File edits, shell, and
+              // every non-Synara tool keep the ordinary permission path.
+              if (
+                input.autoApproveSynaraTools === true &&
+                context.gatewaySessionLease !== undefined &&
+                isSynaraGatewayToolName(toolName)
               ) {
                 return {
                   behavior: "allow",

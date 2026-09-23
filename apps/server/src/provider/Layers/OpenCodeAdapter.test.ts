@@ -77,6 +77,49 @@ describe("OpenCode permission policy", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("approves Synara group tools once when the session opted in behind a live gateway lease", () => {
+    const base = {
+      runtimeMode: "approval-required" as const,
+      interactionMode: "default" as const,
+      activeTurn: true,
+      computerControlEnabled: false,
+      autoApproveSynaraTools: true,
+      gatewaySessionActive: true,
+      metadata: {} as const,
+    };
+
+    expect(
+      resolveOpenCodePermissionPolicyReply({
+        ...base,
+        permission: "mcp__synara__synara_create_thread",
+      }),
+    ).toBe("once");
+    expect(
+      resolveOpenCodePermissionPolicyReply({
+        ...base,
+        permission: "synara_project_link_repository",
+      }),
+    ).toBe("once");
+    // File edits and shell still ask in approval-required mode.
+    expect(resolveOpenCodePermissionPolicyReply({ ...base, permission: "edit" })).toBeUndefined();
+    expect(resolveOpenCodePermissionPolicyReply({ ...base, permission: "bash" })).toBeUndefined();
+    // The flag is inert without a live gateway session and when not opted in.
+    expect(
+      resolveOpenCodePermissionPolicyReply({
+        ...base,
+        gatewaySessionActive: false,
+        permission: "mcp__synara__synara_create_thread",
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveOpenCodePermissionPolicyReply({
+        ...base,
+        autoApproveSynaraTools: false,
+        permission: "mcp__synara__synara_create_thread",
+      }),
+    ).toBeUndefined();
+  });
 });
 
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);

@@ -4774,23 +4774,29 @@ export default function ChatView({
     if (!activeThread) return;
     setThreadError(activeThread.id, null);
   }, [activeThread, setThreadError]);
+  const dismissThreadError = useCallback(
+    (errorThreadId: ThreadId) => {
+      setThreadError(errorThreadId, null);
+    },
+    [setThreadError],
+  );
   const clearThreadErrorAfterUnblock = useCallback(
     (unblockedThreadId: ThreadId) => {
       setThreadError(unblockedThreadId, null);
     },
     [setThreadError],
   );
-  const { unblockThread: unblockActiveThread, unblocking: unblockingActiveThread } =
-    useThreadUnblock({
-      threadId: activeThread?.id ?? null,
-      onUnblocked: clearThreadErrorAfterUnblock,
-    });
+  const { unblockThread, unblockingThreadId } = useThreadUnblock({
+    threadId: activeThread?.id ?? null,
+    onUnblocked: clearThreadErrorAfterUnblock,
+  });
+  const unblockingActiveThread =
+    activeThread !== undefined && unblockingThreadId === activeThread.id;
   useThreadErrorToast({
     threadId: activeThread?.id ?? null,
-    error: activeThread?.error ?? null,
-    onDismiss: dismissActiveThreadError,
-    onUnblock: unblockActiveThread,
-    unblocking: unblockingActiveThread,
+    onDismiss: dismissThreadError,
+    onUnblock: unblockThread,
+    unblockingThreadId,
   });
   const dismissActiveProviderHealthBanner = useCallback(() => {
     if (!activeProviderHealthBannerDismissalKey) return;
@@ -5963,8 +5969,10 @@ export default function ChatView({
         />
       ) : null}
 
-      {/* Thread-level errors render as a toast (see `useThreadErrorToast`) so they
-          never displace the transcript. */}
+      {/* Thread-level errors surface inline over the transcript (see
+          `ThreadErrorBanner`) so they never displace it; a toast only fires
+          for a live error on a thread that is not currently visible (see
+          `useThreadErrorToast`). */}
       <ProviderHealthBanner
         status={shouldShowProviderHealthBanner ? visibleActiveProviderStatus : null}
         onDismiss={dismissActiveProviderHealthBanner}
@@ -6116,6 +6124,10 @@ export default function ChatView({
                     messageChangeSignal={timelineMessages}
                     turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
                     conversationOnly={isCoordinatorConversation}
+                    threadError={activeThread?.error ?? null}
+                    unblockingThread={unblockingActiveThread}
+                    onDismissThreadError={dismissActiveThreadError}
+                    onUnblockThread={unblockThread}
                     onOpenTurnDiff={onOpenTurnDiff}
                     onOpenThread={onNavigateToThread}
                     onOpenAutomation={onOpenAutomation}

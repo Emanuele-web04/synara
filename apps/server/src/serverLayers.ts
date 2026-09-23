@@ -126,6 +126,8 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(TextGenerationLayerLive),
     Layer.provideMerge(GitCoreLive),
     Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(ServerSettingsLive),
+    Layer.provideMerge(providerHealthLayer),
   );
   const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
@@ -137,6 +139,10 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(ServerSettingsLive),
     Layer.provideMerge(AgentGatewayOperationRepositoryLive),
     Layer.provideMerge(projectAgentServiceLayer),
+    // Persistence-level only: the reactor must recognize coordinator threads to
+    // pre-approve Synara group tools — the same first lookup the project agent
+    // service's principal resolver performs, without going through the service.
+    Layer.provideMerge(ProjectAgentRepositoryLive),
   );
   const checkpointReactorLayer = CheckpointReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),

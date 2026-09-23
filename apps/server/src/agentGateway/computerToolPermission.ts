@@ -1,4 +1,8 @@
-import type { ProviderInteractionMode, RuntimeMode } from "@synara/contracts";
+import {
+  BROWSER_TOOL_NAMES,
+  type ProviderInteractionMode,
+  type RuntimeMode,
+} from "@synara/contracts";
 
 /** Exact tool names owned by Synara's capability-gated Computer gateway. */
 export const SYNARA_COMPUTER_TOOL_NAMES = [
@@ -158,6 +162,141 @@ export function computerToolNameFromProviderPermission(input: {
   if (metadataToolName !== undefined) return qualifiedSynaraComputerToolName(metadataToolName);
 
   return qualifiedSynaraComputerToolName(input.title);
+}
+
+/**
+ * The `synara_*` catalog served by Synara's agent gateway: thread read/write,
+ * project agent, automation, diagnostics, and review tools. Kept exact — a
+ * look-alike MCP server (`synara_fs`, `synara_tools`) must never inherit the
+ * auto-approve path the reserved `synara` server gets.
+ */
+const SYNARA_GATEWAY_OWNED_TOOL_NAMES = [
+  // Thread read tools (threadReadTools.ts)
+  "synara_context",
+  "synara_capabilities",
+  "synara_list_projects",
+  "synara_list_threads",
+  "synara_read_thread",
+  "synara_wait_for_threads",
+  // Thread write tools (Layers/AgentGateway.ts)
+  "synara_create_threads",
+  "synara_create_thread",
+  "synara_send_message",
+  "synara_interrupt_thread",
+  "synara_set_thread_title",
+  "synara_set_thread_pull_request",
+  "synara_set_thread_archived",
+  "synara_set_thread_goal",
+  // Thread diagnostics (threadDiagnosticTools.ts)
+  "synara_read_thread_activity",
+  "synara_diagnose_thread",
+  "synara_read_thread_events",
+  "synara_read_thread_runtime_events",
+  // Automations (automationTools.ts)
+  "synara_create_automation",
+  "synara_list_automations",
+  "synara_view_automation",
+  "synara_update_automation",
+  "synara_update_automation_memory",
+  "synara_cancel_automation",
+  "synara_report_automation_result",
+  // Project agent tools (projectAgentTools.ts)
+  "synara_project_context",
+  "synara_project_forget",
+  "synara_project_get_overview",
+  "synara_project_library_add",
+  "synara_project_library_list",
+  "synara_project_link_repository",
+  "synara_project_list_tasks",
+  "synara_project_list_threads",
+  "synara_project_read_document",
+  "synara_project_remember",
+  "synara_project_report_result",
+  "synara_project_write_document",
+  // Browser review tool (browserTools.ts)
+  "synara_e2e_review",
+  // Capability-gated device tools (deviceTools.ts — not in contracts)
+  "device_boot",
+  "device_describe_ui",
+  "device_install",
+  "device_launch",
+  "device_list",
+  "device_open_url",
+  "device_press_button",
+  "device_screenshot",
+  "device_scroll_to_element",
+  "device_swipe",
+  "device_tap",
+  "device_type",
+] as const;
+
+/** Every tool name the agent gateway serves, from the shared catalogs. */
+const SYNARA_GATEWAY_TOOL_NAME_SET: ReadonlySet<string> = new Set<string>([
+  ...SYNARA_GATEWAY_OWNED_TOOL_NAMES,
+  ...SYNARA_COMPUTER_TOOL_NAMES,
+  ...BROWSER_TOOL_NAMES,
+]);
+
+const SYNARA_MCP_QUALIFIED_PREFIX = "mcp__synara__";
+const SYNARA_MCP_SERVER_PREFIX = "synara_";
+
+/**
+ * Any tool Synara's agent gateway serves under its reserved MCP server name —
+ * the whole gateway catalog (thread, project, automation, diagnostics,
+ * computer, browser, device). The session token is what authorizes each call
+ * server-side, so providers that were granted the gateway may let these names
+ * skip their own interactive permission prompt when the start input opts in
+ * (`ProviderSessionStartInput.autoApproveSynaraTools`).
+ *
+ * Providers report MCP calls two ways, and both must pin the server identity:
+ * Claude-style `mcp__synara__<tool>` matches on the exact `mcp__synara__`
+ * prefix (a `synara_fs` server produces `mcp__synara_fs__*`, which fails it);
+ * `<server>_<tool>` reports like OpenCode's `synara_computer_click` match only
+ * when the name — or the part after the `synara_` server prefix — is in the
+ * served catalog. A bare `synara_*` catalog name (`synara_list_threads`) also
+ * matches because the name itself carries the namespace; capability families
+ * (`computer_*`, `browser_*`, `device_*`) must arrive server-qualified.
+ * Everything else keeps the ordinary permission path.
+ */
+export function isSynaraGatewayToolName(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  const normalized = value.trim().toLowerCase();
+  if (normalized.startsWith(SYNARA_MCP_QUALIFIED_PREFIX)) return true;
+  if (SYNARA_GATEWAY_TOOL_NAME_SET.has(normalized)) {
+    return normalized.startsWith(SYNARA_MCP_SERVER_PREFIX);
+  }
+  return (
+    normalized.startsWith(SYNARA_MCP_SERVER_PREFIX) &&
+    SYNARA_GATEWAY_TOOL_NAME_SET.has(normalized.slice(SYNARA_MCP_SERVER_PREFIX.length))
+  );
+}
+
+/**
+ * Namespace-insensitive matcher across the fields a provider permission
+ * prompt may report a tool name through — the direct name, or a tool-name
+ * field nested in raw input / metadata the way some adapters deliver MCP
+ * calls.
+ */
+export function isSynaraGatewayToolCall(input: {
+  readonly name?: unknown;
+  readonly title?: unknown;
+  readonly rawInput?: unknown;
+  readonly metadata?: unknown;
+}): boolean {
+  const explicitName = typeof input.name === "string" ? input.name : undefined;
+  if (explicitName !== undefined) return isSynaraGatewayToolName(explicitName);
+
+  const rawToolName = firstRecordString(input.rawInput, ["_toolName", "toolName", "tool_name"]);
+  if (rawToolName !== undefined) return isSynaraGatewayToolName(rawToolName);
+
+  const metadataToolName = firstRecordString(input.metadata, [
+    "_toolName",
+    "toolName",
+    "tool_name",
+  ]);
+  if (metadataToolName !== undefined) return isSynaraGatewayToolName(metadataToolName);
+
+  return isSynaraGatewayToolName(input.title);
 }
 
 /**
