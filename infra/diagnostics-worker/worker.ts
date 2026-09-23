@@ -21,6 +21,10 @@ export interface Env {
   /** Absent when the bucket cannot be provisioned; /v1/crash returns 503. */
   CRASH_DUMPS?: R2Bucket;
   ASSETS: Fetcher;
+  /** Per-IP rate limit for ingest endpoints (120 req / 60 s). */
+  INGEST_RATE_LIMITER?: RateLimit;
+  /** Per-IP rate limit for the dashboard login (10 req / 60 s). */
+  LOGIN_RATE_LIMITER?: RateLimit;
   DASHBOARD_PASSWORD?: string;
   DASHBOARD_SESSION_KEY?: string;
   /** Optional shared ingest secret; required when set (Authorization: Bearer). */
@@ -47,6 +51,12 @@ const MAX_EVENTS_PER_POST = 400;
 const MESSAGE_MAX = 1024;
 const STACK_MAX = 8 * 1024;
 const LOG_TAIL_MAX = 16 * 1024;
+const LOGIN_BODY_MAX_BYTES = 4 * 1024;
+// Multipart framing around the dump itself; the body cap is dump cap + this.
+const MULTIPART_OVERHEAD_BYTES = 256 * 1024;
+// Client timestamps this far ahead are clock skew, not data.
+const MAX_EVENT_FUTURE_MS = 24 * 60 * 60 * 1000;
+const MAX_EVENT_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const VERSION_PATTERN = /^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SESSION_COOKIE = "synara_beta_dash";
@@ -62,6 +72,8 @@ function isFiniteNumber(value: unknown): value is number {
 }
 
 interface NormalizedEvent {
+  /** Client-generated event id; unique in the events table for idempotency. */
+  clientId: string | null;
   ts: string;
   installId: string;
   appVersion: string;
@@ -83,7 +95,7 @@ interface NormalizedEvent {
 }
 
 /** Returns a normalized row for the `events` table, or null to drop. */
-export function normalizeEvent(raw: unknown): NormalizedEvent | null {
+export function normalizeEvent(raw: unknown, now = Date.now()): NormalizedEvent | null {
   if (!isRecord(raw)) return null;
   if (raw.v !== 1 || typeof raw.event !== "string" || !KNOWN_EVENTS.has(raw.event)) {
     return null;
@@ -92,11 +104,21 @@ export function normalizeEvent(raw: unknown): NormalizedEvent | null {
   if (raw.flavor !== "beta") return null;
   if (typeof raw.platform !== "string" || raw.platform.length > 16) return null;
   if (typeof raw.arch !== "string" || raw.arch.length > 16) return null;
-  if (typeof raw.appVersion !== "string" || !VERSION_PATTERN.test(raw.appVersion)) return null;
-  if (typeof raw.ts !== "string" || Number.isNaN(Date.parse(raw.ts))) return null;
+  if (
+    typeof raw.appVersion !== "string" ||
+    raw.appVersion.length > 32 ||
+    !VERSION_PATTERN.test(raw.appVersion)
+  ) {
+    return null;
+  }
+  if (typeof raw.ts !== "string" || raw.ts.length > 64) return null;
+  const tsMs = Date.parse(raw.ts);
+  if (Number.isNaN(tsMs)) return null;
+  if (tsMs > now + MAX_EVENT_FUTURE_MS || tsMs < now - MAX_EVENT_AGE_MS) return null;
+  const clientId = typeof raw.id === "string" && UUID_PATTERN.test(raw.id) ? raw.id : null;
 
   const payload = isRecord(raw.payload) ? raw.payload : {};
-  const kind = typeof payload.kind === "string" ? payload.kind : "";
+  const kind = typeof payload.kind === "string" ? payload.kind.slice(0, 16) : "";
   const outcome = payload.outcome === "error" ? "error" : "ok";
   const processType =
     typeof payload.processType === "string" ? payload.processType.slice(0, 32) : "";
@@ -133,6 +155,7 @@ export function normalizeEvent(raw: unknown): NormalizedEvent | null {
       : null;
 
   return {
+    clientId,
     ts: raw.ts,
     installId: raw.installId,
     appVersion: raw.appVersion,
@@ -155,36 +178,80 @@ export function normalizeEvent(raw: unknown): NormalizedEvent | null {
   };
 }
 
-const INSERT_EVENT_SQL = `INSERT INTO events (
-  ts, received_at, install_id, app_version, platform, arch, event, kind,
-  outcome, process_type, reason, error_context, target_version, duration_ms,
-  source, fingerprint, message, stack, log_tail
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+// INSERT OR IGNORE + the unique index on client_id make retried flushes
+// idempotent: the same client event id is stored at most once.
+const INSERT_EVENT_SQL = `INSERT OR IGNORE INTO events (
+  client_id, ts, received_at, install_id, app_version, platform, arch, event,
+  kind, outcome, process_type, reason, error_context, target_version,
+  duration_ms, source, fingerprint, message, stack, log_tail
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
-async function insertEvent(env: Env, event: NormalizedEvent): Promise<void> {
-  await env.DB.prepare(INSERT_EVENT_SQL)
-    .bind(
-      event.ts,
-      new Date().toISOString(),
-      event.installId,
-      event.appVersion,
-      event.platform,
-      event.arch,
-      event.event,
-      event.kind,
-      event.outcome,
-      event.processType,
-      event.reason,
-      event.errorContext,
-      event.targetVersion,
-      event.durationMs,
-      event.source,
-      event.fingerprint,
-      event.message,
-      event.stack,
-      event.logTail,
-    )
-    .run();
+function eventStatement(env: Env, event: NormalizedEvent, receivedAt: string): D1PreparedStatement {
+  return env.DB.prepare(INSERT_EVENT_SQL).bind(
+    event.clientId,
+    event.ts,
+    receivedAt,
+    event.installId,
+    event.appVersion,
+    event.platform,
+    event.arch,
+    event.event,
+    event.kind,
+    event.outcome,
+    event.processType,
+    event.reason,
+    event.errorContext,
+    event.targetVersion,
+    event.durationMs,
+    event.source,
+    event.fingerprint,
+    event.message,
+    event.stack,
+    event.logTail,
+  );
+}
+
+/**
+ * Reads a request body with a hard byte cap that does not trust
+ * Content-Length. The stream is drained (never cancelled — workerd proxies
+ * may drop the connection on mid-upload cancel) but at most maxBytes is
+ * retained. Returns null when the cap is exceeded.
+ */
+async function readBodyBytes(request: Request, maxBytes: number): Promise<Uint8Array | null> {
+  if (!request.body) return new Uint8Array(0);
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total <= maxBytes) chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  if (total > maxBytes) return null;
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
+}
+
+/** Per-IP rate-limit check; a missing/failing limiter must not break ingest. */
+async function overRateLimit(limiter: RateLimit | undefined, request: Request): Promise<boolean> {
+  if (!limiter) return false;
+  try {
+    const key = request.headers.get("cf-connecting-ip") ?? "anonymous";
+    const outcome = await limiter.limit({ key });
+    return !outcome.success;
+  } catch {
+    return false;
+  }
 }
 
 function authorizedIngest(request: Request, env: Env): boolean {
@@ -286,10 +353,15 @@ function jsonResponse(data: unknown, init?: ResponseInit): Response {
 
 async function handleApi(request: Request, env: Env, url: URL): Promise<Response> {
   if (url.pathname === "/api/login" && request.method === "POST") {
+    if (await overRateLimit(env.LOGIN_RATE_LIMITER, request)) {
+      return new Response("rate limited", { status: 429 });
+    }
     if (!sessionConfigured(env)) return new Response("dashboard not configured", { status: 503 });
+    const bodyBytes = await readBodyBytes(request, LOGIN_BODY_MAX_BYTES);
+    if (!bodyBytes) return new Response("payload too large", { status: 413 });
     let body: unknown;
     try {
-      body = await request.json();
+      body = JSON.parse(new TextDecoder().decode(bodyBytes));
     } catch {
       return new Response("bad request", { status: 400 });
     }
@@ -448,7 +520,12 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
   const dumpMatch = /^\/api\/dumps\/(.+)$/.exec(url.pathname);
   if (dumpMatch && request.method === "GET") {
     if (!env.CRASH_DUMPS) return new Response("crash storage unavailable", { status: 503 });
-    const key = decodeURIComponent(dumpMatch[1]!);
+    let key: string;
+    try {
+      key = decodeURIComponent(dumpMatch[1]!);
+    } catch {
+      return new Response("bad key", { status: 400 });
+    }
     if (!key.startsWith("dumps/") || key.includes("..")) {
       return new Response("bad key", { status: 400 });
     }
@@ -467,6 +544,22 @@ async function handleApi(request: Request, env: Env, url: URL): Promise<Response
 
 // --- Request routing ----------------------------------------------------------
 
+// The SPA is same-origin only: self-hosted scripts/styles, canvas charts, no
+// framing. style-src needs 'unsafe-inline' for ECharts' inline styles.
+const SPA_CSP =
+  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+  "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; " +
+  "base-uri 'none'; form-action 'self'";
+
+/** Serves the SPA shell with hardening headers. */
+async function serveSpa(_request: Request, env: Env, url: URL): Promise<Response> {
+  const response = await env.ASSETS.fetch(new URL("/index.html", url));
+  const headers = new Headers(response.headers);
+  headers.set("content-security-policy", SPA_CSP);
+  headers.set("cache-control", "no-store");
+  return new Response(response.body, { status: response.status, headers });
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -476,22 +569,23 @@ export default {
     }
 
     if (url.pathname === "/v1/events" && request.method === "POST") {
+      if (await overRateLimit(env.INGEST_RATE_LIMITER, request)) {
+        return new Response("rate limited", { status: 429 });
+      }
       if (!authorizedIngest(request, env)) {
         return new Response("unauthorized", { status: 401 });
       }
-      const contentLength = Number(request.headers.get("content-length") ?? "0");
-      if (contentLength > MAX_NDJSON_BYTES) {
+      const bodyBytes = await readBodyBytes(request, MAX_NDJSON_BYTES);
+      if (!bodyBytes) {
         return new Response("payload too large", { status: 413 });
       }
-      const body = await request.text();
-      if (body.length > MAX_NDJSON_BYTES) {
-        return new Response("payload too large", { status: 413 });
-      }
+      const body = new TextDecoder().decode(bodyBytes);
       const lines = body.split("\n").filter((line) => line.length > 0);
       if (lines.length > MAX_EVENTS_PER_POST) {
         return new Response("too many events", { status: 413 });
       }
-      let written = 0;
+      const receivedAt = new Date().toISOString();
+      const statements: D1PreparedStatement[] = [];
       for (const line of lines) {
         let parsed: unknown;
         try {
@@ -501,17 +595,21 @@ export default {
         }
         const normalized = normalizeEvent(parsed);
         if (!normalized) continue;
-        try {
-          await insertEvent(env, normalized);
-          written += 1;
-        } catch {
-          // A single bad row must not reject the batch.
-        }
+        statements.push(eventStatement(env, normalized, receivedAt));
+      }
+      let written = 0;
+      if (statements.length > 0) {
+        // One D1 round trip for the whole batch.
+        const results = await env.DB.batch(statements);
+        written = results.reduce((n, r) => n + (r.meta?.changes ?? 0), 0);
       }
       return Response.json({ accepted: written, received: lines.length });
     }
 
     if (url.pathname === "/v1/crash" && request.method === "POST") {
+      if (await overRateLimit(env.INGEST_RATE_LIMITER, request)) {
+        return new Response("rate limited", { status: 429 });
+      }
       if (!authorizedIngest(request, env)) {
         return new Response("unauthorized", { status: 401 });
       }
@@ -520,12 +618,21 @@ export default {
       }
       // Electron's crashReporter POSTs multipart/form-data with the minidump in
       // the `upload_file_minidump` part plus globalExtra fields.
-      const contentLength = Number(request.headers.get("content-length") ?? "0");
       const maxBytes = Number(env.MAX_DUMP_BYTES ?? 5 * 1024 * 1024);
-      if (contentLength > maxBytes) {
+      const bodyBytes = await readBodyBytes(request, maxBytes + MULTIPART_OVERHEAD_BYTES);
+      if (!bodyBytes) {
         return new Response("dump too large", { status: 413 });
       }
-      const form = await request.formData();
+      let form: FormData;
+      try {
+        form = await new Request(request.url, {
+          method: request.method,
+          headers: request.headers,
+          body: bodyBytes.buffer as ArrayBuffer,
+        }).formData();
+      } catch {
+        return new Response("bad request", { status: 400 });
+      }
       const dump = form.get("upload_file_minidump");
       if (!(dump instanceof File)) {
         return new Response("missing minidump", { status: 400 });
@@ -534,7 +641,9 @@ export default {
         return new Response("dump too large", { status: 413 });
       }
       const installId = String(form.get("installId") ?? "unknown").replace(/[^0-9a-f-]/gi, "");
-      const appVersion = String(form.get("appVersion") ?? "").slice(0, 32);
+      // appVersion is our explicit globalExtra; `ver` is Electron's built-in.
+      const rawVersion = String(form.get("appVersion") ?? form.get("ver") ?? "");
+      const appVersion = VERSION_PATTERN.test(rawVersion) ? rawVersion : "";
       const key = `dumps/${new Date().toISOString().slice(0, 10)}/${installId || "unknown"}/${crypto.randomUUID()}.dmp`;
       await env.CRASH_DUMPS.put(key, dump.stream(), {
         customMetadata: {
@@ -560,7 +669,11 @@ export default {
     }
 
     if (url.pathname.startsWith("/api/")) {
-      return handleApi(request, env, url);
+      // API responses are never cacheable: they carry session-scoped data.
+      const response = await handleApi(request, env, url);
+      const headers = new Headers(response.headers);
+      headers.set("cache-control", "no-store");
+      return new Response(response.body, { status: response.status, headers });
     }
 
     // Dashboard SPA. Hashed static assets are public; pages require a session
@@ -572,19 +685,20 @@ export default {
       return new Response("not found", { status: 404 });
     }
     if (url.pathname === "/login") {
-      return env.ASSETS.fetch(new URL("/index.html", url));
+      return serveSpa(request, env, url);
     }
     if (!(await hasSession(request, env))) {
       return Response.redirect(`${url.origin}/login`, 302);
     }
-    return env.ASSETS.fetch(new URL("/index.html", url));
+    return serveSpa(request, env, url);
   },
 
-  // Daily retention: events and dump-index rows older than 30 days are deleted.
+  // Daily retention: rows older than 30 days are deleted by received_at —
+  // server-side, so client clock skew cannot extend retention.
   // R2 objects expire via the bucket's own lifecycle rule.
   async scheduled(_controller: unknown, env: Env): Promise<void> {
     const cutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
-    await env.DB.prepare("DELETE FROM events WHERE ts < ?").bind(cutoff).run();
-    await env.DB.prepare("DELETE FROM crash_dumps WHERE ts < ?").bind(cutoff).run();
+    await env.DB.prepare("DELETE FROM events WHERE received_at < ?").bind(cutoff).run();
+    await env.DB.prepare("DELETE FROM crash_dumps WHERE received_at < ?").bind(cutoff).run();
   },
 } satisfies ExportedHandler<Env>;

@@ -10,7 +10,7 @@ import { normalizeEvent, signSession, verifySessionCookie } from "./worker";
 const baseEvent = {
   v: 1,
   id: "11111111-2222-3333-4444-555555555555",
-  ts: "2026-09-23T12:00:00.000Z",
+  ts: new Date().toISOString(),
   installId: "00000000-0000-4000-8000-000000000000",
   appVersion: "9.9.9-beta.1",
   flavor: "beta",
@@ -51,7 +51,7 @@ describe("normalizeEvent", () => {
     expect(row!.source).toBe("renderer");
     expect(row!.fingerprint).toBe("abcdef0123456789");
     expect(row!.message).toContain("<email>");
-    expect(row!.message).toContain("<user>");
+    expect(row!.message).toContain("~/…/x");
     expect(JSON.stringify(row)).not.toContain("user@example.com");
     expect(JSON.stringify(row)).not.toContain("sk-AbCd");
     expect(JSON.stringify(row)).not.toContain("alice");
@@ -77,11 +77,44 @@ describe("normalizeEvent", () => {
     ["unknown event", { ...baseEvent, event: "chat.message" }],
     ["non-beta flavor", { ...baseEvent, flavor: "production" }],
     ["bad version", { ...baseEvent, appVersion: "not-semver" }],
+    ["overlong version", { ...baseEvent, appVersion: "1.2.3-" + "a".repeat(64) }],
     ["bad install id", { ...baseEvent, installId: "not-a-uuid" }],
     ["missing v", { ...baseEvent, v: 2 }],
     ["bad ts", { ...baseEvent, ts: "yesterday" }],
   ])("drops %s", (_name, event) => {
     expect(normalizeEvent(event)).toBeNull();
+  });
+
+  it("drops events outside the accepted timestamp window", () => {
+    const now = Date.parse("2026-09-23T12:00:00.000Z");
+    const future = new Date(now + 25 * 60 * 60 * 1000).toISOString();
+    const old = new Date(now - 31 * 24 * 60 * 60 * 1000).toISOString();
+    const edge = new Date(now + 23 * 60 * 60 * 1000).toISOString();
+    expect(normalizeEvent({ ...baseEvent, ts: future }, now)).toBeNull();
+    expect(normalizeEvent({ ...baseEvent, ts: old }, now)).toBeNull();
+    expect(normalizeEvent({ ...baseEvent, ts: edge }, now)).not.toBeNull();
+  });
+
+  it("keeps a valid client id for idempotent ingest", () => {
+    const row = normalizeEvent(baseEvent);
+    expect(row!.clientId).toBe("11111111-2222-3333-4444-555555555555");
+    expect(normalizeEvent({ ...baseEvent, id: "not-a-uuid" })!.clientId).toBeNull();
+    const { id: _id, ...noId } = baseEvent;
+    expect(normalizeEvent(noId)!.clientId).toBeNull();
+  });
+
+  it("caps payload.kind and other free strings", () => {
+    const row = normalizeEvent({
+      ...baseEvent,
+      event: "app.error",
+      payload: {
+        kind: `error${"x".repeat(200)}`,
+        source: "main",
+        message: "m",
+        fingerprint: "abcdef0123456789",
+      },
+    });
+    expect(row!.kind.length).toBeLessThanOrEqual(16);
   });
 });
 

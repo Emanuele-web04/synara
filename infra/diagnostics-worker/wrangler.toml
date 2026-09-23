@@ -28,6 +28,18 @@ run_worker_first = true
 [triggers]
 crons = ["0 4 * * *"]
 
+# Per-IP rate limits enforced by the platform (keyed on CF-Connecting-IP in
+# worker.ts). Ingest gets headroom for queued flushes; login is strict.
+[[ratelimits]]
+name = "INGEST_RATE_LIMITER"
+namespace_id = "1001"
+simple = { limit = 120, period = 60 }
+
+[[ratelimits]]
+name = "LOGIN_RATE_LIMITER"
+namespace_id = "1002"
+simple = { limit = 10, period = 60 }
+
 # Dashboard auth secrets (required for /api/* and pages):
 #   wrangler secret put DASHBOARD_PASSWORD
 #   wrangler secret put DASHBOARD_SESSION_KEY
