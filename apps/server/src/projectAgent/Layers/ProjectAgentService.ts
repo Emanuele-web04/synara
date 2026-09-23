@@ -1039,7 +1039,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
 
   const dispatchGroupThreadCommand = (
     threadIds: ReadonlyArray<ThreadId>,
-    type: "thread.turn.interrupt" | "thread.archive" | "thread.unarchive",
+    type: "thread.turn.interrupt" | "thread.archive" | "thread.unarchive" | "thread.delete",
   ) =>
     Effect.forEach(
       threadIds,
@@ -2416,6 +2416,14 @@ export const makeProjectAgentService = Effect.gen(function* () {
               .getConfig(input.projectId)
               .pipe(Effect.mapError(toServiceError("Failed to load project coordinator.")))
               .pipe(Effect.map(Option.getOrNull));
+            // Collect group threads up front: deleteProjectData wipes the
+            // thread index, and project.delete only accepts a threadless
+            // project, so every group thread must be dispatched for deletion
+            // before the project delete.
+            const { shells } = yield* listGroupThreadShells({
+              projectId: input.projectId,
+              coordinatorThreadId: agentConfig?.coordinatorThreadId ?? null,
+            });
             const root = yield* resolveLibraryRoot({
               stateDir: serverConfig.stateDir,
               projectId: input.projectId,
@@ -2457,6 +2465,13 @@ export const makeProjectAgentService = Effect.gen(function* () {
             });
             // The project delete dispatch keeps the projection layer in step:
             // threads tombstone, shells drop, the project row disappears.
+            yield* dispatchGroupThreadCommand(
+              [
+                ...(agentConfig?.coordinatorThreadId ? [agentConfig.coordinatorThreadId] : []),
+                ...shells.map((shell) => shell.id),
+              ],
+              "thread.delete",
+            );
             yield* orchestrationEngine
               .dispatch({
                 type: "project.delete",

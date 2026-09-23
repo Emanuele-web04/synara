@@ -2519,11 +2519,13 @@ it.effect("archive hides the group and unarchive restores it", () => {
       archived.config?.archivedAt !== null && archived.config?.archivedAt !== undefined,
       true,
     );
-    const archiveCommands = harness.dispatched
-      .filter((command) => command.type === "thread.archive")
-      .map((command) => command.threadId);
-    assert.equal(archiveCommands.includes(coordinatorThreadId), true);
-    assert.equal(archiveCommands.includes(groupMemberThreadId), true);
+    const archiveCommands = new Set(
+      harness.dispatched
+        .filter((command) => command.type === "thread.archive")
+        .map((command) => command.threadId),
+    );
+    assert.equal(archiveCommands.has(coordinatorThreadId), true);
+    assert.equal(archiveCommands.has(groupMemberThreadId), true);
     assert.equal(
       harness.automationUpdates.some(
         (update) => update.id === automationId && update.enabled === false,
@@ -2540,11 +2542,13 @@ it.effect("archive hides the group and unarchive restores it", () => {
       { kind: "user" },
     );
     assert.equal(restored.config?.archivedAt ?? null, null);
-    const unarchiveCommands = harness.dispatched
-      .filter((command) => command.type === "thread.unarchive")
-      .map((command) => command.threadId);
-    assert.equal(unarchiveCommands.includes(coordinatorThreadId), true);
-    assert.equal(unarchiveCommands.includes(groupMemberThreadId), true);
+    const unarchiveCommands = new Set(
+      harness.dispatched
+        .filter((command) => command.type === "thread.unarchive")
+        .map((command) => command.threadId),
+    );
+    assert.equal(unarchiveCommands.has(coordinatorThreadId), true);
+    assert.equal(unarchiveCommands.has(groupMemberThreadId), true);
     assert.equal(
       harness.automationUpdates.some(
         (update) => update.id === automationId && update.enabled === true,
@@ -2581,6 +2585,21 @@ it.effect("delete removes group data, trashes the library, leaves linked repos",
       { requestId: "req-del-link", projectId: groupId, linkedProjectId: ordinaryId },
       coordinator,
     );
+    yield* repository.upsertThreadIndex({
+      projectId: groupId,
+      threadId: groupMemberThreadId,
+      excluded: false,
+      archived: false,
+      summaryStatus: "covered",
+      lastUpdatedAt: now,
+      lastSummarizedAt: now,
+    });
+    harness.threadShells[groupMemberThreadId] = {
+      projectId: groupId,
+      title: "Member",
+      workingDirectory: `${serverConfig.stateDir}/member`,
+      session: null,
+    };
 
     assert.equal(
       (yield* Effect.exit(
@@ -2597,6 +2616,13 @@ it.effect("delete removes group data, trashes the library, leaves linked repos",
     // The group's coordinator data is gone; linked repos are untouched.
     const config = yield* repository.getConfig(groupId);
     assert.equal(Option.isNone(config), true);
+    // project.delete only accepts threadless projects: every group thread
+    // (coordinator + members) is deleted first.
+    const threadDeletes = harness.dispatched.filter((command) => command.type === "thread.delete");
+    assert.deepEqual(
+      threadDeletes.map((command) => command.threadId).toSorted(),
+      [overview.config!.coordinatorThreadId!, groupMemberThreadId].toSorted(),
+    );
     const deletes = harness.dispatched.filter((command) => command.type === "project.delete");
     assert.equal(deletes.length, 1);
     assert.equal(deletes[0]!.projectId, groupId);
