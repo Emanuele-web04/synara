@@ -127,6 +127,10 @@ describe("computer panel state helpers", () => {
     expect(
       resolveComputerAvailabilityView({ kind: "backend-unavailable", message: "Backend is off" }),
     ).toMatchObject({ kind: "blocked", description: "Backend is off" });
+    // A server still selecting its desktop is waiting, not broken.
+    expect(
+      resolveComputerAvailabilityView({ kind: "checking", message: "Finding the desktop." }),
+    ).toMatchObject({ kind: "checking", description: "Finding the desktop." });
   });
 
   it("names the withheld grants in the blocked title", () => {
@@ -435,6 +439,14 @@ describe("computerStatusNeedsSetup", () => {
     expect(
       computerStatusNeedsSetup(
         state({ availability: { kind: "unsupported-platform", platform: "win32" } }),
+      ),
+    ).toBe(false);
+  });
+
+  it("says no while the server is still selecting its desktop", () => {
+    expect(
+      computerStatusNeedsSetup(
+        state({ availability: { kind: "checking", message: "Finding the desktop." } }),
       ),
     ).toBe(false);
   });

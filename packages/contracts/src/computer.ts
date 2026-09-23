@@ -303,6 +303,23 @@ export const ComputerAvailability = Schema.Union([
     kind: Schema.Literal("backend-unavailable"),
     message: TrimmedNonEmptyString.check(Schema.isMaxLength(COMPUTER_MESSAGE_MAX_LENGTH)),
   }),
+  /**
+   * The server is still finding out which desktop it drives. Startup does not
+   * wait on that question — a wedged session bus could stall it for tens of
+   * seconds — so for that window the answer is "not yet", which is neither a
+   * failure to report nor a setup to offer; it ends by itself.
+   *
+   * Decoding is strict, so a client built before this member cannot decode an
+   * availability carrying it. That was accepted rather than bumping the WS
+   * protocol revision: only a Linux server emits it, only while its first
+   * detection outlives the startup budget, and the web client ships with the
+   * server it talks to. A later member that a server sends in steady state
+   * needs the revision bump (see wsCompatibility.ts).
+   */
+  Schema.Struct({
+    kind: Schema.Literal("checking"),
+    message: TrimmedNonEmptyString.check(Schema.isMaxLength(COMPUTER_MESSAGE_MAX_LENGTH)),
+  }),
 ]);
 export type ComputerAvailability = typeof ComputerAvailability.Type;
 
@@ -358,6 +375,14 @@ export const ComputerHealth = Schema.Struct({
    * and absent is not the same claim as `false`.
    */
   backgroundInputDegraded: Schema.optional(Schema.Boolean),
+  /**
+   * `unavailable` by choice rather than by fault: the backend let its desktop
+   * or its connection go on purpose (an idle shutdown or release, a desktop
+   * that is not running right now) and the next real use brings it back.
+   * Optional, and set only by a backend that makes that distinction; absent
+   * is not the same claim as `false`.
+   */
+  dormant: Schema.optional(Schema.Boolean),
 });
 export type ComputerHealth = typeof ComputerHealth.Type;
 
@@ -923,6 +948,15 @@ export const ComputerLaunchAppResult = Schema.Struct({
    * that passed a flatpak app id or a .desktop id learns what actually ran.
    */
   resolvedCommand: Schema.optional(Schema.String.check(Schema.isMaxLength(4_096))),
+  /**
+   * The application identity the launch resolved to — a desktop entry id such
+   * as `org.kde.kate`, or a flatpak app id — spelled the way this backend's
+   * windows report `appName`. Present only when the backend can name it; its
+   * presence also says `pid` may belong to a launcher that handed off (flatpak,
+   * `gio launch`, a single-instance app), so window readiness accepts a window
+   * of this app when none carries the pid.
+   */
+  appId: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(512))),
   window: Schema.NullOr(ComputerWindow),
 });
 export type ComputerLaunchAppResult = typeof ComputerLaunchAppResult.Type;
@@ -1254,15 +1288,27 @@ export const ComputerActionEvent = Schema.Struct({
 });
 export type ComputerActionEvent = typeof ComputerActionEvent.Type;
 
+/**
+ * The image format of one preview frame. Model-facing screenshots are always
+ * PNG; the live preview may carry JPEG, which a backend encodes an order of
+ * magnitude faster and ships at a fraction of the size. Absent means PNG.
+ */
+export const ComputerFrameMimeType = Schema.Literals(["image/png", "image/jpeg"]);
+export type ComputerFrameMimeType = typeof ComputerFrameMimeType.Type;
+
+export const ComputerFrameHeader = Schema.Struct({
+  computerId: ComputerId,
+  sequence: NonNegativeInt,
+  timestampMs: Schema.Finite,
+  keyframe: Schema.Boolean,
+  codecConfig: Schema.Boolean,
+  mimeType: Schema.optional(ComputerFrameMimeType),
+});
+export type ComputerFrameHeader = typeof ComputerFrameHeader.Type;
+
 export const ComputerFrameEvent = Schema.Struct({
   type: Schema.Literal("computer.frame"),
-  header: Schema.Struct({
-    computerId: ComputerId,
-    sequence: NonNegativeInt,
-    timestampMs: Schema.Finite,
-    keyframe: Schema.Boolean,
-    codecConfig: Schema.Boolean,
-  }),
+  header: ComputerFrameHeader,
 });
 export type ComputerFrameEvent = typeof ComputerFrameEvent.Type;
 
@@ -1304,20 +1350,13 @@ export const COMPUTER_FRAME_MAGIC = 0x5343;
 export const COMPUTER_FRAME_VERSION = 1;
 export const COMPUTER_FRAME_MAX_COMPUTER_ID_BYTES = 255;
 
-export const ComputerFrameHeader = Schema.Struct({
-  computerId: ComputerId,
-  sequence: NonNegativeInt,
-  timestampMs: Schema.Finite,
-  keyframe: Schema.Boolean,
-  codecConfig: Schema.Boolean,
-});
-export type ComputerFrameHeader = typeof ComputerFrameHeader.Type;
-
 export const ComputerFrameDecodeErrorReason = Schema.Literals([
   "too-short",
   "bad-magic",
   "unsupported-version",
   "truncated-computer-id",
   "invalid-computer-id",
+  /** The frame names an image format this build cannot display. */
+  "unsupported-format",
 ]);
 export type ComputerFrameDecodeErrorReason = typeof ComputerFrameDecodeErrorReason.Type;

@@ -1,5 +1,5 @@
 import type { ComputerId } from "@synara/contracts";
-import type { ComputerFrame } from "@synara/shared/computerFrame";
+import { computerFrameMimeType, type ComputerFrame } from "@synara/shared/computerFrame";
 import { useEffect, useRef, useState } from "react";
 
 import {
@@ -41,6 +41,22 @@ export function mergeComputerImageStreamStatus(
     return next;
   }
   return previous;
+}
+
+/**
+ * The frame's payload as an image the browser can decode, typed with the
+ * format the frame names — PNG, or the JPEG a backend may send for the preview.
+ *
+ * The payload is a view over that message's own buffer, and the Blob
+ * constructor copies the bytes it is given, so this is the only copy a
+ * multi-megabyte frame needs. The cast narrows the decoder's `ArrayBufferLike`
+ * to what `Blob` accepts: this buffer came from a WebSocket message, which is
+ * never shared memory.
+ */
+export function computerFrameImageBlob(frame: ComputerFrame): Blob {
+  return new Blob([frame.payload as Uint8Array<ArrayBuffer>], {
+    type: computerFrameMimeType(frame.header),
+  });
 }
 
 function isImageBitmapAvailable(): boolean {
@@ -103,13 +119,7 @@ export function useComputerImageStream(input: {
       decoding = true;
       let bitmap: ImageBitmap | null = null;
       try {
-        // The payload is a view over that message's own buffer, and the Blob
-        // constructor copies the bytes it is given, so this is the only copy a
-        // multi-megabyte frame needs. The cast narrows the decoder's
-        // `ArrayBufferLike` to what `Blob` accepts: this buffer came from a
-        // WebSocket message, which is never shared memory.
-        const payload = frame.payload as Uint8Array<ArrayBuffer>;
-        bitmap = await globalThis.createImageBitmap(new Blob([payload], { type: "image/png" }));
+        bitmap = await globalThis.createImageBitmap(computerFrameImageBlob(frame));
         if (!isCurrent() || disposed) return;
         const canvas = canvasRef.current;
         const context = canvas?.getContext("2d");

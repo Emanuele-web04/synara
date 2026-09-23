@@ -3,6 +3,7 @@
 // Layer: Release verification entrypoint
 
 import { strict as assert } from "node:assert";
+import { createRequire } from "node:module";
 
 import { loadAcpSdk } from "./provider/acp/AcpSdk.ts";
 import { loadClaudeAgentSdk } from "./provider/claudeAgentSdk.ts";
@@ -15,6 +16,9 @@ await import("@earendil-works/pi-coding-agent");
 await import("open");
 await import("node-pty");
 await import("@xterm/headless");
+// The KWin backend resolves the session-bus client through createRequire on a
+// Linux desktop's first real use; a missing package must fail here instead.
+createRequire(import.meta.url)("dbus-next");
 
 const { parsePatchFiles } = await import("@pierre/diffs");
 const patches = parsePatchFiles(

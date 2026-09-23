@@ -910,7 +910,12 @@ export class FakeComputerBackend implements ComputerBackend {
     this.eventListeners.clear();
   }
 
-  emitFrame(keyframe = false, codecConfig = false, data = Uint8Array.of(0x01)): void {
+  emitFrame(
+    keyframe = false,
+    codecConfig = false,
+    data = Uint8Array.of(0x01),
+    mimeType?: ComputerStreamFrame["mimeType"],
+  ): void {
     if (!this.frameListener || this.disposed) return;
     const frame: ComputerStreamFrame = {
       sequence: this.nextSequence++,
@@ -918,6 +923,7 @@ export class FakeComputerBackend implements ComputerBackend {
       keyframe,
       codecConfig,
       data,
+      ...(mimeType !== undefined ? { mimeType } : {}),
     };
     this.frameListener(frame);
   }
@@ -941,6 +947,16 @@ export class FakeComputerBackend implements ComputerBackend {
    */
   emitDesktopInterrupted(pauses: readonly string[] = []): void {
     this.emit({ type: "desktop-interrupted", pauses });
+  }
+
+  /** Reports a changed capability set, as a reconnect or a slot swap does. */
+  emitCapabilitiesChanged(): void {
+    this.emit({ type: "capabilities-changed", capabilities: this.currentCapabilities });
+  }
+
+  /** Reports that the desktop this backend drove has ended for good. */
+  emitDesktopGone(message = "The fake desktop exited."): void {
+    this.emit({ type: "desktop-gone", message });
   }
 
   setAvailability(availability: ComputerAvailability): void {

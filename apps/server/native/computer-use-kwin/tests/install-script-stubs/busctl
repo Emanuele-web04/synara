@@ -1,0 +1,55 @@
+# shellcheck shell=bash
+# KWin's org.kde.KWin.Plugins interface and the plugin's own service on a stub
+# session bus, for apps/server/src/computer/kwinInstallScript.test.ts. The
+# loaded plugin ids live in $STUB_STATE/loaded, one per line; the available
+# ones are the .so files in $SYNARA_KWIN_PLUGIN_DIR.
+loaded="$STUB_STATE/loaded"
+touch "$loaded"
+as_list() {
+    local ids=() id
+    mapfile -t ids <"$1"
+    printf 'as %d' "${#ids[@]}"
+    for id in "${ids[@]}"; do
+        printf ' "%s"' "$id"
+    done
+    printf '\n'
+}
+last="${*: -1}"
+case "$*" in
+    *"org.kde.KWin.Plugins LoadedPlugins"*)
+        as_list "$loaded"
+        ;;
+    *"org.kde.KWin.Plugins AvailablePlugins"*)
+        find "$SYNARA_KWIN_PLUGIN_DIR" -maxdepth 1 -name '*.so' -printf '%f\n' 2>/dev/null |
+            sed 's/\.so$//' >"$STUB_STATE/available" || true
+        as_list "$STUB_STATE/available"
+        ;;
+    *"UnloadPlugin s "*)
+        if grep -qx -- "$last" "$loaded"; then
+            grep -vx -- "$last" "$loaded" >"$loaded.tmp" || true
+            mv "$loaded.tmp" "$loaded"
+            echo "b true"
+        else
+            echo "b false"
+        fi
+        ;;
+    *"LoadPlugin s "*)
+        printf '%s\n' "$last" >>"$loaded"
+        echo "b true"
+        ;;
+    *"GetNameOwner s org.synara.ComputerUse"*)
+        if [[ ! -s "$loaded" ]]; then
+            echo "Call failed: The name is not activatable" >&2
+            exit 1
+        fi
+        echo 's ":1.42"'
+        ;;
+    *"healthJson"*)
+        # busctl escapes the quotes inside a string reply.
+        printf '%s\n' 's "{\"ok\":true,\"build\":\"fake-build\"}"'
+        ;;
+    *)
+        echo "Call failed: not stubbed: $*" >&2
+        exit 1
+        ;;
+esac

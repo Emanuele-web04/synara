@@ -253,6 +253,26 @@ jobs:
       - name: Test server shard ${{ matrix.shard }}
         run: bunx turbo run test --filter=@synara/cli -- --shard=${{ matrix.shard }}
 
+  # Built inside this run on purpose: workflow artifacts are per-run, so the
+  # standalone prebuild runs can never hand their output to this release. The
+  # binaries never enter the portable build, which is verified native-free;
+  # the Linux packaging legs stage them after the verified import instead.
+  # Prebuilds never block or delay a release: a leg the matrix cannot build is
+  # reported-and-skipped inside the called workflow, a run that fails or
+  # finishes late leaves the packaging jobs to ship with a warning, and the
+  # users concerned keep the source-build fallback.
+  kwin_plugin_prebuilds:
+    name: KWin plugin prebuilds
+    needs: preflight
+    if: ${{ needs.preflight.outputs.build_native == 'true' || needs.preflight.outputs.build_server == 'true' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/kwin-plugin-prebuilds.yml
+    with:
+      # The provenance-verified commit, so the binaries match what ships.
+      ref: ${{ needs.preflight.outputs.ref }}
+      strict: false
+
   build_portable:
     name: Build portable JavaScript
     needs: [preflight, quality, server_tests]
@@ -330,6 +350,10 @@ jobs:
     timeout-minutes: ${{ needs.preflight.outputs.benchmark_native == 'true' && 25 || 60 }}
     permissions:
       contents: read
+      # The Linux leg downloads this run's KWin plugin prebuilts by polling for
+      # their artifact and the prebuild jobs' state (below) rather than through
+      # a job dependency, so no leg ever waits on the Linux container matrix.
+      actions: read
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.preflight.outputs.matrix) }}
@@ -400,6 +424,46 @@ jobs:
         uses: ./.github/actions/restore-portable-build
         with:
           source-commit: ${{ needs.preflight.outputs.source_commit }}
+
+      - name: Download KWin plugin prebuilts
+        if: matrix.platform == 'linux' && needs.preflight.outputs.package_artifacts == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          # Staged into the packaging stage by the desktop build, beside the
+          # verified server dist, never into the portable tree it verifies.
+          # Best effort: a release ships without prebuilts rather than waiting
+          # on them or failing over them, and those users keep the
+          # source-build fallback. The wait stops as soon as the prebuild jobs
+          # of this run (the called workflow's jobs, listed under this job's
+          # name) have all concluded, and at the matrix's own budget (30 min
+          # legs plus a 10 min assemble) plus margin otherwise.
+          prebuilt_dir="$RUNNER_TEMP/kwin-plugin-prebuilt"
+          prefix="KWin plugin prebuilds / "
+          for _ in $(seq 1 90); do
+            rm -rf "$prebuilt_dir"
+            if gh run download "$GITHUB_RUN_ID" --name kwin-plugin-prebuilt --dir "$prebuilt_dir" 2>/dev/null \
+              && test -s "$prebuilt_dir/manifest.json"; then
+              echo "SYNARA_KWIN_PLUGIN_PREBUILT_DIR=$prebuilt_dir" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            # shellcheck disable=SC2016 # $prefix is a jq variable, bound with --arg.
+            pending="$(
+              gh run view "$GITHUB_RUN_ID" --json jobs \
+                --jq --arg prefix "$prefix" \
+                '[.jobs[] | select(.name | startswith($prefix)) | select(.conclusion == null or .conclusion == "")] | length' \
+                2>/dev/null || echo unknown
+            )"
+            if [[ "$pending" == "0" ]]; then
+              echo "::warning::The KWin plugin prebuild jobs of this run concluded without a prebuilt artifact; this Linux build ships without prebuilts (source-build fallback)."
+              exit 0
+            fi
+            sleep 30
+          done
+          rm -rf "$prebuilt_dir"
+          echo "::warning::The KWin plugin prebuilds of this run did not finish in time; this Linux build ships without prebuilts (source-build fallback)."
 
       - id: build_artifact
         if: needs.preflight.outputs.package_artifacts == 'true'
@@ -571,8 +635,10 @@ jobs:
 
   publish_cli:
     name: Publish CLI to npm
-    if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_PUBLISH_CLI == '1' }}
-    needs: [preflight, build, build_portable]
+    # kwin_plugin_prebuilds orders the job after the prebuilds but never gates
+    # it: a failed or skipped prebuild run publishes without them.
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.build.result == 'success' && needs.build_portable.result == 'success' && needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_PUBLISH_CLI == '1' }}
+    needs: [preflight, build, build_portable, kwin_plugin_prebuilds]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -605,13 +671,28 @@ jobs:
         with:
           source-commit: ${{ needs.preflight.outputs.source_commit }}
 
+      - name: Stage KWin plugin prebuilts
+        id: stage_cli_prebuilts
+        if: needs.kwin_plugin_prebuilds.result == 'success'
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: kwin-plugin-prebuilt
+          path: apps/server/dist/computer-use-kwin/prebuilt
+
+      - name: Report missing KWin plugin prebuilts
+        if: needs.kwin_plugin_prebuilds.result != 'success' || steps.stage_cli_prebuilts.outcome != 'success'
+        run: echo "::warning::The KWin plugin prebuilts were not staged (prebuild run ${{ needs.kwin_plugin_prebuilds.result }}); the CLI package ships without them (source-build fallback)."
+
       - name: Publish CLI package
         run: node apps/server/scripts/cli.ts publish --tag latest --app-version "${{ needs.preflight.outputs.version }}" --verbose
 
   build_server_tarball:
     name: Build server tarball
-    if: needs.preflight.outputs.build_server == 'true'
-    needs: [preflight, build_portable]
+    # kwin_plugin_prebuilds orders the job after the prebuilds but never gates
+    # it: a failed or skipped prebuild run packs the tarball without them.
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.build_portable.result == 'success' && needs.preflight.outputs.build_server == 'true' }}
+    needs: [preflight, build_portable, kwin_plugin_prebuilds]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -641,6 +722,19 @@ jobs:
         uses: ./.github/actions/restore-portable-build
         with:
           source-commit: ${{ needs.preflight.outputs.source_commit }}
+
+      - name: Stage KWin plugin prebuilts
+        id: stage_tarball_prebuilts
+        if: needs.kwin_plugin_prebuilds.result == 'success'
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          name: kwin-plugin-prebuilt
+          path: apps/server/dist/computer-use-kwin/prebuilt
+
+      - name: Report missing KWin plugin prebuilts
+        if: needs.kwin_plugin_prebuilds.result != 'success' || steps.stage_tarball_prebuilts.outcome != 'success'
+        run: echo "::warning::The KWin plugin prebuilts were not staged (prebuild run ${{ needs.kwin_plugin_prebuilds.result }}); the server tarball ships without them (source-build fallback)."
 
       - name: Pack server tarball
         run: node apps/server/scripts/cli.ts pack --out release-server --app-version "${{ needs.preflight.outputs.version }}"

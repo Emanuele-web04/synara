@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 
 import {
   createDesktopPlatformBuildConfig,
+  LINUX_COMPUTER_USE_ASAR_UNPACK_GLOBS,
   MAC_APPSNAP_HELPER_ASAR_EXCLUSION,
   MAC_APPSNAP_HELPER_BUNDLE_PATH,
   MAC_APPSNAP_HELPER_STAGE_PATH,
@@ -163,7 +164,11 @@ describe("createDesktopPlatformBuildConfig", () => {
     ]);
     assert.ok(linux.files?.includes("!apps/desktop/resources/cua-driver/**"));
     assert.ok(linux.files?.includes("!apps/desktop/prod-resources/cua-driver/**"));
-    assert.deepStrictEqual(linux.asarUnpack, ["node_modules/node-pty/**"]);
+    assert.deepStrictEqual(linux.asarUnpack, [
+      "node_modules/node-pty/**",
+      "apps/server/dist/atspi_helper.py",
+      "apps/server/dist/computer-use-kwin/**",
+    ]);
     assert.deepStrictEqual(linux.linux, {
       target: ["AppImage"],
       executableName: "synara",
@@ -204,14 +209,36 @@ describe("createDesktopPlatformBuildConfig", () => {
     });
   });
 
-  it("keeps node-pty unpacked from ASAR in generated build config", () => {
-    const config = createDesktopPlatformBuildConfig({
-      platform: "linux",
-      target: "AppImage",
-    });
-
+  it("keeps node-pty unpacked from ASAR on every platform", () => {
     assert.deepStrictEqual([...NODE_PTY_ASAR_UNPACK_GLOBS], ["node_modules/node-pty/**"]);
-    assert.deepStrictEqual(config.asarUnpack, [...NODE_PTY_ASAR_UNPACK_GLOBS]);
+    for (const platform of ["linux", "mac", "win"] as const) {
+      const config = createDesktopPlatformBuildConfig({ platform, target: "dir" });
+      assert.ok(
+        config.asarUnpack?.includes("node_modules/node-pty/**"),
+        `${platform} must unpack node-pty`,
+      );
+    }
+  });
+
+  it("unpacks the Linux computer-use assets that python3 and bash read from disk", () => {
+    const linux = createDesktopPlatformBuildConfig({ platform: "linux", target: "AppImage" });
+
+    assert.deepStrictEqual(
+      [...LINUX_COMPUTER_USE_ASAR_UNPACK_GLOBS],
+      ["apps/server/dist/atspi_helper.py", "apps/server/dist/computer-use-kwin/**"],
+    );
+    assert.deepStrictEqual(linux.asarUnpack, [
+      "node_modules/node-pty/**",
+      "apps/server/dist/atspi_helper.py",
+      "apps/server/dist/computer-use-kwin/**",
+    ]);
+
+    // Only Linux ships the KWin plugin and the AT-SPI helper; the other
+    // platforms keep the smaller node-pty-only unpack set.
+    const mac = createDesktopPlatformBuildConfig({ platform: "mac", target: "dmg" });
+    const win = createDesktopPlatformBuildConfig({ platform: "win", target: "nsis" });
+    assert.deepStrictEqual(mac.asarUnpack, ["node_modules/node-pty/**"]);
+    assert.deepStrictEqual(win.asarUnpack, ["node_modules/node-pty/**"]);
   });
 
   it("blocks unsupported or non-matching Linux native build hosts", () => {
