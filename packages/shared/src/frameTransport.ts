@@ -2,6 +2,15 @@ export const FRAME_HEADER_FIXED_BYTES = 17;
 export const FRAME_MAX_STREAM_ID_BYTES = 255;
 export const FRAME_FLAG_KEYFRAME = 0b0000_0001;
 export const FRAME_FLAG_CODEC_CONFIG = 0b0000_0010;
+/**
+ * Two flag bits carrying a payload format code whose meaning each stream
+ * family defines (the computer stream maps it to an image MIME type). `0` is
+ * the family's original format, so every frame written before the field
+ * existed still decodes as what it was.
+ */
+export const FRAME_FLAG_FORMAT_MASK = 0b0000_1100;
+const FRAME_FLAG_FORMAT_SHIFT = 2;
+export const FRAME_FORMAT_MAX = FRAME_FLAG_FORMAT_MASK >> FRAME_FLAG_FORMAT_SHIFT;
 
 export type FrameDecodeErrorReason =
   | "too-short"
@@ -16,6 +25,8 @@ export interface FrameHeader {
   readonly timestampMs: number;
   readonly keyframe: boolean;
   readonly codecConfig: boolean;
+  /** Payload format code, `0..FRAME_FORMAT_MAX`; absent is `0`. */
+  readonly format?: number;
 }
 
 export interface FrameEnvelope {
@@ -60,7 +71,12 @@ export const encodeFrameEnvelope = (config: FrameCodecConfig, frame: FrameEnvelo
   const view = new DataView(buffer);
   const bytes = new Uint8Array(buffer);
 
-  let flags = 0;
+  const format = frame.header.format ?? 0;
+  if (!Number.isInteger(format) || format < 0 || format > FRAME_FORMAT_MAX) {
+    throw new FrameEncodeError(`${config.frameLabel} frame format ${format} is out of range`);
+  }
+
+  let flags = format << FRAME_FLAG_FORMAT_SHIFT;
   if (frame.header.keyframe) flags |= FRAME_FLAG_KEYFRAME;
   if (frame.header.codecConfig) flags |= FRAME_FLAG_CODEC_CONFIG;
 
@@ -106,6 +122,7 @@ export const decodeFrameEnvelope = (
     return { ok: false, reason: "invalid-stream-id" };
   }
 
+  const format = (flags & FRAME_FLAG_FORMAT_MASK) >> FRAME_FLAG_FORMAT_SHIFT;
   return {
     ok: true,
     frame: {
@@ -115,6 +132,7 @@ export const decodeFrameEnvelope = (
         timestampMs: view.getFloat64(8, true),
         keyframe: (flags & FRAME_FLAG_KEYFRAME) !== 0,
         codecConfig: (flags & FRAME_FLAG_CODEC_CONFIG) !== 0,
+        ...(format !== 0 ? { format } : {}),
       },
       payload: bytes.subarray(payloadOffset),
     },
