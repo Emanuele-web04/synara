@@ -30,18 +30,23 @@ other non-code work.
 4. Optionally add **Group instructions** on **Memory** and link repositories on **Environment**.
 5. Choose **Create group**. Setup does not launch a model.
 
+If you cancel setup before the new group has any threads, files, or linked repositories, Synara asks
+**Discard this group?** Choose **Discard group** to remove it, or **Keep group** to finish setup
+later.
+
 The coordinator conversation opens with a welcome message. Until you send your first message, a
 **Suggestions** row offers three shortcuts: **Connect repositories**, **Add a goal**, and **Write
-instructions**. Each one opens the matching settings section.
+instructions**. Each one opens the matching settings section, and hides once that setting is filled.
 
 ![New group dialog](./screenshots/groups-new-group.png)
 
 ![Set up your group dialog](./screenshots/groups-onboarding.png)
 
 In the sidebar, each group row expands to show its coordinator row first, then the group's
-threads. Right-click the coordinator row and choose **Change icon…** to restyle it, or pin it so it
-stays visible while the group is collapsed. A group whose coordinator is not set up shows **Set up
-coordinator** instead.
+threads. Threads the coordinator starts in a linked repository are listed there too, with the
+repository name, while their task is open. Right-click the coordinator row and choose **Change
+icon…** to restyle it, or pin it so it stays visible while the group is collapsed. A group whose
+coordinator is not set up shows **Set up coordinator** instead.
 
 ## Talk to the coordinator
 
@@ -57,9 +62,15 @@ When a request could mean either "do it now" or "just suggest", the coordinator 
 list of suggested threads (title, repository, one-line brief) and waits for your confirmation.
 Tell it once if you always want this, and it will remember.
 
+The coordinator's own Synara tools (starting threads, saving memory, adding Library files) run
+without asking for approval while the group is active. File edits, shell commands, and other tools
+still ask. In a paused or archived group, every tool asks again.
+
 After it starts threads, the coordinator stays on watch. When a thread finishes, fails, hits a
 quota limit, or is interrupted, the coordinator wakes up and posts a short status in its chat. If a
-thread dies, it starts a new thread for the same job or picks another path.
+thread dies, it starts a new thread for the same job or picks another path. Scheduled check-ins
+show in the chat as a compact **Coordinator check-in** row; choose **Show details** to see the
+prompt.
 
 Useful requests:
 
@@ -71,15 +82,19 @@ Link the repository at ~/code/api to this group.
 Every Monday, summarize open pull requests.
 ```
 
-You can also start a thread in a group yourself: open a new chat while the group is active. It
-uses the group's thread model and effort and receives the same instructions and memory.
+You can also start a thread in a group yourself: open a new chat while the group is active. The
+group's **Thread model** and effort are only the starting default. Pick any other model in the
+composer for that chat. If the default provider is not installed or signed in, the composer keeps a
+model that works, so sending is never blocked. The chat still receives the group's instructions and
+memory.
 
 ![Coordinator conversation](./screenshots/groups-coordinator-chat.png)
 
 ## The Group panel and Overview
 
 Open the **Group** panel from the chat header. It shows the group folder, the coordinator and its
-model, a **Focus** card (a short summary of what matters now), and an overview with three tabs:
+model, a **Focus** card (a short summary of what matters now, refreshed after each coordinator
+turn), and an overview with three tabs:
 
 - **Threads** — every thread in the group, sorted into live states.
 - **Pull requests** — PRs opened by group threads, with an **Open on GitHub** link.
@@ -93,24 +108,25 @@ model, a **Focus** card (a short summary of what matters now), and an overview w
 | **Idle**             | The thread is not running and has nothing waiting                                   |
 | **Resolved**         | Archived, its task is done or cancelled, or its PR was merged or closed (collapsed) |
 
-Threads in linked repositories appear here too, labelled with their repository. Right-click a row
+Threads in linked repositories appear here too, labelled with their repository, and stay under
+**Resolved** after their task is done. Right-click a row
 for **Mark resolved** (or **Reopen**) and **Open in split view**.
 
 When any thread is **Waiting on you**, the group's sidebar row shows an amber dot ("A thread needs
 you").
 
-The panel's **Context** section shows the group's Instructions, Notes, Decisions, and Playbook
-files. Instructions and Notes are editable there.
+The panel's **Context** section shows the group's Instructions, Decisions, and Playbook files. Only
+Instructions can be edited there.
 
 ![Group panel overview](./screenshots/groups-overview.png)
 
 ## Instructions and memory
 
-Every turn of every group thread, including threads the group runs in linked repositories,
-receives a context packet with:
+Every turn of every thread in the group, whether the coordinator started it or you did, and
+including threads in linked repositories, receives a context packet with:
 
 - The group **instructions**
-- The group **goal**, if you set one
+- The group **goal**, if you set one, plus the group's decisions and open tasks
 - The **MEMORY.md** index of shared group memory
 - The list of **linked repositories** and the **Library** location
 - The group's default thread model
@@ -124,7 +140,8 @@ Edit these in group settings → **Memory**:
   also added to the packet. The MEMORY.md index is sent either way.
 - **MEMORY.md** — choose **View** to read the coordinator's running memory.
 - **Memory files** — every saved memory note. Type in the note box (for example, "Note that
-  releases go out on Tuesdays") to add one yourself. Notes apply immediately.
+  releases go out on Tuesdays") to add one yourself. Your note is saved under `memory/notes/` and
+  added to the MEMORY.md index right away, so every thread sees it on its next turn.
 
 **How "remember" works.** When you tell the coordinator a preference or a fact ("always use the
 small model for reviews"), it saves the note as `memory/<date>-<slug>.md` and adds one line to the
@@ -177,9 +194,16 @@ These controls live at the bottom of settings → **General**.
 
 When you delete a group:
 
-- Linked repositories and their threads are untouched.
+- Linked repositories and their threads are never deleted.
 - The default Library folder is moved to the trash when possible.
 - A Library folder you chose yourself is never moved or deleted; Synara tells you where it was left.
+- The group folder under `~/Documents/Synara/Groups/` is removed only when it holds nothing but the
+  files Synara created there. If you or a thread added anything, the folder is kept and Synara
+  shows its path ("Folder kept because it has your files").
+
+**Change the coordinator's model.** Pick a new **Coordinator model** in settings → **General** and
+save. The coordinator moves to that model and keeps its transcript. If that provider is turned off
+or not installed, the save is refused and the coordinator keeps running on its old model.
 
 **Continue as a group.** Right-click an ordinary thread and choose **Continue as a group**. Synara
 creates a new group named after the thread, links the thread's project, and opens group setup. The
@@ -192,12 +216,13 @@ coordinator cannot be handed off.
 
 ## Settings reference
 
-Open settings from the gear in the Group panel (**Group settings**).
+Open settings from the gear in the Group panel (**Group settings**). The model pickers list every
+provider's models, just like the composer.
 
 | Section         | Settings                                                                                                                          |
 | --------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| **General**     | Name, Icon, Goal; coordinator Appearance (icon and color); Coordinator model and effort; Thread model and effort; Lifecycle       |
-| **Memory**      | Group instructions; Write memory notes; MEMORY.md; Memory files; Thread memory                                                    |
+| **General**     | Name, Icon, Goal; Coordinator icon and color; Coordinator model and effort; Thread model and effort (defaults); Lifecycle         |
+| **Memory**      | Group instructions; Auto memory (Write memory notes, MEMORY.md); Memory files; Thread memory                                      |
 | **Environment** | Linked repositories; Group folder; Worker environment (Local or Worktree); Library hosting (Location, Git remote, Push on change) |
 | **Plugins**     | Plugins discovered from the group's folder                                                                                        |
 
@@ -211,7 +236,7 @@ Open settings from the gear in the Group panel (**Group settings**).
 | Library (custom)                | The folder you chose in **Library hosting** → **Location**           |
 
 Synara's database is the source of truth; the Markdown files are a mirror. `~/.synara` moves if you
-set `SYNARA_HOME`. Deleting a group does not remove the group folder under `Documents`.
+set `SYNARA_HOME`.
 
 ## Limits and troubleshooting
 
