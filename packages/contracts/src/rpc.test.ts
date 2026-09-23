@@ -7,7 +7,7 @@ import {
   WsBootstrapRpcGroup,
   WsFeatureRpcGroup,
   WsComputerRpcGroup,
-  WsProjectAgentLinkRpcGroup,
+  WsProjectAgentRpcGroup,
   WsProjectsDiscoverScriptsRpc,
   WsProjectsProvisionFromGitHubRpc,
   WsProjectsSubscribeFileChangeRpc,
@@ -47,10 +47,12 @@ describe("WS RPC contracts", () => {
     expect(WsFeatureRpcGroup.requests.has("projects.subscribeFileChange")).toBe(true);
   });
 
-  it("exports project-agent link RPCs in a satellite group", () => {
-    expect(WsProjectAgentLinkRpcGroup.requests.has("projectAgent.linkProject")).toBe(true);
-    expect(WsProjectAgentLinkRpcGroup.requests.has("projectAgent.unlinkProject")).toBe(true);
+  it("exports project-agent RPCs in a satellite group", () => {
+    expect(WsProjectAgentRpcGroup.requests.has("projectAgent.linkProject")).toBe(true);
+    expect(WsProjectAgentRpcGroup.requests.has("projectAgent.unlinkProject")).toBe(true);
+    expect(WsProjectAgentRpcGroup.requests.has("projectAgent.getOverview")).toBe(true);
     expect(WsFeatureRpcGroup.requests.has("projectAgent.linkProject")).toBe(false);
+    expect(WsFeatureRpcGroup.requests.has("projectAgent.getOverview")).toBe(false);
   });
 
   it("exports the automation create RPC", () => {

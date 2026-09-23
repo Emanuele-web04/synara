@@ -29,7 +29,7 @@ import {
   WS_METHODS,
   WsCompatibilityError,
   WsFeatureRpcGroup,
-  WsProjectAgentLinkRpcGroup,
+  WsProjectAgentRpcGroup,
   type AutomationStreamEvent,
   type GitActionProgressEvent,
   type GitCreateDetachedWorktreeResult,
@@ -219,9 +219,7 @@ function awaitWithAbort<A>(promise: Promise<A>, signal: AbortSignal | undefined)
 // real RPC error (or an `unsupported-platform` availability) to render its
 // blocked state. Merging here keeps one socket and one client.
 const makeRpcClient = RpcClient.make(
-  WsFeatureRpcGroup.merge(WsDeviceRpcGroup)
-    .merge(WsComputerRpcGroup)
-    .merge(WsProjectAgentLinkRpcGroup),
+  WsFeatureRpcGroup.merge(WsDeviceRpcGroup).merge(WsComputerRpcGroup).merge(WsProjectAgentRpcGroup),
 );
 const makeBootstrapRpcClient = RpcClient.make(WsBootstrapRpcGroup);
 const REQUEST_TIMEOUT_MS = 60_000;

@@ -1867,9 +1867,16 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsAutomationArchiveRunRpc,
   WsAutomationResolveProposalRpc,
   WsSubscribeAutomationEventsRpc,
+);
+
+// Project-agent RPCs live in a satellite group: folding them into
+// WsFeatureRpcGroup pushes its inferred type past the declaration emit limit.
+export const WsProjectAgentRpcGroup = RpcGroup.make(
   WsProjectAgentGetOverviewRpc,
   WsProjectAgentListSummariesRpc,
   WsProjectAgentConfigureRpc,
+  WsProjectAgentLinkProjectRpc,
+  WsProjectAgentUnlinkProjectRpc,
   WsProjectAgentStartGoalRpc,
   WsProjectAgentUpdateGoalRpc,
   WsProjectAgentPauseGoalRpc,
@@ -1896,9 +1903,4 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsProjectAgentLibraryRestoreRpc,
   WsProjectAgentLibraryStatusRpc,
   WsSubscribeProjectAgentEventsRpc,
-);
-
-export const WsProjectAgentLinkRpcGroup = RpcGroup.make(
-  WsProjectAgentLinkProjectRpc,
-  WsProjectAgentUnlinkProjectRpc,
 );
