@@ -22,7 +22,10 @@ import { getComposerTraitSelection } from "~/components/chat/composerTraits";
 import { resolveRuntimeModelDescriptor } from "~/components/chat/runtimeModelCapabilities";
 import { cn } from "~/lib/utils";
 
-import { modelSelectionsEqual } from "./groupSettingsDialog.logic";
+import {
+  modelSelectionsEqual,
+  resolveGroupModelCatalogPrefetchProviders,
+} from "./groupSettingsDialog.logic";
 
 function useGroupModelCatalog(input: {
   readonly selection: ModelSelection;
@@ -34,8 +37,12 @@ function useGroupModelCatalog(input: {
     selectedProvider: input.selection.provider,
     discoveryEnabled: input.pickerOpen,
     // Warm discovery for the row's provider so dynamic effort levels are known
-    // even when the model picker itself never opens.
-    prefetchProviders: [input.selection.provider],
+    // even when the model picker itself never opens; an open picker warms
+    // every visible provider like the composer's does.
+    prefetchProviders: resolveGroupModelCatalogPrefetchProviders(
+      input.pickerOpen,
+      input.selection.provider,
+    ),
     cwd: resolveProviderDiscoveryCwd({
       activeThreadWorktreePath: null,
       activeProjectCwd: input.projectCwd.length > 0 ? input.projectCwd : null,

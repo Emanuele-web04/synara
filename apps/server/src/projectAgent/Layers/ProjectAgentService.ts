@@ -102,6 +102,7 @@ import { ProjectAgentRepository } from "../../persistence/Services/ProjectAgentR
 import { ProjectionThreadRepository } from "../../persistence/Services/ProjectionThreads.ts";
 import { ProjectAgentServiceError } from "../Errors.ts";
 import { isAllowedGroupCoordinatorCreateTarget } from "../groupCreateAllowlist.ts";
+import { cleanupGroupWorkspaceRoot } from "../../groupWorkspaceScaffold.ts";
 import {
   hashDocumentContent,
   materializeDocumentPath,
@@ -2607,9 +2608,19 @@ export const makeProjectAgentService = Effect.gen(function* () {
                   }),
                 catch: toServiceError("Failed to remove group context files."),
               });
+              // The managed group workspace folder only gets removed when
+              // nothing but Synara-generated instructions remain inside; any
+              // user files keep it on disk and the path goes back to the UI.
+              const workspaceCleanup = yield* cleanupGroupWorkspaceRoot({
+                workspaceRoot: project.workspaceRoot,
+                groupsWorkspaceRoot: serverConfig.groupsWorkspaceRoot,
+              });
+              const workspaceLeftOnDiskPath =
+                workspaceCleanup.status === "kept" ? workspaceCleanup.workspaceRoot : null;
               const deleted: ProjectAgentDeleteGroupResult = {
                 deletedProjectId: input.projectId,
                 libraryLeftOnDiskPath,
+                workspaceLeftOnDiskPath,
               };
               return deleted;
             }),
