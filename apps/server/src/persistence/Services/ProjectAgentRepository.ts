@@ -41,6 +41,8 @@ export interface ProjectAgentConfigSummaryRow {
   readonly coordinatorColor: string | null;
   readonly revision: ProjectAgentConfig["revision"];
   readonly goalStatus: ProjectGoalStatus | null;
+  readonly pausedAt: string | null;
+  readonly archivedAt: string | null;
 }
 
 export interface ProjectAgentRepositoryShape {
@@ -152,6 +154,18 @@ export interface ProjectAgentRepositoryShape {
     readonly logicalPath: string;
     readonly diskHash: string;
   }) => Effect.Effect<void, ProjectAgentRepositoryError>;
+  /** Remove one document entirely: revisions plus its head row. */
+  readonly deleteDocument: (input: {
+    readonly projectId: ProjectId;
+    readonly logicalPath: string;
+  }) => Effect.Effect<void, ProjectAgentRepositoryError>;
+  /** Remove every project-agent row for a project (config, goals, tasks,
+   *  evidence, documents, activity, digests, inbox, cursors, index, receipts).
+   *  Used when a group is deleted; the orchestration project.delete command
+   *  still runs afterwards for the projection layer. */
+  readonly deleteProjectData: (
+    projectId: ProjectId,
+  ) => Effect.Effect<void, ProjectAgentRepositoryError>;
   readonly readDocumentRevisions: (input: {
     readonly projectId: ProjectId;
     readonly logicalPaths: ReadonlyArray<string>;

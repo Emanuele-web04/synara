@@ -2,7 +2,21 @@ import type {
   ProjectActivity,
   ProjectAgentBackfillInput,
   ProjectAgentConfigureInput,
+  ProjectAgentDeleteGroupInput,
+  ProjectAgentDeleteGroupResult,
+  ProjectAgentForgetInput,
+  ProjectAgentForgetResult,
+  ProjectAgentGroupControlInput,
+  ProjectAgentLibraryAddInput,
+  ProjectAgentLibraryAddResult,
+  ProjectAgentLibraryListInput,
+  ProjectAgentLibraryListResult,
   ProjectAgentLinkProjectInput,
+  ProjectAgentLinkRepositoryInput,
+  ProjectAgentListThreadsInput,
+  ProjectAgentListThreadsResult,
+  ProjectAgentRememberInput,
+  ProjectAgentRememberResult,
   ProjectAgentUnlinkProjectInput,
   ProjectAgentContextPacket,
   ProjectAgentCreateTaskInput,
@@ -68,6 +82,57 @@ export interface ProjectAgentServiceShape {
     input: ProjectAgentUnlinkProjectInput,
     principal: ProjectAgentPrincipal,
   ) => Effect.Effect<ProjectAgentOverview, ProjectAgentServiceError>;
+  readonly linkRepository: (
+    input: ProjectAgentLinkRepositoryInput,
+    principal: ProjectAgentPrincipal,
+  ) => Effect.Effect<ProjectAgentOverview, ProjectAgentServiceError>;
+  readonly remember: (
+    input: ProjectAgentRememberInput,
+    principal: ProjectAgentPrincipal,
+  ) => Effect.Effect<ProjectAgentRememberResult, ProjectAgentServiceError>;
+  readonly forget: (
+    input: ProjectAgentForgetInput,
+    principal: ProjectAgentPrincipal,
+  ) => Effect.Effect<ProjectAgentForgetResult, ProjectAgentServiceError>;
+  readonly libraryList: (
+    input: ProjectAgentLibraryListInput,
+    principal: ProjectAgentPrincipal,
+  ) => Effect.Effect<ProjectAgentLibraryListResult, ProjectAgentServiceError>;
+  readonly libraryAdd: (
+    input: ProjectAgentLibraryAddInput,
+    principal: ProjectAgentPrincipal,
+  ) => Effect.Effect<ProjectAgentLibraryAddResult, ProjectAgentServiceError>;
+  readonly listGroupThreads: (
+    input: ProjectAgentListThreadsInput,
+    principal: ProjectAgentPrincipal,
+  ) => Effect.Effect<ProjectAgentListThreadsResult, ProjectAgentServiceError>;
+  readonly pauseGroup: (
+    input: ProjectAgentGroupControlInput,
+    principal: ProjectAgentPrincipal,
+  ) => Effect.Effect<ProjectAgentOverview, ProjectAgentServiceError>;
+  readonly resumeGroup: (
+    input: ProjectAgentGroupControlInput,
+    principal: ProjectAgentPrincipal,
+  ) => Effect.Effect<ProjectAgentOverview, ProjectAgentServiceError>;
+  readonly archiveGroup: (
+    input: ProjectAgentGroupControlInput,
+    principal: ProjectAgentPrincipal,
+  ) => Effect.Effect<ProjectAgentOverview, ProjectAgentServiceError>;
+  readonly unarchiveGroup: (
+    input: ProjectAgentGroupControlInput,
+    principal: ProjectAgentPrincipal,
+  ) => Effect.Effect<ProjectAgentOverview, ProjectAgentServiceError>;
+  readonly restartCoordinator: (
+    input: ProjectAgentGroupControlInput,
+    principal: ProjectAgentPrincipal,
+  ) => Effect.Effect<ProjectAgentOverview, ProjectAgentServiceError>;
+  readonly deleteGroup: (
+    input: ProjectAgentDeleteGroupInput,
+    principal: ProjectAgentPrincipal,
+  ) => Effect.Effect<ProjectAgentDeleteGroupResult, ProjectAgentServiceError>;
+  readonly assertGroupCoordinatorTurnAllowed: (input: {
+    readonly threadId: ThreadId;
+  }) => Effect.Effect<void, ProjectAgentServiceError>;
   readonly assertCallerMayCreateThreadInProject: (input: {
     readonly callerThreadId: ThreadId;
     readonly targetProjectId: ProjectId;

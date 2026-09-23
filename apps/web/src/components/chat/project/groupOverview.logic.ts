@@ -10,10 +10,14 @@ import type { AutomationDefinition, ProjectId, ProjectTask, ThreadId } from "@sy
 import type { AppState } from "../../../storeState";
 import type { ThreadPullRequest } from "../../../hooks/useThreadPullRequests";
 import type { SidebarThreadSummary } from "../../../types";
-import { canSessionAnswerPendingRequests, isLatestTurnSettled } from "../../../session-logic";
-import { isThreadActivelyWorking } from "../../Sidebar.logic";
+import {
+  groupThreadNeedsAttention as sharedGroupThreadNeedsAttention,
+  resolveGroupThreadState,
+  type GroupThreadSectionId,
+  type GroupThreadStateThread,
+} from "@synara/shared/groupThreadState";
 
-export type GroupThreadSectionId = "waiting" | "working" | "review" | "idle" | "resolved";
+export type { GroupThreadSectionId };
 
 export interface GroupThreadSectionSpec {
   readonly id: GroupThreadSectionId;
@@ -64,83 +68,12 @@ export const GROUP_THREAD_SECTIONS: readonly GroupThreadSectionSpec[] = [
   },
 ];
 
-type GroupThreadStateThread = Pick<
-  SidebarThreadSummary,
-  | "archivedAt"
-  | "hasPendingApprovals"
-  | "hasPendingUserInput"
-  | "hasLiveTailWork"
-  | "session"
-  | "latestTurn"
->;
-
-/**
- * A thread needs the user: a live approval/input request, or a failed session/turn.
- * Archived threads and dead sessions can't receive an answer, so their stale pending
- * flags never surface — this is the same masking `resolveThreadStatusPill` applies.
- */
-export function groupThreadNeedsAttention(thread: GroupThreadStateThread): boolean {
-  if (thread.archivedAt != null) {
-    return false;
-  }
-  if (isGroupThreadErrored(thread)) {
-    return true;
-  }
-  return (
-    canSessionAnswerPendingRequests(thread.session) &&
-    (thread.hasPendingApprovals || thread.hasPendingUserInput)
-  );
-}
-
-function isGroupThreadErrored(thread: GroupThreadStateThread): boolean {
-  return (
-    thread.session?.status === "error" ||
-    (thread.latestTurn?.state === "error" && isLatestTurnSettled(thread.latestTurn, thread.session))
-  );
-}
-
-/**
- * Live-state bucket for one group thread, derived from the same inputs the sidebar
- * uses (pending request flags, session status, latest turn) plus the group's task
- * and PR data. Terminal markers (archive, finished task) win over stale pending
- * flags; an open non-draft PR only counts as "review" once the thread is not still
- * producing work, and a merged/closed PR resolves the thread.
- * There is no "landing" bucket: `useThreadPullRequests` does not expose review or
- * queue state, so an approved-but-unmerged PR cannot be distinguished here.
- */
-export function resolveGroupThreadState(input: {
-  readonly thread: GroupThreadStateThread;
-  readonly task: Pick<ProjectTask, "status" | "archivedAt"> | null;
-  readonly indexArchived: boolean;
-  readonly pullRequest: Pick<NonNullable<ThreadPullRequest>, "state" | "isDraft"> | null;
-}): GroupThreadSectionId {
-  const { thread, task } = input;
-  if (
-    thread.archivedAt != null ||
-    input.indexArchived ||
-    task?.archivedAt != null ||
-    task?.status === "done" ||
-    task?.status === "cancelled"
-  ) {
-    return "resolved";
-  }
-  const canAnswer = canSessionAnswerPendingRequests(thread.session);
-  const hasPendingRequest = canAnswer && (thread.hasPendingApprovals || thread.hasPendingUserInput);
-  if (hasPendingRequest || isGroupThreadErrored(thread)) {
-    return "waiting";
-  }
-  if (isThreadActivelyWorking(thread) || thread.session?.status === "connecting") {
-    return "working";
-  }
-  const pullRequest = input.pullRequest;
-  if (pullRequest?.state === "open" && pullRequest.isDraft !== true) {
-    return "review";
-  }
-  if (pullRequest !== null && pullRequest.state !== "open") {
-    return "resolved";
-  }
-  return "idle";
-}
+// The bucket derivation lives in @synara/shared so the web panel and the
+// server's `synara_project_list_threads` tool report the same state; this
+// alias keeps the needs-attention call sites on the group-thread vocabulary.
+export const groupThreadNeedsAttention: (thread: GroupThreadStateThread) => boolean =
+  sharedGroupThreadNeedsAttention;
+export { resolveGroupThreadState };
 
 /**
  * Group membership: threads started inside the group folder plus threads the group

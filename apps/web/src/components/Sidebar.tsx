@@ -118,6 +118,7 @@ import { formatRelativeTime } from "../lib/relativeTime";
 import {
   isMacNavigatorPlatform,
   newCommandId,
+  newMessageId,
   newProjectId,
   newThreadId,
   randomUUID,
@@ -173,7 +174,11 @@ import {
   readNativeApiServerCapability,
 } from "../nativeApi";
 import { isHomeChatContainerProject, prewarmHomeChatProject } from "../lib/chatProjects";
-import { collectGroupProjectIds, isGroupContainerProject } from "../lib/groupProjects";
+import {
+  collectGroupProjectIds,
+  createGroupProject,
+  isGroupContainerProject,
+} from "../lib/groupProjects";
 import { useProjectEnvironmentStore } from "../projectEnvironmentStore";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useLatestProjectStore } from "../latestProjectStore";
@@ -644,6 +649,11 @@ function resolveWorktreeBadgeLabel(
     envMode: thread.envMode,
     worktreePath: thread.worktreePath,
   }).worktreeBadgeLabel;
+}
+
+/** User message the coordinator receives when a thread is handed to a group. */
+function groupPickupMessageText(sourceThread: Pick<Thread, "id" | "title">): string {
+  return `A thread was handed to this group for you to pick up: "${sourceThread.title ?? "Untitled thread"}" (thread id ${sourceThread.id}). Use synara_read_thread to read it and continue the work it was doing.`;
 }
 
 type ThreadMetaChip = {
@@ -1633,6 +1643,8 @@ export default function Sidebar() {
   const [projectAgentDialogState, setProjectAgentDialogState] = useState<{
     projectId: ProjectId;
     mode: "onboarding" | "edit";
+    /** Posted to the coordinator as its first turn once onboarding saves. */
+    firstMessage?: string;
   } | null>(null);
   // A coordinator activation scheduled from onboarding outlives the dialog: its
   // poll/timeout must not yank the user to that thread after they have moved on,
@@ -2979,6 +2991,114 @@ export default function Sidebar() {
     },
     [createThreadHandoff],
   );
+
+  // Posts the "pick this thread up" user message to a group's coordinator once
+  // its coordinator thread exists (right after onboarding save, or immediately
+  // when moving a thread into a configured group).
+  const postGroupPickupMessage = useCallback(
+    async (coordinatorThreadId: ThreadId, text: string): Promise<boolean> => {
+      const api = readNativeApi();
+      if (!api) return false;
+      // Run the coordinator under its configured runtime mode — never a
+      // blanket full-access turn.
+      const runtimeMode =
+        useStore.getState().threadShellById?.[coordinatorThreadId]?.runtimeMode ??
+        "approval-required";
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "thread.turn.start",
+          commandId: newCommandId(),
+          threadId: coordinatorThreadId,
+          message: {
+            messageId: newMessageId(),
+            role: "user",
+            text,
+            attachments: [],
+          },
+          runtimeMode,
+          interactionMode: "default",
+          createdAt: new Date().toISOString(),
+        });
+        return true;
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not notify the coordinator",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        });
+        return false;
+      }
+    },
+    [],
+  );
+
+  const continueThreadAsGroup = useCallback(async (thread: Thread) => {
+    const api = readNativeApi();
+    if (!api?.projectAgent) return;
+    const groupId = await createGroupProject({ title: thread.title ?? "New group" }).catch(
+      () => null,
+    );
+    if (!groupId) {
+      toastManager.add({
+        type: "error",
+        title: "Unable to create group",
+        description: "The Groups workspace is not ready yet — try again in a moment.",
+      });
+      return;
+    }
+    const overview = await api.projectAgent
+      .linkProject({
+        requestId: randomUUID(),
+        projectId: groupId,
+        linkedProjectId: thread.projectId,
+      })
+      .catch(() => null);
+    if (!overview) {
+      toastManager.add({
+        type: "error",
+        title: "Group created, but the project could not be linked",
+        description: "Link the repository from the group's settings instead.",
+      });
+    }
+    setProjectAgentDialogState({
+      projectId: groupId,
+      mode: "onboarding",
+      firstMessage: groupPickupMessageText(thread),
+    });
+  }, []);
+  const moveThreadToGroup = useCallback(
+    async (thread: Thread, targetGroupProjectId: ProjectId) => {
+      const api = readNativeApi();
+      if (!api?.projectAgent) return;
+      const overview = await api.projectAgent
+        .linkProject({
+          requestId: randomUUID(),
+          projectId: targetGroupProjectId,
+          linkedProjectId: thread.projectId,
+        })
+        .catch(() => null);
+      if (!overview) {
+        toastManager.add({
+          type: "error",
+          title: "Could not move the thread to the group",
+          description: "The project may already be linked to that group.",
+        });
+        return;
+      }
+      const coordinatorThreadId = overview.config?.coordinatorThreadId;
+      if (coordinatorThreadId) {
+        await postGroupPickupMessage(coordinatorThreadId, groupPickupMessageText(thread));
+      } else {
+        toastManager.add({
+          type: "info",
+          title: "Project linked",
+          description: "Set up the group's coordinator to hand the thread over.",
+        });
+      }
+    },
+    [postGroupPickupMessage],
+  );
+
   const handleThreadContextMenu = useCallback(
     async (
       threadId: ThreadId,
@@ -3075,6 +3195,23 @@ export default function Sidebar() {
             : []),
           { id: "copy-thread-id", label: "Copy Thread ID", icon: THREAD_CONTEXT_MENU_ICONS.copy },
           ...(options?.extraItems ?? []),
+          // Group actions only make sense for threads in ordinary (non-group)
+          // projects; group threads already belong to a group.
+          ...(groupProjectIdSet.has(thread.projectId) || thread.parentThreadId
+            ? []
+            : [
+                {
+                  id: "continue-as-group",
+                  label: "Continue as a group",
+                  icon: THREAD_CONTEXT_MENU_ICONS.group,
+                  separatorBefore: true,
+                },
+                {
+                  id: "move-to-group",
+                  label: "Move to group…",
+                  icon: THREAD_CONTEXT_MENU_ICONS.group,
+                },
+              ]),
           // Subagent threads are archived and restored through their parent
           // (thread.archive cascades); archiving one alone would strand it with
           // no sidebar or Archived-panel row to restore it from.
@@ -3225,6 +3362,46 @@ export default function Sidebar() {
         copyThreadIdToClipboard(threadId);
         return;
       }
+      if (clicked === "continue-as-group") {
+        await continueThreadAsGroup(thread);
+        return;
+      }
+      if (clicked === "move-to-group") {
+        // Paused and archived groups can't run a coordinator turn, so they
+        // aren't move targets — the server refuses the turn either way.
+        const eligibleGroups = projects.filter((project) => {
+          const summary = summaryFor(project.id);
+          return (
+            groupProjectIdSet.has(project.id) &&
+            summary?.archivedAt == null &&
+            summary?.pausedAt == null
+          );
+        });
+        if (eligibleGroups.length === 0) {
+          toastManager.add({
+            type: "info",
+            title: "No groups yet",
+            description: "Create a group first, then move this thread into it.",
+          });
+          return;
+        }
+        const picked = await api.contextMenu.show(
+          eligibleGroups.map((project) => ({
+            id: `move-to-group:${project.id}` as const,
+            label: project.name,
+            icon: THREAD_CONTEXT_MENU_ICONS.group,
+          })),
+          position,
+        );
+        if (typeof picked === "string" && picked.startsWith("move-to-group:")) {
+          const targetProjectId = picked.slice("move-to-group:".length);
+          const target = eligibleGroups.find((project) => project.id === targetProjectId);
+          if (target) {
+            await moveThreadToGroup(thread, target.id);
+          }
+        }
+        return;
+      }
       if (clicked === "return-to-single-chat") {
         await options?.onExtraAction?.("return-to-single-chat");
         return;
@@ -3244,17 +3421,21 @@ export default function Sidebar() {
       copyThreadIdToClipboard,
       clearDismissedThreadStatus,
       clearThreadNotification,
+      continueThreadAsGroup,
       groupProjectIdSet,
       handoffThread,
       markThreadUnread,
+      moveThreadToGroup,
       navigate,
       openRenameThreadDialog,
       pinnedThreadIdSet,
       projectCwdById,
+      projects,
       providerStatuses,
       resolveThreadStatusForSidebar,
       serverSettingsQuery.data?.providers,
       sidebarThreadSummaryById,
+      summaryFor,
       toggleThreadPinned,
     ],
   );
@@ -7024,6 +7205,10 @@ export default function Sidebar() {
           onSaved={(overview) => {
             if (projectAgentDialogState?.mode !== "onboarding") return;
             const coordinatorThreadId = overview.config?.coordinatorThreadId;
+            const firstMessage = projectAgentDialogState.firstMessage;
+            if (coordinatorThreadId && firstMessage) {
+              void postGroupPickupMessage(coordinatorThreadId, firstMessage);
+            }
             if (coordinatorThreadId) {
               pendingCoordinatorActivationRef.current?.cancel();
               pendingCoordinatorActivationRef.current = {

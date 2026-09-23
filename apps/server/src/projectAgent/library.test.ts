@@ -499,7 +499,9 @@ it.layer(TestLayer)("group library", (it) => {
       expect(marker).toBe(`synara-library\n${testProjectId}\n`);
       // The default location stays open for the adoption: .git at the managed
       // root is never foreign; the same state at a custom path is refused.
-      const stateDir = path.join(root, "state");
+      // The state dir must be a sibling, not nested: a library root that
+      // contains the state dir is an ancestor of it and correctly refused.
+      const stateDir = path.join(path.dirname(root), "state");
       yield* assertLibraryRootLocation({
         root,
         stateDir,

@@ -107,6 +107,10 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly noBrowser: boolean;
   readonly authToken: string | undefined;
   readonly desktopShutdownToken?: string | undefined;
+  // Overrides the platform trash directory group deletes move libraries into.
+  // Left unset in production; tests point it at a temp dir so nothing touches
+  // the real ~/.Trash.
+  readonly trashDir?: string | undefined;
   readonly migrationDivergenceConsent?: string | undefined;
   readonly autoBootstrapProjectFromCwd: boolean;
   readonly logProviderEvents: boolean;
@@ -239,7 +243,11 @@ export const resolveCanonicalWorkspaceRoots = Effect.fn(function* (input: {
 export class ServerConfig extends ServiceMap.Service<ServerConfig, ServerConfigShape>()(
   "synara/config/ServerConfig",
 ) {
-  static readonly layerTest = (cwd: string, baseDirOrPrefix: string | { prefix: string }) =>
+  static readonly layerTest = (
+    cwd: string,
+    baseDirOrPrefix: string | { prefix: string },
+    overrides?: Partial<ServerConfigShape>,
+  ) =>
     Layer.effect(
       ServerConfig,
       Effect.gen(function* () {
@@ -284,6 +292,10 @@ export class ServerConfig extends ServiceMap.Service<ServerConfig, ServerConfigS
           publicUrl: undefined,
           allowInsecureRemote: false,
           noBrowser: false,
+          // Tests must never write to the real ~/.Trash — default the trash
+          // target inside the scoped base dir unless overridden.
+          trashDir: path.join(baseDir, "trash"),
+          ...overrides,
         } satisfies ServerConfigShape;
       }),
     );

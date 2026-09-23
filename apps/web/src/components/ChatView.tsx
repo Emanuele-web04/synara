@@ -330,6 +330,8 @@ import { shouldShowCoordinatorSuggestions } from "./chat/project/coordinatorSugg
 import { ProjectPanel } from "./chat/project/ProjectPanel";
 import { LibraryPanel } from "./chat/group/LibraryPanel";
 import { useProjectAgentSummaries } from "./chat/project/useProjectAgentSummaries";
+import { useProjectAgentSummariesStore } from "./chat/project/useProjectAgentSummaries";
+import { GroupPausedBanner } from "./chat/group/GroupPausedBanner";
 import { useProjectInstructionsSource } from "./chat/project/useProjectInstructionsSource";
 import {
   resolveProjectPanelEnabled,
@@ -1687,10 +1689,11 @@ export default function ChatView({
     );
     return derivePromptHistoryFromMessages([...activeMessages, ...pendingOptimisticMessages]);
   }, [activeThread?.messages, optimisticUserMessages]);
-  const { coordinatorThreadIds, summariesByProjectId } = useProjectAgentSummaries();
+  const { coordinatorThreadIds, summariesByProjectId, summaryFor } = useProjectAgentSummaries();
   const isCoordinatorConversation = Boolean(
     activeThread && coordinatorThreadIds.has(activeThread.id),
   );
+  const activeGroupSummary = isCoordinatorConversation ? summaryFor(activeThread?.projectId) : null;
   const [coordinatorSettingsOpen, setCoordinatorSettingsOpen] = useState(false);
   const [coordinatorSettingsSection, setCoordinatorSettingsSection] = useState<
     GroupSettingsSection | undefined
@@ -6157,6 +6160,35 @@ export default function ChatView({
                     contentInsetBottomPx={composerTranscriptInsetPx}
                     contentInsetBottomClearancePx={composerOverlayBottomClearancePx}
                   />
+                  {/* The composer floats `bottom-full` over this trailing
+                      block, so the last in-flow element must reserve the
+                      same `pb-28` clearance CoordinatorSuggestions does or
+                      the composer surface covers its controls. */}
+                  {isCoordinatorConversation && activeGroupSummary?.pausedAt ? (
+                    <div
+                      className={cn(
+                        CHAT_COLUMN_GUTTER_CLASS_NAME,
+                        showCoordinatorSuggestions ? "pb-2" : "pb-28",
+                      )}
+                    >
+                      <GroupPausedBanner
+                        projectId={activeThread!.projectId}
+                        onResume={async () => {
+                          const api = readNativeApi();
+                          if (!api?.projectAgent || !activeThread) return;
+                          const overview = await api.projectAgent
+                            .resumeGroup({
+                              requestId: crypto.randomUUID(),
+                              projectId: activeThread.projectId,
+                            })
+                            .catch(() => null);
+                          if (overview) {
+                            useProjectAgentSummariesStore.getState().applyOverview(overview);
+                          }
+                        }}
+                      />
+                    </div>
+                  ) : null}
                   {showCoordinatorSuggestions ? (
                     <CoordinatorSuggestions
                       onOpenSettings={(section) => {
