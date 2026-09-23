@@ -5,13 +5,15 @@ import {
   CHAT_COLUMN_GUTTER_CLASS_NAME,
 } from "../composerPickerStyles";
 import {
-  COORDINATOR_SUGGESTION_CHIPS,
+  type CoordinatorSuggestionChip,
   coordinatorSuggestionSection,
 } from "./coordinatorSuggestions.logic";
 
 export function CoordinatorSuggestions({
+  chips,
   onOpenSettings,
 }: {
+  chips: readonly CoordinatorSuggestionChip[];
   onOpenSettings: (section: GroupSettingsSection) => void;
 }) {
   return (
@@ -19,7 +21,7 @@ export function CoordinatorSuggestions({
       <div className={cn(CHAT_COLUMN_FRAME_CLASS_NAME, "flex flex-col gap-2 px-1")}>
         <div className="text-ui text-muted-foreground">Suggestions</div>
         <div className="flex flex-wrap gap-2">
-          {COORDINATOR_SUGGESTION_CHIPS.map((label) => (
+          {chips.map((label) => (
             <button
               key={label}
               type="button"

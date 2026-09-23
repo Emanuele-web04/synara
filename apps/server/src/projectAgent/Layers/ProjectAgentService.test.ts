@@ -6,6 +6,7 @@ import { assert, it } from "@effect/vitest";
 import {
   AutomationId,
   DEFAULT_SERVER_SETTINGS,
+  ProjectActivityId,
   ProjectDocumentRevisionId,
   ProjectGoalId,
   ProjectId,
@@ -18,7 +19,8 @@ import {
   type ServerSettings,
 } from "@synara/contracts";
 import { memoryThreadDocumentPath } from "@synara/shared/projectAgent";
-import { Effect, Layer, Option, Stream } from "effect";
+import { Cause, Deferred, Effect, Fiber, Layer, Option, Stream } from "effect";
+import { TestClock } from "effect/testing";
 
 import { ServerConfig } from "../../config.ts";
 import { TextGeneration } from "../../git/Services/TextGeneration.ts";
@@ -154,6 +156,7 @@ function makeTestLayer(options?: {
   const automationDeletes: string[] = [];
   const runNowCalls: string[] = [];
   const automationRuns: Array<{ readonly id: string }> = [];
+  const digestGenerationInputs: unknown[] = [];
   let failFirstImport = options?.failFirstImport === true;
   let shellBatchCalls = 0;
   const snapshotLayer = Layer.effect(
@@ -352,6 +355,7 @@ function makeTestLayer(options?: {
     automationDeletes,
     runNowCalls,
     automationRuns,
+    digestGenerationInputs,
     threadShells,
     shellBatchCalls: () => shellBatchCalls,
     layer: ProjectAgentServiceLive.pipe(
@@ -360,7 +364,14 @@ function makeTestLayer(options?: {
       Layer.provide(automationLayer),
       Layer.provide(serverSettingsLayer),
       Layer.provide(providerHealthLayer),
-      Layer.provide(Layer.succeed(TextGeneration, {} as unknown as TextGeneration["Service"])),
+      Layer.provide(
+        Layer.succeed(TextGeneration, {
+          generateProjectDigest: (input: unknown) => {
+            digestGenerationInputs.push(input);
+            return Effect.succeed({ summary: "Digest refreshed by test.", focusItems: [] });
+          },
+        } as unknown as TextGeneration["Service"]),
+      ),
       Layer.provide(
         Layer.succeed(GitCore, {
           withMutation: (_cwd: string, effect: Effect.Effect<unknown, unknown, unknown>) => effect,
@@ -1410,6 +1421,180 @@ it.effect("resolves linked-repo workers through the task assignment", () => {
       `inbox/${linkedWorkerThreadId}/report.md`,
     );
     assert.equal(Option.isSome(report), true);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("refreshes the digest when the coordinator's own turn settles", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* service.configure(
+      {
+        requestId: "req-coordinator-settle",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    const coordinatorThreadId = overview.config?.coordinatorThreadId;
+    assert.ok(coordinatorThreadId);
+    const seeded = yield* repository.getDigest(groupId);
+    assert.equal(Option.isSome(seeded) ? seeded.value.summary : null, "Coordinator is ready.");
+    // A coordinator settle records the wake-skip activity and must re-arm the
+    // debounced digest — the Focus card kept the seeded summary when it did not.
+    yield* service.ingestSettledThreadEvent({
+      threadId: coordinatorThreadId,
+      sourceEventId: "coordinator-settle-1",
+      eventType: "thread.turn-diff-completed",
+      createdAt: now,
+    });
+    yield* TestClock.adjust("61 seconds");
+    let digest: Option.Option<{ summary: string }> = Option.none();
+    for (let i = 0; i < 100 && Option.isNone(digest); i += 1) {
+      const found = yield* repository.getDigest(groupId);
+      if (Option.isSome(found) && found.value.summary === "Digest refreshed by test.") {
+        digest = found;
+      } else {
+        // The debounce fiber runs real (SQLite) work the test clock skips; let
+        // the microtask queue drain so it can land.
+        yield* Effect.promise(() => new Promise((resolve) => setImmediate(resolve)));
+      }
+    }
+    assert.equal(Option.isSome(digest), true);
+  }).pipe(Effect.provide(Layer.merge(harness.layer, TestClock.layer())));
+});
+
+it.effect("reports member threads, linked repos, and setup flags in summaries", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* service.configure(
+      {
+        requestId: "req-summary-fields",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+        // The dialog writes the goal text onto the config — hasGoal must see it
+        // even before any goal row is authorized.
+        goal: "Ship it",
+      },
+      { kind: "user" },
+    );
+    const coordinatorThreadId = overview.config?.coordinatorThreadId;
+    assert.ok(coordinatorThreadId);
+    const goalId = ProjectGoalId.makeUnsafe("goal-summary");
+    yield* repository.saveGoal(
+      {
+        id: goalId,
+        projectId: groupId,
+        objective: "Ship it",
+        authorizationSource: "user",
+        scopeVersion: 1,
+        acceptanceCriteria: null,
+        limits,
+        status: "active",
+        continuationCount: 0,
+        workerCreationCount: 0,
+        authorizedAt: now,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+      },
+      null,
+    );
+    // A worker the coordinator dispatched into the linked repo: the sidebar
+    // bucket needs it in memberThreadIds even though its projectId is the repo.
+    const linkedWorkerThreadId = ThreadId.makeUnsafe("thread-linked-summary-worker");
+    yield* repository.saveTask(
+      {
+        id: ProjectTaskId.makeUnsafe("task-summary"),
+        projectId: groupId,
+        goalId,
+        title: "Patch repo",
+        description: null,
+        acceptanceCriteria: null,
+        status: "running",
+        dependsOnTaskIds: [],
+        assignedThreadId: linkedWorkerThreadId,
+        repairCount: 0,
+        archivedAt: null,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+      },
+      null,
+    );
+    // A worker whose task finished belongs in the Overview's Resolved
+    // section — it must not be counted under the group forever.
+    const finishedWorkerThreadId = ThreadId.makeUnsafe("thread-linked-finished-worker");
+    yield* repository.saveTask(
+      {
+        id: ProjectTaskId.makeUnsafe("task-summary-done"),
+        projectId: groupId,
+        goalId,
+        title: "Finished patch",
+        description: null,
+        acceptanceCriteria: null,
+        status: "done",
+        dependsOnTaskIds: [],
+        assignedThreadId: finishedWorkerThreadId,
+        repairCount: 0,
+        archivedAt: null,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+      },
+      null,
+    );
+    // An archived task's worker stays out even while the task reads open.
+    const archivedWorkerThreadId = ThreadId.makeUnsafe("thread-linked-archived-worker");
+    yield* repository.saveTask(
+      {
+        id: ProjectTaskId.makeUnsafe("task-summary-archived"),
+        projectId: groupId,
+        goalId,
+        title: "Archived patch",
+        description: null,
+        acceptanceCriteria: null,
+        status: "running",
+        dependsOnTaskIds: [],
+        assignedThreadId: archivedWorkerThreadId,
+        repairCount: 0,
+        archivedAt: now,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+      },
+      null,
+    );
+    yield* service.linkProject(
+      {
+        requestId: "req-summary-link",
+        projectId: groupId,
+        linkedProjectId: ordinaryId,
+      },
+      { kind: "user" },
+    );
+    yield* service.writeDocument(
+      {
+        requestId: "req-summary-instructions",
+        projectId: groupId,
+        logicalPath: "instructions.md",
+        content: "# Instructions\n\nCheck spelling.\n",
+      },
+      { kind: "user" },
+    );
+    const listed = yield* service.listSummaries({}, { kind: "user" });
+    const row = listed.summaries.find((summary) => summary.projectId === groupId);
+    assert.ok(row);
+    assert.equal(row.hasGoal, true);
+    assert.equal(row.instructionsConfigured, true);
+    assert.deepEqual(row.linkedProjectIds, [ordinaryId]);
+    assert.equal(row.memberThreadIds?.includes(coordinatorThreadId), true);
+    assert.equal(row.memberThreadIds?.includes(linkedWorkerThreadId), true);
+    assert.equal(row.memberThreadIds?.includes(finishedWorkerThreadId), false);
+    assert.equal(row.memberThreadIds?.includes(archivedWorkerThreadId), false);
   }).pipe(Effect.provide(harness.layer));
 });
 
@@ -3218,6 +3403,191 @@ it.effect("delete aborts atomically when a group thread refuses to delete", () =
     );
     assert.equal(stillThere, true);
     assert.equal(overview.config?.coordinatorThreadId != null, true);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("requireEmpty delete succeeds on a group nothing was added to", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const overview = yield* configureTestGroup(service, "req-empty-setup");
+    // Listing initializes the managed library — its seeded Artifacts scaffold
+    // must still count as empty.
+    yield* service.libraryList({ projectId: groupId }, { kind: "user" });
+
+    const result = yield* service.deleteGroup(
+      {
+        requestId: "req-empty-del",
+        projectId: groupId,
+        confirmName: "Alpha",
+        requireEmpty: true,
+      },
+      { kind: "user" },
+    );
+    assert.equal(result.deletedProjectId, groupId);
+    assert.equal(overview.config?.coordinatorThreadId != null, true);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("requireEmpty delete refuses once anything landed and leaves the group intact", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    yield* configureTestGroup(service, "req-notempty-setup");
+    // A member thread the client-side probe could have missed — the server
+    // re-checks under the lock instead of trusting it.
+    yield* repository.upsertThreadIndex({
+      projectId: groupId,
+      threadId: groupMemberThreadId,
+      excluded: false,
+      archived: false,
+      summaryStatus: "covered",
+      lastUpdatedAt: now,
+      lastSummarizedAt: now,
+    });
+
+    const dispatchesBefore = harness.dispatched.length;
+    const exit = yield* Effect.exit(
+      service.deleteGroup(
+        {
+          requestId: "req-notempty-del",
+          projectId: groupId,
+          confirmName: "Alpha",
+          requireEmpty: true,
+        },
+        { kind: "user" },
+      ),
+    );
+    assert.equal(exit._tag, "Failure");
+    if (exit._tag === "Failure") {
+      const failure = Cause.findErrorOption(exit.cause);
+      assert.equal(Option.isSome(failure), true);
+      if (Option.isSome(failure)) {
+        assert.equal(failure.value.code, "conflict");
+        assert.match(failure.value.message, /no longer empty/);
+      }
+    }
+
+    // Nothing was torn down: no thread or project delete ran, config intact.
+    assert.equal(harness.dispatched.length, dispatchesBefore);
+    const config = yield* repository.getConfig(groupId);
+    assert.equal(Option.isSome(config), true);
+    const index = yield* repository.listThreadIndex(groupId);
+    assert.equal(
+      index.some((entry) => entry.threadId === groupMemberThreadId),
+      true,
+    );
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("skips the digest model call when the digest inputs did not change", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    yield* configureTestGroup(service, "req-digest-skip-setup");
+
+    yield* service.refreshDigest(
+      { projectId: groupId, requestId: "req-digest-1" },
+      { kind: "user" },
+    );
+    assert.equal(harness.digestGenerationInputs.length, 1);
+
+    // Same inputs: the refresh short-circuits before any model call.
+    yield* service.refreshDigest(
+      { projectId: groupId, requestId: "req-digest-2" },
+      { kind: "user" },
+    );
+    assert.equal(harness.digestGenerationInputs.length, 1);
+
+    // Wake bookkeeping is not digest input — a wake-skipped row neither
+    // reaches the model prompt nor dirties the input signature.
+    yield* repository.appendActivity({
+      id: ProjectActivityId.makeUnsafe("pa-skip-1"),
+      projectId: groupId,
+      kind: "wake-skipped",
+      actorKind: "system",
+      actorThreadId: null,
+      goalId: null,
+      taskId: null,
+      source: null,
+      summary: "wake skipped: coordinator idle",
+      createdAt: now,
+    });
+    yield* service.refreshDigest(
+      { projectId: groupId, requestId: "req-digest-3" },
+      { kind: "user" },
+    );
+    assert.equal(harness.digestGenerationInputs.length, 1);
+
+    // A real activity row dirties the signature → the model runs again, and
+    // the wake-skipped row is still absent from its activity list.
+    yield* repository.appendActivity({
+      id: ProjectActivityId.makeUnsafe("pa-skip-2"),
+      projectId: groupId,
+      kind: "task-created",
+      actorKind: "coordinator",
+      actorThreadId: null,
+      goalId: null,
+      taskId: null,
+      source: null,
+      summary: "Created a task",
+      createdAt: now,
+    });
+    yield* service.refreshDigest(
+      { projectId: groupId, requestId: "req-digest-4" },
+      { kind: "user" },
+    );
+    assert.equal(harness.digestGenerationInputs.length, 2);
+    const lastInput = harness.digestGenerationInputs.at(-1) as {
+      activity?: string;
+    };
+    assert.equal(lastInput.activity?.includes("wake skipped"), false);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("publishes thread-index-upserted when the coordinator records worker threads", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-idx-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const workerThreadId = ThreadId.makeUnsafe("thread-idx-worker");
+    // The stream emits its snapshot only after the live-event subscription is
+    // attached — awaiting it removes the publish-vs-subscribe race.
+    const snapshotSeen = yield* Deferred.make<void>();
+    const collect = yield* service.streamEvents({ projectId: groupId }).pipe(
+      Stream.tap((event) =>
+        event.type === "snapshot" ? Deferred.succeed(snapshotSeen, void 0) : Effect.void,
+      ),
+      Stream.take(2),
+      Stream.runCollect,
+      Effect.forkChild,
+    );
+    yield* Deferred.await(snapshotSeen);
+
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-idx-record",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [workerThreadId],
+      titles: ["Patch the linked repo"],
+    });
+
+    const events = yield* Fiber.join(collect);
+    const upserted = events.filter((event) => event.type === "thread-index-upserted");
+    assert.equal(upserted.length, 1);
+    assert.equal(upserted[0]!.projectId, groupId);
+    assert.deepEqual(
+      upserted[0]!.threads.map((entry) => entry.threadId),
+      [workerThreadId],
+    );
+    const index = yield* repository.listThreadIndex(groupId);
+    assert.equal(
+      index.some((entry) => entry.threadId === workerThreadId),
+      true,
+    );
   }).pipe(Effect.provide(harness.layer));
 });
 

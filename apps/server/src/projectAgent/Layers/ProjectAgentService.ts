@@ -27,6 +27,8 @@ import {
   type ProjectActivity,
   type ProjectInboxEvent,
   type OrchestrationThreadShell,
+  type LibraryEntry,
+  type ProjectThreadIndexEntry,
   type ProjectAgentDeleteGroupResult,
   type ProjectAgentGroupThreadEntry,
   type ProjectAgentOverview,
@@ -106,7 +108,7 @@ import { OrchestrationEngineService } from "../../orchestration/Services/Orchest
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProjectAgentRepository } from "../../persistence/Services/ProjectAgentRepository.ts";
 import { ProjectionThreadRepository } from "../../persistence/Services/ProjectionThreads.ts";
-import { ProjectAgentServiceError } from "../Errors.ts";
+import { LibraryError, ProjectAgentServiceError } from "../Errors.ts";
 import { isAllowedGroupCoordinatorCreateTarget } from "../groupCreateAllowlist.ts";
 import { cleanupGroupWorkspaceRoot } from "../../groupWorkspaceScaffold.ts";
 import {
@@ -268,12 +270,17 @@ const branded = {
   message: (id = randomUUID()) => MessageId.makeUnsafe(id),
 };
 
+const SEED_INSTRUCTIONS_CONTENT = "# Instructions\n\n";
+// listSummaries compares head hashes — the instructions body never leaves
+// the document tables just to flag a customized file.
+const SEED_INSTRUCTIONS_HASH = hashDocumentContent(SEED_INSTRUCTIONS_CONTENT);
+
 const SEED_DOCUMENTS: ReadonlyArray<{ path: string; content: string }> = [
   {
     path: "overview.md",
     content: "# Overview\n\nCoordinator is not configured.\n",
   },
-  { path: "instructions.md", content: "# Instructions\n\n" },
+  { path: "instructions.md", content: SEED_INSTRUCTIONS_CONTENT },
   { path: "notes.md", content: "# Notes\n\n" },
   { path: "decisions.md", content: "# Decisions\n\n" },
   { path: "archived.md", content: "# Archived\n\n" },
@@ -301,9 +308,24 @@ export const makeProjectAgentService = Effect.gen(function* () {
   const digestInflight = yield* Ref.make(new Set<string>());
   const digestPending = yield* Ref.make(new Set<string>());
   const digestTimer = yield* Ref.make(new Set<string>());
+  // The inputs a digest actually reads (activity minus bookkeeping rows,
+  // tasks, threads, documents, coverage) hashed at generation time — a
+  // refresh that finds the same signature is a no-op, so a coordinator turn
+  // that changed nothing never burns a model call.
+  const digestInputSignatures = yield* Ref.make(new Map<string, string>());
 
   const publish = (event: ProjectAgentStreamEvent) =>
     PubSub.publish(events, event).pipe(Effect.asVoid);
+  // Index rows are the Overview Threads tab's data — a subscriber must see a
+  // coordinator-spawned worker appear the moment it is indexed, not after the
+  // next full listing (which may never come while the panel stays open).
+  const publishThreadIndexUpserts = (
+    projectId: ProjectId,
+    threads: ReadonlyArray<ProjectThreadIndexEntry>,
+  ) =>
+    threads.length === 0
+      ? Effect.void
+      : publish({ type: "thread-index-upserted", projectId, threads: [...threads] });
   const toServiceError = (message: string) => (cause: unknown) =>
     new ProjectAgentServiceError({
       message:
@@ -632,6 +654,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         right.updatedAt.localeCompare(left.updatedAt),
       );
       let assignedCoverage = coveredIds.size;
+      const upserted: ProjectThreadIndexEntry[] = [];
       for (const thread of sorted) {
         const prior = existingByThreadId.get(thread.threadId);
         const excluded = excludedIds.has(thread.threadId);
@@ -669,7 +692,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
         yield* repository
           .upsertThreadIndex(next)
           .pipe(Effect.mapError(toServiceError("Failed to store thread index.")));
+        upserted.push(next);
       }
+      yield* publishThreadIndexUpserts(projectId, upserted);
       const index = yield* repository
         .listThreadIndex(projectId)
         .pipe(Effect.mapError(toServiceError("Failed to load thread coverage.")));
@@ -1280,12 +1305,34 @@ export const makeProjectAgentService = Effect.gen(function* () {
       const threads = yield* repository
         .listThreadIndex(projectId)
         .pipe(Effect.mapError(toServiceError("Failed to load digest threads.")));
+      // wake-skipped rows are wake bookkeeping, not group activity — feeding
+      // them into the digest input would churn the signature (and the prompt)
+      // with noise that never belongs in a project summary.
+      const digestActivity = activity.filter((entry) => entry.kind !== "wake-skipped");
+      const inputSignature = hashDocumentContent(
+        JSON.stringify([
+          digestActivity.map((entry) => [entry.id, entry.sequence]),
+          tasks.map((task) => [task.id, task.revision, task.status, task.archivedAt]),
+          documents.map((doc) => [doc.logicalPath, doc.revision, doc.contentHash]),
+          threads.map((thread) => [
+            thread.threadId,
+            thread.excluded,
+            thread.archived,
+            thread.summaryStatus,
+            thread.lastUpdatedAt,
+          ]),
+          coverage,
+        ]),
+      );
+      if ((yield* Ref.get(digestInputSignatures)).get(projectId) === inputSignature) {
+        return;
+      }
       const running = {
         projectId,
         summary: previousSummary ?? "Generating project summary…",
         focusItems: lastGood?.focusItems ?? [],
         coverageFromSequence: lastGood?.coverageFromSequence ?? 0,
-        coverageToSequence: activity[0]?.sequence ?? lastGood?.coverageToSequence ?? 0,
+        coverageToSequence: digestActivity[0]?.sequence ?? lastGood?.coverageToSequence ?? 0,
         historicalCoverage:
           coverage.pendingThreadCount > 0 ? ("partial" as const) : ("complete" as const),
         summarizedThreadCount: coverage.summarizedThreadCount,
@@ -1303,7 +1350,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         .pipe(Effect.mapError(toServiceError("Failed to load project for digest.")));
       const cwd = Option.isSome(project) ? project.value.workspaceRoot : serverConfig.cwd;
       const allowed = new Set([
-        ...activity.map((entry) => entry.id),
+        ...digestActivity.map((entry) => entry.id),
         ...tasks.map((task) => task.id),
         ...threads.map((thread) => thread.threadId),
         ...documents.map((doc) => doc.logicalPath),
@@ -1312,7 +1359,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         .generateProjectDigest({
           cwd,
           previousSummary: previousSummary ?? undefined,
-          activity: activity.map((entry) => `${entry.id}: ${entry.summary}`).join("\n"),
+          activity: digestActivity.map((entry) => `${entry.id}: ${entry.summary}`).join("\n"),
           coverage: `summarized=${coverage.summarizedThreadCount} pending=${coverage.pendingThreadCount}`,
           pinnedFocus: (lastGood?.focusItems ?? [])
             .filter((item) => item.pinned)
@@ -1343,7 +1390,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         summary: generated.summary,
         focusItems: generated.focusItems,
         coverageFromSequence: lastGood?.coverageFromSequence ?? 0,
-        coverageToSequence: activity[0]?.sequence ?? 0,
+        coverageToSequence: digestActivity[0]?.sequence ?? 0,
         historicalCoverage:
           coverage.pendingThreadCount > 0 ? ("partial" as const) : ("complete" as const),
         summarizedThreadCount: coverage.summarizedThreadCount,
@@ -1356,6 +1403,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
       yield* repository
         .saveDigest(digest)
         .pipe(Effect.mapError(toServiceError("Failed to save digest.")));
+      yield* Ref.update(digestInputSignatures, (signatures) =>
+        new Map(signatures).set(projectId, inputSignature),
+      );
       yield* publish({ type: "digest-upserted", digest });
       // Work that arrived while this generation ran stays flagged in
       // digestPending; the owning drain loop (timer or caller) picks it up.
@@ -1518,6 +1568,12 @@ export const makeProjectAgentService = Effect.gen(function* () {
                 revision: row.revision,
                 pausedAt: row.pausedAt,
                 archivedAt: row.archivedAt,
+                memberThreadIds: [...new Set([row.coordinatorThreadId, ...row.memberThreadIds])],
+                linkedProjectIds: row.linkedProjectIds,
+                hasGoal:
+                  row.goalStatus !== null || (row.goal !== null && row.goal.trim().length > 0),
+                instructionsConfigured:
+                  row.instructionsHash !== null && row.instructionsHash !== SEED_INSTRUCTIONS_HASH,
               });
             }
             return {
@@ -2632,7 +2688,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
               // thread index, and project.delete only accepts a threadless
               // project, so every group thread must be dispatched for deletion
               // before the project delete.
-              const { shells } = yield* listGroupThreadShells({
+              const { index, tasks, shells } = yield* listGroupThreadShells({
                 projectId: input.projectId,
                 coordinatorThreadId: agentConfig?.coordinatorThreadId ?? null,
               });
@@ -2655,6 +2711,86 @@ export const makeProjectAgentService = Effect.gen(function* () {
                   isCustomPath: false,
                   projectId: input.projectId,
                 }).pipe(Effect.mapError(toServiceError("Failed to resolve the group library.")));
+              }
+              if (input.requireEmpty === true) {
+                // The dialog-side "still empty" probe is a hint, not a guard —
+                // anything could have landed between it and this delete.
+                // Re-check under the lock before tearing anything down: no
+                // member threads, no tasks, only untouched seed documents,
+                // and nothing in the library.
+                // A group created seconds ago may not have a library dir on
+                // disk at all — a missing root is an empty library, while any
+                // other inspection failure should refuse the delete.
+                const rootStat = yield* Effect.tryPromise({
+                  try: async () => {
+                    try {
+                      return await fs.stat(root);
+                    } catch (error) {
+                      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+                      throw error;
+                    }
+                  },
+                  catch: () =>
+                    new ProjectAgentServiceError({
+                      message: "Could not inspect the group's library.",
+                      code: "invalid",
+                    }),
+                });
+                const listTopEntries =
+                  rootStat === null || !rootStat.isDirectory()
+                    ? ([] as ReadonlyArray<LibraryEntry>)
+                    : yield* listLibraryEntries(root).pipe(
+                        Effect.catch((error: LibraryError) =>
+                          error.code === "not-found"
+                            ? Effect.succeed<ReadonlyArray<LibraryEntry>>([])
+                            : Effect.fail(error),
+                        ),
+                        Effect.mapError(toServiceError("Failed to list the group library.")),
+                      );
+                // The seeded Artifacts/ scaffold (holding only the marker /
+                // keep files listLibraryEntries filters out) is not content —
+                // a group is empty while it is the only top-level entry and
+                // itself lists nothing.
+                let libraryEmpty = listTopEntries.length === 0;
+                if (
+                  !libraryEmpty &&
+                  listTopEntries.length === 1 &&
+                  listTopEntries[0]!.name === "Artifacts" &&
+                  listTopEntries[0]!.kind === "directory"
+                ) {
+                  const artifactsEntries = yield* listLibraryEntries(root, "Artifacts").pipe(
+                    Effect.catch((error: LibraryError) =>
+                      error.code === "not-found"
+                        ? Effect.succeed<ReadonlyArray<LibraryEntry>>([])
+                        : Effect.fail(error),
+                    ),
+                    Effect.mapError(toServiceError("Failed to list the group library.")),
+                  );
+                  libraryEmpty = artifactsEntries.length === 0;
+                }
+                const documentHeads = yield* repository
+                  .listDocumentHeads(input.projectId)
+                  .pipe(Effect.mapError(toServiceError("Failed to load group documents.")));
+                const seedContentByPath = new Map(
+                  SEED_DOCUMENTS.map((seed) => [seed.path, seed.content]),
+                );
+                const documentsPristine = documentHeads.every((head) => {
+                  const seeded = seedContentByPath.get(head.logicalPath);
+                  return seeded !== undefined && head.contentHash === hashDocumentContent(seeded);
+                });
+                const coordinatorThreadId = agentConfig?.coordinatorThreadId ?? null;
+                const threadsPristine =
+                  index.every((entry) => entry.threadId === coordinatorThreadId) &&
+                  tasks.length === 0 &&
+                  shells.length === 0;
+                if (!threadsPristine || !documentsPristine || !libraryEmpty) {
+                  return yield* Effect.fail(
+                    fail(
+                      "This group is no longer empty — finish setup or delete it from the group's settings.",
+                      "conflict",
+                    ),
+                  );
+                }
               }
               // Threads first, and stop on any failure: a thread that refuses
               // to delete must abort the whole delete while the group is still
@@ -3576,6 +3712,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         yield* repository
           .upsertThreadIndex(entry)
           .pipe(Effect.mapError(toServiceError("Failed to update thread coverage.")));
+        yield* publishThreadIndexUpserts(input.projectId, [entry]);
         yield* impl.scheduleDigest(input.projectId);
         return entry;
       }),
@@ -3857,17 +3994,19 @@ export const makeProjectAgentService = Effect.gen(function* () {
           Option.isSome(goal) && goal.value.status === "active" ? goal.value : null;
         for (const [index, threadId] of input.threadIds.entries()) {
           const title = input.titles[index] ?? `Worker ${index + 1}`;
+          const indexEntry = {
+            projectId: principal.projectId,
+            threadId,
+            excluded: false,
+            archived: false,
+            summaryStatus: "pending" as const,
+            lastUpdatedAt: now,
+            lastSummarizedAt: null,
+          };
           yield* repository
-            .upsertThreadIndex({
-              projectId: principal.projectId,
-              threadId,
-              excluded: false,
-              archived: false,
-              summaryStatus: "pending",
-              lastUpdatedAt: now,
-              lastSummarizedAt: null,
-            })
+            .upsertThreadIndex(indexEntry)
             .pipe(Effect.mapError(toServiceError("Failed to index worker thread.")));
+          yield* publishThreadIndexUpserts(principal.projectId, [indexEntry]);
           if (activeGoal) {
             const task = yield* impl.createTask(
               {
@@ -4219,6 +4358,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
             summary: "Coordinator self-events do not wake coordination.",
             createdAt: input.createdAt,
           });
+          // Coordinator turns still change what the digest should say (tasks
+          // dispatched, docs written, memory saved) — the self-event early
+          // return used to skip this, so Focus kept the stale summary.
+          yield* impl.scheduleDigest(projectId);
           return;
         }
         // A worker is a thread the coordinator assigned to a task. Wakes come
@@ -4844,10 +4987,14 @@ export const makeProjectAgentService = Effect.gen(function* () {
             if (event.type === "activity-appended")
               return event.activity.projectId === input.projectId;
             if (event.type === "digest-upserted") return event.digest.projectId === input.projectId;
+            if (event.type === "thread-index-upserted") return event.projectId === input.projectId;
             return event.head.projectId === input.projectId;
           };
           const liveQueue = yield* Queue.bounded<ProjectAgentStreamEvent, Cause.Done>(64);
-          yield* Stream.fromPubSub(events).pipe(
+          // `Stream.fromPubSub` never delivers under this runtime — subscribe
+          // explicitly in the stream's own scope and drain that subscription.
+          const subscription = yield* PubSub.subscribe(events);
+          yield* Stream.fromSubscription(subscription).pipe(
             Stream.filter(matchesProject),
             Stream.runIntoQueue(liveQueue),
             Effect.forkScoped,

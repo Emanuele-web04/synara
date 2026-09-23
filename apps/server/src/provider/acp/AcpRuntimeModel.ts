@@ -317,7 +317,10 @@ function summarizeToolCallContent(
   return extractTextContentFromToolCallContent(content);
 }
 
-function isProviderGenericToolTitle(title: string | undefined, kind: string | undefined): boolean {
+export function isProviderGenericToolTitle(
+  title: string | undefined,
+  kind: string | undefined,
+): boolean {
   const normalized = title?.toLowerCase().replace(/\s+/g, " ").trim();
   if (!normalized) {
     return false;

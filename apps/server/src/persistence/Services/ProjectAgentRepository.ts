@@ -41,8 +41,15 @@ export interface ProjectAgentConfigSummaryRow {
   readonly coordinatorColor: string | null;
   readonly revision: ProjectAgentConfig["revision"];
   readonly goalStatus: ProjectGoalStatus | null;
+  /** Coordinator objective text stored on the config (`config.goal`). */
+  readonly goal: string | null;
   readonly pausedAt: string | null;
   readonly archivedAt: string | null;
+  /** Visible index ∪ open-task-assigned member threads (excludes the coordinator). */
+  readonly memberThreadIds: ReadonlyArray<ThreadId>;
+  readonly linkedProjectIds: ReadonlyArray<ProjectId>;
+  /** Head content hash of instructions.md, when the document exists. */
+  readonly instructionsHash: string | null;
 }
 
 export interface ProjectAgentRepositoryShape {

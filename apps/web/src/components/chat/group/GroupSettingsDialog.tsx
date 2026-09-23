@@ -9,6 +9,15 @@ import { useEffect, useRef, useState } from "react";
 
 import { CentralIcon } from "~/lib/central-icons";
 import { SidebarLeadingIcon } from "~/components/SidebarLeadingIcon";
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+} from "~/components/ui/alert-dialog";
 import { Button } from "~/components/ui/button";
 import {
   Dialog,
@@ -47,6 +56,7 @@ import {
   GROUP_SETTINGS_SECTION_LABELS,
   GROUP_SETTINGS_SECTIONS,
   buildGroupSettingsBaseline,
+  isGroupOnboardingDiscardable,
   groupSettingsDirtySections,
   resolveSaveAttemptRequestId,
   saveAttemptFingerprint,
@@ -72,6 +82,9 @@ export function GroupSettingsDialog(props: {
   readonly defaultModelSelection: ModelSelection | null;
   readonly initialSection?: GroupSettingsSection | undefined;
   readonly importedInstructions?: string | undefined;
+  // Only set when this dialog opening also created the group — discard is
+  // "undo create", never an offer for a group that already existed.
+  readonly allowDiscard?: boolean | undefined;
   readonly onOpenChange: (open: boolean) => void;
   readonly onSaved?: ((overview: ProjectAgentOverview) => void) | undefined;
 }) {
@@ -98,6 +111,9 @@ export function GroupSettingsDialog(props: {
   const [baseline, setBaseline] = useState<GroupSettingsBaseline | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
+  const [discardError, setDiscardError] = useState<string | null>(null);
+  const [discarding, setDiscarding] = useState(false);
   // The most recent failed save attempt; a retry reuses its requestId only while
   // the payload fingerprint matches so server receipts dedupe the replay.
   const failedAttemptRef = useRef<{ requestId: string; fingerprint: string } | null>(null);
@@ -229,147 +245,251 @@ export function GroupSettingsDialog(props: {
     props.onOpenChange(false);
   };
 
+  // Cancelled onboarding otherwise leaves a half-created group in the sidebar
+  // as "Set up coordinator". When nothing was ever added to it (no threads,
+  // no user files, no linked repos), offer to discard the group outright.
+  const requestClose = () => {
+    if (props.mode !== "onboarding" || props.allowDiscard !== true) {
+      props.onOpenChange(false);
+      return;
+    }
+    const projectAgent = readNativeApi()?.projectAgent;
+    const sidebarThreadCount = Object.values(useStore.getState().sidebarThreadSummaryById).filter(
+      (summary) => summary?.projectId === props.projectId,
+    ).length;
+    void (async () => {
+      let empty = false;
+      try {
+        if (projectAgent) {
+          const [overview, index, docs] = await Promise.all([
+            projectAgent.getOverview({ projectId: props.projectId }),
+            projectAgent.listThreadIndex({ projectId: props.projectId }),
+            projectAgent.listDocuments({ projectId: props.projectId }),
+          ]);
+          empty = isGroupOnboardingDiscardable({
+            threadIndexCount: index.threads.length,
+            sidebarThreadCount,
+            linkedProjectIds: overview.linkedProjectIds,
+            documentPaths: docs.documents.map((doc) => doc.logicalPath),
+          });
+        }
+      } catch {
+        // A failed probe keeps the group — discarding must never be guessed.
+        empty = false;
+      }
+      if (empty) {
+        setDiscardError(null);
+        setDiscardConfirmOpen(true);
+      } else {
+        props.onOpenChange(false);
+      }
+    })();
+  };
+
+  const confirmDiscard = async () => {
+    if (discarding) return;
+    setDiscarding(true);
+    setDiscardError(null);
+    const result = await agent.deleteGroup(props.projectId, props.projectName, {
+      requireEmpty: true,
+    });
+    setDiscarding(false);
+    if (result === null) {
+      setDiscardError("Could not delete this group. Try again from the group's settings.");
+      return;
+    }
+    setDiscardConfirmOpen(false);
+    props.onOpenChange(false);
+  };
+
   const title = props.mode === "onboarding" ? "Set up your group" : props.projectName;
 
   return (
-    <Dialog
-      open={props.open}
-      onOpenChange={(open) => {
-        // A close mid-save would drop the in-flight optimistic-lock write and
-        // leave the draft unrecoverable; only Escape/backdrop while idle counts.
-        if (!open && saving) return;
-        props.onOpenChange(open);
-      }}
-    >
-      <DialogPopup className="h-[min(80vh,720px)] max-w-4xl">
-        <DialogHeader className="border-b border-[color:var(--color-border-light)] px-5 pb-3">
-          <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>
-            {props.mode === "onboarding"
-              ? "Choose how the coordinator works with this group."
-              : "Coordinator settings for this group."}
-          </DialogDescription>
-        </DialogHeader>
-        <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
-          <nav
-            aria-label="Group settings sections"
-            className="shrink-0 overflow-x-auto border-b border-[color:var(--color-border-light)] px-1.5 py-2 sm:w-[220px] sm:overflow-x-visible sm:overflow-y-auto sm:border-b-0 sm:border-r"
-          >
-            <ul className={cn("flex flex-row sm:flex-col", SETTINGS_SIDEBAR_LIST_GAP_CLASS_NAME)}>
-              {GROUP_SETTINGS_SECTIONS.map((id) => {
-                const isActive = id === section;
-                return (
-                  <li key={id} className="shrink-0">
-                    <button
-                      type="button"
-                      aria-current={isActive ? "page" : undefined}
-                      className={cn(
-                        SETTINGS_SIDEBAR_ITEM_CLASS_NAME,
-                        "whitespace-nowrap",
-                        isActive
-                          ? SETTINGS_SIDEBAR_ROW_FILL_ACTIVE_CLASS_NAME
-                          : SETTINGS_SIDEBAR_ROW_FILL_HOVER_CLASS_NAME,
-                      )}
-                      onClick={() => setSection(id)}
-                    >
-                      <SidebarLeadingIcon size="sm" tone="text-inherit">
-                        <CentralIcon
-                          name={GROUP_SETTINGS_SECTION_ICONS[id]}
-                          className={SETTINGS_SIDEBAR_ICON_CLASS_NAME}
-                        />
-                      </SidebarLeadingIcon>
-                      <span className={SETTINGS_SIDEBAR_ITEM_LABEL_CLASS_NAME}>
-                        {GROUP_SETTINGS_SECTION_LABELS[id]}
-                      </span>
-                      {dirtySections.has(id) ? (
-                        <span
-                          aria-label="Unsaved changes"
-                          className="ms-auto size-1.5 rounded-full bg-muted-foreground/60"
-                        />
-                      ) : null}
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          </nav>
-          <div className="min-w-0 flex-1 overflow-y-auto px-5 py-4">
-            {draft === null ? (
-              <div className="flex h-full items-center justify-center text-muted-foreground">
-                {agent.error ? (
-                  <p className="text-ui text-destructive" role="alert">
-                    {agent.error}
-                  </p>
-                ) : (
-                  <Spinner aria-label="Loading group settings" className="size-4" />
-                )}
-              </div>
-            ) : section === "general" ? (
-              <>
-                <GroupGeneralSection
+    <>
+      <Dialog
+        open={props.open}
+        onOpenChange={(open) => {
+          // A close mid-save would drop the in-flight optimistic-lock write and
+          // leave the draft unrecoverable; only Escape/backdrop while idle counts.
+          if (!open && saving) return;
+          if (!open) {
+            requestClose();
+            return;
+          }
+          props.onOpenChange(open);
+        }}
+      >
+        <DialogPopup className="h-[min(80vh,720px)] max-w-4xl">
+          <DialogHeader className="border-b border-[color:var(--color-border-light)] px-5 pb-3">
+            <DialogTitle>{title}</DialogTitle>
+            <DialogDescription>
+              {props.mode === "onboarding"
+                ? "Choose how the coordinator works with this group."
+                : "Coordinator settings for this group."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
+            <nav
+              aria-label="Group settings sections"
+              className="shrink-0 overflow-x-auto border-b border-[color:var(--color-border-light)] px-1.5 py-2 sm:w-[220px] sm:overflow-x-visible sm:overflow-y-auto sm:border-b-0 sm:border-r"
+            >
+              <ul className={cn("flex flex-row sm:flex-col", SETTINGS_SIDEBAR_LIST_GAP_CLASS_NAME)}>
+                {GROUP_SETTINGS_SECTIONS.map((id) => {
+                  const isActive = id === section;
+                  return (
+                    <li key={id} className="shrink-0">
+                      <button
+                        type="button"
+                        aria-current={isActive ? "page" : undefined}
+                        className={cn(
+                          SETTINGS_SIDEBAR_ITEM_CLASS_NAME,
+                          "whitespace-nowrap",
+                          isActive
+                            ? SETTINGS_SIDEBAR_ROW_FILL_ACTIVE_CLASS_NAME
+                            : SETTINGS_SIDEBAR_ROW_FILL_HOVER_CLASS_NAME,
+                        )}
+                        onClick={() => setSection(id)}
+                      >
+                        <SidebarLeadingIcon size="sm" tone="text-inherit">
+                          <CentralIcon
+                            name={GROUP_SETTINGS_SECTION_ICONS[id]}
+                            className={SETTINGS_SIDEBAR_ICON_CLASS_NAME}
+                          />
+                        </SidebarLeadingIcon>
+                        <span className={SETTINGS_SIDEBAR_ITEM_LABEL_CLASS_NAME}>
+                          {GROUP_SETTINGS_SECTION_LABELS[id]}
+                        </span>
+                        {dirtySections.has(id) ? (
+                          <span
+                            aria-label="Unsaved changes"
+                            className="ms-auto size-1.5 rounded-full bg-muted-foreground/60"
+                          />
+                        ) : null}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </nav>
+            <div className="min-w-0 flex-1 overflow-y-auto px-5 py-4">
+              {draft === null ? (
+                <div className="flex h-full items-center justify-center text-muted-foreground">
+                  {agent.error ? (
+                    <p className="text-ui text-destructive" role="alert">
+                      {agent.error}
+                    </p>
+                  ) : (
+                    <Spinner aria-label="Loading group settings" className="size-4" />
+                  )}
+                </div>
+              ) : section === "general" ? (
+                <>
+                  <GroupGeneralSection
+                    draft={draft}
+                    defaultModelSelection={props.defaultModelSelection}
+                    projectCwd={props.workspacePath}
+                    onChange={(patch) =>
+                      setDraft((current) => (current ? { ...current, ...patch } : current))
+                    }
+                  />
+                  {props.mode === "edit" ? (
+                    <GroupLifecycleSection
+                      agent={agent}
+                      projectName={props.projectName}
+                      onDeleted={() => props.onOpenChange(false)}
+                    />
+                  ) : null}
+                </>
+              ) : section === "memory" ? (
+                <GroupMemorySection
+                  configured={agent.overview?.configured === true}
                   draft={draft}
-                  defaultModelSelection={props.defaultModelSelection}
-                  projectCwd={props.workspacePath}
+                  agent={agent}
+                  instructionsSource={instructionsSource}
+                  instructionsAutosave={instructionsAutosave}
                   onChange={(patch) =>
                     setDraft((current) => (current ? { ...current, ...patch } : current))
                   }
                 />
-                {props.mode === "edit" ? (
-                  <GroupLifecycleSection
-                    agent={agent}
-                    projectName={props.projectName}
-                    onDeleted={() => props.onOpenChange(false)}
-                  />
-                ) : null}
-              </>
-            ) : section === "memory" ? (
-              <GroupMemorySection
-                configured={agent.overview?.configured === true}
-                draft={draft}
-                agent={agent}
-                instructionsSource={instructionsSource}
-                instructionsAutosave={instructionsAutosave}
-                onChange={(patch) =>
-                  setDraft((current) => (current ? { ...current, ...patch } : current))
-                }
-              />
-            ) : section === "environment" ? (
-              <GroupEnvironmentSection
-                workspacePath={props.workspacePath}
-                draft={draft}
-                agent={agent}
-                onChange={(patch) =>
-                  setDraft((current) => (current ? { ...current, ...patch } : current))
-                }
-              />
-            ) : (
-              <GroupPluginsSection workspacePath={props.workspacePath} />
-            )}
+              ) : section === "environment" ? (
+                <GroupEnvironmentSection
+                  workspacePath={props.workspacePath}
+                  draft={draft}
+                  agent={agent}
+                  onChange={(patch) =>
+                    setDraft((current) => (current ? { ...current, ...patch } : current))
+                  }
+                />
+              ) : (
+                <GroupPluginsSection workspacePath={props.workspacePath} />
+              )}
+            </div>
           </div>
-        </div>
-        <DialogFooter className="border-t border-[color:var(--color-border-light)] px-5 py-3">
-          {saveError ? (
-            <p className="me-auto self-center text-ui text-destructive" role="alert">
-              {saveError}
+          <DialogFooter className="border-t border-[color:var(--color-border-light)] px-5 py-3">
+            {saveError ? (
+              <p className="me-auto self-center text-ui text-destructive" role="alert">
+                {saveError}
+              </p>
+            ) : null}
+            <Button type="button" variant="ghost" disabled={saving} onClick={() => requestClose()}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={saving || draft === null || (props.mode === "edit" && !dirty)}
+              onClick={() => void handleSave()}
+            >
+              {props.mode === "onboarding" ? "Create group" : "Save"}
+            </Button>
+          </DialogFooter>
+        </DialogPopup>
+      </Dialog>
+      <AlertDialog
+        open={discardConfirmOpen}
+        onOpenChange={(next) => {
+          if (!next && !discarding) setDiscardConfirmOpen(false);
+        }}
+      >
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Discard this group?</AlertDialogTitle>
+            <AlertDialogDescription>
+              "{props.projectName}" has no threads, files, or linked repositories yet. Deleting it
+              removes the group entirely — or keep it and finish setup later.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {discardError ? (
+            <p className="px-5 text-ui-sm text-destructive" role="alert">
+              {discardError}
             </p>
           ) : null}
-          <Button
-            type="button"
-            variant="ghost"
-            disabled={saving}
-            onClick={() => props.onOpenChange(false)}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            disabled={saving || draft === null || (props.mode === "edit" && !dirty)}
-            onClick={() => void handleSave()}
-          >
-            {props.mode === "onboarding" ? "Create group" : "Save"}
-          </Button>
-        </DialogFooter>
-      </DialogPopup>
-    </Dialog>
+          <AlertDialogFooter>
+            <AlertDialogClose
+              render={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    // Keeping the group also ends onboarding — closing only
+                    // this confirm leaves the setup dialog open to re-prompt.
+                    props.onOpenChange(false);
+                  }}
+                />
+              }
+            >
+              Keep group
+            </AlertDialogClose>
+            <Button
+              size="sm"
+              variant="destructive"
+              disabled={discarding}
+              onClick={() => void confirmDiscard()}
+            >
+              Discard group
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
+    </>
   );
 }

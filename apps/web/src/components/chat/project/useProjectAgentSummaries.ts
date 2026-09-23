@@ -19,7 +19,10 @@ type ProjectAgentSummariesState = {
   applyEvent: (event: ProjectAgentStreamEvent) => void;
 };
 
-function summaryFromOverview(overview: ProjectAgentOverview): ProjectAgentSummary {
+function summaryFromOverview(
+  overview: ProjectAgentOverview,
+  previous?: ProjectAgentSummary,
+): ProjectAgentSummary {
   return {
     projectId: overview.projectId,
     configured: projectAgentOverviewConfigured(overview),
@@ -31,6 +34,13 @@ function summaryFromOverview(overview: ProjectAgentOverview): ProjectAgentSummar
     revision: overview.config?.revision ?? 0,
     pausedAt: overview.config?.pausedAt ?? null,
     archivedAt: overview.config?.archivedAt ?? null,
+    // The overview has no member-index field; only listSummaries knows it.
+    memberThreadIds: previous?.memberThreadIds,
+    linkedProjectIds: overview.linkedProjectIds,
+    // The goal text the dialog writes lives on the config; the authorized goal
+    // row is a separate signal — either one counts as "has a goal".
+    hasGoal: overview.goal !== null || (overview.config?.goal?.trim().length ?? 0) > 0,
+    instructionsConfigured: previous?.instructionsConfigured,
   };
 }
 
@@ -53,17 +63,32 @@ export const useProjectAgentSummariesStore = create<ProjectAgentSummariesState>(
   applyOverview: (overview) =>
     set((current) => {
       const next = new Map(current.summariesByProjectId);
-      next.set(overview.projectId, summaryFromOverview(overview));
+      next.set(
+        overview.projectId,
+        summaryFromOverview(overview, current.summariesByProjectId.get(overview.projectId)),
+      );
       return { summariesByProjectId: next, loaded: true };
     }),
-  applyEvent: (event) =>
-    set((current) => {
-      if (event.type === "snapshot") {
+  // Effects (the debounced re-list) stay out of the `set` updaters — a state
+  // updater must be pure; scheduling inside one fires on every re-evaluation
+  // and can loop the refresh it was meant to coalesce.
+  applyEvent: (event) => {
+    if (event.type === "snapshot") {
+      set((current) => {
         const next = new Map(current.summariesByProjectId);
-        next.set(event.overview.projectId, summaryFromOverview(event.overview));
+        next.set(
+          event.overview.projectId,
+          summaryFromOverview(
+            event.overview,
+            current.summariesByProjectId.get(event.overview.projectId),
+          ),
+        );
         return { summariesByProjectId: next };
-      }
-      if (event.type === "config-upserted") {
+      });
+      return;
+    }
+    if (event.type === "config-upserted") {
+      set((current) => {
         const previous = current.summariesByProjectId.get(event.config.projectId);
         const next = new Map(current.summariesByProjectId);
         next.set(event.config.projectId, {
@@ -80,10 +105,17 @@ export const useProjectAgentSummariesStore = create<ProjectAgentSummariesState>(
           revision: event.config.revision,
           pausedAt: event.config.pausedAt ?? null,
           archivedAt: event.config.archivedAt ?? null,
+          memberThreadIds: previous?.memberThreadIds,
+          linkedProjectIds: previous?.linkedProjectIds,
+          hasGoal: (event.config.goal?.trim().length ?? 0) > 0 || previous?.hasGoal === true,
+          instructionsConfigured: previous?.instructionsConfigured,
         });
         return { summariesByProjectId: next, loaded: true };
-      }
-      if (event.type === "goal-upserted") {
+      });
+      return;
+    }
+    if (event.type === "goal-upserted") {
+      set((current) => {
         const previous = current.summariesByProjectId.get(event.goal.projectId);
         if (!previous?.configured) return current;
         const next = new Map(current.summariesByProjectId);
@@ -99,11 +131,30 @@ export const useProjectAgentSummariesStore = create<ProjectAgentSummariesState>(
                 : event.goal.status === "stopped"
                   ? "stopped"
                   : previous.coordinatorStatus,
+          hasGoal: event.goal.status === "active" || event.goal.status === "paused",
         });
         return { summariesByProjectId: next };
+      });
+      // A goal stop can't see config.goal here — the debounced re-list lands
+      // the authoritative union of both goal signals.
+      scheduleProjectAgentSummariesRefresh();
+      return;
+    }
+    if (event.type === "document-head-updated") {
+      // instructions.md content feeds the "Write instructions" chip state.
+      if (event.head.logicalPath === "instructions.md") {
+        scheduleProjectAgentSummariesRefresh();
       }
-      return current;
-    }),
+      return;
+    }
+    if (event.type === "task-upserted" || event.type === "thread-index-upserted") {
+      // Task assignments and index writes change member threads; a coalesced
+      // re-list picks them up. activity-appended no longer refreshes — group
+      // activity lands dozens of rows per turn and none of them change the
+      // summary row.
+      scheduleProjectAgentSummariesRefresh();
+    }
+  },
 }));
 
 let summariesLoadPromise: Promise<void> | null = null;
