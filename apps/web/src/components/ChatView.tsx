@@ -5344,24 +5344,6 @@ export default function ChatView({
               {isSidechatExpired ? (
                 <ExpiredSidechatNotice onStartNew={startReplacementSidechat} />
               ) : null}
-              {isCoordinatorConversation && activeGroupSummary?.pausedAt ? (
-                <GroupPausedBanner
-                  projectId={activeThread!.projectId}
-                  onResume={async () => {
-                    const api = readNativeApi();
-                    if (!api?.projectAgent || !activeThread) return;
-                    const overview = await api.projectAgent
-                      .resumeGroup({
-                        requestId: crypto.randomUUID(),
-                        projectId: activeThread.projectId,
-                      })
-                      .catch(() => null);
-                    if (overview) {
-                      useProjectAgentSummariesStore.getState().applyOverview(overview);
-                    }
-                  }}
-                />
-              ) : null}
               {showComposerLiveChangesHeader ? (
                 <ComposerLiveChangesHeader
                   fileCount={activeTurnLiveDiffState.fileCount}
@@ -6185,6 +6167,29 @@ export default function ChatView({
                         setCoordinatorSettingsOpen(true);
                       }}
                     />
+                  ) : null}
+                  {/* In flow with the suggestions, not inside the floating
+                      composer overlay — there both would fight for the band
+                      above the gutter and the chips paint over the label. */}
+                  {isCoordinatorConversation && activeGroupSummary?.pausedAt ? (
+                    <div className={CHAT_COLUMN_GUTTER_CLASS_NAME}>
+                      <GroupPausedBanner
+                        projectId={activeThread!.projectId}
+                        onResume={async () => {
+                          const api = readNativeApi();
+                          if (!api?.projectAgent || !activeThread) return;
+                          const overview = await api.projectAgent
+                            .resumeGroup({
+                              requestId: crypto.randomUUID(),
+                              projectId: activeThread.projectId,
+                            })
+                            .catch(() => null);
+                          if (overview) {
+                            useProjectAgentSummariesStore.getState().applyOverview(overview);
+                          }
+                        }}
+                      />
+                    </div>
                   ) : null}
                 </div>
 

@@ -1358,8 +1358,16 @@ export const makeProjectAgentService = Effect.gen(function* () {
           createdAt: isoNow(),
         });
       }
-      const config = yield* requireConfig(input.projectId);
-      yield* publish({ type: "config-upserted", config });
+      // Linking is a project-level relation, so it succeeds for a group the
+      // user has not finished configuring yet (continue-as-group links before
+      // onboarding saves) — only the config publish waits for one.
+      const config = yield* repository
+        .getConfig(input.projectId)
+        .pipe(Effect.mapError(toServiceError("Failed to load project coordinator.")))
+        .pipe(Effect.map(Option.getOrNull));
+      if (config !== null) {
+        yield* publish({ type: "config-upserted", config });
+      }
       const overview = yield* buildOverview(input.projectId);
       yield* storeReceipt(input.requestId, input.projectId, "linkProject", overview);
       return overview;
