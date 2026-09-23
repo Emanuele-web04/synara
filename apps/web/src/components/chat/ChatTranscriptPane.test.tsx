@@ -115,6 +115,9 @@ describe("ChatTranscriptPane", () => {
     // The banner rides the same absolute-overlay pattern as the scroll button —
     // it must not re-enter normal flow above the transcript.
     expect(markup).toContain("pointer-events-none absolute inset-x-0 top-2");
+    // ...but the banner itself must re-enable pointer input or its
+    // dismiss/unblock buttons are dead to real clicks.
+    expect(markup).toContain("pointer-events-auto");
     expect(markup).not.toContain("Unblock thread");
   });
 

@@ -15,23 +15,26 @@ import { Alert, AlertAction, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { IconButton } from "../ui/icon-button";
 import { CircleAlertIcon, XIcon } from "~/lib/icons";
+import { cn } from "~/lib/utils";
 
 export function ThreadErrorBanner({
   error,
   onDismiss,
   onUnblock,
   unblocking = false,
+  className,
 }: {
   error: string | null;
   onDismiss?: () => void;
   /** Recovery action offered only when the error is a provider-delivery quarantine. */
   onUnblock?: () => void;
   unblocking?: boolean;
+  className?: string;
 }) {
   if (!error) return null;
   const canUnblock = onUnblock !== undefined && isProviderDeliveryBlockDetail(error);
   return (
-    <Alert variant="error" className="w-full max-w-[36rem] shadow-sm">
+    <Alert variant="error" className={cn("w-full max-w-[36rem] shadow-sm", className)}>
       <CircleAlertIcon />
       <AlertDescription className="line-clamp-3" title={error}>
         {error}
