@@ -95,7 +95,7 @@ describe("sanitizeBetaDiagnosticsPayload", () => {
     expect(sanitized).toEqual({
       kind: "error",
       source: "renderer",
-      message: "failed for <email> at ~/app",
+      message: "failed for <email> at ~/…/app",
       stack: expect.stringContaining("[redacted]"),
       fingerprint: "abcdef0123456789",
     });
@@ -315,9 +315,32 @@ describe("resolveBetaDiagnosticsEndpoint", () => {
       resolveBetaDiagnosticsEndpoint({ SYNARA_BETA_DIAGNOSTICS_URL: "http://127.0.0.1:8787" }),
     ).toBe("http://127.0.0.1:8787");
     expect(
+      resolveBetaDiagnosticsEndpoint({ SYNARA_BETA_DIAGNOSTICS_URL: "http://localhost:8787" }),
+    ).toBe("http://localhost:8787");
+    expect(
+      resolveBetaDiagnosticsEndpoint({ SYNARA_BETA_DIAGNOSTICS_URL: "http://[::1]:8787" }),
+    ).toBe("http://[::1]:8787");
+    expect(
       resolveBetaDiagnosticsEndpoint({
         SYNARA_BETA_DIAGNOSTICS_URL: "http://diagnostics.example.com",
       }),
     ).toBe(BETA_DIAGNOSTICS_ENDPOINT);
+  });
+
+  it("rejects loopback lookalikes and unparseable overrides", () => {
+    // A prefix match would let these through; the hostname must be exact.
+    for (const override of [
+      "http://localhost.evil.com",
+      "http://localhost@evil.com",
+      "http://127.0.0.1.evil.com",
+      "http://evil.com/localhost",
+      "ftp://localhost",
+      "not a url",
+      "localhost:8787",
+    ]) {
+      expect(resolveBetaDiagnosticsEndpoint({ SYNARA_BETA_DIAGNOSTICS_URL: override })).toBe(
+        BETA_DIAGNOSTICS_ENDPOINT,
+      );
+    }
   });
 });

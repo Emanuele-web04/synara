@@ -417,7 +417,11 @@ if (betaDiagnostics) {
     submitURL: `${resolveBetaDiagnosticsEndpoint(process.env)}/v1/crash`,
     uploadToServer: true,
     compress: true,
-    globalExtra: { installId: betaDiagnostics.installId, flavor: "beta" },
+    globalExtra: {
+      installId: betaDiagnostics.installId,
+      flavor: "beta",
+      appVersion: app.getVersion(),
+    },
   });
 }
 
@@ -4571,7 +4575,11 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
         kind: "crash",
         processType: "backend",
         reason,
-        logTail: readLogTail(Path.join(LOG_DIR, BACKEND_LOG_FILE_NAME)),
+        // Guarded explicitly: on stable builds betaDiagnostics is null and the
+        // log file must not be touched at all.
+        logTail: betaDiagnostics
+          ? readLogTail(Path.join(LOG_DIR, BACKEND_LOG_FILE_NAME))
+          : undefined,
       });
       scheduleBackendRestart(reason);
     });
@@ -5534,7 +5542,9 @@ function attachRendererCrashRecovery(window: BrowserWindow): void {
       kind: "crash",
       processType: "renderer",
       reason: details.reason,
-      logTail: readLogTail(Path.join(LOG_DIR, DESKTOP_LOG_FILE_NAME)),
+      // Guarded explicitly: on stable builds betaDiagnostics is null and the
+      // log file must not be touched at all.
+      logTail: betaDiagnostics ? readLogTail(Path.join(LOG_DIR, DESKTOP_LOG_FILE_NAME)) : undefined,
     });
     const description = `reason=${details.reason} exitCode=${details.exitCode}`;
     writeDesktopLogHeader(`renderer process gone ${description}`);

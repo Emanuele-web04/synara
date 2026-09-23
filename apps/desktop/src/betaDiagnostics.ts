@@ -7,9 +7,11 @@
 //   are ever written. There is no generic "metadata" bag.
 // - Free-text fields (error message, stack, log tail) are capped and passed
 //   through redactDiagnosticText (packages/shared/diagnosticsRedaction.ts)
-//   before they are written to the queue.
-// - No prompts, chat text, file contents, file paths, repo names, provider
-//   payloads, credentials, or environment variables are collected.
+//   before they are written to the queue. Paths in them are reduced to the
+//   file name; folder and repo names are dropped. Redaction is best-effort:
+//   error text can still include fragments of whatever was on screen.
+// - No prompts, chat text, file contents, provider payloads, credentials, or
+//   environment variables are collected.
 // - The install id is a random UUID generated on first launch of a beta install;
 //   it identifies an install, not a person.
 // - Stable/production builds never construct this object, so the stable binary
@@ -177,12 +179,13 @@ export function readLogTail(filePath: string): string | undefined {
     const start = Math.max(0, size - DIAGNOSTICS_LOG_TAIL_MAX_LENGTH);
     const buffer = Buffer.alloc(size - start);
     const fd = openSync(filePath, "r");
+    let bytesRead = 0;
     try {
-      readSync(fd, buffer, 0, buffer.length, start);
+      bytesRead = readSync(fd, buffer, 0, buffer.length, start);
     } finally {
       closeSync(fd);
     }
-    const lines = buffer.toString("utf8").split("\n");
+    const lines = buffer.subarray(0, bytesRead).toString("utf8").split("\n");
     return lines.slice(-DIAGNOSTICS_LOG_TAIL_MAX_LINES).join("\n");
   } catch {
     return undefined;
@@ -210,12 +213,19 @@ export function resolveBetaDiagnosticsEndpoint(env: NodeJS.ProcessEnv): string {
   const override = env[BETA_DIAGNOSTICS_ENDPOINT_ENV]?.trim();
   if (!override) return BETA_DIAGNOSTICS_ENDPOINT;
   // Loopback http targets are allowed so the worker can be developed locally;
-  // remote overrides must be TLS.
-  if (
-    /^https:\/\//i.test(override) ||
-    /^http:\/\/(127\.0\.0\.1|localhost|\[::1\])/i.test(override)
-  ) {
-    return override;
+  // remote overrides must be TLS. Parsed as a URL so lookalike prefixes like
+  // http://localhost.evil.com cannot pass.
+  try {
+    const url = new URL(override);
+    if (url.protocol === "https:") return override;
+    if (
+      url.protocol === "http:" &&
+      (url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]")
+    ) {
+      return override;
+    }
+  } catch {
+    // Unparseable override: fall through to the baked default.
   }
   return BETA_DIAGNOSTICS_ENDPOINT;
 }
@@ -388,9 +398,10 @@ export class BetaDiagnostics {
   /**
    * POSTs the oldest queued events as newline-delimited JSON. Successfully
    * delivered lines are dropped from the head of the queue; the remainder stay
-   * for the next flush.
+   * for the next flush. `timeoutMs` bounds the request so a hung endpoint
+   * cannot stall quit.
    */
-  async flush(): Promise<void> {
+  async flush(timeoutMs = 15_000): Promise<void> {
     if (this.flushing || this.disposed) return;
     this.flushing = true;
     try {
@@ -413,7 +424,7 @@ export class BetaDiagnostics {
         method: "POST",
         headers: { "content-type": "application/x-ndjson" },
         body,
-        signal: AbortSignal.timeout(15_000),
+        signal: AbortSignal.timeout(timeoutMs),
       });
       if (!response.ok) return;
 
@@ -441,15 +452,15 @@ export class BetaDiagnostics {
     }
   }
 
-  /** Best-effort final flush + shutdown for app quit. */
-  async dispose(): Promise<void> {
+  /** Best-effort final flush + shutdown for app quit; bounded by `timeoutMs`. */
+  async dispose(timeoutMs = 3_000): Promise<void> {
     if (this.disposed) return;
     if (this.flushTimer) {
       clearInterval(this.flushTimer);
       this.flushTimer = null;
     }
     try {
-      await this.flush();
+      await this.flush(timeoutMs);
     } catch {
       // shutting down
     } finally {
