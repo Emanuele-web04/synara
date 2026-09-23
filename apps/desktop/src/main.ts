@@ -25,6 +25,7 @@ import {
   app,
   BrowserWindow,
   clipboard,
+  crashReporter,
   dialog,
   globalShortcut,
   ipcMain,
@@ -66,9 +67,9 @@ import { isKeyboardShortcutsHelpChord } from "@synara/shared/browserShortcuts";
 import { getMacTrafficLightPosition } from "@synara/shared/desktopChrome";
 import { DEVICE_HELPER_SOURCE_DIR_ENV } from "@synara/shared/deviceHelperCache";
 import {
+  desktopUpdateChannel,
   SYNARA_DESKTOP_SMOKE_USER_DATA_ENV,
   SYNARA_DESKTOP_BUNDLE_ID_ENV,
-  SYNARA_DESKTOP_UPDATE_CHANNEL,
   SYNARA_SOURCE_DESKTOP_BUILD_MARKER,
   canOverrideDesktopSmokeUserData,
   resolveSynaraDesktopRuntimeFlavor,
@@ -102,6 +103,13 @@ import {
   type BundleSignature,
 } from "./bundleSwapDetection";
 import { waitForBackendStartupReady } from "./backendStartupReadiness";
+import { DesktopBetaChannel, resolveBetaHomeDir } from "./betaChannel";
+import {
+  BetaDiagnostics,
+  readLogTail,
+  resolveBetaDiagnosticsEndpoint,
+  type BetaDiagnosticsEventName,
+} from "./betaDiagnostics";
 import { showDesktopConfirmDialog } from "./confirmDialog";
 import {
   desktopAppIconResourceName,
@@ -195,6 +203,7 @@ import {
   getDownloadStallTimeoutMessage,
   hasDownloadProgressAdvanced,
   isExpectedStalledDownloadCancellationError,
+  isUpdateVersionAllowedForFlavor,
   isUpdateVersionNewer,
   shouldBroadcastDownloadProgress,
   shouldCheckForUpdatesOnForeground,
@@ -357,8 +366,12 @@ const desktopFlavor = resolveSynaraDesktopRuntimeFlavor({
   allowDevelopmentOverride: isSourceDesktopBuild,
 });
 const desktopIdentity = synaraDesktopIdentity(desktopFlavor);
+// Beta never honors SYNARA_HOME: a globally exported stable home would make
+// beta open (and migrate) stable's database.
 const BASE_DIR =
-  process.env.SYNARA_HOME?.trim() ||
+  (desktopFlavor === "beta"
+    ? process.env.SYNARA_BETA_HOME?.trim()
+    : process.env.SYNARA_HOME?.trim()) ||
   Path.join(OS.homedir(), desktopIdentity.defaultHomeDirectoryName);
 const STATE_DIR = Path.join(BASE_DIR, "userdata");
 const DESKTOP_WINDOW_STATE_PATH = Path.join(STATE_DIR, "desktop-window-state.json");
@@ -387,6 +400,49 @@ const DESKTOP_BROWSER_HOST_CAPABILITY_FD = 3;
 // for the same lock even when they use the same Electron executable.
 const userDataPath = resolveUserDataPath();
 app.setPath("userData", userDataPath);
+
+// Beta-only diagnostics: constructed solely when the baked build flavor is
+// "beta", so production binaries never run a collection path. The payload
+// schema is an allowlist — no prompts, file contents, or paths are collected.
+const betaDiagnostics =
+  desktopFlavor === "beta"
+    ? new BetaDiagnostics({
+        homeDir: BASE_DIR,
+        appVersion: app.getVersion(),
+        platform: process.platform,
+        arch: process.arch,
+      })
+    : null;
+
+if (betaDiagnostics) {
+  crashReporter.start({
+    productName: APP_DISPLAY_NAME,
+    companyName: "Synara",
+    submitURL: `${resolveBetaDiagnosticsEndpoint(process.env)}/v1/crash`,
+    uploadToServer: true,
+    compress: true,
+    globalExtra: {
+      installId: betaDiagnostics.installId,
+      flavor: "beta",
+      appVersion: app.getVersion(),
+    },
+  });
+}
+
+const trackBetaDiagnostics = (
+  event: BetaDiagnosticsEventName,
+  payload: Parameters<BetaDiagnostics["track"]>[1],
+): void => {
+  betaDiagnostics?.track(event, payload);
+};
+
+// Monitor-only: observes uncaught exceptions for diagnostics without changing
+// Node's exit behavior — the POSIX EPIPE filter and the default crash path
+// stay exactly as before.
+process.on("uncaughtExceptionMonitor", (error: unknown) => {
+  betaDiagnostics?.trackError("main", error);
+});
+
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 const AUTO_UPDATE_STARTUP_DELAY_MS = 15_000;
 const AUTO_UPDATE_POLL_INTERVAL_MS = 4 * 60 * 60 * 1000;
@@ -419,7 +475,7 @@ const POSIX_BACKEND_TERMINATE_DELAY_MS = 15_000;
 const POSIX_BACKEND_FORCE_KILL_DELAY_MS = 18_000;
 const POSIX_BACKEND_SHUTDOWN_TIMEOUT_MS = 20_000;
 const BACKEND_MAX_OLD_SPACE_ENV_KEYS = ["SYNARA_BACKEND_MAX_OLD_SPACE_MB"] as const;
-const DESKTOP_UPDATE_ALLOW_PRERELEASE = false;
+const DESKTOP_UPDATE_ALLOW_PRERELEASE = desktopFlavor === "beta";
 const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
 const DESKTOP_MENU_ZOOM_FACTOR_STEP = 1.1;
 const DESKTOP_MENU_MIN_ZOOM_FACTOR = 0.25;
@@ -587,7 +643,11 @@ const desktopRuntimeInfo = resolveDesktopRuntimeInfo({
   runningUnderArm64Translation: app.runningUnderARM64Translation === true,
 });
 const initialUpdateState = (): DesktopUpdateState =>
-  createInitialDesktopUpdateState(app.getVersion(), desktopRuntimeInfo);
+  createInitialDesktopUpdateState(
+    app.getVersion(),
+    desktopRuntimeInfo,
+    desktopFlavor === "development" ? "production" : desktopFlavor,
+  );
 
 function logTimestamp(): string {
   return new Date().toISOString();
@@ -2789,16 +2849,52 @@ function emitUpdateState(): void {
 }
 
 function setUpdateState(patch: Partial<DesktopUpdateState>): void {
+  const previousStatus = updateState.status;
   updateState = { ...updateState, ...patch };
   emitUpdateState();
+  if (betaDiagnostics && updateState.status !== previousStatus) {
+    const status = updateState.status;
+    if (status === "checking") {
+      trackBetaDiagnostics("update.check", { kind: "update", outcome: "ok" });
+    } else if (status === "available") {
+      trackBetaDiagnostics("update.available", {
+        kind: "update",
+        outcome: "ok",
+        ...(updateState.availableVersion ? { targetVersion: updateState.availableVersion } : {}),
+      });
+    } else if (status === "downloaded") {
+      trackBetaDiagnostics("update.downloaded", {
+        kind: "update",
+        outcome: "ok",
+        ...(updateState.downloadedVersion ? { targetVersion: updateState.downloadedVersion } : {}),
+      });
+    } else if (status === "error") {
+      trackBetaDiagnostics("update.error", {
+        kind: "update",
+        outcome: "error",
+        ...(updateState.errorContext ? { errorContext: updateState.errorContext } : {}),
+      });
+    }
+  }
 }
 
 function shouldEnableAutoUpdates(): boolean {
   return resolveAutoUpdateDisabledReason() === null;
 }
 
-function isKnownUpdateVersionNewer(version: string | null | undefined): boolean {
-  return typeof version === "string" && isUpdateVersionNewer(app.getVersion(), version);
+function isAcceptableUpdateVersion(version: string | null | undefined): boolean {
+  return (
+    typeof version === "string" &&
+    isUpdateVersionAllowedForFlavor(version, desktopFlavor) &&
+    isUpdateVersionNewer(app.getVersion(), version)
+  );
+}
+
+function describeRejectedUpdateVersion(version: string): string {
+  if (!isUpdateVersionAllowedForFlavor(version, desktopFlavor)) {
+    return `version ${version} is not on the "${desktopFlavor}" flavor's update lane`;
+  }
+  return `version ${version} is not newer than current ${app.getVersion()}`;
 }
 
 function getUpdaterCachePathArgs(): {
@@ -3174,12 +3270,14 @@ async function downloadAvailableUpdate(): Promise<{
   if (!updaterConfigured || updateDownloadInFlight || updateState.status !== "available") {
     return { accepted: false, completed: false };
   }
-  if (!isKnownUpdateVersionNewer(updateState.availableVersion)) {
-    await clearPendingUpdateCache("available version is not newer than current app");
+  if (!isAcceptableUpdateVersion(updateState.availableVersion)) {
+    const rejected =
+      typeof updateState.availableVersion === "string"
+        ? describeRejectedUpdateVersion(updateState.availableVersion)
+        : "no acceptable update version recorded";
+    await clearPendingUpdateCache(`staged update rejected: ${rejected}`);
     setUpdateState(reduceDesktopUpdateStateOnNoUpdate(updateState, new Date().toISOString()));
-    console.info(
-      `[desktop-updater] Ignoring stale available update ${updateState.availableVersion ?? "unknown"} for current ${app.getVersion()}.`,
-    );
+    console.info(`[desktop-updater] Ignoring stale available update: ${rejected}.`);
     return { accepted: false, completed: false };
   }
   updateDownloadInFlight = true;
@@ -3367,12 +3465,13 @@ async function runDownloadedUpdateInstall(
   completed: boolean;
 }> {
   const versionToInstall = updateState.downloadedVersion ?? updateState.availableVersion;
-  if (!versionToInstall || !isKnownUpdateVersionNewer(versionToInstall)) {
-    await clearPendingUpdateCache("downloaded version is not newer than current app");
+  if (!versionToInstall || !isAcceptableUpdateVersion(versionToInstall)) {
+    const rejected = versionToInstall
+      ? describeRejectedUpdateVersion(versionToInstall)
+      : "no update version recorded";
+    await clearPendingUpdateCache(`downloaded update rejected: ${rejected}`);
     setUpdateState(reduceDesktopUpdateStateOnNoUpdate(updateState, new Date().toISOString()));
-    console.info(
-      `[desktop-updater] Ignoring stale downloaded update ${versionToInstall ?? "unknown"} for current ${app.getVersion()}.`,
-    );
+    console.info(`[desktop-updater] Ignoring stale downloaded update: ${rejected}.`);
     return { accepted: false, completed: false };
   }
 
@@ -3485,21 +3584,25 @@ async function installDownloadedUpdate(): Promise<{
 
 async function recordDownloadedUpdateIdentity(info: UpdateDownloadedEvent): Promise<void> {
   clearUpdateDownloadStallTimer();
-  if (!isUpdateVersionNewer(app.getVersion(), info.version)) {
+  if (!isAcceptableUpdateVersion(info.version)) {
     downloadedUpdateArtifact = null;
-    clearPendingUpdateCacheWhenSafe("downloaded version is not newer than current app");
+    clearPendingUpdateCacheWhenSafe(
+      `downloaded update rejected: ${describeRejectedUpdateVersion(info.version)}`,
+    );
     setUpdateState(reduceDesktopUpdateStateOnNoUpdate(updateState, new Date().toISOString()));
     console.info(
-      `[desktop-updater] Ignoring downloaded non-newer update ${info.version}; current version is ${app.getVersion()}.`,
+      `[desktop-updater] Ignoring downloaded update: ${describeRejectedUpdateVersion(info.version)}.`,
     );
     return;
   }
 
   try {
     const identity = await fingerprintUpdateArtifact(info.downloadedFile);
-    if (!isUpdateVersionNewer(app.getVersion(), info.version)) {
+    if (!isAcceptableUpdateVersion(info.version)) {
       downloadedUpdateArtifact = null;
-      clearPendingUpdateCacheWhenSafe("downloaded version became stale during fingerprinting");
+      clearPendingUpdateCacheWhenSafe(
+        `downloaded update rejected after fingerprinting: ${describeRejectedUpdateVersion(info.version)}`,
+      );
       setUpdateState(reduceDesktopUpdateStateOnNoUpdate(updateState, new Date().toISOString()));
       return;
     }
@@ -3525,7 +3628,11 @@ function configureAutoUpdater(): void {
     githubUpdateSource === null ? null : buildGitHubReleasesPageUrl(githubUpdateSource);
   const enabled = shouldEnableAutoUpdates();
   setUpdateState({
-    ...createInitialDesktopUpdateState(app.getVersion(), desktopRuntimeInfo),
+    ...createInitialDesktopUpdateState(
+      app.getVersion(),
+      desktopRuntimeInfo,
+      desktopFlavor === "development" ? "production" : desktopFlavor,
+    ),
     enabled,
     status: enabled ? "idle" : "disabled",
     releaseUrl,
@@ -3547,7 +3654,7 @@ function configureAutoUpdater(): void {
   autoUpdater.autoInstallOnAppQuit = false;
   // The dedicated channel keeps the permanent compatibility release on the
   // default feed while Synara versions advance independently.
-  autoUpdater.channel = SYNARA_DESKTOP_UPDATE_CHANNEL;
+  autoUpdater.channel = desktopUpdateChannel(desktopFlavor);
   autoUpdater.allowPrerelease = DESKTOP_UPDATE_ALLOW_PRERELEASE;
   autoUpdater.allowDowngrade = false;
   // Match electron-updater's native GitHub provider path; the packaged
@@ -3582,12 +3689,14 @@ function configureAutoUpdater(): void {
   autoUpdater.on("update-available", (info) => {
     clearUpdateCheckTimeoutTimer();
     downloadedUpdateArtifact = null;
-    if (!isUpdateVersionNewer(app.getVersion(), info.version)) {
-      void clearPendingUpdateCache("available version is not newer than current app");
+    if (!isAcceptableUpdateVersion(info.version)) {
+      void clearPendingUpdateCache(
+        `available update rejected: ${describeRejectedUpdateVersion(info.version)}`,
+      );
       setUpdateState(reduceDesktopUpdateStateOnNoUpdate(updateState, new Date().toISOString()));
       lastLoggedDownloadMilestone = -1;
       console.info(
-        `[desktop-updater] Ignoring non-newer update ${info.version}; current version is ${app.getVersion()}.`,
+        `[desktop-updater] Ignoring available update: ${describeRejectedUpdateVersion(info.version)}.`,
       );
       return;
     }
@@ -4466,6 +4575,16 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
       }
       const reason = `code=${code ?? "null"} signal=${signal ?? "null"}`;
       lastBackendFailureDetail = outputTailDetector.read();
+      trackBetaDiagnostics("app.child-process-crash", {
+        kind: "crash",
+        processType: "backend",
+        reason,
+        // Guarded explicitly: on stable builds betaDiagnostics is null and the
+        // log file must not be touched at all.
+        logTail: betaDiagnostics
+          ? readLogTail(Path.join(LOG_DIR, BACKEND_LOG_FILE_NAME))
+          : undefined,
+      });
       scheduleBackendRestart(reason);
     });
   });
@@ -4587,6 +4706,10 @@ async function shutdownDesktopRuntime(reason: string): Promise<void> {
       });
       await browserSessionRestore?.shutdown();
       restoreStdIoCapture?.();
+      if (betaDiagnostics) {
+        trackBetaDiagnostics("app.exit", { kind: "lifecycle" });
+        await betaDiagnostics.dispose().catch(() => undefined);
+      }
       desktopShutdownComplete = true;
       writeDesktopLogHeader(`${reason} shutdown complete`);
     },
@@ -4647,6 +4770,20 @@ async function confirmRunningChatsThenQuit(reason: string): Promise<void> {
     return;
   }
   requestGracefulAppQuit(reason);
+}
+
+function ownMacAppBundlePath(): string {
+  return Path.resolve(process.execPath, "..", "..", "..");
+}
+
+/** Only ever trash the packaged beta bundle this process runs from. */
+function isTrashableBetaBundle(): boolean {
+  return (
+    desktopFlavor === "beta" &&
+    process.platform === "darwin" &&
+    app.isPackaged &&
+    Path.basename(ownMacAppBundlePath()) === `${APP_DISPLAY_NAME}.app`
+  );
 }
 
 function requestGracefulAppQuit(reason: string): void {
@@ -4987,6 +5124,61 @@ function registerIpcHandlers(): void {
     }
   });
 
+  const betaChannel = new DesktopBetaChannel({
+    platform: process.platform,
+    homeDir: OS.homedir(),
+    betaHomeDir: resolveBetaHomeDir(),
+    flavor:
+      desktopFlavor === "beta"
+        ? "beta"
+        : desktopFlavor === "canary"
+          ? "canary"
+          : desktopFlavor === "cua"
+            ? "cua"
+            : "production",
+    feedUrlOverride: process.env.SYNARA_BETA_FEED_URL,
+    installDirOverride: process.env.SYNARA_BETA_INSTALL_DIR,
+    betaUserDataDir: process.env.SYNARA_BETA_USER_DATA,
+    stableExecutablePath: desktopFlavor === "production" ? process.execPath : undefined,
+    stableHomeDir: desktopFlavor === "production" ? BASE_DIR : undefined,
+    canTrashOwnBundle: isTrashableBetaBundle(),
+  });
+
+  ipcMain.removeHandler(IPC.beta.getState);
+  ipcMain.handle(IPC.beta.getState, async () => betaChannel.getState());
+
+  ipcMain.removeHandler(IPC.beta.install);
+  ipcMain.handle(IPC.beta.install, async () => betaChannel.install());
+
+  ipcMain.removeHandler(IPC.beta.launch);
+  ipcMain.handle(IPC.beta.launch, async () => betaChannel.launch());
+
+  ipcMain.removeHandler(IPC.beta.importAndLaunch);
+  ipcMain.handle(IPC.beta.importAndLaunch, async () => betaChannel.importAndLaunch(BASE_DIR));
+
+  ipcMain.removeHandler(IPC.beta.leave);
+  ipcMain.handle(IPC.beta.leave, async (_event, rawInput: unknown) => {
+    const result = await betaChannel.leave();
+    if (!result.ok) return result;
+    const moveToTrash =
+      typeof rawInput === "object" &&
+      rawInput !== null &&
+      (rawInput as { moveToTrash?: unknown }).moveToTrash === true;
+    if (moveToTrash && isTrashableBetaBundle()) {
+      try {
+        await shell.trashItem(ownMacAppBundlePath());
+      } catch (error) {
+        return {
+          ok: false,
+          error: "internal" as const,
+          message: `Synara is open, but Synara Beta could not be moved to the Trash: ${formatErrorMessage(error)}`,
+        };
+      }
+    }
+    setImmediate(() => requestGracefulAppQuit("beta-leave"));
+    return result;
+  });
+
   ipcMain.removeHandler(IPC.updateGetState);
   ipcMain.handle(IPC.updateGetState, async () => updateState);
 
@@ -5220,6 +5412,15 @@ function createWindow(): BrowserWindow {
   attachDesktopZoomFactorSync(window);
   attachRendererCrashRecovery(window);
   attachDesktopPhysicalZoomShortcuts(window);
+  if (betaDiagnostics) {
+    // Renderer console errors become app.error events (throttled inside
+    // trackError); messages are redacted before they touch the queue.
+    window.webContents.on("console-message", (details) => {
+      if (details.level === "error" && typeof details.message === "string") {
+        betaDiagnostics.trackError("renderer", details.message);
+      }
+    });
+  }
 
   window.webContents.on("will-attach-webview", (event, webPreferences, params) => {
     const partition = params.partition;
@@ -5387,6 +5588,14 @@ function attachRendererCrashRecovery(window: BrowserWindow): void {
     // the pending ask and count it as quitting for the crash policy.
     const quitAskPending = runningChatsQuitGuard.hasPendingAsk();
     runningChatsQuitGuard.allowPending();
+    trackBetaDiagnostics("app.renderer-crash", {
+      kind: "crash",
+      processType: "renderer",
+      reason: details.reason,
+      // Guarded explicitly: on stable builds betaDiagnostics is null and the
+      // log file must not be touched at all.
+      logTail: betaDiagnostics ? readLogTail(Path.join(LOG_DIR, DESKTOP_LOG_FILE_NAME)) : undefined,
+    });
     const description = `reason=${details.reason} exitCode=${details.exitCode}`;
     writeDesktopLogHeader(`renderer process gone ${description}`);
     safeConsoleError(`[desktop] renderer process gone (${description})`);
@@ -5736,6 +5945,19 @@ if (hasSingleInstanceLock) {
     .whenReady()
     .then(() => {
       writeDesktopLogHeader("app ready");
+      if (betaDiagnostics) {
+        betaDiagnostics.start();
+        const previousLaunchVersion = parseLastLaunchVersion(readLaunchVersionRecordContents());
+        trackBetaDiagnostics("app.start", { kind: "lifecycle" });
+        if (previousLaunchVersion !== null && previousLaunchVersion !== app.getVersion()) {
+          // A version change across launches means an update install landed.
+          trackBetaDiagnostics("update.installed", {
+            kind: "update",
+            outcome: "ok",
+            targetVersion: app.getVersion(),
+          });
+        }
+      }
       configureAppIdentity();
       if (process.platform === "win32") {
         try {
@@ -5769,6 +5991,18 @@ if (hasSingleInstanceLock) {
       app.on("browser-window-blur", () => {
         markDesktopAppBackgrounded();
       });
+
+      if (betaDiagnostics) {
+        app.on("child-process-gone", (_event, details) => {
+          // GPU/utility process crashes; details.reason is a fixed Electron enum.
+          trackBetaDiagnostics("app.child-process-crash", {
+            kind: "crash",
+            processType: details.type,
+            reason: details.reason,
+            logTail: readLogTail(Path.join(LOG_DIR, DESKTOP_LOG_FILE_NAME)),
+          });
+        });
+      }
 
       app.on("browser-window-focus", () => {
         handleDesktopAppForegrounded();

@@ -33,7 +33,8 @@ export function AnnouncementSheet(props: {
   // Two lines at 378px wide is the reference sheet's proportion; longer copy wraps to
   // three and throws the whole vertical rhythm off.
   description: ReactNode;
-  dismissLabel: string;
+  // Omitted on single-action sheets; the confirm button still closes via onConfirm.
+  dismissLabel?: string;
   confirmLabel: string;
   // Fired by the dismiss button and by Escape / backdrop closes.
   onDismiss: () => void;
@@ -73,9 +74,15 @@ export function AnnouncementSheet(props: {
           </DialogHeader>
 
           <DialogFooter className="gap-2 p-0 pt-3">
-            <Button variant="ghost" className={ACTION_BUTTON_CLASS_NAME} onClick={props.onDismiss}>
-              {props.dismissLabel}
-            </Button>
+            {props.dismissLabel !== undefined ? (
+              <Button
+                variant="ghost"
+                className={ACTION_BUTTON_CLASS_NAME}
+                onClick={props.onDismiss}
+              >
+                {props.dismissLabel}
+              </Button>
+            ) : null}
             <Button
               className={ACTION_BUTTON_CLASS_NAME}
               onClick={() => {

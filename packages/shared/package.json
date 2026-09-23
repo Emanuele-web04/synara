@@ -112,6 +112,14 @@
       "types": "./src/desktopIdentity.ts",
       "import": "./src/desktopIdentity.ts"
     },
+    "./betaChannel": {
+      "types": "./src/betaChannel.ts",
+      "import": "./src/betaChannel.ts"
+    },
+    "./diagnosticsRedaction": {
+      "types": "./src/diagnosticsRedaction.ts",
+      "import": "./src/diagnosticsRedaction.ts"
+    },
     "./Net": {
       "types": "./src/Net.ts",
       "import": "./src/Net.ts"

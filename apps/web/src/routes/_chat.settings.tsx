@@ -36,6 +36,7 @@ import {
 } from "~/components/settings/ConversationStorageSettingsPanels";
 import {
   AppSnapSettingsPanel,
+  BetaChannelSettingsPanel,
   NotificationsSettingsPanel,
 } from "~/components/settings/DesktopSettingsPanels";
 import { ComputerSettingsPanel } from "~/components/settings/ComputerSettingsPanel";
@@ -463,6 +464,7 @@ function SettingsRouteView() {
   const renderGeneralPanel = () => (
     <div className="space-y-6">
       <SafariAccessSetupButton />
+      <BetaChannelSettingsPanel active={true} />
       <SettingsSection title="Core defaults">
         <SettingsRow
           title="Default provider"
