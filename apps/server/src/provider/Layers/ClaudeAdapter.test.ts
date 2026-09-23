@@ -9,6 +9,7 @@ import type {
   ModelInfo,
   PermissionMode,
   PermissionResult,
+  PermissionUpdate,
   SDKControlGetContextUsageResponse,
   SDKMessage,
   SDKUserMessage,
@@ -7805,6 +7806,164 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       yield* Stream.runHead(adapter.streamEvents);
       const secondPermissionResult = yield* Effect.promise(() => secondPermissionPromise);
       assert.equal((secondPermissionResult as PermissionResult).behavior, "deny");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect(
+    "keeps later command prompts supervised after always allowing a tool for the session",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+
+        const session = yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "approval-required",
+        });
+
+        yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
+
+        const canUseTool = harness.getLastCreateQueryInput()?.options.canUseTool;
+        assert.equal(typeof canUseTool, "function");
+        if (!canUseTool) {
+          return;
+        }
+
+        const toolSuggestions: PermissionUpdate[] = [
+          {
+            type: "addRules",
+            rules: [{ toolName: "mcp__docs__search" }],
+            behavior: "allow",
+            destination: "session",
+          },
+        ];
+        const toolPermissionPromise = canUseTool(
+          "mcp__docs__search",
+          { query: "release notes" },
+          {
+            signal: new AbortController().signal,
+            suggestions: toolSuggestions,
+            toolUseID: "tool-use-mcp-1",
+            requestId: "request-tool-use-mcp-1",
+          },
+        );
+        const toolRequested = yield* Stream.runHead(adapter.streamEvents);
+        if (toolRequested._tag !== "Some" || toolRequested.value.type !== "request.opened") {
+          assert.fail("expected the MCP tool approval to open");
+          return;
+        }
+        assert.equal(toolRequested.value.payload.requestType, "tool_approval");
+
+        yield* adapter.respondToRequest(
+          session.threadId,
+          ApprovalRequestId.makeUnsafe(String(toolRequested.value.requestId)),
+          "acceptForSession",
+        );
+        yield* Stream.runHead(adapter.streamEvents);
+        const toolPermissionResult = (yield* Effect.promise(
+          () => toolPermissionPromise,
+        )) as PermissionResult & { readonly updatedPermissions?: unknown };
+        assert.equal(toolPermissionResult.behavior, "allow");
+        assert.deepEqual(toolPermissionResult.updatedPermissions, toolSuggestions);
+
+        const bashPermissionPromise = canUseTool(
+          "Bash",
+          { command: "rm -rf build" },
+          {
+            signal: new AbortController().signal,
+            toolUseID: "tool-use-bash-1",
+            requestId: "request-tool-use-bash-1",
+          },
+        );
+        // Before the fix the tool grant auto-allowed this call without a prompt.
+        const bashRequested = yield* Effect.raceFirst(
+          Stream.runHead(adapter.streamEvents),
+          Effect.promise(() => bashPermissionPromise).pipe(
+            Effect.flatMap(() =>
+              Effect.sync(() => assert.fail("Bash ran without an approval prompt")),
+            ),
+          ),
+        );
+        if (bashRequested._tag !== "Some" || bashRequested.value.type !== "request.opened") {
+          assert.fail("expected the Bash command to still require approval");
+          return;
+        }
+        assert.equal(bashRequested.value.payload.requestType, "command_execution_approval");
+
+        yield* adapter.respondToRequest(
+          session.threadId,
+          ApprovalRequestId.makeUnsafe(String(bashRequested.value.requestId)),
+          "decline",
+        );
+        yield* Stream.runHead(adapter.streamEvents);
+        const bashPermissionResult = yield* Effect.promise(() => bashPermissionPromise);
+        assert.equal((bashPermissionResult as PermissionResult).behavior, "deny");
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
+  it.effect("always allows later requests after a command is allowed for the session", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "approval-required",
+      });
+
+      yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
+
+      const canUseTool = harness.getLastCreateQueryInput()?.options.canUseTool;
+      assert.equal(typeof canUseTool, "function");
+      if (!canUseTool) {
+        return;
+      }
+
+      const firstPermissionPromise = canUseTool(
+        "Bash",
+        { command: "pwd" },
+        {
+          signal: new AbortController().signal,
+          toolUseID: "tool-use-bash-1",
+          requestId: "request-tool-use-bash-1",
+        },
+      );
+      const firstRequested = yield* Stream.runHead(adapter.streamEvents);
+      if (firstRequested._tag !== "Some" || firstRequested.value.type !== "request.opened") {
+        assert.fail("expected the first Bash command to require approval");
+        return;
+      }
+
+      yield* adapter.respondToRequest(
+        session.threadId,
+        ApprovalRequestId.makeUnsafe(String(firstRequested.value.requestId)),
+        "acceptForSession",
+      );
+      yield* Stream.runHead(adapter.streamEvents);
+      const firstPermissionResult = yield* Effect.promise(() => firstPermissionPromise);
+      assert.equal((firstPermissionResult as PermissionResult).behavior, "allow");
+
+      const secondPermissionResult = yield* Effect.promise(() =>
+        canUseTool(
+          "Edit",
+          { file_path: "src/index.ts", old_string: "a", new_string: "b" },
+          {
+            signal: new AbortController().signal,
+            toolUseID: "tool-use-edit-1",
+            requestId: "request-tool-use-edit-1",
+          },
+        ),
+      );
+      assert.equal((secondPermissionResult as PermissionResult).behavior, "allow");
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
