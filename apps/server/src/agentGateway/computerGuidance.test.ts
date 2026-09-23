@@ -5,6 +5,7 @@ import {
   COMPUTER_HELP_INDEX,
   COMPUTER_HELP_SECTIONS,
   COMPUTER_HELP_TOPICS,
+  computerHelpSections,
   computerToolInstructions,
   DEFAULT_COMPUTER_GUIDANCE_PROFILE,
   setActiveComputerGuidanceProfile,
@@ -157,6 +158,49 @@ describe("computer guidance", () => {
       }
     }
     expect(activeComputerGuidanceProfile()).toBe(DEFAULT_COMPUTER_GUIDANCE_PROFILE);
+  });
+
+  it("describes a dedicated-seat Linux desktop as one the agent can drive", () => {
+    // Only the profile a compositor backend registers changes the text: the
+    // Cua host on Linux, with no seat of its own, keeps the legacy wording.
+    const desktop = { dialect: "linux", dedicatedSeat: true } as const;
+    expect(computerToolInstructions({ dialect: "linux", dedicatedSeat: false })).toBe(
+      LEGACY_INSTRUCTIONS,
+    );
+    expect(computerHelpSections({ dialect: "linux", dedicatedSeat: false }).linux).toBe(
+      LEGACY_LINUX_CHAPTER,
+    );
+
+    const notes = computerToolInstructions(desktop);
+    expect(notes).not.toContain("native desktop input is unavailable");
+    expect(notes).not.toContain("computer_browser_prepare");
+    expect(notes).toContain("seat of its own");
+    expect(notes).toContain("computer_human_active");
+    expect(notes).toContain("This desktop has no computer_browser_* route");
+    expect(notes).toContain('press_key takes one key or a chord ("ctrl+shift+n")');
+    for (const heading of ["### Working loop", "### Background first", "### Browser", "### More"]) {
+      expect(notes, heading).toContain(heading);
+    }
+    expect(notes.length).toBeLessThanOrEqual(3_800);
+
+    const linux = computerHelpSections(desktop).linux;
+    expect(linux).toContain("compositor plugin (KWin or Hyprland)");
+    expect(linux).toContain("Meta+Shift+Esc");
+    expect(linux).toContain("never touched");
+    expect(linux).not.toContain("native desktop input is unavailable");
+    expect(linux.length).toBeLessThanOrEqual(900);
+
+    try {
+      setActiveComputerGuidanceProfile(desktop);
+      const policy = renderSynaraHarnessPolicy({
+        gatewayControlAvailable: true,
+        enableComputerControl: true,
+      });
+      expect(policy).toContain("seat of its own");
+      expect(policy).not.toContain("Linux native desktop input is unavailable");
+    } finally {
+      setActiveComputerGuidanceProfile(undefined);
+    }
   });
 
   it("keeps the visibility chapter about explicit user-requested controls", () => {

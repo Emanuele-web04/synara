@@ -94,11 +94,13 @@ selection answers. The guidance profile is registered again when it does.
 
 ## Backend: KWin plugin (Plasma Wayland)
 
-`apps/server/native/computer-use-kwin/` is a `KWin::Plugin` loaded into the
-human's own `kwin_wayland`: the agent's seat, cursor, input delivery and
-capture, behind a D-Bus interface. No backend selects or loads it yet;
-`scripts/install-and-load.sh` builds, installs and loads it by hand, as the
-plugin's README describes.
+`KWinComputerBackend.ts` drives `apps/server/native/computer-use-kwin/`, a
+`KWin::Plugin` loaded into the human's own `kwin_wayland`. It reports backend
+`kwin`, `visibleDesktop: true`, the full capability set, `dedicatedSeat` and
+`textRangeSelection: false`. Selected when `org.kde.KWin` is owned on the
+session bus and the session is Wayland; Plasma on X11 owns the name too, but
+the plugin's dedicated seat exists only on Wayland, so that host is left
+unclaimed rather than given a backend that refuses forever.
 
 ### Seat policy, as the plugin implements it
 
@@ -112,17 +114,18 @@ plugin's README describes.
   is observed, never changed, and the same-client rule refuses input aimed at
   a surface whose client the human is active in.
 - When the human is active in a window, agent actions aimed at that window
-  are refused with `org.synara.ComputerUse.Error.HumanActive`. Every refusal
-  is decided before the plugin sends anything; a raise that would bury their
-  window is refused too, and no activation is borrowed in an application they
-  are typing in. Serials the agent's events carry never count as the human's
-  interaction: KWin refuses an activation token that quotes one, so a client
-  cannot use an agent click to take the human's keyboard (Chromium did,
-  between two of its windows), while a launch the human started still takes
-  focus when it maps in the middle of the agent's work.
+  are refused with the retryable token `computer_human_active`, whether the
+  compositor or the server raised it. Every refusal is decided before the
+  plugin sends anything; a raise that would bury their window is refused too,
+  and no activation is borrowed in an application they are typing in. Serials
+  the agent's events carry never count as the human's interaction: KWin
+  refuses an activation token that quotes one, so a client cannot use an
+  agent click to take the human's keyboard (Chromium did, between two of its
+  windows), while a launch the human started still takes focus when it maps
+  in the middle of the agent's work.
 - `Meta+Shift+Esc` stops the session and latches until pressed again; a plugin
-  that could not register the shortcut says so in `healthJson` rather than
-  advertising a hotkey that does not exist.
+  that could not register the shortcut is reported as a setup blocker rather
+  than advertising a hotkey that does not exist.
 - A popup the agent opens never grabs. KWin ignores the seat in
   `xdg_popup.grab` and would move seat0's keyboard onto any grabbing popup,
   swallowing the human's keys and next click, so the plugin attributes each
@@ -134,18 +137,28 @@ plugin's README describes.
 ### Plugin contract
 
 The plugin exports the D-Bus object `org.synara.ComputerUse` at
-`/org/synara/ComputerUse`, interface `org.synara.ComputerUse1`, described in
-`org.synara.ComputerUse.xml`. Its client takes the exclusive bus name
-`org.synara.ComputerUse.Server`, writes a random token to a 0600 file and
-calls `authenticate`; every other method except `healthJson` requires the
-authenticated caller, and the plugin drops the caller when the server name
-changes owner.
+`/org/synara/ComputerUse`, interface `org.synara.ComputerUse1`; `kwinDbus.ts`
+(`KWinComputerPluginApi`) is the server-side typing. The server takes the
+exclusive bus name `org.synara.ComputerUse.Server`, writes a random token to a
+0600 file (`computerSessionAuth.ts`) and calls `authenticate`; every other
+method except `healthJson` requires the authenticated caller, and the plugin
+drops the caller when the server name changes owner.
 
 - `focusWindow`, `raiseWindow` and `clearFocusWindow` aim keys and scope
   pointer input without activating; `resetInputDelivery` does everything a
-  lease hand-over needs in one call.
+  lease hand-over needs in one call and is what the manager runs on every
+  lease change, release and emergency stop. The backend runs it only on a
+  session that is up: a reset never restarts an idled-out session.
 - A locked or inactive session refuses capture and input with
-  `SessionLocked`.
+  `SessionLocked`. The backend maps it to a retryable refusal carrying an
+  `inputPause` (token `computer_session_locked`) that names the window the
+  seat was aimed at, when any; the manager latches the pause until a scoped
+  observation of that window — or, for a pause naming no window, an unscoped
+  observation with a screenshot — sees the desktop unlocked through
+  `checkInputReady`, which reads plugin health through the same checks as the
+  establishing read. The transition into the lock is announced once as a
+  `desktop-interrupted` event so standing task consent does not carry across
+  it.
 - Captures render offscreen at the next safe compositor point; the agent's
   cursor is painted in, the human's never is. A downscaled capture is rendered
   by the GPU at (or near) the delivered size into render targets reused between
@@ -157,19 +170,73 @@ changes owner.
   has committed new content after the agent's input and gone quiet, driven by
   damage signals and timers rather than a fixed sleep.
   `captureWindowEx`/`captureRegionEx` take flags for a passive frame (not
-  agent activity, so an observer does not keep an idle session alive), JPEG,
-  or raw luma, and reply with the bytes' MIME type. Every version 1 method is
-  unchanged, so a client that uses a feature only when it is listed keeps
-  working with an older plugin.
+  agent activity: the preview no longer keeps an idle session alive), JPEG,
+  or raw luma, and reply with the bytes' MIME type. The server uses a
+  feature only when it is listed, so an installed older plugin keeps working.
   `healthJson.xAuthority` names the cookie file of the compositor's own
   Xwayland, which X11 apps launched into a nested session need.
+- Text selection is refused up front (`textRangeSelection: false`): AT-SPI
+  exposes no settable selection this backend can read back, and nothing
+  approximates it.
+
+### Guidance
+
+The backend declares `dedicatedSeat`, and the session-start instructions and
+the `linux` help chapter render from that profile: native input available,
+`ctrl` chords, `computer_human_active` as the wait-and-retry signal, and no
+`computer_browser_*` route. Every other profile keeps the Cua host's text.
+
+### Perception
+
+`atspi_helper.py` is a Python process speaking newline-framed JSON on stdio,
+supervised by `AtspiHelperClient` (`atspiClient.ts`) with a request deadline, a
+frame cap and bounded restart. Its walk is bounded per window and per
+application; partial results carry a marker rather than failing the read.
+`atspiTreeTargeting.ts` fuses each tree with the plugin's window bounds into
+the desktop-space `ComputerUiNode` tree the manager exposes.
+
+### Engine behaviour
+
+How the engine in `KWinComputerBackend.ts` behaves, whichever backend it serves:
+
+- Connection: a dead bus is noticed from the socket itself (dbus-next never
+  emits `disconnect`), and every call waiting on it fails at once. Reconnects
+  back off from 250 ms to 30 s, and the backoff restarts only after a
+  connection stayed up 30 s or carried an input. A plugin the human unloaded
+  from the same compositor instance is not reloaded until the next real use;
+  a restarted compositor gets it back. A compositor missing for 60 s is
+  reported once as `desktop-gone`.
+- Action path: a window list read once serves the whole desktop operation
+  (75 ms, dropped on any input, focus or raise), through `windowsStateJson`
+  when offered. No glide under a pixel or for the human's pane input. Text
+  goes through `keys` a word at a time. Model captures
+  use the core's 1536 px budget. `launchApp` reports the pid, the app id a
+  launcher hands off to, and whether one of its windows took activation.
+- Settle: with `waitForSettle`, an action waits until the target window has
+  repainted and stayed quiet for 100 ms, for at most the 300 ms the fixed
+  wait used to take. At 300 ms, a window that has not repainted at all is
+  taken as unchanged and one still repainting as an animation; both are
+  photographed then. After three actions in a row that saw no repaint the
+  manager's fixed wait comes back.
+- Preview: stills are passive JPEGs (`captureRegionEx`) at a 1280 px budget
+  through `StillFramePublisher`. They slow from 500 ms to 2 s after four
+  identical frames, wake on actions and window changes, and wait while a
+  desktop operation runs. Five failed stills mark capture unavailable. A
+  locked session or a timed-out capture does not count toward that, and
+  health is re-read with backoff until capture works again.
+- Typing is refused before any key on layouts the US-QWERTY table cannot
+  type: Dvorak, Colemak, `intl`, `alt-intl` and non-US layouts. The short
+  name (`us`) and the descriptive one a keymap without a layout list
+  reports (`English (US)`) both count as plain US.
+- Paste offers the text once (`wl-copy --paste-once`) and restores the
+  human's clipboard as soon as it has been read. Any offer still open when
+  the backend is disposed is withdrawn.
 
 ### Provisioning and packaging
 
 Everything except distribution packages installs under the user's home,
-without root, from the server process: `provisionKWinPlugin`
-(`kwinPluginProvisioning.ts`) and the steps under `provisioning/`, with
-distribution packages behind one `pkexec` prompt. With no matching prebuilt,
+without root, from the server process, and only `provision()` (the settings
+panel's Set up) installs anything. With no matching prebuilt,
 `scripts/install-and-load.sh --build-only` compiles against the local headers
 (KWin 6, Qt 6, KF6, ECM; Ubuntu before 24.10 and Debian before 13 are refused
 by name). Each install lands as a new `SynaraComputerUsePluginV<n>.so`, since
@@ -194,20 +261,42 @@ stages it under the packaged server dist, and the CLI and server-tarball jobs
 stage it into the restored dist when the prebuild run succeeded. No packaging
 job waits on or is gated by the prebuild matrix.
 
-The plugin sources ship outside ASAR (`LINUX_COMPUTER_USE_ASAR_UNPACK_GLOBS`):
-bash and cmake read them off the disk. `apps/server/scripts/cli.ts` copies them
-into `dist/`, and `scripts/release-smoke.ts` checks the packaging.
+The AT-SPI helper and the plugin sources ship outside ASAR
+(`LINUX_COMPUTER_USE_ASAR_UNPACK_GLOBS`): python3, bash and cmake read them off
+the disk. `apps/server/scripts/cli.ts` copies both into `dist/`,
+`scripts/release-smoke.ts` checks the packaging, and the packaged runtime smoke
+loads `dbus-next` the way the backend does.
+
+Environment: `SYNARA_KWIN_PLUGIN_DIR`, `SYNARA_KWIN_PREBUILT_DIR`,
+`SYNARA_KWIN_SOURCE_DIR`, `SYNARA_KWIN_STATE_ROOT` override paths;
+`SYNARA_COMPUTER_IDLE_TIMEOUT_MS` and `SYNARA_COMPUTER_HUMAN_ACTIVE_MS` tune the
+session; `SYNARA_COMPUTER_IDLE_RELEASE_MINUTES` (default 10, `0` off) is how long
+an unused desktop keeps its bus connection, the server's bus name and the AT-SPI
+helper before letting them go, so a second Synara server can drive it (the next
+use connects again); `SYNARA_ATSPI_PYTHON` and `SYNARA_ATSPI_HELPER` point at
+the helper, and `SYNARA_ATSPI_EVENTS` switches its event-fed tree cache (off by
+default on the real desktop, where registering for events makes every
+application emit them, GTK 3 all of them; `1` turns it on).
+Every variable the server reads for computer use is listed in `turbo.json`'s
+`globalPassThroughEnv`, which turbo strips otherwise in strict mode; a backend
+that reads a new one adds it there.
 
 ### Testing
 
-The plugin's fixture tests (`native/computer-use-kwin/tests`) compile
-production functions against stub protocol resources. Seat delivery,
+Backend tests inject `FakeDbus` and `FakePlugin` (`computerPluginTestDoubles.ts`);
+no test touches a real bus or compositor. `atspiHelper.python.test.ts` runs the
+helper's own unit tests and its stdio framing against the real interpreter with
+a fake `Atspi`. The plugin's fixture tests (`native/computer-use-kwin/tests`)
+compile production functions against stub protocol resources. Seat delivery,
 the same-client rule, the guard, the shortcut and lock refusal need a live
 compositor and are exercised only against a disposable nested `kwin_wayland`.
 
 ## Known gaps
 
 - Nothing here is verified against a live compositor by the test suite.
+- Text and character keys need a US layout without dead keys (`us`,
+  `us(altgr-intl)`, `us(euro)`) and are refused on any other; named keys
+  still work.
 - No protocol-level drag-and-drop and no client-side titlebar moves; both need
   a button serial on the human's seat. Modified pointer input (modifier plus
   click or scroll) is refused.
@@ -220,4 +309,5 @@ compositor and are exercised only against a disposable nested `kwin_wayland`.
   remainder for one second, so small scrolls a few seconds apart are lost in
   such a client. Direct injection carries the remainder.
 - The plugin is built per compositor version, so every KWin release needs a
-  new build.
+  new build; a KWin upgrade leaves no plugin loaded until the next login
+  provisions one.

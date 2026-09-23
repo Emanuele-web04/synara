@@ -7,6 +7,8 @@ import { CUA_HOST_SOCKET_ENV } from "@synara/shared/cuaDriverProtocol";
 import { ComputerManager } from "../ComputerManager.ts";
 import { CuaComputerBackend } from "../CuaComputerBackend.ts";
 import { FakeComputerBackend } from "../FakeComputerBackend.ts";
+import { KWinComputerBackend } from "../KWinComputerBackend.ts";
+import { sessionBusNameHasOwner } from "../sessionBusNames.ts";
 import { UnavailableComputerBackend } from "../UnavailableComputerBackend.ts";
 import { ComputerService, type ComputerServiceShape } from "../Services/ComputerService.ts";
 import type { ComputerBackend } from "../ComputerBackend.ts";
@@ -40,7 +42,7 @@ export interface ComputerServiceLiveOptions {
    * host socket and the Linux tiers are read from (defaults to the process
    * environment), and the Linux detection probes (default to the live host).
    */
-  readonly selection?: Omit<LinuxBackendSelectionDependencies, "override">;
+  readonly selection?: Partial<Omit<LinuxBackendSelectionDependencies, "override">>;
   /** Test override for `COMPUTER_SELECTION_STARTUP_BUDGET_MS`. */
   readonly selectionBudgetMs?: number;
   /** Test override for how a selected Linux tier is constructed. */
@@ -52,7 +54,11 @@ export interface ComputerServiceLiveOptions {
  * that registers a tier in `linuxBackendSelection.ts` cannot forget to say how
  * it is built; the type fails the build otherwise.
  */
-const LINUX_BACKENDS: Record<LinuxBackendChoice, () => ComputerBackend> = {};
+const LINUX_BACKENDS: Record<LinuxBackendChoice, () => ComputerBackend> = {
+  // Constructed, not connected: the backend touches the compositor on first
+  // real use, and its `provision()` is the settings panel's one-click setup.
+  kwin: () => new KWinComputerBackend(),
+};
 
 let warnedMissingControlStatePath = false;
 
@@ -342,7 +348,8 @@ function planBackend(
     forced: forcedChoice !== undefined,
     select: async () => {
       const linux = await selectLinuxBackend({
-        ...selection,
+        env,
+        busNameHasOwner: selection?.busNameHasOwner ?? sessionBusNameHasOwner,
         ...(forcedChoice !== undefined ? { override: forcedChoice } : {}),
       });
       if (!linux) return { backend: fallbackBackend(platform, env) };

@@ -181,7 +181,14 @@ describe("ComputerServiceLive", () => {
               dialect: "linux",
               dedicatedSeat: false,
             });
-          }).pipe(Effect.provide(makeComputerServiceLayer({ platform: "linux" }))),
+          }).pipe(
+            Effect.provide(
+              makeComputerServiceLayer({
+                platform: "linux",
+                selection: { env: { SYNARA_CUA_HOST_SOCKET: "/tmp/synara-cua-test.sock" } },
+              }),
+            ),
+          ),
         ),
       );
       vi.stubEnv("SYNARA_COMPUTER_BACKEND", "cua");
@@ -211,7 +218,12 @@ describe("ComputerServiceLive", () => {
             message: "No computer backend is available on this server.",
           });
         }).pipe(
-          Effect.provide(makeComputerServiceLayer({ platform: "linux", selection: { env: {} } })),
+          Effect.provide(
+            makeComputerServiceLayer({
+              platform: "linux",
+              selection: { env: {}, busNameHasOwner: async () => false },
+            }),
+          ),
         ),
       ),
     );
@@ -243,6 +255,35 @@ describe("ComputerServiceLive", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+
+  it("routes a KDE Wayland host to the KWin backend without touching the compositor", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const service = yield* ComputerService;
+          expect(service.supported).toBe(true);
+          // Construction and the boot probe never connect: a host whose bus
+          // says KWin is up but that has no plugin anywhere reports exactly
+          // that, and nothing is installed or loaded to find out.
+          expect(service.availability).toMatchObject({ kind: "backend-unavailable" });
+          expect(service.manager.guidanceProfile).toEqual({
+            dialect: "linux",
+            dedicatedSeat: true,
+          });
+        }).pipe(
+          Effect.provide(
+            makeComputerServiceLayer({
+              platform: "linux",
+              selection: {
+                env: { XDG_SESSION_TYPE: "wayland" },
+                busNameHasOwner: async (name) => name === "org.kde.KWin",
+              },
+            }),
+          ),
+        ),
+      ),
+    );
   });
 
   it("selects the fake backend only when explicitly requested", async () => {

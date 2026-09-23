@@ -21,12 +21,14 @@
  * backend otherwise.
  */
 
+import { KWIN_SERVICE } from "./kwinDbus.ts";
+
 /**
  * Every Linux backend `SYNARA_COMPUTER_BACKEND` can name. Each backend adds
  * its choice here beside its detection tier in `selectLinuxBackend`, and its
  * constructor in the service layer's factory table, so the three cannot drift.
  */
-export const LINUX_BACKEND_CHOICES = [] as const;
+export const LINUX_BACKEND_CHOICES = ["kwin"] as const;
 export type LinuxBackendChoice = (typeof LINUX_BACKEND_CHOICES)[number];
 
 /**
@@ -84,24 +86,63 @@ export function isLinuxBackendChoice(
   return override !== undefined && (LINUX_BACKEND_CHOICES as readonly string[]).includes(override);
 }
 
+/**
+ * Whether this session is one the KWin plugin can be reached in at all.
+ *
+ * The same predicate `KWinComputerBackend` gates on, and it has to be: the
+ * backend refuses a non-Wayland session outright, so selecting it for one is
+ * selecting a backend that is already known to refuse. `XDG_SESSION_TYPE` is
+ * what logind sets; a present `WAYLAND_DISPLAY` stands in for a session started
+ * outside a login manager, where the variable is often simply absent.
+ */
+export function waylandSession(env: NodeJS.ProcessEnv): boolean {
+  const sessionType = env.XDG_SESSION_TYPE ?? (env.WAYLAND_DISPLAY ? "wayland" : "");
+  return sessionType.toLowerCase() === "wayland";
+}
+
 export interface LinuxBackendSelectionDependencies {
   readonly env?: NodeJS.ProcessEnv;
   /** The parsed `SYNARA_COMPUTER_BACKEND`, when it names a Linux tier. */
   readonly override?: LinuxBackendChoice;
+  /**
+   * Whether a name is owned on the session bus. Rejects when the bus itself is
+   * unreachable, which the caller distinguishes from an unowned name.
+   */
+  readonly busNameHasOwner: (name: string) => Promise<boolean>;
 }
 
 /**
  * Resolves the Linux backend in order: the override, then each detection tier.
  * `undefined` means no Linux tier claims this host.
+ *
+ * The KWin tier asks the session bus who owns `org.kde.KWin` rather than
+ * reading `XDG_CURRENT_DESKTOP`. The compositor is the thing that decides
+ * whether the KWin plugin can load; the env var is a label a login manager
+ * sets and a user can override, and on a KDE session started from a tty it is
+ * often simply absent. Plasma on X11 owns the name too, and there the plugin's
+ * dedicated seat does not exist, so the tier claims only a Wayland session.
  */
 export async function selectLinuxBackend(
   dependencies: LinuxBackendSelectionDependencies,
 ): Promise<LinuxBackendSelection | undefined> {
+  const env = dependencies.env ?? process.env;
   if (dependencies.override !== undefined) {
     return {
       choice: dependencies.override,
       forced: true,
       reason: `SYNARA_COMPUTER_BACKEND=${dependencies.override} selected this backend explicitly, so no other backend is tried.`,
+    };
+  }
+
+  // An unreachable session bus is not evidence that KWin is absent, but it is
+  // proof that the KWin plugin cannot be reached: every call to it goes over
+  // that bus. It leaves this tier unclaimed rather than failing selection.
+  const kwinUp = await dependencies.busNameHasOwner(KWIN_SERVICE).catch(() => false);
+  if (kwinUp && waylandSession(env)) {
+    return {
+      choice: "kwin",
+      forced: false,
+      reason: `${KWIN_SERVICE} is owned on the session bus, so this is a KWin session and the KWin plugin applies.`,
     };
   }
   return undefined;

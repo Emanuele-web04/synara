@@ -3752,6 +3752,49 @@ describe("ComputerManager and FakeComputerBackend", () => {
   });
 });
 
+it("clears a pause that names no window only through an unscoped screenshot observation", async () => {
+  // A locked session refuses with a pause naming no window when nothing was
+  // aimed. There is no window to observe for it, so the hint's other route —
+  // an unscoped observation with a screenshot — reads readiness through the
+  // focused window; an observation of some other window, or one without a
+  // screenshot, leaves the pause standing.
+  class LockedBackend extends FakeComputerBackend {
+    locked = true;
+    readonly checked: string[] = [];
+    override async typeText(text: string) {
+      if (this.locked)
+        throw new ComputerBackendError("computer_session_locked: the session is locked.", {
+          retryable: true,
+          inputPause: { message: "computer_session_locked: the session is locked." },
+        });
+      return super.typeText(text);
+    }
+    async checkInputReady(windowId: string) {
+      this.checked.push(windowId);
+      if (this.locked) throw new Error("still locked");
+    }
+  }
+  const backend = new LockedBackend();
+  const manager = new ComputerManager({ backend });
+  await expect(manager.typeText("thread-a", "hello")).rejects.toHaveProperty("inputPause");
+  await manager.releaseDesktopControl("thread-a");
+  expect((await manager.getThreadState("thread-a")).inputPause?.windowId).toBeUndefined();
+
+  await manager.getState({ includeScreenshot: false });
+  expect(backend.checked).toEqual([]);
+  await manager.getState({ includeScreenshot: true });
+  expect(backend.checked).toEqual(["fake-terminal"]);
+  expect((await manager.getThreadState("thread-a")).inputPause).toBeDefined();
+  // A scoped observation of any window is the other route, as it always was.
+  await manager.getState({ windowId: "fake-calculator" });
+  expect(backend.checked).toEqual(["fake-terminal", "fake-calculator"]);
+  backend.locked = false;
+  await manager.getState({ includeScreenshot: true });
+  expect(backend.checked).toEqual(["fake-terminal", "fake-calculator", "fake-terminal"]);
+  expect((await manager.getThreadState("thread-a")).inputPause).toBeUndefined();
+  await manager.dispose();
+});
+
 it("holds refused input until a scoped observation establishes readiness", async () => {
   class PausedBackend extends FakeComputerBackend {
     ready = false;

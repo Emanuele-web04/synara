@@ -551,9 +551,10 @@ function verifyDesktopStageLockAuthority(): void {
   }
 }
 
-// The KWin plugin sources are read by bash and cmake, which cannot read inside
-// app.asar, so the Linux desktop build must leave them as real files under
-// app.asar.unpacked, at the path the stage copies the server dist to.
+// The AT-SPI helper is run by python3 and the KWin plugin sources by bash and
+// cmake. Neither can read inside app.asar, so the Linux desktop build must
+// leave both as real files under app.asar.unpacked, at the path the stage
+// copies the server dist to.
 function verifyLinuxComputerUseAssetsUnpacked(): void {
   const buildScript = readFileSync(resolve(repoRoot, "scripts/build-desktop-artifact.ts"), "utf8");
   assertContains(
@@ -563,7 +564,10 @@ function verifyLinuxComputerUseAssetsUnpacked(): void {
   );
   const asarUnpack =
     createDesktopPlatformBuildConfig({ platform: "linux", target: "AppImage" }).asarUnpack ?? [];
-  for (const glob of ["apps/server/dist/computer-use-kwin/**"]) {
+  for (const glob of [
+    "apps/server/dist/atspi_helper.py",
+    "apps/server/dist/computer-use-kwin/**",
+  ]) {
     if (!asarUnpack.includes(glob)) {
       throw new Error(`Expected the Linux desktop build to unpack ${glob} from app.asar.`);
     }

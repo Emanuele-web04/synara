@@ -166,6 +166,7 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.ok(linux.files?.includes("!apps/desktop/prod-resources/cua-driver/**"));
     assert.deepStrictEqual(linux.asarUnpack, [
       "node_modules/node-pty/**",
+      "apps/server/dist/atspi_helper.py",
       "apps/server/dist/computer-use-kwin/**",
     ]);
     assert.deepStrictEqual(linux.linux, {
@@ -219,20 +220,21 @@ describe("createDesktopPlatformBuildConfig", () => {
     }
   });
 
-  it("unpacks the Linux computer-use assets that bash and cmake read from disk", () => {
+  it("unpacks the Linux computer-use assets that python3 and bash read from disk", () => {
     const linux = createDesktopPlatformBuildConfig({ platform: "linux", target: "AppImage" });
 
     assert.deepStrictEqual(
       [...LINUX_COMPUTER_USE_ASAR_UNPACK_GLOBS],
-      ["apps/server/dist/computer-use-kwin/**"],
+      ["apps/server/dist/atspi_helper.py", "apps/server/dist/computer-use-kwin/**"],
     );
     assert.deepStrictEqual(linux.asarUnpack, [
       "node_modules/node-pty/**",
+      "apps/server/dist/atspi_helper.py",
       "apps/server/dist/computer-use-kwin/**",
     ]);
 
-    // Only Linux ships the KWin plugin; the other platforms keep the smaller
-    // node-pty-only unpack set.
+    // Only Linux ships the KWin plugin and the AT-SPI helper; the other
+    // platforms keep the smaller node-pty-only unpack set.
     const mac = createDesktopPlatformBuildConfig({ platform: "mac", target: "dmg" });
     const win = createDesktopPlatformBuildConfig({ platform: "win", target: "nsis" });
     assert.deepStrictEqual(mac.asarUnpack, ["node_modules/node-pty/**"]);

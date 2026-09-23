@@ -28,7 +28,7 @@ import {
 
 import { pngDimensions } from "../pngHeader.ts";
 import { ComputerBackendError } from "./ComputerBackend.ts";
-const unwrapDbusValue = (value: unknown): unknown => value;
+import { unwrapDbusValue } from "./dbusPlumbing.ts";
 import { clampTextToLength } from "./utf8Truncation.ts";
 
 /** Prefix of the message a capture failure carries when no backend names itself. */

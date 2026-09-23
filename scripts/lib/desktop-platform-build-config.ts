@@ -32,14 +32,15 @@ export const MAC_ICON_ASSETS_CAR_BUNDLE_PATH = "Resources/Assets.car";
 const MAC_DMG_ICON_PATH = "icon.icns";
 export const NODE_PTY_ASAR_UNPACK_GLOBS = ["node_modules/node-pty/**"] as const;
 /**
- * Linux computer-use assets that other programs read off the disk: the KWin
- * plugin's sources and installer are read by bash and cmake during the
- * source-build fallback. Only Node's own fs sees inside app.asar, so these
- * stay real files under app.asar.unpacked. The paths are relative to the
- * staged app root, where the desktop stage copies the server dist to
- * apps/server/dist.
+ * Linux computer-use assets that other programs read off the disk: the AT-SPI
+ * helper runs under python3 and the KWin plugin's sources and installer are
+ * read by bash and cmake during the source-build fallback. Only Node's own fs
+ * sees inside app.asar, so these stay real files under app.asar.unpacked.
+ * The paths are relative to the staged app root, where the desktop stage
+ * copies the server dist to apps/server/dist.
  */
 export const LINUX_COMPUTER_USE_ASAR_UNPACK_GLOBS = [
+  "apps/server/dist/atspi_helper.py",
   "apps/server/dist/computer-use-kwin/**",
 ] as const;
 

@@ -1443,8 +1443,19 @@ export class ComputerManager {
       this.backend.availability(),
     ]);
     // A fresh, scoped observation is the recovery boundary. Merely capturing
-    // pixels or waiting does not establish that input is possible again.
+    // pixels or waiting does not establish that input is possible again. A
+    // pause that names no window — a locked session — has no window to
+    // observe, so an unscoped observation with a screenshot stands in for it,
+    // read through the window a scoped observation would most plausibly have
+    // named: the aimed one, else the active one, else any visible one.
     if (options.windowId) await this.refreshInputPause(options.windowId, state.windows);
+    else if (options.includeScreenshot === true) {
+      const observed =
+        state.windows.find((window) => window.focused) ??
+        state.windows.find((window) => window.active) ??
+        state.windows.find((window) => window.visible && !window.minimized);
+      if (observed) await this.refreshInputPause(observed.id, state.windows, { unscoped: true });
+    }
     const inputPause =
       (this.lease ? this.threads.get(this.lease.threadId)?.inputPause : undefined) ??
       (options.windowId
@@ -4246,6 +4257,7 @@ export class ComputerManager {
   private async refreshInputPause(
     windowId: string,
     windows: readonly ComputerWindow[],
+    options: { readonly unscoped?: boolean } = {},
   ): Promise<void> {
     // Read once, for the same reason as the launch wait's.
     const checkInputReady = this.backend.checkInputReady?.bind(this.backend);
@@ -4256,6 +4268,9 @@ export class ComputerManager {
       ([threadId, state]) =>
         (observingThread === undefined || observingThread === threadId) &&
         state.inputPause &&
+        // An unscoped observation clears only a pause that names no window;
+        // one that names a window still needs that window observed.
+        (options.unscoped ? !state.inputPause.windowId : true) &&
         (!state.inputPause.windowId ||
           state.inputPause.windowId === windowId ||
           (state.inputPause.pid !== undefined &&
