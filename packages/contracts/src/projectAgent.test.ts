@@ -50,6 +50,8 @@ it.effect("decodes a configured project agent summary", () =>
       configured: true,
       coordinatorName: "Synara Coordinator",
       coordinatorThreadId: "thread-coordinator",
+      coordinatorIcon: null,
+      coordinatorColor: null,
       coordinatorStatus: "idle",
       revision: 1,
     });

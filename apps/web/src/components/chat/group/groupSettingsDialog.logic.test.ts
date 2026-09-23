@@ -55,6 +55,8 @@ function makeDraft(overrides: Partial<GroupSettingsDraft> = {}): GroupSettingsDr
     name: "alpha",
     icon: "🐝",
     goal: "ship it",
+    coordinatorIcon: "",
+    coordinatorColor: "",
     coordinatorModelSelection: codexSelection,
     workerModelSelection: codexSelection,
     workerEnvironment: "local",

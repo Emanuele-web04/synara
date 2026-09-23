@@ -24,6 +24,8 @@ function summaryFromOverview(overview: ProjectAgentOverview): ProjectAgentSummar
     configured: overview.configured,
     coordinatorName: overview.config?.coordinatorName ?? null,
     coordinatorThreadId: overview.config?.coordinatorThreadId ?? null,
+    coordinatorIcon: overview.config?.coordinatorIcon ?? null,
+    coordinatorColor: overview.config?.coordinatorColor ?? null,
     coordinatorStatus: overview.coordinatorStatus,
     revision: overview.config?.revision ?? 0,
   };
@@ -66,6 +68,8 @@ export const useProjectAgentSummariesStore = create<ProjectAgentSummariesState>(
           configured: true,
           coordinatorName: event.config.coordinatorName,
           coordinatorThreadId: event.config.coordinatorThreadId,
+          coordinatorIcon: event.config.coordinatorIcon ?? null,
+          coordinatorColor: event.config.coordinatorColor ?? null,
           coordinatorStatus:
             previous?.coordinatorStatus && previous.coordinatorStatus !== "unconfigured"
               ? previous.coordinatorStatus

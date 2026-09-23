@@ -6,6 +6,7 @@ import { dialogFieldLabelClassName } from "~/components/ui/dialog";
 import { cn } from "~/lib/utils";
 
 import { CharacterCountTextarea } from "./CharacterCountTextarea";
+import { COORDINATOR_COLOR_OPTIONS, COORDINATOR_ICON_OPTIONS } from "./coordinatorAppearance";
 import { GroupIconPicker } from "./GroupIconPicker";
 import { GroupEffortRow, GroupModelRow } from "./GroupModelEffortRow";
 import {
@@ -49,6 +50,86 @@ export function GroupGeneralSection(props: {
               aria-label="Group goal"
               onChange={(event) => onChange({ goal: event.target.value })}
             />
+          </div>
+        </SettingsCard>
+      </SettingsSectionShell>
+
+      <SettingsSectionShell title="Coordinator">
+        <SettingsCard>
+          <div className="space-y-1.5 px-4 py-3">
+            <div className="flex items-center justify-between gap-2">
+              <p className={cn(dialogFieldLabelClassName)}>Appearance</p>
+              <button
+                type="button"
+                aria-label="Use default coordinator appearance"
+                className={cn(
+                  "cursor-pointer text-ui-sm text-muted-foreground transition-colors hover:text-foreground",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 rounded-sm",
+                )}
+                onClick={() => onChange({ coordinatorIcon: "", coordinatorColor: "" })}
+              >
+                Use default
+              </button>
+            </div>
+            <div
+              className="flex flex-wrap items-center gap-1"
+              role="group"
+              aria-label="Coordinator icon"
+            >
+              {COORDINATOR_ICON_OPTIONS.map(({ key, label, Icon }) => {
+                const selected = draft.coordinatorIcon === key;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    title={label}
+                    aria-label={`Coordinator icon ${label}`}
+                    aria-pressed={selected}
+                    className={cn(
+                      "relative grid size-8 place-items-center rounded-lg border-2 text-ui-lg transition-colors motion-reduce:transition-none",
+                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+                      selected
+                        ? "border-foreground"
+                        : "border-transparent hover:border-foreground/25",
+                    )}
+                    onClick={() => onChange({ coordinatorIcon: selected ? "" : key })}
+                  >
+                    <Icon className="size-4" />
+                  </button>
+                );
+              })}
+            </div>
+            <div
+              className="flex flex-wrap items-center gap-1 pt-1"
+              role="group"
+              aria-label="Coordinator color"
+            >
+              {COORDINATOR_COLOR_OPTIONS.map((option) => {
+                const selected = draft.coordinatorColor === option.key;
+                return (
+                  <button
+                    key={option.key}
+                    type="button"
+                    title={option.label}
+                    aria-label={`Coordinator color ${option.label}`}
+                    aria-pressed={selected}
+                    className={cn(
+                      "relative grid size-8 place-items-center rounded-lg border-2 transition-colors motion-reduce:transition-none",
+                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+                      selected
+                        ? "border-foreground"
+                        : "border-transparent hover:border-foreground/25",
+                    )}
+                    onClick={() => onChange({ coordinatorColor: selected ? "" : option.key })}
+                  >
+                    <span
+                      className={cn("size-4 rounded-full", option.swatchClassName)}
+                      aria-hidden
+                    />
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </SettingsCard>
       </SettingsSectionShell>

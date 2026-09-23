@@ -55,6 +55,8 @@ const ConfigRow = Schema.Struct({
   disabledAt: ProjectAgentConfig.fields.disabledAt,
   goal: Schema.NullOr(Schema.String),
   icon: Schema.NullOr(Schema.String),
+  coordinatorIcon: Schema.NullOr(Schema.String),
+  coordinatorColor: Schema.NullOr(Schema.String),
   autoMemoryEnabled: Schema.Number,
   libraryPath: Schema.NullOr(Schema.String),
   libraryRemoteUrl: Schema.NullOr(Schema.String),
@@ -105,6 +107,8 @@ const SummaryRow = Schema.Struct({
   projectId: ProjectId,
   coordinatorName: ProjectAgentConfig.fields.coordinatorName,
   coordinatorThreadId: ThreadId,
+  coordinatorIcon: Schema.NullOr(Schema.String),
+  coordinatorColor: Schema.NullOr(Schema.String),
   revision: ProjectAgentConfig.fields.revision,
   goalStatus: Schema.NullOr(ProjectGoalStatus),
 });
@@ -129,6 +133,12 @@ function toConfig(row: typeof ConfigRow.Type): ProjectAgentConfig {
     disabledAt: row.disabledAt,
     ...(row.goal && row.goal.length > 0 ? { goal: row.goal } : {}),
     ...(row.icon && row.icon.trim().length > 0 ? { icon: row.icon.trim() } : {}),
+    ...(row.coordinatorIcon && row.coordinatorIcon.trim().length > 0
+      ? { coordinatorIcon: row.coordinatorIcon.trim() }
+      : {}),
+    ...(row.coordinatorColor && row.coordinatorColor.trim().length > 0
+      ? { coordinatorColor: row.coordinatorColor.trim() }
+      : {}),
     autoMemoryEnabled: row.autoMemoryEnabled === 1,
     ...(row.libraryPath && row.libraryPath.length > 0 ? { libraryPath: row.libraryPath } : {}),
     ...(row.libraryRemoteUrl && row.libraryRemoteUrl.length > 0
@@ -166,6 +176,8 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         disabled_at AS "disabledAt",
         goal,
         icon,
+        coordinator_icon AS "coordinatorIcon",
+        coordinator_color AS "coordinatorColor",
         auto_memory_enabled AS "autoMemoryEnabled",
         library_path AS "libraryPath",
         library_remote_url AS "libraryRemoteUrl",
@@ -196,6 +208,8 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         disabled_at AS "disabledAt",
         goal,
         icon,
+        coordinator_icon AS "coordinatorIcon",
+        coordinator_color AS "coordinatorColor",
         auto_memory_enabled AS "autoMemoryEnabled",
         library_path AS "libraryPath",
         library_remote_url AS "libraryRemoteUrl",
@@ -213,6 +227,7 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         coordinator_model_selection_json, coordinator_provider_options_json,
         worker_routing_json, limits_json, capture_enabled, enabled, automation_id,
         revision, created_at, updated_at, disabled_at, goal, icon, auto_memory_enabled,
+        coordinator_icon, coordinator_color,
         library_path, library_remote_url, library_push_on_change
       ) VALUES (
         ${row.projectId}, ${row.coordinatorThreadId}, ${row.coordinatorName},
@@ -220,6 +235,7 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         ${row.workerRouting}, ${row.limits}, ${row.captureEnabled}, ${row.enabled},
         ${row.automationId}, ${row.revision}, ${row.createdAt}, ${row.updatedAt}, ${row.disabledAt},
         ${row.goal}, ${row.icon}, ${row.autoMemoryEnabled},
+        ${row.coordinatorIcon}, ${row.coordinatorColor},
         ${row.libraryPath}, ${row.libraryRemoteUrl}, ${row.libraryPushOnChange}
       )
     `,
@@ -244,6 +260,8 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         disabled_at = ${row.disabledAt},
         goal = ${row.goal},
         icon = ${row.icon},
+        coordinator_icon = ${row.coordinatorIcon},
+        coordinator_color = ${row.coordinatorColor},
         auto_memory_enabled = ${row.autoMemoryEnabled},
         library_path = ${row.libraryPath},
         library_remote_url = ${row.libraryRemoteUrl},
@@ -472,6 +490,8 @@ const makeProjectAgentRepository = Effect.gen(function* () {
     disabledAt: config.disabledAt,
     goal: config.goal ?? null,
     icon: config.icon ?? null,
+    coordinatorIcon: config.coordinatorIcon ?? null,
+    coordinatorColor: config.coordinatorColor ?? null,
     autoMemoryEnabled: config.autoMemoryEnabled ? 1 : 0,
     libraryPath: config.libraryPath ?? null,
     libraryRemoteUrl: config.libraryRemoteUrl ?? null,
@@ -518,6 +538,8 @@ const makeProjectAgentRepository = Effect.gen(function* () {
             disabled_at AS "disabledAt",
             goal,
             icon,
+            coordinator_icon AS "coordinatorIcon",
+            coordinator_color AS "coordinatorColor",
             auto_memory_enabled AS "autoMemoryEnabled",
             library_path AS "libraryPath",
             library_remote_url AS "libraryRemoteUrl",
@@ -539,6 +561,8 @@ const makeProjectAgentRepository = Effect.gen(function* () {
             c.project_id AS "projectId",
             c.coordinator_name AS "coordinatorName",
             c.coordinator_thread_id AS "coordinatorThreadId",
+            c.coordinator_icon AS "coordinatorIcon",
+            c.coordinator_color AS "coordinatorColor",
             c.revision AS "revision",
             g.status AS "goalStatus"
           FROM project_agent_configs c
@@ -553,6 +577,8 @@ const makeProjectAgentRepository = Effect.gen(function* () {
               projectId: row.projectId,
               coordinatorName: row.coordinatorName,
               coordinatorThreadId: row.coordinatorThreadId,
+              coordinatorIcon: row.coordinatorIcon,
+              coordinatorColor: row.coordinatorColor,
               revision: row.revision,
               goalStatus: row.goalStatus,
             })),

@@ -72,6 +72,8 @@ export interface GroupSettingsDraft {
   readonly name: string;
   readonly icon: string;
   readonly goal: string;
+  readonly coordinatorIcon: string;
+  readonly coordinatorColor: string;
   readonly coordinatorModelSelection: ModelSelection;
   readonly workerModelSelection: ModelSelection;
   readonly workerEnvironment: "local" | "worktree";
@@ -110,6 +112,8 @@ export function buildGroupSettingsDraft(input: {
     name: input.projectName,
     icon: config?.icon ?? "",
     goal: config?.goal ?? "",
+    coordinatorIcon: config?.coordinatorIcon ?? "",
+    coordinatorColor: config?.coordinatorColor ?? "",
     coordinatorModelSelection: config?.coordinatorModelSelection ?? fallbackSelection,
     workerModelSelection: config?.workerRouting?.modelSelection ?? fallbackSelection,
     workerEnvironment: config?.workerRouting?.environment ?? "local",
@@ -153,6 +157,8 @@ export function groupSettingsDirtySections(
     draft.name.trim() !== baseline.name.trim() ||
     draft.icon !== baseline.icon ||
     draft.goal !== baseline.goal ||
+    draft.coordinatorIcon !== baseline.coordinatorIcon ||
+    draft.coordinatorColor !== baseline.coordinatorColor ||
     !modelSelectionsEqual(draft.coordinatorModelSelection, baseline.coordinatorModelSelection) ||
     !modelSelectionsEqual(draft.workerModelSelection, baseline.workerModelSelection)
   ) {
@@ -206,6 +212,8 @@ export function buildGroupConfigureInput(input: {
   // Cleared fields are sent as `null` (the server nulls the column); a field is
   // omitted only when it was empty in the baseline too, where absent == keep.
   const icon = draft.icon.trim();
+  const coordinatorIcon = draft.coordinatorIcon.trim();
+  const coordinatorColor = draft.coordinatorColor.trim();
   const libraryPath = draft.libraryPath.trim();
   const libraryRemoteUrl = draft.libraryRemoteUrl.trim();
 
@@ -233,6 +241,16 @@ export function buildGroupConfigureInput(input: {
       : {}),
     goal: draft.goal,
     ...(icon.length > 0 ? { icon } : baselineDraft.icon.trim().length > 0 ? { icon: null } : {}),
+    ...(coordinatorIcon.length > 0
+      ? { coordinatorIcon }
+      : baselineDraft.coordinatorIcon.trim().length > 0
+        ? { coordinatorIcon: null }
+        : {}),
+    ...(coordinatorColor.length > 0
+      ? { coordinatorColor }
+      : baselineDraft.coordinatorColor.trim().length > 0
+        ? { coordinatorColor: null }
+        : {}),
     autoMemoryEnabled: draft.autoMemoryEnabled,
     ...(input.userDisplayName?.trim() ? { userDisplayName: input.userDisplayName.trim() } : {}),
     ...(libraryPath.length > 0

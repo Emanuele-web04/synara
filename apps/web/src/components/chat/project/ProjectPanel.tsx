@@ -23,6 +23,7 @@ import {
   EnvironmentSectionDivider,
 } from "../environment/EnvironmentRow";
 import { GroupSettingsDialog } from "../group/GroupSettingsDialog";
+import { resolveCoordinatorAppearance } from "../group/coordinatorAppearance";
 import type { GroupSettingsSection } from "../group/groupSettingsDialog.logic";
 import { defaultProjectAgentName } from "./projectAgentDialog.logic";
 import {
@@ -104,6 +105,15 @@ export function ProjectPanel({
   const configured = agent.overview?.configured === true;
   const coordinatorModel =
     agent.overview?.config?.coordinatorModelSelection ?? defaultModelSelection;
+  const coordinatorAppearance = resolveCoordinatorAppearance({
+    coordinatorIcon: agent.overview?.config?.coordinatorIcon,
+    coordinatorColor: agent.overview?.config?.coordinatorColor,
+  });
+  const CoordinatorGlyph = coordinatorAppearance.Icon;
+  const coordinatorIconClassName = cn(
+    ENVIRONMENT_ROW_ICON_CLASS_NAME,
+    coordinatorAppearance.iconClassName,
+  );
 
   const content = (
     <div className="flex flex-col gap-0.5 p-1.5">
@@ -151,7 +161,7 @@ export function ProjectPanel({
 
       {configured && agent.overview?.config ? (
         <EnvironmentRow
-          icon={<BotIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
+          icon={<CoordinatorGlyph className={coordinatorIconClassName} aria-hidden />}
           label={coordinatorName}
           trailing={
             <span className="text-ui-xs text-muted-foreground">

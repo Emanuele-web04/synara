@@ -294,6 +294,8 @@ describe("SidebarGroupsSurface", () => {
           configured: true,
           coordinatorName: "Team lead",
           coordinatorThreadId,
+          coordinatorIcon: null,
+          coordinatorColor: null,
           coordinatorStatus: "idle",
           revision: 1,
         },
