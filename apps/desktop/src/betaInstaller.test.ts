@@ -9,7 +9,11 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+
 import {
+  httpsFetchText,
   installBetaFromFeed,
   parseBetaMacManifest,
   resolveBetaFeedLocation,
@@ -232,5 +236,28 @@ describe("installBetaFromFeed", () => {
     };
     await expect(installBetaFromFeed(bad, () => {})).rejects.toThrow(/not Synara Beta/);
     expect(existsSync(join(installDir, "Synara Beta.app"))).toBe(false);
+  });
+});
+
+describe("httpsFetchText transport policy", () => {
+  it("refuses plain HTTP for non-loopback hosts", async () => {
+    await expect(httpsFetchText("http://example.com/beta-mac.yml")).rejects.toThrow(/non-loopback/);
+  });
+
+  it("refuses non-HTTP protocols", async () => {
+    await expect(httpsFetchText("file:///etc/passwd")).rejects.toThrow(/Unsupported/);
+  });
+
+  it("accepts plain HTTP from a loopback demo feed", async () => {
+    const server = createServer((_request, response) => response.end("version: 1.0.0-beta.1\n"));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const { port } = server.address() as AddressInfo;
+      await expect(httpsFetchText(`http://127.0.0.1:${port}/beta-mac.yml`)).resolves.toBe(
+        "version: 1.0.0-beta.1\n",
+      );
+    } finally {
+      server.close();
+    }
   });
 });

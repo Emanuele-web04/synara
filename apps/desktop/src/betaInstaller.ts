@@ -10,7 +10,8 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createWriteStream, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { get as httpsGet } from "node:https";
+import { get as httpGet } from "node:http";
+import { get as httpsGet, type RequestOptions } from "node:https";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
@@ -137,27 +138,57 @@ export interface BetaFeedLocation {
 
 export type FetchText = (url: string) => Promise<string>;
 
+/**
+ * HTTPS everywhere; plain HTTP is accepted only for loopback hosts so a local
+ * demo feed can serve the manifest without a certificate.
+ */
+function feedGet(
+  url: string,
+  options: RequestOptions,
+  onResponse: Parameters<typeof httpsGet>[2],
+): ReturnType<typeof httpsGet> {
+  const parsed = new URL(url);
+  const isLoopback = ["127.0.0.1", "localhost", "::1", "[::1]"].includes(parsed.hostname);
+  if (parsed.protocol === "http:") {
+    if (!isLoopback) {
+      throw new Error(`Refusing plain-HTTP beta feed for non-loopback host ${parsed.hostname}.`);
+    }
+    return httpGet(url, options, onResponse) as ReturnType<typeof httpsGet>;
+  }
+  if (parsed.protocol !== "https:") {
+    throw new Error(`Unsupported beta feed protocol ${parsed.protocol}.`);
+  }
+  return httpsGet(url, options, onResponse);
+}
+
 /** Default fetch over HTTPS, following GitHub's release-asset redirects. */
 export const httpsFetchText: FetchText = (url) =>
   new Promise((resolvePromise, rejectPromise) => {
-    httpsGet(url, { headers: { "user-agent": "synara-desktop" } }, (response) => {
-      const status = response.statusCode ?? 0;
-      const location = response.headers.location;
-      if (status >= 300 && status < 400 && typeof location === "string") {
-        response.resume();
-        resolvePromise(httpsFetchText(new URL(location, url).toString()));
-        return;
-      }
-      if (status !== 200) {
-        response.resume();
-        rejectPromise(new Error(`GET ${url} failed with ${status}.`));
-        return;
-      }
-      const chunks: Buffer[] = [];
-      response.on("data", (chunk: Buffer) => chunks.push(chunk));
-      response.on("end", () => resolvePromise(Buffer.concat(chunks).toString("utf8")));
-      response.on("error", rejectPromise);
-    }).on("error", rejectPromise);
+    let request;
+    try {
+      request = feedGet(url, { headers: { "user-agent": "synara-desktop" } }, (response) => {
+        const status = response.statusCode ?? 0;
+        const location = response.headers.location;
+        if (status >= 300 && status < 400 && typeof location === "string") {
+          response.resume();
+          resolvePromise(httpsFetchText(new URL(location, url).toString()));
+          return;
+        }
+        if (status !== 200) {
+          response.resume();
+          rejectPromise(new Error(`GET ${url} failed with ${status}.`));
+          return;
+        }
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () => resolvePromise(Buffer.concat(chunks).toString("utf8")));
+        response.on("error", rejectPromise);
+      });
+    } catch (error) {
+      rejectPromise(error);
+      return;
+    }
+    request.on("error", rejectPromise);
   });
 
 /**
@@ -212,33 +243,40 @@ export type DownloadFile = (
 /** Streams a URL to disk, reporting percent when the server sends a length. */
 export const httpsDownloadFile: DownloadFile = (url, destinationPath, onProgress) =>
   new Promise((resolvePromise, rejectPromise) => {
-    httpsGet(url, { headers: { "user-agent": "synara-desktop" } }, (response) => {
-      const status = response.statusCode ?? 0;
-      const location = response.headers.location;
-      if (status >= 300 && status < 400 && typeof location === "string") {
-        response.resume();
-        resolvePromise(
-          httpsDownloadFile(new URL(location, url).toString(), destinationPath, onProgress),
-        );
-        return;
-      }
-      if (status !== 200) {
-        response.resume();
-        rejectPromise(new Error(`GET ${url} failed with ${status}.`));
-        return;
-      }
-      const total = Number(response.headers["content-length"] ?? 0);
-      let received = 0;
-      const out = createWriteStream(destinationPath);
-      response.on("data", (chunk: Buffer) => {
-        received += chunk.length;
-        onProgress(total > 0 ? Math.round((received / total) * 100) : null);
+    let request;
+    try {
+      request = feedGet(url, { headers: { "user-agent": "synara-desktop" } }, (response) => {
+        const status = response.statusCode ?? 0;
+        const location = response.headers.location;
+        if (status >= 300 && status < 400 && typeof location === "string") {
+          response.resume();
+          resolvePromise(
+            httpsDownloadFile(new URL(location, url).toString(), destinationPath, onProgress),
+          );
+          return;
+        }
+        if (status !== 200) {
+          response.resume();
+          rejectPromise(new Error(`GET ${url} failed with ${status}.`));
+          return;
+        }
+        const total = Number(response.headers["content-length"] ?? 0);
+        let received = 0;
+        const out = createWriteStream(destinationPath);
+        response.on("data", (chunk: Buffer) => {
+          received += chunk.length;
+          onProgress(total > 0 ? Math.round((received / total) * 100) : null);
+        });
+        response.pipe(out);
+        out.on("finish", () => resolvePromise());
+        out.on("error", rejectPromise);
+        response.on("error", rejectPromise);
       });
-      response.pipe(out);
-      out.on("finish", () => resolvePromise());
-      out.on("error", rejectPromise);
-      response.on("error", rejectPromise);
-    }).on("error", rejectPromise);
+    } catch (error) {
+      rejectPromise(error);
+      return;
+    }
+    request.on("error", rejectPromise);
   });
 
 export type RunCommand = (command: string, args: readonly string[]) => void;
