@@ -326,7 +326,10 @@ import {
 } from "./chat/environment/EnvironmentPanel";
 import type { GroupSettingsSection } from "./chat/group/groupSettingsDialog.logic";
 import { CoordinatorSuggestions } from "./chat/project/CoordinatorSuggestions";
-import { shouldShowCoordinatorSuggestions } from "./chat/project/coordinatorSuggestions.logic";
+import {
+  shouldShowCoordinatorSuggestions,
+  visibleCoordinatorSuggestionChips,
+} from "./chat/project/coordinatorSuggestions.logic";
 import { ProjectPanel } from "./chat/project/ProjectPanel";
 import { LibraryPanel } from "./chat/group/LibraryPanel";
 import { useProjectAgentSummaries } from "./chat/project/useProjectAgentSummaries";
@@ -1698,8 +1701,14 @@ export default function ChatView({
   const [coordinatorSettingsSection, setCoordinatorSettingsSection] = useState<
     GroupSettingsSection | undefined
   >(undefined);
+  const coordinatorSuggestionChips = visibleCoordinatorSuggestionChips({
+    hasGoal: activeGroupSummary?.hasGoal,
+    instructionsConfigured: activeGroupSummary?.instructionsConfigured,
+    linkedProjectCount: activeGroupSummary?.linkedProjectIds?.length ?? 0,
+  });
   const showCoordinatorSuggestions =
     isGroupContainer &&
+    coordinatorSuggestionChips.length > 0 &&
     shouldShowCoordinatorSuggestions({
       isCoordinatorThread: isCoordinatorConversation,
       messages: activeThread?.messages ?? EMPTY_MESSAGES,
@@ -6203,6 +6212,7 @@ export default function ChatView({
                   ) : null}
                   {showCoordinatorSuggestions ? (
                     <CoordinatorSuggestions
+                      chips={coordinatorSuggestionChips}
                       onOpenSettings={(section) => {
                         setCoordinatorSettingsSection(section);
                         setCoordinatorSettingsOpen(true);

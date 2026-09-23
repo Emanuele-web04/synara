@@ -114,8 +114,10 @@ const SummaryRow = Schema.Struct({
   coordinatorColor: Schema.NullOr(Schema.String),
   revision: ProjectAgentConfig.fields.revision,
   goalStatus: Schema.NullOr(ProjectGoalStatus),
+  goal: Schema.NullOr(Schema.String),
   pausedAt: Schema.NullOr(IsoDateTime),
   archivedAt: Schema.NullOr(IsoDateTime),
+  instructionsContent: Schema.NullOr(Schema.String),
 });
 
 function toConfig(row: typeof ConfigRow.Type): ProjectAgentConfig {
@@ -578,44 +580,98 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         Effect.flatMap((rows) => Effect.forEach(rows, (row) => withLinkedIds(toConfig(row)))),
       ),
     listSummaries: () =>
-      SqlSchema.findAll({
-        Request: Schema.Struct({}),
-        Result: SummaryRow,
-        execute: () => sql`
-          SELECT
-            c.project_id AS "projectId",
-            c.coordinator_name AS "coordinatorName",
-            c.coordinator_thread_id AS "coordinatorThreadId",
-            c.coordinator_icon AS "coordinatorIcon",
-            c.coordinator_color AS "coordinatorColor",
-            c.revision AS "revision",
-            c.paused_at AS "pausedAt",
-            c.archived_at AS "archivedAt",
-            g.status AS "goalStatus"
-          FROM project_agent_configs c
-          LEFT JOIN project_agent_goals g
-            ON g.project_id = c.project_id
-            AND g.status IN ('active', 'paused')
-        `,
-      })({}).pipe(
-        Effect.map(
-          (rows): ReadonlyArray<ProjectAgentConfigSummaryRow> =>
-            rows.map((row) => ({
-              projectId: row.projectId,
-              coordinatorName: row.coordinatorName,
-              coordinatorThreadId: row.coordinatorThreadId,
-              coordinatorIcon: row.coordinatorIcon,
-              coordinatorColor: row.coordinatorColor,
-              revision: row.revision,
-              goalStatus: row.goalStatus,
-              pausedAt: row.pausedAt,
-              archivedAt: row.archivedAt,
-            })),
-        ),
-        Effect.mapError(
-          toPersistenceSqlOrDecodeError("ProjectAgentRepository.listSummaries", "summary"),
-        ),
-      ),
+      Effect.gen(function* () {
+        const rows = yield* SqlSchema.findAll({
+          Request: Schema.Struct({}),
+          Result: SummaryRow,
+          execute: () => sql`
+            SELECT
+              c.project_id AS "projectId",
+              c.coordinator_name AS "coordinatorName",
+              c.coordinator_thread_id AS "coordinatorThreadId",
+              c.coordinator_icon AS "coordinatorIcon",
+              c.coordinator_color AS "coordinatorColor",
+              c.revision AS "revision",
+              c.paused_at AS "pausedAt",
+              c.archived_at AS "archivedAt",
+              g.status AS "goalStatus",
+              c.goal AS "goal",
+              d.content AS "instructionsContent"
+            FROM project_agent_configs c
+            LEFT JOIN project_agent_goals g
+              ON g.project_id = c.project_id
+              AND g.status IN ('active', 'paused')
+            LEFT JOIN project_agent_document_heads dh
+              ON dh.project_id = c.project_id
+              AND dh.logical_path = 'instructions.md'
+            LEFT JOIN project_agent_documents d
+              ON d.project_id = dh.project_id
+              AND d.logical_path = dh.logical_path
+              AND d.revision = dh.revision
+          `,
+        })({}).pipe(
+          Effect.mapError(
+            toPersistenceSqlOrDecodeError("ProjectAgentRepository.listSummaries", "summary"),
+          ),
+        );
+        const memberRows = yield* sql`
+          SELECT project_id, thread_id FROM project_agent_thread_index
+            WHERE excluded = 0 AND archived = 0
+          UNION
+          SELECT project_id, assigned_thread_id FROM project_agent_tasks
+            WHERE assigned_thread_id IS NOT NULL
+        `.pipe(
+          Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.listSummaries.members")),
+        );
+        const linkedRows = yield* sql`
+          SELECT project_id, linked_project_id FROM project_agent_linked_projects
+        `.pipe(
+          Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.listSummaries.linked")),
+        );
+        const memberIdsByProject = new Map<string, string[]>();
+        for (const row of memberRows) {
+          const projectId = String(row.project_id);
+          const threadId = String(row.thread_id);
+          const list = memberIdsByProject.get(projectId);
+          if (list) {
+            if (!list.includes(threadId)) list.push(threadId);
+          } else {
+            memberIdsByProject.set(projectId, [threadId]);
+          }
+        }
+        const linkedIdsByProject = new Map<string, string[]>();
+        for (const row of linkedRows) {
+          const projectId = String(row.project_id);
+          const list = linkedIdsByProject.get(projectId);
+          const linkedId = String(row.linked_project_id);
+          if (list) {
+            if (!list.includes(linkedId)) list.push(linkedId);
+          } else {
+            linkedIdsByProject.set(projectId, [linkedId]);
+          }
+        }
+        return rows.map(
+          (row): ProjectAgentConfigSummaryRow => ({
+            projectId: row.projectId,
+            coordinatorName: row.coordinatorName,
+            coordinatorThreadId: row.coordinatorThreadId,
+            coordinatorIcon: row.coordinatorIcon,
+            coordinatorColor: row.coordinatorColor,
+            revision: row.revision,
+            goalStatus: row.goalStatus,
+            goal: row.goal,
+            pausedAt: row.pausedAt,
+            archivedAt: row.archivedAt,
+            memberThreadIds: (memberIdsByProject.get(row.projectId) ?? []).map((id) =>
+              ThreadId.makeUnsafe(id),
+            ),
+            linkedProjectIds: (linkedIdsByProject.get(row.projectId) ?? []).map((id) =>
+              ProjectId.makeUnsafe(id),
+            ),
+            instructionsContent: row.instructionsContent,
+          }),
+        );
+      }),
     listLinkedProjectIds: (projectId) =>
       listLinkedIds({ projectId }).pipe(
         Effect.map((rows) => rows.map((row) => row.linkedProjectId)),

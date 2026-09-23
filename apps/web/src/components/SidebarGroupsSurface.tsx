@@ -97,6 +97,7 @@ export function SidebarGroupsSurface({
     orderedProjectThreadIds: readonly ThreadId[],
     depth?: number,
     topLevel?: boolean,
+    projectContextLabel?: string,
   ) => ReactNode;
   readonly renderListSectionHeader: (label: string, toolbar: ReactNode) => ReactNode;
   readonly renderPinnedThreadsSection: () => ReactNode;
@@ -109,7 +110,15 @@ export function SidebarGroupsSurface({
   const studioWorkspaceRoot = useWorkspacePathsStore((store) => store.studioWorkspaceRoot);
   const groupsWorkspaceRoot = useWorkspacePathsStore((store) => store.groupsWorkspaceRoot);
   const toggleProject = useStore((store) => store.toggleProject);
+  const projects = useStore((store) => store.projects);
   const { summariesByProjectId } = useProjectAgentSummaries();
+  const projectLabelById = useMemo(() => {
+    const map = new Map<ProjectId, string>();
+    for (const project of projects) {
+      map.set(project.id, resolveSidebarProjectRowLabel(project));
+    }
+    return map;
+  }, [projects]);
   // One shared selector answers "which groups have a thread Waiting on you" for
   // every row — the chat-header Group toggle reads the same result.
   const attentionGroups = useMemo(() => {
@@ -446,6 +455,10 @@ export function SidebarGroupsSurface({
                           entry.thread,
                           projectSidebarData?.orderedProjectThreadIds ?? [],
                           entry.depth,
+                          false,
+                          entry.thread.projectId !== project.id
+                            ? (projectLabelById.get(entry.thread.projectId) ?? undefined)
+                            : undefined,
                         ),
                       )}
                     </SidebarMenuSub>

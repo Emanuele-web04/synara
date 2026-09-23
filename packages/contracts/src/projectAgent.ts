@@ -387,6 +387,15 @@ export const ProjectAgentSummary = Schema.Struct({
   pausedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   archivedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   revision: ProjectAgentRevision,
+  /** Threads that belong to the group (same union as the panel Overview):
+   * task-assigned + indexed + the coordinator thread itself. */
+  memberThreadIds: Schema.optional(Schema.Array(ThreadId)),
+  /** Projects linked into the group as repositories. */
+  linkedProjectIds: Schema.optional(Schema.Array(ProjectId)),
+  /** An active or paused goal exists — completed/stopped goals do not count. */
+  hasGoal: Schema.optional(Schema.Boolean),
+  /** instructions.md differs from the seeded default. */
+  instructionsConfigured: Schema.optional(Schema.Boolean),
 });
 export type ProjectAgentSummary = typeof ProjectAgentSummary.Type;
 

@@ -1443,6 +1443,42 @@ export function partitionSidebarThreadsByProjectIds<
   return { groupThreads, nonGroupThreads };
 }
 
+// A thread's projectId says where it runs; a group's member set says who it
+// belongs to. Threads the coordinator dispatches into a linked repo carry the
+// repo's projectId, so the projectId-keyed buckets alone would never surface
+// them under the group. Union each group's member ids into its bucket.
+export function mergeGroupMemberThreadsIntoProjectBuckets(input: {
+  readonly sortedSidebarThreadsByProjectId: ReadonlyMap<ProjectId, SidebarThreadSummary[]>;
+  readonly threads: readonly SidebarThreadSummary[];
+  readonly memberThreadIdsByProjectId: ReadonlyMap<ProjectId, ReadonlySet<ThreadId>>;
+  readonly sortThreads: (
+    threads: readonly SidebarThreadSummary[],
+  ) => readonly SidebarThreadSummary[];
+}): ReadonlyMap<ProjectId, SidebarThreadSummary[]> {
+  if (input.memberThreadIdsByProjectId.size === 0) {
+    return input.sortedSidebarThreadsByProjectId;
+  }
+  const threadById = new Map<ThreadId, SidebarThreadSummary>();
+  for (const thread of input.threads) {
+    threadById.set(thread.id, thread);
+  }
+  let merged: Map<ProjectId, SidebarThreadSummary[]> | null = null;
+  for (const [projectId, memberIds] of input.memberThreadIdsByProjectId) {
+    const bucket = input.sortedSidebarThreadsByProjectId.get(projectId) ?? [];
+    const knownIds = new Set(bucket.map((thread) => thread.id));
+    const extras: SidebarThreadSummary[] = [];
+    for (const threadId of memberIds) {
+      if (knownIds.has(threadId)) continue;
+      const thread = threadById.get(threadId);
+      if (thread) extras.push(thread);
+    }
+    if (extras.length === 0) continue;
+    merged ??= new Map(input.sortedSidebarThreadsByProjectId);
+    merged.set(projectId, [...input.sortThreads([...bucket, ...extras])]);
+  }
+  return merged ?? input.sortedSidebarThreadsByProjectId;
+}
+
 // Centralizes the expensive per-project row derivation so Sidebar.tsx can mostly orchestrate UI state.
 export function deriveSidebarProjectData(input: {
   projects: readonly Pick<Project, "id" | "cwd" | "expanded">[];

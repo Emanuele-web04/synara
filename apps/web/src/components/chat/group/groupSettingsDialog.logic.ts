@@ -1,10 +1,11 @@
-import type {
-  ModelSelection,
-  ProviderKind,
-  ProjectAgentConfig,
-  ProjectAgentConfigureInput,
-  ProjectAgentOverview,
-  ProjectId,
+import {
+  type ModelSelection,
+  PROJECT_AGENT_RESERVED_PATHS,
+  type ProviderKind,
+  type ProjectAgentConfig,
+  type ProjectAgentConfigureInput,
+  type ProjectAgentOverview,
+  type ProjectId,
 } from "@synara/contracts";
 import { MEMORY_NOTES_DOCUMENT_PREFIX } from "@synara/shared/projectAgent";
 
@@ -364,4 +365,30 @@ export function memoryNoteDocumentPath(note: string, now = new Date()): string {
       .slice(0, 48) || "note";
   const timestamp = now.toISOString().replace(/[:.]/g, "-").replace("T", "-").replace(/Z$/, "");
   return `${MEMORY_NOTES_DOCUMENT_PREFIX}${timestamp}-${slug}.md`;
+}
+
+// Documents every group project starts with; "files yet" means anything
+// beyond this set (the coordinator playbook lives outside reserved paths).
+export const GROUP_SEED_DOCUMENT_PATHS: ReadonlySet<string> = new Set([
+  ...PROJECT_AGENT_RESERVED_PATHS,
+  "docs/project-bot.md",
+]);
+
+/**
+ * A group whose onboarding was cancelled is safe to discard only while it is
+ * still untouched: no threads anywhere the sidebar can surface them, no
+ * linked repositories, and no documents beyond the seeded scaffold.
+ */
+export function isGroupOnboardingDiscardable(input: {
+  readonly threadIndexCount: number;
+  readonly sidebarThreadCount: number;
+  readonly linkedProjectIds: ReadonlyArray<string>;
+  readonly documentPaths: ReadonlyArray<string>;
+}): boolean {
+  return (
+    input.threadIndexCount === 0 &&
+    input.sidebarThreadCount === 0 &&
+    input.linkedProjectIds.length === 0 &&
+    input.documentPaths.every((path) => GROUP_SEED_DOCUMENT_PATHS.has(path))
+  );
 }

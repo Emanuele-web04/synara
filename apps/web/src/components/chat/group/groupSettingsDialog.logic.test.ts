@@ -11,6 +11,7 @@ import {
   formatCharacterCount,
   GROUP_GOAL_MAX_CHARS,
   groupSettingsDirtySections,
+  isGroupOnboardingDiscardable,
   isGroupSettingsSection,
   memoryNoteDocumentPath,
   modelSelectionsEqual,
@@ -518,5 +519,52 @@ describe("memoryNoteDocumentPath", () => {
   it("falls back to 'note' for content with no slug characters", () => {
     const path = memoryNoteDocumentPath("!!!", new Date("2026-09-21T00:00:00.000Z"));
     expect(path).toMatch(/^memory\/notes\/.+-note\.md$/);
+  });
+});
+
+describe("isGroupOnboardingDiscardable", () => {
+  const seedPaths = [
+    "overview.md",
+    "instructions.md",
+    "notes.md",
+    "decisions.md",
+    "archived.md",
+    "artifacts/index.md",
+    "internal/manifest.json",
+    "memory/MEMORY.md",
+    "docs/project-bot.md",
+  ];
+  const empty = {
+    threadIndexCount: 0,
+    sidebarThreadCount: 0,
+    linkedProjectIds: [] as string[],
+    documentPaths: seedPaths,
+  };
+
+  it("is discardable when nothing was added beyond the seeded documents", () => {
+    expect(isGroupOnboardingDiscardable(empty)).toBe(true);
+  });
+
+  it("is not discardable once the group has threads", () => {
+    expect(isGroupOnboardingDiscardable({ ...empty, threadIndexCount: 1 })).toBe(false);
+    expect(isGroupOnboardingDiscardable({ ...empty, sidebarThreadCount: 2 })).toBe(false);
+  });
+
+  it("is not discardable once a repository is linked", () => {
+    expect(isGroupOnboardingDiscardable({ ...empty, linkedProjectIds: ["proj-linked"] })).toBe(
+      false,
+    );
+  });
+
+  it("is not discardable once a real file exists", () => {
+    expect(
+      isGroupOnboardingDiscardable({
+        ...empty,
+        documentPaths: [...seedPaths, "docs/roadmap.md"],
+      }),
+    ).toBe(false);
+    expect(
+      isGroupOnboardingDiscardable({ ...empty, documentPaths: [...seedPaths, "uploads/logo.png"] }),
+    ).toBe(false);
   });
 });

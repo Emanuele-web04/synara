@@ -19,6 +19,7 @@ import {
 } from "@synara/contracts";
 import { memoryThreadDocumentPath } from "@synara/shared/projectAgent";
 import { Effect, Layer, Option, Stream } from "effect";
+import { TestClock } from "effect/testing";
 
 import { ServerConfig } from "../../config.ts";
 import { TextGeneration } from "../../git/Services/TextGeneration.ts";
@@ -360,7 +361,12 @@ function makeTestLayer(options?: {
       Layer.provide(automationLayer),
       Layer.provide(serverSettingsLayer),
       Layer.provide(providerHealthLayer),
-      Layer.provide(Layer.succeed(TextGeneration, {} as unknown as TextGeneration["Service"])),
+      Layer.provide(
+        Layer.succeed(TextGeneration, {
+          generateProjectDigest: () =>
+            Effect.succeed({ summary: "Digest refreshed by test.", focusItems: [] }),
+        } as unknown as TextGeneration["Service"]),
+      ),
       Layer.provide(
         Layer.succeed(GitCore, {
           withMutation: (_cwd: string, effect: Effect.Effect<unknown, unknown, unknown>) => effect,
@@ -1410,6 +1416,135 @@ it.effect("resolves linked-repo workers through the task assignment", () => {
       `inbox/${linkedWorkerThreadId}/report.md`,
     );
     assert.equal(Option.isSome(report), true);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("refreshes the digest when the coordinator's own turn settles", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* service.configure(
+      {
+        requestId: "req-coordinator-settle",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+      },
+      { kind: "user" },
+    );
+    const coordinatorThreadId = overview.config?.coordinatorThreadId;
+    assert.ok(coordinatorThreadId);
+    const seeded = yield* repository.getDigest(groupId);
+    assert.equal(Option.isSome(seeded) ? seeded.value.summary : null, "Coordinator is ready.");
+    // A coordinator settle records the wake-skip activity and must re-arm the
+    // debounced digest — the Focus card kept the seeded summary when it did not.
+    yield* service.ingestSettledThreadEvent({
+      threadId: coordinatorThreadId,
+      sourceEventId: "coordinator-settle-1",
+      eventType: "thread.turn-diff-completed",
+      createdAt: now,
+    });
+    yield* TestClock.adjust("61 seconds");
+    let digest: Option.Option<{ summary: string }> = Option.none();
+    for (let i = 0; i < 100 && Option.isNone(digest); i += 1) {
+      const found = yield* repository.getDigest(groupId);
+      if (Option.isSome(found) && found.value.summary === "Digest refreshed by test.") {
+        digest = found;
+      } else {
+        // The debounce fiber runs real (SQLite) work the test clock skips; let
+        // the microtask queue drain so it can land.
+        yield* Effect.promise(() => new Promise((resolve) => setImmediate(resolve)));
+      }
+    }
+    assert.equal(Option.isSome(digest), true);
+  }).pipe(Effect.provide(Layer.merge(harness.layer, TestClock.layer())));
+});
+
+it.effect("reports member threads, linked repos, and setup flags in summaries", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* service.configure(
+      {
+        requestId: "req-summary-fields",
+        projectId: groupId,
+        coordinatorModelSelection: modelSelection,
+        // The dialog writes the goal text onto the config — hasGoal must see it
+        // even before any goal row is authorized.
+        goal: "Ship it",
+      },
+      { kind: "user" },
+    );
+    const coordinatorThreadId = overview.config?.coordinatorThreadId;
+    assert.ok(coordinatorThreadId);
+    const goalId = ProjectGoalId.makeUnsafe("goal-summary");
+    yield* repository.saveGoal(
+      {
+        id: goalId,
+        projectId: groupId,
+        objective: "Ship it",
+        authorizationSource: "user",
+        scopeVersion: 1,
+        acceptanceCriteria: null,
+        limits,
+        status: "active",
+        continuationCount: 0,
+        workerCreationCount: 0,
+        authorizedAt: now,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+      },
+      null,
+    );
+    // A worker the coordinator dispatched into the linked repo: the sidebar
+    // bucket needs it in memberThreadIds even though its projectId is the repo.
+    const linkedWorkerThreadId = ThreadId.makeUnsafe("thread-linked-summary-worker");
+    yield* repository.saveTask(
+      {
+        id: ProjectTaskId.makeUnsafe("task-summary"),
+        projectId: groupId,
+        goalId,
+        title: "Patch repo",
+        description: null,
+        acceptanceCriteria: null,
+        status: "running",
+        dependsOnTaskIds: [],
+        assignedThreadId: linkedWorkerThreadId,
+        repairCount: 0,
+        archivedAt: null,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+      },
+      null,
+    );
+    yield* service.linkProject(
+      {
+        requestId: "req-summary-link",
+        projectId: groupId,
+        linkedProjectId: ordinaryId,
+      },
+      { kind: "user" },
+    );
+    yield* service.writeDocument(
+      {
+        requestId: "req-summary-instructions",
+        projectId: groupId,
+        logicalPath: "instructions.md",
+        content: "# Instructions\n\nCheck spelling.\n",
+      },
+      { kind: "user" },
+    );
+    const listed = yield* service.listSummaries({}, { kind: "user" });
+    const row = listed.summaries.find((summary) => summary.projectId === groupId);
+    assert.ok(row);
+    assert.equal(row.hasGoal, true);
+    assert.equal(row.instructionsConfigured, true);
+    assert.deepEqual(row.linkedProjectIds, [ordinaryId]);
+    assert.equal(row.memberThreadIds?.includes(coordinatorThreadId), true);
+    assert.equal(row.memberThreadIds?.includes(linkedWorkerThreadId), true);
   }).pipe(Effect.provide(harness.layer));
 });
 

@@ -331,6 +331,7 @@ import {
   getSidebarThreadIdsToPrewarm,
   getVisibleSidebarEntriesForPreview,
   groupSidebarThreadsByProjectId,
+  mergeGroupMemberThreadsIntoProjectBuckets,
   partitionSidebarThreadsByProjectIds,
   isLatestPinnedProjectMutation,
   isProjectsSidebarSurface,
@@ -1764,7 +1765,7 @@ export default function Sidebar() {
   const sidebarTreeThreads = useStore(selectSidebarTreeThreads);
   const selectProjectLastActivityAt = useMemo(() => createProjectLastActivityAtSelector(), []);
   const projectLastActivityAt = useStore(selectProjectLastActivityAt);
-  const { summaryFor, coordinatorThreadIds } = useProjectAgentSummaries();
+  const { summaryFor, summariesByProjectId, coordinatorThreadIds } = useProjectAgentSummaries();
   const displaySidebarThreads = useMemo(
     () => excludeHiddenProjectAgentCoordinatorThreads(sidebarThreads, coordinatorThreadIds),
     [coordinatorThreadIds, sidebarThreads],
@@ -4340,6 +4341,32 @@ export default function Sidebar() {
     [activeRouteProject, groupProjects, handleNewGroupChat, navigate],
   );
 
+  const sidebarThreadSortOrder = appSettings.sidebarThreadSortOrder;
+  const groupScopedSortedSidebarThreadsByProjectId = useMemo(() => {
+    if (!isOnGroups) {
+      return sortedSidebarThreadsByProjectId;
+    }
+    const memberThreadIdsByProjectId = new Map<ProjectId, ReadonlySet<ThreadId>>();
+    for (const project of groupProjects) {
+      const memberIds = summariesByProjectId.get(project.id)?.memberThreadIds;
+      if (memberIds && memberIds.length > 0) {
+        memberThreadIdsByProjectId.set(project.id, new Set(memberIds));
+      }
+    }
+    return mergeGroupMemberThreadsIntoProjectBuckets({
+      sortedSidebarThreadsByProjectId,
+      threads: displaySidebarTreeThreads,
+      memberThreadIdsByProjectId,
+      sortThreads: (threads) => sortThreadsForSidebar(threads, sidebarThreadSortOrder),
+    });
+  }, [
+    displaySidebarTreeThreads,
+    groupProjects,
+    isOnGroups,
+    sidebarThreadSortOrder,
+    sortedSidebarThreadsByProjectId,
+    summariesByProjectId,
+  ]);
   const groupProjectSidebarDataById = useMemo<
     ReadonlyMap<ProjectId, SidebarDerivedProjectData>
   >(() => {
@@ -4351,7 +4378,7 @@ export default function Sidebar() {
     }
     return deriveSidebarProjectData({
       projects: groupProjects,
-      sortedSidebarThreadsByProjectId,
+      sortedSidebarThreadsByProjectId: groupScopedSortedSidebarThreadsByProjectId,
       pinnedThreadIds,
       threadListExtraPagesByProjectCwd,
       normalizeProjectCwd: normalizeSidebarProjectThreadListCwd,
@@ -4365,7 +4392,7 @@ export default function Sidebar() {
     isOnGroups,
     threadListExtraPagesByProjectCwd,
     pinnedThreadIds,
-    sortedSidebarThreadsByProjectId,
+    groupScopedSortedSidebarThreadsByProjectId,
     groupProjects,
     resolveThreadStatusForSidebar,
   ]);
@@ -4970,6 +4997,9 @@ export default function Sidebar() {
     // their top-level rows align flush like pinned rows instead of the indented
     // column used for project-nested threads.
     topLevel = false,
+    // A group member thread dispatched into a linked repo shows where it runs —
+    // same small-label treatment as pinned rows' project name.
+    projectContextLabel?: string,
   ) {
     const threadTerminalState = selectThreadTerminalState(terminalStateByThreadId, thread.id);
     const threadEntryPoint = threadTerminalState.entryPoint;
@@ -5114,6 +5144,10 @@ export default function Sidebar() {
                       <TooltipPopup side="top">Temporary chat</TooltipPopup>
                     </Tooltip>
                   </div>
+                ) : projectContextLabel ? (
+                  <span className="ml-auto shrink-0 truncate pl-1 pr-1 text-ui-meta text-muted-foreground/38">
+                    {projectContextLabel}
+                  </span>
                 ) : undefined
               }
             />

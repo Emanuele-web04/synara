@@ -19,7 +19,10 @@ type ProjectAgentSummariesState = {
   applyEvent: (event: ProjectAgentStreamEvent) => void;
 };
 
-function summaryFromOverview(overview: ProjectAgentOverview): ProjectAgentSummary {
+function summaryFromOverview(
+  overview: ProjectAgentOverview,
+  previous?: ProjectAgentSummary,
+): ProjectAgentSummary {
   return {
     projectId: overview.projectId,
     configured: projectAgentOverviewConfigured(overview),
@@ -31,6 +34,13 @@ function summaryFromOverview(overview: ProjectAgentOverview): ProjectAgentSummar
     revision: overview.config?.revision ?? 0,
     pausedAt: overview.config?.pausedAt ?? null,
     archivedAt: overview.config?.archivedAt ?? null,
+    // The overview has no member-index field; only listSummaries knows it.
+    memberThreadIds: previous?.memberThreadIds,
+    linkedProjectIds: overview.linkedProjectIds,
+    // The goal text the dialog writes lives on the config; the authorized goal
+    // row is a separate signal — either one counts as "has a goal".
+    hasGoal: overview.goal !== null || (overview.config?.goal?.trim().length ?? 0) > 0,
+    instructionsConfigured: previous?.instructionsConfigured,
   };
 }
 
@@ -53,14 +63,23 @@ export const useProjectAgentSummariesStore = create<ProjectAgentSummariesState>(
   applyOverview: (overview) =>
     set((current) => {
       const next = new Map(current.summariesByProjectId);
-      next.set(overview.projectId, summaryFromOverview(overview));
+      next.set(
+        overview.projectId,
+        summaryFromOverview(overview, current.summariesByProjectId.get(overview.projectId)),
+      );
       return { summariesByProjectId: next, loaded: true };
     }),
   applyEvent: (event) =>
     set((current) => {
       if (event.type === "snapshot") {
         const next = new Map(current.summariesByProjectId);
-        next.set(event.overview.projectId, summaryFromOverview(event.overview));
+        next.set(
+          event.overview.projectId,
+          summaryFromOverview(
+            event.overview,
+            current.summariesByProjectId.get(event.overview.projectId),
+          ),
+        );
         return { summariesByProjectId: next };
       }
       if (event.type === "config-upserted") {
@@ -80,12 +99,19 @@ export const useProjectAgentSummariesStore = create<ProjectAgentSummariesState>(
           revision: event.config.revision,
           pausedAt: event.config.pausedAt ?? null,
           archivedAt: event.config.archivedAt ?? null,
+          memberThreadIds: previous?.memberThreadIds,
+          linkedProjectIds: previous?.linkedProjectIds,
+          hasGoal: (event.config.goal?.trim().length ?? 0) > 0 || previous?.hasGoal === true,
+          instructionsConfigured: previous?.instructionsConfigured,
         });
         return { summariesByProjectId: next, loaded: true };
       }
       if (event.type === "goal-upserted") {
         const previous = current.summariesByProjectId.get(event.goal.projectId);
         if (!previous?.configured) return current;
+        // A goal stop can't see config.goal here — the debounced re-list lands
+        // the authoritative union of both goal signals.
+        scheduleProjectAgentSummariesRefresh();
         const next = new Map(current.summariesByProjectId);
         next.set(event.goal.projectId, {
           ...previous,
@@ -99,8 +125,21 @@ export const useProjectAgentSummariesStore = create<ProjectAgentSummariesState>(
                 : event.goal.status === "stopped"
                   ? "stopped"
                   : previous.coordinatorStatus,
+          hasGoal: event.goal.status === "active" || event.goal.status === "paused",
         });
         return { summariesByProjectId: next };
+      }
+      if (event.type === "document-head-updated") {
+        // instructions.md content feeds the "Write instructions" chip state.
+        if (event.head.logicalPath === "instructions.md") {
+          scheduleProjectAgentSummariesRefresh();
+        }
+        return current;
+      }
+      if (event.type === "task-upserted" || event.type === "activity-appended") {
+        // Task assignment changes member threads; link/unlink lands as
+        // activity. Re-list summaries so the sidebar keeps up.
+        scheduleProjectAgentSummariesRefresh();
       }
       return current;
     }),

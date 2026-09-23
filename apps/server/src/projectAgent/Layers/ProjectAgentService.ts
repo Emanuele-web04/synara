@@ -268,12 +268,14 @@ const branded = {
   message: (id = randomUUID()) => MessageId.makeUnsafe(id),
 };
 
+const SEED_INSTRUCTIONS_CONTENT = "# Instructions\n\n";
+
 const SEED_DOCUMENTS: ReadonlyArray<{ path: string; content: string }> = [
   {
     path: "overview.md",
     content: "# Overview\n\nCoordinator is not configured.\n",
   },
-  { path: "instructions.md", content: "# Instructions\n\n" },
+  { path: "instructions.md", content: SEED_INSTRUCTIONS_CONTENT },
   { path: "notes.md", content: "# Notes\n\n" },
   { path: "decisions.md", content: "# Decisions\n\n" },
   { path: "archived.md", content: "# Archived\n\n" },
@@ -1518,6 +1520,13 @@ export const makeProjectAgentService = Effect.gen(function* () {
                 revision: row.revision,
                 pausedAt: row.pausedAt,
                 archivedAt: row.archivedAt,
+                memberThreadIds: [...new Set([row.coordinatorThreadId, ...row.memberThreadIds])],
+                linkedProjectIds: row.linkedProjectIds,
+                hasGoal:
+                  row.goalStatus !== null || (row.goal !== null && row.goal.trim().length > 0),
+                instructionsConfigured:
+                  row.instructionsContent !== null &&
+                  row.instructionsContent !== SEED_INSTRUCTIONS_CONTENT,
               });
             }
             return {
@@ -4219,6 +4228,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
             summary: "Coordinator self-events do not wake coordination.",
             createdAt: input.createdAt,
           });
+          // Coordinator turns still change what the digest should say (tasks
+          // dispatched, docs written, memory saved) — the self-event early
+          // return used to skip this, so Focus kept the stale summary.
+          yield* impl.scheduleDigest(projectId);
           return;
         }
         // A worker is a thread the coordinator assigned to a task. Wakes come
