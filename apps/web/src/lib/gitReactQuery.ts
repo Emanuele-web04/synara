@@ -1,6 +1,5 @@
 import { DEFAULT_GIT_RECENT_COMMIT_LIMIT } from "@synara/contracts";
 import type {
-  GitHandoffThreadInput,
   GitReadWorkingTreeDiffInput,
   GitStackedAction,
   ModelSelection,
@@ -100,7 +99,6 @@ export const gitMutationKeys = {
   pull: (cwd: string | null) => ["git", "mutation", "pull", cwd] as const,
   preparePullRequestThread: (cwd: string | null) =>
     ["git", "mutation", "prepare-pull-request-thread", cwd] as const,
-  handoffThread: (cwd: string | null) => ["git", "mutation", "handoff-thread", cwd] as const,
   stageFiles: (cwd: string | null) => ["git", "mutation", "stage-files", cwd] as const,
   unstageFiles: (cwd: string | null) => ["git", "mutation", "unstage-files", cwd] as const,
 };
@@ -935,21 +933,5 @@ export function gitPreparePullRequestThreadMutationOptions(input: {
     unavailableMessage: "Pull request thread preparation is unavailable.",
     run: (api, cwd, { reference, mode }) =>
       api.git.preparePullRequestThread({ cwd, reference, mode }),
-  });
-}
-
-export function gitHandoffThreadMutationOptions(input: {
-  cwd: string | null;
-  queryClient: QueryClient;
-}) {
-  return makeGitMutationOptions<
-    Omit<GitHandoffThreadInput, "cwd">,
-    Awaited<ReturnType<NativeApi["git"]["handoffThread"]>>
-  >({
-    cwd: input.cwd,
-    queryClient: input.queryClient,
-    mutationKey: gitMutationKeys.handoffThread(input.cwd),
-    unavailableMessage: "Git handoff is unavailable.",
-    run: (api, cwd, request) => api.git.handoffThread({ cwd, ...request }),
   });
 }

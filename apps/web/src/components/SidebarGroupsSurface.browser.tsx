@@ -1,7 +1,6 @@
 // FILE: SidebarGroupsSurface.browser.tsx
 // Purpose: Verifies the Groups sidebar surface — empty state, group expansion,
-//          coordinator row ordering, the per-group new-chat action, and legacy
-//          Studio container adoption.
+//          coordinator row ordering, and legacy Studio container adoption.
 // Layer: Browser UI test
 
 import "../index.css";
@@ -47,6 +46,7 @@ import type { SidebarDerivedProjectData } from "./Sidebar.logic";
 
 const GROUPS_ROOT = "/Users/tester/Groups";
 const GROUP_A_ID = ProjectId.makeUnsafe("group-a");
+const GROUP_B_ID = ProjectId.makeUnsafe("group-b");
 const STUDIO_ID = ProjectId.makeUnsafe("studio-legacy");
 const THREAD_A = ThreadId.makeUnsafe("thread-a");
 
@@ -146,7 +146,6 @@ function Harness(props: { threadsHydrated: boolean; callbacks: Callbacks }) {
         onOpenThread={props.callbacks.onOpenThread}
         onOpenGroupSettings={props.callbacks.onOpenGroupSettings}
         onProjectContextMenu={props.callbacks.onProjectContextMenu}
-        onCreateGroupChat={props.callbacks.onCreateGroupChat}
       />
     </SidebarProvider>
   );
@@ -157,7 +156,6 @@ interface Callbacks {
   onOpenThread: (threadId: ThreadId) => void;
   onOpenGroupSettings: (projectId: ProjectId, mode: "onboarding" | "edit") => void;
   onProjectContextMenu: (projectId: ProjectId, position: { x: number; y: number }) => void;
-  onCreateGroupChat: (projectId: ProjectId) => void;
 }
 
 function makeCallbacks(
@@ -168,7 +166,6 @@ function makeCallbacks(
     onOpenThread: vi.fn(),
     onOpenGroupSettings: vi.fn(),
     onProjectContextMenu: vi.fn(),
-    onCreateGroupChat: vi.fn(),
   };
 }
 
@@ -259,8 +256,8 @@ describe("SidebarGroupsSurface", () => {
     expect(groupButton!.getAttribute("aria-expanded")).toBe("false");
 
     // Children stay mounted but inert while collapsed.
-    const newChatRow = await waitForText("New group chat");
-    expect(newChatRow.closest("[inert]")).not.toBeNull();
+    const collapsedCoordinatorRow = await waitForText("Set up coordinator");
+    expect(collapsedCoordinatorRow.closest("[inert]")).not.toBeNull();
 
     groupButton!.click();
     await vi.waitFor(() => {
@@ -311,23 +308,33 @@ describe("SidebarGroupsSurface", () => {
     });
   });
 
-  it("fires onCreateGroupChat from the per-group New group chat action", async () => {
+  it("shows just the coordinator row in an expanded group with no chats", async () => {
     const group = makeGroupProject({
-      id: GROUP_A_ID,
+      id: GROUP_B_ID,
       kind: "group",
-      name: "Team Alpha",
-      cwd: `${GROUPS_ROOT}/team-alpha`,
+      name: "Empty Team",
+      cwd: `${GROUPS_ROOT}/empty-team`,
       expanded: true,
     });
-    const { callbacks } = await mount({ projects: [group], threadsHydrated: true });
+    await mount({ projects: [group], threadsHydrated: true });
 
-    const newChatButton = await waitForText("New group chat");
-    const button = newChatButton.closest("[role='button']") as HTMLElement | null;
-    expect(button).not.toBeNull();
-    button!.click();
-    await vi.waitFor(() => {
-      expect(callbacks.onCreateGroupChat).toHaveBeenCalledWith(GROUP_A_ID);
-    });
+    const coordinatorRow = await waitForText("Set up coordinator");
+    expect(coordinatorRow.closest("[inert]")).toBeNull();
+    // The coordinator starts a group's threads — no per-group new-chat affordance
+    // and no empty-list placeholder row below it.
+    expect(
+      Array.from(document.querySelectorAll<HTMLElement>("*")).find(
+        (el) => el.children.length === 0 && el.textContent?.trim() === "New group chat",
+      ),
+    ).toBeUndefined();
+    expect(
+      Array.from(document.querySelectorAll<HTMLElement>("*")).find(
+        (el) => el.children.length === 0 && el.textContent?.trim() === "No group chats yet",
+      ),
+    ).toBeUndefined();
+    expect(
+      document.querySelector<HTMLButtonElement>('button[aria-label*="New group chat"]'),
+    ).toBeNull();
   });
 
   it("adopts the legacy Studio container by retitling it Groups once across remounts", async () => {

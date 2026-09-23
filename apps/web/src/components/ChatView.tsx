@@ -109,9 +109,7 @@ import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useTheme } from "../hooks/useTheme";
-import { useThreadHandoff } from "../hooks/useThreadHandoff";
 import { useThreadUnblock } from "../hooks/useThreadUnblock";
-import { useThreadWorkspaceHandoff } from "../hooks/useThreadWorkspaceHandoff";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { formatShortcutLabel, shortcutLabelForCommand } from "../keybindings";
 import { isHomeChatContainerProject } from "../lib/chatProjects";
@@ -146,7 +144,6 @@ import {
   resolveThreadEnvironmentMode,
 } from "../lib/threadEnvironment";
 import {
-  canCreateThreadHandoff,
   resolveAvailableHandoffTargetProviders,
   resolveThreadHandoffBadgeLabel,
 } from "../lib/threadHandoff";
@@ -233,7 +230,7 @@ import { RenameThreadDialog } from "./RenameThreadDialog";
 import { SidebarHeaderNavigationControls } from "./SidebarHeaderNavigationControls";
 import { SynaraLogo } from "./SynaraLogo";
 import TerminalWorkspaceTabs from "./TerminalWorkspaceTabs";
-import { ThreadWorktreeHandoffDialog } from "./ThreadWorktreeHandoffDialog";
+
 import { ChatComposerFooter } from "./chat/ChatComposerFooter";
 import { ChatHeader } from "./chat/ChatHeader";
 import { ChatSurfaceHeader } from "./chat/ChatSurfaceHeader";
@@ -541,7 +538,6 @@ export default function ChatView({
   const navigate = useNavigate();
   const { handleNewThread } = useHandleNewThread();
   const { handleNewChat } = useHandleNewChat();
-  const { createThreadHandoff } = useThreadHandoff();
   const rawSearch = useDiffRouteSearch();
   const activeSplitView = useSplitViewStore(
     useMemo(() => selectSplitView(rawSearch.splitViewId ?? null), [rawSearch.splitViewId]),
@@ -1560,18 +1556,6 @@ export default function ChatView({
     showPlanFollowUpPrompt,
   });
   const composerFooterHasWideActions = showPlanFollowUpPrompt || activePendingProgress !== null;
-  const handoffDisabled = !(
-    activeThread &&
-    activeProject &&
-    isServerThread &&
-    canCreateThreadHandoff({
-      thread: activeThread,
-      isBusy: isWorking,
-      hasPendingApprovals: pendingApprovals.length > 0,
-      hasPendingUserInput: pendingUserInputs.length > 0,
-    })
-  );
-
   useLayoutEffect(() => {
     if (previousActiveTurnLayoutKeyRef.current !== activeTurnLayoutKey) {
       previousActiveTurnLayoutKeyRef.current = activeTurnLayoutKey;
@@ -2165,7 +2149,7 @@ export default function ChatView({
   const handoffBadgeTargetProvider = activeThread?.handoff
     ? activeThread.modelSelection.provider
     : null;
-  const handoffTargetProviders = useMemo(
+  const sidechatTargetProviders = useMemo(
     () =>
       activeThread
         ? resolveAvailableHandoffTargetProviders({
@@ -2176,7 +2160,6 @@ export default function ChatView({
         : [],
     [activeThread, providerStatuses, serverSettingsQuery.data?.providers],
   );
-  const handoffActionLabel = activeThread ? "Hand off thread" : "Create handoff thread";
   const activeProviderStatus = useMemo(
     () => findProviderStatus(providerStatuses, selectedProvider),
     [selectedProvider, providerStatuses],
@@ -2835,44 +2818,6 @@ export default function ChatView({
     setTerminalOpen,
     setThreadError,
   });
-  const stopActiveThreadSession = useCallback(async () => {
-    const api = readNativeApi();
-    if (
-      !api ||
-      !isServerThread ||
-      !activeThread ||
-      activeThread.session === null ||
-      activeThread.session.status === "closed"
-    ) {
-      return;
-    }
-
-    await api.orchestration.dispatchCommand({
-      type: "thread.session.stop",
-      commandId: newCommandId(),
-      threadId: activeThread.id,
-      createdAt: new Date().toISOString(),
-    });
-  }, [activeThread, isServerThread]);
-  const {
-    handoffBusy,
-    worktreeHandoffDialogOpen,
-    setWorktreeHandoffDialogOpen,
-    worktreeHandoffName,
-    setWorktreeHandoffName,
-    onHandoffToWorktree,
-    onHandoffToLocal,
-    confirmWorktreeHandoff,
-  } = useThreadWorkspaceHandoff({
-    activeProject,
-    activeThread,
-    activeRootBranch,
-    activeThreadAssociatedWorktree,
-    isServerThread,
-    stopActiveThreadSession,
-    runProjectScript,
-  });
-
   const {
     persistRuntimeModeChange,
     handleRuntimeModeChange,
@@ -3761,28 +3706,6 @@ export default function ChatView({
     ],
   );
 
-  const onCreateHandoffThread = useCallback(
-    async (targetProvider: ProviderKind) => {
-      if (!activeThread || handoffDisabled) {
-        return;
-      }
-
-      try {
-        await createThreadHandoff(activeThread, targetProvider);
-      } catch (error) {
-        toastManager.add({
-          type: "error",
-          title: "Could not create handoff thread",
-          description:
-            error instanceof Error
-              ? error.message
-              : "An error occurred while creating the handoff thread.",
-        });
-      }
-    },
-    [activeThread, createThreadHandoff, handoffDisabled],
-  );
-
   const clearComposerInput = useCallback(
     (threadId: ThreadId) => {
       promptHistoryNavigationRef.current = null;
@@ -4367,7 +4290,7 @@ export default function ChatView({
       activeThread?.session !== null &&
       activeThread?.session?.status !== "closed",
     canExecuteSideCommand,
-    sidechatTargetProviders: handoffTargetProviders,
+    sidechatTargetProviders,
     canOfferExportCommand,
     supportsTextNativeReviewCommand,
     fastModeEnabled,
@@ -4791,9 +4714,6 @@ export default function ChatView({
     onEnvModeChange,
     envLocked,
     threadDetailReady: threadDetailHydration === "ready",
-    onHandoffToWorktree,
-    onHandoffToLocal,
-    handoffBusy,
     onComposerFocusRequest: scheduleComposerFocus,
     ...(isGroupContainer ? { fixedLocalWorkspaceCwd: threadWorkspaceCwd } : {}),
     ...(canCheckoutPullRequestIntoThread
@@ -5588,9 +5508,6 @@ export default function ChatView({
           availableEditors={availableEditors}
           diffToggleShortcutLabel={diffPanelShortcutLabel}
           handoffBadgeLabel={handoffBadgeLabel}
-          handoffActionLabel={handoffActionLabel}
-          handoffDisabled={handoffDisabled}
-          handoffActionTargetProviders={handoffTargetProviders}
           handoffBadgeSourceProvider={handoffBadgeSourceProvider}
           handoffBadgeTargetProvider={handoffBadgeTargetProvider}
           gitCwd={threadWorkspaceCwd}
@@ -5651,7 +5568,6 @@ export default function ChatView({
           onDeleteProjectScript={deleteProjectScript}
           onToggleDiff={onToggleDiff}
           onRegisterCommitAndPushTrigger={onRegisterCommitAndPushTrigger}
-          onCreateHandoff={onCreateHandoffThread}
           onNavigateToThread={onNavigateToThread}
           onRenameThread={() => setRenameDialogOpen(true)}
           {...(onCloseThreadPane ? { onCloseThreadPane } : {})}
@@ -6084,14 +6000,7 @@ export default function ChatView({
         activeContextWindowLabel={contextWindowSelectionStatus.activeLabel}
         pendingContextWindowLabel={contextWindowSelectionStatus.pendingSelectedLabel}
       />
-      <ThreadWorktreeHandoffDialog
-        open={worktreeHandoffDialogOpen}
-        worktreeName={worktreeHandoffName}
-        busy={handoffBusy}
-        onWorktreeNameChange={setWorktreeHandoffName}
-        onOpenChange={setWorktreeHandoffDialogOpen}
-        onConfirm={confirmWorktreeHandoff}
-      />
+
       {!isInactiveSplitPane && activeProject && !isSidechatExpired ? (
         <TranscriptSelectionActionLayer
           key={threadId}

@@ -1,7 +1,7 @@
 // FILE: SidebarGroupsSurface.tsx
 // Purpose: Groups sidebar surface — a "New group" action plus one expandable row per
-//          group container (coordinator row first, then the group's chats, then a
-//          per-group "New group chat" button). Replaces the old flat Studio list.
+//          group container (coordinator row first, then the group's chats). Threads in a
+//          group are started by its coordinator. Replaces the old flat Studio list.
 // Layer: Web component
 // Exports: SidebarGroupsSurface
 
@@ -19,8 +19,6 @@ import type { SidebarThreadSummary } from "../types";
 import { cn } from "../lib/utils";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 
-import { SidebarIconButton } from "./SidebarIconButton";
-import { SidebarSectionToolbar } from "./SidebarSectionToolbar";
 import {
   resolveSidebarProjectRowLabel,
   resolveThreadRowClassName,
@@ -75,7 +73,6 @@ export function SidebarGroupsSurface({
   onOpenThread,
   onOpenGroupSettings,
   onProjectContextMenu,
-  onCreateGroupChat,
 }: {
   readonly groupProjects: readonly Project[];
   readonly projectSidebarDataById: ReadonlyMap<ProjectId, SidebarDerivedProjectData>;
@@ -94,7 +91,6 @@ export function SidebarGroupsSurface({
   readonly onOpenThread: (threadId: ThreadId) => void;
   readonly onOpenGroupSettings: (projectId: ProjectId, mode: "onboarding" | "edit") => void;
   readonly onProjectContextMenu: (projectId: ProjectId, position: { x: number; y: number }) => void;
-  readonly onCreateGroupChat: (projectId: ProjectId) => void;
 }) {
   const homeDir = useWorkspacePathsStore((store) => store.homeDir);
   const chatWorkspaceRoot = useWorkspacePathsStore((store) => store.chatWorkspaceRoot);
@@ -319,19 +315,6 @@ export function SidebarGroupsSurface({
                         {resolveSidebarProjectRowLabel(project)}
                       </span>
                     </SidebarMenuButton>
-                    <SidebarSectionToolbar placement="overlay" revealOnHover>
-                      <SidebarIconButton
-                        icon={NewThreadIcon}
-                        label={`New group chat in ${resolveSidebarProjectRowLabel(project)}`}
-                        tooltip="New group chat"
-                        tooltipSide="top"
-                        onClick={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          onCreateGroupChat(project.id);
-                        }}
-                      />
-                    </SidebarSectionToolbar>
                   </div>
                   {coordinatorPinned ? (
                     <SidebarMenuSub
@@ -358,26 +341,6 @@ export function SidebarGroupsSurface({
                           entry.depth,
                         ),
                       )}
-                      {(projectSidebarData?.visibleEntries.length ?? 0) === 0 ? (
-                        <div className="px-2 py-1 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/58">
-                          No group chats yet
-                        </div>
-                      ) : null}
-                      <SidebarMenuSubItem className="w-full">
-                        <SidebarMenuSubButton
-                          render={<div role="button" tabIndex={0} />}
-                          data-thread-selection-safe
-                          size="sm"
-                          aria-label={`New group chat in ${resolveSidebarProjectRowLabel(project)}`}
-                          className={SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME}
-                          onClick={() => {
-                            onCreateGroupChat(project.id);
-                          }}
-                        >
-                          <NewThreadIcon className="size-3.5 shrink-0" />
-                          <span className="min-w-0 truncate">New group chat</span>
-                        </SidebarMenuSubButton>
-                      </SidebarMenuSubItem>
                     </SidebarMenuSub>
                   </DisclosureRegion>
                 </div>

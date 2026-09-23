@@ -2,7 +2,7 @@
 // Purpose: Chat-header toggle for the group Library panel; mirrors ProjectToggle.
 // Layer: Chat UI component
 
-import { BookIcon } from "~/lib/icons";
+import { FoldersIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
 import { Toggle } from "../../ui/toggle";
@@ -28,7 +28,7 @@ export function LibraryToggle({ library }: { library: ProjectToggleState }) {
             variant="default"
             size="xs"
           >
-            <SurfaceChipIcon icon={BookIcon} className="size-4" />
+            <SurfaceChipIcon icon={FoldersIcon} className="size-4" />
           </Toggle>
         }
       />

@@ -87,10 +87,8 @@ import {
   type DesktopUpdateState,
   type OrchestrationShellSnapshot,
   type OrchestrationThreadPullRequest,
-  PROVIDER_DISPLAY_NAMES,
   ProjectId,
   SpaceId,
-  type ProviderKind,
   ThreadId,
   type ResolvedKeybindingsConfig,
   WS_GITHUB_PROJECT_PROVISIONING_CAPABILITY,
@@ -145,7 +143,6 @@ import {
   createSidebarTreeThreadsSelector,
   isSidebarThreadVisible,
 } from "../storeSelectors";
-import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
 import { useThreadPullRequests } from "../hooks/useThreadPullRequests";
 import {
   providerComposerCapabilitiesQueryOptions,
@@ -241,7 +238,7 @@ import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useHandleNewGroupChat } from "../hooks/useHandleNewGroupChat";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useProviderStatusesForLocalConfig } from "../hooks/useProviderStatusesForLocalConfig";
-import { useThreadHandoff } from "../hooks/useThreadHandoff";
+
 import { useFeedbackDialogStore } from "../feedbackDialogStore";
 import { openExternalLink } from "~/lib/linkChips";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
@@ -365,11 +362,7 @@ import {
 } from "~/lib/disclosureMotion";
 import { createClientPointMenuAnchor } from "~/lib/clientPointMenuAnchor";
 import { resolveThreadModelSummary } from "~/lib/threadModelSummary";
-import {
-  canCreateThreadHandoff,
-  resolveAvailableHandoffTargetProviders,
-  resolveThreadHandoffBadgeLabel,
-} from "../lib/threadHandoff";
+import { resolveThreadHandoffBadgeLabel } from "../lib/threadHandoff";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import { normalizeSettingsSection } from "../settingsNavigation";
@@ -1479,7 +1472,6 @@ export default function Sidebar() {
   const { handleNewThread } = useHandleNewThread();
   const { handleNewChat } = useHandleNewChat();
   const { handleNewGroupChat } = useHandleNewGroupChat();
-  const { createThreadHandoff } = useThreadHandoff();
   const routeThreadId = useParams({
     strict: false,
     select: (params) => (params.threadId ? ThreadId.makeUnsafe(params.threadId) : null),
@@ -2943,24 +2935,6 @@ export default function Sidebar() {
 
   const copyThreadIdToClipboard = useCopyThreadIdToClipboard();
   const copyPathToClipboard = useCopyPathToClipboard();
-  const handoffThread = useCallback(
-    async (thread: Thread, targetProvider: ProviderKind) => {
-      try {
-        await createThreadHandoff(thread, targetProvider);
-      } catch (error) {
-        toastManager.add({
-          type: "error",
-          title: "Could not create handoff thread",
-          description:
-            error instanceof Error
-              ? error.message
-              : "An error occurred while creating the handoff thread.",
-        });
-      }
-    },
-    [createThreadHandoff],
-  );
-
   const handleThreadContextMenu = useCallback(
     async (
       threadId: ThreadId,
@@ -2979,37 +2953,7 @@ export default function Sidebar() {
       if (!thread) return;
       const threadSummary = sidebarThreadSummaryById[threadId];
       const isPinned = pinnedThreadIdSet.has(threadId);
-      const hasPendingApprovals =
-        threadSummary?.hasPendingApprovals ??
-        derivePendingApprovals(thread.activities, thread.pendingInteractions, {
-          authoritativeHasPending: thread.hasPendingApprovals,
-          latestTurnId: thread.latestTurn?.turnId,
-        }).length > 0;
-      const hasPendingUserInput =
-        threadSummary?.hasPendingUserInput ??
-        derivePendingUserInputs(thread.activities, thread.pendingInteractions, {
-          authoritativeHasPending: thread.hasPendingUserInput,
-          latestTurnId: thread.latestTurn?.turnId,
-        }).length > 0;
-      const canHandoff = canCreateThreadHandoff({
-        thread,
-        hasPendingApprovals,
-        hasPendingUserInput,
-      });
       const threadStatus = threadSummary ? resolveThreadStatusForSidebar(threadSummary) : null;
-      const handoffTargets = canHandoff
-        ? resolveAvailableHandoffTargetProviders({
-            sourceProvider: thread.modelSelection.provider,
-            providerSettings: serverSettingsQuery.data?.providers,
-            providerStatuses,
-          })
-        : [];
-      const handoffItems = handoffTargets.map((provider, index) => ({
-        id: `handoff:${provider}`,
-        label: `Handoff to ${PROVIDER_DISPLAY_NAMES[provider]}`,
-        icon: THREAD_CONTEXT_MENU_ICONS.handoff,
-        separatorBefore: index === 0,
-      }));
       const threadWorkspacePath = resolveThreadWorkspaceCwd({
         projectCwd: projectCwdById.get(thread.projectId) ?? null,
         envMode: thread.envMode,
@@ -3033,7 +2977,6 @@ export default function Sidebar() {
               ]
             : []),
           { id: "mark-unread", label: "Mark unread", icon: THREAD_CONTEXT_MENU_ICONS.markUnread },
-          ...handoffItems,
           {
             id: "copy-path",
             label: "Copy Path",
@@ -3091,13 +3034,6 @@ export default function Sidebar() {
       }
       if (clicked === "clear-notification") {
         clearThreadNotification(threadId);
-        return;
-      }
-      if (typeof clicked === "string" && clicked.startsWith("handoff:")) {
-        const targetProvider = clicked.slice("handoff:".length);
-        if (handoffTargets.includes(targetProvider as ProviderKind)) {
-          await handoffThread(thread, targetProvider as ProviderKind);
-        }
         return;
       }
       if (clicked === "copy-path") {
@@ -3219,15 +3155,12 @@ export default function Sidebar() {
       copyThreadIdToClipboard,
       clearDismissedThreadStatus,
       clearThreadNotification,
-      handoffThread,
       markThreadUnread,
       navigate,
       openRenameThreadDialog,
       pinnedThreadIdSet,
       projectCwdById,
-      providerStatuses,
       resolveThreadStatusForSidebar,
-      serverSettingsQuery.data?.providers,
       sidebarThreadSummaryById,
       toggleThreadPinned,
     ],
@@ -6177,9 +6110,6 @@ export default function Sidebar() {
                     setProjectAgentDialogState({ projectId, mode });
                   }}
                   onProjectContextMenu={handleProjectContextMenu}
-                  onCreateGroupChat={(projectId) => {
-                    void handleCreateGroupChat(projectId);
-                  }}
                 />
               ) : activityViewEnabled ? (
                 <SidebarGroup className="px-1.5 py-1.5">

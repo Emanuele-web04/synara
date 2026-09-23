@@ -1,7 +1,7 @@
 // Purpose: Shared Local/Worktree chip and menu for the full and floating composers.
 import type { ThreadEnvironmentMode } from "@synara/contracts";
 import type { ReactNode } from "react";
-import { CheckIcon, ChevronDownIcon, HandoffIcon, WorktreeIcon } from "~/lib/icons";
+import { CheckIcon, ChevronDownIcon, WorktreeIcon } from "~/lib/icons";
 import { CentralIcon } from "~/lib/central-icons";
 import type { ThreadEnvironmentPresentation } from "~/lib/threadEnvironment";
 import { COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME } from "./composerPickerStyles";
@@ -19,7 +19,7 @@ const ENV_MENU_ICON_CLASS_NAME = "size-3.5 text-muted-foreground";
 
 /**
  * One row of the "Work in" menu: `[glyph] [label …grows] [✓ when selected]`.
- * Centralizes the icon/label/check treatment so the local, worktree, and handoff
+ * Centralizes the icon/label/check treatment so the local and worktree
  * entries stay on one grid instead of repeating the same class strings per row.
  */
 function WorkInMenuItem({
@@ -52,11 +52,6 @@ interface ComposerEnvironmentPickerProps {
   environmentPresentation: ThreadEnvironmentPresentation;
   onEnvModeChange: (mode: ThreadEnvironmentMode) => void;
   canSwitchToWorktree: boolean;
-  canHandoffToLocal?: boolean;
-  canHandoffToWorktree?: boolean;
-  onHandoffToLocal?: (() => void) | undefined;
-  onHandoffToWorktree?: (() => void) | undefined;
-  handoffBusy?: boolean | undefined;
   isPanel?: boolean;
   disabled?: boolean;
   onOpenChange?: ((open: boolean) => void) | undefined;
@@ -67,11 +62,6 @@ export function ComposerEnvironmentPicker({
   environmentPresentation,
   onEnvModeChange,
   canSwitchToWorktree,
-  canHandoffToLocal = false,
-  canHandoffToWorktree = false,
-  onHandoffToLocal,
-  onHandoffToWorktree,
-  handoffBusy = false,
   isPanel = false,
   disabled = false,
   onOpenChange,
@@ -139,27 +129,11 @@ export function ComposerEnvironmentPicker({
               onSelect={() => onEnvModeChange("worktree")}
             />
           ) : null}
-          {environmentPresentation.mode === "worktree" && !canHandoffToLocal ? (
+          {environmentPresentation.mode === "worktree" ? (
             <WorkInMenuItem
               icon={<WorktreeIcon className={ENV_MENU_ICON_CLASS_NAME} />}
               label={environmentPresentation.worktreeOptionLabel}
               selected
-            />
-          ) : null}
-          {canHandoffToWorktree && onHandoffToWorktree ? (
-            <WorkInMenuItem
-              icon={<WorktreeIcon className={ENV_MENU_ICON_CLASS_NAME} />}
-              label="Hand off to new worktree"
-              disabled={handoffBusy}
-              onSelect={() => onHandoffToWorktree()}
-            />
-          ) : null}
-          {canHandoffToLocal && onHandoffToLocal ? (
-            <WorkInMenuItem
-              icon={<HandoffIcon className={ENV_MENU_ICON_CLASS_NAME} />}
-              label="Hand off to local"
-              disabled={handoffBusy}
-              onSelect={() => onHandoffToLocal()}
             />
           ) : null}
         </MenuGroup>

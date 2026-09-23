@@ -6997,12 +6997,10 @@ describe("ChatView transcript geometry (full app)", () => {
     });
 
     try {
-      const newStudioChatButton = await waitForElement(
-        () => document.querySelector<HTMLButtonElement>('button[aria-label*="New group chat"]'),
-        "Unable to find the group new-chat action.",
-      );
-      newStudioChatButton.click();
-      newStudioChatButton.click();
+      // Fire the surface-aware new-chat chord twice: on the Groups segment it maps to
+      // the group chat create path, and the second fire must coalesce with the first.
+      await dispatchConfiguredShortcutWhenReady(window, { key: "n", altKey: true });
+      await dispatchConfiguredShortcutWhenReady(window, { key: "n", altKey: true });
 
       const newThreadPath = await waitForURL(
         mounted.router,

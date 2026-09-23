@@ -94,7 +94,7 @@ function MemoryDocumentDialog(props: {
           ) : content.trim().length === 0 ? (
             <p className="text-[12px] text-muted-foreground">This file is empty.</p>
           ) : (
-            <ChatMarkdown text={content} cwd={undefined} />
+            <ChatMarkdown text={content} cwd={undefined} className="pull-request-prose" />
           )}
         </DialogPanel>
       </DialogPopup>
