@@ -70,8 +70,8 @@ export function BetaDiagnosticsWelcomeDialog() {
       title="You're on Synara Beta"
       description={
         <>
-          Beta always sends crash reports, launch and update timings, and feature counters — never
-          your chats, files, or paths. Full list: docs/diagnostics.md.
+          Beta always sends crash reports, redacted error messages and log excerpts, and launch and
+          update timings — never your chats or files. Full list: docs/diagnostics.md.
         </>
       }
       dismissLabel="Not now"

@@ -106,6 +106,7 @@ import { waitForBackendStartupReady } from "./backendStartupReadiness";
 import { DesktopBetaChannel, resolveBetaHomeDir } from "./betaChannel";
 import {
   BetaDiagnostics,
+  readLogTail,
   resolveBetaDiagnosticsEndpoint,
   type BetaDiagnosticsEventName,
 } from "./betaDiagnostics";
@@ -426,6 +427,13 @@ const trackBetaDiagnostics = (
 ): void => {
   betaDiagnostics?.track(event, payload);
 };
+
+// Monitor-only: observes uncaught exceptions for diagnostics without changing
+// Node's exit behavior — the POSIX EPIPE filter and the default crash path
+// stay exactly as before.
+process.on("uncaughtExceptionMonitor", (error: unknown) => {
+  betaDiagnostics?.trackError("main", error);
+});
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 const AUTO_UPDATE_STARTUP_DELAY_MS = 15_000;
@@ -4559,6 +4567,12 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
       }
       const reason = `code=${code ?? "null"} signal=${signal ?? "null"}`;
       lastBackendFailureDetail = outputTailDetector.read();
+      trackBetaDiagnostics("app.child-process-crash", {
+        kind: "crash",
+        processType: "backend",
+        reason,
+        logTail: readLogTail(Path.join(LOG_DIR, BACKEND_LOG_FILE_NAME)),
+      });
       scheduleBackendRestart(reason);
     });
   });
@@ -5340,6 +5354,15 @@ function createWindow(): BrowserWindow {
   attachDesktopZoomFactorSync(window);
   attachRendererCrashRecovery(window);
   attachDesktopPhysicalZoomShortcuts(window);
+  if (betaDiagnostics) {
+    // Renderer console errors become app.error events (throttled inside
+    // trackError); messages are redacted before they touch the queue.
+    window.webContents.on("console-message", (details) => {
+      if (details.level === "error" && typeof details.message === "string") {
+        betaDiagnostics.trackError("renderer", details.message);
+      }
+    });
+  }
 
   window.webContents.on("will-attach-webview", (event, webPreferences, params) => {
     const partition = params.partition;
@@ -5511,6 +5534,7 @@ function attachRendererCrashRecovery(window: BrowserWindow): void {
       kind: "crash",
       processType: "renderer",
       reason: details.reason,
+      logTail: readLogTail(Path.join(LOG_DIR, DESKTOP_LOG_FILE_NAME)),
     });
     const description = `reason=${details.reason} exitCode=${details.exitCode}`;
     writeDesktopLogHeader(`renderer process gone ${description}`);
@@ -5915,6 +5939,7 @@ if (hasSingleInstanceLock) {
             kind: "crash",
             processType: details.type,
             reason: details.reason,
+            logTail: readLogTail(Path.join(LOG_DIR, DESKTOP_LOG_FILE_NAME)),
           });
         });
       }

@@ -5,6 +5,9 @@
 // Privacy contract (also documented in docs/diagnostics.md):
 // - Only the fixed event names and payload fields declared in BetaDiagnosticsEvent
 //   are ever written. There is no generic "metadata" bag.
+// - Free-text fields (error message, stack, log tail) are capped and passed
+//   through redactDiagnosticText (packages/shared/diagnosticsRedaction.ts)
+//   before they are written to the queue.
 // - No prompts, chat text, file contents, file paths, repo names, provider
 //   payloads, credentials, or environment variables are collected.
 // - The install id is a random UUID generated on first launch of a beta install;
@@ -14,26 +17,40 @@
 
 import {
   appendFileSync,
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
   renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
+
+import { redactDiagnosticText } from "@synara/shared/diagnosticsRedaction";
 
 /** Override point for self-hosted / dev ingestion; production default ships in the binary. */
 export const BETA_DIAGNOSTICS_ENDPOINT = "https://synara-beta-diagnostics.kartik-9f9.workers.dev";
 export const BETA_DIAGNOSTICS_ENDPOINT_ENV = "SYNARA_BETA_DIAGNOSTICS_URL";
 
 const FLUSH_INTERVAL_MS = 5 * 60 * 1000;
-const QUEUE_MAX_BYTES = 512 * 1024;
-const QUEUE_TRIM_TARGET_BYTES = 256 * 1024;
+// Crash events can carry a ~16 KiB log tail, so the queue gets headroom for a
+// burst of them without crowding out ordinary events.
+const QUEUE_MAX_BYTES = 1024 * 1024;
+const QUEUE_TRIM_TARGET_BYTES = 512 * 1024;
 const FLUSH_BATCH_MAX_EVENTS = 200;
 const FLUSH_BATCH_MAX_BYTES = 256 * 1024;
+
+export const DIAGNOSTICS_MESSAGE_MAX_LENGTH = 1024;
+export const DIAGNOSTICS_STACK_MAX_LENGTH = 8 * 1024;
+export const DIAGNOSTICS_LOG_TAIL_MAX_LENGTH = 16 * 1024;
+export const DIAGNOSTICS_LOG_TAIL_MAX_LINES = 200;
+const ERROR_FINGERPRINT_WINDOW_MS = 10 * 60 * 1000;
+const ERROR_HOURLY_CAP = 30;
 
 /**
  * Allowlist of event names. Adding an event means extending this union and the
@@ -42,6 +59,7 @@ const FLUSH_BATCH_MAX_BYTES = 256 * 1024;
 export type BetaDiagnosticsEventName =
   | "app.start"
   | "app.exit"
+  | "app.error"
   | "app.renderer-crash"
   | "app.child-process-crash"
   | "update.check"
@@ -52,7 +70,20 @@ export type BetaDiagnosticsEventName =
 
 export type BetaDiagnosticsPayload =
   | { readonly kind: "lifecycle"; readonly durationMs?: number }
-  | { readonly kind: "crash"; readonly processType: string; readonly reason: string }
+  | {
+      readonly kind: "crash";
+      readonly processType: string;
+      readonly reason: string;
+      /** Redacted tail of the relevant process log (see readLogTail). */
+      readonly logTail?: string | undefined;
+    }
+  | {
+      readonly kind: "error";
+      readonly source: "main" | "renderer";
+      readonly message: string;
+      readonly stack?: string | undefined;
+      readonly fingerprint: string;
+    }
   | {
       readonly kind: "update";
       readonly outcome: "ok" | "error";
@@ -77,10 +108,17 @@ export interface BetaDiagnosticsEvent {
 const isFiniteNonNegative = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value) && value >= 0;
 
-/** Fields not on the allowlist are dropped, never coerced. */
+/**
+ * Fields not on the allowlist are dropped, never coerced. Free-text fields
+ * (message, stack, logTail) are capped and passed through redactDiagnosticText
+ * with the caller's homeDir.
+ */
 export function sanitizeBetaDiagnosticsPayload(
   payload: BetaDiagnosticsPayload,
+  homeDir?: string,
 ): BetaDiagnosticsPayload {
+  const redact = (text: unknown, maxLength: number): string =>
+    redactDiagnosticText(String(text), { homeDir, maxLength });
   if (payload.kind === "lifecycle") {
     return {
       kind: "lifecycle",
@@ -92,6 +130,22 @@ export function sanitizeBetaDiagnosticsPayload(
       kind: "crash",
       processType: String(payload.processType).slice(0, 32),
       reason: String(payload.reason).slice(0, 64),
+      ...(typeof payload.logTail === "string" && payload.logTail.length > 0
+        ? { logTail: redact(payload.logTail, DIAGNOSTICS_LOG_TAIL_MAX_LENGTH) }
+        : {}),
+    };
+  }
+  if (payload.kind === "error") {
+    return {
+      kind: "error",
+      source: payload.source === "renderer" ? "renderer" : "main",
+      message: redact(payload.message, DIAGNOSTICS_MESSAGE_MAX_LENGTH),
+      ...(typeof payload.stack === "string" && payload.stack.length > 0
+        ? { stack: redact(payload.stack, DIAGNOSTICS_STACK_MAX_LENGTH) }
+        : {}),
+      fingerprint: /^[0-9a-f]{8,32}$/i.test(String(payload.fingerprint))
+        ? String(payload.fingerprint)
+        : "unknown",
     };
   }
   return {
@@ -108,6 +162,48 @@ export function sanitizeBetaDiagnosticsPayload(
       ? { errorContext: payload.errorContext }
       : {}),
   };
+}
+
+/**
+ * Reads the last ~200 lines / 16 KiB of a process log for crash context.
+ * Returns undefined when the file is missing or unreadable. The caller passes
+ * the result through the crash payload, which redacts it before queueing.
+ */
+export function readLogTail(filePath: string): string | undefined {
+  try {
+    if (!existsSync(filePath)) return undefined;
+    const size = statSync(filePath).size;
+    if (size === 0) return undefined;
+    const start = Math.max(0, size - DIAGNOSTICS_LOG_TAIL_MAX_LENGTH);
+    const buffer = Buffer.alloc(size - start);
+    const fd = openSync(filePath, "r");
+    try {
+      readSync(fd, buffer, 0, buffer.length, start);
+    } finally {
+      closeSync(fd);
+    }
+    const lines = buffer.toString("utf8").split("\n");
+    return lines.slice(-DIAGNOSTICS_LOG_TAIL_MAX_LINES).join("\n");
+  } catch {
+    return undefined;
+  }
+}
+
+/** Top stack frame of an (already redacted) stack, for fingerprinting. */
+function topStackFrame(stack: string | undefined): string {
+  if (!stack) return "";
+  for (const line of stack.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("at ")) return trimmed;
+  }
+  return stack.split("\n")[0]?.trim() ?? "";
+}
+
+function errorFingerprint(message: string, stack: string | undefined): string {
+  return createHash("sha256")
+    .update(`${message}\n${topStackFrame(stack)}`)
+    .digest("hex")
+    .slice(0, 16);
 }
 
 export function resolveBetaDiagnosticsEndpoint(env: NodeJS.ProcessEnv): string {
@@ -148,12 +244,16 @@ export class BetaDiagnostics {
     this.appVersion = input.appVersion;
     this.platform = input.platform;
     this.arch = input.arch;
+    this.homeDir = input.homeDir;
   }
 
   private readonly now: () => Date;
   private readonly appVersion: string;
   private readonly platform: string;
   private readonly arch: string;
+  private readonly homeDir: string;
+  private readonly errorFingerprintSentAt = new Map<string, number>();
+  private readonly errorSentTimestamps: number[] = [];
 
   private loadInstallId(homeDir: string): string {
     const diagnosticsDir = join(homeDir, "diagnostics");
@@ -192,7 +292,7 @@ export class BetaDiagnostics {
       platform: this.platform,
       arch: this.arch,
       event,
-      payload: sanitizeBetaDiagnosticsPayload(payload),
+      payload: sanitizeBetaDiagnosticsPayload(payload, this.homeDir),
     };
     try {
       mkdirSync(join(this.queuePath, ".."), { recursive: true });
@@ -204,6 +304,62 @@ export class BetaDiagnostics {
     } catch {
       // Diagnostics must never break the app.
     }
+  }
+
+  /**
+   * Records an app.error event. The message and stack are redacted before the
+   * fingerprint is computed; identical fingerprints are throttled to one event
+   * per 10 minutes and the session is capped at 30 errors per hour.
+   */
+  trackError(source: "main" | "renderer", error: unknown): void {
+    if (this.disposed) return;
+    try {
+      const message = error instanceof Error ? error.message : String(error);
+      const stack = error instanceof Error ? error.stack : undefined;
+      const redactedMessage = redactDiagnosticText(message, {
+        homeDir: this.homeDir,
+        maxLength: DIAGNOSTICS_MESSAGE_MAX_LENGTH,
+      });
+      const redactedStack =
+        stack === undefined
+          ? undefined
+          : redactDiagnosticText(stack, {
+              homeDir: this.homeDir,
+              maxLength: DIAGNOSTICS_STACK_MAX_LENGTH,
+            });
+      const fingerprint = errorFingerprint(redactedMessage, redactedStack);
+      if (!this.allowError(fingerprint)) return;
+      this.track("app.error", {
+        kind: "error",
+        source,
+        message: redactedMessage,
+        stack: redactedStack,
+        fingerprint,
+      });
+    } catch {
+      // Diagnostics must never break the app.
+    }
+  }
+
+  private allowError(fingerprint: string): boolean {
+    const nowMs = this.now().getTime();
+    while (
+      this.errorSentTimestamps.length > 0 &&
+      nowMs - this.errorSentTimestamps[0]! > 60 * 60 * 1000
+    ) {
+      this.errorSentTimestamps.shift();
+    }
+    if (this.errorSentTimestamps.length >= ERROR_HOURLY_CAP) return false;
+    const lastSent = this.errorFingerprintSentAt.get(fingerprint);
+    if (lastSent !== undefined && nowMs - lastSent < ERROR_FINGERPRINT_WINDOW_MS) return false;
+    this.errorFingerprintSentAt.set(fingerprint, nowMs);
+    if (this.errorFingerprintSentAt.size > 256) {
+      for (const [key, sentAt] of this.errorFingerprintSentAt) {
+        if (nowMs - sentAt > ERROR_FINGERPRINT_WINDOW_MS) this.errorFingerprintSentAt.delete(key);
+      }
+    }
+    this.errorSentTimestamps.push(nowMs);
+    return true;
   }
 
   private trimQueueIfNeeded(): void {

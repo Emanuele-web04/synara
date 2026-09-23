@@ -2,15 +2,17 @@
 // Purpose: Queue, sanitize, and flush behavior for beta-only diagnostics.
 
 import { createServer, type Server } from "node:http";
-import { mkdtempSync, readFileSync, existsSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, existsSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
   BetaDiagnostics,
+  readLogTail,
   resolveBetaDiagnosticsEndpoint,
   sanitizeBetaDiagnosticsPayload,
   BETA_DIAGNOSTICS_ENDPOINT,
@@ -77,6 +79,127 @@ describe("sanitizeBetaDiagnosticsPayload", () => {
       targetVersion: "../../etc/passwd",
     });
     expect("targetVersion" in sanitized).toBe(false);
+  });
+
+  it("redacts free text in error payloads", () => {
+    const sanitized = sanitizeBetaDiagnosticsPayload(
+      {
+        kind: "error",
+        source: "renderer",
+        message: "failed for user@example.com at /Users/alice/app",
+        stack: "Error: token ghp_0123456789abcdefABCDEF1234\n    at x (f.ts:1:1)",
+        fingerprint: "abcdef0123456789",
+      },
+      "/Users/alice",
+    );
+    expect(sanitized).toEqual({
+      kind: "error",
+      source: "renderer",
+      message: "failed for <email> at ~/app",
+      stack: expect.stringContaining("[redacted]"),
+      fingerprint: "abcdef0123456789",
+    });
+    expect(JSON.stringify(sanitized)).not.toContain("ghp_");
+    expect(JSON.stringify(sanitized)).not.toContain("alice");
+  });
+
+  it("redacts and caps crash logTail", () => {
+    const longTail = `line with password=hunter2\n${"x".repeat(40 * 1024)}`;
+    const sanitized = sanitizeBetaDiagnosticsPayload(
+      {
+        kind: "crash",
+        processType: "renderer",
+        reason: "oom",
+        logTail: longTail,
+      },
+      "/Users/alice",
+    );
+    const logTail = "logTail" in sanitized ? sanitized.logTail : undefined;
+    expect(logTail).toBeDefined();
+    expect(logTail!.length).toBeLessThanOrEqual(16 * 1024);
+    expect(logTail).not.toContain("hunter2");
+  });
+});
+
+describe("readLogTail", () => {
+  it("returns the last lines of a log file and undefined for missing files", () => {
+    const root = makeRoot();
+    const logPath = join(root, "desktop-main.log");
+    writeFileSync(logPath, Array.from({ length: 300 }, (_, i) => `line-${i}`).join("\n"));
+    const tail = readLogTail(logPath)!;
+    expect(tail).toContain("line-299");
+    expect(tail).not.toContain("line-50");
+    expect(readLogTail(join(root, "missing.log"))).toBeUndefined();
+  });
+});
+
+describe("BetaDiagnostics error tracking", () => {
+  const readQueue = (root: string) =>
+    readFileSync(join(root, "diagnostics", "events.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+
+  it("records redacted app.error events with a fingerprint", () => {
+    const root = makeRoot();
+    const diag = new BetaDiagnostics({
+      homeDir: root,
+      appVersion: "9.9.9-beta.1",
+      platform: "linux",
+      arch: "x64",
+      env: {},
+    });
+    diag.trackError(
+      "main",
+      new Error("boom in /Users/alice/.synara-beta with sk-AbCdEfGhIjKlMnOpQrStUvWx"),
+    );
+    const events = readQueue(root);
+    expect(events).toHaveLength(1);
+    expect(events[0].event).toBe("app.error");
+    expect(events[0].payload.kind).toBe("error");
+    expect(events[0].payload.source).toBe("main");
+    expect(events[0].payload.fingerprint).toMatch(/^[0-9a-f]{16}$/);
+    expect(JSON.stringify(events[0])).not.toContain("alice");
+    expect(JSON.stringify(events[0])).not.toContain("sk-");
+  });
+
+  it("throttles the same fingerprint to once per 10 minutes", () => {
+    const root = makeRoot();
+    let now = new Date("2026-09-23T00:00:00Z");
+    const diag = new BetaDiagnostics({
+      homeDir: root,
+      appVersion: "9.9.9-beta.1",
+      platform: "linux",
+      arch: "x64",
+      env: {},
+      now: () => now,
+    });
+    // Same message and no stack: identical fingerprint.
+    diag.trackError("renderer", "same failure");
+    diag.trackError("renderer", "same failure");
+    expect(readQueue(root)).toHaveLength(1);
+    now = new Date(now.getTime() + 11 * 60 * 1000);
+    diag.trackError("renderer", "same failure");
+    expect(readQueue(root)).toHaveLength(2);
+  });
+
+  it("caps app.error at 30 per hour", () => {
+    const root = makeRoot();
+    let now = new Date("2026-09-23T00:00:00Z");
+    const diag = new BetaDiagnostics({
+      homeDir: root,
+      appVersion: "9.9.9-beta.1",
+      platform: "linux",
+      arch: "x64",
+      env: {},
+      now: () => now,
+    });
+    for (let i = 0; i < 40; i += 1) {
+      // Distinct messages so the per-fingerprint throttle does not apply.
+      diag.trackError("main", new Error(`failure-${i}`));
+      now = new Date(now.getTime() + 1000);
+    }
+    expect(readQueue(root)).toHaveLength(30);
   });
 });
 
@@ -159,6 +282,22 @@ describe("BetaDiagnostics", () => {
       .trim()
       .split("\n");
     expect(lines).toHaveLength(1);
+  });
+});
+
+describe("production gate", () => {
+  it("main.ts constructs BetaDiagnostics only for the baked beta flavor", () => {
+    const mainSource = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "main.ts"),
+      "utf8",
+    );
+    const construction = mainSource.slice(
+      mainSource.indexOf("const betaDiagnostics ="),
+      mainSource.indexOf("const trackBetaDiagnostics"),
+    );
+    expect(construction).toContain('desktopFlavor === "beta"');
+    expect(construction).toContain("new BetaDiagnostics(");
+    expect(construction).toContain(": null");
   });
 });
 

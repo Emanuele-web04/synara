@@ -2,17 +2,35 @@ name = "synara-beta-diagnostics"
 main = "worker.ts"
 compatibility_date = "2026-09-01"
 
-# Events land in Analytics Engine (free at beta volume) — query via the
-# Cloudflare dashboard or the GraphQL analytics API.
-[[analytics_engine_datasets]]
-binding = "BETA_EVENTS"
-dataset = "synara_beta_events"
+# Events land in D1 so the dashboard can query them through a binding.
+# Create: wrangler d1 create synara-beta-diagnostics
+# Migrate: wrangler d1 migrations apply synara-beta-diagnostics
+[[d1_databases]]
+binding = "DB"
+database_name = "synara-beta-diagnostics"
+database_id = "86e0bd2d-5cad-44de-9f72-e94a890c4860"
+migrations_dir = "migrations"
 
 # Minidumps go to R2. Lifecycle rule recommended: expire objects after 30 days.
 [[r2_buckets]]
 binding = "CRASH_DUMPS"
 bucket_name = "synara-beta-crash-dumps"
 
+# Dashboard SPA built by `vite build` into ./dist. The worker runs first so
+# page requests are gated by the session cookie; it forwards to ASSETS for
+# hashed files and index.html.
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+run_worker_first = true
+
+# Daily retention sweep: events + crash_dumps rows older than 30 days.
+[triggers]
+crons = ["0 4 * * *"]
+
+# Dashboard auth secrets (required for /api/* and pages):
+#   wrangler secret put DASHBOARD_PASSWORD
+#   wrangler secret put DASHBOARD_SESSION_KEY
 # Optional shared secret; set with `wrangler secret put INGEST_TOKEN` and bake
 # the same value into beta builds only if you want the endpoint closed.
 # [vars]
