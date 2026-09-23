@@ -44,7 +44,11 @@ import {
   type ThreadComputerState,
 } from "@synara/contracts";
 import { encodeComputerFrame } from "@synara/shared/computerFrame";
-import { FrameTransport, type FrameSink } from "@synara/shared/frameTransport";
+import {
+  classifyByFrameFlags,
+  FrameTransport,
+  type FrameSink,
+} from "@synara/shared/frameTransport";
 
 import {
   DesktopOperationQueue,
@@ -1132,6 +1136,7 @@ export class ComputerManager {
             },
             payload: frame.data,
           }),
+        classify: classifyByFrameFlags,
         queueLimit: COMPUTER_FRAME_QUEUE_LIMIT,
         socketBudgetBytes: COMPUTER_FRAME_SOCKET_BUDGET_BYTES,
         subscriberIdPrefix: "computer-frame-subscriber",
