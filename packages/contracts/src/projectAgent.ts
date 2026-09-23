@@ -90,6 +90,9 @@ export const ProjectAgentConfig = Schema.Struct({
   libraryPath: Schema.optional(TrimmedNonEmptyString),
   libraryRemoteUrl: Schema.optional(LibraryRemoteUrl),
   libraryPushOnChange: Schema.optional(Schema.Boolean),
+  pausedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  archivedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  pausedAutomationIds: Schema.optional(Schema.Array(AutomationId)),
 });
 export type ProjectAgentConfig = typeof ProjectAgentConfig.Type;
 
@@ -378,6 +381,8 @@ export const ProjectAgentSummary = Schema.Struct({
   coordinatorIcon: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(64))),
   coordinatorColor: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(32))),
   coordinatorStatus: Schema.Literals(["unconfigured", "idle", "running", "paused", "stopped"]),
+  pausedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  archivedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   revision: ProjectAgentRevision,
 });
 export type ProjectAgentSummary = typeof ProjectAgentSummary.Type;
@@ -434,6 +439,95 @@ export const ProjectAgentUnlinkProjectInput = Schema.Struct({
   linkedProjectId: ProjectId,
 });
 export type ProjectAgentUnlinkProjectInput = typeof ProjectAgentUnlinkProjectInput.Type;
+
+// Coordinator-side repository linking: the tool resolves one of the two
+// reference forms into `linkedProjectId` before the shared link path runs.
+export const ProjectAgentLinkRepositoryInput = Schema.Struct({
+  requestId: ProjectAgentRequestId,
+  projectId: ProjectId,
+  linkedProjectId: Schema.optional(ProjectId),
+  workspacePath: Schema.optional(TrimmedNonEmptyString),
+});
+export type ProjectAgentLinkRepositoryInput = typeof ProjectAgentLinkRepositoryInput.Type;
+
+export const ProjectAgentRememberInput = Schema.Struct({
+  requestId: ProjectAgentRequestId,
+  projectId: ProjectId,
+  note: TrimmedNonEmptyString.check(Schema.isMaxLength(4_000)),
+  title: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(160))),
+});
+export type ProjectAgentRememberInput = typeof ProjectAgentRememberInput.Type;
+
+export const ProjectAgentRememberResult = Schema.Struct({
+  path: TrimmedNonEmptyString,
+  updated: Schema.Boolean,
+  deduplicated: Schema.Boolean,
+});
+export type ProjectAgentRememberResult = typeof ProjectAgentRememberResult.Type;
+
+export const ProjectAgentForgetInput = Schema.Struct({
+  requestId: ProjectAgentRequestId,
+  projectId: ProjectId,
+  path: TrimmedNonEmptyString,
+});
+export type ProjectAgentForgetInput = typeof ProjectAgentForgetInput.Type;
+
+export const ProjectAgentForgetResult = Schema.Struct({
+  deleted: Schema.Boolean,
+});
+export type ProjectAgentForgetResult = typeof ProjectAgentForgetResult.Type;
+
+export const ProjectAgentGroupThreadEntry = Schema.Struct({
+  threadId: ThreadId,
+  title: Schema.String,
+  projectId: ProjectId,
+  projectTitle: Schema.NullOr(Schema.String),
+  state: Schema.String,
+  stateLabel: Schema.String,
+  taskId: Schema.NullOr(ProjectTaskId),
+  pullRequestUrl: Schema.NullOr(Schema.String),
+  pullRequestState: Schema.NullOr(Schema.String),
+  pullRequestIsDraft: Schema.optional(Schema.Boolean),
+  updatedAt: Schema.NullOr(IsoDateTime),
+});
+export type ProjectAgentGroupThreadEntry = typeof ProjectAgentGroupThreadEntry.Type;
+
+export const ProjectAgentListThreadsInput = Schema.Struct({
+  projectId: ProjectId,
+});
+export type ProjectAgentListThreadsInput = typeof ProjectAgentListThreadsInput.Type;
+
+export const ProjectAgentListThreadsResult = Schema.Struct({
+  threads: Schema.Array(ProjectAgentGroupThreadEntry),
+});
+export type ProjectAgentListThreadsResult = typeof ProjectAgentListThreadsResult.Type;
+
+export const ProjectAgentLibraryAddInput = Schema.Struct({
+  requestId: ProjectAgentRequestId,
+  projectId: ProjectId,
+  sourcePath: TrimmedNonEmptyString.check(Schema.isMaxLength(4_096)),
+  destinationPath: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(4_096))),
+});
+export type ProjectAgentLibraryAddInput = typeof ProjectAgentLibraryAddInput.Type;
+
+export const ProjectAgentLibraryAddResult = Schema.Struct({
+  path: TrimmedNonEmptyString,
+  commitSha: Schema.String,
+});
+export type ProjectAgentLibraryAddResult = typeof ProjectAgentLibraryAddResult.Type;
+
+// One shape serves pause/resume/archive/unarchive/restart-coordinator.
+export const ProjectAgentGroupControlInput = Schema.Struct({
+  requestId: ProjectAgentRequestId,
+  projectId: ProjectId,
+});
+export type ProjectAgentGroupControlInput = typeof ProjectAgentGroupControlInput.Type;
+
+export const ProjectAgentDeleteGroupResult = Schema.Struct({
+  deletedProjectId: ProjectId,
+  libraryLeftOnDiskPath: Schema.NullOr(Schema.String),
+});
+export type ProjectAgentDeleteGroupResult = typeof ProjectAgentDeleteGroupResult.Type;
 
 export const ProjectAgentStartGoalInput = Schema.Struct({
   requestId: ProjectAgentRequestId,

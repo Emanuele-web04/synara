@@ -1,10 +1,12 @@
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   AutomationId,
+  ProjectDocumentRevisionId,
   ProjectGoalId,
   ProjectId,
   ProjectInboxEventId,
@@ -17,6 +19,7 @@ import { Effect, Layer, Option, Stream } from "effect";
 
 import { ServerConfig } from "../../config.ts";
 import { TextGeneration } from "../../git/Services/TextGeneration.ts";
+import { GitCore } from "../../git/Services/GitCore.ts";
 import { AutomationService } from "../../automation/Services/AutomationService.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -25,6 +28,11 @@ import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { ProjectAgentRepository } from "../../persistence/Services/ProjectAgentRepository.ts";
 import { ProjectionThreadRepository } from "../../persistence/Services/ProjectionThreads.ts";
 import { coordinatorWelcomeMessageId } from "../groupCoordinatorHost.ts";
+import {
+  PROJECT_BOT_HEARTBEAT_PROMPT,
+  PROJECT_BOT_PLAYBOOK,
+  PROJECT_BOT_PLAYBOOK_PATH,
+} from "../projectBotPlaybook.ts";
 import { wakeReceiptRequestId } from "../digest.ts";
 import { resolveLibraryRoot } from "../libraryStore.ts";
 import { ProjectAgentService } from "../Services/ProjectAgentService.ts";
@@ -59,8 +67,19 @@ function makeTestLayer(options?: {
       projectId: ProjectId;
       title: string;
       session: { status: string; updatedAt: string; lastError: string | null } | null;
-      latestTurn?: { state: string } | null;
+      latestTurn?: {
+        state: string;
+        startedAt?: string;
+        completedAt?: string | null;
+      } | null;
       hasPendingApprovals?: boolean;
+      hasPendingUserInput?: boolean;
+      archivedAt?: string | null;
+      lastKnownPr?: { url: string; state: string; isDraft: boolean } | null;
+      updatedAt?: string;
+      worktreePath?: string | null;
+      workingDirectory?: string | null;
+      envMode?: string;
     }
   > = {
     [groupMemberThreadId]: {
@@ -91,24 +110,33 @@ function makeTestLayer(options?: {
         runtimeMode: "full-access",
         interactionMode: "collaboration",
         branch: null,
-        worktreePath: null,
-        workingDirectory: null,
-        envMode: "local",
+        worktreePath: row.worktreePath ?? null,
+        workingDirectory: row.workingDirectory ?? null,
+        envMode: row.envMode ?? "local",
         messages: [],
         latestTurn: row.latestTurn ?? null,
         hasPendingApprovals: row.hasPendingApprovals === true,
-        archivedAt: null,
+        hasPendingUserInput: row.hasPendingUserInput === true,
+        archivedAt: row.archivedAt ?? null,
         deletedAt: null,
         settledAt: null,
         handoff: null,
         session: row.session,
+        lastKnownPr: row.lastKnownPr ?? null,
         createdAt: now,
-        updatedAt: now,
+        updatedAt: row.updatedAt ?? now,
       }),
     );
   };
   const dispatched: OrchestrationCommand[] = [];
+  const automationDefinitions: Array<{
+    readonly id: string;
+    readonly enabled: boolean;
+    readonly archivedAt: string | null;
+    readonly prompt: string;
+  }> = [];
   const automationUpdates: Array<{ readonly id: string; readonly enabled?: boolean }> = [];
+  const automationDeletes: string[] = [];
   const runNowCalls: string[] = [];
   const automationRuns: Array<{ readonly id: string }> = [];
   let failFirstImport = options?.failFirstImport === true;
@@ -200,6 +228,12 @@ function makeTestLayer(options?: {
         return Effect.succeed(Option.none());
       };
       return {
+        getActiveProjectByWorkspaceRoot: (workspaceRoot: string) =>
+          Effect.succeed(
+            workspaceRoot === path.resolve("/tmp/app")
+              ? Option.some({ id: ordinaryId, title: "App" })
+              : Option.none(),
+          ) as ReturnType<ProjectionSnapshotQuery["Service"]["getActiveProjectByWorkspaceRoot"]>,
         getProjectShellById,
         getProjectShellsByIds: (projectIds: ReadonlyArray<ProjectId>) => {
           shellBatchCalls += 1;
@@ -239,7 +273,11 @@ function makeTestLayer(options?: {
       Effect.succeed({
         id: AutomationId.makeUnsafe("automation-1"),
       }),
-    list: () => Effect.succeed({ definitions: [], runs: [] }),
+    list: () => Effect.succeed({ definitions: [...automationDefinitions], runs: [] }),
+    delete: (input: { readonly id: string }) => {
+      automationDeletes.push(String(input.id));
+      return Effect.succeed({ deleted: true });
+    },
     update: (input: { readonly id: string; readonly enabled?: boolean }) => {
       automationUpdates.push({
         id: String(input.id),
@@ -255,7 +293,9 @@ function makeTestLayer(options?: {
   } as unknown as AutomationService["Service"]);
   return {
     dispatched,
+    automationDefinitions,
     automationUpdates,
+    automationDeletes,
     runNowCalls,
     automationRuns,
     threadShells,
@@ -265,6 +305,17 @@ function makeTestLayer(options?: {
       Layer.provide(orchestrationLayer),
       Layer.provide(automationLayer),
       Layer.provide(Layer.succeed(TextGeneration, {} as unknown as TextGeneration["Service"])),
+      Layer.provide(
+        Layer.succeed(GitCore, {
+          withMutation: (_cwd: string, effect: Effect.Effect<unknown, unknown, unknown>) => effect,
+          execute: () =>
+            Effect.succeed({
+              code: 0,
+              stdout: "0123456789abcdef0123456789abcdef01234567\n",
+              stderr: "",
+            }),
+        } as unknown as (typeof GitCore)["Service"]),
+      ),
       Layer.provide(
         Layer.succeed(ProjectionThreadRepository, {
           listByProjectId: () => Effect.succeed([]),
@@ -1854,5 +1905,846 @@ it.effect("configure reuses the existing coordinator thread on retry", () => {
       harness.dispatched.filter((command) => command.type === "thread.create").length,
       1,
     );
+  }).pipe(Effect.provide(harness.layer));
+});
+
+// ---- Group tools + lifecycle (PR 13) ----
+
+const configureTestGroup = (
+  service: ProjectAgentService["Service"],
+  requestId: string,
+  overrides: {
+    readonly projectId?: ProjectId;
+    readonly libraryPath?: string;
+    readonly goal?: string;
+  } = {},
+) =>
+  service.configure(
+    {
+      requestId,
+      projectId: overrides.projectId ?? groupId,
+      coordinatorModelSelection: modelSelection,
+      ...(overrides.libraryPath === undefined ? {} : { libraryPath: overrides.libraryPath }),
+      ...(overrides.goal === undefined ? {} : { goal: overrides.goal }),
+    },
+    { kind: "user" },
+  );
+
+const coordinatorPrincipal = (coordinatorThreadId: ThreadId) =>
+  ({
+    kind: "coordinator",
+    threadId: coordinatorThreadId,
+    projectId: groupId,
+  }) as const;
+
+const memberPrincipal = (
+  threadId: ThreadId = groupMemberThreadId,
+  projectId: ProjectId = groupId,
+) => ({ kind: "group-member", threadId, projectId }) as const;
+
+const workerPrincipal = (
+  threadId: ThreadId = ThreadId.makeUnsafe("thread-worker"),
+  projectId: ProjectId = groupId,
+) =>
+  ({
+    kind: "worker",
+    threadId,
+    projectId,
+    taskId: ProjectTaskId.makeUnsafe("task-1"),
+  }) as const;
+
+it.effect("gates the new group tools by principal kind", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const overview = yield* configureTestGroup(service, "req-gate-setup");
+    const coordinatorThreadId = overview.config?.coordinatorThreadId;
+    assert.equal(coordinatorThreadId !== null && coordinatorThreadId !== undefined, true);
+    const coordinator = coordinatorPrincipal(coordinatorThreadId!);
+    const member = memberPrincipal();
+    const worker = workerPrincipal();
+    const foreignWorker = workerPrincipal(foreignThreadId, ordinaryId);
+    const unmanaged = {
+      kind: "unmanaged",
+      threadId: foreignThreadId,
+      projectId: groupId,
+    } as const;
+    const user = { kind: "user" } as const;
+
+    // user: the UI reads the library; every other new tool is forbidden.
+    const libraryRead = yield* service.libraryList({ projectId: groupId }, user);
+    assert.equal(Array.isArray(libraryRead.entries), true);
+    for (const exit of [
+      yield* Effect.exit(
+        service.remember({ requestId: "req-u-remember", projectId: groupId, note: "x" }, user),
+      ),
+      yield* Effect.exit(
+        service.forget(
+          { requestId: "req-u-forget", projectId: groupId, path: "memory/2026-01-01-x.md" },
+          user,
+        ),
+      ),
+      yield* Effect.exit(
+        service.linkRepository(
+          { requestId: "req-u-link", projectId: groupId, linkedProjectId: ordinaryId },
+          user,
+        ),
+      ),
+      yield* Effect.exit(
+        service.libraryAdd(
+          { requestId: "req-u-add", projectId: groupId, sourcePath: "a.txt" },
+          user,
+        ),
+      ),
+      yield* Effect.exit(service.listGroupThreads({ projectId: groupId }, user)),
+    ]) {
+      assert.equal(exit._tag, "Failure");
+    }
+
+    // unmanaged and foreign principals never touch the group.
+    for (const principal of [unmanaged, foreignWorker] as const) {
+      for (const exit of [
+        yield* Effect.exit(
+          service.remember(
+            { requestId: "req-f-remember", projectId: groupId, note: "x" },
+            principal,
+          ),
+        ),
+        yield* Effect.exit(
+          service.libraryAdd(
+            { requestId: "req-f-add", projectId: groupId, sourcePath: "a.txt" },
+            principal,
+          ),
+        ),
+        yield* Effect.exit(service.listGroupThreads({ projectId: groupId }, principal)),
+        yield* Effect.exit(
+          service.linkRepository(
+            { requestId: "req-f-link", projectId: groupId, linkedProjectId: ordinaryId },
+            principal,
+          ),
+        ),
+      ]) {
+        assert.equal(exit._tag, "Failure");
+      }
+    }
+
+    // group-member + worker: memory and library yes, link/list_threads no.
+    const memberMemory = yield* service.remember(
+      { requestId: "req-m-remember", projectId: groupId, note: "member note" },
+      member,
+    );
+    assert.equal(memberMemory.updated, true);
+    const workerMemory = yield* service.remember(
+      { requestId: "req-w-remember", projectId: groupId, note: "worker note" },
+      worker,
+    );
+    assert.equal(workerMemory.updated, true);
+    for (const principal of [member, worker] as const) {
+      assert.equal(
+        (yield* Effect.exit(service.listGroupThreads({ projectId: groupId }, principal)))._tag,
+        "Failure",
+      );
+      assert.equal(
+        (yield* Effect.exit(
+          service.linkRepository(
+            { requestId: "req-mw-link", projectId: groupId, linkedProjectId: ordinaryId },
+            principal,
+          ),
+        ))._tag,
+        "Failure",
+      );
+    }
+
+    // coordinator: everything.
+    const linked = yield* service.linkRepository(
+      { requestId: "req-c-link", projectId: groupId, linkedProjectId: ordinaryId },
+      coordinator,
+    );
+    assert.equal(linked.config?.linkedProjectIds?.includes(ordinaryId), true);
+    const threads = yield* service.listGroupThreads({ projectId: groupId }, coordinator);
+    assert.equal(Array.isArray(threads.threads), true);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("remember writes a dated note + MEMORY.md line and dedupes repeats", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-mem-setup");
+    const coordinator = coordinatorPrincipal(overview.config!.coordinatorThreadId!);
+    const today = new Date().toISOString().slice(0, 10);
+
+    const first = yield* service.remember(
+      {
+        requestId: "req-mem-1",
+        projectId: groupId,
+        note: "Releases go out on Tuesdays",
+        title: "Release day",
+      },
+      coordinator,
+    );
+    assert.equal(first.path, `memory/${today}-release-day.md`);
+    assert.equal(first.updated, true);
+    assert.equal(first.deduplicated, false);
+
+    const note = yield* repository.readDocumentRevision({
+      projectId: groupId,
+      logicalPath: first.path,
+    });
+    assert.equal(Option.isSome(note), true);
+    if (Option.isSome(note)) {
+      assert.equal(note.value.content.includes("Releases go out on Tuesdays"), true);
+      assert.equal(note.value.authorKind, "system");
+    }
+
+    const index = yield* repository.readDocumentRevision({
+      projectId: groupId,
+      logicalPath: "memory/MEMORY.md",
+    });
+    assert.equal(Option.isSome(index), true);
+    if (Option.isSome(index)) {
+      assert.equal(index.value.content.includes(`- [Release day](${first.path})`), true);
+    }
+
+    // A near-identical repeat refreshes the index line in place — no new file.
+    const again = yield* service.remember(
+      {
+        requestId: "req-mem-2",
+        projectId: groupId,
+        note: "releases go out on tuesdays",
+      },
+      coordinator,
+    );
+    assert.equal(again.deduplicated, true);
+    assert.equal(again.updated, false);
+    assert.equal(again.path, first.path);
+    const heads = yield* repository.listDocumentHeads(groupId);
+    assert.equal(heads.filter((head) => head.logicalPath.startsWith(`memory/${today}-`)).length, 1);
+
+    // forget removes the file and its index line.
+    const forgotten = yield* service.forget(
+      { requestId: "req-mem-3", projectId: groupId, path: first.path },
+      coordinator,
+    );
+    assert.equal(forgotten.deleted, true);
+    const gone = yield* repository.getDocumentHead(groupId, first.path);
+    assert.equal(Option.isNone(gone), true);
+    const indexAfter = yield* repository.readDocumentRevision({
+      projectId: groupId,
+      logicalPath: "memory/MEMORY.md",
+    });
+    assert.equal(Option.isSome(indexAfter), true);
+    if (Option.isSome(indexAfter)) {
+      assert.equal(indexAfter.value.content.includes(first.path), false);
+    }
+    // forget refuses non-memory paths and missing files.
+    assert.equal(
+      (yield* Effect.exit(
+        service.forget(
+          { requestId: "req-mem-4", projectId: groupId, path: "instructions.md" },
+          coordinator,
+        ),
+      ))._tag,
+      "Failure",
+    );
+    const missing = yield* service.forget(
+      { requestId: "req-mem-5", projectId: groupId, path: `memory/${today}-nope.md` },
+      coordinator,
+    );
+    assert.equal(missing.deleted, false);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("linkRepository links by project id or workspace path and records activity", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-link-setup");
+    const coordinator = coordinatorPrincipal(overview.config!.coordinatorThreadId!);
+
+    const byId = yield* service.linkRepository(
+      { requestId: "req-link-1", projectId: groupId, linkedProjectId: ordinaryId },
+      coordinator,
+    );
+    assert.equal(byId.config?.linkedProjectIds?.includes(ordinaryId), true);
+    const activity = yield* repository.listActivity({ projectId: groupId, limit: 20 });
+    assert.equal(
+      activity.some((item) => item.summary.includes("Linked repository")),
+      true,
+    );
+
+    const byPath = yield* service.linkRepository(
+      { requestId: "req-link-2", projectId: groupId, workspacePath: "/tmp/app" },
+      coordinator,
+    );
+    assert.equal(byPath.config?.linkedProjectIds?.includes(ordinaryId), true);
+
+    // Unknown workspace path, containers and self-linking are rejected.
+    for (const input of [
+      { requestId: "req-link-3", projectId: groupId, workspacePath: "/tmp/nothing" },
+      { requestId: "req-link-4", projectId: groupId, linkedProjectId: groupId },
+      { requestId: "req-link-5", projectId: groupId, linkedProjectId: groupId2 },
+      { requestId: "req-link-6", projectId: groupId, linkedProjectId: studioId },
+    ]) {
+      assert.equal(
+        (yield* Effect.exit(service.linkRepository(input, coordinator)))._tag,
+        "Failure",
+      );
+    }
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("libraryAdd copies in-workspace files and rejects escapes", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const serverConfig = yield* ServerConfig;
+    const overview = yield* configureTestGroup(service, "req-lib-setup");
+    const coordinator = coordinatorPrincipal(overview.config!.coordinatorThreadId!);
+
+    // The group folder is the coordinator's workspace; the member thread gets
+    // its own working directory — both under the tmp state dir, never the
+    // real ~/Documents/Synara workspace roots.
+    const groupFolder = path.join(serverConfig.stateDir, "group-folder");
+    const memberWorkspace = path.join(serverConfig.stateDir, "member-workspace");
+    yield* Effect.promise(() => fs.mkdir(path.join(groupFolder, "docs"), { recursive: true }));
+    yield* Effect.promise(() => fs.mkdir(memberWorkspace, { recursive: true }));
+    yield* Effect.promise(() =>
+      fs.writeFile(path.join(memberWorkspace, "report.txt"), "quarterly report"),
+    );
+    harness.threadShells[groupMemberThreadId] = {
+      projectId: groupId,
+      title: "Group member chat",
+      session: { status: "ready", updatedAt: now, lastError: null },
+      workingDirectory: memberWorkspace,
+    };
+    harness.threadShells[overview.config!.coordinatorThreadId!] = {
+      projectId: groupId,
+      title: "Coordinator",
+      session: null,
+      workingDirectory: groupFolder,
+    };
+    const libraryRoot = yield* resolveLibraryRoot({
+      stateDir: serverConfig.stateDir,
+      projectId: groupId,
+    });
+
+    // member thread delivers a file from its own workspace.
+    const added = yield* service.libraryAdd(
+      {
+        requestId: "req-lib-add-1",
+        projectId: groupId,
+        sourcePath: "report.txt",
+      },
+      memberPrincipal(),
+    );
+    assert.equal(added.path, "report.txt");
+    assert.equal(added.commitSha, "0123456789abcdef0123456789abcdef01234567");
+    const copied = yield* Effect.promise(() =>
+      fs.readFile(path.join(libraryRoot, "report.txt"), "utf8"),
+    );
+    assert.equal(copied, "quarterly report");
+    const listed = yield* service.libraryList({ projectId: groupId }, memberPrincipal());
+    assert.equal(
+      listed.entries.some((entry) => entry.name === "report.txt"),
+      true,
+    );
+
+    // coordinator can deliver from the group folder too.
+    yield* Effect.promise(() => fs.writeFile(path.join(groupFolder, "plan.md"), "plan"));
+    const coordinatorAdd = yield* service.libraryAdd(
+      {
+        requestId: "req-lib-add-2",
+        projectId: groupId,
+        sourcePath: "plan.md",
+        destinationPath: "notes/plan.md",
+      },
+      coordinator,
+    );
+    assert.equal(coordinatorAdd.path, "notes/plan.md");
+
+    // A symlink inside the workspace that points outside it is rejected.
+    const outsideFile = path.join(serverConfig.stateDir, "outside.txt");
+    yield* Effect.promise(() => fs.writeFile(outsideFile, "secret"));
+    yield* Effect.promise(() => fs.symlink(outsideFile, path.join(memberWorkspace, "escape.txt")));
+    assert.equal(
+      (yield* Effect.exit(
+        service.libraryAdd(
+          { requestId: "req-lib-add-3", projectId: groupId, sourcePath: "escape.txt" },
+          memberPrincipal(),
+        ),
+      ))._tag,
+      "Failure",
+    );
+
+    // Absolute paths outside the workspace and .git destinations are refused.
+    assert.equal(
+      (yield* Effect.exit(
+        service.libraryAdd(
+          {
+            requestId: "req-lib-add-4",
+            projectId: groupId,
+            sourcePath: outsideFile,
+          },
+          memberPrincipal(),
+        ),
+      ))._tag,
+      "Failure",
+    );
+    assert.equal(
+      (yield* Effect.exit(
+        service.libraryAdd(
+          {
+            requestId: "req-lib-add-5",
+            projectId: groupId,
+            sourcePath: "report.txt",
+            destinationPath: ".git/config",
+          },
+          memberPrincipal(),
+        ),
+      ))._tag,
+      "Failure",
+    );
+
+    // A thread from another group cannot reach this group's library.
+    assert.equal(
+      (yield* Effect.exit(
+        service.libraryAdd(
+          {
+            requestId: "req-lib-add-6",
+            projectId: groupId,
+            sourcePath: "report.txt",
+          },
+          memberPrincipal(group2MemberThreadId, groupId2),
+        ),
+      ))._tag,
+      "Failure",
+    );
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("listGroupThreads reports derived states to the coordinator", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-threads-setup");
+    const coordinator = coordinatorPrincipal(overview.config!.coordinatorThreadId!);
+
+    const runningThread = ThreadId.makeUnsafe("thread-running");
+    const approvalThread = ThreadId.makeUnsafe("thread-approval");
+    const prThread = ThreadId.makeUnsafe("thread-pr");
+    for (const threadId of [runningThread, approvalThread, prThread]) {
+      yield* repository.upsertThreadIndex({
+        projectId: groupId,
+        threadId,
+        excluded: false,
+        archived: false,
+        summaryStatus: "pending",
+        lastUpdatedAt: now,
+        lastSummarizedAt: null,
+      });
+    }
+    harness.threadShells[runningThread] = {
+      projectId: groupId,
+      title: "Runner",
+      session: { status: "running", updatedAt: now, lastError: null },
+      latestTurn: { state: "running", startedAt: now },
+    };
+    harness.threadShells[approvalThread] = {
+      projectId: groupId,
+      title: "Needs approval",
+      session: { status: "ready", updatedAt: now, lastError: null },
+      hasPendingApprovals: true,
+    };
+    harness.threadShells[prThread] = {
+      projectId: groupId,
+      title: "Opened a PR",
+      session: { status: "ready", updatedAt: now, lastError: null },
+      lastKnownPr: {
+        url: "https://github.com/diliprt/synara/pull/7",
+        state: "open",
+        isDraft: false,
+      },
+    };
+
+    const result = yield* service.listGroupThreads({ projectId: groupId }, coordinator);
+    const byThread = new Map(result.threads.map((row) => [row.threadId, row]));
+    assert.equal(byThread.get(runningThread)?.state, "working");
+    assert.equal(byThread.get(approvalThread)?.state, "waiting");
+    assert.equal(byThread.get(prThread)?.state, "review");
+    assert.equal(
+      byThread.get(prThread)?.pullRequestUrl,
+      "https://github.com/diliprt/synara/pull/7",
+    );
+    assert.equal(byThread.get(prThread)?.projectTitle, "Alpha");
+    // waiting sorts ahead of working ahead of review.
+    const states = result.threads.map((row) => row.state);
+    assert.deepEqual(states, ["waiting", "working", "review"]);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("pause interrupts turns, blocks wakes, disables automations; resume restores", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-pause-setup");
+    const coordinator = coordinatorPrincipal(overview.config!.coordinatorThreadId!);
+    const automationId = AutomationId.makeUnsafe("automation-1");
+    harness.automationDefinitions.push(
+      { id: automationId, enabled: true, archivedAt: null, prompt: PROJECT_BOT_HEARTBEAT_PROMPT },
+      {
+        id: AutomationId.makeUnsafe("automation-2"),
+        enabled: false,
+        archivedAt: null,
+        prompt: "x",
+      },
+    );
+    yield* repository.upsertThreadIndex({
+      projectId: groupId,
+      threadId: groupMemberThreadId,
+      excluded: false,
+      archived: false,
+      summaryStatus: "pending",
+      lastUpdatedAt: now,
+      lastSummarizedAt: null,
+    });
+    harness.threadShells[groupMemberThreadId] = {
+      projectId: groupId,
+      title: "Group member chat",
+      session: { status: "running", updatedAt: now, lastError: null },
+      latestTurn: { state: "running", startedAt: now },
+    };
+
+    // Only the user can pause.
+    assert.equal(
+      (yield* Effect.exit(
+        service.pauseGroup({ requestId: "req-pause-x", projectId: groupId }, coordinator),
+      ))._tag,
+      "Failure",
+    );
+    const paused = yield* service.pauseGroup(
+      { requestId: "req-pause-1", projectId: groupId },
+      { kind: "user" },
+    );
+    assert.equal(paused.config?.pausedAt !== null && paused.config?.pausedAt !== undefined, true);
+    const interrupts = harness.dispatched.filter(
+      (command) => command.type === "thread.turn.interrupt",
+    );
+    assert.equal(
+      interrupts.some((command) => command.threadId === groupMemberThreadId),
+      true,
+    );
+    // Only the previously-enabled automation was disabled.
+    assert.equal(
+      harness.automationUpdates.some(
+        (update) => update.id === automationId && update.enabled === false,
+      ),
+      true,
+    );
+    assert.equal(
+      harness.automationUpdates.some((update) => update.id === "automation-2"),
+      false,
+    );
+
+    // A queued wake stays queued while paused.
+    yield* repository.insertInboxEvent({
+      id: ProjectInboxEventId.makeUnsafe("inbox-paused"),
+      projectId: groupId,
+      sourceThreadId: groupMemberThreadId,
+      sourceEventId: "paused-alert",
+      eventType: "worker.error",
+      taskId: null,
+      eligibleWake: true,
+      createdAt: "2026-09-20T00:07:00.000Z",
+    });
+    yield* service.processPendingWakes(groupId);
+    assert.equal(harness.runNowCalls.length, 0);
+
+    const resumed = yield* service.resumeGroup(
+      { requestId: "req-resume-1", projectId: groupId },
+      { kind: "user" },
+    );
+    assert.equal(resumed.config?.pausedAt ?? null, null);
+    assert.equal(
+      harness.automationUpdates.some(
+        (update) => update.id === automationId && update.enabled === true,
+      ),
+      true,
+    );
+    // resume re-drives the pending wake.
+    assert.equal(harness.runNowCalls.length, 1);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("archive hides the group and unarchive restores it", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-archive-setup");
+    const coordinator = coordinatorPrincipal(overview.config!.coordinatorThreadId!);
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const automationId = AutomationId.makeUnsafe("automation-1");
+    harness.automationDefinitions.push({
+      id: automationId,
+      enabled: true,
+      archivedAt: null,
+      prompt: PROJECT_BOT_HEARTBEAT_PROMPT,
+    });
+    yield* repository.upsertThreadIndex({
+      projectId: groupId,
+      threadId: groupMemberThreadId,
+      excluded: false,
+      archived: false,
+      summaryStatus: "pending",
+      lastUpdatedAt: now,
+      lastSummarizedAt: null,
+    });
+
+    assert.equal(
+      (yield* Effect.exit(
+        service.archiveGroup({ requestId: "req-arch-x", projectId: groupId }, coordinator),
+      ))._tag,
+      "Failure",
+    );
+    const archived = yield* service.archiveGroup(
+      { requestId: "req-arch-1", projectId: groupId },
+      { kind: "user" },
+    );
+    assert.equal(
+      archived.config?.archivedAt !== null && archived.config?.archivedAt !== undefined,
+      true,
+    );
+    const archiveCommands = harness.dispatched
+      .filter((command) => command.type === "thread.archive")
+      .map((command) => command.threadId);
+    assert.equal(archiveCommands.includes(coordinatorThreadId), true);
+    assert.equal(archiveCommands.includes(groupMemberThreadId), true);
+    assert.equal(
+      harness.automationUpdates.some(
+        (update) => update.id === automationId && update.enabled === false,
+      ),
+      true,
+    );
+
+    harness.threadShells[groupMemberThreadId] = {
+      ...harness.threadShells[groupMemberThreadId]!,
+      archivedAt: now,
+    };
+    const restored = yield* service.unarchiveGroup(
+      { requestId: "req-unarch-1", projectId: groupId },
+      { kind: "user" },
+    );
+    assert.equal(restored.config?.archivedAt ?? null, null);
+    const unarchiveCommands = harness.dispatched
+      .filter((command) => command.type === "thread.unarchive")
+      .map((command) => command.threadId);
+    assert.equal(unarchiveCommands.includes(coordinatorThreadId), true);
+    assert.equal(unarchiveCommands.includes(groupMemberThreadId), true);
+    assert.equal(
+      harness.automationUpdates.some(
+        (update) => update.id === automationId && update.enabled === true,
+      ),
+      true,
+    );
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("delete removes group data, trashes the library, leaves linked repos", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const serverConfig = yield* ServerConfig;
+    const customLibrary = path.join(serverConfig.stateDir, "group-library-custom");
+    yield* Effect.promise(() => fs.mkdir(customLibrary, { recursive: true }));
+    const overview = yield* configureTestGroup(service, "req-del-setup", {
+      libraryPath: customLibrary,
+    });
+    const coordinator = coordinatorPrincipal(overview.config!.coordinatorThreadId!);
+    // Listing initializes the Synara marker so the custom root counts as
+    // managed — a markerless non-empty folder is never treated as a library.
+    yield* service.libraryList({ projectId: groupId }, { kind: "user" });
+    yield* Effect.promise(() => fs.writeFile(path.join(customLibrary, "seed.txt"), "keep me"));
+    harness.automationDefinitions.push({
+      id: "automation-1",
+      enabled: true,
+      archivedAt: null,
+      prompt: PROJECT_BOT_HEARTBEAT_PROMPT,
+    });
+
+    yield* service.linkRepository(
+      { requestId: "req-del-link", projectId: groupId, linkedProjectId: ordinaryId },
+      coordinator,
+    );
+
+    assert.equal(
+      (yield* Effect.exit(
+        service.deleteGroup({ requestId: "req-del-x", projectId: groupId }, coordinator),
+      ))._tag,
+      "Failure",
+    );
+    const result = yield* service.deleteGroup(
+      { requestId: "req-del-1", projectId: groupId },
+      { kind: "user" },
+    );
+    assert.equal(result.deletedProjectId, groupId);
+
+    // The group's coordinator data is gone; linked repos are untouched.
+    const config = yield* repository.getConfig(groupId);
+    assert.equal(Option.isNone(config), true);
+    const deletes = harness.dispatched.filter((command) => command.type === "project.delete");
+    assert.equal(deletes.length, 1);
+    assert.equal(deletes[0]!.projectId, groupId);
+    assert.equal(
+      harness.dispatched.some(
+        (command) => command.type === "project.delete" && command.projectId === ordinaryId,
+      ),
+      false,
+    );
+    assert.equal(harness.automationDeletes.includes("automation-1"), true);
+
+    // The custom library path is never rm -rf'd: it is either moved to the OS
+    // trash intact, or left on disk with the path reported.
+    const stillThere = yield* Effect.promise(() =>
+      fs
+        .access(customLibrary)
+        .then(() => true)
+        .catch(() => false),
+    );
+    if (stillThere) {
+      assert.equal(result.libraryLeftOnDiskPath, customLibrary);
+      const seed = yield* Effect.promise(() =>
+        fs.readFile(path.join(customLibrary, "seed.txt"), "utf8"),
+      );
+      assert.equal(seed, "keep me");
+    } else {
+      const platform = os.platform();
+      const trashDir =
+        platform === "darwin"
+          ? path.join(os.homedir(), ".Trash")
+          : path.join(os.homedir(), ".local", "share", "Trash", "files");
+      const moved = yield* Effect.promise(() =>
+        fs
+          .readdir(trashDir)
+          .then((names) => names.filter((name) => name.startsWith("group-library-custom-"))),
+      );
+      assert.equal(moved.length > 0, true);
+      const seed = yield* Effect.promise(() =>
+        fs.readFile(path.join(trashDir, moved[0]!, "seed.txt"), "utf8"),
+      );
+      assert.equal(seed, "keep me");
+    }
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("restartCoordinator stops the provider session and re-fires the heartbeat", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const overview = yield* configureTestGroup(service, "req-restart-setup");
+    const coordinator = coordinatorPrincipal(overview.config!.coordinatorThreadId!);
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+
+    assert.equal(
+      (yield* Effect.exit(
+        service.restartCoordinator({ requestId: "req-restart-x", projectId: groupId }, coordinator),
+      ))._tag,
+      "Failure",
+    );
+    yield* service.restartCoordinator(
+      { requestId: "req-restart-1", projectId: groupId },
+      { kind: "user" },
+    );
+    const stops = harness.dispatched.filter((command) => command.type === "thread.session.stop");
+    assert.equal(stops.length, 1);
+    assert.equal(stops[0]!.threadId, coordinatorThreadId);
+    assert.equal(harness.runNowCalls.length, 1);
+
+    // A paused group refuses the restart until it is resumed.
+    yield* service.pauseGroup(
+      { requestId: "req-restart-pause", projectId: groupId },
+      { kind: "user" },
+    );
+    assert.equal(
+      (yield* Effect.exit(
+        service.restartCoordinator(
+          { requestId: "req-restart-2", projectId: groupId },
+          { kind: "user" },
+        ),
+      ))._tag,
+      "Failure",
+    );
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("upgrades a stock playbook but never a user-edited one", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-playbook-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+
+    // Seed already wrote the current default — simulate the previous default
+    // with a system-authored revision that predates this playbook.
+    yield* repository.writeDocument({
+      revision: {
+        id: ProjectDocumentRevisionId.makeUnsafe("doc-old-default"),
+        projectId: groupId,
+        logicalPath: PROJECT_BOT_PLAYBOOK_PATH,
+        revision: 2,
+        content: "# Old default playbook\n\nFollow the project rules.\n",
+        contentHash: "old-default-hash",
+        authorKind: "system",
+        authorThreadId: null,
+        sources: [],
+        createdAt: now,
+      },
+      expectedRevision: 1,
+      diskHash: "old-default-hash",
+    });
+    yield* service.formatContextPacketForTurn(coordinatorThreadId);
+    const upgraded = yield* repository.readDocumentRevision({
+      projectId: groupId,
+      logicalPath: PROJECT_BOT_PLAYBOOK_PATH,
+    });
+    assert.equal(Option.isSome(upgraded), true);
+    if (Option.isSome(upgraded)) {
+      assert.equal(upgraded.value.content, PROJECT_BOT_PLAYBOOK);
+    }
+
+    // A user-authored playbook is left alone.
+    const head = yield* repository.getDocumentHead(groupId, PROJECT_BOT_PLAYBOOK_PATH);
+    const userRevision = (Option.isSome(head) ? head.value.revision : 2) + 1;
+    yield* repository.writeDocument({
+      revision: {
+        id: ProjectDocumentRevisionId.makeUnsafe("doc-user-edit"),
+        projectId: groupId,
+        logicalPath: PROJECT_BOT_PLAYBOOK_PATH,
+        revision: userRevision,
+        content: "# My custom coordinator rules\n",
+        contentHash: "user-edit-hash",
+        authorKind: "user",
+        authorThreadId: null,
+        sources: [],
+        createdAt: now,
+      },
+      expectedRevision: userRevision - 1,
+      diskHash: "user-edit-hash",
+    });
+    yield* service.formatContextPacketForTurn(coordinatorThreadId);
+    const kept = yield* repository.readDocumentRevision({
+      projectId: groupId,
+      logicalPath: PROJECT_BOT_PLAYBOOK_PATH,
+    });
+    assert.equal(Option.isSome(kept), true);
+    if (Option.isSome(kept)) {
+      assert.equal(kept.value.content, "# My custom coordinator rules\n");
+    }
   }).pipe(Effect.provide(harness.layer));
 });

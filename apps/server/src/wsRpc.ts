@@ -2280,6 +2280,60 @@ const makeWsRpcHandlersLayer = () =>
             projectAgentService.unlinkProject(input, { kind: "user" }),
             "Failed to unlink repository",
           ),
+        [WS_METHODS.projectAgentPauseGroup]: (input) =>
+          requireWsOwnerSession.pipe(
+            Effect.andThen(
+              rpcEffect(
+                projectAgentService.pauseGroup(input, { kind: "user" }),
+                "Failed to pause group",
+              ),
+            ),
+          ),
+        [WS_METHODS.projectAgentResumeGroup]: (input) =>
+          requireWsOwnerSession.pipe(
+            Effect.andThen(
+              rpcEffect(
+                projectAgentService.resumeGroup(input, { kind: "user" }),
+                "Failed to resume group",
+              ),
+            ),
+          ),
+        [WS_METHODS.projectAgentArchiveGroup]: (input) =>
+          requireWsOwnerSession.pipe(
+            Effect.andThen(
+              rpcEffect(
+                projectAgentService.archiveGroup(input, { kind: "user" }),
+                "Failed to archive group",
+              ),
+            ),
+          ),
+        [WS_METHODS.projectAgentUnarchiveGroup]: (input) =>
+          requireWsOwnerSession.pipe(
+            Effect.andThen(
+              rpcEffect(
+                projectAgentService.unarchiveGroup(input, { kind: "user" }),
+                "Failed to unarchive group",
+              ),
+            ),
+          ),
+        [WS_METHODS.projectAgentRestartCoordinator]: (input) =>
+          requireWsOwnerSession.pipe(
+            Effect.andThen(
+              rpcEffect(
+                projectAgentService.restartCoordinator(input, { kind: "user" }),
+                "Failed to restart coordinator",
+              ),
+            ),
+          ),
+        [WS_METHODS.projectAgentDeleteGroup]: (input) =>
+          requireWsOwnerSession.pipe(
+            Effect.andThen(
+              rpcEffect(
+                projectAgentService.deleteGroup(input, { kind: "user" }),
+                "Failed to delete group",
+              ),
+            ),
+          ),
         [WS_METHODS.projectAgentStartGoal]: (input) =>
           rpcEffect(
             projectAgentService.startGoal(input, { kind: "user" }),

@@ -1,4 +1,6 @@
 import {
+  AutomationId,
+  IsoDateTime,
   ProjectActivity,
   ProjectAgentConfig,
   ProjectAgentLimits,
@@ -59,6 +61,9 @@ const ConfigRow = Schema.Struct({
   libraryPath: Schema.NullOr(Schema.String),
   libraryRemoteUrl: Schema.NullOr(Schema.String),
   libraryPushOnChange: Schema.Number,
+  pausedAt: Schema.NullOr(IsoDateTime),
+  archivedAt: Schema.NullOr(IsoDateTime),
+  pausedAutomationIds: Schema.NullOr(Schema.fromJsonString(Schema.Array(AutomationId))),
 });
 
 const GoalRow = Schema.Struct({
@@ -109,6 +114,8 @@ const SummaryRow = Schema.Struct({
   coordinatorColor: Schema.NullOr(Schema.String),
   revision: ProjectAgentConfig.fields.revision,
   goalStatus: Schema.NullOr(ProjectGoalStatus),
+  pausedAt: Schema.NullOr(IsoDateTime),
+  archivedAt: Schema.NullOr(IsoDateTime),
 });
 
 function toConfig(row: typeof ConfigRow.Type): ProjectAgentConfig {
@@ -143,6 +150,9 @@ function toConfig(row: typeof ConfigRow.Type): ProjectAgentConfig {
       ? { libraryRemoteUrl: row.libraryRemoteUrl }
       : {}),
     libraryPushOnChange: row.libraryPushOnChange === 1,
+    pausedAt: row.pausedAt,
+    archivedAt: row.archivedAt,
+    pausedAutomationIds: row.pausedAutomationIds ?? [],
   };
 }
 
@@ -179,7 +189,10 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         auto_memory_enabled AS "autoMemoryEnabled",
         library_path AS "libraryPath",
         library_remote_url AS "libraryRemoteUrl",
-        library_push_on_change AS "libraryPushOnChange"
+        library_push_on_change AS "libraryPushOnChange",
+        paused_at AS "pausedAt",
+        archived_at AS "archivedAt",
+        paused_automation_ids AS "pausedAutomationIds"
       FROM project_agent_configs
       WHERE project_id = ${projectId}
     `,
@@ -211,7 +224,10 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         auto_memory_enabled AS "autoMemoryEnabled",
         library_path AS "libraryPath",
         library_remote_url AS "libraryRemoteUrl",
-        library_push_on_change AS "libraryPushOnChange"
+        library_push_on_change AS "libraryPushOnChange",
+        paused_at AS "pausedAt",
+        archived_at AS "archivedAt",
+        paused_automation_ids AS "pausedAutomationIds"
       FROM project_agent_configs
       WHERE coordinator_thread_id = ${threadId}
     `,
@@ -226,7 +242,8 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         worker_routing_json, limits_json, capture_enabled, enabled, automation_id,
         revision, created_at, updated_at, disabled_at, goal, icon, auto_memory_enabled,
         coordinator_icon, coordinator_color,
-        library_path, library_remote_url, library_push_on_change
+        library_path, library_remote_url, library_push_on_change,
+        paused_at, archived_at, paused_automation_ids
       ) VALUES (
         ${row.projectId}, ${row.coordinatorThreadId}, ${row.coordinatorName},
         ${row.coordinatorModelSelection}, ${row.coordinatorProviderOptions},
@@ -234,7 +251,8 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         ${row.automationId}, ${row.revision}, ${row.createdAt}, ${row.updatedAt}, ${row.disabledAt},
         ${row.goal}, ${row.icon}, ${row.autoMemoryEnabled},
         ${row.coordinatorIcon}, ${row.coordinatorColor},
-        ${row.libraryPath}, ${row.libraryRemoteUrl}, ${row.libraryPushOnChange}
+        ${row.libraryPath}, ${row.libraryRemoteUrl}, ${row.libraryPushOnChange},
+        ${row.pausedAt}, ${row.archivedAt}, ${row.pausedAutomationIds}
       )
     `,
   });
@@ -263,7 +281,10 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         auto_memory_enabled = ${row.autoMemoryEnabled},
         library_path = ${row.libraryPath},
         library_remote_url = ${row.libraryRemoteUrl},
-        library_push_on_change = ${row.libraryPushOnChange}
+        library_push_on_change = ${row.libraryPushOnChange},
+        paused_at = ${row.pausedAt},
+        archived_at = ${row.archivedAt},
+        paused_automation_ids = ${row.pausedAutomationIds}
       WHERE project_id = ${row.projectId} AND revision = ${expectedRevision}
       RETURNING 1 AS changed
     `,
@@ -494,6 +515,9 @@ const makeProjectAgentRepository = Effect.gen(function* () {
     libraryPath: config.libraryPath ?? null,
     libraryRemoteUrl: config.libraryRemoteUrl ?? null,
     libraryPushOnChange: config.libraryPushOnChange ? 1 : 0,
+    pausedAt: config.pausedAt ?? null,
+    archivedAt: config.archivedAt ?? null,
+    pausedAutomationIds: config.pausedAutomationIds ?? [],
   });
 
   const revisionMismatch = (operation: string) =>
@@ -541,7 +565,10 @@ const makeProjectAgentRepository = Effect.gen(function* () {
             auto_memory_enabled AS "autoMemoryEnabled",
             library_path AS "libraryPath",
             library_remote_url AS "libraryRemoteUrl",
-            library_push_on_change AS "libraryPushOnChange"
+            library_push_on_change AS "libraryPushOnChange",
+            paused_at AS "pausedAt",
+            archived_at AS "archivedAt",
+            paused_automation_ids AS "pausedAutomationIds"
           FROM project_agent_configs
         `,
       })({}).pipe(
@@ -562,6 +589,8 @@ const makeProjectAgentRepository = Effect.gen(function* () {
             c.coordinator_icon AS "coordinatorIcon",
             c.coordinator_color AS "coordinatorColor",
             c.revision AS "revision",
+            c.paused_at AS "pausedAt",
+            c.archived_at AS "archivedAt",
             g.status AS "goalStatus"
           FROM project_agent_configs c
           LEFT JOIN project_agent_goals g
@@ -579,6 +608,8 @@ const makeProjectAgentRepository = Effect.gen(function* () {
               coordinatorColor: row.coordinatorColor,
               revision: row.revision,
               goalStatus: row.goalStatus,
+              pausedAt: row.pausedAt,
+              archivedAt: row.archivedAt,
             })),
         ),
         Effect.mapError(
@@ -1013,6 +1044,54 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         Effect.asVoid,
         Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.markDocumentDiskSynced")),
       ),
+    deleteDocument: (input) =>
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            yield* sql`
+              DELETE FROM project_agent_documents
+              WHERE project_id = ${input.projectId} AND logical_path = ${input.logicalPath}
+            `;
+            yield* sql`
+              DELETE FROM project_agent_document_heads
+              WHERE project_id = ${input.projectId} AND logical_path = ${input.logicalPath}
+            `;
+          }),
+        )
+        .pipe(Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.deleteDocument"))),
+    deleteProjectData: (projectId) =>
+      sql
+        .withTransaction(
+          Effect.forEach(
+            [
+              "project_agent_configs",
+              "project_agent_goals",
+              "project_agent_tasks",
+              "project_agent_task_dependencies",
+              "project_agent_task_attempts",
+              "project_agent_evidence",
+              "project_agent_documents",
+              "project_agent_document_heads",
+              "project_agent_activity",
+              "project_agent_digests",
+              "project_agent_event_inbox",
+              "project_agent_cursors",
+              "project_agent_thread_index",
+              "project_agent_linked_projects",
+              "project_agent_receipts",
+            ] as const,
+            (table) =>
+              sql
+                .unsafe(`DELETE FROM ${table} WHERE project_id = ?`, [projectId])
+                .pipe(
+                  Effect.mapError(
+                    toPersistenceSqlError(`ProjectAgentRepository.deleteProjectData:${table}`),
+                  ),
+                ),
+            { discard: true },
+          ),
+        )
+        .pipe(Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.deleteProjectData"))),
     readDocumentRevisions: (input) =>
       (input.logicalPaths.length === 0
         ? Effect.succeed<ReadonlyArray<Record<string, unknown>>>([])

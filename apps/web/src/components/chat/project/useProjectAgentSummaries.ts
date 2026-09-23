@@ -29,6 +29,8 @@ function summaryFromOverview(overview: ProjectAgentOverview): ProjectAgentSummar
     coordinatorColor: overview.config?.coordinatorColor ?? null,
     coordinatorStatus: overview.coordinatorStatus,
     revision: overview.config?.revision ?? 0,
+    pausedAt: overview.config?.pausedAt ?? null,
+    archivedAt: overview.config?.archivedAt ?? null,
   };
 }
 
@@ -76,6 +78,8 @@ export const useProjectAgentSummariesStore = create<ProjectAgentSummariesState>(
               ? previous.coordinatorStatus
               : "idle",
           revision: event.config.revision,
+          pausedAt: event.config.pausedAt ?? null,
+          archivedAt: event.config.archivedAt ?? null,
         });
         return { summariesByProjectId: next, loaded: true };
       }
@@ -85,6 +89,8 @@ export const useProjectAgentSummariesStore = create<ProjectAgentSummariesState>(
         const next = new Map(current.summariesByProjectId);
         next.set(event.goal.projectId, {
           ...previous,
+          pausedAt: previous.pausedAt ?? null,
+          archivedAt: previous.archivedAt ?? null,
           coordinatorStatus:
             event.goal.status === "paused"
               ? "paused"

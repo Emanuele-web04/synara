@@ -54,6 +54,8 @@ import type {
   ProjectAgentExportDocumentsInput,
   ProjectAgentExportDocumentsResult,
   ProjectAgentGetOverviewInput,
+  ProjectAgentGroupControlInput,
+  ProjectAgentDeleteGroupResult,
   ProjectAgentListSummariesInput,
   ProjectAgentListSummariesResult,
   ProjectAgentGoalControlInput,
@@ -1147,6 +1149,12 @@ export interface NativeApi {
       input: ProjectAgentExportDocumentsInput,
     ) => Promise<ProjectAgentExportDocumentsResult>;
     refreshDigest: (input: ProjectAgentRefreshDigestInput) => Promise<ProjectAgentOverview>;
+    pauseGroup: (input: ProjectAgentGroupControlInput) => Promise<ProjectAgentOverview>;
+    resumeGroup: (input: ProjectAgentGroupControlInput) => Promise<ProjectAgentOverview>;
+    archiveGroup: (input: ProjectAgentGroupControlInput) => Promise<ProjectAgentOverview>;
+    unarchiveGroup: (input: ProjectAgentGroupControlInput) => Promise<ProjectAgentOverview>;
+    restartCoordinator: (input: ProjectAgentGroupControlInput) => Promise<ProjectAgentOverview>;
+    deleteGroup: (input: ProjectAgentGroupControlInput) => Promise<ProjectAgentDeleteGroupResult>;
     library: {
       list: (input: ProjectAgentLibraryListInput) => Promise<ProjectAgentLibraryListResult>;
       mkdir: (input: ProjectAgentLibraryMkdirInput) => Promise<ProjectAgentLibraryMutationResult>;

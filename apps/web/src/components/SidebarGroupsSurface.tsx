@@ -34,7 +34,10 @@ import {
   createGroupNeedsAttentionSelector,
   type GroupNeedsAttentionGroup,
 } from "./chat/project/groupOverview.logic";
-import { useProjectAgentSummaries } from "./chat/project/useProjectAgentSummaries";
+import {
+  useProjectAgentSummaries,
+  useProjectAgentSummariesStore,
+} from "./chat/project/useProjectAgentSummaries";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
 import {
   SidebarGroup,
@@ -130,6 +133,25 @@ export function SidebarGroupsSurface({
     (store) => store.toggleProjectAgentPinned,
   );
   const [newGroupDialogOpen, setNewGroupDialogOpen] = useState(false);
+  const [archivedGroupsOpen, setArchivedGroupsOpen] = useState(false);
+
+  const activeGroups = groupProjects.filter(
+    (project) => summariesByProjectId.get(project.id)?.archivedAt == null,
+  );
+  const archivedGroups = groupProjects.filter(
+    (project) => summariesByProjectId.get(project.id)?.archivedAt != null,
+  );
+
+  const unarchiveGroup = async (projectId: ProjectId) => {
+    const api = readNativeApi();
+    if (!api?.projectAgent) return;
+    const overview = await api.projectAgent
+      .unarchiveGroup({ requestId: crypto.randomUUID(), projectId })
+      .catch(() => null);
+    if (overview) {
+      useProjectAgentSummariesStore.getState().applyOverview(overview);
+    }
+  };
 
   // Adopt the pre-Groups Studio container in place: retitle it "Groups" once so its
   // existing chats stay under it. Idempotent — the row stops matching once renamed.
@@ -243,8 +265,8 @@ export function SidebarGroupsSurface({
           />,
         )}
         <SidebarMenu className="gap-1">
-          {groupProjects.length > 0 ? (
-            groupProjects.map((project) => {
+          {activeGroups.length > 0 ? (
+            activeGroups.map((project) => {
               const projectSidebarData = projectSidebarDataById.get(project.id);
               const coordinatorSummary = summariesByProjectId.get(project.id) ?? null;
               const coordinatorConfigured = coordinatorSummary?.configured === true;
@@ -437,6 +459,81 @@ export function SidebarGroupsSurface({
             </div>
           )}
         </SidebarMenu>
+        {archivedGroups.length > 0 ? (
+          <div className="group/archived-collapsible pt-1">
+            <SidebarMenuButton
+              size="sm"
+              className={cn(
+                SIDEBAR_HEADER_ROW_CLASS_NAME,
+                "cursor-pointer hover:bg-[var(--sidebar-accent)]",
+              )}
+              aria-expanded={archivedGroupsOpen}
+              onClick={() => setArchivedGroupsOpen((open) => !open)}
+            >
+              <DisclosureChevron
+                open={archivedGroupsOpen}
+                className="size-3 shrink-0 text-muted-foreground/70"
+              />
+              <span
+                className={cn(
+                  "min-w-0 flex-1 truncate font-system-ui text-ui font-normal text-muted-foreground",
+                  SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
+                )}
+              >
+                Archived groups
+              </span>
+            </SidebarMenuButton>
+            <DisclosureRegion open={archivedGroupsOpen} className="pt-0.5">
+              <SidebarMenuSub
+                className={cn(
+                  "mx-0 my-0 w-full translate-x-0 border-l-0 px-0 py-0",
+                  SIDEBAR_NESTED_LIST_GAP_CLASS_NAME,
+                )}
+              >
+                {archivedGroups.map((project) => (
+                  <SidebarMenuSubItem
+                    key={project.id}
+                    className="group/archived-row relative w-full"
+                  >
+                    <SidebarMenuSubButton
+                      render={<div role="button" tabIndex={0} />}
+                      size="sm"
+                      className={cn("text-muted-foreground", SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME)}
+                      aria-label={`Archived group ${resolveSidebarProjectRowLabel(project)}`}
+                      onContextMenu={(event) => {
+                        event.preventDefault();
+                        onProjectContextMenu(project.id, {
+                          x: event.clientX,
+                          y: event.clientY,
+                        });
+                      }}
+                    >
+                      <FolderOpenIcon className="size-3.5 shrink-0" />
+                      <span className="min-w-0 flex-1 truncate">
+                        {resolveSidebarProjectRowLabel(project)}
+                      </span>
+                    </SidebarMenuSubButton>
+                    <button
+                      type="button"
+                      className={cn(
+                        "sidebar-icon-button absolute right-1.5 top-1/2 z-20 -translate-y-1/2 cursor-pointer rounded-sm px-1 text-ui-xs text-muted-foreground transition-opacity hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring",
+                        "pointer-events-none opacity-0 md:group-hover/archived-row:pointer-events-auto md:group-hover/archived-row:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100",
+                      )}
+                      aria-label={`Unarchive ${resolveSidebarProjectRowLabel(project)}`}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        void unarchiveGroup(project.id);
+                      }}
+                    >
+                      Unarchive
+                    </button>
+                  </SidebarMenuSubItem>
+                ))}
+              </SidebarMenuSub>
+            </DisclosureRegion>
+          </div>
+        ) : null}
       </SidebarGroup>
       <RenameDialog
         open={newGroupDialogOpen}

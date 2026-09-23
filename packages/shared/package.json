@@ -375,6 +375,10 @@
     "./asyncUserInput": {
       "types": "./src/asyncUserInput.ts",
       "import": "./src/asyncUserInput.ts"
+    },
+    "./groupThreadState": {
+      "types": "./src/groupThreadState.ts",
+      "import": "./src/groupThreadState.ts"
     }
   },
   "scripts": {

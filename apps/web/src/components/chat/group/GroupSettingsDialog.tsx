@@ -40,6 +40,7 @@ import { useWorkspacePathsStore } from "~/workspacePathsStore";
 
 import { GroupEnvironmentSection } from "./GroupEnvironmentSection";
 import { GroupGeneralSection } from "./GroupGeneralSection";
+import { GroupLifecycleSection } from "./GroupLifecycleSection";
 import { GroupMemorySection } from "./GroupMemorySection";
 import { GroupPluginsSection } from "./GroupPluginsSection";
 import {
@@ -297,14 +298,23 @@ export function GroupSettingsDialog(props: {
                 )}
               </div>
             ) : section === "general" ? (
-              <GroupGeneralSection
-                draft={draft}
-                defaultModelSelection={props.defaultModelSelection}
-                projectCwd={props.workspacePath}
-                onChange={(patch) =>
-                  setDraft((current) => (current ? { ...current, ...patch } : current))
-                }
-              />
+              <>
+                <GroupGeneralSection
+                  draft={draft}
+                  defaultModelSelection={props.defaultModelSelection}
+                  projectCwd={props.workspacePath}
+                  onChange={(patch) =>
+                    setDraft((current) => (current ? { ...current, ...patch } : current))
+                  }
+                />
+                {props.mode === "edit" ? (
+                  <GroupLifecycleSection
+                    agent={agent}
+                    projectName={props.projectName}
+                    onDeleted={() => props.onOpenChange(false)}
+                  />
+                ) : null}
+              </>
             ) : section === "memory" ? (
               <GroupMemorySection
                 configured={agent.overview?.configured === true}

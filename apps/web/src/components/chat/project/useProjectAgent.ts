@@ -1,6 +1,7 @@
 import {
   type ModelSelection,
   type ProjectActivity,
+  type ProjectAgentDeleteGroupResult,
   type ProjectAgentOverview,
   type ProjectAgentStreamEvent,
   type ProjectAgentWorkerRouting,
@@ -340,6 +341,96 @@ export function useProjectAgent(input: {
     [runMutation],
   );
 
+  // Lifecycle ops share the same runMutation wrapper but take the input's
+  // projectId so a settings dialog can act on any group, not just the one
+  // currently bound to this hook.
+  const groupControl = useCallback(
+    async (
+      projectId: ProjectId,
+      call: (
+        projectAgent: NonNullable<ReturnType<typeof readNativeApi>>["projectAgent"],
+      ) => Promise<ProjectAgentOverview>,
+    ) => {
+      const api = readNativeApi();
+      if (!api?.projectAgent) return null;
+      setBusy(true);
+      try {
+        const overview = await call(api.projectAgent);
+        useProjectAgentSummariesStore.getState().applyOverview(overview);
+        if (projectIdRef.current === projectId) await load();
+        return overview;
+      } catch (cause) {
+        if (projectIdRef.current === projectId) {
+          setError(cause instanceof Error ? cause.message : "Group action failed.");
+        }
+        return null;
+      } finally {
+        if (projectIdRef.current === projectId) setBusy(false);
+      }
+    },
+    [load],
+  );
+
+  const pauseGroup = useCallback(
+    async (projectId: ProjectId) =>
+      groupControl(projectId, (projectAgent) =>
+        projectAgent.pauseGroup({ requestId: crypto.randomUUID(), projectId }),
+      ),
+    [groupControl],
+  );
+
+  const resumeGroup = useCallback(
+    async (projectId: ProjectId) =>
+      groupControl(projectId, (projectAgent) =>
+        projectAgent.resumeGroup({ requestId: crypto.randomUUID(), projectId }),
+      ),
+    [groupControl],
+  );
+
+  const archiveGroup = useCallback(
+    async (projectId: ProjectId) =>
+      groupControl(projectId, (projectAgent) =>
+        projectAgent.archiveGroup({ requestId: crypto.randomUUID(), projectId }),
+      ),
+    [groupControl],
+  );
+
+  const unarchiveGroup = useCallback(
+    async (projectId: ProjectId) =>
+      groupControl(projectId, (projectAgent) =>
+        projectAgent.unarchiveGroup({ requestId: crypto.randomUUID(), projectId }),
+      ),
+    [groupControl],
+  );
+
+  const restartCoordinator = useCallback(
+    async (projectId: ProjectId) =>
+      groupControl(projectId, (projectAgent) =>
+        projectAgent.restartCoordinator({ requestId: crypto.randomUUID(), projectId }),
+      ),
+    [groupControl],
+  );
+
+  const deleteGroup = useCallback(async (projectId: ProjectId) => {
+    const api = readNativeApi();
+    if (!api?.projectAgent) return null;
+    setBusy(true);
+    try {
+      const result: ProjectAgentDeleteGroupResult = await api.projectAgent.deleteGroup({
+        requestId: crypto.randomUUID(),
+        projectId,
+      });
+      return result;
+    } catch (cause) {
+      if (projectIdRef.current === projectId) {
+        setError(cause instanceof Error ? cause.message : "Group action failed.");
+      }
+      return null;
+    } finally {
+      if (projectIdRef.current === projectId) setBusy(false);
+    }
+  }, []);
+
   const startGoal = useCallback(
     async (objective: string) =>
       runMutation(async (projectAgent, projectId) => {
@@ -569,6 +660,12 @@ export function useProjectAgent(input: {
     configure,
     linkProject,
     unlinkProject,
+    pauseGroup,
+    resumeGroup,
+    archiveGroup,
+    unarchiveGroup,
+    restartCoordinator,
+    deleteGroup,
     startGoal,
     pauseGoal,
     resumeGoal,

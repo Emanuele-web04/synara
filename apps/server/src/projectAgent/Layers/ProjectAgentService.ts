@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 
 import {
@@ -24,12 +25,16 @@ import {
   type OrchestrationCommand,
   type ProjectActivity,
   type ProjectInboxEvent,
+  type ProjectAgentDeleteGroupResult,
+  type ProjectAgentGroupThreadEntry,
   type ProjectAgentOverview,
   type ProjectAgentSummary,
   type ProjectAgentStreamEvent,
   type ProjectDocumentRevision,
   type ProjectTaskStatus,
 } from "@synara/contracts";
+import { groupThreadStateLabel, resolveGroupThreadState } from "@synara/shared/groupThreadState";
+import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
 import { isOrdinaryProjectRow } from "@synara/shared/projectContainers";
 import {
   coordinatorWelcomeDisplayName,
@@ -37,8 +42,23 @@ import {
   coordinatorWelcomeText,
   isGroupCoordinatorHostProject,
 } from "../groupCoordinatorHost.ts";
-import { assertLibraryRootLocation, moveLibraryRoot, resolveLibraryRoot } from "../libraryStore.ts";
-import { withLibraryQueues, withLibraryRootLock } from "../libraryGit.ts";
+import {
+  assertLibraryRootLocation,
+  ensureLibraryRepo,
+  listLibraryEntries,
+  moveLibraryRoot,
+  normalizeLibraryRelativePath,
+  resolveLibraryRoot,
+  resolveLibraryWriteTarget,
+} from "../libraryStore.ts";
+import {
+  commitLibraryChange,
+  pushLibraryIfConfigured,
+  withLibraryQueue,
+  withLibraryQueues,
+  withLibraryRootLock,
+} from "../libraryGit.ts";
+import { isContainedPath } from "../../workspace/realPathContainment.ts";
 import {
   canWriteMemoryDocument,
   decodeProjectAgentListCursor,
@@ -72,6 +92,7 @@ import {
 
 import { AutomationService } from "../../automation/Services/AutomationService.ts";
 import { ServerConfig } from "../../config.ts";
+import { GitCore } from "../../git/Services/GitCore.ts";
 import { TextGeneration } from "../../git/Services/TextGeneration.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -81,6 +102,8 @@ import { ProjectAgentServiceError } from "../Errors.ts";
 import { isAllowedGroupCoordinatorCreateTarget } from "../groupCreateAllowlist.ts";
 import {
   hashDocumentContent,
+  materializeDocumentPath,
+  projectContextRoot,
   readProjectDocumentMirror,
   writeProjectDocumentMirror,
 } from "../materializer.ts";
@@ -139,6 +162,36 @@ const COORDINATOR_BUSY_LIVE_MS = 15 * 60_000;
 // between run start and receipt save can never queue a second run.
 const wakeClaimRequestId = (receiptId: string) => `${receiptId}:claim`;
 
+// Only dated note files are group memory the coordinator can forget; the
+// index, thread-scoped memories, and user notes are off limits.
+const GROUP_MEMORY_NOTE_PATTERN = /^memory\/\d{4}-\d{2}-\d{2}-[a-z0-9][a-z0-9-]*\.md$/;
+const MEMORY_INDEX_MAX_ENTRIES = 256;
+
+const normalizeMemoryNote = (value: string) =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
+const memoryNoteBody = (content: string) => normalizeMemoryNote(content.replace(/^#[^\n]*\n/, ""));
+
+const slugifyMemoryTitle = (value: string) => {
+  const slug = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48)
+    .replace(/-+$/g, "");
+  return slug.length > 0 ? slug : "note";
+};
+
+const memoryNoteSummary = (note: string) =>
+  note
+    .split("\n")
+    .find((line) => line.trim().length > 0)
+    ?.trim()
+    .slice(0, 140) ?? note.slice(0, 140);
+
 const branded = {
   thread: (id = randomUUID()) => ThreadId.makeUnsafe(id),
   command: (id = randomUUID()) => CommandId.makeUnsafe(id),
@@ -179,6 +232,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
   const automationService = yield* AutomationService;
   const serverConfig = yield* ServerConfig;
   const textGeneration = yield* TextGeneration;
+  const git = yield* GitCore;
   const events = yield* PubSub.unbounded<ProjectAgentStreamEvent>();
   const digestInflight = yield* Ref.make(new Set<string>());
   const digestPending = yield* Ref.make(new Set<string>());
@@ -768,6 +822,301 @@ export const makeProjectAgentService = Effect.gen(function* () {
       Effect.asVoid,
     );
 
+  // ===== Groups: memory, library, threads, and lifecycle helpers =====
+
+  // The library root is the group's writable artifact store. Resolution
+  // mirrors the WS `resolveGroupLibrary` gate: the (optional) config supplies
+  // libraryPath, and the root is re-validated against workspace/state roots.
+  const resolveGroupLibraryRoot = (projectId: ProjectId) =>
+    Effect.gen(function* () {
+      const agentConfig = yield* repository
+        .getConfig(projectId)
+        .pipe(Effect.mapError(toServiceError("Failed to load project coordinator.")))
+        .pipe(Effect.map(Option.getOrNull));
+      const root = yield* resolveLibraryRoot({
+        stateDir: serverConfig.stateDir,
+        projectId,
+        libraryPath: agentConfig?.libraryPath,
+      }).pipe(Effect.mapError(toServiceError("Failed to resolve the group library.")));
+      yield* assertLibraryRootLocation({
+        root,
+        stateDir: serverConfig.stateDir,
+        groupsWorkspaceRoot: serverConfig.groupsWorkspaceRoot,
+        studioWorkspaceRoot: serverConfig.studioWorkspaceRoot,
+        isCustomPath: agentConfig?.libraryPath !== undefined,
+        projectId,
+      }).pipe(Effect.mapError(toServiceError("Failed to resolve the group library.")));
+      return {
+        root,
+        agentConfig,
+        libraryIsManaged: agentConfig?.libraryPath === undefined,
+      };
+    });
+
+  const pushLibraryInBackground = (
+    root: string,
+    agentConfig: {
+      readonly libraryRemoteUrl?: string | undefined;
+      readonly libraryPushOnChange?: boolean | undefined;
+    } | null,
+  ) =>
+    Effect.forkDetach(
+      withLibraryQueue(
+        root,
+        pushLibraryIfConfigured({
+          git,
+          root,
+          libraryRemoteUrl: agentConfig?.libraryRemoteUrl,
+          libraryPushOnChange: agentConfig?.libraryPushOnChange,
+        }),
+      ),
+    );
+
+  const readGroupMemoryNoteRevisions = (projectId: ProjectId) =>
+    Effect.gen(function* () {
+      const heads = yield* repository
+        .listDocumentHeads(projectId)
+        .pipe(Effect.mapError(toServiceError("Failed to list group memory.")));
+      const paths = heads
+        .map((head) => head.logicalPath)
+        .filter((logicalPath) => GROUP_MEMORY_NOTE_PATTERN.test(logicalPath));
+      if (paths.length === 0) {
+        return [] as ReadonlyArray<ProjectDocumentRevision>;
+      }
+      return yield* repository
+        .readDocumentRevisions({ projectId, logicalPaths: paths })
+        .pipe(Effect.mapError(toServiceError("Failed to read group memory.")));
+    });
+
+  // One `- [title](path) — summary` line per note in MEMORY.md, the index
+  // every group thread reads. Rewritten through upsertSystemDocument so it
+  // keeps its system authorship and disk mirror.
+  const updateMemoryIndex = (input: {
+    readonly projectId: ProjectId;
+    readonly logicalPath: string;
+    readonly title: string;
+    readonly summary: string | null;
+  }) =>
+    Effect.gen(function* () {
+      const current = yield* repository
+        .readDocumentRevision({
+          projectId: input.projectId,
+          logicalPath: MEMORY_AUTO_DOCUMENT_PATH,
+        })
+        .pipe(Effect.mapError(toServiceError("Failed to load the memory index.")));
+      const content = Option.isSome(current) ? current.value.content : "# Memory\n";
+      const lines = content.split("\n");
+      const marker = `](${input.logicalPath})`;
+      const index = lines.findIndex((line) => line.includes(marker));
+      if (input.summary === null) {
+        if (index < 0) return;
+        lines.splice(index, 1);
+      } else {
+        const entry = `- [${input.title}](${input.logicalPath}) — ${input.summary}`;
+        if (index >= 0) lines[index] = entry;
+        else lines.push(entry);
+        // Cap the index: drop the oldest entries first, never the one just
+        // written.
+        const entryCount = () => lines.filter((line) => line.startsWith("- [")).length;
+        while (entryCount() > MEMORY_INDEX_MAX_ENTRIES) {
+          const oldest = lines.findIndex(
+            (line) => line.startsWith("- [") && !line.includes(marker),
+          );
+          if (oldest < 0) break;
+          lines.splice(oldest, 1);
+        }
+      }
+      const next = lines.join("\n").replace(/\n{3,}/g, "\n\n");
+      yield* upsertSystemDocument({
+        projectId: input.projectId,
+        logicalPath: MEMORY_AUTO_DOCUMENT_PATH,
+        content: next.endsWith("\n") ? next : `${next}\n`,
+      });
+    });
+
+  // A library_add source must live inside the calling thread's own workspace
+  // (its worktree when one is materialized, otherwise its project cwd) — the
+  // same containment rule the upload route applies to its own root. Nested
+  // symlinks are never dereferenced on copy; a top-level link that resolves
+  // outside the workspace is rejected by the realpath pair.
+  const resolveLibraryCallerSource = (principal: ProjectAgentPrincipal, sourcePath: string) =>
+    Effect.gen(function* () {
+      if (principal.kind === "user") {
+        return yield* Effect.fail(
+          fail("The library add tool runs from a group thread or the coordinator.", "forbidden"),
+        );
+      }
+      const shell = yield* snapshotQuery
+        .getThreadShellById(principal.threadId)
+        .pipe(Effect.mapError(toServiceError("Failed to load calling thread.")));
+      if (Option.isNone(shell)) {
+        return yield* Effect.fail(fail("Calling thread was not found.", "not-found"));
+      }
+      const project = yield* snapshotQuery
+        .getProjectShellById(shell.value.projectId)
+        .pipe(Effect.mapError(toServiceError("Failed to load calling project.")));
+      const workspaceRoot = resolveThreadWorkspaceCwd({
+        projectCwd: Option.isSome(project) ? project.value.workspaceRoot : null,
+        envMode: shell.value.envMode,
+        worktreePath: shell.value.worktreePath,
+        workingDirectory: shell.value.workingDirectory,
+      });
+      if (workspaceRoot === null) {
+        return yield* Effect.fail(fail("The calling thread has no workspace yet.", "invalid"));
+      }
+      const candidate = path.isAbsolute(sourcePath)
+        ? path.normalize(sourcePath)
+        : path.resolve(workspaceRoot, sourcePath);
+      const resolved = yield* Effect.tryPromise({
+        try: async () => {
+          const [realRoot, realTarget] = await Promise.all([
+            fs.realpath(workspaceRoot),
+            fs.realpath(candidate),
+          ]);
+          return { realRoot, realTarget };
+        },
+        catch: () =>
+          fail(`Library source "${sourcePath}" was not found in the workspace.`, "not-found"),
+      });
+      if (!isContainedPath(resolved.realRoot, resolved.realTarget)) {
+        return yield* Effect.fail(
+          fail(
+            `Library source "${sourcePath}" must stay inside the calling thread's workspace.`,
+            "forbidden",
+          ),
+        );
+      }
+      const relative = path.relative(resolved.realRoot, resolved.realTarget);
+      if (relative === "") {
+        return yield* Effect.fail(
+          fail("Choose a file or folder inside the workspace, not the workspace root.", "invalid"),
+        );
+      }
+      if (relative.split(path.sep).some((segment) => segment.toLowerCase() === ".git")) {
+        return yield* Effect.fail(
+          fail(`Library source "${sourcePath}" cannot address repository metadata.`, "forbidden"),
+        );
+      }
+      return { source: resolved.realTarget, threadTitle: shell.value.title };
+    });
+
+  // Group membership for threads = the group's own threads plus anything the
+  // thread index or task assignments recorded (linked-repo workers live
+  // outside the group project but still belong to it).
+  const listGroupThreadShells = (input: {
+    readonly projectId: ProjectId;
+    readonly coordinatorThreadId: ThreadId | null;
+  }) =>
+    Effect.gen(function* () {
+      const index = yield* repository
+        .listThreadIndex(input.projectId)
+        .pipe(Effect.mapError(toServiceError("Failed to load group threads.")));
+      const groupThreads = yield* projectionThreads
+        .listByProjectId({ projectId: input.projectId })
+        .pipe(Effect.mapError(toServiceError("Failed to load group threads.")));
+      const tasks = yield* repository
+        .listTasks({ projectId: input.projectId, includeArchived: true, limit: 500 })
+        .pipe(Effect.mapError(toServiceError("Failed to load group tasks.")));
+      const ids = new Set<ThreadId>();
+      for (const thread of groupThreads) {
+        if (thread.deletedAt === null && thread.threadId !== input.coordinatorThreadId) {
+          ids.add(thread.threadId);
+        }
+      }
+      for (const entry of index) {
+        if (entry.threadId !== input.coordinatorThreadId) ids.add(entry.threadId);
+      }
+      for (const task of tasks) {
+        if (task.assignedThreadId && task.assignedThreadId !== input.coordinatorThreadId) {
+          ids.add(task.assignedThreadId);
+        }
+      }
+      const shells = yield* snapshotQuery
+        .getThreadShellsByIds([...ids])
+        .pipe(Effect.mapError(toServiceError("Failed to load group threads.")));
+      return { index, tasks, shells };
+    });
+
+  const dispatchGroupThreadCommand = (
+    threadIds: ReadonlyArray<ThreadId>,
+    type: "thread.turn.interrupt" | "thread.archive" | "thread.unarchive",
+  ) =>
+    Effect.forEach(
+      threadIds,
+      (threadId) =>
+        orchestrationEngine
+          .dispatch({
+            type,
+            commandId: branded.command(),
+            threadId,
+            createdAt: isoNow(),
+          } as OrchestrationCommand)
+          .pipe(Effect.catch(() => Effect.void)),
+      { discard: true },
+    );
+
+  // Pause/archive disable the group's automations and record exactly which
+  // were on, so resume/unarchive restore only what the lifecycle turned off.
+  const disableGroupAutomations = (projectId: ProjectId) =>
+    Effect.gen(function* () {
+      const listed = yield* automationService
+        .list({ projectId })
+        .pipe(Effect.mapError(toServiceError("Failed to load group automations.")));
+      const enabledIds = listed.definitions
+        .filter((definition) => definition.enabled && definition.archivedAt === null)
+        .map((definition) => definition.id);
+      for (const id of enabledIds) {
+        yield* automationService
+          .update({ id, enabled: false })
+          .pipe(Effect.catch(() => Effect.void));
+      }
+      return enabledIds;
+    });
+
+  const restoreGroupAutomations = (automationIds: ReadonlyArray<AutomationId>) =>
+    Effect.forEach(
+      automationIds,
+      (id) => automationService.update({ id, enabled: true }).pipe(Effect.catch(() => Effect.void)),
+      { discard: true },
+    );
+
+  const libraryPathExists = (target: string) =>
+    Effect.tryPromise({
+      try: async () => {
+        await fs.access(target);
+        return true;
+      },
+      catch: () => "unreachable",
+    }).pipe(Effect.catch(() => Effect.succeed(false)));
+
+  // Deleting a group moves its library to the OS trash (rename inside the
+  // user-owned trash dir) — never an rm -rf, and never of a custom
+  // libraryPath's contents beyond the move itself.
+  const moveLibraryToTrash = (root: string) =>
+    Effect.tryPromise({
+      try: async () => {
+        const platform = os.platform();
+        const home = os.homedir();
+        const trashDir =
+          platform === "darwin"
+            ? path.join(home, ".Trash")
+            : platform === "win32"
+              ? null
+              : path.join(home, ".local", "share", "Trash", "files");
+        if (trashDir === null) return false;
+        await fs.mkdir(trashDir, { recursive: true });
+        const target = path.join(trashDir, `${path.basename(root)}-${randomUUID().slice(0, 8)}`);
+        await fs.rename(root, target);
+        return true;
+      },
+      catch: () => "unreachable",
+    }).pipe(Effect.catch(() => Effect.succeed(false)));
+
+  const requireUserLifecycleAction = (action: string, principal: ProjectAgentPrincipal) =>
+    isUserPrincipal(principal)
+      ? Effect.void
+      : Effect.fail(fail(`${action} is a user action.`, "forbidden"));
+
   const importCoordinatorGreeting = (input: {
     readonly threadId: ThreadId;
     readonly userDisplayName?: string | undefined;
@@ -964,6 +1313,58 @@ export const makeProjectAgentService = Effect.gen(function* () {
       }
     });
 
+  // Both link entry points (the user's linkProject and the coordinator's
+  // synara_project_link_repository) run this body; only the recorded actor
+  // differs.
+  const linkProjectIntoGroup = (input: {
+    readonly requestId: string;
+    readonly projectId: ProjectId;
+    readonly linkedProjectId: ProjectId;
+    readonly actorKind: "user" | "coordinator";
+    readonly actorThreadId: ThreadId | null;
+  }) =>
+    Effect.gen(function* () {
+      const existingReceipt = yield* replayReceipt(
+        input.requestId,
+        input.projectId,
+        (json) => JSON.parse(json) as ProjectAgentOverview,
+      );
+      if (existingReceipt) return existingReceipt;
+      yield* resolveGroupCoordinatorProject(input.projectId);
+      if (input.linkedProjectId === input.projectId) {
+        return yield* Effect.fail(fail("A group cannot link to itself.", "invalid"));
+      }
+      const linked = yield* requireOrdinaryRepoProject(input.linkedProjectId);
+      const currentIds = yield* repository
+        .listLinkedProjectIds(input.projectId)
+        .pipe(Effect.mapError(toServiceError("Failed to list linked repositories.")));
+      if (!currentIds.includes(input.linkedProjectId)) {
+        yield* repository
+          .linkProject({
+            projectId: input.projectId,
+            linkedProjectId: input.linkedProjectId,
+            createdAt: isoNow(),
+          })
+          .pipe(Effect.mapError(toServiceError("Failed to link repository.")));
+        yield* appendActivity({
+          projectId: input.projectId,
+          kind: "config-updated",
+          actorKind: input.actorKind,
+          actorThreadId: input.actorThreadId,
+          goalId: null,
+          taskId: null,
+          source: null,
+          summary: `Linked repository ${linked.title}`,
+          createdAt: isoNow(),
+        });
+      }
+      const config = yield* requireConfig(input.projectId);
+      yield* publish({ type: "config-upserted", config });
+      const overview = yield* buildOverview(input.projectId);
+      yield* storeReceipt(input.requestId, input.projectId, "linkProject", overview);
+      return overview;
+    });
+
   const impl: ProjectAgentServiceShape = {
     getOverview: (input, principal) =>
       requireProjectAccess(principal, input.projectId).pipe(
@@ -1002,6 +1403,8 @@ export const makeProjectAgentService = Effect.gen(function* () {
                 coordinatorColor: row.coordinatorColor,
                 coordinatorStatus: coordinatorStatusFromGoal(true, row.goalStatus),
                 revision: row.revision,
+                pausedAt: row.pausedAt,
+                archivedAt: row.archivedAt,
               });
             }
             return {
@@ -1324,6 +1727,636 @@ export const makeProjectAgentService = Effect.gen(function* () {
         if (!isUserPrincipal(principal)) {
           return yield* Effect.fail(fail("Linking a repository is a user action.", "forbidden"));
         }
+        return yield* linkProjectIntoGroup({
+          requestId: input.requestId,
+          projectId: input.projectId,
+          linkedProjectId: input.linkedProjectId,
+          actorKind: "user",
+          actorThreadId: null,
+        });
+      }),
+
+    linkRepository: (input, principal) =>
+      Effect.gen(function* () {
+        if (!isCoordinatorPrincipal(principal, input.projectId)) {
+          return yield* Effect.fail(
+            fail("Only the group's coordinator can link a repository.", "forbidden"),
+          );
+        }
+        const linkedProjectId = yield* Effect.gen(function* () {
+          if (input.linkedProjectId !== undefined) return input.linkedProjectId;
+          if (input.workspacePath === undefined) {
+            return yield* Effect.fail(fail("Pass linkedProjectId or workspacePath.", "invalid"));
+          }
+          const project = yield* snapshotQuery
+            .getActiveProjectByWorkspaceRoot(path.resolve(input.workspacePath))
+            .pipe(Effect.mapError(toServiceError("Failed to resolve workspacePath.")));
+          if (Option.isNone(project)) {
+            return yield* Effect.fail(
+              fail(`No Synara project owns workspace "${input.workspacePath}".`, "not-found"),
+            );
+          }
+          return project.value.id;
+        });
+        return yield* linkProjectIntoGroup({
+          requestId: input.requestId,
+          projectId: input.projectId,
+          linkedProjectId,
+          actorKind: "coordinator",
+          actorThreadId: principal.kind === "user" ? null : principal.threadId,
+        });
+      }),
+
+    remember: (input, principal) =>
+      Effect.gen(function* () {
+        yield* requireProjectAccess(principal, input.projectId);
+        if (principal.kind === "user" || principal.kind === "unmanaged") {
+          return yield* Effect.fail(
+            fail("Only group threads and the coordinator can save group memory.", "forbidden"),
+          );
+        }
+        const existingReceipt = yield* replayReceipt(
+          input.requestId,
+          input.projectId,
+          (json) => JSON.parse(json) as { path: string; updated: boolean; deduplicated: boolean },
+        );
+        if (existingReceipt) return existingReceipt;
+        const note = input.note.trim();
+        const title = input.title?.trim() || memoryNoteSummary(note).slice(0, 60) || "Note";
+        const existing = yield* readGroupMemoryNoteRevisions(input.projectId);
+        const wanted = normalizeMemoryNote(note);
+        const duplicate = existing.find((revision) => {
+          const have = memoryNoteBody(revision.content);
+          return (
+            have === wanted ||
+            (have.length >= 40 &&
+              wanted.length >= 40 &&
+              (have.includes(wanted) || wanted.includes(have)))
+          );
+        });
+        if (duplicate) {
+          yield* updateMemoryIndex({
+            projectId: input.projectId,
+            logicalPath: duplicate.logicalPath,
+            title,
+            summary: memoryNoteSummary(note),
+          });
+          const result = { path: duplicate.logicalPath, updated: false, deduplicated: true };
+          yield* storeReceipt(input.requestId, input.projectId, "remember", result);
+          return result;
+        }
+        const existingPaths = new Set(existing.map((revision) => revision.logicalPath));
+        const today = isoNow().slice(0, 10);
+        const slug = slugifyMemoryTitle(title);
+        let logicalPath = `memory/${today}-${slug}.md`;
+        const content = `# ${title}\n\n${note}\n`;
+        if (existingPaths.has(logicalPath)) {
+          // Same dated slug, different note: the file holds an earlier
+          // version of this memory — replace its body instead of forking a
+          // suffixed sibling the index would double-list.
+          yield* upsertSystemDocument({
+            projectId: input.projectId,
+            logicalPath,
+            content,
+            authorThreadId: principal.threadId,
+          });
+          yield* updateMemoryIndex({
+            projectId: input.projectId,
+            logicalPath,
+            title,
+            summary: memoryNoteSummary(note),
+          });
+          const result = { path: logicalPath, updated: true, deduplicated: false };
+          yield* storeReceipt(input.requestId, input.projectId, "remember", result);
+          return result;
+        }
+        let counter = 2;
+        while (existingPaths.has(logicalPath)) {
+          logicalPath = `memory/${today}-${slug}-${counter}.md`;
+          counter += 1;
+        }
+        yield* upsertSystemDocument({
+          projectId: input.projectId,
+          logicalPath,
+          content,
+          authorThreadId: principal.threadId,
+        });
+        yield* updateMemoryIndex({
+          projectId: input.projectId,
+          logicalPath,
+          title,
+          summary: memoryNoteSummary(note),
+        });
+        yield* appendActivity({
+          projectId: input.projectId,
+          kind: "document-written",
+          actorKind: principal.kind === "coordinator" ? "coordinator" : "worker",
+          actorThreadId: principal.threadId,
+          goalId: null,
+          taskId: principal.kind === "worker" ? principal.taskId : null,
+          source: null,
+          summary: `Remembered: ${title}`,
+          createdAt: isoNow(),
+        });
+        const result = { path: logicalPath, updated: true, deduplicated: false };
+        yield* storeReceipt(input.requestId, input.projectId, "remember", result);
+        return result;
+      }),
+
+    forget: (input, principal) =>
+      Effect.gen(function* () {
+        yield* requireProjectAccess(principal, input.projectId);
+        if (principal.kind === "user" || principal.kind === "unmanaged") {
+          return yield* Effect.fail(
+            fail("Only group threads and the coordinator can remove group memory.", "forbidden"),
+          );
+        }
+        const existingReceipt = yield* replayReceipt(
+          input.requestId,
+          input.projectId,
+          (json) => JSON.parse(json) as { deleted: boolean },
+        );
+        if (existingReceipt) return existingReceipt;
+        const logicalPath = yield* Effect.try({
+          try: () => normalizeProjectDocumentPath(input.path),
+          catch: () => fail(`Memory path "${input.path}" is not a valid document path.`, "invalid"),
+        });
+        if (!GROUP_MEMORY_NOTE_PATTERN.test(logicalPath)) {
+          return yield* Effect.fail(
+            fail(
+              `Only group memory notes (memory/<date>-<slug>.md) can be forgotten.`,
+              "forbidden",
+            ),
+          );
+        }
+        const head = yield* repository
+          .getDocumentHead(input.projectId, logicalPath)
+          .pipe(Effect.mapError(toServiceError("Failed to load group memory.")));
+        if (Option.isNone(head)) {
+          const result = { deleted: false };
+          yield* storeReceipt(input.requestId, input.projectId, "forget", result);
+          return result;
+        }
+        yield* repository
+          .deleteDocument({ projectId: input.projectId, logicalPath })
+          .pipe(Effect.mapError(toServiceError("Failed to remove group memory.")));
+        yield* Effect.tryPromise({
+          try: () =>
+            fs.rm(materializeDocumentPath(serverConfig.stateDir, input.projectId, logicalPath), {
+              force: true,
+            }),
+          catch: toServiceError("Failed to remove the memory mirror file."),
+        });
+        yield* updateMemoryIndex({
+          projectId: input.projectId,
+          logicalPath,
+          title: "",
+          summary: null,
+        });
+        yield* appendActivity({
+          projectId: input.projectId,
+          kind: "document-written",
+          actorKind: principal.kind === "coordinator" ? "coordinator" : "worker",
+          actorThreadId: principal.threadId,
+          goalId: null,
+          taskId: principal.kind === "worker" ? principal.taskId : null,
+          source: null,
+          summary: `Forgot memory ${logicalPath}`,
+          createdAt: isoNow(),
+        });
+        const result = { deleted: true };
+        yield* storeReceipt(input.requestId, input.projectId, "forget", result);
+        return result;
+      }),
+
+    libraryList: (input, principal) =>
+      Effect.gen(function* () {
+        yield* requireProjectAccess(principal, input.projectId);
+        return yield* withLibraryRootLock(
+          input.projectId,
+          Effect.gen(function* () {
+            const { root, libraryIsManaged } = yield* resolveGroupLibraryRoot(input.projectId);
+            const entries = yield* withLibraryQueue(
+              root,
+              Effect.gen(function* () {
+                yield* ensureLibraryRepo(git, root, input.projectId, {
+                  isManaged: libraryIsManaged,
+                }).pipe(Effect.mapError(toServiceError("Failed to prepare the group library.")));
+                return yield* listLibraryEntries(root, input.relativePath).pipe(
+                  Effect.mapError(toServiceError("Failed to list the group library.")),
+                );
+              }),
+            );
+            return { root, entries };
+          }),
+        );
+      }),
+
+    libraryAdd: (input, principal) =>
+      Effect.gen(function* () {
+        yield* requireProjectAccess(principal, input.projectId);
+        const existingReceipt = yield* replayReceipt(
+          input.requestId,
+          input.projectId,
+          (json) => JSON.parse(json) as { path: string; commitSha: string },
+        );
+        if (existingReceipt) return existingReceipt;
+        const caller = yield* resolveLibraryCallerSource(principal, input.sourcePath);
+        return yield* withLibraryRootLock(
+          input.projectId,
+          Effect.gen(function* () {
+            const { root, agentConfig, libraryIsManaged } = yield* resolveGroupLibraryRoot(
+              input.projectId,
+            );
+            const result = yield* withLibraryQueue(
+              root,
+              Effect.gen(function* () {
+                yield* ensureLibraryRepo(git, root, input.projectId, {
+                  isManaged: libraryIsManaged,
+                }).pipe(Effect.mapError(toServiceError("Failed to prepare the group library.")));
+                const stat = yield* Effect.tryPromise({
+                  try: () => fs.stat(caller.source),
+                  catch: () =>
+                    fail(`Library source "${input.sourcePath}" was not found.`, "not-found"),
+                });
+                const baseName = path.basename(caller.source);
+                const requested = yield* normalizeLibraryRelativePath(
+                  input.destinationPath ?? baseName,
+                ).pipe(
+                  Effect.mapError(toServiceError("Failed to resolve the library destination.")),
+                );
+                let relativePath = requested;
+                const existingDest = yield* Effect.tryPromise({
+                  try: () => fs.stat(path.resolve(root, ...requested.split("/"))),
+                  catch: () => "missing",
+                }).pipe(Effect.catch(() => Effect.succeed(null)));
+                if (existingDest !== null && existingDest.isDirectory()) {
+                  relativePath = `${requested}/${baseName}`;
+                }
+                const target = yield* resolveLibraryWriteTarget(root, relativePath).pipe(
+                  Effect.mapError(toServiceError("Failed to resolve the library destination.")),
+                );
+                yield* Effect.tryPromise({
+                  try: () =>
+                    stat.isDirectory()
+                      ? fs.cp(caller.source, target, { recursive: true, verbatimSymlinks: true })
+                      : fs.copyFile(caller.source, target),
+                  catch: toServiceError("Failed to copy into the group library."),
+                });
+                const { commitSha } = yield* commitLibraryChange(
+                  git,
+                  root,
+                  `Add ${relativePath} from ${caller.threadTitle}`,
+                ).pipe(Effect.mapError(toServiceError("Failed to commit the group library.")));
+                return { path: relativePath, commitSha };
+              }),
+            );
+            yield* pushLibraryInBackground(root, agentConfig);
+            yield* appendActivity({
+              projectId: input.projectId,
+              kind: "document-written",
+              actorKind: principal.kind === "coordinator" ? "coordinator" : "worker",
+              actorThreadId: principal.kind === "user" ? null : principal.threadId,
+              goalId: null,
+              taskId: principal.kind === "worker" ? principal.taskId : null,
+              source: null,
+              summary: `Added ${result.path} to the library from ${caller.threadTitle}`,
+              createdAt: isoNow(),
+            });
+            yield* storeReceipt(input.requestId, input.projectId, "libraryAdd", result);
+            return result;
+          }),
+        );
+      }),
+
+    listGroupThreads: (input, principal) =>
+      Effect.gen(function* () {
+        if (!isCoordinatorPrincipal(principal, input.projectId)) {
+          return yield* Effect.fail(
+            fail("Only the group's coordinator can list group threads.", "forbidden"),
+          );
+        }
+        yield* resolveGroupCoordinatorProject(input.projectId);
+        const config = yield* requireConfig(input.projectId);
+        const { index, tasks, shells } = yield* listGroupThreadShells({
+          projectId: input.projectId,
+          coordinatorThreadId: config.coordinatorThreadId,
+        });
+        const taskByThreadId = new Map(
+          tasks
+            .filter((task) => task.assignedThreadId !== null)
+            .map((task) => [task.assignedThreadId!, task] as const),
+        );
+        const indexArchivedByThreadId = new Map(
+          index.map((entry) => [entry.threadId, entry.archived] as const),
+        );
+        const projectShells = yield* snapshotQuery
+          .getProjectShellsByIds([...new Set(shells.map((shell) => shell.projectId))])
+          .pipe(Effect.mapError(toServiceError("Failed to load group projects.")));
+        const projectTitleById = new Map(projectShells.map((shell) => [shell.id, shell.title]));
+        const rows: ProjectAgentGroupThreadEntry[] = shells.map((shell) => {
+          const task = taskByThreadId.get(shell.id) ?? null;
+          const state = resolveGroupThreadState({
+            thread: {
+              archivedAt: shell.archivedAt ?? null,
+              hasPendingApprovals: shell.hasPendingApprovals,
+              hasPendingUserInput: shell.hasPendingUserInput,
+              session: shell.session,
+              latestTurn: shell.latestTurn,
+            },
+            task: task ? { status: task.status, archivedAt: task.archivedAt } : null,
+            indexArchived: indexArchivedByThreadId.get(shell.id) ?? false,
+            pullRequest: shell.lastKnownPr
+              ? { state: shell.lastKnownPr.state, isDraft: shell.lastKnownPr.isDraft }
+              : null,
+          });
+          return {
+            threadId: shell.id,
+            title: shell.title,
+            projectId: shell.projectId,
+            projectTitle: projectTitleById.get(shell.projectId) ?? null,
+            state,
+            stateLabel: groupThreadStateLabel(state),
+            taskId: task?.id ?? null,
+            pullRequestUrl: shell.lastKnownPr?.url ?? null,
+            pullRequestState: shell.lastKnownPr?.state ?? null,
+            pullRequestIsDraft: shell.lastKnownPr?.isDraft,
+            updatedAt: shell.updatedAt,
+          };
+        });
+        const order: Record<string, number> = {
+          waiting: 0,
+          working: 1,
+          review: 2,
+          landing: 3,
+          idle: 4,
+          resolved: 5,
+        };
+        rows.sort(
+          (left, right) =>
+            (order[left.state] ?? 9) - (order[right.state] ?? 9) ||
+            (right.updatedAt ?? "").localeCompare(left.updatedAt ?? ""),
+        );
+        return { threads: rows };
+      }),
+
+    pauseGroup: (input, principal) =>
+      withProjectLock(
+        input.projectId,
+        Effect.gen(function* () {
+          yield* requireUserLifecycleAction("Pausing a group", principal);
+          const existingReceipt = yield* replayReceipt(
+            input.requestId,
+            input.projectId,
+            (json) => JSON.parse(json) as ProjectAgentOverview,
+          );
+          if (existingReceipt) return existingReceipt;
+          yield* resolveGroupCoordinatorProject(input.projectId);
+          const config = yield* requireConfig(input.projectId);
+          if (config.pausedAt === null) {
+            const disabledIds = yield* disableGroupAutomations(input.projectId);
+            const now = isoNow();
+            const saved = yield* repository
+              .saveConfig(
+                {
+                  ...config,
+                  pausedAt: now,
+                  pausedAutomationIds: [
+                    ...new Set([...(config.pausedAutomationIds ?? []), ...disabledIds]),
+                  ],
+                  revision: config.revision + 1,
+                  updatedAt: now,
+                },
+                config.revision,
+              )
+              .pipe(Effect.mapError(toServiceError("Failed to pause the group.")));
+            yield* publish({ type: "config-upserted", config: saved });
+            // Interrupt live turns on the coordinator and member threads so a
+            // paused group stops producing work immediately.
+            const { shells } = yield* listGroupThreadShells({
+              projectId: input.projectId,
+              coordinatorThreadId: config.coordinatorThreadId,
+            });
+            const liveThreadIds = shells
+              .filter(
+                (shell) =>
+                  shell.latestTurn?.state === "running" ||
+                  shell.session?.status === "running" ||
+                  shell.session?.status === "starting",
+              )
+              .map((shell) => shell.id);
+            const coordinator = yield* snapshotQuery
+              .getThreadShellById(config.coordinatorThreadId)
+              .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+            const coordinatorLive =
+              Option.isSome(coordinator) && coordinator.value.latestTurn?.state === "running";
+            yield* dispatchGroupThreadCommand(
+              coordinatorLive ? [config.coordinatorThreadId, ...liveThreadIds] : liveThreadIds,
+              "thread.turn.interrupt",
+            );
+            yield* appendActivity({
+              projectId: input.projectId,
+              kind: "config-updated",
+              actorKind: "user",
+              actorThreadId: null,
+              goalId: null,
+              taskId: null,
+              source: null,
+              summary: "Paused group.",
+              createdAt: isoNow(),
+            });
+          }
+          const overview = yield* buildOverview(input.projectId);
+          yield* storeReceipt(input.requestId, input.projectId, "pauseGroup", overview);
+          return overview;
+        }),
+      ),
+
+    resumeGroup: (input, principal) =>
+      Effect.gen(function* () {
+        const overview = yield* withProjectLock(
+          input.projectId,
+          Effect.gen(function* () {
+            yield* requireUserLifecycleAction("Resuming a group", principal);
+            const existingReceipt = yield* replayReceipt(
+              input.requestId,
+              input.projectId,
+              (json) => JSON.parse(json) as ProjectAgentOverview,
+            );
+            if (existingReceipt) return existingReceipt;
+            yield* resolveGroupCoordinatorProject(input.projectId);
+            const config = yield* requireConfig(input.projectId);
+            if (config.pausedAt !== null) {
+              const restoreIds = config.pausedAutomationIds ?? [];
+              yield* restoreGroupAutomations(restoreIds);
+              const now = isoNow();
+              const saved = yield* repository
+                .saveConfig(
+                  {
+                    ...config,
+                    pausedAt: null,
+                    pausedAutomationIds: [],
+                    revision: config.revision + 1,
+                    updatedAt: now,
+                  },
+                  config.revision,
+                )
+                .pipe(Effect.mapError(toServiceError("Failed to resume the group.")));
+              yield* publish({ type: "config-upserted", config: saved });
+              yield* appendActivity({
+                projectId: input.projectId,
+                kind: "config-updated",
+                actorKind: "user",
+                actorThreadId: null,
+                goalId: null,
+                taskId: null,
+                source: null,
+                summary: "Resumed group.",
+                createdAt: isoNow(),
+              });
+            }
+            const next = yield* buildOverview(input.projectId);
+            yield* storeReceipt(input.requestId, input.projectId, "resumeGroup", next);
+            return next;
+          }),
+        );
+        // Inbox events recorded while paused are still queued; a fresh wake
+        // pass re-drives them now that the gate is open.
+        yield* impl.processPendingWakes(input.projectId).pipe(Effect.catch(() => Effect.void));
+        return overview;
+      }),
+
+    archiveGroup: (input, principal) =>
+      withProjectLock(
+        input.projectId,
+        Effect.gen(function* () {
+          yield* requireUserLifecycleAction("Archiving a group", principal);
+          const existingReceipt = yield* replayReceipt(
+            input.requestId,
+            input.projectId,
+            (json) => JSON.parse(json) as ProjectAgentOverview,
+          );
+          if (existingReceipt) return existingReceipt;
+          yield* resolveGroupCoordinatorProject(input.projectId);
+          const config = yield* requireConfig(input.projectId);
+          if (config.archivedAt === null) {
+            const disabledIds = yield* disableGroupAutomations(input.projectId);
+            const now = isoNow();
+            const saved = yield* repository
+              .saveConfig(
+                {
+                  ...config,
+                  archivedAt: now,
+                  pausedAutomationIds: [
+                    ...new Set([...(config.pausedAutomationIds ?? []), ...disabledIds]),
+                  ],
+                  revision: config.revision + 1,
+                  updatedAt: now,
+                },
+                config.revision,
+              )
+              .pipe(Effect.mapError(toServiceError("Failed to archive the group.")));
+            yield* publish({ type: "config-upserted", config: saved });
+            const { shells } = yield* listGroupThreadShells({
+              projectId: input.projectId,
+              coordinatorThreadId: config.coordinatorThreadId,
+            });
+            yield* dispatchGroupThreadCommand(
+              [
+                config.coordinatorThreadId,
+                ...shells.filter((shell) => shell.archivedAt == null).map((shell) => shell.id),
+              ],
+              "thread.archive",
+            );
+            yield* appendActivity({
+              projectId: input.projectId,
+              kind: "config-updated",
+              actorKind: "user",
+              actorThreadId: null,
+              goalId: null,
+              taskId: null,
+              source: null,
+              summary: "Archived group.",
+              createdAt: isoNow(),
+            });
+          }
+          const overview = yield* buildOverview(input.projectId);
+          yield* storeReceipt(input.requestId, input.projectId, "archiveGroup", overview);
+          return overview;
+        }),
+      ),
+
+    unarchiveGroup: (input, principal) =>
+      Effect.gen(function* () {
+        const overview = yield* withProjectLock(
+          input.projectId,
+          Effect.gen(function* () {
+            yield* requireUserLifecycleAction("Unarchiving a group", principal);
+            const existingReceipt = yield* replayReceipt(
+              input.requestId,
+              input.projectId,
+              (json) => JSON.parse(json) as ProjectAgentOverview,
+            );
+            if (existingReceipt) return existingReceipt;
+            yield* resolveGroupCoordinatorProject(input.projectId);
+            const config = yield* requireConfig(input.projectId);
+            if (config.archivedAt !== null) {
+              // A group still paused keeps its automations off; resume is the
+              // only lifecycle that restores them while pausedAt is set.
+              const restoreIds = config.pausedAt === null ? (config.pausedAutomationIds ?? []) : [];
+              yield* restoreGroupAutomations(restoreIds);
+              const now = isoNow();
+              const saved = yield* repository
+                .saveConfig(
+                  {
+                    ...config,
+                    archivedAt: null,
+                    pausedAutomationIds:
+                      config.pausedAt === null ? [] : (config.pausedAutomationIds ?? []),
+                    revision: config.revision + 1,
+                    updatedAt: now,
+                  },
+                  config.revision,
+                )
+                .pipe(Effect.mapError(toServiceError("Failed to unarchive the group.")));
+              yield* publish({ type: "config-upserted", config: saved });
+              const { shells } = yield* listGroupThreadShells({
+                projectId: input.projectId,
+                coordinatorThreadId: config.coordinatorThreadId,
+              });
+              yield* dispatchGroupThreadCommand(
+                [
+                  config.coordinatorThreadId,
+                  ...shells.filter((shell) => shell.archivedAt != null).map((shell) => shell.id),
+                ],
+                "thread.unarchive",
+              );
+              yield* appendActivity({
+                projectId: input.projectId,
+                kind: "config-updated",
+                actorKind: "user",
+                actorThreadId: null,
+                goalId: null,
+                taskId: null,
+                source: null,
+                summary: "Unarchived group.",
+                createdAt: isoNow(),
+              });
+            }
+            const next = yield* buildOverview(input.projectId);
+            yield* storeReceipt(input.requestId, input.projectId, "unarchiveGroup", next);
+            return next;
+          }),
+        );
+        if (overview.config?.pausedAt == null) {
+          yield* impl.processPendingWakes(input.projectId).pipe(Effect.catch(() => Effect.void));
+        }
+        return overview;
+      }),
+
+    restartCoordinator: (input, principal) =>
+      Effect.gen(function* () {
+        yield* requireUserLifecycleAction("Restarting the coordinator", principal);
         const existingReceipt = yield* replayReceipt(
           input.requestId,
           input.projectId,
@@ -1331,38 +2364,116 @@ export const makeProjectAgentService = Effect.gen(function* () {
         );
         if (existingReceipt) return existingReceipt;
         yield* resolveGroupCoordinatorProject(input.projectId);
-        if (input.linkedProjectId === input.projectId) {
-          return yield* Effect.fail(fail("A group cannot link to itself.", "invalid"));
-        }
-        const linked = yield* requireOrdinaryRepoProject(input.linkedProjectId);
-        const currentIds = yield* repository
-          .listLinkedProjectIds(input.projectId)
-          .pipe(Effect.mapError(toServiceError("Failed to list linked repositories.")));
-        if (!currentIds.includes(input.linkedProjectId)) {
-          yield* repository
-            .linkProject({
-              projectId: input.projectId,
-              linkedProjectId: input.linkedProjectId,
-              createdAt: isoNow(),
-            })
-            .pipe(Effect.mapError(toServiceError("Failed to link repository.")));
-          yield* appendActivity({
-            projectId: input.projectId,
-            kind: "config-updated",
-            actorKind: "user",
-            actorThreadId: null,
-            goalId: null,
-            taskId: null,
-            source: null,
-            summary: `Linked repository ${linked.title}`,
-            createdAt: isoNow(),
-          });
-        }
         const config = yield* requireConfig(input.projectId);
-        yield* publish({ type: "config-upserted", config });
+        if (config.pausedAt !== null || config.archivedAt !== null) {
+          return yield* Effect.fail(
+            fail("Resume or unarchive the group before restarting its coordinator.", "conflict"),
+          );
+        }
+        yield* orchestrationEngine
+          .dispatch({
+            type: "thread.session.stop",
+            commandId: branded.command(),
+            threadId: config.coordinatorThreadId,
+            createdAt: isoNow(),
+          } as OrchestrationCommand)
+          .pipe(Effect.catch(() => Effect.void));
+        if (config.enabled && config.automationId !== null) {
+          yield* automationService
+            .runNow({ automationId: config.automationId })
+            .pipe(Effect.mapError(toServiceError("Failed to restart the coordinator.")));
+        }
+        yield* appendActivity({
+          projectId: input.projectId,
+          kind: "config-updated",
+          actorKind: "user",
+          actorThreadId: null,
+          goalId: null,
+          taskId: null,
+          source: null,
+          summary: "Restarted coordinator.",
+          createdAt: isoNow(),
+        });
         const overview = yield* buildOverview(input.projectId);
-        yield* storeReceipt(input.requestId, input.projectId, "linkProject", overview);
+        yield* storeReceipt(input.requestId, input.projectId, "restartCoordinator", overview);
         return overview;
+      }),
+
+    deleteGroup: (input, principal) =>
+      Effect.gen(function* () {
+        yield* requireUserLifecycleAction("Deleting a group", principal);
+        const existingReceipt = yield* replayReceipt(
+          input.requestId,
+          input.projectId,
+          (json) => JSON.parse(json) as ProjectAgentDeleteGroupResult,
+        );
+        if (existingReceipt) return existingReceipt;
+        yield* resolveGroupCoordinatorProject(input.projectId);
+        const result = yield* withLibraryRootLock(
+          input.projectId,
+          Effect.gen(function* () {
+            const agentConfig = yield* repository
+              .getConfig(input.projectId)
+              .pipe(Effect.mapError(toServiceError("Failed to load project coordinator.")))
+              .pipe(Effect.map(Option.getOrNull));
+            const root = yield* resolveLibraryRoot({
+              stateDir: serverConfig.stateDir,
+              projectId: input.projectId,
+              libraryPath: agentConfig?.libraryPath,
+            }).pipe(Effect.mapError(toServiceError("Failed to resolve the group library.")));
+            yield* assertLibraryRootLocation({
+              root,
+              stateDir: serverConfig.stateDir,
+              groupsWorkspaceRoot: serverConfig.groupsWorkspaceRoot,
+              studioWorkspaceRoot: serverConfig.studioWorkspaceRoot,
+              isCustomPath: agentConfig?.libraryPath !== undefined,
+              projectId: input.projectId,
+            }).pipe(Effect.mapError(toServiceError("Failed to resolve the group library.")));
+            let libraryLeftOnDiskPath: string | null = null;
+            if (yield* libraryPathExists(root)) {
+              const moved = yield* moveLibraryToTrash(root);
+              if (!moved) libraryLeftOnDiskPath = root;
+            }
+            const listed = yield* automationService
+              .list({ projectId: input.projectId, includeArchived: true })
+              .pipe(Effect.mapError(toServiceError("Failed to load group automations.")));
+            for (const definition of listed.definitions) {
+              yield* automationService
+                .delete({ id: definition.id })
+                .pipe(Effect.catch(() => Effect.void));
+            }
+            yield* repository
+              .deleteProjectData(input.projectId)
+              .pipe(Effect.mapError(toServiceError("Failed to delete group coordinator data.")));
+            // The context mirror directory is app-owned state (documents +
+            // managed default library when it lived under project-context).
+            yield* Effect.tryPromise({
+              try: () =>
+                fs.rm(projectContextRoot(serverConfig.stateDir, input.projectId), {
+                  recursive: true,
+                  force: true,
+                }),
+              catch: toServiceError("Failed to remove group context files."),
+            });
+            // The project delete dispatch keeps the projection layer in step:
+            // threads tombstone, shells drop, the project row disappears.
+            yield* orchestrationEngine
+              .dispatch({
+                type: "project.delete",
+                commandId: branded.command(),
+                projectId: input.projectId,
+                createdAt: isoNow(),
+              } as OrchestrationCommand)
+              .pipe(Effect.mapError(toServiceError("Failed to delete the group project.")));
+            const deleted: ProjectAgentDeleteGroupResult = {
+              deletedProjectId: input.projectId,
+              libraryLeftOnDiskPath,
+            };
+            return deleted;
+          }),
+        );
+        yield* storeReceipt(input.requestId, input.projectId, "deleteGroup", result);
+        return result;
       }),
 
     unlinkProject: (input, principal) =>
@@ -2295,6 +3406,24 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const memoryEnabled = Option.isSome(config)
           ? Boolean(config.value.autoMemoryEnabled)
           : false;
+        // The MEMORY.md index is loaded for every group thread — threads
+        // discover group memory through it regardless of the auto-memory
+        // switch, which only governs the extra memory/threads/ packet docs.
+        const memoryIndex = yield* repository
+          .readDocumentRevision({
+            projectId: principal.projectId,
+            logicalPath: MEMORY_AUTO_DOCUMENT_PATH,
+          })
+          .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+        const memoryIndexText =
+          Option.isSome(memoryIndex) && memoryIndex.value.content.trim().length > 0
+            ? memoryIndex.value.content.trim()
+            : "Empty. Save group-wide memory with synara_project_remember.";
+        const groupLibraryRoot = Option.isSome(config)
+          ? yield* resolveGroupLibraryRoot(principal.projectId)
+              .pipe(Effect.map(({ root }) => root))
+              .pipe(Effect.catch(() => Effect.succeed("unavailable")))
+          : "unavailable";
         const memoryHeads = memoryEnabled
           ? (yield* repository
               .listDocumentHeads(principal.projectId)
@@ -2335,6 +3464,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
               ]
             : []),
           ...(groupGoal ? [{ label: "Objective", text: groupGoal }] : []),
+          { label: "Group memory index", text: memoryIndexText },
           ...(memoryEnabled ? [{ label: "Memory", text: memorySections.join("\n\n") }] : []),
           {
             label: "Linked repositories",
@@ -2348,6 +3478,16 @@ export const makeProjectAgentService = Effect.gen(function* () {
               return shells.map((shell) => `- ${shell.title} (${shell.workspaceRoot})`).join("\n");
             }),
           },
+          // The group's default for new threads is the configured worker
+          // routing; a thread may still override it per instruction.
+          {
+            label: "Thread model default",
+            text:
+              Option.isSome(config) && config.value.workerRouting?.modelSelection !== undefined
+                ? `${config.value.workerRouting.modelSelection.provider} ${config.value.workerRouting.modelSelection.model}`
+                : "Provider default.",
+          },
+          { label: "Library root", text: groupLibraryRoot },
           ...(isCoordinatorLike ? [{ label: "Watch", text: PROJECT_BOT_WATCH_RULES }] : []),
           ...(isCoordinatorLike
             ? [
@@ -2367,6 +3507,14 @@ export const makeProjectAgentService = Effect.gen(function* () {
                 },
               ]
             : []),
+          ...(principal.kind === "coordinator"
+            ? []
+            : [
+                {
+                  label: "Group tools",
+                  text: "Save shared group memory with synara_project_remember; deliver files to the group Library with synara_project_library_add — sources must be inside your own workspace.",
+                },
+              ]),
           {
             label: "Goal",
             text: packet.goal?.objective ?? "None. Only create a goal if the user asked for one.",
@@ -2379,7 +3527,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
           },
         ]);
         return [
-          "Project context packet (authoritative durable state; additional documents via synara_project_read_document):",
+          "Group context packet (authoritative durable state; additional documents via synara_project_read_document):",
           "This thread opened with a welcome message from you; the user may be replying to it.",
           budget.packet,
           packet.historicalCoverage === "partial"
@@ -2919,6 +4067,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
         projectId,
         Effect.gen(function* () {
           const config = yield* requireConfig(projectId);
+          // Paused/archived groups refuse coordinator wakes. The inbox rows
+          // stay recorded, so resume/unarchive re-drives the backlog.
+          if (config.pausedAt !== null || config.archivedAt !== null) return;
           const goal = yield* repository
             .getActiveGoal(projectId)
             .pipe(Effect.mapError(toServiceError("Failed to load goal for wake.")));
@@ -3190,6 +4341,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
           .pipe(Effect.mapError(toServiceError("Failed to list project coordinators.")));
         for (const config of configs) {
           if (!config.enabled) continue;
+          if (config.pausedAt !== null || config.archivedAt !== null) continue;
           // Only task-assigned threads are workers. Ordinary group chats stay
           // indexed for context but a healthy idle/finished one must never
           // produce reports, wakes, or digests.
