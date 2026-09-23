@@ -80,7 +80,6 @@ function OnboardingFlow(props: {
   const [projectResults, setProjectResults] = useState<ReadonlyArray<OnboardingProjectResult>>([]);
   const { settings } = useAppSettings();
   const statuses = useProviderStatusesForLocalConfig();
-  // Starts on the welcome step so the agents step rarely has to wait for results.
   const providerDetection = useProviderDetection();
   const { activeTheme } = useTheme();
 

@@ -119,8 +119,7 @@ export function ProvidersStep(props: { readonly detection: ProviderDetection }) 
   const [connectingProvider, setConnectingProvider] = useState<ProviderKind | null>(null);
   const { disabled: disabledSet, setProviderDisabled } = useDisabledProvidersDraft();
 
-  // Probe once on entry so a CLI installed while the intro was open shows up. The server
-  // joins a probe that is still running from when the tour opened.
+  // Probe once on entry so a CLI installed while the intro was open shows up.
   const refreshedOnEntryRef = useRef(false);
   useEffect(() => {
     if (refreshedOnEntryRef.current) return;

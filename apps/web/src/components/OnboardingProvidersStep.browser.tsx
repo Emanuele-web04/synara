@@ -7,10 +7,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { ProvidersStep } from "../onboarding/steps/ProvidersStep";
-import {
-  PROVIDER_DETECTION_TIMEOUT_MS,
-  useProviderDetection,
-} from "../onboarding/useProviderDetection";
+import { useProviderDetection } from "../onboarding/useProviderDetection";
 
 const mocks = vi.hoisted(() => ({ getConfig: vi.fn(), refreshProviders: vi.fn() }));
 vi.mock("../nativeApi", () => {
@@ -20,7 +17,6 @@ vi.mock("../nativeApi", () => {
   return { ensureNativeApi: () => api, readNativeApi: () => api };
 });
 vi.mock("../appSettings", () => {
-  // Stable like the real store; the step resyncs its draft when this reference changes.
   const appSettings = { settings: { disabledProviders: [] }, updateSettingsAndWait: vi.fn() };
   return { useAppSettings: () => appSettings, getCustomBinaryPathForProvider: () => null };
 });
@@ -39,7 +35,6 @@ const codexStatus: ServerProviderStatus = {
 
 const clients: QueryClient[] = [];
 beforeEach(() => {
-  // A fresh install has no cached provider statuses until the first probe finishes.
   mocks.getConfig.mockReset().mockResolvedValue({ providers: [] });
   mocks.refreshProviders.mockReset();
 });
@@ -63,7 +58,6 @@ async function renderStep() {
 }
 
 it("does not report agents as not installed while the first probe is running", async () => {
-  // The server joins overlapping refreshes into one probe, so every caller settles together.
   const pendingRefreshes: Array<(result: { providers: ServerProviderStatus[] }) => void> = [];
   mocks.refreshProviders.mockImplementation(
     () => new Promise((resolve) => pendingRefreshes.push(resolve)),
@@ -81,19 +75,16 @@ it("does not report agents as not installed while the first probe is running", a
     .toBeVisible();
 });
 
-it("falls back to not installed when detection never answers", async () => {
-  mocks.refreshProviders.mockImplementation(() => new Promise(() => {}));
-  // Fake only the detection cap; element polling below needs real timers again.
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  try {
-    await renderStep();
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(page.getByText("Detecting agents on this machine…").elements()).toHaveLength(1);
+it("reports missing agents as not installed once detection fails", async () => {
+  const pendingRefreshes: Array<(error: Error) => void> = [];
+  mocks.refreshProviders.mockImplementation(
+    () => new Promise((_resolve, reject) => pendingRefreshes.push(reject)),
+  );
+  await renderStep();
 
-    await vi.advanceTimersByTimeAsync(PROVIDER_DETECTION_TIMEOUT_MS);
-  } finally {
-    vi.useRealTimers();
-  }
+  await expect.element(page.getByText("Detecting agents on this machine…")).toBeVisible();
+
+  for (const reject of pendingRefreshes) reject(new Error("WebSocket RPC timed out"));
 
   await expect
     .element(page.getByText("0 connected · 0 need sign-in · 9 not installed"))

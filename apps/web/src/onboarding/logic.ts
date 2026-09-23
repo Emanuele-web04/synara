@@ -136,10 +136,6 @@ export type ProviderSetupState =
 export function classifyProviderSetup(input: {
   readonly status: Pick<ServerProviderStatus, "available" | "authStatus"> | null | undefined;
   readonly disabled: boolean;
-  /**
-   * A detection probe is in flight. A fresh install has no cached statuses, so a missing
-   * status only means "not installed" once that probe has settled.
-   */
   readonly detecting?: boolean;
 }): ProviderSetupState {
   if (input.disabled) return "disabled";
