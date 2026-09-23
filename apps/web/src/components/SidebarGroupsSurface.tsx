@@ -97,11 +97,16 @@ export function SidebarGroupsSurface({
     orderedProjectThreadIds: readonly ThreadId[],
     depth?: number,
     topLevel?: boolean,
+    projectContextLabel?: string,
   ) => ReactNode;
   readonly renderListSectionHeader: (label: string, toolbar: ReactNode) => ReactNode;
   readonly renderPinnedThreadsSection: () => ReactNode;
   readonly onOpenThread: (threadId: ThreadId) => void;
-  readonly onOpenGroupSettings: (projectId: ProjectId, mode: "onboarding" | "edit") => void;
+  readonly onOpenGroupSettings: (
+    projectId: ProjectId,
+    mode: "onboarding" | "edit",
+    options?: { readonly discardable?: boolean },
+  ) => void;
   readonly onProjectContextMenu: (projectId: ProjectId, position: { x: number; y: number }) => void;
 }) {
   const homeDir = useWorkspacePathsStore((store) => store.homeDir);
@@ -109,7 +114,15 @@ export function SidebarGroupsSurface({
   const studioWorkspaceRoot = useWorkspacePathsStore((store) => store.studioWorkspaceRoot);
   const groupsWorkspaceRoot = useWorkspacePathsStore((store) => store.groupsWorkspaceRoot);
   const toggleProject = useStore((store) => store.toggleProject);
+  const projects = useStore((store) => store.projects);
   const { summariesByProjectId } = useProjectAgentSummaries();
+  const projectLabelById = useMemo(() => {
+    const map = new Map<ProjectId, string>();
+    for (const project of projects) {
+      map.set(project.id, resolveSidebarProjectRowLabel(project));
+    }
+    return map;
+  }, [projects]);
   // One shared selector answers "which groups have a thread Waiting on you" for
   // every row — the chat-header Group toggle reads the same result.
   const attentionGroups = useMemo(() => {
@@ -230,7 +243,8 @@ export function SidebarGroupsSurface({
       });
       throw new Error("Group creation is not ready yet.");
     }
-    onOpenGroupSettings(projectId, "onboarding");
+    // This dialog opening just created the group — Cancel may offer discard.
+    onOpenGroupSettings(projectId, "onboarding", { discardable: true });
   };
 
   const emptyState = resolveGroupsListEmptyState({
@@ -446,6 +460,10 @@ export function SidebarGroupsSurface({
                           entry.thread,
                           projectSidebarData?.orderedProjectThreadIds ?? [],
                           entry.depth,
+                          false,
+                          entry.thread.projectId !== project.id
+                            ? (projectLabelById.get(entry.thread.projectId) ?? undefined)
+                            : undefined,
                         ),
                       )}
                     </SidebarMenuSub>

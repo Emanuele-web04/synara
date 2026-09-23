@@ -168,6 +168,11 @@ describe("Synara gateway tool permission name", () => {
     "synara_fs_list_threads",
     "synara_tools_anything",
     "mcp__synara_fs__read",
+    // The `mcp__synara__` prefix pins the server, not the tool — the part
+    // after it must still be a real catalog name.
+    "mcp__synara__not_a_gateway_tool",
+    "mcp__synara__synara_create_task",
+    "mcp__synara__synara_fs_read",
     // Foreign server or entirely unknown names.
     "mcp__other__synara_create_thread",
     "other_synara_create_thread",
@@ -182,6 +187,24 @@ describe("Synara gateway tool permission name", () => {
     "synara_desktop",
   ])("does not trust a look-alike or foreign name: %s", (providerName) => {
     expect(isSynaraGatewayToolName(providerName)).toBe(false);
+  });
+
+  it("accepts a qualified name only when the tool is in the catalog", () => {
+    expect(isSynaraGatewayToolName("mcp__synara__synara_list_threads")).toBe(true);
+    expect(isSynaraGatewayToolName("mcp__synara__computer_click")).toBe(true);
+    expect(
+      isSynaraGatewayToolCall({ rawInput: { _toolName: "mcp__synara__synara_list_threads" } }),
+    ).toBe(true);
+  });
+
+  it("never trusts a tool name that only appears in the display title", () => {
+    // The title is provider-composed prose — an approval card can render
+    // "mcp__synara__synara_list_threads" for a request that names no such
+    // tool, so the title alone must not authorize anything.
+    expect(isSynaraGatewayToolCall({ title: "mcp__synara__synara_list_threads" })).toBe(false);
+    expect(isSynaraGatewayToolCall({ title: "mcp__synara__not_a_gateway_tool; rm -rf y" })).toBe(
+      false,
+    );
   });
 
   it("rejects non-strings and a look-alike server name in every name field", () => {

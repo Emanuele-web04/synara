@@ -18,6 +18,22 @@ export function coordinatorSuggestionSection(label: string): GroupSettingsSectio
   return COORDINATOR_SUGGESTION_SECTIONS[label as CoordinatorSuggestionChip] ?? "general";
 }
 
+// A chip is an invitation to fill a setting — once the setting is filled the
+// chip is noise. Fields the summary has not reported yet stay undefined and
+// keep their chip visible.
+export function visibleCoordinatorSuggestionChips(input: {
+  readonly hasGoal: boolean | undefined;
+  readonly instructionsConfigured: boolean | undefined;
+  readonly linkedProjectCount: number;
+}): readonly CoordinatorSuggestionChip[] {
+  return COORDINATOR_SUGGESTION_CHIPS.filter((chip) => {
+    if (chip === "Add a goal") return input.hasGoal !== true;
+    if (chip === "Write instructions") return input.instructionsConfigured !== true;
+    if (chip === "Connect repositories") return input.linkedProjectCount === 0;
+    return true;
+  });
+}
+
 export function shouldShowCoordinatorSuggestions(input: {
   readonly isCoordinatorThread: boolean;
   readonly messages: ReadonlyArray<{ readonly role: string }>;

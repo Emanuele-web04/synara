@@ -387,6 +387,15 @@ export const ProjectAgentSummary = Schema.Struct({
   pausedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   archivedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   revision: ProjectAgentRevision,
+  /** Threads that belong to the group (same union as the panel Overview):
+   * task-assigned + indexed + the coordinator thread itself. */
+  memberThreadIds: Schema.optional(Schema.Array(ThreadId)),
+  /** Projects linked into the group as repositories. */
+  linkedProjectIds: Schema.optional(Schema.Array(ProjectId)),
+  /** An active or paused goal exists — completed/stopped goals do not count. */
+  hasGoal: Schema.optional(Schema.Boolean),
+  /** instructions.md differs from the seeded default. */
+  instructionsConfigured: Schema.optional(Schema.Boolean),
 });
 export type ProjectAgentSummary = typeof ProjectAgentSummary.Type;
 
@@ -528,10 +537,14 @@ export type ProjectAgentGroupControlInput = typeof ProjectAgentGroupControlInput
 
 // Deleting a group additionally requires the group's current title, checked
 // server-side — the typed-name confirmation is not just a client nicety.
+// `requireEmpty` is the guarded onboarding-discard path: the service re-checks
+// inside the project lock that nothing was ever added to the group and
+// refuses the delete when it is no longer untouched.
 export const ProjectAgentDeleteGroupInput = Schema.Struct({
   requestId: ProjectAgentRequestId,
   projectId: ProjectId,
   confirmName: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
+  requireEmpty: Schema.optional(Schema.Boolean),
 });
 export type ProjectAgentDeleteGroupInput = typeof ProjectAgentDeleteGroupInput.Type;
 
@@ -755,6 +768,15 @@ export const ProjectAgentStreamEvent = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("document-head-updated"),
     head: ProjectDocumentHead,
+  }),
+  // One batch per index write — carries the rows actually written so a
+  // watcher can patch its list without re-listing the whole index (e.g. the
+  // Overview's Threads tab when the coordinator starts a worker thread in a
+  // linked repo).
+  Schema.Struct({
+    type: Schema.Literal("thread-index-upserted"),
+    projectId: ProjectId,
+    threads: Schema.Array(ProjectThreadIndexEntry),
   }),
 ]);
 export type ProjectAgentStreamEvent = typeof ProjectAgentStreamEvent.Type;

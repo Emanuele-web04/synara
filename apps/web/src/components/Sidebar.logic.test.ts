@@ -19,6 +19,7 @@ import {
   getNextVisibleSidebarThreadId,
   getSidebarThreadIdsToPrewarm,
   groupSidebarThreadsByProjectId,
+  mergeGroupMemberThreadsIntoProjectBuckets,
   isLatestPinnedProjectMutation,
   isProjectsSidebarSurface,
   getUnpinnedThreadsForSidebar,
@@ -1804,6 +1805,97 @@ describe("partitionSidebarThreadsByProjectIds", () => {
       "thread-group",
       "thread-studio",
     ]);
+  });
+});
+
+const sortThreadsById = (threads: readonly SidebarThreadSummary[]) =>
+  [...threads].toSorted((left, right) => left.id.localeCompare(right.id));
+
+describe("mergeGroupMemberThreadsIntoProjectBuckets", () => {
+  const groupProjectId = ProjectId.makeUnsafe("project-group");
+  const repoProjectId = ProjectId.makeUnsafe("project-repo");
+
+  it("unions linked-repo member threads into the group bucket", () => {
+    const ownThread = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-own"),
+      projectId: groupProjectId,
+    });
+    const memberThread = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-member"),
+      projectId: repoProjectId,
+    });
+    const otherRepoThread = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-repo-other"),
+      projectId: repoProjectId,
+    });
+    const base = groupSidebarThreadsByProjectId([ownThread, memberThread, otherRepoThread]);
+
+    const merged = mergeGroupMemberThreadsIntoProjectBuckets({
+      sortedSidebarThreadsByProjectId: base,
+      threads: [ownThread, memberThread, otherRepoThread],
+      memberThreadIdsByProjectId: new Map([
+        [groupProjectId, new Set([ownThread.id, memberThread.id])],
+      ]),
+      sortThreads: sortThreadsById,
+    });
+
+    expect(merged.get(groupProjectId)?.map((thread) => thread.id)).toEqual([
+      "thread-member",
+      "thread-own",
+    ]);
+    // Membership adds the thread to the group; it still lives under its own repo.
+    expect(merged.get(repoProjectId)?.map((thread) => thread.id)).toEqual([
+      memberThread.id,
+      otherRepoThread.id,
+    ]);
+  });
+
+  it("returns the input map unchanged when no member extras apply", () => {
+    const ownThread = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-own"),
+      projectId: groupProjectId,
+    });
+    const base = groupSidebarThreadsByProjectId([ownThread]);
+
+    const missingOnly = mergeGroupMemberThreadsIntoProjectBuckets({
+      sortedSidebarThreadsByProjectId: base,
+      threads: [ownThread],
+      memberThreadIdsByProjectId: new Map([
+        [groupProjectId, new Set([ThreadId.makeUnsafe("thread-not-loaded")])],
+      ]),
+      sortThreads: sortThreadsById,
+    });
+    expect(missingOnly).toBe(base);
+
+    const alreadyMember = mergeGroupMemberThreadsIntoProjectBuckets({
+      sortedSidebarThreadsByProjectId: base,
+      threads: [ownThread],
+      memberThreadIdsByProjectId: new Map([[groupProjectId, new Set([ownThread.id])]]),
+      sortThreads: sortThreadsById,
+    });
+    expect(alreadyMember).toBe(base);
+  });
+
+  it("keeps member threads out of other groups' buckets", () => {
+    const secondGroupId = ProjectId.makeUnsafe("project-group-2");
+    const memberThread = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-member"),
+      projectId: repoProjectId,
+    });
+    const base = groupSidebarThreadsByProjectId([memberThread]);
+
+    const merged = mergeGroupMemberThreadsIntoProjectBuckets({
+      sortedSidebarThreadsByProjectId: base,
+      threads: [memberThread],
+      memberThreadIdsByProjectId: new Map([
+        [secondGroupId, new Set<ThreadId>()],
+        [groupProjectId, new Set([memberThread.id])],
+      ]),
+      sortThreads: sortThreadsById,
+    });
+
+    expect(merged.get(secondGroupId)).toBeUndefined();
+    expect(merged.get(groupProjectId)?.map((thread) => thread.id)).toEqual([memberThread.id]);
   });
 });
 

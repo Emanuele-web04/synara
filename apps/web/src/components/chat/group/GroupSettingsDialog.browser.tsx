@@ -35,7 +35,7 @@ const api = vi.hoisted(() => {
       listTasks: vi.fn(async () => ({ tasks: [] })),
       listActivity: vi.fn(async () => ({ activity: [], nextCursor: null })),
       listDocuments: vi.fn(async () => ({ documents: [] })),
-      listThreadIndex: vi.fn(async () => ({ threads: [] })),
+      listThreadIndex: vi.fn(async () => ({ threads: [] as Array<{ threadId: string }> })),
       subscribe: vi.fn(async () => undefined),
       unsubscribe: vi.fn(async () => undefined),
       onEvent: vi.fn(() => () => undefined),
@@ -48,6 +48,11 @@ const api = vi.hoisted(() => {
       })),
       linkProject: vi.fn(),
       unlinkProject: vi.fn(),
+      deleteGroup: vi.fn(async () => ({
+        deletedProjectId: "project-group-1",
+        libraryLeftOnDiskPath: null,
+        workspaceLeftOnDiskPath: null,
+      })),
     },
     orchestration: { dispatchCommand: vi.fn(async () => ({ sequence: 1 })) },
     server: { getConfig: vi.fn(async () => ({ cwd: "/srv" })) },
@@ -129,7 +134,7 @@ describe("GroupSettingsDialog", () => {
     vi.clearAllMocks();
     api.projectAgent.getOverview.mockResolvedValue(overview());
     api.projectAgent.configure.mockResolvedValue(overview());
-    useStore.setState({ projects: [] });
+    useStore.setState({ projects: [], sidebarThreadSummaryById: {} });
   });
 
   it("switches between nav sections", async () => {
@@ -308,5 +313,61 @@ describe("GroupSettingsDialog", () => {
     await renderDialog({ mode: "onboarding" });
     expect(document.body.textContent).toContain("Set up your group");
     await expect.element(page.getByRole("button", { name: "Create group" })).toBeInTheDocument();
+  });
+
+  it("keeps the group and closes onboarding when discard is declined", async () => {
+    api.projectAgent.getOverview.mockResolvedValue(
+      overview({ configured: false, config: null, coordinatorStatus: "unconfigured" }),
+    );
+    const onOpenChange = vi.fn();
+    await renderDialog({ mode: "onboarding", allowDiscard: true, onOpenChange });
+
+    await page.getByRole("button", { name: "Cancel" }).click();
+    await expect.element(page.getByRole("button", { name: "Keep group" })).toBeInTheDocument();
+
+    await page.getByRole("button", { name: "Keep group" }).click();
+    await vi.waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    // The setup dialog itself must close too — a re-open would re-prompt.
+    await vi.waitFor(() => expect(document.body.textContent).not.toContain("Discard this group?"));
+    expect(api.projectAgent.deleteGroup).not.toHaveBeenCalled();
+  });
+
+  it("discards a still-empty onboarding group with requireEmpty", async () => {
+    api.projectAgent.getOverview.mockResolvedValue(
+      overview({ configured: false, config: null, coordinatorStatus: "unconfigured" }),
+    );
+    const onOpenChange = vi.fn();
+    await renderDialog({ mode: "onboarding", allowDiscard: true, onOpenChange });
+
+    await page.getByRole("button", { name: "Cancel" }).click();
+    await page.getByRole("button", { name: "Discard group" }).click();
+
+    await vi.waitFor(() =>
+      expect(api.projectAgent.deleteGroup).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectId: PROJECT_ID,
+          confirmName: "alpha",
+          requireEmpty: true,
+        }),
+      ),
+    );
+    await vi.waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+  });
+
+  it("never offers discard for a group that already has threads", async () => {
+    api.projectAgent.getOverview.mockResolvedValue(
+      overview({ configured: false, config: null, coordinatorStatus: "unconfigured" }),
+    );
+    api.projectAgent.listThreadIndex.mockResolvedValue({
+      threads: [{ threadId: "worker-1" }],
+    });
+    const onOpenChange = vi.fn();
+    await renderDialog({ mode: "onboarding", allowDiscard: true, onOpenChange });
+
+    await page.getByRole("button", { name: "Cancel" }).click();
+
+    await vi.waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(document.body.textContent).not.toContain("Discard this group?");
+    expect(api.projectAgent.deleteGroup).not.toHaveBeenCalled();
   });
 });
