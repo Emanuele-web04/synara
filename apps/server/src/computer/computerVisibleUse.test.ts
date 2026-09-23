@@ -39,9 +39,6 @@ describe("messageRequestsVisibleUse", () => {
       "show me the browser",
       "show me the Helium window",
       "I want to watch you fill the form",
-      "bring Safari to the front",
-      "Bring Resolve to foreground",
-      "Put Resolve in the foreground",
       "put the window on my screen",
       "take over my desktop and do it",
       "make the app visible",
@@ -60,6 +57,15 @@ describe("messageRequestsVisibleUse", () => {
       "fammi vedere cosa stai facendo",
     ]) {
       expect(messageRequestsVisibleUse(text), text).toBe(true);
+    }
+    const apps = { knownAppNames: ["Safari", "Resolve"] };
+    for (const text of [
+      "bring Safari to the front",
+      "Bring Resolve to foreground",
+      "Put Resolve in the foreground",
+    ]) {
+      expect(messageRequestsVisibleUse(text, apps), text).toBe(true);
+      expect(messageRequestsVisibleUse(text), text).toBe(false);
     }
   });
 
@@ -97,6 +103,8 @@ describe("messageRequestsVisibleUse", () => {
     "Move this tab to the front of the list",
     "move forward with the plan",
     "bring the proposal forward to Monday",
+    "Bring the proposal to the front for discussion",
+    "Bring the backlog to the front for review",
     "keep it in the background, don't bring Dia to the front",
     "I want to watch Netflix tonight, find me a show",
     "Download the video so I can watch it offline",
@@ -160,10 +168,14 @@ describe("computerForegroundAuthorizationForMessages", () => {
       message({ role: "assistant", text: "Reading the controls." }),
       message({ text: "keep going" }),
     ];
-    expect(computerForegroundAuthorizationForMessages(messages).userRequestedVisibleUse).toBe(true);
+    const apps = { knownAppNames: ["Resolve"] };
+    expect(computerForegroundAuthorizationForMessages(messages, apps).userRequestedVisibleUse).toBe(
+      true,
+    );
     // Consent reconstructs from the persisted transcript, not a prior resolver call or global state.
     expect(
-      computerForegroundAuthorizationForMessages(structuredClone(messages)).userRequestedVisibleUse,
+      computerForegroundAuthorizationForMessages(structuredClone(messages), apps)
+        .userRequestedVisibleUse,
     ).toBe(true);
     expect(
       computerForegroundAuthorizationForMessages([message({ text: continuation })])
@@ -277,9 +289,10 @@ describe("computerForegroundAuthorizationForMessages", () => {
         message({ id: replyId, source: "async-user-input", text: `${title}\n${answer}` }),
         message({ text: "continue" }),
       ];
-      expect(computerForegroundAuthorizationForMessages(messages).userRequestedVisibleUse).toBe(
-        answer === "Yes",
-      );
+      expect(
+        computerForegroundAuthorizationForMessages(messages, { knownAppNames: ["Resolve"] })
+          .userRequestedVisibleUse,
+      ).toBe(answer === "Yes");
     },
   );
 
@@ -313,14 +326,17 @@ describe("computerForegroundAuthorizationForMessages", () => {
     "accepts %s as confirmation of the immediately preceding visibility question",
     (reply) => {
       expect(
-        computerForegroundAuthorizationForMessages([
-          message({ text: "use Helium in the background" }),
-          message({
-            role: "assistant",
-            text: "This menu needs visible access. Can I bring Helium to the front?",
-          }),
-          message({ text: reply }),
-        ]).userRequestedVisibleUse,
+        computerForegroundAuthorizationForMessages(
+          [
+            message({ text: "use Helium in the background" }),
+            message({
+              role: "assistant",
+              text: "This menu needs visible access. Can I bring Helium to the front?",
+            }),
+            message({ text: reply }),
+          ],
+          { knownAppNames: ["Helium"] },
+        ).userRequestedVisibleUse,
       ).toBe(true);
     },
   );

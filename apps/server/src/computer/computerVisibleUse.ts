@@ -76,10 +76,11 @@ const VISIBLE_USE_PATTERNS: readonly RegExp[] = [
   /\bi (?:want|would like|['’]d like) to see (?:the |my )?(?:[\w-]+ ){0,3}(?:window|app|screen|desktop|browser|page)(?=\s*(?:[.!?,;:]|$))/i,
   /\b(?:put|show|display)\b[^.!?\n]{0,40}\bon (?:my|the) screen\b/i,
   /\b(?:make|keep) (?:it|(?:the |my )?(?:[\w-]+ ){0,3}(?:app|window|browser)) visible\b/i,
-  // "Bring Dia to the front so I can watch" may continue past "front", but
-  // "the front end", "the front desk" and "the front of the list" are places,
-  // and "move the foreground layer" is not a destination.
-  /\b(?:bring|put|move|pull|raise)\b[^.!?\n]{0,40}\b(?:to the front|(?:to|in|into) (?:the )?foreground)\b(?![- ]?(?:end|desk|door|row|page|of)\b)/i,
+  // A generic thing brought "to the front" is not necessarily an app. The
+  // target must be a screen object, a known app (below), or an explicit wish
+  // to watch. Unrecognized names get the consent card instead of a silent raise.
+  /\b(?:bring|put|move|pull|raise)\s+(?:(?:the|my|this|that)\s+)?(?:window|app|browser|screen|desktop|it)\s+(?:to\s+(?:the\s+)?front|(?:to|in|into)\s+(?:the\s+)?foreground)\b/i,
+  /\b(?:bring|put|move|pull|raise)\b[^.!?\n]{0,40}\b(?:to\s+(?:the\s+)?front|(?:to|in|into)\s+(?:the\s+)?foreground)\b(?=\s+(?:so\s+(?:that\s+)?(?:i|we)\s+can\s+(?:all\s+)?(?:watch|see)\b|and\s+show\s+me\b))/i,
   // "Forward" needs a window-shaped object: "move forward with the plan" is not a request to watch.
   /\b(?:bring|pull)(?: up)? (?:the |my |its |their )?(?:[\w-]+ ){0,2}(?:window|app|browser|it|them) (?:forward|up front)\b/i,
   /\buse (?:the )?foreground(?: mode)?(?=\s*(?:[.!?,;:]|$))/i,
@@ -119,6 +120,20 @@ function requestsKnownAppVisibility(text: string, context: ComputerForegroundCon
   );
 }
 
+function requestsKnownAppForeground(text: string, context: ComputerForegroundContext): boolean {
+  const app = text
+    .trim()
+    .match(
+      /^(?:please[, ]+)?(?:bring|put|move|pull|raise)\s+(.+?)\s+(?:to\s+(?:the\s+)?front|(?:to|in|into)\s+(?:the\s+)?foreground)[.!?]*$/iu,
+    )?.[1];
+  if (!app) return false;
+  const name = app.trim().toLocaleLowerCase();
+  return (
+    context.knownAppNames?.some((candidate) => candidate.trim().toLocaleLowerCase() === name) ===
+    true
+  );
+}
+
 /** Whether one message text explicitly asks to see the desktop. Pure. */
 export function messageRequestsVisibleUse(
   text: string,
@@ -128,7 +143,8 @@ export function messageRequestsVisibleUse(
   return (
     !BACKGROUND_USE_PATTERNS.some((pattern) => pattern.test(request)) &&
     (VISIBLE_USE_PATTERNS.some((pattern) => pattern.test(request)) ||
-      requestsKnownAppVisibility(request, context))
+      requestsKnownAppVisibility(request, context) ||
+      requestsKnownAppForeground(request, context))
   );
 }
 
