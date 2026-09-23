@@ -749,6 +749,10 @@ const make = Effect.gen(function* () {
   const providerService = yield* ProviderService;
   const computerService = yield* Effect.serviceOption(ComputerService);
   const gatewaySessions = yield* Effect.serviceOption(AgentGatewaySessionRegistry);
+  // Resolved at make time: fibers that run turn dispatch do not inherit the
+  // layer environment, so per-turn serviceOption lookups would see an empty
+  // context.
+  const projectAgentService = yield* Effect.serviceOption(ProjectAgentService);
   const providerHealth = yield* ProviderHealth;
   const pendingInteractions = yield* ProjectionPendingInteractionRepository;
   const runtimeEventRepository = yield* ProviderRuntimeEventRepository;
@@ -1788,11 +1792,8 @@ const make = Effect.gen(function* () {
     // A group coordinator must not stall its turn on interactive approval for
     // the Synara group tools — the gateway authorizes every call server-side
     // anyway. File edits, shell, and every non-Synara tool still ask.
-    // The repository sits below this layer in the server graph (the project
-    // agent service itself depends on the reactor's outputs), so the
-    // coordinator check must come straight from the persisted config rather
-    // than the service's principal resolver — the same lookup the service
-    // performs first.
+    // The coordinator check reads the persisted config directly — the same
+    // lookup the service's principal resolver performs first.
     const autoApproveSynaraTools = Option.isNone(projectAgentRepository)
       ? false
       : yield* projectAgentRepository.value.getConfigByCoordinatorThread(threadId).pipe(
@@ -2281,11 +2282,11 @@ const make = Effect.gen(function* () {
     if (!thread) {
       return;
     }
-    const projectContext = yield* Effect.gen(function* () {
-      const projectAgent = yield* Effect.serviceOption(ProjectAgentService);
-      if (Option.isNone(projectAgent)) return "";
-      return yield* projectAgent.value.formatContextPacketForTurn(input.threadId);
-    }).pipe(Effect.catch(() => Effect.succeed("")));
+    const projectContext = yield* (
+      Option.isSome(projectAgentService)
+        ? projectAgentService.value.formatContextPacketForTurn(input.threadId)
+        : Effect.succeed("")
+    ).pipe(Effect.catch(() => Effect.succeed("")));
     const debugPromptOverheadChars = debugModePromptOverheadChars(input.interactionMode);
     const goalPromptOverheadChars = providerGoalPromptOverheadChars(activeThreadGoal(thread));
     const providerPromptOverheadChars = debugPromptOverheadChars + goalPromptOverheadChars;
@@ -2298,10 +2299,10 @@ const make = Effect.gen(function* () {
     const authoredMessageText = computerInvocation
       ? computerInvocation.prompt || "Use Synara Computer for this task."
       : input.messageText;
-    const promptWithProjectContext =
-      projectContext.trim().length > 0
-        ? `${projectContext}\n\n${authoredMessageText}`
-        : authoredMessageText;
+    // The project packet is ambient context, not user words: it prefixes the
+    // assembled provider input rather than joining `<latest_user_message>`.
+    const projectContextPrefix = projectContext.trim().length > 0 ? `${projectContext}\n\n` : "";
+    const promptWithProjectContext = `${projectContextPrefix}${authoredMessageText}`;
     const threadMentionProjection = yield* resolveThreadMentionPromptProjection({
       mentions: input.mentions,
       snapshotQuery: projectionSnapshotQuery,
@@ -2589,7 +2590,7 @@ const make = Effect.gen(function* () {
     const boundaryMessageText = thread.sidechatSourceThreadId
       ? `<sidechat_boundary>\n${SIDECHAT_BOUNDARY_INSTRUCTION}\n</sidechat_boundary>\n\n<latest_user_message>\n${authoredMessageText}\n</latest_user_message>`
       : authoredMessageText;
-    const bootstrapBudgetMessageText = `${boundaryMessageText}${mentionContextSuffix}`;
+    const bootstrapBudgetMessageText = `${projectContextPrefix}${boundaryMessageText}${mentionContextSuffix}`;
     const shouldBootstrapHandoff =
       thread.handoff?.bootstrapStatus === "pending" &&
       !hasNativeAssistantMessagesBefore(thread, transcriptBoundaryMessageId);
@@ -2752,9 +2753,11 @@ const make = Effect.gen(function* () {
               }
             : null;
     const composeProviderInput = (bootstrap: BootstrapContextSelection | null): string =>
-      bootstrap
-        ? wrapProviderContext({ ...bootstrap, messageText: boundaryMessageText })
-        : boundaryMessageText;
+      `${projectContextPrefix}${
+        bootstrap
+          ? wrapProviderContext({ ...bootstrap, messageText: boundaryMessageText })
+          : boundaryMessageText
+      }`;
     const providerInputWithMentionContext = withProviderThreadStatePrompts({
       interactionMode: input.interactionMode,
       goal: activeThreadGoal(thread),
