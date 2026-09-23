@@ -71,7 +71,8 @@ export function BetaDiagnosticsWelcomeDialog() {
       description={
         <>
           Beta always sends crash reports, redacted error messages and log excerpts, and launch and
-          update timings — never your chats or files. Full list: docs/diagnostics.md.
+          update timings — never your chats or files. Paths shrink to file names only; redacted text
+          can still show fragments of what was on screen. Full list: docs/diagnostics.md.
         </>
       }
       dismissLabel="Not now"

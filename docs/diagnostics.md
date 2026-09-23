@@ -5,7 +5,7 @@ health on real machines instead of waiting for bug reports. This document is the
 authoritative description of what leaves your computer.
 
 **Stable builds collect nothing.** The diagnostics module is only constructed
-when the packaged build's `synaraFlavor` field equals `"beta"` — a field baked
+when the packaged build's `synaraDesktopFlavor` field equals `"beta"` — a field baked
 in at build time that cannot be flipped by an environment variable. (The module
 source is bundled into the shared desktop code, but in a stable build it is
 never instantiated: no UI, environment variable, or IPC can enable it.)
@@ -42,23 +42,26 @@ should be treated like crash dumps on any platform — kept on a short lifecycle
 ## What is never collected
 
 - Chat messages, prompts, agent output, or transcripts
-- File names, workspace contents, or git metadata
+- File contents, workspace contents, or git metadata
 - Provider keys, tokens, or anything under `secrets/`
 - IP-derived identifiers, device IDs, or account identity
 - Screenshots, window contents, or keystrokes
 
 The only free-text fields are `message`, `stack`, and `logTail`. Before they
 are written to the queue, each is passed through `redactDiagnosticText`
-(`packages/shared/src/diagnosticsRedaction.ts`), which strips home/user
-directories, emails, URL query strings, `Authorization`/`Bearer` values, known
-token shapes (API keys, GitHub/Slack/AWS/Google tokens, JWTs), sensitive
-`key=value` fields, IP addresses, and any remaining long opaque token. The
-worker runs the same redaction again before storing.
+(`packages/shared/src/diagnosticsRedaction.ts`), which strips PEM blocks, git
+remote URLs, emails, URL credentials and query strings,
+`Authorization`/`Bearer`/`Cookie` values, known token shapes (API keys,
+GitHub/Slack/AWS/Google tokens, JWTs), sensitive `key=value`/`key: value`
+fields, IP addresses, and any remaining long opaque token. Paths are reduced
+to the file name: `/Users/you/code/my-repo/app.ts` becomes `~/…/app.ts`, so
+folder and repository names are not sent. Redaction is best-effort — error
+text can still include fragments of whatever was on screen. The worker runs
+the same redaction again before storing.
 
 ## Transport and storage
 
 Events are buffered to `~/.synara-beta/diagnostics/events.jsonl` and flushed in
-<<<<<<< HEAD
 batches as NDJSON over HTTPS to `https://synara-beta-diagnostics.kartik-9f9.workers.dev`
 (override with `SYNARA_BETA_DIAGNOSTICS_URL` for local development; only `https://`
 or loopback targets are accepted). Events land in a Cloudflare D1 database and

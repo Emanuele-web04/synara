@@ -26,12 +26,17 @@ published by the same release workflow as stable, and it updates through
 
 - Stable builds follow the `synara` updater channel with `allowPrerelease=false` and
   only ever read the repository's GitHub Latest release.
-- Beta builds follow the `beta` updater channel with `allowPrerelease=true` and pick
-  the newest release that carries `beta-mac.yml`, `beta.yml`, or `beta-linux.yml`
-  manifests.
-- Beta releases publish `beta-*.yml` manifests only; the `synara` and `latest`
-  aliases stay on stable releases. A beta release can never be offered to a stable
-  install, and a stable release never carries beta manifests.
+- Beta builds follow the `beta` updater channel with `allowPrerelease=true`.
+  electron-updater's GitHub provider reads the releases atom feed and takes the
+  newest release that is not tagged for a custom channel — so if a stable
+  release is newer than the latest beta tag, beta installs see "no update"
+  until the next beta release is cut. Always cut a new beta right after each
+  stable release.
+- Beta releases carry `beta-mac.yml`, `beta.yml`, and `beta-linux.yml`
+  manifests. The `latest-*.yml` files are uploaded on beta releases too, but
+  they are inert there: stable installs only read them from the Latest
+  release, which beta tags never become. A beta release can never be offered
+  to a stable install, and a stable release never carries beta manifests.
 - The desktop additionally gate-checks every candidate's version against its
   lane (`isUpdateVersionAllowedForFlavor`): beta installs accept only
   `*-beta.*` versions and production installs accept only stable versions.
@@ -65,6 +70,9 @@ beta channel and the beta desktop flavor; every other suffix keeps today's behav
    dist-tag.
 4. Manual `workflow_dispatch` with `version=X.Y.Z-beta.N` plus `publish_release=true`
    works the same way; the tag is created on the workflow commit.
+5. Always cut a new beta right after each stable release. The GitHub provider
+   picks the newest non-custom-channel release in the feed, so a newer stable
+   tag shadows every older beta until a fresh beta prerelease out-sorts it.
 
 ### Signing
 
@@ -79,9 +87,9 @@ exact `X.Y.Z-beta.N` version without the `v`).
 bun run dist:desktop:artifact -- --platform mac --target dmg --arch arm64 --flavor beta
 ```
 
-`--flavor` accepts `production` (default), `canary`, or `beta`, and the
+`--flavor` accepts `production` (default), `canary`, `cua`, or `beta`, and the
 `SYNARA_DESKTOP_FLAVOR` env var is equivalent. The packaged `package.json` embeds the
-resolved flavor (`synaraFlavor`), so a packaged build cannot silently lose its
+resolved flavor (`synaraDesktopFlavor`), so a packaged build cannot silently lose its
 identity at runtime; on packaged builds the embedded value wins over the env var.
 
 ## Joining beta from stable
