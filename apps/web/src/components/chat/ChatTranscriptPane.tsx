@@ -372,6 +372,7 @@ export function ChatTranscriptPane({
         {!agentActivityDetail && threadError ? (
           <div className="pointer-events-none absolute inset-x-0 top-2 z-30 flex justify-center px-3">
             <ThreadErrorBanner
+              className="pointer-events-auto"
               error={threadError}
               unblocking={unblockingThread === true}
               {...(onDismissThreadError ? { onDismiss: onDismissThreadError } : {})}
