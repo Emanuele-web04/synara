@@ -16,20 +16,28 @@ import {
   BETA_IMPORT_REQUEST_FILE_NAME,
   BETA_IMPORT_RESULT_FILE_NAME,
   SYNARA_BETA_HOME_DIR_NAME,
+  SYNARA_BETA_HOME_ENV,
+  SYNARA_BETA_INSTALL_DIR_ENV,
   SYNARA_BETA_RELEASES_URL,
+  SYNARA_BETA_USER_DATA_ENV,
   SYNARA_BETA_WINDOWS_INSTALLER_GUID,
   type BetaImportResult,
 } from "@synara/shared/betaChannel";
+import { SYNARA_DESKTOP_SMOKE_USER_DATA_ENV } from "@synara/shared/desktopIdentity";
 import type {
   DesktopBetaActionError,
   DesktopBetaActionResult,
   DesktopBetaChannelState,
+  DesktopBetaInstallProgress,
 } from "@synara/contracts";
+
+import { installBetaFromFeed, type BetaInstallDeps } from "./betaInstaller";
 
 // electron-builder registers the uninstall key under the raw NSIS guid (no
 // braces); the value itself lives in @synara/shared/betaChannel.
 export const BETA_WINDOWS_UNINSTALL_GUID = SYNARA_BETA_WINDOWS_INSTALLER_GUID;
 const BETA_MAC_APP_NAME = "Synara Beta.app";
+const BETA_MAC_EXECUTABLE_NAME = "Synara Beta";
 const BETA_WINDOWS_EXE_NAME = "Synara Beta.exe";
 const BETA_LINUX_DESKTOP_FILE = "synara-beta.desktop";
 
@@ -46,6 +54,60 @@ interface BetaChannelDeps {
   readonly betaHomeDir: string;
   /** Flavor of the running app; only "production" may initiate the handoff. */
   readonly flavor: "production" | "beta" | "canary" | "cua";
+  /** Base URL serving beta-mac.yml and its files; falls back to GitHub releases. */
+  readonly feedUrlOverride?: string | undefined;
+  /** Install target for the macOS bundle; defaults to /Applications. */
+  readonly installDirOverride?: string | undefined;
+  /** Electron userData handed to the launched beta when set. */
+  readonly betaUserDataDir?: string | undefined;
+  /** Injectable installer (tests). Defaults to the real feed install. */
+  readonly install?: (
+    onProgress: (progress: DesktopBetaInstallProgress) => void,
+  ) => Promise<string>;
+}
+
+/** Environment inherited by a launched beta. Stable's own data-home and
+ * userData overrides must not leak; beta gets its own. */
+export function betaLaunchEnvironment(input: {
+  readonly env?: NodeJS.ProcessEnv;
+  readonly betaHomeDir: string;
+  readonly betaUserDataDir?: string | undefined;
+}): NodeJS.ProcessEnv {
+  const env = { ...(input.env ?? process.env) };
+  for (const key of [
+    "SYNARA_HOME",
+    SYNARA_DESKTOP_SMOKE_USER_DATA_ENV,
+    "SYNARA_PORT",
+    "SYNARA_AUTH_TOKEN",
+    "SYNARA_DESKTOP_WS_URL",
+    "SYNARA_DESKTOP_SHUTDOWN_TOKEN",
+    "SYNARA_DESKTOP_FLAVOR",
+    "VITE_DEV_SERVER_URL",
+    "ELECTRON_RUN_AS_NODE",
+  ]) {
+    delete env[key];
+  }
+  env[SYNARA_BETA_HOME_ENV] = input.betaHomeDir;
+  const userData = input.betaUserDataDir ?? env[SYNARA_BETA_USER_DATA_ENV];
+  if (userData) {
+    env[SYNARA_DESKTOP_SMOKE_USER_DATA_ENV] = userData;
+  }
+  return env;
+}
+
+/** The directories macOS installs probe, honoring `SYNARA_BETA_INSTALL_DIR`. */
+export function betaMacInstallDirs(input?: {
+  readonly homeDir?: string;
+  readonly env?: NodeJS.ProcessEnv;
+}): string[] {
+  const env = input?.env ?? process.env;
+  const override = env[SYNARA_BETA_INSTALL_DIR_ENV]?.trim();
+  const homeDir = input?.homeDir ?? homedir();
+  return [
+    ...(override ? [join(override, BETA_MAC_APP_NAME)] : []),
+    `/Applications/${BETA_MAC_APP_NAME}`,
+    join(homeDir, "Applications", BETA_MAC_APP_NAME),
+  ];
 }
 
 const readRegistryValue = (key: string, value: string): string | null => {
@@ -65,6 +127,7 @@ const readRegistryValue = (key: string, value: string): string | null => {
 export function detectBetaInstall(
   platform: NodeJS.Platform = process.platform,
   homeDir: string = homedir(),
+  env: NodeJS.ProcessEnv = process.env,
 ): BetaInstallDetection {
   const missing: BetaInstallDetection = {
     installed: false,
@@ -73,10 +136,7 @@ export function detectBetaInstall(
     version: null,
   };
   if (platform === "darwin") {
-    for (const appPath of [
-      `/Applications/${BETA_MAC_APP_NAME}`,
-      join(homeDir, "Applications", BETA_MAC_APP_NAME),
-    ]) {
+    for (const appPath of betaMacInstallDirs({ homeDir, env })) {
       if (existsSync(appPath)) {
         return {
           installed: true,
@@ -223,22 +283,34 @@ export function writeBetaImportRequest(input: {
   renameSync(tempPath, requestPath);
 }
 
+/**
+ * Launches the installed beta by executable path with a sanitized environment.
+ * Spawning the binary directly (rather than `open`) keeps Launch Services from
+ * re-activating a different copy, and the env scrub keeps stable's own data
+ * overrides from leaking into the beta process.
+ */
 export function launchBetaInstall(
   detection: BetaInstallDetection,
   platform: NodeJS.Platform = process.platform,
+  env?: NodeJS.ProcessEnv,
 ): void {
   if (!detection.installed || !detection.executablePath) {
     throw new Error("Synara Beta is not installed");
   }
   if (platform === "darwin") {
-    // `open` re-activates an already-running instance instead of failing.
-    spawn("open", ["-a", detection.installPath!], {
+    const executable = join(detection.installPath!, "Contents", "MacOS", BETA_MAC_EXECUTABLE_NAME);
+    spawn(executable, [], {
       detached: true,
       stdio: "ignore",
+      env: env ?? process.env,
     }).unref();
     return;
   }
-  spawn(detection.executablePath, [], { detached: true, stdio: "ignore" }).unref();
+  spawn(detection.executablePath, [], {
+    detached: true,
+    stdio: "ignore",
+    env: env ?? process.env,
+  }).unref();
 }
 
 const action = (
@@ -252,10 +324,29 @@ const action = (
 });
 
 export class DesktopBetaChannel {
+  private installProgress: DesktopBetaInstallProgress | null = null;
+  private installInFlight: Promise<void> | null = null;
+
   constructor(private readonly deps: BetaChannelDeps) {}
 
+  /** macOS can install beta in place; other platforms keep the download page. */
+  private get canInstall(): boolean {
+    return this.deps.platform === "darwin";
+  }
+
+  private detect(): BetaInstallDetection {
+    return detectBetaInstall(this.deps.platform, this.deps.homeDir);
+  }
+
+  private launchEnv(): NodeJS.ProcessEnv {
+    return betaLaunchEnvironment({
+      betaHomeDir: this.deps.betaHomeDir,
+      betaUserDataDir: this.deps.betaUserDataDir,
+    });
+  }
+
   getState(): DesktopBetaChannelState {
-    const detection = detectBetaInstall(this.deps.platform, this.deps.homeDir);
+    const detection = this.detect();
     const running = isBetaServerRunning(this.deps.betaHomeDir);
     const result = readBetaImportResult(this.deps.betaHomeDir);
     return {
@@ -263,10 +354,12 @@ export class DesktopBetaChannel {
       flavor: this.deps.flavor,
       installed: detection.installed,
       version: detection.version,
+      canInstall: this.canInstall,
       running,
       lastImportAt: result && result.ok ? result.completedAt : null,
       lastImportError: result && !result.ok ? (result.error ?? "import failed") : null,
       downloadUrl: SYNARA_BETA_RELEASES_URL,
+      install: this.installProgress,
     };
   }
 
@@ -275,12 +368,12 @@ export class DesktopBetaChannel {
     if (this.deps.flavor !== "production") {
       return action(false, "not-supported", "Beta handoff is only available from stable Synara.");
     }
-    const detection = detectBetaInstall(this.deps.platform, this.deps.homeDir);
+    const detection = this.detect();
     if (!detection.installed || !detection.executablePath) {
       return action(false, "not-installed", "Synara Beta is not installed yet.");
     }
     try {
-      launchBetaInstall(detection, this.deps.platform);
+      launchBetaInstall(detection, this.deps.platform, this.launchEnv());
       return action(true);
     } catch (error) {
       return action(false, "launch-failed", error instanceof Error ? error.message : String(error));
@@ -288,15 +381,76 @@ export class DesktopBetaChannel {
   }
 
   /**
-   * Writes the import marker into the beta home and launches the beta app.
-   * The beta server performs the snapshot itself at startup, before opening its
-   * own database, so the stable app never touches beta state directly.
+   * Ensures beta is installed, downloading it from the feed when missing.
+   * Concurrent callers share one in-flight install.
    */
-  importAndLaunch(sourceHomeDir: string): DesktopBetaActionResult {
+  private async ensureInstalled(): Promise<DesktopBetaActionResult> {
+    if (this.detect().installed) return action(true);
+    if (!this.canInstall) {
+      return action(false, "not-installed", "Synara Beta is not installed yet.");
+    }
+    this.installInFlight ??= (async () => {
+      const install =
+        this.deps.install ??
+        ((onProgress: (progress: DesktopBetaInstallProgress) => void) =>
+          installBetaFromFeed(this.installDeps(), onProgress));
+      try {
+        await install((progress) => {
+          this.installProgress = progress;
+        });
+        this.installProgress = null;
+      } finally {
+        this.installInFlight = null;
+      }
+    })();
+    try {
+      await this.installInFlight;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.installProgress = { phase: "error", percent: null, message };
+      return action(false, "install-failed", message);
+    }
+    if (!this.detect().installed) {
+      const message = "The beta install finished but the app was not found.";
+      this.installProgress = { phase: "error", percent: null, message };
+      return action(false, "install-failed", message);
+    }
+    return action(true);
+  }
+
+  private installDeps(): BetaInstallDeps {
+    return {
+      arch: process.arch,
+      installDir: this.deps.installDirOverride ?? "/Applications",
+      feedUrlOverride: this.deps.feedUrlOverride,
+    };
+  }
+
+  /**
+   * Downloads and installs beta when needed, then opens it without importing.
+   */
+  async install(): Promise<DesktopBetaActionResult> {
     if (this.deps.flavor !== "production") {
       return action(false, "not-supported", "Beta handoff is only available from stable Synara.");
     }
-    const detection = detectBetaInstall(this.deps.platform, this.deps.homeDir);
+    const installed = await this.ensureInstalled();
+    if (!installed.ok) return installed;
+    return this.launch();
+  }
+
+  /**
+   * Downloads and installs beta when needed, writes the import marker into the
+   * beta home, and launches the beta app. The beta server performs the snapshot
+   * itself at startup, before opening its own database, so the stable app never
+   * touches beta state directly.
+   */
+  async importAndLaunch(sourceHomeDir: string): Promise<DesktopBetaActionResult> {
+    if (this.deps.flavor !== "production") {
+      return action(false, "not-supported", "Beta handoff is only available from stable Synara.");
+    }
+    const installed = await this.ensureInstalled();
+    if (!installed.ok) return installed;
+    const detection = this.detect();
     if (!detection.installed || !detection.executablePath) {
       return action(false, "not-installed", "Synara Beta is not installed yet.");
     }
@@ -312,9 +466,12 @@ export class DesktopBetaChannel {
         betaHomeDir: this.deps.betaHomeDir,
         sourceHomeDir,
       });
-      launchBetaInstall(detection, this.deps.platform);
+      this.installProgress = { phase: "opening", percent: null };
+      launchBetaInstall(detection, this.deps.platform, this.launchEnv());
+      this.installProgress = null;
       return action(true);
     } catch (error) {
+      this.installProgress = null;
       // A marker without a launched beta would run the import on some later,
       // unrelated beta start; remove it so nothing consumes it by surprise.
       try {
@@ -330,5 +487,7 @@ export class DesktopBetaChannel {
   }
 }
 
-export const resolveBetaHomeDir = (homeDir: string = homedir()): string =>
-  join(homeDir, SYNARA_BETA_HOME_DIR_NAME);
+export const resolveBetaHomeDir = (
+  homeDir: string = homedir(),
+  env: NodeJS.ProcessEnv = process.env,
+): string => env[SYNARA_BETA_HOME_ENV]?.trim() || join(homeDir, SYNARA_BETA_HOME_DIR_NAME);

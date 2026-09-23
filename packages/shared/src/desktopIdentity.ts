@@ -103,6 +103,7 @@ export function canOverrideDesktopSmokeUserData(input: {
 }): boolean {
   return (
     input.packagedFlavor === "cua" ||
+    input.packagedFlavor === "beta" ||
     (input.packagedFlavor === undefined &&
       input.sourceBuildMarker === SYNARA_SOURCE_DESKTOP_BUILD_MARKER)
   );

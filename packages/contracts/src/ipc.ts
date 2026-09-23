@@ -367,6 +367,14 @@ export interface DesktopUpdateActionResult {
   state: DesktopUpdateState;
 }
 
+/** In-flight or failed beta download/install reported by the stable side. */
+export interface DesktopBetaInstallProgress {
+  readonly phase: "downloading" | "verifying" | "installing" | "opening" | "error";
+  /** 0-100 while the download reports a content length; null when indeterminate. */
+  readonly percent: number | null;
+  readonly message?: string;
+}
+
 /** Result of a stable-side probe for a parallel Synara Beta install. */
 export interface DesktopBetaChannelState {
   /** False on web builds and unsupported probing environments. */
@@ -375,6 +383,8 @@ export interface DesktopBetaChannelState {
   readonly flavor: "production" | "beta" | "canary" | "cua";
   readonly installed: boolean;
   readonly version: string | null;
+  /** True when this platform can install beta in place (macOS today). */
+  readonly canInstall: boolean;
   /** Beta's server pid is alive (its launch marker/runtime file says so). */
   readonly running: boolean;
   /** Timestamp of the last completed data import reported by the beta app. */
@@ -382,12 +392,15 @@ export interface DesktopBetaChannelState {
   readonly lastImportError: string | null;
   /** Public download page handed to the user when beta is not installed. */
   readonly downloadUrl: string;
+  /** Live download/install progress; an `error` phase stays until the next attempt. */
+  readonly install: DesktopBetaInstallProgress | null;
 }
 
 export type DesktopBetaActionError =
   | "not-supported"
   | "not-installed"
   | "beta-running"
+  | "install-failed"
   | "launch-failed"
   | "internal";
 
@@ -789,7 +802,12 @@ export interface DesktopBridge {
   /** Stable→Beta opt-in surface. Absent on builds that do not ship it. */
   beta?: {
     getState: () => Promise<DesktopBetaChannelState>;
-    /** Writes the import marker and launches Synara Beta to consume it. */
+    /** Downloads and installs Synara Beta when missing (macOS), then opens it. */
+    install: () => Promise<DesktopBetaActionResult>;
+    /**
+     * Installs Synara Beta when missing (macOS), writes the import marker, and
+     * launches it to consume the import.
+     */
     importAndLaunch: () => Promise<DesktopBetaActionResult>;
     launch: () => Promise<DesktopBetaActionResult>;
   };

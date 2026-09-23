@@ -196,14 +196,15 @@ describe("desktopIdentity", () => {
     },
   );
 
-  it("isolates smoke profiles only for source launches or immutable Cua packages", () => {
+  it("isolates smoke profiles only for source launches or isolated packages", () => {
     expect(canOverrideDesktopSmokeUserData({ packagedFlavor: "cua" })).toBe(true);
+    expect(canOverrideDesktopSmokeUserData({ packagedFlavor: "beta" })).toBe(true);
     expect(
       canOverrideDesktopSmokeUserData({
         sourceBuildMarker: SYNARA_SOURCE_DESKTOP_BUILD_MARKER,
       }),
     ).toBe(true);
-    for (const packagedFlavor of ["production", "canary", "beta", "development", null]) {
+    for (const packagedFlavor of ["production", "canary", "development", null]) {
       expect(
         canOverrideDesktopSmokeUserData({
           packagedFlavor,

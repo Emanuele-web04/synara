@@ -367,6 +367,7 @@ const desktopFlavor = resolveSynaraDesktopRuntimeFlavor({
 });
 const desktopIdentity = synaraDesktopIdentity(desktopFlavor);
 const BASE_DIR =
+  (desktopFlavor === "beta" ? process.env.SYNARA_BETA_HOME?.trim() : undefined) ||
   process.env.SYNARA_HOME?.trim() ||
   Path.join(OS.homedir(), desktopIdentity.defaultHomeDirectoryName);
 const STATE_DIR = Path.join(BASE_DIR, "userdata");
@@ -5118,10 +5119,16 @@ function registerIpcHandlers(): void {
           : desktopFlavor === "cua"
             ? "cua"
             : "production",
+    feedUrlOverride: process.env.SYNARA_BETA_FEED_URL,
+    installDirOverride: process.env.SYNARA_BETA_INSTALL_DIR,
+    betaUserDataDir: process.env.SYNARA_BETA_USER_DATA,
   });
 
   ipcMain.removeHandler(IPC.beta.getState);
   ipcMain.handle(IPC.beta.getState, async () => betaChannel.getState());
+
+  ipcMain.removeHandler(IPC.beta.install);
+  ipcMain.handle(IPC.beta.install, async () => betaChannel.install());
 
   ipcMain.removeHandler(IPC.beta.launch);
   ipcMain.handle(IPC.beta.launch, async () => betaChannel.launch());

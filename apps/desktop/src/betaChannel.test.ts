@@ -7,6 +7,8 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+const spawnCalls: { command: string; env: NodeJS.ProcessEnv | undefined }[] = [];
+
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return {
@@ -15,7 +17,11 @@ vi.mock("node:child_process", async (importOriginal) => {
       if (String(args[0]).includes("failing-beta")) {
         throw new Error("spawn ENOENT");
       }
-      return actual.spawn(...args);
+      spawnCalls.push({
+        command: String(args[0]),
+        env: (args[2] as { env?: NodeJS.ProcessEnv } | undefined)?.env,
+      });
+      return { unref: () => {}, on: () => {}, pid: 4321 };
     },
   };
 });
@@ -23,12 +29,18 @@ vi.mock("node:child_process", async (importOriginal) => {
 import {
   BETA_IMPORT_REQUEST_FILE_NAME,
   BETA_IMPORT_RESULT_FILE_NAME,
+  SYNARA_BETA_HOME_ENV,
+  SYNARA_BETA_INSTALL_DIR_ENV,
 } from "@synara/shared/betaChannel";
-import { BETA_WINDOWS_UNINSTALL_GUID } from "./betaChannel";
+import { SYNARA_DESKTOP_SMOKE_USER_DATA_ENV } from "@synara/shared/desktopIdentity";
 import {
+  BETA_WINDOWS_UNINSTALL_GUID,
   DesktopBetaChannel,
+  betaLaunchEnvironment,
+  detectBetaInstall,
   isBetaServerRunning,
   readBetaImportResult,
+  resolveBetaHomeDir,
   writeBetaImportRequest,
 } from "./betaChannel";
 
@@ -46,20 +58,25 @@ afterEach(() => {
   }
 });
 
-const makeChannel = (root: string, flavor: "production" | "beta" | "canary" = "production") =>
+const makeChannel = (
+  root: string,
+  flavor: "production" | "beta" | "canary" = "production",
+  extra: Partial<ConstructorParameters<typeof DesktopBetaChannel>[0]> = {},
+) =>
   new DesktopBetaChannel({
     platform: "linux",
     homeDir: root,
     betaHomeDir: join(root, ".synara-beta"),
     flavor,
+    ...extra,
   });
 
 describe("DesktopBetaChannel", () => {
-  it("reports unsupported actions on non-production flavors", () => {
+  it("reports unsupported actions on non-production flavors", async () => {
     const root = makeRoot();
     const beta = makeChannel(root, "beta");
     expect(beta.launch().ok).toBe(false);
-    expect(beta.importAndLaunch(root).error).toBe("not-supported");
+    expect((await beta.importAndLaunch(root)).error).toBe("not-supported");
     expect(beta.getState().flavor).toBe("beta");
   });
 
@@ -69,17 +86,19 @@ describe("DesktopBetaChannel", () => {
     expect(state.installed).toBe(false);
     expect(state.running).toBe(false);
     expect(state.lastImportAt).toBeNull();
+    expect(state.canInstall).toBe(false);
+    expect(state.install).toBeNull();
     expect(state.downloadUrl).toContain("releases");
   });
 
-  it("refuses the import when beta is missing", () => {
+  it("refuses the import when beta is missing", async () => {
     const root = makeRoot();
-    const result = makeChannel(root).importAndLaunch(root);
+    const result = await makeChannel(root).importAndLaunch(root);
     expect(result.ok).toBe(false);
     expect(result.error).toBe("not-installed");
   });
 
-  it("refuses the import while the beta server is running", () => {
+  it("refuses the import while the beta server is running", async () => {
     const root = makeRoot();
     const betaHome = join(root, ".synara-beta");
     mkdirSync(join(betaHome, "userdata"), { recursive: true });
@@ -91,14 +110,14 @@ describe("DesktopBetaChannel", () => {
     // must trip before launch either way once an install exists.
     const channel = makeChannel(root);
     expect(isBetaServerRunning(betaHome)).toBe(true);
-    const result = channel.importAndLaunch(root);
+    const result = await channel.importAndLaunch(root);
     expect(result.ok).toBe(false);
     // "not-installed" wins first on this machine; running detection is
     // independently covered by isBetaServerRunning.
     expect(["beta-running", "not-installed"]).toContain(result.error);
   });
 
-  it("removes the import marker when launching beta throws", () => {
+  it("removes the import marker when launching beta throws", async () => {
     const root = makeRoot();
     const betaHome = join(root, ".synara-beta");
     // Fake a linux install through its desktop file so detection resolves a
@@ -107,12 +126,65 @@ describe("DesktopBetaChannel", () => {
     mkdirSync(desktopDir, { recursive: true });
     writeFileSync(join(desktopDir, "synara-beta.desktop"), "Exec=/opt/failing-beta\n");
 
-    const result = makeChannel(root).importAndLaunch(join(root, ".synara"));
+    const result = await makeChannel(root).importAndLaunch(join(root, ".synara"));
     expect(result.ok).toBe(false);
     expect(result.error).toBe("internal");
     // The marker must not outlive the failed launch; a leftover would import
     // on the next unrelated beta start.
     expect(existsSync(join(betaHome, BETA_IMPORT_REQUEST_FILE_NAME))).toBe(false);
+  });
+
+  it("installs via the feed, then launches the new app on macOS", async () => {
+    const root = makeRoot();
+    const betaHome = join(root, ".synara-beta");
+    const installDir = join(root, "Applications");
+    const channel = new DesktopBetaChannel({
+      platform: "darwin",
+      homeDir: root,
+      betaHomeDir: betaHome,
+      flavor: "production",
+      installDirOverride: installDir,
+      betaUserDataDir: join(root, "beta-userdata"),
+      install: async (onProgress) => {
+        onProgress({ phase: "downloading", percent: 42 });
+        mkdirSync(join(installDir, "Synara Beta.app"), { recursive: true });
+        return join(installDir, "Synara Beta.app");
+      },
+    });
+
+    const result = await channel.importAndLaunch(join(root, ".synara"));
+    expect(result.ok).toBe(true);
+    expect(existsSync(join(betaHome, BETA_IMPORT_REQUEST_FILE_NAME))).toBe(true);
+    const last = spawnCalls.at(-1);
+    expect(last?.command).toBe(
+      join(installDir, "Synara Beta.app", "Contents", "MacOS", "Synara Beta"),
+    );
+    // Beta gets its own home; stable's overrides must not leak through.
+    expect(last?.env?.[SYNARA_BETA_HOME_ENV]).toBe(betaHome);
+    expect(last?.env?.SYNARA_HOME).toBeUndefined();
+    expect(last?.env?.[SYNARA_DESKTOP_SMOKE_USER_DATA_ENV]).toBe(join(root, "beta-userdata"));
+    // The flow is finished: no stale progress is reported.
+    expect(channel.getState().install).toBeNull();
+    expect(channel.getState().installed).toBe(true);
+  });
+
+  it("reports an install failure and keeps it visible in state", async () => {
+    const root = makeRoot();
+    const channel = new DesktopBetaChannel({
+      platform: "darwin",
+      homeDir: root,
+      betaHomeDir: join(root, ".synara-beta"),
+      flavor: "production",
+      installDirOverride: join(root, "Applications"),
+      install: async () => {
+        throw new Error("checksum mismatch");
+      },
+    });
+    const result = await channel.install();
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("install-failed");
+    expect(channel.getState().install?.phase).toBe("error");
+    expect(channel.getState().install?.message).toContain("checksum mismatch");
   });
 });
 
@@ -187,5 +259,55 @@ describe("import marker files", () => {
 describe("detection constants", () => {
   it("keeps the Windows beta GUID stable", () => {
     expect(BETA_WINDOWS_UNINSTALL_GUID).toBe("a8e63b48-d4f3-4db5-9e12-368107afe65d");
+  });
+});
+
+describe("environment overrides", () => {
+  it("resolveBetaHomeDir honors SYNARA_BETA_HOME", () => {
+    const root = makeRoot();
+    const custom = join(root, "custom-beta-home");
+    expect(resolveBetaHomeDir(root, { [SYNARA_BETA_HOME_ENV]: custom })).toBe(custom);
+    expect(resolveBetaHomeDir(root, {})).toBe(join(root, ".synara-beta"));
+  });
+
+  it("detectBetaInstall finds the app in SYNARA_BETA_INSTALL_DIR", () => {
+    const root = makeRoot();
+    const installDir = join(root, "DemoApps");
+    mkdirSync(join(installDir, "Synara Beta.app"), { recursive: true });
+    const detection = detectBetaInstall("darwin", root, {
+      [SYNARA_BETA_INSTALL_DIR_ENV]: installDir,
+    });
+    expect(detection.installed).toBe(true);
+    expect(detection.installPath).toBe(join(installDir, "Synara Beta.app"));
+  });
+
+  it("betaLaunchEnvironment strips stable's data overrides and sets beta's own", () => {
+    const env = betaLaunchEnvironment({
+      env: {
+        HOME: "/home/test",
+        SYNARA_HOME: "/stable-home",
+        [SYNARA_DESKTOP_SMOKE_USER_DATA_ENV]: "/stable-userdata",
+        SYNARA_PORT: "3737",
+        SYNARA_AUTH_TOKEN: "secret",
+        ELECTRON_RUN_AS_NODE: "1",
+      },
+      betaHomeDir: "/beta-home",
+      betaUserDataDir: "/beta-userdata",
+    });
+    expect(env.HOME).toBe("/home/test");
+    expect(env.SYNARA_HOME).toBeUndefined();
+    expect(env.SYNARA_PORT).toBeUndefined();
+    expect(env.SYNARA_AUTH_TOKEN).toBeUndefined();
+    expect(env.ELECTRON_RUN_AS_NODE).toBeUndefined();
+    expect(env[SYNARA_BETA_HOME_ENV]).toBe("/beta-home");
+    expect(env[SYNARA_DESKTOP_SMOKE_USER_DATA_ENV]).toBe("/beta-userdata");
+  });
+
+  it("betaLaunchEnvironment leaves the smoke override unset without a beta userData", () => {
+    const env = betaLaunchEnvironment({
+      env: { [SYNARA_DESKTOP_SMOKE_USER_DATA_ENV]: "/stable-userdata" },
+      betaHomeDir: "/beta-home",
+    });
+    expect(env[SYNARA_DESKTOP_SMOKE_USER_DATA_ENV]).toBeUndefined();
   });
 });

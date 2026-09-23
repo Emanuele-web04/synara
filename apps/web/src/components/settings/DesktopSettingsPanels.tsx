@@ -447,9 +447,11 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
     queryKey: ["desktop-beta-channel-state"],
     queryFn: () => betaBridge!.getState(),
     enabled: active && betaBridge !== undefined,
-    refetchInterval: 30_000,
+    // Poll fast while a download/install is in flight so the progress row moves.
+    refetchInterval: (query) =>
+      query.state.data?.install && query.state.data.install.phase !== "error" ? 500 : 30_000,
   });
-  const [actionPending, setActionPending] = useState<"copy" | "open" | null>(null);
+  const [actionPending, setActionPending] = useState<"copy" | "open" | "install" | null>(null);
   const state: DesktopBetaChannelState | null = betaStateQuery.data ?? null;
 
   if (!active || !betaBridge || !state?.supported) return null;
@@ -489,6 +491,23 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
           type: "warning",
           title: "Could not open Synara Beta",
           description: result.message ?? "The beta install was not found.",
+        });
+      }
+      refresh();
+    } finally {
+      setActionPending(null);
+    }
+  }
+
+  async function installBeta() {
+    setActionPending("install");
+    try {
+      const result = await betaBridge!.install();
+      if (!result.ok) {
+        toastManager.add({
+          type: "warning",
+          title: "Could not install Synara Beta",
+          description: result.message ?? "Try again from Settings → General.",
         });
       }
       refresh();
@@ -553,11 +572,54 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
               Last import failed: {state.lastImportError}
             </p>
           ) : null}
+          {state.install?.phase === "error" ? (
+            <p className="text-ui-xs text-destructive">
+              Install failed: {state.install.message ?? "unknown error"}
+            </p>
+          ) : state.install ? (
+            <p className="text-ui-xs text-muted-foreground">
+              {state.install.phase === "downloading"
+                ? `Downloading Synara Beta${state.install.percent !== null ? ` — ${state.install.percent}%` : "…"}`
+                : state.install.phase === "verifying"
+                  ? "Verifying the download…"
+                  : state.install.phase === "installing"
+                    ? "Installing Synara Beta…"
+                    : "Opening Synara Beta…"}
+            </p>
+          ) : null}
           <div className="flex flex-wrap items-center gap-2 pt-1.5">
             {!state.installed ? (
-              <Button size="xs" onClick={() => void openDownloadPage()}>
-                Get Synara Beta
-              </Button>
+              state.canInstall ? (
+                <>
+                  <Button
+                    size="xs"
+                    disabled={actionPending !== null}
+                    onClick={() => void installBeta()}
+                  >
+                    {actionPending === "install" ? "Installing…" : "Install Synara Beta"}
+                  </Button>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    disabled={actionPending !== null}
+                    onClick={() => void copyDataAndLaunch()}
+                  >
+                    {actionPending === "copy" ? "Installing…" : "Copy my data and open"}
+                  </Button>
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    disabled={actionPending !== null}
+                    onClick={() => void openDownloadPage()}
+                  >
+                    Download page
+                  </Button>
+                </>
+              ) : (
+                <Button size="xs" onClick={() => void openDownloadPage()}>
+                  Get Synara Beta
+                </Button>
+              )
             ) : (
               <>
                 <Button

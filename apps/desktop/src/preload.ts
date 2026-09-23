@@ -211,6 +211,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   },
   beta: {
     getState: () => ipcRenderer.invoke(IPC.beta.getState),
+    install: () => ipcRenderer.invoke(IPC.beta.install),
     launch: () => ipcRenderer.invoke(IPC.beta.launch),
     importAndLaunch: () => ipcRenderer.invoke(IPC.beta.importAndLaunch),
   },
