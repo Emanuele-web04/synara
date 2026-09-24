@@ -7,16 +7,20 @@
 
 import type { ProjectId } from "@synara/contracts";
 
+import { resolveGroupCoordinatorDisplayName } from "../lib/groupCoordinatorName";
 import type { Project } from "../types";
 
 export function resolveGroupCoordinatorRowLabel(input: {
   readonly configured: boolean;
   readonly coordinatorName: string | null | undefined;
+  readonly groupName: string;
+  readonly remoteName?: string | null | undefined;
+  readonly threadTitle?: string | null | undefined;
 }): string {
-  if (input.configured && input.coordinatorName && input.coordinatorName.trim().length > 0) {
-    return input.coordinatorName;
+  if (!input.configured) {
+    return "Set up coordinator";
   }
-  return "Set up coordinator";
+  return resolveGroupCoordinatorDisplayName(input);
 }
 
 export type GroupsListEmptyState = "loading" | "no-groups" | null;

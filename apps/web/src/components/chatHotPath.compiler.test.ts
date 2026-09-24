@@ -185,7 +185,7 @@ const HOT_PATH_MODULES: readonly HotPathModule[] = [
   // Group panel is open — same per-row hot-path budget as the sidebar surfaces.
   {
     relativePath: "chat/project/GroupOverview.tsx",
-    requiredFunction: "GroupOverview",
+    requiredFunction: "GroupThreadsSection",
     allowedBailoutReasons: [],
   },
   {

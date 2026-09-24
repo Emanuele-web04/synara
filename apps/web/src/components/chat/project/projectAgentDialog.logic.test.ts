@@ -8,7 +8,7 @@ import {
 
 describe("project agent dialog defaults", () => {
   it("names a new agent after the project", () => {
-    expect(defaultProjectAgentName("synara")).toBe("synara Coordinator");
+    expect(defaultProjectAgentName("synara")).toBe("synara");
     expect(defaultProjectAgentName("  ")).toBe("Project Coordinator");
   });
 
