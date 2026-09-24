@@ -25,6 +25,24 @@ export function isFailedWorkerSessionStatus(status: string | null | undefined): 
   return status === "error" || status === "interrupted" || status === "stopped";
 }
 
+// Once a worker records a terminal settle outcome its monitoring is done —
+// later settle-class events (a replayed stop, a health-loop status pass) must
+// not post a second row. Waiting outcomes are not terminal: the worker can
+// still settle for real afterwards.
+const TERMINAL_WORKER_SETTLE_OUTCOMES: ReadonlySet<ProjectManagedWorkerSettleOutcome> = new Set([
+  "completed",
+  "stopped",
+  "failed",
+  "interrupted",
+  "missing",
+]);
+
+export function isTerminalWorkerSettleOutcome(
+  outcome: ProjectManagedWorkerSettleOutcome | null,
+): boolean {
+  return outcome !== null && TERMINAL_WORKER_SETTLE_OUTCOMES.has(outcome);
+}
+
 // A worker is a thread the coordinator assigned to a task — ordinary group
 // chat threads stay indexed for context but are never reported on or woken.
 export function isManagedWorkerThread(input: {

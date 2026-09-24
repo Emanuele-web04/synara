@@ -152,6 +152,7 @@ import {
   formatWorkerSettlementReport,
   formatWorkerWatchLine,
   isFailedWorkerSessionStatus,
+  isTerminalWorkerSettleOutcome,
   isWorkerAlertEvent,
   lastAssistantTextFromMessages,
   shouldMaterializeWorkerSettlementReport,
@@ -458,6 +459,16 @@ export const makeProjectAgentService = Effect.gen(function* () {
       const notice = workerMonitorNoticeForEvent(input.eventType);
       if (notice === null) return;
       const worker = input.worker;
+      // A terminal settle already reported: same-episode re-ingests — a
+      // replayed stop or the health loop's status pass — must not post a
+      // second row, and a settled worker cannot go stuck. A genuinely new
+      // terminal transition (missing → completed) still reports.
+      if (
+        isTerminalWorkerSettleOutcome(worker.settleOutcome) &&
+        (notice.kind === "stuck" || notice.outcome === worker.settleOutcome)
+      ) {
+        return;
+      }
       const threadPayload = {
         threadId: worker.threadId,
         title: worker.title,
@@ -662,11 +673,15 @@ export const makeProjectAgentService = Effect.gen(function* () {
           ),
         );
 
+      // A terminal settle already reported: monitoring ends there, so the
+      // health checks below (missing shell, failed status, overdue waiting,
+      // silent running + recovery) must not post another episode.
+      if (isTerminalWorkerSettleOutcome(worker.settleOutcome)) return;
       if (Option.isNone(input.shell)) {
         // Missing shell: one episode, keyed by its first-seen timestamp. A
         // worker already settled as missing stays quiet while the shell is
         // still gone — a later settle event re-opens reporting.
-        if (worker.stuckKind === "missing" || worker.settleOutcome === "missing") return;
+        if (worker.stuckKind === "missing") return;
         const stuckSince = nowIso;
         yield* repository
           .upsertManagedWorker({
@@ -697,13 +712,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
       if (worker.stuckKind === "missing") {
         updated = { ...updated, stuckKind: null, stuckSince: null };
       }
-      const terminal =
-        worker.settleOutcome === "completed" ||
-        worker.settleOutcome === "stopped" ||
-        worker.settleOutcome === "failed" ||
-        worker.settleOutcome === "interrupted" ||
-        worker.settleOutcome === "missing";
-      if (!terminal && !updated.needsYou) {
+      if (!updated.needsYou) {
         const waiting = shell.hasPendingApprovals || shell.hasPendingUserInput;
         if (waiting) {
           const waitingSince = updated.waitingSince ?? nowIso;

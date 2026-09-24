@@ -3594,7 +3594,7 @@ describe("MessagesTimeline", () => {
     );
   });
 
-  it("renders an automation-dispatched coordinator prompt without a check-in pill", async () => {
+  it("renders an automation-dispatched coordinator prompt as a normal user row", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -3619,10 +3619,10 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    // Check-in turns never appear as a compact row; when one reaches the
-    // timeline it renders like any other user message.
+    // Check-in turns are suppressed upstream in deriveWorkLogEntries; the
+    // timeline no longer has a compact check-in row, so the prompt renders as
+    // a normal user bubble.
     expect(markup).not.toContain("Coordinator check-in");
-    expect(markup).not.toContain("Show details");
     expect(markup).toContain("--app-user-message-background");
     expect(markup).toContain("Sent via Automation");
   });
