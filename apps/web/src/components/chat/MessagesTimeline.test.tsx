@@ -3700,7 +3700,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("<button");
   });
 
-  it("renders the batch roll-up as one pill with per-thread links and outcomes", async () => {
+  it("renders the batch roll-up as a chat message with per-thread links and outcomes", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -3760,7 +3760,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Alpha research");
     expect(markup).toContain("Beta survey");
     expect(markup).toContain("Gamma page");
-    expect(markup).toContain("needs approval");
+    expect(markup).toContain("needs your approval");
     // Three thread links — no full work-entry chrome around them.
     expect(markup.match(/<button/g)?.length).toBeGreaterThanOrEqual(3);
   });

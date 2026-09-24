@@ -9,7 +9,7 @@
 //      Synara's version, derived from the same helpers the sidebar uses.
 
 import type { AutomationDefinition, ThreadId } from "@synara/contracts";
-import { type MouseEvent as ReactMouseEvent, useEffect, useState } from "react";
+import { type MouseEvent as ReactMouseEvent, useEffect, useId, useState } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
@@ -170,6 +170,7 @@ export function GroupThreadActivitySparkline({
   readonly threads: readonly SidebarThreadSummary[];
 }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const gradientId = `group-activity-fill-${useId().replace(/:/g, "")}`;
   useEffect(() => {
     const interval = window.setInterval(() => setNowMs(Date.now()), SPARKLINE_TICK_MS);
     return () => window.clearInterval(interval);
@@ -193,6 +194,10 @@ export function GroupThreadActivitySparkline({
     coordinates.length > 1
       ? `M${coordinates.map((point) => `${point.x.toFixed(1)} ${point.y.toFixed(1)}`).join(" L")}`
       : null;
+  const areaData =
+    pathData !== null
+      ? `${pathData} L${SPARKLINE_VIEW_WIDTH} ${SPARKLINE_VIEW_HEIGHT} L0 ${SPARKLINE_VIEW_HEIGHT} Z`
+      : null;
   const workingLabel = series.currentCount === 1 ? "1 thread" : `${series.currentCount} threads`;
   const accessibleLabel = `${workingLabel} working now, peak ${series.peakCount} in the last hour`;
   return (
@@ -209,6 +214,12 @@ export function GroupThreadActivitySparkline({
         className="block size-full"
         aria-hidden
       >
+        <defs>
+          <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="var(--color-text-accent)" stopOpacity={0.18} />
+            <stop offset="100%" stopColor="var(--color-text-accent)" stopOpacity={0} />
+          </linearGradient>
+        </defs>
         {SPARKLINE_GRID_ROWS.map((y) => (
           <line
             key={`row-${y}`}
@@ -237,6 +248,9 @@ export function GroupThreadActivitySparkline({
             vectorEffect="non-scaling-stroke"
           />
         ))}
+        {pathData !== null && areaData !== null ? (
+          <path d={areaData} fill={`url(#${gradientId})`} stroke="none" />
+        ) : null}
         {pathData !== null ? (
           <path
             d={pathData}

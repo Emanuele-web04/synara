@@ -207,7 +207,7 @@ export function workerMonitorNoticeForEvent(eventType: string): WorkerMonitorNot
         outcome: "waiting-approval",
         tone: "approval",
         marker: "\u26a0",
-        phrase: "is waiting for approval",
+        phrase: "is waiting for your approval",
       };
     case "user-input.requested":
       return {
@@ -215,7 +215,7 @@ export function workerMonitorNoticeForEvent(eventType: string): WorkerMonitorNot
         outcome: "waiting-input",
         tone: "approval",
         marker: "\u26a0",
-        phrase: "needs input",
+        phrase: "needs your input",
       };
     case "thread.turn-interrupt-requested":
     case "worker.interrupted":
@@ -358,7 +358,7 @@ export function formatWorkerBatchRollup(input: {
   if (allFinished) {
     return `All ${count} ${noun} finished: ${entries.join(", ")}`;
   }
-  return `All ${count} ${noun} settled: ${entries.join(", ")}`;
+  return `All ${count} ${noun} are done: ${entries.join(", ")}`;
 }
 
 export function lastAssistantTextFromMessages(

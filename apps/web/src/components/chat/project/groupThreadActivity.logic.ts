@@ -4,12 +4,13 @@
 //          no polling and no per-bucket server calls. Each thread contributes
 //          one work interval (its latest turn, or its live session while no turn
 //          exists yet) and the series counts how many intervals cover each
-//          minute bucket of the trailing ~60-minute window.
+//          minute bucket of a fixed trailing 60-minute window, so a young group
+//          still draws a full-width line (flat, then rising) instead of a dot.
 // Layer: Group panel logic (pure)
 
 import { isLatestTurnSettled } from "@synara/shared/groupThreadState";
 
-/** Sparkline window: the trailing hour, or since the group's first thread when shorter. */
+/** Sparkline window: always the trailing hour, bucketed per minute. */
 export const GROUP_THREAD_ACTIVITY_WINDOW_MS = 60 * 60 * 1000;
 export const GROUP_THREAD_ACTIVITY_BUCKET_MS = 60 * 1000;
 
@@ -108,12 +109,7 @@ export function buildGroupThreadActivitySeries(input: {
     return empty;
   }
   const intervals: Array<{ startMs: number; endMs: number }> = [];
-  let firstThreadMs: number | null = null;
   for (const thread of input.threads) {
-    const createdMs = parseMs(thread.createdAt);
-    if (createdMs !== null && (firstThreadMs === null || createdMs < firstThreadMs)) {
-      firstThreadMs = createdMs;
-    }
     const interval = resolveGroupThreadWorkInterval(thread, nowMs);
     if (interval !== null && interval.endMs > interval.startMs) {
       intervals.push(interval);
@@ -122,14 +118,8 @@ export function buildGroupThreadActivitySeries(input: {
   if (intervals.length === 0) {
     return empty;
   }
-  const windowStartMs = Math.max(
-    nowMs - GROUP_THREAD_ACTIVITY_WINDOW_MS,
-    firstThreadMs ?? nowMs - GROUP_THREAD_ACTIVITY_WINDOW_MS,
-  );
-  const bucketCount = Math.max(
-    1,
-    Math.ceil((nowMs - windowStartMs) / GROUP_THREAD_ACTIVITY_BUCKET_MS),
-  );
+  const windowStartMs = nowMs - GROUP_THREAD_ACTIVITY_WINDOW_MS;
+  const bucketCount = Math.ceil(GROUP_THREAD_ACTIVITY_WINDOW_MS / GROUP_THREAD_ACTIVITY_BUCKET_MS);
   const points = Array.from({ length: bucketCount }, () => 0);
   let currentCount = 0;
   for (const interval of intervals) {
