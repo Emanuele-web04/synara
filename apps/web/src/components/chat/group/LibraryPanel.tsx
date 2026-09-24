@@ -624,7 +624,12 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
   return (
     <>
       <div
-        className={ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME}
+        className={cn(
+          ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME,
+          // Expanded, the overlay spans the whole chat column so the card's
+          // max width is measured against the column, never the window.
+          fullHeight ? "left-0 items-end" : null,
+        )}
         data-environment-panel-variant={variant}
         aria-hidden={!open}
         inert={!open}
@@ -635,9 +640,9 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
             ENVIRONMENT_PANEL_MOTION_CLASS,
             "flex flex-col transition-[width] duration-200 ease-out motion-reduce:transition-none",
             // Collapsed is a narrow card capped below the overlay; expanded grows
-            // both ways — full height and a reading width for documents — while
-            // leaving the chat column visible beside it.
-            fullHeight ? "h-full w-[clamp(20rem,calc(100vw-22rem),48rem)]" : "w-72 max-h-[70%]",
+            // both ways — full height and a reading width for documents — but
+            // never wider than the chat column it sits in.
+            fullHeight ? "h-full w-[48rem] max-w-full" : "w-72 max-h-[70%]",
             open
               ? "pointer-events-auto translate-x-0 opacity-100"
               : "pointer-events-none translate-x-full opacity-0",
