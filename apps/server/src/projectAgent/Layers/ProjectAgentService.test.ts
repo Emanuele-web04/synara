@@ -89,6 +89,7 @@ function makeTestLayer(options?: {
         lastError: string | null;
         activeTurnId?: string | null;
         lastActivityAt?: string | null;
+        lastProgressAt?: string | null;
       } | null;
       latestTurn?: {
         state: string;
@@ -4731,7 +4732,8 @@ it.effect("interrupts and re-dispatches the recorded prompt after the nudge dela
     );
     const worker = yield* repository.findManagedWorkerByThread(workerThreadId);
     assert.equal(Option.isSome(worker) ? worker.value.recoveryStep : null, 2);
-    assert.equal(Option.isSome(worker) ? worker.value.recoveriesUsed : null, 1);
+    // Nudge + re-dispatch each count against the cap.
+    assert.equal(Option.isSome(worker) ? worker.value.recoveriesUsed : null, 2);
 
     // Deduped within the episode: a repeat pass dispatches nothing new.
     yield* service.inspectWorkerHealth();
@@ -4758,33 +4760,26 @@ it.effect("flags the worker Waiting on you once the recovery cap is exhausted", 
     harness.providerSessions.push(liveProviderSession(workerThreadId));
     harness.dispatched.length = 0;
 
-    // Recovery 1: nudge at +11m, redispatch at +17m.
+    // Recovery 1: nudge at +11m (attempt 1), interrupt + re-dispatch at +17m
+    // (attempt 2) — the cap is spent inside the first cycle.
     yield* TestClock.adjust("11 minutes");
     yield* service.inspectWorkerHealth();
     yield* TestClock.adjust("6 minutes");
     yield* service.inspectWorkerHealth();
     const workerAfterFirst = yield* repository.findManagedWorkerByThread(workerThreadId);
-    assert.equal(Option.isSome(workerAfterFirst) ? workerAfterFirst.value.recoveriesUsed : null, 1);
+    assert.equal(Option.isSome(workerAfterFirst) ? workerAfterFirst.value.recoveriesUsed : null, 2);
 
-    // Another full quiet window: the episode chain continues (lastActivity
-    // never moved) and the next pass starts the second recovery cycle.
+    // The next full quiet window finds the re-dispatch produced nothing —
+    // the spent cap latches "Waiting on you" — a Synara-native needs-you row
+    // on the coordinator thread (with real actions, not a fake provider
+    // request) and one wake for the coordinator to tell the user.
     yield* TestClock.adjust("11 minutes");
-    yield* service.inspectWorkerHealth();
-    yield* service.inspectWorkerHealth();
-    yield* TestClock.adjust("6 minutes");
     yield* service.inspectWorkerHealth();
     const workerAfterSecond = yield* repository.findManagedWorkerByThread(workerThreadId);
     assert.equal(
       Option.isSome(workerAfterSecond) ? workerAfterSecond.value.recoveriesUsed : null,
       2,
     );
-
-    // Third stall window with the cap spent: the worker latches
-    // "Waiting on you" — a Synara-native needs-you row on the coordinator
-    // thread (with real actions, not a fake provider request) and one wake
-    // for the coordinator to tell the user.
-    yield* TestClock.adjust("11 minutes");
-    yield* service.inspectWorkerHealth();
     const needsYouRows = harness.dispatched.filter(
       (command) =>
         command.type === "thread.activity.append" &&
@@ -5278,7 +5273,9 @@ it.effect("keeps the recovery count across episodes and caps the chain", () => {
       prompts: ["Draft the schema migration"],
     });
     harness.providerSessions.push(liveProviderSession(workerThreadId));
-    const stallAt = (iso: string) => {
+    // `stallAt` models the projected session: activity that also produced
+    // real work stamps `lastProgressAt`; a bare echo leaves it unset.
+    const stallAt = (iso: string, progressIso?: string) => {
       harness.threadShells[workerThreadId] = {
         projectId: groupId,
         title: "Stalled worker",
@@ -5288,6 +5285,7 @@ it.effect("keeps the recovery count across episodes and caps the chain", () => {
           lastError: null,
           activeTurnId: "turn-live",
           lastActivityAt: iso,
+          ...(progressIso === undefined ? {} : { lastProgressAt: progressIso }),
         },
         latestTurn: { state: "running", startedAt: iso },
       };
@@ -5295,35 +5293,37 @@ it.effect("keeps the recovery count across episodes and caps the chain", () => {
     stallAt("1970-01-01T00:00:00.000Z");
     harness.dispatched.length = 0;
 
-    // Episode 1: nudge at +11m, interrupt + re-dispatch at +17m.
+    // Episode 1: nudge at +11m (attempt 1), interrupt + re-dispatch at +17m
+    // (attempt 2).
     yield* TestClock.adjust("11 minutes");
     yield* service.inspectWorkerHealth();
     yield* TestClock.adjust("6 minutes");
     yield* service.inspectWorkerHealth();
     const afterFirst = yield* repository.findManagedWorkerByThread(workerThreadId);
-    assert.equal(Option.isSome(afterFirst) ? afterFirst.value.recoveriesUsed : null, 1);
+    assert.equal(Option.isSome(afterFirst) ? afterFirst.value.recoveriesUsed : null, 2);
 
-    // The re-dispatch produced real output: runtime activity moved to t=17m,
-    // the quiet pass clears the episode — but the lifetime count stays.
-    stallAt("1970-01-01T00:17:00.000Z");
+    // The re-dispatch produced real output: work landed at t=18m, so the
+    // quiet pass clears the episode — but the lifetime count stays.
+    stallAt("1970-01-01T00:18:00.000Z", "1970-01-01T00:18:00.000Z");
     yield* service.inspectWorkerHealth();
     const healthy = yield* repository.findManagedWorkerByThread(workerThreadId);
-    assert.equal(Option.isSome(healthy) ? healthy.value.recoveriesUsed : null, 1);
+    assert.equal(Option.isSome(healthy) ? healthy.value.recoveriesUsed : null, 2);
     assert.equal(Option.isSome(healthy) ? healthy.value.stuckKind : "x", null);
     // Ladder steps post rows only — they never wake the coordinator model.
     assert.equal(harness.runNowCalls.length, 0);
 
-    // Episode 2 at t=29m+: the count continues instead of resetting to 0.
+    // Episode 2 at t=29m+: the spent cap latches "Waiting on you" instead of
+    // cycling another recovery.
     yield* TestClock.adjust("12 minutes");
     yield* service.inspectWorkerHealth();
     yield* TestClock.adjust("6 minutes");
     yield* service.inspectWorkerHealth();
     const afterSecond = yield* repository.findManagedWorkerByThread(workerThreadId);
     assert.equal(Option.isSome(afterSecond) ? afterSecond.value.recoveriesUsed : null, 2);
+    assert.equal(Option.isSome(afterSecond) ? afterSecond.value.needsYou : null, true);
 
-    // Episode 3: activity moved again, then another stall — the spent cap
-    // latches "Waiting on you" instead of looping forever.
-    stallAt("1970-01-01T00:35:00.000Z");
+    // Activity + another stall while the latch holds: nothing else fires.
+    stallAt("1970-01-01T00:35:00.000Z", "1970-01-01T00:35:00.000Z");
     yield* TestClock.adjust("12 minutes");
     yield* service.inspectWorkerHealth();
     const latched = yield* repository.findManagedWorkerByThread(workerThreadId);
@@ -5628,4 +5628,287 @@ it.effect("logs coordinator check-ins to the activity log without waking it", ()
     // Check-in turns never wake the coordinator.
     assert.equal(harness.runNowCalls.length, 0);
   }).pipe(Effect.provide(harness.layer));
+});
+
+// A turn-diff that closed missing/error belongs to a turn the ladder
+// interrupted — it settles `interrupted`, never `completed`: the recovery
+// count survives and no false "finished" row posts. A `ready` diff still
+// settles completed and refunds the count (a genuine success).
+it.effect("settles a missing diff as interrupted without resetting the recovery count", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-missing-diff-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const workerThreadId = ThreadId.makeUnsafe("thread-missing-diff-worker");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-missing-diff-record",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [workerThreadId],
+      titles: ["Stalled worker"],
+      prompts: ["Draft the schema migration"],
+    });
+    harness.threadShells[workerThreadId] = quietRunningShell("1970-01-01T00:00:00.000Z");
+    harness.providerSessions.push(liveProviderSession(workerThreadId));
+    harness.dispatched.length = 0;
+
+    // Drive the ladder to step 2: nudge at +11m, interrupt + re-dispatch at
+    // +17m — the cap is spent inside the first cycle.
+    yield* TestClock.adjust("11 minutes");
+    yield* service.inspectWorkerHealth();
+    yield* TestClock.adjust("6 minutes");
+    yield* service.inspectWorkerHealth();
+    const mid = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(mid) ? mid.value.recoveriesUsed : null, 2);
+
+    // The ladder's own interrupt closes the checkpoint `missing`: the
+    // diff-completed event must not read as a clean finish.
+    yield* service.ingestSettledThreadEvent({
+      threadId: workerThreadId,
+      sourceEventId: "diff-missing-1",
+      eventType: "thread.turn-diff-completed",
+      checkpointStatus: "missing",
+      createdAt: "1970-01-01T00:18:00.000Z",
+    });
+    const worker = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(worker) ? worker.value.settleOutcome : null, "interrupted");
+    // The ladder's own interrupt never refunds the attempts it spent.
+    assert.equal(Option.isSome(worker) ? worker.value.recoveriesUsed : null, 2);
+    const settled = harness.dispatched.filter(
+      (command) =>
+        command.type === "thread.activity.append" &&
+        command.activity.kind === "synara.worker.settled",
+    );
+    assert.equal(settled.length, 1);
+    if (settled[0]!.type === "thread.activity.append") {
+      assert.equal(settled[0]!.activity.summary, "⚠ Stalled worker was interrupted");
+    }
+
+    // A re-armed worker whose next turn genuinely finishes still settles
+    // completed — and refunds the recovery count.
+    yield* service.recordWorkerTurnRequest({
+      threadId: workerThreadId,
+      commandId: "coordinator:follow-up",
+      dispatchOrigin: null,
+      turnId: "turn-follow-up",
+      eventType: "thread.turn-start-requested",
+      createdAt: "1970-01-01T00:19:00.000Z",
+    });
+    yield* service.ingestSettledThreadEvent({
+      threadId: workerThreadId,
+      sourceEventId: "diff-ready-1",
+      eventType: "thread.turn-diff-completed",
+      checkpointStatus: "ready",
+      createdAt: "1970-01-01T00:25:00.000Z",
+    });
+    const finished = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(finished) ? finished.value.settleOutcome : null, "completed");
+    assert.equal(Option.isSome(finished) ? finished.value.recoveriesUsed : null, 0);
+    const settledRows = harness.dispatched.filter(
+      (command) =>
+        command.type === "thread.activity.append" &&
+        command.activity.kind === "synara.worker.settled",
+    );
+    assert.equal(settledRows.length, 2);
+    if (settledRows[1]!.type === "thread.activity.append") {
+      assert.equal(settledRows[1]!.activity.summary, "✓ Stalled worker finished — no result filed");
+    }
+  }).pipe(Effect.provide(Layer.merge(harness.layer, TestClock.layer())));
+});
+
+// A provider that only echoes the recovery steer emits activity without real
+// progress: the ladder re-anchors the quiet window but keeps its position —
+// it never clears and never restarts. Two counted attempts later the spent
+// cap latches "Waiting on you" instead of re-nudging every 10 minutes.
+it.effect("escalates through a nudge echo instead of clearing the ladder", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-echo-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const workerThreadId = ThreadId.makeUnsafe("thread-echo-worker");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-echo-record",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [workerThreadId],
+      titles: ["Stalled worker"],
+      prompts: ["Draft the schema migration"],
+    });
+    const shellAt = (iso: string) => {
+      // Activity moves (the provider echoed the steer) but nothing produced
+      // work — `lastProgressAt` stays unset.
+      harness.threadShells[workerThreadId] = {
+        projectId: groupId,
+        title: "Stalled worker",
+        session: {
+          status: "running",
+          updatedAt: iso,
+          lastError: null,
+          activeTurnId: "turn-live",
+          lastActivityAt: iso,
+        },
+        latestTurn: { state: "running", startedAt: iso },
+      };
+    };
+    shellAt("1970-01-01T00:00:00.000Z");
+    harness.providerSessions.push(liveProviderSession(workerThreadId));
+    harness.dispatched.length = 0;
+
+    // Nudge at +11m (attempt 1).
+    yield* TestClock.adjust("11 minutes");
+    yield* service.inspectWorkerHealth();
+    assert.equal(
+      recoveryCommands(harness).filter((command) => command.type === "thread.turn.start").length,
+      1,
+    );
+
+    // The provider echoes the steer back — activity moves, no real work.
+    shellAt("1970-01-01T00:11:30.000Z");
+    yield* TestClock.adjust("6 minutes");
+    yield* service.inspectWorkerHealth();
+    // The echo did NOT clear the ladder — and it must not re-nudge either.
+    assert.equal(
+      recoveryCommands(harness).filter((command) => command.type === "thread.turn.start").length,
+      1,
+    );
+    const afterEcho = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(afterEcho) ? afterEcho.value.recoveryStep : null, 1);
+
+    // Once the quiet window elapses past the echo stamp, the SAME chain
+    // resumes: interrupt + re-dispatch (attempt 2).
+    yield* TestClock.adjust("5 minutes");
+    yield* service.inspectWorkerHealth();
+    const stepTwo = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(stepTwo) ? stepTwo.value.recoveriesUsed : null, 2);
+    assert.equal(
+      recoveryCommands(harness).filter((command) => command.type === "thread.turn.interrupt")
+        .length,
+      1,
+    );
+
+    // Another echo with no work, another quiet window — the spent cap
+    // latches "Waiting on you" instead of re-nudging forever.
+    shellAt("1970-01-01T00:23:00.000Z");
+    yield* TestClock.adjust("12 minutes");
+    yield* service.inspectWorkerHealth();
+    const latched = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(latched) ? latched.value.needsYou : null, true);
+    // Total automatic dispatches: one nudge steer + one interrupt + one
+    // re-dispatch. No silent infinite loop.
+    const starts = recoveryCommands(harness).filter(
+      (command) => command.type === "thread.turn.start",
+    );
+    assert.equal(starts.length, 2);
+    assert.equal(
+      recoveryCommands(harness).filter((command) => command.type === "thread.turn.interrupt")
+        .length,
+      1,
+    );
+  }).pipe(Effect.provide(Layer.merge(harness.layer, TestClock.layer())));
+});
+
+// The ladder claims its step on the durable row BEFORE the dispatch: the
+// async ownership write that the dispatch triggers (`recordWorkerTurnRequest`
+// on the turn-start-requested event) must not drop the claimed step or the
+// recovery count.
+it.effect("keeps the claimed ladder step when the ownership write lands after it", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-claim-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const workerThreadId = ThreadId.makeUnsafe("thread-claim-worker");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-claim-record",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [workerThreadId],
+      titles: ["Stalled worker"],
+      prompts: ["Draft the schema migration"],
+    });
+    harness.threadShells[workerThreadId] = quietRunningShell("1970-01-01T00:00:00.000Z");
+    harness.providerSessions.push(liveProviderSession(workerThreadId));
+    harness.dispatched.length = 0;
+
+    yield* TestClock.adjust("11 minutes");
+    yield* service.inspectWorkerHealth();
+    const claimed = yield* repository.findManagedWorkerByThread(workerThreadId);
+    // The claim is durable already — before the nudge's own turn-request
+    // event could possibly land.
+    assert.equal(Option.isSome(claimed) ? claimed.value.recoveryStep : null, 1);
+    assert.equal(Option.isSome(claimed) ? claimed.value.recoveriesUsed : null, 1);
+    const nudge = recoveryCommands(harness)[0]!;
+
+    // The steer lands and the engine reports the new turn — the ownership
+    // rewrite must keep the claimed ladder state.
+    yield* service.recordWorkerTurnRequest({
+      threadId: workerThreadId,
+      commandId: nudge.commandId,
+      dispatchOrigin: "automation",
+      turnId: "turn-nudge-1",
+      eventType: "thread.turn-start-requested",
+      createdAt: now,
+    });
+    const worker = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(worker) ? worker.value.recoveryStep : null, 1);
+    assert.equal(Option.isSome(worker) ? worker.value.recoveriesUsed : null, 1);
+    assert.equal(Option.isSome(worker) ? worker.value.activeTurnOrigin : null, "ladder");
+  }).pipe(Effect.provide(Layer.merge(harness.layer, TestClock.layer())));
+});
+
+// A coordinator message that queues behind a running USER turn must not
+// flip the running turn's ownership — the promotion's turn-start-requested
+// event is where ownership changes hands.
+it.effect("keeps user-turn ownership while a coordinator turn is only queued", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-queued-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const workerThreadId = ThreadId.makeUnsafe("thread-queued-worker");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-queued-record",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [workerThreadId],
+      titles: ["Busy worker"],
+    });
+
+    // The user started a turn — ownership is theirs.
+    yield* service.recordWorkerTurnRequest({
+      threadId: workerThreadId,
+      commandId: "user:turn-1",
+      dispatchOrigin: "user",
+      turnId: "turn-user-1",
+      eventType: "thread.turn-start-requested",
+      createdAt: now,
+    });
+    // A coordinator message lands while the user's turn still runs — it
+    // queues. Ownership must stay with the running user turn.
+    yield* service.recordWorkerTurnRequest({
+      threadId: workerThreadId,
+      commandId: "coordinator:msg-1",
+      dispatchOrigin: null,
+      turnId: null,
+      eventType: "thread.turn-queued",
+      createdAt: now,
+    });
+    const queued = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(queued) ? queued.value.activeTurnOrigin : null, "user");
+    assert.equal(Option.isSome(queued) ? queued.value.activeTurnCommandId : null, "user:turn-1");
+
+    // The queued coordinator turn is promoted — NOW ownership moves.
+    yield* service.recordWorkerTurnRequest({
+      threadId: workerThreadId,
+      commandId: "server:dispatch-queued-turn:7",
+      dispatchOrigin: null,
+      turnId: "turn-coord-1",
+      eventType: "thread.turn-start-requested",
+      createdAt: now,
+    });
+    const promoted = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(promoted) ? promoted.value.activeTurnOrigin : null, "coordinator");
+  }).pipe(Effect.provide(Layer.merge(harness.layer, TestClock.layer())));
 });

@@ -33,6 +33,7 @@ const makeProjectionThreadSessionRepository = Effect.gen(function* () {
           active_turn_id,
           last_error,
           last_activity_at,
+          last_progress_at,
           updated_at
         )
         VALUES (
@@ -43,6 +44,7 @@ const makeProjectionThreadSessionRepository = Effect.gen(function* () {
           ${row.activeTurnId},
           ${row.lastError},
           ${row.lastActivityAt},
+          ${row.lastProgressAt},
           ${row.updatedAt}
         )
         ON CONFLICT (thread_id)
@@ -55,6 +57,10 @@ const makeProjectionThreadSessionRepository = Effect.gen(function* () {
           last_activity_at = MAX(
             COALESCE(projection_thread_sessions.last_activity_at, excluded.last_activity_at),
             COALESCE(excluded.last_activity_at, projection_thread_sessions.last_activity_at)
+          ),
+          last_progress_at = MAX(
+            COALESCE(projection_thread_sessions.last_progress_at, excluded.last_progress_at),
+            COALESCE(excluded.last_progress_at, projection_thread_sessions.last_progress_at)
           ),
           updated_at = excluded.updated_at
       `,
@@ -73,6 +79,7 @@ const makeProjectionThreadSessionRepository = Effect.gen(function* () {
           active_turn_id AS "activeTurnId",
           last_error AS "lastError",
           last_activity_at AS "lastActivityAt",
+          last_progress_at AS "lastProgressAt",
           updated_at AS "updatedAt"
         FROM projection_thread_sessions
         WHERE thread_id = ${threadId}
@@ -90,12 +97,20 @@ const makeProjectionThreadSessionRepository = Effect.gen(function* () {
 
   const touchLastActivityRow = SqlSchema.void({
     Request: TouchLastActivityInput,
-    execute: ({ threadId, activityAt }) =>
-      sql`
-        UPDATE projection_thread_sessions
-        SET last_activity_at = MAX(COALESCE(last_activity_at, ${activityAt}), ${activityAt})
-        WHERE thread_id = ${threadId}
-      `,
+    execute: ({ threadId, activityAt, isProgress }) =>
+      isProgress === true
+        ? sql`
+          UPDATE projection_thread_sessions
+          SET
+            last_activity_at = MAX(COALESCE(last_activity_at, ${activityAt}), ${activityAt}),
+            last_progress_at = MAX(COALESCE(last_progress_at, ${activityAt}), ${activityAt})
+          WHERE thread_id = ${threadId}
+        `
+        : sql`
+          UPDATE projection_thread_sessions
+          SET last_activity_at = MAX(COALESCE(last_activity_at, ${activityAt}), ${activityAt})
+          WHERE thread_id = ${threadId}
+        `,
   });
 
   const markToolStartedRow = SqlSchema.void({

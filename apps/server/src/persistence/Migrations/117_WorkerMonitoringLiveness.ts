@@ -5,7 +5,9 @@ import { columnExists, tableExists } from "./schemaHelpers.ts";
 
 // Worker-monitoring liveness signals. `projection_thread_sessions.last_activity_at`
 // is the durable last-runtime-activity timestamp fed (throttled) by provider
-// ingestion so silence is measured from real work, not session lifecycle rows.
+// ingestion so silence is measured from real work, not session lifecycle rows;
+// `last_progress_at` stamps only work-producing events (agent output, tool
+// lifecycle, turn boundaries) so a steer/nudge echo cannot pass as progress.
 // `projection_thread_active_tools` tracks tool calls still in flight (started,
 // not completed): idempotent INSERT OR IGNORE / DELETE writes keep it correct
 // across the startup open-turn event replay. Managed workers gain the active
@@ -18,6 +20,13 @@ export default Effect.gen(function* () {
     yield* sql`
       ALTER TABLE projection_thread_sessions
       ADD COLUMN last_activity_at TEXT
+    `;
+  }
+
+  if (!(yield* columnExists(sql, "projection_thread_sessions", "last_progress_at"))) {
+    yield* sql`
+      ALTER TABLE projection_thread_sessions
+      ADD COLUMN last_progress_at TEXT
     `;
   }
 

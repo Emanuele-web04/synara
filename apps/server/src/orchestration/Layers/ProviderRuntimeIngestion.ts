@@ -141,6 +141,46 @@ const BUFFERED_TOOL_OUTPUT_BY_KEY_TTL = Duration.minutes(60);
 const BUFFERED_REASONING_SUMMARY_BY_KEY_CACHE_CAPACITY = 2_048;
 const BUFFERED_REASONING_SUMMARY_BY_KEY_TTL = Duration.minutes(60);
 const PENDING_GENERATED_IMAGES_CACHE_CAPACITY = 512;
+
+// "Real progress" for the worker-monitoring silence ladder: only events that
+// produce work — agent-side items, tool lifecycle, turn boundaries, streamed
+// agent output. A user-message item (the recovery steer itself echoes back
+// as one) or an unknown stream kind does not count, so a nudge's own echo
+// cannot reset the quiet window and re-trigger the ladder forever.
+const WORKER_PROGRESS_ITEM_TYPES = new Set<string>([
+  "assistant_message",
+  "reasoning",
+  "plan",
+  "command_execution",
+  "file_change",
+  "mcp_tool_call",
+  "dynamic_tool_call",
+  "collab_agent_tool_call",
+  "web_search",
+  "image_view",
+  "image_generation",
+  "review_entered",
+  "review_exited",
+  "context_compaction",
+  "error",
+]);
+
+function isWorkerProgressRuntimeEvent(event: ProviderRuntimeEvent): boolean {
+  switch (event.type) {
+    case "turn.started":
+    case "turn.completed":
+    case "turn.aborted":
+      return true;
+    case "item.started":
+    case "item.updated":
+    case "item.completed":
+      return WORKER_PROGRESS_ITEM_TYPES.has(event.payload.itemType);
+    case "content.delta":
+      return event.payload.streamKind !== "unknown";
+    default:
+      return false;
+  }
+}
 // Hot-path cache only. Turn settlement also reads durable activity records, so
 // TTL expiry or a server restart cannot discard the transcript reference.
 const PENDING_GENERATED_IMAGES_TTL = Duration.minutes(60);
@@ -2178,6 +2218,7 @@ const make = Effect.gen(function* () {
           .touchLastActivity({
             threadId: thread.id,
             activityAt: now,
+            isProgress: isWorkerProgressRuntimeEvent(event),
           })
           .pipe(Effect.catchCause(() => Effect.void));
       }
@@ -2254,6 +2295,11 @@ const make = Effect.gen(function* () {
             threadId: thread.id,
           })
           .pipe(Effect.catchCause(() => Effect.void));
+      }
+      if (event.type === "session.exited") {
+        // The runtime is gone — stop tracking the thread's flush throttle so
+        // the map doesn't accumulate entries for closed threads.
+        flushMap.delete(thread.id);
       }
 
       const shouldApplyThreadLifecycle =

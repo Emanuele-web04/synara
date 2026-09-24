@@ -83,6 +83,10 @@ const make = Effect.gen(function* () {
               ? payload.dispatchOrigin
               : null,
           turnId: "turnId" in payload && typeof payload.turnId === "string" ? payload.turnId : null,
+          // `thread.turn-queued` only enqueues behind a running turn — the
+          // running turn keeps its ownership until promotion emits
+          // `thread.turn-start-requested`.
+          eventType: event.type,
           createdAt: new Date().toISOString(),
         });
         return;
@@ -117,6 +121,11 @@ const make = Effect.gen(function* () {
         threadId: payload.threadId as ThreadId,
         sourceEventId: `${event.sequence}:${event.type}`,
         eventType: event.type,
+        // A turn-diff that closed missing/error (e.g. a turn the ladder
+        // interrupted) is reclassified inside ingest as an interruption.
+        ...("status" in payload && typeof payload.status === "string"
+          ? { checkpointStatus: payload.status }
+          : {}),
         ...("turnId" in payload && typeof payload.turnId === "string"
           ? { turnId: payload.turnId }
           : {}),

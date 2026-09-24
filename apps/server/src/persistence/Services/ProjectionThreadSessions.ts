@@ -29,6 +29,10 @@ export const ProjectionThreadSession = Schema.Struct({
    * tool lifecycle, messages, requests) — fed throttled by provider ingestion.
    * Separate from `updatedAt`, which moves only on session lifecycle events. */
   lastActivityAt: Schema.NullOr(IsoDateTime),
+  /** Durable last-PROGRESS timestamp: only work-producing events (agent
+   * output, tool lifecycle, turn boundaries) — a steer/nudge echo does not
+   * count, so the recovery ladder can't be cleared by its own nudge. */
+  lastProgressAt: Schema.NullOr(IsoDateTime),
   updatedAt: IsoDateTime,
 });
 
@@ -47,6 +51,9 @@ export type DeleteProjectionThreadSessionInput = typeof DeleteProjectionThreadSe
 export const TouchLastActivityInput = Schema.Struct({
   threadId: ThreadId,
   activityAt: IsoDateTime,
+  /** When true the event produced real work and `lastProgressAt` advances
+   * alongside `lastActivityAt`. */
+  isProgress: Schema.optional(Schema.Boolean),
 });
 export type TouchLastActivityInput = typeof TouchLastActivityInput.Type;
 

@@ -1301,6 +1301,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             yield* projectionThreadSessionRepository.upsert({
               ...turnStartSession,
               lastActivityAt: event.payload.createdAt,
+              lastProgressAt: event.payload.createdAt,
             });
           }
           return;
@@ -1315,6 +1316,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             activeTurnId: event.payload.session.activeTurnId,
             lastError: event.payload.session.lastError,
             lastActivityAt: event.payload.session.lastActivityAt ?? null,
+            lastProgressAt: event.payload.session.lastProgressAt ?? null,
             updatedAt: event.payload.session.updatedAt,
           });
           return;

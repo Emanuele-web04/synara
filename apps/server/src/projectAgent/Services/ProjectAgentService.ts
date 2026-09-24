@@ -245,6 +245,10 @@ export interface ProjectAgentServiceShape {
     readonly threadId: ThreadId;
     readonly sourceEventId: string;
     readonly eventType: string;
+    /** Checkpoint status carried by `thread.turn-diff-completed` — a diff that
+     * ended `missing`/`error` describes an interrupted turn, never a clean
+     * finish, and must not settle the worker as `completed`. */
+    readonly checkpointStatus?: string;
     /** Turn the event belongs to — used to classify coordinator check-in
      * turns for the group activity log. */
     readonly turnId?: string;
@@ -264,6 +268,10 @@ export interface ProjectAgentServiceShape {
     readonly commandId: string | null;
     readonly dispatchOrigin: string | null;
     readonly turnId: string | null;
+    /** Orchestration event type that carried the request
+     * (`thread.turn-start-requested` starts the turn; `thread.turn-queued`
+     * only enqueues it behind a running turn and must not take ownership). */
+    readonly eventType?: string;
     readonly createdAt: string;
   }) => Effect.Effect<void, ProjectAgentServiceError>;
   /**

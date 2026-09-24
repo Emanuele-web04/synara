@@ -604,6 +604,9 @@ export const OrchestrationSession = Schema.Struct({
    * (streamed output, tool lifecycle, messages, requests). Maintained by
    * runtime ingestion, not by session lifecycle events. */
   lastActivityAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  /** Last activity that produced real work (agent output, tool lifecycle,
+   * turn boundaries) — a steer/nudge echo does not advance it. */
+  lastProgressAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   updatedAt: IsoDateTime,
 });
 export type OrchestrationSession = typeof OrchestrationSession.Type;

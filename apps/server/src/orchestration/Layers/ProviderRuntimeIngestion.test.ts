@@ -8575,8 +8575,8 @@ describe("ProviderRuntimeIngestion", () => {
     const turnId = asTurnId("turn-liveness");
     const sessionRow = () =>
       runtime!.runPromise(
-        sql<{ readonly lastActivityAt: string | null }>`
-          SELECT last_activity_at AS "lastActivityAt"
+        sql<{ readonly lastActivityAt: string | null; readonly lastProgressAt: string | null }>`
+          SELECT last_activity_at AS "lastActivityAt", last_progress_at AS "lastProgressAt"
           FROM projection_thread_sessions
           WHERE thread_id = ${threadId}
         `,
@@ -8610,6 +8610,8 @@ describe("ProviderRuntimeIngestion", () => {
 
     let row = (await sessionRow())[0];
     expect(row?.lastActivityAt).toBe("2026-09-10T00:10:00.000Z");
+    // A tool call starting IS real work.
+    expect(row?.lastProgressAt).toBe("2026-09-10T00:10:00.000Z");
     let inFlight = await tools();
     expect(inFlight.map((entry) => entry.itemId)).toEqual(["tool-live-1"]);
     expect(inFlight[0]?.turnId).toBe(turnId);
@@ -8628,6 +8630,7 @@ describe("ProviderRuntimeIngestion", () => {
     await harness.drain();
     row = (await sessionRow())[0];
     expect(row?.lastActivityAt).toBe("2026-09-10T00:14:00.000Z");
+    expect(row?.lastProgressAt).toBe("2026-09-10T00:14:00.000Z");
     inFlight = await tools();
     expect(inFlight.length).toBe(1);
 
@@ -8645,6 +8648,7 @@ describe("ProviderRuntimeIngestion", () => {
     await harness.drain();
     row = (await sessionRow())[0];
     expect(row?.lastActivityAt).toBe("2026-09-10T00:14:00.000Z");
+    expect(row?.lastProgressAt).toBe("2026-09-10T00:14:00.000Z");
 
     // Tool completion clears the in-flight row (and counts as activity).
     harness.emit({
@@ -8662,5 +8666,65 @@ describe("ProviderRuntimeIngestion", () => {
     expect(inFlight.length).toBe(0);
     row = (await sessionRow())[0];
     expect(row?.lastActivityAt).toBe("2026-09-10T00:20:00.000Z");
+    expect(row?.lastProgressAt).toBe("2026-09-10T00:20:00.000Z");
+
+    // A user-message item — e.g. the recovery steer echoing back — moves
+    // lastActivityAt but is NOT real progress.
+    harness.emit({
+      type: "item.started",
+      eventId: asEventId("live-echo"),
+      provider: "codex",
+      createdAt: "2026-09-10T00:25:00.000Z",
+      threadId,
+      turnId,
+      itemId: asItemId("echo-msg"),
+      payload: { itemType: "user_message", status: "completed", title: "steer echo" },
+    });
+    await harness.drain();
+    row = (await sessionRow())[0];
+    expect(row?.lastActivityAt).toBe("2026-09-10T00:25:00.000Z");
+    expect(row?.lastProgressAt).toBe("2026-09-10T00:20:00.000Z");
+
+    // Real output after the echo stamps progress again.
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("live-progress"),
+      provider: "codex",
+      createdAt: "2026-09-10T00:26:00.000Z",
+      threadId,
+      turnId,
+      itemId: asItemId("msg-progress"),
+      payload: { streamKind: "assistant_text", delta: "back to work" },
+    });
+    await harness.drain();
+    row = (await sessionRow())[0];
+    expect(row?.lastActivityAt).toBe("2026-09-10T00:26:00.000Z");
+    expect(row?.lastProgressAt).toBe("2026-09-10T00:26:00.000Z");
+
+    // session.exited prunes the flush throttle: the next event inside the
+    // ~15s window still stamps — without the prune it would be suppressed.
+    harness.emit({
+      type: "session.exited",
+      eventId: asEventId("live-exited"),
+      provider: "codex",
+      createdAt: "2026-09-10T00:27:00.000Z",
+      threadId,
+      turnId,
+      payload: { exitKind: "graceful" },
+    });
+    await harness.drain();
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("live-after-exit"),
+      provider: "codex",
+      createdAt: "2026-09-10T00:27:05.000Z",
+      threadId,
+      turnId,
+      itemId: asItemId("msg-after-exit"),
+      payload: { streamKind: "assistant_text", delta: "post-exit" },
+    });
+    await harness.drain();
+    row = (await sessionRow())[0];
+    expect(row?.lastActivityAt).toBe("2026-09-10T00:27:05.000Z");
   });
 });
