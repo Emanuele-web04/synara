@@ -43,12 +43,17 @@ jobs:
               {
                 name: "size:L",
                 color: "fe7d37",
-                description: "600-1,499 changed lines, excluding tests, lockfiles, generated files, and assets.",
+                description: "600-999 changed lines, excluding tests, lockfiles, generated files, and assets.",
               },
               {
                 name: "size:XL",
                 color: "d93f0b",
-                description: "1,500+ changed lines, excluding tests, lockfiles, generated files, and assets.",
+                description: "1,000-2,999 changed lines, excluding tests, lockfiles, generated files, and assets.",
+              },
+              {
+                name: "size:XXL",
+                color: "b60205",
+                description: "3,000+ changed lines, excluding tests, lockfiles, generated files, and assets.",
               },
             ];
 
@@ -130,9 +135,7 @@ jobs:
             const { owner, repo } = context.repo;
             const managedLabels = JSON.parse(process.env.PR_SIZE_LABELS_JSON ?? "[]");
             const managedLabelNames = new Set(managedLabels.map((label) => label.name));
-            // size:XXL is retired: it is stripped from PRs during sync but its
-            // label definition is left in place rather than deleted.
-            const removableLabelNames = new Set([...managedLabelNames, "size:XXL"]);
+            const removableLabelNames = managedLabelNames;
 
             // Keep this aligned with the repo's test entrypoints and test-only support files.
             const testFilePatterns = [
@@ -173,11 +176,15 @@ jobs:
                 return "size:M";
               }
 
-              if (totalChangedLines < 1500) {
+              if (totalChangedLines < 1000) {
                 return "size:L";
               }
 
-              return "size:XL";
+              if (totalChangedLines < 3000) {
+                return "size:XL";
+              }
+
+              return "size:XXL";
             };
 
             const syncSize = async (prNumber) => {
