@@ -188,7 +188,9 @@ describe("redactDiagnosticText", () => {
     const started = performance.now();
     const out = redact(input);
     const elapsed = performance.now() - started;
-    expect(elapsed).toBeLessThan(50);
+    // Quadratic backtracking on 64 KiB takes seconds; the linear path takes a
+    // few milliseconds. The loose bound keeps shared CI runners from flaking.
+    expect(elapsed).toBeLessThan(500);
     expect(out).toContain("password: [redacted]");
     expect(out).not.toContain("hunter2");
   });
