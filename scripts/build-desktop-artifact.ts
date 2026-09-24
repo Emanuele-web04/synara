@@ -137,6 +137,7 @@ interface BuildCliInput {
   readonly sourceTag: Option.Option<string>;
   readonly lockfileSha256: Option.Option<string>;
   readonly outputDir: Option.Option<string>;
+  readonly kwinPluginPrebuiltDir: Option.Option<string>;
   readonly skipBuild: Option.Option<boolean>;
   readonly keepStage: Option.Option<boolean>;
   readonly signed: Option.Option<boolean>;
@@ -237,6 +238,12 @@ interface ResolvedBuildOptions {
   readonly sourceTag: string | undefined;
   readonly lockfileSha256: string | undefined;
   readonly outputDir: string;
+  /**
+   * Prebuilt KWin plugin binaries to ship under the staged server dist. Never
+   * part of the portable build, which is verified native-free; the release's
+   * Linux leg fetches them separately and stages them here.
+   */
+  readonly kwinPluginPrebuiltDir: string | undefined;
   readonly skipBuild: boolean;
   readonly keepStage: boolean;
   readonly signed: boolean;
@@ -291,6 +298,7 @@ const BuildEnvConfig = Config.all({
   sourceTag: Config.string("SYNARA_SOURCE_TAG").pipe(Config.option),
   lockfileSha256: Config.string("SYNARA_LOCKFILE_SHA256").pipe(Config.option),
   outputDir: Config.string("SYNARA_DESKTOP_OUTPUT_DIR").pipe(Config.option),
+  kwinPluginPrebuiltDir: Config.string("SYNARA_KWIN_PLUGIN_PREBUILT_DIR").pipe(Config.option),
   skipBuild: Config.string("SYNARA_DESKTOP_SKIP_BUILD").pipe(Config.option),
   keepStage: Config.string("SYNARA_DESKTOP_KEEP_STAGE").pipe(Config.option),
   signed: Config.string("SYNARA_DESKTOP_SIGNED").pipe(Config.option),
@@ -362,6 +370,11 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     mergeOptions(input.outputDir, env.outputDir, releaseDir),
   );
 
+  const kwinPluginPrebuiltDir = mergeOptions(
+    input.kwinPluginPrebuiltDir,
+    env.kwinPluginPrebuiltDir,
+    undefined,
+  );
   const skipBuild = resolveBooleanFlag(input.skipBuild, envSkipBuild);
   const keepStage = resolveBooleanFlag(input.keepStage, envKeepStage);
   const signed = resolveBooleanFlag(input.signed, envSigned);
@@ -383,6 +396,9 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     sourceTag,
     lockfileSha256,
     outputDir,
+    kwinPluginPrebuiltDir: kwinPluginPrebuiltDir
+      ? path.resolve(repoRoot, kwinPluginPrebuiltDir)
+      : undefined,
     skipBuild,
     keepStage,
     signed,
@@ -1153,6 +1169,15 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* fs.copy(distDirs.desktopDist, path.join(stageAppDir, "apps/desktop/dist-electron"));
   yield* fs.copy(distDirs.desktopResources, stageResourcesDir);
   yield* fs.copy(distDirs.serverDist, path.join(stageAppDir, "apps/server/dist"));
+  if (options.kwinPluginPrebuiltDir) {
+    // After the verified copy, never before it: the portable manifest rejects
+    // native binaries, and these are exactly that.
+    yield* Effect.log("[desktop-artifact] Staging KWin plugin prebuilts...");
+    yield* fs.copy(
+      options.kwinPluginPrebuiltDir,
+      path.join(stageAppDir, "apps/server/dist/computer-use-kwin/prebuilt"),
+    );
+  }
 
   yield* timedBuildStage(
     "platform-icons",
@@ -1415,6 +1440,12 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   ),
   lockfileSha256: Flag.string("lockfile-sha256").pipe(
     Flag.withDescription("Expected bun.lock SHA-256 (env: SYNARA_LOCKFILE_SHA256)."),
+    Flag.optional,
+  ),
+  kwinPluginPrebuiltDir: Flag.string("kwin-plugin-prebuilt-dir").pipe(
+    Flag.withDescription(
+      "Prebuilt KWin plugin directory to ship under the server dist (env: SYNARA_KWIN_PLUGIN_PREBUILT_DIR).",
+    ),
     Flag.optional,
   ),
   outputDir: Flag.string("output-dir").pipe(

@@ -65,9 +65,13 @@ import {
   COMPUTER_ACTION_OBSERVATION_MAX_DIMENSION,
   computerBackendActionResult,
   ComputerBackendError,
+  computerGuidanceProfile,
   type ComputerAgentDialect,
   type ComputerBackend,
+  type ComputerGuidanceProfile,
   type ComputerBackendActionResult,
+  type ComputerClipboardPasteOffer,
+  type ComputerLumaCapture,
   type ComputerBrowserCallResult,
   type ComputerCaptureRequest,
   type ComputerStreamFrame,
@@ -89,7 +93,12 @@ import {
   topmostWindowAtPoint,
   windowsCoveringPoint,
 } from "./computerGeometry.ts";
-import { decodePngLuma, estimateVerticalTravel, ScrollGearingStore } from "./scrollCalibration.ts";
+import {
+  estimateVerticalTravel,
+  measurementFrameLuma,
+  ScrollGearingStore,
+  type ScrollMeasurementFrame,
+} from "./scrollCalibration.ts";
 import { ScrollGearingFile } from "./scrollGearingFile.ts";
 import {
   ComputerTargetError,
@@ -177,6 +186,14 @@ export const COMPUTER_ACTION_OBSERVER_SETTLE_QUIET_MS = COMPUTER_ACTION_SETTLE_M
  * reaches for their own clipboard next is not racing us.
  */
 export const COMPUTER_PASTE_RESTORE_MS = 250;
+/**
+ * The longest paste waits for a backend that can observe the paste
+ * (`writeClipboardForPaste`) to report the payload read before restoring
+ * anyway. Long enough for a slow toolkit to service the request, short enough
+ * that a shortcut the target ignored does not hold the human's clipboard
+ * hostage.
+ */
+export const COMPUTER_PASTE_CONSUME_TIMEOUT_MS = 2_000;
 
 /**
  * Trailing-edge window on the republish that a backend window change triggers.
@@ -302,12 +319,20 @@ export interface ComputerManagerOptions {
   readonly actionSettleMs?: number;
   /** Injected for tests, so window-churn tests do not wait out the real window. */
   readonly windowsPublishDebounceMs?: number;
-  /** Injected for tests; decodes and correlates two PNG captures. */
+  /** Injected for tests; decodes and correlates two captures. */
   readonly measureScrollTravel?: (
-    before: Uint8Array,
-    after: Uint8Array,
+    before: ScrollMeasurementFrame,
+    after: ScrollMeasurementFrame,
   ) => number | undefined | Promise<number | undefined>;
 }
+
+/**
+ * What a scroll leg is measured from: a capture that may also become the
+ * action's observation, or a luma-only baseline nobody will ever see.
+ */
+type ScrollBaseline =
+  | { readonly kind: "capture"; readonly capture: ComputerCapturedWindow }
+  | { readonly kind: "luma"; readonly luma: ComputerLumaCapture };
 
 /**
  * A resolved pointer target, plus what the window read taken while resolving it
@@ -421,8 +446,8 @@ export class ComputerManager {
   private readonly actionSettleMs: number;
   private readonly windowsPublishDebounceMs: number;
   private readonly measureScrollTravel: (
-    before: Uint8Array,
-    after: Uint8Array,
+    before: ScrollMeasurementFrame,
+    after: ScrollMeasurementFrame,
   ) => number | undefined | Promise<number | undefined>;
   /** Learned per window and kept for the manager's life; see ScrollGearingStore. */
   private readonly scrollGearing = new ScrollGearingStore();
@@ -433,7 +458,8 @@ export class ComputerManager {
   /**
    * Whether this backend answers `waitForSettle`. "unsupported" is sticky —
    * the driver and the host's tool allowlist are fixed for the backend's
-   * life — but a transient failure (stale target, retired generation,
+   * life, and a `capabilities-changed` (a swapped occupant, a reconnect)
+   * starts a new one — but a transient failure (stale target, retired generation,
    * cancelled call) never flips it: the next action probes again rather than
    * permanently losing the observer over one bad target.
    */
@@ -469,6 +495,11 @@ export class ComputerManager {
    */
   get agentDialect(): ComputerAgentDialect {
     return this.backend.agentDialect ?? "linux";
+  }
+
+  /** What the session-start guidance says about this desktop. */
+  get guidanceProfile(): ComputerGuidanceProfile {
+    return computerGuidanceProfile(this.backend);
   }
 
   get supportsFocusNeutralSemanticText(): boolean {
@@ -1039,6 +1070,46 @@ export class ComputerManager {
   }
 
   /**
+   * Replaces the desktop under the manager: `swap` (a slot's occupant change)
+   * runs as one exclusive desktop operation, after every live agent
+   * operation has been aborted with a retryable "the desktop changed" reason.
+   *
+   * The slot resolves each backend member against its occupant at the moment
+   * of the call, so a swap landing between an action's targeting and its
+   * input would send the rest of that action — computed against the old
+   * desktop — to the new one. Aborting ends live operations at their next
+   * checkpoint; the exclusive transaction waits for them (and anything queued
+   * ahead) to finish, so no operation straddles the two desktops. Operations
+   * queued behind the swap start on the new occupant.
+   *
+   * A queue that is closed or full cannot take the swap; it then runs
+   * directly, since a desktop that is gone has to be replaced regardless.
+   */
+  async replaceDesktop(swap: () => Promise<void>): Promise<void> {
+    if (this.disposed) {
+      await swap();
+      return;
+    }
+    const reason = new ComputerBackendError(
+      "The desktop changed while this operation ran; nothing more was sent to it. Observe the new desktop before retrying.",
+      { retryable: true },
+    );
+    for (const live of this.activeAuthorities.values()) {
+      for (const controller of live) controller.abort(reason);
+    }
+    let ran = false;
+    try {
+      await this.operations.run(async () => {
+        ran = true;
+        await withoutDesktopCancellation(swap);
+      });
+    } catch (error) {
+      if (ran) throw error;
+      await swap();
+    }
+  }
+
+  /**
    * The manager side of the physical Escape interrupt, relayed from the
    * desktop's monitor route (or invoked directly by tests).
    *
@@ -1119,7 +1190,7 @@ export class ComputerManager {
       options.actionSettleMs ?? cuaActionSettleMsOverride() ?? COMPUTER_ACTION_SETTLE_MS;
     this.windowsPublishDebounceMs =
       options.windowsPublishDebounceMs ?? COMPUTER_WINDOWS_PUBLISH_DEBOUNCE_MS;
-    this.measureScrollTravel = options.measureScrollTravel ?? measureScrollTravelFromPng;
+    this.measureScrollTravel = options.measureScrollTravel ?? measureScrollTravelFromFrames;
     this.backendHealth = options.backend.health();
     this.transport =
       options.transport ??
@@ -1133,6 +1204,7 @@ export class ComputerManager {
               timestampMs: frame.timestampMs,
               keyframe: frame.keyframe,
               codecConfig: frame.codecConfig,
+              ...(frame.mimeType !== undefined ? { mimeType: frame.mimeType } : {}),
             },
             payload: frame.data,
           }),
@@ -1157,6 +1229,10 @@ export class ComputerManager {
           this.backendHealth = event.health;
           this.republishAllThreads();
         } else if (event.type === "capabilities-changed") {
+          // Verdicts cached about the backend are about the one that was
+          // there: a slot swap and a reconnect to a newer plugin both land
+          // here, and either may answer what the last one could not.
+          this.observerSettle = "unknown";
           this.republishAllThreads();
         } else if (event.type === "desktop-interrupted") {
           // Locked-use resume policy: consent granted before a lock/sleep/
@@ -1243,11 +1319,18 @@ export class ComputerManager {
     // not be the thing that installs and loads compositor code on a machine
     // where nothing has ever used the feature, so before first engagement it
     // answers from the side-effect-free probe.
+    //
+    // A backend with its own passive status read boots its desktop on demand,
+    // so the establishing read is not for a timer to make: polling it would
+    // respawn the desktop the human just closed. Such a backend answers every
+    // status read passively; the desktop starts again on the next real use.
     let availability: ComputerAvailability;
     try {
-      availability = this.backendEngaged
-        ? await this.backend.availability({ refresh: true })
-        : await this.backend.probeAvailability();
+      availability = this.backend.statusAvailability
+        ? await this.backend.statusAvailability()
+        : this.backendEngaged
+          ? await this.backend.availability({ refresh: true })
+          : await this.backend.probeAvailability();
     } catch (error) {
       availability = {
         kind: "backend-unavailable",
@@ -1392,15 +1475,20 @@ export class ComputerManager {
     if (request.kind === "window") {
       await this.assertWindowContentAllowed(request.windowId);
     } else {
-      // A region photographs whatever its rect covers: it is refused only
-      // where a visible denied window's bounds actually intersect it.
-      const denied = (await this.deniedVisibleWindows()).find(
-        (entry) =>
-          entry.window.bounds !== undefined && rectsOverlap(entry.window.bounds, request.region),
-      );
-      if (denied) throw new ComputerDenylistError(denied.match.app, denied.match.matched);
+      await this.assertRegionContentAllowed(request.region);
     }
     return await this.backend.captureScreenshot(request);
+  }
+
+  /**
+   * A region photographs whatever its rect covers: it is refused only where a
+   * visible denied window's bounds actually intersect it.
+   */
+  private async assertRegionContentAllowed(region: ComputerRect): Promise<void> {
+    const denied = (await this.deniedVisibleWindows()).find(
+      (entry) => entry.window.bounds !== undefined && rectsOverlap(entry.window.bounds, region),
+    );
+    if (denied) throw new ComputerDenylistError(denied.match.app, denied.match.matched);
   }
 
   /**
@@ -1463,6 +1551,10 @@ export class ComputerManager {
    * what a perception request with no explicit target means: "show me where
    * input is going", at window resolution rather than as a workspace-wide
    * downscale that loses small text.
+   *
+   * A backend that names a `defaultObservationRegion` narrows the fallback to
+   * it: on a multi-monitor desktop the workspace is several screens wide, and
+   * one downscaled picture of all of them is too small to read.
    */
   async captureFocusedWindow(
     maxDimension?: number,
@@ -1481,6 +1573,17 @@ export class ComputerManager {
           ...limit,
         }),
         windowId: window.id,
+      };
+    }
+    const scoped = await this.backend.defaultObservationRegion?.().catch(() => undefined);
+    if (scoped !== undefined) {
+      await this.assertRegionContentAllowed(scoped);
+      return {
+        screenshot: await this.backend.captureScreenshot({
+          kind: "region",
+          region: scoped,
+          ...limit,
+        }),
       };
     }
     // The whole-workspace fallback photographs every visible window, so a
@@ -1583,10 +1686,15 @@ export class ComputerManager {
       this.backend.waitForSettle !== undefined
     ) {
       try {
+        const policy = this.backend.actionSettle;
         const outcome = await this.backend.waitForSettle({
           windowId,
-          timeoutMs: COMPUTER_ACTION_OBSERVER_SETTLE_TIMEOUT_MS,
-          quietMs: this.actionSettleMs,
+          timeoutMs: policy?.timeoutMs ?? COMPUTER_ACTION_OBSERVER_SETTLE_TIMEOUT_MS,
+          quietMs: Math.min(this.actionSettleMs, policy?.quietMs ?? this.actionSettleMs),
+          ...(policy?.quietWithinMs === undefined ? {} : { quietWithinMs: policy.quietWithinMs }),
+          ...(policy?.changeWithinMs === undefined
+            ? {}
+            : { changeWithinMs: policy.changeWithinMs }),
         });
         this.observerSettle = "supported";
         currentComputerCall()?.timing?.count(
@@ -1849,6 +1957,10 @@ export class ComputerManager {
       }
       this.emitAction(threadId, "computer_launch_app");
       if (!result.window && result.windowStatus !== "no_usable_window" && waitForWindowMs > 0) {
+        // Read once: the backend may be a slot whose occupant changes, and a
+        // member re-read after the waits below may be another desktop's, or
+        // gone. The wait checks readiness where it started.
+        const checkInputReady = this.backend.checkInputReady?.bind(this.backend);
         const readiness = await waitForWindow(
           () => this.readWindows(),
           app,
@@ -1856,9 +1968,8 @@ export class ComputerManager {
           desktopOperationSignal(),
           {
             ...(result.pid !== undefined ? { pid: result.pid } : {}),
-            ...(this.backend.checkInputReady
-              ? { checkInputReady: (windowId: string) => this.backend.checkInputReady!(windowId) }
-              : {}),
+            ...(result.appId !== undefined ? { appId: result.appId } : {}),
+            ...(checkInputReady ? { checkInputReady } : {}),
           },
         ).catch(() => {
           assertDesktopOperationActive();
@@ -2865,7 +2976,7 @@ export class ComputerManager {
         (await this.agentFocusWindowId());
       const before = !options.observe
         ? undefined
-        : await this.captureForMeasurement(observedWindowId);
+        : await this.captureScrollBaseline(observedWindowId);
 
       // Gearing keys are route-scoped: an AX scroll-bar press and a wheel
       // gesture move the same window different distances for one request, so
@@ -2961,7 +3072,7 @@ export class ComputerManager {
           if (after) {
             const remainderLeg = await this.settleAndMeasure(
               observedWindowId,
-              after,
+              { kind: "capture", capture: after },
               remainderResult?.scrollDelta?.deltaY ?? legY,
               windowKey(remainderRoute),
               durableKey(remainderRoute),
@@ -3126,7 +3237,7 @@ export class ComputerManager {
    */
   private async settleAndMeasure(
     windowId: string | undefined,
-    from: ComputerCapturedWindow,
+    from: ScrollBaseline,
     injectedY: number,
     windowKey?: string,
     appKey?: string,
@@ -3142,11 +3253,7 @@ export class ComputerManager {
         const expectedY = injectedY * predictedGearing;
         const early = await this.captureForMeasurement(windowId);
         if (early) {
-          const traveled = await this.measureLegTravel(
-            from.screenshot,
-            early.screenshot,
-            injectedY,
-          );
+          const traveled = await this.measureLegTravel(from, early.screenshot, injectedY);
           if (
             traveled !== undefined &&
             Math.abs(traveled - expectedY) <=
@@ -3167,7 +3274,7 @@ export class ComputerManager {
     }
     const capture = await this.captureForMeasurement(windowId);
     if (!capture) return {};
-    const traveled = await this.measureLegTravel(from.screenshot, capture.screenshot, injectedY);
+    const traveled = await this.measureLegTravel(from, capture.screenshot, injectedY);
     this.learnLegTravel(windowKey ?? windowId, appKey, injectedY, traveled);
     return { capture, ...(traveled === undefined ? {} : { traveled }) };
   }
@@ -3181,7 +3288,7 @@ export class ComputerManager {
    * direction nothing moved in.
    */
   private async measureLegTravel(
-    from: ComputerScreenshot,
+    from: ScrollBaseline,
     to: ComputerScreenshot,
     injectedY: number,
   ): Promise<number | undefined> {
@@ -3217,6 +3324,43 @@ export class ComputerManager {
     } catch {
       return undefined;
     }
+  }
+
+  /**
+   * The picture a scroll is measured from. It is never shown to anyone, so a
+   * backend that can hand back raw luma (`captureLuma`) skips the PNG encode,
+   * the base64 round trip and the decode; any other backend, a scroll with no
+   * window to name, and a luma capture that fails or comes back malformed all
+   * take the ordinary measurement capture instead.
+   */
+  private async captureScrollBaseline(
+    windowId: string | undefined,
+  ): Promise<ScrollBaseline | undefined> {
+    const captureLuma = this.backend.captureLuma?.bind(this.backend);
+    if (windowId !== undefined && captureLuma && this.backendCapabilities.capture) {
+      this.engageBackend();
+      try {
+        const luma = await timedComputerLeg("observe", () =>
+          captureLuma({
+            kind: "window",
+            windowId,
+            maxDimension: COMPUTER_ACTION_OBSERVATION_MAX_DIMENSION,
+          }),
+        );
+        if (
+          luma.width > 0 &&
+          luma.height > 0 &&
+          luma.data.byteLength === luma.width * luma.height &&
+          luma.scale > 0
+        ) {
+          return { kind: "luma", luma };
+        }
+      } catch {
+        // Fall through to the screenshot baseline.
+      }
+    }
+    const capture = await this.captureForMeasurement(windowId);
+    return capture ? { kind: "capture", capture } : undefined;
   }
 
   /**
@@ -3271,18 +3415,25 @@ export class ComputerManager {
   }
 
   private async measureTravel(
-    before: ComputerScreenshot,
+    before: ScrollBaseline,
     after: ComputerScreenshot,
   ): Promise<number | undefined> {
-    if (before.bytesBase64 === after.bytesBase64) return 0;
+    if (before.kind === "capture" && before.capture.screenshot.bytesBase64 === after.bytesBase64) {
+      return 0;
+    }
     // Without a scale on both captures there is no conversion from capture
     // pixels to the logical pixels the request was made in, and two different
     // scales are two different pictures of the window.
-    const scale = before.scale;
+    const scale = before.kind === "capture" ? before.capture.screenshot.scale : before.luma.scale;
     if (scale === undefined || scale !== after.scale || scale <= 0) return undefined;
     const traveled = await this.measureScrollTravel(
-      this.measurementBytes(before),
-      this.measurementBytes(after),
+      before.kind === "capture"
+        ? { kind: "png", bytes: this.measurementBytes(before.capture.screenshot) }
+        : {
+            kind: "luma",
+            image: { width: before.luma.width, height: before.luma.height, luma: before.luma.data },
+          },
+      { kind: "png", bytes: this.measurementBytes(after) },
     );
     return traveled === undefined ? undefined : traveled / scale;
   }
@@ -3476,28 +3627,46 @@ export class ComputerManager {
       const read = this.backend.readClipboard?.bind(this.backend);
       const write = this.backend.writeClipboard?.bind(this.backend);
       if (!read || !write) throw clipboardUnsupportedError();
+      const writeForPaste = this.backend.writeClipboardForPaste?.bind(this.backend);
       const previous = await timedComputerLeg("dispatch", () => read().catch(() => undefined));
-      await timedComputerLeg("dispatch", () => write(text));
+      const offer = await timedComputerLeg(
+        "dispatch",
+        (): Promise<ComputerClipboardPasteOffer | void> =>
+          writeForPaste ? writeForPaste(text) : write(text),
+      );
       let restored = false;
       let result: ComputerBackendActionResult | void;
+      // Whether the offer was read before the shortcut was even dispatched:
+      // that reader was not the target but a clipboard watcher (Klipper, a
+      // `wl-paste --watch` history daemon), so it says nothing about the paste.
+      let consumedBeforeShortcut = false;
+      let shortcutDispatched = false;
+      if (offer) {
+        offer.consumed.then(
+          () => {
+            if (!shortcutDispatched) consumedBeforeShortcut = true;
+          },
+          () => undefined,
+        );
+      }
       try {
-        result = await this.runKeyboardDispatch(threadId, windowId, () =>
-          this.backend.hotkey(
+        result = await this.runKeyboardDispatch(threadId, windowId, () => {
+          shortcutDispatched = true;
+          return this.backend.hotkey(
             this.agentDialect === "macos" ? ["meta", "v"] : ["ctrl", "v"],
             windowId,
-          ),
-        );
+          );
+        });
       } finally {
+        shortcutDispatched = true;
         // The restore runs whether or not the shortcut dispatched: the payload
         // is already on the clipboard either way, and leaving it there leaks
         // the agent's text into the next paste the human makes.
         if (previous !== undefined) {
-          await timedComputerLeg(
-            "settle",
-            () =>
-              new Promise<void>((resolve) => {
-                setTimeout(resolve, COMPUTER_PASTE_RESTORE_MS);
-              }),
+          await timedComputerLeg("settle", () =>
+            pasteConsumed(
+              consumedBeforeShortcut ? { consumed: new Promise(() => undefined) } : offer,
+            ),
           );
           restored = await write(previous).then(
             () => true,
@@ -3571,6 +3740,17 @@ export class ComputerManager {
     target: ComputerTarget,
     range: ComputerTextRange,
   ): Promise<ComputerActionResult> {
+    // Refused here, before the lease is claimed and the window restacked and
+    // aimed: a backend that cannot select a range would refuse the dispatch
+    // anyway, and every step before it would have been paid for nothing.
+    if (this.backend.textRangeSelection === false) {
+      throw new ComputerBackendError(
+        "Selecting a text range is not supported on this desktop: the accessibility layer " +
+          "exposes no selection to set. Use set_value to replace the field, or click and " +
+          "keyboard navigation to place the caret.",
+        { rejectedOperation: "selectText" },
+      );
+    }
     return this.withSemanticControl(threadId, target.windowId, async () => {
       const resolved = await this.prepareSemanticDispatch(target, threadId, true);
       const result = await timedComputerLeg("dispatch", () =>
@@ -4072,7 +4252,9 @@ export class ComputerManager {
     windowId: string,
     windows: readonly ComputerWindow[],
   ): Promise<void> {
-    if (!this.backend.checkInputReady) return;
+    // Read once, for the same reason as the launch wait's.
+    const checkInputReady = this.backend.checkInputReady?.bind(this.backend);
+    if (!checkInputReady) return;
     const observingThread = currentComputerTask()?.threadId;
     const observedWindow = windows.find((window) => window.id === windowId);
     const paused = [...this.threads.entries()].filter(
@@ -4099,7 +4281,7 @@ export class ComputerManager {
       generation: this.controlState.get(threadId).generation,
     }));
     try {
-      await this.backend.checkInputReady(windowId);
+      await checkInputReady(windowId);
     } catch {
       return; // Read-only perception remains available while input is paused.
     }
@@ -4155,7 +4337,7 @@ export class ComputerManager {
     const changed = held?.threadId !== owner;
     assertDesktopOperationActive();
     if (changed) {
-      await this.backend.clearFocusWindow?.();
+      await this.resetInputDelivery();
       assertDesktopOperationActive();
     }
     // Stamp the claiming caller's own turn when it carries one; the map only
@@ -4206,6 +4388,18 @@ export class ComputerManager {
       ...(lease.turnId ? { turnId: lease.turnId } : {}),
       ...detail,
     });
+  }
+
+  /**
+   * The seat as the next owner must find it: nothing aimed, nothing held,
+   * nothing remembered about the previous owner's targets. A backend without
+   * the full reset still has focus to clear, which is the part that matters
+   * most — the next owner's unscoped keystroke otherwise lands in the window
+   * the previous owner aimed at.
+   */
+  private async resetInputDelivery(): Promise<void> {
+    if (this.backend.resetInputDelivery) await this.backend.resetInputDelivery();
+    else await this.backend.clearFocusWindow?.();
   }
 
   /**
@@ -4312,7 +4506,7 @@ export class ComputerManager {
       // The queue can admit a newer turn before this release gets its slot.
       // Even a thread-level teardown belongs to the turn observed above.
       if (this.lease.turnId !== releasedTurnId) return;
-      await this.backend.clearFocusWindow?.();
+      await this.resetInputDelivery();
       this.recordLeaseLifecycle("released", this.lease);
       this.lease = null;
       // The released turn is no longer this thread's authority: a later
@@ -5276,6 +5470,14 @@ export class ComputerManager {
     if (this.backendHealth.status === "connected" || availability.kind !== "available") {
       return availability;
     }
+    // Dormant is the same idle, reached later: the backend let its desktop go
+    // on purpose (an idle shutdown or release) and the next use brings it
+    // back. Only the backend can tell that apart from a lost connection, so
+    // only its explicit marker counts — a backend that never sets it (Cua)
+    // is corrected exactly as before.
+    if (this.backendHealth.status === "unavailable" && this.backendHealth.dormant === true) {
+      return availability;
+    }
     return {
       kind: "backend-unavailable",
       message: healthUnavailableMessage(this.backendHealth),
@@ -5327,16 +5529,42 @@ export class ComputerManager {
  * capture in a format this does not decode costs the measurement, not the
  * scroll.
  */
-async function measureScrollTravelFromPng(
-  before: Uint8Array,
-  after: Uint8Array,
+async function measureScrollTravelFromFrames(
+  before: ScrollMeasurementFrame,
+  after: ScrollMeasurementFrame,
 ): Promise<number | undefined> {
   const [decodedBefore, decodedAfter] = await Promise.all([
-    decodePngLuma(before),
-    decodePngLuma(after),
+    measurementFrameLuma(before),
+    measurementFrameLuma(after),
   ]);
   if (!decodedBefore || !decodedAfter) return undefined;
   return estimateVerticalTravel(decodedBefore, decodedAfter);
+}
+
+/**
+ * The wait between a paste shortcut and putting the human's clipboard back.
+ * A backend that can observe the paste (`writeClipboardForPaste`) ends it once
+ * the target has read the payload, bounded for a paste that never reads;
+ * every other backend keeps the fixed settle. Never shorter than that settle
+ * either way: a read reported the instant the keys went out can still be a
+ * watcher's, and the target reads off the keystroke asynchronously. An offer
+ * read before the shortcut was sent is passed in as never read.
+ */
+async function pasteConsumed(offer: ComputerClipboardPasteOffer | void): Promise<void> {
+  const timers: ReturnType<typeof setTimeout>[] = [];
+  const after = (ms: number) =>
+    new Promise<void>((resolve) => {
+      timers.push(setTimeout(resolve, ms));
+    });
+  const floor = after(COMPUTER_PASTE_RESTORE_MS);
+  try {
+    if (!offer) return await floor;
+    const bound = after(COMPUTER_PASTE_CONSUME_TIMEOUT_MS);
+    await Promise.race([offer.consumed.catch(() => bound), bound]);
+    await floor;
+  } finally {
+    for (const timer of timers) clearTimeout(timer);
+  }
 }
 
 /** Scroll telemetry is a reading, not a measurement instrument: two decimals is all it means. */

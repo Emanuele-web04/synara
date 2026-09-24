@@ -31,6 +31,17 @@ export const MAC_ICON_ASSETS_CAR_STAGE_PATH = "apps/desktop/resources/Assets.car
 export const MAC_ICON_ASSETS_CAR_BUNDLE_PATH = "Resources/Assets.car";
 const MAC_DMG_ICON_PATH = "icon.icns";
 export const NODE_PTY_ASAR_UNPACK_GLOBS = ["node_modules/node-pty/**"] as const;
+/**
+ * Linux computer-use assets that other programs read off the disk: the KWin
+ * plugin's sources and installer are read by bash and cmake during the
+ * source-build fallback. Only Node's own fs sees inside app.asar, so these
+ * stay real files under app.asar.unpacked. The paths are relative to the
+ * staged app root, where the desktop stage copies the server dist to
+ * apps/server/dist.
+ */
+export const LINUX_COMPUTER_USE_ASAR_UNPACK_GLOBS = [
+  "apps/server/dist/computer-use-kwin/**",
+] as const;
 
 export interface DesktopPlatformBuildConfig {
   readonly afterSign?: string;
@@ -177,6 +188,7 @@ export function createDesktopPlatformBuildConfig(
   if (input.platform === "linux") {
     return {
       ...nativePackaging,
+      asarUnpack: [...NODE_PTY_ASAR_UNPACK_GLOBS, ...LINUX_COMPUTER_USE_ASAR_UNPACK_GLOBS],
       // The driver is spawned by path; an executable inside app.asar cannot
       // serve that path. Keep the staged copy outside the archive and omit
       // both source and runtime-resource copies from the application bundle.
