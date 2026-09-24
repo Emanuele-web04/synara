@@ -639,7 +639,7 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
           <p className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>You're on Synara Beta</p>
           <p className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>
             New features land here first. To help us fix things quickly, Beta shares crash reports
-            and anonymous usage stats. Your chats, code, and files stay on your computer.
+            and anonymous usage stats. We don't collect your chats, code, or files.
           </p>
           <button
             type="button"
@@ -655,14 +655,18 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
               <div>
                 <p className="m-0 text-ui-sm font-medium text-foreground">Shared</p>
                 <ul className="m-0 list-disc space-y-0.5 pl-4 pt-0.5 text-ui-sm text-muted-foreground">
+                  <li>A random ID for this install, not linked to you</li>
+                  <li>When Beta opens, closes, installs, or is removed</li>
                   <li>Crashes and errors, with emails, keys, and usernames removed</li>
                   <li>App version, OS version, and language</li>
-                  <li>Which providers you use, and how many chats and turns (just counts)</li>
+                  <li>
+                    Which providers you use, and how many projects, chats, and turns (just counts)
+                  </li>
                   <li>Whether updates install correctly</li>
                 </ul>
               </div>
               <div>
-                <p className="m-0 text-ui-sm font-medium text-foreground">Never shared</p>
+                <p className="m-0 text-ui-sm font-medium text-foreground">Not collected</p>
                 <ul className="m-0 list-disc space-y-0.5 pl-4 pt-0.5 text-ui-sm text-muted-foreground">
                   <li>Your chats, prompts, or agent replies</li>
                   <li>Your code, files, or project names</li>
@@ -670,7 +674,9 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
                 </ul>
               </div>
               <p className="m-0 text-ui-xs text-muted-foreground">
-                Reports are kept for a year. Crash snapshots are deleted after 90 days.
+                If Beta crashes, a snapshot of the app's memory is sent so we can find the cause. It
+                stays private to the Synara team and is deleted after 90 days. Other reports are
+                kept for a year.
               </p>
             </div>
           </DisclosureRegion>
