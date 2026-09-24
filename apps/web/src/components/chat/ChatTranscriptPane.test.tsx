@@ -104,7 +104,7 @@ describe("ChatTranscriptPane", () => {
     expect(markup).not.toContain("absolute right-2 top-2");
   });
 
-  it("renders a stored thread error as an inline overlay that never displaces the transcript", () => {
+  it("renders a stored thread error in flow above the transcript, never as an overlay", () => {
     const markup = renderTranscriptPaneMarkup({
       threadError: "Provider adapter request failed (grok): connect ETIMEDOUT",
       onDismissThreadError: () => {},
@@ -112,12 +112,10 @@ describe("ChatTranscriptPane", () => {
 
     expect(markup).toContain("Provider adapter request failed (grok): connect ETIMEDOUT");
     expect(markup).toContain('role="alert"');
-    // The banner rides the same absolute-overlay pattern as the scroll button —
-    // it must not re-enter normal flow above the transcript.
-    expect(markup).toContain("pointer-events-none absolute inset-x-0 top-2");
-    // ...but the banner itself must re-enable pointer input or its
-    // dismiss/unblock buttons are dead to real clicks.
-    expect(markup).toContain("pointer-events-auto");
+    // In flow above the transcript — an absolute overlay would cover whatever
+    // message happens to sit at the top of the scroll region.
+    expect(markup).not.toContain("pointer-events-none absolute inset-x-0 top-2");
+    expect(markup).toContain("shrink-0");
     expect(markup).not.toContain("Unblock thread");
   });
 

@@ -1903,8 +1903,14 @@ const make = Effect.gen(function* () {
     if (reusableSession) {
       const existingSessionThreadId = thread.id;
       const runtimeModeChanged = desiredRuntimeMode !== thread.session?.runtimeMode;
+      // A live session whose provider diverged from the binding (a stale
+      // projection or an interrupted rebind) is treated as a provider change:
+      // it is restarted on the preferred provider and its resume cursor —
+      // meaningless to any other provider — is dropped below instead of
+      // forwarded into the replacement's start input.
       const providerChanged =
         providerRebindRequested ||
+        activeSessionBeforeEnsure?.provider !== preferredProvider ||
         (requestedModelSelection !== undefined &&
           requestedModelSelection.provider !== boundProvider);
       const sessionModelSwitch =
@@ -4694,9 +4700,44 @@ const make = Effect.gen(function* () {
       }),
     );
 
+  const observeStaleClaudeResumeTerminal = Effect.fnUntraced(function* (
+    event: ProviderQueueDrainEvent,
+  ) {
+    if (
+      event.type !== "turn.completed" ||
+      event.payload.state !== "failed" ||
+      event.provider !== "claudeAgent" ||
+      !isStaleClaudeResumeError(event.payload.errorMessage)
+    ) {
+      return;
+    }
+    // A stale Claude resume id only surfaces asynchronously: the CLI accepts
+    // --resume at spawn and dies once the queued prompt reaches it, so the
+    // synchronous sendTurn retry path never sees it. Drop the persisted
+    // cursor here or every later dispatch replays the same dead id, and mark
+    // the thread so the next fresh session carries the transcript bootstrap.
+    yield* clearStaleProviderResumeState({
+      threadId: event.threadId,
+      cause: new ProviderAdapterRequestError({
+        provider: event.provider,
+        method: "turn",
+        detail: event.payload.errorMessage ?? "",
+      }),
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.logWarning("provider command reactor could not clear stale claude resume state", {
+          threadId: event.threadId,
+          error: String(error),
+        }),
+      ),
+    );
+    freshSessionContextBootstrapThreadIds.add(event.threadId);
+  });
+
   const processQueueDrainEvent = Effect.fnUntraced(function* (event: ProviderQueueDrainEvent) {
     yield* processClaudeCompactionTerminal(event);
     yield* observePendingContextBootstrapTerminalEvent(event);
+    yield* observeStaleClaudeResumeTerminal(event);
     const sessionThreadId =
       (yield* resolveProviderSessionThread(event.threadId))?.id ?? event.threadId;
     const reservation = pendingQueuedDispatchBySessionThread.get(sessionThreadId);
