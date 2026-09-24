@@ -5920,6 +5920,127 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it.each([
+    { modifier: "ctrlKey", behavior: "queue", draft: "", image: false, reject: false },
+    { modifier: "metaKey", behavior: "steer", draft: "", image: false, reject: false },
+    {
+      modifier: "ctrlKey",
+      behavior: "queue",
+      draft: "send this draft",
+      image: false,
+      reject: false,
+    },
+    { modifier: "ctrlKey", behavior: "queue", draft: "", image: false, reject: true },
+    { modifier: "ctrlKey", behavior: "queue", draft: "", image: true, reject: false },
+  ] as const)(
+    "queued shortcut $modifier with $behavior, draft '$draft', image $image, rejection $reject",
+    async ({ modifier, behavior, draft, image, reject }) => {
+      localStorage.setItem(
+        "synara:app-settings:v1",
+        JSON.stringify({ followUpBehavior: behavior }),
+      );
+      const restoreNativeApi = installDeterministicSendNativeApi({ rejectTurnStart: reject });
+      for (const id of ["first", "second"]) {
+        useComposerDraftStore.getState().enqueueQueuedTurn(THREAD_ID, {
+          id,
+          kind: "chat",
+          createdAt: NOW_ISO,
+          previewText: `${id} queued prompt`,
+          prompt: `${id} queued prompt`,
+          images: [],
+          files: [],
+          assistantSelections: [],
+          browserAnnotations: [],
+          terminalContexts: [],
+          fileComments: [],
+          pastedTexts: [],
+          pullRequestContexts: [],
+          skills: [],
+          mentions: [],
+          selectedProvider: "codex",
+          selectedModel: "gpt-5",
+          selectedPromptEffort: null,
+          modelSelection: { provider: "codex", model: "gpt-5" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          envMode: "local",
+        });
+      }
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, draft);
+      if (image) {
+        useComposerDraftStore.getState().addImage(
+          THREAD_ID,
+          createComposerImage({
+            id: "shortcut-draft-image",
+            previewUrl: "blob:shortcut-draft-image",
+            name: "draft.png",
+          }),
+        );
+      }
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-queued-shortcut" as MessageId,
+          targetText: "queued shortcut target",
+          sessionStatus: "running",
+        }),
+      });
+      try {
+        const editor = await waitForComposerEditor();
+        await vi.waitFor(() => {
+          expect(document.querySelectorAll('[data-testid="queued-follow-up-row"]')).toHaveLength(2);
+          expect(editor.textContent?.trim()).toBe(draft);
+        });
+        editor.focus();
+        const pressEnter = (options: KeyboardEventInit) =>
+          editor.dispatchEvent(
+            new KeyboardEvent("keydown", {
+              key: "Enter",
+              code: "Enter",
+              bubbles: true,
+              cancelable: true,
+              ...options,
+            }),
+          );
+        if (!draft && !image) {
+          // Plain Enter must not promote queued work, and holding the shortcut must not drain it.
+          pressEnter({});
+          pressEnter({ [modifier]: true, repeat: true });
+          await waitForLayout();
+          expect(
+            wsRequests.map(readDispatchedCommand).filter((c) => c?.type === "thread.turn.start"),
+          ).toHaveLength(0);
+        }
+        pressEnter({ [modifier]: true });
+        if (!draft && !image) pressEnter({ [modifier]: true }); // Same-render keypress must not send twice.
+        await vi.waitFor(
+          () => {
+            const commands = wsRequests
+              .map(readDispatchedCommand)
+              .filter((c) => c?.type === "thread.turn.start");
+            expect(commands).toHaveLength(1);
+            expect(commands[0]).toMatchObject({ dispatchMode: "steer" });
+            expect(commands[0]?.message).toMatchObject(
+              image
+                ? { attachments: [expect.objectContaining({ name: "draft.png" })] }
+                : { text: draft || "first queued prompt" },
+            );
+            const queue =
+              useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.queuedTurns ?? [];
+            expect(queue.map((turn) => turn.id)).toEqual(
+              draft || image || reject ? ["first", "second"] : ["second"],
+            );
+            if (reject) expect(document.body.textContent).toContain("Turn start failed for test.");
+          },
+          { timeout: 8_000 },
+        );
+      } finally {
+        await mounted.cleanup();
+        restoreNativeApi();
+      }
+    },
+  );
+
   it("steers a running turn when Follow-up behavior is set to Steer", async () => {
     localStorage.setItem("synara:app-settings:v1", JSON.stringify({ followUpBehavior: "steer" }));
     useComposerDraftStore.getState().setPrompt(THREAD_ID, "steer this running turn");
