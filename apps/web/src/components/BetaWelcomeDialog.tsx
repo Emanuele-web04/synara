@@ -30,7 +30,10 @@ const INITIAL_STORAGE: BetaWelcomeStorage = { acknowledged: false };
 
 const WELCOME_POINTS = [
   { icon: "shield-check", text: "Synara stays separate and untouched." },
-  { icon: "bug", text: "Crash and error reports are on, with private info removed." },
+  {
+    icon: "heart",
+    text: "Beta shares crash reports and anonymous usage stats so we can fix things fast. Your chats, code, and files stay on your computer.",
+  },
   { icon: "arrow-left-circle", text: "Switch back to Synara any time in Settings." },
 ] as const;
 

@@ -49,6 +49,8 @@ import {
 } from "~/components/ui/alert-dialog";
 import { Button } from "~/components/ui/button";
 import { Checkbox } from "~/components/ui/checkbox";
+import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
+import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
 import { Switch } from "~/components/ui/switch";
 import { toastManager } from "~/components/ui/toast";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
@@ -552,6 +554,7 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
   });
   const [actionPending, setActionPending] = useState<"copy" | "open" | "install" | null>(null);
   const [leaveDialogOpen, setLeaveDialogOpen] = useState(false);
+  const [sharesDisclosureOpen, setSharesDisclosureOpen] = useState(false);
   const state: DesktopBetaChannelState | null = betaStateQuery.data ?? null;
 
   if (!active || !betaBridge || !state?.supported) return null;
@@ -635,9 +638,42 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
         <div className="min-w-0 flex-1 space-y-1">
           <p className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>You're on Synara Beta</p>
           <p className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>
-            New features land here first. Crash and error reports are always on, with private info
-            like emails, keys, and your username removed before anything is sent.
+            New features land here first. To help us fix things quickly, Beta shares crash reports
+            and anonymous usage stats. Your chats, code, and files stay on your computer.
           </p>
+          <button
+            type="button"
+            className="flex cursor-pointer items-center gap-1.5 pt-1 text-ui-sm text-muted-foreground transition-colors hover:text-foreground"
+            aria-expanded={sharesDisclosureOpen}
+            onClick={() => setSharesDisclosureOpen((open) => !open)}
+          >
+            <DisclosureChevron open={sharesDisclosureOpen} />
+            What Beta shares
+          </button>
+          <DisclosureRegion open={sharesDisclosureOpen}>
+            <div className="space-y-2 pt-1.5">
+              <div>
+                <p className="m-0 text-ui-sm font-medium text-foreground">Shared</p>
+                <ul className="m-0 list-disc space-y-0.5 pl-4 pt-0.5 text-ui-sm text-muted-foreground">
+                  <li>Crashes and errors, with emails, keys, and usernames removed</li>
+                  <li>App version, OS version, and language</li>
+                  <li>Which providers you use, and how many chats and turns (just counts)</li>
+                  <li>Whether updates install correctly</li>
+                </ul>
+              </div>
+              <div>
+                <p className="m-0 text-ui-sm font-medium text-foreground">Never shared</p>
+                <ul className="m-0 list-disc space-y-0.5 pl-4 pt-0.5 text-ui-sm text-muted-foreground">
+                  <li>Your chats, prompts, or agent replies</li>
+                  <li>Your code, files, or project names</li>
+                  <li>Keys, passwords, or anything that says who you are</li>
+                </ul>
+              </div>
+              <p className="m-0 text-ui-xs text-muted-foreground">
+                Reports are kept for a year. Crash snapshots are deleted after 90 days.
+              </p>
+            </div>
+          </DisclosureRegion>
           <div className="flex flex-wrap items-center gap-2 pt-1.5">
             {state.stableInstalled ? (
               <Button size="xs" variant="outline" onClick={() => setLeaveDialogOpen(true)}>
@@ -680,8 +716,8 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
           </div>
           <p className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>
             {state.installed
-              ? "Beta runs next to Synara with its own data, so nothing here changes. Copy your data to bring over projects, settings, and provider sign-ins."
-              : "Try new features before everyone else. Synara Beta is a separate app with its own data, and this app stays exactly as it is."}
+              ? "Beta runs next to Synara with its own data, so nothing here changes. Copy your data to bring over projects, settings, and provider sign-ins. Beta shares crash reports and anonymous usage stats."
+              : "Try new features before everyone else. Synara Beta is a separate app with its own data, and this app stays exactly as it is. Beta shares crash reports and anonymous usage stats to help us improve it."}
           </p>
           {state.lastImportAt ? (
             <p className="text-ui-xs text-muted-foreground">
