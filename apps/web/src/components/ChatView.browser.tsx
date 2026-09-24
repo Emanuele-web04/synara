@@ -8143,6 +8143,123 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it("does not carry the first-send handoff into another thread", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, THREAD_ID);
+
+    const populatedSnapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-handoff-target" as MessageId,
+      targetText: "handoff target",
+    });
+    const sourceThread = { ...populatedSnapshot.threads[0]!, messages: [] };
+    const snapshotWithOther = addThreadToSnapshot(populatedSnapshot, OTHER_THREAD_ID);
+    const otherThread = snapshotWithOther.threads.find((thread) => thread.id === OTHER_THREAD_ID);
+    if (otherThread === undefined) {
+      throw new Error("Expected the other thread fixture.");
+    }
+    const snapshot = {
+      ...snapshotWithOther,
+      threads: [
+        sourceThread,
+        {
+          ...otherThread,
+          messages: populatedSnapshot.threads[0]!.messages,
+          session: otherThread.session
+            ? { ...otherThread.session, threadId: OTHER_THREAD_ID }
+            : null,
+        },
+      ],
+    };
+    const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+
+    try {
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "Send then switch threads");
+      const sendButton = await waitForSendButton();
+      sendButton.click();
+      await vi.waitFor(
+        () => {
+          expect(document.querySelector(".chat-composer-after-landing")).not.toBeNull();
+        },
+        { timeout: 1_000, interval: 16 },
+      );
+
+      await mounted.router.navigate({
+        to: "/$threadId",
+        params: { threadId: OTHER_THREAD_ID },
+      });
+      await waitForURL(
+        mounted.router,
+        (path) => path === `/${OTHER_THREAD_ID}`,
+        "The handoff test should switch to the other thread.",
+      );
+      await waitForLayout();
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 50));
+      expect(document.querySelector(".chat-composer-after-landing")).toBeNull();
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("does not reuse a first-send handoff after a rejected send", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi({ rejectTurnStart: true });
+    useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, THREAD_ID);
+    const snapshot = addThreadToSnapshot(createDraftOnlySnapshot(), THREAD_ID);
+    const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+
+    try {
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "This send will fail");
+      const sendButton = await waitForSendButton();
+      sendButton.click();
+      await vi.waitFor(
+        () => {
+          expect(
+            wsRequests.some(
+              (request) => readDispatchedCommand(request)?.type === "thread.turn.start",
+            ),
+          ).toBe(true);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      await vi.waitFor(
+        () => {
+          expect(document.querySelector('[data-testid="empty-landing-heading"]')).not.toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const sourceThread = fixture.snapshot.threads.find((thread) => thread.id === THREAD_ID);
+      if (sourceThread === undefined) {
+        throw new Error("Expected the source thread fixture.");
+      }
+      const recoveredThread = {
+        ...sourceThread,
+        messages: [
+          createUserMessage({
+            id: "msg-user-after-failed-send" as MessageId,
+            text: "Recovered after failed send",
+            offsetSeconds: 1,
+          }),
+        ],
+      };
+      fixture.snapshot = { ...fixture.snapshot, threads: [recoveredThread] };
+      useStore
+        .getState()
+        .syncServerShellSnapshot(createShellSnapshotFromReadModel(fixture.snapshot));
+      useStore.getState().syncServerThreadDetailHotPath(recoveredThread);
+      await waitForLayout();
+      await vi.waitFor(() => expect(mounted.router.state.status).toBe("idle"), {
+        timeout: 8_000,
+        interval: 16,
+      });
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 50));
+      expect(document.querySelector(".chat-composer-after-landing")).toBeNull();
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
   it("keeps the transcript open while the first turn starts before its message arrives", async () => {
     const snapshot = addThreadToSnapshot(createDraftOnlySnapshot(), THREAD_ID);
     const emptyThread = { ...snapshot.threads[0]!, session: null };

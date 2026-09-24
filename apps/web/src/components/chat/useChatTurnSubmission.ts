@@ -944,6 +944,11 @@ export function useChatTurnSubmission({
         composerPullRequestContextsSnapshot,
         composerSkillsSnapshot,
         composerMentionsSnapshot,
+      }).then((turnStarted) => {
+        if (!turnStarted && isCenteredEmptyLanding) {
+          firstSendLandingHandoffRef.current = null;
+        }
+        return turnStarted;
       });
     },
     [

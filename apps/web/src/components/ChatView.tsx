@@ -764,7 +764,8 @@ export default function ChatView({
   const [isComposerExtrasPanelOpen, setIsComposerExtrasPanelOpen] = useState(false);
   const [secondaryChromePlaceholderHeight, setSecondaryChromePlaceholderHeight] = useState(88);
   const firstSendLandingHandoffRef = useRef<FirstSendLandingHandoff | null>(null);
-  const [composerArrivedFromLanding, setComposerArrivedFromLanding] = useState(false);
+  const [composerArrivedFromLandingThreadId, setComposerArrivedFromLandingThreadId] =
+    useState<ThreadId | null>(null);
   // Tracks whether the user explicitly dismissed the sidebar for the active turn.
   const planSidebarDismissedForTurnRef = useRef<string | null>(null);
   // When set, the thread-change reset effect will open the sidebar instead of closing it.
@@ -1818,33 +1819,38 @@ export default function ChatView({
     threadDetailHydration === "ready";
   const isEmptyChatLanding =
     isCenteredEmptyLanding && Boolean(homeDir) && isContainerLandingProject;
-  useEffect(() => {
+  // Apply the handoff before paint so the first transcript frame cannot flash at full opacity.
+  useLayoutEffect(() => {
     if (isCenteredEmptyLanding) {
-      setComposerArrivedFromLanding(false);
+      setComposerArrivedFromLandingThreadId(null);
       return;
     }
 
     const handoff = firstSendLandingHandoffRef.current;
     if (handoff === null || activeThreadId === null) {
+      if (activeThreadId !== composerArrivedFromLandingThreadId) {
+        setComposerArrivedFromLandingThreadId(null);
+      }
       return;
     }
     if (activeThreadId !== handoff.sourceThreadId && activeThreadId !== handoff.targetThreadId) {
       firstSendLandingHandoffRef.current = null;
+      setComposerArrivedFromLandingThreadId(null);
       return;
     }
 
     firstSendLandingHandoffRef.current = null;
-    setComposerArrivedFromLanding(true);
-  }, [activeThreadId, isCenteredEmptyLanding]);
+    setComposerArrivedFromLandingThreadId(activeThreadId);
+  }, [activeThreadId, composerArrivedFromLandingThreadId, isCenteredEmptyLanding]);
   useEffect(() => {
-    if (!composerArrivedFromLanding) {
+    if (composerArrivedFromLandingThreadId === null) {
       return;
     }
     const settleTimer = window.setTimeout(() => {
-      setComposerArrivedFromLanding(false);
+      setComposerArrivedFromLandingThreadId(null);
     }, 320);
     return () => window.clearTimeout(settleTimer);
-  }, [composerArrivedFromLanding]);
+  }, [composerArrivedFromLandingThreadId]);
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
     useTurnDiffSummaries(activeThread);
   const turnDiffSummaryByAssistantMessageId = useMemo(() => {
@@ -6061,7 +6067,8 @@ export default function ChatView({
                     <div
                       className={cn(
                         "pointer-events-auto",
-                        composerArrivedFromLanding && "chat-composer-after-landing",
+                        composerArrivedFromLandingThreadId === activeThreadId &&
+                          "chat-composer-after-landing",
                       )}
                     >
                       {composerSection}
