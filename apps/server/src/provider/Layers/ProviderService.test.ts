@@ -77,6 +77,12 @@ import {
   SqlitePersistenceMemory,
 } from "../../persistence/Layers/Sqlite.ts";
 import { AGENT_GATEWAY_TURN_AUTHORITY_RETIRED } from "../../agentGateway/sessionLease.ts";
+import {
+  ComputerService,
+  type ComputerServiceShape,
+} from "../../computer/Services/ComputerService.ts";
+import { ComputerManager } from "../../computer/ComputerManager.ts";
+import { FakeComputerBackend } from "../../computer/FakeComputerBackend.ts";
 
 const asRequestId = (value: string): ApprovalRequestId => ApprovalRequestId.makeUnsafe(value);
 const asEventId = (value: string): EventId => EventId.makeUnsafe(value);
@@ -421,6 +427,7 @@ function makeProviderServiceLayer(
   providers?: {
     readonly includeRestartRollbackDroid?: boolean;
     readonly includePi?: boolean;
+    readonly computerService?: ComputerServiceShape;
     readonly codexDidResumeSession?: NonNullable<
       ProviderAdapterShape<ProviderAdapterError>["didResumeSession"]
     >;
@@ -464,11 +471,18 @@ function makeProviderServiceLayer(
   );
   const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
 
+  const providerLayer = makeProviderServiceLive(options).pipe(
+    Layer.provide(providerAdapterLayer),
+    Layer.provide(directoryLayer),
+  );
   const rawLayer = Layer.mergeAll(
-    makeProviderServiceLive(options).pipe(
-      Layer.provide(providerAdapterLayer),
-      Layer.provide(directoryLayer),
-    ),
+    // serviceOption reads the layer's build context, so the service has to be
+    // provided INTO the layer, not just merged into the output.
+    providers?.computerService !== undefined
+      ? providerLayer.pipe(
+          Layer.provideMerge(Layer.succeed(ComputerService, providers.computerService)),
+        )
+      : providerLayer,
     directoryLayer,
     runtimeRepositoryLayer,
     NodeServices.layer,
@@ -630,6 +644,110 @@ const rotationRetry = makeProviderServiceLayer({
 });
 const restartRollbackRouting = makeProviderServiceLayer(undefined, {
   includeRestartRollbackDroid: true,
+});
+
+const makeComputerServiceShape = (supported: boolean): ComputerServiceShape => ({
+  supported,
+  availability: supported
+    ? { kind: "available", backend: "fake" }
+    : { kind: "backend-unavailable", message: "Computer use is available in Synara Beta." },
+  manager: new ComputerManager({ backend: new FakeComputerBackend() }),
+});
+const stableComputerRouting = makeProviderServiceLayer(undefined, {
+  includePi: true,
+  computerService: makeComputerServiceShape(false),
+});
+const betaComputerRouting = makeProviderServiceLayer(undefined, {
+  includePi: true,
+  computerService: makeComputerServiceShape(true),
+});
+
+// Stable ships no computer backend: a persisted enableComputerControl flag
+// (written by a Beta install on the same data directory) must never reach an
+// adapter or be carried into a fresh binding row.
+stableComputerRouting.layer("ProviderServiceLive Stable computer-control gating", (it) => {
+  it.effect("recovery starts the session without the persisted flag", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-stable-computer-recovery");
+      yield* directory.upsert({
+        threadId,
+        provider: "pi",
+        status: "stopped",
+        resumeCursor: { sessionId: "stable-pi-session" },
+        runtimePayload: { enableComputerControl: true },
+      });
+
+      yield* provider.sendTurn({ threadId, input: "resume", attachments: [] });
+
+      const recoveryCall = stableComputerRouting.pi.startSession.mock.calls.findLast(
+        ([input]) => input.threadId === threadId,
+      )?.[0];
+      assert.ok(recoveryCall, "expected the recovery to start a Pi session");
+      assert.notEqual(recoveryCall.enableComputerControl, true);
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.notEqual(asRuntimePayloadRecord(binding?.runtimePayload).enableComputerControl, true);
+    }),
+  );
+
+  it.effect("a start that inherits the persisted flag dispatches off", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-stable-computer-inherit");
+      yield* directory.upsert({
+        threadId,
+        provider: "codex",
+        status: "stopped",
+        runtimePayload: { enableComputerControl: true },
+      });
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        cwd: "/tmp/stable-computer-inherit",
+        runtimeMode: "full-access",
+      });
+
+      const startCall = stableComputerRouting.codex.startSession.mock.calls.findLast(
+        ([input]) => input.threadId === threadId,
+      )?.[0];
+      assert.equal(startCall?.enableComputerControl, false);
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.notEqual(asRuntimePayloadRecord(binding?.runtimePayload).enableComputerControl, true);
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+});
+
+betaComputerRouting.layer("ProviderServiceLive supported computer-control gating", (it) => {
+  it.effect("keeps honoring the persisted flag when the backend is supported", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-beta-computer-inherit");
+      yield* directory.upsert({
+        threadId,
+        provider: "codex",
+        status: "stopped",
+        runtimePayload: { enableComputerControl: true },
+      });
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        cwd: "/tmp/beta-computer-inherit",
+        runtimeMode: "full-access",
+      });
+
+      const startCall = betaComputerRouting.codex.startSession.mock.calls.findLast(
+        ([input]) => input.threadId === threadId,
+      )?.[0];
+      assert.equal(startCall?.enableComputerControl, true);
+      yield* provider.stopSession({ threadId });
+    }),
+  );
 });
 const piInteractionRouting = makeProviderServiceLayer(undefined, { includePi: true });
 const adapterConfirmedFreshRouting = makeProviderServiceLayer(undefined, {
