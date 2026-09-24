@@ -46,6 +46,7 @@ import { OrchestrationEngineService } from "../../orchestration/Services/Orchest
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { AutomationService } from "../../automation/Services/AutomationService.ts";
 import { buildAutomationProposalActivity } from "../../automation/proposalActivity.ts";
+import { ProjectAgentService } from "../../projectAgent/Services/ProjectAgentService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
 import { OrchestrationEventDeliveryRepository } from "../../persistence/Services/OrchestrationEventDeliveries.ts";
@@ -100,6 +101,7 @@ import {
 } from "../../computer/computerVisibleUse.ts";
 import { BrowserAutomationHost } from "../../browserAutomation/Services/BrowserAutomationHost.ts";
 import { makeBrowserAutomationHost } from "../../browserAutomation/Layers/BrowserAutomationHost.ts";
+import { makeProjectAgentTools } from "../projectAgentTools.ts";
 import { makeThreadReadTools } from "../threadReadTools.ts";
 import { makeThreadDiagnosticTools } from "../threadDiagnosticTools.ts";
 import { pruneProjectedArchivedManagedWorktrees } from "../../managedWorktrees.ts";
@@ -137,6 +139,7 @@ export const makeAgentGateway = Effect.gen(function* () {
   const snapshotQuery = yield* ProjectionSnapshotQuery;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const automationService = yield* AutomationService;
+  const projectAgentService = yield* ProjectAgentService;
   const git = yield* GitCore;
   const gitManager = yield* GitManager;
   const providerDiscovery = yield* ProviderDiscoveryService;
@@ -250,7 +253,11 @@ export const makeAgentGateway = Effect.gen(function* () {
   // that runs with more privileges than the user granted the caller itself —
   // otherwise an approval-required or worktree-isolated agent escalates by proxy.
   const assertCallerMayDriveThread = (
-    caller: { readonly runtimeMode: RuntimeMode; readonly envMode?: string | null | undefined },
+    caller: {
+      readonly id: string;
+      readonly runtimeMode: RuntimeMode;
+      readonly envMode?: string | null | undefined;
+    },
     target: {
       readonly id: string;
       readonly runtimeMode: RuntimeMode;
@@ -272,6 +279,12 @@ export const makeAgentGateway = Effect.gen(function* () {
           ),
         );
       }
+      yield* projectAgentService
+        .assertCallerMayDriveManagedThread({
+          callerThreadId: ThreadId.makeUnsafe(caller.id),
+          targetThreadId: ThreadId.makeUnsafe(target.id),
+        })
+        .pipe(Effect.mapError((error) => new ToolInputError(error.message)));
     });
 
   const readTools = makeThreadReadTools({
@@ -305,6 +318,21 @@ export const makeAgentGateway = Effect.gen(function* () {
     serverConfig,
     loadProviderAvailabilities,
     requireThreadShell,
+    authorizeManagedGoalCreation: (input) =>
+      projectAgentService
+        .authorizeManagedGoalCreation(input)
+        .pipe(Effect.mapError((error) => new ToolInputError(error.message))),
+    recordManagedWorkerThreads: (input) =>
+      projectAgentService
+        .recordManagedWorkerThreads(input)
+        .pipe(Effect.mapError((error) => new ToolInputError(error.message))),
+    assertCreateTargetProject: (input) =>
+      projectAgentService
+        .assertCallerMayCreateThreadInProject({
+          callerThreadId: ThreadId.makeUnsafe(input.callerThreadId),
+          targetProjectId: input.targetProjectId,
+        })
+        .pipe(Effect.mapError((error) => new ToolInputError(error.message))),
   });
 
   const createThreads: ToolEntry = {
@@ -313,7 +341,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     definition: {
       name: "synara_create_threads",
       description:
-        "Create an exact batch of 1–20 standalone Synara threads. Worktree threads start on a Synara-managed temporary branch pinned at baseRef (or the selected checkout's HEAD) and copy local checkout changes plus .worktreeinclude files when the ref is that checkout's HEAD; on the first turn Synara may rename the branch after the prompt and publish it. Validation/preflight failures create nothing and may be corrected with the same requestId; durable retries replay the exact operation.",
+        "Create an exact batch of 1–20 standalone Synara threads. Worktree threads start on a Synara-managed temporary branch pinned at baseRef (or the selected checkout's HEAD) and copy local checkout changes plus .worktreeinclude files when the ref is that checkout's HEAD; on the first turn Synara may rename the branch after the prompt and publish it. Validation/preflight failures create nothing and may be corrected with the same requestId; durable retries replay the exact operation. Each created thread's result includes a ready-to-use link (`thread://<threadId>`); when you mention a thread in a message to the user, write it as a markdown link like [title](thread://<threadId>).",
       inputSchema: {
         type: "object",
         properties: {
@@ -382,7 +410,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     definition: {
       name: "synara_create_thread",
       description:
-        "Create exactly one standalone Synara thread. Worktree threads start on a Synara-managed temporary branch pinned at baseRef; on the first turn Synara may rename the branch after the prompt and publish it. For two or more threads use one synara_create_threads call instead.",
+        "Create exactly one standalone Synara thread. Worktree threads start on a Synara-managed temporary branch pinned at baseRef; on the first turn Synara may rename the branch after the prompt and publish it. For two or more threads use one synara_create_threads call instead. The result includes a ready-to-use link (`thread://<threadId>`); when you mention the thread in a message to the user, write it as a markdown link like [title](thread://<threadId>).",
       inputSchema: {
         type: "object",
         properties: {
@@ -867,6 +895,9 @@ export const makeAgentGateway = Effect.gen(function* () {
   const browserTools = makeAgentGatewayBrowserTools(browserAutomationHost, {
     resolveWorkspaceRoot,
   });
+  const projectAgentTools = makeProjectAgentTools({
+    projectAgent: projectAgentService,
+  });
 
   // One denial activity per (thread, turn, tool): agents typically retry the denied
   // tool several times in a row, and repeated cards would bury the chat — but a
@@ -1204,6 +1235,7 @@ export const makeAgentGateway = Effect.gen(function* () {
         })
       : []),
     ...computerBrowserTools,
+    ...projectAgentTools,
   ];
 
   // The computer family by name, read off the unfiltered catalog above: a

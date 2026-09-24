@@ -13,6 +13,7 @@ import {
   buildThreadHandoffImportedActivities,
   buildThreadHandoffImportedMessages,
   resolveAvailableHandoffTargetProviders,
+  resolveThreadHandoffAvailability,
   resolveThreadHandoffTitle,
   resolveThreadHandoffModelSelection,
 } from "./threadHandoff";
@@ -236,5 +237,38 @@ describe("threadHandoff", () => {
       provider: "codex",
       model: DEFAULT_MODEL_BY_PROVIDER.codex,
     });
+  });
+
+  it("offers provider and workspace handoff for an ordinary project thread", () => {
+    expect(
+      resolveThreadHandoffAvailability({
+        isGroupContainer: false,
+        isCoordinatorThread: false,
+      }),
+    ).toEqual({ providerHandoff: true, workspaceHandoff: true });
+  });
+
+  it("keeps provider handoff for a group chat but hides workspace handoff", () => {
+    expect(
+      resolveThreadHandoffAvailability({
+        isGroupContainer: true,
+        isCoordinatorThread: false,
+      }),
+    ).toEqual({ providerHandoff: true, workspaceHandoff: false });
+  });
+
+  it("hides every handoff action for the coordinator thread", () => {
+    expect(
+      resolveThreadHandoffAvailability({
+        isGroupContainer: true,
+        isCoordinatorThread: true,
+      }),
+    ).toEqual({ providerHandoff: false, workspaceHandoff: false });
+    expect(
+      resolveThreadHandoffAvailability({
+        isGroupContainer: false,
+        isCoordinatorThread: true,
+      }),
+    ).toEqual({ providerHandoff: false, workspaceHandoff: false });
   });
 });

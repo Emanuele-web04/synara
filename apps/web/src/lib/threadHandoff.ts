@@ -205,6 +205,30 @@ export function canCreateThreadHandoff(input: {
   return true;
 }
 
+export interface ThreadHandoffAvailability {
+  // "Hand off thread" — create a new thread on another provider.
+  readonly providerHandoff: boolean;
+  // "Hand off to new worktree" / "Hand off to local" — move the same thread's workspace.
+  readonly workspaceHandoff: boolean;
+}
+
+/**
+ * Single gating decision for every Hand off surface (chat header, sidebar
+ * context menu, composer "Work in" menu). Group chats hand off between
+ * providers like ordinary threads but have no repo checkout to move, and the
+ * coordinator is a single per-group identity — a hand-off copy would read as a
+ * second coordinator.
+ */
+export function resolveThreadHandoffAvailability(input: {
+  readonly isGroupContainer: boolean;
+  readonly isCoordinatorThread: boolean;
+}): ThreadHandoffAvailability {
+  return {
+    providerHandoff: !input.isCoordinatorThread,
+    workspaceHandoff: !input.isGroupContainer && !input.isCoordinatorThread,
+  };
+}
+
 export function resolveThreadHandoffModelSelection(input: {
   readonly sourceThread: Pick<Thread, "modelSelection">;
   readonly targetProvider: ProviderKind;

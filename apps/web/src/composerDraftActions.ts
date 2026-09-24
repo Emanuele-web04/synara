@@ -851,11 +851,67 @@ export const createComposerDraftStoreState =
         return { draftsByThreadId: nextDraftsByThreadId };
       });
     },
+    seedModelSelection: (threadId, modelSelection) => {
+      if (threadId.length === 0) {
+        return;
+      }
+      const normalized = normalizeModelSelection(modelSelection);
+      if (normalized === null) {
+        return;
+      }
+      set((state) => {
+        const existing = state.draftsByThreadId[threadId];
+        const base = existing ?? createEmptyThreadDraft();
+        const nextMap = { ...base.modelSelectionByProvider };
+        const current = nextMap[normalized.provider];
+        nextMap[normalized.provider] = reconcileProviderScopedModelSelection(normalized, current);
+        if (Equal.equals(base.modelSelectionByProvider, nextMap)) {
+          return state;
+        }
+        const nextDraft: ComposerThreadDraftState = {
+          ...base,
+          modelSelectionByProvider: nextMap,
+        };
+        const nextDraftsByThreadId = { ...state.draftsByThreadId };
+        if (shouldRemoveDraft(nextDraft)) {
+          delete nextDraftsByThreadId[threadId];
+        } else {
+          nextDraftsByThreadId[threadId] = nextDraft;
+        }
+        return { draftsByThreadId: nextDraftsByThreadId };
+      });
+    },
     setModelSelectionAndSticky: (threadId, modelSelection) => {
       get().setModelSelection(threadId, modelSelection);
       const correctedSelection =
         get().draftsByThreadId[threadId]?.modelSelectionByProvider[modelSelection.provider];
       get().setStickyModelSelection(correctedSelection ?? modelSelection);
+    },
+    setProviderOptionsForDispatch: (threadId, providerOptions) => {
+      if (threadId.length === 0) {
+        return;
+      }
+      set((state) => {
+        const existing = state.draftsByThreadId[threadId];
+        if (!existing && providerOptions == null) {
+          return state;
+        }
+        const base = existing ?? createEmptyThreadDraft();
+        if (Equal.equals(base.providerOptionsForDispatch, providerOptions ?? undefined)) {
+          return state;
+        }
+        const nextDraft: ComposerThreadDraftState = {
+          ...base,
+          providerOptionsForDispatch: providerOptions ?? undefined,
+        };
+        const nextDraftsByThreadId = { ...state.draftsByThreadId };
+        if (shouldRemoveDraft(nextDraft)) {
+          delete nextDraftsByThreadId[threadId];
+        } else {
+          nextDraftsByThreadId[threadId] = nextDraft;
+        }
+        return { draftsByThreadId: nextDraftsByThreadId };
+      });
     },
     setModelOptions: (threadId, modelOptions) => {
       if (threadId.length === 0) {

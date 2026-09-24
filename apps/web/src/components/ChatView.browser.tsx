@@ -57,7 +57,6 @@ import { isMacNavigatorPlatform } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { setThreadDetailResumeCursor } from "../threadDetailResumeCursors";
 import { resetHomeChatProjectPrewarmStateForTests } from "../lib/chatProjects";
-import { resetStudioProjectPrewarmStateForTests } from "../lib/studioProjects";
 import { hasReconciledServerProviderStatuses } from "../lib/serverReactQuery";
 import { getRouter } from "../router";
 import { useSplitViewStore } from "../splitViewStore";
@@ -131,6 +130,7 @@ interface TestFixture {
   providerStatusesSnapshot: ServerConfig["providers"] | null;
   welcome: WsWelcomePayload;
   gitBranchByCwd: Record<string, string>;
+  projectAgentOverviews: Record<string, unknown>;
 }
 
 let fixture: TestFixture;
@@ -509,6 +509,7 @@ function buildFixture(snapshot: OrchestrationReadModel): TestFixture {
     serverConfig: createBaseServerConfig(),
     providerStatusesSnapshot: null,
     gitBranchByCwd: {},
+    projectAgentOverviews: {},
     welcome: {
       cwd: "/repo/project",
       projectName: "Project",
@@ -1290,6 +1291,10 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
       entries: [],
       truncated: false,
     };
+  }
+  if (tag === WS_METHODS.projectAgentGetOverview) {
+    const projectId = typeof body.projectId === "string" ? body.projectId : "";
+    return fixture.projectAgentOverviews[projectId] ?? {};
   }
   if (tag === WS_METHODS.terminalOpen) {
     return {
@@ -2131,7 +2136,6 @@ describe("ChatView transcript geometry (full app)", () => {
     await resetWsNativeApiForTest();
     resetRetainedThreadDetailSubscriptionsForTests();
     await resetHomeChatProjectPrewarmStateForTests();
-    await resetStudioProjectPrewarmStateForTests();
     await setViewport(DEFAULT_VIEWPORT);
     attachmentResponseDelayMs = 0;
     attachmentUploadSequence = 0;
@@ -2145,6 +2149,7 @@ describe("ChatView transcript geometry (full app)", () => {
       homeDir: null,
       chatWorkspaceRoot: null,
       studioWorkspaceRoot: null,
+      groupsWorkspaceRoot: null,
     });
     document.body.innerHTML = "";
     wsRequests.length = 0;
@@ -2191,7 +2196,6 @@ describe("ChatView transcript geometry (full app)", () => {
 
   afterEach(async () => {
     await resetHomeChatProjectPrewarmStateForTests();
-    await resetStudioProjectPrewarmStateForTests();
     resetRetainedThreadDetailSubscriptionsForTests();
     document.body.innerHTML = "";
   });
@@ -4323,10 +4327,31 @@ describe("ChatView transcript geometry (full app)", () => {
 
       const scrollSpy = installImmediateScrollToSpy(scrollContainer);
       restoreScrollTo = scrollSpy.restore;
-      // Let mount-time tail/image expansion retries (max 260ms) settle before
-      // isolating scrolls caused by the state transitions below.
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 300));
-      await waitForLayout();
+      // The virtual list's bootstrap initial-scroll session can stay armed
+      // past mount — or re-arm on the next layout change after an abort — and
+      // dispatches a one-shot correction scroll once its reveal settles. Drive
+      // one real transition, then stay quiet so its rAF-driven passes settle
+      // without the resolved offset moving; repeat once in case the first
+      // session aborted silently and only re-arms on this change. The
+      // dispatch is captured by the spy and cleared instead of landing inside
+      // the assertions below.
+      for (const warmStatus of ["starting", "ready"] as const) {
+        syncActiveThread((thread) => ({
+          ...thread,
+          session: thread.session ? { ...thread.session, status: warmStatus } : null,
+        }));
+        await waitForLayout();
+        // Quiet window: also covers mount-time tail/image expansion retries
+        // (scheduled at up to 260ms, possibly late under load).
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 300));
+          await waitForLayout();
+          if (scrollSpy.calls.length === 0) {
+            break;
+          }
+          scrollSpy.calls.length = 0;
+        }
+      }
       scrollSpy.calls.length = 0;
 
       // Buffering/connecting state changes generic turn chrome, but does not add a
@@ -7109,7 +7134,7 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("coalesces repeated Studio new-chat clicks and stays in Studio after navigation settles", async () => {
+  it("coalesces repeated group new-chat clicks and stays in Groups after navigation settles", async () => {
     useComposerDraftStore.setState({
       draftThreadsByThreadId: {
         [STUDIO_DRAFT_THREAD_ID]: {
@@ -7130,9 +7155,9 @@ describe("ChatView transcript geometry (full app)", () => {
 
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
-      // Keep one non-Studio server thread in the snapshot. This matches the real failure: Studio
+      // Keep one non-group server thread in the snapshot. This matches the real failure: Groups
       // has no persisted chats, while the global missing-thread recovery sees known threads and
-      // immediately redirects a transiently-cleared Studio draft to the home index.
+      // immediately redirects a transiently-cleared group draft to the home index.
       snapshot: withStudioProject(
         withHomeChatProject(
           createSnapshotForTargetUser({
@@ -7153,17 +7178,15 @@ describe("ChatView transcript geometry (full app)", () => {
     });
 
     try {
-      const newStudioChatButton = await waitForElement(
-        () => document.querySelector<HTMLButtonElement>('button[aria-label="New studio chat"]'),
-        "Unable to find the Studio new-chat action.",
-      );
-      newStudioChatButton.click();
-      newStudioChatButton.click();
+      // Fire the surface-aware new-chat chord twice: on the Groups segment it maps to
+      // the group chat create path, and the second fire must coalesce with the first.
+      await dispatchConfiguredShortcutWhenReady(window, { key: "n", altKey: true });
+      await dispatchConfiguredShortcutWhenReady(window, { key: "n", altKey: true });
 
       const newThreadPath = await waitForURL(
         mounted.router,
         (path) => UUID_ROUTE_RE.test(path),
-        "A fresh Studio chat should navigate to a new draft UUID.",
+        "A fresh group chat should navigate to a new draft UUID.",
       );
       const newThreadId = newThreadPath.slice(1) as ThreadId;
 
@@ -7210,7 +7233,7 @@ describe("ChatView transcript geometry (full app)", () => {
 
       // A superseded navigation resolves the older navigate() promise before the newer route has
       // committed. Give route effects enough time to expose a late Home redirect, then assert the
-      // stable final state and cleanup of the displaced Studio draft.
+      // stable final state and cleanup of the displaced group draft.
       await new Promise<void>((resolve) => window.setTimeout(resolve, 100));
       await vi.waitFor(
         () => {
@@ -7224,6 +7247,169 @@ describe("ChatView transcript geometry (full app)", () => {
           expect(studioDraftIds).toEqual([newThreadId]);
           expect(state.projectDraftThreadIdByProjectId[STUDIO_PROJECT_ID]).toBe(newThreadId);
           expect(state.projectDraftThreadIdByProjectId[HOME_PROJECT_ID]).toBeUndefined();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("seeds a fresh group chat draft from the group's workerRouting", async () => {
+    useComposerDraftStore.setState({
+      draftThreadsByThreadId: {
+        [STUDIO_DRAFT_THREAD_ID]: {
+          projectId: STUDIO_PROJECT_ID,
+          createdAt: NOW_ISO,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          entryPoint: "chat",
+          branch: null,
+          worktreePath: null,
+          envMode: "local",
+        },
+      },
+      projectDraftThreadIdByProjectId: {
+        [STUDIO_PROJECT_ID]: STUDIO_DRAFT_THREAD_ID,
+      },
+    });
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withStudioProject(
+        withHomeChatProject(
+          createSnapshotForTargetUser({
+            targetMessageId: "msg-user-group-routing" as MessageId,
+            targetText: "projects-side thread",
+          }),
+        ),
+      ),
+      initialEntry: `/${STUDIO_DRAFT_THREAD_ID}`,
+      configureFixture: (nextFixture) => {
+        nextFixture.welcome = {
+          ...nextFixture.welcome,
+          homeDir: "/Users/tester",
+          chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+          studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
+        };
+        nextFixture.projectAgentOverviews[STUDIO_PROJECT_ID] = {
+          projectId: STUDIO_PROJECT_ID,
+          configured: true,
+          config: {
+            projectId: STUDIO_PROJECT_ID,
+            coordinatorThreadId: "thread-studio-coordinator" as ThreadId,
+            coordinatorName: "Studio lead",
+            coordinatorModelSelection: { provider: "codex", model: "gpt-5" },
+            workerRouting: {
+              modelSelection: { provider: "claudeAgent", model: "claude-opus-4-5" },
+              providerOptions: { claudeAgent: { enableArtifacts: true } },
+            },
+            limits: {
+              maxConcurrentWorkers: 8,
+              maxNewWorkersPerTurn: 8,
+              maxWorkerCreationsPerGoal: 40,
+              maxAutomaticContinuationsPerGoal: 20,
+              maxRepairRoundsPerTask: 2,
+            },
+            captureEnabled: true,
+            enabled: true,
+            automationId: null,
+            revision: 1,
+            createdAt: NOW_ISO,
+            updatedAt: NOW_ISO,
+            disabledAt: null,
+          },
+          linkedProjectIds: [],
+          goal: null,
+          digest: null,
+          blockers: [],
+          recentOutcomes: [],
+          coordinatorStatus: "idle",
+        };
+      },
+    });
+
+    try {
+      await dispatchConfiguredShortcutWhenReady(window, { key: "n", altKey: true });
+
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "A fresh group chat should navigate to a new draft UUID.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+
+      // The group's coordinator workerRouting beats the app-level sticky/default
+      // selection: the fresh draft dispatches on the group's configured provider.
+      await vi.waitFor(
+        () => {
+          const draft = useComposerDraftStore.getState().draftsByThreadId[newThreadId];
+          expect(draft?.activeProvider).toBe("claudeAgent");
+          expect(draft?.modelSelectionByProvider.claudeAgent?.model).toBe("claude-opus-4-5");
+          expect(draft?.providerOptionsForDispatch).toEqual({
+            claudeAgent: { enableArtifacts: true },
+          });
+          expect(useComposerDraftStore.getState().getDraftThread(newThreadId)?.projectId).toBe(
+            STUDIO_PROJECT_ID,
+          );
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps a group thread open when the Groups section is hidden", async () => {
+    localStorage.setItem("synara:app-settings:v1", JSON.stringify({ showGroupsSection: false }));
+    const groupProjectId = "project-group-alpha" as ProjectId;
+    const snapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-group-thread-hidden-tab" as MessageId,
+      targetText: "group thread",
+    });
+    const groupSnapshot: OrchestrationReadModel = {
+      ...snapshot,
+      projects: [
+        ...snapshot.projects,
+        {
+          id: groupProjectId,
+          kind: "group",
+          title: "Team Alpha",
+          workspaceRoot: "/Users/tester/Groups/team-alpha",
+          defaultModelSelection: { provider: "codex", model: "gpt-5" },
+          scripts: [],
+          createdAt: NOW_ISO,
+          updatedAt: NOW_ISO,
+          deletedAt: null,
+        },
+      ],
+      threads: snapshot.threads.map((thread) =>
+        thread.id === THREAD_ID ? Object.assign({}, thread, { projectId: groupProjectId }) : thread,
+      ),
+    };
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: groupSnapshot,
+      initialEntry: `/${THREAD_ID}`,
+      configureFixture: (nextFixture) => {
+        nextFixture.welcome = {
+          ...nextFixture.welcome,
+          homeDir: "/Users/tester",
+          chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+          studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
+          groupsWorkspaceRoot: "/Users/tester/Groups",
+        };
+      },
+    });
+    try {
+      // The hidden-section guard belongs to the /groups route alone: a group
+      // thread opened from search, split view, or a link stays on its route.
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 400));
+      await vi.waitFor(
+        () => {
+          expect(mounted.router.state.status).toBe("idle");
+          expect(mounted.router.state.location.pathname).toBe(`/${THREAD_ID}`);
         },
         { timeout: 8_000, interval: 16 },
       );

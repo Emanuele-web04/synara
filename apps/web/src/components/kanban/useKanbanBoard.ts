@@ -12,7 +12,7 @@ import { toastManager } from "~/components/ui/toast";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { useKanbanUiStore } from "../../kanbanUiStore";
 import { isHomeChatContainerProject } from "../../lib/chatProjects";
-import { isStudioContainerProject } from "../../lib/studioProjects";
+import { isGroupContainerProject } from "../../lib/groupProjects";
 import { useStore } from "../../store";
 import { createSidebarDisplayThreadsSelector } from "../../storeSelectors";
 import { useTerminalStateStore } from "../../terminalStateStore";
@@ -52,6 +52,7 @@ export function useKanbanBoard(): KanbanBoard {
   const homeDir = useWorkspacePathsStore((state) => state.homeDir);
   const chatWorkspaceRoot = useWorkspacePathsStore((state) => state.chatWorkspaceRoot);
   const studioWorkspaceRoot = useWorkspacePathsStore((state) => state.studioWorkspaceRoot);
+  const groupsWorkspaceRoot = useWorkspacePathsStore((state) => state.groupsWorkspaceRoot);
   const projectSortOrder = settings.sidebarProjectSortOrder;
 
   // Mirror the sidebar's grouping: projects in the user's sidebar sort order, then one
@@ -62,10 +63,18 @@ export function useKanbanBoard(): KanbanBoard {
     const chatContainers = allProjects.filter((project) =>
       isHomeChatContainerProject(project, { homeDir, chatWorkspaceRoot }),
     );
+    // Group containers are intentionally excluded: a group coordinates chats
+    // rather than owning a task board, and its threads surface on the Groups
+    // view, not Kanban.
     const otherProjects = allProjects.filter(
       (project) =>
         !isHomeChatContainerProject(project, { homeDir, chatWorkspaceRoot }) &&
-        !isStudioContainerProject(project, { homeDir, chatWorkspaceRoot, studioWorkspaceRoot }),
+        !isGroupContainerProject(project, {
+          homeDir,
+          chatWorkspaceRoot,
+          studioWorkspaceRoot,
+          groupsWorkspaceRoot,
+        }),
     );
     const canonicalContainer =
       chatContainers.find((project) => project.kind === "chat") ?? chatContainers[0] ?? null;
@@ -84,7 +93,15 @@ export function useKanbanBoard(): KanbanBoard {
       ],
       projectIdAliases: aliases,
     };
-  }, [allProjects, chatWorkspaceRoot, homeDir, projectSortOrder, studioWorkspaceRoot, threads]);
+  }, [
+    allProjects,
+    chatWorkspaceRoot,
+    groupsWorkspaceRoot,
+    homeDir,
+    projectSortOrder,
+    studioWorkspaceRoot,
+    threads,
+  ]);
   const draftsByThreadId = useComposerDraftStore((state) => state.draftsByThreadId);
   const draftThreadsByThreadId = useComposerDraftStore((state) => state.draftThreadsByThreadId);
   const draftOrderByProjectId = useKanbanUiStore((state) => state.draftOrderByProjectId);

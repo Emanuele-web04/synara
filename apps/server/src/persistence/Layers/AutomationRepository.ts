@@ -104,6 +104,7 @@ const AutomationDefinitionDbRow = Schema.Struct({
   misfirePolicy: AutomationDefinition.fields.misfirePolicy,
   acknowledgedRisks: Schema.fromJsonString(AutomationDefinition.fields.acknowledgedRisks),
   iterationCount: AutomationDefinition.fields.iterationCount,
+  managedByProject: Schema.Number,
   createdAt: AutomationDefinition.fields.createdAt,
   updatedAt: AutomationDefinition.fields.updatedAt,
   archivedAt: AutomationDefinition.fields.archivedAt,
@@ -121,7 +122,7 @@ const AutomationRunDbRow = Schema.Struct({
   projectId: AutomationRun.fields.projectId,
   threadId: AutomationRun.fields.threadId,
   turnId: Schema.NullOr(TurnId),
-  triggerType: Schema.Literals(["manual", "scheduled"]),
+  triggerType: Schema.Literals(["manual", "scheduled", "project-event"]),
   status: AutomationRun.fields.status,
   scheduledFor: AutomationRun.fields.scheduledFor,
   deferredUntil: AutomationRun.fields.deferredUntil,
@@ -173,6 +174,7 @@ function toDefinition(row: AutomationDefinitionDbRow) {
   return decodeDefinition({
     ...row,
     enabled: row.enabled === 1,
+    managedByProject: row.managedByProject === 1,
     providerOptions: row.providerOptions ?? undefined,
   }).pipe(Effect.mapError(toPersistenceDecodeError("AutomationRepository.definitionRowToDomain")));
 }
@@ -226,6 +228,7 @@ const makeAutomationRepository = Effect.gen(function* () {
           misfire_policy,
           acknowledged_risks_json,
           iteration_count,
+          managed_by_project,
           created_at,
           updated_at,
           archived_at
@@ -264,6 +267,7 @@ const makeAutomationRepository = Effect.gen(function* () {
           ${definition.misfirePolicy},
           ${definition.acknowledgedRisks},
           ${definition.iterationCount},
+          ${definition.managedByProject},
           ${definition.createdAt},
           ${definition.updatedAt},
           ${definition.archivedAt}
@@ -315,6 +319,7 @@ const makeAutomationRepository = Effect.gen(function* () {
           misfire_policy AS "misfirePolicy",
           acknowledged_risks_json AS "acknowledgedRisks",
           iteration_count AS "iterationCount",
+          COALESCE(managed_by_project, 0) AS "managedByProject",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           archived_at AS "archivedAt"
@@ -363,6 +368,7 @@ const makeAutomationRepository = Effect.gen(function* () {
             misfire_policy = ${definition.misfirePolicy},
             acknowledged_risks_json = ${definition.acknowledgedRisks},
             iteration_count = ${definition.iterationCount},
+            managed_by_project = ${definition.managedByProject},
             updated_at = ${definition.updatedAt},
             archived_at = ${definition.archivedAt}
         WHERE automation_id = ${definition.id}
@@ -435,6 +441,7 @@ const makeAutomationRepository = Effect.gen(function* () {
           misfire_policy AS "misfirePolicy",
           acknowledged_risks_json AS "acknowledgedRisks",
           iteration_count AS "iterationCount",
+          COALESCE(managed_by_project, 0) AS "managedByProject",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           archived_at AS "archivedAt"
@@ -489,6 +496,7 @@ const makeAutomationRepository = Effect.gen(function* () {
           definitions.misfire_policy AS "misfirePolicy",
           definitions.acknowledged_risks_json AS "acknowledgedRisks",
           definitions.iteration_count AS "iterationCount",
+          COALESCE(definitions.managed_by_project, 0) AS "managedByProject",
           definitions.created_at AS "createdAt",
           definitions.updated_at AS "updatedAt",
           definitions.archived_at AS "archivedAt"
@@ -1535,7 +1543,7 @@ const makeAutomationRepository = Effect.gen(function* () {
     const { id, input, now } = request;
     const initialNextRunAt = Object.hasOwn(request, "nextRunAt")
       ? (request.nextRunAt ?? null)
-      : input.schedule.type === "manual"
+      : input.schedule.type === "manual" || input.schedule.type === "project-event"
         ? null
         : now;
     const mode = input.mode ?? "standalone";
@@ -1578,6 +1586,7 @@ const makeAutomationRepository = Effect.gen(function* () {
       misfirePolicy: input.misfirePolicy ?? "coalesce",
       acknowledgedRisks: input.acknowledgedRisks ?? [],
       iterationCount: 0,
+      managedByProject: request.managedByProject ?? false,
       createdAt: now,
       updatedAt: now,
       archivedAt: null,
@@ -1586,6 +1595,7 @@ const makeAutomationRepository = Effect.gen(function* () {
       ...definition,
       enabled: definition.enabled ? 1 : 0,
       stopOnError: definition.stopAfterConsecutiveFailures === null ? 0 : 1,
+      managedByProject: definition.managedByProject ? 1 : 0,
       providerOptions: definition.providerOptions ?? null,
       completionPolicy: definition.completionPolicy ?? { type: "none" },
       completionPolicyVersion: definition.completionPolicyVersion ?? 1,
@@ -1603,6 +1613,7 @@ const makeAutomationRepository = Effect.gen(function* () {
         ...definition,
         enabled: definition.enabled ? 1 : 0,
         stopOnError: definition.stopAfterConsecutiveFailures === null ? 0 : 1,
+        managedByProject: definition.managedByProject ? 1 : 0,
         providerOptions: definition.providerOptions ?? null,
         completionPolicy: definition.completionPolicy ?? { type: "none" },
         completionPolicyVersion: definition.completionPolicyVersion ?? 1,

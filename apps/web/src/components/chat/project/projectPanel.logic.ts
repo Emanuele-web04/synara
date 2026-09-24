@@ -1,0 +1,167 @@
+import type {
+  ProjectDigestFocusItem,
+  ProjectTask,
+  ProjectThreadIndexEntry,
+  ThreadId,
+} from "@synara/contracts";
+import {
+  sanitizeProjectDigestFocusTitle,
+  sanitizeProjectDigestSummary,
+} from "@synara/shared/projectAgent";
+
+export { sanitizeProjectDigestFocusTitle, sanitizeProjectDigestSummary };
+
+export type ProjectFocusRowState = "open" | "done" | "archived";
+
+export type ProjectFocusRow = {
+  readonly id: string;
+  readonly title: string;
+  readonly detail: string | null;
+  readonly threadId: ThreadId | null;
+  readonly state: ProjectFocusRowState;
+};
+
+const OPEN_TASK_STATUSES = new Set(["planned", "ready", "running", "review", "blocked"]);
+
+function firstLine(value: string | null | undefined): string | null {
+  const trimmed = value?.trim() ?? "";
+  if (trimmed.length === 0) return null;
+  const line = trimmed.split(/\r?\n/, 1)[0]?.trim() ?? "";
+  return line.length > 0 ? line : null;
+}
+
+export function projectTaskFocusRow(task: ProjectTask): ProjectFocusRow {
+  const archived = task.archivedAt !== null;
+  const done = task.status === "done" || task.status === "cancelled";
+  return {
+    id: task.id,
+    title: task.title,
+    detail: firstLine(task.description),
+    threadId: task.assignedThreadId,
+    state: archived
+      ? "archived"
+      : done
+        ? "done"
+        : OPEN_TASK_STATUSES.has(task.status)
+          ? "open"
+          : "done",
+  };
+}
+
+export function partitionProjectFocusRows(tasks: ReadonlyArray<ProjectTask>): {
+  readonly open: ReadonlyArray<ProjectFocusRow>;
+  readonly done: ReadonlyArray<ProjectFocusRow>;
+  readonly archived: ReadonlyArray<ProjectFocusRow>;
+} {
+  const open: ProjectFocusRow[] = [];
+  const done: ProjectFocusRow[] = [];
+  const archived: ProjectFocusRow[] = [];
+  for (const task of tasks) {
+    const row = projectTaskFocusRow(task);
+    if (row.state === "archived") archived.push(row);
+    else if (row.state === "open") open.push(row);
+    else done.push(row);
+  }
+  return { open, done, archived };
+}
+
+export function projectThreadIndexFocusRows(input: {
+  readonly threads: ReadonlyArray<ProjectThreadIndexEntry>;
+  readonly coordinatorThreadId: ThreadId | null | undefined;
+  readonly titlesById: ReadonlyMap<string, string>;
+}): {
+  readonly open: ReadonlyArray<ProjectFocusRow>;
+  readonly archived: ReadonlyArray<ProjectFocusRow>;
+} {
+  const open: ProjectFocusRow[] = [];
+  const archived: ProjectFocusRow[] = [];
+  for (const thread of input.threads) {
+    if (thread.excluded) continue;
+    if (input.coordinatorThreadId && thread.threadId === input.coordinatorThreadId) continue;
+    const title = input.titlesById.get(thread.threadId) ?? "Worker thread";
+    const row: ProjectFocusRow = {
+      id: thread.threadId,
+      title,
+      detail: null,
+      threadId: thread.threadId,
+      state: thread.archived ? "archived" : "open",
+    };
+    if (row.state === "archived") archived.push(row);
+    else open.push(row);
+  }
+  return { open, archived };
+}
+
+export function mergeProjectFocusRows(
+  tasks: ReturnType<typeof partitionProjectFocusRows>,
+  threads: ReturnType<typeof projectThreadIndexFocusRows>,
+): ReturnType<typeof partitionProjectFocusRows> {
+  const seen = new Set(tasks.open.map((row) => row.threadId).filter(Boolean));
+  const extraOpen = threads.open.filter((row) => !row.threadId || !seen.has(row.threadId));
+  const archivedIds = new Set(tasks.archived.map((row) => row.threadId).filter(Boolean));
+  const extraArchived = threads.archived.filter(
+    (row) => !row.threadId || !archivedIds.has(row.threadId),
+  );
+  return {
+    open: [...tasks.open, ...extraOpen],
+    done: tasks.done,
+    archived: [...tasks.archived, ...extraArchived],
+  };
+}
+
+export function projectDigestFocusRows(
+  items: ReadonlyArray<ProjectDigestFocusItem>,
+): ReadonlyArray<ProjectFocusRow> {
+  return items.map((item) => ({
+    id: item.id,
+    title: sanitizeProjectDigestFocusTitle(item.title),
+    detail: null,
+    threadId: item.sourceThreadId ?? null,
+    state: "open",
+  }));
+}
+
+export function rewriteThreadIdsAsMarkdownLinks(
+  text: string,
+  threads: ReadonlyArray<{ readonly id: string; readonly title: string }>,
+): string {
+  if (text.length === 0) return text;
+  let next = text;
+  // Coordinator messages sometimes cite threads as `[label](synara://thread/<title>)`
+  // — with raw spaces in the target — which markdown cannot parse at all.
+  // Resolve the target (id or title, raw or %-encoded) into a `thread://` link
+  // when it names a known thread; otherwise %-encode it so it still renders.
+  const threadByKey = new Map<string, { id: string; title: string }>();
+  for (const thread of threads) {
+    threadByKey.set(thread.id.toLowerCase(), thread);
+    const title = thread.title.trim();
+    if (title.length > 0) threadByKey.set(title.toLowerCase(), thread);
+  }
+  next = next.replace(
+    /\[([^\]]+)\]\(synara:\/\/thread\/([^)\s]+(?:\s[^)\s]+)*)\)/g,
+    (match, label: string, target: string) => {
+      let decoded = target;
+      try {
+        decoded = decodeURIComponent(target).trim();
+      } catch {
+        // Malformed %-encoding: keep the raw target.
+      }
+      const thread = threadByKey.get(decoded.toLowerCase());
+      return thread
+        ? `[${label}](thread://${thread.id})`
+        : `[${label}](synara://thread/${encodeURIComponent(decoded)})`;
+    },
+  );
+  for (const thread of threads) {
+    const escapedId = thread.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const label = thread.title.trim().length > 0 ? thread.title.trim() : "Thread";
+    const markdownLink = `[${label}](thread://${thread.id})`;
+    next = next.replace(
+      new RegExp(`\\[([^\\]]+)\\]\\(thread://${escapedId}\\)`, "g"),
+      markdownLink,
+    );
+    next = next.replace(new RegExp(`thread://${escapedId}(?!\\))`, "g"), markdownLink);
+    next = next.replace(new RegExp(`(?<!\\[|thread://)\\b${escapedId}\\b`, "g"), markdownLink);
+  }
+  return next;
+}

@@ -103,4 +103,25 @@ describe("ChatTranscriptPane", () => {
     expect(markup).not.toContain('data-testid="thread-find-bar"');
     expect(markup).not.toContain("absolute right-2 top-2");
   });
+
+  it("renders a stored thread error in flow above the transcript, never as an overlay", () => {
+    const markup = renderTranscriptPaneMarkup({
+      threadError: "Provider adapter request failed (grok): connect ETIMEDOUT",
+      onDismissThreadError: () => {},
+    });
+
+    expect(markup).toContain("Provider adapter request failed (grok): connect ETIMEDOUT");
+    expect(markup).toContain('role="alert"');
+    // In flow above the transcript — an absolute overlay would cover whatever
+    // message happens to sit at the top of the scroll region.
+    expect(markup).not.toContain("pointer-events-none absolute inset-x-0 top-2");
+    expect(markup).toContain("shrink-0");
+    expect(markup).not.toContain("Unblock thread");
+  });
+
+  it("keeps the transcript clean when no thread error is stored", () => {
+    const markup = renderTranscriptPaneMarkup({ threadError: null });
+
+    expect(markup).not.toContain('role="alert"');
+  });
 });

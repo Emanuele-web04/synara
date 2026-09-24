@@ -319,7 +319,7 @@ function SettingsRouteView() {
       ? ["Thread sort order"]
       : []),
     ...(settings.showChatsSection !== defaults.showChatsSection ? ["Chats section"] : []),
-    ...(settings.showStudioSection !== defaults.showStudioSection ? ["Studio section"] : []),
+    ...(settings.showGroupsSection !== defaults.showGroupsSection ? ["Groups section"] : []),
     ...(settings.showAutomationRunThreads !== defaults.showAutomationRunThreads
       ? ["Automation runs"]
       : []),
@@ -643,11 +643,11 @@ function SettingsRouteView() {
         })}
 
         {renderBooleanSettingRow({
-          settingKey: "showStudioSection",
-          title: "Studio",
-          description: "Show the Studio tab in the sidebar switcher.",
-          resetLabel: "studio section",
-          ariaLabel: "Show the Studio section in the sidebar",
+          settingKey: "showGroupsSection",
+          title: "Groups",
+          description: "Show the Groups tab in the sidebar switcher.",
+          resetLabel: "groups section",
+          ariaLabel: "Show the Groups section in the sidebar",
         })}
 
         {renderBooleanSettingRow({

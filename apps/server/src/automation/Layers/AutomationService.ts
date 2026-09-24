@@ -484,7 +484,7 @@ function mergeDefinitionUpdate(
 ): AutomationDefinition {
   const schedule = input.schedule ?? current.schedule;
   const nextRunAt =
-    schedule.type === "manual"
+    schedule.type === "manual" || schedule.type === "project-event"
       ? null
       : input.schedule
         ? safeComputeNextRunAt(schedule, now, current.nextRunAt, jitterContext)
@@ -816,7 +816,12 @@ export const AutomationServiceLive = Layer.effect(
             );
           }
           const nextRunAt = computeNextAutomationRunAt(input.schedule, input.now);
-          if (input.enabled && input.schedule.type !== "manual" && nextRunAt === null) {
+          if (
+            input.enabled &&
+            input.schedule.type !== "manual" &&
+            input.schedule.type !== "project-event" &&
+            nextRunAt === null
+          ) {
             throw new Error("Automation schedule must have a future run time.");
           }
         },
@@ -2586,6 +2591,14 @@ export const AutomationServiceLive = Layer.effect(
     const create: AutomationServiceShape["create"] = (input) =>
       Effect.gen(function* () {
         const now = isoNow();
+        if (input.schedule.type === "project-event") {
+          return yield* Effect.fail(
+            new AutomationServiceError({
+              message:
+                "Project-event automations are reserved for the Project Coordinator and cannot be created from ordinary automation editing.",
+            }),
+          );
+        }
         const normalizedInput: AutomationCreateInput = {
           ...input,
           stopAfterConsecutiveFailures: resolveAutomationStopPolicy(
@@ -2638,6 +2651,36 @@ export const AutomationServiceLive = Layer.effect(
         );
         yield* publish({ type: "definition-upserted", definition: normalized });
         return normalized;
+      });
+
+    const createProjectManaged: AutomationServiceShape["createProjectManaged"] = (input) =>
+      Effect.gen(function* () {
+        const now = isoNow();
+        if (input.schedule.type !== "project-event" || input.mode !== "heartbeat") {
+          return yield* Effect.fail(
+            new AutomationServiceError({
+              message:
+                "Project-managed automations must use heartbeat mode and a project-event schedule.",
+            }),
+          );
+        }
+        yield* requireProject(input.projectId);
+        yield* validateHeartbeatTarget({
+          mode: "heartbeat",
+          projectId: input.projectId,
+          targetThreadId: input.targetThreadId ?? null,
+        });
+        const definition = yield* automationRepository
+          .createDefinition({
+            id: makeAutomationId(),
+            input,
+            now,
+            nextRunAt: null,
+            managedByProject: true,
+          })
+          .pipe(Effect.mapError(toServiceError("Failed to create project-managed automation.")));
+        yield* publish({ type: "definition-upserted", definition });
+        return definition;
       });
 
     const validateDefinitionUpdate = (definition: AutomationDefinition, now: string) =>
@@ -2980,7 +3023,7 @@ export const AutomationServiceLive = Layer.effect(
           return definition;
         }
         const computedNextRunAt =
-          definition.schedule.type === "manual"
+          definition.schedule.type === "manual" || definition.schedule.type === "project-event"
             ? null
             : computeNextAutomationRunAtAfter(
                 definition.schedule,
@@ -2991,7 +3034,11 @@ export const AutomationServiceLive = Layer.effect(
         // Manual reruns should not revive legacy definitions that cannot pass today's
         // active-schedule policy, such as oversized sub-minute loops.
         let canBecomeEnabled = false;
-        if (definition.schedule.type === "manual" || computedNextRunAt !== null) {
+        if (
+          definition.schedule.type === "manual" ||
+          definition.schedule.type === "project-event" ||
+          computedNextRunAt !== null
+        ) {
           canBecomeEnabled = yield* validateSchedulePolicy({
             schedule: definition.schedule,
             enabled: true,
@@ -3090,6 +3137,18 @@ export const AutomationServiceLive = Layer.effect(
                   } as const)
                 : yield* continuationEligibility(runnableDefinition, now);
           if (!eligibility.eligible) {
+            // A pending check-in already queued behind the active run is the
+            // newest durable signal a manual Run now could add — coalesce onto
+            // it instead of queueing a second deferred run per request.
+            const activeRuns = yield* automationRepository
+              .listActiveRunsForDefinition({ automationId: runnableDefinition.id })
+              .pipe(Effect.mapError(toServiceError("Failed to load pending automation runs.")));
+            const pendingRun = activeRuns.find(
+              (run) => run.status === "pending" || run.status === "claimed",
+            );
+            if (pendingRun) {
+              return { run: pendingRun };
+            }
             const deferState = heartbeatDeferState(now, now);
             const deferredRun = yield* claimPendingRun(
               runnableDefinition,
@@ -3575,6 +3634,7 @@ export const AutomationServiceLive = Layer.effect(
     return {
       list,
       create,
+      createProjectManaged,
       update,
       delete: deleteAutomation,
       resolveProposal,

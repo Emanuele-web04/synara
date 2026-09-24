@@ -184,6 +184,10 @@
       "types": "./src/pendingInteractions.ts",
       "import": "./src/pendingInteractions.ts"
     },
+    "./groupSlug": {
+      "types": "./src/groupSlug.ts",
+      "import": "./src/groupSlug.ts"
+    },
     "./projectContainers": {
       "types": "./src/projectContainers.ts",
       "import": "./src/projectContainers.ts"
@@ -191,6 +195,10 @@
     "./projectDirectoryName": {
       "types": "./src/projectDirectoryName.ts",
       "import": "./src/projectDirectoryName.ts"
+    },
+    "./projectAgent": {
+      "types": "./src/projectAgent.ts",
+      "import": "./src/projectAgent.ts"
     },
     "./pinnedMessages": {
       "types": "./src/pinnedMessages.ts",
@@ -371,6 +379,14 @@
     "./asyncUserInput": {
       "types": "./src/asyncUserInput.ts",
       "import": "./src/asyncUserInput.ts"
+    },
+    "./groupThreadState": {
+      "types": "./src/groupThreadState.ts",
+      "import": "./src/groupThreadState.ts"
+    },
+    "./coordinatorCheckin": {
+      "types": "./src/coordinatorCheckin.ts",
+      "import": "./src/coordinatorCheckin.ts"
     }
   },
   "scripts": {

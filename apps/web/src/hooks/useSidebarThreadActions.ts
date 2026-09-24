@@ -15,8 +15,13 @@ import { showConfirmDialogFallback } from "../confirmDialogFallback";
 import {
   getFallbackThreadIdAfterDelete,
   derivePinnedThreadIdsForSidebar,
+  excludeHiddenProjectAgentCoordinatorThreads,
   isLatestPinnedThreadMutation,
 } from "../components/Sidebar.logic";
+import {
+  coordinatorThreadIdSet,
+  useProjectAgentSummariesStore,
+} from "../components/chat/project/useProjectAgentSummaries";
 import { toastManager } from "../components/ui/toast";
 import { deleteActiveThreadFromClient } from "../lib/activeThreadDelete";
 import { reconcileDeletedThreadsFromClient } from "../lib/deletedThreadClientReconciliation";
@@ -112,6 +117,8 @@ export function useSidebarThreadActions(input: {
     sidebarThreadSummaryById,
     threadsHydrated,
   } = input;
+  const hiddenCoordinatorThreadIds = () =>
+    coordinatorThreadIdSet(useProjectAgentSummariesStore.getState().summariesByProjectId.values());
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
@@ -709,8 +716,11 @@ export function useSidebarThreadActions(input: {
       const api = readNativeApi();
       const project = projectById.get(projectId);
       if (!api || !project) return;
-      const projectThreads = sidebarThreads.filter(
-        (thread) => thread.projectId === projectId && thread.archivedAt == null,
+      const projectThreads = excludeHiddenProjectAgentCoordinatorThreads(
+        sidebarThreads.filter(
+          (thread) => thread.projectId === projectId && thread.archivedAt == null,
+        ),
+        hiddenCoordinatorThreadIds(),
       );
       if (projectThreads.length === 0) {
         toastManager.add({
@@ -770,8 +780,14 @@ export function useSidebarThreadActions(input: {
       const api = readNativeApi();
       const project = projectById.get(projectId);
       if (!api || !project) return null;
-      const projectThreads = sidebarThreads.filter((thread) => thread.projectId === projectId);
-      if (projectThreads.length === 0) {
+      const allProjectThreads = sidebarThreads.filter((thread) => thread.projectId === projectId);
+      const visibleProjectThreads = excludeHiddenProjectAgentCoordinatorThreads(
+        allProjectThreads,
+        hiddenCoordinatorThreadIds(),
+      );
+      const deletingWholeProject = options?.confirmMessage === null;
+      const projectThreads = deletingWholeProject ? allProjectThreads : visibleProjectThreads;
+      if (visibleProjectThreads.length === 0 && !deletingWholeProject) {
         if (options?.showEmptyToast ?? true) {
           toastManager.add({
             type: "info",

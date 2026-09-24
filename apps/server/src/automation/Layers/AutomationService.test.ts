@@ -488,6 +488,7 @@ const textGeneration = {
   generateBranchName: () => Effect.die("unused"),
   generateThreadTitle: () => Effect.die("unused"),
   generateThreadRecap: () => Effect.die("unused"),
+  generateProjectDigest: () => Effect.die("unused"),
   generateAutomationIntent: () => Effect.die("unused"),
   evaluateAutomationCompletion: (input: CompletionEvaluationInputForTest) => {
     completionEvaluationInputs.push(input);
@@ -2244,6 +2245,39 @@ layer("AutomationService", (it) => {
         (yield* service.list({ projectId })).runs.find((entry) => entry.id === run.id)?.status,
         "running",
       );
+    }),
+  );
+
+  it.effect("coalesces repeated runNow calls onto the queued check-in run", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-coalesced-manual");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+      });
+      const first = yield* service.runNow({ automationId: created.id });
+      assert.strictEqual(first.run.status, "running");
+
+      // With a run still active, a manual Run now queues one deferred check-in;
+      // further Run now clicks (e.g. repeated project saves) must reuse it.
+      const second = yield* service.runNow({ automationId: created.id });
+      assert.strictEqual(second.run.status, "pending");
+      assert.isNotNull(second.run.deferredUntil);
+
+      const third = yield* service.runNow({ automationId: created.id });
+      assert.strictEqual(third.run.status, "pending");
+      assert.strictEqual(third.run.id, second.run.id);
+
+      const listed = yield* service.list({ projectId });
+      assert.strictEqual(listed.runs.filter((entry) => entry.status === "pending").length, 1);
+
+      yield* service.cancelRun({ runId: second.run.id });
+      yield* service.cancelRun({ runId: first.run.id });
     }),
   );
 

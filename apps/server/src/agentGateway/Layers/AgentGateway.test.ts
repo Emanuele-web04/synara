@@ -36,6 +36,7 @@ import { TestClock } from "effect/testing";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
 import { AutomationService } from "../../automation/Services/AutomationService.ts";
+import { ProjectAgentService } from "../../projectAgent/Services/ProjectAgentService.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { GitManager } from "../../git/Services/GitManager.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
@@ -67,6 +68,7 @@ import { ProviderDiscoveryServiceLive } from "../../provider/Layers/ProviderDisc
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { isSynaraGatewayToolName } from "../computerToolPermission.ts";
 import { AgentGateway } from "../Services/AgentGateway.ts";
 import { AgentGatewayCredentials } from "../Services/AgentGatewayCredentials.ts";
 import {
@@ -797,6 +799,39 @@ function makeHarnessLayer(
       }),
   } as unknown as (typeof AutomationService)["Service"]);
 
+  const projectAgentLayer = Layer.succeed(ProjectAgentService, {
+    resolvePrincipalForThread: () => Effect.succeed({ kind: "user" as const }),
+    assertCallerMayDriveManagedThread: () => Effect.void,
+    getOverview: () =>
+      Effect.succeed({
+        projectId: PROJECT_ID,
+        configured: false,
+        config: null,
+        goal: null,
+        digest: null,
+        linkedProjectIds: [],
+        blockers: [],
+        recentOutcomes: [],
+        coordinatorStatus: "unconfigured",
+      }),
+    listTasks: () => Effect.succeed({ tasks: [], nextCursor: null }),
+    readDocument: () => Effect.fail(new Error("not configured")),
+    writeDocument: () => Effect.fail(new Error("not configured")),
+    reportResult: () => Effect.fail(new Error("not configured")),
+    buildContextPacket: () => Effect.fail(new Error("not configured")),
+    formatContextPacketForTurn: () => Effect.succeed(""),
+    authorizeManagedGoalCreation: () => Effect.void,
+    assertCallerMayCreateThreadInProject: () => Effect.void,
+    recordManagedWorkerThreads: () => Effect.void,
+    scheduleDigest: () => Effect.void,
+    reconcilePendingWakes: () => Effect.void,
+    inspectWorkerHealth: () => Effect.void,
+    listEvidence: () => Effect.succeed({ evidence: [] }),
+    listThreadIndex: () => Effect.succeed({ threads: [] }),
+    excludeThread: () => Effect.fail(new Error("not configured")),
+    backfillSummaries: () => Effect.fail(new Error("not configured")),
+  } as unknown as (typeof ProjectAgentService)["Service"]);
+
   const gitLayer = Layer.succeed(GitCore, {
     withMutation: (_cwd: string, effect: Effect.Effect<unknown, unknown, unknown>) => effect,
     execute: (input: { operation: string; cwd: string; args: ReadonlyArray<string> }) =>
@@ -1253,6 +1288,7 @@ function makeHarnessLayer(
     Layer.provide(snapshotLayer),
     Layer.provide(engineLayer),
     Layer.provide(automationLayer),
+    Layer.provide(projectAgentLayer),
     Layer.provide(gitLayer),
     Layer.provide(gitManagerLayer),
     Layer.provide(providerDiscoveryLayer),
@@ -1692,6 +1728,32 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
+  it.effect("covers every served tool under the auto-approve matcher", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.postRaw({
+        authorizationHeader: "Bearer token-parent",
+        body: { jsonrpc: "2.0", id: 1, method: "tools/list" },
+      });
+      assert.equal(response.status, 200);
+      const tools =
+        (response.body as { result?: { tools?: Array<{ name: string }> } } | undefined)?.result
+          ?.tools ?? [];
+      assert.isAbove(tools.length, 0);
+      for (const tool of tools) {
+        assert.isTrue(
+          isSynaraGatewayToolName(`synara_${tool.name}`),
+          `synara_${tool.name} must auto-approve`,
+        );
+        assert.isTrue(
+          isSynaraGatewayToolName(`mcp__synara__${tool.name}`),
+          `mcp__synara__${tool.name} must auto-approve`,
+        );
+      }
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
   it.effect("rejects malformed JSON-RPC ids before invoking a tool", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
     return Effect.gen(function* () {
@@ -2037,6 +2099,20 @@ describe("AgentGateway", () => {
         "synara_cancel_automation",
         "synara_update_automation_memory",
         "synara_report_automation_result",
+        // Group tools the coordinator delegates through — the playbook names
+        // these, so a capability regression would silently gut delegation.
+        "synara_project_get_overview",
+        "synara_project_list_tasks",
+        "synara_project_read_document",
+        "synara_project_write_document",
+        "synara_project_report_result",
+        "synara_project_context",
+        "synara_project_remember",
+        "synara_project_forget",
+        "synara_project_link_repository",
+        "synara_project_library_list",
+        "synara_project_library_add",
+        "synara_project_list_threads",
       ]);
       const createThreadProperties = tools.find((tool) => tool.name === "synara_create_thread")
         ?.inputSchema.properties;
@@ -2696,6 +2772,11 @@ describe("AgentGateway", () => {
         },
       });
       assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+
+      const created = toolResultJson(response.result).threads as Array<Record<string, unknown>>;
+      // The result carries a ready-to-use thread link so callers can write
+      // `[title](thread://<id>)` markdown instead of title-with-spaces links.
+      assert.equal(created[0]?.link, `thread://${String(created[0]?.threadId)}`);
 
       const creates = harness.dispatched.filter((command) => command.type === "thread.create");
       const turns = harness.dispatched.filter((command) => command.type === "thread.turn.start");

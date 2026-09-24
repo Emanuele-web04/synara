@@ -3593,4 +3593,175 @@ describe("MessagesTimeline", () => {
       markup.indexOf("Edited 1 file"),
     );
   });
+
+  it("renders an automation-dispatched coordinator prompt as a normal user row", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        conversationOnly
+        timelineEntries={[
+          {
+            id: "checkin-row",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:29.000Z",
+            message: {
+              id: MessageId.makeUnsafe("checkin-message"),
+              role: "user",
+              text: "Automation: Alpha events\nAutomation ID: automation-1\nRun: manual\n\nCoordinator events",
+              createdAt: "2026-03-17T19:12:29.000Z",
+              streaming: false,
+              source: "native",
+              dispatchOrigin: "automation",
+            },
+          },
+        ]}
+      />,
+    );
+
+    // Check-in turns are suppressed upstream in deriveWorkLogEntries; the
+    // timeline no longer has a compact check-in row, so the prompt renders as
+    // a normal user bubble.
+    expect(markup).not.toContain("Coordinator check-in");
+    expect(markup).toContain("--app-user-message-background");
+    expect(markup).toContain("Sent via Automation");
+  });
+
+  it("keeps automation-origin user messages as bubbles outside coordinator conversations", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        timelineEntries={[
+          {
+            id: "automation-row",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:29.000Z",
+            message: {
+              id: MessageId.makeUnsafe("automation-message"),
+              role: "user",
+              text: "Automation: Alpha events\nRun: scheduled",
+              createdAt: "2026-03-17T19:12:29.000Z",
+              streaming: false,
+              source: "native",
+              dispatchOrigin: "automation",
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).not.toContain("Coordinator check-in");
+    expect(markup).toContain("--app-user-message-background");
+    expect(markup).toContain("Sent via Automation");
+  });
+
+  it("renders a server-posted worker settle row as a compact pill", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        conversationOnly
+        timelineEntries={[
+          {
+            id: "monitor-settle-row",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:29.000Z",
+            entry: {
+              id: "monitor-settle-entry",
+              createdAt: "2026-03-17T19:12:29.000Z",
+              label: "✓ Mars rocket research finished",
+              tone: "info",
+              synaraWorkerNotice: {
+                kind: "settled",
+                marker: "✓",
+                phrase: "finished",
+                threads: [
+                  {
+                    threadId: "thread-mars",
+                    title: "Mars rocket research",
+                    outcome: "completed",
+                    result: null,
+                    pr: null,
+                    projectId: null,
+                  },
+                ],
+              },
+            },
+          },
+        ]}
+        onOpenThread={() => {}}
+      />,
+    );
+
+    expect(markup).toContain('data-worker-monitor-kind="settled"');
+    expect(markup).toContain("Mars rocket research");
+    expect(markup).toContain("finished");
+    expect(markup).toContain("<button");
+  });
+
+  it("renders the batch roll-up as a chat message with per-thread links and outcomes", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...makeTimelineBaseProps()}
+        conversationOnly
+        timelineEntries={[
+          {
+            id: "monitor-rollup-row",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:29.000Z",
+            entry: {
+              id: "monitor-rollup-entry",
+              createdAt: "2026-03-17T19:12:29.000Z",
+              label:
+                "All 3 threads settled: Alpha research ✓, Beta survey ✓, Gamma page ⚠ needs approval",
+              tone: "info",
+              synaraWorkerNotice: {
+                kind: "rollup",
+                marker: null,
+                phrase: null,
+                threads: [
+                  {
+                    threadId: "thread-a",
+                    title: "Alpha research",
+                    outcome: "completed",
+                    result: null,
+                    pr: null,
+                    projectId: null,
+                  },
+                  {
+                    threadId: "thread-b",
+                    title: "Beta survey",
+                    outcome: "completed",
+                    result: null,
+                    pr: null,
+                    projectId: null,
+                  },
+                  {
+                    threadId: "thread-c",
+                    title: "Gamma page",
+                    outcome: "waiting-approval",
+                    result: null,
+                    pr: null,
+                    projectId: null,
+                  },
+                ],
+              },
+            },
+          },
+        ]}
+        onOpenThread={() => {}}
+      />,
+    );
+
+    expect(markup).toContain('data-worker-monitor-kind="rollup"');
+    expect(markup).toContain("All 3 threads settled:");
+    expect(markup).toContain("Alpha research");
+    expect(markup).toContain("Beta survey");
+    expect(markup).toContain("Gamma page");
+    expect(markup).toContain("needs your approval");
+    // Three thread links — no full work-entry chrome around them.
+    expect(markup.match(/<button/g)?.length).toBeGreaterThanOrEqual(3);
+  });
 });

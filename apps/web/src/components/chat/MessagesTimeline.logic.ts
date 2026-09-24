@@ -611,6 +611,7 @@ export function deriveMessagesTimelineRows(input: {
   activeTurnStartedAt: string | null;
   turnDiffSummaryByAssistantMessageId: ReadonlyMap<MessageId, TurnDiffSummary>;
   revertTurnCountByUserMessageId: ReadonlyMap<MessageId, number>;
+  conversationOnly?: boolean;
 }): MessagesTimelineRow[] {
   const nextRows: MessagesTimelineRow[] = [];
   const timelineMessages = input.timelineEntries.flatMap((entry) =>
@@ -670,21 +671,39 @@ export function deriveMessagesTimelineRows(input: {
     }
 
     if (timelineEntry.kind === "work") {
-      const groupedEntries = [timelineEntry.entry];
+      const run = [
+        { entry: timelineEntry.entry, id: timelineEntry.id, createdAt: timelineEntry.createdAt },
+      ];
       let cursor = index + 1;
       while (cursor < input.timelineEntries.length) {
         const nextEntry = input.timelineEntries[cursor];
         if (!nextEntry || nextEntry.kind !== "work") break;
-        groupedEntries.push(nextEntry.entry);
+        run.push({ entry: nextEntry.entry, id: nextEntry.id, createdAt: nextEntry.createdAt });
         cursor += 1;
       }
-      flushPendingWorkGroup();
-      pendingWorkGroup = {
-        kind: "work",
-        id: timelineEntry.id,
-        createdAt: timelineEntry.createdAt,
-        groupedEntries,
-      };
+      // Server-posted coordinator monitor rows keep their own work row: the
+      // leading/inline merges into an assistant message hide them on
+      // conversation-only surfaces, so they must never join a mergeable group.
+      for (const runEntry of run) {
+        if (runEntry.entry.synaraWorkerNotice) {
+          flushPendingWorkGroup();
+          nextRows.push({
+            kind: "work",
+            id: runEntry.id,
+            createdAt: runEntry.createdAt,
+            groupedEntries: [runEntry.entry],
+          });
+        } else if (pendingWorkGroup) {
+          pendingWorkGroup.groupedEntries.push(runEntry.entry);
+        } else {
+          pendingWorkGroup = {
+            kind: "work",
+            id: runEntry.id,
+            createdAt: runEntry.createdAt,
+            groupedEntries: [runEntry.entry],
+          };
+        }
+      }
       index = cursor - 1;
       continue;
     }
@@ -777,11 +796,13 @@ export function deriveMessagesTimelineRows(input: {
     });
   }
 
-  collapseSettledTurns(nextRows, {
-    terminalAssistantMessageIds,
-    activeTurnInProgress: input.activeTurnInProgress ?? false,
-    activeTurnId: input.activeTurnId ?? null,
-  });
+  if (input.conversationOnly !== true) {
+    collapseSettledTurns(nextRows, {
+      terminalAssistantMessageIds,
+      activeTurnInProgress: input.activeTurnInProgress ?? false,
+      activeTurnId: input.activeTurnId ?? null,
+    });
+  }
 
   // The live turn wears a "Working for Xs" header + divider — the counting-up
   // twin of a settled turn's "Worked for Xs" disclosure. It anchors to the top
@@ -789,6 +810,7 @@ export function deriveMessagesTimelineRows(input: {
   // real start time to count from; the trailing "Thinking" shimmer covers the
   // gap before one exists. Inserted after collapse so folding is untouched.
   if (
+    input.conversationOnly !== true &&
     input.isWorking &&
     input.activeTurnStartedAt &&
     !(input.worktreeSetup && input.worktreeSetupOpen)
@@ -893,6 +915,10 @@ function collapseSettledTurns(
     for (let scan = pass - 1; scan >= 0; scan -= 1) {
       const prev = rows[scan]!;
       if (prev.kind === "work") {
+        // Coordinator monitor rows are server-posted system pills, not turn
+        // work — folding them into a collapsed turn would hide them on
+        // conversation-only surfaces.
+        if (prev.groupedEntries.some((entry) => entry.synaraWorkerNotice)) continue;
         foldIndices.push(scan);
         continue;
       }

@@ -17,6 +17,10 @@ import {
   useComposerDraftStore,
 } from "../composerDraftStore";
 import {
+  applyGroupWorkerRoutingDefaults,
+  resolveGroupContainerThreadDefaults,
+} from "../lib/groupWorkerRouting";
+import {
   findProviderStatus,
   isProviderUsable,
   resolveAvailableProviderPreference,
@@ -53,6 +57,11 @@ export interface NewThreadNavigationOptions {
   search?: (previous: Record<string, unknown>) => Record<string, unknown>;
 }
 
+// Coordinator hand-off threads never mint through this hook, so every caller
+// here is a user-initiated surface: a fresh chat draft minted inside a group
+// container seeds from the group's workerRouting via the same helper the
+// Groups new-chat path uses. Stored/route reuse paths keep the user's
+// existing selections.
 export function useHandleNewThread() {
   const projects = useStore((store) => store.projects);
   const { settings, serverSettings } = useAppSettings();
@@ -377,6 +386,10 @@ export function useHandleNewThread() {
         options,
         defaultEnvMode,
       });
+      const containerDefaults = await resolveGroupContainerThreadDefaults({
+        projectId,
+        entryPoint,
+      });
       const committed = await stageDraftNavigation({
         // Keep the previous routed draft alive while the destination loads. Replacing the
         // project's primary slot earlier makes the route guard redirect the old URL to Home.
@@ -386,6 +399,13 @@ export function useHandleNewThread() {
           // Seed the draft from the sticky (last-used) selection so a new chat
           // reopens with the model and options used most recently.
           applyUsableStickyState(threadId);
+          if (containerDefaults) {
+            applyGroupWorkerRoutingDefaults({
+              threadId,
+              defaults: containerDefaults,
+              providerStatuses: providerStatusesReconciled ? providerStatuses : [],
+            });
+          }
           applyProviderOverride(threadId);
         },
         // Mark the draft-landing navigation as a transition so the new route

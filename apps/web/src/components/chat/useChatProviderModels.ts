@@ -15,7 +15,7 @@ import {
   serverConfigQueryOptions,
 } from "~/lib/serverReactQuery";
 import type { AppSettings } from "../../appSettings";
-import { getProviderStartOptions } from "../../appSettings";
+import { getProviderStartOptions, mergeProviderStartOptions } from "../../appSettings";
 import { useComposerThreadDraft, useEffectiveComposerModelState } from "../../composerDraftStore";
 import { buildSearchableModelOptions } from "../../hooks/useComposerCommandMenuItems";
 import { useProviderModelCatalog } from "../../hooks/useProviderModelCatalog";
@@ -215,7 +215,17 @@ export function useChatProviderModels({
     selectedProvider,
     selectedRuntimeModel,
   ]);
-  const providerOptionsForDispatch = useMemo(() => getProviderStartOptions(settings), [settings]);
+  const providerOptionsForDispatch = useMemo(
+    // A seeded overlay (group worker routing) sits on top of the user's own
+    // start options instead of replacing them wholesale, so a send on any
+    // provider the user picks still dispatches their configured options.
+    () =>
+      mergeProviderStartOptions(
+        getProviderStartOptions(settings),
+        composerDraft.providerOptionsForDispatch,
+      ),
+    [composerDraft.providerOptionsForDispatch, settings],
+  );
   const selectedModelForPicker =
     selectedModelSelection.provider === selectedProvider
       ? selectedModelSelection.model

@@ -198,6 +198,9 @@ export interface ComposerThreadDraftState {
   restoredSourceProposedPlan?: RestoredComposerSourceProposedPlan | null;
   modelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>>;
   activeProvider: ProviderKind | null;
+  // Per-thread provider start options staged for dispatch (e.g. a group's worker
+  // routing defaults). Unset means the global settings-derived options apply.
+  providerOptionsForDispatch?: ProviderStartOptions | undefined;
   runtimeMode: RuntimeMode | null;
   interactionMode: ProviderInteractionMode | null;
   enableComputerControl?: boolean | undefined;
@@ -330,7 +333,20 @@ export interface ComposerDraftStoreState {
     threadId: ThreadId,
     modelSelection: ModelSelection | null | undefined,
   ) => void;
+  /**
+   * Records a per-provider default model without switching the draft's active
+   * provider — used for seeds (group worker routing) that must not steal the
+   * composer's provider pick.
+   */
+  seedModelSelection: (
+    threadId: ThreadId,
+    modelSelection: ModelSelection | null | undefined,
+  ) => void;
   setModelSelectionAndSticky: (threadId: ThreadId, modelSelection: ModelSelection) => void;
+  setProviderOptionsForDispatch: (
+    threadId: ThreadId,
+    providerOptions: ProviderStartOptions | null | undefined,
+  ) => void;
   setModelOptions: (
     threadId: ThreadId,
     modelOptions: ProviderModelOptions | null | undefined,
@@ -881,6 +897,7 @@ export function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     draft.restoredSourceProposedPlan == null &&
     Object.keys(draft.modelSelectionByProvider).length === 0 &&
     draft.activeProvider === null &&
+    draft.providerOptionsForDispatch == null &&
     draft.runtimeMode === null &&
     draft.interactionMode === null &&
     // An explicit false is still content: it records the user's choice to keep

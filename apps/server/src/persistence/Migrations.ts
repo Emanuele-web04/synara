@@ -124,6 +124,15 @@ import Migration0104 from "./Migrations/104_ProjectionThreadsClaudeCacheReview.t
 import ProjectImportOriginsMigration from "./Migrations/106_ProjectImportOrigins.ts";
 import Migration0108 from "./Migrations/108_GatewayCompletions.ts";
 import Migration0107 from "./Migrations/107_ProjectionThreadsHumanMessage.ts";
+import Migration0109 from "./Migrations/109_ProjectAgent.ts";
+import Migration0110 from "./Migrations/110_Groups.ts";
+import Migration0111 from "./Migrations/111_GroupLibraryHosting.ts";
+import Migration0112 from "./Migrations/112_CoordinatorAppearance.ts";
+import Migration0113 from "./Migrations/113_ProjectAgentWakeCursor.ts";
+import Migration0114 from "./Migrations/114_ProjectAgentLifecycle.ts";
+import Migration0115 from "./Migrations/115_ProjectAgentManagedWorkers.ts";
+import Migration0116 from "./Migrations/116_ProjectAgentWorkerRecovery.ts";
+import Migration0117 from "./Migrations/117_WorkerMonitoringLiveness.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -248,6 +257,15 @@ export const migrationEntries = [
   [106, "ProjectImportOrigins", ProjectImportOriginsMigration],
   [107, "ProjectionThreadsHumanMessage", Migration0107],
   [108, "GatewayCompletions", Migration0108],
+  [109, "ProjectAgent", Migration0109],
+  [110, "Groups", Migration0110],
+  [111, "GroupLibraryHosting", Migration0111],
+  [112, "CoordinatorAppearance", Migration0112],
+  [113, "ProjectAgentWakeCursor", Migration0113],
+  [114, "ProjectAgentLifecycle", Migration0114],
+  [115, "ProjectAgentManagedWorkers", Migration0115],
+  [116, "ProjectAgentWorkerRecovery", Migration0116],
+  [117, "WorkerMonitoringLiveness", Migration0117],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

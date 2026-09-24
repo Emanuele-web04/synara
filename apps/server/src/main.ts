@@ -190,6 +190,10 @@ const CliEnvConfig = Config.all({
   autoBootstrapProjectFromCwd: optionalBooleanEnvironmentConfig(
     "SYNARA_AUTO_BOOTSTRAP_PROJECT_FROM_CWD",
   ),
+  trashDir: Config.string("SYNARA_TRASH_DIR").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
   logProviderEvents: optionalBooleanEnvironmentConfig("SYNARA_LOG_PROVIDER_EVENTS"),
   logWebSocketEvents: optionalBooleanEnvironmentConfig("SYNARA_LOG_WS_EVENTS"),
 });
@@ -317,7 +321,7 @@ const ServerConfigLive = (input: CliInput) =>
         });
       }
 
-      const { homeDir, chatWorkspaceRoot, studioWorkspaceRoot } =
+      const { homeDir, chatWorkspaceRoot, studioWorkspaceRoot, groupsWorkspaceRoot } =
         yield* resolveCanonicalWorkspaceRoots({ homeDir: userHomeDir });
 
       const config: ServerConfigShape = {
@@ -327,6 +331,7 @@ const ServerConfigLive = (input: CliInput) =>
         homeDir,
         chatWorkspaceRoot,
         studioWorkspaceRoot,
+        groupsWorkspaceRoot,
         host,
         baseDir,
         ...derivedPaths,
@@ -339,6 +344,7 @@ const ServerConfigLive = (input: CliInput) =>
         desktopShutdownToken,
         migrationDivergenceConsent,
         autoBootstrapProjectFromCwd,
+        trashDir: env.trashDir,
         logProviderEvents,
         logWebSocketEvents,
       } satisfies ServerConfigShape;

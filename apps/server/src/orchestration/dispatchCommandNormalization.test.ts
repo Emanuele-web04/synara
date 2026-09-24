@@ -159,6 +159,7 @@ describe("makeDispatchCommandNormalizer", () => {
       attachmentsDir: "/tmp/attachments",
       chatWorkspaceRoot: "/Users/tester/Documents/Synara",
       studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
+      groupsWorkspaceRoot: "/Users/tester/Documents/Synara/Groups",
       fileSystem: {} as FileSystem.FileSystem,
       path: {} as Path.Path,
       canonicalizeProjectWorkspaceRoot: (workspaceRoot) => Effect.succeed(workspaceRoot),
@@ -188,6 +189,7 @@ describe("makeDispatchCommandNormalizer", () => {
     const normalizer = makeDispatchCommandNormalizer<Error>({
       attachmentsDir: "/tmp/attachments",
       studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
+      groupsWorkspaceRoot: "/Users/tester/Documents/Synara/Groups",
       fileSystem: {} as FileSystem.FileSystem,
       path: {} as Path.Path,
       canonicalizeProjectWorkspaceRoot: (workspaceRoot) => Effect.succeed(workspaceRoot),
@@ -217,6 +219,171 @@ describe("makeDispatchCommandNormalizer", () => {
     await runPrepareWorkspaceRoot(second);
 
     expect(preparedRoots).toEqual(["/Users/tester/Documents/Synara/Studio/Outbox"]);
+  });
+
+  it("roots a group create under Groups/<slug> and prepares that folder", async () => {
+    const preparedRoots: string[] = [];
+    const canonicalized: string[] = [];
+    const normalizer = makeDispatchCommandNormalizer<Error>({
+      attachmentsDir: "/tmp/attachments",
+      groupsWorkspaceRoot: "/Users/tester/Documents/Synara/Groups",
+      fileSystem: {} as FileSystem.FileSystem,
+      path: { join: (...parts: string[]) => parts.join("/") } as Path.Path,
+      canonicalizeProjectWorkspaceRoot: (workspaceRoot) => {
+        canonicalized.push(workspaceRoot);
+        return Effect.succeed(workspaceRoot);
+      },
+      prepareGroupWorkspaceRoot: (workspaceRoot) =>
+        Effect.sync(() => {
+          preparedRoots.push(workspaceRoot);
+        }),
+    });
+
+    const result = await Effect.runPromise(
+      normalizer({
+        command: projectCreateCommand({
+          kind: "group",
+          title: "Alpha Bot",
+          workspaceRoot: "/tmp/ignored",
+        }),
+      }),
+    );
+    await runPrepareWorkspaceRoot(result);
+
+    expect(canonicalized).toEqual(["/Users/tester/Documents/Synara/Groups/alpha-bot"]);
+    expect(result.command.type).toBe("project.create");
+    if (result.command.type === "project.create") {
+      expect(result.command.workspaceRoot).toBe("/Users/tester/Documents/Synara/Groups/alpha-bot");
+    }
+    expect(preparedRoots).toEqual(["/Users/tester/Documents/Synara/Groups/alpha-bot"]);
+  });
+
+  it("allocates a unique group folder when the slug is already taken", async () => {
+    const groupsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "synara-groups-"));
+    const takenDir = path.join(groupsRoot, "alpha-bot");
+    fs.mkdirSync(takenDir, { recursive: true });
+    const fileSystem = {
+      readDirectory: (dir: string) =>
+        Effect.try({
+          try: () => fs.readdirSync(dir) as ReadonlyArray<string>,
+          catch: () => new Error("readDirectory failed"),
+        }),
+    } as unknown as FileSystem.FileSystem;
+    const normalizer = makeDispatchCommandNormalizer<Error>({
+      attachmentsDir: "/tmp/attachments",
+      groupsWorkspaceRoot: groupsRoot,
+      fileSystem,
+      path: path as unknown as Path.Path,
+      canonicalizeProjectWorkspaceRoot: (workspaceRoot) => Effect.succeed(workspaceRoot),
+      listGroupWorkspaceRoots: () => Effect.succeed([]),
+    });
+
+    try {
+      const result = await Effect.runPromise(
+        normalizer({
+          command: projectCreateCommand({
+            kind: "group",
+            title: "Alpha Bot",
+            workspaceRoot: "/tmp/ignored",
+          }),
+        }),
+      );
+
+      expect(result.command.type).toBe("project.create");
+      if (result.command.type === "project.create") {
+        expect(result.command.workspaceRoot).toBe(path.join(groupsRoot, "alpha-bot-2"));
+      }
+    } finally {
+      fs.rmSync(groupsRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("skips the folder claimed by another group project in the read model", async () => {
+    const groupsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "synara-groups-"));
+    const takenDir = path.join(groupsRoot, "alpha-bot");
+    const normalizer = makeDispatchCommandNormalizer<Error>({
+      attachmentsDir: "/tmp/attachments",
+      groupsWorkspaceRoot: groupsRoot,
+      fileSystem: {} as FileSystem.FileSystem,
+      path: path as unknown as Path.Path,
+      canonicalizeProjectWorkspaceRoot: (workspaceRoot) => Effect.succeed(workspaceRoot),
+      listGroupWorkspaceRoots: () =>
+        Effect.succeed([
+          {
+            projectId: ProjectId.makeUnsafe("project-other-group"),
+            workspaceRoot: takenDir,
+          },
+        ]),
+    });
+
+    try {
+      const result = await Effect.runPromise(
+        normalizer({
+          command: projectCreateCommand({
+            kind: "group",
+            projectId: ProjectId.makeUnsafe("project-new-group"),
+            title: "Alpha Bot",
+            workspaceRoot: "/tmp/ignored",
+          }),
+        }),
+      );
+
+      expect(result.command.type).toBe("project.create");
+      if (result.command.type === "project.create") {
+        expect(result.command.workspaceRoot).toBe(path.join(groupsRoot, "alpha-bot-2"));
+      }
+    } finally {
+      fs.rmSync(groupsRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the group's own folder on meta.update instead of bumping to a suffix", async () => {
+    const groupsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "synara-groups-"));
+    const ownDir = path.join(groupsRoot, "alpha-bot");
+    fs.mkdirSync(ownDir, { recursive: true });
+    const fileSystem = {
+      readDirectory: (dir: string) =>
+        Effect.try({
+          try: () => fs.readdirSync(dir) as ReadonlyArray<string>,
+          catch: () => new Error("readDirectory failed"),
+        }),
+    } as unknown as FileSystem.FileSystem;
+    const normalizer = makeDispatchCommandNormalizer<Error>({
+      attachmentsDir: "/tmp/attachments",
+      groupsWorkspaceRoot: groupsRoot,
+      fileSystem,
+      path: path as unknown as Path.Path,
+      canonicalizeProjectWorkspaceRoot: (workspaceRoot) => Effect.succeed(workspaceRoot),
+      listGroupWorkspaceRoots: () =>
+        Effect.succeed([
+          {
+            projectId: ProjectId.makeUnsafe("project-alpha"),
+            workspaceRoot: ownDir,
+          },
+        ]),
+    });
+
+    try {
+      const result = await Effect.runPromise(
+        normalizer({
+          command: {
+            type: "project.meta.update",
+            commandId: CommandId.makeUnsafe("cmd-meta-update"),
+            projectId: ProjectId.makeUnsafe("project-alpha"),
+            kind: "group",
+            title: "Alpha Bot",
+            workspaceRoot: ownDir,
+          } satisfies Extract<ClientOrchestrationCommand, { type: "project.meta.update" }>,
+        }),
+      );
+
+      expect(result.command.type).toBe("project.meta.update");
+      if (result.command.type === "project.meta.update") {
+        expect(result.command.workspaceRoot).toBe(ownDir);
+      }
+    } finally {
+      fs.rmSync(groupsRoot, { recursive: true, force: true });
+    }
   });
 
   it("defers binary attachment authority to the transactional managed ledger", async () => {

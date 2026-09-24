@@ -3,6 +3,8 @@ import {
   canonicalSynaraComputerToolName,
   computerToolNameFromProviderPermission,
   isSynaraComputerToolFamilyName,
+  isSynaraGatewayToolCall,
+  isSynaraGatewayToolName,
   qualifiedSynaraComputerToolName,
   shouldAllowSynaraComputerProviderTool,
 } from "./computerToolPermission.ts";
@@ -138,5 +140,80 @@ describe("Synara Computer provider permission", () => {
       false,
     );
     expect(shouldAllowSynaraComputerProviderTool({ ...allowed, runtimeMode: "auto" })).toBe(false);
+  });
+});
+
+describe("Synara gateway tool permission name", () => {
+  it.each([
+    // Claude's fully-qualified spelling pins the exact `mcp__synara__` server.
+    "mcp__synara__synara_create_thread",
+    "mcp__synara__computer_click",
+    // `<server>_<tool>` reports (OpenCode) with a real catalog name.
+    "synara_synara_create_thread",
+    "synara_synara_project_link_repository",
+    "synara_computer_click",
+    "synara_device_list",
+    "synara_browser_run",
+    // Bare `synara_*` catalog names carry the namespace inside the tool name.
+    "synara_project_link_repository",
+    "synara_e2e_review",
+  ])("recognizes a Synara gateway tool: %s", (providerName) => {
+    expect(isSynaraGatewayToolName(providerName)).toBe(true);
+  });
+
+  it.each([
+    // A user MCP server named `synara_fs` reports `synara_fs_<tool>` — the
+    // prefix alone must never grant it the auto-approve path.
+    "synara_fs_read",
+    "synara_fs_list_threads",
+    "synara_tools_anything",
+    "mcp__synara_fs__read",
+    // The `mcp__synara__` prefix pins the server, not the tool — the part
+    // after it must still be a real catalog name.
+    "mcp__synara__not_a_gateway_tool",
+    "mcp__synara__synara_create_task",
+    "mcp__synara__synara_fs_read",
+    // Foreign server or entirely unknown names.
+    "mcp__other__synara_create_thread",
+    "other_synara_create_thread",
+    "computer_click",
+    "browser_click",
+    // Names the external-agent MCP surface serves, not the provider gateway.
+    "synara_create_task",
+    "synara_read_task",
+    "synara_overview",
+    "synara_synara_create_task",
+    // Not served by the agent gateway at all.
+    "synara_desktop",
+  ])("does not trust a look-alike or foreign name: %s", (providerName) => {
+    expect(isSynaraGatewayToolName(providerName)).toBe(false);
+  });
+
+  it("accepts a qualified name only when the tool is in the catalog", () => {
+    expect(isSynaraGatewayToolName("mcp__synara__synara_list_threads")).toBe(true);
+    expect(isSynaraGatewayToolName("mcp__synara__computer_click")).toBe(true);
+    expect(
+      isSynaraGatewayToolCall({ rawInput: { _toolName: "mcp__synara__synara_list_threads" } }),
+    ).toBe(true);
+  });
+
+  it("never trusts a tool name that only appears in the display title", () => {
+    // The title is provider-composed prose — an approval card can render
+    // "mcp__synara__synara_list_threads" for a request that names no such
+    // tool, so the title alone must not authorize anything.
+    expect(isSynaraGatewayToolCall({ title: "mcp__synara__synara_list_threads" })).toBe(false);
+    expect(isSynaraGatewayToolCall({ title: "mcp__synara__not_a_gateway_tool; rm -rf y" })).toBe(
+      false,
+    );
+  });
+
+  it("rejects non-strings and a look-alike server name in every name field", () => {
+    expect(isSynaraGatewayToolName(undefined)).toBe(false);
+    expect(isSynaraGatewayToolName(42)).toBe(false);
+    expect(isSynaraGatewayToolCall({ name: "synara_fs_create_thread" })).toBe(false);
+    expect(isSynaraGatewayToolCall({ metadata: { toolName: "synara_fs_read" } })).toBe(false);
+    expect(isSynaraGatewayToolCall({ rawInput: { _toolName: "synara_synara_send_message" } })).toBe(
+      true,
+    );
   });
 });

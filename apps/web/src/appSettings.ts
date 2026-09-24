@@ -300,10 +300,13 @@ export const AppSettingsSchema = Schema.Struct({
   showPullRequestDiffColors: Schema.Boolean.pipe(withDefaults(() => true)),
   // Local-only UI preferences for hiding sidebar surfaces a user doesn't want.
   // `showChatsSection` controls the standalone "Chats" list in the sidebar footer
-  // (rootless chats not tied to a project). `showStudioSection` controls the
-  // optional Studio tab in the section switcher.
+  // (rootless chats not tied to a project). `showGroupsSection` controls the
+  // optional Groups tab in the section switcher.
   showChatsSection: Schema.Boolean.pipe(withDefaults(() => true)),
-  showStudioSection: Schema.Boolean.pipe(withDefaults(() => true)),
+  showGroupsSection: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Deprecated rename bridge from the Studio surface. Normalization migrates this
+  // value onto `showGroupsSection` once and then omits the key.
+  showStudioSection: Schema.optionalKey(Schema.Boolean),
   // Local-only UI preferences for the primary sidebar nav block (New thread, Kanban,
   // Pull requests, Automations): drag-to-reorder order plus explicitly hidden items.
   // An item whose route is currently active stays visible regardless (mirrors
@@ -661,11 +664,15 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     allowComputerControlInNewChats: legacyAllowComputerControlInNewChats,
     geminiBinaryPath: legacyGeminiBinaryPath,
     customGeminiModels: legacyCustomGeminiModels,
+    showStudioSection: legacyShowStudioSection,
     ...currentSettings
   } = settings;
   return {
     ...currentSettings,
     enableAppSnap: settings.enableAppSnap || legacyEnableAppshots === true,
+    // Read the legacy Studio key once: it defaults to true, so only an explicit
+    // `false` carries over onto the renamed Groups section.
+    showGroupsSection: settings.showGroupsSection && legacyShowStudioSection !== false,
     computerControlEnabled:
       settings.computerControlEnabled || legacyAllowComputerControlInNewChats === true,
     // Password fields are accepted only as write-only update patches. Never retain
@@ -1372,6 +1379,53 @@ export function getProviderStartOptions(
   };
 
   return Object.keys(providerOptions).length > 0 ? providerOptions : undefined;
+}
+
+/**
+ * Layers `overlay` over `base` per provider and per option key: the overlay
+ * wins only for the provider options it names, so a seeded routing overlay
+ * (e.g. a group's worker routing) never wipes the user's own start options
+ * for other providers — or the untouched keys of a provider it does name.
+ */
+export function mergeProviderStartOptions(
+  base: ProviderStartOptions | undefined,
+  overlay: ProviderStartOptions | undefined,
+): ProviderStartOptions | undefined {
+  if (overlay === undefined) {
+    return base;
+  }
+  if (base === undefined) {
+    return overlay;
+  }
+  return {
+    ...(base.codex !== undefined || overlay.codex !== undefined
+      ? { codex: { ...base.codex, ...overlay.codex } }
+      : {}),
+    ...(base.claudeAgent !== undefined || overlay.claudeAgent !== undefined
+      ? { claudeAgent: { ...base.claudeAgent, ...overlay.claudeAgent } }
+      : {}),
+    ...(base.cursor !== undefined || overlay.cursor !== undefined
+      ? { cursor: { ...base.cursor, ...overlay.cursor } }
+      : {}),
+    ...(base.devin !== undefined || overlay.devin !== undefined
+      ? { devin: { ...base.devin, ...overlay.devin } }
+      : {}),
+    ...(base.antigravity !== undefined || overlay.antigravity !== undefined
+      ? { antigravity: { ...base.antigravity, ...overlay.antigravity } }
+      : {}),
+    ...(base.grok !== undefined || overlay.grok !== undefined
+      ? { grok: { ...base.grok, ...overlay.grok } }
+      : {}),
+    ...(base.droid !== undefined || overlay.droid !== undefined
+      ? { droid: { ...base.droid, ...overlay.droid } }
+      : {}),
+    ...(base.opencode !== undefined || overlay.opencode !== undefined
+      ? { opencode: { ...base.opencode, ...overlay.opencode } }
+      : {}),
+    ...(base.pi !== undefined || overlay.pi !== undefined
+      ? { pi: { ...base.pi, ...overlay.pi } }
+      : {}),
+  };
 }
 
 /**

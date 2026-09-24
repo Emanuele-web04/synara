@@ -412,7 +412,7 @@ export function computeNextAutomationRunAt(
   fromIso: string,
   jitterContext?: AutomationScheduleJitterContext,
 ): string | null {
-  if (schedule.type === "manual") {
+  if (schedule.type === "manual" || schedule.type === "project-event") {
     return null;
   }
 
@@ -454,7 +454,7 @@ export function computeNextAutomationRunAtAfter(
   notBeforeIso: string,
   jitterContext?: AutomationScheduleJitterContext,
 ): string | null {
-  if (schedule.type === "manual") {
+  if (schedule.type === "manual" || schedule.type === "project-event") {
     return null;
   }
 
@@ -487,7 +487,7 @@ export function computeAutomationScheduleSpacingSeconds(
   schedule: AutomationSchedule,
   fromIso: string,
 ): number | null {
-  if (schedule.type === "manual" || schedule.type === "once") {
+  if (schedule.type === "manual" || schedule.type === "once" || schedule.type === "project-event") {
     return null;
   }
   const first = computeNextAutomationRunAt(schedule, fromIso);

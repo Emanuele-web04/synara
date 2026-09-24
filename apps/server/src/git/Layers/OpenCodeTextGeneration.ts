@@ -43,6 +43,7 @@ import {
   buildDiffSummaryPrompt,
   buildPrContentPrompt,
   buildThreadRecapPrompt,
+  buildProjectDigestPrompt,
   buildThreadTitlePrompt,
   decodeStructuredTextGenerationOutput,
   type RawTextFallback,
@@ -662,6 +663,33 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
       };
     });
 
+    const generateProjectDigest: TextGenerationShape["generateProjectDigest"] = Effect.fn(
+      `${config.serviceName}.generateProjectDigest`,
+    )(function* (input) {
+      const modelSelection = resolveOpenCodeCompatibleModelSelection(config, input);
+      if (!modelSelection) {
+        return yield* new TextGenerationError({
+          operation: "generateProjectDigest",
+          detail: `Invalid ${config.displayName} model selection.`,
+        });
+      }
+      const { prompt, outputSchemaJson, rawTextFallback } = buildProjectDigestPrompt({
+        ...(input.previousSummary ? { previousSummary: input.previousSummary } : {}),
+        activity: input.activity,
+        coverage: input.coverage,
+        pinnedFocus: input.pinnedFocus,
+      });
+      return yield* runOpenCodeJson({
+        operation: "generateProjectDigest",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson,
+        rawTextFallback,
+        modelSelection,
+        ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+      });
+    });
+
     const generateAutomationIntent: TextGenerationShape["generateAutomationIntent"] = Effect.fn(
       `${config.serviceName}.generateAutomationIntent`,
     )(function* (input) {
@@ -716,6 +744,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
       generateBranchName,
       generateThreadTitle,
       generateThreadRecap,
+      generateProjectDigest,
       generateAutomationIntent,
       evaluateAutomationCompletion,
     } satisfies TextGenerationShape;
