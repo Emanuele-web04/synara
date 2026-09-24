@@ -11,7 +11,6 @@ import type { ProjectId, ThreadId } from "@synara/contracts";
 import { createGroupProject, findLegacyStudioContainerForAdoption } from "../lib/groupProjects";
 import { FolderOpenIcon, NewThreadIcon, PENCIL_ICON_NAME } from "../lib/icons";
 import { newCommandId } from "../lib/utils";
-import { PinStatusIcon, pinActionLabel } from "../lib/pin";
 import { readNativeApi } from "../nativeApi";
 import { usePinnedProjectAgentsStore } from "../pinnedProjectAgentsStore";
 import { useStore } from "../store";
@@ -25,6 +24,8 @@ import {
   type SidebarDerivedProjectData,
 } from "./Sidebar.logic";
 import { ChatSortMenu, SidebarPrimaryAction } from "./Sidebar";
+import { SidebarRowHoverActions } from "./SidebarRowHoverActions";
+import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
 import {
   resolveGroupCoordinatorRowLabel,
   resolveGroupsListEmptyState,
@@ -115,6 +116,7 @@ export function SidebarGroupsSurface({
   const groupsWorkspaceRoot = useWorkspacePathsStore((store) => store.groupsWorkspaceRoot);
   const toggleProject = useStore((store) => store.toggleProject);
   const projects = useStore((store) => store.projects);
+  const sidebarThreadSummaryById = useStore((store) => store.sidebarThreadSummaryById);
   const { summariesByProjectId } = useProjectAgentSummaries();
   const projectLabelById = useMemo(() => {
     const map = new Map<ProjectId, string>();
@@ -289,6 +291,12 @@ export function SidebarGroupsSurface({
               const coordinatorRowLabel = resolveGroupCoordinatorRowLabel({
                 configured: coordinatorConfigured,
                 coordinatorName: coordinatorSummary?.coordinatorName,
+                groupName: resolveSidebarProjectRowLabel(project),
+                remoteName: project.remoteName,
+                threadTitle:
+                  coordinatorSummary?.coordinatorThreadId != null
+                    ? sidebarThreadSummaryById[coordinatorSummary.coordinatorThreadId]?.title
+                    : null,
               });
               const coordinatorThreadActive =
                 coordinatorConfigured &&
@@ -327,7 +335,7 @@ export function SidebarGroupsSurface({
                   });
               };
               const coordinatorRow = (
-                <SidebarMenuSubItem className="group/project-agent-row relative w-full">
+                <SidebarMenuSubItem className="group/thread-row relative w-full">
                   <SidebarMenuSubButton
                     render={<div role="button" tabIndex={0} />}
                     data-thread-selection-safe
@@ -364,30 +372,23 @@ export function SidebarGroupsSurface({
                     <span className="min-w-0 truncate">{coordinatorRowLabel}</span>
                   </SidebarMenuSubButton>
                   {coordinatorConfigured ? (
-                    <button
-                      type="button"
-                      aria-label={pinActionLabel("coordinator", coordinatorPinned)}
-                      aria-pressed={coordinatorPinned}
-                      title={pinActionLabel("coordinator", coordinatorPinned)}
-                      className={cn(
-                        "sidebar-icon-button absolute right-1.5 top-1/2 z-20 inline-flex size-4 -translate-y-1/2 cursor-pointer items-center justify-center rounded-sm transition-opacity hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring",
-                        SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
-                        coordinatorPinned
-                          ? "pointer-events-auto opacity-100"
-                          : "pointer-events-none opacity-0 md:group-hover/project-agent-row:pointer-events-auto md:group-hover/project-agent-row:opacity-100 md:group-has-[:focus-visible]/project-agent-row:pointer-events-auto md:group-has-[:focus-visible]/project-agent-row:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100",
-                      )}
-                      onMouseDown={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                      }}
-                      onClick={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        toggleProjectAgentPinned(project.id);
-                      }}
+                    <SidebarRowHoverActions
+                      threadId={coordinatorSummary?.coordinatorThreadId ?? project.id}
                     >
-                      <PinStatusIcon pinned={coordinatorPinned} className="size-3.5" />
-                    </button>
+                      <div className="pointer-events-auto inline-flex items-center">
+                        <ThreadPinToggleButton
+                          pinned={coordinatorPinned}
+                          presentation="inline"
+                          targetLabel="coordinator"
+                          toneClassName="text-muted-foreground/42"
+                          onToggle={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            toggleProjectAgentPinned(project.id);
+                          }}
+                        />
+                      </div>
+                    </SidebarRowHoverActions>
                   ) : null}
                 </SidebarMenuSubItem>
               );

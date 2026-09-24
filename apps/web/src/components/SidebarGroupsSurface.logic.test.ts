@@ -2,6 +2,10 @@ import { ProjectId } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  isDefaultGroupCoordinatorName,
+  resolveGroupCoordinatorDisplayName,
+} from "../lib/groupCoordinatorName";
+import {
   activateThreadWhenHydrated,
   resolveGroupChatTargetProjectId,
   resolveGroupCoordinatorRowLabel,
@@ -15,17 +19,85 @@ const ORDINARY = ProjectId.makeUnsafe("project-ordinary");
 describe("resolveGroupCoordinatorRowLabel", () => {
   it("shows the configured coordinator name", () => {
     expect(
-      resolveGroupCoordinatorRowLabel({ configured: true, coordinatorName: "Group lead" }),
+      resolveGroupCoordinatorRowLabel({
+        configured: true,
+        coordinatorName: "Group lead",
+        groupName: "Alpha",
+      }),
     ).toBe("Group lead");
   });
 
-  it("falls back to the setup label when unconfigured or unnamed", () => {
-    expect(resolveGroupCoordinatorRowLabel({ configured: false, coordinatorName: null })).toBe(
-      "Set up coordinator",
-    );
-    expect(resolveGroupCoordinatorRowLabel({ configured: true, coordinatorName: "  " })).toBe(
-      "Set up coordinator",
-    );
+  it("defaults to the group name when the stored name is the generated default", () => {
+    expect(
+      resolveGroupCoordinatorRowLabel({
+        configured: true,
+        coordinatorName: "Alpha Coordinator",
+        groupName: "Alpha",
+      }),
+    ).toBe("Alpha");
+    expect(
+      resolveGroupCoordinatorRowLabel({
+        configured: true,
+        coordinatorName: "  ",
+        groupName: "Alpha",
+      }),
+    ).toBe("Alpha");
+    expect(
+      resolveGroupCoordinatorRowLabel({
+        configured: true,
+        coordinatorName: null,
+        groupName: "Alpha",
+      }),
+    ).toBe("Alpha");
+  });
+
+  it("falls back to the setup label when unconfigured", () => {
+    expect(
+      resolveGroupCoordinatorRowLabel({
+        configured: false,
+        coordinatorName: null,
+        groupName: "Alpha",
+      }),
+    ).toBe("Set up coordinator");
+  });
+});
+
+describe("resolveGroupCoordinatorDisplayName", () => {
+  it("maps the legacy '<title> Coordinator' default onto the group name", () => {
+    expect(
+      resolveGroupCoordinatorDisplayName({
+        coordinatorName: "Building Mars Coordinator",
+        groupName: "Building Mars",
+        remoteName: "Building Mars",
+      }),
+    ).toBe("Building Mars");
+  });
+
+  it("keeps a user-chosen name and a user-renamed thread title", () => {
+    expect(
+      resolveGroupCoordinatorDisplayName({
+        coordinatorName: "Team lead",
+        groupName: "Alpha",
+        remoteName: "alpha",
+      }),
+    ).toBe("Team lead");
+    expect(
+      resolveGroupCoordinatorDisplayName({
+        coordinatorName: "Alpha Coordinator",
+        groupName: "Alpha",
+        remoteName: "Alpha",
+        threadTitle: "Bobby",
+      }),
+    ).toBe("Bobby");
+  });
+});
+
+describe("isDefaultGroupCoordinatorName", () => {
+  it("treats both default shapes as generated", () => {
+    expect(isDefaultGroupCoordinatorName("Alpha", ["Alpha"])).toBe(true);
+    expect(isDefaultGroupCoordinatorName("Alpha Coordinator", ["Alpha"])).toBe(true);
+    expect(isDefaultGroupCoordinatorName(null, ["Alpha"])).toBe(true);
+    expect(isDefaultGroupCoordinatorName("Team lead", ["Alpha"])).toBe(false);
   });
 });
 

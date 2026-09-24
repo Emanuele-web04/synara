@@ -1,6 +1,6 @@
 export function defaultProjectAgentName(projectName: string): string {
   const trimmed = projectName.trim();
-  return trimmed.length > 0 ? `${trimmed} Coordinator` : "Project Coordinator";
+  return trimmed.length > 0 ? trimmed : "Project Coordinator";
 }
 
 export function resolveProjectAgentRowLabel(input: {
