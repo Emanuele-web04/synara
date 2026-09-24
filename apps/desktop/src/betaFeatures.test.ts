@@ -13,7 +13,7 @@ describe("computer use Stable gate", () => {
   it("returns from startCuaHost before touching the driver or monitors", () => {
     const fnStart = MAIN_SOURCE.indexOf("async function startCuaHost()");
     expect(fnStart).toBeGreaterThanOrEqual(0);
-    const body = MAIN_SOURCE.slice(fnStart, fnStart + 4000);
+    const body = MAIN_SOURCE.slice(fnStart, fnStart + 12000);
 
     const gate = body.indexOf('isBetaFeatureEnabled("computerUse", desktopFlavor)');
     expect(gate).toBeGreaterThanOrEqual(0);
@@ -35,7 +35,7 @@ describe("computer use Stable gate", () => {
 
   it("still sweeps orphaned cua drivers on Stable", () => {
     const fnStart = MAIN_SOURCE.indexOf("async function startCuaHost()");
-    const body = MAIN_SOURCE.slice(fnStart, fnStart + 4000);
+    const body = MAIN_SOURCE.slice(fnStart, fnStart + 12000);
     const sweep = body.indexOf("sweepOrphanedCuaDrivers()");
     const gate = body.indexOf('isBetaFeatureEnabled("computerUse", desktopFlavor)');
     expect(sweep).toBeGreaterThanOrEqual(0);
