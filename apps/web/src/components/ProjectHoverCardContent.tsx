@@ -102,7 +102,7 @@ export function ProjectHoverCardContent({
           )}
         >
           <BotIcon className={ICON_CLASS_NAME} aria-hidden />
-          <span className="min-w-0 truncate">Edit project agent</span>
+          <span className="min-w-0 truncate">Edit coordinator</span>
         </button>
       ) : null}
     </div>

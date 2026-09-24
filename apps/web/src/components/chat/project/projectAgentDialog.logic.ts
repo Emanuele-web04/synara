@@ -10,7 +10,7 @@ export function resolveProjectAgentRowLabel(input: {
   if (input.configured && input.coordinatorName && input.coordinatorName.trim().length > 0) {
     return input.coordinatorName;
   }
-  return "Set up project agent";
+  return "Set up coordinator";
 }
 
 export function isProjectAgentRowVisible(input: {
