@@ -129,6 +129,14 @@ import {
 } from "../computerStateStore";
 import { formatShortcutLabel, shortcutLabelForCommand } from "../keybindings";
 import { isHomeChatContainerProject } from "../lib/chatProjects";
+import {
+  FIRST_SEND_BUBBLE_FADE_MS,
+  FIRST_SEND_HERO_EXIT_MS,
+  FIRST_SEND_MOTION_DURATION_MS,
+  FIRST_SEND_MOTION_EASING,
+  FIRST_SEND_WORKING_REVEAL_DELAY_MS,
+  FIRST_SEND_WORKING_REVEAL_MS,
+} from "../lib/firstSendMotion";
 import { appendComposerPromptText } from "../lib/chatReferences";
 import { createPastedTextDraft } from "../lib/composerPastedText";
 import {
@@ -449,9 +457,10 @@ function getRateLimitBannerDismissalKey(
 const VOICE_RECORDER_ACTION_ARM_DELAY_MS = 250;
 
 // First-send composer dock slide: FLIP from the centered landing slot to the
-// transcript's bottom dock. The launch window mirrors the same staleness bound
-// as the handoff itself — a delayed dock (worktree setup) skips the slide.
-const COMPOSER_DOCK_MOTION_DURATION_MS = 480;
+// transcript's bottom dock. Duration/easing live in lib/firstSendMotion.ts so
+// the bubble rise, working-row reveal, and hero exit share one clock + curve.
+// The launch window mirrors the same staleness bound as the handoff itself —
+// a delayed dock (worktree setup) skips the slide.
 const COMPOSER_DOCK_MOTION_LAUNCH_WINDOW_MS = 1_500;
 
 // Fail-open bound for the "Stopping…" state: a settle event that never arrives
@@ -494,6 +503,29 @@ function ComposerModelLoadingControl(props: { widthClassName: string }) {
     >
       <RefreshCwIcon aria-hidden="true" className="size-3.5 animate-spin" />
       <span className="truncate text-ui-xs">Loading models</span>
+    </div>
+  );
+}
+
+// Shared by the centered landing and the brief exit overlay on first send. The
+// overlay passes exitOverlay to skip the enter animation and the test id.
+function EmptyLandingHero(props: { heading: ReactNode; exitOverlay?: boolean }) {
+  return (
+    <div
+      data-empty-landing-hero={props.exitOverlay ? undefined : "true"}
+      className={cn(
+        props.exitOverlay ? null : "empty-landing-hero-motion",
+        "flex flex-col items-center gap-3 px-6 pb-5 text-center select-none",
+        CHAT_COLUMN_FRAME_CLASS_NAME,
+      )}
+    >
+      <SynaraLogo aria-label="Synara logo" className="size-8" />
+      <h2
+        data-testid={props.exitOverlay ? undefined : "empty-landing-heading"}
+        className="max-w-[32rem] text-[22px] font-normal leading-[1.2] tracking-[-0.01em] text-foreground/90 sm:text-[24px]"
+      >
+        {props.heading}
+      </h2>
     </div>
   );
 }
@@ -781,9 +813,24 @@ export default function ChatView({
   // reads state during render (refs are forbidden there); the FLIP measurement
   // itself reads the ref inside a layout effect.
   const [pendingDockSlideThreadId, setPendingDockSlideThreadId] = useState<ThreadId | null>(null);
+  // Landing hero exit overlay: a snapshot of the hero keeps rendering for a
+  // beat after the landing unmounts so it can fade instead of popping.
+  const [landingHeroExit, setLandingHeroExit] = useState<
+    (NonNullable<FirstSendLandingHandoff["hero"]> & { threadId: ThreadId }) | null
+  >(null);
   const setFirstSendLandingHandoff = useCallback((handoff: FirstSendLandingHandoff | null) => {
     firstSendLandingHandoffRef.current = handoff;
     setPendingDockSlideThreadId(handoff?.targetThreadId ?? null);
+    // The hero overlay outlives the handoff itself — the dock commit consumes
+    // and clears the handoff while the overlay is still fading out. Its own
+    // effect tears it down after FIRST_SEND_HERO_EXIT_MS or on thread switch.
+    if (handoff?.hero) {
+      setLandingHeroExit(
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches
+          ? null
+          : { ...handoff.hero, threadId: handoff.targetThreadId },
+      );
+    }
   }, []);
   const emptyLandingComposerBlockRef = useRef<HTMLDivElement | null>(null);
   const dockedComposerRef = useRef<HTMLDivElement | null>(null);
@@ -791,6 +838,12 @@ export default function ChatView({
   // draft→server thread id swap mid-animation doesn't cut the motion short.
   const dockedComposerAnimationRef = useRef<Animation | null>(null);
   const dockedComposerAnimationThreadRef = useRef<ThreadId | null>(null);
+  // The rest of the first-send choreography (bubble rise, working-row reveal)
+  // travels with the slide — same cancellation rules.
+  const landingChoreoAnimationsRef = useRef<Animation[]>([]);
+  const landingChoreoRetryRef = useRef<number | null>(null);
+  const landingHeroExitRef = useRef<HTMLDivElement | null>(null);
+  const mainContentRef = useRef<HTMLDivElement | null>(null);
   // Tracks whether the user explicitly dismissed the sidebar for the active turn.
   const planSidebarDismissedForTurnRef = useRef<string | null>(null);
   // When set, the thread-change reset effect will open the sidebar instead of closing it.
@@ -1756,10 +1809,16 @@ export default function ChatView({
       ),
     [activeThread?.proposedPlans, agentActivityTimelineState.timelineWorkEntries, timelineMessages],
   );
-  const enteringUserMessageIds = useMemo<ReadonlySet<MessageId>>(
-    () => new Set(optimisticUserMessages.map((message) => message.id)),
-    [optimisticUserMessages],
-  );
+  const expectedDispatchUserMessageId = localDispatch?.expectedUserMessageId ?? null;
+  const enteringUserMessageIds = useMemo<ReadonlySet<MessageId>>(() => {
+    const ids = new Set(optimisticUserMessages.map((message) => message.id));
+    // The landing first send rises its bubble with WAAPI in the dock commit —
+    // exclude it here so it doesn't also play the generic send-enter.
+    if (pendingDockSlideThreadId === threadId && expectedDispatchUserMessageId !== null) {
+      ids.delete(expectedDispatchUserMessageId);
+    }
+    return ids;
+  }, [expectedDispatchUserMessageId, optimisticUserMessages, pendingDockSlideThreadId, threadId]);
   // The user message a local send anchored at the top of the transcript viewport.
   // Set at the send sites and kept after the turn settles — collapsing the tail
   // spacer when a turn ends would visibly yank the settled transcript. The next
@@ -1892,6 +1951,14 @@ export default function ChatView({
     () => () => {
       dockedComposerAnimationRef.current?.cancel();
       dockedComposerAnimationThreadRef.current = null;
+      for (const animation of landingChoreoAnimationsRef.current) {
+        animation.cancel();
+      }
+      landingChoreoAnimationsRef.current = [];
+      if (landingChoreoRetryRef.current !== null) {
+        cancelAnimationFrame(landingChoreoRetryRef.current);
+        landingChoreoRetryRef.current = null;
+      }
     },
     [],
   );
@@ -2550,6 +2617,14 @@ export default function ChatView({
       dockedComposerAnimationRef.current?.cancel();
       dockedComposerAnimationRef.current = null;
       dockedComposerAnimationThreadRef.current = null;
+      for (const animation of landingChoreoAnimationsRef.current) {
+        animation.cancel();
+      }
+      landingChoreoAnimationsRef.current = [];
+      if (landingChoreoRetryRef.current !== null) {
+        cancelAnimationFrame(landingChoreoRetryRef.current);
+        landingChoreoRetryRef.current = null;
+      }
     }
     if (isCenteredEmptyLanding) {
       return;
@@ -2597,12 +2672,140 @@ export default function ChatView({
     dockedComposerAnimationRef.current = element.animate(
       [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "translate(0, 0)" }],
       {
-        duration: COMPOSER_DOCK_MOTION_DURATION_MS,
-        easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+        duration: FIRST_SEND_MOTION_DURATION_MS,
+        easing: FIRST_SEND_MOTION_EASING,
       },
     );
     dockedComposerAnimationThreadRef.current = activeThreadId;
+
+    // The rest of the first-send choreography: the sent text visibly leaves
+    // the card and floats up to its transcript row, then the working rows
+    // arrive after a short delay. Transforms/opacity only. The virtualized
+    // timeline mounts its rows a commit after the dock swap, so the row-level
+    // pieces retry on frames — every animation is pinned to the slide's
+    // startTime, so the shared clock is exact regardless of when the row lands.
+    for (const animation of landingChoreoAnimationsRef.current) {
+      animation.cancel();
+    }
+    landingChoreoAnimationsRef.current = [];
+    if (landingChoreoRetryRef.current !== null) {
+      cancelAnimationFrame(landingChoreoRetryRef.current);
+      landingChoreoRetryRef.current = null;
+    }
+    const slideStartTime = dockedComposerAnimationRef.current.startTime;
+    const choreoSentAt = from.at;
+    let bubbleStarted = handoff.userMessageId === null;
+    let workingStarted = false;
+    const tryStartChoreo = (): boolean => {
+      const pane = mainContentRef.current;
+      if (!pane) {
+        return false;
+      }
+      if (!bubbleStarted) {
+        const bubbleEl = pane.querySelector<HTMLElement>(
+          `[data-message-id="${CSS.escape(handoff.userMessageId ?? "")}"][data-message-role="user"]`,
+        );
+        if (bubbleEl) {
+          const riseDy = from.top - bubbleEl.getBoundingClientRect().top;
+          bubbleStarted = true;
+          if (riseDy > 1) {
+            const rise = bubbleEl.animate(
+              [{ transform: `translateY(${riseDy}px)` }, { transform: "translateY(0)" }],
+              {
+                duration: FIRST_SEND_MOTION_DURATION_MS,
+                easing: FIRST_SEND_MOTION_EASING,
+              },
+            );
+            const fade = bubbleEl.animate([{ opacity: 0 }, { opacity: 1 }], {
+              duration: FIRST_SEND_BUBBLE_FADE_MS,
+              easing: "ease-out",
+            });
+            if (typeof slideStartTime === "number") {
+              rise.startTime = slideStartTime;
+              fade.startTime = slideStartTime;
+            }
+            landingChoreoAnimationsRef.current.push(rise, fade);
+          }
+        }
+      }
+      if (!workingStarted) {
+        const workingEls = pane.querySelectorAll<HTMLElement>(
+          '[data-timeline-row-kind="working-header"], [data-timeline-row-kind="working"]',
+        );
+        if (workingEls.length > 0) {
+          workingStarted = true;
+          for (const workingEl of workingEls) {
+            const reveal = workingEl.animate(
+              [
+                { opacity: 0, transform: "translateY(8px)" },
+                { opacity: 1, transform: "translateY(0)" },
+              ],
+              {
+                duration: FIRST_SEND_WORKING_REVEAL_MS,
+                easing: "ease-out",
+                delay: FIRST_SEND_WORKING_REVEAL_DELAY_MS,
+                fill: "backwards",
+              },
+            );
+            if (typeof slideStartTime === "number") {
+              reveal.startTime = slideStartTime;
+            }
+            landingChoreoAnimationsRef.current.push(reveal);
+          }
+        }
+      }
+      return bubbleStarted && workingStarted;
+    };
+    if (!tryStartChoreo()) {
+      const retryChoreo = () => {
+        landingChoreoRetryRef.current = null;
+        if (tryStartChoreo()) {
+          return;
+        }
+        // Rows only lag the dock commit by a frame or two; past the launch
+        // window the choreography would just look late — drop it.
+        if (performance.now() - choreoSentAt < COMPOSER_DOCK_MOTION_LAUNCH_WINDOW_MS) {
+          landingChoreoRetryRef.current = requestAnimationFrame(retryChoreo);
+        }
+      };
+      landingChoreoRetryRef.current = requestAnimationFrame(retryChoreo);
+    }
   }, [activeThreadId, isCenteredEmptyLanding, secondaryChromeReady, setFirstSendLandingHandoff]);
+  // The landing hero unmounts with the landing; its snapshot overlay fades and
+  // drifts up so the top of the pane doesn't pop empty mid-slide.
+  useLayoutEffect(() => {
+    if (landingHeroExit === null) {
+      return;
+    }
+    if (landingHeroExit.threadId !== threadId) {
+      setLandingHeroExit(null);
+      return;
+    }
+    const element = landingHeroExitRef.current;
+    if (element === null) {
+      return;
+    }
+    const animation = element.animate(
+      [
+        { opacity: 1, transform: "translateY(0)" },
+        { opacity: 0, transform: "translateY(-12px)" },
+      ],
+      { duration: FIRST_SEND_HERO_EXIT_MS, easing: "ease-out" },
+    );
+    let cleared = false;
+    const clear = () => {
+      if (cleared) return;
+      cleared = true;
+      setLandingHeroExit(null);
+    };
+    void animation.finished.then(clear, () => undefined);
+    const timeout = window.setTimeout(clear, FIRST_SEND_HERO_EXIT_MS + 100);
+    return () => {
+      cleared = true;
+      animation.cancel();
+      window.clearTimeout(timeout);
+    };
+  }, [landingHeroExit, threadId]);
   const setThreadError = useCallback(
     (targetThreadId: ThreadId | null, error: string | null) => {
       if (!targetThreadId) return;
@@ -4953,7 +5156,6 @@ export default function ChatView({
   }, [setDismissedRateLimitBannerKey, activeRateLimitBannerDismissalKey]);
   const previewSession = useComputerPreviewStore(selectThreadComputerPreviewSession(threadId));
   const previewLayout = useComputerPreviewStore(selectThreadComputerPreviewLayout(threadId));
-  const mainContentRef = useRef<HTMLDivElement | null>(null);
   const [mainContentWidth, setMainContentWidth] = useState(1600);
   useEffect(() => {
     const element = mainContentRef.current;
@@ -5167,6 +5369,38 @@ export default function ChatView({
       showEmptyLandingProjectPicker ||
       emptyLandingProjectChip !== null ||
       showEmptyLandingBranchToolbar);
+  const emptyLandingHeading = isEmptyChatLanding ? (
+    "What should we work on?"
+  ) : (
+    <>
+      What should we do in{" "}
+      {showEmptyLandingProjectPicker ? (
+        <ProjectPicker
+          align="center"
+          side="bottom"
+          selectionMode="project"
+          selectedProjectId={activeProject.id}
+          selectedWorkspaceRoot={activeProject.cwd}
+          showResetToHome
+          onSelectProject={handleSelectProjectForEmptyDraft}
+          onCreateProjectFromPath={handleCreateProjectFromPickerPath}
+          onResetToHome={handleResetWorkspaceToHome}
+          renderTrigger={
+            <button
+              type="button"
+              data-testid="empty-landing-heading-project-trigger"
+              className="cursor-pointer rounded-sm text-inherit underline decoration-dotted decoration-[1.5px] underline-offset-[6px] transition-colors duration-150 ease-out hover:text-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transition-none"
+            >
+              {activeProjectDisplayName ?? "this folder"}
+            </button>
+          }
+        />
+      ) : (
+        <span className="text-inherit">{activeProjectDisplayName ?? "this folder"}</span>
+      )}
+      ?
+    </>
+  );
   const emptyLandingControls = showEmptyLandingControls ? (
     <div
       data-empty-landing-controls="true"
@@ -6114,53 +6348,7 @@ export default function ChatView({
                   data-empty-landing-stack="true"
                   className="empty-landing-stack flex w-full flex-col items-center"
                 >
-                  <div
-                    className={cn(
-                      "empty-landing-hero-motion flex flex-col items-center gap-3 px-6 pb-5 text-center select-none",
-                      CHAT_COLUMN_FRAME_CLASS_NAME,
-                    )}
-                  >
-                    <SynaraLogo aria-label="Synara logo" className="size-8" />
-                    <h2
-                      data-testid="empty-landing-heading"
-                      className="max-w-[32rem] text-[22px] font-normal leading-[1.2] tracking-[-0.01em] text-foreground/90 sm:text-[24px]"
-                    >
-                      {isEmptyChatLanding ? (
-                        "What should we work on?"
-                      ) : (
-                        <>
-                          What should we do in{" "}
-                          {showEmptyLandingProjectPicker ? (
-                            <ProjectPicker
-                              align="center"
-                              side="bottom"
-                              selectionMode="project"
-                              selectedProjectId={activeProject.id}
-                              selectedWorkspaceRoot={activeProject.cwd}
-                              showResetToHome
-                              onSelectProject={handleSelectProjectForEmptyDraft}
-                              onCreateProjectFromPath={handleCreateProjectFromPickerPath}
-                              onResetToHome={handleResetWorkspaceToHome}
-                              renderTrigger={
-                                <button
-                                  type="button"
-                                  data-testid="empty-landing-heading-project-trigger"
-                                  className="cursor-pointer rounded-sm text-inherit underline decoration-dotted decoration-[1.5px] underline-offset-[6px] transition-colors duration-150 ease-out hover:text-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transition-none"
-                                >
-                                  {activeProjectDisplayName ?? "this folder"}
-                                </button>
-                              }
-                            />
-                          ) : (
-                            <span className="text-inherit">
-                              {activeProjectDisplayName ?? "this folder"}
-                            </span>
-                          )}
-                          ?
-                        </>
-                      )}
-                    </h2>
-                  </div>
+                  <EmptyLandingHero heading={emptyLandingHeading} />
                   {composerSection}
                   {relocateComposerLeadingControls ? (
                     <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
@@ -6172,6 +6360,22 @@ export default function ChatView({
                     </div>
                   ) : null}
                 </div>
+              </div>
+            ) : null}
+
+            {landingHeroExit !== null && landingHeroExit.threadId === threadId ? (
+              <div
+                ref={landingHeroExitRef}
+                aria-hidden="true"
+                data-first-send-hero-exit="true"
+                className="pointer-events-none fixed z-10"
+                style={{
+                  top: landingHeroExit.top,
+                  left: landingHeroExit.left,
+                  width: landingHeroExit.width,
+                }}
+              >
+                <EmptyLandingHero heading={landingHeroExit.heading} exitOverlay />
               </div>
             ) : null}
 

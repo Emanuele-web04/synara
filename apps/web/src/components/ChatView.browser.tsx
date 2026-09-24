@@ -57,6 +57,14 @@ import { isMacNavigatorPlatform } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { setThreadDetailResumeCursor } from "../threadDetailResumeCursors";
 import { resetHomeChatProjectPrewarmStateForTests } from "../lib/chatProjects";
+import {
+  FIRST_SEND_BUBBLE_FADE_MS,
+  FIRST_SEND_HERO_EXIT_MS,
+  FIRST_SEND_MOTION_DURATION_MS,
+  FIRST_SEND_MOTION_EASING,
+  FIRST_SEND_WORKING_REVEAL_DELAY_MS,
+  FIRST_SEND_WORKING_REVEAL_MS,
+} from "../lib/firstSendMotion";
 import { resetStudioProjectPrewarmStateForTests } from "../lib/studioProjects";
 import { hasReconciledServerProviderStatuses } from "../lib/serverReactQuery";
 import { getRouter } from "../router";
@@ -8152,6 +8160,14 @@ describe("ChatView transcript geometry (full app)", () => {
         },
         { timeout: 1_000, interval: 16 },
       );
+      {
+        const docked = document.querySelector<HTMLElement>('[data-docked-composer="true"]');
+        const slideTiming = (
+          docked!.getAnimations()[0]?.effect as KeyframeEffect | null
+        )?.getComputedTiming();
+        expect(slideTiming?.duration).toBe(FIRST_SEND_MOTION_DURATION_MS);
+        expect(slideTiming?.easing).toBe(FIRST_SEND_MOTION_EASING);
+      }
       const messageSelector = `[data-message-id="${message.messageId}"][data-message-role="user"]`;
       const expectTranscript = async () => {
         await waitForLayout();
@@ -9490,6 +9506,14 @@ describe("ChatView transcript geometry (full app)", () => {
       useComposerDraftStore.getState().setPrompt(THREAD_ID, "Dock without motion");
       const sendButton = await waitForSendButton();
       sendButton.click();
+      const startCommand = await vi.waitFor(() => {
+        const command = wsRequests
+          .map(readDispatchedCommand)
+          .find((candidate) => candidate?.type === "thread.turn.start");
+        expect(command).toBeDefined();
+        return command!;
+      });
+      const messageId = (startCommand.message as { messageId: MessageId }).messageId;
       await vi.waitFor(
         () => {
           const docked = document.querySelector<HTMLElement>('[data-docked-composer="true"]');
@@ -9498,9 +9522,150 @@ describe("ChatView transcript geometry (full app)", () => {
         },
         { timeout: 8_000, interval: 16 },
       );
+      // No piece of the landing choreography runs under reduced motion.
+      const bubbleRow = document.querySelector<HTMLElement>(
+        `[data-message-id="${messageId}"][data-message-role="user"]`,
+      );
+      expect(bubbleRow?.getAnimations() ?? []).toHaveLength(0);
+      const workingEl = document.querySelector<HTMLElement>(
+        '[data-timeline-row-kind="working-header"], [data-timeline-row-kind="working"]',
+      );
+      expect(workingEl?.getAnimations() ?? []).toHaveLength(0);
+      expect(document.querySelector("[data-first-send-hero-exit]")).toBeNull();
     } finally {
       await mounted.cleanup();
       matchMediaSpy.mockRestore();
+      restoreNativeApi();
+    }
+  });
+
+  it("choreographs the landing first send: bubble rise, working reveal, hero exit", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, THREAD_ID);
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createDraftOnlySnapshot(),
+    });
+
+    try {
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "Choreograph me");
+      const sendButton = await waitForSendButton();
+      sendButton.click();
+
+      // The choreography is short — capture the animation timings on the first
+      // poll after the dock commit, before the WAAPI animations finish and are
+      // removed from getAnimations().
+      const bubbleRow = await vi.waitFor(() => {
+        const el = document.querySelector<HTMLElement>('[data-message-role="user"]');
+        expect(el).not.toBeNull();
+        expect(el!.getAnimations().length).toBeGreaterThan(0);
+        return el!;
+      });
+      const bubbleTimings = bubbleRow
+        .getAnimations()
+        .map(
+          (animation) => (animation.effect as KeyframeEffect | null)?.getComputedTiming() ?? null,
+        )
+        .filter((timing) => timing !== null);
+      // The sent message rises out of the card's old position: one transform
+      // rise on the shared clock plus the shorter opacity fade — and NOT the
+      // generic send-enter class on top of it.
+      expect(bubbleRow.classList.contains("chat-message-send-enter")).toBe(false);
+      const rise = bubbleTimings.find(
+        (timing) => Number(timing.duration) === FIRST_SEND_MOTION_DURATION_MS,
+      );
+      const fade = bubbleTimings.find(
+        (timing) => Number(timing.duration) === FIRST_SEND_BUBBLE_FADE_MS,
+      );
+      expect(rise?.easing).toBe(FIRST_SEND_MOTION_EASING);
+      expect(fade).toBeDefined();
+
+      // The hero leaves through a fading overlay instead of popping.
+      const heroExit = document.querySelector<HTMLElement>("[data-first-send-hero-exit]");
+      expect(heroExit).not.toBeNull();
+      expect(heroExit!.getAttribute("aria-hidden")).toBe("true");
+
+      // The working rows arrive on the delayed reveal.
+      const workingEl = document.querySelector<HTMLElement>(
+        '[data-timeline-row-kind="working-header"], [data-timeline-row-kind="working"]',
+      );
+      expect(workingEl).not.toBeNull();
+      const revealTiming = workingEl!
+        .getAnimations()
+        .map(
+          (animation) => (animation.effect as KeyframeEffect | null)?.getComputedTiming() ?? null,
+        )
+        .find(
+          (timing) =>
+            timing !== null &&
+            Number(timing.duration) === FIRST_SEND_WORKING_REVEAL_MS &&
+            Number(timing.delay) === FIRST_SEND_WORKING_REVEAL_DELAY_MS,
+        );
+      expect(revealTiming).toBeDefined();
+
+      // The hero overlay is removed once its exit animation ends.
+      await vi.waitFor(
+        () => {
+          expect(document.querySelector("[data-first-send-hero-exit]")).toBeNull();
+        },
+        { timeout: FIRST_SEND_HERO_EXIT_MS + 2_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("keeps the generic send-enter on a follow-up send", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-followup-enter" as MessageId,
+        targetText: "follow-up enter target",
+        sessionStatus: "ready",
+      }),
+    });
+
+    try {
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "follow-up");
+      const sendButton = await waitForSendButton();
+      await vi.waitFor(() => expect(sendButton.disabled).toBe(false), {
+        timeout: 8_000,
+        interval: 16,
+      });
+      sendButton.click();
+      const startCommand = await vi.waitFor(() => {
+        const command = wsRequests
+          .map(readDispatchedCommand)
+          .find((candidate) => candidate?.type === "thread.turn.start");
+        expect(command).toBeDefined();
+        return command!;
+      });
+      const messageId = (startCommand.message as { messageId: MessageId }).messageId;
+      const row = await vi.waitFor(() => {
+        const el = document.querySelector<HTMLElement>(
+          `[data-message-id="${messageId}"][data-message-role="user"]`,
+        );
+        expect(el).not.toBeNull();
+        return el!;
+      });
+      // Ordinary sends keep the class-based enter — no landing rise.
+      await vi.waitFor(() => {
+        expect(row.classList.contains("chat-message-send-enter")).toBe(true);
+      });
+      const rise = row
+        .getAnimations()
+        .map(
+          (animation) => (animation.effect as KeyframeEffect | null)?.getComputedTiming() ?? null,
+        )
+        .find(
+          (timing) => timing !== null && Number(timing.duration) === FIRST_SEND_MOTION_DURATION_MS,
+        );
+      expect(rise).toBeUndefined();
+      expect(document.querySelector("[data-first-send-hero-exit]")).toBeNull();
+    } finally {
+      await mounted.cleanup();
       restoreNativeApi();
     }
   });

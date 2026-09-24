@@ -37,6 +37,10 @@ export interface FirstSendLandingHandoff {
   targetThreadId: ThreadId;
   /** Landing composer block geometry at send time, for the FLIP slide into the dock. */
   from: { top: number; centerX: number; at: number } | null;
+  /** The optimistic user row that rises out of the landing card. */
+  userMessageId: MessageId | null;
+  /** Landing hero rect + plain heading text for the brief exit overlay. */
+  hero: { top: number; left: number; width: number; heading: string } | null;
 }
 
 /**

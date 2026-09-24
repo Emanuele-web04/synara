@@ -778,9 +778,26 @@ export function useChatTurnSubmission({
         const landingCard =
           landingBlock?.querySelector<HTMLElement>("[data-composer-card]") ?? landingBlock;
         const landingRect = landingCard?.getBoundingClientRect();
+        // Snapshot the hero for its exit overlay — the landing unmounts in the
+        // same commit, so the rect and heading text have to be captured here.
+        const heroEl =
+          landingBlock
+            ?.closest("[data-empty-landing-stack]")
+            ?.querySelector<HTMLElement>("[data-empty-landing-hero]") ?? null;
+        const heroRect = heroEl?.getBoundingClientRect();
         setFirstSendLandingHandoff({
           sourceThreadId: threadId,
           targetThreadId: threadIdForSend,
+          userMessageId: messageIdForSend,
+          hero:
+            heroEl && heroRect
+              ? {
+                  top: heroRect.top,
+                  left: heroRect.left,
+                  width: heroRect.width,
+                  heading: heroEl.querySelector("h2")?.textContent ?? "",
+                }
+              : null,
           from: landingRect
             ? {
                 top: landingRect.top,
