@@ -6,7 +6,7 @@
  *
  * @module Open
  */
-import { resolveExecutable } from "@synara/shared/executable";
+import { createBatchExecutableResolver, resolveExecutable } from "@synara/shared/executable";
 import { spawnProcess } from "@synara/shared/processRuntime";
 import { statSync } from "node:fs";
 import { dirname, extname } from "node:path";
@@ -125,10 +125,10 @@ function resolveMacOpenArgs(
 
 function resolveAvailableCommand(
   commands: ReadonlyArray<string>,
-  options: CommandAvailabilityOptions = {},
+  resolve: (command: string) => string | null,
 ): string | null {
   for (const command of commands) {
-    if (isCommandAvailable(command, options)) {
+    if (resolve(command) !== null) {
       return command;
     }
   }
@@ -289,10 +289,12 @@ export function resolveAvailableEditors(
   env: NodeJS.ProcessEnv = process.env,
 ): ReadonlyArray<EditorId> {
   const available: EditorId[] = [];
+  // One PATH scan for every editor: per-command probing is seconds of sync IO on Windows.
+  const resolve = createBatchExecutableResolver({ platform, env });
 
   for (const editor of EDITORS) {
     if (editor.commands !== null) {
-      if (resolveAvailableCommand(editor.commands, { platform, env }) !== null) {
+      if (resolveAvailableCommand(editor.commands, resolve) !== null) {
         available.push(editor.id);
         continue;
       }
@@ -316,7 +318,7 @@ export function resolveAvailableEditors(
 
     if (editor.id === "file-manager") {
       const command = fileManagerCommandForPlatform(platform);
-      if (isCommandAvailable(command, { platform, env })) {
+      if (resolve(command) !== null) {
         available.push(editor.id);
       }
     }
@@ -375,7 +377,9 @@ export const resolveEditorLaunch = Effect.fnUntraced(function* (
   }
 
   if (editorDef.commands) {
-    const command = resolveAvailableCommand(editorDef.commands, { platform, env });
+    const command = resolveAvailableCommand(editorDef.commands, (candidate) =>
+      resolveExecutable(candidate, { platform, env }),
+    );
     if (command) {
       return {
         command,

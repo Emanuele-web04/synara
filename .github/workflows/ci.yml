@@ -351,6 +351,8 @@ jobs:
           src/provider/supervisedProcessTeardown.test.ts
           src/provider/providerStartupLifecycle.test.ts
           src/processRunner.test.ts
+          src/orchestration/projectImportPaths.test.ts
+          src/orchestration/projectImportCatalog.test.ts
           src/windowsProcessEffect.test.ts
           src/persistence/MigrationBackup.test.ts
           src/persistence/Migrations/MigrationReplay.test.ts

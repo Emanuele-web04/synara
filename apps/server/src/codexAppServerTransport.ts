@@ -26,10 +26,24 @@ export class CodexAppServerTransportError extends JsonRpcStdioTransportError {
   }
 }
 
+/**
+ * Whether a stdout line the framer dropped has to end the session.
+ *
+ * Only an oversized line does: a frame past the budget was on the wire, so a
+ * response we may be waiting on is gone. Invalid UTF-8 costs only its own line.
+ * Codex subprocesses and hooks can leak arbitrary output onto the same pipe,
+ * which the manager already ignores when it is not JSON, and the framer has
+ * resynchronized past it.
+ */
+export const isFatalCodexLineError = (error: JsonRpcStdioTransportError): boolean =>
+  error.reason === "frame-too-large";
+
 /** Codex-compatible name for the shared raw-byte JSONL framer. */
 export class CodexJsonlFramer extends JsonRpcStdioFramer {
   constructor(maxFrameBytes = CODEX_APP_SERVER_MAX_FRAME_BYTES) {
-    super(maxFrameBytes);
+    super(maxFrameBytes, (error) => {
+      if (isFatalCodexLineError(error)) throw error;
+    });
   }
 
   protected override makeTransportError(

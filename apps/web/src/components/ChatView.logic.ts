@@ -21,6 +21,7 @@ import {
   type ThreadId as ThreadIdType,
 } from "@synara/contracts";
 import { getDefaultModel, normalizeModelSlug } from "@synara/shared/model";
+import { approvalSessionGrantWidensSessionPolicy } from "@synara/shared/approvalSessionGrant";
 import { buildSynaraBranchName } from "@synara/shared/git";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
 import { isGenericTerminalThreadTitle } from "@synara/shared/terminalThreads";
@@ -145,13 +146,11 @@ export function resolveRuntimeModeAfterApprovalDecision(
   decision: ProviderApprovalDecision,
   requestKind?: ProviderRequestKind,
 ): RuntimeMode | null {
-  // Permission-profile grants are narrower than a runtime-mode override.
-  // Their acceptForSession decision is persisted by the provider for only
-  // that permission set and must not silently broaden the whole thread.
-  // Tool approvals keep their own, properly scoped channel too (the provider
-  // remembers the specific tool); widening them here would un-supervise
-  // commands and file changes the user never saw.
-  if (requestKind === "permissions" || requestKind === "tool") {
+  // Permission-profile and tool grants are narrower than a runtime-mode
+  // override: the provider remembers that exact permission set or tool, and
+  // widening them here would un-supervise commands and file changes the user
+  // never saw.
+  if (!approvalSessionGrantWidensSessionPolicy(requestKind)) {
     return null;
   }
   if (decision === "acceptForSession" && currentRuntimeMode === "approval-required") {

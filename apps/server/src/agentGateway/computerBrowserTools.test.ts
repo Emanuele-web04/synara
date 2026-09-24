@@ -58,6 +58,7 @@ async function setup(options?: {
   authorizeAction?: AgentGatewayComputerBrowserToolsOptions["authorizeAction"];
   resolveForegroundAuthorization?: AgentGatewayComputerBrowserToolsOptions["resolveForegroundAuthorization"];
   resolveWorkspaceRoot?: AgentGatewayComputerBrowserToolsOptions["resolveWorkspaceRoot"];
+  requestForegroundConsent?: AgentGatewayComputerBrowserToolsOptions["requestForegroundConsent"];
 }) {
   const backend = options?.backend ?? new FakeComputerBackend({ browser: true });
   const manager = new ComputerManager({ backend, actionSettleMs: 0 });
@@ -69,6 +70,9 @@ async function setup(options?: {
       : {}),
     ...(options?.resolveWorkspaceRoot
       ? { resolveWorkspaceRoot: options.resolveWorkspaceRoot }
+      : {}),
+    ...(options?.requestForegroundConsent
+      ? { requestForegroundConsent: options.requestForegroundConsent }
       : {}),
   });
   const byName = new Map(tools.map((tool) => [tool.definition.name, tool]));
@@ -255,6 +259,51 @@ describe("computer_browser_* gateway tools", () => {
     expect(modes).toEqual(["foreground"]);
     await call("computer_browser_prepare", { ...args, windowed: false });
     expect(modes).toEqual(["foreground", "background"]);
+  });
+
+  it("asks for a visible browser after routine approval, like the desktop tools", async () => {
+    const order: string[] = [];
+    let granted = false;
+    const { backend, call } = await setup({
+      backend: new FakeComputerBackend({ browser: true, agentDialect: "macos" }),
+      authorizeAction: async () => {
+        order.push("routine");
+        return true;
+      },
+      resolveForegroundAuthorization: async () => ({ userRequestedVisibleUse: granted }),
+      requestForegroundConsent: async () => {
+        order.push("foreground");
+        granted = true;
+        return true;
+      },
+    });
+    const result = await call("computer_browser_prepare", {
+      allow_launch: true,
+      windowed: true,
+      profile: { mode: "isolated_new" },
+    });
+    expect(result.isError).not.toBe(true);
+    expect(order).toEqual(["routine", "foreground"]);
+    expect(backend.callsFor("browser.browser_prepare")).toHaveLength(1);
+  });
+
+  it("never shows the visible-use card on Linux, which refuses visible launches", async () => {
+    const consent = vi.fn(async () => true);
+    const authorizeAction = vi.fn(async () => true);
+    const { backend, call } = await setup({
+      authorizeAction,
+      resolveForegroundAuthorization: async () => ({ userRequestedVisibleUse: false }),
+      requestForegroundConsent: consent,
+    });
+    const result = await call("computer_browser_prepare", {
+      allow_launch: true,
+      windowed: true,
+      profile: { mode: "isolated_new" },
+    });
+    expect(textOf(result)).toContain("foreground_not_requested");
+    expect(consent).not.toHaveBeenCalled();
+    expect(authorizeAction).not.toHaveBeenCalled();
+    expect(backend.callsFor("browser.browser_prepare")).toHaveLength(0);
   });
 
   it("refuses when visible-use authorization changes while ordinary approval is pending", async () => {

@@ -13,7 +13,7 @@ runs only through its dedicated workflow, not on every PR build: it measures
 copied baseline/candidate algorithms and adds no application regression assertion.
 This removes twelve ten-second measurement waits from the blocking build lane.
 
-Windows checks are grouped by package, removing five separate Vitest startups
+Windows checks are grouped by package, removing six separate Vitest startups
 while keeping the same runtime, lifecycle and migration test files. The credential
 reader's filtered compilation test and native Bun PTY probe remain separate.
 

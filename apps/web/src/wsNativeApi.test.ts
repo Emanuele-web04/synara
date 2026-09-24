@@ -152,6 +152,21 @@ afterEach(() => {
 });
 
 describe("wsNativeApi", () => {
+  it("gives a slow provider refresh a bounded deadline beyond the generic RPC timeout", async () => {
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+    requestMock.mockResolvedValue({ providers: defaultProviders });
+
+    await expect(api.server.refreshProviders()).resolves.toEqual({
+      providers: defaultProviders,
+    });
+    expect(requestMock).toHaveBeenCalledExactlyOnceWith(
+      WS_METHODS.serverRefreshProviders,
+      undefined,
+      { timeoutMs: 180_000 },
+    );
+  });
+
   it("delivers and caches valid server.welcome payloads", async () => {
     const { createWsNativeApi, onServerWelcome } = await import("./wsNativeApi");
 

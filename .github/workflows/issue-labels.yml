@@ -17,33 +17,102 @@ jobs:
     name: Sync issue labels
     runs-on: ubuntu-24.04
     steps:
-      - name: Ensure managed issue labels exist
+      - name: Sync managed issue labels
         uses: actions/github-script@v7
         with:
           script: |
+            const { owner, repo } = context.repo;
+
             const managedLabels = [
-              {
-                name: "bug",
-                color: "d73a4a",
-                description: "Something is broken or behaving incorrectly.",
-              },
-              {
-                name: "enhancement",
-                color: "a2eeef",
-                description: "Requested improvement or new capability.",
-              },
-              {
-                name: "needs-triage",
-                color: "fbca04",
-                description: "Issue needs maintainer review and initial categorization.",
-              },
+              // kind:*
+              { name: "kind:bug", color: "0969da", description: "Something is broken or behaves incorrectly." },
+              { name: "kind:feature", color: "0969da", description: "New capability or user-facing addition." },
+              { name: "kind:polish", color: "0969da", description: "Improves existing behavior: UX, performance, or reliability." },
+              { name: "kind:docs", color: "0969da", description: "Documentation only." },
+              { name: "kind:chore", color: "0969da", description: "Build, CI, dependencies, refactors, and tooling." },
+              { name: "kind:question", color: "0969da", description: "Question or support request." },
+              // area:*
+              { name: "area:chat", color: "8250df", description: "Composer, transcript, threads, and messages." },
+              { name: "area:providers", color: "8250df", description: "Provider adapters, models, auth, and sessions." },
+              { name: "area:git", color: "8250df", description: "Git, worktrees, diffs, and pull requests." },
+              { name: "area:terminal", color: "8250df", description: "Integrated terminal and command execution." },
+              { name: "area:browser", color: "8250df", description: "Embedded browser and browser tools." },
+              { name: "area:computer-use", color: "8250df", description: "Computer use and device control." },
+              { name: "area:voice", color: "8250df", description: "Voice input and realtime voice." },
+              { name: "area:settings", color: "8250df", description: "Settings, preferences, and keybindings." },
+              { name: "area:app-shell", color: "8250df", description: "Desktop app, windows, install, updates, and layout." },
+              { name: "area:remote", color: "8250df", description: "Remote access, cloud, and mobile companion." },
+              // provider:*
+              { name: "provider:codex", color: "bf8700", description: "Specific to the Codex provider." },
+              { name: "provider:claude", color: "bf8700", description: "Specific to the Claude provider." },
+              { name: "provider:opencode", color: "bf8700", description: "Specific to the OpenCode provider." },
+              { name: "provider:pi", color: "bf8700", description: "Specific to the Pi provider." },
+              { name: "provider:cursor", color: "bf8700", description: "Specific to the Cursor provider." },
+              { name: "provider:gemini", color: "bf8700", description: "Specific to the Gemini provider." },
+              { name: "provider:antigravity", color: "bf8700", description: "Specific to the Antigravity provider." },
+              // os:*
+              { name: "os:macos", color: "6e7781", description: "Only affects macOS." },
+              { name: "os:windows", color: "6e7781", description: "Only affects Windows." },
+              { name: "os:linux", color: "6e7781", description: "Only affects Linux." },
+              // status:*
+              { name: "status:triage", color: "fbca04", description: "Waiting for first triage." },
+              { name: "status:needs-info", color: "fbca04", description: "Waiting on the author for details." },
+              { name: "status:blocked", color: "fbca04", description: "Blocked by another issue, PR, or decision." },
+              // review:*
+              { name: "review:pass", color: "1a7f37", description: "Automated review found no blocking problems." },
+              { name: "review:changes", color: "cf222e", description: "Automated review found problems to fix." },
+              { name: "review:needs-human", color: "bc4c00", description: "Automated review needs a maintainer decision." },
             ];
+
+            // Old default labels -> managed replacements. Renaming keeps the
+            // label on issues that already have it instead of re-tagging them.
+            const renames = [
+              ["bug", "kind:bug"],
+              ["enhancement", "kind:feature"],
+              ["needs-triage", "status:triage"],
+              ["documentation", "kind:docs"],
+              ["question", "kind:question"],
+            ];
+
+            const labelExists = async (name) => {
+              try {
+                await github.rest.issues.getLabel({ owner, repo, name });
+                return true;
+              } catch (error) {
+                if (error.status !== 404) {
+                  throw error;
+                }
+                return false;
+              }
+            };
+
+            for (const [oldName, newName] of renames) {
+              if (!(await labelExists(oldName))) {
+                continue;
+              }
+
+              if (await labelExists(newName)) {
+                core.warning(`Both '${oldName}' and '${newName}' exist; leaving both unchanged.`);
+                continue;
+              }
+
+              const def = managedLabels.find((label) => label.name === newName);
+              await github.rest.issues.updateLabel({
+                owner,
+                repo,
+                name: oldName,
+                new_name: newName,
+                color: def.color,
+                description: def.description,
+              });
+              core.info(`Renamed '${oldName}' to '${newName}'.`);
+            }
 
             for (const label of managedLabels) {
               try {
                 const { data: existing } = await github.rest.issues.getLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
+                  owner,
+                  repo,
                   name: label.name,
                 });
 
@@ -52,8 +121,8 @@ jobs:
                   (existing.description ?? "") !== label.description
                 ) {
                   await github.rest.issues.updateLabel({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
+                    owner,
+                    repo,
                     name: label.name,
                     color: label.color,
                     description: label.description,
@@ -64,12 +133,18 @@ jobs:
                   throw error;
                 }
 
-                await github.rest.issues.createLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  name: label.name,
-                  color: label.color,
-                  description: label.description,
-                });
+                try {
+                  await github.rest.issues.createLabel({
+                    owner,
+                    repo,
+                    name: label.name,
+                    color: label.color,
+                    description: label.description,
+                  });
+                } catch (createError) {
+                  if (createError.status !== 422) {
+                    throw createError;
+                  }
+                }
               }
             }

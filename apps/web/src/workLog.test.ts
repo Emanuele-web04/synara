@@ -1679,6 +1679,31 @@ describe("deriveWorkLogEntries", () => {
     ]);
   });
 
+  it("labels visible-use consent apart from routine Computer consent", () => {
+    const activities = [
+      makeActivity({
+        id: "computer-foreground-request",
+        kind: "approval.requested",
+        summary: "Show Computer on screen for this task",
+        payload: { approvalScope: "computer-foreground", toolName: "computer_activate_window" },
+      }),
+      makeActivity({
+        id: "computer-foreground-declined",
+        kind: "approval.resolved",
+        summary: "Computer approval resolved",
+        payload: {
+          approvalScope: "computer-foreground",
+          toolName: "computer_activate_window",
+          decision: "decline",
+        },
+      }),
+    ];
+    expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
+      { toolTitle: "Asked to show Computer on screen" },
+      { toolTitle: "Computer kept in the background" },
+    ]);
+  });
+
   it("collapses Cursor tool lifecycle rows by toolCallId even when titles and details change", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
