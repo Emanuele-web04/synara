@@ -12,8 +12,10 @@ import { useEffect, useRef, useState } from "react";
 
 import { APP_VERSION } from "../branding";
 import { useLocalStorage } from "../hooks/useLocalStorage";
+import { isBetaFeatureOn } from "../betaFeatures";
 import { WHATS_NEW_ENTRIES } from "./entries";
 import {
+  filterEntriesByBetaFeature,
   resolveWhatsNewState,
   type WhatsNewEntry,
   type WhatsNewInputs,
@@ -82,7 +84,10 @@ export function useWhatsNew(options?: {
   readonly entries?: readonly WhatsNewEntry[];
   readonly currentVersion?: string;
 }): UseWhatsNewResult {
-  const entries = options?.entries ?? WHATS_NEW_ENTRIES;
+  const entries = filterEntriesByBetaFeature(
+    options?.entries ?? WHATS_NEW_ENTRIES,
+    isBetaFeatureOn,
+  );
   const currentVersion = options?.currentVersion ?? APP_VERSION;
 
   const [storage, setStorage] = useLocalStorage(

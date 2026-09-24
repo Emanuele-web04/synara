@@ -7,6 +7,8 @@
 // That lets us unit-test version arithmetic and selection rules in isolation
 // and keeps the hook thin.
 
+import type { BetaOnlyFeature } from "@synara/shared/betaFeatures";
+
 /**
  * A single feature highlight inside a release. Modelled after the
  * IndieDevs "feature card" format so each bullet can carry a screenshot and
@@ -22,6 +24,10 @@ export interface WhatsNewFeature {
   readonly image?: string;
   readonly imageAlt?: string;
   readonly details?: string;
+  /** Entries tagged with a Beta-only feature hide on builds where it is off
+      (e.g. Computer Use on Stable), so release notes never advertise a
+      feature the build does not ship. */
+  readonly betaFeature?: BetaOnlyFeature;
 }
 
 /**
@@ -82,6 +88,25 @@ export function sortEntriesByVersionDesc(
   entries: readonly WhatsNewEntry[],
 ): readonly WhatsNewEntry[] {
   return entries.toSorted((left, right) => compareVersions(right.version, left.version));
+}
+
+/**
+ * Drop features tagged with a disabled Beta-only feature, and drop a release
+ * entirely when nothing remains. The enabled check is injected so tests do
+ * not depend on the runtime flavor probe.
+ */
+export function filterEntriesByBetaFeature(
+  entries: readonly WhatsNewEntry[],
+  isEnabled: (feature: BetaOnlyFeature) => boolean,
+): WhatsNewEntry[] {
+  return entries
+    .map((entry) => ({
+      ...entry,
+      features: entry.features.filter(
+        (feature) => feature.betaFeature === undefined || isEnabled(feature.betaFeature),
+      ),
+    }))
+    .filter((entry) => entry.features.length > 0);
 }
 
 /**

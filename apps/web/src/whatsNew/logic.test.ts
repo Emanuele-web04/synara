@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   compareVersions,
+  filterEntriesByBetaFeature,
   parseVersion,
   resolveWhatsNewState,
   sortEntriesByVersionDesc,
@@ -129,5 +130,47 @@ describe("resolveWhatsNewState", () => {
     });
 
     expect(state).toEqual({ kind: "silent-bootstrap", nextLastSeenVersion: "0.0.29" });
+  });
+});
+
+describe("filterEntriesByBetaFeature", () => {
+  const entries = [
+    {
+      version: "0.9.0",
+      date: "Sep 21",
+      features: [
+        { id: "plain", title: "Plain", description: "d" },
+        {
+          id: "computer",
+          title: "Computer",
+          description: "d",
+          betaFeature: "computerUse" as const,
+        },
+      ],
+    },
+    {
+      version: "0.8.0",
+      date: "Sep 1",
+      features: [
+        {
+          id: "computer-only",
+          title: "Computer only",
+          description: "d",
+          betaFeature: "computerUse" as const,
+        },
+      ],
+    },
+  ];
+
+  it("drops disabled beta features and empty releases", () => {
+    const filtered = filterEntriesByBetaFeature(entries, () => false);
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0]!.features.map((f) => f.id)).toEqual(["plain"]);
+  });
+
+  it("keeps everything when the feature is enabled", () => {
+    const filtered = filterEntriesByBetaFeature(entries, () => true);
+    expect(filtered).toHaveLength(2);
+    expect(filtered[0]!.features).toHaveLength(2);
   });
 });

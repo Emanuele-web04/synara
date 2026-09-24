@@ -120,6 +120,14 @@ describe("external MCP guided setup", () => {
     expect(description).not.toContain("runtime:local");
   });
 
+  it("omits the computer-control line when the feature is disabled", () => {
+    const capabilities = ["runtime:full-access", "computer:control"] as const;
+    expect(describeExternalMcpPermissions(capabilities)).toContain("Control this Mac");
+    expect(describeExternalMcpPermissions(capabilities, false)).toBe(
+      "Create and follow its own tasks · Run without approval prompts",
+    );
+  });
+
   it("offers a non-destructive resume path when only the pairing code expired", () => {
     expect(
       externalMcpSetupAction({

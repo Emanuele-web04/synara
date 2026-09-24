@@ -48,6 +48,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
       },
       {
         id: "computer-control",
+        betaFeature: "computerUse",
         title: "Clearer Computer control",
         description:
           "Computer previews and settings better explain which window is targeted and when control is available.",
@@ -79,6 +80,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
     features: [
       {
         id: "computer-beta",
+        betaFeature: "computerUse",
         title: "Computer Use beta — macOS first",
         description:
           "Ask Synara to work with Mac apps and browsers. Computer Use is in beta and available on macOS only for this release; Linux is coming soon.",
@@ -87,6 +89,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
       },
       {
         id: "computer-preview",
+        betaFeature: "computerUse",
         title: "Follow the app your agent is using",
         description:
           "A compact, draggable preview follows the targeted window or browser tab, with an expand control and clearer action cards.",
