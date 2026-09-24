@@ -2173,6 +2173,18 @@ function deriveComputerToolDescription(input: {
   toolName: string | null;
   title: string | null;
 }) {
+  if (input.payload?.approvalScope === "computer-foreground") {
+    return {
+      summary:
+        input.activity.kind === "approval.requested"
+          ? "Asked to show Computer on screen"
+          : input.payload.decision === "accept"
+            ? "Computer allowed on screen"
+            : input.payload.decision === "decline"
+              ? "Computer kept in the background"
+              : "On-screen request cancelled",
+    };
+  }
   if (input.payload?.approvalScope === "computer-task") {
     return {
       summary:

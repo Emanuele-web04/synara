@@ -322,4 +322,51 @@ describe("ComputerApprovalGate", () => {
     expect(await gate.requestTask(input("pending"))).toBe(true);
     expect(prompts.get("pending")).toHaveLength(1);
   });
+
+  it("keeps visible-use consent separate from routine consent and scoped to the turn", async () => {
+    const gate = new ComputerApprovalGate();
+    const ids: string[] = [];
+    const input = (turnId: string) => ({
+      threadId: "a",
+      turnId,
+      signal: new AbortController().signal,
+      publish: async (id: string, decision?: string) => {
+        if (decision === undefined) ids.push(id);
+      },
+    });
+    const routine = gate.requestTask(input("turn-1"));
+    // A visible-use prompt in the same turn must not cancel the routine one.
+    const foreground = gate.requestForegroundTask(input("turn-1"));
+    expect(ids).toHaveLength(2);
+    gate.respond("a", ids[0]!, "accept");
+    expect(await routine).toBe(true);
+    expect(gate.hasForegroundGrant("a", "turn-1")).toBe(false);
+    gate.respond("a", ids[1]!, "accept");
+    expect(await foreground).toBe(true);
+    expect(gate.hasForegroundGrant("a", "turn-1")).toBe(true);
+    expect(await gate.requestForegroundTask(input("turn-1"))).toBe(true);
+    expect(ids).toHaveLength(2);
+    expect(gate.hasForegroundGrant("a", "turn-2")).toBe(false);
+    gate.revokeTaskGrants();
+    expect(gate.hasForegroundGrant("a", "turn-1")).toBe(false);
+  });
+
+  it("remembers a visible-use decline for the turn without nagging", async () => {
+    const gate = new ComputerApprovalGate();
+    let prompts = 0;
+    const input = {
+      threadId: "a",
+      turnId: "turn",
+      signal: new AbortController().signal,
+      publish: async (id: string, decision?: string) => {
+        if (decision === undefined) {
+          prompts++;
+          gate.respond("a", id, "decline");
+        }
+      },
+    };
+    expect(await gate.requestForegroundTask(input)).toBe(false);
+    expect(await gate.requestForegroundTask(input)).toBe(false);
+    expect(prompts).toBe(1);
+  });
 });

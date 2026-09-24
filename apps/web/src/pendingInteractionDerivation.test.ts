@@ -53,6 +53,22 @@ describe("derivePendingApprovals", () => {
       sessionApprovalAvailable: false,
     });
   });
+  it("preserves the visible-use scope of a gateway Computer approval", () => {
+    const approvals = derivePendingApprovals([
+      makeActivity({
+        kind: "approval.requested",
+        summary: "Show Computer on screen for this task",
+        tone: "approval",
+        payload: {
+          requestId: "computer:foreground",
+          requestKind: "tool",
+          approvalScope: "computer-foreground",
+          sessionApprovalAvailable: false,
+        },
+      }),
+    ]);
+    expect(approvals[0]).toMatchObject({ approvalScope: "computer-foreground" });
+  });
   it("shows only actionable durable approval settlements", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
