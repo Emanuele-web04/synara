@@ -2231,7 +2231,10 @@ const make = Effect.gen(function* () {
     const goalPromptOverheadChars = providerGoalPromptOverheadChars(activeThreadGoal(thread));
     const providerPromptOverheadChars = debugPromptOverheadChars + goalPromptOverheadChars;
     const computerInvocation =
-      input.dispatchOrigin === undefined || input.dispatchOrigin === "user"
+      (input.dispatchOrigin === undefined || input.dispatchOrigin === "user") &&
+      // Stable ships no computer backend; a typed /computer-use must pass
+      // through literally instead of being rewritten into a provider prompt.
+      (Option.isNone(computerService) || computerService.value.supported === true)
         ? parseComputerInvocation(input.messageText)
         : null;
     // Synara owns this command. Keep it in durable user text for provenance,
