@@ -37,6 +37,7 @@ import {
   ProjectAgentRepository,
   type ProjectAgentConfigSummaryRow,
   type ProjectAgentRepositoryShape,
+  normalizeDigestError,
 } from "../Services/ProjectAgentRepository.ts";
 
 const ConfigRow = Schema.Struct({
@@ -1306,7 +1307,9 @@ const makeProjectAgentRepository = Effect.gen(function* () {
           if (!row) return Effect.succeed(Option.none());
           const focusItems =
             typeof row.focusItems === "string" ? JSON.parse(row.focusItems) : row.focusItems;
-          return Schema.decodeUnknownEffect(ProjectDigest)({ ...row, focusItems }).pipe(
+          const lastError =
+            typeof row.lastError === "string" ? normalizeDigestError(row.lastError) : row.lastError;
+          return Schema.decodeUnknownEffect(ProjectDigest)({ ...row, focusItems, lastError }).pipe(
             Effect.map(Option.some),
             Effect.mapError(toPersistenceDecodeError("ProjectAgentRepository.getDigest")),
           );

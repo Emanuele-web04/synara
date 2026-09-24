@@ -10,6 +10,7 @@ import {
 } from "@synara/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Exit, Layer, Option } from "effect";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { ProjectAgentRepository } from "../Services/ProjectAgentRepository.ts";
 import { ProjectAgentRepositoryLive } from "./ProjectAgentRepository.ts";
@@ -495,6 +496,40 @@ layer("ProjectAgentRepository", (it) => {
         true,
       );
       assert.equal(again >= 0, true);
+    }),
+  );
+
+  it.effect("still loads a digest whose stored error is oversize raw CLI output", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProjectAgentRepository;
+      const sql = yield* SqlClient.SqlClient;
+      const digestProjectId = ProjectId.makeUnsafe("project-digest-oversize-error");
+      yield* repository.saveDigest({
+        projectId: digestProjectId,
+        summary: "",
+        focusItems: [],
+        coverageFromSequence: 0,
+        coverageToSequence: 0,
+        historicalCoverage: "complete",
+        summarizedThreadCount: 0,
+        pendingThreadCount: 0,
+        generationState: "failed",
+        generatedAt: null,
+        lastGoodAt: null,
+        lastError: null,
+      });
+      // Rows written before the save-side cap existed can hold >2,000 chars
+      // with ANSI escapes; loading them must not fail the whole overview.
+      const raw = `Codex CLI command failed: \u001b[1mworkdir:\u001b[0m ${"x".repeat(2_500)}`;
+      yield* sql`UPDATE project_agent_digests SET last_error = ${raw} WHERE project_id = ${digestProjectId}`;
+      const digest = yield* repository.getDigest(digestProjectId);
+      assert.equal(Option.isSome(digest), true);
+      if (Option.isSome(digest)) {
+        const lastError = digest.value.lastError ?? "";
+        assert.equal(lastError.length <= 2_000, true);
+        assert.equal(lastError.includes("\u001b"), false);
+        assert.equal(lastError.startsWith("Codex CLI command failed: workdir:"), true);
+      }
     }),
   );
 

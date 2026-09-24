@@ -282,3 +282,17 @@ export class ProjectAgentRepository extends ServiceMap.Service<
   ProjectAgentRepository,
   ProjectAgentRepositoryShape
 >()("synara/persistence/Services/ProjectAgentRepository") {}
+
+// Digest errors are raw provider/CLI output (ANSI colour codes, multi-KB
+// banners). The contract caps `lastError` at 2,000 characters; an oversize
+// row would fail to decode and take the whole group overview down with it.
+const DIGEST_ERROR_MAX_LENGTH = 2_000;
+// eslint-disable-next-line no-control-regex
+const ANSI_ESCAPE_PATTERN = /\u001b\[[0-9;]*[A-Za-z]/g;
+
+export function normalizeDigestError(error: string | null | undefined): string | null {
+  if (error == null) return null;
+  const cleaned = error.replace(ANSI_ESCAPE_PATTERN, "").trim();
+  if (cleaned.length <= DIGEST_ERROR_MAX_LENGTH) return cleaned;
+  return `${cleaned.slice(0, DIGEST_ERROR_MAX_LENGTH - 1)}\u2026`;
+}

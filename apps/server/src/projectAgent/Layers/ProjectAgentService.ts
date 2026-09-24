@@ -115,7 +115,10 @@ import { GitCore } from "../../git/Services/GitCore.ts";
 import { TextGeneration } from "../../git/Services/TextGeneration.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { ProjectAgentRepository } from "../../persistence/Services/ProjectAgentRepository.ts";
+import {
+  normalizeDigestError,
+  ProjectAgentRepository,
+} from "../../persistence/Services/ProjectAgentRepository.ts";
 import { ProjectionThreadRepository } from "../../persistence/Services/ProjectionThreads.ts";
 import { LibraryError, ProjectAgentServiceError } from "../Errors.ts";
 import { isAllowedGroupCoordinatorCreateTarget } from "../groupCreateAllowlist.ts";
@@ -2264,7 +2267,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         generationState: generated.error ? ("failed" as const) : ("idle" as const),
         generatedAt: generated.error ? (lastGood?.generatedAt ?? null) : isoNow(),
         lastGoodAt: generated.error ? (lastGood?.lastGoodAt ?? null) : isoNow(),
-        lastError: generated.error,
+        lastError: normalizeDigestError(generated.error),
       };
       yield* repository
         .saveDigest(digest)
