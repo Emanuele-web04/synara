@@ -43,7 +43,7 @@ import type {
   DesktopBetaInstallProgress,
 } from "@synara/contracts";
 
-import { installBetaFromFeed, type BetaInstallDeps } from "./betaInstaller";
+import { installBetaFromFeed, type BetaInstallDeps, type ExpectedTeamId } from "./betaInstaller";
 
 // electron-builder registers the uninstall key under the raw NSIS guid (no
 // braces); the value itself lives in @synara/shared/betaChannel.
@@ -74,7 +74,7 @@ interface BetaChannelDeps {
   /** Install target for the macOS bundle; defaults to /Applications. */
   readonly installDirOverride?: string | undefined;
   /** Team id the downloaded beta must be signed by; null when unsigned. */
-  readonly expectedTeamId?: string | null | undefined;
+  readonly expectedTeamId?: ExpectedTeamId | undefined;
   /** Electron userData handed to the launched beta when set. */
   readonly betaUserDataDir?: string | undefined;
   /** Stable's own executable and data home, handed to beta for the way back. */

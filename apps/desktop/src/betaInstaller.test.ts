@@ -3,7 +3,7 @@
 //          checksum/bundle-identity gates in the macOS auto-install flow.
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -314,6 +314,39 @@ describe("installBetaFromFeed", () => {
     );
     expect(target).toBe(join(installDir, "Synara Beta.app"));
     expect(calls).toHaveLength(0);
+  });
+
+  it("fails closed when the running app's own team id is unavailable", async () => {
+    const root = makeRoot();
+    const { deps, installDir } = feedDeps(root);
+    const { calls, readCommand } = codesignStub("TEAM1234AB");
+    await expect(
+      installBetaFromFeed({ ...deps, expectedTeamId: "unavailable", readCommand }, () => {}),
+    ).rejects.toThrow(
+      "Couldn't check the beta download's signature. Try the download page instead.",
+    );
+    expect(calls).toHaveLength(0);
+    expect(existsSync(join(installDir, "Synara Beta.app"))).toBe(false);
+  });
+
+  it("rejects a symlinked bundle", async () => {
+    const root = makeRoot();
+    const { deps, installDir } = feedDeps(root);
+    const bad = {
+      ...deps,
+      run: (command: string, args: readonly string[]) => {
+        if (command === "ditto") {
+          const extractDir = args[args.length - 1]!;
+          const real = fakeApp(join(root, "elsewhere"));
+          symlinkSync(real, join(extractDir, "Synara Beta.app"));
+          return;
+        }
+        if (command === "mv") return;
+        throw new Error(`unexpected command ${command}`);
+      },
+    };
+    await expect(installBetaFromFeed(bad, () => {})).rejects.toThrow(/isn't signed by Synara/);
+    expect(existsSync(join(installDir, "Synara Beta.app"))).toBe(false);
   });
 });
 

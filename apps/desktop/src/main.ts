@@ -104,6 +104,7 @@ import {
 } from "./bundleSwapDetection";
 import { waitForBackendStartupReady } from "./backendStartupReadiness";
 import { DesktopBetaChannel, readBetaImportResult, resolveBetaHomeDir } from "./betaChannel";
+import type { ExpectedTeamId } from "./betaInstaller";
 import {
   BetaDiagnostics,
   readLogTail,
@@ -4801,22 +4802,28 @@ function ownMacAppBundlePath(): string {
 /**
  * Team id of the running app's signature, used to verify a downloaded beta
  * bundle before it is installed. Unsigned builds (dev, local, demo) yield
- * "not set" or a non-zero exit — the install then skips the check. A lookup
- * failure must never break startup, so every path resolves to null.
+ * "not set" or a "not signed" exit — the install then skips the check. Any
+ * other lookup failure on a packaged app resolves to "unavailable" so the
+ * installer fails closed instead of silently skipping verification; a lookup
+ * failure must never break startup.
  */
-function ownAppTeamId(): string | null {
-  if (process.platform !== "darwin") return null;
+function ownAppTeamId(): ExpectedTeamId {
+  if (process.platform !== "darwin" || !app.isPackaged) return null;
   try {
     const result = ChildProcess.spawnSync(
       "codesign",
       ["-dv", "--verbose=4", ownMacAppBundlePath()],
       { encoding: "utf8" },
     );
-    if (result.status !== 0) return null;
+    if (result.status !== 0) {
+      const output = `${result.stderr ?? ""}\n${result.stdout ?? ""}`;
+      return /not signed|unsigned/i.test(output) ? null : "unavailable";
+    }
     const teamId = /^TeamIdentifier=(\S+)$/m.exec(result.stderr ?? "")?.[1];
-    return teamId && teamId !== "not set" ? teamId : null;
+    if (teamId === undefined) return "unavailable";
+    return teamId === "not set" ? null : teamId;
   } catch {
-    return null;
+    return "unavailable";
   }
 }
 

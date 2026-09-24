@@ -9,7 +9,14 @@
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { createWriteStream, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  createWriteStream,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import { get as httpGet } from "node:http";
 import { get as httpsGet, type RequestOptions } from "node:https";
 import { tmpdir } from "node:os";
@@ -332,6 +339,16 @@ const readCommandDefault: ReadCommand = (command, args) => {
 
 const TEAM_ID_LINE_PATTERN = /^TeamIdentifier=(\S+)$/m;
 const UNSIGNED_BETA_MESSAGE = "The beta download isn't signed by Synara. It wasn't installed.";
+const TEAM_ID_LOOKUP_FAILED_MESSAGE =
+  "Couldn't check the beta download's signature. Try the download page instead.";
+
+/**
+ * Team id the downloaded bundle must be signed by. `null` skips the check
+ * (the running app is unsigned, e.g. a dev build); `"unavailable"` means the
+ * running packaged app could not determine its own team id, which fails
+ * closed rather than skipping verification.
+ */
+export type ExpectedTeamId = string | null | "unavailable";
 
 /**
  * Gatekeeper never assesses downloads made by our own HTTPS client, and the
@@ -342,10 +359,11 @@ const UNSIGNED_BETA_MESSAGE = "The beta download isn't signed by Synara. It wasn
  */
 export function verifyBetaCodeSignature(
   appPath: string,
-  expectedTeamId: string | null,
+  expectedTeamId: ExpectedTeamId,
   readCommand: ReadCommand,
 ): void {
   if (expectedTeamId === null) return;
+  if (expectedTeamId === "unavailable") throw new Error(TEAM_ID_LOOKUP_FAILED_MESSAGE);
   const verify = readCommand("codesign", ["--verify", "--deep", "--strict", appPath]);
   if (verify.status !== 0) throw new Error(UNSIGNED_BETA_MESSAGE);
   const info = readCommand("codesign", ["-dv", "--verbose=4", appPath]);
@@ -376,7 +394,7 @@ export interface BetaInstallDeps {
   readonly installDir: string;
   readonly feedUrlOverride?: string | undefined;
   /** Team id the downloaded bundle must be signed by; null skips the check. */
-  readonly expectedTeamId?: string | null;
+  readonly expectedTeamId?: ExpectedTeamId;
   readonly fetchText?: FetchText;
   readonly downloadFile?: DownloadFile;
   readonly run?: RunCommand;
@@ -420,6 +438,12 @@ export async function installBetaFromFeed(
     mkdirSync(extractDir, { recursive: true });
     run("ditto", ["-x", "-k", zipPath, extractDir]);
     const appPath = join(extractDir, BETA_MAC_APP_NAME);
+    // A symlinked bundle must never leave the temp dir: `mv` would write the
+    // symlink target outside installDir or plant a link pointing elsewhere.
+    const appStat = lstatSync(appPath, { throwIfNoEntry: false });
+    if (appStat !== undefined && (!appStat.isDirectory() || appStat.isSymbolicLink())) {
+      throw new Error(UNSIGNED_BETA_MESSAGE);
+    }
     verifyBetaAppBundle(appPath);
     verifyBetaCodeSignature(
       appPath,
