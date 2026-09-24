@@ -50,15 +50,15 @@ const seed = Effect.gen(function* () {
   yield* sql`INSERT INTO projection_thread_sessions (thread_id, status, provider_name, updated_at)
             VALUES ('t1', 'idle', 'claudeAgent', ${nowIso()}),
                    ('t2', 'idle', 'claudeAgent', ${nowIso()}),
-                   ('t3', 'idle', NULL, ${nowIso()})`;
+                   ('th3', 'idle', NULL, ${nowIso()})`;
   // t1: 2 turns (1 error). t2: 1 completed turn + 1 stale turn (excluded).
-  // t3 has no provider session and must not appear in providers[].
+  // th3 has no provider session and must not appear in providers[].
   yield* sql`INSERT INTO projection_turns (thread_id, turn_id, state, requested_at, checkpoint_files_json)
             VALUES ('t1', 'u1', 'completed', ${nowIso()}, '[]'),
                    ('t1', 'u2', 'error', ${nowIso()}, '[]'),
                    ('t2', 'u3', 'completed', ${nowIso()}, '[]'),
                    ('t2', 'u4', 'interrupted', ${hoursAgoIso(30)}, '[]'),
-                   ('t3', 'u5', 'completed', ${nowIso()}, '[]')`;
+                   ('th3', 'u5', 'completed', ${nowIso()}, '[]')`;
 });
 
 describe("writeBetaUsageSnapshot", () => {
