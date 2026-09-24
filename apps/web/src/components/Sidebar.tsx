@@ -230,6 +230,7 @@ import { RenameDialog } from "./RenameDialog";
 import { RelocateProjectDialog } from "./RelocateProjectDialog";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import ReleaseHistoryDialog from "./ReleaseHistoryDialog";
+import { isBetaFeatureOn } from "../betaFeatures";
 import { WHATS_NEW_ENTRIES } from "../whatsNew/entries";
 import { sortEntriesByVersionDesc } from "../whatsNew/logic";
 import {
@@ -7077,7 +7078,11 @@ function SidebarSearchPaletteController(props: {
   const sidebarDisplayThreads = useStore(selectSidebarDisplayThreads);
   const importProviders: ReadonlyArray<ImportProviderKind> = (
     ["codex", "claudeAgent", "cursor", "opencode", "omp"] as const
-  ).filter((provider, index) => supportsThreadImport(importProviderCapabilityQueries[index]?.data));
+  ).filter(
+    (provider, index) =>
+      isBetaFeatureOn(provider) &&
+      supportsThreadImport(importProviderCapabilityQueries[index]?.data),
+  );
   // `threads` is rebuilt on every streamed store flush, so this projection is
   // cheap by construction (message text is cached per thread-messages array
   // below) and its result keeps the previous identity while nothing the

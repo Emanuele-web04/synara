@@ -36,6 +36,7 @@ import { QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Throttler } from "@tanstack/react-pacer";
 
 import { APP_DISPLAY_NAME, APP_VERSION } from "../branding";
+import { isBetaFeatureOn } from "../betaFeatures";
 import { DesktopWindowControls } from "../components/DesktopWindowControls";
 import { RunningChatsQuitCoordinator } from "../components/RunningChatsQuitCoordinator";
 import { AppSnapCoordinator } from "../components/AppSnapCoordinator";
@@ -471,7 +472,7 @@ function ProviderModelDiscoveryWarmer() {
   // cwd-scoped query key then only pays for the config reads on top.
   const { settings } = useAppSettings();
   const queryClient = useQueryClient();
-  const ompHidden = settings.hiddenProviders.includes("omp");
+  const ompHidden = !isBetaFeatureOn("omp") || settings.hiddenProviders.includes("omp");
   const ompBinaryPath = settings.ompBinaryPath;
   const ompAgentDir = settings.ompAgentDir;
   useEffect(() => {
