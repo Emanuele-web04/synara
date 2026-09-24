@@ -22,7 +22,10 @@ the current input, provider and concurrency corrections and their runtime limits
 
 Synara 0.9.0 introduces Computer Use in beta on macOS only. Linux is coming soon.
 The Linux implementation and qualification material below describe development
-work, not released Linux Computer support.
+work, not released Linux Computer support. The Linux material here covers the
+Cua host in observation-only mode; the native Linux backends that drive a
+desktop through a compositor plugin or a nested compositor are documented in
+[computer-use-linux.md](../computer-use-linux.md).
 
 ## Isolated packaged build
 

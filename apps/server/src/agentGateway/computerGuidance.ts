@@ -4,6 +4,33 @@
  * Perception and mutations share the task's computer:control capability.
  * Disabled sessions receive neither this block nor the Computer tool catalog.
  */
+import type { ComputerGuidanceProfile } from "../computer/ComputerBackend.ts";
+
+/**
+ * The desktop this process drives, as the guidance describes it.
+ *
+ * One server drives one desktop, and the harness policy is rendered by
+ * provider adapters that never see the backend, so the computer service
+ * registers the backend's profile here once and the renders read it. Absent
+ * is the Cua host's own profile: the text every session got before any other
+ * backend could register one.
+ */
+let activeProfile: ComputerGuidanceProfile | undefined;
+
+export const DEFAULT_COMPUTER_GUIDANCE_PROFILE: ComputerGuidanceProfile = {
+  dialect: "macos",
+  dedicatedSeat: false,
+};
+
+export function setActiveComputerGuidanceProfile(
+  profile: ComputerGuidanceProfile | undefined,
+): void {
+  activeProfile = profile;
+}
+
+export function activeComputerGuidanceProfile(): ComputerGuidanceProfile {
+  return activeProfile ?? DEFAULT_COMPUTER_GUIDANCE_PROFILE;
+}
 
 /**
  * The situational playbook chapters `computer_help` serves on demand. They
