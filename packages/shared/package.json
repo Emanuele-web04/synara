@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./betaFeatures": {
+      "types": "./src/betaFeatures.ts",
+      "import": "./src/betaFeatures.ts"
+    },
     "./cuaActionDiagnostics": {
       "types": "./src/cuaActionDiagnostics.ts",
       "import": "./src/cuaActionDiagnostics.ts"
