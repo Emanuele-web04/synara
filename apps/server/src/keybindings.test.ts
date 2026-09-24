@@ -86,6 +86,19 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }),
   );
 
+  it.effect("defaults composer voice toggle to alt+M outside terminal focus", () =>
+    Effect.sync(() => {
+      assert.deepEqual(
+        DEFAULT_KEYBINDINGS.find((rule) => rule.command === "composer.voice.toggle"),
+        {
+          key: "alt+m",
+          command: "composer.voice.toggle",
+          when: "!terminalFocus",
+        },
+      );
+    }),
+  );
+
   it.effect("defaults sidebar.search to Cmd+K on macOS and Ctrl+K elsewhere", () =>
     Effect.sync(() => {
       const searchDefaults = DEFAULT_KEYBINDINGS.filter(

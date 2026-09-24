@@ -695,6 +695,39 @@ describe("composer focus shortcuts", () => {
   });
 });
 
+describe("composer voice shortcuts", () => {
+  const voiceBindings = compile([
+    {
+      shortcut: {
+        key: "m",
+        metaKey: false,
+        ctrlKey: false,
+        shiftKey: false,
+        altKey: true,
+        modKey: false,
+      },
+      command: "composer.voice.toggle",
+      whenAst: whenNot(whenIdentifier("terminalFocus")),
+    },
+  ]);
+
+  it("toggles the composer voice note with Alt+M outside terminal focus", () => {
+    assert.equal(
+      resolveShortcutCommand(event({ key: "m", altKey: true }), voiceBindings, {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "composer.voice.toggle",
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "m", altKey: true }), voiceBindings, {
+        platform: "MacIntel",
+        context: { terminalFocus: true },
+      }),
+    );
+  });
+});
+
 describe("recent view shortcuts", () => {
   it("resolves Ctrl+Tab outside terminal focus", () => {
     assert.strictEqual(

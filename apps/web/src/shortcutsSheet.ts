@@ -179,6 +179,11 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Focus or blur the chat prompt composer.",
   },
   {
+    command: "composer.voice.toggle",
+    label: "Toggle voice note",
+    description: "Start or stop the composer voice note recording.",
+  },
+  {
     command: "chat.find",
     label: "Find in thread",
     description: "Search the current transcript and jump to each matching message.",
