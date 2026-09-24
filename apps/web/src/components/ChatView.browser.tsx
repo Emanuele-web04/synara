@@ -3711,7 +3711,7 @@ describe("ChatView transcript geometry (full app)", () => {
   // is the message visibly jumping up and down through send → Thinking →
   // "Working for" → streaming, which is what a fixed-target scroll produces once
   // the coordinate moves under it (reserve sizing, rows above being remeasured).
-  it("moves a sent message to its anchor once and holds it across the turn lifecycle", async () => {
+  it("moves a sent message to its anchor, holds it, then follows an overflowing response", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
     let currentSnapshot = createSnapshotForTargetUser({
       targetMessageId: "msg-user-send-jitter" as MessageId,
@@ -3766,7 +3766,7 @@ describe("ChatView transcript geometry (full app)", () => {
 
       // Sampled every frame: the regression is a single-frame hop, so polling for
       // the settled state would not see it.
-      const samples: Array<{ t: number; offset: number | null }> = [];
+      const samples: Array<{ t: number; offset: number | null; bottom: number }> = [];
       const startedAt = performance.now();
       let sampling = true;
       const sample = () => {
@@ -3777,6 +3777,8 @@ describe("ChatView transcript geometry (full app)", () => {
           offset: row
             ? row.getBoundingClientRect().top - scrollContainer.getBoundingClientRect().top
             : null,
+          bottom:
+            scrollContainer.scrollHeight - scrollContainer.clientHeight - scrollContainer.scrollTop,
         });
         window.requestAnimationFrame(sample);
       };
@@ -3858,8 +3860,9 @@ describe("ChatView transcript geometry (full app)", () => {
           }));
         });
       }
-      // Assistant text streams in below the anchor, chunk by chunk.
-      for (let chunk = 1; chunk <= 24; chunk += 1) {
+      // Assistant text streams in below the anchor, chunk by chunk. Continue
+      // past the reserved space so the test covers the intentional hand-off.
+      for (let chunk = 1; chunk <= 40; chunk += 1) {
         at(560 + chunk * 33, () => {
           syncActiveThread((thread) => ({
             ...thread,
@@ -3882,31 +3885,40 @@ describe("ChatView transcript geometry (full app)", () => {
       }
 
       await new Promise<void>((resolve) => {
-        window.setTimeout(resolve, 1_600);
+        window.setTimeout(resolve, 2_200);
       });
       sampling = false;
 
       const visible = samples.filter(
-        (entry): entry is { t: number; offset: number } => entry.offset !== null,
+        (entry): entry is { t: number; offset: number; bottom: number } => entry.offset !== null,
       );
       const firstArrivalIndex = visible.findIndex(
         (entry) => Math.abs(entry.offset - topGapPx) <= 2,
       );
       const settled = firstArrivalIndex >= 0 ? visible.slice(firstArrivalIndex) : [];
+      // Once the response is taller than the remaining viewport, the list
+      // intentionally hands off from the pinned send to following the live
+      // tail. Validate the rigid hold before that hand-off separately from the
+      // upward motion afterward. The long stream exhausts the reserve on both
+      // local and CI browser fonts, so a missing hand-off is a regression too.
+      const handoffIndex = settled.findIndex((entry) => entry.offset < topGapPx - 4);
+      const held = handoffIndex < 0 ? settled : settled.slice(0, handoffIndex);
       let reversals = 0;
       let travelAfterArrivalPx = 0;
       let maxDownwardJumpPx = 0;
       let previousDirection = 0;
       for (let index = 1; index < settled.length; index += 1) {
         const delta = settled[index]!.offset - settled[index - 1]!.offset;
-        travelAfterArrivalPx += Math.abs(delta);
         maxDownwardJumpPx = Math.max(maxDownwardJumpPx, delta);
         if (Math.abs(delta) <= 0.5) continue;
         const direction = Math.sign(delta);
         if (previousDirection !== 0 && direction !== previousDirection) reversals += 1;
         previousDirection = direction;
       }
-      const maxDriftAfterArrivalPx = settled.reduce(
+      for (let index = 1; index < held.length; index += 1) {
+        travelAfterArrivalPx += Math.abs(held[index]!.offset - held[index - 1]!.offset);
+      }
+      const maxDriftAfterArrivalPx = held.reduce(
         (worst, entry) => Math.max(worst, Math.abs(entry.offset - topGapPx)),
         0,
       );
@@ -3929,7 +3941,12 @@ describe("ChatView transcript geometry (full app)", () => {
         approachDirection = direction;
       }
       const trace = () =>
-        visible.map((entry) => `${Math.round(entry.t)}:${Math.round(entry.offset)}`).join(" ");
+        visible
+          .map(
+            (entry) =>
+              `${Math.round(entry.t)}:${Math.round(entry.offset)}:${Math.round(entry.bottom)}`,
+          )
+          .join(" ");
       expect(
         firstArrivalIndex,
         `sent message never reached its anchor: ${trace()}`,
@@ -3945,6 +3962,18 @@ describe("ChatView transcript geometry (full app)", () => {
       expect(maxDriftAfterArrivalPx, `anchor drifted off its coordinate: ${trace()}`).toBeLessThan(
         4,
       );
+      expect(
+        handoffIndex,
+        `anchor never handed off to the overflowing tail: ${trace()}`,
+      ).toBeGreaterThan(-1);
+      expect(
+        settled[handoffIndex]!.t,
+        `anchor released before the short response filled the reserve: ${trace()}`,
+      ).toBeGreaterThan(1_000);
+      expect(
+        settled.at(-1)!.bottom,
+        `transcript did not follow the overflowing response: ${trace()}`,
+      ).toBeLessThan(8);
     } finally {
       await mounted.cleanup();
       restoreNativeApi();
