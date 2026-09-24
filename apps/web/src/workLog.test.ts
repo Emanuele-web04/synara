@@ -774,6 +774,76 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
+  it("collapses consecutive retryable warnings of one turn to the latest attempt", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "codex-retry-1",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        sequence: 1,
+        kind: "runtime.warning",
+        summary: "Codex reconnecting",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { message: "Reconnecting... 1/5", willRetry: true },
+      }),
+      makeActivity({
+        id: "codex-retry-2",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        sequence: 2,
+        kind: "runtime.warning",
+        summary: "Codex reconnecting",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { message: "Reconnecting... 2/5", willRetry: true },
+      }),
+      makeActivity({
+        id: "codex-retry-3",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        sequence: 3,
+        kind: "runtime.warning",
+        summary: "Codex reconnecting",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { message: "Reconnecting... 3/5", willRetry: true },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries).toHaveLength(1);
+    // Anchored on the first row but shows the latest attempt.
+    expect(entries[0]).toMatchObject({
+      id: "codex-retry-1",
+      createdAt: "2026-02-23T00:00:01.000Z",
+      detail: "Reconnecting... 3/5",
+    });
+  });
+
+  it("does not collapse retryable warnings across turn boundaries", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "codex-retry-a",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "runtime.warning",
+        summary: "Codex reconnecting",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { message: "Reconnecting... 1/5", willRetry: true },
+      }),
+      makeActivity({
+        id: "codex-retry-b",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "runtime.warning",
+        summary: "Codex reconnecting",
+        tone: "info",
+        turnId: "turn-2",
+        payload: { message: "Reconnecting... 1/5", willRetry: true },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries).toHaveLength(2);
+  });
+
   it("does not collapse identical runtime warnings across turn boundaries", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

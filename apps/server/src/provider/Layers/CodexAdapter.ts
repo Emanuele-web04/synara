@@ -1867,6 +1867,7 @@ function mapToRuntimeEvents(
         payload: {
           message,
           ...(!treatAsWarning ? { class: "provider_error" as const } : {}),
+          ...(willRetry ? { willRetry: true as const } : {}),
           ...(event.payload !== undefined ? { detail: event.payload } : {}),
         },
       },

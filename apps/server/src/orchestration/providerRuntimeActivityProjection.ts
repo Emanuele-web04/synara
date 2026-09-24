@@ -787,6 +787,16 @@ export function projectProviderRuntimeActivities(
               : nativeType
                 ? { nativeEventType: nativeType }
                 : {}),
+            // Provider self-retries collapse client-side to the latest attempt.
+            // Codex flags them explicitly; OpenCode surfaces them as the
+            // session.next.retried / session.status(retry) native events — the
+            // adapter only emits a warning from session.status when
+            // status.type === "retry", so both nativeTypes are retries.
+            ...(event.payload.willRetry === true ||
+            (event.provider === "opencode" &&
+              (nativeType === "session.next.retried" || nativeType === "session.status"))
+              ? { willRetry: true }
+              : {}),
             ...activityDataField(event.payload.detail),
           }),
           turnId: toTurnId(event.turnId) ?? null,
