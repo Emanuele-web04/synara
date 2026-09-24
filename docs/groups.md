@@ -69,8 +69,9 @@ still ask. In a paused or archived group, every tool asks again.
 After it starts threads, the coordinator stays on watch. When a thread finishes, fails, hits a
 quota limit, or is interrupted, the coordinator wakes up and posts a short status in its chat. If a
 thread dies, it starts a new thread for the same job or picks another path. Scheduled check-ins
-show in the chat as a compact **Coordinator check-in** row; choose **Show details** to see the
-prompt.
+run in the background and never appear in the chat. If the coordinator has nothing to report it
+stays silent; when it does have something for you, only its message is shown. Every check-in is
+recorded in the group's activity log.
 
 Useful requests:
 
@@ -106,11 +107,19 @@ approval`). Each row links straight to that thread, then wakes the
   has settled, the server posts a single roll-up row (`All 3 threads finished`,
   or `All 3 threads settled: A ✓, B ✓, C ⚠ needs approval`) and wakes the
   coordinator once to summarize for you.
-- **Stuck detection** — a health check runs every minute. A worker is reported
-  stuck once per episode when it runs with no new activity for more than 10
-  minutes, waits on an approval or user input for more than 5 minutes, or its
-  session errors or disappears. When the worker recovers, the episode ends and
-  a later stall reports again.
+- **Stuck detection and recovery** — a health check runs every minute. A worker
+  is reported stuck once per episode when it runs with no new activity for more
+  than 10 minutes, waits on an approval or user input for more than 5 minutes,
+  or its session errors or disappears. For a silent worker the server then runs
+  a recovery ladder: it posts a nudge into the worker thread asking for a
+  one-line status, and if nothing new arrives within 5 more minutes it
+  interrupts the turn and re-dispatches the worker's task once. After 2
+  automatic recoveries in one stall — or when the task can't be re-dispatched —
+  the worker is marked **Waiting on you**, a needs-you marker lights up on the
+  thread, and the coordinator wakes once to tell you; no further automatic
+  action is taken. Waiting-for-approval or -input workers are never
+  auto-approved; they get the same needs-you marker and one wake. When the
+  worker recovers, the episode ends and a later stall reports again.
 
 The same tracked-worker set drives the Threads tab in the Group panel and the
 Focus list, so what you see matches what the coordinator watches.

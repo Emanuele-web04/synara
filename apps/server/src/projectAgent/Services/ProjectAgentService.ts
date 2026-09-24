@@ -225,6 +225,9 @@ export interface ProjectAgentServiceShape {
     readonly batchId?: string;
     readonly threadIds: ReadonlyArray<ThreadId>;
     readonly titles: ReadonlyArray<string>;
+    /** The task prompt each thread was created with — stored durably so the
+     * stall-recovery ladder can re-dispatch it after a restart. */
+    readonly prompts?: ReadonlyArray<string | null>;
   }) => Effect.Effect<void, ProjectAgentServiceError>;
   readonly reconcilePendingWakes: () => Effect.Effect<void, ProjectAgentServiceError>;
   readonly inspectWorkerHealth: () => Effect.Effect<void, ProjectAgentServiceError>;
@@ -240,6 +243,9 @@ export interface ProjectAgentServiceShape {
     readonly threadId: ThreadId;
     readonly sourceEventId: string;
     readonly eventType: string;
+    /** Turn the event belongs to — used to classify coordinator check-in
+     * turns for the group activity log. */
+    readonly turnId?: string;
     readonly createdAt: string;
   }) => Effect.Effect<void, ProjectAgentServiceError>;
   readonly processPendingWakes: (

@@ -110,6 +110,7 @@ interface CreationCoordinatorDependencies {
     readonly batchId?: string;
     readonly threadIds: ReadonlyArray<ThreadId>;
     readonly titles: ReadonlyArray<string>;
+    readonly prompts?: ReadonlyArray<string | null>;
   }) => Effect.Effect<void, ToolInputError>;
   readonly assertCreateTargetProject?: (input: {
     readonly callerThreadId: string;
@@ -1233,12 +1234,16 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
             now: gatewayIsoNow(),
           });
           if (recordManagedWorkerThreads && caller) {
+            const promptByThreadId = new Map(
+              createdThreads.map((entry) => [entry.ids.threadId, entry.spec.prompt]),
+            );
             yield* recordManagedWorkerThreads({
               callerThreadId: caller.id,
               requestId: input.requestId,
               batchId: operationId,
               threadIds: result.threadIds,
               titles: result.threads.map((thread) => thread.title),
+              prompts: result.threadIds.map((threadId) => promptByThreadId.get(threadId) ?? null),
             });
           }
           return { kind: "created" as const, result };

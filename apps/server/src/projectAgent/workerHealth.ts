@@ -8,6 +8,19 @@ export const PROJECT_AGENT_WORKER_HEALTH_INTERVAL_MS = 60_000;
 export const WORKER_STUCK_RUNNING_QUIET_MS = 10 * 60_000;
 export const WORKER_STUCK_WAITING_MS = 5 * 60_000;
 
+// Programmatic stall-recovery ladder, run by the health loop (no model). Step 1
+// nudges at the silent threshold; step 2 interrupts and re-dispatches the
+// recorded task prompt after REDELIVER_DELAY_MS more quiet; the cap bounds
+// automatic recoveries per thread before it is flagged "Waiting on you".
+export const WORKER_RECOVERY_NUDGE_TEXT =
+  "Automatic check from the coordinator: you have produced no output for 10 minutes. Post a one-line status, then continue or report a blocker.";
+export const WORKER_RECOVERY_REDELIVER_DELAY_MS = 5 * 60_000;
+export const WORKER_RECOVERY_MAX_ATTEMPTS = 2;
+// Orchestration commands the ladder dispatches carry this prefix so the settle
+// reactor can tell recovery-caused interrupts/steers from worker-owned events.
+export const WORKER_RECOVERY_COMMAND_PREFIX = "agent-recovery:";
+export const workerRecoveryNeedsYouRequestId = (threadId: string) => `worker-recovery:${threadId}`;
+
 export function isFailedWorkerSessionStatus(status: string | null | undefined): boolean {
   return status === "error" || status === "interrupted" || status === "stopped";
 }
@@ -33,6 +46,7 @@ const WORKER_ALERT_EVENT_TYPES = new Set([
   "worker.stopped",
   "worker.silent",
   "worker.waiting-overdue",
+  "worker.needs-you",
   "thread.approval-response-requested",
   "thread.user-input-response-requested",
 ]);
@@ -184,6 +198,30 @@ export function workerMonitorNoticeForEvent(eventType: string): WorkerMonitorNot
         tone: "approval",
         marker: "\u26a0",
         phrase: "has been waiting for over 5 minutes",
+      };
+    case "worker.nudged":
+      return {
+        kind: "stuck",
+        outcome: null,
+        tone: "approval",
+        marker: "\u26a0",
+        phrase: "was nudged after 10 minutes without progress",
+      };
+    case "worker.recovery-redispatched":
+      return {
+        kind: "stuck",
+        outcome: null,
+        tone: "approval",
+        marker: "\u26a0",
+        phrase: "was interrupted and had its task re-dispatched",
+      };
+    case "worker.needs-you":
+      return {
+        kind: "stuck",
+        outcome: null,
+        tone: "error",
+        marker: "\u2717",
+        phrase: "needs you — automatic recovery is exhausted",
       };
     default:
       return null;

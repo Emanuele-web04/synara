@@ -26,6 +26,7 @@ import {
   PROVIDER_DISPLAY_NAMES,
   type OrchestrationCommand,
   type ProjectActivity,
+  type ProjectActivityKind,
   type ProjectInboxEvent,
   type ProjectManagedWorker,
   type OrchestrationThreadShell,
@@ -40,6 +41,7 @@ import {
   type ProjectTaskStatus,
 } from "@synara/contracts";
 import { groupThreadStateLabel, resolveGroupThreadState } from "@synara/shared/groupThreadState";
+import { coordinatorCheckinTurnReport } from "@synara/shared/coordinatorCheckin";
 import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
 import { isOrdinaryProjectRow } from "@synara/shared/projectContainers";
 import {
@@ -86,6 +88,7 @@ import {
 } from "@synara/shared/projectAgent";
 import {
   Cause,
+  Clock,
   Duration,
   Effect,
   Equal,
@@ -152,10 +155,15 @@ import {
   isWorkerAlertEvent,
   lastAssistantTextFromMessages,
   shouldMaterializeWorkerSettlementReport,
+  WORKER_RECOVERY_MAX_ATTEMPTS,
+  WORKER_RECOVERY_NUDGE_TEXT,
+  WORKER_RECOVERY_COMMAND_PREFIX,
+  WORKER_RECOVERY_REDELIVER_DELAY_MS,
   WORKER_STUCK_RUNNING_QUIET_MS,
   WORKER_STUCK_WAITING_MS,
   workerInboxReportPath,
   workerMonitorNoticeForEvent,
+  workerRecoveryNeedsYouRequestId,
 } from "../workerHealth.ts";
 import {
   ProjectAgentService,
@@ -486,14 +494,46 @@ export const makeProjectAgentService = Effect.gen(function* () {
           notice.outcome === "waiting-approval" || notice.outcome === "waiting-input"
             ? (worker.waitingSince ?? input.createdAt)
             : null,
-        // An event means the worker is alive; any stuck episode is over.
+        // An event means the worker is alive; any stuck episode and recovery
+        // ladder run is over, and a flagged "Waiting on you" resolves.
         stuckKind: null,
         stuckSince: null,
+        recoveryEpisode: null,
+        recoveryStep: 0,
+        nudgeAt: null,
+        needsYou: false,
+        needsYouAt: null,
         updatedAt: input.createdAt,
       };
       yield* repository
         .upsertManagedWorker(updated)
         .pipe(Effect.mapError(toServiceError("Failed to update managed worker.")));
+      if (worker.needsYou) {
+        // Close the synthetic pending request the needs-you latch opened so
+        // the thread's waiting indicator clears with the episode.
+        yield* orchestrationEngine
+          .dispatch({
+            type: "thread.activity.append",
+            commandId: CommandId.makeUnsafe(
+              `agent-monitor:needs-you-resolved:${input.sourceEventId}`,
+            ),
+            threadId: worker.threadId,
+            activity: {
+              id: EventId.makeUnsafe(`agent-monitor:needs-you-resolved:${input.sourceEventId}`),
+              tone: "info",
+              kind: "user-input.resolved",
+              summary: "Worker recovery request resolved.",
+              payload: {
+                requestId: workerRecoveryNeedsYouRequestId(worker.threadId),
+                answers: {},
+              },
+              turnId: null,
+              createdAt: input.createdAt,
+            },
+            createdAt: input.createdAt,
+          })
+          .pipe(Effect.catch(() => Effect.void));
+      }
       yield* postWorkerMonitorRow({
         coordinatorThreadId: input.coordinatorThreadId,
         sourceKey: `settle:${input.sourceEventId}`,
@@ -560,14 +600,20 @@ export const makeProjectAgentService = Effect.gen(function* () {
   // missing shell (episode-keyed), failed session status, waiting on an
   // approval/user input past the waiting threshold, and running silent past
   // the quiet threshold. Terminal outcomes stop the waiting/silent checks.
+  // The recovery ladder rides the silent check: each silent episode nudges the
+  // worker once, then interrupts + re-dispatches its recorded task prompt once
+  // the post-nudge delay elapses, bounded by WORKER_RECOVERY_MAX_ATTEMPTS per
+  // episode chain. Exhaustion latches "Waiting on you" (needs-you dot + one
+  // wake to tell the user). All ladder state lives on the durable worker row,
+  // so a restart mid-episode resumes the same step.
   const inspectManagedWorkerHealth = (input: {
     readonly worker: ProjectManagedWorker;
     readonly shell: Option.Option<OrchestrationThreadShell>;
   }) =>
     Effect.gen(function* () {
       const worker = input.worker;
-      const nowIso = isoNow();
-      const nowMs = Date.now();
+      const nowMs = yield* Clock.currentTimeMillis;
+      const nowIso = new Date(nowMs).toISOString();
       const serviceError = toServiceError("Failed to update managed worker health state.");
       const ingestHealthEvent = (sourceEventId: string, eventType: string) =>
         impl
@@ -592,6 +638,29 @@ export const makeProjectAgentService = Effect.gen(function* () {
               }),
             ),
           );
+
+      // Recovery dispatches reuse the same orchestration commands the
+      // coordinator tools send (steer message, interrupt, queued turn). Their
+      // deterministic command ids carry the WORKER_RECOVERY_COMMAND_PREFIX so
+      // the settle reactor ignores the interrupt side effects, and a crash
+      // between dispatch and the row write replays the same ids.
+      const dispatchRecovery = (command: OrchestrationCommand) =>
+        orchestrationEngine.dispatch(command).pipe(
+          Effect.as(true),
+          Effect.catch((error) =>
+            appendActivity({
+              projectId: worker.projectId,
+              kind: "error",
+              actorKind: "system",
+              actorThreadId: worker.threadId,
+              goalId: null,
+              taskId: null,
+              source: null,
+              summary: `Worker recovery dispatch ${command.type} on ${worker.threadId}: ${String(error)}`,
+              createdAt: nowIso,
+            }).pipe(Effect.as(false)),
+          ),
+        );
 
       if (Option.isNone(input.shell)) {
         // Missing shell: one episode, keyed by its first-seen timestamp. A
@@ -634,7 +703,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         worker.settleOutcome === "failed" ||
         worker.settleOutcome === "interrupted" ||
         worker.settleOutcome === "missing";
-      if (!terminal) {
+      if (!terminal && !updated.needsYou) {
         const waiting = shell.hasPendingApprovals || shell.hasPendingUserInput;
         if (waiting) {
           const waitingSince = updated.waitingSince ?? nowIso;
@@ -655,19 +724,183 @@ export const makeProjectAgentService = Effect.gen(function* () {
             updated = { ...updated, stuckKind: null, stuckSince: null };
           }
           const lastActivity = shell.session?.updatedAt ?? shell.updatedAt;
+          const recoveryCommandId = (step: string) =>
+            `${WORKER_RECOVERY_COMMAND_PREFIX}${worker.threadId}:${lastActivity}:${step}`;
+          const latchNeedsYou = Effect.gen(function* () {
+            updated = { ...updated, needsYou: true, needsYouAt: nowIso };
+            // A synthetic pending input lights the worker's needs-you dot and
+            // lands it in the "Waiting on you" bucket; the settle path above
+            // resolves it when a real worker event arrives.
+            yield* dispatchRecovery({
+              type: "thread.activity.append",
+              commandId: CommandId.makeUnsafe(recoveryCommandId("needs-you")),
+              threadId: worker.threadId,
+              activity: {
+                id: EventId.makeUnsafe(recoveryCommandId("needs-you")),
+                tone: "approval",
+                kind: "user-input.requested",
+                summary: "Automatic recovery is exhausted; the worker needs direction.",
+                payload: {
+                  requestId: workerRecoveryNeedsYouRequestId(worker.threadId),
+                  questions: [
+                    {
+                      id: "recovery",
+                      header: "Needs you",
+                      question:
+                        "Automatic recovery is exhausted and this worker is still stalled. What should it do next?",
+                      options: [
+                        {
+                          label: "Reply with instructions",
+                          description: "Send guidance the worker should follow.",
+                        },
+                        {
+                          label: "Stop the worker",
+                          description: "End this thread's work.",
+                        },
+                      ],
+                    },
+                  ],
+                },
+                turnId: null,
+                createdAt: nowIso,
+              },
+              createdAt: nowIso,
+            });
+            yield* ingestHealthEvent(
+              `worker-health:${worker.threadId}:needs-you:${lastActivity}`,
+              "worker.needs-you",
+            );
+          });
           if (
             sessionStatus === "running" &&
             nowMs - Date.parse(lastActivity) > WORKER_STUCK_RUNNING_QUIET_MS
           ) {
             if (updated.stuckKind !== "silent" || updated.stuckSince !== lastActivity) {
-              updated = { ...updated, stuckKind: "silent", stuckSince: lastActivity };
+              // A fresh silent episode: the worker produced events since the
+              // last stall, so the recovery chain resets with it.
+              updated = {
+                ...updated,
+                stuckKind: "silent",
+                stuckSince: lastActivity,
+                recoveryEpisode: lastActivity,
+                recoveryStep: 0,
+                nudgeAt: null,
+                recoveriesUsed: 0,
+              };
               yield* ingestHealthEvent(
                 `worker-health:${worker.threadId}:silent:${lastActivity}`,
                 "worker.silent",
               );
             }
+            if (updated.recoveryEpisode === lastActivity) {
+              if (updated.recoveryStep === 0) {
+                if (updated.recoveriesUsed >= WORKER_RECOVERY_MAX_ATTEMPTS) {
+                  yield* latchNeedsYou;
+                } else {
+                  // Step 1 — nudge through the same steer path the
+                  // coordinator's send tool uses.
+                  const dispatched = yield* dispatchRecovery({
+                    type: "thread.turn.start",
+                    commandId: CommandId.makeUnsafe(recoveryCommandId("nudge")),
+                    threadId: worker.threadId,
+                    message: {
+                      messageId: MessageId.makeUnsafe(`${recoveryCommandId("nudge")}:message`),
+                      role: "user",
+                      text: WORKER_RECOVERY_NUDGE_TEXT,
+                      attachments: [],
+                    },
+                    dispatchMode: "steer",
+                    dispatchOrigin: "automation",
+                    runtimeMode: shell.runtimeMode,
+                    interactionMode: shell.interactionMode,
+                    createdAt: nowIso,
+                  });
+                  if (dispatched) {
+                    updated = { ...updated, recoveryStep: 1, nudgeAt: nowIso };
+                    yield* ingestHealthEvent(
+                      `worker-health:${worker.threadId}:nudged:${lastActivity}`,
+                      "worker.nudged",
+                    );
+                  }
+                }
+              } else if (
+                updated.recoveryStep === 1 &&
+                updated.nudgeAt !== null &&
+                nowMs - Date.parse(updated.nudgeAt) > WORKER_RECOVERY_REDELIVER_DELAY_MS
+              ) {
+                // Step 2 — still quiet after the nudge: interrupt the stalled
+                // turn, then re-dispatch the recorded task prompt once.
+                const prompt = worker.taskPrompt;
+                if (prompt === null || prompt.trim().length === 0) {
+                  yield* latchNeedsYou;
+                } else {
+                  const turnActive =
+                    shell.session?.activeTurnId != null || shell.latestTurn?.state === "running";
+                  const interrupted = turnActive
+                    ? yield* dispatchRecovery({
+                        type: "thread.turn.interrupt",
+                        commandId: CommandId.makeUnsafe(recoveryCommandId("interrupt")),
+                        threadId: worker.threadId,
+                        createdAt: nowIso,
+                      })
+                    : true;
+                  const redispatched =
+                    interrupted &&
+                    (yield* dispatchRecovery({
+                      type: "thread.turn.start",
+                      commandId: CommandId.makeUnsafe(recoveryCommandId("redispatch")),
+                      threadId: worker.threadId,
+                      message: {
+                        messageId: MessageId.makeUnsafe(
+                          `${recoveryCommandId("redispatch")}:message`,
+                        ),
+                        role: "user",
+                        text: prompt,
+                        attachments: [],
+                      },
+                      dispatchMode: "queue",
+                      dispatchOrigin: "automation",
+                      runtimeMode: shell.runtimeMode,
+                      interactionMode: shell.interactionMode,
+                      createdAt: nowIso,
+                    }));
+                  if (redispatched) {
+                    updated = {
+                      ...updated,
+                      recoveryStep: 2,
+                      nudgeAt: nowIso,
+                      recoveriesUsed: updated.recoveriesUsed + 1,
+                    };
+                    yield* ingestHealthEvent(
+                      `worker-health:${worker.threadId}:redispatched:${lastActivity}`,
+                      "worker.recovery-redispatched",
+                    );
+                  }
+                }
+              } else if (
+                updated.recoveryStep === 2 &&
+                updated.nudgeAt !== null &&
+                nowMs - Date.parse(updated.nudgeAt) > WORKER_STUCK_RUNNING_QUIET_MS
+              ) {
+                // The re-dispatch produced no events within a full quiet
+                // window — that stall counts as another episode of the same
+                // chain and either starts a new cycle or, at the cap, flags
+                // the worker "Waiting on you".
+                updated = { ...updated, recoveryStep: 0 };
+                if (updated.recoveriesUsed >= WORKER_RECOVERY_MAX_ATTEMPTS) {
+                  yield* latchNeedsYou;
+                }
+              }
+            }
           } else if (updated.stuckKind === "silent") {
-            updated = { ...updated, stuckKind: null, stuckSince: null };
+            updated = {
+              ...updated,
+              stuckKind: null,
+              stuckSince: null,
+              recoveryEpisode: null,
+              recoveryStep: 0,
+              nudgeAt: null,
+            };
           }
         }
       }
@@ -4369,7 +4602,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
           }
           // Every coordinator-created thread is a tracked worker — the durable
           // record drives settle rows, the batch roll-up, and stuck detection
-          // even when no active goal produced a task for it.
+          // even when no active goal produced a task for it. The task prompt
+          // is stored so the stall-recovery ladder can re-dispatch it after a
+          // restart without re-reading the thread.
           yield* repository
             .upsertManagedWorker({
               projectId: principal.projectId,
@@ -4383,6 +4618,13 @@ export const makeProjectAgentService = Effect.gen(function* () {
               waitingSince: null,
               stuckKind: null,
               stuckSince: null,
+              taskPrompt: input.prompts?.[index] ?? null,
+              recoveryEpisode: null,
+              recoveryStep: 0,
+              nudgeAt: null,
+              recoveriesUsed: 0,
+              needsYou: false,
+              needsYouAt: null,
               createdAt: now,
               updatedAt: now,
             })
@@ -4684,15 +4926,39 @@ export const makeProjectAgentService = Effect.gen(function* () {
           .pipe(Effect.mapError(toServiceError("Failed to load coordinator for event.")));
         if (Option.isNone(config) || !config.value.enabled) return;
         if (Option.isSome(configByCoordinator)) {
+          // Coordinator self-events never wake coordination. Automation
+          // "check-in" turns additionally stay out of the coordinator
+          // transcript entirely — the activity log records what each check-in
+          // concluded instead.
+          let summary = "Coordinator self-events do not wake coordination.";
+          let kind: ProjectActivityKind = "wake-skipped";
+          if (input.eventType === "thread.turn-diff-completed" && input.turnId !== undefined) {
+            const detail = yield* snapshotQuery
+              .getThreadDetailById(input.threadId)
+              .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+            const checkin = Option.isSome(detail)
+              ? coordinatorCheckinTurnReport({
+                  messages: detail.value.messages,
+                  turnId: input.turnId,
+                })
+              : null;
+            if (checkin !== null) {
+              kind = "coordinator-checkin";
+              summary =
+                checkin.silent || checkin.replyText === null
+                  ? "Coordinator check-in: nothing to report."
+                  : `Coordinator check-in: ${checkin.replyText.trim().slice(0, 500)}`;
+            }
+          }
           yield* appendActivity({
             projectId,
-            kind: "wake-skipped",
+            kind,
             actorKind: "system",
             actorThreadId: input.threadId,
             goalId: null,
             taskId: null,
             source: null,
-            summary: "Coordinator self-events do not wake coordination.",
+            summary,
             createdAt: input.createdAt,
           });
           // Coordinator turns still change what the digest should say (tasks

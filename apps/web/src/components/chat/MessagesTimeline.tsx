@@ -1668,54 +1668,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const isTailContentRow = row.id === tailContentRowId;
           const showCrossTaskOrigin =
             crossTaskOrigin !== null && row.message.id === firstUserMessageId;
-          // Automation check-ins posted into the coordinator conversation are
-          // system dispatches, not user speech — render them as a compact
-          // system row with the raw automation prompt behind "Show details"
-          // instead of a user bubble.
-          if (
-            conversationOnly &&
-            resolveUserTurnMarker({
-              dispatchMode: row.message.dispatchMode,
-              dispatchOrigin: row.message.dispatchOrigin,
-            }) === "automation"
-          ) {
-            return (
-              <div
-                className="flex w-full flex-col items-center gap-1.5"
-                data-chat-find-document-id={row.message.id}
-              >
-                <button
-                  type="button"
-                  className={cn(
-                    "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 transition-colors hover:bg-muted/40",
-                    MUTED_LABEL_TEXT_CLASS_NAME,
-                  )}
-                  aria-expanded={userMessageExpanded}
-                  onClick={() => {
-                    setExpandedUserMessagesById((previous) => ({
-                      ...previous,
-                      [row.message.id]: !(previous[row.message.id] ?? false),
-                    }));
-                  }}
-                >
-                  <ClockIcon className="size-3 shrink-0" aria-hidden />
-                  <span>Coordinator check-in</span>
-                  <span className="tabular-nums text-muted-foreground/60">
-                    {formatDayAwareTimestamp(row.message.createdAt, timestampFormat)}
-                  </span>
-                  <DisclosureChevron open={userMessageExpanded} className="size-3" />
-                  <span className="underline decoration-muted-foreground/40 underline-offset-2">
-                    {userMessageExpanded ? "Hide details" : "Show details"}
-                  </span>
-                </button>
-                <DisclosureRegion open={userMessageExpanded} className="w-full max-w-[36rem]">
-                  <p className="whitespace-pre-wrap break-words rounded-lg bg-muted/30 px-3 py-2 text-left font-system-ui text-ui-sm text-muted-foreground">
-                    {userMessageText}
-                  </p>
-                </DisclosureRegion>
-              </div>
-            );
-          }
           return (
             <div className="flex w-full flex-col gap-3">
               {showCrossTaskOrigin ? (

@@ -379,6 +379,10 @@
     "./groupThreadState": {
       "types": "./src/groupThreadState.ts",
       "import": "./src/groupThreadState.ts"
+    },
+    "./coordinatorCheckin": {
+      "types": "./src/coordinatorCheckin.ts",
+      "import": "./src/coordinatorCheckin.ts"
     }
   },
   "scripts": {

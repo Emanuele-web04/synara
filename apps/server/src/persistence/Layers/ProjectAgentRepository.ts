@@ -119,6 +119,13 @@ const WorkerRow = Schema.Struct({
   waitingSince: Schema.NullOr(IsoDateTime),
   stuckKind: ProjectManagedWorker.fields.stuckKind,
   stuckSince: Schema.NullOr(IsoDateTime),
+  taskPrompt: Schema.NullOr(Schema.String),
+  recoveryEpisode: Schema.NullOr(IsoDateTime),
+  recoveryStep: Schema.Int,
+  nudgeAt: Schema.NullOr(IsoDateTime),
+  recoveriesUsed: Schema.Int,
+  needsYou: Schema.Int,
+  needsYouAt: Schema.NullOr(IsoDateTime),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -180,7 +187,7 @@ function toGoal(row: typeof GoalRow.Type): ProjectGoal {
 }
 
 function toWorker(row: typeof WorkerRow.Type): ProjectManagedWorker {
-  return { ...row };
+  return { ...row, needsYou: row.needsYou === 1 };
 }
 
 const makeProjectAgentRepository = Effect.gen(function* () {
@@ -1554,11 +1561,16 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         INSERT INTO project_agent_managed_workers (
           project_id, thread_id, batch_id, request_id, title, task_id,
           settled_at, settle_outcome, waiting_since, stuck_kind, stuck_since,
+          task_prompt, recovery_episode, recovery_step, nudge_at, recoveries_used,
+          needs_you, needs_you_at,
           created_at, updated_at
         ) VALUES (
           ${worker.projectId}, ${worker.threadId}, ${worker.batchId}, ${worker.requestId},
           ${worker.title}, ${worker.taskId}, ${worker.settledAt}, ${worker.settleOutcome},
           ${worker.waitingSince}, ${worker.stuckKind}, ${worker.stuckSince},
+          ${worker.taskPrompt}, ${worker.recoveryEpisode}, ${worker.recoveryStep},
+          ${worker.nudgeAt}, ${worker.recoveriesUsed},
+          ${worker.needsYou ? 1 : 0}, ${worker.needsYouAt},
           ${worker.createdAt}, ${worker.updatedAt}
         )
         ON CONFLICT (project_id, thread_id) DO UPDATE SET
@@ -1571,6 +1583,13 @@ const makeProjectAgentRepository = Effect.gen(function* () {
           waiting_since = excluded.waiting_since,
           stuck_kind = excluded.stuck_kind,
           stuck_since = excluded.stuck_since,
+          task_prompt = COALESCE(excluded.task_prompt, project_agent_managed_workers.task_prompt),
+          recovery_episode = excluded.recovery_episode,
+          recovery_step = excluded.recovery_step,
+          nudge_at = excluded.nudge_at,
+          recoveries_used = excluded.recoveries_used,
+          needs_you = excluded.needs_you,
+          needs_you_at = excluded.needs_you_at,
           updated_at = excluded.updated_at
       `.pipe(
         Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.upsertManagedWorker")),
@@ -1586,7 +1605,11 @@ const makeProjectAgentRepository = Effect.gen(function* () {
             request_id AS "requestId", title, task_id AS "taskId",
             settled_at AS "settledAt", settle_outcome AS "settleOutcome",
             waiting_since AS "waitingSince", stuck_kind AS "stuckKind",
-            stuck_since AS "stuckSince", created_at AS "createdAt", updated_at AS "updatedAt"
+            stuck_since AS "stuckSince", task_prompt AS "taskPrompt",
+            recovery_episode AS "recoveryEpisode", recovery_step AS "recoveryStep",
+            nudge_at AS "nudgeAt", recoveries_used AS "recoveriesUsed",
+            needs_you AS "needsYou", needs_you_at AS "needsYouAt",
+            created_at AS "createdAt", updated_at AS "updatedAt"
           FROM project_agent_managed_workers
           WHERE thread_id = ${threadId}
         `,
@@ -1609,7 +1632,11 @@ const makeProjectAgentRepository = Effect.gen(function* () {
             request_id AS "requestId", title, task_id AS "taskId",
             settled_at AS "settledAt", settle_outcome AS "settleOutcome",
             waiting_since AS "waitingSince", stuck_kind AS "stuckKind",
-            stuck_since AS "stuckSince", created_at AS "createdAt", updated_at AS "updatedAt"
+            stuck_since AS "stuckSince", task_prompt AS "taskPrompt",
+            recovery_episode AS "recoveryEpisode", recovery_step AS "recoveryStep",
+            nudge_at AS "nudgeAt", recoveries_used AS "recoveriesUsed",
+            needs_you AS "needsYou", needs_you_at AS "needsYouAt",
+            created_at AS "createdAt", updated_at AS "updatedAt"
           FROM project_agent_managed_workers
           WHERE project_id = ${projectId}
           ORDER BY created_at ASC, thread_id ASC
@@ -1630,7 +1657,11 @@ const makeProjectAgentRepository = Effect.gen(function* () {
             request_id AS "requestId", title, task_id AS "taskId",
             settled_at AS "settledAt", settle_outcome AS "settleOutcome",
             waiting_since AS "waitingSince", stuck_kind AS "stuckKind",
-            stuck_since AS "stuckSince", created_at AS "createdAt", updated_at AS "updatedAt"
+            stuck_since AS "stuckSince", task_prompt AS "taskPrompt",
+            recovery_episode AS "recoveryEpisode", recovery_step AS "recoveryStep",
+            nudge_at AS "nudgeAt", recoveries_used AS "recoveriesUsed",
+            needs_you AS "needsYou", needs_you_at AS "needsYouAt",
+            created_at AS "createdAt", updated_at AS "updatedAt"
           FROM project_agent_managed_workers
           WHERE project_id = ${projectId} AND batch_id = ${batchId}
           ORDER BY created_at ASC, thread_id ASC

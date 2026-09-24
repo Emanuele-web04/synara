@@ -4977,3 +4977,106 @@ describe("deriveWorkLogEntries Codex find regression", () => {
     });
   });
 });
+
+describe("deriveTimelineEntries coordinator check-in suppression", () => {
+  const checkinTurnId = TurnId.makeUnsafe("turn-checkin-1");
+  const ordinaryTurnId = TurnId.makeUnsafe("turn-ordinary-1");
+  const messages: ChatMessage[] = [
+    {
+      id: MessageId.makeUnsafe("human-1"),
+      role: "user",
+      text: "Keep an eye on the workers",
+      createdAt: "2026-09-20T00:00:00Z",
+      streaming: false,
+    },
+    {
+      id: MessageId.makeUnsafe("checkin-prompt"),
+      role: "user",
+      text: "[automation] Hourly heartbeat",
+      dispatchOrigin: "automation",
+      turnId: checkinTurnId,
+      createdAt: "2026-09-20T01:00:00Z",
+      streaming: false,
+    },
+    {
+      id: MessageId.makeUnsafe("checkin-reply"),
+      role: "assistant",
+      text: "SILENT",
+      turnId: checkinTurnId,
+      createdAt: "2026-09-20T01:00:30Z",
+      streaming: false,
+    },
+    {
+      id: MessageId.makeUnsafe("ordinary-reply"),
+      role: "assistant",
+      text: "On it",
+      turnId: ordinaryTurnId,
+      createdAt: "2026-09-20T02:00:00Z",
+      streaming: false,
+    },
+  ];
+  const checkinTool = {
+    id: "checkin-tool",
+    turnId: checkinTurnId,
+    createdAt: "2026-09-20T01:00:10Z",
+    tone: "tool" as const,
+    label: "Read inbox",
+  };
+  const ordinaryTool = {
+    id: "ordinary-tool",
+    turnId: ordinaryTurnId,
+    createdAt: "2026-09-20T02:00:10Z",
+    tone: "tool" as const,
+    label: "Listed workers",
+  };
+  const checkinPlan = {
+    id: "checkin-plan",
+    turnId: checkinTurnId,
+    planMarkdown: "# Check-in plan",
+    implementedAt: null,
+    implementationThreadId: null,
+    createdAt: "2026-09-20T01:00:20Z",
+    updatedAt: "2026-09-20T01:00:20Z",
+  };
+
+  it("hides the whole silent check-in turn — prompt, reply, work and plan rows", () => {
+    const entries = deriveTimelineEntries(messages, [checkinPlan], [checkinTool, ordinaryTool], {
+      suppressCoordinatorCheckins: true,
+    });
+    expect(entries.map((entry) => entry.id)).toEqual([
+      "human-1",
+      "ordinary-reply",
+      "ordinary-tool",
+    ]);
+  });
+
+  it("keeps a non-silent check-in reply as a bare coordinator message", () => {
+    const withReport: ChatMessage[] = messages.map((message) =>
+      message.id === MessageId.makeUnsafe("checkin-reply")
+        ? { ...message, text: "Worker beta failed — needs a look." }
+        : message,
+    );
+    const entries = deriveTimelineEntries(withReport, [checkinPlan], [checkinTool], {
+      suppressCoordinatorCheckins: true,
+    });
+    expect(entries.map((entry) => entry.id)).toEqual([
+      "human-1",
+      "checkin-reply",
+      "ordinary-reply",
+    ]);
+  });
+
+  it("leaves every row alone without the suppression option", () => {
+    const entries = deriveTimelineEntries(messages, [checkinPlan], [checkinTool]);
+    expect(new Set(entries.map((entry) => entry.id))).toEqual(
+      new Set([
+        "human-1",
+        "checkin-prompt",
+        "checkin-reply",
+        "checkin-tool",
+        "checkin-plan",
+        "ordinary-reply",
+      ]),
+    );
+  });
+});

@@ -1735,8 +1735,16 @@ export default function ChatView({
         timelineMessages,
         activeThread?.proposedPlans ?? [],
         agentActivityTimelineState.timelineWorkEntries,
+        // Coordinator check-in turns run in the background and never appear
+        // in this transcript — their outcomes live in the group activity log.
+        { suppressCoordinatorCheckins: isCoordinatorConversation },
       ),
-    [activeThread?.proposedPlans, agentActivityTimelineState.timelineWorkEntries, timelineMessages],
+    [
+      activeThread?.proposedPlans,
+      agentActivityTimelineState.timelineWorkEntries,
+      isCoordinatorConversation,
+      timelineMessages,
+    ],
   );
   const enteringUserMessageIds = useMemo<ReadonlySet<MessageId>>(
     () => new Set(optimisticUserMessages.map((message) => message.id)),

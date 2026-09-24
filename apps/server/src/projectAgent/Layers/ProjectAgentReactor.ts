@@ -2,7 +2,10 @@ import type { OrchestrationEvent, ProjectId, ThreadId } from "@synara/contracts"
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
 import { Cause, Duration, Effect, Layer, Schedule, Stream } from "effect";
 
-import { PROJECT_AGENT_WORKER_HEALTH_INTERVAL_MS } from "../workerHealth.ts";
+import {
+  PROJECT_AGENT_WORKER_HEALTH_INTERVAL_MS,
+  WORKER_RECOVERY_COMMAND_PREFIX,
+} from "../workerHealth.ts";
 
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectAgentReactor } from "../Services/ProjectAgentReactor.ts";
@@ -48,12 +51,21 @@ const make = Effect.gen(function* () {
         return;
       }
       if (!SETTLE_EVENT_TYPES.has(event.type)) return;
+      // The recovery ladder's own dispatches (queued steer interrupts, the
+      // explicit interrupt) must not settle the worker — an "interrupted"
+      // outcome would end the episode it is trying to fix.
+      if (event.commandId !== null && event.commandId.startsWith(WORKER_RECOVERY_COMMAND_PREFIX)) {
+        return;
+      }
       const payload = event.payload;
       if (!("threadId" in payload)) return;
       yield* projectAgent.ingestSettledThreadEvent({
         threadId: payload.threadId as ThreadId,
         sourceEventId: `${event.sequence}:${event.type}`,
         eventType: event.type,
+        ...("turnId" in payload && typeof payload.turnId === "string"
+          ? { turnId: payload.turnId }
+          : {}),
         createdAt: new Date().toISOString(),
       });
     }).pipe(

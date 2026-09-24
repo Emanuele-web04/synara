@@ -79,7 +79,12 @@ function makeTestLayer(options?: {
     {
       projectId: ProjectId;
       title: string;
-      session: { status: string; updatedAt: string; lastError: string | null } | null;
+      session: {
+        status: string;
+        updatedAt: string;
+        lastError: string | null;
+        activeTurnId?: string | null;
+      } | null;
       latestTurn?: {
         state: string;
         startedAt?: string;
@@ -141,6 +146,20 @@ function makeTestLayer(options?: {
       }),
     );
   };
+  // Thread detail stubs for code paths that hydrate messages (worker reports,
+  // coordinator check-in classification). Shells alone are enough elsewhere.
+  const threadDetails: Record<
+    string,
+    {
+      messages: Array<{
+        id: string;
+        role: string;
+        text: string;
+        turnId?: string | null;
+        dispatchOrigin?: string | null;
+      }>;
+    }
+  > = {};
   const dispatched: OrchestrationCommand[] = [];
   const automationDefinitions: Array<{
     readonly id: string;
@@ -267,7 +286,12 @@ function makeTestLayer(options?: {
             return shells;
           }) as ReturnType<ProjectionSnapshotQuery["Service"]["getProjectShellsByIds"]>;
         },
-        getThreadDetailById: () => Effect.succeed(Option.none()),
+        getThreadDetailById: (threadId: ThreadId) =>
+          Effect.succeed(
+            threadId in threadDetails
+              ? Option.some(threadDetails[threadId] as never)
+              : Option.none(),
+          ),
         getThreadShellById,
         getThreadShellsByIds: (threadIds: ReadonlyArray<ThreadId>) =>
           Effect.forEach(threadIds, getThreadShellById).pipe(
@@ -357,6 +381,7 @@ function makeTestLayer(options?: {
     automationRuns,
     digestGenerationInputs,
     threadShells,
+    threadDetails,
     shellBatchCalls: () => shellBatchCalls,
     layer: ProjectAgentServiceLive.pipe(
       Layer.provide(snapshotLayer),
@@ -4420,25 +4445,26 @@ it.effect("flags quiet and overdue workers once per episode", () => {
       threadIds: [quietThread, waitingThread],
       titles: ["Quiet worker", "Waiting worker"],
     });
-    // Running silent past the quiet threshold.
+    // Running silent past the quiet threshold (TestClock starts at the unix
+    // epoch — last activity at epoch goes quiet 10 minutes in).
     harness.threadShells[quietThread] = {
       projectId: groupId,
       title: "Quiet worker",
-      session: { status: "running", updatedAt: "2020-01-01T00:00:00.000Z", lastError: null },
-      latestTurn: { state: "running", startedAt: "2020-01-01T00:00:00.000Z" },
+      session: { status: "running", updatedAt: "1970-01-01T00:00:00.000Z", lastError: null },
+      latestTurn: { state: "running", startedAt: "1970-01-01T00:00:00.000Z" },
     };
     // Waiting on an approval since before the waiting threshold.
     harness.threadShells[waitingThread] = {
       projectId: groupId,
       title: "Waiting worker",
-      session: { status: "ready", updatedAt: now, lastError: null },
+      session: { status: "ready", updatedAt: "1970-01-01T00:00:00.000Z", lastError: null },
       hasPendingApprovals: true,
     };
     yield* service.ingestSettledThreadEvent({
       threadId: waitingThread,
       sourceEventId: "stuck-waiting-approval",
       eventType: "thread.approval-response-requested",
-      createdAt: "2020-01-01T00:00:00.000Z",
+      createdAt: "1970-01-01T00:00:00.000Z",
     });
     harness.dispatched.length = 0;
 
@@ -4448,12 +4474,19 @@ it.effect("flags quiet and overdue workers once per episode", () => {
           command.type === "thread.activity.append" &&
           command.activity.kind === "synara.worker.stuck",
       );
+    yield* TestClock.adjust("11 minutes");
     yield* service.inspectWorkerHealth();
-    assert.equal(stuckRows().length, 2);
+    // The quiet worker reports silent and takes the ladder's first step (an
+    // automatic nudge); the waiting worker reports overdue.
+    assert.equal(stuckRows().length, 3);
     const summaries = new Set(
       stuckRows().map((row) => (row.type === "thread.activity.append" ? row.activity.summary : "")),
     );
     assert.equal(summaries.has("⚠ Quiet worker has not reported for over 10 minutes"), true);
+    assert.equal(
+      summaries.has("⚠ Quiet worker was nudged after 10 minutes without progress"),
+      true,
+    );
     assert.equal(summaries.has("⚠ Waiting worker has been waiting for over 5 minutes"), true);
     const quiet = yield* repository.findManagedWorkerByThread(quietThread);
     assert.equal(Option.isSome(quiet) ? quiet.value.stuckKind : null, "silent");
@@ -4462,8 +4495,8 @@ it.effect("flags quiet and overdue workers once per episode", () => {
 
     // Same episode, same dedupe keys: a second pass posts nothing new.
     yield* service.inspectWorkerHealth();
-    assert.equal(stuckRows().length, 2);
-  }).pipe(Effect.provide(harness.layer));
+    assert.equal(stuckRows().length, 3);
+  }).pipe(Effect.provide(Layer.merge(harness.layer, TestClock.layer())));
 });
 
 it.effect("reports a missing worker shell once", () => {
@@ -4496,5 +4529,293 @@ it.effect("reports a missing worker shell once", () => {
     // The settled missing worker stays quiet while its shell is still gone.
     yield* service.inspectWorkerHealth();
     assert.equal(missingRows().length, 1);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+// Programmatic stall recovery: the health loop runs the ladder off durable
+// worker-row state — it nudges a worker silent past the quiet threshold,
+// interrupts + re-dispatches the recorded task prompt after the post-nudge
+// delay, then flags it "Waiting on you" once the per-episode cap is hit.
+// Every pass re-reads the row, so a mid-episode restart resumes the same step.
+const recoveryCommands = (harness: ReturnType<typeof makeTestLayer>) =>
+  harness.dispatched.filter((command) => command.commandId.startsWith("agent-recovery:"));
+
+const stuckRowSummaries = (harness: ReturnType<typeof makeTestLayer>) =>
+  harness.dispatched
+    .filter(
+      (command) =>
+        command.type === "thread.activity.append" &&
+        command.activity.kind === "synara.worker.stuck",
+    )
+    .map((command) => (command.type === "thread.activity.append" ? command.activity.summary : ""));
+
+const quietRunningShell = (updatedAt: string) =>
+  ({
+    projectId: groupId,
+    title: "Stalled worker",
+    session: {
+      status: "running",
+      updatedAt,
+      lastError: null,
+      activeTurnId: "turn-live",
+    },
+    latestTurn: { state: "running", startedAt: updatedAt },
+  }) as const;
+
+it.effect("nudges a silent worker once per stall episode, then holds", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-nudge-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const workerThreadId = ThreadId.makeUnsafe("thread-nudge-worker");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-nudge-record",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [workerThreadId],
+      titles: ["Stalled worker"],
+    });
+    // TestClock starts at the unix epoch: last activity at epoch means the
+    // quiet threshold is reached 10 minutes in.
+    harness.threadShells[workerThreadId] = quietRunningShell("1970-01-01T00:00:00.000Z");
+    harness.dispatched.length = 0;
+
+    yield* TestClock.adjust("9 minutes");
+    yield* service.inspectWorkerHealth();
+    assert.equal(recoveryCommands(harness).length, 0);
+
+    yield* TestClock.adjust("2 minutes");
+    yield* service.inspectWorkerHealth();
+    const nudges = recoveryCommands(harness).filter(
+      (command) => command.type === "thread.turn.start",
+    );
+    assert.equal(nudges.length, 1);
+    const nudge = nudges[0]!;
+    if (nudge.type === "thread.turn.start") {
+      assert.equal(nudge.threadId, workerThreadId);
+      assert.equal(nudge.dispatchMode, "steer");
+      assert.equal(nudge.dispatchOrigin, "automation");
+      assert.equal(
+        nudge.message.text,
+        "Automatic check from the coordinator: you have produced no output for 10 minutes. Post a one-line status, then continue or report a blocker.",
+      );
+    }
+    assert.equal(
+      stuckRowSummaries(harness).includes(
+        "⚠ Stalled worker was nudged after 10 minutes without progress",
+      ),
+      true,
+    );
+    const worker = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(worker) ? worker.value.recoveryStep : null, 1);
+    assert.equal(Option.isSome(worker) ? worker.value.nudgeAt !== null : false, true);
+
+    // Same stall episode: a repeat pass dispatches nothing new.
+    yield* service.inspectWorkerHealth();
+    assert.equal(recoveryCommands(harness).length, 1);
+  }).pipe(Effect.provide(Layer.merge(harness.layer, TestClock.layer())));
+});
+
+it.effect("interrupts and re-dispatches the recorded prompt after the nudge delay", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-redispatch-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const workerThreadId = ThreadId.makeUnsafe("thread-redispatch-worker");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-redispatch-record",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [workerThreadId],
+      titles: ["Stalled worker"],
+      prompts: ["Draft the schema migration"],
+    });
+    harness.threadShells[workerThreadId] = quietRunningShell("1970-01-01T00:00:00.000Z");
+    harness.dispatched.length = 0;
+
+    yield* TestClock.adjust("11 minutes");
+    yield* service.inspectWorkerHealth();
+    assert.equal(recoveryCommands(harness).length, 1);
+    // The persisted step-1 state is all the next pass needs — the same call
+    // sequence resumes correctly after a server restart mid-episode.
+    const midEpisode = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(midEpisode) ? midEpisode.value.recoveryStep : null, 1);
+
+    yield* TestClock.adjust("4 minutes");
+    yield* service.inspectWorkerHealth();
+    // Only 4 minutes since the nudge: the redeliver delay has not elapsed.
+    assert.equal(recoveryCommands(harness).length, 1);
+
+    yield* TestClock.adjust("2 minutes");
+    yield* service.inspectWorkerHealth();
+    const commands = recoveryCommands(harness);
+    assert.equal(commands.filter((command) => command.type === "thread.turn.interrupt").length, 1);
+    const redispatches = commands.filter((command) => command.type === "thread.turn.start");
+    assert.equal(redispatches.length, 2);
+    const redispatch = redispatches[1]!;
+    if (redispatch.type === "thread.turn.start") {
+      assert.equal(redispatch.threadId, workerThreadId);
+      assert.equal(redispatch.dispatchMode, "queue");
+      assert.equal(redispatch.message.text, "Draft the schema migration");
+    }
+    assert.equal(
+      stuckRowSummaries(harness).includes(
+        "⚠ Stalled worker was interrupted and had its task re-dispatched",
+      ),
+      true,
+    );
+    const worker = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(worker) ? worker.value.recoveryStep : null, 2);
+    assert.equal(Option.isSome(worker) ? worker.value.recoveriesUsed : null, 1);
+
+    // Deduped within the episode: a repeat pass dispatches nothing new.
+    yield* service.inspectWorkerHealth();
+    assert.equal(recoveryCommands(harness).length, 3);
+  }).pipe(Effect.provide(Layer.merge(harness.layer, TestClock.layer())));
+});
+
+it.effect("flags the worker Waiting on you once the recovery cap is exhausted", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-cap-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const workerThreadId = ThreadId.makeUnsafe("thread-cap-worker");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-cap-record",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [workerThreadId],
+      titles: ["Stalled worker"],
+      prompts: ["Draft the schema migration"],
+    });
+    harness.threadShells[workerThreadId] = quietRunningShell("1970-01-01T00:00:00.000Z");
+    harness.dispatched.length = 0;
+
+    // Recovery 1: nudge at +11m, redispatch at +17m.
+    yield* TestClock.adjust("11 minutes");
+    yield* service.inspectWorkerHealth();
+    yield* TestClock.adjust("6 minutes");
+    yield* service.inspectWorkerHealth();
+    const workerAfterFirst = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(workerAfterFirst) ? workerAfterFirst.value.recoveriesUsed : null, 1);
+
+    // Another full quiet window: the episode chain continues (lastActivity
+    // never moved) and the next pass starts the second recovery cycle.
+    yield* TestClock.adjust("11 minutes");
+    yield* service.inspectWorkerHealth();
+    yield* service.inspectWorkerHealth();
+    yield* TestClock.adjust("6 minutes");
+    yield* service.inspectWorkerHealth();
+    const workerAfterSecond = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(
+      Option.isSome(workerAfterSecond) ? workerAfterSecond.value.recoveriesUsed : null,
+      2,
+    );
+
+    // Third stall window with the cap spent: the worker latches
+    // "Waiting on you" — needs-you row, synthetic pending input on the
+    // worker thread, and one wake for the coordinator to tell the user.
+    yield* TestClock.adjust("11 minutes");
+    yield* service.inspectWorkerHealth();
+    assert.equal(
+      stuckRowSummaries(harness).includes(
+        "✗ Stalled worker needs you — automatic recovery is exhausted",
+      ),
+      true,
+    );
+    const needsYouRequests = harness.dispatched.filter(
+      (command) =>
+        command.type === "thread.activity.append" &&
+        command.activity.kind === "user-input.requested" &&
+        command.threadId === workerThreadId,
+    );
+    assert.equal(needsYouRequests.length, 1);
+    const worker = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(worker) ? worker.value.needsYou : null, true);
+    const inbox = yield* repository.listInboxAfter({ projectId: groupId, limit: 50 });
+    assert.equal(
+      inbox.some((row) => row.eventType === "worker.needs-you" && row.eligibleWake),
+      true,
+    );
+
+    // No further automatic action while the latch holds.
+    const dispatchedBefore = harness.dispatched.length;
+    yield* service.inspectWorkerHealth();
+    assert.equal(harness.dispatched.length, dispatchedBefore);
+  }).pipe(Effect.provide(Layer.merge(harness.layer, TestClock.layer())));
+});
+
+it.effect("logs coordinator check-ins to the activity log without waking it", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-checkin-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    harness.runNowCalls.length = 0;
+
+    harness.threadDetails[coordinatorThreadId] = {
+      messages: [
+        {
+          id: "msg-checkin-user",
+          role: "user",
+          text: "[automation] Hourly heartbeat",
+          turnId: "turn-checkin-1",
+          dispatchOrigin: "automation",
+        },
+        {
+          id: "msg-checkin-assistant",
+          role: "assistant",
+          text: "SILENT",
+          turnId: "turn-checkin-1",
+        },
+      ],
+    };
+    yield* service.ingestSettledThreadEvent({
+      threadId: coordinatorThreadId,
+      sourceEventId: "checkin-silent-1",
+      eventType: "thread.turn-diff-completed",
+      createdAt: "2026-09-20T00:10:00.000Z",
+      turnId: "turn-checkin-1",
+    });
+
+    harness.threadDetails[coordinatorThreadId] = {
+      messages: [
+        {
+          id: "msg-checkin-user-2",
+          role: "user",
+          text: "[automation] Hourly heartbeat",
+          turnId: "turn-checkin-2",
+          dispatchOrigin: "automation",
+        },
+        {
+          id: "msg-checkin-assistant-2",
+          role: "assistant",
+          text: "Beta survey failed — needs a look.",
+          turnId: "turn-checkin-2",
+        },
+      ],
+    };
+    yield* service.ingestSettledThreadEvent({
+      threadId: coordinatorThreadId,
+      sourceEventId: "checkin-report-1",
+      eventType: "thread.turn-diff-completed",
+      createdAt: "2026-09-20T01:10:00.000Z",
+      turnId: "turn-checkin-2",
+    });
+
+    const activity = yield* repository.listActivity({ projectId: groupId, limit: 40 });
+    const checkinRows = activity.filter((row) => row.kind === "coordinator-checkin");
+    assert.equal(checkinRows.length, 2);
+    assert.equal(checkinRows[1]?.summary, "Coordinator check-in: nothing to report.");
+    assert.equal(
+      checkinRows[0]?.summary,
+      "Coordinator check-in: Beta survey failed — needs a look.",
+    );
+    // Check-in turns never wake the coordinator.
+    assert.equal(harness.runNowCalls.length, 0);
   }).pipe(Effect.provide(harness.layer));
 });

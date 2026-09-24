@@ -26,6 +26,7 @@ import {
   summarizeToolRawOutput,
 } from "@synara/shared/toolOutputSummary";
 import { pluralize, stripTerminalControlSequences } from "@synara/shared/text";
+import { suppressCoordinatorCheckinMessages } from "@synara/shared/coordinatorCheckin";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import {
   deriveReadableToolTitle,
@@ -2725,11 +2726,29 @@ export function deriveTimelineEntries(
   messages: ChatMessage[],
   proposedPlans: ProposedPlan[],
   workEntries: WorkLogEntry[],
+  options?: { readonly suppressCoordinatorCheckins?: boolean },
 ): TimelineEntry[] {
+  // Coordinator check-ins (automation-dispatched heartbeat/wake turns) never
+  // render: the automation prompt row, its work/plan rows bound to the check-in
+  // turn, and the reply when it is a silent "nothing to report". A non-silent
+  // reply stays as an ordinary coordinator message.
+  const checkinSuppression = options?.suppressCoordinatorCheckins
+    ? suppressCoordinatorCheckinMessages(messages)
+    : null;
+  const visibleMessages = checkinSuppression ? checkinSuppression.messages : messages;
+  const checkinTurnIds = checkinSuppression?.checkinTurnIds;
+  const visibleProposedPlans = checkinTurnIds
+    ? proposedPlans.filter((plan) => plan.turnId == null || !checkinTurnIds.has(plan.turnId))
+    : proposedPlans;
+  const visibleWorkEntries = checkinTurnIds
+    ? workEntries.filter((entry) => entry.turnId == null || !checkinTurnIds.has(entry.turnId))
+    : workEntries;
   const proposedPlanTurnIds = new Set(
-    proposedPlans.flatMap((proposedPlan) => (proposedPlan.turnId ? [proposedPlan.turnId] : [])),
+    visibleProposedPlans.flatMap((proposedPlan) =>
+      proposedPlan.turnId ? [proposedPlan.turnId] : [],
+    ),
   );
-  const messageRows: TimelineEntry[] = messages.flatMap((message): TimelineEntry[] => {
+  const messageRows: TimelineEntry[] = visibleMessages.flatMap((message): TimelineEntry[] => {
     const displayMessage =
       message.role === "assistant" && message.turnId && proposedPlanTurnIds.has(message.turnId)
         ? { ...message, text: stripProposedPlanBlocksFromText(message.text) }
@@ -2772,13 +2791,13 @@ export function deriveTimelineEntries(
       },
     ];
   });
-  const proposedPlanRows: TimelineEntry[] = proposedPlans.map((proposedPlan) => ({
+  const proposedPlanRows: TimelineEntry[] = visibleProposedPlans.map((proposedPlan) => ({
     id: proposedPlan.id,
     kind: "proposed-plan",
     createdAt: proposedPlan.createdAt,
     proposedPlan,
   }));
-  const workRows: TimelineEntry[] = workEntries.map((entry) => ({
+  const workRows: TimelineEntry[] = visibleWorkEntries.map((entry) => ({
     id: entry.id,
     kind: "work",
     createdAt: entry.createdAt,
@@ -2791,13 +2810,13 @@ export function deriveTimelineEntries(
   const userStarts: string[] = [];
   const messageOrder = new Map<string, number>();
   const turnOrder = new Map<string, number>();
-  const messagesOrdered = messages.every(
+  const messagesOrdered = visibleMessages.every(
     (message, index) =>
-      index === 0 || messages[index - 1]!.createdAt.localeCompare(message.createdAt) <= 0,
+      index === 0 || visibleMessages[index - 1]!.createdAt.localeCompare(message.createdAt) <= 0,
   );
   const orderedMessages = messagesOrdered
-    ? messages
-    : messages.toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
+    ? visibleMessages
+    : visibleMessages.toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
   for (const message of orderedMessages) {
     // Effective dispatch semantics are recorded before an emulated steer waits
     // for interruption/promotion. Fall back to turn binding for events written

@@ -262,6 +262,7 @@ export const ProjectActivityKind = Schema.Literals([
   "digest-failed",
   "wake-enqueued",
   "wake-skipped",
+  "coordinator-checkin",
   "error",
 ]);
 export type ProjectActivityKind = typeof ProjectActivityKind.Type;
@@ -372,6 +373,19 @@ export const ProjectManagedWorker = Schema.Struct({
   waitingSince: Schema.NullOr(IsoDateTime),
   stuckKind: Schema.NullOr(ProjectManagedWorkerStuckKind),
   stuckSince: Schema.NullOr(IsoDateTime),
+  /** Task prompt recorded at creation so the stall-recovery ladder can
+   * re-dispatch it durably after a restart. */
+  taskPrompt: Schema.NullOr(Schema.String),
+  /** Stall-recovery ladder state, all durable. `recoveryEpisode` keys the
+   * active silent episode (its `stuckSince` value); `recoveryStep` is the
+   * furthest step attempted for it (0 none, 1 nudged, 2 re-dispatched);
+   * `recoveriesUsed` is the lifetime count feeding the per-thread cap. */
+  recoveryEpisode: Schema.NullOr(IsoDateTime),
+  recoveryStep: Schema.Int,
+  nudgeAt: Schema.NullOr(IsoDateTime),
+  recoveriesUsed: Schema.Int,
+  needsYou: Schema.Boolean,
+  needsYouAt: Schema.NullOr(IsoDateTime),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });

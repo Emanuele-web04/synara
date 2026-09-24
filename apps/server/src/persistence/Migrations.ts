@@ -131,6 +131,7 @@ import Migration0112 from "./Migrations/112_CoordinatorAppearance.ts";
 import Migration0113 from "./Migrations/113_ProjectAgentWakeCursor.ts";
 import Migration0114 from "./Migrations/114_ProjectAgentLifecycle.ts";
 import Migration0115 from "./Migrations/115_ProjectAgentManagedWorkers.ts";
+import Migration0116 from "./Migrations/116_ProjectAgentWorkerRecovery.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -262,6 +263,7 @@ export const migrationEntries = [
   [113, "ProjectAgentWakeCursor", Migration0113],
   [114, "ProjectAgentLifecycle", Migration0114],
   [115, "ProjectAgentManagedWorkers", Migration0115],
+  [116, "ProjectAgentWorkerRecovery", Migration0116],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
