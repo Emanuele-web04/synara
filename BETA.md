@@ -268,7 +268,7 @@ Promote a feature to Stable by deleting its entry; every gate resolves itself.
 
 OMP (`"omp"`) is currently the only entry. On Stable the server treats OMP as
 disabled — sessions, automations, and commit-message generation refuse it with
-"OMP is available in Synara Beta." — while the user's saved OMP setting is left
+"Oh My Pi is available in Synara Beta." — while the user's saved OMP setting is left
 untouched on disk. The web hides OMP from Settings > Providers, onboarding, and
 the provider pickers; existing OMP threads still render but cannot continue on
 Stable.
