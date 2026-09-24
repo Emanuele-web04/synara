@@ -186,6 +186,17 @@ describe("ComputerSetupRequiredCard", () => {
     expect(markup).toContain("Computer access has not been checked");
   });
 
+  it("offers no Set up while the server is still finding its desktop", () => {
+    const markup = renderToStaticMarkup(
+      <ComputerSetupRequiredCard
+        status={status({ kind: "checking", message: "Finding the desktop." })}
+        onSetUp={() => undefined}
+      />,
+    );
+    expect(markup).toContain("Finding the desktop.");
+    expect(markup).not.toContain("Set up");
+  });
+
   it("disables setup while the shared request is pending", () => {
     const markup = renderToStaticMarkup(
       <ComputerSetupRequiredCard isPending onSetUp={() => undefined} />,

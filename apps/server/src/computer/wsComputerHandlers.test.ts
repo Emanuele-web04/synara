@@ -6,6 +6,7 @@ import { ComputerManager } from "./ComputerManager.ts";
 import { desktopOperationSignal, withDesktopOperationSignal } from "./DesktopOperationQueue.ts";
 import { FakeComputerBackend } from "./FakeComputerBackend.ts";
 import { makeWsComputerHandlers } from "./wsComputerHandlers.ts";
+import { isPaneInput } from "./paneInput.ts";
 
 function setup() {
   const backend = new FakeComputerBackend();
@@ -146,6 +147,39 @@ describe("computer WebSocket handlers", () => {
       (method) => method !== COMPUTER_WS_METHODS.subscribeEvents,
     );
     expect(Object.keys(handlers).toSorted()).toEqual(expected.toSorted());
+  });
+
+  it("marks every input route from the pane as the human's pane input", async () => {
+    const { backend, handlers } = setup();
+    const marked: Record<string, boolean> = {};
+    for (const method of ["typeText", "pressKey", "hotkey", "click", "scroll"] as const) {
+      const original = backend[method].bind(backend) as (...args: never[]) => Promise<unknown>;
+      Object.assign(backend, {
+        [method]: (...args: never[]) => {
+          marked[method] = isPaneInput();
+          return original(...args);
+        },
+      });
+    }
+
+    await Effect.runPromise(handlers[COMPUTER_WS_METHODS.typeText]({ text: "hi" }));
+    await Effect.runPromise(handlers[COMPUTER_WS_METHODS.pressKey]({ key: "enter" }));
+    await Effect.runPromise(
+      handlers[COMPUTER_WS_METHODS.inputKey]({ key: "a", modifiers: ["ctrl"] }),
+    );
+    await Effect.runPromise(handlers[COMPUTER_WS_METHODS.inputClick]({ x: 10, y: 20 }));
+    await Effect.runPromise(
+      handlers[COMPUTER_WS_METHODS.inputScroll]({ x: 10, y: 20, deltaX: 0, deltaY: 80 }),
+    );
+
+    expect(marked).toEqual({
+      typeText: true,
+      pressKey: true,
+      hotkey: true,
+      click: true,
+      scroll: true,
+    });
+    expect(isPaneInput()).toBe(false);
   });
 
   it("sends a pane click straight to the backend coordinate path", async () => {

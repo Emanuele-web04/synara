@@ -8,16 +8,28 @@ const unavailable = (windowReason: NonNullable<ComputerLaunchAppResult["windowRe
   windowReason,
 });
 
+/**
+ * What the launch itself established about the process it started.
+ *
+ * `pid` alone is the historical rule and stays exact: a window of that
+ * process, and no other. `appId` is a backend's statement that the pid may be
+ * a launcher's — flatpak, `gio launch` and single-instance apps hand the
+ * window to a different process — so a window of that app identity counts
+ * too, as does the launch name, whenever no window carries the pid.
+ */
+export interface LaunchedWindowTarget {
+  readonly pid?: number;
+  readonly appId?: string;
+  readonly checkInputReady?: (windowId: string) => Promise<void>;
+}
+
 /** Match an app name/path conservatively; ambiguity never picks a window. */
 export async function waitForWindow(
   read: () => Promise<readonly ComputerWindow[]>,
   app: string,
   timeoutMs: number,
   signal?: AbortSignal,
-  target?: {
-    readonly pid?: number;
-    readonly checkInputReady?: (windowId: string) => Promise<void>;
-  },
+  target?: LaunchedWindowTarget,
 ): Promise<Pick<ComputerLaunchAppResult, "window" | "windowStatus" | "windowReason">> {
   // A hung list/AX probe must not defeat the readiness polling budget. Abort
   // only this read-only phase; the launch has already been sent and is never
@@ -56,23 +68,13 @@ async function probeWindow(
   app: string,
   timeoutMs: number,
   signal: AbortSignal,
-  target:
-    | { readonly pid?: number; readonly checkInputReady?: (windowId: string) => Promise<void> }
-    | undefined,
+  target: LaunchedWindowTarget | undefined,
 ): Promise<Pick<ComputerLaunchAppResult, "window" | "windowStatus" | "windowReason">> {
-  const name = app
-    .split(/[\\/]/)
-    .at(-1)
-    ?.replace(/\.app$/i, "")
-    .toLocaleLowerCase();
+  const name = launchName(app);
   const deadline = performance.now() + Math.min(2_000, Math.max(0, timeoutMs));
   while (true) {
     signal?.throwIfAborted();
-    const matches = (await read()).filter((window) =>
-      target?.pid !== undefined
-        ? window.pid === target.pid
-        : window.appName?.toLocaleLowerCase() === name,
-    );
+    const matches = launchedWindows(await read(), name, target);
     signal?.throwIfAborted();
     // Titles, visibility and size do not prove which same-app window is the
     // requested document. Keep the choice explicit when siblings exist.
@@ -99,4 +101,51 @@ async function probeWindow(
     if (remaining <= 0) return unavailable(reason ?? "input_unavailable");
     await delay(Math.min(150, remaining), undefined, { signal });
   }
+}
+
+function launchName(app: string): string | undefined {
+  return app
+    .split(/[\\/]/)
+    .at(-1)
+    ?.replace(/\.app$/i, "")
+    .toLocaleLowerCase();
+}
+
+/** A desktop entry id names its app with or without the `.desktop` suffix. */
+function withoutDesktopSuffix(name: string | undefined): string | undefined {
+  return name?.replace(/\.desktop$/i, "");
+}
+
+/**
+ * The windows this launch may have produced. Without an app identity the rule
+ * is the one every backend always had: the pid when the launch reported one,
+ * else the launch name against `appName`. With one, the pid still wins when any
+ * window carries it — it is the stronger proof — and otherwise the identity or
+ * the launch name may match, because the reported pid then belongs to a
+ * process that was only ever going to hand the window on.
+ */
+function launchedWindows(
+  windows: readonly ComputerWindow[],
+  name: string | undefined,
+  target: LaunchedWindowTarget | undefined,
+): readonly ComputerWindow[] {
+  const pid = target?.pid;
+  if (target?.appId === undefined) {
+    return windows.filter((window) =>
+      pid !== undefined ? window.pid === pid : window.appName?.toLocaleLowerCase() === name,
+    );
+  }
+  if (pid !== undefined) {
+    const byPid = windows.filter((window) => window.pid === pid);
+    if (byPid.length > 0) return byPid;
+  }
+  const names = new Set(
+    [withoutDesktopSuffix(launchName(target.appId)), withoutDesktopSuffix(name)].filter(
+      (entry): entry is string => entry !== undefined && entry.length > 0,
+    ),
+  );
+  return windows.filter((window) => {
+    const appName = withoutDesktopSuffix(window.appName?.toLocaleLowerCase());
+    return appName !== undefined && names.has(appName);
+  });
 }
