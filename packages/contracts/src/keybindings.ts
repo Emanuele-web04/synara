@@ -74,6 +74,8 @@ export const STATIC_KEYBINDING_COMMANDS = [
   "editor.openFavorite",
   "editor.file.save",
   "git.commitAndPush",
+  "search.files",
+  "search.snippets",
 ] as const;
 
 // Shared list of numbered thread-jump commands used by the web shortcut UI.

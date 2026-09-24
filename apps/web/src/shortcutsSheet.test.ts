@@ -61,6 +61,16 @@ describe("buildShortcutSheetSections", () => {
     ).toBe(true);
     expect(
       sections[0]?.entries.some(
+        (entry) => entry.id === "search.files" && entry.shortcutLabel === "⌘P",
+      ),
+    ).toBe(true);
+    expect(
+      sections[0]?.entries.some(
+        (entry) => entry.id === "search.snippets" && entry.shortcutLabel === "⇧⌘F",
+      ),
+    ).toBe(true);
+    expect(
+      sections[0]?.entries.some(
         (entry) => entry.id === "sidebar.activity" && entry.shortcutLabel === "⌥⌘U",
       ),
     ).toBe(true);

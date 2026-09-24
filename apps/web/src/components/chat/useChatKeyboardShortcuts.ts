@@ -13,6 +13,7 @@ import { isElectron } from "../../env";
 import { resolveShortcutCommand } from "../../keybindings";
 import { isEditableEventTarget } from "../../lib/editableEventTarget";
 import { isTerminalFocused } from "../../lib/terminalFocus";
+import type { WorkspaceSearchPaletteMode } from "../WorkspaceSearchPalette";
 import type { Project } from "../../types";
 import { type Thread } from "../../types";
 import { resolveCycledModelSlug } from "../ChatView.logic";
@@ -50,6 +51,7 @@ function canHandleComposerPickerShortcut(
 interface ChatKeyboardShortcutsInput {
   onToggleDevicePanel: (() => void) | undefined;
   onSplitSurface: (() => void) | undefined;
+  onOpenWorkspaceSearch?: ((mode: WorkspaceSearchPaletteMode) => void) | undefined;
   surfaceMode: "single" | "split";
   isFocusedPane: boolean;
   activeThreadId: ThreadId | null;
@@ -114,6 +116,7 @@ interface ChatKeyboardShortcutsInput {
 export function useChatKeyboardShortcuts({
   onToggleDevicePanel,
   onSplitSurface,
+  onOpenWorkspaceSearch,
   surfaceMode,
   isFocusedPane,
   activeThreadId,
@@ -248,6 +251,14 @@ export function useChatKeyboardShortcuts({
         event.stopPropagation();
         setThreadFindOpen(true);
         setThreadFindFocusNonce((current) => current + 1);
+        return;
+      }
+
+      if (command === "search.files" || command === "search.snippets") {
+        if (!onOpenWorkspaceSearch) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onOpenWorkspaceSearch(command === "search.files" ? "files" : "snippets");
         return;
       }
 
@@ -479,6 +490,7 @@ export function useChatKeyboardShortcuts({
     onToggleBrowser,
     onToggleDevicePanel,
     onToggleDiff,
+    onOpenWorkspaceSearch,
     onInterruptFromStopControl,
     onSplitSurface,
     showGitActions,

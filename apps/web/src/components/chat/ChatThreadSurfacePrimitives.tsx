@@ -12,6 +12,7 @@ import {
 } from "../DiffPanelShell";
 import type { DiffFileEditRequest } from "../../lib/diffEditBaseRev";
 import type { SplitViewPanePanelState } from "../../splitViewStore";
+import type { WorkspaceSearchPaletteMode } from "../WorkspaceSearchPalette";
 import { CHAT_BACKGROUND_CLASS_NAME } from "./composerPickerStyles";
 import { Spinner } from "../ui/spinner";
 import { cn } from "~/lib/utils";
@@ -119,6 +120,7 @@ export function DeferredChatView(props: {
   onToggleDevice?: () => void;
   onOpenBrowserUrl: (url: string) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
+  onOpenWorkspaceSearch?: (mode: WorkspaceSearchPaletteMode) => void;
   onSplitSurface?: () => void;
   onMaximize?: () => void;
   viewModeAction?: {
@@ -176,6 +178,7 @@ export function DeferredChatView(props: {
       {...(props.onToggleDevice ? { onToggleDevicePanel: props.onToggleDevice } : {})}
       onOpenBrowserUrl={props.onOpenBrowserUrl}
       onOpenTurnDiffPanel={props.onOpenTurnDiff}
+      onOpenWorkspaceSearch={props.onOpenWorkspaceSearch}
       {...(props.onSplitSurface ? { onSplitSurface: props.onSplitSurface } : {})}
       {...(props.onMaximize ? { onMaximizeSurface: props.onMaximize } : {})}
       {...(props.viewModeAction !== undefined ? { viewModeAction: props.viewModeAction } : {})}
