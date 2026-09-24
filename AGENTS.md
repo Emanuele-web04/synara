@@ -16,7 +16,7 @@ Read only what the task needs:
 
 - Product and ownership semantics: [core concepts](docs/core-concepts.md) and [providers](docs/providers.md).
 - Contribution and verification conventions: [CONTRIBUTING.md](CONTRIBUTING.md) and the affected package's scripts.
-- Release/signing work: [release guide](docs/release.md). Local Canary operations: [Canary guide](docs/canary.md).
+- Release/signing work: [release guide](docs/release.md). Beta channel and flavor work: [Beta guide](docs/beta.md). Local Canary operations: [Canary guide](docs/canary.md).
 - Current commands, toolchain requirements, and patched dependencies: [package.json](package.json), `bun.lock`, and `.mise.toml`. Resolve current paths from the checkout rather than relying on an old repository map.
 
 ## Transcript and UI safeguards

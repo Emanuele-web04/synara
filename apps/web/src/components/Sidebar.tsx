@@ -5562,6 +5562,7 @@ export default function Sidebar() {
   }, [desktopUpdateState, surfaceDesktopUpdateError]);
 
   const showDesktopUpdateButton = isElectron && shouldShowDesktopUpdateButton(desktopUpdateState);
+  const isBetaDesktopFlavor = desktopUpdateState?.flavor === "beta";
 
   const desktopUpdateTooltip = desktopUpdateState
     ? getDesktopUpdateButtonTooltip(desktopUpdateState, {
@@ -5590,7 +5591,8 @@ export default function Sidebar() {
     desktopUpdateButtonPresentation.secondaryLabel !== null;
   const desktopUpdateDownloadPercent = getDesktopUpdateDownloadPercent(desktopUpdateState);
   const desktopUpdateRowButtonClasses = cn(
-    "inline-flex h-6 shrink-0 items-center justify-center gap-1.5 rounded-full bg-[var(--info)] px-2.5 font-system-ui text-ui-xs font-medium leading-none text-white transition-colors",
+    "inline-flex h-6 shrink-0 items-center justify-center gap-1.5 rounded-full px-2.5 font-system-ui text-ui-xs font-medium leading-none text-white transition-colors",
+    isBetaDesktopFlavor ? "bg-[image:var(--beta-gradient)]" : "bg-[var(--info)]",
     desktopUpdateButtonHasSecondaryLabel && "min-h-6 py-0.5",
     desktopUpdateButtonInteractivityClasses,
   );
@@ -5942,6 +5944,15 @@ export default function Sidebar() {
 
   const headerControls = <SidebarLeadingControls className="ml-auto hidden md:flex" />;
 
+  const betaBadge = isBetaDesktopFlavor ? (
+    <span
+      aria-label="Synara Beta"
+      className="inline-flex shrink-0 items-center rounded-full bg-[var(--beta-pill)] px-1.5 py-0.5 text-ui-xs font-semibold uppercase leading-none tracking-wide text-[var(--beta-pill-ink)]"
+    >
+      Beta
+    </span>
+  ) : null;
+
   const wordmark = (
     <div className="flex w-full items-center gap-1.5">
       <SidebarTrigger className="shrink-0 text-muted-foreground/75 hover:text-foreground md:hidden" />
@@ -6035,6 +6046,9 @@ export default function Sidebar() {
         ) : null}
         {isOnSettings ? (
           <SidebarGroup className="p-0">
+            {isBetaDesktopFlavor ? (
+              <div className="flex items-center justify-end pb-1 pr-2.5">{betaBadge}</div>
+            ) : null}
             <SettingsSidebarNav
               activeSection={activeSettingsSection}
               onBack={handleBackToAppFromSettings}
@@ -6079,6 +6093,7 @@ export default function Sidebar() {
                     onClick={() => setActivityViewEnabledSmoothly(!activityViewEnabled)}
                   />
                 ) : null}
+                {betaBadge}
               </div>
             </div>
             {/* The keyed content remounts with a short enter animation while the picker

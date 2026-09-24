@@ -43,6 +43,13 @@ import {
   type RuntimeMode,
   type ServerConfigShape,
 } from "./config";
+import {
+  SYNARA_BETA_BUNDLE_ID,
+  SYNARA_DESKTOP_BUNDLE_ID_ENV,
+} from "@synara/shared/desktopIdentity";
+import { runBetaImportIfRequested } from "./betaImport";
+import { startBetaUsageSnapshotJob } from "./betaUsageSnapshot";
+import { LATEST_MIGRATION_ID } from "./persistence/Migrations";
 import { fixPath, resolveBaseDir } from "./os-jank";
 import { Open } from "./open";
 import { ServerAuth } from "./auth/Services/ServerAuth";
@@ -270,6 +277,28 @@ const ServerConfigLive = (input: CliInput) =>
       const baseDir = yield* resolveBaseDir(configuredHome);
       const userHomeDir = OS.homedir();
       const derivedPaths = yield* deriveServerPaths(baseDir, devUrl);
+      // A "Copy my data to Beta" request from a stable install lands as a
+      // marker in this home; it must be consumed before the private state
+      // directory (and its database) is created or repaired.
+      // Only Synara Beta consumes the marker, so a stray file in any other
+      // home can never replace that install's database.
+      if (process.env[SYNARA_DESKTOP_BUNDLE_ID_ENV] === SYNARA_BETA_BUNDLE_ID) {
+        const importResult = yield* Effect.tryPromise({
+          try: () =>
+            runBetaImportIfRequested({
+              betaHomeDir: baseDir,
+              stateDir: derivedPaths.stateDir,
+              latestMigrationId: LATEST_MIGRATION_ID,
+            }),
+          catch: (cause) =>
+            new StartupError({ message: "Failed to complete the stable→beta data import", cause }),
+        });
+        if (importResult.consumed) {
+          yield* Effect.logInfo("stable→beta data import finished").pipe(
+            Effect.annotateLogs({ ok: importResult.ok, error: importResult.error ?? null }),
+          );
+        }
+      }
       yield* Effect.try({
         try: () => preparePrivateServerPaths(derivedPaths),
         catch: (cause) =>
@@ -432,6 +461,11 @@ const makeServerProgram = (input: CliInput) =>
     // Start the retention loop after the server is live so startup can serve
     // existing history first, then hide inactive threads from the app in the background.
     yield* startThreadRetentionJob(orchestrationEngine, projectionSnapshotQuery);
+    // Beta only: anonymous 24h usage snapshot for diagnostics. Same gate as the
+    // stable→beta import; failures are logged inside and never break startup.
+    if (process.env[SYNARA_DESKTOP_BUNDLE_ID_ENV] === SYNARA_BETA_BUNDLE_ID) {
+      yield* startBetaUsageSnapshotJob(config.baseDir);
+    }
     // Optional Claude OAuth keepalive. Disabled by default because it touches
     // Claude Code auth data in the background; users can opt in with
     // SYNARA_CLAUDE_KEEPALIVE=1.

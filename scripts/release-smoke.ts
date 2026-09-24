@@ -239,6 +239,85 @@ function verifyReleaseWorkflowSafety(): void {
   );
   assertContains(
     workflow,
+    "vars.SYNARA_PUBLISH_CLI == '1' && needs.preflight.outputs.is_prerelease == 'false'",
+    "Expected prereleases to be fenced out of the npm latest publish job.",
+  );
+  assertContains(
+    workflow,
+    "vars.SYNARA_FINALIZE_RELEASE == '1' && needs.preflight.outputs.is_prerelease == 'false'",
+    "Expected prereleases to be fenced out of the version-bump finalize job.",
+  );
+  assertContains(
+    workflow,
+    "desktop_flavor: ${{ steps.release_meta.outputs.desktop_flavor }}",
+    "Expected preflight to expose the resolved desktop flavor.",
+  );
+  assertContains(
+    workflow,
+    '--flavor "${{ needs.preflight.outputs.desktop_flavor }}"',
+    "Expected the desktop matrix to build the resolved flavor.",
+  );
+  assertContains(
+    workflow,
+    '--channel "$UPDATE_CHANNEL"',
+    "Expected feed prep to emit manifests for the resolved update channel.",
+  );
+  assertContains(
+    workflow,
+    "UPDATE_CHANNEL: ${{ needs.preflight.outputs.update_channel }}",
+    "Expected feed prep to receive the resolved update channel.",
+  );
+  assertContains(
+    workflow,
+    "--executable-name",
+    "Expected packaged startup verification to resolve the flavor's executable name.",
+  );
+  const iconJob = workflow.slice(
+    workflow.indexOf("  build_mac_icon:\n"),
+    workflow.indexOf("  build:\n"),
+  );
+  assertContains(
+    iconJob,
+    "DESKTOP_FLAVOR: ${{ needs.preflight.outputs.desktop_flavor }}",
+    "Expected the macOS icon job to receive the resolved desktop flavor.",
+  );
+  const brandAssets = readFileSync(resolve(repoRoot, "scripts/lib/brand-assets.ts"), "utf8");
+  const betaComposerPath = /betaMacIconComposer: "([^"]+)"/.exec(brandAssets)?.[1];
+  const prodComposerPath = /productionMacIconComposer: "([^"]+)"/.exec(brandAssets)?.[1];
+  if (betaComposerPath === undefined || prodComposerPath === undefined) {
+    throw new Error("Expected brand-assets.ts to declare Icon Composer sources per flavor.");
+  }
+  assertContains(
+    iconJob,
+    `icon_source="${prodComposerPath}"`,
+    "Expected the macOS icon job to default to the production Icon Composer source.",
+  );
+  assertContains(
+    iconJob,
+    `icon_source="${betaComposerPath}"`,
+    "Expected the macOS icon job to compile the beta Icon Composer source for beta releases.",
+  );
+  assertContains(
+    iconJob,
+    "--app-icon Synara",
+    "Expected every flavor's icon catalog to keep the Synara asset name.",
+  );
+  const collectStep = workflow.slice(
+    workflow.indexOf("  - name: Collect release assets"),
+    workflow.indexOf("  - name: Verify and record artifact provenance"),
+  );
+  assertContains(
+    collectStep,
+    '"release/*.',
+    "Expected the collect step to glob the release/ output directory.",
+  );
+  assertContains(
+    workflow,
+    "--output-dir release",
+    "Expected every flavor's build to write into the collected release/ directory.",
+  );
+  assertContains(
+    workflow,
     "SYNARA_PUBLISH_RELEASE: ${{ needs.preflight.outputs.publish_release }}",
     "Expected artifact signing admission to know whether artifacts will be published.",
   );
@@ -363,6 +442,29 @@ function verifyReleaseWorkflowSafety(): void {
     updaterSecurity,
     "return feedPublisherNames",
     "Runtime signature verification must not trust publisher names from mutable updater config.",
+  );
+
+  const nextBetaJob = workflow.slice(workflow.indexOf("  cut_next_beta:\n"));
+  assertContains(
+    workflow,
+    "if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_AUTO_BETA == '1' && needs.preflight.outputs.is_prerelease == 'false' }}",
+    "Expected the next-beta cut to require an opted-in stable publication.",
+  );
+  assertContains(
+    nextBetaJob,
+    "sort -V | tail -1",
+    "Expected the next-beta job to skip releases that are not the highest stable tag.",
+  );
+  assertContains(
+    nextBetaJob,
+    'git push origin "refs/tags/$TAG"',
+    "Expected the next-beta job to push only the beta tag.",
+  );
+  assertNotContains(nextBetaJob, "HEAD:main", "The next-beta job must never push to main.");
+  assertNotContains(
+    nextBetaJob,
+    "git push origin HEAD",
+    "The next-beta job must never push a branch.",
   );
 }
 
