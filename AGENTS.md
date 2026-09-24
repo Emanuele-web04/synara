@@ -16,8 +16,18 @@ Read only what the task needs:
 
 - Product and ownership semantics: [core concepts](docs/core-concepts.md) and [providers](docs/providers.md).
 - Contribution and verification conventions: [CONTRIBUTING.md](CONTRIBUTING.md) and the affected package's scripts.
-- Release/signing work: [release guide](docs/release.md). Beta channel and flavor work: [Beta guide](docs/beta.md). Local Canary operations: [Canary guide](docs/canary.md).
+- Release/signing work: [release guide](docs/release.md). Beta channel and flavor work: [Beta guide](BETA.md). Local Canary operations: [Canary guide](docs/canary.md).
 - Current commands, toolchain requirements, and patched dependencies: [package.json](package.json), `bun.lock`, and `.mise.toml`. Resolve current paths from the checkout rather than relying on an old repository map.
+
+## Beta and Stable
+
+Synara ships two desktop apps from the same `main`: **Synara** (Stable) and **Synara Beta**. [BETA.md](BETA.md) has the full picture; these rules apply to every change:
+
+- There is no Beta branch. Merge into `main`; the release tag picks the app (`vX.Y.Z` is Stable, `vX.Y.Z-beta.N` is Beta). Beta tags carry the _next_ Stable version (`v0.9.2` → `v0.9.3-beta.1`).
+- Beta and Stable have separate identities, data homes (`~/.synara` vs `~/.synara-beta`), and update feeds. Do not add code that reads, writes, or updates across them, except the one-way Stable → Beta copy in the Beta channel code.
+- Everything you merge ships in both apps. To keep a feature out of Stable, add its key to `BETA_ONLY_FEATURES` in `packages/shared/src/betaFeatures.ts`, refuse it on the server (authoritative), hide its entry points on the web, and make persisted state for it inert on Stable. Hiding UI alone is not a gate.
+- Migrations run in both apps. A migration added for a Beta-only feature must be additive so Stable ignores it safely.
+- Diagnostics are Beta-only. Never send diagnostics from Stable, and route every field through the shared allowlist and `diagnosticsRedaction.ts`. Never collect chat content, prompts, file contents, project names, credentials, or identity.
 
 ## Transcript and UI safeguards
 

@@ -4,6 +4,43 @@ Synara Beta is a packaged prerelease flavor of the desktop app. It is a separate
 application that installs and updates side-by-side with stable Synara, and it never
 shares stable's data directory or update feed.
 
+## The short version
+
+- **One branch.** Every PR merges into `main` as usual. There is no Beta branch.
+  The release tag decides which app gets built from `main`:
+  - `vX.Y.Z` builds **Synara** (Stable).
+  - `vX.Y.Z-beta.N` builds **Synara Beta**.
+- **Beta is named after the next Stable.** After `v0.9.2` ships, the next Beta is
+  `v0.9.3-beta.1`, then `v0.9.3-beta.2`, and so on until `v0.9.3` ships. Never tag
+  `v0.9.2-beta.1` after `v0.9.2`: it sorts older than the Stable it follows.
+- **Two separate apps.** Synara and Synara Beta install side by side, with separate
+  data (`~/.synara` and `~/.synara-beta`) and separate update feeds. A Beta update is
+  never offered to Stable, and the other way round.
+- **Data only copies Stable → Beta.** Settings > Try Beta copies the user's Stable
+  data into Beta. Nothing is ever copied back: "Switch back to Synara" reopens
+  Stable with the data it already had.
+- **Beta-only features** stay out of Stable through one list,
+  `BETA_ONLY_FEATURES` in `packages/shared/src/betaFeatures.ts`. The code ships in
+  both apps; Stable just switches listed features off. Remove the entry to promote
+  a feature to Stable. See [Beta-only features](#beta-only-features).
+- **Diagnostics are Beta-only.** Beta sends redacted crash reports and anonymous
+  usage counts to a private dashboard. Stable sends nothing. See
+  [Diagnostics](#diagnostics).
+
+### Release order
+
+1. Merge the PRs for the release into `main`.
+2. If Windows is shipping unsigned, set the repo variable
+   `SYNARA_ALLOW_UNSIGNED_WINDOWS_RELEASE` to the Stable version (for example
+   `0.9.2`), then tag and publish `v0.9.2`.
+3. Set the variable to the Beta version (`0.9.3-beta.1`), then tag and publish
+   `v0.9.3-beta.1` from the same commit. With `SYNARA_AUTO_BETA=1` this tag is
+   created automatically after the Stable publish.
+4. More Betas (`beta.2`, `beta.3`, …) can follow from newer `main` commits at any
+   time. Stable only moves when a `vX.Y.Z` tag is cut.
+
+The rest of this file is the detailed reference.
+
 ## Identity
 
 - App name: `Synara Beta`
@@ -235,7 +272,7 @@ The list is currently empty — nothing is Beta-only right now.
 
 Beta builds ship always-on diagnostics — crash reports plus anonymous usage
 counts (which providers are used, how many chats and turns) — while stable
-builds contain no sender code at all. See [diagnostics.md](diagnostics.md) for
+builds contain no sender code at all. See [diagnostics.md](docs/diagnostics.md) for
 exactly what is collected, what is never collected, and how the Cloudflare
 ingest works.
 

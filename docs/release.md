@@ -19,7 +19,7 @@ This document covers build-only native validation and publishing desktop release
   - Windows `x64` NSIS installer
 - Publishes one versioned GitHub Release with all produced files.
   - Versions with a suffix after `X.Y.Z` (for example `1.2.3-alpha.1`) are published as GitHub prereleases.
-  - A `beta` prerelease identifier (`vX.Y.Z-beta.N`) selects the beta lane: the desktop artifact builds with `--flavor beta`, updater manifests publish under the `beta` channel, and the release never becomes Latest, never bumps `main` versions, and never touches the npm `latest` dist-tag. See [Beta channel](beta.md).
+  - A `beta` prerelease identifier (`vX.Y.Z-beta.N`) selects the beta lane: the desktop artifact builds with `--flavor beta`, updater manifests publish under the `beta` channel, and the release never becomes Latest, never bumps `main` versions, and never touches the npm `latest` dist-tag. See [Beta channel](../BETA.md).
   - Stable clean-lane releases are GitHub Latest; the 0.4.x compatibility release remains historical.
 - Publishes default `latest*.yml` metadata plus byte-identical `synara*.yml` aliases on every stable release so existing packaged binaries keep working.
 - Keeps the historical 0.4.x compatibility release unchanged; current stable payloads stay on their own GitHub Latest release.
@@ -93,7 +93,7 @@ Checklist:
 - Optional jobs stay disabled unless repository variables enable them:
   - `SYNARA_PUBLISH_CLI=1`
   - `SYNARA_FINALIZE_RELEASE=1`
-  - `SYNARA_AUTO_BETA=1` — tag the next `vX.Y.(Z+1)-beta.1` on the stable commit after each stable publish (see docs/beta.md).
+  - `SYNARA_AUTO_BETA=1` — tag the next `vX.Y.(Z+1)-beta.1` on the stable commit after each stable publish (see [BETA.md](../BETA.md)).
 
 ## 1) Build-only native CI validation
 
