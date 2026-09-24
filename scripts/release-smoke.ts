@@ -452,6 +452,11 @@ function verifyReleaseWorkflowSafety(): void {
   );
   assertContains(
     nextBetaJob,
+    "sort -V | tail -1",
+    "Expected the next-beta job to skip releases that are not the highest stable tag.",
+  );
+  assertContains(
+    nextBetaJob,
     'git push origin "refs/tags/$TAG"',
     "Expected the next-beta job to push only the beta tag.",
   );

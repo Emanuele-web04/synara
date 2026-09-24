@@ -993,6 +993,14 @@ jobs:
             echo "Expected a stable X.Y.Z release version, got: $RELEASE_VERSION" >&2
             exit 1
           fi
+          HIGHEST="$(git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)"
+          if [ "$HIGHEST" != "v${RELEASE_VERSION}" ]; then
+            echo "v${RELEASE_VERSION} is not the highest stable tag (${HIGHEST:-none}); skipping auto-beta."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "version=" >> "$GITHUB_OUTPUT"
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           BASE="${RELEASE_VERSION%.*}.$(( ${RELEASE_VERSION##*.} + 1 ))"
           VERSION="${BASE}-beta.1"
           TAG="v${VERSION}"

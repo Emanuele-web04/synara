@@ -81,8 +81,10 @@ beta channel and the beta desktop flavor; every other suffix keeps today's behav
    picks the newest non-custom-channel release in the feed, so a newer stable
    tag shadows every older beta until a fresh beta prerelease out-sorts it.
    With the repository variable `SYNARA_AUTO_BETA=1`, the release workflow does
-   this automatically after each stable publish: it tags `vX.Y.(Z+1)-beta.1` on
-   the stable commit (skipped when any beta for that base already exists).
+   this automatically after each stable publish: it tags a version commit made
+   on top of the stable commit as `vX.Y.(Z+1)-beta.1` (skipped when any beta
+   for that base already exists, or when the release just published is not the
+   highest stable tag — a re-release of an old line does not cut a beta).
    Later betas on the same base stay manual.
 
 ### Signing
