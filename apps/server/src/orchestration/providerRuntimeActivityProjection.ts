@@ -10,6 +10,11 @@ import {
 import { nonEmptyTrimmed } from "@synara/shared/text";
 
 import {
+  isSensitiveKey,
+  REDACTED_SENSITIVE_VALUE,
+  redactSensitiveJsonFields,
+} from "../sensitiveKeys.ts";
+import {
   sanitizeUnmappedProviderData,
   sanitizeUnmappedProviderDetail,
 } from "../provider/unmappedProviderEvents.ts";
@@ -269,16 +274,10 @@ function truncateJsonValue(
     return String(value);
   }
 
-  const entries = Object.entries(value)
-    .filter(
-      ([, entry]) =>
-        entry !== undefined && typeof entry !== "function" && typeof entry !== "symbol",
-    )
-    .toSorted((left, right) => {
-      const byRank = activityPayloadKeyRank(left[0]) - activityPayloadKeyRank(right[0]);
-      return byRank !== 0 ? byRank : left[0].localeCompare(right[0]);
-    });
-  const retainedEntries = entries.slice(0, options.objectKeys);
+  const entries = Object.entries(value).filter(
+    ([, entry]) => entry !== undefined && typeof entry !== "function" && typeof entry !== "symbol",
+  );
+  const retainedEntries = selectLeadingActivityPayloadEntries(entries, options.objectKeys);
   const result: Record<string, unknown> = {};
   for (const [key, entry] of retainedEntries) {
     result[key] = truncateJsonValue(entry, { ...options, depth: options.depth - 1 });
@@ -546,26 +545,61 @@ function sessionApprovalAvailable(
 }
 
 // Approval cards render `toolParamsDisplay` entries as name/value rows, so a raw
-// tool-input object has to be flattened into that shape. Values are stringified
-// here rather than passed through as nested JSON: the card prints one compact line
-// per parameter, and pre-formatting keeps the persisted payload small.
+// tool-input object has to be flattened into that shape.
 function toolParamsDisplayFromToolInput(
   input: Record<string, unknown> | undefined,
-): ReadonlyArray<{ readonly name: string; readonly value: string }> | undefined {
+): ReadonlyArray<{ readonly name: string; readonly value: unknown }> | undefined {
   if (!input) {
     return undefined;
   }
-  const entries = Object.entries(input).map(([name, value]) => ({
-    name,
-    value:
-      typeof value === "string" ? value : (safeStringifyToolParamValue(value) ?? String(value)),
-  }));
+  const entries = Object.entries(input).map(([name, value]) => ({ name, value }));
   return entries.length > 0 ? entries : undefined;
+}
+
+// Values are stringified rather than passed through as nested JSON: the card
+// prints one compact line per parameter, and pre-formatting keeps the persisted
+// payload small. Approval cards are persisted and replayed, so a credential-named
+// parameter, or a credential nested inside one, is redacted before it gets there.
+function toolParamDisplayValue(names: ReadonlyArray<string | undefined>, value: unknown): string {
+  if (names.some((name) => name !== undefined && isSensitiveKey(name))) {
+    return REDACTED_SENSITIVE_VALUE;
+  }
+  if (typeof value === "string") {
+    return redactStructuredToolParamString(value);
+  }
+  // No unredacted fallback serializer: a value JSON cannot encode is shown as
+  // its string form instead.
+  return safeStringifyToolParamValue(value) ?? String(value);
+}
+
+// Codex can supply already-formatted parameter strings. Inspect a complete JSON
+// object or array, but leave ordinary strings and JSON without secrets unchanged.
+function redactStructuredToolParamString(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
+    return value;
+  }
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (parsed === null || typeof parsed !== "object") {
+      return value;
+    }
+    let redacted = false;
+    const serialized = JSON.stringify(parsed, (key, entry: unknown) => {
+      if (isSensitiveKey(key)) {
+        redacted = true;
+      }
+      return redactSensitiveJsonFields(key, entry);
+    });
+    return redacted ? serialized : value;
+  } catch {
+    return value;
+  }
 }
 
 function safeStringifyToolParamValue(value: unknown): string | undefined {
   try {
-    return JSON.stringify(value);
+    return JSON.stringify(value, redactSensitiveJsonFields);
   } catch {
     return undefined;
   }
@@ -593,12 +627,12 @@ function requestedMcpToolCallPresentation(
   // Preserve the array shape consumed by approval cards even for large inputs.
   const toolParamsDisplay = rawParams?.slice(0, 12).map((entry) => {
     const row = asObject(entry);
+    const name = asString(row?.name);
+    const displayName = asString(row?.display_name);
     return {
-      ...(asString(row?.display_name)
-        ? { display_name: truncateJsonString(asString(row?.display_name)!, 128) }
-        : {}),
-      name: truncateJsonString(asString(row?.name) ?? "argument", 128),
-      value: truncateJsonString(asString(row?.value) ?? stringifyJsonLike(row?.value), 900),
+      ...(displayName ? { display_name: truncateJsonString(displayName, 128) } : {}),
+      name: truncateJsonString(name ?? "argument", 128),
+      value: truncateJsonString(toolParamDisplayValue([name, displayName], row?.value), 900),
     };
   });
   return {
@@ -1408,4 +1442,55 @@ export function providerActivityUpdateFingerprint(activity: OrchestrationThreadA
     payload: activity.payload,
     turnId: activity.turnId,
   });
+}
+
+function compareActivityPayloadEntries(
+  left: readonly [string, unknown],
+  right: readonly [string, unknown],
+): number {
+  const byRank = activityPayloadKeyRank(left[0]) - activityPayloadKeyRank(right[0]);
+  return byRank !== 0 ? byRank : left[0].localeCompare(right[0]);
+}
+
+/**
+ * The first `limit` entries in rank/name order, without sorting the whole
+ * object first. Payloads are untrusted and can be arbitrarily wide, so a full
+ * sort just to keep a handful of keys made truncation itself the expensive
+ * step. Keys are unique, so the comparator never ties and the selection is
+ * exactly `toSorted(...).slice(0, limit)`.
+ */
+function selectLeadingActivityPayloadEntries(
+  entries: ReadonlyArray<[string, unknown]>,
+  limit: number,
+): Array<[string, unknown]> {
+  if (limit <= 0) {
+    return [];
+  }
+  if (entries.length <= limit) {
+    return entries.toSorted(compareActivityPayloadEntries);
+  }
+  const leading: Array<[string, unknown]> = [];
+  for (const entry of entries) {
+    if (
+      leading.length === limit &&
+      compareActivityPayloadEntries(entry, leading[leading.length - 1]!) >= 0
+    ) {
+      continue;
+    }
+    let low = 0;
+    let high = leading.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (compareActivityPayloadEntries(leading[middle]!, entry) <= 0) {
+        low = middle + 1;
+      } else {
+        high = middle;
+      }
+    }
+    leading.splice(low, 0, entry);
+    if (leading.length > limit) {
+      leading.pop();
+    }
+  }
+  return leading;
 }

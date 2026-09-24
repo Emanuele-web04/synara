@@ -88,6 +88,7 @@ async function setup(
   resolveForegroundAuthorization: AgentGatewayComputerToolsOptions["resolveForegroundAuthorization"] = async () => ({
     userRequestedVisibleUse: true,
   }),
+  requestForegroundConsent?: AgentGatewayComputerToolsOptions["requestForegroundConsent"],
 ) {
   // A zero settle delay: these tests assert on what the post-action capture
   // does, not on how long the desktop is given to repaint.
@@ -97,12 +98,14 @@ async function setup(
         manager,
         ...(authorizeAction ? { authorizeAction } : {}),
         resolveForegroundAuthorization,
+        ...(requestForegroundConsent ? { requestForegroundConsent } : {}),
       })
     : [];
   const tools = makeAgentGatewayComputerTools({
     manager,
     ...(authorizeAction ? { authorizeAction } : {}),
     resolveForegroundAuthorization,
+    ...(requestForegroundConsent ? { requestForegroundConsent } : {}),
     relatedTools: browserTools,
   });
   const byName = new Map([...tools, ...browserTools].map((tool) => [tool.definition.name, tool]));
@@ -395,7 +398,7 @@ describe("agent gateway computer tools", () => {
     // The activate tool no longer promises consent-covered foreground: the
     // user's own task text is the authorization, and the description says so.
     expect(byName.get("computer_activate_window")?.definition.description).toContain(
-      "only when the user's own task text asked to see the screen",
+      "Unless the user's own task text asked to see the screen",
     );
     expect(byName.get("computer_list_windows")?.definition.description).not.toContain(
       "into view automatically",
@@ -3631,6 +3634,67 @@ describe("computer never-raise gate", () => {
       expect(payload.error).toBe("foreground_not_requested");
       expect(payload.effect).toBe("not-dispatched");
       expect(payload.message).toContain("did not ask");
+      expect(backend.callsFor("raiseWindow")).toEqual([]);
+      expect(backend.callsFor("focusWindow")).toEqual([]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("asks on the approval card before the queue and raises once the user allows it", async () => {
+    const backend = new FakeComputerBackend();
+    let granted = false;
+    const consent = vi.fn(async () => {
+      granted = true;
+      return true;
+    });
+    const { call, manager } = await setup(
+      backend,
+      async () => true,
+      async () => ({ userRequestedVisibleUse: granted }),
+      consent,
+    );
+    try {
+      const raised = await call("computer_activate_window", { window_id: "fake-calculator" });
+      expect(raised.isError).not.toBe(true);
+      expect(consent).toHaveBeenCalledTimes(1);
+      expect(backend.callsFor("raiseWindow").length).toBeGreaterThan(0);
+      // The grant holds for the turn: a second raise does not prompt again.
+      await call("computer_activate_window", { window_id: "fake-calculator" });
+      expect(consent).toHaveBeenCalledTimes(1);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("asks once for a run whose steps raise, and never for background calls", async () => {
+    const backend = new FakeComputerBackend();
+    const consent = vi.fn(async () => false);
+    const { call, manager } = await setup(backend, async () => true, refusing, consent);
+    try {
+      await call("computer_click", { window_id: "fake-calculator", x: 10, y: 10 });
+      expect(consent).not.toHaveBeenCalled();
+      const batch = await call("computer_run", {
+        steps: [{ type: "activate_window", window_id: "fake-calculator" }],
+      });
+      expect(consent).toHaveBeenCalledTimes(1);
+      expect(resultJson(batch)).toMatchObject({ error: "foreground_not_requested" });
+      expect(backend.callsFor("raiseWindow")).toEqual([]);
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it("refuses without raising when the user keeps it in the background", async () => {
+    const backend = new FakeComputerBackend();
+    const consent = vi.fn(async () => false);
+    const { call, manager } = await setup(backend, async () => true, refusing, consent);
+    try {
+      const refused = await call("computer_activate_window", { window_id: "fake-calculator" });
+      expect(refused.isError).toBe(true);
+      const payload = resultJson(refused) as { error: string; message: string };
+      expect(payload.error).toBe("foreground_not_requested");
+      expect(payload.message).toContain("declined, cancelled or left unanswered");
       expect(backend.callsFor("raiseWindow")).toEqual([]);
       expect(backend.callsFor("focusWindow")).toEqual([]);
     } finally {

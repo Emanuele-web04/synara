@@ -28,6 +28,10 @@
       "types": "./src/runtimeMode.ts",
       "import": "./src/runtimeMode.ts"
     },
+    "./approvalSessionGrant": {
+      "types": "./src/approvalSessionGrant.ts",
+      "import": "./src/approvalSessionGrant.ts"
+    },
     "./git": {
       "types": "./src/git.ts",
       "import": "./src/git.ts"

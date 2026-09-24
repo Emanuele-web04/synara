@@ -229,6 +229,26 @@ describe("ComposerModelPicker", () => {
     }
   });
 
+  it("shows the star on every starred model of the provider tab, whatever its traits", async () => {
+    const screen = await mountPicker({}, { reasoningEffort: "medium" }, [
+      { provider: "codex", model: GPT_5_5, effort: "high", fastMode: false, thinking: null },
+      { provider: "codex", model: GPT_5_4, effort: "low", fastMode: true, thinking: null },
+    ]);
+    try {
+      await page.getByRole("tab", { name: "Codex" }).click();
+      await expect
+        .element(page.getByRole("button", { name: "Remove GPT-5.5 from starred" }))
+        .toBeVisible();
+      await page.getByRole("button", { name: "Remove GPT-5.4 from starred" }).click();
+
+      expect(readStoredStars()).toEqual([
+        { provider: "codex", model: GPT_5_5, effort: "high", fastMode: false, thinking: null },
+      ]);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it("keeps retired presets removable while blocking clicks and shortcuts", async () => {
     const onProviderModelChange = vi.fn();
     const screen = await mountPicker(
@@ -370,8 +390,16 @@ describe("ComposerModelPicker", () => {
       await expect.element(slider).toBeVisible();
       expect(trigger.element().getBoundingClientRect().width).toBeCloseTo(closedWidth, 1);
 
-      slider.element().focus();
-      await userEvent.keyboard("{ArrowRight}{ArrowRight}");
+      // The panel still settles its own focus right after open and can steal it
+      // back mid-typing, so step the thumb directly; each step must commit before
+      // the next, since back-to-back keydowns would read the stale value.
+      slider
+        .element()
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+      await expect.element(slider).toHaveAttribute("aria-valuetext", "High");
+      slider
+        .element()
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
       await expect.element(slider).toHaveAttribute("aria-valuetext", "Extra High");
       expect(trigger.element().getBoundingClientRect().width).toBeCloseTo(closedWidth, 1);
     } finally {

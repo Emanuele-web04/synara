@@ -5,6 +5,7 @@ import {
   normalizeStarredModels,
   starredModelKey,
   toggleStarredModel,
+  unstarModel,
   type StarredModel,
 } from "~/lib/starredModels";
 import {
@@ -104,6 +105,14 @@ describe("starred model presets", () => {
       starredModelKey(lowEffort),
     ]);
     expect(toggleStarredModel(both, CODEX_HIGH_FAST)).toEqual([lowEffort]);
+  });
+
+  it("unstars every preset of a model and keeps the provider's other models", () => {
+    const lowEffort = { ...CODEX_HIGH_FAST, effort: "low" };
+    const otherModel = { ...CODEX_HIGH_FAST, model: "gpt-5.4" };
+    expect(unstarModel([CODEX_HIGH_FAST, otherModel, lowEffort], CODEX_HIGH_FAST)).toEqual([
+      otherModel,
+    ]);
   });
 
   it("drops stored entries for unknown providers and duplicates", () => {

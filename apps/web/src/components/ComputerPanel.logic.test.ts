@@ -153,6 +153,25 @@ describe("computer panel state helpers", () => {
     ).toMatchObject({ kind: "checking", title: "Computer access has not been checked" });
   });
 
+  it("calls an idle helper ready only when the OS confirms every grant", () => {
+    const idle = { ...connectedHealth(), status: "unavailable" as const, captureAvailable: false };
+    expect(
+      resolveComputerAvailabilityView({ kind: "available", backend: "mac" }, idle, true),
+    ).toMatchObject({ kind: "ready", title: "All permissions granted" });
+    // A helper that already failed is not idle, whatever the grants say.
+    expect(
+      resolveComputerAvailabilityView(
+        { kind: "available", backend: "mac" },
+        {
+          ...idle,
+          consecutiveFailures: 1,
+          lastFailure: { at: "2026-01-01T00:00:00.000Z", message: "helper exited" },
+        },
+        true,
+      ),
+    ).toMatchObject({ kind: "checking", title: "Computer access has not been checked" });
+  });
+
   it("does not claim full desktop readiness when capture is denied", () => {
     expect(
       resolveComputerAvailabilityView(
@@ -442,6 +461,17 @@ describe("computerStatusNeedsSetup", () => {
         state({ availability: { kind: "backend-unavailable", message: "no helper" } }),
       ),
     ).toBe(true);
+  });
+
+  it("asks for setup on an idle backend unless the OS confirms every grant", () => {
+    const idle = {
+      ...state({
+        health: { ...connectedHealth(), status: "unavailable", captureAvailable: false },
+      }),
+      provisionable: true,
+    };
+    expect(computerStatusNeedsSetup(idle)).toBe(true);
+    expect(computerStatusNeedsSetup(idle, true)).toBe(false);
   });
 
   it("says yes when the desktop is driveable but blind", () => {

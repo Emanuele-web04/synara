@@ -13,6 +13,7 @@ import {
   type ProviderStartOptions,
 } from "@synara/contracts";
 import { isWorkspaceRootWithin, workspaceRootsEqual } from "@synara/shared/threadWorkspace";
+import { providerStartOptionsFromServerSettings } from "@synara/shared/serverSettings";
 import { Effect } from "effect";
 import type {
   ProjectImportRepository,
@@ -410,15 +411,12 @@ export function makeProjectImportHandlers(options: ProjectImportRouteOptions) {
           });
         }
         const settings = yield* options.serverSettings.getSettings;
+        const configuredOptions = providerStartOptionsFromServerSettings(settings);
+        const claudeBinaryPath = configuredOptions.claudeAgent?.binaryPath;
         const providerOptions: ProviderStartOptions =
           source.provider === "codex"
-            ? {
-                codex: {
-                  binaryPath: settings.providers.codex.binaryPath,
-                  homePath: settings.providers.codex.homePath,
-                },
-              }
-            : { claudeAgent: { binaryPath: settings.providers.claudeAgent.binaryPath } };
+            ? { codex: configuredOptions.codex }
+            : { claudeAgent: { ...(claudeBinaryPath ? { binaryPath: claudeBinaryPath } : {}) } };
         const runtimeCwd = workingDirectory ?? (directoryExists ? workspaceRoot : undefined);
         // The ledger and native binding survive failures. Retrying the same origin
         // resumes this frozen copy, while deterministic command IDs prevent replay.

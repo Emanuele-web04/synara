@@ -279,6 +279,65 @@ export function createThreadWorkspaceMetadataSelector(
   };
 }
 
+export interface ThreadGitActionsMetadata {
+  readonly worktreePath: string | null;
+  readonly branch: string | null;
+  readonly associatedWorktreeBranch: string | null | undefined;
+  readonly createBranchFlowCompleted: boolean;
+  readonly title: string | undefined;
+}
+
+const EMPTY_THREAD_GIT_ACTIONS_METADATA: ThreadGitActionsMetadata = {
+  worktreePath: null,
+  branch: null,
+  associatedWorktreeBranch: null,
+  createBranchFlowCompleted: false,
+  title: undefined,
+};
+
+/** Shell-only git-action inputs (worktree, branch, title) that stay reference-stable
+ *  while a turn streams. The git actions control is always mounted on the chat
+ *  surface and only reads these fields; subscribing it to the full derived Thread
+ *  re-rendered it on every message/activity delta. */
+export function createThreadGitActionsMetadataSelector(
+  threadId: ThreadId | null | undefined,
+): (state: AppState) => ThreadGitActionsMetadata {
+  let previousResult = EMPTY_THREAD_GIT_ACTIONS_METADATA;
+
+  return (state) => {
+    if (!threadId) {
+      return EMPTY_THREAD_GIT_ACTIONS_METADATA;
+    }
+    const source = state.threadShellById?.[threadId];
+    if (!source) {
+      previousResult = EMPTY_THREAD_GIT_ACTIONS_METADATA;
+      return previousResult;
+    }
+    const worktreePath = source.worktreePath ?? null;
+    const branch = source.branch ?? null;
+    const associatedWorktreeBranch = source.associatedWorktreeBranch;
+    const createBranchFlowCompleted = source.createBranchFlowCompleted ?? false;
+    const title = source.title;
+    if (
+      previousResult.worktreePath === worktreePath &&
+      previousResult.branch === branch &&
+      previousResult.associatedWorktreeBranch === associatedWorktreeBranch &&
+      previousResult.createBranchFlowCompleted === createBranchFlowCompleted &&
+      previousResult.title === title
+    ) {
+      return previousResult;
+    }
+    previousResult = {
+      worktreePath,
+      branch,
+      associatedWorktreeBranch,
+      createBranchFlowCompleted,
+      title,
+    };
+    return previousResult;
+  };
+}
+
 export function createThreadExistsSelector(
   threadId: ThreadId | null | undefined,
 ): (state: AppState) => boolean {

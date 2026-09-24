@@ -97,7 +97,7 @@ describe("ComputerSettingsPanel", () => {
 
   it("keeps the surface calm while the desktop is ready", () => {
     const markup = render({ status: status() });
-    expect(markup).not.toContain("Computer control available");
+    expect(markup).toContain("Connected to the desktop");
     expect(markup).not.toContain("Set up");
     expect(markup).not.toContain("Refresh");
     expect(markup).not.toContain("Desktop backend");
@@ -105,7 +105,9 @@ describe("ComputerSettingsPanel", () => {
     expect(markup).not.toContain("Capabilities");
   });
 
-  it("asks to check access before a shipped helper has actually connected", () => {
+  it("asks to check access while nothing has confirmed the grants", () => {
+    // After a restart the backend is idle, and without the OS's own grant
+    // answer an idle backend is not evidence that anything works.
     const markup = render({
       status: status({
         health: {

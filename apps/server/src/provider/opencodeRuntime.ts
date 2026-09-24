@@ -45,7 +45,8 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import { makeEffectProcessCommand } from "../platform/effectProcessRuntime.ts";
 
 import { NetService, type NetServiceShape } from "@synara/shared/Net";
-import { buildProviderChildEnvironment } from "../providerChildEnvironment.ts";
+import { expandHomePath } from "@synara/shared/synaraHome";
+import { buildOpenCodeServerProcessEnv } from "./providerBinaryResolution.ts";
 import { readOpenCodeAuthFileUtf8 } from "./openCodeAuthPaths.ts";
 import {
   teardownEffectProcessTree,
@@ -132,6 +133,12 @@ export function openCodeRuntimeErrorDetail(cause: unknown): string {
     }
   }
   return String(cause);
+}
+
+function missingCliHint(cliSpec: OpenCodeCompatibleCliSpec, detail: string): string {
+  return /ENOENT|EACCES/i.test(detail)
+    ? ` The ${cliSpec.displayName} CLI was not found or was not executable on PATH or in the standard install locations; install it (https://opencode.ai) or set an explicit binary path in provider settings.`
+    : "";
 }
 
 export const runOpenCodeSdk = <A>(
@@ -784,17 +791,6 @@ export function buildOpenCodePermissionRules(
   return runtimeRules;
 }
 
-export function buildOpenCodeServerProcessEnv(input: {
-  readonly experimentalWebSockets?: boolean;
-  readonly baseEnv?: NodeJS.ProcessEnv;
-}): NodeJS.ProcessEnv {
-  return buildProviderChildEnvironment({
-    provider: "opencode",
-    baseEnv: input.baseEnv ?? process.env,
-    overrides: input.experimentalWebSockets ? { OPENCODE_EXPERIMENTAL_WEBSOCKETS: "true" } : {},
-  });
-}
-
 export function toOpenCodePermissionReply(
   decision: ProviderApprovalDecision,
 ): "once" | "always" | "reject" {
@@ -849,6 +845,7 @@ const collectStreamAsString = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.
 export interface OpenCodeRuntimeLiveOptions {
   readonly teardownProcessTree?: typeof teardownProviderProcessTree;
   readonly netService?: NetServiceShape;
+  readonly fetchImpl?: (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 }
 
 const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
@@ -865,8 +862,8 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
       Effect.gen(function* () {
         const childEnv = buildOpenCodeServerProcessEnv({});
         const child = yield* spawner.spawn(
-          makeEffectProcessCommand(input.binaryPath, input.args, {
-            ...(input.cwd ? { cwd: input.cwd } : {}),
+          makeEffectProcessCommand(expandHomePath(input.binaryPath), input.args, {
+            ...(input.cwd ? { cwd: expandHomePath(input.cwd) } : {}),
             env: childEnv,
           }),
         );
@@ -892,13 +889,14 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
         } satisfies OpenCodeCommandResult;
       }).pipe(
         Effect.scoped,
-        Effect.mapError((cause) =>
-          ensureRuntimeError(
+        Effect.mapError((cause) => {
+          const detail = openCodeRuntimeErrorDetail(cause);
+          return ensureRuntimeError(
             "runOpenCodeCommand",
-            `Failed to execute '${input.binaryPath} ${input.args.join(" ")}': ${openCodeRuntimeErrorDetail(cause)}`,
+            `Failed to execute '${input.binaryPath} ${input.args.join(" ")}': ${detail}${missingCliHint(input.cliSpec ?? OPENCODE_CLI_SPEC, detail)}`,
             cause,
-          ),
-        ),
+          );
+        }),
       );
 
     const startOpenCodeServerProcess: OpenCodeRuntimeShape["startOpenCodeServerProcess"] = (
@@ -939,9 +937,9 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
         childEnv.OPENCODE_SERVER_PASSWORD = serverPassword;
         const child = yield* spawner
           .spawn(
-            makeEffectProcessCommand(input.binaryPath, args, {
+            makeEffectProcessCommand(expandHomePath(input.binaryPath), args, {
               env: childEnv,
-              ...(input.cwd ? { cwd: input.cwd } : {}),
+              ...(input.cwd ? { cwd: expandHomePath(input.cwd) } : {}),
               detached: false,
               killSignal: "SIGKILL",
               forceKillAfter: "1500 millis",
@@ -949,14 +947,14 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
           )
           .pipe(
             Effect.provideService(Scope.Scope, runtimeScope),
-            Effect.mapError(
-              (cause) =>
-                new OpenCodeRuntimeError({
-                  operation: "startOpenCodeServerProcess",
-                  detail: `Failed to spawn OpenCode server process: ${openCodeRuntimeErrorDetail(cause)}`,
-                  cause,
-                }),
-            ),
+            Effect.mapError((cause) => {
+              const detail = openCodeRuntimeErrorDetail(cause);
+              return new OpenCodeRuntimeError({
+                operation: "startOpenCodeServerProcess",
+                detail: `Failed to spawn OpenCode server process: ${detail}${missingCliHint(cliSpec, detail)}`,
+                cause,
+              });
+            }),
           );
         yield* Scope.addFinalizer(
           runtimeScope,
@@ -1088,6 +1086,45 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
           });
         }
 
+        // Synara needs the legacy endpoint family, so probe `provider.list`.
+        // A missing route (404/405) establishes incompatibility, not the CLI
+        // version. Retry other statuses and connection failures separately.
+        const probeUrl = `${readyOption.value.replace(/\/$/, "")}/provider`;
+        const fetchImpl = options?.fetchImpl ?? fetch;
+        let probeStatus: number | null = null;
+        let surfaceConfirmed = false;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          if (attempt > 0) yield* Effect.sleep(250);
+          const response = yield* Effect.promise(() =>
+            fetchImpl(probeUrl, {
+              headers: {
+                Authorization: `Basic ${Buffer.from(`${cliSpec.serverAuthUsername}:${serverPassword}`, "utf8").toString("base64")}`,
+              },
+              signal: AbortSignal.timeout(5_000),
+            }).then(
+              (result) => result,
+              () => null,
+            ),
+          );
+          if (response?.ok) {
+            surfaceConfirmed = true;
+            break;
+          }
+          if (response !== null && (response.status === 404 || response.status === 405)) {
+            return yield* new OpenCodeRuntimeError({
+              operation: "startOpenCodeServerProcess",
+              detail: `${cliSpec.displayName} server does not serve the legacy surface Synara requires (GET /provider → HTTP ${response.status}). Install a compatible CLI release (https://opencode.ai) or set an explicit binary path in provider settings.`,
+            });
+          }
+          probeStatus = response === null ? null : response.status;
+        }
+        if (!surfaceConfirmed) {
+          return yield* new OpenCodeRuntimeError({
+            operation: "startOpenCodeServerProcess",
+            detail: `${cliSpec.displayName} server did not pass the legacy surface probe after 3 attempts (GET /provider → ${probeStatus === null ? "unreachable" : `HTTP ${probeStatus}`}).${probeStatus === 401 || probeStatus === 403 ? " The server rejected the credentials it was started with; report this as a bug." : ""}`,
+          });
+        }
+
         return {
           url: readyOption.value,
           serverPassword,
@@ -1195,8 +1232,19 @@ const makeOpenCodeRuntime = (options?: OpenCodeRuntimeLiveOptions) =>
           // lexically can cross a symlink differently or hide a missing directory. Keep the same
           // spelling in both the pool key and spawn options, without adding filesystem work here.
           const hasParentTraversal = input.cwd?.split(/[\\/]/).includes("..");
-          const pooledInput =
-            input.cwd && !hasParentTraversal ? { ...input, cwd: resolvePath(input.cwd) } : input;
+          // node:path never expands `~` the way a shell would — a literal tilde
+          // ENOENTs at spawn and would pool under the wrong key.
+          const pooledInput = {
+            ...input,
+            binaryPath: expandHomePath(input.binaryPath),
+            ...(input.cwd
+              ? {
+                  cwd: hasParentTraversal
+                    ? expandHomePath(input.cwd)
+                    : resolvePath(expandHomePath(input.cwd)),
+                }
+              : {}),
+          };
           const key = pooledOpenCodeServerKey(pooledInput);
           const existing = pooledServers.get(key);
           if (existing) {

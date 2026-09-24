@@ -77,6 +77,11 @@ Providers expose different selection models:
 Synara normalizes these choices into the composer where possible without pretending that every
 provider has identical capabilities.
 
+Claude Code may discover a model under an alias while reporting its concrete model ID separately.
+For a release newer than Synara's catalog, the picker shows the concrete ID. Agent Gateway accepts
+that ID when it resolves to one discovered non-default model; ambiguous IDs require an exact
+advertised alias.
+
 For Codex, successful model discovery determines the built-in choices, including when the returned
 catalog is empty. Models absent from that catalog are not added back from Synara's static list.
 Custom models remain available. Until discovery succeeds, Synara uses a static fallback; a failed
@@ -196,6 +201,19 @@ after a matching native compaction boundary and successful completion. Failure o
 keeps the message on hold. If delivery is uncertain, Synara does not automatically repeat the send.
 See [cache recovery behavior and verification](claude-cache-recovery.md) for the implementation
 boundaries and remaining live validation.
+
+### OpenCode
+
+Synara uses OpenCode's legacy endpoint family, including `/session` and MCP
+for the Synara tools attached to managed sessions. Startup checks `GET /provider`
+and rejects a server that reports that route as unavailable; this does not identify
+the CLI's version. The SDK is pinned exactly (`1.18.31`) — bump it deliberately,
+never by range.
+
+The `opencode` executable resolves from `PATH` first, then the standard install
+locations (`~/.opencode/bin`, `~/.bun/bin`, npm/pnpm/yarn global bins, Homebrew,
+Volta, asdf, mise, proto, Deno, nvm/fnm). Set an explicit binary path in
+provider settings only when the install lives somewhere else entirely.
 
 ### Claude Artifacts, `/design` and `/slides`
 

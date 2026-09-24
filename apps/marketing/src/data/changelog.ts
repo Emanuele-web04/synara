@@ -26,6 +26,58 @@ export interface ChangelogEntry {
 
 export const CHANGELOG_ENTRIES: readonly ChangelogEntry[] = [
   {
+    version: "0.9.1",
+    date: "Sep 22",
+    features: [
+      {
+        id: "claude-opus-5-5",
+        title: "Claude Opus 5.5",
+        description:
+          "Select Claude Opus 5.5 with the right model name and effort controls; the Opus alias now resolves to 5.5.",
+        details:
+          "The Claude Code runtime and your account determine availability. Existing explicit model choices remain unchanged.",
+      },
+      {
+        id: "gpt-6-sol-luna",
+        title: "GPT-6 Sol & Luna",
+        description: "Choose GPT-6 Sol or Luna in Codex with model-specific reasoning options.",
+        details:
+          "Sol offers Low through Ultra effort; Luna offers Low through Max. GPT-6 Astra remains the default for chat, and GPT-6 Luna is the default for Git writing. Your installed Codex runtime and account determine which models are available.",
+      },
+      {
+        id: "environment-tasks",
+        title: "Find tasks created from an environment",
+        description:
+          "The Environment panel now shows tasks created from it, with direct navigation and clearer status.",
+      },
+      {
+        id: "computer-control",
+        title: "Clearer Computer control",
+        description:
+          "Computer previews and settings better explain which window is targeted and when control is available.",
+      },
+      {
+        id: "opencode-recovery",
+        title: "More reliable OpenCode startup",
+        description:
+          "Synara finds OpenCode across common installation paths and explains when a CLI lacks the managed-session tools it needs.",
+      },
+      {
+        id: "release-performance",
+        title: "Less repeated work",
+        description:
+          "Streaming, sidebar, Git, simulator and provider paths avoid redundant reads or rendering; release builds reuse verified artifacts where possible.",
+        details: "These are targeted optimizations, not a universal speed or battery-life claim.",
+      },
+      {
+        id: "small-fixes",
+        title: "Polish across longer sessions",
+        description:
+          "Long durations include days, model favorites behave more predictably, and deleting active tasks handles cleanup more safely.",
+      },
+    ],
+  },
+  {
     version: "0.9.0",
     date: "Sep 21",
     features: [

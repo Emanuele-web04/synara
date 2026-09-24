@@ -31,6 +31,7 @@ import {
   type ComputerSetupRequiredPayload,
   type ModelSelection,
   type ProjectId,
+  type ProviderApprovalDecision,
   type ProviderKind,
   type RuntimeMode,
   type ServerProviderStatus,
@@ -84,6 +85,7 @@ import { makeCreateThreadsHandler } from "../creationCoordinator.ts";
 import { makeAgentGatewayAutomationTools } from "../automationTools.ts";
 import { makeAgentGatewayBrowserTools } from "../browserTools.ts";
 import { makeAgentGatewayComputerBrowserTools } from "../computerBrowserTools.ts";
+import { computerApprovalDisplayArgs } from "../computerApprovalDisplay.ts";
 import { makeAgentGatewayDeviceTools } from "../deviceTools.ts";
 import { DeviceService } from "../../device/Services/DeviceService.ts";
 import {
@@ -94,10 +96,7 @@ import {
 import { isSynaraComputerToolFamilyName } from "../computerToolPermission.ts";
 import { ComputerService } from "../../computer/Services/ComputerService.ts";
 import { computerApprovalGate } from "../../computer/ComputerApprovalGate.ts";
-import {
-  COMPUTER_FOREGROUND_NOT_AUTHORIZED,
-  computerForegroundAuthorizationForMessages,
-} from "../../computer/computerVisibleUse.ts";
+import { makeComputerForegroundConsent } from "../computerForegroundConsent.ts";
 import { BrowserAutomationHost } from "../../browserAutomation/Services/BrowserAutomationHost.ts";
 import { makeBrowserAutomationHost } from "../../browserAutomation/Layers/BrowserAutomationHost.ts";
 import { makeThreadReadTools } from "../threadReadTools.ts";
@@ -1058,12 +1057,65 @@ export const makeAgentGateway = Effect.gen(function* () {
   };
 
   /**
-   * The Synara-owned approval path, shared by the desktop tools, the
+   * The approval card for one Computer or Device consent prompt: routine task
+   * consent, visible-use consent, or a single-call approval (clipboard reads).
+   * Device names share this path because provider-native permission bridges
+   * cannot see MCP calls and would otherwise let a mutating device action run
+   * unasked.
+   */
+  const publishComputerApproval =
+    (
+      name: string,
+      args: Record<string, unknown>,
+      context: Parameters<NonNullable<AgentGatewayComputerToolsOptions["authorizeAction"]>>[2],
+      approvalScope: "computer-task" | "computer-foreground" | "device-task" | undefined,
+    ) =>
+    async (requestId: string, decision?: ProviderApprovalDecision): Promise<void> => {
+      const deviceTool = name.startsWith("device_");
+      const createdAt = isoNow();
+      const eventKey = `${requestId}:${decision === undefined ? "open" : "resolved"}`;
+      await Effect.runPromise(
+        orchestrationEngine.dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.makeUnsafe(eventKey),
+          threadId: ThreadId.makeUnsafe(context.callerThreadId),
+          activity: {
+            id: EventId.makeUnsafe(eventKey),
+            tone: "info",
+            kind: decision === undefined ? "approval.requested" : "approval.resolved",
+            summary:
+              decision !== undefined
+                ? `${deviceTool ? "Device" : "Computer"} approval resolved`
+                : approvalScope === "computer-foreground"
+                  ? "Show Computer on screen for this task"
+                  : approvalScope === "device-task"
+                    ? "Allow Device for this task"
+                    : approvalScope === "computer-task"
+                      ? "Allow Computer for this task"
+                      : `${deviceTool ? "Device" : "Computer"} action needs approval`,
+            payload: {
+              requestId,
+              requestKind: "tool",
+              requestType: "tool",
+              toolName: name,
+              toolParamsDisplay: computerApprovalDisplayArgs(args),
+              sessionApprovalAvailable: false,
+              ...(approvalScope !== undefined ? { approvalScope } : {}),
+              ...(decision === undefined ? {} : { decision }),
+            },
+            turnId: context.callerTurnId ? TurnId.makeUnsafe(context.callerTurnId) : null,
+            createdAt,
+          },
+          createdAt,
+        }),
+      );
+    };
+
+  /**
+   * The Computer approval path, shared by the desktop tools, the
    * driver-backed `computer_browser_*` family, and the device family — same
-   * task-scoped consent, same publish/respond plumbing. Browser names take
-   * task consent like every other mutating computer tool; device names take
-   * it too, because provider-native permission bridges cannot see MCP calls
-   * and would otherwise let a mutating device action run unasked.
+   * capability, same task-scoped consent, same disclosure. Browser and device
+   * names take task consent like every other mutating computer tool.
    */
   const authorizeComputerAction: NonNullable<
     AgentGatewayComputerToolsOptions["authorizeAction"]
@@ -1095,49 +1147,12 @@ export const makeAgentGateway = Effect.gen(function* () {
       threadId: context.callerThreadId,
       turnId: context.callerTurnId ?? "",
       signal,
-      publish: async (requestId, decision) => {
-        const createdAt = isoNow();
-        const eventKey = `${requestId}:${decision === undefined ? "open" : "resolved"}`;
-        await Effect.runPromise(
-          orchestrationEngine.dispatch({
-            type: "thread.activity.append",
-            commandId: CommandId.makeUnsafe(eventKey),
-            threadId: ThreadId.makeUnsafe(context.callerThreadId),
-            activity: {
-              id: EventId.makeUnsafe(eventKey),
-              tone: "info",
-              kind: decision === undefined ? "approval.requested" : "approval.resolved",
-              summary:
-                decision === undefined
-                  ? taskConsent
-                    ? `Allow ${deviceTool ? "Device" : "Computer"} for this task`
-                    : `${deviceTool ? "Device" : "Computer"} action needs approval`
-                  : `${deviceTool ? "Device" : "Computer"} approval resolved`,
-              payload: {
-                requestId,
-                requestKind: "tool",
-                requestType: "tool",
-                toolName: name,
-                toolParamsDisplay: JSON.stringify(
-                  Object.fromEntries(
-                    Object.entries(args).filter(
-                      ([key]) => key !== "text" && key !== "value" && key !== "prompt_text",
-                    ),
-                  ),
-                ),
-                sessionApprovalAvailable: false,
-                ...(taskConsent
-                  ? { approvalScope: deviceTool ? "device-task" : "computer-task" }
-                  : {}),
-                ...(decision === undefined ? {} : { decision }),
-              },
-              turnId: context.callerTurnId ? TurnId.makeUnsafe(context.callerTurnId) : null,
-              createdAt,
-            },
-            createdAt,
-          }),
-        );
-      },
+      publish: publishComputerApproval(
+        name,
+        args,
+        context,
+        taskConsent ? (deviceTool ? "device-task" : "computer-task") : undefined,
+      ),
     });
     if (approved && !deviceTool) {
       await Effect.runPromise(
@@ -1148,20 +1163,21 @@ export const makeAgentGateway = Effect.gen(function* () {
     return approved;
   };
 
-  // Native apps and browsers share durable task consent. Full-access mode
-  // alone does not authorize taking the user's screen.
-  const resolveComputerForegroundAuthorization: NonNullable<
-    AgentGatewayComputerToolsOptions["resolveForegroundAuthorization"]
-  > = async (context) => {
-    const detail = await Effect.runPromise(
-      snapshotQuery.getThreadDetailById(ThreadId.makeUnsafe(context.callerThreadId)),
-    );
-    return Option.isNone(detail)
-      ? COMPUTER_FOREGROUND_NOT_AUTHORIZED
-      : computerForegroundAuthorizationForMessages(detail.value.messages, {
-          knownAppNames: computerService?.manager.observedAppNames() ?? [],
-        });
-  };
+  const {
+    resolveForegroundAuthorization: resolveComputerForegroundAuthorization,
+    requestForegroundConsent: requestComputerForegroundConsent,
+  } = makeComputerForegroundConsent({
+    gate: computerApprovalGate,
+    loadMessages: async (threadId) => {
+      const detail = await Effect.runPromise(
+        snapshotQuery.getThreadDetailById(ThreadId.makeUnsafe(threadId)),
+      );
+      return Option.isNone(detail) ? undefined : detail.value.messages;
+    },
+    knownAppNames: () => computerService?.manager.observedAppNames() ?? [],
+    publish: (name, args, context) =>
+      publishComputerApproval(name, args, context, "computer-foreground"),
+  });
 
   const resolveComputerSpaceDesignation: NonNullable<
     AgentGatewayComputerToolsOptions["resolveSpaceDesignation"]
@@ -1180,6 +1196,7 @@ export const makeAgentGateway = Effect.gen(function* () {
           manager: computerService.manager,
           authorizeAction: authorizeComputerAction,
           resolveForegroundAuthorization: resolveComputerForegroundAuthorization,
+          requestForegroundConsent: requestComputerForegroundConsent,
           resolveWorkspaceRoot,
         })
       : [];
@@ -1209,6 +1226,7 @@ export const makeAgentGateway = Effect.gen(function* () {
           onSetupRequired: surfaceComputerSetupRequired,
           authorizeAction: authorizeComputerAction,
           resolveForegroundAuthorization: resolveComputerForegroundAuthorization,
+          requestForegroundConsent: requestComputerForegroundConsent,
           resolveSpaceDesignation: resolveComputerSpaceDesignation,
           relatedTools: computerBrowserTools,
         })

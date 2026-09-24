@@ -10,6 +10,40 @@
 
 - Fixed OMP threads being mislabeled as Codex when the session-provider normalizer fell through to the Codex default instead of preserving the OMP provider.
 
+## [0.9.1] — 2026-09-22
+
+**Claude Opus 5.5 and GPT-6 Sol & Luna lead this update.** Synara also improves environment task navigation, OpenCode startup, Computer control feedback, and several high-frequency paths.
+
+### Added
+
+- Claude Opus 5.5 model name, aliases, and capability mapping. The `opus` alias now resolves to 5.5; existing explicit choices remain intact.
+- GPT-6 Sol and Luna in the Codex model catalog with their supported reasoning ranges. Astra remains the chat default; Luna now defaults for Git writing, including saved settings that used the previous Luna default. Runtime and account access govern availability.
+- Direct rows for tasks created from an environment, with navigation and status in the Environment panel.
+
+### Changed
+
+- Computer control preview, targeting, settings, and model picker feedback are clearer.
+- Streaming, projection, provider, Git, simulator, sidebar, and review paths avoid redundant work. Desktop release builds reuse verified portable output and Cua driver caches where possible. These targeted changes do not establish a universal speed or battery-life percentage.
+- Long-running durations include day units, and model favorites and active-task deletion behave more consistently.
+
+### Fixed
+
+- OpenCode managed sessions retain the legacy engine required for thread-scoped tools. Binary discovery covers common installation locations and startup reports unsupported 2.x-only CLIs clearly.
+- Windows credential-reader cold compilation has more time before its bounded timeout, addressing a CI regression seen on the release base.
+- Computer settings no longer offer macOS permission setup on an unsupported local platform.
+- Bounded thread mention reads retain the omitted-older-messages count. Marketing installer counts use a daily computed cache without repeated browser polling.
+
+### Verification
+
+- Local formatting, lint, typecheck, release smoke, app and marketing builds, Windows source-boundary check, and the full Bun test suite passed using pinned Node 24.13.1 and Bun 1.4.2. The full-suite run at the preceding CI-qualified head passed 14,797 tests after the test timing fixes. An initial run under Node 26 failed 33 web tests because that Node build did not provide usable `localStorage`; the pinned-runtime rerun passed.
+- The two browser cases that failed on the pre-release main CI run were rerun directly: the chat anchor case passed and the Computer settings case reproduced, was fixed, then passed. The Windows CI credential-reader test hit its previous 10-second timeout; the first 0.9.1 CI run passed it after the timeout increase.
+- The first 0.9.1 CI run also passed those browser cases but exposed a model-cycle ordering regression. Astra was restored to the first catalog position, and the exact failed browser case passed locally.
+- The next 0.9.1 CI run exposed an ACP replay test with a quiet window shorter than loaded-runner timer drift. Its focused case passed after widening that test policy. A separate desktop test now uses its existing event barrier to wait for the mock driver's observation; its focused case and the final full suite passed locally.
+- Exact-head CI then passed. The first tag release failed before Windows packaging because GNU tar treated the absolute `D:` archive path as a remote host. The importer now runs tar from the artifact directory with a relative archive name; its focused import test passed. Focused model, settings, Git contract, and web settings tests passed after changing the Git-writing default to GPT-6 Luna. Formatting, lint, typecheck, and release smoke passed again. Full release workflow validation remains pending on the corrected tag.
+- Public website documentation checks, lint and build passed locally. Windows packaging, startup smoke, provenance, and public publication remain unverified until the release workflow succeeds.
+
+[Complete commit comparison](https://github.com/Emanuele-web04/synara/compare/v0.9.0...v0.9.1).
+
 ## [0.9.0] — 2026-09-21
 
 **Computer Use arrives in beta, available on macOS only at the moment. Linux is coming soon.** Ask Synara to operate Mac apps and browsers with `/computer-use`, follow the targeted window in a preview, and stop the task from chat. The rest of this release brings project import, richer provider controls, clearer review workflows and many reliability fixes.

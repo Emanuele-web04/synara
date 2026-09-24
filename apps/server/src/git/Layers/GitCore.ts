@@ -153,9 +153,22 @@ const NON_REPOSITORY_STATUS_DETAILS = Object.freeze({
 });
 
 type TraceTailState = {
-  processedChars: number;
-  remainder: string;
+  /** Bytes of the trace file already consumed; the next read starts here. */
+  processedBytes: number;
+  /** Trailing bytes after the last newline, kept raw so a multibyte character split across reads survives. */
+  remainder: Uint8Array;
 };
+
+const NEWLINE_BYTE = 0x0a;
+
+function concatBytes(left: Uint8Array, right: Uint8Array): Uint8Array {
+  if (left.length === 0) return right;
+  if (right.length === 0) return left;
+  const combined = new Uint8Array(left.length + right.length);
+  combined.set(left, 0);
+  combined.set(right, left.length);
+  return combined;
+}
 
 class StatusUpstreamRefreshCacheKey extends Data.Class<StatusUpstreamRefreshCacheKeyFields> {}
 
@@ -517,9 +530,10 @@ const createTrace2Monitor = Effect.fn(function* (
   });
   const hookStartByChildKey = new Map<string, { hookName: string; startedAtMs: number }>();
   const traceTailState = yield* Ref.make<TraceTailState>({
-    processedChars: 0,
-    remainder: "",
+    processedBytes: 0,
+    remainder: new Uint8Array(0),
   });
+  const traceDecoder = new TextDecoder();
 
   const handleTraceLine = (line: string) =>
     Effect.gen(function* () {
@@ -578,34 +592,43 @@ const createTrace2Monitor = Effect.fn(function* (
     });
 
   const deltaMutex = yield* Semaphore.make(1);
+  // Tail the file from the last consumed byte instead of re-reading it whole
+  // on every watch event: the trace only grows while git and its hooks run, so
+  // whole-file reads made the tail quadratic in the trace size.
   const readTraceDelta = deltaMutex.withPermit(
-    fs.readFileString(traceFilePath).pipe(
-      Effect.flatMap((contents) =>
-        Effect.uninterruptible(
-          Ref.modify(traceTailState, ({ processedChars, remainder }) => {
-            if (contents.length <= processedChars) {
-              return [[], { processedChars, remainder }];
-            }
-
-            const appended = contents.slice(processedChars);
-            const combined = remainder + appended;
-            const lines = combined.split("\n");
-            const nextRemainder = lines.pop() ?? "";
-
-            return [
-              lines.map((line) => line.replace(/\r$/, "")),
-              {
-                processedChars: contents.length,
-                remainder: nextRemainder,
-              },
-            ];
-          }).pipe(
-            Effect.flatMap((lines) => Effect.forEach(lines, handleTraceLine, { discard: true })),
-          ),
+    Effect.gen(function* () {
+      const { processedBytes } = yield* Ref.get(traceTailState);
+      const appended = yield* Stream.runFold(
+        fs.stream(traceFilePath, { offset: processedBytes }),
+        () => new Uint8Array(0),
+        concatBytes,
+      );
+      if (appended.length === 0) {
+        return;
+      }
+      yield* Effect.uninterruptible(
+        Ref.modify(traceTailState, ({ processedBytes: consumed, remainder }) => {
+          const combined = concatBytes(remainder, appended);
+          const lastNewline = combined.lastIndexOf(NEWLINE_BYTE);
+          if (lastNewline === -1) {
+            return [[], { processedBytes: consumed + appended.length, remainder: combined }];
+          }
+          const lines = traceDecoder
+            .decode(combined.subarray(0, lastNewline))
+            .split("\n")
+            .map((line) => line.replace(/\r$/, ""));
+          return [
+            lines,
+            {
+              processedBytes: consumed + appended.length,
+              remainder: combined.slice(lastNewline + 1),
+            },
+          ];
+        }).pipe(
+          Effect.flatMap((lines) => Effect.forEach(lines, handleTraceLine, { discard: true })),
         ),
-      ),
-      Effect.ignore({ log: true }),
-    ),
+      );
+    }).pipe(Effect.ignore({ log: true })),
   );
   const traceFileName = path.basename(traceFilePath);
   yield* Stream.runForEach(fs.watch(traceFilePath), (event) => {
@@ -621,11 +644,11 @@ const createTrace2Monitor = Effect.fn(function* (
   yield* Effect.addFinalizer(() =>
     Effect.gen(function* () {
       yield* readTraceDelta;
-      const finalLine = yield* Ref.modify(traceTailState, ({ processedChars, remainder }) => [
-        remainder.trim(),
+      const finalLine = yield* Ref.modify(traceTailState, ({ processedBytes, remainder }) => [
+        traceDecoder.decode(remainder).trim(),
         {
-          processedChars,
-          remainder: "",
+          processedBytes,
+          remainder: new Uint8Array(0),
         },
       ]);
       if (finalLine.length > 0) {

@@ -12,12 +12,14 @@ import {
   type StarredModel,
   StarredModelsSchema,
   toggleStarredModel,
+  unstarModel,
 } from "~/lib/starredModels";
 import { useLocalStorage } from "./useLocalStorage";
 
 export function useStarredModels(): {
   starredModels: ReadonlyArray<StarredModel>;
   toggleStarredModel: (entry: StarredModel) => void;
+  unstarModel: (entry: Pick<StarredModel, "provider" | "model">) => void;
 } {
   // Until the first edit writes the new key, legacy per-provider favourites stand in.
   const [legacySeed] = useState(seedStarredModelsFromLegacyFavorites);
@@ -29,5 +31,6 @@ export function useStarredModels(): {
   return {
     starredModels: normalizeStarredModels(stored),
     toggleStarredModel: (entry) => setStored((current) => toggleStarredModel(current, entry)),
+    unstarModel: (entry) => setStored((current) => unstarModel(current, entry)),
   };
 }

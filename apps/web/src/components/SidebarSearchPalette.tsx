@@ -28,7 +28,7 @@ import {
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
 import { Autocomplete as AutocompletePrimitive } from "@base-ui/react/autocomplete";
 import { LuArrowLeft, LuCornerLeftUp } from "react-icons/lu";
-import { type ComponentType, useEffect, useState, type KeyboardEvent } from "react";
+import { type ComponentType, useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { FolderClosed } from "./FolderClosed";
 import { ProviderIcon as SharedProviderIcon } from "./ProviderIcon";
@@ -491,7 +491,13 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
     query.trim().length > 0 &&
     (themeCommandItems.length > 0 || matchedCurrentThemes.length > 0);
   const matchedProjects = isBrowsing ? [] : matchSidebarSearchProjects(props.projects, query);
-  const matchedThreads = isBrowsing ? [] : matchSidebarSearchThreads(props.threads, query);
+  // Scoring normalizes and scans every message of every thread; keep it keyed
+  // on the thread set and query so highlight/keyboard/state re-renders and
+  // unrelated store flushes do not rescore the whole workspace.
+  const matchedThreads = useMemo(
+    () => (isBrowsing ? [] : matchSidebarSearchThreads(props.threads, query)),
+    [isBrowsing, props.threads, query],
+  );
   const hasSearchResults =
     matchedActions.length > 0 ||
     themeCommandItems.length > 0 ||

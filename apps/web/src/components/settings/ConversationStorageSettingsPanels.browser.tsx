@@ -19,6 +19,8 @@ const harness = vi.hoisted(() => ({
   removeDeletedThreadFromClientState: vi.fn(),
   mutateAsync: vi.fn(),
   invalidateQueries: vi.fn(),
+  confirm: vi.fn(async (_message: string) => true),
+  deleteArchivedThreadsFromClient: vi.fn(async (_input: { threadIds: string[] }) => {}),
 }));
 
 vi.mock("@tanstack/react-query", () => ({
@@ -48,6 +50,15 @@ vi.mock("~/store", () => ({
     }),
 }));
 
+vi.mock("~/nativeApi", () => {
+  const api = { dialogs: { confirm: harness.confirm }, orchestration: {} };
+  return { readNativeApi: () => api, ensureNativeApi: () => api };
+});
+
+vi.mock("~/lib/archivedThreadDelete", () => ({
+  deleteArchivedThreadsFromClient: harness.deleteArchivedThreadsFromClient,
+}));
+
 import { ArchivedSettingsPanel, WorktreesSettingsPanel } from "./ConversationStorageSettingsPanels";
 
 function thread(overrides: Record<string, unknown>) {
@@ -68,6 +79,8 @@ describe("ConversationStorageSettingsPanels", () => {
   afterEach(() => {
     document.body.innerHTML = "";
     harness.threadShells = [];
+    harness.confirm.mockClear();
+    harness.deleteArchivedThreadsFromClient.mockClear();
   });
 
   it("uses one association rule for direct and associated worktree paths", async () => {
@@ -148,5 +161,48 @@ describe("ConversationStorageSettingsPanels", () => {
     expect(text).toContain("Recoverable archived child");
     expect(text).toContain("Archived parent");
     expect(text).not.toContain("Represented archived child");
+  });
+
+  it("deletes every archived subtree, children before parents, after one confirmation", async () => {
+    harness.threadShells = [
+      thread({ id: "active", title: "Active thread" }),
+      thread({ id: "first", title: "First archived", archivedAt: "2026-01-02T00:00:00.000Z" }),
+      thread({
+        id: "first-child",
+        title: "First child",
+        parentThreadId: "first",
+        archivedAt: "2026-01-02T00:00:00.000Z",
+      }),
+      thread({
+        id: "second",
+        title: "Second archived",
+        projectId: "missing-project",
+        archivedAt: "2026-01-03T00:00:00.000Z",
+      }),
+    ];
+
+    const screen = await render(<ArchivedSettingsPanel active />);
+    await expect.element(screen.getByText("2 archived threads")).toBeVisible();
+    await screen.getByRole("button", { name: "Delete all" }).click();
+
+    await vi.waitFor(() => expect(harness.deleteArchivedThreadsFromClient).toHaveBeenCalledOnce());
+    expect(harness.confirm).toHaveBeenCalledOnce();
+    expect(harness.confirm.mock.calls[0]?.[0]).toContain("all 2 archived threads");
+    expect(harness.deleteArchivedThreadsFromClient.mock.calls[0]?.[0]).toMatchObject({
+      threadIds: ["first-child", "first", "second"],
+    });
+  });
+
+  it("does not delete anything when delete all is cancelled", async () => {
+    harness.threadShells = [
+      thread({ id: "only", title: "Only archived", archivedAt: "2026-01-02T00:00:00.000Z" }),
+    ];
+    harness.confirm.mockResolvedValueOnce(false);
+
+    const screen = await render(<ArchivedSettingsPanel active />);
+    await screen.getByRole("button", { name: "Delete all" }).click();
+
+    await vi.waitFor(() => expect(harness.confirm).toHaveBeenCalledOnce());
+    expect(harness.deleteArchivedThreadsFromClient).not.toHaveBeenCalled();
   });
 });

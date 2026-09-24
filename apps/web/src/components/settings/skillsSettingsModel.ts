@@ -182,8 +182,15 @@ export function buildSettingsSkillGroups(
 export function buildSettingsSkillSections(
   skills: ReadonlyArray<ProviderSkillDescriptor>,
 ): SettingsSkillSection[] {
+  return buildSettingsSkillSectionsFromGroups(buildSettingsSkillGroups(skills));
+}
+
+/** Sections from already-built groups, so callers that need both do not run the grouping twice. */
+export function buildSettingsSkillSectionsFromGroups(
+  groups: ReadonlyArray<SettingsSkillGroup>,
+): SettingsSkillSection[] {
   const sections = new Map<string, SettingsSkillGroup[]>();
-  for (const group of buildSettingsSkillGroups(skills)) {
+  for (const group of groups) {
     sections.set(group.section, [...(sections.get(group.section) ?? []), group]);
   }
 

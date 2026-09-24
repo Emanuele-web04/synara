@@ -253,6 +253,13 @@ export function ComputerSettingsPanel({
       : status?.availability.kind === "permission-required"
         ? status.availability.missing
         : EMPTY_PERMISSIONS;
+  // macOS itself says every grant is in place. This is what lets an idle
+  // backend, which has checked nothing since launch, still show as ready.
+  const grantsConfirmed =
+    hasNativePermissionSetup &&
+    appSnapState !== null &&
+    nativePermissionSetupError === null &&
+    nativeMissingPermissions.length === 0;
   // Idle status is intentionally side-effect-free. Fresh local grant evidence
   // can reveal setup needs without starting Computer or its input listener.
   const availability =
@@ -281,7 +288,7 @@ export function ComputerSettingsPanel({
             ? statusQuery.error.message
             : "The server could not be reached.",
       }
-    : resolveComputerAvailabilityView(availability, status?.health);
+    : resolveComputerAvailabilityView(availability, status?.health, grantsConfirmed);
   const backend =
     status?.availability.kind === "available" ? (status.availability.backend ?? null) : null;
   const health = status?.health;
@@ -315,27 +322,29 @@ export function ComputerSettingsPanel({
    */
   const captureUnavailable = health?.captureAvailable === false;
   const captureBlocked = captureUnavailable && health?.status === "connected";
+  const localPlatformUnsupported =
+    localPermissionBridge !== null && appSnapState !== null && appSnapState.platform !== "macos";
   // Shared with the chat's setup card, which asks the same question of the same
   // status after pressing the same server-side Set up.
   const needsSetup =
-    nativePermissionSetupError !== null ||
-    nativeMissingPermissions.length > 0 ||
-    computerStatusNeedsSetup(status);
+    !localPlatformUnsupported &&
+    (nativePermissionSetupError !== null ||
+      nativeMissingPermissions.length > 0 ||
+      computerStatusNeedsSetup(status, grantsConfirmed));
   // The one counter worth carrying beside the status sentence; a last failure
   // is already the reconnect sentence, so it is not repeated here.
   const healthNotes = [computerReconnectsNote(health)].filter(
     (note): note is string => note !== null,
   );
   /**
-   * The surface stays silent while the desktop is ready: the toggle's
-   * description carries the calm state, and a second green row would be
-   * chrome. One row appears only when something needs the user — a blocked
-   * backend, a missing grant, a screen-capture refusal, a reconnect in flight,
-   * or a status query that failed — and that row carries the one action that
-   * fixes or rechecks it.
+   * One status row says whether the desktop is ready, connected, or needs the
+   * user — a blocked backend, a missing grant, a screen-capture refusal, a
+   * reconnect in flight, or a status query that failed. Only the last kind
+   * carries an action, the one that fixes or rechecks it.
    */
   const showAttentionRow =
     nativePermissionSetupError !== null ||
+    availabilityView.kind === "ready" ||
     availabilityView.kind === "blocked" ||
     (availabilityView.kind === "checking" && (needsSetup || health?.status === "reconnecting"));
   const attentionTitle = nativePermissionSetupError
@@ -354,11 +363,13 @@ export function ComputerSettingsPanel({
     "size-2 shrink-0 rounded-full",
     nativePermissionSetupError
       ? "bg-red-500"
-      : availabilityView.kind === "checking"
-        ? "animate-pulse bg-amber-500"
-        : captureBlocked
-          ? "bg-amber-500"
-          : "bg-red-500",
+      : availabilityView.kind === "ready"
+        ? "bg-emerald-500"
+        : availabilityView.kind === "checking"
+          ? "animate-pulse bg-amber-500"
+          : captureBlocked
+            ? "bg-amber-500"
+            : "bg-red-500",
   );
   const attentionAction =
     needsSetup && !statusQuery.isError ? (

@@ -72,6 +72,10 @@ import {
 } from "./helperSandbox.ts";
 
 const SIMCTL_TIMEOUT_MS = 30_000;
+/** How long one `simctl list devices` answer serves repeat callers; see listDevicesUnchecked. */
+const DEVICE_LIST_CACHE_MS = 1_500;
+/** How long the machine-wide `xcode-select -p` answer is reused; see xcodeSelectPath. */
+const XCODE_SELECT_CACHE_MS = 15_000;
 const BOOT_TIMEOUT_MS = 120_000;
 const RECORDING_START_TIMEOUT_MS = 10_000;
 const RECORDING_STOP_GRACE_MS = 15_000;
@@ -296,6 +300,14 @@ export class IosSimulatorBackend implements DeviceBackend {
   private deviceTypes: Promise<DeviceTypeCatalogue> | null = null;
   /** One `/Applications` scan per process; see discoverXcodeDeveloperDir. */
   private xcodeDiscovery: Promise<string | null> | null = null;
+  private xcodeSelectCache: {
+    readonly resolvedAtMs: number;
+    readonly developerDir: Promise<string | null>;
+  } | null = null;
+  private deviceListCache: {
+    readonly listedAtMs: number;
+    readonly devices: Promise<readonly DeviceDescriptor[]>;
+  } | null = null;
   private helper: HelperClient | null = null;
   private helperBuildFailure: string | null = null;
   private helperCompilation: Promise<string> | null = null;
@@ -990,6 +1002,10 @@ export class IosSimulatorBackend implements DeviceBackend {
     if (this.osPlatform !== "darwin") {
       throw new DeviceBackendError("iOS simulators are only available on macOS");
     }
+    // Anything but a read can change what `list devices` reports; drop the
+    // short-lived listing cache before the command runs so the next listing
+    // sees the mutation (boot, shutdown, create, erase, ...).
+    if (args[0] !== "list") this.deviceListCache = null;
     return await this.run("xcrun", ["simctl", ...args], {
       timeoutMs: options.timeoutMs ?? SIMCTL_TIMEOUT_MS,
       allowNonZeroExit: true,
@@ -1007,8 +1023,32 @@ export class IosSimulatorBackend implements DeviceBackend {
     );
   }
 
+  /**
+   * One `simctl list` serves every caller within a short window: a single
+   * manager snapshot lists twice (availability, then discovery) and agent tool
+   * calls arrive seconds apart. The window is short enough that a device the
+   * user boots from Simulator.app still shows up promptly, and any simctl
+   * mutation issued through this backend drops the cache immediately.
+   */
   private async listDevicesUnchecked(): Promise<readonly DeviceDescriptor[]> {
     if (this.osPlatform !== "darwin") return [];
+    const cached = this.deviceListCache;
+    if (cached !== null && Date.now() - cached.listedAtMs < DEVICE_LIST_CACHE_MS) {
+      return await cached.devices;
+    }
+    const listedAtMs = Date.now();
+    const devices = this.listDevicesFresh();
+    const entry = { listedAtMs, devices };
+    this.deviceListCache = entry;
+    try {
+      return await devices;
+    } catch (error) {
+      if (this.deviceListCache === entry) this.deviceListCache = null;
+      throw error;
+    }
+  }
+
+  private async listDevicesFresh(): Promise<readonly DeviceDescriptor[]> {
     const [result, catalogue] = await Promise.all([
       this.simctl(["list", "devices", "--json"]).catch(() => null),
       this.deviceTypeCatalogue(),
@@ -1060,6 +1100,22 @@ export class IosSimulatorBackend implements DeviceBackend {
   private async xcodeSelectPath(): Promise<string | null> {
     const override = this.developerDirOverride();
     if (override !== null) return override;
+    const cached = this.xcodeSelectCache;
+    if (cached !== null && Date.now() - cached.resolvedAtMs < XCODE_SELECT_CACHE_MS) {
+      return await cached.developerDir;
+    }
+    const entry = { resolvedAtMs: Date.now(), developerDir: this.resolveXcodeSelectPath() };
+    this.xcodeSelectCache = entry;
+    return await entry.developerDir;
+  }
+
+  /**
+   * The machine-wide selection, re-read on a short interval rather than once
+   * per process: `sudo xcode-select -s` from the setup checklist must take
+   * effect without a restart, but `toolchainEnv()` consults this for every
+   * simctl and xcodebuild spawn, which made it the most-run subprocess.
+   */
+  private async resolveXcodeSelectPath(): Promise<string | null> {
     const result = await this.run("xcode-select", ["-p"], {
       timeoutMs: 10_000,
       allowNonZeroExit: true,

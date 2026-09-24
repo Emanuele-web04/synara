@@ -77,7 +77,7 @@ import {
 } from "~/providerModelOptions";
 import { ensureNativeApi } from "~/nativeApi";
 import { useStore } from "~/store";
-import { createAllThreadsSelector } from "~/storeSelectors";
+import { createSidebarThreadSummariesSelector } from "~/storeSelectors";
 import {
   AutomationApprovalBanner,
   AutomationModelPicker,
@@ -109,7 +109,10 @@ export const Route = createFileRoute("/_chat/automations/$automationId")({
   component: AutomationDetailView,
 });
 
-const selectAllThreads = createAllThreadsSelector();
+// Sidebar summaries carry every field these surfaces read (id, projectId, title,
+// sidechatSourceThreadId) and do not rebuild on streamed message/activity deltas
+// the way the fully derived thread list does.
+const selectAllThreads = createSidebarThreadSummariesSelector();
 
 // Commit the trimmed text: the validators trim before checking, so committing the raw
 // draft would persist stray whitespace the validation never saw.

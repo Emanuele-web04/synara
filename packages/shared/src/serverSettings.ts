@@ -51,13 +51,16 @@ export function providerStartOptionsFromServerSettings(
   settings: ServerSettings,
 ): ProviderStartOptions {
   const { providers } = settings;
+  const codexBinaryPath = providers.codex.binaryPath.trim();
+  const codexHomePath = providers.codex.homePath.trim();
+  const claudeBinaryPath = providers.claudeAgent.binaryPath.trim();
   return {
     codex: {
-      ...(providers.codex.binaryPath ? { binaryPath: providers.codex.binaryPath } : {}),
-      ...(providers.codex.homePath ? { homePath: providers.codex.homePath } : {}),
+      ...(codexBinaryPath ? { binaryPath: codexBinaryPath } : {}),
+      ...(codexHomePath ? { homePath: codexHomePath } : {}),
     },
     claudeAgent: {
-      ...(providers.claudeAgent.binaryPath ? { binaryPath: providers.claudeAgent.binaryPath } : {}),
+      ...(claudeBinaryPath ? { binaryPath: claudeBinaryPath } : {}),
       enableArtifacts: providers.claudeAgent.enableArtifacts,
     },
     cursor: {

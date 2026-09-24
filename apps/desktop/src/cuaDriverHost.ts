@@ -1011,9 +1011,13 @@ export class CuaDriverHost {
       }
       const browserRecoverySetup = this.isIsolatedBrowserSetup(name, request.args);
       const browserRecoveryObserved = this.hasBrowserRecoveryObservation(request.args, task);
+      // Launching names an app, not anything on screen, so a stale view cannot
+      // misdirect it. Gating it left a task that starts by opening an app
+      // stuck after every lock or sleep: the app had no window to observe.
       if (
         (this.desktopObservationRequired &&
-          (CUA_ACTION_TOOLS.has(name) || name === "check_input_ready")) ||
+          ((CUA_ACTION_TOOLS.has(name) && name !== "launch_app") ||
+            name === "check_input_ready")) ||
         (this.browserObservationRequired &&
           CUA_BROWSER_MUTATION_TOOLS.has(name) &&
           !browserRecoverySetup &&
@@ -1442,8 +1446,11 @@ export class CuaDriverHost {
       }
       if (isBrowser && task && reply.ok && !reply.result?.isError)
         this.rememberBrowserTarget(input, reply.result, task);
+      // Reads may finish during the cooldown, but must not release recovery
+      // tracking while continued physical input can still make them stale.
       if (
         modelObservation &&
+        this.inputInterruptCooldownUntil <= Date.now() &&
         !connection.destroyed &&
         !generation.retired &&
         !generation.didExit &&
@@ -2434,20 +2441,24 @@ export class CuaDriverHost {
     return true;
   }
 
-  /** A human changing the controlled target invalidates the model's view.
-   * Typing in a different app does not interrupt background control. */
+  /** Background control shares the Mac with the human: their typing, clicks
+   * and app switches never pause it, even on the app the agent is using. Only
+   * a foreground action in flight — the agent driving the real cursor and
+   * keyboard — collides with physical input, so only that action is
+   * interrupted. Keep observing physical input during recovery so only quiet
+   * and fresh state release the pause. Physical Escape and Stop remain the
+   * ways to halt the agent. */
   physicalInput(event: PhysicalComputerInput): boolean {
     if (this.closed || !this.generation || this.generation.retired) return false;
+    if (
+      !this.activeForegroundInput &&
+      !this.desktopObservationRequired &&
+      this.takeoverTargets.size === 0
+    )
+      return false;
     const affected = [...this.controlledTargets].filter(
-      ([key, target]) =>
-        (this.activeForegroundInput && key === this.activeInputTaskKey) ||
-        (event.pid !== undefined &&
-          target.pid === event.pid &&
-          (event.windowId === undefined ||
-            target.windowId === undefined ||
-            target.windowId === event.windowId)),
+      ([key]) => this.activeForegroundInput && key === this.activeInputTaskKey,
     );
-    if (!this.activeForegroundInput && affected.length === 0) return false;
     const alreadyPaused =
       this.desktopObservationRequired ||
       this.browserObservationRequired ||
@@ -2464,7 +2475,7 @@ export class CuaDriverHost {
             pid: target.pid,
             windowId: target.windowId,
           })),
-          foreground: this.activeForegroundInput,
+          foreground: true,
         }),
       );
     }
@@ -2474,7 +2485,7 @@ export class CuaDriverHost {
       this.browserObservationRequired = true;
     }
     const affectedInputInFlight =
-      (this.activeForegroundInput || affected.some(([key]) => key === this.activeInputTaskKey)) &&
+      this.activeForegroundInput &&
       [...this.inFlightInputInterrupts].some((input) => !input.signal.aborted);
     this.inputInterruptCooldownUntil = Date.now() + ESCAPE_INPUT_COOLDOWN_MS;
     if (alreadyPaused && !affectedInputInFlight) {

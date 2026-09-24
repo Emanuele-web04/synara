@@ -46,6 +46,12 @@ export function starredModelKey(
   ]);
 }
 
+// Provider + model only. A provider tab row shares its traits with every model of that
+// provider, so it counts as starred when any preset of the model exists.
+export function starredModelSlotKey(entry: Pick<StoredStarredModel, "provider" | "model">): string {
+  return JSON.stringify([entry.provider, entry.model]);
+}
+
 // Drops entries for providers this build no longer knows and de-duplicates by key,
 // preserving the user's order.
 export function normalizeStarredModels(
@@ -72,6 +78,17 @@ export function toggleStarredModel(
   return normalized.some((candidate) => starredModelKey(candidate) === key)
     ? normalized.filter((candidate) => starredModelKey(candidate) !== key)
     : [...normalized, entry];
+}
+
+// Removes every preset of a model, whatever traits each one pins.
+export function unstarModel(
+  current: ReadonlyArray<StoredStarredModel>,
+  entry: Pick<StoredStarredModel, "provider" | "model">,
+): StoredStarredModel[] {
+  const slot = starredModelSlotKey(entry);
+  return normalizeStarredModels(current).filter(
+    (candidate) => starredModelSlotKey(candidate) !== slot,
+  );
 }
 
 // Legacy per-provider favorites become trait-less presets until the user first edits stars.

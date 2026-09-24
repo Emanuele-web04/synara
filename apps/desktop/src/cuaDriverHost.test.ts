@@ -258,6 +258,38 @@ process.stdin.resume(); process.stdin.on('end',retire);
   return { host, endpoint, events };
 }
 /** Wait for a real driver event; a missed barrier must fail the test. */
+/**
+ * Physical input while the agent drives the real cursor and keyboard: the one
+ * collision that still interrupts, and so the way into native takeover.
+ */
+async function foregroundCollision(
+  f: Awaited<ReturnType<typeof fixture>>,
+  task: { threadId: string; turnId: string },
+  target: { pid: number; window_id: number },
+): Promise<void> {
+  const typing = cuaRequest(
+    f.endpoint,
+    {
+      method: "call",
+      name: "type_text",
+      args: { ...target, delivery_mode: "foreground", text: "fixture" },
+      task,
+    },
+    { mutation: true },
+  );
+  await waitForEvent(f, "dispatch");
+  expect(
+    f.host.physicalInput({
+      type: "physical-input",
+      kind: "pointer",
+      pid: target.pid,
+      windowId: target.window_id,
+    }),
+  ).toBe(true);
+  await expect(typing).resolves.toMatchObject({ ok: false, effect: "dispatched-unknown" });
+  await waitForEvent(f, "interrupt-ack");
+}
+
 async function waitForEvent(
   f: Awaited<ReturnType<typeof fixture>>,
   event: string,
@@ -496,6 +528,32 @@ describe("Cua macOS host retirement", () => {
     expect((await f.events()).filter((event) => event.event === "key")).toHaveLength(1);
   });
 
+  it("lets a task open an app after unlock, before it has anything to observe", async () => {
+    // "Open Calculator" after sleep: the app has no window yet, so requiring a
+    // fresh look first would leave the task nothing it could observe.
+    const f = await fixture();
+    await f.host.pauseDesktop("screen-lock");
+    const launch = () =>
+      cuaRequest<CuaReply>(f.endpoint, {
+        method: "call",
+        name: "launch_app",
+        args: { name: "Calculator" },
+      });
+    await expect(launch()).resolves.toMatchObject({
+      result: { structuredContent: { code: "computer_input_paused" } },
+    });
+    f.host.resumeDesktop("screen-lock");
+    const launched = await launch();
+    expect(launched.ok).toBe(true);
+    expect(launched.result?.structuredContent?.code).toBeUndefined();
+    // Acting on something on screen still needs the fresh look.
+    await expect(
+      cuaRequest(f.endpoint, { method: "call", name: "press_key" }),
+    ).resolves.toMatchObject({
+      result: { structuredContent: { code: "computer_input_paused" } },
+    });
+  });
+
   it("piggybacks sorted pauses and the never-reset interruption count on every reply", async () => {
     const f = await fixture();
     const probe = () => cuaRequest<CuaReply>(f.endpoint, { method: "probe" });
@@ -653,11 +711,7 @@ describe("Cua macOS host retirement", () => {
       },
       { signal: controller.signal },
     ).catch((error: unknown) => error);
-    for (let attempt = 0; attempt < 200; attempt++) {
-      if ((await f.events().catch(() => [])).some((event) => event.event === "observe")) break;
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
-    expect((await f.events()).some((event) => event.event === "observe")).toBe(true);
+    await waitForEvent(f, "observe");
     controller.abort();
     expect(await observation).toBeInstanceOf(Error);
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -2454,58 +2508,27 @@ describe("physical Escape interrupt", () => {
     },
   );
 
-  it("pauses only the human's controlled target and coalesces repeated physical input", async () => {
-    const f = await fixture(capability, { delayObservation: true });
-    const task = { threadId: "takeover", turnId: "turn" };
+  it("keeps background control running through the human's typing, clicks and app switches", async () => {
+    const f = await fixture();
+    const task = { threadId: "background", turnId: "turn" };
     const args = { pid: 700, window_id: 900, key: "enter" };
     await cuaRequest(f.endpoint, { method: "call", name: "press_key", args, task });
-    expect(f.host.physicalInput({ type: "physical-input", kind: "keyboard", pid: 701 })).toBe(
-      false,
-    );
-    expect(
-      f.host.physicalInput({ type: "physical-input", kind: "pointer", pid: 700, windowId: 901 }),
-    ).toBe(false);
-    expect(
-      f.host.physicalInput({ type: "physical-input", kind: "pointer", pid: 700, windowId: 900 }),
-    ).toBe(true);
-    expect(f.host.physicalInput({ type: "physical-input", kind: "keyboard", pid: 700 })).toBe(true);
-    await waitForEvent(f, "interrupt-ack");
-    expect((await f.events()).filter((event) => event.event === "interrupt")).toHaveLength(1);
-    await expect(pressKey(f.endpoint)).resolves.toMatchObject({
-      result: { structuredContent: { code: "computer_input_paused" } },
-      desktopInterruptions: 0,
-    });
-    const observation = cuaRequest(f.endpoint, {
-      method: "call",
-      name: "get_window_state",
-      args,
-      modelObservation: true,
-      task,
-    });
-    await waitForEvent(f, "observe");
-    expect(f.host.physicalInput({ type: "physical-input", kind: "keyboard", pid: 700 })).toBe(true);
-    await expect(observation).resolves.toMatchObject({
-      result: { isError: true },
-      desktopInterruptions: 0,
-    });
-    await new Promise((resolve) => setTimeout(resolve, ESCAPE_INPUT_COOLDOWN_MS + 50));
-    await expect(pressKey(f.endpoint)).resolves.toMatchObject({ result: { isError: true } });
-    await cuaRequest(f.endpoint, {
-      method: "call",
-      name: "get_window_state",
-      args,
-      modelObservation: true,
-      task,
-    });
-    await expect(pressKey(f.endpoint)).resolves.toMatchObject({
-      ok: true,
-      result: {},
-      desktopInterruptions: 0,
-    });
-    await cuaRequest(f.endpoint, { method: "end_task", task });
+    // Keys in the controlled app (⌘-Tab included), clicks on its window, and
+    // input anywhere else: none of it touches background work.
     expect(f.host.physicalInput({ type: "physical-input", kind: "keyboard", pid: 700 })).toBe(
       false,
     );
+    expect(
+      f.host.physicalInput({ type: "physical-input", kind: "pointer", pid: 700, windowId: 900 }),
+    ).toBe(false);
+    expect(f.host.physicalInput({ type: "physical-input", kind: "keyboard", pid: 701 })).toBe(
+      false,
+    );
+    await expect(
+      cuaRequest(f.endpoint, { method: "call", name: "press_key", args, task }),
+    ).resolves.toMatchObject({ ok: true, result: {} });
+    expect((await f.events()).filter((event) => event.event === "interrupt")).toHaveLength(0);
+    expect((await f.events()).filter((event) => event.event === "key")).toHaveLength(2);
   });
 
   it("interrupts foreground input even when the physical event belongs to a different app", async () => {
@@ -2525,6 +2548,70 @@ describe("physical Escape interrupt", () => {
     await waitForEvent(f, "interrupt-ack");
     expect((await f.events()).filter((event) => event.event === "release")).toHaveLength(1);
   });
+
+  it.each([true, false])(
+    "keeps foreground recovery paused through continued typing (scoped target: %s)",
+    async (scoped) => {
+      const f = await fixture(capability, { delayObservation: true });
+      const task = { threadId: "foreground-recovery", turnId: "turn" };
+      const target = scoped ? { pid: 700, window_id: 900 } : {};
+      const typing = cuaRequest(
+        f.endpoint,
+        {
+          method: "call",
+          name: "type_text",
+          args: { ...target, delivery_mode: "foreground", text: "fixture" },
+          task,
+        },
+        { mutation: true },
+      );
+      await waitForEvent(f, "dispatch");
+      const physicalInput = () =>
+        f.host.physicalInput({ type: "physical-input", kind: "keyboard", pid: 700 });
+      expect(physicalInput()).toBe(true);
+      await expect(typing).resolves.toMatchObject({ ok: false, effect: "dispatched-unknown" });
+      await waitForEvent(f, "interrupt-ack");
+      await new Promise((resolve) => setTimeout(resolve, ESCAPE_INPUT_COOLDOWN_MS + 50));
+
+      const observe = () =>
+        cuaRequest(f.endpoint, {
+          method: "call",
+          name: "get_window_state",
+          args: target,
+          modelObservation: true,
+          task,
+        });
+      const act = () =>
+        cuaRequest(f.endpoint, {
+          method: "call",
+          name: "press_key",
+          args: { ...target, delivery_mode: "foreground", key: "enter" },
+          task,
+        });
+      const reading = observe();
+      await waitForEvent(f, "observe");
+      // The interrupted action already returned; input must still invalidate this read.
+      expect(physicalInput()).toBe(true);
+      await expect(reading).resolves.toMatchObject({
+        result: { structuredContent: { code: "computer_input_paused" } },
+      });
+      await expect(act()).resolves.toMatchObject({
+        result: { structuredContent: { code: "computer_input_paused" } },
+      });
+      // An early read must not disarm recovery tracking during the new cooldown.
+      await observe();
+      expect(physicalInput()).toBe(true);
+      expect((await f.events()).filter((event) => event.event === "interrupt")).toHaveLength(1);
+      await new Promise((resolve) => setTimeout(resolve, ESCAPE_INPUT_COOLDOWN_MS + 50));
+      await expect(act()).resolves.toMatchObject({
+        result: { structuredContent: { code: "computer_input_paused" } },
+      });
+      await observe();
+      await expect(act()).resolves.toMatchObject({ ok: true, result: {} });
+      expect(physicalInput()).toBe(false);
+      expect((await f.events()).filter((event) => event.event === "key")).toHaveLength(1);
+    },
+  );
 
   it("starts listener activation only on use and disarms it when the last task ends", async () => {
     let state: ComputerInputMonitorState = { ready: false, error: "input_monitor_idle" };
@@ -2792,10 +2879,7 @@ describe("physical Escape interrupt", () => {
       });
     await observe(taskA, windowA);
     await observe(taskB, windowB);
-    expect(
-      f.host.physicalInput({ type: "physical-input", kind: "pointer", pid: 700, windowId: 900 }),
-    ).toBe(true);
-    await waitForEvent(f, "interrupt-ack");
+    await foregroundCollision(f, taskB, windowB);
     await observe(taskA, windowB);
     await observe(taskB, windowA);
     await observe(taskB, windowB, false);
@@ -2868,8 +2952,7 @@ describe("physical Escape interrupt", () => {
         task,
       });
     await observe({ pid: 700, window_id: 900 });
-    f.host.physicalInput({ type: "physical-input", kind: "pointer", pid: 700, windowId: 900 });
-    await waitForEvent(f, "interrupt-ack");
+    await foregroundCollision(f, task, { pid: 700, window_id: 900 });
     const cooldown = await act();
     expect(cooldown.result?.structuredContent?.wait_seconds).toBeGreaterThan(0);
     expect(cooldown.result?.structuredContent?.requery_hint).toBeTypeOf("string");
@@ -2887,7 +2970,7 @@ describe("physical Escape interrupt", () => {
   });
 
   it.each(["dom_refs_v1", "semantic_v2"])(
-    "requires the affected task's exact %s browser snapshot after takeover",
+    "requires the affected task's exact %s browser snapshot after an interrupt",
     async (snapshot_format) => {
       const f = await fixture(capability, { browserObservations: true });
       const task = { threadId: "browser-takeover", turnId: "turn" };
@@ -2911,9 +2994,7 @@ describe("physical Escape interrupt", () => {
         });
       await observe(window);
       await observe(browser);
-      expect(
-        f.host.physicalInput({ type: "physical-input", kind: "pointer", pid: 700, windowId: 900 }),
-      ).toBe(true);
+      expect(f.host.emergencyStopInput()).toBe(true);
       await waitForEvent(f, "interrupt-ack");
       await observe(browser, true, otherTask);
       await observe(window);
@@ -2973,7 +3054,7 @@ describe("physical Escape interrupt", () => {
       task,
     });
     await waitForEvent(f, "browser-observe");
-    expect(f.host.physicalInput({ type: "physical-input", kind: "keyboard", pid: 700 })).toBe(true);
+    expect(f.host.emergencyStopInput()).toBe(true);
     await expect(reading).resolves.toMatchObject({
       result: { structuredContent: { code: "computer_input_paused" } },
     });

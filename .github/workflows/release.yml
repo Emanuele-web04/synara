@@ -15,8 +15,26 @@ on:
         required: true
         default: false
         type: boolean
+      platform:
+        description: "Build-only platform scope (publication requires all)"
+        type: choice
+        default: all
+        options: [all, mac-arm64, mac-x64, linux-x64, win-x64]
+      stage:
+        description: "Build-only stage (publication requires artifact; preflight runs only the quality gates)"
+        type: choice
+        default: artifact
+        options: [artifact, native, icon, js, preflight]
+      cua_benchmark_baseline:
+        description: "Optional full baseline commit for paired cold Cua builds (native, one Mac only)"
+        type: string
+        default: ""
 
 permissions: {}
+
+env:
+  # The same build setting is fingerprinted on every portable-output consumer.
+  AZURE_TRUSTED_SIGNING_SUBJECT_DN: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBJECT_DN }}
 
 concurrency:
   group: synara-desktop-release
@@ -43,6 +61,14 @@ jobs:
       source_tag: ${{ steps.source_provenance.outputs.source_tag }}
       lockfile_sha256: ${{ steps.source_provenance.outputs.lockfile_sha256 }}
       ref: ${{ steps.source_provenance.outputs.source_commit }}
+      matrix: ${{ steps.scope.outputs.matrix }}
+      build_icon: ${{ steps.scope.outputs.build_icon }}
+      build_js: ${{ steps.scope.outputs.build_js }}
+      build_native: ${{ steps.scope.outputs.build_native }}
+      benchmark_native: ${{ steps.scope.outputs.benchmark_native }}
+      quality_gates: ${{ steps.scope.outputs.quality_gates }}
+      package_artifacts: ${{ steps.scope.outputs.package_artifacts }}
+      build_server: ${{ steps.scope.outputs.build_server }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -64,6 +90,15 @@ jobs:
           else
             echo "Build-only validation enabled; no release or package will be published."
           fi
+
+      - id: scope
+        name: Validate build scope
+        env:
+          BUILD_PLATFORM: ${{ inputs.platform || 'all' }}
+          BUILD_STAGE: ${{ inputs.stage || 'artifact' }}
+          PUBLISH_RELEASE: ${{ steps.release_mode.outputs.publish_release }}
+          CUA_BENCHMARK_BASELINE: ${{ inputs.cua_benchmark_baseline }}
+        run: node scripts/resolve-release-build-scope.ts
 
       - id: release_meta
         name: Resolve release policy
@@ -133,29 +168,133 @@ jobs:
             fi
           done
 
+  # Preflight resolves policy only, so the quality gates fan out immediately.
+  # The serial server suite is the longest gate; it runs in its own shards below.
+  quality:
+    name: Quality gates
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.ref }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      # Five workspace packages patch the one shared TypeScript install in their
+      # prepare scripts; concurrent patching of that file is a race, so lifecycle
+      # scripts run one at a time here.
+      - name: Install dependencies
+        run: bun install --frozen-lockfile --concurrent-scripts=1
+
+      - name: Verify Synara identity
+        run: bun run brand:check
+
+      - name: Lint
+        if: needs.preflight.outputs.quality_gates == 'true'
+        run: bun run lint
+
+      - name: Typecheck
+        if: needs.preflight.outputs.quality_gates == 'true'
+        run: bun run typecheck
+
+      - name: Test every package except the server
+        if: needs.preflight.outputs.quality_gates == 'true'
+        run: bunx turbo run test --filter='!@synara/cli'
+
+  # The server package runs its files serially (see apps/server/package.json).
+  # Vitest's native shards keep every file and assertion; only the distribution
+  # across runners changes, matching the measured three-way split in ci.yml.
+  server_tests:
+    name: Server tests (${{ matrix.shard }})
+    needs: preflight
+    if: needs.preflight.outputs.quality_gates == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      # One shard's failure must not cancel the others, so every lane reports
+      # complete signal for the release gate.
+      fail-fast: false
+      matrix:
+        shard: ["1/3", "2/3", "3/3"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.ref }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: bun install --frozen-lockfile --concurrent-scripts=1
 
-      - name: Verify Synara identity
-        run: bun run brand:check
+      - name: Test server shard ${{ matrix.shard }}
+        run: bunx turbo run test --filter=@synara/cli -- --shard=${{ matrix.shard }}
 
-      - name: Lint
-        run: bun run lint
-
-      - name: Typecheck
-        run: bun run typecheck
-
-      - name: Test
-        run: bun run test
+  build_portable:
+    name: Build portable JavaScript
+    needs: [preflight, quality, server_tests]
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.quality.result == 'success' && (needs.server_tests.result == 'success' || needs.server_tests.result == 'skipped') && needs.preflight.outputs.build_js == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.ref }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - name: Report runner capacity
+        run: node scripts/report-build-runner.ts
+      - name: Install frozen dependencies
+        run: bun install --frozen-lockfile --ignore-scripts --filter '!@synara/marketing'
+      - name: Build portable outputs
+        run: bun run build:desktop
+      - name: Record portable output provenance
+        env:
+          SOURCE_COMMIT: ${{ needs.preflight.outputs.source_commit }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/portable-build"
+          node scripts/portable-build.ts create "$RUNNER_TEMP/portable-build/manifest.json" "$SOURCE_COMMIT"
+          tar -cf "$RUNNER_TEMP/portable-build/outputs.tar" apps/desktop/dist-electron apps/server/dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: portable-build
+          path: ${{ runner.temp }}/portable-build/*
+          compression-level: 1
+          if-no-files-found: error
 
   build_mac_icon:
     name: Compile macOS icon
-    needs: preflight
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.quality.result == 'success' && (needs.server_tests.result == 'success' || needs.server_tests.result == 'skipped') && needs.preflight.outputs.build_icon == 'true' }}
+    needs: [preflight, quality, server_tests]
     runs-on: macos-26
     timeout-minutes: 10
     permissions:
@@ -185,35 +324,15 @@ jobs:
 
   build:
     name: Build ${{ matrix.label }}
-    needs: [preflight, build_mac_icon]
+    needs: [preflight, quality, server_tests, build_mac_icon, build_portable]
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.quality.result == 'success' && (needs.server_tests.result == 'success' || needs.server_tests.result == 'skipped') && needs.preflight.outputs.build_native == 'true' && (needs.build_mac_icon.result == 'success' || needs.build_mac_icon.result == 'skipped') && (needs.build_portable.result == 'success' || needs.build_portable.result == 'skipped') }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    timeout-minutes: ${{ needs.preflight.outputs.benchmark_native == 'true' && 25 || 60 }}
     permissions:
       contents: read
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - label: macOS arm64
-            runner: macos-15
-            platform: mac
-            target: dmg
-            arch: arm64
-          - label: macOS x64
-            runner: macos-15-intel
-            platform: mac
-            target: dmg
-            arch: x64
-          - label: Linux x64
-            runner: ubuntu-24.04
-            platform: linux
-            target: AppImage
-            arch: x64
-          - label: Windows x64
-            runner: windows-2022
-            platform: win
-            target: nsis
-            arch: x64
+      matrix: ${{ fromJSON(needs.preflight.outputs.matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -232,19 +351,20 @@ jobs:
           node-version-file: package.json
 
       - name: Install dependencies
+        if: needs.preflight.outputs.package_artifacts == 'true'
         # Preflight validates the entire workspace. Native artifacts retain all
         # runtime/build dependencies but do not install the unrelated marketing site.
         run: bun install --frozen-lockfile --ignore-scripts --filter '!@synara/marketing'
 
       - name: Download macOS icon catalog
-        if: matrix.platform == 'mac'
+        if: matrix.platform == 'mac' && needs.preflight.outputs.package_artifacts == 'true'
         uses: actions/download-artifact@v8
         with:
           name: mac-icon-catalog
           path: ${{ runner.temp }}/mac-icon
 
       - name: Select macOS native toolchain
-        if: matrix.platform == 'mac'
+        if: matrix.platform == 'mac' && needs.preflight.outputs.package_artifacts == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -258,28 +378,31 @@ jobs:
           echo "SYNARA_MAC_ICON_CATALOG=$RUNNER_TEMP/mac-icon/Assets.car" >> "$GITHUB_ENV"
           DEVELOPER_DIR="$native_developer_dir" xcodebuild -version
 
-      - name: Install the pinned Cua Driver compiler
-        # The mac and Linux artifacts compile the patched Cua Driver from source,
-        # and provisioning refuses any rustc other than the pinned release.
-        if: matrix.platform == 'mac' || matrix.platform == 'linux'
-        shell: bash
-        run: |
-          set -euo pipefail
-          rust_version=$(jq -r .rustVersion packages/shared/src/cuaDriverRelease.json)
-          rustup toolchain install "$rust_version" --profile minimal
-          echo "RUSTUP_TOOLCHAIN=$rust_version" >> "$GITHUB_ENV"
-          # Provisioning otherwise compiles into a directory it deletes, so the
-          # macOS x64 packaging retries would each recompile the driver.
-          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/cua-driver-target" >> "$GITHUB_ENV"
+      - name: Report runner capacity
+        run: node scripts/report-build-runner.ts
 
-      - name: Install Linux native build dependencies
-        if: matrix.platform == 'linux'
-        shell: bash
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev libx11-dev libxtst-dev libxrandr-dev libxfixes-dev libxrender-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libwayland-dev
+      - name: Provision verified Cua
+        if: matrix.platform == 'mac' || matrix.platform == 'linux'
+        uses: ./.github/actions/provision-cua
+        with:
+          benchmark-baseline: ${{ inputs.cua_benchmark_baseline || '' }}
+
+      - name: Upload Cua benchmark evidence
+        if: ${{ always() && needs.preflight.outputs.benchmark_native == 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: cua-benchmark-${{ matrix.arch }}
+          path: ${{ runner.temp }}/cua-benchmark/evidence
+          if-no-files-found: error
+
+      - name: Restore portable outputs
+        if: needs.preflight.outputs.package_artifacts == 'true'
+        uses: ./.github/actions/restore-portable-build
+        with:
+          source-commit: ${{ needs.preflight.outputs.source_commit }}
 
       - id: build_artifact
+        if: needs.preflight.outputs.package_artifacts == 'true'
         name: Build desktop artifact
         shell: bash
         env:
@@ -312,6 +435,8 @@ jobs:
             --build-version "${{ needs.preflight.outputs.version }}"
             --source-commit "$SOURCE_COMMIT"
             --lockfile-sha256 "$LOCKFILE_SHA256"
+            --skip-build
+            --keep-stage
             --verbose
           )
 
@@ -365,31 +490,13 @@ jobs:
             echo "Signing disabled for ${{ matrix.platform }}."
           fi
 
-          if [[ "${{ matrix.platform }}" == "mac" && "${{ matrix.arch }}" == "x64" ]]; then
-            # electron-builder occasionally times out fetching x64 DMG helper bundles on GitHub-hosted macOS runners.
-            # Retry this narrow packaging path so transient upstream 504s do not block the whole release.
-            max_attempts=3
-            for attempt in $(seq 1 "$max_attempts"); do
-              if bun run dist:desktop:artifact -- "${args[@]}"; then
-                break
-              fi
-
-              if [[ "$attempt" -eq "$max_attempts" ]]; then
-                echo "macOS x64 desktop artifact build failed after $max_attempts attempts."
-                exit 1
-              fi
-
-              sleep_seconds=$((attempt * 15))
-              echo "macOS x64 desktop artifact build failed on attempt $attempt/$max_attempts. Retrying in ${sleep_seconds}s..."
-              sleep "$sleep_seconds"
-            done
-          else
-            bun run dist:desktop:artifact -- "${args[@]}"
-          fi
+          # Never retry source, signing or notarization failures as downloads.
+          bun run dist:desktop:artifact -- "${args[@]}"
 
           echo "signed=$signed" >> "$GITHUB_OUTPUT"
 
       - name: Collect release assets
+        if: needs.preflight.outputs.package_artifacts == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -415,6 +522,7 @@ jobs:
           fi
 
       - name: Verify and record artifact provenance
+        if: needs.preflight.outputs.package_artifacts == 'true'
         shell: bash
         env:
           EXPECTED_MAC_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -444,6 +552,7 @@ jobs:
             --expected-windows-subject-dn "$EXPECTED_WINDOWS_SUBJECT_DN"
 
       - name: Smoke packaged desktop startup
+        if: needs.preflight.outputs.package_artifacts == 'true'
         shell: bash
         run: |
           node scripts/verify-packaged-desktop-startup.ts \
@@ -453,6 +562,7 @@ jobs:
             --version "${{ needs.preflight.outputs.version }}"
 
       - name: Upload build artifacts
+        if: needs.preflight.outputs.package_artifacts == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: desktop-${{ matrix.platform }}-${{ matrix.arch }}
@@ -462,7 +572,7 @@ jobs:
   publish_cli:
     name: Publish CLI to npm
     if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_PUBLISH_CLI == '1' }}
-    needs: [preflight, build]
+    needs: [preflight, build, build_portable]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -490,16 +600,18 @@ jobs:
         # needs dependencies available to build the package.
         run: bun install --frozen-lockfile --ignore-scripts
 
-      - name: Build CLI package
-        run: bun run build --filter=@synara/web --filter=@synara/cli
+      - name: Restore portable outputs
+        uses: ./.github/actions/restore-portable-build
+        with:
+          source-commit: ${{ needs.preflight.outputs.source_commit }}
 
       - name: Publish CLI package
         run: node apps/server/scripts/cli.ts publish --tag latest --app-version "${{ needs.preflight.outputs.version }}" --verbose
 
   build_server_tarball:
     name: Build server tarball
-    if: ${{ needs.preflight.outputs.publish_release == 'true' }}
-    needs: [preflight, build]
+    if: needs.preflight.outputs.build_server == 'true'
+    needs: [preflight, build_portable]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -525,8 +637,10 @@ jobs:
         # dependencies available to build the package.
         run: bun install --frozen-lockfile --ignore-scripts
 
-      - name: Build server package
-        run: bun run build --filter=@synara/web --filter=@synara/cli
+      - name: Restore portable outputs
+        uses: ./.github/actions/restore-portable-build
+        with:
+          source-commit: ${{ needs.preflight.outputs.source_commit }}
 
       - name: Pack server tarball
         run: node apps/server/scripts/cli.ts pack --out release-server --app-version "${{ needs.preflight.outputs.version }}"

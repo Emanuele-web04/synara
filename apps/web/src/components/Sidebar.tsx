@@ -184,6 +184,7 @@ import { useLatestProjectStore } from "../latestProjectStore";
 import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
 import { dispatchThreadRename } from "../lib/threadRename";
 import { quotePosixShellArgument } from "../lib/shellQuote";
+import { useStableValue } from "~/hooks/useStableValue";
 import { DEFAULT_THREAD_TERMINAL_ID, type SidebarThreadSummary, type Thread } from "../types";
 import {
   applyAutomationEvent,
@@ -406,10 +407,11 @@ import { useThreadDetailPrewarm } from "../threadDetailPrewarm";
 import { hasThreadDetailResumeCursor } from "../threadDetailResumeCursors";
 import { retainThreadDetailSubscription } from "../threadDetailSubscriptionRetention";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
-import type {
-  SidebarSearchAction,
-  SidebarSearchProject,
-  SidebarSearchThread,
+import {
+  areSidebarSearchThreadListsEqual,
+  type SidebarSearchAction,
+  type SidebarSearchProject,
+  type SidebarSearchThread,
 } from "./SidebarSearchPalette.logic";
 import { useFocusedChatContext } from "../focusedChatContext";
 import { waitForRecoverableProjectInReadModel } from "../lib/projectCreateRecovery";
@@ -7011,6 +7013,23 @@ export default function Sidebar() {
   );
 }
 
+// Message text projections keyed by the thread's message array, which the
+// store keeps reference-stable while that thread's messages are unchanged.
+const searchPaletteMessagesByThreadMessages = new WeakMap<
+  Thread["messages"],
+  SidebarSearchThread["messages"]
+>();
+
+function searchPaletteMessagesFor(thread: Thread): SidebarSearchThread["messages"] {
+  const cached = searchPaletteMessagesByThreadMessages.get(thread.messages);
+  if (cached) {
+    return cached;
+  }
+  const projected = thread.messages.map((message) => ({ text: message.text }));
+  searchPaletteMessagesByThreadMessages.set(thread.messages, projected);
+  return projected;
+}
+
 function SidebarSearchPaletteController(props: {
   open: boolean;
   mode: SidebarSearchPaletteMode;
@@ -7044,7 +7063,11 @@ function SidebarSearchPaletteController(props: {
   const importProviders: ReadonlyArray<ImportProviderKind> = (
     ["codex", "claudeAgent", "cursor", "opencode", "omp"] as const
   ).filter((provider, index) => supportsThreadImport(importProviderCapabilityQueries[index]?.data));
-  const searchPaletteThreads = useMemo<SidebarSearchThread[]>(() => {
+  // `threads` is rebuilt on every streamed store flush, so this projection is
+  // cheap by construction (message text is cached per thread-messages array
+  // below) and its result keeps the previous identity while nothing the
+  // palette shows has changed, sparing the palette a full rescore per token.
+  const rebuiltSearchPaletteThreads = useMemo<SidebarSearchThread[]>(() => {
     const threadById = new Map(threads.map((thread) => [thread.id, thread] as const));
     const searchProjectById = new Map(
       props.projects.map((project) => [project.id, project] as const),
@@ -7067,13 +7090,15 @@ function SidebarSearchPaletteController(props: {
           provider: thread.modelSelection.provider,
           createdAt: thread.createdAt,
           updatedAt: thread.updatedAt,
-          messages: thread.messages.map((message) => ({
-            text: message.text,
-          })),
+          messages: searchPaletteMessagesFor(thread),
         },
       ];
     });
   }, [props.projectById, props.projects, sidebarDisplayThreads, threads]);
+  const searchPaletteThreads = useStableValue(
+    rebuiltSearchPaletteThreads,
+    areSidebarSearchThreadListsEqual,
+  );
 
   return (
     <SidebarSearchPalette

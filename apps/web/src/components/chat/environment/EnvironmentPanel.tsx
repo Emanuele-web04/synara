@@ -18,6 +18,7 @@ import type {
   ResolvedKeybindingsConfig,
   ThreadId,
 } from "@synara/contracts";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 
@@ -40,7 +41,15 @@ import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { ArrowUpRightIcon, ChangesIcon, GitHubIcon, SettingsIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
+import { deleteActiveThreadFromClient } from "~/lib/activeThreadDelete";
+import { gitRemoveWorktreeMutationOptions } from "~/lib/gitReactQuery";
 import { waitForSidechatCreator } from "~/lib/sidechatCreatorRegistry";
+import { useComposerDraftStore } from "~/composerDraftStore";
+import { showConfirmDialogFallback } from "~/confirmDialogFallback";
+import { usePinnedThreadsStore } from "~/pinnedThreadsStore";
+import { useSplitViewStore } from "~/splitViewStore";
+import { useTerminalStateStore } from "~/terminalStateStore";
+import { useTemporaryThreadStore } from "~/temporaryThreadStore";
 import { useRightDockStore } from "~/rightDockStore";
 
 import { EnvironmentEditorSection } from "./EnvironmentEditorSection";
@@ -255,6 +264,8 @@ export function EnvironmentPanel({
   const recap = recapProp ?? null;
   const onOpenEditorView = onOpenEditorViewProp ?? null;
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
   const { settings } = useAppSettings();
   const openRightDockPane = useRightDockStore((store) => store.openPane);
   const { additions, deletions, hasChanges } = diffTotals;
@@ -400,6 +411,47 @@ export function EnvironmentPanel({
               threadId: sidechatThreadId,
             });
             onClose();
+          }}
+          onDelete={(sidechat) => {
+            void (async () => {
+              if (settings.confirmThreadDelete) {
+                const confirmationMessage = [
+                  `Delete side chat "${sidechat.title}"?`,
+                  "This permanently clears conversation history for this side chat and its subagents.",
+                ].join("\n");
+                const api = readNativeApi();
+                const confirmed = api
+                  ? await api.dialogs.confirm(confirmationMessage)
+                  : await showConfirmDialogFallback(confirmationMessage);
+                if (!confirmed) return;
+              }
+              // The host can change workspace after the side chat is created. The shared delete
+              // helper prompts only if this side chat is now the last owner of its worktree.
+              // An open dock pane is pruned once the thread disappears.
+              await deleteActiveThreadFromClient({
+                threadId: sidechat.id,
+                includeSubagentDescendants: true,
+                onDeleted: ({ thread }) => {
+                  usePinnedThreadsStore.getState().unpinThread(thread.id);
+                  const drafts = useComposerDraftStore.getState();
+                  drafts.clearDraftThread(thread.id);
+                  drafts.clearProjectDraftThreadById(thread.projectId, thread.id);
+                  useTerminalStateStore.getState().clearTerminalState(thread.id);
+                  useSplitViewStore.getState().removeThreadFromSplitViews(thread.id);
+                  useTemporaryThreadStore.getState().clearTemporaryThread(thread.id);
+                },
+                removeWorktree: (worktree) => removeWorktreeMutation.mutateAsync(worktree),
+              });
+            })().catch((error) => {
+              toastManager.add({
+                type: "error",
+                title: "Could not delete side chat",
+                description:
+                  error instanceof Error
+                    ? error.message
+                    : "An error occurred while deleting the side chat.",
+              });
+            });
           }}
         />
       ) : null}
