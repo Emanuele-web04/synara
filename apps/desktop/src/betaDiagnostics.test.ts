@@ -411,13 +411,37 @@ describe("BetaDiagnostics", () => {
     );
   };
 
-  it("reports whether the install id was created this launch", () => {
+  it("marks a new install pending until the marker is cleared", () => {
     const root = makeRoot();
+    const pendingPath = join(root, "diagnostics", "install-pending");
     const first = makeDiagnostics(root);
-    expect(first.installIdIsNew).toBe(true);
+    expect(first.hasInstallPending()).toBe(true);
+    // Relaunches keep the marker until the event is queued and cleared.
     const second = makeDiagnostics(root);
-    expect(second.installIdIsNew).toBe(false);
+    expect(second.hasInstallPending()).toBe(true);
     expect(second.installId).toBe(first.installId);
+    second.clearInstallPending();
+    expect(existsSync(pendingPath)).toBe(false);
+    expect(makeDiagnostics(root).hasInstallPending()).toBe(false);
+  });
+
+  it("drops a beta event whose outcome is invalid for the event name", () => {
+    const root = makeRoot();
+    const diag = makeDiagnostics(root);
+    diag.track("beta.installed", { kind: "beta", outcome: "trash" });
+    diag.track("beta.left", { kind: "beta", outcome: "fresh" });
+    diag.track("beta.installed", { kind: "beta", outcome: "imported" });
+    const events = readQueue(root);
+    expect(events).toHaveLength(1);
+    expect(events[0].payload).toEqual({ kind: "beta", outcome: "imported" });
+  });
+
+  it("dispose relays a fresh snapshot so short sessions still report", async () => {
+    const root = makeRoot();
+    const diag = makeDiagnostics(root, "http://127.0.0.1:1");
+    writeSnapshot(root, new Date().toISOString());
+    await diag.dispose();
+    expect(readQueue(root).filter((event) => event.event === "usage.daily")).toHaveLength(1);
   });
 
   it("maybeTrackDailyUsage sends once per UTC day and records the day", () => {

@@ -4448,13 +4448,15 @@ async function restartBackendAfterCrash(
 type BackendStartTrigger = "lifecycle" | "crash-restart";
 
 /**
- * Emits beta.installed exactly once, on the first backend readiness of a fresh
- * beta install. The server consumes any pending import marker before it
+ * Emits beta.installed once, on the first backend readiness while the
+ * install-pending marker exists. The marker is written when the install id is
+ * created, so a first launch whose backend never came up reports on the next
+ * launch instead. The server consumes any pending import marker before it
  * listens, so import-result.json is final at this point.
  */
 let betaInstalledEventEmitted = false;
 function maybeTrackBetaInstalled(): void {
-  if (!betaDiagnostics || !betaDiagnostics.installIdIsNew || betaInstalledEventEmitted) {
+  if (!betaDiagnostics || betaInstalledEventEmitted || !betaDiagnostics.hasInstallPending()) {
     return;
   }
   betaInstalledEventEmitted = true;
@@ -4463,6 +4465,7 @@ function maybeTrackBetaInstalled(): void {
     kind: "beta",
     outcome: result === null ? "fresh" : result.ok ? "imported" : "import-failed",
   });
+  betaDiagnostics.clearInstallPending();
 }
 
 function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {

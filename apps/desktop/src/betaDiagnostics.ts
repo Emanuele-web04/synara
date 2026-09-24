@@ -49,7 +49,7 @@ const FLUSH_BATCH_MAX_EVENTS = 200;
 const FLUSH_BATCH_MAX_BYTES = 256 * 1024;
 // The server writes diagnostics/usage-snapshot.json every 6h; the main
 // process relays it as one usage.daily event per UTC day.
-const USAGE_SNAPSHOT_FIRST_DELAY_MS = 10 * 60 * 1000;
+const USAGE_SNAPSHOT_FIRST_DELAY_MS = 2 * 60 * 1000;
 const USAGE_SNAPSHOT_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const USAGE_SNAPSHOT_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 const USAGE_COUNT_MAX = 100_000;
@@ -344,11 +344,10 @@ export function resolveBetaDiagnosticsEndpoint(env: NodeJS.ProcessEnv): string {
 export class BetaDiagnostics {
   /** Random UUID identifying this beta install; generated on first launch. */
   readonly installId: string;
-  /** True when this launch created the install id (i.e. first-ever launch). */
-  readonly installIdIsNew: boolean;
   private readonly queuePath: string;
   private readonly usageSnapshotPath: string;
   private readonly usageLastDayPath: string;
+  private readonly installPendingPath: string;
   private readonly endpoint: string;
   private flushTimer: ReturnType<typeof setInterval> | null = null;
   private usageTimers: ReturnType<typeof setTimeout>[] = [];
@@ -366,10 +365,9 @@ export class BetaDiagnostics {
     this.queuePath = join(input.homeDir, "diagnostics", "events.jsonl");
     this.usageSnapshotPath = join(input.homeDir, "diagnostics", "usage-snapshot.json");
     this.usageLastDayPath = join(input.homeDir, "diagnostics", "usage-last-day");
+    this.installPendingPath = join(input.homeDir, "diagnostics", "install-pending");
     this.endpoint = resolveBetaDiagnosticsEndpoint(input.env ?? process.env);
-    const installId = this.loadInstallId(input.homeDir);
-    this.installId = installId.id;
-    this.installIdIsNew = installId.created;
+    this.installId = this.loadInstallId(input.homeDir);
     this.now = input.now ?? (() => new Date());
     this.appVersion = input.appVersion;
     this.platform = input.platform;
@@ -385,21 +383,44 @@ export class BetaDiagnostics {
   private readonly errorFingerprintSentAt = new Map<string, number>();
   private readonly errorSentTimestamps: number[] = [];
 
-  private loadInstallId(homeDir: string): { id: string; created: boolean } {
+  private loadInstallId(homeDir: string): string {
     const diagnosticsDir = join(homeDir, "diagnostics");
     const idPath = join(diagnosticsDir, "install-id");
     try {
       if (existsSync(idPath)) {
         const existing = readFileSync(idPath, "utf8").trim();
-        if (/^[0-9a-f-]{36}$/i.test(existing)) return { id: existing, created: false };
+        if (/^[0-9a-f-]{36}$/i.test(existing)) return existing;
       }
       mkdirSync(diagnosticsDir, { recursive: true });
       const generated = randomUUID();
       writeFileSync(idPath, `${generated}\n`, { encoding: "utf8", mode: 0o600 });
-      return { id: generated, created: true };
+      try {
+        // Durable marker so a first launch whose backend never comes up still
+        // reports beta.installed on the next launch.
+        writeFileSync(this.installPendingPath, `${new Date().toISOString()}\n`, {
+          encoding: "utf8",
+          mode: 0o600,
+        });
+      } catch {
+        // Marker write must not fail install-id creation.
+      }
+      return generated;
     } catch {
-      // An unpersisted id is regenerated next launch; it is not "new".
-      return { id: randomUUID(), created: false };
+      return randomUUID();
+    }
+  }
+
+  /** True while this install still owes a beta.installed event. */
+  hasInstallPending(): boolean {
+    return existsSync(this.installPendingPath);
+  }
+
+  /** Deletes the marker once the beta.installed event is queued. */
+  clearInstallPending(): void {
+    try {
+      rmSync(this.installPendingPath, { force: true });
+    } catch {
+      // best effort
     }
   }
 
@@ -423,6 +444,9 @@ export class BetaDiagnostics {
 
   track(event: BetaDiagnosticsEventName, payload: BetaDiagnosticsPayload): void {
     if (this.disposed) return;
+    const sanitized = sanitizeBetaDiagnosticsPayload(payload, this.homeDir, event);
+    // A beta lifecycle event without a valid outcome is meaningless — drop it.
+    if (sanitized.kind === "beta" && !("outcome" in sanitized)) return;
     const record: BetaDiagnosticsEvent = {
       v: 1,
       id: randomUUID(),
@@ -433,7 +457,7 @@ export class BetaDiagnostics {
       platform: this.platform,
       arch: this.arch,
       event,
-      payload: sanitizeBetaDiagnosticsPayload(payload, this.homeDir, event),
+      payload: sanitized,
     };
     try {
       mkdirSync(join(this.queuePath, ".."), { recursive: true });
@@ -637,6 +661,9 @@ export class BetaDiagnostics {
   /** Best-effort final flush + shutdown for app quit; bounded by `timeoutMs`. */
   async dispose(timeoutMs = 3_000): Promise<void> {
     if (this.disposed) return;
+    // Short sessions may never reach the 2-minute timer; a still-fresh
+    // snapshot from this or the previous launch relays on the way out.
+    this.maybeTrackDailyUsage();
     if (this.flushTimer) {
       clearInterval(this.flushTimer);
       this.flushTimer = null;
