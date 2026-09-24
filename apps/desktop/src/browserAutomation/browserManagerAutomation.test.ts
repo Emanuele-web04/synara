@@ -58,6 +58,8 @@ class FakeWebContents extends EventEmitter {
     detach: vi.fn(),
   };
   isDestroyed = () => false;
+  getType = () => "browserView";
+  isFocused = () => false;
   setUserAgent = vi.fn();
   windowOpenHandler:
     | ((details: { url: string; frameName: string; features: string; disposition: string }) => {
@@ -80,6 +82,102 @@ class FakeWebContents extends EventEmitter {
 }
 
 describe("DesktopBrowserManager automation runtime boundary", () => {
+  it("keeps takeover and deferred download provenance scoped to the controlled tab", async () => {
+    const manager = new DesktopBrowserManager();
+    const agent = manager.prepareAutomationTab({ threadId: THREAD_ID, reuse: true });
+    const contents = new FakeWebContents(414);
+    webContentsViewConstructor.mockReturnValueOnce({
+      webContents: contents,
+      setBounds: vi.fn(),
+      setVisible: vi.fn(),
+      setBorderRadius: vi.fn(),
+    });
+    await manager.getAutomationRuntime({ threadId: THREAD_ID, tabId: agent.automationTabId });
+    const manual = manager.newTab({ threadId: THREAD_ID });
+    const manualContents = new FakeWebContents(415);
+    webContentsViewConstructor.mockReturnValueOnce({
+      webContents: manualContents,
+      setBounds: vi.fn(),
+      setVisible: vi.fn(),
+      setBorderRadius: vi.fn(),
+    });
+    await manager.getCookieImportRuntime({ threadId: THREAD_ID, tabId: manual.activeTabId! });
+    const epoch = manager.getAutomationHumanControlEpoch(THREAD_ID, agent.automationTabId);
+    const release = manager.trackAutomationDownload(
+      { threadId: THREAD_ID, tabId: agent.automationTabId },
+      vi.fn(),
+    );
+    release();
+    manualContents.emit("focus");
+    manualContents.emit("before-input-event", {}, { type: "keyDown", key: "x" });
+    manualContents.emit("before-mouse-event", {}, { type: "mouseDown", x: 1, y: 1 });
+    manager.selectTab({ threadId: THREAD_ID, tabId: manual.activeTabId! });
+    manager.hide({ threadId: THREAD_ID });
+    expect(manager.getAutomationHumanControlEpoch(THREAD_ID, agent.automationTabId)).toBe(epoch);
+    const download = { preventDefault: vi.fn() };
+    willDownloadListener.current!(download, {}, contents);
+    expect(download.preventDefault).toHaveBeenCalledOnce();
+    contents.emit("focus");
+    expect(manager.getAutomationHumanControlEpoch(THREAD_ID, agent.automationTabId)).toBe(
+      epoch + 1,
+    );
+    const manualDownload = { preventDefault: vi.fn() };
+    willDownloadListener.current!(manualDownload, {}, contents);
+    expect(manualDownload.preventDefault).not.toHaveBeenCalled();
+    manager.dispose();
+  });
+
+  it("creates, acquires and navigates an agent tab without changing the manual selection", async () => {
+    const manager = new DesktopBrowserManager();
+    const manual = manager.open({ threadId: THREAD_ID });
+    const agent = manager.prepareAutomationTab({ threadId: THREAD_ID, reuse: false });
+    expect(agent.automationTabId).not.toBe(manual.activeTabId);
+    expect(agent.activeTabId).toBe(manual.activeTabId);
+    const contents = new FakeWebContents(411);
+    webContentsViewConstructor.mockReturnValueOnce({
+      webContents: contents,
+      setBounds: vi.fn(),
+      setVisible: vi.fn(),
+      setBorderRadius: vi.fn(),
+    });
+    const input = { threadId: THREAD_ID, tabId: agent.automationTabId };
+    manager.selectAutomationTab(input);
+    const runtime = await manager.getAutomationRuntime(input);
+    manager.prepareAutomationNavigation({ ...input, url: "https://agent.example/" });
+    expect(manager.getState({ threadId: THREAD_ID }).activeTabId).toBe(manual.activeTabId);
+    expect(runtime.webContents).toBe(contents);
+    expect(contents.close).not.toHaveBeenCalled();
+    manager.closeAutomationTab(input);
+    expect(manager.getState({ threadId: THREAD_ID }).activeTabId).toBe(manual.activeTabId);
+    manager.dispose();
+  });
+
+  it("keeps an inactive agent page alive across manual tab selection and chat hiding", async () => {
+    vi.useFakeTimers();
+    const manager = new DesktopBrowserManager();
+    const manual = manager.open({ threadId: THREAD_ID });
+    const agent = manager.prepareAutomationTab({ threadId: THREAD_ID, reuse: false });
+    const contents = new FakeWebContents(412);
+    webContentsViewConstructor.mockReturnValueOnce({
+      webContents: contents,
+      setBounds: vi.fn(),
+      setVisible: vi.fn(),
+      setBorderRadius: vi.fn(),
+    });
+    const input = { threadId: THREAD_ID, tabId: agent.automationTabId };
+    try {
+      await manager.getAutomationRuntime(input);
+      manager.selectTab({ threadId: THREAD_ID, tabId: manual.activeTabId! });
+      manager.hide({ threadId: THREAD_ID });
+      await vi.advanceTimersByTimeAsync(30_100);
+      expect(contents.close).not.toHaveBeenCalled();
+      expect((await manager.getAutomationRuntime(input)).webContents).toBe(contents);
+    } finally {
+      manager.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("parks native previews outside hit testing, captures bounded frames and restores the same page", async () => {
     const contents = new FakeWebContents(121);
     const thumbnail = { toJPEG: vi.fn(() => Buffer.from("thumbnail")) };
@@ -687,7 +785,7 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     manager.dispose();
   });
 
-  it("keeps the adopted renderer guest when agent tools claim the tab", async () => {
+  it("rejects automation before restoring an adopted guest, preserving its live page", async () => {
     const manager = new DesktopBrowserManager();
     const hostWindow = {
       webContents: Object.assign(new EventEmitter(), { id: 41, isDestroyed: () => false }),
@@ -710,9 +808,13 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     });
 
     manager.selectAutomationTab({ threadId: THREAD_ID, tabId });
-    const runtime = await manager.getAutomationRuntime({ threadId: THREAD_ID, tabId });
-
-    expect(runtime.webContents).toBe(guest);
+    const loads = guest.loadURL.mock.calls.length;
+    await expect(
+      manager.getAutomationRuntime({ threadId: THREAD_ID, tabId }),
+    ).rejects.toMatchObject({
+      browserError: { code: "BrowserBackgroundInputUnavailable", effectMayHaveCommitted: false },
+    });
+    expect(guest.loadURL).toHaveBeenCalledTimes(loads);
     expect(guest.close).not.toHaveBeenCalled();
     expect(manager.getState({ threadId: THREAD_ID }).tabs[0]?.runtimeSurface).toBe("renderer");
     manager.dispose();
@@ -1029,14 +1131,14 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
     expect(publication).not.toHaveBeenCalled();
   });
 
-  it("still treats hiding a manual browser panel as human takeover", () => {
+  it("does not treat hiding a manual browser panel as page takeover", () => {
     const manager = new DesktopBrowserManager();
     manager.open({ threadId: THREAD_ID });
     const beforeHide = manager.getAutomationHumanControlEpoch(THREAD_ID);
 
     manager.hide({ threadId: THREAD_ID });
 
-    expect(manager.getAutomationHumanControlEpoch(THREAD_ID)).toBe(beforeHide + 1);
+    expect(manager.getAutomationHumanControlEpoch(THREAD_ID)).toBe(beforeHide);
   });
 
   it("publishes direct native keyboard and mouse takeover from the visible guest", () => {
@@ -1512,14 +1614,20 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       }),
     ]);
     releaseWindowOpenTracking();
+    webContentsViewConstructor.mockReturnValueOnce({
+      webContents: new FakeWebContents(219),
+      setBounds: vi.fn(),
+      setVisible: vi.fn(),
+      setBorderRadius: vi.fn(),
+    });
     const afterAgentOpen = manager.getState({ threadId: THREAD_ID });
     expect(afterAgentOpen.tabs).toHaveLength(2);
-    expect(afterAgentOpen.activeTabId).not.toBe(sourceTabId);
+    expect(afterAgentOpen.activeTabId).toBe(sourceTabId);
     expect(manager.getAutomationHumanControlEpoch(THREAD_ID)).toBe(0);
     expect(windowOpenEvents).toEqual([
       {
         kind: "tab",
-        openedTabId: afterAgentOpen.activeTabId,
+        openedTabId: afterAgentOpen.tabs.find((tab) => tab.id !== sourceTabId)!.id,
         sourceTabId,
         threadId: THREAD_ID,
       },
@@ -1617,7 +1725,8 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       await new Promise<void>((resolve) => setImmediate(resolve));
       const popupState = manager.getState({ threadId: THREAD_ID });
       expect(popupState.tabs).toHaveLength(2);
-      expect(popupState.tabs.find((tab) => tab.id === popupState.activeTabId)).toMatchObject({
+      expect(popupState.activeTabId).toBe(sourceTabId);
+      expect(popupState.tabs.find((tab) => tab.id !== sourceTabId)).toMatchObject({
         openerTabId: sourceTabId,
         runtimeSurface: "native",
         status: "live",

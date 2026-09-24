@@ -262,7 +262,9 @@ const BrowserResolvedTarget = closedStruct({
 });
 const BrowserHumanActionRequired = closedStruct({
   kind: Schema.Literal("oauth_popup"),
-  instruction: Schema.Literal("Complete sign-in in the visible popup before continuing."),
+  instruction: Schema.Literal(
+    "Open the sign-in popup tab in the browser and complete sign-in before continuing.",
+  ),
 });
 const BrowserPopupCorrelationOutputFields = {
   openedTabId: Schema.optional(BrowserTabId),

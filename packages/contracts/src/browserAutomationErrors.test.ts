@@ -45,6 +45,7 @@ const browserErrorCodes = [
   "BrowserTargetNotEditable",
   "BrowserInvalidLocator",
   "BrowserInputUnsupported",
+  "BrowserBackgroundInputUnavailable",
   "BrowserNavigationBlocked",
   "BrowserNetworkBlocked",
   "BrowserNavigationFailed",
@@ -105,6 +106,13 @@ const specialPolicies = {
     message: "The matched browser element is covered by another page element.",
     retryable: true,
     phase: "target",
+    effectMayHaveCommitted: false,
+  },
+  BrowserBackgroundInputUnavailable: {
+    message:
+      "This live browser guest cannot receive background input without interfering with the user. No action ran and the page was preserved. Use browser_open with reuse: false for a separate native tab, or ask the user to complete this step manually.",
+    retryable: false,
+    phase: "input",
     effectMayHaveCommitted: false,
   },
   BrowserInputUnsupported: {

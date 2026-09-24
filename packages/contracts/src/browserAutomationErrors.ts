@@ -37,6 +37,7 @@ export const BrowserErrorCode = Schema.Literals([
   "BrowserTargetNotEditable",
   "BrowserInvalidLocator",
   "BrowserInputUnsupported",
+  "BrowserBackgroundInputUnavailable",
   "BrowserInvalidArguments",
   "BrowserInvalidTimeout",
   "BrowserCredentialTargetRequired",
@@ -87,6 +88,7 @@ type BrowserFixedAutomationErrorCode =
   | "BrowserTargetNotEnabled"
   | "BrowserTargetObscured"
   | "BrowserInputUnsupported"
+  | "BrowserBackgroundInputUnavailable"
   | "BrowserInvalidArguments"
   | "BrowserInvalidTimeout"
   | "BrowserScreenshotTooLarge"
@@ -149,6 +151,8 @@ export const BrowserAutomationErrorMessages = Object.freeze({
   BrowserInvalidLocator: "The browser locator is invalid.",
   BrowserInputUnsupported:
     "The requested browser input is unsupported. Use a supported browser action.",
+  BrowserBackgroundInputUnavailable:
+    "This live browser guest cannot receive background input without interfering with the user. No action ran and the page was preserved. Use browser_open with reuse: false for a separate native tab, or ask the user to complete this step manually.",
   BrowserInvalidArguments:
     "The tool arguments do not match the published input schema. No browser action ran. Correct the argument names, types and bounds before retrying; this does not mean form filling is unsupported.",
   BrowserInvalidTimeout:
@@ -194,6 +198,7 @@ export const BrowserFixedAutomationErrorInvariants = Object.freeze({
   BrowserTargetNotEnabled: fixedBrowserErrorInvariant(false, "target", false),
   BrowserTargetObscured: fixedBrowserErrorInvariant(true, "target", false),
   BrowserInputUnsupported: fixedBrowserErrorInvariant(false, "input", false),
+  BrowserBackgroundInputUnavailable: fixedBrowserErrorInvariant(false, "input", false),
   BrowserInvalidArguments: fixedBrowserErrorInvariant(false, "input", false),
   BrowserInvalidTimeout: fixedBrowserErrorInvariant(false, "input", false),
   BrowserScreenshotTooLarge: fixedBrowserErrorInvariant(false, "snapshot", false),

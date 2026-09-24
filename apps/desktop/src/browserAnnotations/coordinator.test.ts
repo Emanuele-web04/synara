@@ -115,6 +115,9 @@ describe("BrowserAnnotationCoordinator", () => {
       theme: DARK_ANNOTATION_THEME,
     });
     expect(harness.markHumanControl).toHaveBeenCalledOnce();
+    expect(harness.markHumanControl).toHaveBeenCalledWith(THREAD_ID, TAB_ID);
+    expect(harness.coordinator.isInteractive(THREAD_ID, TAB_ID)).toBe(true);
+    expect(harness.coordinator.isInteractive(THREAD_ID, "other-tab")).toBe(false);
 
     harness.coordinator.handleGuestMessage(harness.webContents, {
       version: 1,

@@ -63,7 +63,6 @@ export interface BrowserHostPipeServerOptions {
   readonly pipePath?: string;
   readonly capability?: string;
   readonly platform?: NodeJS.Platform;
-  readonly requestOpenPanel?: (threadId: ThreadId) => void | Promise<void>;
   readonly automationHost?: Pick<DesktopBrowserAutomationHost, "executeTool">;
   readonly maxInFlightRequests?: number;
   readonly maxQueuedOutputBytes?: number;
@@ -259,7 +258,6 @@ export class BrowserHostPipeServer {
     this.maxInFlightRequests = normalized.maxInFlightRequests ?? MAX_IN_FLIGHT_REQUESTS;
     this.maxQueuedOutputBytes = normalized.maxQueuedOutputBytes ?? MAX_QUEUED_OUTPUT_BYTES;
     const hostOptions = {
-      ...(normalized.requestOpenPanel ? { requestOpenPanel: normalized.requestOpenPanel } : {}),
       ...(normalized.vault ? { vault: normalized.vault } : {}),
       ...(normalized.vaultCapture ? { vaultCapture: normalized.vaultCapture } : {}),
     };

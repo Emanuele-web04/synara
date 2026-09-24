@@ -274,6 +274,8 @@ const createWebContents = () => {
   return {
     once: webContentsEvents.once.bind(webContentsEvents),
     removeListener: webContentsEvents.removeListener.bind(webContentsEvents),
+    getType: vi.fn(() => "browserView"),
+    isFocused: vi.fn(() => false),
     isDestroyed: () => false,
     id: 101,
     focus: vi.fn(),
@@ -354,10 +356,11 @@ const createManager = () => {
   const manager = {
     isAnnotationInteractive: vi.fn(() => false),
     isHumanBrowserOperationActive: vi.fn(() => false),
+    isBrowserTabFocused: vi.fn(() => false),
     getState: vi.fn(() => state),
     getAutomationHumanControlEpoch: vi.fn(() => 0),
     subscribeAutomationHumanControl: vi.fn(
-      (_threadId: ThreadId, _listener: () => void) => () => undefined,
+      (_threadId: ThreadId, _listener: (tabId?: string) => void) => () => undefined,
     ),
     trackAutomationWindowOpen: vi.fn(
       (_input: { threadId: ThreadId; tabId: string }, _listener: (event: unknown) => void) => () =>
@@ -368,7 +371,7 @@ const createManager = () => {
         undefined,
     ),
     selectAutomationTab: vi.fn(() => state),
-    prepareAutomationTab: vi.fn(() => state),
+    prepareAutomationTab: vi.fn(() => ({ ...state, automationTabId: state.activeTabId })),
     prepareAutomationNavigation: vi.fn(() => state),
     resolveAnnotationNavigationTarget: vi.fn(({ annotationId }: { annotationId: string }) =>
       annotationId === "annotation-page"
@@ -388,6 +391,49 @@ const createManager = () => {
 };
 
 describe("DesktopBrowserAutomationHost", () => {
+  it("preserves a live renderer guest and its URL when background automation is unavailable", async () => {
+    const { manager, raw, webContents } = createManager();
+    vi.mocked(webContents.getType).mockReturnValue("webview");
+    const host = new DesktopBrowserAutomationHost(manager);
+    const before = structuredClone(raw.getState());
+    for (const name of ["browser_run", "browser_navigate"] as const) {
+      await expect(
+        host.executeTool({
+          sessionId: "guest",
+          provider: "codex",
+          threadId: THREAD_ID,
+          name,
+          arguments:
+            name === "browser_run"
+              ? { code: "return 1", idempotencyKey: name }
+              : { url: "https://other.example/", idempotencyKey: name },
+        }),
+      ).rejects.toMatchObject({
+        browserError: { code: "BrowserBackgroundInputUnavailable", effectMayHaveCommitted: false },
+      });
+    }
+    expect(raw.prepareAutomationNavigation).not.toHaveBeenCalled();
+    expect(raw.getState()).toEqual(before);
+    expect(webContents.loadURL).not.toHaveBeenCalled();
+  });
+
+  it("refuses automation while the user owns native page focus", async () => {
+    const { manager, webContents } = createManager();
+    vi.mocked(webContents.isFocused).mockReturnValue(true);
+    const host = new DesktopBrowserAutomationHost(manager);
+    await expect(
+      host.executeTool({
+        sessionId: "manual",
+        provider: "codex",
+        threadId: THREAD_ID,
+        name: "browser_run",
+        arguments: { code: "return 1", idempotencyKey: "manual" },
+      }),
+    ).rejects.toMatchObject({
+      browserError: { code: "BrowserInterruptedByHuman", effectMayHaveCommitted: false },
+    });
+  });
+
   it.each([45000, 60000])(
     "rejects invalid timeout before running the browser (%s)",
     async (timeoutMs) => {
@@ -655,10 +701,7 @@ describe("DesktopBrowserAutomationHost", () => {
 
   it("opens the requested thread, keeps tab affinity and deduplicates an identical intention", async () => {
     const { manager, raw } = createManager();
-    const openPanel = vi.fn(async () => undefined);
-    const host = new DesktopBrowserAutomationHost(manager, {
-      requestOpenPanel: openPanel,
-    });
+    const host = new DesktopBrowserAutomationHost(manager, {});
     const request = {
       sessionId: "session-1",
       provider: "gemini",
@@ -671,7 +714,6 @@ describe("DesktopBrowserAutomationHost", () => {
     const second = await host.executeTool(request);
     expect(first).toEqual(second);
     expect(raw.prepareAutomationTab).toHaveBeenCalledTimes(1);
-    expect(openPanel).toHaveBeenCalledWith(THREAD_ID);
     await expect(
       host.executeTool({
         sessionId: "session-1",
@@ -806,18 +848,12 @@ describe("DesktopBrowserAutomationHost", () => {
     ).toHaveLength(1);
   });
 
-  it("opens the blank launcher without waiting for a guest webview that does not exist", async () => {
+  it("opens a blank native runtime without revealing a panel", async () => {
     const { manager, raw } = createManager();
     const blankState = raw.getState();
     blankState.tabs[0]!.url = "about:blank";
     blankState.tabs[0]!.lastCommittedUrl = null;
-    raw.getVisibleAutomationRuntime.mockImplementation(() => {
-      throw new Error("no guest for about:blank");
-    });
-    const openPanel = vi.fn(async () => undefined);
-    const host = new DesktopBrowserAutomationHost(manager, {
-      requestOpenPanel: openPanel,
-    });
+    const host = new DesktopBrowserAutomationHost(manager, {});
 
     await expect(
       host.executeTool({
@@ -828,14 +864,12 @@ describe("DesktopBrowserAutomationHost", () => {
         arguments: { idempotencyKey: "open-blank" },
       }),
     ).resolves.toMatchObject({ tabId: TAB_ID, finalUrl: "about:blank" });
-    expect(openPanel).toHaveBeenCalledWith(THREAD_ID);
-    expect(raw.getVisibleAutomationRuntime).not.toHaveBeenCalled();
+    expect(raw.getAutomationRuntime).toHaveBeenCalled();
   });
 
   it("reuses an attached tab for a hidden no-URL open", async () => {
     const { manager, raw } = createManager();
-    const openPanel = vi.fn(async () => undefined);
-    const host = new DesktopBrowserAutomationHost(manager, { requestOpenPanel: openPanel });
+    const host = new DesktopBrowserAutomationHost(manager);
 
     await expect(
       host.executeTool({
@@ -854,11 +888,14 @@ describe("DesktopBrowserAutomationHost", () => {
       threadId: THREAD_ID,
       tabId: TAB_ID,
     });
-    expect(raw.prepareAutomationTab).not.toHaveBeenCalled();
-    expect(openPanel).not.toHaveBeenCalled();
+    expect(raw.prepareAutomationTab).toHaveBeenCalledWith({
+      threadId: THREAD_ID,
+      reuse: true,
+      tabId: TAB_ID,
+    });
   });
 
-  it("never prepares browser state for a hidden open with a URL", async () => {
+  it("reuses the scoped tab for hidden navigation without selecting the UI tab", async () => {
     const { manager, raw } = createManager();
     const host = new DesktopBrowserAutomationHost(manager);
 
@@ -879,7 +916,11 @@ describe("DesktopBrowserAutomationHost", () => {
       finalUrl: "https://example.test/next",
       disposition: "reused",
     });
-    expect(raw.prepareAutomationTab).not.toHaveBeenCalled();
+    expect(raw.prepareAutomationTab).toHaveBeenCalledWith({
+      threadId: THREAD_ID,
+      reuse: true,
+      tabId: TAB_ID,
+    });
     expect(raw.prepareAutomationNavigation).toHaveBeenCalledWith({
       threadId: THREAD_ID,
       tabId: TAB_ID,
@@ -887,96 +928,48 @@ describe("DesktopBrowserAutomationHost", () => {
     });
   });
 
-  it("rejects a hidden navigation when another session changes the visible tab during validation", async () => {
+  it("preserves a new UI selection while a hidden navigation is being validated", async () => {
     const { manager, raw, webContents } = createManager();
     const state = raw.getState();
-    state.tabs.push({
-      id: OPENED_TAB_ID,
-      url: "https://other.example/",
-      title: "Other",
-      status: "live",
-      isLoading: false,
-      canGoBack: false,
-      canGoForward: false,
-      faviconUrl: null,
-      lastCommittedUrl: "https://other.example/",
-      lastError: null,
-    });
-    raw.prepareAutomationTab.mockImplementation(() => {
-      state.activeTabId = OPENED_TAB_ID;
-      return state;
-    });
+    state.tabs.push({ ...state.tabs[0]!, id: OPENED_TAB_ID });
     const diagnosticsStarted = deferred<void>();
     const releaseDiagnostics = deferred<void>();
     const sendCommand = webContents.debugger.sendCommand as ReturnType<typeof vi.fn>;
     const original = sendCommand.getMockImplementation() as SendCommand;
-    let suspendFirstDiagnostics = true;
+    let first = true;
     sendCommand.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
-      if (method === "Runtime.enable" && suspendFirstDiagnostics) {
-        suspendFirstDiagnostics = false;
+      if (method === "Runtime.enable" && first) {
+        first = false;
         diagnosticsStarted.resolve();
         await releaseDiagnostics.promise;
       }
       return original(method, params);
     });
     const host = new DesktopBrowserAutomationHost(manager);
-    const hiddenNavigation = host.executeTool({
-      sessionId: "session-hidden-race-a",
+    const operation = host.executeTool({
+      sessionId: "hidden-navigation",
       provider: "codex",
       threadId: THREAD_ID,
       name: "browser_open",
-      arguments: {
-        idempotencyKey: "open-hidden-race-a",
-        show: false,
-        url: "https://example.test/next",
-      },
+      arguments: { idempotencyKey: "hidden", show: false, url: "https://example.test/next" },
     });
     await diagnosticsStarted.promise;
-
-    await expect(
-      host.executeTool({
-        sessionId: "session-hidden-race-b",
-        provider: "claude",
-        threadId: THREAD_ID,
-        name: "browser_open",
-        arguments: {
-          idempotencyKey: "open-hidden-race-b",
-          show: true,
-          reuse: false,
-        },
-      }),
-    ).resolves.toMatchObject({ tabId: OPENED_TAB_ID });
-    expect(state.activeTabId).toBe(OPENED_TAB_ID);
+    state.activeTabId = OPENED_TAB_ID;
     releaseDiagnostics.resolve();
-
-    await expect(hiddenNavigation).rejects.toMatchObject({
-      browserError: {
-        code: "BrowserHostUnavailable",
-        effectMayHaveCommitted: false,
-        tabId: TAB_ID,
-      },
+    await expect(operation).resolves.toMatchObject({
+      tabId: TAB_ID,
+      finalUrl: "https://example.test/next",
     });
     expect(state.activeTabId).toBe(OPENED_TAB_ID);
-    expect(webContents.getURL()).toBe("https://example.test/");
-    expect(raw.prepareAutomationNavigation).not.toHaveBeenCalled();
     await expect(
       host.executeTool({
-        sessionId: "session-hidden-race-a",
+        sessionId: "hidden-navigation",
         provider: "codex",
         threadId: THREAD_ID,
         name: "browser_status",
         arguments: {},
       }),
-    ).resolves.toMatchObject({ assignedTabId: null });
-    await expect(
-      host.executeTool({
-        sessionId: "session-hidden-race-b",
-        provider: "claude",
-        threadId: THREAD_ID,
-        name: "browser_status",
-        arguments: {},
-      }),
-    ).resolves.toMatchObject({ assignedTabId: OPENED_TAB_ID });
+    ).resolves.toMatchObject({ assignedTabId: TAB_ID });
   });
 
   it("keeps a visible navigation selected until its CDP action finishes", async () => {
@@ -996,7 +989,7 @@ describe("DesktopBrowserAutomationHost", () => {
     });
     raw.prepareAutomationTab.mockImplementation(() => {
       state.activeTabId = OPENED_TAB_ID;
-      return state;
+      return { ...state, automationTabId: state.activeTabId };
     });
     const navigationStarted = deferred<void>();
     const releaseNavigation = deferred<void>();
@@ -1082,7 +1075,11 @@ describe("DesktopBrowserAutomationHost", () => {
         effectMayHaveCommitted: false,
       },
     });
-    expect(raw.prepareAutomationTab).not.toHaveBeenCalled();
+    expect(raw.prepareAutomationTab).toHaveBeenCalledWith({
+      threadId: THREAD_ID,
+      reuse: true,
+      tabId: TAB_ID,
+    });
     expect(raw.selectAutomationTab).toHaveBeenCalledWith({
       threadId: THREAD_ID,
       tabId: TAB_ID,
@@ -1188,6 +1185,25 @@ describe("DesktopBrowserAutomationHost", () => {
     expect(raw.closeAutomationTab).toHaveBeenCalledWith({ threadId: THREAD_ID, tabId: TAB_ID });
   });
 
+  it("preserves a tab the user is typing in when the agent requests close", async () => {
+    const { manager, raw } = createManager();
+    raw.isBrowserTabFocused.mockReturnValue(true);
+    const host = new DesktopBrowserAutomationHost(manager);
+    await expect(
+      host.executeTool({
+        sessionId: "close-human-tab",
+        provider: "codex",
+        threadId: THREAD_ID,
+        name: "browser_close",
+        arguments: { idempotencyKey: "close-human-tab" },
+      }),
+    ).rejects.toMatchObject({
+      browserError: { code: "BrowserInterruptedByHuman", effectMayHaveCommitted: false },
+    });
+    expect(raw.closeAutomationTab).not.toHaveBeenCalled();
+    expect(raw.getAutomationRuntime).not.toHaveBeenCalled();
+  });
+
   it("guards a downloadable browser_open response before projecting its URL", async () => {
     const { manager, raw } = createManager();
     let reportDownload: ((event: { threadId: ThreadId; sourceTabId: string }) => void) | undefined;
@@ -1202,7 +1218,7 @@ describe("DesktopBrowserAutomationHost", () => {
       queueMicrotask(() => {
         reportDownload?.({ threadId: THREAD_ID, sourceTabId: TAB_ID });
       });
-      return state;
+      return { ...state, automationTabId: state.activeTabId };
     });
     const host = new DesktopBrowserAutomationHost(manager);
 
@@ -1231,9 +1247,7 @@ describe("DesktopBrowserAutomationHost", () => {
   it("reports human takeover when manual control changes during an agent action", async () => {
     const { manager, raw } = createManager();
     raw.getAutomationHumanControlEpoch.mockReturnValueOnce(10).mockReturnValue(11);
-    const host = new DesktopBrowserAutomationHost(manager, {
-      requestOpenPanel: async () => undefined,
-    });
+    const host = new DesktopBrowserAutomationHost(manager, {});
 
     await expect(
       host.executeTool({
@@ -1263,9 +1277,7 @@ describe("DesktopBrowserAutomationHost", () => {
       }
       return original(method, params);
     });
-    const host = new DesktopBrowserAutomationHost(manager, {
-      requestOpenPanel: async () => undefined,
-    });
+    const host = new DesktopBrowserAutomationHost(manager, {});
 
     await expect(
       host.executeTool({
@@ -1365,6 +1377,49 @@ describe("DesktopBrowserAutomationHost", () => {
     );
   });
 
+  it.each([true, false])(
+    "preserves human takeover while browser_open reuse=%s waits for a lock",
+    async (reuse) => {
+      const { manager, raw } = createManager();
+      const host = new DesktopBrowserAutomationHost(manager);
+      const lock = deferred<void>();
+      const prepared = deferred<void>();
+      const tabId = reuse ? TAB_ID : "3ca91001-21c0-4f73-a579-7d64f80c15b0";
+      const lockKey = reuse ? `visibility:${THREAD_ID}` : `tab:${THREAD_ID}:${tabId}`;
+      const tails = (host as unknown as { lockTails: Map<string, Promise<void>> }).lockTails;
+      tails.set(lockKey, lock.promise);
+      let takeControl!: (tabId: string) => void;
+      raw.subscribeAutomationHumanControl.mockImplementation((_threadId, listener) => {
+        takeControl = listener;
+        return () => undefined;
+      });
+      if (!reuse)
+        raw.prepareAutomationTab.mockImplementation(() => {
+          prepared.resolve();
+          return { ...raw.getState(), automationTabId: tabId };
+        });
+      const operation = host.executeTool({
+        sessionId: `open-wait-${reuse}`,
+        provider: "codex",
+        threadId: THREAD_ID,
+        name: "browser_open",
+        arguments: { reuse, url: "https://new.example/", idempotencyKey: "open-wait" },
+      });
+      const rejected = expect(operation).rejects.toMatchObject({
+        browserError: { code: "BrowserInterruptedByHuman" },
+      });
+      if (!reuse) await prepared.promise;
+      takeControl(tabId);
+      lock.resolve();
+      await rejected;
+      await host.waitForIdle();
+      expect(raw.getAutomationRuntime).not.toHaveBeenCalled();
+      expect(raw.prepareAutomationNavigation).not.toHaveBeenCalled();
+      if (reuse) expect(raw.prepareAutomationTab).not.toHaveBeenCalled();
+      await host.dispose();
+    },
+  );
+
   it("interrupts the active chain immediately when the user takes native control", async () => {
     const { manager, raw, webContents } = createManager();
     const layout = deferred<{
@@ -1383,14 +1438,17 @@ describe("DesktopBrowserAutomationHost", () => {
       return original(method, params);
     });
     let epoch = 0;
-    let takeControl!: () => void;
+    const listeners = new Set<(tabId?: string) => void>();
+    const takeControl = (tabId?: string) => {
+      if (tabId === undefined || tabId === TAB_ID) epoch += 1;
+      for (const listener of listeners) listener(tabId);
+    };
     raw.getAutomationHumanControlEpoch.mockImplementation(() => epoch);
     raw.subscribeAutomationHumanControl.mockImplementation((_threadId, listener) => {
-      takeControl = () => {
-        epoch += 1;
-        listener();
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
       };
-      return () => undefined;
     });
     const host = new DesktopBrowserAutomationHost(manager);
     const operation = host.executeTool({
@@ -1402,7 +1460,19 @@ describe("DesktopBrowserAutomationHost", () => {
     });
 
     await layoutStarted.promise;
-    takeControl();
+    let settled = false;
+    void operation.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    takeControl("unrelated-manual-tab");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+    takeControl(TAB_ID);
     await expect(operation).rejects.toMatchObject({
       browserError: { code: "BrowserInterruptedByHuman" },
     });
@@ -1446,36 +1516,5 @@ describe("DesktopBrowserAutomationHost", () => {
     controller.abort();
     await expect(operation).rejects.toMatchObject({ browserError: { code: "BrowserCancelled" } });
     acquisition.resolve(runtime);
-  });
-
-  it("does not block background execution on a pending panel reveal", async () => {
-    const { manager } = createManager();
-    const panelReveal = deferred<void>();
-    const requestOpenPanel = vi.fn(() => panelReveal.promise);
-    const host = new DesktopBrowserAutomationHost(manager, { requestOpenPanel });
-    const operation = host.executeTool({
-      sessionId: "session-panel-abort",
-      provider: "codex",
-      threadId: THREAD_ID,
-      name: "browser_logs",
-      arguments: {},
-    });
-
-    await vi.waitFor(() => {
-      expect(requestOpenPanel).toHaveBeenCalledWith(THREAD_ID);
-    });
-    await expect(operation).resolves.toMatchObject({
-      tabId: TAB_ID,
-    });
-    await expect(
-      host.executeTool({
-        sessionId: "session-panel-abort",
-        provider: "codex",
-        threadId: THREAD_ID,
-        name: "browser_tabs",
-        arguments: {},
-      }),
-    ).resolves.toMatchObject({ activeTabId: TAB_ID });
-    panelReveal.resolve();
   });
 });

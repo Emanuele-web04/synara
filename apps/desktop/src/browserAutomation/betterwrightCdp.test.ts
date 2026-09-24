@@ -27,6 +27,7 @@ function fixture(
     getURL: () => "https://fixture.example/",
     getTitle: () => "Fixture",
     getType: vi.fn(() => "browserView"),
+    isFocused: vi.fn(() => false),
     getZoomFactor: vi.fn(() => 1),
     sendInputEvent: vi.fn(),
     close: vi.fn(),
@@ -49,6 +50,45 @@ function fixture(
 }
 
 describe("Betterwright target boundary", () => {
+  it.each(["Page.bringToFront", "Emulation.setFocusEmulationEnabled"])(
+    "denies worker focus control %s",
+    async (method) => {
+      const f = fixture();
+      await f.target.receive({
+        id: 1,
+        method: "Target.attachToTarget",
+        params: { targetId: f.target.targetId },
+      });
+      const sessionId = (f.messages[0]!.result as { sessionId: string }).sessionId;
+      await f.target.receive({ id: 2, sessionId, method, params: { enabled: false } });
+      expect(f.messages.at(-1)).toHaveProperty("error");
+      expect(f.debuggerApi.sendCommand).not.toHaveBeenCalled();
+      expect(f.contents.focus).not.toHaveBeenCalled();
+      await f.target.dispose(false);
+    },
+  );
+
+  it("rejects the next command when a human has focused the target page", async () => {
+    const f = fixture();
+    await f.target.receive({
+      id: 1,
+      method: "Target.attachToTarget",
+      params: { targetId: f.target.targetId },
+    });
+    const sessionId = (f.messages[0]!.result as { sessionId: string }).sessionId;
+    f.contents.isFocused.mockReturnValue(true);
+    await f.target.receive({
+      id: 2,
+      sessionId,
+      method: "Input.insertText",
+      params: { text: "must-not-type" },
+    });
+    expect(f.messages.at(-1)).toHaveProperty("error");
+    expect(f.debuggerApi.sendCommand).not.toHaveBeenCalled();
+    expect(f.contents.focus).not.toHaveBeenCalled();
+    await f.target.dispose(false);
+  });
+
   it.each([0.5, 1, 2])(
     "scales native hover coordinates at zoom %s and preserves modifiers",
     async (zoom) => {
@@ -88,52 +128,32 @@ describe("Betterwright target boundary", () => {
       await f.target.dispose(false);
     },
   );
-  it("drains pending renderer focus and skips input after cancellation", async () => {
-    const f = fixture([], "backend");
-    f.contents.getType.mockReturnValue("webview");
-    let focused!: (value: boolean) => void;
-    const host = {
-      isDestroyed: () => false,
-      executeJavaScript: vi
-        .fn()
-        .mockImplementationOnce(
-          () =>
-            new Promise((resolve) => {
-              focused = resolve;
-            }),
-        )
-        .mockResolvedValue(undefined),
-    };
-    Object.assign(f.contents, { id: 42, hostWebContents: host });
-    await f.target.receive({
-      id: 1,
-      method: "Target.attachToTarget",
-      params: { targetId: f.target.targetId },
-    });
-    const sessionId = (f.messages[0]!.result as { sessionId: string }).sessionId;
-    const input = f.target.receive({
-      id: 2,
-      sessionId,
-      method: "Input.insertText",
-      params: { text: "must-not-type" },
-    });
-    await vi.waitFor(() => expect(focused).toBeTypeOf("function"));
-    let drained = false;
-    const disposal = f.target.dispose(false).then(() => {
-      drained = true;
-    });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(drained).toBe(false);
-    focused(true);
-    await Promise.all([input, disposal]);
-    expect(host.executeJavaScript).toHaveBeenCalledTimes(2);
-    expect(
-      f.debuggerApi.sendCommand.mock.calls.some(([method]) => method.startsWith("Input.")),
-    ).toBe(false);
-  });
+  it.each(["Input.insertText", "Input.dispatchMouseEvent", "Runtime.evaluate"])(
+    "rejects guest %s before it can reach the composer",
+    async (method) => {
+      const f = fixture();
+      f.contents.getType.mockReturnValue("webview");
+      await f.target.receive({
+        id: 1,
+        method: "Target.attachToTarget",
+        params: { targetId: f.target.targetId },
+      });
+      const sessionId = (f.messages[0]!.result as { sessionId: string }).sessionId;
+      await f.target.receive({
+        id: 2,
+        sessionId,
+        method,
+        params: { text: "agent", type: "mousePressed", x: 1, y: 2 },
+      });
+      expect(f.messages.at(-1)).toHaveProperty("error");
+      expect(f.debuggerApi.sendCommand).not.toHaveBeenCalled();
+      expect(f.contents.focus).not.toHaveBeenCalled();
+      await f.target.dispose(false);
+    },
+  );
 
   it.each([false, true])(
-    "serializes native focus across targets and skips revoked queued work (%s)",
+    "serializes input across targets and skips revoked queued work (%s)",
     async (cancelQueued) => {
       const first = fixture([], "first-backend");
       const second = fixture([], "second-backend");
@@ -155,13 +175,13 @@ describe("Betterwright target boundary", () => {
       let finish!: (value: {}) => void;
       first.debuggerApi.sendCommand.mockImplementation((method) => {
         if (method !== "Input.insertText") return Promise.resolve({});
-        expect(focusState.current).toBe(first.contents);
+        expect(focusState.current).toBe(host);
         return new Promise((resolve) => {
           finish = resolve;
         });
       });
       second.debuggerApi.sendCommand.mockImplementation(async (method) => {
-        if (method === "Input.insertText") expect(focusState.current).toBe(second.contents);
+        if (method === "Input.insertText") expect(focusState.current).toBe(host);
         return {};
       });
       const a = first.target.receive({
@@ -179,12 +199,12 @@ describe("Betterwright target boundary", () => {
       });
       await Promise.resolve();
       expect(second.contents.focus).not.toHaveBeenCalled();
-      expect(focusState.current).toBe(first.contents);
+      expect(focusState.current).toBe(host);
       if (cancelQueued) await second.target.dispose(false);
       finish({});
       await Promise.all([a, b]);
       expect(focusState.current).toBe(host);
-      expect(second.contents.focus).toHaveBeenCalledTimes(cancelQueued ? 0 : 1);
+      expect(second.contents.focus).not.toHaveBeenCalled();
       if (cancelQueued) {
         expect(second.messages.find((message) => message.id === 2)).toHaveProperty("error");
         expect(
@@ -199,7 +219,7 @@ describe("Betterwright target boundary", () => {
   );
 
   it.each(["Input.insertText", "Input.dispatchKeyEvent"])(
-    "scopes %s to the guest and restores the host focus afterward",
+    "dispatches %s without even temporarily moving host focus",
     async (method) => {
       const f = fixture();
       const host = {
@@ -216,7 +236,7 @@ describe("Betterwright target boundary", () => {
       });
       const sessionId = (f.messages[0]!.result as { sessionId: string }).sessionId;
       f.debuggerApi.sendCommand.mockImplementation(async () => {
-        expect(focusState.current).toBe(f.contents);
+        expect(focusState.current).toBe(host);
         return {};
       });
       await f.target.receive({
@@ -225,8 +245,8 @@ describe("Betterwright target boundary", () => {
         method,
         params: { type: "keyDown", key: "a", text: "a" },
       });
-      expect(f.contents.focus).toHaveBeenCalledOnce();
-      expect(host.focus).toHaveBeenCalledOnce();
+      expect(f.contents.focus).not.toHaveBeenCalled();
+      expect(host.focus).not.toHaveBeenCalled();
       expect(focusState.current).toBe(host);
       f.debuggerApi.sendCommand.mockResolvedValue({});
       await f.target.dispose(false);
@@ -258,7 +278,8 @@ describe("Betterwright target boundary", () => {
         method: "Input.insertText",
         params: { text: "synthetic" },
       });
-      expect(host.focus).toHaveBeenCalledTimes(outcome === "dispatch failed" ? 1 : 0);
+      expect(host.focus).not.toHaveBeenCalled();
+      expect(f.contents.focus).not.toHaveBeenCalled();
       await f.target.dispose(false);
     },
   );

@@ -36,6 +36,7 @@ import type {
   ThreadId,
 } from "@synara/contracts";
 import { isBrowserCopyLinkChord } from "@synara/shared/browserShortcuts";
+import { assertBackgroundBrowserInput } from "./browserAutomation/betterwrightFocus";
 import {
   BROWSER_BLANK_URL as ABOUT_BLANK_URL,
   BROWSER_AUTOMATION_VIEWPORT_HEIGHT,
@@ -77,7 +78,7 @@ const BROWSER_ERROR_ABORTED = -3;
 
 type BrowserStateListener = (state: ThreadBrowserState) => void;
 type BrowserCopyLinkListener = (event: BrowserCopyLinkEvent) => void;
-type BrowserHumanControlListener = () => void;
+type BrowserHumanControlListener = (tabId?: string) => void;
 type BrowserAutomationWindowOpenListener = (event: BrowserAutomationWindowOpenEvent) => void;
 type BrowserAutomationDownloadListener = (event: BrowserAutomationDownloadEvent) => void;
 
@@ -208,6 +209,7 @@ export interface BrowserAutomationPrepareTabInput {
   readonly threadId: ThreadId;
   readonly url?: string;
   readonly reuse: boolean;
+  readonly tabId?: string;
 }
 
 export interface BrowserAutomationPrepareNavigationInput extends BrowserTabInput {
@@ -228,7 +230,7 @@ export interface BrowserAutomationDownloadEvent {
 
 export interface DesktopBrowserManagerOptions {
   onRuntimeReady?: (runtime: BrowserAutomationVisibleRuntime) => () => void;
-  onHumanControl?: (threadId: ThreadId) => void;
+  onHumanControl?: (threadId: ThreadId, tabId?: string) => void;
   beforeInputEvent?: (event: Electron.Event, input: Electron.Input) => boolean;
   annotationPreloadPath?: string;
 }
@@ -425,6 +427,7 @@ export class DesktopBrowserManager {
   >();
   private readonly lastEmittedVersionByThreadId = new Map<ThreadId, number>();
   private readonly humanControlEpochByThreadId = new Map<ThreadId, number>();
+  private readonly humanControlEpochByRuntimeKey = new Map<string, number>();
   private readonly humanControlListenersByThreadId = new Map<
     ThreadId,
     Set<BrowserHumanControlListener>
@@ -502,7 +505,7 @@ export class DesktopBrowserManager {
       },
       resolveRuntimeByWebContentsId: (webContentsId) =>
         this.toAnnotationRuntime(this.findRuntimeByWebContentsId(webContentsId)),
-      markHumanControl: (threadId) => this.markHumanControl(threadId),
+      markHumanControl: (threadId, tabId) => this.markHumanControl(threadId, tabId),
     });
   }
 
@@ -589,8 +592,8 @@ export class DesktopBrowserManager {
     this.annotations.handleGuestMessage(sender, payload);
   }
 
-  isAnnotationInteractive(threadId: ThreadId): boolean {
-    return this.annotations.isInteractive(threadId);
+  isAnnotationInteractive(threadId: ThreadId, tabId?: string): boolean {
+    return this.annotations.isInteractive(threadId, tabId);
   }
 
   isTrustedRenderer(webContentsId: number): boolean {
@@ -637,7 +640,7 @@ export class DesktopBrowserManager {
   ): () => void {
     const key = buildRuntimeKey(input.threadId, input.tabId);
     const listeners = this.automationDownloadListenersByRuntimeKey.get(key) ?? new Set();
-    const humanControlEpoch = this.getAutomationHumanControlEpoch(input.threadId);
+    const humanControlEpoch = this.getAutomationHumanControlEpoch(input.threadId, input.tabId);
     const lease: BrowserAutomationDownloadLease = {
       listener,
       humanControlEpoch,
@@ -751,7 +754,8 @@ export class DesktopBrowserManager {
           overrideBrowserWindowOptions: this.sessionPolicy.buildOAuthPopupWindowOptions(
             this.window,
           ),
-          createWindow: (options) => this.createEmbeddedPopup({ threadId, tabId }, options, url),
+          createWindow: (options) =>
+            this.createEmbeddedPopup({ threadId, tabId }, options, url, !automationGestureActive),
         };
       }
 
@@ -782,6 +786,7 @@ export class DesktopBrowserManager {
     opener: OAuthPopupContext,
     options: EmbeddedPopupOptions,
     url: string,
+    activate: boolean,
   ): WebContents {
     const state = this.ensureWorkspace(opener.threadId);
     const tab = createBrowserTab(url);
@@ -806,10 +811,16 @@ export class DesktopBrowserManager {
     // callback; a renderer-owned opener must survive until the callback returns.
     setImmediate(() => {
       if (this.disposed || this.runtimes.get(runtime.key) !== runtime) return;
-      state.activeTabId = tab.id;
+      if (activate && state.activeTabId === opener.tabId) state.activeTabId = tab.id;
       this.markThreadStateChanged(opener.threadId);
       const bounds = this.getVisibleBoundsForThread(opener.threadId);
-      if (this.activeThreadId === opener.threadId && bounds) this.attachRuntime(runtime, bounds);
+      if (
+        activate &&
+        state.activeTabId === tab.id &&
+        this.activeThreadId === opener.threadId &&
+        bounds
+      )
+        this.attachRuntime(runtime, bounds);
       this.emitState(opener.threadId);
       // Background-tab requests may not supply an already navigating child.
       if (!options.webContents) {
@@ -866,7 +877,7 @@ export class DesktopBrowserManager {
       return;
     }
     const runtimeKey = buildRuntimeKey(context.threadId, context.tabId);
-    const currentHumanEpoch = this.getAutomationHumanControlEpoch(context.threadId);
+    const currentHumanEpoch = this.getAutomationHumanControlEpoch(context.threadId, context.tabId);
     const provenance = this.automationSideEffectProvenanceByRuntimeKey.get(runtimeKey);
     if (!provenance || provenance.humanControlEpoch !== currentHumanEpoch) {
       // A manual download after genuine user input remains native Electron
@@ -888,8 +899,14 @@ export class DesktopBrowserManager {
     const provenance = this.automationSideEffectProvenanceByRuntimeKey.get(
       buildRuntimeKey(opener.threadId, opener.tabId),
     );
-    if (provenance?.humanControlEpoch === this.getAutomationHumanControlEpoch(opener.threadId)) {
-      this.automationSideEffectProvenanceByRuntimeKey.set(childKey, { ...provenance });
+    if (
+      provenance?.humanControlEpoch ===
+      this.getAutomationHumanControlEpoch(opener.threadId, opener.tabId)
+    ) {
+      this.automationSideEffectProvenanceByRuntimeKey.set(childKey, {
+        ...provenance,
+        humanControlEpoch: this.humanControlEpochByRuntimeKey.get(childKey) ?? 0,
+      });
     }
   }
 
@@ -1011,7 +1028,6 @@ export class DesktopBrowserManager {
     }
 
     state.tabs = [...state.tabs, pending.tab];
-    state.activeTabId = pending.tab.id;
     pending.tab.runtimeSurface = "native";
     const openedRuntimeKey = buildRuntimeKey(pending.threadId, pending.tab.id);
     this.automationRuntimeKeys.add(openedRuntimeKey);
@@ -1024,7 +1040,7 @@ export class DesktopBrowserManager {
     // The host can now reconcile openedTabId from canonical state, but the
     // renderer must not remove the source guest until Electron has completely
     // unwound the native window-open activation and the click response.
-    this.scheduleDeferredStatePublication(key, pending.threadId, true, undefined, pending.tab.id);
+    this.scheduleDeferredStatePublication(key, pending.threadId, false, undefined, pending.tab.id);
   }
 
   private scheduleDeferredStatePublication(
@@ -1047,6 +1063,14 @@ export class DesktopBrowserManager {
         });
       }
       this.emitState(threadId);
+      if (
+        !pending.reattachActiveTab &&
+        pending.initialNavigationTabId &&
+        this.states.get(threadId)?.tabs.some((tab) => tab.id === pending.initialNavigationTabId)
+      ) {
+        const runtime = this.ensureLiveRuntime(threadId, pending.initialNavigationTabId);
+        if (!runtime.webContents.getURL()) void this.loadTab(threadId, runtime.tabId, { runtime });
+      }
       const bounds = pending.reattachActiveTab ? this.getVisibleBoundsForThread(threadId) : null;
       if (pending.reattachActiveTab && this.activeThreadId === threadId && bounds) {
         const initialTabId = pending.initialNavigationTabId;
@@ -1130,7 +1154,7 @@ export class DesktopBrowserManager {
       if (input.type !== "keyDown") {
         return;
       }
-      this.markHumanControl(runtime.threadId);
+      this.markHumanControl(runtime.threadId, runtime.tabId);
       const key = input.key.toLowerCase();
       const isCloseChord =
         key === "escape" ||
@@ -1152,7 +1176,7 @@ export class DesktopBrowserManager {
         input.type === "mouseWheel" ||
         input.type === "contextMenu"
       ) {
-        this.markHumanControl(runtime.threadId);
+        this.markHumanControl(runtime.threadId, runtime.tabId);
       }
     };
     webContents.on("before-mouse-event", markPopupPointerControl);
@@ -1272,6 +1296,7 @@ export class DesktopBrowserManager {
     this.snapshotCacheByThreadId.clear();
     this.lastEmittedVersionByThreadId.clear();
     this.humanControlEpochByThreadId.clear();
+    this.humanControlEpochByRuntimeKey.clear();
     this.humanControlListenersByThreadId.clear();
     this.expectedAutomationInputsByRuntimeKey.clear();
     this.automationGestureDepthByRuntimeKey.clear();
@@ -1297,14 +1322,23 @@ export class DesktopBrowserManager {
     };
   }
 
-  getAutomationHumanControlEpoch(threadId: ThreadId): number {
-    return this.humanControlEpochByThreadId.get(threadId) ?? 0;
+  getAutomationHumanControlEpoch(threadId: ThreadId, tabId?: string): number {
+    return tabId === undefined
+      ? (this.humanControlEpochByThreadId.get(threadId) ?? 0)
+      : (this.humanControlEpochByRuntimeKey.get(buildRuntimeKey(threadId, tabId)) ?? 0);
   }
 
   private humanBrowserOperations = 0;
 
   isHumanBrowserOperationActive(): boolean {
     return this.humanBrowserOperations > 0;
+  }
+
+  isBrowserTabFocused(input: BrowserTabInput): boolean {
+    const runtime = this.runtimes.get(buildRuntimeKey(input.threadId, input.tabId));
+    return Boolean(
+      runtime && !runtime.webContents.isDestroyed() && runtime.webContents.isFocused(),
+    );
   }
 
   /** Cookie imports affect the shared session, so pause every agent until they drain. */
@@ -1336,10 +1370,19 @@ export class DesktopBrowserManager {
   }
 
   /** Prepares an agent-owned tab whose native runtime can outlive the chat route. */
-  prepareAutomationTab(input: BrowserAutomationPrepareTabInput): ThreadBrowserState {
+  prepareAutomationTab(
+    input: BrowserAutomationPrepareTabInput,
+  ): ThreadBrowserState & { automationTabId: string } {
     const hadExistingTab = (this.states.get(input.threadId)?.tabs.length ?? 0) > 0;
     const state = this.ensureWorkspace(input.threadId, input.url);
-    let tab = input.reuse || !hadExistingTab ? this.getActiveTab(state) : null;
+    let tab =
+      input.reuse && input.tabId
+        ? this.getTab(state, input.tabId)
+        : input.reuse || !hadExistingTab
+          ? this.getActiveTab(state)
+          : null;
+    if (input.reuse && input.tabId && !tab)
+      throw new Error("The requested browser tab is unavailable.");
     if (!tab) {
       tab = createBrowserTab(normalizeUrlInput(input.url));
       state.tabs = [...state.tabs, tab];
@@ -1355,14 +1398,14 @@ export class DesktopBrowserManager {
       tab.lastError = null;
     }
     state.open = true;
-    state.activeTabId = tab.id;
+    state.activeTabId ??= tab.id;
     syncThreadLastError(state);
     this.markThreadStateChanged(input.threadId);
     this.emitState(input.threadId);
-    return this.snapshotThreadState(input.threadId, state);
+    return { ...this.snapshotThreadState(input.threadId, state), automationTabId: tab.id };
   }
 
-  /** Selects a scoped tab and keeps it available to background automation. */
+  /** Claims a scoped tab without changing the user's selected browser tab. */
   selectAutomationTab(input: BrowserTabInput): ThreadBrowserState {
     const state = this.states.get(input.threadId);
     const tab = state ? this.getTab(state, input.tabId) : null;
@@ -1372,10 +1415,6 @@ export class DesktopBrowserManager {
 
     let didChange = false;
     didChange = this.claimAutomationTab(input.threadId, tab) || didChange;
-    if (state.activeTabId !== tab.id) {
-      state.activeTabId = tab.id;
-      didChange = true;
-    }
     didChange = syncThreadLastError(state) || didChange;
     if (didChange) {
       this.markThreadStateChanged(input.threadId);
@@ -1397,7 +1436,6 @@ export class DesktopBrowserManager {
     tab.title = defaultTitleForUrl(nextUrl);
     tab.lastCommittedUrl = null;
     tab.lastError = null;
-    state.activeTabId = tab.id;
     syncThreadLastError(state);
     this.markThreadStateChanged(input.threadId);
     this.emitState(input.threadId);
@@ -1493,12 +1531,17 @@ export class DesktopBrowserManager {
     if (!state?.open || !tab) {
       throw new Error("The requested browser tab is not available in this thread.");
     }
-    if (state.activeTabId !== tab.id) {
-      throw new Error("The requested browser tab is not the active tab for this thread.");
+
+    const existing = this.runtimes.get(buildRuntimeKey(input.threadId, tab.id));
+    if (existing && !existing.webContents.isDestroyed()) {
+      // Reject before URL restoration or ownership changes can touch a live
+      // guest or a page under manual control.
+      assertBackgroundBrowserInput(existing.webContents);
     }
 
     const didChange = this.claimAutomationTab(input.threadId, tab);
     const runtime = this.ensureLiveRuntime(input.threadId, tab.id);
+    assertBackgroundBrowserInput(runtime.webContents);
     this.noteAutomationRuntimeUse(runtime.key);
     const expectedUrl = normalizeUrlInput(tab.lastCommittedUrl ?? tab.url);
     const currentUrl = this.sessionPolicy.resolveDisplayUrl(runtime.webContents.getURL());
@@ -1658,13 +1701,7 @@ export class DesktopBrowserManager {
 
   hide(input: BrowserThreadInput): void {
     const state = this.states.get(input.threadId);
-    const activeTab = state ? this.getActiveTab(state) : null;
-    const keepsAgentRuntimeAlive = Boolean(
-      activeTab && this.automationRuntimeKeys.has(buildRuntimeKey(input.threadId, activeTab.id)),
-    );
-    if (!keepsAgentRuntimeAlive) {
-      this.markHumanControl(input.threadId);
-    }
+    // Hiding a panel or switching chats does not take control of any page.
     // A hidden browser must never leave the miniature presentation zoom on a
     // runtime that automation or a later screenshot can reacquire.
     this.resetRuntimePageZoomForThread(input.threadId);
@@ -1957,9 +1994,9 @@ export class DesktopBrowserManager {
   }
 
   navigate(input: BrowserNavigateInput): ThreadBrowserState {
-    this.markHumanControl(input.threadId);
     const state = this.ensureWorkspace(input.threadId);
     const tab = this.resolveTab(state, input.tabId);
+    this.markHumanControl(input.threadId, tab.id);
     const nextUrl = normalizeUrlInput(input.url);
     tab.url = nextUrl;
     tab.title = defaultTitleForUrl(nextUrl);
@@ -1995,9 +2032,9 @@ export class DesktopBrowserManager {
   }
 
   reload(input: BrowserTabInput): ThreadBrowserState {
-    this.markHumanControl(input.threadId);
     const state = this.ensureWorkspace(input.threadId);
     const tab = this.resolveTab(state, input.tabId);
+    this.markHumanControl(input.threadId, tab.id);
     const runtime = this.runtimes.get(buildRuntimeKey(input.threadId, tab.id));
     if (runtime) {
       runtime.webContents.reload();
@@ -2009,7 +2046,7 @@ export class DesktopBrowserManager {
   }
 
   goBack(input: BrowserTabInput): ThreadBrowserState {
-    this.markHumanControl(input.threadId);
+    this.markHumanControl(input.threadId, input.tabId);
     const runtime = this.runtimes.get(buildRuntimeKey(input.threadId, input.tabId));
     if (runtime && canWebContentsGoBack(runtime.webContents)) {
       runtime.webContents.goBack();
@@ -2018,7 +2055,7 @@ export class DesktopBrowserManager {
   }
 
   goForward(input: BrowserTabInput): ThreadBrowserState {
-    this.markHumanControl(input.threadId);
+    this.markHumanControl(input.threadId, input.tabId);
     const runtime = this.runtimes.get(buildRuntimeKey(input.threadId, input.tabId));
     if (runtime && canWebContentsGoForward(runtime.webContents)) {
       runtime.webContents.goForward();
@@ -2027,10 +2064,10 @@ export class DesktopBrowserManager {
   }
 
   newTab(input: BrowserNewTabInput): ThreadBrowserState {
-    this.markHumanControl(input.threadId);
     const state = this.ensureWorkspace(input.threadId);
     const tab = createBrowserTab(normalizeUrlInput(input.url));
     state.tabs = [...state.tabs, tab];
+    this.markHumanControl(input.threadId, tab.id);
     if (input.activate !== false || !state.activeTabId) {
       state.activeTabId = tab.id;
     }
@@ -2052,7 +2089,7 @@ export class DesktopBrowserManager {
   }
 
   closeTab(input: BrowserTabInput): ThreadBrowserState {
-    this.markHumanControl(input.threadId);
+    this.markHumanControl(input.threadId, input.tabId);
     const state = this.ensureWorkspace(input.threadId);
     let nextTabs = state.tabs.filter((tab) => tab.id !== input.tabId);
     if (nextTabs.length === state.tabs.length) {
@@ -2098,9 +2135,9 @@ export class DesktopBrowserManager {
   }
 
   selectTab(input: BrowserTabInput): ThreadBrowserState {
-    this.markHumanControl(input.threadId);
     const state = this.ensureWorkspace(input.threadId);
     const tab = this.resolveTab(state, input.tabId);
+    this.markHumanControl(input.threadId, tab.id);
     this.activateTab(input.threadId, state, tab);
 
     if (this.activeThreadId === input.threadId) {
@@ -2115,9 +2152,9 @@ export class DesktopBrowserManager {
   }
 
   openDevTools(input: BrowserTabInput): void {
-    this.markHumanControl(input.threadId);
     const state = this.ensureWorkspace(input.threadId);
     const tab = this.resolveTab(state, input.tabId);
+    this.markHumanControl(input.threadId, tab.id);
     this.activateTab(input.threadId, state, tab);
 
     this.resumeThread(input.threadId);
@@ -2530,7 +2567,11 @@ export class DesktopBrowserManager {
     );
 
     for (const tab of state.tabs) {
-      if (tab.id === activeTabId || this.isEmbeddedPopupFamily(threadId, tab.id)) {
+      if (
+        tab.id === activeTabId ||
+        this.isEmbeddedPopupFamily(threadId, tab.id) ||
+        this.automationRuntimeKeys.has(buildRuntimeKey(threadId, tab.id))
+      ) {
         this.clearTabSuspendTimer(threadId, tab.id);
         continue;
       }
@@ -2578,10 +2619,7 @@ export class DesktopBrowserManager {
     let didChange = false;
     for (const tab of state.tabs) {
       if (this.isEmbeddedPopupFamily(threadId, tab.id)) continue;
-      if (
-        tab.id === state.activeTabId &&
-        this.automationRuntimeKeys.has(buildRuntimeKey(threadId, tab.id))
-      ) {
+      if (this.automationRuntimeKeys.has(buildRuntimeKey(threadId, tab.id))) {
         continue;
       }
       this.destroyRuntime(threadId, tab.id);
@@ -2939,6 +2977,9 @@ export class DesktopBrowserManager {
     // The native page owns keyboard focus while browsing, so the renderer never sees the
     // shell's physical zoom fallback or copy-link chord. Give the shell first refusal,
     // then handle browser-local chords here.
+    const onFocus = () => this.markHumanControl(threadId, tabId);
+    webContents.on("focus", onFocus);
+    runtime.listenerDisposers.push(() => webContents.removeListener("focus", onFocus));
     const beforeInputEvent = (event: Electron.Event, input: Electron.Input) => {
       if (this.options.beforeInputEvent?.(event, input)) {
         return;
@@ -2958,7 +2999,7 @@ export class DesktopBrowserManager {
       ) {
         return;
       }
-      this.markHumanControl(threadId);
+      this.markHumanControl(threadId, tabId);
       const matches = isBrowserCopyLinkChord(
         {
           meta: input.meta,
@@ -2997,7 +3038,7 @@ export class DesktopBrowserManager {
         ) {
           return;
         }
-        this.markHumanControl(threadId);
+        this.markHumanControl(threadId, tabId);
       }
     };
     webContents.on("before-mouse-event", beforeMouseEvent);
@@ -3407,8 +3448,8 @@ export class DesktopBrowserManager {
     }
   }
 
-  private markHumanControl(threadId: ThreadId): void {
-    this.options.onHumanControl?.(threadId);
+  private markHumanControl(threadId: ThreadId, tabId?: string): void {
+    this.options.onHumanControl?.(threadId, tabId);
     const state = this.states.get(threadId);
     const activeTab = state ? this.getActiveTab(state) : null;
     if (activeTab) {
@@ -3418,14 +3459,25 @@ export class DesktopBrowserManager {
       threadId,
       (this.humanControlEpochByThreadId.get(threadId) ?? 0) + 1,
     );
+    const affectedTabIds = tabId === undefined ? (state?.tabs.map((tab) => tab.id) ?? []) : [tabId];
+    for (const affectedTabId of affectedTabIds) {
+      const key = buildRuntimeKey(threadId, affectedTabId);
+      this.humanControlEpochByRuntimeKey.set(
+        key,
+        (this.humanControlEpochByRuntimeKey.get(key) ?? 0) + 1,
+      );
+    }
     for (const [key, provenance] of this.automationSideEffectProvenanceByRuntimeKey) {
-      if (provenance.threadId === threadId) {
+      if (
+        provenance.threadId === threadId &&
+        (tabId === undefined || key === buildRuntimeKey(threadId, tabId))
+      ) {
         this.automationSideEffectProvenanceByRuntimeKey.delete(key);
       }
     }
     for (const listener of [...(this.humanControlListenersByThreadId.get(threadId) ?? [])]) {
       try {
-        listener();
+        listener(tabId);
       } catch {
         // Input delivery must never be disrupted by an automation observer.
       }
@@ -3493,7 +3545,10 @@ export class DesktopBrowserManager {
 
   private emitAutomationDownload(event: BrowserAutomationDownloadEvent): void {
     const key = buildRuntimeKey(event.threadId, event.sourceTabId);
-    const humanControlEpoch = this.getAutomationHumanControlEpoch(event.threadId);
+    const humanControlEpoch = this.getAutomationHumanControlEpoch(
+      event.threadId,
+      event.sourceTabId,
+    );
     for (const lease of [...(this.automationDownloadListenersByRuntimeKey.get(key) ?? [])]) {
       if (lease.humanControlEpoch !== humanControlEpoch) continue;
       try {

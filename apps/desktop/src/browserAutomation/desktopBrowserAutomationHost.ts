@@ -51,6 +51,7 @@ import {
   type BrowserNavigationObservation,
 } from "./navigationTracker";
 import { runBetterwright } from "./betterwrightRuntime";
+import { assertBackgroundBrowserInput } from "./betterwrightFocus";
 import type { BrowserVault } from "./browserVault";
 import type { BrowserVaultCapture } from "./browserVaultCapture";
 
@@ -73,7 +74,6 @@ export interface BrowserAutomationToolRequest {
 }
 
 export interface DesktopBrowserAutomationHostOptions {
-  readonly requestOpenPanel?: (threadId: ThreadId) => void | Promise<void>;
   readonly vault?: BrowserVault;
   readonly vaultCapture?: BrowserVaultCapture;
 }
@@ -295,16 +295,13 @@ export class DesktopBrowserAutomationHost {
   private readonly lockTails = new Map<string, Promise<void>>();
   private readonly activeOperations = new Set<Promise<unknown>>();
   private readonly diagnostics = new BrowserDiagnosticsStore();
-  private readonly requestOpenPanel: ((threadId: ThreadId) => void | Promise<void>) | undefined;
   private disposed = false;
   private disposal: Promise<void> | null = null;
 
   constructor(
     private readonly browserManager: DesktopBrowserManager,
     private readonly options: DesktopBrowserAutomationHostOptions = {},
-  ) {
-    this.requestOpenPanel = options.requestOpenPanel;
-  }
+  ) {}
 
   dispose(): Promise<void> {
     if (this.disposal) return this.disposal;
@@ -337,8 +334,7 @@ export class DesktopBrowserAutomationHost {
     if (
       request.name !== "browser_status" &&
       request.name !== "browser_tabs" &&
-      (this.browserManager.isAnnotationInteractive(request.threadId) ||
-        this.browserManager.isHumanBrowserOperationActive())
+      this.browserManager.isHumanBrowserOperationActive()
     ) {
       throw new BrowserAutomationHostError({
         code: "BrowserInterruptedByHuman",
@@ -390,20 +386,34 @@ export class DesktopBrowserAutomationHost {
     const interruptByHuman = (error: BrowserAutomationHostError) => controller.abort(error);
     request.signal?.addEventListener("abort", abortForRequest, { once: true });
     if (request.signal?.aborted) abortForRequest();
-    const requestedTabId = typeof input.tabId === "string" ? input.tabId : affinity.tabId;
+    let humanControlTarget =
+      request.name === "browser_open" && input.reuse === false
+        ? null
+        : typeof input.tabId === "string"
+          ? input.tabId
+          : affinity.tabId;
+    const takenOverTabIds = new Set<string>();
+    const interruptForHuman = () =>
+      interruptByHuman(
+        new BrowserAutomationHostError({
+          code: "BrowserInterruptedByHuman",
+          retryable: true,
+          phase: actionStarted ? "runtime" : "queue",
+          effectMayHaveCommitted: actionStarted && !definition.annotations.readOnlyHint,
+          ...(humanControlTarget ? { tabId: humanControlTarget as BrowserTabId } : {}),
+        }),
+      );
+    const selectHumanControlTarget = (tabId: string) => {
+      humanControlTarget = tabId;
+      if (takenOverTabIds.has(tabId)) interruptForHuman();
+      throwIfAborted(controller.signal);
+    };
     const unsubscribeHumanControl =
       request.name === "browser_status" || request.name === "browser_tabs"
         ? undefined
-        : this.browserManager.subscribeAutomationHumanControl(request.threadId, () => {
-            interruptByHuman(
-              new BrowserAutomationHostError({
-                code: "BrowserInterruptedByHuman",
-                retryable: true,
-                phase: "runtime",
-                effectMayHaveCommitted: !definition.annotations.readOnlyHint,
-                ...(requestedTabId ? { tabId: requestedTabId as BrowserTabId } : {}),
-              }),
-            );
+        : this.browserManager.subscribeAutomationHumanControl(request.threadId, (eventTabId) => {
+            if (eventTabId !== undefined) takenOverTabIds.add(eventTabId);
+            if (eventTabId === undefined || eventTabId === humanControlTarget) interruptForHuman();
           });
 
     const run = (): Promise<unknown> => {
@@ -420,6 +430,7 @@ export class DesktopBrowserAutomationHost {
                 runtimeTimeoutError,
                 interruptByHuman,
                 () => (actionStarted = true),
+                selectHumanControlTarget,
               ),
             controller.signal,
             queuedTimeoutError,
@@ -679,7 +690,7 @@ export class DesktopBrowserAutomationHost {
     interrupt: (error: BrowserAutomationHostError) => void,
     action: () => Promise<T> | T,
   ): Promise<T> {
-    const epoch = this.browserManager.getAutomationHumanControlEpoch(threadId);
+    const epoch = this.browserManager.getAutomationHumanControlEpoch(threadId, tabId);
     const humanError = new BrowserAutomationHostError({
       code: "BrowserInterruptedByHuman",
       retryable: true,
@@ -690,19 +701,20 @@ export class DesktopBrowserAutomationHost {
     try {
       if (
         this.browserManager.isHumanBrowserOperationActive() ||
-        this.browserManager.getAutomationHumanControlEpoch(threadId) !== epoch
+        this.browserManager.isAnnotationInteractive(threadId, tabId) ||
+        this.browserManager.getAutomationHumanControlEpoch(threadId, tabId) !== epoch
       ) {
         interrupt(humanError);
       }
       throwIfAborted(signal);
       const result = await action();
-      if (this.browserManager.getAutomationHumanControlEpoch(threadId) !== epoch) {
+      if (this.browserManager.getAutomationHumanControlEpoch(threadId, tabId) !== epoch) {
         interrupt(humanError);
       }
       throwIfAborted(signal);
       return result;
     } catch (error) {
-      if (this.browserManager.getAutomationHumanControlEpoch(threadId) !== epoch) {
+      if (this.browserManager.getAutomationHumanControlEpoch(threadId, tabId) !== epoch) {
         interrupt(humanError);
       }
       if (signal.aborted) throw abortReason(signal);
@@ -776,13 +788,10 @@ export class DesktopBrowserAutomationHost {
     affinity: SessionAffinity,
     tabId: string,
     signal: AbortSignal,
-    reveal: boolean,
     restore = true,
   ): Promise<BrowserAutomationVisibleRuntime> {
     throwIfAborted(signal);
     this.browserManager.selectAutomationTab({ threadId: affinity.threadId, tabId });
-    throwIfAborted(signal);
-    if (reveal) this.requestPanelReveal(affinity.threadId);
     throwIfAborted(signal);
     try {
       const runtime = await raceWithSignal(
@@ -793,10 +802,12 @@ export class DesktopBrowserAutomationHost {
         signal,
       );
       throwIfAborted(signal);
+      assertBackgroundBrowserInput(runtime.webContents);
       await this.diagnostics.observe(runtime, signal);
       return runtime;
-    } catch {
+    } catch (error) {
       throwIfAborted(signal);
+      if (error instanceof BrowserAutomationHostError) throw error;
       browserHostError({
         code: "BrowserHostUnavailable",
         retryable: true,
@@ -804,18 +815,6 @@ export class DesktopBrowserAutomationHost {
         effectMayHaveCommitted: false,
         tabId: tabId as BrowserTabId,
       });
-    }
-  }
-
-  private requestPanelReveal(threadId: ThreadId): void {
-    if (!this.requestOpenPanel) return;
-    // Revealing is opportunistic UI feedback, not a prerequisite for browser
-    // execution. The renderer opens the panel only when this thread is already
-    // active; a slow/backgrounded UI must never stall the agent runtime.
-    try {
-      void Promise.resolve(this.requestOpenPanel(threadId)).catch(() => undefined);
-    } catch {
-      // The persistent native runtime remains usable when the shell cannot reveal it.
     }
   }
 
@@ -898,6 +897,7 @@ export class DesktopBrowserAutomationHost {
     abortError: BrowserAutomationHostError,
     interruptByHuman: (error: BrowserAutomationHostError) => void,
     markActionStarted: () => void,
+    selectHumanControlTarget: (tabId: string) => void,
   ): Promise<unknown> {
     switch (request.name) {
       case "browser_status":
@@ -912,6 +912,7 @@ export class DesktopBrowserAutomationHost {
           abortError,
           interruptByHuman,
           markActionStarted,
+          selectHumanControlTarget,
         );
     }
 
@@ -935,6 +936,7 @@ export class DesktopBrowserAutomationHost {
       affinity.tabId = annotationTarget.tabId;
     }
     const targetTabId = annotationTarget?.tabId ?? this.resolveTabId(affinity, input.tabId);
+    selectHumanControlTarget(targetTabId);
     return this.withLock(
       `tab:${affinity.threadId}:${targetTabId}`,
       () =>
@@ -974,6 +976,17 @@ export class DesktopBrowserAutomationHost {
   ): Promise<TabToolExecution> {
     throwIfAborted(signal);
     if (request.name === "browser_close") {
+      if (
+        this.browserManager.isBrowserTabFocused({ threadId: affinity.threadId, tabId: targetTabId })
+      ) {
+        browserHostError({
+          code: "BrowserInterruptedByHuman",
+          retryable: true,
+          phase: "input",
+          effectMayHaveCommitted: false,
+          tabId: targetTabId as BrowserTabId,
+        });
+      }
       return uncorrelatedExecution(this.close(affinity, targetTabId));
     }
 
@@ -1014,18 +1027,12 @@ export class DesktopBrowserAutomationHost {
         });
       }
       const url = validateWebUrl(resolvedUrl);
+      const runtime = await this.resolveAutomationRuntime(affinity, targetTabId, signal, false);
       this.browserManager.prepareAutomationNavigation({
         threadId: affinity.threadId,
         tabId: targetTabId,
         url,
       });
-      const runtime = await this.resolveAutomationRuntime(
-        affinity,
-        targetTabId,
-        signal,
-        true,
-        false,
-      );
       return uncorrelatedExecution(
         await this.withDialogs(runtime, signal, () =>
           this.navigate(runtime, navigateInput, url, signal),
@@ -1035,7 +1042,7 @@ export class DesktopBrowserAutomationHost {
 
     const historyDirection = browserHistoryDirection(request.name);
     if (historyDirection) {
-      const runtime = await this.resolveAutomationRuntime(affinity, targetTabId, signal, true);
+      const runtime = await this.resolveAutomationRuntime(affinity, targetTabId, signal);
       return uncorrelatedExecution(
         await this.withDialogs(runtime, signal, () =>
           navigateBrowserHistory(
@@ -1048,7 +1055,7 @@ export class DesktopBrowserAutomationHost {
       );
     }
 
-    const runtime = await this.resolveAutomationRuntime(affinity, targetTabId, signal, true);
+    const runtime = await this.resolveAutomationRuntime(affinity, targetTabId, signal);
     const windowOpen = request.name === "browser_run" ? this.observeWindowOpen(runtime) : null;
     try {
       return await this.executeVisibleTool(
@@ -1155,12 +1162,13 @@ export class DesktopBrowserAutomationHost {
             ...result,
             humanActionRequired: {
               kind: "oauth_popup" as const,
-              instruction: "Complete sign-in in the visible popup before continuing." as const,
+              instruction:
+                "Open the sign-in popup tab in the browser and complete sign-in before continuing." as const,
             },
           }
         : result;
     const state = this.browserManager.getState({ threadId: affinity.threadId });
-    const openedTabId = execution.openedTabId ?? state.activeTabId;
+    const openedTabId = execution.openedTabId;
     if (
       !openedTabId ||
       openedTabId === targetTabId ||
@@ -1168,9 +1176,7 @@ export class DesktopBrowserAutomationHost {
     ) {
       return reconciledResult;
     }
-    // BrowserManager changes activeTabId without advancing the human epoch only
-    // for a new tab created inside the short-lived agent gesture lease. Adopt
-    // it after the human guard has successfully reconciled.
+    // Adopt only the correlated agent popup. The UI selection belongs to the user.
     affinity.tabId = openedTabId;
     return reconciledResult && typeof reconciledResult === "object"
       ? { ...reconciledResult, openedTabId: openedTabId as BrowserTabId }
@@ -1210,36 +1216,32 @@ export class DesktopBrowserAutomationHost {
     abortError: BrowserAutomationHostError,
     interruptByHuman: (error: BrowserAutomationHostError) => void,
     markActionStarted: () => void,
+    selectHumanControlTarget: (tabId: string) => void,
   ): Promise<BrowserOpenOutput> {
     throwIfAborted(signal);
     const url = input.url === undefined ? undefined : validateWebUrl(input.url);
-    const show = input.show ?? true;
     const before = this.browserManager.getState({ threadId: affinity.threadId });
-    const hiddenTabId = !show && (input.reuse ?? true) ? before.activeTabId : null;
-    if (!show) {
-      if (!hiddenTabId) {
-        browserHostError({
-          code: "BrowserHostUnavailable",
-          retryable: true,
-          phase: "runtime",
-          effectMayHaveCommitted: false,
+    // Reuse follows this provider session, never a later selection made by the user.
+    const preferred = before.tabs.some((tab) => tab.id === affinity.tabId)
+      ? affinity.tabId
+      : before.activeTabId;
+    if ((input.reuse ?? true) && preferred) selectHumanControlTarget(preferred);
+    const prepared = await this.withVisibilityLock(
+      affinity.threadId,
+      signal,
+      abortError,
+      async () => {
+        markActionStarted();
+        const prepared = this.browserManager.prepareAutomationTab({
+          threadId: affinity.threadId,
+          reuse: input.reuse ?? true,
+          ...((input.reuse ?? true) && preferred ? { tabId: preferred } : {}),
         });
-      }
-    }
-    throwIfAborted(signal);
-    // A hidden open may only use the tab proven visible below, under both the
-    // per-tab lock and the human-control guard. Preparing browser state here
-    // would reopen, select, or create a renderer before that proof succeeds.
-    const prepared = show
-      ? await this.withVisibilityLock(affinity.threadId, signal, abortError, async () => {
-          markActionStarted();
-          return this.browserManager.prepareAutomationTab({
-            threadId: affinity.threadId,
-            reuse: input.reuse ?? true,
-          });
-        })
-      : before;
-    const selected = show ? prepared.activeTabId : hiddenTabId;
+        selectHumanControlTarget(prepared.automationTabId);
+        return prepared;
+      },
+    );
+    const selected = prepared.automationTabId;
     if (!selected) throw new Error("Browser open did not create a tab.");
     const disposition = before.tabs.some((tab) => tab.id === selected) ? "reused" : "created";
     return this.withLock(
@@ -1253,40 +1255,17 @@ export class DesktopBrowserAutomationHost {
           interruptByHuman,
           async () => {
             throwIfAborted(signal);
-            if (!show) {
-              // Keep the potentially slow diagnostics preflight outside the
-              // visibility lease. The state is revalidated under that lease
-              // immediately before any hidden mutation below.
-              await this.resolveAutomationRuntime(affinity, selected, signal, false);
-            }
             const executeOpen = async (): Promise<BrowserOpenOutput> => {
               markActionStarted();
-              if (!show) {
-                const visibleState = this.browserManager.getState({ threadId: affinity.threadId });
-                if (
-                  visibleState.activeTabId !== selected ||
-                  !visibleState.tabs.some((tab) => tab.id === selected)
-                ) {
-                  browserHostError({
-                    code: "BrowserHostUnavailable",
-                    retryable: true,
-                    phase: "runtime",
-                    effectMayHaveCommitted: false,
-                    tabId: selected as BrowserTabId,
-                  });
-                }
-              } else if (!url) {
-                // prepareAutomationTab runs before the per-tab lease is known.
-                // Reassert its selection now that the thread visibility lease
-                // protects this open from every other provider session.
-                this.browserManager.selectAutomationTab({
-                  threadId: affinity.threadId,
-                  tabId: selected,
-                });
-              }
+              // Check delivery before changing the projected URL of a live guest.
+              const runtime = await this.resolveAutomationRuntime(
+                affinity,
+                selected,
+                signal,
+                false,
+              );
               affinity.tabId = selected;
               if (!url) {
-                if (show) this.requestPanelReveal(affinity.threadId);
                 throwIfAborted(signal);
                 const tab = prepared.tabs.find((candidate) => candidate.id === selected);
                 return {
@@ -1308,13 +1287,6 @@ export class DesktopBrowserAutomationHost {
                     tabId: selected,
                     url,
                   });
-                  const runtime = await this.resolveAutomationRuntime(
-                    affinity,
-                    selected,
-                    signal,
-                    show,
-                    false,
-                  );
                   return this.withDialogs(runtime, signal, async () => {
                     const loaded = await this.navigateOrObserve(
                       runtime,
