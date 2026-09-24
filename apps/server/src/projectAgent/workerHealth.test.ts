@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   classifyWorkerSettlement,
+  formatWorkerBatchRollup,
   formatWorkerSettlementReport,
   formatWorkerWatchLine,
   isFailedWorkerSessionStatus,
@@ -50,10 +51,44 @@ describe("worker health", () => {
     expect(isWorkerAlertEvent("worker.interrupted")).toBe(true);
     expect(isWorkerAlertEvent("worker.missing")).toBe(true);
     expect(isWorkerAlertEvent("worker.stopped")).toBe(true);
-    expect(isWorkerAlertEvent("thread.approval-response-requested")).toBe(true);
-    expect(isWorkerAlertEvent("thread.user-input-response-requested")).toBe(true);
+    expect(isWorkerAlertEvent("worker.disconnected")).toBe(true);
+    expect(isWorkerAlertEvent("worker.never-started")).toBe(true);
+    expect(isWorkerAlertEvent("worker.tool-overtime")).toBe(true);
+    // Request-side waiting signals (provider raised them) alert; the
+    // response-requested event types fire when the USER answers — not alerts.
+    expect(isWorkerAlertEvent("approval.requested")).toBe(true);
+    expect(isWorkerAlertEvent("user-input.requested")).toBe(true);
+    expect(isWorkerAlertEvent("thread.approval-response-requested")).toBe(false);
+    expect(isWorkerAlertEvent("thread.user-input-response-requested")).toBe(false);
     expect(isWorkerAlertEvent("thread.turn-diff-completed")).toBe(false);
     expect(isWorkerAlertEvent("thread.session-set")).toBe(false);
+  });
+
+  it("formats roll-up entries with results, PR links, and no-result notes", () => {
+    expect(
+      formatWorkerBatchRollup({
+        threads: [
+          {
+            title: "Alpha",
+            outcome: "completed",
+            result: "Shipped the migration — 12 files",
+            pr: "https://github.com/diliprt/synara/pull/42",
+          },
+          { title: "Beta", outcome: "completed" },
+          { title: "Gamma", outcome: "waiting-approval" },
+        ],
+      }),
+    ).toBe(
+      "All 3 threads settled: Alpha: Shipped the migration — 12 files — https://github.com/diliprt/synara/pull/42, Beta \u2713 — no result filed, Gamma \u26a0 needs approval",
+    );
+    expect(
+      formatWorkerBatchRollup({
+        threads: [
+          { title: "Alpha", outcome: "completed" },
+          { title: "Beta", outcome: "stopped" },
+        ],
+      }),
+    ).toBe("All 2 threads finished: Alpha \u2713 — no result filed, Beta \u2713");
   });
 
   it("formats a quota failure for the coordinator packet", () => {

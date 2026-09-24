@@ -8567,4 +8567,100 @@ describe("ProviderRuntimeIngestion", () => {
     expect(acks.length).toBeLessThan(rows.length);
     expect(acks.length).toBeLessThanOrEqual(4);
   });
+
+  it("maintains durable last-activity + in-flight tool rows for the worker monitor", async () => {
+    const harness = await createHarness();
+    const sql = await runtime!.runPromise(Effect.service(SqlClient.SqlClient));
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("turn-liveness");
+    const sessionRow = () =>
+      runtime!.runPromise(
+        sql<{ readonly lastActivityAt: string | null }>`
+          SELECT last_activity_at AS "lastActivityAt"
+          FROM projection_thread_sessions
+          WHERE thread_id = ${threadId}
+        `,
+      );
+    const tools = () =>
+      runtime!.runPromise(
+        sql<{
+          readonly itemId: string;
+          readonly turnId: string | null;
+          readonly startedAt: string;
+        }>`
+          SELECT item_id AS "itemId", turn_id AS "turnId", started_at AS "startedAt"
+          FROM projection_thread_active_tools
+          WHERE thread_id = ${threadId}
+          ORDER BY started_at ASC
+        `,
+      );
+
+    // A tool starting is runtime activity — and a tracked in-flight tool.
+    harness.emit({
+      type: "item.started",
+      eventId: asEventId("live-tool-start"),
+      provider: "codex",
+      createdAt: "2026-09-10T00:10:00.000Z",
+      threadId,
+      turnId,
+      itemId: asItemId("tool-live-1"),
+      payload: { itemType: "command_execution", status: "inProgress", title: "vitest" },
+    });
+    await harness.drain();
+
+    let row = (await sessionRow())[0];
+    expect(row?.lastActivityAt).toBe("2026-09-10T00:10:00.000Z");
+    let inFlight = await tools();
+    expect(inFlight.map((entry) => entry.itemId)).toEqual(["tool-live-1"]);
+    expect(inFlight[0]?.turnId).toBe(turnId);
+
+    // A later delta moves lastActivityAt; the tool stays in flight.
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("live-delta"),
+      provider: "codex",
+      createdAt: "2026-09-10T00:14:00.000Z",
+      threadId,
+      turnId,
+      itemId: asItemId("msg-live"),
+      payload: { streamKind: "assistant_text", delta: "still running" },
+    });
+    await harness.drain();
+    row = (await sessionRow())[0];
+    expect(row?.lastActivityAt).toBe("2026-09-10T00:14:00.000Z");
+    inFlight = await tools();
+    expect(inFlight.length).toBe(1);
+
+    // The stamp never regresses: an out-of-order earlier event keeps the max.
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("live-delta-old"),
+      provider: "codex",
+      createdAt: "2026-09-10T00:11:00.000Z",
+      threadId,
+      turnId,
+      itemId: asItemId("msg-live"),
+      payload: { streamKind: "assistant_text", delta: "late" },
+    });
+    await harness.drain();
+    row = (await sessionRow())[0];
+    expect(row?.lastActivityAt).toBe("2026-09-10T00:14:00.000Z");
+
+    // Tool completion clears the in-flight row (and counts as activity).
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("live-tool-done"),
+      provider: "codex",
+      createdAt: "2026-09-10T00:20:00.000Z",
+      threadId,
+      turnId,
+      itemId: asItemId("tool-live-1"),
+      payload: { itemType: "command_execution", status: "completed", title: "vitest" },
+    });
+    await harness.drain();
+    inFlight = await tools();
+    expect(inFlight.length).toBe(0);
+    row = (await sessionRow())[0];
+    expect(row?.lastActivityAt).toBe("2026-09-10T00:20:00.000Z");
+  });
 });

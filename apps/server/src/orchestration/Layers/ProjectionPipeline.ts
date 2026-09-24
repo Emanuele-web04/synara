@@ -1298,7 +1298,10 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             requestedAt: event.payload.createdAt,
           });
           if (turnStartSession !== null) {
-            yield* projectionThreadSessionRepository.upsert(turnStartSession);
+            yield* projectionThreadSessionRepository.upsert({
+              ...turnStartSession,
+              lastActivityAt: event.payload.createdAt,
+            });
           }
           return;
         }
@@ -1311,6 +1314,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             runtimeMode: event.payload.session.runtimeMode,
             activeTurnId: event.payload.session.activeTurnId,
             lastError: event.payload.session.lastError,
+            lastActivityAt: event.payload.session.lastActivityAt ?? null,
             updatedAt: event.payload.session.updatedAt,
           });
           return;

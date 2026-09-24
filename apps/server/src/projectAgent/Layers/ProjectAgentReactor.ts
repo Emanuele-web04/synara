@@ -13,11 +13,26 @@ import { ProjectAgentService } from "../Services/ProjectAgentService.ts";
 
 const SETTLE_EVENT_TYPES: ReadonlySet<OrchestrationEvent["type"]> = new Set([
   "thread.turn-diff-completed",
-  "thread.approval-response-requested",
-  "thread.user-input-response-requested",
   "thread.turn-interrupt-requested",
   "thread.session-set",
   "thread.session-stop-requested",
+]);
+
+// Turn-ownership signals: who started the worker's active turn decides
+// whether the ladder may steer it (coordinator/ladder only) and re-arms
+// monitoring on terminally settled workers.
+const TURN_REQUEST_EVENT_TYPES: ReadonlySet<OrchestrationEvent["type"]> = new Set([
+  "thread.turn-start-requested",
+  "thread.turn-queued",
+]);
+
+// Request-side waiting signals ride `thread.activity-appended` — the provider
+// raising an approval/input request marks the worker waiting; the
+// response-requested event types fire when the USER answers and are not
+// worker-waiting signals.
+const REQUEST_ACTIVITY_KINDS: ReadonlySet<string> = new Set([
+  "approval.requested",
+  "user-input.requested",
 ]);
 
 const make = Effect.gen(function* () {
@@ -44,12 +59,51 @@ const make = Effect.gen(function* () {
     Effect.forkScoped,
   );
 
+  const isWatchedEvent = (type: OrchestrationEvent["type"]) =>
+    type === "project.deleted" ||
+    SETTLE_EVENT_TYPES.has(type) ||
+    TURN_REQUEST_EVENT_TYPES.has(type) ||
+    type === "thread.activity-appended";
+
   const worker = yield* makeDrainableWorker((event: OrchestrationEvent) =>
     Effect.gen(function* () {
       if (event.type === "project.deleted") {
         yield* projectAgent.onProjectDeleted(event.payload.projectId as ProjectId);
         return;
       }
+
+      if (TURN_REQUEST_EVENT_TYPES.has(event.type)) {
+        const payload = event.payload;
+        if (!("threadId" in payload)) return;
+        yield* projectAgent.recordWorkerTurnRequest({
+          threadId: payload.threadId as ThreadId,
+          commandId: event.commandId,
+          dispatchOrigin:
+            "dispatchOrigin" in payload && typeof payload.dispatchOrigin === "string"
+              ? payload.dispatchOrigin
+              : null,
+          turnId: "turnId" in payload && typeof payload.turnId === "string" ? payload.turnId : null,
+          createdAt: new Date().toISOString(),
+        });
+        return;
+      }
+
+      if (event.type === "thread.activity-appended") {
+        const payload = event.payload;
+        if (!("threadId" in payload) || !("activity" in payload)) return;
+        const activity = payload.activity as { kind?: unknown; id?: unknown };
+        if (typeof activity?.kind !== "string" || !REQUEST_ACTIVITY_KINDS.has(activity.kind)) {
+          return;
+        }
+        yield* projectAgent.ingestSettledThreadEvent({
+          threadId: payload.threadId as ThreadId,
+          sourceEventId: `${event.sequence}:${activity.kind}`,
+          eventType: activity.kind,
+          createdAt: new Date().toISOString(),
+        });
+        return;
+      }
+
       if (!SETTLE_EVENT_TYPES.has(event.type)) return;
       // The recovery ladder's own dispatches (queued steer interrupts, the
       // explicit interrupt) must not settle the worker — an "interrupted"
@@ -84,9 +138,7 @@ const make = Effect.gen(function* () {
     worker,
     Effect.forkScoped(
       Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) =>
-        event.type === "project.deleted" || SETTLE_EVENT_TYPES.has(event.type)
-          ? worker.enqueue(event).pipe(Effect.asVoid)
-          : Effect.void,
+        isWatchedEvent(event.type) ? worker.enqueue(event).pipe(Effect.asVoid) : Effect.void,
       ),
     ).pipe(Effect.asVoid),
   );

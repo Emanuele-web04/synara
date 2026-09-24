@@ -69,6 +69,8 @@ import {
 import { ProjectionPendingInteractionRepositoryLive } from "../../persistence/Layers/ProjectionPendingInteractions.ts";
 import { ProviderRuntimeEventRepositoryLive } from "../../persistence/Layers/ProviderRuntimeEvents.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
+import { ProjectionThreadSessionRepository } from "../../persistence/Services/ProjectionThreadSessions.ts";
+import { ProjectionThreadSessionRepositoryLive } from "../../persistence/Layers/ProjectionThreadSessions.ts";
 import { OrchestrationCommandReceiptRepository } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
 import {
   PROVIDER_RUNTIME_INGESTION_CONSUMER,
@@ -665,9 +667,13 @@ const make = Effect.gen(function* () {
   const providerService = yield* ProviderService;
   const computerService = yield* Effect.serviceOption(ComputerService);
   const projectionTurnRepository = yield* ProjectionTurnRepository;
+  const projectionThreadSessionRepository = yield* ProjectionThreadSessionRepository;
   const pendingInteractions = yield* ProjectionPendingInteractionRepository;
   const runtimeEvents = yield* ProviderRuntimeEventRepository;
   const commandReceipts = yield* OrchestrationCommandReceiptRepository;
+  // Throttle map for the durable last-runtime-activity timestamp: one row
+  // write per thread per ~15s of observed activity instead of per event.
+  const lastActivityFlushByThreadRef = yield* Ref.make(new Map<string, number>());
   const outstandingTurnIdsByThreadRef = yield* Ref.make<ReadonlyMap<ThreadId, ReadonlySet<TurnId>>>(
     new Map(),
   );
@@ -2156,6 +2162,26 @@ const make = Effect.gen(function* () {
         return;
       }
       const thread = targetThreadResolution.thread;
+
+      // Durable last-activity signal (worker-monitoring silence is measured
+      // from this, not from session lifecycle rows): every runtime event of
+      // ANY kind counts — tool lifecycle, streamed output, messages,
+      // approval/input requests. Throttled to one row write per thread per
+      // ~15s of activity; the first event on a thread always flushes.
+      const LAST_ACTIVITY_FLUSH_INTERVAL_MS = 15_000;
+      const activityAtMs = Date.parse(now);
+      const flushMap = yield* Ref.get(lastActivityFlushByThreadRef);
+      const lastFlush = flushMap.get(thread.id);
+      if (lastFlush === undefined || activityAtMs - lastFlush >= LAST_ACTIVITY_FLUSH_INTERVAL_MS) {
+        flushMap.set(thread.id, activityAtMs);
+        yield* projectionThreadSessionRepository
+          .touchLastActivity({
+            threadId: thread.id,
+            activityAt: now,
+          })
+          .pipe(Effect.catchCause(() => Effect.void));
+      }
+
       if (isRowMakingProviderRuntimeEvent(event)) {
         for (const state of segmentStateByThreadId.get(thread.id)?.values() ?? []) {
           if (state.hasText) {
@@ -2183,6 +2209,52 @@ const make = Effect.gen(function* () {
         terminalApplicability?.resolvedTurnId !== undefined
           ? TurnId.makeUnsafe(terminalApplicability.resolvedTurnId)
           : rawEventTurnId;
+
+      // In-flight tool tracking: a started-but-unfinished tool call counts as
+      // activity for the whole duration it runs (a 12-minute test suite must
+      // never look silent). INSERT OR IGNORE / DELETE keeps it replay-safe.
+      if (
+        event.type === "item.started" &&
+        event.itemId !== undefined &&
+        isToolLifecycleItemType(event.payload.itemType)
+      ) {
+        yield* projectionThreadSessionRepository
+          .markToolStarted({
+            threadId: thread.id,
+            itemId: event.itemId,
+            turnId: rawEventTurnId ?? null,
+            startedAt: now,
+            startedEventId: event.eventId,
+          })
+          .pipe(Effect.catchCause(() => Effect.void));
+      }
+      if (
+        event.type === "item.completed" &&
+        event.itemId !== undefined &&
+        isToolLifecycleItemType(event.payload.itemType)
+      ) {
+        yield* projectionThreadSessionRepository
+          .markToolFinished({
+            threadId: thread.id,
+            itemId: event.itemId,
+          })
+          .pipe(Effect.catchCause(() => Effect.void));
+      }
+      if (event.type === "turn.started" && eventTurnId) {
+        yield* projectionThreadSessionRepository
+          .clearActiveTools({
+            threadId: thread.id,
+            exceptTurnId: eventTurnId,
+          })
+          .pipe(Effect.catchCause(() => Effect.void));
+      }
+      if (isTerminalTurnEvent || event.type === "session.exited") {
+        yield* projectionThreadSessionRepository
+          .clearActiveTools({
+            threadId: thread.id,
+          })
+          .pipe(Effect.catchCause(() => Effect.void));
+      }
 
       const shouldApplyThreadLifecycle =
         event.type === "turn.started"
@@ -3554,6 +3626,7 @@ export const ProviderRuntimeIngestionLive = Layer.effect(
       ProjectionPendingInteractionRepositoryLive,
       ProviderRuntimeEventRepositoryLive,
       OrchestrationCommandReceiptRepositoryLive,
+      ProjectionThreadSessionRepositoryLive,
     ),
   ),
 );

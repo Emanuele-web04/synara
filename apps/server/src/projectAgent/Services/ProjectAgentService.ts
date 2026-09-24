@@ -42,6 +42,8 @@ import type {
   ProjectAgentReadDocumentResult,
   ProjectAgentRefreshDigestInput,
   ProjectAgentReportResultInput,
+  ProjectAgentResolveWorkerInput,
+  ProjectAgentResolveWorkerResult,
   ProjectAgentStartGoalInput,
   ProjectAgentStreamEvent,
   ProjectAgentSubscribeInput,
@@ -251,6 +253,28 @@ export interface ProjectAgentServiceShape {
   readonly processPendingWakes: (
     projectId: ProjectId,
   ) => Effect.Effect<void, ProjectAgentServiceError>;
+  /**
+   * Turn-ownership signal from the reactor: classifies the originating
+   * command (coordinator / ladder / user), clears a latched needs-you on any
+   * new turn, and re-arms monitoring on a terminally settled worker when the
+   * new turn is coordinator- or ladder-originated.
+   */
+  readonly recordWorkerTurnRequest: (input: {
+    readonly threadId: ThreadId;
+    readonly commandId: string | null;
+    readonly dispatchOrigin: string | null;
+    readonly turnId: string | null;
+    readonly createdAt: string;
+  }) => Effect.Effect<void, ProjectAgentServiceError>;
+  /**
+   * User decision on a "Waiting on you" worker: `stop` interrupts its turn
+   * and settles it; `retry` clears the latch and re-dispatches the recorded
+   * task prompt under the ladder's ownership.
+   */
+  readonly resolveWorkerAlert: (
+    input: ProjectAgentResolveWorkerInput,
+    principal: ProjectAgentPrincipal,
+  ) => Effect.Effect<ProjectAgentResolveWorkerResult, ProjectAgentServiceError>;
   readonly resolvePrincipalForThread: (
     threadId: ThreadId,
   ) => Effect.Effect<ProjectAgentPrincipal, ProjectAgentServiceError>;

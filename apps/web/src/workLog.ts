@@ -191,13 +191,19 @@ export interface WorkLogSynaraWorkerNoticeThread {
   threadId: string;
   title: string;
   outcome: string | null;
+  result: string | null;
+  pr: string | null;
+  /** Owning group project — the needs-you actions resolve against it. */
+  projectId: string | null;
 }
 
 export interface WorkLogSynaraWorkerNotice {
-  kind: "settled" | "stuck" | "rollup";
+  kind: "settled" | "stuck" | "needs-you" | "rollup";
   marker: string | null;
   phrase: string | null;
   threads: ReadonlyArray<WorkLogSynaraWorkerNoticeThread>;
+  /** Synara-native action ids on a needs-you card (retry / stop / open). */
+  actions?: ReadonlyArray<"retry" | "stop" | "open">;
 }
 
 export interface WorkLogSubagent {
@@ -439,6 +445,7 @@ function shouldKeepActivityForWorkLog(
   if (
     activity.kind === "synara.worker.settled" ||
     activity.kind === "synara.worker.stuck" ||
+    activity.kind === "synara.worker.needs-you" ||
     activity.kind === "synara.workers.settled"
   ) {
     return true;
@@ -572,23 +579,48 @@ function extractWorkLogSynaraWorkerNotice(
       if (!threadId || !title) {
         return [];
       }
-      return [{ threadId, title, outcome: asTrimmedString(thread?.outcome) ?? null }];
+      return [
+        {
+          threadId,
+          title,
+          outcome: asTrimmedString(thread?.outcome) ?? null,
+          result: asTrimmedString(thread?.result) ?? null,
+          pr: asTrimmedString(thread?.pr) ?? null,
+          projectId: asTrimmedString(thread?.projectId) ?? null,
+        },
+      ];
     });
   };
   if (activityKind === "synara.workers.settled") {
     const threads = parseThreads(payload.threads);
     return threads.length > 0 ? { kind: "rollup", marker: null, phrase: null, threads } : null;
   }
-  if (activityKind === "synara.worker.settled" || activityKind === "synara.worker.stuck") {
+  if (
+    activityKind === "synara.worker.settled" ||
+    activityKind === "synara.worker.stuck" ||
+    activityKind === "synara.worker.needs-you"
+  ) {
     const threads = parseThreads([payload.thread]);
     if (threads.length === 0) {
       return null;
     }
+    const actions = Array.isArray(payload.actions)
+      ? payload.actions.flatMap(
+          (action): Array<"retry" | "stop" | "open"> =>
+            action === "retry" || action === "stop" || action === "open" ? [action] : [],
+        )
+      : undefined;
     return {
-      kind: activityKind === "synara.worker.stuck" ? "stuck" : "settled",
+      kind:
+        activityKind === "synara.worker.needs-you"
+          ? "needs-you"
+          : activityKind === "synara.worker.stuck"
+            ? "stuck"
+            : "settled",
       marker: asTrimmedString(payload.marker) ?? null,
       phrase: asTrimmedString(payload.phrase) ?? null,
       threads,
+      ...(actions ? { actions } : {}),
     };
   }
   return null;
@@ -817,6 +849,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (
     activity.kind === "synara.worker.settled" ||
     activity.kind === "synara.worker.stuck" ||
+    activity.kind === "synara.worker.needs-you" ||
     activity.kind === "synara.workers.settled"
   ) {
     const notice = extractWorkLogSynaraWorkerNotice(payload, activity.kind);

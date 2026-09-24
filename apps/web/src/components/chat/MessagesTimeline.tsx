@@ -72,6 +72,7 @@ import { composerOverlayScrollMaskImage } from "./composerOverlay";
 import { CrossTaskOriginLabel, type CrossTaskOrigin } from "./CrossTaskOriginLabel";
 import { ForkSourceDivider, type ForkSourceReference } from "./ForkSourceDivider";
 import { SynaraThreadCreationCard } from "./SynaraThreadCreationCard";
+import { WorkerMonitorNoticePill } from "./WorkerMonitorNoticePill";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { DiffStatLabel } from "./DiffStatLabel";
@@ -1507,67 +1508,18 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               ? [{ entry: workEntry, notice: workEntry.synaraWorkerNotice }]
               : [],
           );
-          const outcomeLabels: Record<string, string> = {
-            completed: "\u2713",
-            stopped: "\u2713",
-            failed: "\u2717 failed",
-            interrupted: "\u26a0 interrupted",
-            missing: "\u2717 missing",
-            "waiting-approval": "\u26a0 needs approval",
-            "waiting-input": "\u26a0 needs input",
-          };
           if (notices.length === 0) {
             return null;
           }
           return (
             <div className="flex w-full flex-col items-center gap-1.5">
               {notices.map(({ entry, notice }) => (
-                <div
+                <WorkerMonitorNoticePill
                   key={`worker-monitor:${entry.id}`}
-                  className={cn(
-                    "inline-flex max-w-full flex-wrap items-center justify-center gap-1.5 rounded-full px-2 py-0.5",
-                    MUTED_LABEL_TEXT_CLASS_NAME,
-                  )}
-                  data-worker-monitor-kind={notice.kind}
-                >
-                  {notice.kind === "rollup" ? (
-                    <>
-                      <span>
-                        {entry.label.includes(":")
-                          ? `${entry.label.slice(0, entry.label.indexOf(":") + 1)} `
-                          : entry.label}
-                      </span>
-                      {notice.threads.map((thread) => (
-                        <button
-                          key={`worker-monitor-thread:${thread.threadId}`}
-                          type="button"
-                          className="inline p-0 text-inherit underline decoration-foreground/30 underline-offset-2 hover:decoration-foreground/70"
-                          onClick={() => onOpenThread?.(ThreadId.makeUnsafe(thread.threadId))}
-                        >
-                          {thread.title}
-                          {thread.outcome
-                            ? ` ${outcomeLabels[thread.outcome] ?? thread.outcome}`
-                            : ""}
-                        </button>
-                      ))}
-                    </>
-                  ) : (
-                    <>
-                      {notice.marker ? <span aria-hidden>{notice.marker}</span> : null}
-                      {notice.threads.map((thread) => (
-                        <button
-                          key={`worker-monitor-thread:${thread.threadId}`}
-                          type="button"
-                          className="inline p-0 text-inherit underline decoration-foreground/30 underline-offset-2 hover:decoration-foreground/70"
-                          onClick={() => onOpenThread?.(ThreadId.makeUnsafe(thread.threadId))}
-                        >
-                          {thread.title}
-                        </button>
-                      ))}
-                      {notice.phrase ? <span>{notice.phrase}</span> : null}
-                    </>
-                  )}
-                </div>
+                  entry={entry}
+                  notice={notice}
+                  {...(onOpenThread ? { onOpenThread } : {})}
+                />
               ))}
             </div>
           );

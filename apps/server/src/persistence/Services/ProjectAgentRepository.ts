@@ -1,4 +1,5 @@
 import {
+  IsoDateTime,
   ProjectActivity,
   ProjectAgentConfig,
   ProjectAgentRequestId,
@@ -256,6 +257,15 @@ export interface ProjectAgentRepositoryShape {
   readonly upsertManagedWorker: (
     worker: ProjectManagedWorker,
   ) => Effect.Effect<ProjectManagedWorker, ProjectAgentRepositoryError>;
+  /**
+   * Compare-and-set write of the monitor-owned worker columns guarded by the
+   * row's `updated_at` — a stale read cannot revert a concurrent settle.
+   * `applied: false` on a guard miss; the caller re-reads or drops the write.
+   */
+  readonly saveManagedWorkerMonitor: (input: {
+    readonly worker: ProjectManagedWorker;
+    readonly expectedUpdatedAt: IsoDateTime;
+  }) => Effect.Effect<{ readonly applied: boolean }, ProjectAgentRepositoryError>;
   readonly findManagedWorkerByThread: (
     threadId: ThreadId,
   ) => Effect.Effect<Option.Option<ProjectManagedWorker>, ProjectAgentRepositoryError>;

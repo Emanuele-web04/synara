@@ -744,7 +744,16 @@ describe("deriveWorkLogEntries", () => {
       kind: "settled",
       marker: "✓",
       phrase: "finished",
-      threads: [{ threadId: "thread-mars", title: "Mars rocket research", outcome: "completed" }],
+      threads: [
+        {
+          threadId: "thread-mars",
+          title: "Mars rocket research",
+          outcome: "completed",
+          result: null,
+          pr: null,
+          projectId: null,
+        },
+      ],
     });
     const stuck = entries.find((entry) => entry.id === "worker-stuck");
     expect(stuck?.synaraWorkerNotice?.kind).toBe("stuck");
@@ -754,9 +763,30 @@ describe("deriveWorkLogEntries", () => {
       marker: null,
       phrase: null,
       threads: [
-        { threadId: "thread-a", title: "A", outcome: "completed" },
-        { threadId: "thread-b", title: "B", outcome: "completed" },
-        { threadId: "thread-c", title: "C", outcome: "waiting-approval" },
+        {
+          threadId: "thread-a",
+          title: "A",
+          outcome: "completed",
+          result: null,
+          pr: null,
+          projectId: null,
+        },
+        {
+          threadId: "thread-b",
+          title: "B",
+          outcome: "completed",
+          result: null,
+          pr: null,
+          projectId: null,
+        },
+        {
+          threadId: "thread-c",
+          title: "C",
+          outcome: "waiting-approval",
+          result: null,
+          pr: null,
+          projectId: null,
+        },
       ],
     });
   });

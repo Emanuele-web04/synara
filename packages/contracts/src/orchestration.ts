@@ -600,6 +600,10 @@ export const OrchestrationSession = Schema.Struct({
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(() => DEFAULT_RUNTIME_MODE)),
   activeTurnId: Schema.NullOr(TurnId),
   lastError: Schema.NullOr(TrimmedNonEmptyString),
+  /** Last provider-runtime activity of any kind observed on the thread
+   * (streamed output, tool lifecycle, messages, requests). Maintained by
+   * runtime ingestion, not by session lifecycle events. */
+  lastActivityAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   updatedAt: IsoDateTime,
 });
 export type OrchestrationSession = typeof OrchestrationSession.Type;

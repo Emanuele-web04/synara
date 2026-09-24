@@ -107,6 +107,15 @@ export function GroupOverview({
     () => new Set(agent.threads.filter((entry) => entry.archived).map((entry) => entry.threadId)),
     [agent.threads],
   );
+  const needsYouThreadIds = useMemo(
+    () =>
+      new Set(
+        (agent.overview?.workers ?? [])
+          .filter((worker) => worker.needsYou)
+          .map((worker) => worker.threadId),
+      ),
+    [agent.overview?.workers],
+  );
 
   const threadRows = useMemo(
     () =>
@@ -118,6 +127,7 @@ export function GroupOverview({
         projectNameById,
         groupProjectId,
         groupProjectName: groupName,
+        needsYouThreadIds,
       }),
     [
       groupThreads,
@@ -127,6 +137,7 @@ export function GroupOverview({
       projectNameById,
       groupProjectId,
       groupName,
+      needsYouThreadIds,
     ],
   );
   const threadSections = useMemo(() => partitionGroupThreadRows(threadRows), [threadRows]);

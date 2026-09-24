@@ -1475,7 +1475,16 @@ describe("deriveMessagesTimelineRows", () => {
         kind: "settled",
         marker: "✓",
         phrase: "finished",
-        threads: [{ threadId: "thread-1", title: "Worker", outcome: "completed" }],
+        threads: [
+          {
+            threadId: "thread-1",
+            title: "Worker",
+            outcome: "completed",
+            result: null,
+            pr: null,
+            projectId: null,
+          },
+        ],
       },
     },
   });

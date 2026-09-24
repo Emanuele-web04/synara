@@ -8,6 +8,16 @@ export const PROJECT_AGENT_WORKER_HEALTH_INTERVAL_MS = 60_000;
 export const WORKER_STUCK_RUNNING_QUIET_MS = 10 * 60_000;
 export const WORKER_STUCK_WAITING_MS = 5 * 60_000;
 
+// A tool call still in flight counts as activity while it runs — the silence
+// ladder must never interrupt it. Beyond this hard cap the ladder only nudges
+// and notifies (never interrupts a running tool).
+export const WORKER_TOOL_OVERTIME_MS = 45 * 60_000;
+
+// A worker the coordinator created must show a session or a started turn
+// within this grace window; afterwards it is treated as stuck (one counted
+// re-dispatch attempt, then "Waiting on you").
+export const WORKER_NEVER_STARTED_MS = 3 * 60_000;
+
 // Programmatic stall-recovery ladder, run by the health loop (no model). Step 1
 // nudges at the silent threshold; step 2 interrupts and re-dispatches the
 // recorded task prompt after REDELIVER_DELAY_MS more quiet; the cap bounds
@@ -19,7 +29,6 @@ export const WORKER_RECOVERY_MAX_ATTEMPTS = 2;
 // Orchestration commands the ladder dispatches carry this prefix so the settle
 // reactor can tell recovery-caused interrupts/steers from worker-owned events.
 export const WORKER_RECOVERY_COMMAND_PREFIX = "agent-recovery:";
-export const workerRecoveryNeedsYouRequestId = (threadId: string) => `worker-recovery:${threadId}`;
 
 export function isFailedWorkerSessionStatus(status: string | null | undefined): boolean {
   return status === "error" || status === "interrupted" || status === "stopped";
@@ -62,16 +71,43 @@ const WORKER_ALERT_EVENT_TYPES = new Set([
   "worker.interrupted",
   "worker.missing",
   "worker.stopped",
+  "worker.disconnected",
   "worker.silent",
   "worker.waiting-overdue",
+  "worker.never-started",
+  "worker.tool-overtime",
   "worker.needs-you",
-  "thread.approval-response-requested",
-  "thread.user-input-response-requested",
+  // Request-side waiting signals (the provider raised the request — the
+  // response-requested event types fire when the USER answers instead).
+  "approval.requested",
+  "user-input.requested",
 ]);
 
 export function isWorkerAlertEvent(eventType: string): boolean {
   return WORKER_ALERT_EVENT_TYPES.has(eventType);
 }
+
+// Ladder bookkeeping steps post their compact rows but never wake the
+// coordinator model — only a give-up ("Waiting on you") or a real settle
+// earns a coordinator turn.
+export const WORKER_WAKE_EVENT_TYPES: ReadonlySet<string> = new Set([
+  "thread.turn-diff-completed",
+  "thread.turn-interrupt-requested",
+  "thread.session-stop-requested",
+  "approval.requested",
+  "user-input.requested",
+  "worker.error",
+  "worker.interrupted",
+  "worker.stopped",
+  "worker.missing",
+  "worker.disconnected",
+  "worker.needs-you",
+]);
+
+// A session whose projection says "running" but is absent from the live
+// provider-session list is only flagged dead past this grace — fresh
+// dispatches can lag the adapter listing by a few seconds.
+export const WORKER_DISCONNECT_GRACE_MS = 90_000;
 
 export function formatWorkerWatchLine(input: {
   readonly title: string;
@@ -117,7 +153,12 @@ export function classifyWorkerSettlement(input: {
   ) {
     return "interrupted";
   }
-  if (status === "error" || eventType === "worker.error" || eventType === "worker.missing") {
+  if (
+    status === "error" ||
+    eventType === "worker.error" ||
+    eventType === "worker.missing" ||
+    eventType === "worker.disconnected"
+  ) {
     return "failed";
   }
   if (
@@ -160,7 +201,7 @@ export function workerMonitorNoticeForEvent(eventType: string): WorkerMonitorNot
         marker: "\u2713",
         phrase: "stopped",
       };
-    case "thread.approval-response-requested":
+    case "approval.requested":
       return {
         kind: "settle",
         outcome: "waiting-approval",
@@ -168,7 +209,7 @@ export function workerMonitorNoticeForEvent(eventType: string): WorkerMonitorNot
         marker: "\u26a0",
         phrase: "is waiting for approval",
       };
-    case "thread.user-input-response-requested":
+    case "user-input.requested":
       return {
         kind: "settle",
         outcome: "waiting-input",
@@ -201,6 +242,14 @@ export function workerMonitorNoticeForEvent(eventType: string): WorkerMonitorNot
         marker: "\u2717",
         phrase: "went missing",
       };
+    case "worker.disconnected":
+      return {
+        kind: "settle",
+        outcome: "failed",
+        tone: "error",
+        marker: "\u2717",
+        phrase: "lost its session",
+      };
     case "worker.silent":
       return {
         kind: "stuck",
@@ -232,6 +281,22 @@ export function workerMonitorNoticeForEvent(eventType: string): WorkerMonitorNot
         tone: "approval",
         marker: "\u26a0",
         phrase: "was interrupted and had its task re-dispatched",
+      };
+    case "worker.never-started":
+      return {
+        kind: "stuck",
+        outcome: null,
+        tone: "approval",
+        marker: "\u26a0",
+        phrase: "never started — no session or turn within 3 minutes",
+      };
+    case "worker.tool-overtime":
+      return {
+        kind: "stuck",
+        outcome: null,
+        tone: "approval",
+        marker: "\u26a0",
+        phrase: "has a tool call running for over 45 minutes",
       };
     case "worker.needs-you":
       return {
@@ -268,6 +333,11 @@ export function formatWorkerBatchRollup(input: {
   readonly threads: ReadonlyArray<{
     readonly title: string;
     readonly outcome: ProjectManagedWorkerSettleOutcome;
+    /** Structured `synara_project_report_result` summary — preferred over the
+     * generic outcome label when present. */
+    readonly result?: string | null;
+    /** Tracked PR URL for the worker thread, appended when known. */
+    readonly pr?: string | null;
   }>;
 }): string {
   const count = input.threads.length;
@@ -275,12 +345,19 @@ export function formatWorkerBatchRollup(input: {
   const allFinished = input.threads.every(
     (thread) => thread.outcome === "completed" || thread.outcome === "stopped",
   );
+  const entries = input.threads.map((thread) => {
+    const result = thread.result?.split("\n")[0]?.trim();
+    const pr = thread.pr?.trim() ? ` — ${thread.pr}` : "";
+    if (result) {
+      const clipped = result.length > 140 ? `${result.slice(0, 137)}...` : result;
+      return `${thread.title}: ${clipped}${pr}`;
+    }
+    const missingResult = thread.outcome === "completed" ? " — no result filed" : "";
+    return `${thread.title} ${WORKER_ROLLUP_ENTRY_LABELS[thread.outcome]}${missingResult}${pr}`;
+  });
   if (allFinished) {
-    return `All ${count} ${noun} finished`;
+    return `All ${count} ${noun} finished: ${entries.join(", ")}`;
   }
-  const entries = input.threads.map(
-    (thread) => `${thread.title} ${WORKER_ROLLUP_ENTRY_LABELS[thread.outcome]}`,
-  );
   return `All ${count} ${noun} settled: ${entries.join(", ")}`;
 }
 

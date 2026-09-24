@@ -126,6 +126,10 @@ const WorkerRow = Schema.Struct({
   recoveriesUsed: Schema.Int,
   needsYou: Schema.Int,
   needsYouAt: Schema.NullOr(IsoDateTime),
+  activeTurnOrigin: ProjectManagedWorker.fields.activeTurnOrigin,
+  activeTurnCommandId: Schema.NullOr(Schema.String),
+  resultSummary: Schema.NullOr(Schema.String),
+  resultAt: Schema.NullOr(IsoDateTime),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -188,6 +192,10 @@ function toGoal(row: typeof GoalRow.Type): ProjectGoal {
 
 function toWorker(row: typeof WorkerRow.Type): ProjectManagedWorker {
   return { ...row, needsYou: row.needsYou === 1 };
+}
+
+function toWorkerRow(worker: ProjectManagedWorker): typeof WorkerRow.Type {
+  return { ...worker, needsYou: worker.needsYou ? 1 : 0 };
 }
 
 const makeProjectAgentRepository = Effect.gen(function* () {
@@ -1563,6 +1571,7 @@ const makeProjectAgentRepository = Effect.gen(function* () {
           settled_at, settle_outcome, waiting_since, stuck_kind, stuck_since,
           task_prompt, recovery_episode, recovery_step, nudge_at, recoveries_used,
           needs_you, needs_you_at,
+          active_turn_origin, active_turn_command_id, result_summary, result_at,
           created_at, updated_at
         ) VALUES (
           ${worker.projectId}, ${worker.threadId}, ${worker.batchId}, ${worker.requestId},
@@ -1571,6 +1580,8 @@ const makeProjectAgentRepository = Effect.gen(function* () {
           ${worker.taskPrompt}, ${worker.recoveryEpisode}, ${worker.recoveryStep},
           ${worker.nudgeAt}, ${worker.recoveriesUsed},
           ${worker.needsYou ? 1 : 0}, ${worker.needsYouAt},
+          ${worker.activeTurnOrigin}, ${worker.activeTurnCommandId},
+          ${worker.resultSummary}, ${worker.resultAt},
           ${worker.createdAt}, ${worker.updatedAt}
         )
         ON CONFLICT (project_id, thread_id) DO UPDATE SET
@@ -1590,10 +1601,51 @@ const makeProjectAgentRepository = Effect.gen(function* () {
           recoveries_used = excluded.recoveries_used,
           needs_you = excluded.needs_you,
           needs_you_at = excluded.needs_you_at,
+          active_turn_origin = excluded.active_turn_origin,
+          active_turn_command_id = excluded.active_turn_command_id,
+          result_summary = excluded.result_summary,
+          result_at = excluded.result_at,
           updated_at = excluded.updated_at
       `.pipe(
         Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.upsertManagedWorker")),
         Effect.as(worker),
+      ),
+    saveManagedWorkerMonitor: (input) =>
+      // Monitor-owned columns only, compare-and-set on the row's own
+      // `updated_at` so a stale health-loop read cannot revert a concurrent
+      // settle (a miss reports `applied: false`; the caller re-reads or
+      // drops the write rather than clobbering fresher state).
+      SqlSchema.findOneOption({
+        Request: Schema.Struct({
+          worker: WorkerRow,
+          expectedUpdatedAt: IsoDateTime,
+        }),
+        Result: ChangedRow,
+        execute: ({ worker, expectedUpdatedAt }) => sql`
+          UPDATE project_agent_managed_workers SET
+            settled_at = ${worker.settledAt},
+            settle_outcome = ${worker.settleOutcome},
+            waiting_since = ${worker.waitingSince},
+            stuck_kind = ${worker.stuckKind},
+            stuck_since = ${worker.stuckSince},
+            task_prompt = COALESCE(${worker.taskPrompt}, project_agent_managed_workers.task_prompt),
+            recovery_episode = ${worker.recoveryEpisode},
+            recovery_step = ${worker.recoveryStep},
+            nudge_at = ${worker.nudgeAt},
+            recoveries_used = ${worker.recoveriesUsed},
+            needs_you = ${worker.needsYou ? 1 : 0},
+            needs_you_at = ${worker.needsYouAt},
+            active_turn_origin = ${worker.activeTurnOrigin},
+            active_turn_command_id = ${worker.activeTurnCommandId},
+            result_summary = ${worker.resultSummary},
+            result_at = ${worker.resultAt},
+            updated_at = ${worker.updatedAt}
+          WHERE thread_id = ${worker.threadId} AND updated_at = ${expectedUpdatedAt}
+          RETURNING 1 AS changed
+        `,
+      })({ worker: toWorkerRow(input.worker), expectedUpdatedAt: input.expectedUpdatedAt }).pipe(
+        Effect.map((option) => ({ applied: Option.isSome(option) })),
+        Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.saveManagedWorkerMonitor")),
       ),
     findManagedWorkerByThread: (threadId) =>
       SqlSchema.findOneOption({
@@ -1609,6 +1661,9 @@ const makeProjectAgentRepository = Effect.gen(function* () {
             recovery_episode AS "recoveryEpisode", recovery_step AS "recoveryStep",
             nudge_at AS "nudgeAt", recoveries_used AS "recoveriesUsed",
             needs_you AS "needsYou", needs_you_at AS "needsYouAt",
+            active_turn_origin AS "activeTurnOrigin",
+            active_turn_command_id AS "activeTurnCommandId",
+            result_summary AS "resultSummary", result_at AS "resultAt",
             created_at AS "createdAt", updated_at AS "updatedAt"
           FROM project_agent_managed_workers
           WHERE thread_id = ${threadId}
@@ -1636,6 +1691,9 @@ const makeProjectAgentRepository = Effect.gen(function* () {
             recovery_episode AS "recoveryEpisode", recovery_step AS "recoveryStep",
             nudge_at AS "nudgeAt", recoveries_used AS "recoveriesUsed",
             needs_you AS "needsYou", needs_you_at AS "needsYouAt",
+            active_turn_origin AS "activeTurnOrigin",
+            active_turn_command_id AS "activeTurnCommandId",
+            result_summary AS "resultSummary", result_at AS "resultAt",
             created_at AS "createdAt", updated_at AS "updatedAt"
           FROM project_agent_managed_workers
           WHERE project_id = ${projectId}
@@ -1661,6 +1719,9 @@ const makeProjectAgentRepository = Effect.gen(function* () {
             recovery_episode AS "recoveryEpisode", recovery_step AS "recoveryStep",
             nudge_at AS "nudgeAt", recoveries_used AS "recoveriesUsed",
             needs_you AS "needsYou", needs_you_at AS "needsYouAt",
+            active_turn_origin AS "activeTurnOrigin",
+            active_turn_command_id AS "activeTurnCommandId",
+            result_summary AS "resultSummary", result_at AS "resultAt",
             created_at AS "createdAt", updated_at AS "updatedAt"
           FROM project_agent_managed_workers
           WHERE project_id = ${projectId} AND batch_id = ${batchId}
