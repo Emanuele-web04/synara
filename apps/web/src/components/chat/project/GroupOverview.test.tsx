@@ -1,9 +1,9 @@
 // FILE: GroupOverview.test.tsx
-// Purpose: Static-markup coverage for the Group panel Overview — row titles must
-//          size off the same `text-ui` token sidebar thread rows use, not the
-//          panel's ambient font size.
+// Purpose: Static-markup coverage for the Group panel's Threads section — row
+//          titles must size off the same `text-ui` token sidebar thread rows
+//          use, not the panel's ambient font size.
 // Layer: Chat UI component test
-// Depends on: GroupOverview with a stubbed project agent.
+// Depends on: GroupThreadsSection with a stubbed project agent.
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ProjectId, ThreadId } from "@synara/contracts";
@@ -12,7 +12,8 @@ import { describe, expect, it } from "vitest";
 
 import type { SidebarThreadSummary } from "../../../types";
 
-import { GroupOverview } from "./GroupOverview";
+import { GroupThreadsSection } from "./GroupOverview";
+import { partitionGroupThreadRows } from "./groupOverview.logic";
 import type { useProjectAgent } from "./useProjectAgent";
 
 type ProjectAgent = ReturnType<typeof useProjectAgent>;
@@ -43,29 +44,31 @@ function makeThread(overrides: Partial<SidebarThreadSummary> = {}): SidebarThrea
 
 const agent = { tasks: [], threads: [] } as unknown as ProjectAgent;
 
-function renderOverview(threads: readonly SidebarThreadSummary[]): string {
+function renderThreadsSection(threads: readonly SidebarThreadSummary[]): string {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const rows = threads.map((thread) => ({
+    thread,
+    task: null,
+    state: "idle" as const,
+    pullRequest: null,
+    projectName: null,
+    taskLine: null,
+  }));
   return renderToStaticMarkup(
     <QueryClientProvider client={queryClient}>
-      <GroupOverview
-        groupProjectId={GROUP_ID}
-        groupName="Mars"
-        memberThreadIds={new Set(threads.map((thread) => thread.id))}
-        groupThreads={threads}
-        projectNameById={new Map()}
-        projectCwdById={new Map()}
+      <GroupThreadsSection
+        sections={partitionGroupThreadRows(rows)}
         agent={agent}
         onOpenThread={() => undefined}
         onOpenThreadSplit={() => undefined}
-        onOpenAutomation={() => undefined}
       />
     </QueryClientProvider>,
   );
 }
 
-describe("GroupOverview", () => {
+describe("GroupThreadsSection", () => {
   it("sizes thread row titles with the same text-ui token sidebar rows use", () => {
-    const markup = renderOverview([makeThread()]);
+    const markup = renderThreadsSection([makeThread()]);
 
     // SidebarThreadRowContent titles carry `text-ui`; panel rows must match so
     // titles track the Settings font size instead of the ambient default.

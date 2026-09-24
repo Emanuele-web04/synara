@@ -1,10 +1,17 @@
-import type { ModelSelection, ProjectId, ThreadId } from "@synara/contracts";
+import {
+  type AutomationDefinition,
+  type ModelSelection,
+  type ProjectId,
+  type ProjectTask,
+  type ThreadId,
+} from "@synara/contracts";
 import { PROJECT_CONTEXT_PREVIEW_DOCUMENTS } from "@synara/shared/projectAgent";
 import { resolveGroupCoordinatorStatus } from "@synara/shared/groupThreadState";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import ChatMarkdown from "~/components/ChatMarkdown";
-import { FolderClosed } from "~/components/FolderClosed";
+import { ProviderIcon } from "~/components/ProviderIcon";
+import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
 import { IconButton } from "~/components/ui/icon-button";
 import { Textarea } from "~/components/ui/textarea";
 import {
@@ -13,26 +20,42 @@ import {
   ENVIRONMENT_PANEL_SURFACE_CLASS_NAME,
 } from "~/components/chat/composerPickerStyles";
 import { ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME } from "~/components/chat/environment/environmentPanelStyles";
-import { basenameOfPath } from "~/file-icons";
-import { BotIcon, PauseIcon, PlayIcon, SettingsIcon, XIcon } from "~/lib/icons";
+import { useThreadPullRequests } from "~/hooks/useThreadPullRequests";
+import { resolveGroupCoordinatorDisplayName } from "~/lib/groupCoordinatorName";
+import { BotIcon, FastModeIcon, PauseIcon, PlayIcon, SettingsIcon, XIcon } from "~/lib/icons";
+import { formatThreadModelSummaryLabel, resolveThreadModelSummary } from "~/lib/threadModelSummary";
 import { cn } from "~/lib/utils";
+import { useAutomations } from "~/routes/-automations.shared";
 import { useStore } from "~/store";
 import { createSidebarThreadSummariesSelector } from "~/storeSelectors";
+import type { SidebarThreadSummary } from "~/types";
 
 import {
   ENVIRONMENT_ROW_ICON_CLASS_NAME,
-  EnvironmentCollapsibleSection,
   EnvironmentPanelTitle,
   EnvironmentRow,
-  EnvironmentSectionDivider,
 } from "../environment/EnvironmentRow";
 import { GroupSettingsDialog } from "../group/GroupSettingsDialog";
-import { resolveCoordinatorAppearance } from "../group/coordinatorAppearance";
 import type { GroupSettingsSection } from "../group/groupSettingsDialog.logic";
-import { GroupOverview } from "./GroupOverview";
-import { defaultProjectAgentName } from "./projectAgentDialog.logic";
+import {
+  GroupAutomationsSection,
+  GroupPanelSectionBar,
+  GroupPullRequestsSection,
+  GroupThreadActivitySparkline,
+  GroupThreadsSection,
+} from "./GroupOverview";
+import { GROUP_PANEL_SECTIONS, type GroupPanelSectionId } from "./groupPanelSections";
 import { projectAgentOverviewConfigured } from "./projectAgentOverview.logic";
-import { collectGroupThreadSummaries } from "./groupOverview.logic";
+import {
+  buildGroupThreadRows,
+  collectGroupAutomations,
+  collectGroupPullRequestRows,
+  collectGroupThreadSummaries,
+  groupThreadNeedsAttention,
+  partitionGroupThreadRows,
+  type GroupPullRequestRow,
+  type GroupThreadRow as GroupThreadRowData,
+} from "./groupOverview.logic";
 import {
   mergeProjectFocusRows,
   partitionProjectFocusRows,
@@ -43,6 +66,22 @@ import {
 } from "./projectPanel.logic";
 import { useProjectAgent } from "./useProjectAgent";
 import { useProjectAgentSummaries } from "./useProjectAgentSummaries";
+
+const EMPTY_SIDEBAR_THREADS: readonly SidebarThreadSummary[] = [];
+const EMPTY_GROUP_THREAD_ROWS: readonly GroupThreadRowData[] = [];
+const EMPTY_GROUP_PULL_REQUEST_ROWS: readonly GroupPullRequestRow[] = [];
+const EMPTY_AUTOMATION_DEFINITIONS: readonly AutomationDefinition[] = [];
+
+const GROUP_PANEL_STATUS_DOT: Record<
+  "waiting" | "working" | "paused" | "stopped" | "idle",
+  { readonly dotClassName: string; readonly label: string; readonly pulse: boolean }
+> = {
+  waiting: { dotClassName: "bg-amber-500 dark:bg-amber-300/90", label: "Needs you", pulse: false },
+  working: { dotClassName: "bg-sky-500 dark:bg-sky-300/80", label: "Working", pulse: true },
+  paused: { dotClassName: "bg-muted-foreground/50", label: "Paused", pulse: false },
+  stopped: { dotClassName: "bg-muted-foreground/40", label: "Stopped", pulse: false },
+  idle: { dotClassName: "bg-muted-foreground/40", label: "Idle", pulse: false },
+};
 
 export interface ProjectPanelProps {
   open: boolean;
@@ -143,9 +182,6 @@ export function ProjectPanel({
   const contextDocuments = PROJECT_CONTEXT_PREVIEW_DOCUMENTS.filter(
     (document) => document.logicalPath !== "notes.md",
   );
-  const coordinatorName =
-    agent.overview?.config?.coordinatorName ?? defaultProjectAgentName(projectName);
-  const folderLabel = basenameOfPath(workspacePath) || workspacePath || projectName;
   // Configured must not depend on the panel being open — the overview is only
   // loaded while open, so either feed decides it: the panel's own overview, or
   // the shared summaries store (fed by mutations, the config stream while the
@@ -154,38 +190,149 @@ export function ProjectPanel({
   const configured =
     projectAgentOverviewConfigured(agent.overview) ||
     (projectId !== null && summariesByProjectId.get(projectId)?.configured === true);
-  // The coordinator row reads live state off the same sidebar thread summary
-  // the thread list uses, so it reports "running" while a coordinator turn is
-  // in flight instead of echoing the overview's slower goal-derived value.
+  // The coordinator model line reads live state off the same sidebar thread
+  // summary the thread list uses, so it reports "running" while a coordinator
+  // turn is in flight instead of echoing the overview's slower goal value.
+  const coordinatorThread = coordinatorThreadId
+    ? (sidebarThreads.find((entry) => entry.id === coordinatorThreadId) ?? null)
+    : null;
   const coordinatorStatus = (() => {
     if (!configured) {
       return "unconfigured";
     }
-    const thread = coordinatorThreadId
-      ? (sidebarThreads.find((entry) => entry.id === coordinatorThreadId) ?? null)
-      : null;
     return resolveGroupCoordinatorStatus({
       configured: true,
       goalStatus: agent.overview?.goal?.status ?? null,
-      thread,
+      thread: coordinatorThread,
     });
   })();
+  const coordinatorNeedsYou = coordinatorThread
+    ? groupThreadNeedsAttention(coordinatorThread)
+    : false;
+  const coordinatorStatusDot = !configured
+    ? null
+    : coordinatorNeedsYou
+      ? GROUP_PANEL_STATUS_DOT.waiting
+      : coordinatorStatus === "running"
+        ? GROUP_PANEL_STATUS_DOT.working
+        : coordinatorStatus === "paused"
+          ? GROUP_PANEL_STATUS_DOT.paused
+          : coordinatorStatus === "stopped"
+            ? GROUP_PANEL_STATUS_DOT.stopped
+            : GROUP_PANEL_STATUS_DOT.idle;
   const coordinatorModel =
     agent.overview?.config?.coordinatorModelSelection ?? defaultModelSelection;
-  const coordinatorAppearance = resolveCoordinatorAppearance({
-    coordinatorIcon: agent.overview?.config?.coordinatorIcon,
-    coordinatorColor: agent.overview?.config?.coordinatorColor,
+  const coordinatorModelSummary = resolveThreadModelSummary(coordinatorModel);
+  const coordinatorDisplayName = resolveGroupCoordinatorDisplayName({
+    coordinatorName: agent.overview?.config?.coordinatorName ?? null,
+    threadTitle: coordinatorThread?.title ?? null,
+    groupName: projectName,
+    remoteName: projectId
+      ? (allProjects.find((project) => project.id === projectId)?.remoteName ?? null)
+      : null,
   });
-  const CoordinatorGlyph = coordinatorAppearance.Icon;
-  const coordinatorIconClassName = cn(
-    ENVIRONMENT_ROW_ICON_CLASS_NAME,
-    coordinatorAppearance.iconClassName,
+
+  const [openSection, setOpenSection] = useState<GroupPanelSectionId | null>(null);
+  const sectionsRegionId = useId();
+
+  const pullRequestsByThreadId = useThreadPullRequests({
+    // A closed (or unconfigured) panel registers zero queries — no work off-view.
+    threads: open && configured ? groupThreads : EMPTY_SIDEBAR_THREADS,
+    projectCwdById,
+  });
+  const automations = useAutomations();
+
+  const taskByThreadId = useMemo(() => {
+    const map = new Map<ThreadId, ProjectTask>();
+    for (const task of agent.tasks) {
+      if (task.assignedThreadId) map.set(task.assignedThreadId, task);
+    }
+    return map;
+  }, [agent.tasks]);
+  const indexArchivedThreadIds = useMemo(
+    () => new Set(agent.threads.filter((entry) => entry.archived).map((entry) => entry.threadId)),
+    [agent.threads],
+  );
+  const needsYouThreadIds = useMemo(
+    () =>
+      new Set(
+        (agent.overview?.workers ?? [])
+          .filter((worker) => worker.needsYou)
+          .map((worker) => worker.threadId),
+      ),
+    [agent.overview?.workers],
   );
 
+  const threadRows = useMemo(
+    () =>
+      projectId === null
+        ? EMPTY_GROUP_THREAD_ROWS
+        : buildGroupThreadRows({
+            threads: groupThreads,
+            taskByThreadId,
+            indexArchivedThreadIds,
+            pullRequests: pullRequestsByThreadId,
+            projectNameById,
+            groupProjectId: projectId,
+            groupProjectName: projectName,
+            needsYouThreadIds,
+          }),
+    [
+      projectId,
+      groupThreads,
+      taskByThreadId,
+      indexArchivedThreadIds,
+      pullRequestsByThreadId,
+      projectNameById,
+      projectName,
+      needsYouThreadIds,
+    ],
+  );
+  const threadSections = useMemo(() => partitionGroupThreadRows(threadRows), [threadRows]);
+  const waitingThreadCount = threadSections.get("waiting")?.length ?? 0;
+  const pullRequestRows = useMemo(
+    () =>
+      projectId === null
+        ? EMPTY_GROUP_PULL_REQUEST_ROWS
+        : collectGroupPullRequestRows({
+            threads: groupThreads,
+            pullRequests: pullRequestsByThreadId,
+            projectNameById,
+            groupProjectId: projectId,
+            groupProjectName: projectName,
+          }),
+    [groupThreads, pullRequestsByThreadId, projectNameById, projectId, projectName],
+  );
+  const scopedAutomations = useMemo(
+    () =>
+      projectId === null
+        ? EMPTY_AUTOMATION_DEFINITIONS
+        : collectGroupAutomations({
+            definitions: automations.data.definitions,
+            groupProjectId: projectId,
+            memberThreadIds,
+          }),
+    [automations.data.definitions, projectId, memberThreadIds],
+  );
+  const sectionCounts: Record<GroupPanelSectionId, { count: number; waiting: number }> = {
+    // The bar's Threads section lists every group thread (all five state
+    // buckets), so the badge is the full count — not just the live rows.
+    threads: { count: threadRows.length, waiting: waitingThreadCount },
+    "pull-requests": { count: pullRequestRows.length, waiting: 0 },
+    automations: { count: scopedAutomations.length, waiting: 0 },
+    context: { count: contextDocuments.length, waiting: 0 },
+  };
+
+  const openCoordinatorThread = () => {
+    if (coordinatorThreadId) {
+      onOpenCoordinator(coordinatorThreadId);
+    }
+  };
+
   const content = (
-    <div className="flex flex-col gap-0.5 p-1.5">
-      <div className="flex items-center justify-between gap-2 px-2 pb-0.5 pt-0.5">
-        <EnvironmentPanelTitle>Group</EnvironmentPanelTitle>
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex items-center justify-between gap-2 px-3 pb-0.5 pt-1">
+        <EnvironmentPanelTitle>Groups</EnvironmentPanelTitle>
         <div className="flex items-center gap-0.5">
           {configured ? (
             <>
@@ -220,97 +367,143 @@ export function ProjectPanel({
       </div>
 
       {agent.error ? (
-        <p className="px-2 text-ui-sm text-destructive" role="alert">
+        <p className="px-3 text-ui-sm text-destructive" role="alert">
           {agent.error}
         </p>
       ) : null}
 
-      <EnvironmentRow
-        icon={<FolderClosed className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
-        label={
-          <span className="truncate" title={workspacePath}>
-            {folderLabel}
-          </span>
-        }
-      />
-
-      {configured && agent.overview?.config ? (
-        <EnvironmentRow
-          icon={<CoordinatorGlyph className={coordinatorIconClassName} aria-hidden />}
-          label={coordinatorName}
-          trailing={<span className="text-ui-xs text-muted-foreground">{coordinatorStatus}</span>}
-          onClick={() => onOpenCoordinator(agent.overview!.config!.coordinatorThreadId)}
-        />
+      {configured ? (
+        <>
+          <GroupThreadActivitySparkline threads={groupThreads} />
+          <button
+            type="button"
+            className="mx-1.5 flex items-center gap-1.5 rounded-md px-2 py-1 text-left text-ui text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
+            aria-label={`Open ${coordinatorDisplayName}`}
+            title={coordinatorDisplayName}
+            onClick={openCoordinatorThread}
+          >
+            {coordinatorModelSummary ? (
+              <ProviderIcon
+                provider={coordinatorModelSummary.provider}
+                className="size-3.5 shrink-0"
+              />
+            ) : null}
+            <span className="min-w-0 flex-1 truncate">
+              {coordinatorModelSummary
+                ? formatThreadModelSummaryLabel(coordinatorModelSummary)
+                : coordinatorDisplayName}
+            </span>
+            {coordinatorModelSummary?.fastMode ? (
+              <FastModeIcon
+                className="size-3 shrink-0 text-[var(--color-text-foreground-secondary)]"
+                aria-hidden
+              />
+            ) : null}
+            {coordinatorStatusDot ? (
+              <span className="flex size-3 shrink-0 items-center justify-center" aria-hidden>
+                <span
+                  className={cn(
+                    "block size-1.5 rounded-full",
+                    coordinatorStatusDot.dotClassName,
+                    coordinatorStatusDot.pulse && "animate-pulse",
+                  )}
+                  title={coordinatorStatusDot.label}
+                />
+              </span>
+            ) : null}
+          </button>
+        </>
       ) : (
-        <EnvironmentRow
-          icon={<BotIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
-          label="Set up coordinator"
-          onClick={() => setAgentDialogOpen(true)}
-        />
+        <div className="px-1.5">
+          <EnvironmentRow
+            icon={<BotIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
+            label="Set up coordinator"
+            onClick={() => setAgentDialogOpen(true)}
+          />
+        </div>
       )}
 
-      {coordinatorModel ? (
-        <p className="px-2 text-ui-sm text-muted-foreground">
-          {coordinatorModel.provider} / {coordinatorModel.model}
-        </p>
-      ) : null}
+      <div className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-1.5">
+        {configured && projectId !== null ? (
+          <div className="flex min-h-full flex-col">
+            <ProjectFocusCard
+              className="flex-1"
+              summary={sanitizeProjectDigestSummary(agent.overview?.digest?.summary ?? null)}
+              updating={
+                agent.overview?.digest?.generationState === "pending" ||
+                agent.overview?.digest?.generationState === "running"
+              }
+              items={digestFocus.length > 0 ? digestFocus : focusRows.open}
+              onOpenThread={onOpenThread}
+            />
+
+            {agent.overview?.blockers.map((blocker) => (
+              <p key={blocker.taskId} className="px-2 text-ui-sm text-destructive">
+                Blocked: {blocker.title} — {blocker.reason}
+              </p>
+            ))}
+          </div>
+        ) : (
+          <p className="px-2 py-1 text-ui text-muted-foreground">
+            Threads, context, and memory for the group live in this folder after you set up the
+            coordinator. Setup does not launch a model.
+          </p>
+        )}
+      </div>
 
       {configured && projectId !== null ? (
         <>
-          <EnvironmentSectionDivider />
-          <ProjectFocusCard
-            summary={sanitizeProjectDigestSummary(agent.overview?.digest?.summary ?? null)}
-            updating={
-              agent.overview?.digest?.generationState === "pending" ||
-              agent.overview?.digest?.generationState === "running"
-            }
-            items={digestFocus.length > 0 ? digestFocus : focusRows.open}
-            onOpenThread={onOpenThread}
-          />
-
-          {agent.overview?.blockers.map((blocker) => (
-            <p key={blocker.taskId} className="px-2 text-ui-sm text-destructive">
-              Blocked: {blocker.title} — {blocker.reason}
-            </p>
-          ))}
-
-          {open ? (
-            <GroupOverview
-              groupProjectId={projectId}
-              groupName={projectName}
-              memberThreadIds={memberThreadIds}
-              groupThreads={groupThreads}
-              projectNameById={projectNameById}
-              projectCwdById={projectCwdById}
-              agent={agent}
-              onOpenThread={onOpenThread}
-              onOpenThreadSplit={onOpenThreadSplit}
-              onOpenAutomation={onOpenAutomation}
-            />
-          ) : null}
-
-          <EnvironmentSectionDivider />
-          <EnvironmentCollapsibleSection label="Context" defaultOpen={false}>
-            <div className="flex flex-col gap-0.5 pb-1">
-              {contextDocuments.map((document) => (
-                <ProjectContextFile
-                  key={document.logicalPath}
-                  logicalPath={document.logicalPath}
-                  editable={document.editable}
-                  enabled={open}
-                  projectId={projectId}
+          <DisclosureRegion
+            open={openSection !== null}
+            className="shrink-0 border-t border-[color:var(--color-border-light)]"
+            contentClassName="max-h-[45svh] overflow-y-auto px-1.5 py-1.5"
+          >
+            <div id={sectionsRegionId} role="region" aria-label="Group sections">
+              {openSection === "threads" ? (
+                <GroupThreadsSection
+                  sections={threadSections}
                   agent={agent}
+                  onOpenThread={onOpenThread}
+                  onOpenThreadSplit={onOpenThreadSplit}
                 />
-              ))}
+              ) : null}
+              {openSection === "pull-requests" ? (
+                <GroupPullRequestsSection rows={pullRequestRows} onOpenThread={onOpenThread} />
+              ) : null}
+              {openSection === "automations" ? (
+                <GroupAutomationsSection
+                  definitions={scopedAutomations}
+                  automations={automations}
+                  onOpenAutomation={onOpenAutomation}
+                />
+              ) : null}
+              {openSection === "context" ? (
+                <div className="flex flex-col gap-0.5 pb-1">
+                  {contextDocuments.map((document) => (
+                    <ProjectContextFile
+                      key={document.logicalPath}
+                      logicalPath={document.logicalPath}
+                      editable={document.editable}
+                      enabled={open}
+                      projectId={projectId}
+                      agent={agent}
+                    />
+                  ))}
+                </div>
+              ) : null}
             </div>
-          </EnvironmentCollapsibleSection>
+          </DisclosureRegion>
+          <div className="shrink-0 border-t border-[color:var(--color-border-light)] px-1 py-1">
+            <GroupPanelSectionBar
+              sections={GROUP_PANEL_SECTIONS}
+              sectionCounts={sectionCounts}
+              openSectionId={openSection}
+              regionId={sectionsRegionId}
+              onToggle={setOpenSection}
+            />
+          </div>
         </>
-      ) : (
-        <p className="px-2 py-1 text-ui text-muted-foreground">
-          Threads, context, and memory for the group live in this folder after you set up the
-          coordinator. Setup does not launch a model.
-        </p>
-      )}
+      ) : null}
     </div>
   );
 
@@ -332,7 +525,7 @@ export function ProjectPanel({
               : "pointer-events-none translate-x-full opacity-0",
           )}
         >
-          <div className="min-h-0 overflow-y-auto">{content}</div>
+          {content}
         </div>
       </div>
       {projectId !== null ? (
@@ -366,14 +559,21 @@ function ProjectFocusCard({
   updating,
   items,
   onOpenThread,
+  className,
 }: {
   summary: string | null;
   updating: boolean;
   items: ReadonlyArray<ProjectFocusRow>;
   onOpenThread: (threadId: ThreadId) => void;
+  className?: string | undefined;
 }) {
   return (
-    <div className="mx-1 mb-1 rounded-xl bg-[var(--color-background-elevated-secondary)] px-2.5 py-2">
+    <div
+      className={cn(
+        "mx-1 mb-1 rounded-xl bg-[var(--color-background-elevated-secondary)] px-2.5 py-2",
+        className,
+      )}
+    >
       <p className="px-0.5 pb-1.5 text-ui-sm font-medium text-muted-foreground">Focus</p>
       {summary ? (
         <p className="px-0.5 pb-1.5 text-ui text-muted-foreground">{summary}</p>

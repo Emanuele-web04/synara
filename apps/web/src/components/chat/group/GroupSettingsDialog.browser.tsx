@@ -256,7 +256,7 @@ describe("GroupSettingsDialog", () => {
       expect.objectContaining({ type: "project.meta.update", title: "beta" }),
     );
     const payload = api.projectAgent.configure.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(payload.coordinatorName).toBe("beta Coordinator");
+    expect(payload.coordinatorName).toBe("beta");
   });
 
   it("autosaves Memory instructions to instructions.md", async () => {

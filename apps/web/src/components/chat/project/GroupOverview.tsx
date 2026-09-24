@@ -1,57 +1,48 @@
 // FILE: GroupOverview.tsx
-// Purpose: The Group panel's Overview body — Threads grouped by live state, Pull
-//          requests opened by group threads, and group-scoped Automations.
+// Purpose: Section bodies for the Group panel's bottom section bar — Threads
+//          grouped by live state, Pull requests opened by group threads, and
+//          group-scoped Automations. The panel hoists the derivation (thread
+//          rows, PR rows, automation scoping) so the bar's badges and the
+//          expanded body read the same data.
 // Layer: Group panel UI
 // Why: Claude Code's Projects Overview lists every thread by live state; this is
 //      Synara's version, derived from the same helpers the sidebar uses.
 
-import type { AutomationDefinition, ProjectId, ProjectTask, ThreadId } from "@synara/contracts";
-import { type MouseEvent as ReactMouseEvent, useMemo, useState } from "react";
+import type { AutomationDefinition, ThreadId } from "@synara/contracts";
+import { type MouseEvent as ReactMouseEvent, useEffect, useState } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
 import { IconButton } from "~/components/ui/icon-button";
 import { Switch } from "~/components/ui/switch";
 import { toastManager } from "~/components/ui/toast";
-import { SettingsSegmentedControl } from "~/components/settings/SettingControls";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { PanelStateMessage } from "~/components/chat/PanelStateMessage";
 import { PrStateChip } from "~/components/pullRequest/PrStateChip";
 import { resolvePrStatePresentation } from "~/components/pullRequest/pullRequestStatePresentation";
 import { ProviderIcon } from "~/components/ProviderIcon";
 import { EnvironmentSectionLabel } from "~/components/chat/environment/EnvironmentRow";
-import { useThreadPullRequests } from "~/hooks/useThreadPullRequests";
 import { CheckIcon, Columns2Icon, EllipsisIcon, GitHubIcon, RotateCcwIcon } from "~/lib/icons";
+import type { GroupPanelSectionDescriptor, GroupPanelSectionId } from "./groupPanelSections";
 import { formatSchedule } from "~/lib/automationForm";
 import { formatRelativeTime } from "~/lib/relativeTime";
 import { archiveThreadFromClient, unarchiveThreadFromClient } from "~/lib/threadArchive";
 import { cn } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
-import { useAutomations } from "~/routes/-automations.shared";
-
+import type { useAutomations } from "~/routes/-automations.shared";
 import type { SidebarThreadSummary } from "~/types";
+
 import {
   GROUP_THREAD_SECTIONS,
-  buildGroupThreadRows,
-  collectGroupAutomations,
-  collectGroupPullRequestRows,
-  partitionGroupThreadRows,
-  type GroupThreadRow,
+  type GroupPullRequestRow,
+  type GroupThreadRow as GroupThreadRowData,
   type GroupThreadSectionId,
 } from "./groupOverview.logic";
+import { buildGroupThreadActivitySeries } from "./groupThreadActivity.logic";
 import type { useProjectAgent } from "./useProjectAgent";
 
 type ProjectAgent = ReturnType<typeof useProjectAgent>;
-
-type GroupOverviewTab = "threads" | "pull-requests" | "automations";
-
-const GROUP_OVERVIEW_TAB_OPTIONS: ReadonlyArray<{
-  readonly value: GroupOverviewTab;
-  readonly label: string;
-}> = [
-  { value: "threads", label: "Threads" },
-  { value: "pull-requests", label: "Pull requests" },
-  { value: "automations", label: "Automations" },
-];
+type Automations = ReturnType<typeof useAutomations>;
 
 // The native context menu renders icons from SVG markup, so the same glyphs used
 // in React rows are rasterized once here.
@@ -59,128 +50,226 @@ const RESOLVE_MENU_ICON = renderToStaticMarkup(<CheckIcon />);
 const SPLIT_VIEW_MENU_ICON = renderToStaticMarkup(<Columns2Icon />);
 const REOPEN_MENU_ICON = renderToStaticMarkup(<RotateCcwIcon />);
 
-const EMPTY_THREADS: readonly SidebarThreadSummary[] = [];
-
 // Row titles size off the same token as sidebar thread rows and the Focus card,
 // never the panel's ambient font size.
 const GROUP_OVERVIEW_ROW_TITLE_CLASS_NAME = "min-w-0 truncate text-ui font-medium text-foreground";
 
-export function GroupOverview({
-  groupProjectId,
-  groupName,
-  memberThreadIds,
-  groupThreads,
-  projectNameById,
-  projectCwdById,
-  agent,
-  onOpenThread,
-  onOpenThreadSplit,
-  onOpenAutomation,
+// — Section bar —
+
+// Corner pill for a section's item count — small enough to sit on the icon
+// without touching neighbouring buttons at the panel's narrowest width.
+const SECTION_COUNT_PILL_CLASS_NAME =
+  "absolute -right-2.5 -top-1.5 flex h-3 min-w-3 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--foreground)_8%,transparent)] px-0.5 text-ui-2xs leading-none tabular-nums text-muted-foreground/90";
+
+/**
+ * The Group panel's bottom bar: one evenly spaced icon button per section.
+ * Only the open section shows its label under the icon (reserved-height line so
+ * toggling does not shift the bar); every button carries the label in a tooltip
+ * and in its accessible name. Counts ride on the icon's top-right corner and a
+ * "waiting on you" dot on the top-left, so the bar stays readable from ~260px
+ * up where inline labels ran together.
+ */
+export function GroupPanelSectionBar({
+  sections,
+  sectionCounts,
+  openSectionId,
+  regionId,
+  onToggle,
 }: {
-  readonly groupProjectId: ProjectId;
-  readonly groupName: string;
-  readonly memberThreadIds: ReadonlySet<ThreadId>;
-  readonly groupThreads: readonly SidebarThreadSummary[];
-  readonly projectNameById: ReadonlyMap<ProjectId, string>;
-  readonly projectCwdById: ReadonlyMap<ProjectId, string>;
-  readonly agent: ProjectAgent;
-  readonly onOpenThread: (threadId: ThreadId) => void;
-  readonly onOpenThreadSplit: (threadId: ThreadId) => void;
-  readonly onOpenAutomation: (automationId: string) => void;
+  readonly sections: readonly GroupPanelSectionDescriptor[];
+  readonly sectionCounts: Readonly<
+    Record<GroupPanelSectionId, { readonly count: number; readonly waiting: number }>
+  >;
+  readonly openSectionId: GroupPanelSectionId | null;
+  readonly regionId: string;
+  readonly onToggle: (sectionId: GroupPanelSectionId | null) => void;
 }) {
-  const [tab, setTab] = useState<GroupOverviewTab>("threads");
-  const wantsPullRequests = tab === "threads" || tab === "pull-requests";
-  const pullRequestsByThreadId = useThreadPullRequests({
-    // An empty thread list registers zero queries — the Automations tab stays cheap.
-    threads: wantsPullRequests ? groupThreads : EMPTY_THREADS,
-    projectCwdById,
-  });
-
-  const taskByThreadId = useMemo(() => {
-    const map = new Map<ThreadId, ProjectTask>();
-    for (const task of agent.tasks) {
-      if (task.assignedThreadId) map.set(task.assignedThreadId, task);
-    }
-    return map;
-  }, [agent.tasks]);
-  const indexArchivedThreadIds = useMemo(
-    () => new Set(agent.threads.filter((entry) => entry.archived).map((entry) => entry.threadId)),
-    [agent.threads],
-  );
-  const needsYouThreadIds = useMemo(
-    () =>
-      new Set(
-        (agent.overview?.workers ?? [])
-          .filter((worker) => worker.needsYou)
-          .map((worker) => worker.threadId),
-      ),
-    [agent.overview?.workers],
-  );
-
-  const threadRows = useMemo(
-    () =>
-      buildGroupThreadRows({
-        threads: groupThreads,
-        taskByThreadId,
-        indexArchivedThreadIds,
-        pullRequests: pullRequestsByThreadId,
-        projectNameById,
-        groupProjectId,
-        groupProjectName: groupName,
-        needsYouThreadIds,
-      }),
-    [
-      groupThreads,
-      taskByThreadId,
-      indexArchivedThreadIds,
-      pullRequestsByThreadId,
-      projectNameById,
-      groupProjectId,
-      groupName,
-      needsYouThreadIds,
-    ],
-  );
-  const threadSections = useMemo(() => partitionGroupThreadRows(threadRows), [threadRows]);
-
-  const pullRequestRows = useMemo(
-    () =>
-      collectGroupPullRequestRows({
-        threads: groupThreads,
-        pullRequests: pullRequestsByThreadId,
-        projectNameById,
-        groupProjectId,
-        groupProjectName: groupName,
-      }),
-    [groupThreads, pullRequestsByThreadId, projectNameById, groupProjectId, groupName],
-  );
-
   return (
-    <div className="flex flex-col px-1 pb-1">
-      <div className="px-1 py-1">
-        <SettingsSegmentedControl
-          value={tab}
-          onValueChange={setTab}
-          options={GROUP_OVERVIEW_TAB_OPTIONS}
-          ariaLabel="Overview sections"
-        />
-      </div>
-      {tab === "threads" ? (
-        <GroupThreadsTab
-          sections={threadSections}
-          agent={agent}
-          onOpenThread={onOpenThread}
-          onOpenThreadSplit={onOpenThreadSplit}
-        />
-      ) : null}
-      {tab === "pull-requests" ? (
-        <GroupPullRequestsTab rows={pullRequestRows} onOpenThread={onOpenThread} />
-      ) : null}
-      {tab === "automations" ? (
-        <GroupAutomationsTab
-          groupProjectId={groupProjectId}
-          memberThreadIds={memberThreadIds}
-          onOpenAutomation={onOpenAutomation}
-        />
+    <div className="flex items-stretch">
+      {sections.map((section) => {
+        const counts = sectionCounts[section.id];
+        const isOpen = openSectionId === section.id;
+        const ariaLabel =
+          counts.waiting > 0
+            ? `${section.label}, ${counts.waiting} waiting on you`
+            : counts.count > 0
+              ? `${section.label}, ${counts.count}`
+              : section.label;
+        const toggle = () => {
+          onToggle(isOpen ? null : section.id);
+        };
+        return (
+          <Tooltip key={section.id}>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label={ariaLabel}
+                  aria-expanded={isOpen}
+                  aria-controls={regionId}
+                  aria-pressed={isOpen}
+                  className={cn(
+                    "flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-lg px-1 py-1 text-ui-xs transition-colors",
+                    isOpen
+                      ? "bg-foreground/8 text-foreground"
+                      : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+                  )}
+                  onClick={toggle}
+                />
+              }
+            >
+              <span className="relative flex size-4 items-center justify-center">
+                <section.icon className="size-4" aria-hidden />
+                {counts.waiting > 0 ? (
+                  <span
+                    className="absolute -left-1.5 -top-1 block size-1.5 rounded-full bg-amber-500 dark:bg-amber-300/90"
+                    aria-hidden
+                  />
+                ) : null}
+                {counts.count > 0 ? (
+                  <span className={SECTION_COUNT_PILL_CLASS_NAME} aria-hidden>
+                    {counts.count}
+                  </span>
+                ) : null}
+              </span>
+              <span className={cn("min-w-0 max-w-full truncate", !isOpen && "invisible")}>
+                {section.label}
+              </span>
+            </TooltipTrigger>
+            <TooltipPopup>
+              <p>{section.label}</p>
+            </TooltipPopup>
+          </Tooltip>
+        );
+      })}
+    </div>
+  );
+}
+
+// — Activity sparkline —
+
+const SPARKLINE_VIEW_WIDTH = 100;
+const SPARKLINE_VIEW_HEIGHT = 40;
+const SPARKLINE_PAD_Y = 4;
+const SPARKLINE_TICK_MS = 15_000;
+const SPARKLINE_GRID_ROWS = [10, 20, 30] as const;
+const SPARKLINE_GRID_COLUMNS = [25, 50, 75] as const;
+
+/**
+ * "Threads working" sparkline for the top of the Group panel: a thin accent
+ * line over a faint dotted grid, a highlighted dot on the latest point, no
+ * axes. The series is rebuilt from the store's thread summaries each render and
+ * the window advances on a slow tick, so it updates as threads start and
+ * finish. Hidden until the group has produced any work — a brand-new group has
+ * nothing to chart.
+ */
+export function GroupThreadActivitySparkline({
+  threads,
+}: {
+  readonly threads: readonly SidebarThreadSummary[];
+}) {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const interval = window.setInterval(() => setNowMs(Date.now()), SPARKLINE_TICK_MS);
+    return () => window.clearInterval(interval);
+  }, []);
+  const series = buildGroupThreadActivitySeries({ threads, nowMs });
+  if (series.points.length === 0) {
+    return null;
+  }
+  const peak = Math.max(1, series.peakCount);
+  const pointCount = series.points.length;
+  const stepX = pointCount > 1 ? SPARKLINE_VIEW_WIDTH / (pointCount - 1) : 0;
+  const coordinates = series.points.map((count, index) => ({
+    x: pointCount > 1 ? index * stepX : SPARKLINE_VIEW_WIDTH / 2,
+    y:
+      SPARKLINE_VIEW_HEIGHT -
+      SPARKLINE_PAD_Y -
+      (count / peak) * (SPARKLINE_VIEW_HEIGHT - SPARKLINE_PAD_Y * 2),
+  }));
+  const lastPoint = coordinates[coordinates.length - 1];
+  const pathData =
+    coordinates.length > 1
+      ? `M${coordinates.map((point) => `${point.x.toFixed(1)} ${point.y.toFixed(1)}`).join(" L")}`
+      : null;
+  const workingLabel = series.currentCount === 1 ? "1 thread" : `${series.currentCount} threads`;
+  const accessibleLabel = `${workingLabel} working now, peak ${series.peakCount} in the last hour`;
+  return (
+    <div
+      role="img"
+      aria-label={accessibleLabel}
+      title={accessibleLabel}
+      tabIndex={0}
+      className="relative mx-3 mb-0.5 mt-1 h-11"
+    >
+      <svg
+        viewBox={`0 0 ${SPARKLINE_VIEW_WIDTH} ${SPARKLINE_VIEW_HEIGHT}`}
+        preserveAspectRatio="none"
+        className="block size-full"
+        aria-hidden
+      >
+        {SPARKLINE_GRID_ROWS.map((y) => (
+          <line
+            key={`row-${y}`}
+            x1={0}
+            y1={y}
+            x2={SPARKLINE_VIEW_WIDTH}
+            y2={y}
+            stroke="var(--color-border-light)"
+            strokeWidth={1}
+            strokeDasharray="1 4"
+            strokeLinecap="round"
+            vectorEffect="non-scaling-stroke"
+          />
+        ))}
+        {SPARKLINE_GRID_COLUMNS.map((x) => (
+          <line
+            key={`col-${x}`}
+            x1={x}
+            y1={0}
+            x2={x}
+            y2={SPARKLINE_VIEW_HEIGHT}
+            stroke="var(--color-border-light)"
+            strokeWidth={1}
+            strokeDasharray="1 4"
+            strokeLinecap="round"
+            vectorEffect="non-scaling-stroke"
+          />
+        ))}
+        {pathData !== null ? (
+          <path
+            d={pathData}
+            fill="none"
+            stroke="var(--color-text-accent)"
+            strokeWidth={1.5}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            vectorEffect="non-scaling-stroke"
+          />
+        ) : null}
+      </svg>
+      {lastPoint !== undefined ? (
+        <>
+          <span
+            className="pointer-events-none absolute size-4 rounded-full"
+            style={{
+              left: `calc(${(lastPoint.x / SPARKLINE_VIEW_WIDTH) * 100}% - 8px)`,
+              top: `calc(${(lastPoint.y / SPARKLINE_VIEW_HEIGHT) * 100}% - 8px)`,
+              backgroundColor: "var(--color-text-accent)",
+              opacity: 0.2,
+            }}
+            aria-hidden
+          />
+          <span
+            className="pointer-events-none absolute size-2 rounded-full"
+            style={{
+              left: `calc(${(lastPoint.x / SPARKLINE_VIEW_WIDTH) * 100}% - 4px)`,
+              top: `calc(${(lastPoint.y / SPARKLINE_VIEW_HEIGHT) * 100}% - 4px)`,
+              backgroundColor: "var(--color-text-accent)",
+            }}
+            aria-hidden
+          />
+        </>
       ) : null}
     </div>
   );
@@ -188,13 +277,18 @@ export function GroupOverview({
 
 // — Threads —
 
-function GroupThreadsTab({
+export function GroupThreadsSection({
   sections,
+  sectionIds,
+  emptyMessage,
   agent,
   onOpenThread,
   onOpenThreadSplit,
 }: {
-  readonly sections: ReadonlyMap<GroupThreadSectionId, readonly GroupThreadRow[]>;
+  readonly sections: ReadonlyMap<GroupThreadSectionId, readonly GroupThreadRowData[]>;
+  /** Limit the rendered state buckets; defaults to all five. */
+  readonly sectionIds?: readonly GroupThreadSectionId[] | undefined;
+  readonly emptyMessage?: string | undefined;
   readonly agent: ProjectAgent;
   readonly onOpenThread: (threadId: ThreadId) => void;
   readonly onOpenThreadSplit: (threadId: ThreadId) => void;
@@ -204,20 +298,26 @@ function GroupThreadsTab({
   const [toggledSections, setToggledSections] = useState<ReadonlySet<GroupThreadSectionId>>(
     () => new Set(),
   );
-  const totalRows = GROUP_THREAD_SECTIONS.reduce(
+  const visibleSections = sectionIds
+    ? GROUP_THREAD_SECTIONS.filter((section) => sectionIds.includes(section.id))
+    : GROUP_THREAD_SECTIONS;
+  const totalRows = visibleSections.reduce(
     (count, section) => count + (sections.get(section.id)?.length ?? 0),
     0,
   );
   if (totalRows === 0) {
     return (
       <PanelStateMessage density="compact">
-        <p>No threads yet. Ask the coordinator for work and it will start threads here.</p>
+        <p>
+          {emptyMessage ??
+            "No threads yet. Ask the coordinator for work and it will start threads here."}
+        </p>
       </PanelStateMessage>
     );
   }
   return (
     <div className="flex flex-col gap-1">
-      {GROUP_THREAD_SECTIONS.map((section) => {
+      {visibleSections.map((section) => {
         const rows = sections.get(section.id) ?? [];
         if (rows.length === 0) return null;
         const collapsed = section.defaultOpen === toggledSections.has(section.id);
@@ -263,13 +363,13 @@ function GroupThreadsTab({
   );
 }
 
-function GroupThreadRow({
+export function GroupThreadRow({
   row,
   agent,
   onOpenThread,
   onOpenThreadSplit,
 }: {
-  readonly row: GroupThreadRow;
+  readonly row: GroupThreadRowData;
   readonly agent: ProjectAgent;
   readonly onOpenThread: (threadId: ThreadId) => void;
   readonly onOpenThreadSplit: (threadId: ThreadId) => void;
@@ -393,15 +493,11 @@ function GroupThreadRow({
 
 // — Pull requests —
 
-function GroupPullRequestsTab({
+export function GroupPullRequestsSection({
   rows,
   onOpenThread,
 }: {
-  readonly rows: ReadonlyArray<{
-    readonly thread: SidebarThreadSummary;
-    readonly pullRequest: NonNullable<GroupThreadRow["pullRequest"]>;
-    readonly projectName: string | null;
-  }>;
+  readonly rows: readonly GroupPullRequestRow[];
   readonly onOpenThread: (threadId: ThreadId) => void;
 }) {
   if (rows.length === 0) {
@@ -454,34 +550,23 @@ function GroupPullRequestsTab({
 
 // — Automations —
 
-function GroupAutomationsTab({
-  groupProjectId,
-  memberThreadIds,
+export function GroupAutomationsSection({
+  definitions,
+  automations,
   onOpenAutomation,
 }: {
-  readonly groupProjectId: ProjectId;
-  readonly memberThreadIds: ReadonlySet<ThreadId>;
+  readonly definitions: readonly AutomationDefinition[];
+  readonly automations: Automations;
   readonly onOpenAutomation: (automationId: string) => void;
 }) {
-  const automations = useAutomations();
-  const scoped = useMemo(
-    () =>
-      collectGroupAutomations({
-        definitions: automations.data.definitions,
-        groupProjectId,
-        memberThreadIds,
-      }),
-    [automations.data.definitions, groupProjectId, memberThreadIds],
-  );
-
-  if (automations.isLoading && scoped.length === 0) {
+  if (automations.isLoading && definitions.length === 0) {
     return (
       <PanelStateMessage density="compact">
         <p>Loading automations…</p>
       </PanelStateMessage>
     );
   }
-  if (scoped.length === 0) {
+  if (definitions.length === 0) {
     return (
       <PanelStateMessage density="compact">
         <p>No automations yet. Ask the coordinator to check something on a schedule.</p>
@@ -490,7 +575,7 @@ function GroupAutomationsTab({
   }
   return (
     <div className="flex flex-col gap-0.5">
-      {scoped.map((definition) => (
+      {definitions.map((definition) => (
         <GroupAutomationRow
           key={definition.id}
           definition={definition}

@@ -2324,7 +2324,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
             );
           }
           const now = isoNow();
-          const coordinatorName = input.coordinatorName ?? `${project.title} Coordinator`;
+          const coordinatorName = input.coordinatorName ?? project.title;
           let coordinatorThreadId: ThreadId;
           let automationId: ProjectAgentConfig["automationId"];
           let revision = 1;
@@ -2348,7 +2348,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
               .listByProjectId({ projectId: input.projectId })
               .pipe(Effect.mapError(toServiceError("Failed to list project threads.")));
             const reusable = threads.find(
-              (thread) => thread.deletedAt === null && thread.title === coordinatorName,
+              (thread) =>
+                thread.deletedAt === null &&
+                (thread.title === coordinatorName ||
+                  thread.title === `${project.title} Coordinator`),
             );
             coordinatorThreadId =
               reusable?.threadId ??

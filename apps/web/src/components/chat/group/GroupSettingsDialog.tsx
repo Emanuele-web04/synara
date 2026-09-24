@@ -34,6 +34,7 @@ import { useProjectAgent } from "~/components/chat/project/useProjectAgent";
 import { useProjectAgentSummariesStore } from "~/components/chat/project/useProjectAgentSummaries";
 import { toDisplayName } from "~/components/profile/profileFormatting";
 import { useProfileName } from "~/components/profile/useProfileName";
+import { isDefaultGroupCoordinatorName } from "~/lib/groupCoordinatorName";
 import { cn, newCommandId } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import {
@@ -221,6 +222,9 @@ export function GroupSettingsDialog(props: {
           : undefined,
       importedInstructions,
       userDisplayName,
+      projectRemoteName: useStore
+        .getState()
+        .projects.find((project) => project.id === props.projectId)?.remoteName,
       renameProject: async (title) => {
         await api.orchestration.dispatchCommand({
           type: "project.meta.update",
@@ -229,6 +233,30 @@ export function GroupSettingsDialog(props: {
           title,
         });
         renameProjectLocally(props.projectId, title);
+        // A coordinator thread still titled with the previous default name
+        // follows the rename; a thread the user renamed keeps its own title.
+        const coordinatorThreadId = useProjectAgentSummariesStore
+          .getState()
+          .summariesByProjectId.get(props.projectId)?.coordinatorThreadId;
+        if (coordinatorThreadId) {
+          const summaryTitle =
+            useStore.getState().sidebarThreadSummaryById[coordinatorThreadId]?.title;
+          if (
+            summaryTitle &&
+            isDefaultGroupCoordinatorName(summaryTitle, [
+              useStore.getState().projects.find((project) => project.id === props.projectId)
+                ?.remoteName,
+              baseline.draft.name,
+            ])
+          ) {
+            await api.orchestration.dispatchCommand({
+              type: "thread.meta.update",
+              commandId: newCommandId(),
+              threadId: coordinatorThreadId,
+              title,
+            });
+          }
+        }
       },
       configure: (payload) => api.projectAgent.configure(payload),
     });

@@ -9,6 +9,8 @@ import {
 } from "@synara/contracts";
 import { MEMORY_NOTES_DOCUMENT_PREFIX } from "@synara/shared/projectAgent";
 
+import { isDefaultGroupCoordinatorName } from "../../../lib/groupCoordinatorName";
+
 export const GROUP_SETTINGS_SECTIONS = ["general", "memory", "environment", "plugins"] as const;
 export type GroupSettingsSection = (typeof GROUP_SETTINGS_SECTIONS)[number];
 
@@ -204,6 +206,8 @@ export function buildGroupConfigureInput(input: {
   readonly expectedRevision?: number | undefined;
   readonly importedInstructions?: string | undefined;
   readonly userDisplayName?: string | undefined;
+  /** The project's server-side title — the stored coordinator name derives from it. */
+  readonly projectRemoteName?: string | undefined;
 }): ProjectAgentConfigureInput {
   const { draft, baseline } = input;
   const baselineDraft = baseline.draft;
@@ -227,16 +231,27 @@ export function buildGroupConfigureInput(input: {
   const libraryPath = draft.libraryPath.trim();
   const libraryRemoteUrl = draft.libraryRemoteUrl.trim();
 
+  // The coordinator's configured name defaults to the group's own name; the
+  // " Coordinator" suffix is no longer appended. The field is sent only while
+  // the stored name is still a generated default so a user-chosen name survives
+  // a rename untouched, while default names keep following the group name.
+  const sendCoordinatorName =
+    (generalDirty || input.mode === "onboarding") &&
+    isDefaultGroupCoordinatorName(config?.coordinatorName ?? null, [
+      input.projectRemoteName,
+      baselineDraft.name,
+    ]);
+
   return {
     requestId: input.requestId,
     projectId: input.projectId,
     coordinatorModelSelection: draft.coordinatorModelSelection,
     workerRouting,
-    ...(generalDirty || input.mode === "onboarding"
+    ...(sendCoordinatorName
       ? {
           coordinatorName:
             draft.name.trim().length > 0
-              ? `${draft.name.trim()} Coordinator`.slice(0, GROUP_NAME_MAX_CHARS)
+              ? draft.name.trim().slice(0, GROUP_NAME_MAX_CHARS)
               : "Group Coordinator",
         }
       : {}),
@@ -321,6 +336,7 @@ export async function saveGroupSettings(input: {
   readonly userDisplayName?: string | undefined;
   readonly configure: (payload: ProjectAgentConfigureInput) => Promise<ProjectAgentOverview>;
   readonly renameProject?: ((title: string) => Promise<void> | void) | undefined;
+  readonly projectRemoteName?: string | undefined;
 }): Promise<SaveGroupSettingsResult> {
   const trimmedName = input.draft.name.trim();
   if (trimmedName.length === 0) {
@@ -341,6 +357,7 @@ export async function saveGroupSettings(input: {
         expectedRevision: input.expectedRevision,
         importedInstructions: input.importedInstructions,
         userDisplayName: input.userDisplayName,
+        projectRemoteName: input.projectRemoteName,
       }),
     );
     if (input.renameProject && trimmedName !== input.baseline.draft.name.trim()) {

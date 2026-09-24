@@ -145,6 +145,7 @@ import {
   deriveLatestContextWindowState,
 } from "../lib/contextWindow";
 import { reconcileDeletedThreadFromClient } from "../lib/deletedThreadClientReconciliation";
+import { resolveGroupCoordinatorDisplayName } from "../lib/groupCoordinatorName";
 import {
   normalizeRuntimeModeForProvider,
   providerModelSupportsAutoRuntimeMode,
@@ -336,10 +337,8 @@ import { useProjectAgentSummaries } from "./chat/project/useProjectAgentSummarie
 import { useProjectAgentSummariesStore } from "./chat/project/useProjectAgentSummaries";
 import { GroupPausedBanner } from "./chat/group/GroupPausedBanner";
 import { useProjectInstructionsSource } from "./chat/project/useProjectInstructionsSource";
-import {
-  resolveProjectPanelEnabled,
-  type ChatAuxiliarySurface,
-} from "./chat/auxiliary/auxiliaryPanel.logic";
+import { resolveProjectPanelEnabled } from "./chat/auxiliary/auxiliaryPanel.logic";
+import { useAuxiliarySurface } from "./chat/auxiliary/useAuxiliarySurface";
 import {
   createGroupNeedsAttentionSelector,
   type GroupNeedsAttentionGroup,
@@ -2824,21 +2823,29 @@ export default function ChatView({
     environmentEnabled,
     isGroupContainer,
   });
-  const [auxiliarySurface, setAuxiliarySurface] = useState<ChatAuxiliarySurface | null>(
-    environmentPanelVisible ? "environment" : null,
-  );
+  // Group chats default to the Groups panel — a newly created group's
+  // coordinator chat opens with Focus/sections visible. An explicit toggle wins
+  // while its project stays active; closing the panel persists per group so the
+  // default never overrides a deliberate close.
+  const { auxiliarySurface, chooseAuxiliarySurface, setGroupPanelClosed } = useAuxiliarySurface({
+    projectId: activeProjectId,
+    projectPanelEnabled,
+    environmentPanelVisible,
+  });
   const setEnvironmentFromAuxiliary = useCallback(
     (open: boolean) => {
-      setAuxiliarySurface((current) =>
-        open ? "environment" : current === "environment" ? null : current,
-      );
+      chooseAuxiliarySurface(open ? "environment" : null);
       setEnvironmentPanelOpenPreference(open);
     },
-    [setEnvironmentPanelOpenPreference],
+    [chooseAuxiliarySurface, setEnvironmentPanelOpenPreference],
   );
   const setProjectFromAuxiliary = useCallback(
     (open: boolean) => {
-      setAuxiliarySurface((current) => (open ? "project" : current === "project" ? null : current));
+      chooseAuxiliarySurface(open ? "project" : null);
+      // The close is remembered per group (separate store) — never written into
+      // the env-panel preference, so a dismissed Groups panel stays closed on
+      // later visits without changing the Environment default.
+      setGroupPanelClosed(!open);
       // Another surface claims the dock, but the user's persisted env-panel
       // preference stays untouched — environmentPanelVisibleEffective already
       // hides Environment while a sibling panel is open.
@@ -2846,16 +2853,16 @@ export default function ChatView({
         closeEnvironmentPanelAfterAction();
       }
     },
-    [closeEnvironmentPanelAfterAction],
+    [chooseAuxiliarySurface, setGroupPanelClosed, closeEnvironmentPanelAfterAction],
   );
   const setLibraryFromAuxiliary = useCallback(
     (open: boolean) => {
-      setAuxiliarySurface((current) => (open ? "library" : current === "library" ? null : current));
+      chooseAuxiliarySurface(open ? "library" : null);
       if (open) {
         closeEnvironmentPanelAfterAction();
       }
     },
-    [closeEnvironmentPanelAfterAction],
+    [chooseAuxiliarySurface, closeEnvironmentPanelAfterAction],
   );
   const githubRepositoryQuery = useQuery(
     gitGithubRepositoryQueryOptions(gitBranchSourceCwd, environmentPanelVisible),
@@ -4944,7 +4951,14 @@ export default function ChatView({
   }
 
   const activeThreadDisplayTitle = resolveActiveThreadTitle({
-    title: activeThread.title,
+    title: isCoordinatorConversation
+      ? resolveGroupCoordinatorDisplayName({
+          coordinatorName: activeGroupSummary?.coordinatorName ?? null,
+          threadTitle: activeThread.title,
+          groupName: activeProjectDisplayName ?? activeProject?.name ?? activeThread.title,
+          remoteName: activeProject?.remoteName ?? null,
+        })
+      : activeThread.title,
     subagentTitle: activeThread.parentThreadId
       ? resolveSubagentPresentationForThread({
           thread: activeThread,
