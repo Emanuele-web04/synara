@@ -110,6 +110,7 @@ import {
 import { isClaudeAutoModeCliVersionSupported } from "../claudeCliVersion.ts";
 import { collectUint8StreamText } from "../../stream/collectUint8StreamText";
 import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
+import { readGrokCachedLogin } from "../../providerUsage/providers/grok";
 
 export { parseClaudeAuthStatusFromOutput } from "../claudeAuthStatus";
 export type { CommandResult } from "../providerCliOutput";
@@ -1198,6 +1199,7 @@ export const checkClaudeProviderStatus = makeCheckClaudeProviderStatus();
 
 export const makeCheckGrokProviderStatus = (
   binaryPath?: string,
+  readCachedLogin: typeof readGrokCachedLogin = readGrokCachedLogin,
 ): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
@@ -1251,20 +1253,25 @@ export const makeCheckGrokProviderStatus = (
     const version = versionProbe.result;
     const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
     const hasApiKey = hasGrokApiKeyEnv();
+    // Sessions authenticate with the API key when one is set, otherwise with the
+    // cached `grok login` session (ACP `cached_token`), so report the same source.
+    const hasCachedLogin = !hasApiKey && (yield* Effect.promise(() => readCachedLogin())) !== null;
 
     return {
       provider: GROK_PROVIDER,
       status: "ready" as const,
       available: true,
-      authStatus: hasApiKey ? ("authenticated" as const) : ("unknown" as const),
+      authStatus: hasApiKey || hasCachedLogin ? ("authenticated" as const) : ("unknown" as const),
       version: parsedVersion,
       checkedAt,
       ...(hasApiKey
         ? { authType: "apiKey", authLabel: "xAI API Key" }
-        : {
-            message:
-              "Grok CLI is installed. Run `grok` to authenticate locally, or set XAI_API_KEY before starting a session.",
-          }),
+        : hasCachedLogin
+          ? { authType: "grokLogin", authLabel: "Grok Account" }
+          : {
+              message:
+                "Grok CLI is installed. Run `grok` to authenticate locally, or set XAI_API_KEY before starting a session.",
+            }),
     } satisfies ServerProviderStatus;
   });
 
