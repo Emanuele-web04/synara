@@ -11,8 +11,8 @@
 
 The supplied recordings were decoded frame by frame before implementation.
 
-- Synara reference: `Screen Recording 2026-09-24 at 14.06.58.mov` — 1,038 decoded frames (1,039 in container metadata), about 20.27 seconds.
-- Monocode reference: `VcmDJi_9rOeYPF0Y.mp4` — 1,504 frames, about 25.07 seconds.
+- Synara reference: `Screen Recording 2026-09-24 at 14.06.58.mov` - 1,038 decoded frames (1,039 in container metadata), about 20.27 seconds.
+- Monocode reference: `VcmDJi_9rOeYPF0Y.mp4` - 1,504 frames, about 25.07 seconds.
 - Monocode keeps the empty title and composer close together near the vertical center.
 - Monocode's first-send composer handoff takes about 300ms.
 - The previous Synara layout kept the title high and the composer near the bottom.
@@ -22,12 +22,12 @@ The supplied recordings were decoded frame by frame before implementation.
 ### Passed
 
 - `bun install --frozen-lockfile`
-- `bun run typecheck` — all 7 packages passed; existing suggestions remain.
-- `bun run lint` — 0 errors and 728 existing warnings.
+- `bun run typecheck` - all 7 packages passed; existing suggestions remain.
+- `bun run lint` - 0 errors and 728 existing warnings.
 - `bunx oxfmt --check apps/web/src/components/ChatView.tsx apps/web/src/components/ChatView.browser.tsx apps/web/src/index.css`
-- `bun run --cwd apps/web test -- --testTimeout=15000` — 399 files passed, 5,225 tests passed, 3 skipped.
-- `bun run --cwd apps/web test:browser -- src/components/ChatView.browser.tsx -t 'centers the home landing stack|keeps the first sent message|preserves a new-chat draft'` — 4 passed, 137 skipped.
-- `bun run build` — all 5 build tasks passed; existing chunk-size and build-plugin warnings remain.
+- `bun run --cwd apps/web test -- --testTimeout=15000` - 399 files passed, 5,225 tests passed, 3 skipped.
+- `bun run --cwd apps/web test:browser -- src/components/ChatView.browser.tsx -t 'centers the home landing stack|keeps the first sent message|preserves a new-chat draft'` - 4 passed, 137 skipped.
+- `bun run build` - all 5 build tasks passed; existing chunk-size and build-plugin warnings remain.
 - `git diff --check`
 
 The browser suite emitted an existing `ResizeObserver loop completed with undelivered notifications` warning. It did not fail the run.
