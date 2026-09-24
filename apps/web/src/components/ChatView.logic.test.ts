@@ -3519,21 +3519,22 @@ describe("resolveEffectiveComputerControl", () => {
   });
 
   it("is forced off when the build has no computer use, overriding every other input", () => {
+    const available: ComputerAvailability = { kind: "available", backend: "mac" };
     for (const input of [
       {
         draftOverride: true,
-        availability: { kind: "available", backend: "mac" },
+        availability: available,
         computerControlEnabled: true,
         chatHasTurns: true,
       },
       {
         draftOverride: undefined,
         mode: "request" as const,
-        availability: { kind: "available", backend: "mac" },
+        availability: available,
         computerControlEnabled: false,
         chatHasTurns: false,
       },
-    ]) {
+    ] as const) {
       expect(resolveEffectiveComputerControl({ ...input, computerUseEnabled: false })).toBe(false);
     }
   });
