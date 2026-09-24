@@ -425,7 +425,7 @@ export function ProjectPanel({
 
       {/* One scroll area holds the body plus whichever section is open, so the
           pinned header and section bar never leave the capped panel. */}
-      <div className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-1.5">
+      <div className="min-h-[min(22rem,50vh)] flex-1 overflow-y-auto px-1.5 pb-2">
         {configured && projectId !== null ? (
           <div className="flex min-h-full flex-col">
             <ProjectFocusCard
@@ -571,22 +571,22 @@ function ProjectFocusCard({
   return (
     <div
       className={cn(
-        "mx-1 mb-1 rounded-xl bg-[var(--color-background-elevated-secondary)] px-2.5 py-2",
+        "mx-1 mb-1.5 mt-2 rounded-xl bg-[var(--color-background-elevated-secondary)] px-3 py-3",
         className,
       )}
     >
-      <p className="px-0.5 pb-1.5 text-ui-sm font-medium text-muted-foreground">Focus</p>
+      <p className="px-0.5 pb-2 text-ui-sm font-medium text-muted-foreground">Focus</p>
       {summary ? (
-        <p className="px-0.5 pb-1.5 text-ui text-muted-foreground">{summary}</p>
+        <p className="px-0.5 pb-2.5 text-ui leading-relaxed text-muted-foreground">{summary}</p>
       ) : updating ? (
         <p className="px-0.5 pb-1.5 text-ui-xs text-muted-foreground">Updating…</p>
       ) : null}
       {items.length === 0 && !summary ? (
         <p className="px-0.5 text-ui text-muted-foreground">Nothing in focus yet.</p>
       ) : (
-        <ul className="flex flex-col gap-1.5">
+        <ul className="flex flex-col gap-2.5">
           {items.map((item) => (
-            <li key={item.id} className="flex gap-1.5 text-ui leading-snug">
+            <li key={item.id} className="flex gap-2 text-ui leading-snug">
               <span className="mt-1.5 size-1 shrink-0 rounded-full bg-foreground/45" aria-hidden />
               <ProjectFocusLink row={item} onOpenThread={onOpenThread} />
             </li>
