@@ -204,9 +204,11 @@ the chats and settings it had before.
 
 ## Diagnostics
 
-Beta builds ship always-on diagnostics; stable builds contain no sender code at
-all. See [diagnostics.md](diagnostics.md) for exactly what is collected, what is
-never collected, and how the Cloudflare ingest works.
+Beta builds ship always-on diagnostics — crash reports plus anonymous usage
+counts (which providers are used, how many chats and turns) — while stable
+builds contain no sender code at all. See [diagnostics.md](diagnostics.md) for
+exactly what is collected, what is never collected, and how the Cloudflare
+ingest works.
 
 ## Data
 

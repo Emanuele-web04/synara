@@ -103,7 +103,7 @@ import {
   type BundleSignature,
 } from "./bundleSwapDetection";
 import { waitForBackendStartupReady } from "./backendStartupReadiness";
-import { DesktopBetaChannel, resolveBetaHomeDir } from "./betaChannel";
+import { DesktopBetaChannel, readBetaImportResult, resolveBetaHomeDir } from "./betaChannel";
 import {
   BetaDiagnostics,
   readLogTail,
@@ -4447,6 +4447,24 @@ async function restartBackendAfterCrash(
  */
 type BackendStartTrigger = "lifecycle" | "crash-restart";
 
+/**
+ * Emits beta.installed exactly once, on the first backend readiness of a fresh
+ * beta install. The server consumes any pending import marker before it
+ * listens, so import-result.json is final at this point.
+ */
+let betaInstalledEventEmitted = false;
+function maybeTrackBetaInstalled(): void {
+  if (!betaDiagnostics || !betaDiagnostics.installIdIsNew || betaInstalledEventEmitted) {
+    return;
+  }
+  betaInstalledEventEmitted = true;
+  const result = readBetaImportResult(BASE_DIR);
+  trackBetaDiagnostics("beta.installed", {
+    kind: "beta",
+    outcome: result === null ? "fresh" : result.ok ? "imported" : "import-failed",
+  });
+}
+
 function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
   if (isQuitting || backendProcess) return;
   // Recovery owns the database until it clears the marker. Callers that restart
@@ -4533,6 +4551,7 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
     () => {
       if (backendListeningDetector === listeningDetector) {
         backendSupervision.recordReadiness();
+        maybeTrackBetaInstalled();
       }
     },
     () => undefined,
@@ -5175,6 +5194,12 @@ function registerIpcHandlers(): void {
         };
       }
     }
+    trackBetaDiagnostics("beta.left", {
+      kind: "beta",
+      outcome: moveToTrash && isTrashableBetaBundle() ? "trash" : "keep",
+    });
+    // The quit path flushes queued events via dispose() with the bounded
+    // timeout; the event above is already queued by then.
     setImmediate(() => requestGracefulAppQuit("beta-leave"));
     return result;
   });
@@ -5948,7 +5973,11 @@ if (hasSingleInstanceLock) {
       if (betaDiagnostics) {
         betaDiagnostics.start();
         const previousLaunchVersion = parseLastLaunchVersion(readLaunchVersionRecordContents());
-        trackBetaDiagnostics("app.start", { kind: "lifecycle" });
+        trackBetaDiagnostics("app.start", {
+          kind: "lifecycle",
+          osVersion: process.getSystemVersion(),
+          locale: app.getLocale(),
+        });
         if (previousLaunchVersion !== null && previousLaunchVersion !== app.getVersion()) {
           // A version change across launches means an update install landed.
           trackBetaDiagnostics("update.installed", {

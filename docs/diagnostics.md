@@ -12,24 +12,36 @@ never instantiated: no UI, environment variable, or IPC can enable it.)
 
 ## What is collected
 
-Ten event names, each with a small fixed field set. The full allowlist lives
-in `apps/desktop/src/betaDiagnostics.ts` (`BetaDiagnosticsEventName` and the
-`sanitizeBetaDiagnosticsPayload` schemas); the ingest worker re-validates the
-same allowlist server-side.
+Thirteen event names, each with a small fixed field set. The full allowlist
+lives in `apps/desktop/src/betaDiagnostics.ts` (`BetaDiagnosticsEventName` and
+the `sanitizeBetaDiagnosticsPayload` schemas); the ingest worker re-validates
+the same allowlist server-side.
 
 | Event                                                                                       | Fields (all optional except `kind`)                                                                                                                       |
 | ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `app.start`, `app.exit`                                                                     | `kind: "lifecycle"`                                                                                                                                       |
+| `app.start`, `app.exit`                                                                     | `kind: "lifecycle"`; `app.start` also carries `osVersion` (major.minor) and `locale` (language only, e.g. `en`)                                           |
 | `app.renderer-crash`, `app.child-process-crash`                                             | `kind: "crash"`, `processType` (Electron enum like `renderer`/`gpu`/`backend`), `reason`, `logTail` (redacted last ~200 lines/16 KiB of the relevant log) |
 | `app.error`                                                                                 | `kind: "error"`, `source` (`main`/`renderer`), `message` (redacted, 1 KiB), `stack` (redacted, 8 KiB), `fingerprint` (hash of the redacted text)          |
 | `update.check`, `update.available`, `update.downloaded`, `update.installed`, `update.error` | `kind: "update"`, `outcome` (`ok`/`error`), `durationMs`, `errorContext` (`check`/`download`/`install`), `targetVersion` (strict semver)                  |
+| `usage.daily`                                                                               | `kind: "usage"`, `providers` (provider name + `threads`/`turns`/`turnsFailed` counts for the last 24h), `projects`, `activeThreads` — counts only         |
+| `beta.installed`, `beta.left`                                                               | `kind: "beta"`, `outcome` (`imported`/`import-failed`/`fresh`, or `trash`/`keep`)                                                                         |
 
 `app.error` fires when the main process throws an uncaught exception or a
 renderer logs a console error. The same fingerprint is sent at most once per
 10 minutes and at most 30 errors per hour per session.
 
+`usage.daily` works differently from the other events: the main process cannot
+read the projection database, so the server writes
+`~/.synara-beta/diagnostics/usage-snapshot.json` every 6 hours (counts only —
+provider names, thread and turn counts, project count) and the main process
+relays it once per UTC day. `beta.installed` is emitted once, on the first
+backend start after a fresh install, and says whether stable data was imported.
+`beta.left` fires when you switch back to stable and says only whether the beta
+app was moved to the Trash.
+
 Every event also carries: a random per-install UUID, `flavor: "beta"`,
-`platform`, `arch`, the app version, and a timestamp. The install UUID is
+`platform`, `arch`, the app version, and a timestamp; `app.start` additionally
+carries the OS version (major.minor) and UI language. The install UUID is
 generated locally on first launch (`crypto.randomUUID`) — it is not derived
 from your hardware, account, or IP.
 
@@ -40,8 +52,8 @@ can't be redacted, so they are deleted after 90 days by an R2 expiry rule.
 
 ## What is never collected
 
-- Chat messages, prompts, agent output, or transcripts
-- File contents, workspace contents, or git metadata
+- Chat messages, prompts, agent output, or transcripts (usage events carry counts only)
+- File contents, workspace contents, project names, or git metadata
 - Provider keys, tokens, or anything under `secrets/`
 - IP-derived identifiers, device IDs, or account identity
 - Screenshots, window contents, or keystrokes

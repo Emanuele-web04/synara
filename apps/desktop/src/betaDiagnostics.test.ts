@@ -103,6 +103,109 @@ describe("sanitizeBetaDiagnosticsPayload", () => {
     expect(JSON.stringify(sanitized)).not.toContain("alice");
   });
 
+  it("sanitizes usage payloads: providers, counts, duplicates", () => {
+    const sanitized = sanitizeBetaDiagnosticsPayload(
+      {
+        kind: "usage",
+        providers: [
+          { provider: "claudeAgent", threads: 3.7, turns: 9.9, turnsFailed: 1 },
+          // Legacy name migrates to the current ProviderKind and merges.
+          { provider: "gemini" as never, threads: 2, turns: 4, turnsFailed: 0 },
+          { provider: "antigravity", threads: 1, turns: 5, turnsFailed: 2 },
+          { provider: "notaprovider" as never, threads: 9, turns: 9, turnsFailed: 9 },
+          { provider: "claudeAgent", threads: 1, turns: Number.NaN, turnsFailed: -3 },
+        ],
+        projects: 4.6,
+        activeThreads: -2,
+      },
+      "/tmp/x",
+      "usage.daily",
+    );
+    expect(sanitized).toEqual({
+      kind: "usage",
+      providers: [
+        { provider: "claudeAgent", threads: 4, turns: 9, turnsFailed: 1 },
+        { provider: "antigravity", threads: 3, turns: 9, turnsFailed: 2 },
+      ],
+      projects: 4,
+      activeThreads: 0,
+    });
+  });
+
+  it("clamps usage counts and drops extra fields", () => {
+    const sanitized = sanitizeBetaDiagnosticsPayload(
+      {
+        kind: "usage",
+        providers: [
+          {
+            provider: "codex",
+            threads: 200_000,
+            turns: 1,
+            turnsFailed: 0,
+            // @ts-expect-error smuggled field
+            note: "user@example.com",
+          },
+        ],
+        projects: 1e9,
+        activeThreads: 1,
+      },
+      "/tmp/x",
+      "usage.daily",
+    );
+    expect(JSON.stringify(sanitized)).not.toContain("user@example.com");
+    expect(sanitized).toEqual({
+      kind: "usage",
+      providers: [{ provider: "codex", threads: 100_000, turns: 1, turnsFailed: 0 }],
+      projects: 100_000,
+      activeThreads: 1,
+    });
+  });
+
+  it("validates beta outcomes per event", () => {
+    const installed = sanitizeBetaDiagnosticsPayload(
+      { kind: "beta", outcome: "imported" },
+      "/tmp/x",
+      "beta.installed",
+    );
+    expect(installed).toEqual({ kind: "beta", outcome: "imported" });
+    const left = sanitizeBetaDiagnosticsPayload(
+      { kind: "beta", outcome: "trash" },
+      "/tmp/x",
+      "beta.left",
+    );
+    expect(left).toEqual({ kind: "beta", outcome: "trash" });
+    // Outcomes are not interchangeable across the two events.
+    expect(
+      sanitizeBetaDiagnosticsPayload(
+        { kind: "beta", outcome: "trash" },
+        "/tmp/x",
+        "beta.installed",
+      ),
+    ).toEqual({ kind: "beta" });
+    expect(
+      sanitizeBetaDiagnosticsPayload({ kind: "beta", outcome: "imported" }, "/tmp/x", "beta.left"),
+    ).toEqual({ kind: "beta" });
+    // A beta payload under a non-beta event drops the outcome entirely.
+    expect(
+      sanitizeBetaDiagnosticsPayload({ kind: "beta", outcome: "fresh" }, "/tmp/x", "app.start"),
+    ).toEqual({ kind: "beta" });
+  });
+
+  it("keeps only major.minor osVersion and a two/three-letter locale", () => {
+    const sanitized = sanitizeBetaDiagnosticsPayload(
+      { kind: "lifecycle", osVersion: "15.3.1", locale: "en-US" },
+      "/tmp/x",
+      "app.start",
+    );
+    expect(sanitized).toEqual({ kind: "lifecycle", osVersion: "15.3", locale: "en" });
+    const bad = sanitizeBetaDiagnosticsPayload(
+      { kind: "lifecycle", osVersion: "not a version", locale: "english-US" },
+      "/tmp/x",
+      "app.start",
+    );
+    expect(bad).toEqual({ kind: "lifecycle" });
+  });
+
   it("redacts and caps crash logTail", () => {
     const longTail = `line with password=hunter2\n${"x".repeat(40 * 1024)}`;
     const sanitized = sanitizeBetaDiagnosticsPayload(
@@ -282,6 +385,104 @@ describe("BetaDiagnostics", () => {
       .trim()
       .split("\n");
     expect(lines).toHaveLength(1);
+  });
+
+  const readQueue = (root: string) => {
+    const queuePath = join(root, "diagnostics", "events.jsonl");
+    if (!existsSync(queuePath)) return [];
+    return readFileSync(queuePath, "utf8")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  };
+
+  const writeSnapshot = (root: string, generatedAt: string) => {
+    const dir = join(root, "diagnostics");
+    writeFileSync(
+      join(dir, "usage-snapshot.json"),
+      JSON.stringify({
+        v: 1,
+        generatedAt,
+        providers: [{ provider: "claudeAgent", threads: 2, turns: 5, turnsFailed: 1 }],
+        projects: 3,
+        activeThreads: 2,
+      }),
+    );
+  };
+
+  it("reports whether the install id was created this launch", () => {
+    const root = makeRoot();
+    const first = makeDiagnostics(root);
+    expect(first.installIdIsNew).toBe(true);
+    const second = makeDiagnostics(root);
+    expect(second.installIdIsNew).toBe(false);
+    expect(second.installId).toBe(first.installId);
+  });
+
+  it("maybeTrackDailyUsage sends once per UTC day and records the day", () => {
+    const root = makeRoot();
+    const now = new Date("2026-09-24T12:00:00.000Z");
+    const diag = new BetaDiagnostics({
+      homeDir: root,
+      appVersion: "9.9.9-beta.1",
+      platform: "linux",
+      arch: "x64",
+      env: {},
+      now: () => now,
+    });
+    writeSnapshot(root, new Date(now.getTime() - 60_000).toISOString());
+    diag.maybeTrackDailyUsage();
+    diag.maybeTrackDailyUsage();
+    const events = readQueue(root).filter((e) => e.event === "usage.daily");
+    expect(events).toHaveLength(1);
+    expect(events[0].payload).toEqual({
+      kind: "usage",
+      providers: [{ provider: "claudeAgent", threads: 2, turns: 5, turnsFailed: 1 }],
+      projects: 3,
+      activeThreads: 2,
+    });
+    expect(readFileSync(join(root, "diagnostics", "usage-last-day"), "utf8").trim()).toBe(
+      "2026-09-24",
+    );
+    // The next UTC day sends again (the server refreshes the snapshot file
+    // every 6h, so write a fresh one).
+    const nextNow = new Date("2026-09-25T00:10:00.000Z");
+    writeSnapshot(root, new Date(nextNow.getTime() - 60_000).toISOString());
+    const diagNext = new BetaDiagnostics({
+      homeDir: root,
+      appVersion: "9.9.9-beta.1",
+      platform: "linux",
+      arch: "x64",
+      env: {},
+      now: () => nextNow,
+    });
+    diagNext.maybeTrackDailyUsage();
+    expect(readQueue(root).filter((e) => e.event === "usage.daily")).toHaveLength(2);
+  });
+
+  it("maybeTrackDailyUsage skips stale, missing, and corrupt snapshots", () => {
+    const root = makeRoot();
+    const now = new Date("2026-09-24T12:00:00.000Z");
+    const diag = new BetaDiagnostics({
+      homeDir: root,
+      appVersion: "9.9.9-beta.1",
+      platform: "linux",
+      arch: "x64",
+      env: {},
+      now: () => now,
+    });
+    // Missing file: nothing queued.
+    diag.maybeTrackDailyUsage();
+    expect(readQueue(root)).toHaveLength(0);
+    // Corrupt file: nothing queued.
+    writeFileSync(join(root, "diagnostics", "usage-snapshot.json"), "{not json");
+    diag.maybeTrackDailyUsage();
+    expect(readQueue(root)).toHaveLength(0);
+    // Stale (>12h old): nothing queued.
+    writeSnapshot(root, new Date(now.getTime() - 13 * 60 * 60 * 1000).toISOString());
+    diag.maybeTrackDailyUsage();
+    expect(readQueue(root)).toHaveLength(0);
   });
 });
 

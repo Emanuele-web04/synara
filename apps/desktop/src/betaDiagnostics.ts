@@ -33,6 +33,7 @@ import {
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 
+import { LEGACY_PROVIDER_MIGRATIONS, ProviderKind } from "@synara/contracts";
 import { redactDiagnosticText } from "@synara/shared/diagnosticsRedaction";
 
 /** Override point for self-hosted / dev ingestion; production default ships in the binary. */
@@ -46,6 +47,12 @@ const QUEUE_MAX_BYTES = 1024 * 1024;
 const QUEUE_TRIM_TARGET_BYTES = 512 * 1024;
 const FLUSH_BATCH_MAX_EVENTS = 200;
 const FLUSH_BATCH_MAX_BYTES = 256 * 1024;
+// The server writes diagnostics/usage-snapshot.json every 6h; the main
+// process relays it as one usage.daily event per UTC day.
+const USAGE_SNAPSHOT_FIRST_DELAY_MS = 10 * 60 * 1000;
+const USAGE_SNAPSHOT_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const USAGE_SNAPSHOT_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+const USAGE_COUNT_MAX = 100_000;
 
 export const DIAGNOSTICS_MESSAGE_MAX_LENGTH = 1024;
 export const DIAGNOSTICS_STACK_MAX_LENGTH = 8 * 1024;
@@ -68,10 +75,28 @@ export type BetaDiagnosticsEventName =
   | "update.available"
   | "update.downloaded"
   | "update.installed"
-  | "update.error";
+  | "update.error"
+  | "usage.daily"
+  | "beta.installed"
+  | "beta.left";
+
+/** One provider's anonymous 24h counts inside a usage.daily event. */
+export interface BetaUsageProviderEntry {
+  readonly provider: ProviderKind;
+  readonly threads: number;
+  readonly turns: number;
+  readonly turnsFailed: number;
+}
 
 export type BetaDiagnosticsPayload =
-  | { readonly kind: "lifecycle"; readonly durationMs?: number }
+  | {
+      readonly kind: "lifecycle";
+      readonly durationMs?: number;
+      /** Major.minor OS version (e.g. "15.3"); app.start only. */
+      readonly osVersion?: string | undefined;
+      /** Primary language subtag (e.g. "en"); app.start only. */
+      readonly locale?: string | undefined;
+    }
   | {
       readonly kind: "crash";
       readonly processType: string;
@@ -92,6 +117,16 @@ export type BetaDiagnosticsPayload =
       readonly durationMs?: number;
       readonly targetVersion?: string;
       readonly errorContext?: "check" | "download" | "install";
+    }
+  | {
+      readonly kind: "usage";
+      readonly providers: readonly BetaUsageProviderEntry[];
+      readonly projects: number;
+      readonly activeThreads: number;
+    }
+  | {
+      readonly kind: "beta";
+      readonly outcome: "imported" | "import-failed" | "fresh" | "trash" | "keep";
     };
 
 export interface BetaDiagnosticsEvent {
@@ -110,21 +145,55 @@ export interface BetaDiagnosticsEvent {
 const isFiniteNonNegative = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value) && value >= 0;
 
+const PROVIDER_KIND_SET = new Set<string>(ProviderKind.literals);
+
+/** Usage counts are floored, non-negative, and capped — never free text. */
+const clampUsageCount = (value: unknown): number => {
+  const count = typeof value === "number" ? Math.floor(value) : Number.NaN;
+  if (!Number.isFinite(count) || count < 0) return 0;
+  return Math.min(count, USAGE_COUNT_MAX);
+};
+
+/** Major.minor only: "15.3.1" -> "15.3", "10.0.22621" -> "10.0". */
+const sanitizeOsVersion = (value: unknown): string | undefined => {
+  if (typeof value !== "string") return undefined;
+  const match = /^(\d+)(?:\.(\d+))?/.exec(value);
+  return match ? (match[2] ? `${match[1]}.${match[2]}` : match[1]!) : undefined;
+};
+
+/** app.getLocale() -> primary language subtag ("en-US" -> "en"). */
+const sanitizeLocale = (value: unknown): string | undefined => {
+  if (typeof value !== "string") return undefined;
+  const primary = value.split("-")[0]?.toLowerCase();
+  return primary && /^[a-z]{2,3}$/.test(primary) ? primary : undefined;
+};
+
+const BETA_OUTCOMES_BY_EVENT: Partial<Record<BetaDiagnosticsEventName, ReadonlySet<string>>> = {
+  "beta.installed": new Set(["imported", "import-failed", "fresh"]),
+  "beta.left": new Set(["trash", "keep"]),
+};
+
 /**
  * Fields not on the allowlist are dropped, never coerced. Free-text fields
  * (message, stack, logTail) are capped and passed through redactDiagnosticText
- * with the caller's homeDir.
+ * with the caller's homeDir. `event` scopes outcome validation for the beta
+ * lifecycle events.
  */
 export function sanitizeBetaDiagnosticsPayload(
   payload: BetaDiagnosticsPayload,
   homeDir?: string,
+  event?: BetaDiagnosticsEventName,
 ): BetaDiagnosticsPayload {
   const redact = (text: unknown, maxLength: number): string =>
     redactDiagnosticText(String(text), { homeDir, maxLength });
   if (payload.kind === "lifecycle") {
+    const osVersion = sanitizeOsVersion(payload.osVersion);
+    const locale = sanitizeLocale(payload.locale);
     return {
       kind: "lifecycle",
       ...(isFiniteNonNegative(payload.durationMs) ? { durationMs: payload.durationMs } : {}),
+      ...(osVersion ? { osVersion } : {}),
+      ...(locale ? { locale } : {}),
     };
   }
   if (payload.kind === "crash") {
@@ -150,19 +219,61 @@ export function sanitizeBetaDiagnosticsPayload(
         : "unknown",
     };
   }
+  if (payload.kind === "update") {
+    return {
+      kind: "update",
+      outcome: payload.outcome === "error" ? "error" : "ok",
+      ...(isFiniteNonNegative(payload.durationMs) ? { durationMs: payload.durationMs } : {}),
+      ...(typeof payload.targetVersion === "string" &&
+      /^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$/.test(payload.targetVersion)
+        ? { targetVersion: payload.targetVersion }
+        : {}),
+      ...(payload.errorContext === "check" ||
+      payload.errorContext === "download" ||
+      payload.errorContext === "install"
+        ? { errorContext: payload.errorContext }
+        : {}),
+    };
+  }
+  if (payload.kind === "usage") {
+    // One entry per provider; duplicates merge by summing, then clamp.
+    const merged = new Map<ProviderKind, { threads: number; turns: number; turnsFailed: number }>();
+    if (Array.isArray(payload.providers)) {
+      for (const entry of payload.providers) {
+        if (!entry || typeof entry !== "object") continue;
+        const rawProvider = (entry as { provider?: unknown }).provider;
+        const provider =
+          typeof rawProvider === "string"
+            ? PROVIDER_KIND_SET.has(rawProvider)
+              ? (rawProvider as ProviderKind)
+              : LEGACY_PROVIDER_MIGRATIONS[rawProvider]
+            : undefined;
+        if (!provider) continue;
+        const existing = merged.get(provider) ?? { threads: 0, turns: 0, turnsFailed: 0 };
+        merged.set(provider, {
+          threads: existing.threads + clampUsageCount(entry.threads),
+          turns: existing.turns + clampUsageCount(entry.turns),
+          turnsFailed: existing.turnsFailed + clampUsageCount(entry.turnsFailed),
+        });
+      }
+    }
+    return {
+      kind: "usage",
+      providers: [...merged.entries()].map(([provider, counts]) => ({
+        provider,
+        threads: Math.min(counts.threads, USAGE_COUNT_MAX),
+        turns: Math.min(counts.turns, USAGE_COUNT_MAX),
+        turnsFailed: Math.min(counts.turnsFailed, USAGE_COUNT_MAX),
+      })),
+      projects: clampUsageCount(payload.projects),
+      activeThreads: clampUsageCount(payload.activeThreads),
+    };
+  }
+  // kind === "beta"
+  const allowedOutcomes = event === undefined ? undefined : BETA_OUTCOMES_BY_EVENT[event];
   return {
-    kind: "update",
-    outcome: payload.outcome === "error" ? "error" : "ok",
-    ...(isFiniteNonNegative(payload.durationMs) ? { durationMs: payload.durationMs } : {}),
-    ...(typeof payload.targetVersion === "string" &&
-    /^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$/.test(payload.targetVersion)
-      ? { targetVersion: payload.targetVersion }
-      : {}),
-    ...(payload.errorContext === "check" ||
-    payload.errorContext === "download" ||
-    payload.errorContext === "install"
-      ? { errorContext: payload.errorContext }
-      : {}),
+    kind: "beta",
+    ...(allowedOutcomes?.has(payload.outcome) ? { outcome: payload.outcome } : {}),
   };
 }
 
@@ -233,9 +344,14 @@ export function resolveBetaDiagnosticsEndpoint(env: NodeJS.ProcessEnv): string {
 export class BetaDiagnostics {
   /** Random UUID identifying this beta install; generated on first launch. */
   readonly installId: string;
+  /** True when this launch created the install id (i.e. first-ever launch). */
+  readonly installIdIsNew: boolean;
   private readonly queuePath: string;
+  private readonly usageSnapshotPath: string;
+  private readonly usageLastDayPath: string;
   private readonly endpoint: string;
   private flushTimer: ReturnType<typeof setInterval> | null = null;
+  private usageTimers: ReturnType<typeof setTimeout>[] = [];
   private flushing = false;
   private disposed = false;
 
@@ -248,8 +364,12 @@ export class BetaDiagnostics {
     readonly now?: () => Date;
   }) {
     this.queuePath = join(input.homeDir, "diagnostics", "events.jsonl");
+    this.usageSnapshotPath = join(input.homeDir, "diagnostics", "usage-snapshot.json");
+    this.usageLastDayPath = join(input.homeDir, "diagnostics", "usage-last-day");
     this.endpoint = resolveBetaDiagnosticsEndpoint(input.env ?? process.env);
-    this.installId = this.loadInstallId(input.homeDir);
+    const installId = this.loadInstallId(input.homeDir);
+    this.installId = installId.id;
+    this.installIdIsNew = installId.created;
     this.now = input.now ?? (() => new Date());
     this.appVersion = input.appVersion;
     this.platform = input.platform;
@@ -265,20 +385,21 @@ export class BetaDiagnostics {
   private readonly errorFingerprintSentAt = new Map<string, number>();
   private readonly errorSentTimestamps: number[] = [];
 
-  private loadInstallId(homeDir: string): string {
+  private loadInstallId(homeDir: string): { id: string; created: boolean } {
     const diagnosticsDir = join(homeDir, "diagnostics");
     const idPath = join(diagnosticsDir, "install-id");
     try {
       if (existsSync(idPath)) {
         const existing = readFileSync(idPath, "utf8").trim();
-        if (/^[0-9a-f-]{36}$/i.test(existing)) return existing;
+        if (/^[0-9a-f-]{36}$/i.test(existing)) return { id: existing, created: false };
       }
       mkdirSync(diagnosticsDir, { recursive: true });
       const generated = randomUUID();
       writeFileSync(idPath, `${generated}\n`, { encoding: "utf8", mode: 0o600 });
-      return generated;
+      return { id: generated, created: true };
     } catch {
-      return randomUUID();
+      // An unpersisted id is regenerated next launch; it is not "new".
+      return { id: randomUUID(), created: false };
     }
   }
 
@@ -288,6 +409,16 @@ export class BetaDiagnostics {
       void this.flush();
     }, FLUSH_INTERVAL_MS);
     this.flushTimer.unref?.();
+    // First usage relay 10 minutes after startup, then every 6h. Timers are
+    // unref'd so diagnostics never hold the process open.
+    const first = setTimeout(() => {
+      this.maybeTrackDailyUsage();
+      const every = setInterval(() => this.maybeTrackDailyUsage(), USAGE_SNAPSHOT_INTERVAL_MS);
+      every.unref?.();
+      this.usageTimers.push(every);
+    }, USAGE_SNAPSHOT_FIRST_DELAY_MS);
+    first.unref?.();
+    this.usageTimers.push(first);
   }
 
   track(event: BetaDiagnosticsEventName, payload: BetaDiagnosticsPayload): void {
@@ -302,7 +433,7 @@ export class BetaDiagnostics {
       platform: this.platform,
       arch: this.arch,
       event,
-      payload: sanitizeBetaDiagnosticsPayload(payload, this.homeDir),
+      payload: sanitizeBetaDiagnosticsPayload(payload, this.homeDir, event),
     };
     try {
       mkdirSync(join(this.queuePath, ".."), { recursive: true });
@@ -346,6 +477,57 @@ export class BetaDiagnostics {
         stack: redactedStack,
         fingerprint,
       });
+    } catch {
+      // Diagnostics must never break the app.
+    }
+  }
+
+  /**
+   * Relays the server-written usage snapshot as one usage.daily event per UTC
+   * day. Skips missing/corrupt snapshots, snapshots older than 12h (the server
+   * may have been down), and days already recorded in usage-last-day.
+   */
+  maybeTrackDailyUsage(): void {
+    if (this.disposed) return;
+    try {
+      if (!existsSync(this.usageSnapshotPath)) return;
+      const raw = JSON.parse(readFileSync(this.usageSnapshotPath, "utf8")) as {
+        v?: unknown;
+        generatedAt?: unknown;
+        providers?: unknown;
+        projects?: unknown;
+        activeThreads?: unknown;
+      };
+      if (typeof raw.generatedAt !== "string") return;
+      const generatedMs = Date.parse(raw.generatedAt);
+      const now = this.now();
+      const nowMs = now.getTime();
+      if (
+        !Number.isFinite(generatedMs) ||
+        generatedMs > nowMs ||
+        nowMs - generatedMs > USAGE_SNAPSHOT_MAX_AGE_MS
+      ) {
+        return;
+      }
+      const today = now.toISOString().slice(0, 10);
+      try {
+        if (
+          existsSync(this.usageLastDayPath) &&
+          readFileSync(this.usageLastDayPath, "utf8").trim() === today
+        ) {
+          return;
+        }
+      } catch {
+        // unreadable marker: fall through and track
+      }
+      if (raw.v !== 1) return;
+      this.track("usage.daily", {
+        kind: "usage",
+        providers: Array.isArray(raw.providers) ? (raw.providers as BetaUsageProviderEntry[]) : [],
+        projects: raw.projects as number,
+        activeThreads: raw.activeThreads as number,
+      });
+      writeFileSync(this.usageLastDayPath, `${today}\n`, { encoding: "utf8", mode: 0o600 });
     } catch {
       // Diagnostics must never break the app.
     }
@@ -459,6 +641,8 @@ export class BetaDiagnostics {
       clearInterval(this.flushTimer);
       this.flushTimer = null;
     }
+    for (const timer of this.usageTimers) clearTimeout(timer);
+    this.usageTimers = [];
     try {
       await this.flush(timeoutMs);
     } catch {
