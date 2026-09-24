@@ -7,7 +7,10 @@ import type { SidebarThreadSummary } from "../types";
 import { hasUnseenCompletion, isThreadActivelyWorking } from "./Sidebar.logic";
 
 export function isThreadRunningForActivity(
-  thread: Pick<SidebarThreadSummary, "hasLiveTailWork" | "session" | "latestTurn">,
+  thread: Pick<
+    SidebarThreadSummary,
+    "hasLiveTailWork" | "hasWorkingSubagents" | "session" | "latestTurn"
+  >,
 ): boolean {
   return isThreadActivelyWorking(thread) || thread.session?.status === "connecting";
 }

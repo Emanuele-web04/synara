@@ -184,6 +184,7 @@ type SidebarThreadSortInput = {
   latestTurn?: Thread["latestTurn"] | undefined;
   lastVisitedAt?: Thread["lastVisitedAt"] | undefined;
   hasLiveTailWork?: boolean | undefined;
+  hasWorkingSubagents?: boolean | undefined;
   session?: Thread["session"] | undefined;
 };
 
@@ -400,6 +401,7 @@ type ThreadStatusInput = Pick<
   proposedPlans?: Thread["proposedPlans"] | undefined;
   hasActionableProposedPlan?: boolean | undefined;
   hasLiveTailWork?: boolean | undefined;
+  hasWorkingSubagents?: boolean | undefined;
   dismissedStatusKey?: string | undefined;
 };
 
@@ -586,16 +588,45 @@ export function resolveThreadRowClassName(input: {
 // pill never disagree.
 export function isThreadActivelyWorking(thread: {
   hasLiveTailWork?: boolean | undefined;
+  hasWorkingSubagents?: boolean | undefined;
   session?: Thread["session"] | undefined;
   latestTurn?: Thread["latestTurn"] | undefined;
 }): boolean {
-  if (thread.hasLiveTailWork === true) {
+  if (thread.hasLiveTailWork === true || thread.hasWorkingSubagents === true) {
     return true;
   }
   const session = thread.session ?? null;
   return (
     session?.status === "running" &&
     (thread.latestTurn == null || hasLiveLatestTurn(thread.latestTurn, session))
+  );
+}
+
+/** Roll up live child work before sidebar visibility filters hide nested rows. */
+export function deriveSidebarThreadActivity(
+  threads: readonly SidebarThreadSummary[],
+): readonly SidebarThreadSummary[] {
+  const threadsById = new Map(threads.map((thread) => [thread.id, thread]));
+  const workingAncestorIds = new Set<ThreadId>();
+
+  for (const thread of threads) {
+    if (thread.archivedAt != null || !isThreadActivelyWorking(thread)) continue;
+    const canAnswer = canSessionAnswerPendingRequests(thread.session);
+    if (canAnswer && (thread.hasPendingApprovals || thread.hasPendingUserInput)) continue;
+
+    let parentId = thread.parentThreadId;
+    // Each ancestor is visited once, even with many siblings or malformed cycles.
+    while (parentId && !workingAncestorIds.has(parentId)) {
+      const parent = threadsById.get(parentId);
+      if (!parent || parent.archivedAt != null) break;
+      workingAncestorIds.add(parentId);
+      parentId = parent.parentThreadId;
+    }
+  }
+
+  if (workingAncestorIds.size === 0) return threads;
+  return threads.map((thread) =>
+    workingAncestorIds.has(thread.id) ? { ...thread, hasWorkingSubagents: true } : thread,
   );
 }
 
