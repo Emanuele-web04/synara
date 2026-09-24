@@ -217,7 +217,7 @@ describe("LibraryPanel", () => {
     expect(container.querySelector('[aria-label^="Back to library"]')).toBeNull();
   });
 
-  it("grows to the overlay's full height on expand and restores on collapse", async () => {
+  it("grows taller and wider on expand and restores on collapse", async () => {
     harness.rootEntries = Array.from({ length: 40 }, (_, index) => fileEntry(`note-${index}.md`));
     const { container } = await renderPanel();
 
@@ -225,16 +225,20 @@ describe("LibraryPanel", () => {
       container.querySelector<HTMLElement>("[data-environment-panel-variant] > div")!;
     await expect.element(page.getByRole("button", { name: "note-0.md" })).toBeVisible();
 
-    const collapsedHeight = surface().getBoundingClientRect().height;
-    await page.getByRole("button", { name: "Expand to full height" }).click();
+    const collapsed = surface().getBoundingClientRect();
+    await page.getByRole("button", { name: "Expand library" }).click();
     await vi.waitFor(() => {
-      expect(surface().getBoundingClientRect().height).toBeGreaterThan(collapsedHeight);
+      const rect = surface().getBoundingClientRect();
+      expect(rect.height).toBeGreaterThan(collapsed.height);
+      expect(rect.width).toBeGreaterThan(collapsed.width);
     });
-    const expandedHeight = surface().getBoundingClientRect().height;
+    const expanded = surface().getBoundingClientRect();
 
-    await page.getByRole("button", { name: "Collapse panel" }).click();
+    await page.getByRole("button", { name: "Collapse library" }).click();
     await vi.waitFor(() => {
-      expect(surface().getBoundingClientRect().height).toBeLessThan(expandedHeight);
+      const rect = surface().getBoundingClientRect();
+      expect(rect.height).toBeLessThan(expanded.height);
+      expect(rect.width).toBeLessThan(expanded.width);
     });
   });
 

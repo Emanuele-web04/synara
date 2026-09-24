@@ -342,8 +342,8 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
           </IconButton>
           <IconButton
             type="button"
-            label={fullHeight ? "Collapse panel" : "Expand to full height"}
-            tooltip={fullHeight ? "Collapse" : "Expand to full height"}
+            label={fullHeight ? "Collapse library" : "Expand library"}
+            tooltip={fullHeight ? "Collapse" : "Expand"}
             onClick={() => setFullHeight((current) => !current)}
           >
             {fullHeight ? (
@@ -633,11 +633,11 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
           className={cn(
             ENVIRONMENT_PANEL_SURFACE_CLASS_NAME,
             ENVIRONMENT_PANEL_MOTION_CLASS,
-            "flex w-72 flex-col",
-            // Collapsed caps below the overlay so expand can visibly grow; content
-            // taller than the overlay would otherwise pin the card at max-h-full
-            // and make "Expand to full height" a no-op.
-            fullHeight ? "h-full" : "max-h-[70%]",
+            "flex flex-col transition-[width] duration-200 ease-out motion-reduce:transition-none",
+            // Collapsed is a narrow card capped below the overlay; expanded grows
+            // both ways — full height and a reading width for documents — while
+            // leaving the chat column visible beside it.
+            fullHeight ? "h-full w-[clamp(20rem,calc(100vw-22rem),48rem)]" : "w-72 max-h-[70%]",
             open
               ? "pointer-events-auto translate-x-0 opacity-100"
               : "pointer-events-none translate-x-full opacity-0",
