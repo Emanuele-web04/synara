@@ -18,8 +18,9 @@ export const BETA_USAGE_SNAPSHOT_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const BETA_USAGE_SNAPSHOT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 // Terminal failure states from ProjectionTurnState ("pending" | "running" |
-// "interrupted" | "completed" | "error"). An in-flight turn is not a failure.
-const FAILED_TURN_STATES = ["interrupted", "error"] as const;
+// "interrupted" | "completed" | "error"). An in-flight turn is not a failure,
+// and "interrupted" is a user cancel, not an error.
+const FAILED_TURN_STATES = ["error"] as const;
 
 interface ProviderUsageRow {
   readonly provider: string;

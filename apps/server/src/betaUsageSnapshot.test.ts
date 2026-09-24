@@ -51,13 +51,15 @@ const seed = Effect.gen(function* () {
             VALUES ('t1', 'idle', 'claudeAgent', ${nowIso()}),
                    ('t2', 'idle', 'claudeAgent', ${nowIso()}),
                    ('th3', 'idle', NULL, ${nowIso()})`;
-  // t1: 2 turns (1 error). t2: 1 completed turn + 1 stale turn (excluded).
-  // th3 has no provider session and must not appear in providers[].
+  // t1: 2 turns (1 error). t2: 1 completed + 1 interrupted (a user cancel, not
+  // a failure) + 1 stale turn (excluded). th3 has no provider session and must
+  // not appear in providers[].
   yield* sql`INSERT INTO projection_turns (thread_id, turn_id, state, requested_at, checkpoint_files_json)
             VALUES ('t1', 'u1', 'completed', ${nowIso()}, '[]'),
                    ('t1', 'u2', 'error', ${nowIso()}, '[]'),
                    ('t2', 'u3', 'completed', ${nowIso()}, '[]'),
-                   ('t2', 'u4', 'interrupted', ${hoursAgoIso(30)}, '[]'),
+                   ('t2', 'u4', 'interrupted', ${nowIso()}, '[]'),
+                   ('t2', 'u6', 'completed', ${hoursAgoIso(30)}, '[]'),
                    ('th3', 'u5', 'completed', ${nowIso()}, '[]')`;
 });
 
@@ -75,7 +77,7 @@ describe("writeBetaUsageSnapshot", () => {
     expect(snapshot.v).toBe(1);
     expect(typeof snapshot.generatedAt).toBe("string");
     expect(snapshot.providers).toEqual([
-      { provider: "claudeAgent", threads: 2, turns: 3, turnsFailed: 1 },
+      { provider: "claudeAgent", threads: 2, turns: 4, turnsFailed: 1 },
     ]);
     expect(snapshot.projects).toBe(1); // deleted project excluded
     expect(snapshot.activeThreads).toBe(3); // stale turn's thread still counted
