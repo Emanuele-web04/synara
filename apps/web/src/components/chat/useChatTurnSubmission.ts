@@ -86,6 +86,7 @@ export function useChatTurnSubmission({
   setStoreThreadError,
   queryClient,
   isCenteredEmptyLanding,
+  firstSendLandingHandoffRef,
   setEnvironmentPanelPreferenceOpen,
   environmentPanelPreferenceOpen,
   setTailAnchor,
@@ -831,6 +832,12 @@ export function useChatTurnSubmission({
           }),
         );
       }
+      if (isCenteredEmptyLanding) {
+        firstSendLandingHandoffRef.current = {
+          sourceThreadId: threadId,
+          targetThreadId: threadIdForSend,
+        };
+      }
       setOptimisticUserMessages((existing) => [
         ...existing,
         {
@@ -972,6 +979,7 @@ export function useChatTurnSubmission({
       setStoreThreadError,
       queryClient,
       isCenteredEmptyLanding,
+      firstSendLandingHandoffRef,
       setEnvironmentPanelPreferenceOpen,
       environmentPanelPreferenceOpen,
       setTailAnchor,

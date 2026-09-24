@@ -8089,6 +8089,12 @@ describe("ChatView transcript geometry (full app)", () => {
         return command!;
       });
       const message = startCommand.message as { messageId: MessageId; text: string };
+      await vi.waitFor(
+        () => {
+          expect(document.querySelector(".chat-composer-after-landing")).not.toBeNull();
+        },
+        { timeout: 1_000, interval: 16 },
+      );
       const messageSelector = `[data-message-id="${message.messageId}"][data-message-role="user"]`;
       const expectTranscript = async () => {
         await waitForLayout();
@@ -8234,6 +8240,59 @@ describe("ChatView transcript geometry (full app)", () => {
       }
     },
   );
+
+  it("centers the home landing stack with the composer directly below the heading", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withActiveHomeChatThread(addThreadToSnapshot(createDraftOnlySnapshot(), THREAD_ID)),
+      configureFixture: (nextFixture) => {
+        nextFixture.welcome = {
+          ...nextFixture.welcome,
+          homeDir: "/Users/tester",
+          chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+        };
+      },
+    });
+
+    try {
+      const landingPane = await waitForElement(
+        () => document.querySelector<HTMLElement>('[data-empty-landing-pane="true"]'),
+        "Unable to find the empty home landing pane.",
+      );
+      const landingStack = await waitForElement(
+        () => document.querySelector<HTMLElement>('[data-empty-landing-stack="true"]'),
+        "Unable to find the empty home landing stack.",
+      );
+      const heading = await waitForElement(
+        () => document.querySelector<HTMLElement>('[data-testid="empty-landing-heading"]'),
+        "Unable to find the empty home heading.",
+      );
+      const composer = await waitForElement(
+        () => landingStack.querySelector<HTMLElement>('[data-empty-landing-composer-block="true"]'),
+        "Unable to find the empty home composer.",
+      );
+
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 500));
+      await waitForLayout();
+
+      const paneRect = landingPane.getBoundingClientRect();
+      const stackRect = landingStack.getBoundingClientRect();
+      const headingRect = heading.getBoundingClientRect();
+      const composerRect = composer.getBoundingClientRect();
+      const paneCenterX = paneRect.left + paneRect.width / 2;
+      const paneCenterY = paneRect.top + paneRect.height / 2;
+      const stackCenterX = stackRect.left + stackRect.width / 2;
+      const stackCenterY = stackRect.top + stackRect.height / 2;
+
+      expect(paneRect.height).toBeGreaterThan(0);
+      expect(Math.abs(stackCenterX - paneCenterX)).toBeLessThanOrEqual(2);
+      expect(Math.abs(stackCenterY - paneCenterY)).toBeLessThanOrEqual(2);
+      expect(composerRect.top).toBeGreaterThanOrEqual(headingRect.bottom - 1);
+      expect(composerRect.top - headingRect.bottom).toBeLessThanOrEqual(48);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
 
   it("creates a detached worktree on first send in New worktree mode", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
@@ -8936,6 +8995,9 @@ describe("ChatView transcript geometry (full app)", () => {
         },
         { timeout: 8_000, interval: 16 },
       );
+
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 50));
+      expect(document.querySelector(".chat-composer-after-landing")).toBeNull();
 
       // Come back via "New chat" — must return to the SAME draft thread with the draft intact
       const newChatButtonAgain = page.getByLabelText("Open new chat home");

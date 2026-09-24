@@ -322,7 +322,7 @@ import {
   CHAT_SURFACE_HEADER_PADDING_X_CLASS,
   CHAT_SURFACE_HEADER_ROW_CLASS_NAME,
 } from "./chat/chatHeaderControls";
-import type { LateComposerSendHandlers } from "./chat/chatSendTypes";
+import type { FirstSendLandingHandoff, LateComposerSendHandlers } from "./chat/chatSendTypes";
 import { composerTranscriptBottomInsetPx, useComposerOverlayHeight } from "./chat/composerOverlay";
 import {
   CHAT_BACKGROUND_CLASS_NAME,
@@ -763,7 +763,7 @@ export default function ChatView({
   // slash/mention command menu, so only one of the two is ever open.
   const [isComposerExtrasPanelOpen, setIsComposerExtrasPanelOpen] = useState(false);
   const [secondaryChromePlaceholderHeight, setSecondaryChromePlaceholderHeight] = useState(88);
-  const wasCenteredEmptyLandingRef = useRef(false);
+  const firstSendLandingHandoffRef = useRef<FirstSendLandingHandoff | null>(null);
   const [composerArrivedFromLanding, setComposerArrivedFromLanding] = useState(false);
   // Tracks whether the user explicitly dismissed the sidebar for the active turn.
   const planSidebarDismissedForTurnRef = useRef<string | null>(null);
@@ -1819,23 +1819,32 @@ export default function ChatView({
   const isEmptyChatLanding =
     isCenteredEmptyLanding && Boolean(homeDir) && isContainerLandingProject;
   useEffect(() => {
-    const wasCenteredEmptyLanding = wasCenteredEmptyLandingRef.current;
-    wasCenteredEmptyLandingRef.current = isCenteredEmptyLanding;
-
     if (isCenteredEmptyLanding) {
       setComposerArrivedFromLanding(false);
       return;
     }
-    if (!wasCenteredEmptyLanding) {
+
+    const handoff = firstSendLandingHandoffRef.current;
+    if (handoff === null || activeThreadId === null) {
+      return;
+    }
+    if (activeThreadId !== handoff.sourceThreadId && activeThreadId !== handoff.targetThreadId) {
+      firstSendLandingHandoffRef.current = null;
       return;
     }
 
+    firstSendLandingHandoffRef.current = null;
     setComposerArrivedFromLanding(true);
+  }, [activeThreadId, isCenteredEmptyLanding]);
+  useEffect(() => {
+    if (!composerArrivedFromLanding) {
+      return;
+    }
     const settleTimer = window.setTimeout(() => {
       setComposerArrivedFromLanding(false);
     }, 320);
     return () => window.clearTimeout(settleTimer);
-  }, [isCenteredEmptyLanding]);
+  }, [composerArrivedFromLanding]);
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
     useTurnDiffSummaries(activeThread);
   const turnDiffSummaryByAssistantMessageId = useMemo(() => {
@@ -4019,6 +4028,7 @@ export default function ChatView({
     setStoreThreadError,
     queryClient,
     isCenteredEmptyLanding,
+    firstSendLandingHandoffRef,
     setEnvironmentPanelPreferenceOpen,
     environmentPanelPreferenceOpen,
     setTailAnchor,
@@ -5869,6 +5879,7 @@ export default function ChatView({
           >
             {shouldRenderChatPaneContent && isCenteredEmptyLanding ? (
               <div
+                data-empty-landing-pane="true"
                 className={cn(
                   "chat-pane-enter relative flex min-h-0 flex-1 items-center justify-center",
                   CHAT_COLUMN_GUTTER_CLASS_NAME,

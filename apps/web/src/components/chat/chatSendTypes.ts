@@ -32,6 +32,11 @@ export interface PlanFollowUpSubmission {
   queuedTurn?: QueuedComposerPlanFollowUp;
 }
 
+export interface FirstSendLandingHandoff {
+  sourceThreadId: ThreadId;
+  targetThreadId: ThreadId;
+}
+
 /**
  * Send-path handlers that are declared *after* `onSend` in the component body (they depend on
  * state and callbacks that are set up later) yet have to be reachable from it — and, for
@@ -89,6 +94,7 @@ export interface ChatTurnSubmissionInput {
   setStoreThreadError: (threadId: ThreadId, error: string | null) => void;
   queryClient: QueryClient;
   isCenteredEmptyLanding: boolean;
+  firstSendLandingHandoffRef: RefObject<FirstSendLandingHandoff | null>;
   setEnvironmentPanelPreferenceOpen: Dispatch<SetStateAction<boolean | null>>;
   environmentPanelPreferenceOpen: boolean | null;
   setTailAnchor: Dispatch<SetStateAction<{ threadId: ThreadId; messageId: MessageId } | null>>;
