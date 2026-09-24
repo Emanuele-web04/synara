@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  classifyByFrameFlags,
   decodeFrameEnvelope,
   decodeFrameResyncRequest,
   encodeFrameEnvelope,
@@ -37,6 +38,7 @@ class Sink {
 function makeTransport(options: { queueLimit?: number; socketBudgetBytes?: number } = {}) {
   return new FrameTransport<string, TestFrame>({
     encode: (_streamId, frame) => Uint8Array.of(frame.sequence),
+    classify: classifyByFrameFlags,
     subscriberIdPrefix: "test",
     ...options,
   });
@@ -142,6 +144,40 @@ describe("shared frame transport", () => {
     expect(early.received).toEqual([1, 2, 3, 4]);
   });
 
+  it("does not prime a late subscriber with a keyframe from before the latest codec config", () => {
+    const transport = makeTransport();
+    transport.publish("desktop", { sequence: 1, keyframe: false, codecConfig: true });
+    transport.publish("desktop", { sequence: 2, keyframe: true, codecConfig: false });
+    transport.publish("desktop", { sequence: 3, keyframe: false, codecConfig: true });
+
+    const late = new Sink();
+    transport.subscribe("desktop", late);
+    transport.publish("desktop", { sequence: 4, keyframe: false, codecConfig: false });
+    transport.publish("desktop", { sequence: 5, keyframe: true, codecConfig: false });
+    expect(late.received).toEqual([3, 5]);
+  });
+
+  it("gates on the classification the frame type supplies, whatever its flags are called", () => {
+    interface StillFrame {
+      readonly sequence: number;
+      readonly isKey: boolean;
+    }
+    const transport = new FrameTransport<string, StillFrame>({
+      encode: (_streamId, frame) => Uint8Array.of(frame.sequence),
+      classify: (frame) => ({ keyframe: frame.isKey, codecConfig: false }),
+    });
+    const sink = new Sink();
+    transport.subscribe("desktop", sink);
+    transport.publish("desktop", { sequence: 1, isKey: false });
+    transport.publish("desktop", { sequence: 2, isKey: true });
+    transport.publish("desktop", { sequence: 3, isKey: false });
+
+    const late = new Sink();
+    transport.subscribe("desktop", late);
+    expect(sink.received).toEqual([2, 3]);
+    expect(late.received).toEqual([2]);
+  });
+
   it("drops a stalled backlog until the next keyframe", () => {
     const transport = makeTransport({ queueLimit: 2, socketBudgetBytes: 0 });
     const sink = new Sink();
@@ -215,6 +251,7 @@ describe("frame drain and still recovery", () => {
     });
     const transport = new FrameTransport<string, TestFrame>({
       encode: (_, f) => Uint8Array.of(f.sequence),
+      classify: classifyByFrameFlags,
       socketBudgetBytes: 0,
       independentStills: true,
     });

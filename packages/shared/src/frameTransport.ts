@@ -143,8 +143,24 @@ export interface FrameSubscriberStats {
   readonly queued: number;
 }
 
+/** How a frame is primed and gated, decided by the owner of the frame type. */
+export interface FrameClassification {
+  readonly keyframe: boolean;
+  readonly codecConfig: boolean;
+}
+
+/** `classify` for frame types that carry the flags under their own names. */
+export const classifyByFrameFlags = (frame: FrameClassification): FrameClassification => frame;
+
 export interface FrameTransportOptions<TStreamId extends string, TFrame> {
   readonly encode: (streamId: TStreamId, frame: TFrame) => Uint8Array;
+  /**
+   * Keyframe/codec-config classification, supplied by the owner of `TFrame`.
+   * Reading the flags off an unconstrained generic at runtime treats a missing
+   * field as `false`, so a frame type that spells them differently would leave
+   * every subscriber waiting for a keyframe that never comes.
+   */
+  readonly classify: (frame: TFrame) => FrameClassification;
   readonly queueLimit?: number;
   readonly socketBudgetBytes?: number;
   readonly subscriberIdPrefix?: string;
@@ -179,12 +195,14 @@ export class FrameTransport<TStreamId extends string, TFrame> {
   private readonly queueLimit: number;
   private readonly socketBudgetBytes: number;
   private readonly encode: (streamId: TStreamId, frame: TFrame) => Uint8Array;
+  private readonly classify: (frame: TFrame) => FrameClassification;
   private readonly subscriberIdPrefix: string;
   private nextSubscriberId = 1;
   private readonly independentStills: boolean;
 
   constructor(options: FrameTransportOptions<TStreamId, TFrame>) {
     this.encode = options.encode;
+    this.classify = options.classify;
     this.independentStills = options.independentStills ?? false;
     this.queueLimit = options.queueLimit ?? 8;
     this.socketBudgetBytes = options.socketBudgetBytes ?? 2 * 1024 * 1024;
@@ -238,11 +256,13 @@ export class FrameTransport<TStreamId extends string, TFrame> {
 
   publish(streamId: TStreamId, frame: TFrame): void {
     const encoded = this.encode(streamId, frame);
-    const isCodecConfig = this.isCodecConfig(frame);
-    const isKeyframe = this.isKeyframe(frame);
+    const { keyframe: isKeyframe, codecConfig: isCodecConfig } = this.classify(frame);
 
     if (isCodecConfig) {
       this.codecConfig.set(streamId, encoded);
+      // The cached keyframe belongs to the previous config and cannot be decoded
+      // under this one, so a subscriber arriving before the next keyframe must
+      // not be primed with it.
       this.latestKeyframe.delete(streamId);
     } else if (isKeyframe) this.latestKeyframe.set(streamId, encoded);
 
@@ -287,14 +307,6 @@ export class FrameTransport<TStreamId extends string, TFrame> {
       awaitingKeyframe: subscriber.awaitingKeyframe,
       queued: subscriber.queue.length,
     }));
-  }
-
-  private isCodecConfig(frame: TFrame): boolean {
-    return isFrameMetadata(frame, "codecConfig");
-  }
-
-  private isKeyframe(frame: TFrame): boolean {
-    return isFrameMetadata(frame, "keyframe");
   }
 
   private deliver(
@@ -406,12 +418,6 @@ export class FrameTransport<TStreamId extends string, TFrame> {
     subscriber.queue.length = 0;
     subscriber.queuedBytes = 0;
   }
-}
-
-function isFrameMetadata(frame: unknown, key: "codecConfig" | "keyframe"): boolean {
-  return (
-    typeof frame === "object" && frame !== null && (frame as Record<string, unknown>)[key] === true
-  );
 }
 
 export const decodeFrameResyncRequest = (

@@ -6,6 +6,7 @@
  */
 import { encodeDeviceFrame } from "@synara/shared/deviceFrame";
 import {
+  classifyByFrameFlags,
   FrameTransport,
   type FrameSink,
   type FrameSubscriberStats,
@@ -38,6 +39,7 @@ export class DeviceFrameTransport extends FrameTransport<string, DeviceStreamFra
           },
           payload: frame.data,
         }),
+      classify: classifyByFrameFlags,
       queueLimit: options.queueLimit ?? DEVICE_FRAME_QUEUE_LIMIT,
       socketBudgetBytes: options.socketBudgetBytes ?? DEVICE_FRAME_SOCKET_BUDGET_BYTES,
       subscriberIdPrefix: "device-frame-subscriber",
