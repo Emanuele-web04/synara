@@ -5986,10 +5986,10 @@ export default function ChatView({
         />
       ) : null}
 
-      {/* Thread-level errors surface inline over the transcript (see
-          `ThreadErrorBanner`) so they never displace it; a toast only fires
-          for a live error on a thread that is not currently visible (see
-          `useThreadErrorToast`). */}
+      {/* Thread-level errors surface in flow at the top of the transcript
+          pane (see `ThreadErrorBanner`) so they never cover message content;
+          a toast only fires for a live error on a thread that is not
+          currently visible (see `useThreadErrorToast`). */}
       <ProviderHealthBanner
         status={shouldShowProviderHealthBanner ? visibleActiveProviderStatus : null}
         onDismiss={dismissActiveProviderHealthBanner}

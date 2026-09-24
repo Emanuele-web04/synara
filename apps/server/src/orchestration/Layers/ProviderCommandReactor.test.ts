@@ -13537,6 +13537,120 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.providerName).toBe("claudeAgent");
   });
 
+  it("drops the devin resume cursor when a coordinator model switch rebinds to Claude", async () => {
+    const harness = await createHarness({
+      threadModelSelection: { provider: "devin", model: "swe-1.7" },
+    });
+    const now = new Date().toISOString();
+
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "user-message-devin-rebind-1",
+      text: "first turn on devin",
+      createdAt: now,
+    });
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      modelSelection: { provider: "devin", model: "swe-1.7" },
+    });
+
+    // Group settings applies a new coordinator model by writing the stored
+    // selection durably; the devin session's persisted resume cursor must not
+    // follow the binding onto the new provider.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-devin-rebind-meta-update"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        modelSelection: { provider: "claudeAgent", model: "claude-opus-5-5" },
+      }),
+    );
+
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "user-message-devin-rebind-2",
+      text: "now on claude",
+      createdAt: now,
+    });
+
+    await waitFor(() => harness.startSession.mock.calls.length === 2);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+      provider: "claudeAgent",
+      modelSelection: { provider: "claudeAgent", model: "claude-opus-5-5" },
+    });
+    // The devin resume cursor is meaningless to Claude — dropped, with the
+    // prior-transcript bootstrap standing in for continuity (Hand off's
+    // mechanism), so the second sendTurn carries the thread context.
+    expect(harness.startSession.mock.calls[1]?.[1]).not.toHaveProperty("resumeCursor");
+    expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("<thread_context>");
+    expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("first turn on devin");
+
+    const thread = await readHarnessThread(harness);
+    expect(thread?.session?.providerName).toBe("claudeAgent");
+  });
+
+  it("clears a stale Claude resume cursor surfaced asynchronously and retries fresh once", async () => {
+    const harness = await createHarness({
+      threadModelSelection: { provider: "claudeAgent", model: "claude-opus-5-5" },
+    });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const now = new Date().toISOString();
+
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "user-message-stale-resume-1",
+      text: "first turn on claude",
+      createdAt: now,
+    });
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    // The Claude session dies while the persisted cursor remains, so the next
+    // dispatch resumes from it. The CLI accepts --resume at spawn, so the
+    // stale id only fails once the queued prompt reaches it — the failure
+    // arrives as an async terminal event, not a sendTurn rejection.
+    await Effect.runPromise(harness.stopRuntimeSession({ threadId }));
+
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "user-message-stale-resume-2",
+      text: "second turn resumes claude",
+      createdAt: now,
+    });
+    await waitFor(() => harness.startSession.mock.calls.length === 2);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+
+    await harness.emitRuntimeEvent({
+      type: "turn.completed",
+      eventId: asEventId("evt-stale-resume-failed"),
+      provider: "claudeAgent",
+      threadId,
+      createdAt: new Date().toISOString(),
+      turnId: asTurnId("turn-1"),
+      payload: {
+        state: "failed",
+        errorMessage:
+          "Claude Code returned an error result: No conversation found with session ID: dead-session-id",
+      },
+      providerRefs: {},
+    } as ProviderRuntimeEvent);
+    await waitFor(() => harness.clearSessionResumeCursor.mock.calls.length === 1);
+    expect(harness.clearSessionResumeCursor.mock.calls[0]?.[0]).toMatchObject({ threadId });
+
+    // The next dispatch must start a fresh native session instead of
+    // replaying the dead resume id, with the transcript bootstrap carrying
+    // the earlier context.
+    await dispatchHarnessUserTurn(harness, {
+      messageId: "user-message-stale-resume-3",
+      text: "retry turn",
+      createdAt: now,
+    });
+
+    await waitFor(() => harness.startSession.mock.calls.length === 3);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 3);
+    expect(harness.startSession.mock.calls[2]?.[1]).not.toHaveProperty("resumeCursor");
+    expect(harness.sendTurn.mock.calls[2]?.[0].input).toContain("<thread_context>");
+    expect(harness.sendTurn.mock.calls[2]?.[0].input).toContain("first turn on claude");
+  });
+
   it("applies a stored provider rebind deferred behind an in-flight turn", async () => {
     const harness = await createHarness({
       threadModelSelection: { provider: "grok", model: "grok-code-fast-1" },

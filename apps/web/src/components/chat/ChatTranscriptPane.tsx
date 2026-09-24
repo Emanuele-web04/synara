@@ -107,7 +107,7 @@ interface ChatTranscriptPaneProps {
   timestampFormat: TimestampFormat;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   conversationOnly?: boolean;
-  /** Stored thread-level error, rendered inline over the transcript. */
+  /** Stored thread-level error, rendered in flow above the transcript. */
   threadError?: string | null;
   unblockingThread?: boolean;
   onDismissThreadError?: () => void;
@@ -245,6 +245,19 @@ export function ChatTranscriptPane({
         terminalWorkspaceTerminalTabActive ? "pointer-events-none invisible" : "",
       )}
     >
+      {/* The thread error renders in flow above the transcript rather than as
+          a floating overlay, so it can never cover message content. */}
+      {!agentActivityDetail && threadError ? (
+        <div className="flex shrink-0 justify-center px-3 pt-2">
+          <ThreadErrorBanner
+            error={threadError}
+            unblocking={unblockingThread === true}
+            {...(onDismissThreadError ? { onDismiss: onDismissThreadError } : {})}
+            {...(onUnblockThread ? { onUnblock: onUnblockThread } : {})}
+          />
+        </div>
+      ) : null}
+
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         {agentActivityDetail && onCloseAgentActivityDetail ? (
           <AgentActivityDetailView
@@ -366,18 +379,6 @@ export function ChatTranscriptPane({
             >
               <ArrowDownIcon className="size-3.5" />
             </button>
-          </div>
-        ) : null}
-
-        {!agentActivityDetail && threadError ? (
-          <div className="pointer-events-none absolute inset-x-0 top-2 z-30 flex justify-center px-3">
-            <ThreadErrorBanner
-              className="pointer-events-auto"
-              error={threadError}
-              unblocking={unblockingThread === true}
-              {...(onDismissThreadError ? { onDismiss: onDismissThreadError } : {})}
-              {...(onUnblockThread ? { onUnblock: onUnblockThread } : {})}
-            />
           </div>
         ) : null}
 
