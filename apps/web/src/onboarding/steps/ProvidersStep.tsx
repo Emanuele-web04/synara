@@ -14,7 +14,7 @@ import { getCustomBinaryPathForProvider, useAppSettings } from "~/appSettings";
 import { ProviderIcon } from "~/components/ProviderIcon";
 import { Checkbox } from "~/components/ui/checkbox";
 import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
-import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
+import { Skeleton } from "~/components/ui/skeleton";
 import { RefreshCwIcon, XIcon } from "~/lib/icons";
 import {
   findProviderStatus,
@@ -25,6 +25,7 @@ import { cn } from "~/lib/utils";
 import { useWorkspacePathsStore } from "~/workspacePathsStore";
 import { ONBOARDING_TILE_CLASS_NAME } from "../layout";
 import { classifyProviderSetup, summarizeProviderSetup, type ProviderSetupState } from "../logic";
+import type { ProviderDetection } from "../useProviderDetection";
 import { ProviderConnectTerminal } from "./ProviderConnectTerminal";
 
 const EMPTY_STATUSES: readonly ServerProviderStatus[] = [];
@@ -34,6 +35,8 @@ const STATE_PRESENTATION: Record<ProviderSetupState, { label: string; dotClassNa
   connected: { label: "Connected", dotClassName: "bg-status-success" },
   "needs-sign-in": { label: "Needs sign-in", dotClassName: "bg-warning" },
   "not-installed": { label: "Not installed", dotClassName: "bg-muted-foreground/40" },
+  detecting: { label: "Detecting", dotClassName: "bg-muted-foreground/40" },
+  "check-failed": { label: "Could not check", dotClassName: "bg-warning" },
   disabled: { label: "Disabled", dotClassName: "bg-muted-foreground/40" },
 };
 
@@ -110,36 +113,28 @@ function useDisabledProvidersDraft(): {
   return { disabled: draft, setProviderDisabled };
 }
 
-export function ProvidersStep() {
+export function ProvidersStep(props: { readonly detection: ProviderDetection }) {
+  const { detection } = props;
   const statuses = useDetectedProviderStatuses();
-  const refreshProviderStatuses = useRefreshProviderStatusesNow();
   const homeDir = useWorkspacePathsStore((store) => store.homeDir);
   const [connectingProvider, setConnectingProvider] = useState<ProviderKind | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
   const { disabled: disabledSet, setProviderDisabled } = useDisabledProvidersDraft();
-
-  const refresh = async () => {
-    setRefreshing(true);
-    try {
-      await refreshProviderStatuses();
-    } finally {
-      setRefreshing(false);
-    }
-  };
 
   // Probe once on entry so a CLI installed while the intro was open shows up.
   const refreshedOnEntryRef = useRef(false);
   useEffect(() => {
     if (refreshedOnEntryRef.current) return;
     refreshedOnEntryRef.current = true;
-    void refreshProviderStatuses({ silent: true });
-  }, [refreshProviderStatuses]);
+    void detection.detect({ silent: true });
+  }, [detection]);
 
   const rows = PROVIDER_DESCRIPTORS.map((descriptor) => {
     const status = findProviderStatus(statuses, descriptor.kind);
     const state = classifyProviderSetup({
       status,
       disabled: disabledSet.has(descriptor.kind),
+      detecting: detection.detecting,
+      detectionFailed: detection.failed,
     });
     return { descriptor, status, state };
   });
@@ -153,7 +148,7 @@ export function ProvidersStep() {
 
   const finishConnect = () => {
     setConnectingProvider(null);
-    void refreshProviderStatuses({ silent: true });
+    void detection.detect({ silent: true });
   };
   const toggleConnect = (provider: ProviderKind) => {
     if (connectingProvider === provider) {
@@ -203,12 +198,21 @@ export function ProvidersStep() {
                 <span className="truncate text-ui-lg font-medium text-foreground">
                   {descriptor.displayName}
                 </span>
-                <span className="flex items-center gap-1.5 text-ui-sm text-muted-foreground">
-                  <span
-                    aria-hidden
-                    className={cn("size-1.5 shrink-0 rounded-full", presentation.dotClassName)}
-                  />
-                  {presentation.label}
+                <span className="flex h-lh items-center gap-1.5 text-ui-sm text-muted-foreground">
+                  {state === "detecting" ? (
+                    <>
+                      <Skeleton aria-hidden className="h-2.5 w-20 rounded-full" />
+                      <span className="sr-only">{presentation.label}</span>
+                    </>
+                  ) : (
+                    <>
+                      <span
+                        aria-hidden
+                        className={cn("size-1.5 shrink-0 rounded-full", presentation.dotClassName)}
+                      />
+                      {presentation.label}
+                    </>
+                  )}
                   {canConnectInline ? (
                     <button
                       type="button"
@@ -248,17 +252,28 @@ export function ProvidersStep() {
       </div>
 
       <div className="flex items-center justify-between gap-3 text-ui text-muted-foreground">
-        <span>
-          {summary.connected} connected · {summary.needsSignIn} need sign-in ·{" "}
-          {summary.notInstalled} not installed
+        <span aria-live="polite">
+          {summary.detecting > 0 ? (
+            "Detecting agents on this machine…"
+          ) : summary.checkFailed > 0 ? (
+            "Couldn't check all agents. Try Re-detect."
+          ) : (
+            <>
+              {summary.connected} connected · {summary.needsSignIn} need sign-in ·{" "}
+              {summary.notInstalled} not installed
+            </>
+          )}
         </span>
         <button
           type="button"
-          disabled={refreshing}
+          disabled={detection.detecting}
           className="inline-flex cursor-pointer items-center gap-1.5 text-foreground/70 transition-colors hover:text-foreground disabled:opacity-60 motion-reduce:transition-none"
-          onClick={() => void refresh()}
+          onClick={() => void detection.detect()}
         >
-          <RefreshCwIcon className={cn("size-3.5", refreshing && "animate-spin")} aria-hidden />
+          <RefreshCwIcon
+            className={cn("size-3.5", detection.detecting && "animate-spin")}
+            aria-hidden
+          />
           Re-detect
         </button>
       </div>

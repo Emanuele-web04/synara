@@ -2,6 +2,7 @@ import {
   DEFAULT_SERVER_SETTINGS,
   MessageId,
   ProjectId,
+  ProviderStartOptions,
   SpaceId,
   ThreadId,
   type ImportProjectInput,
@@ -12,7 +13,7 @@ import {
   type ProviderForkThreadResult,
   type ThreadHandoffImportedMessage,
 } from "@synara/contracts";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
 import {
   access,
@@ -94,6 +95,11 @@ function harness(input: {
   projects?: OrchestrationProject[];
   providers?: ProjectImportProvider[];
   disabled?: ProjectImportProvider;
+  paths?: {
+    codexBinaryPath?: string;
+    codexHomePath?: string;
+    claudeBinaryPath?: string;
+  };
 }) {
   const providers = input.providers ?? ["codex"];
   const projects = [...(input.projects ?? [])];
@@ -134,12 +140,15 @@ function harness(input: {
   } as unknown as ProjectImportRepository;
   const importExternalThread = vi.fn(
     (nativeInput: NativeImportInput): Effect.Effect<ProviderForkThreadResult, unknown> =>
-      Effect.succeed({
-        threadId: nativeInput.threadId,
-        resumeCursor:
-          nativeInput.provider === "codex"
-            ? { threadId: `${nativeInput.externalThreadId}-copy` }
-            : { resume: `${nativeInput.externalThreadId}-copy` },
+      Effect.gen(function* () {
+        yield* Schema.decodeUnknownEffect(ProviderStartOptions)(nativeInput.providerOptions);
+        return {
+          threadId: nativeInput.threadId,
+          resumeCursor:
+            nativeInput.provider === "codex"
+              ? { threadId: `${nativeInput.externalThreadId}-copy` }
+              : { resume: `${nativeInput.externalThreadId}-copy` },
+        };
       }),
   );
   const stopRuntimeSession = vi.fn(
@@ -190,10 +199,18 @@ function harness(input: {
     ...DEFAULT_SERVER_SETTINGS,
     providers: {
       ...DEFAULT_SERVER_SETTINGS.providers,
-      codex: { ...DEFAULT_SERVER_SETTINGS.providers.codex, enabled: input.disabled !== "codex" },
+      codex: {
+        ...DEFAULT_SERVER_SETTINGS.providers.codex,
+        enabled: input.disabled !== "codex",
+        binaryPath:
+          input.paths?.codexBinaryPath ?? DEFAULT_SERVER_SETTINGS.providers.codex.binaryPath,
+        homePath: input.paths?.codexHomePath ?? DEFAULT_SERVER_SETTINGS.providers.codex.homePath,
+      },
       claudeAgent: {
         ...DEFAULT_SERVER_SETTINGS.providers.claudeAgent,
         enabled: input.disabled !== "claudeAgent",
+        binaryPath:
+          input.paths?.claudeBinaryPath ?? DEFAULT_SERVER_SETTINGS.providers.claudeAgent.binaryPath,
       },
     },
   };
@@ -250,6 +267,59 @@ afterEach(async () => {
 });
 
 describe("project import routes", () => {
+  it.each([
+    {
+      name: "empty Codex overrides",
+      provider: "codex" as const,
+      paths: { codexBinaryPath: "", codexHomePath: "" },
+      expected: { codex: {} },
+    },
+    {
+      name: "whitespace Codex overrides",
+      provider: "codex" as const,
+      paths: { codexBinaryPath: "  \t", codexHomePath: " \n " },
+      expected: { codex: {} },
+    },
+    {
+      name: "configured Codex executable with default home",
+      provider: "codex" as const,
+      paths: { codexBinaryPath: "codex" },
+      expected: { codex: { binaryPath: "codex" } },
+    },
+    {
+      name: "trimmed Codex overrides",
+      provider: "codex" as const,
+      paths: { codexBinaryPath: " /custom/bin/codex ", codexHomePath: " /custom/codex-home " },
+      expected: { codex: { binaryPath: "/custom/bin/codex", homePath: "/custom/codex-home" } },
+    },
+    {
+      name: "empty Claude executable",
+      provider: "claudeAgent" as const,
+      paths: { claudeBinaryPath: "" },
+      expected: { claudeAgent: {} },
+    },
+    {
+      name: "whitespace Claude executable",
+      provider: "claudeAgent" as const,
+      paths: { claudeBinaryPath: " \t " },
+      expected: { claudeAgent: {} },
+    },
+    {
+      name: "trimmed Claude executable",
+      provider: "claudeAgent" as const,
+      paths: { claudeBinaryPath: " /custom/bin/claude " },
+      expected: { claudeAgent: { binaryPath: "/custom/bin/claude" } },
+    },
+  ])("passes $name through native copy and history", async ({ provider, paths, expected }) => {
+    const { root } = await workspace();
+    const test = harness({ root, providers: [provider], paths });
+    const result = await Effect.runPromise(test.importProject(await test.request(provider)));
+
+    expect(result.status).toBe("imported");
+    expect(test.importExternalThread.mock.calls[0]?.[0].providerOptions).toEqual(expected);
+    expect(test.readHistory.mock.calls[0]?.[0].providerOptions).toEqual(expected);
+  });
+
   it("links a physical folder through its alias without copying or creating filesystem entries", async () => {
     const { directory, root } = await workspace();
     await writeFile(path.join(root, "existing.txt"), "unchanged source");
@@ -290,6 +360,14 @@ describe("project import routes", () => {
     expect(test.importExternalThread.mock.calls[1]?.[0].modelSelection.provider).toBe(
       "claudeAgent",
     );
+    expect(test.commands.filter((command) => command.type === "thread.create")).toEqual([
+      expect.objectContaining({ runtimeMode: "approval-required" }),
+      expect.objectContaining({ runtimeMode: "approval-required" }),
+    ]);
+    expect(test.importExternalThread.mock.calls.map(([input]) => input.runtimeMode)).toEqual([
+      "approval-required",
+      "approval-required",
+    ]);
     expect(test.readHistory.mock.calls.map(([value]) => value.nativeId)).toEqual([
       "codex-original-copy",
       "claudeAgent-original-copy",
@@ -526,7 +604,7 @@ describe("project import routes", () => {
 
   it("retains a failed history reservation, releases the runtime, and retries the same destination", async () => {
     const { root } = await workspace();
-    const test = harness({ root });
+    const test = harness({ root, paths: { codexBinaryPath: " ", codexHomePath: " \t " } });
     const request = await test.request();
     test.readHistory.mockImplementationOnce(() => Effect.fail(new Error("history unavailable")));
 

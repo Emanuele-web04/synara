@@ -50,24 +50,44 @@ export const COMPUTER_USER_INTERACTION_QUIET_MS = 2_000;
  * The phrases that count as the user asking to see the desktop. Deliberately
  * explicit and visible-use-only: "use Chrome" is not "show me Chrome", and a
  * task that only names an app stays background. A false negative costs one
- * refusal that asks the model to have the user confirm; a false positive
+ * click on the approval card; a false positive skips the card and
  * re-opens the exact focus theft this gate exists to stop, so the list errs
  * toward refusing.
  */
+const APOSTROPHE = "['’]";
+/** The phrase must end its clause: "watch" is a request, "watch it offline" is not. */
+const CLAUSE_END = String.raw`(?=\s*(?:[.!?,;:]|$))`;
+const WHAT_YOU_ARE_DOING = `what you(?:${APOSTROPHE}re| are) doing`;
+const WHAT_IS_HAPPENING = `what(?:${APOSTROPHE}s| is) (?:going on|happening)${CLAUSE_END}`;
+const WANT_TO = `i (?:want|would like|${APOSTROPHE}d like) to`;
+const SO_WE_CAN = "so (?:that )?(?:i|we) can (?:all )?";
+
 const VISIBLE_USE_PATTERNS: readonly RegExp[] = [
   /\bshow (?:me )?(?:the |my )?(?:[\w-]+ ){0,3}(?:window|app|screen|desktop|browser|page)(?=\s*(?:[.!?,;:]|$))/i,
-  /\bshow me what you(?: are|'re) doing\b/i,
-  /\b(?:i (?:want|would like|'d like) to |let me )watch (?:you|it|the (?:app|browser|window))\b/i,
+  new RegExp(
+    String.raw`\b(?:show me|let me see|${WANT_TO} see|${SO_WE_CAN}see) (?:${WHAT_YOU_ARE_DOING}\b|${WHAT_IS_HAPPENING})`,
+    "i",
+  ),
+  new RegExp(
+    String.raw`\b(?:${WANT_TO} |let me )watch (?:you|it|the (?:app|browser|window))\b|\b${SO_WE_CAN}watch(?: (?:you|along))?${CLAUSE_END}`,
+    "i",
+  ),
   /\blet me see (?:it|you) work(?:ing)?\b/i,
-  /\bi (?:want|would like|'d like) to see (?:the |my )?(?:[\w-]+ ){0,3}(?:window|app|screen|desktop|browser|page)(?=\s*(?:[.!?,;:]|$))/i,
+  /\bi (?:want|would like|['’]d like) to see (?:the |my )?(?:[\w-]+ ){0,3}(?:window|app|screen|desktop|browser|page)(?=\s*(?:[.!?,;:]|$))/i,
   /\b(?:put|show|display)\b[^.!?\n]{0,40}\bon (?:my|the) screen\b/i,
   /\b(?:make|keep) (?:it|(?:the |my )?(?:[\w-]+ ){0,3}(?:app|window|browser)) visible\b/i,
-  /\b(?:bring|put|move)\b[^.!?]{0,40}\b(?:front|foreground)(?=\s*(?:[.!?,;:]|$))/i,
+  // A generic thing brought "to the front" is not necessarily an app. The
+  // target must be a screen object, a known app (below), or an explicit wish
+  // to watch. Unrecognized names get the consent card instead of a silent raise.
+  /\b(?:bring|put|move|pull|raise)\s+(?:(?:the|my|this|that)\s+)?(?:window|app|browser|screen|desktop|it)\s+(?:to\s+(?:the\s+)?front\b(?!\s+(?:of|desk|door|row|page)\b)|(?:to|in|into)\s+(?:the\s+)?foreground\b)/i,
+  /\b(?:bring|put|move|pull|raise)\b[^.!?\n]{0,40}\b(?:to\s+(?:the\s+)?front|(?:to|in|into)\s+(?:the\s+)?foreground)\b(?=\s+(?:so\s+(?:that\s+)?(?:i|we)\s+can\s+(?:all\s+)?(?:watch|see)\b|and\s+show\s+me\b))/i,
+  // "Forward" needs a window-shaped object: pronouns also refer to dates and plans.
+  /\b(?:bring|pull)(?: up)? (?:the |my |its |their )?(?:[\w-]+ ){0,2}(?:window|app|browser) (?:forward|up front)\b/i,
   /\buse (?:the )?foreground(?: mode)?(?=\s*(?:[.!?,;:]|$))/i,
   /\btake over (?:my|the) (?:screen|desktop|computer)\b/i,
   /\bdrive (?:my|the) (?:screen|desktop|computer)\b/i,
   /\b(?:mostra(?:mi|re)?|porta(?:re)?|metti|mettere)\b[^.!?\n]{0,60}\b(?:sullo schermo|in primo piano)\b/i,
-  /\bvoglio vedere (?:la finestra|il browser|lo schermo|il desktop)\b/i,
+  /\b(?:voglio|vorrei|fammi) vedere (?:la finestra|il browser|lo schermo|il desktop|cosa (?:fai|stai facendo))\b/i,
 ];
 
 // Explicit background/negative instructions take precedence, even when the
@@ -100,6 +120,20 @@ function requestsKnownAppVisibility(text: string, context: ComputerForegroundCon
   );
 }
 
+function requestsKnownAppForeground(text: string, context: ComputerForegroundContext): boolean {
+  const app = text
+    .trim()
+    .match(
+      /^(?:please[, ]+)?(?:bring|put|move|pull|raise)\s+(.+?)\s+(?:to\s+(?:the\s+)?front|(?:to|in|into)\s+(?:the\s+)?foreground)[.!?]*$/iu,
+    )?.[1];
+  if (!app) return false;
+  const name = app.trim().toLocaleLowerCase();
+  return (
+    context.knownAppNames?.some((candidate) => candidate.trim().toLocaleLowerCase() === name) ===
+    true
+  );
+}
+
 /** Whether one message text explicitly asks to see the desktop. Pure. */
 export function messageRequestsVisibleUse(
   text: string,
@@ -109,7 +143,8 @@ export function messageRequestsVisibleUse(
   return (
     !BACKGROUND_USE_PATTERNS.some((pattern) => pattern.test(request)) &&
     (VISIBLE_USE_PATTERNS.some((pattern) => pattern.test(request)) ||
-      requestsKnownAppVisibility(request, context))
+      requestsKnownAppVisibility(request, context) ||
+      requestsKnownAppForeground(request, context))
   );
 }
 
@@ -205,6 +240,25 @@ export function latestUserAuthoredMessage(
     return message;
   }
   return undefined;
+}
+
+/** A card grant cannot outlive a later change to the user's task instructions. */
+export function computerForegroundScopeChangedSince(
+  messages: readonly OrchestrationMessage[],
+  lastMessageId: string | undefined,
+): boolean {
+  const start =
+    lastMessageId === undefined
+      ? -1
+      : messages.findIndex((message) => message.id === lastMessageId);
+  if (lastMessageId !== undefined && start === -1) return true;
+  return messages
+    .slice(start + 1)
+    .some(
+      (message) =>
+        message.role === "user" &&
+        (!isLocalHumanMessage(message) || !isRoutineContinuation(message)),
+    );
 }
 
 /**

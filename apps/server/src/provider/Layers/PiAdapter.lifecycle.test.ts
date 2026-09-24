@@ -5,6 +5,8 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import {
   createAssistantMessageEventStream,
+  getCurrentSystemPrompt,
+  getCurrentTools,
   type AssistantMessage,
   type Tool,
 } from "@earendil-works/pi-ai";
@@ -28,6 +30,7 @@ import { makePiAdapterLive } from "./PiAdapter.ts";
 
 const captured = vi.hoisted(() => ({
   sessions: [] as AgentSession[],
+  modelSystemPrompts: [] as string[],
   modelTools: [] as Tool[][],
   extensions: [] as InlineExtension[],
   events: [] as AgentSessionEvent[],
@@ -70,6 +73,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   captured.sessions.length = 0;
+  captured.modelSystemPrompts.length = 0;
   captured.modelTools.length = 0;
   captured.extensions.length = 0;
   captured.events.length = 0;
@@ -81,7 +85,8 @@ type ResponseKind = "success" | "error" | "overflow" | "partial-error" | "until-
 function responses(...kinds: ResponseKind[]) {
   let calls = 0;
   captured.stream = (model, context, options) => {
-    captured.modelTools.push(context.tools ?? []);
+    captured.modelSystemPrompts.push(getCurrentSystemPrompt(context.messages));
+    captured.modelTools.push(getCurrentTools(context.messages));
     const kind = kinds[calls++] ?? "success";
     const stream = createAssistantMessageEventStream();
     const message: AssistantMessage = {
@@ -225,6 +230,16 @@ async function withAdapter(
 async function send(adapter: PiAdapterShape) {
   return Effect.runPromise(adapter.sendTurn({ threadId, input: "Test this turn" }));
 }
+
+it("passes the current Pi system prompt and tools to the model stream", async () => {
+  responses("success");
+  await withAdapter(async (adapter, events) => {
+    await send(adapter);
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    expect(captured.modelSystemPrompts[0]).toBeTruthy();
+    expect(captured.modelTools[0]?.some((tool) => tool.name === "read")).toBe(true);
+  });
+});
 
 it.each([
   { toolName: "bash", args: { command: "printf hello \n" }, title: "printf hello" },
@@ -797,7 +812,8 @@ it("rejects steering into an untracked SDK run instead of orphaning a queued tur
 });
 
 it("keeps the turn alive through SDK overflow compaction and its continuation", async () => {
-  const calls = responses("success", "overflow", "success", "success");
+  // Pi summarizes history and the split-turn prefix separately before retrying.
+  const calls = responses("success", "overflow", "success", "success", "success");
   await withAdapter(async (adapter, events) => {
     await send(adapter);
     await waitFor(() => expect(completions(events)).toHaveLength(1));
@@ -808,7 +824,7 @@ it("keeps the turn alive through SDK overflow compaction and its continuation", 
     expect(
       captured.events.some((event) => event.type === "compaction_end" && event.willRetry),
     ).toBe(true);
-    expect(calls()).toBe(4);
+    expect(calls()).toBe(5);
     expect(completions(events)[1]).toMatchObject({
       turnId: turn.turnId,
       payload: { state: "completed" },

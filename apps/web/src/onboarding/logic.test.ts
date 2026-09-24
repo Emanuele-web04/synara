@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   ONBOARDING_STEPS,
   classifyProviderSetup,
+  describeOnboardingAgentSummary,
   isOnboardingSetupStep,
   nextOnboardingStep,
   previousOnboardingStep,
@@ -188,6 +189,35 @@ describe("classifyProviderSetup", () => {
     ).toBe("not-installed");
   });
 
+  it("waits for an in-flight probe before calling a provider without status not installed", () => {
+    expect(classifyProviderSetup({ status: null, disabled: false, detecting: true })).toBe(
+      "detecting",
+    );
+    expect(
+      classifyProviderSetup({
+        status: { available: false, authStatus: "unknown" },
+        disabled: false,
+        detecting: true,
+      }),
+    ).toBe("not-installed");
+    expect(classifyProviderSetup({ status: null, disabled: true, detecting: true })).toBe(
+      "disabled",
+    );
+  });
+
+  it("keeps a missing provider unknown if detection fails", () => {
+    expect(classifyProviderSetup({ status: null, disabled: false, detectionFailed: true })).toBe(
+      "check-failed",
+    );
+    expect(
+      classifyProviderSetup({
+        status: { available: false, authStatus: "unknown" },
+        disabled: false,
+        detectionFailed: true,
+      }),
+    ).toBe("not-installed");
+  });
+
   it("only asks for sign-in when auth is known to be missing", () => {
     expect(
       classifyProviderSetup({
@@ -217,9 +247,27 @@ describe("summarizeProviderSetup", () => {
         { provider: "codex", state: "connected" },
         { provider: "claudeAgent", state: "needs-sign-in" },
         { provider: "cursor", state: "not-installed" },
+        { provider: "opencode", state: "detecting" },
+        { provider: "grok", state: "check-failed" },
         { provider: "pi", state: "disabled" },
       ]),
-    ).toEqual({ enabled: 3, connected: 1, needsSignIn: 1, notInstalled: 1 });
+    ).toEqual({
+      enabled: 5,
+      connected: 1,
+      needsSignIn: 1,
+      notInstalled: 1,
+      detecting: 1,
+      checkFailed: 1,
+    });
+  });
+
+  it("keeps the final welcome summary truthful until detection succeeds", () => {
+    const summaryFor = (state: "detecting" | "check-failed" | "connected") =>
+      describeOnboardingAgentSummary(summarizeProviderSetup([{ provider: "codex", state }]));
+
+    expect(summaryFor("detecting")).toBe("Checking agents…");
+    expect(summaryFor("check-failed")).toBe("Could not check all agents");
+    expect(summaryFor("connected")).toBe("1 agent connected");
   });
 });
 
