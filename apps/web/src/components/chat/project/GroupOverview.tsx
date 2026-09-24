@@ -206,7 +206,7 @@ export function GroupThreadActivitySparkline({
       aria-label={accessibleLabel}
       title={accessibleLabel}
       tabIndex={0}
-      className="relative mx-3 mb-0.5 mt-1 h-11"
+      className="relative mx-3 mb-1.5 mt-2 h-12"
     >
       <svg
         viewBox={`0 0 ${SPARKLINE_VIEW_WIDTH} ${SPARKLINE_VIEW_HEIGHT}`}

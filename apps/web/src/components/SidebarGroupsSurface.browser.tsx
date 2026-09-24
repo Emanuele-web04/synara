@@ -243,7 +243,7 @@ describe("SidebarGroupsSurface", () => {
     await waitForText("No groups yet");
   });
 
-  it("expands a group row to reveal its coordinator row first, then chats", async () => {
+  it("shows the coordinator as the group row and expands its chats from the chevron", async () => {
     const group = makeGroupProject({
       id: GROUP_A_ID,
       kind: "group",
@@ -252,39 +252,38 @@ describe("SidebarGroupsSurface", () => {
     });
     await mount({ projects: [group], threadsHydrated: true });
 
-    let groupButton: HTMLButtonElement | null = null;
+    let toggle: HTMLButtonElement | null = null;
     await vi.waitFor(
       () => {
-        groupButton =
-          Array.from(document.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")).find(
-            (button) => button.textContent?.includes("Team Alpha"),
-          ) ?? null;
-        expect(groupButton).not.toBeNull();
+        toggle = document.querySelector<HTMLButtonElement>(
+          'button[aria-label="Show threads in Team Alpha"]',
+        );
+        expect(toggle).not.toBeNull();
       },
       { timeout: 5000 },
     );
-    expect(groupButton!.getAttribute("aria-expanded")).toBe("false");
+    expect(toggle!.getAttribute("aria-expanded")).toBe("false");
 
-    // Children stay mounted but inert while collapsed.
-    const collapsedCoordinatorRow = await waitForText("Set up coordinator");
-    expect(collapsedCoordinatorRow.closest("[inert]")).not.toBeNull();
+    // The group row itself is the (unconfigured) coordinator: no folder row.
+    const headerLabel = await waitForText("Team Alpha");
+    const headerRow = headerLabel.closest<HTMLElement>("button");
+    expect(headerRow?.getAttribute("aria-label")).toBe("Set up coordinator for Team Alpha");
+    expect(headerRow?.closest("[inert]")).toBeNull();
 
-    groupButton!.click();
+    // Chats stay mounted but inert while collapsed.
+    const collapsedChat = await waitForText("Chat one");
+    expect(collapsedChat.closest("[inert]")).not.toBeNull();
+
+    toggle!.click();
     await vi.waitFor(() => {
       expect(
         useStore.getState().projects.find((project) => project.id === GROUP_A_ID)?.expanded,
       ).toBe(true);
     });
-
-    const coordinatorRow = await waitForText("Set up coordinator");
-    expect(coordinatorRow.closest("[inert]")).toBeNull();
-    await waitForText("Chat one");
-
-    // Coordinator row precedes the chat rows.
-    const threadRow = document.querySelector<HTMLElement>(`[data-testid="thread-row-${THREAD_A}"]`);
-    expect(threadRow).not.toBeNull();
+    const chat = await waitForText("Chat one");
+    expect(chat.closest("[inert]")).toBeNull();
     expect(
-      coordinatorRow.compareDocumentPosition(threadRow!) & Node.DOCUMENT_POSITION_FOLLOWING,
+      headerRow!.compareDocumentPosition(chat) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
 
@@ -346,18 +345,19 @@ describe("SidebarGroupsSurface", () => {
     const { callbacks } = await mount({ projects: [group], threadsHydrated: true });
 
     const label = await waitForText("Team lead");
-    const coordinatorRow = label.closest<HTMLElement>('[role="button"]');
+    // The coordinator row is a native <button>, so Enter/Space activate it.
+    const coordinatorRow = label.closest<HTMLButtonElement>("button");
     expect(coordinatorRow).not.toBeNull();
+    expect(coordinatorRow!.tagName).toBe("BUTTON");
     coordinatorRow!.focus();
-    coordinatorRow!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    coordinatorRow!.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+    expect(document.activeElement).toBe(coordinatorRow);
+    coordinatorRow!.click();
     await vi.waitFor(() => {
       expect(callbacks.onOpenThread).toHaveBeenCalledWith(coordinatorThreadId);
     });
-    expect(callbacks.onOpenThread).toHaveBeenCalledTimes(2);
   });
 
-  it("shows just the coordinator row in an expanded group with no chats", async () => {
+  it("shows just the coordinator row for a group with no chats", async () => {
     const group = makeGroupProject({
       id: GROUP_B_ID,
       kind: "group",
@@ -367,8 +367,13 @@ describe("SidebarGroupsSurface", () => {
     });
     await mount({ projects: [group], threadsHydrated: true });
 
-    const coordinatorRow = await waitForText("Set up coordinator");
+    const coordinatorRow = await waitForText("Empty Team");
     expect(coordinatorRow.closest("[inert]")).toBeNull();
+    // With no chats the expand chevron is hidden.
+    const toggle = document.querySelector<HTMLButtonElement>(
+      'button[aria-label="Hide threads in Empty Team"]',
+    );
+    expect(toggle?.classList.contains("invisible")).toBe(true);
     // The coordinator starts a group's threads — no per-group new-chat affordance
     // and no empty-list placeholder row below it.
     expect(
@@ -399,9 +404,9 @@ describe("SidebarGroupsSurface", () => {
     await mount({ projects: [group], threadsHydrated: true });
 
     await vi.waitFor(() => {
-      const row = Array.from(
-        document.querySelectorAll<HTMLButtonElement>("button[aria-expanded]"),
-      ).find((button) => button.textContent?.includes("A thread needs you"));
+      const row = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
+        (button) => button.textContent?.includes("A thread needs you"),
+      );
       expect(row, document.body.innerHTML.slice(0, 2500)).not.toBeUndefined();
       expect(row?.textContent).toContain("Team Alpha");
     });
