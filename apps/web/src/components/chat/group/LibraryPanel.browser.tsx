@@ -217,6 +217,27 @@ describe("LibraryPanel", () => {
     expect(container.querySelector('[aria-label^="Back to library"]')).toBeNull();
   });
 
+  it("grows to the overlay's full height on expand and restores on collapse", async () => {
+    harness.rootEntries = Array.from({ length: 40 }, (_, index) => fileEntry(`note-${index}.md`));
+    const { container } = await renderPanel();
+
+    const surface = () =>
+      container.querySelector<HTMLElement>("[data-environment-panel-variant] > div")!;
+    await expect.element(page.getByRole("button", { name: "note-0.md" })).toBeVisible();
+
+    const collapsedHeight = surface().getBoundingClientRect().height;
+    await page.getByRole("button", { name: "Expand to full height" }).click();
+    await vi.waitFor(() => {
+      expect(surface().getBoundingClientRect().height).toBeGreaterThan(collapsedHeight);
+    });
+    const expandedHeight = surface().getBoundingClientRect().height;
+
+    await page.getByRole("button", { name: "Collapse panel" }).click();
+    await vi.waitFor(() => {
+      expect(surface().getBoundingClientRect().height).toBeLessThan(expandedHeight);
+    });
+  });
+
   it("uploads a file through the hidden input and refetches", async () => {
     harness.rootEntries = [dirEntry("Artifacts")];
     harness.fetchImpl = async (input) => {

@@ -61,6 +61,10 @@ const REOPEN_MENU_ICON = renderToStaticMarkup(<RotateCcwIcon />);
 
 const EMPTY_THREADS: readonly SidebarThreadSummary[] = [];
 
+// Row titles size off the same token as sidebar thread rows and the Focus card,
+// never the panel's ambient font size.
+const GROUP_OVERVIEW_ROW_TITLE_CLASS_NAME = "min-w-0 truncate text-ui font-medium text-foreground";
+
 export function GroupOverview({
   groupProjectId,
   groupName,
@@ -348,7 +352,7 @@ function GroupThreadRow({
               provider={row.thread.session?.provider ?? null}
               className="size-3 shrink-0 opacity-70"
             />
-            <span className="min-w-0 truncate font-medium text-foreground">{threadTitle}</span>
+            <span className={GROUP_OVERVIEW_ROW_TITLE_CLASS_NAME}>{threadTitle}</span>
             {row.pullRequest ? <PrStateChip pr={row.pullRequest} /> : null}
           </span>
           <span className="flex items-center gap-1.5 text-ui-xs text-muted-foreground">
@@ -412,9 +416,7 @@ function GroupPullRequestsTab({
             >
               <span className="flex items-center gap-1.5">
                 <PrStateChip pr={row.pullRequest} />
-                <span className="min-w-0 truncate font-medium text-foreground">
-                  {row.pullRequest.title}
-                </span>
+                <span className={GROUP_OVERVIEW_ROW_TITLE_CLASS_NAME}>{row.pullRequest.title}</span>
               </span>
               <span className="flex items-center gap-1.5 text-ui-xs text-muted-foreground">
                 <span>{presentation.label}</span>
@@ -513,7 +515,7 @@ function GroupAutomationRow({
         className="flex min-w-0 flex-1 flex-col gap-0.5 text-left"
         onClick={onOpen}
       >
-        <span className="min-w-0 truncate font-medium text-foreground">{definition.name}</span>
+        <span className={GROUP_OVERVIEW_ROW_TITLE_CLASS_NAME}>{definition.name}</span>
         <span className="flex items-center gap-1.5 text-ui-xs text-muted-foreground">
           <span className="truncate">{formatSchedule(definition.schedule)}</span>
           <span>
