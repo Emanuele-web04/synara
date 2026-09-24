@@ -937,3 +937,101 @@ jobs:
           git add apps/server/package.json apps/desktop/package.json apps/web/package.json packages/contracts/package.json bun.lock
           git commit -m "chore(release): prepare $RELEASE_TAG"
           git push origin HEAD:main
+
+  cut_next_beta:
+    name: Cut next beta
+    # Stable releases only: tag the next beta off the stable commit so beta installs are never shadowed. Never pushes to main.
+    if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_AUTO_BETA == '1' && needs.preflight.outputs.is_prerelease == 'false' }}
+    needs: [preflight, release]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - id: app_token
+        name: Mint release app token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.source_commit }}
+          fetch-depth: 0
+          token: ${{ steps.app_token.outputs.token }}
+          persist-credentials: true
+
+      - id: app_bot
+        name: Resolve GitHub App bot identity
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          APP_SLUG: ${{ steps.app_token.outputs.app-slug }}
+        run: |
+          user_id="$(gh api "/users/${APP_SLUG}[bot]" --jq .id)"
+          echo "name=${APP_SLUG}[bot]" >> "$GITHUB_OUTPUT"
+          echo "email=${user_id}+${APP_SLUG}[bot]@users.noreply.github.com" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
+      - id: next
+        name: Resolve next beta version
+        env:
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          if ! [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Expected a stable X.Y.Z release version, got: $RELEASE_VERSION" >&2
+            exit 1
+          fi
+          BASE="${RELEASE_VERSION%.*}.$(( ${RELEASE_VERSION##*.} + 1 ))"
+          VERSION="${BASE}-beta.1"
+          TAG="v${VERSION}"
+          if git ls-remote --tags origin "refs/tags/v${BASE}-beta.*" | grep -q .; then
+            echo "A beta for ${BASE} already exists; skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - id: update_versions
+        name: Update version strings
+        if: steps.next.outputs.skip == 'false'
+        env:
+          VERSION: ${{ steps.next.outputs.version }}
+        run: node scripts/update-release-package-versions.ts "$VERSION"
+
+      - name: Format package.json files
+        if: steps.next.outputs.skip == 'false'
+        run: bunx oxfmt apps/server/package.json apps/desktop/package.json apps/web/package.json packages/contracts/package.json
+
+      - name: Refresh lockfile
+        if: steps.next.outputs.skip == 'false'
+        run: bun install --lockfile-only --ignore-scripts
+
+      - name: Commit and tag beta
+        if: steps.next.outputs.skip == 'false'
+        shell: bash
+        env:
+          TAG: ${{ steps.next.outputs.tag }}
+          GIT_USER_NAME: ${{ steps.app_bot.outputs.name }}
+          GIT_USER_EMAIL: ${{ steps.app_bot.outputs.email }}
+        run: |
+          git config user.name "$GIT_USER_NAME"
+          git config user.email "$GIT_USER_EMAIL"
+
+          git add apps/server/package.json apps/desktop/package.json apps/web/package.json packages/contracts/package.json bun.lock
+          git commit -m "chore(release): prepare $TAG"
+          git tag "$TAG"
+          git push origin "refs/tags/$TAG"

@@ -443,6 +443,24 @@ function verifyReleaseWorkflowSafety(): void {
     "return feedPublisherNames",
     "Runtime signature verification must not trust publisher names from mutable updater config.",
   );
+
+  const nextBetaJob = workflow.slice(workflow.indexOf("  cut_next_beta:\n"));
+  assertContains(
+    workflow,
+    "if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_AUTO_BETA == '1' && needs.preflight.outputs.is_prerelease == 'false' }}",
+    "Expected the next-beta cut to require an opted-in stable publication.",
+  );
+  assertContains(
+    nextBetaJob,
+    'git push origin "refs/tags/$TAG"',
+    "Expected the next-beta job to push only the beta tag.",
+  );
+  assertNotContains(nextBetaJob, "HEAD:main", "The next-beta job must never push to main.");
+  assertNotContains(
+    nextBetaJob,
+    "git push origin HEAD",
+    "The next-beta job must never push a branch.",
+  );
 }
 
 function verifyDesktopStageLockAuthority(): void {

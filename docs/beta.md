@@ -59,33 +59,40 @@ beta channel and the beta desktop flavor; every other suffix keeps today's behav
 
 1. Ensure `main` is green and run the build-only validation for the release candidate:
    - `gh workflow run release.yml --ref BRANCH -f version=X.Y.Z-beta.1 -f publish_release=false`
-2. Commit the version, exactly as for a stable release. Release preflight
+2. Commit the version on top of the target commit (normally current `main`),
+   and push only the tag. Release preflight
    (`scripts/verify-release-source-provenance.ts`) requires the four release
-   `package.json` versions to equal the tag version:
+   `package.json` versions to equal the tag version, but beta version commits
+   never land on `main`, so `main` keeps the stable version:
+   - `git switch --detach upstream/main`
    - `node scripts/update-release-package-versions.ts X.Y.Z-beta.N`, then commit
-     and merge that change to `main`.
-3. Create and push the tag on that commit:
-   - `git tag vX.Y.Z-beta.N <commit>` and `git push upstream vX.Y.Z-beta.N`
+   - `git tag vX.Y.Z-beta.N` and `git push upstream vX.Y.Z-beta.N`
    - The base `X.Y.Z` should sit at or ahead of the latest stable version so beta
      builds sort semantically as prereleases of the next stable.
    - `N` starts at `1` and increments per beta cut on the same base version.
-4. The workflow publishes a GitHub **prerelease** named `Synara vX.Y.Z-beta.N` with
+3. The workflow publishes a GitHub **prerelease** named `Synara vX.Y.Z-beta.N` with
    beta installers, `beta-*.yml` manifests, and blockmaps. It is never marked Latest,
    never bumps package versions on `main`, and never publishes the npm `latest`
    dist-tag.
-5. To re-run publication by hand, dispatch the workflow on the existing tag
+4. To re-run publication by hand, dispatch the workflow on the existing tag
    (`gh workflow run release.yml --ref vX.Y.Z-beta.N -f version=X.Y.Z-beta.N -f publish_release=true`).
    Publishing from a branch ref is refused by preflight.
-6. Always cut a new beta right after each stable release. The GitHub provider
+5. Always cut a new beta right after each stable release. The GitHub provider
    picks the newest non-custom-channel release in the feed, so a newer stable
    tag shadows every older beta until a fresh beta prerelease out-sorts it.
+   With the repository variable `SYNARA_AUTO_BETA=1`, the release workflow does
+   this automatically after each stable publish: it tags `vX.Y.(Z+1)-beta.1` on
+   the stable commit (skipped when any beta for that base already exists).
+   Later betas on the same base stay manual.
 
 ### Signing
 
 Beta builds use the same signing setup as stable. Publishing requires the macOS
 signing/notarization secrets, and Windows uses Azure Trusted Signing or the same
 version-scoped unsigned exception (`SYNARA_ALLOW_UNSIGNED_WINDOWS_RELEASE` set to the
-exact `X.Y.Z-beta.N` version without the `v`).
+exact `X.Y.Z-beta.N` version without the `v`). The exception matches one exact
+version, so the automatic post-stable beta needs Azure signing or the variable
+set to that beta version, otherwise its Windows build blocks publication.
 
 ## Building a beta artifact locally
 
