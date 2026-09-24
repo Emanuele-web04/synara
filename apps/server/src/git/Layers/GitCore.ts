@@ -478,6 +478,7 @@ function parseStashEntries(input: string): StashEntry[] {
 function toGitCommandError(
   input: Pick<ExecuteGitInput, "operation" | "cwd" | "args">,
   detail: string,
+  reason?: GitCommandError["reason"],
 ) {
   return (cause: unknown) =>
     Schema.is(GitCommandError)(cause)
@@ -487,6 +488,7 @@ function toGitCommandError(
           command: commandLabel(input.args),
           cwd: input.cwd,
           detail: `${cause instanceof Error && cause.message.length > 0 ? cause.message : "Unknown error"} - ${detail}`,
+          ...(reason !== undefined ? { reason } : {}),
           ...(cause !== undefined ? { cause } : {}),
         });
 }
@@ -741,6 +743,7 @@ export const collectGitOutput = Effect.fn(function* <E>(
             command: commandLabel(input.args),
             cwd: input.cwd,
             detail: `${commandLabel(input.args)} output exceeded ${maxOutputBytes} bytes and was truncated.`,
+            reason: "output-limit",
           });
         }
       }
@@ -757,7 +760,7 @@ export const collectGitOutput = Effect.fn(function* <E>(
         lineBuffer = lineBuffer.slice(-maxOutputBytes);
       }
     }),
-  ).pipe(Effect.mapError(toGitCommandError(input, "output stream failed.")));
+  ).pipe(Effect.mapError(toGitCommandError(input, "output stream failed.", "stream")));
 
   const remainder = decoder.decode();
   appendRetainedPrefix(remainder);
@@ -828,7 +831,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                 },
               }),
             )
-            .pipe(Effect.mapError(toGitCommandError(commandInput, "failed to spawn.")));
+            .pipe(Effect.mapError(toGitCommandError(commandInput, "failed to spawn.", "spawn")));
           // Keep cancellation ownership explicit even though spawn is already
           // Scope-bound: an RPC interruption closes this Scope and kills the child
           // before execute settles. The spawner's own finalizer safely handles the
@@ -854,7 +857,9 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
               ),
               child.exitCode.pipe(
                 Effect.map((value) => Number(value)),
-                Effect.mapError(toGitCommandError(commandInput, "failed to report exit code.")),
+                Effect.mapError(
+                  toGitCommandError(commandInput, "failed to report exit code.", "stream"),
+                ),
               ),
             ],
             { concurrency: "unbounded" },
@@ -871,6 +876,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                 trimmedStderr.length > 0
                   ? `${commandLabel(commandInput.args)} failed: ${trimmedStderr}`
                   : `${commandLabel(commandInput.args)} failed with code ${exitCode}.`,
+              reason: "non-zero-exit",
             });
           }
 
@@ -895,6 +901,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                     command: commandLabel(commandInput.args),
                     cwd: commandInput.cwd,
                     detail: `${commandLabel(commandInput.args)} timed out.`,
+                    reason: "timeout",
                   }),
                 ),
               onSome: Effect.succeed,
