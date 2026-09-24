@@ -264,6 +264,67 @@
   }
 }
 
+/* Empty home arrival: the heading settles first, then the composer fades into the
+   same centered stack. The composer uses opacity only because transformed ancestors
+   can change the containing block used by its anchored pickers. */
+@keyframes empty-landing-hero-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes empty-landing-composer-enter {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+.empty-landing-hero-motion {
+  animation: empty-landing-hero-enter 360ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  will-change: opacity, transform;
+}
+
+.empty-landing-composer-motion {
+  animation: empty-landing-composer-enter 240ms 60ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  will-change: opacity;
+}
+
+/* The first send swaps the centered landing for the transcript's bottom composer.
+   Fade only keeps this handoff cheap and leaves the composer's picker geometry alone. */
+@keyframes chat-composer-after-landing-enter {
+  from {
+    opacity: 0.35;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+.chat-composer-after-landing {
+  animation: chat-composer-after-landing-enter 300ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  will-change: opacity;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .empty-landing-hero-motion,
+  .empty-landing-composer-motion,
+  .chat-composer-after-landing {
+    animation: none;
+    will-change: auto;
+  }
+}
+
 /* The composer model trigger swaps to a fixed placeholder while its menu is open; this
    plays on the model label when it comes back. */
 @keyframes composer-trigger-label-enter {

@@ -763,6 +763,8 @@ export default function ChatView({
   // slash/mention command menu, so only one of the two is ever open.
   const [isComposerExtrasPanelOpen, setIsComposerExtrasPanelOpen] = useState(false);
   const [secondaryChromePlaceholderHeight, setSecondaryChromePlaceholderHeight] = useState(88);
+  const wasCenteredEmptyLandingRef = useRef(false);
+  const [composerArrivedFromLanding, setComposerArrivedFromLanding] = useState(false);
   // Tracks whether the user explicitly dismissed the sidebar for the active turn.
   const planSidebarDismissedForTurnRef = useRef<string | null>(null);
   // When set, the thread-change reset effect will open the sidebar instead of closing it.
@@ -1816,6 +1818,24 @@ export default function ChatView({
     threadDetailHydration === "ready";
   const isEmptyChatLanding =
     isCenteredEmptyLanding && Boolean(homeDir) && isContainerLandingProject;
+  useEffect(() => {
+    const wasCenteredEmptyLanding = wasCenteredEmptyLandingRef.current;
+    wasCenteredEmptyLandingRef.current = isCenteredEmptyLanding;
+
+    if (isCenteredEmptyLanding) {
+      setComposerArrivedFromLanding(false);
+      return;
+    }
+    if (!wasCenteredEmptyLanding) {
+      return;
+    }
+
+    setComposerArrivedFromLanding(true);
+    const settleTimer = window.setTimeout(() => {
+      setComposerArrivedFromLanding(false);
+    }, 320);
+    return () => window.clearTimeout(settleTimer);
+  }, [isCenteredEmptyLanding]);
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
     useTurnDiffSummaries(activeThread);
   const turnDiffSummaryByAssistantMessageId = useMemo(() => {
@@ -5179,7 +5199,11 @@ export default function ChatView({
   const composerSection =
     secondaryChromeReady && shouldRenderChatPaneContent ? (
       <div
-        className={cn(isCenteredEmptyLanding ? "w-full overflow-visible" : "contents")}
+        className={cn(
+          isCenteredEmptyLanding
+            ? "empty-landing-composer-motion w-full overflow-visible"
+            : "contents",
+        )}
         data-empty-landing-composer-block={isCenteredEmptyLanding ? "true" : undefined}
       >
         <form
@@ -5846,30 +5870,29 @@ export default function ChatView({
             {shouldRenderChatPaneContent && isCenteredEmptyLanding ? (
               <div
                 className={cn(
-                  "chat-pane-enter flex min-h-0 flex-1 flex-col",
+                  "chat-pane-enter relative flex min-h-0 flex-1 items-center justify-center",
                   CHAT_COLUMN_GUTTER_CLASS_NAME,
                 )}
               >
-                {/* The heading floats centered in the space above the composer, which is
-                    anchored to the bottom of the pane (with its workspace-tools rail
-                    stacked on top of the input) so starting a chat keeps the composer
-                    where it lives for the rest of the conversation. */}
-                <div className="relative flex min-h-0 flex-1 items-center justify-center">
-                  {/* Pinned to the top so the heading stays optically centered; hidden on
-                      short panes where it would crowd the heading. */}
-                  <div className="absolute inset-x-0 top-4 flex justify-center px-6 [@media(max-height:620px)]:hidden">
-                    <ProjectImportLandingBanner className="w-full max-w-[520px]" />
-                  </div>
+                {/* Keep the import banner out of the centered stack so it never changes
+                    the optical position of the heading as it appears or disappears. */}
+                <div className="absolute inset-x-0 top-4 flex justify-center px-6 [@media(max-height:620px)]:hidden">
+                  <ProjectImportLandingBanner className="w-full max-w-[520px]" />
+                </div>
+                <div
+                  data-empty-landing-stack="true"
+                  className="empty-landing-stack flex w-full flex-col items-center"
+                >
                   <div
                     className={cn(
-                      "flex flex-col items-center gap-4 px-6 text-center select-none",
+                      "empty-landing-hero-motion flex flex-col items-center gap-3 px-6 pb-5 text-center select-none",
                       CHAT_COLUMN_FRAME_CLASS_NAME,
                     )}
                   >
-                    <SynaraLogo aria-label="Synara logo" className="size-10" />
+                    <SynaraLogo aria-label="Synara logo" className="size-8" />
                     <h2
                       data-testid="empty-landing-heading"
-                      className="text-[26px] font-normal leading-[1.15] tracking-[-0.015em] text-foreground/95 sm:text-[30px]"
+                      className="max-w-[32rem] text-[22px] font-normal leading-[1.2] tracking-[-0.01em] text-foreground/90 sm:text-[24px]"
                     >
                       {isEmptyChatLanding ? (
                         "What should we work on?"
@@ -5907,8 +5930,6 @@ export default function ChatView({
                       )}
                     </h2>
                   </div>
-                </div>
-                <div className="w-full shrink-0 pb-3 sm:pb-4">
                   {composerSection}
                   {relocateComposerLeadingControls ? (
                     <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
@@ -6026,7 +6047,14 @@ export default function ChatView({
                     // content (and clear of the docked Environment overlay and preview rail).
                     style={contentInsetRightPx ? { paddingRight: contentInsetRightPx } : undefined}
                   >
-                    <div className="pointer-events-auto">{composerSection}</div>
+                    <div
+                      className={cn(
+                        "pointer-events-auto",
+                        composerArrivedFromLanding && "chat-composer-after-landing",
+                      )}
+                    >
+                      {composerSection}
+                    </div>
                   </div>
                   {/* A trailing BranchToolbar only renders for legacy git threads; otherwise the
                       composer is the last element, so give it a comfortable bottom margin. */}

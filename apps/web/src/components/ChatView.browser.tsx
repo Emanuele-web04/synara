@@ -8224,7 +8224,11 @@ describe("ChatView transcript geometry (full app)", () => {
 
       try {
         expect(document.querySelector('[data-testid="empty-landing-heading"]')).not.toBeNull();
-        expect(document.querySelector('[data-empty-landing-composer-block="true"]')).not.toBeNull();
+        const landingStack = document.querySelector('[data-empty-landing-stack="true"]');
+        expect(landingStack).not.toBeNull();
+        expect(
+          landingStack?.querySelector('[data-empty-landing-composer-block="true"]'),
+        ).not.toBeNull();
       } finally {
         await mounted.cleanup();
       }
