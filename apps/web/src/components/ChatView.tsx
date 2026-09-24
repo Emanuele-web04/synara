@@ -222,6 +222,8 @@ import {
   commitAfterRuntimeModePersistence,
   derivePromptHistoryFromMessages,
   hasFileUndoSettled,
+  isUnsettledTurnWork,
+  localDispatchSessionStartReached,
   resolveActiveThreadTitle,
   type TurnDispatchSettings,
   resolveActiveTurnLiveDiffState,
@@ -383,6 +385,7 @@ import { useComposerReferences } from "./chat/useComposerReferences";
 import { useComposerVoiceController } from "./chat/useComposerVoiceController";
 import { useThreadErrorToast } from "./chat/useThreadErrorToast";
 import { useTranscriptAssistantSelectionAction } from "./chat/useTranscriptAssistantSelectionAction";
+import { useLatchedActiveWorkStartedAt, useStartingProviderName } from "./chat/useWorkingIndicator";
 import {
   composerFooterPlanForTier,
   resolveNextComposerFooterTier,
@@ -444,6 +447,16 @@ function getRateLimitBannerDismissalKey(
 }
 
 const VOICE_RECORDER_ACTION_ARM_DELAY_MS = 250;
+
+// First-send composer dock slide: FLIP from the centered landing slot to the
+// transcript's bottom dock. The launch window mirrors the same staleness bound
+// as the handoff itself — a delayed dock (worktree setup) skips the slide.
+const COMPOSER_DOCK_MOTION_DURATION_MS = 480;
+const COMPOSER_DOCK_MOTION_LAUNCH_WINDOW_MS = 1_500;
+
+// Fail-open bound for the "Stopping…" state: a settle event that never arrives
+// must not leave the indicator and disabled Stop control stuck.
+const STOPPING_TURN_TIMEOUT_MS = 15_000;
 
 function warnVoiceGuard(event: string, details?: Record<string, unknown>) {
   if (!import.meta.env.DEV) {
@@ -764,8 +777,20 @@ export default function ChatView({
   const [isComposerExtrasPanelOpen, setIsComposerExtrasPanelOpen] = useState(false);
   const [secondaryChromePlaceholderHeight, setSecondaryChromePlaceholderHeight] = useState(88);
   const firstSendLandingHandoffRef = useRef<FirstSendLandingHandoff | null>(null);
-  const [composerArrivedFromLandingThreadId, setComposerArrivedFromLandingThreadId] =
-    useState<ThreadId | null>(null);
+  // Render-visible companion to the ref: the docked composer's deferral skip
+  // reads state during render (refs are forbidden there); the FLIP measurement
+  // itself reads the ref inside a layout effect.
+  const [pendingDockSlideThreadId, setPendingDockSlideThreadId] = useState<ThreadId | null>(null);
+  const setFirstSendLandingHandoff = useCallback((handoff: FirstSendLandingHandoff | null) => {
+    firstSendLandingHandoffRef.current = handoff;
+    setPendingDockSlideThreadId(handoff?.targetThreadId ?? null);
+  }, []);
+  const emptyLandingComposerBlockRef = useRef<HTMLDivElement | null>(null);
+  const dockedComposerRef = useRef<HTMLDivElement | null>(null);
+  // The dock slide is kept in a ref (not the layout effect's cleanup) so a
+  // draft→server thread id swap mid-animation doesn't cut the motion short.
+  const dockedComposerAnimationRef = useRef<Animation | null>(null);
+  const dockedComposerAnimationThreadRef = useRef<ThreadId | null>(null);
   // Tracks whether the user explicitly dismissed the sidebar for the active turn.
   const planSidebarDismissedForTurnRef = useRef<string | null>(null);
   // When set, the thread-change reset effect will open the sidebar instead of closing it.
@@ -1498,7 +1523,6 @@ export default function ChatView({
     worktreeSetupResolutionRef,
     worktreeSetupPendingAction,
     setWorktreeSetupPendingAction,
-    turnTakenOver,
     isSendBusy,
     isAwaitingTurnStart,
     activeWorktreeSetup,
@@ -1579,10 +1603,38 @@ export default function ChatView({
     promptRef,
     setComposerDraftPrompt,
   });
+  // A bare session (re)connect is not work on its own — it only counts while a
+  // turn is actually pending: a local dispatch in flight, or a live unsettled
+  // turn (mid-turn reconnect). This is also the Stop button's visibility rule.
+  // The reconciler settles dead-session turns eventually; a closed/errored
+  // session must not pin the Working row + Stop button in the meantime.
+  const hasUnsettledTurnWork = isUnsettledTurnWork({
+    latestTurn: activeLatestTurn,
+    latestTurnSettled,
+    phase,
+    sessionStatus: activeThread?.session?.status,
+  });
+  const isConnectingForPendingTurn =
+    isConnecting && (localDispatch !== null || hasUnsettledTurnWork);
+  // The server honors interrupt during startup too: on a starting/running
+  // session with no live turn it retires the session (processThreadSessionStop
+  // in ProviderCommandReactor). Stop therefore stays up for the whole working
+  // span — dispatch bridge and ready gap included — never swapping back to
+  // Send. The one exception: pre-"start-session" worktree setup, where no
+  // session exists yet and the interrupt would only append a failure row.
+  const isTurnInterruptible =
+    hasLiveTurn || localDispatchSessionStartReached(localDispatch) || hasUnsettledTurnWork;
   // Keep Thinking through the post-ack gap where the server has the message /
   // turn request but the provider session is not live yet (common on first send).
   const isWorking =
-    hasLiveTurn || isSendBusy || isConnecting || isRevertingCheckpoint || isAwaitingTurnStart;
+    hasLiveTurn ||
+    isSendBusy ||
+    isConnectingForPendingTurn ||
+    // Mid-turn session churn (provider retry) flaps the phase through
+    // ready/idle while the turn stays running — keep working through it.
+    hasUnsettledTurnWork ||
+    isRevertingCheckpoint ||
+    isAwaitingTurnStart;
   const hasStreamingAssistantText =
     activeThread?.messages.some((message) => message.role === "assistant" && message.streaming) ??
     false;
@@ -1595,6 +1647,23 @@ export default function ChatView({
     : hasLiveTurn
       ? deriveActiveWorkStartedAt(activeLatestTurn, activeThread?.session ?? null, null)
       : null;
+  // The "Working for Xs" header is part of the indicator from the moment a send
+  // is dispatched: fall back to the local dispatch time before the real turn
+  // start exists, then latch so the counter never jumps back to 0s mid-span.
+  const activeTurnStartedAt = useLatchedActiveWorkStartedAt({
+    isWorking,
+    threadId: activeThreadId,
+    candidate: activeWorkStartedAt ?? localDispatch?.startedAt ?? null,
+  });
+  // "Starting <provider>…" only earns the label after a visibly long connect;
+  // the hook holds it through the connecting → ready gap until the turn runs.
+  const startingProviderName = useStartingProviderName({
+    isWorking,
+    isConnecting,
+    isRunning: hasLiveTurn,
+    providerName: providerDisplayName,
+    threadId: activeThreadId,
+  });
   const activeTurnLayoutKey =
     activeThreadId === null ? null : `${activeThreadId}:${activeLatestTurn?.turnId ?? "idle"}`;
   const activeTurnInProgress = activeTurnLayoutLive || keepSettledActiveTurnLayout;
@@ -1819,38 +1888,13 @@ export default function ChatView({
     threadDetailHydration === "ready";
   const isEmptyChatLanding =
     isCenteredEmptyLanding && Boolean(homeDir) && isContainerLandingProject;
-  // Apply the handoff before paint so the first transcript frame cannot flash at full opacity.
-  useLayoutEffect(() => {
-    if (isCenteredEmptyLanding) {
-      setComposerArrivedFromLandingThreadId(null);
-      return;
-    }
-
-    const handoff = firstSendLandingHandoffRef.current;
-    if (handoff === null || activeThreadId === null) {
-      if (activeThreadId !== composerArrivedFromLandingThreadId) {
-        setComposerArrivedFromLandingThreadId(null);
-      }
-      return;
-    }
-    if (activeThreadId !== handoff.sourceThreadId && activeThreadId !== handoff.targetThreadId) {
-      firstSendLandingHandoffRef.current = null;
-      setComposerArrivedFromLandingThreadId(null);
-      return;
-    }
-
-    firstSendLandingHandoffRef.current = null;
-    setComposerArrivedFromLandingThreadId(activeThreadId);
-  }, [activeThreadId, composerArrivedFromLandingThreadId, isCenteredEmptyLanding]);
-  useEffect(() => {
-    if (composerArrivedFromLandingThreadId === null) {
-      return;
-    }
-    const settleTimer = window.setTimeout(() => {
-      setComposerArrivedFromLandingThreadId(null);
-    }, 320);
-    return () => window.clearTimeout(settleTimer);
-  }, [composerArrivedFromLandingThreadId]);
+  useEffect(
+    () => () => {
+      dockedComposerAnimationRef.current?.cancel();
+      dockedComposerAnimationThreadRef.current = null;
+    },
+    [],
+  );
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
     useTurnDiffSummaries(activeThread);
   const turnDiffSummaryByAssistantMessageId = useMemo(() => {
@@ -2444,12 +2488,23 @@ export default function ChatView({
     threadId: secondaryChromeThreadId,
     ready: true,
   }));
+  // A pending first-send handoff skips the deferred placeholder entirely: the
+  // docked card must be measured and sliding in the same commit the landing
+  // unmounts, or the slide start lags the send by an extra frame.
+  const landingHandoffPending = pendingDockSlideThreadId === secondaryChromeThreadId;
   const secondaryChromeReady =
+    landingHandoffPending ||
     !shouldDeferSecondaryChrome ||
     (secondaryChromeState.threadId === secondaryChromeThreadId && secondaryChromeState.ready);
 
   useEffect(() => {
-    if (!shouldDeferSecondaryChrome) {
+    if (
+      !shouldDeferSecondaryChrome ||
+      // Chrome already rendered for this thread once — toggling the defer gate
+      // (e.g. landing → docked mid-slide) must not swap it back to the
+      // placeholder for a frame.
+      (secondaryChromeState.threadId === secondaryChromeThreadId && secondaryChromeState.ready)
+    ) {
       setSecondaryChromeState((current) =>
         current.threadId === secondaryChromeThreadId && current.ready
           ? current
@@ -2471,7 +2526,83 @@ export default function ChatView({
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [setSecondaryChromeState, secondaryChromeThreadId, shouldDeferSecondaryChrome]);
+  }, [
+    secondaryChromeState.ready,
+    secondaryChromeState.threadId,
+    setSecondaryChromeState,
+    secondaryChromeThreadId,
+    shouldDeferSecondaryChrome,
+  ]);
+  // Consume the first-send handoff before paint: the docked composer slides up
+  // from the landing slot (FLIP) instead of popping in at the bottom. The
+  // secondaryChromeReady gate still matters off-handoff — the docked slot can
+  // render a deferred placeholder for one frame, and measuring it would start
+  // the slide off by the placeholder's extra height.
+  useLayoutEffect(() => {
+    // React reuses the docked node across thread switches, so a slide still in
+    // flight would surface on the new thread — cancel once the thread it was
+    // started for is no longer active. Runs before the handoff checks: the
+    // handoff ref is already null after consumption.
+    if (
+      dockedComposerAnimationThreadRef.current !== null &&
+      dockedComposerAnimationThreadRef.current !== activeThreadId
+    ) {
+      dockedComposerAnimationRef.current?.cancel();
+      dockedComposerAnimationRef.current = null;
+      dockedComposerAnimationThreadRef.current = null;
+    }
+    if (isCenteredEmptyLanding) {
+      return;
+    }
+    const handoff = firstSendLandingHandoffRef.current;
+    if (handoff === null || activeThreadId === null) {
+      return;
+    }
+    if (activeThreadId !== handoff.sourceThreadId && activeThreadId !== handoff.targetThreadId) {
+      setFirstSendLandingHandoff(null);
+      dockedComposerAnimationRef.current?.cancel();
+      dockedComposerAnimationRef.current = null;
+      return;
+    }
+    if (!secondaryChromeReady) {
+      return;
+    }
+
+    const element = dockedComposerRef.current;
+    const from = handoff.from;
+    if (!element || !from) {
+      setFirstSendLandingHandoff(null);
+      return;
+    }
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      setFirstSendLandingHandoff(null);
+      return;
+    }
+    // A delayed dock (e.g. worktree setup) means the landing is long gone.
+    if (performance.now() - from.at > COMPOSER_DOCK_MOTION_LAUNCH_WINDOW_MS) {
+      setFirstSendLandingHandoff(null);
+      return;
+    }
+    // Measure the same visible element on both ends: the rounded composer card,
+    // not the full-width wrapper.
+    const toCard = element.querySelector<HTMLElement>("[data-composer-card]") ?? element;
+    const to = toCard.getBoundingClientRect();
+    const dx = from.centerX - (to.left + to.width / 2);
+    const dy = from.top - to.top;
+    setFirstSendLandingHandoff(null);
+    if (Math.abs(dx) < 1 && Math.abs(dy) < 1) {
+      return;
+    }
+    dockedComposerAnimationRef.current?.cancel();
+    dockedComposerAnimationRef.current = element.animate(
+      [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "translate(0, 0)" }],
+      {
+        duration: COMPOSER_DOCK_MOTION_DURATION_MS,
+        easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+      },
+    );
+    dockedComposerAnimationThreadRef.current = activeThreadId;
+  }, [activeThreadId, isCenteredEmptyLanding, secondaryChromeReady, setFirstSendLandingHandoff]);
   const setThreadError = useCallback(
     (targetThreadId: ThreadId | null, error: string | null) => {
       if (!targetThreadId) return;
@@ -3398,10 +3529,82 @@ export default function ChatView({
     });
   }, [activeThread]);
 
+  // Local "stopping" marker keyed to the thread + turn: the indicator reads
+  // "Stopping…" and the Stop control disables until the turn settles, the
+  // interrupt rejects, the thread changes, or the fail-open bound hits.
+  const [stoppingTurn, setStoppingTurn] = useState<{
+    threadId: ThreadId;
+    turnId: TurnId | null;
+    at: number;
+  } | null>(null);
+  const isStoppingTurn = stoppingTurn !== null && stoppingTurn.threadId === activeThreadId;
+  useEffect(() => {
+    if (stoppingTurn === null) {
+      return;
+    }
+    if (stoppingTurn.threadId !== activeThreadId) {
+      setStoppingTurn(null);
+      return;
+    }
+    // Settled once the tracked turn reports a terminal state, or a NEWER turn
+    // lands terminal — a stale completed latestTurn on an existing thread must
+    // not clear "Stopping…" while the real turn is still starting. A missing
+    // latestTurn is NOT settle evidence — the detail snapshot lags live turns.
+    const latestTurn = activeLatestTurn;
+    const latestTurnTerminal = latestTurn !== null && latestTurn.state !== "running";
+    const trackedTurnSettled =
+      stoppingTurn.turnId !== null &&
+      latestTurnTerminal &&
+      latestTurn.turnId === stoppingTurn.turnId;
+    const newerTerminalTurnSettled =
+      latestTurnTerminal &&
+      latestTurn.turnId !== stoppingTurn.turnId &&
+      (Date.parse(latestTurn.requestedAt) > stoppingTurn.at ||
+        Date.parse(latestTurn.completedAt ?? "") > stoppingTurn.at);
+    const turnSettled = trackedTurnSettled || newerTerminalTurnSettled;
+    // The interrupt races session startup: phase flaps connecting → ready
+    // while the dispatch bridge is still held, and that gap must not clear
+    // "Stopping…" before the interrupt lands.
+    const dispatchBridgeHeld = isAwaitingTurnStart || localDispatch !== null;
+    if (turnSettled || (!isTurnInterruptible && !hasUnsettledTurnWork && !dispatchBridgeHeld)) {
+      setStoppingTurn(null);
+    }
+  }, [
+    activeLatestTurn,
+    activeThreadId,
+    hasUnsettledTurnWork,
+    isAwaitingTurnStart,
+    isTurnInterruptible,
+    localDispatch,
+    stoppingTurn,
+  ]);
+  // Fail-open: a settle event that never arrives must not stick "Stopping…".
+  useEffect(() => {
+    if (stoppingTurn === null) {
+      return;
+    }
+    const remainingMs = STOPPING_TURN_TIMEOUT_MS - (Date.now() - stoppingTurn.at);
+    const timer = window.setTimeout(() => setStoppingTurn(null), Math.max(remainingMs, 0));
+    return () => window.clearTimeout(timer);
+  }, [stoppingTurn]);
+
   // A rejected interrupt (orchestration dispatch timeout, dead runtime) leaves the
   // UI spinning with no explanation, so the stop affordances report it.
   const onInterruptFromStopControl = useCallback(() => {
+    if (activeThreadId) {
+      setStoppingTurn({
+        threadId: activeThreadId,
+        // Only a live turn is a valid stop target: during startup there may be
+        // none yet, and a stale completed latestTurn must not be captured —
+        // its terminal state would settle "Stopping…" in one frame.
+        turnId:
+          activeThread?.session?.activeTurnId ??
+          (activeLatestTurn?.state === "running" ? activeLatestTurn.turnId : null),
+        at: Date.now(),
+      });
+    }
     void onInterrupt().catch((error: unknown) => {
+      setStoppingTurn(null);
       toastManager.add({
         type: "error",
         title: "Could not stop the current response",
@@ -3411,7 +3614,7 @@ export default function ChatView({
             : "The interrupt request failed. Try again in a moment.",
       });
     });
-  }, [onInterrupt]);
+  }, [activeLatestTurn, activeThread?.session?.activeTurnId, activeThreadId, onInterrupt]);
 
   const onStopWorkflowRun = useCallback(async () => {
     const api = readNativeApi();
@@ -3570,6 +3773,10 @@ export default function ChatView({
     isFocusedPane,
     activeThreadId,
     hasLiveTurn,
+    canInterruptTurn: isTurnInterruptible,
+    isStoppingTurn,
+    composerOverlayOpen,
+    expandedImageOpen: expandedImage !== null,
     composerFormRef,
     onInterruptFromStopControl,
     composerSubagentStripItems,
@@ -4034,7 +4241,8 @@ export default function ChatView({
     setStoreThreadError,
     queryClient,
     isCenteredEmptyLanding,
-    firstSendLandingHandoffRef,
+    setFirstSendLandingHandoff,
+    emptyLandingComposerBlockRef,
     setEnvironmentPanelPreferenceOpen,
     environmentPanelPreferenceOpen,
     setTailAnchor,
@@ -5215,6 +5423,7 @@ export default function ChatView({
   const composerSection =
     secondaryChromeReady && shouldRenderChatPaneContent ? (
       <div
+        ref={emptyLandingComposerBlockRef}
         className={cn(
           isCenteredEmptyLanding
             ? "empty-landing-composer-motion w-full overflow-visible"
@@ -5405,6 +5614,7 @@ export default function ChatView({
               {...threadMentionDropzoneProps}
             >
               <div
+                data-composer-card="true"
                 className={cn(
                   COMPOSER_INPUT_SURFACE_CLASS_NAME,
                   composerProviderState.composerSurfaceClassName,
@@ -5559,11 +5769,13 @@ export default function ChatView({
                             ? "Add feedback to refine the plan, or leave this blank to implement it"
                             : activeThread?.parentThreadId
                               ? "Message this subagent while it works"
-                              : hasLiveTurn
-                                ? "Ask for follow-up changes"
-                                : phase === "disconnected"
-                                  ? "Ask for follow-up changes or attach images"
-                                  : "Ask anything, @tag files/folders, or use / to show available commands"
+                              : isCenteredEmptyLanding
+                                ? "Ask anything, @tag files/folders, or use / to show available commands"
+                                : isWorking
+                                  ? "Ask for follow-up changes"
+                                  : phase === "disconnected"
+                                    ? "Ask for follow-up changes or attach images"
+                                    : "Ask anything, @tag files/folders, or use / to show available commands"
                     }
                     disabled={isComposerEditorDisabled}
                   />
@@ -5651,6 +5863,8 @@ export default function ChatView({
                       phase,
                       busy: isSendBusy,
                       connecting: isConnecting,
+                      interruptible: isTurnInterruptible,
+                      stopping: isStoppingTurn,
                       expired: isSidechatExpired,
                       hasPendingCacheReview: activeThread?.claudeCacheReview != null,
                       preparingImages: isPreparingComposerImages,
@@ -5967,20 +6181,21 @@ export default function ChatView({
                   <ChatTranscriptPane
                     activeThreadId={activeThread.id}
                     activeTurnId={activeTurnIdForTranscript}
+                    interruptedTurnId={
+                      activeLatestTurn?.state === "interrupted" ? activeLatestTurn.turnId : null
+                    }
                     agentActivityDetail={openAgentActivityDetail}
                     hasMessages={timelineEntries.length > 0}
                     isWorking={isWorking}
                     workingLabel={resolveWorkingLabel({
-                      isSendBusy,
-                      turnTakenOver,
-                      isConnecting,
-                      providerName: providerDisplayName,
+                      stoppingTurn: isStoppingTurn,
+                      startingProviderName,
                     })}
                     worktreeSetup={activeWorktreeSetup}
                     worktreeSetupPendingAction={worktreeSetupPendingAction}
                     onResolveWorktreeSetup={onResolveWorktreeSetup}
                     activeTurnInProgress={activeTurnInProgress}
-                    activeTurnStartedAt={activeWorkStartedAt}
+                    activeTurnStartedAt={activeTurnStartedAt}
                     listRef={legendListRef}
                     timelineControllerRef={timelineControllerRef}
                     findHighlightStore={threadFindHighlightStore}
@@ -6065,11 +6280,9 @@ export default function ChatView({
                     style={contentInsetRightPx ? { paddingRight: contentInsetRightPx } : undefined}
                   >
                     <div
-                      className={cn(
-                        "pointer-events-auto",
-                        composerArrivedFromLandingThreadId === activeThreadId &&
-                          "chat-composer-after-landing",
-                      )}
+                      ref={dockedComposerRef}
+                      className="pointer-events-auto"
+                      data-docked-composer="true"
                     >
                       {composerSection}
                     </div>

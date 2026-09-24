@@ -1000,6 +1000,88 @@ describe("deriveMessagesTimelineRows", () => {
     expect(rows.some((row) => row.kind === "work")).toBe(false);
   });
 
+  it("marks the collapsed turn header interrupted only for the interrupted turn id", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      interruptedTurnId: "t1" as never,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        assistantEntry("a1", "2026-01-01T00:00:01Z", {
+          turnId: "t1",
+          text: "Preamble",
+          completedAt: "2026-01-01T00:00:01Z",
+        }),
+        assistantEntry("a2", "2026-01-01T00:00:02Z", {
+          turnId: "t1",
+          text: "Stopped mid-answer",
+          completedAt: "2026-01-01T00:00:03Z",
+        }),
+        userEntry("u2", "2026-01-01T00:00:04Z"),
+        assistantEntry("a3", "2026-01-01T00:00:05Z", {
+          turnId: "t2",
+          text: "Next turn preamble",
+          completedAt: "2026-01-01T00:00:05Z",
+        }),
+        assistantEntry("a4", "2026-01-01T00:00:06Z", {
+          turnId: "t2",
+          text: "Next turn done",
+          completedAt: "2026-01-01T00:00:07Z",
+        }),
+      ],
+    });
+    expect(messageRow(rows, "a2")?.collapsedTurnInterrupted).toBe(true);
+    expect(messageRow(rows, "a4")?.collapsedTurnInterrupted).toBe(false);
+  });
+
+  it("flags an interrupted plain reply for the 'Stopped' meta when nothing folds", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      interruptedTurnId: "t1" as never,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        assistantEntry("a1", "2026-01-01T00:00:01Z", {
+          turnId: "t1",
+          text: "Partial answer that was cut off",
+          completedAt: "2026-01-01T00:00:02Z",
+        }),
+        userEntry("u2", "2026-01-01T00:00:03Z"),
+        assistantEntry("a2", "2026-01-01T00:00:04Z", {
+          turnId: "t2",
+          text: "Clean reply",
+          completedAt: "2026-01-01T00:00:05Z",
+        }),
+      ],
+    });
+    // Single-message turn: nothing folds, so the meta carries "Stopped".
+    const stopped = messageRow(rows, "a1");
+    expect(stopped?.assistantTurnInterrupted).toBe(true);
+    expect(stopped?.collapsedTurnItems).toBeUndefined();
+    expect(messageRow(rows, "a2")?.assistantTurnInterrupted).not.toBe(true);
+  });
+
+  it("never shows both the meta 'Stopped' and the collapsed header", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      interruptedTurnId: "t1" as never,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        assistantEntry("a1", "2026-01-01T00:00:01Z", {
+          turnId: "t1",
+          text: "Preamble",
+          completedAt: "2026-01-01T00:00:01Z",
+        }),
+        assistantEntry("a2", "2026-01-01T00:00:02Z", {
+          turnId: "t1",
+          text: "Cut off",
+          completedAt: "2026-01-01T00:00:03Z",
+        }),
+      ],
+    });
+    const terminal = messageRow(rows, "a2");
+    expect(terminal?.collapsedTurnInterrupted).toBe(true);
+    expect(terminal?.assistantTurnInterrupted).not.toBe(true);
+  });
+
   it("folds settled message-segments into the collapsed group instead of stranding the turn", () => {
     // Streaming delivery splits a settled assistant message whose deltas were
     // interleaved with tool rows into message-segment slices. Those slices must

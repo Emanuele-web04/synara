@@ -18,12 +18,15 @@ import { appendAssistantSelectionsToPrompt } from "../../lib/assistantSelections
 import { appendBrowserAnnotationsToPrompt } from "../../lib/browserAnnotations";
 import { appendPastedTextsToPrompt } from "../../lib/composerPastedText";
 import {
+  cloneComposerImageAttachment,
+  composerDraftIsEmpty,
   findPendingBlobComposerAttachments,
   formatOutgoingComposerPrompt,
   hydratePendingBlobComposerAttachments,
   readFileAsDataUrl,
   stageUploadComposerAttachments,
 } from "../../lib/composerSend";
+import { collapseExpandedComposerCursor, detectComposerTrigger } from "../../composer-logic";
 import { appendFileCommentsToPrompt } from "../../lib/fileComments";
 import { appendPullRequestContextsToPrompt } from "../../lib/pullRequestContext";
 import {
@@ -36,6 +39,7 @@ import { buildSourceProposedPlanReference } from "../../session-logic";
 import {
   buildExpiredTerminalContextToastCopy,
   createWorktreeSetupResolution,
+  revokeUserMessagePreviewUrls,
   deriveComposerSendState,
   queuedChatTurnDispatchFields,
   queuedPlanFollowUpDispatchFields,
@@ -86,7 +90,8 @@ export function useChatTurnSubmission({
   setStoreThreadError,
   queryClient,
   isCenteredEmptyLanding,
-  firstSendLandingHandoffRef,
+  setFirstSendLandingHandoff,
+  emptyLandingComposerBlockRef,
   setEnvironmentPanelPreferenceOpen,
   environmentPanelPreferenceOpen,
   setTailAnchor,
@@ -218,6 +223,8 @@ export function useChatTurnSubmission({
     composerTerminalContextsRef,
     composerPastedTextsRef,
     composerPullRequestContextsRef,
+    selectedComposerSkillsRef,
+    selectedComposerMentionsRef,
     setPrompt,
     setComposerCursor,
     addComposerImagesToDraft,
@@ -663,83 +670,14 @@ export function useChatTurnSubmission({
         });
         return true;
       }
-      const workspace = await prepareChatSendWorkspace({
-        activeThread,
-        isServerThread,
-        hasNativeUserMessages,
-        composerImagesForSend,
-        trimmedPromptForSend,
-        composerFilesForSend,
-        composerAssistantSelectionsForSend,
-        composerBrowserAnnotationsForSend,
-        sendableComposerTerminalContexts,
-        composerFileCommentsForSend,
-        sendableComposerPastedTexts,
-        selectedModelSelectionForSend,
-        selectedModelForSend,
-        activeProject,
-        chatWorkspaceRoot,
-        isHomeChatContainer,
-        isStudioContainer,
-        resolvedThreadWorktreePath,
-        runtimeModeForSend,
-        envModeForSend,
-        resolvedThreadWorkingDirectory,
-        currentActiveGitBranch,
-        isContainerLandingProject,
-        api,
-        syncServerShellSnapshot,
-        clearProjectDraftThreadId,
-        setDraftThreadContext,
-        activeRootBranch,
-        gitBranchSourceCwd,
-        setStoreThreadError,
-        queryClient,
-      });
-      if (workspace === false) return false;
-      if (hasPendingCacheReview()) return false;
-      const {
-        threadIdForSend,
-        title,
-        targetProjectIdForSend,
-        targetProjectKindForSend,
-        targetProjectCwdForSend,
-        targetProjectDefaultModelSelectionForSend,
-        nextRuntimeModeForSend,
-        nextThreadEnvMode,
-        nextThreadBranch,
-        nextThreadWorktreePath,
-        nextThreadWorkingDirectory,
-        nextAssociatedWorktreePath,
-        nextAssociatedWorktreeBranch,
-        nextAssociatedWorktreeRef,
-        shouldResumeSettledLocalThread,
-        currentActiveGitBranchForSend,
-        baseBranchForWorktree,
-        setupScriptForWorktree,
-        worktreeSetupScriptName,
-        worktreeCopiesLocalChanges,
-      } = workspace;
+      // The landing docks on the optimistic switch, so it must not wait on
+      // workspace prep (project.create / git branch lookups are WS round-trips).
+      // Everything the optimistic row needs is composer-local; failures after
+      // this point roll back exactly like a rejected send.
       const messageIdForSend = newMessageId();
-      const worktreeSetupResolution = baseBranchForWorktree
-        ? createWorktreeSetupResolution()
-        : null;
-      worktreeSetupResolutionRef.current = worktreeSetupResolution;
-      if (worktreeSetupResolution) {
-        setWorktreeSetupPendingAction(null);
-      }
-
+      const threadIdForSend = activeThread.id;
       sendInFlightRef.current = true;
-      beginLocalDispatch({
-        expectedUserMessageId: messageIdForSend,
-        ...(baseBranchForWorktree
-          ? {
-              worktreeSetupStepId: "create-branch" as const,
-              setupScriptName: worktreeSetupScriptName,
-              copyLocalChanges: worktreeCopiesLocalChanges,
-            }
-          : {}),
-      });
+      beginLocalDispatch({ expectedUserMessageId: messageIdForSend });
 
       const composerImagesSnapshot = [...composerImagesForSend];
       const composerFilesSnapshot = [...composerFilesForSend];
@@ -833,10 +771,24 @@ export function useChatTurnSubmission({
         );
       }
       if (isCenteredEmptyLanding) {
-        firstSendLandingHandoffRef.current = {
+        // Measure the visible composer card (the rounded surface), not the
+        // full-width block wrapper — the docked slide must start exactly where
+        // the card was seen.
+        const landingBlock = emptyLandingComposerBlockRef.current;
+        const landingCard =
+          landingBlock?.querySelector<HTMLElement>("[data-composer-card]") ?? landingBlock;
+        const landingRect = landingCard?.getBoundingClientRect();
+        setFirstSendLandingHandoff({
           sourceThreadId: threadId,
           targetThreadId: threadIdForSend,
-        };
+          from: landingRect
+            ? {
+                top: landingRect.top,
+                centerX: landingRect.left + landingRect.width / 2,
+                at: performance.now(),
+              }
+            : null,
+        });
       }
       setOptimisticUserMessages((existing) => [
         ...existing,
@@ -894,6 +846,157 @@ export function useChatTurnSubmission({
         scheduleComposerFocus();
       }
 
+      const rollbackOptimisticSend = () => {
+        // Uploads start in parallel with workspace/session preparation. If the
+        // send unwinds here, settle that promise and release every staged blob.
+        void turnAttachmentsPromise.then(
+          (staged) => staged.cleanup(),
+          () => undefined,
+        );
+        setOptimisticUserMessages((existing) => {
+          if (queuedChatTurn === null) {
+            // Queued sends share attachment preview URLs with the queued
+            // snapshot — only a removed live-send row owns them.
+            const removed = existing.filter((message) => message.id === messageIdForSend);
+            for (const message of removed) {
+              revokeUserMessagePreviewUrls(message);
+            }
+          }
+          const next = existing.filter((message) => message.id !== messageIdForSend);
+          return next.length === existing.length ? existing : next;
+        });
+        // Queued sends never cleared the composer — restoring would clobber
+        // it. Live sends restore only while the composer is still empty:
+        // anything typed during workspace/session prep must survive.
+        if (
+          queuedChatTurn === null &&
+          composerDraftIsEmpty([
+            promptRef,
+            composerImagesRef,
+            composerFilesRef,
+            composerAssistantSelectionsRef,
+            composerBrowserAnnotationsRef,
+            composerFileCommentsRef,
+            composerTerminalContextsRef,
+            composerPastedTextsRef,
+            composerPullRequestContextsRef,
+            selectedComposerSkillsRef,
+            selectedComposerMentionsRef,
+          ])
+        ) {
+          promptRef.current = promptForSend;
+          setPrompt(promptForSend);
+          setComposerCursor(collapseExpandedComposerCursor(promptForSend, promptForSend.length));
+          addComposerImagesToDraft(composerImagesSnapshot.map(cloneComposerImageAttachment));
+          addComposerFilesToDraft(composerFilesSnapshot);
+          for (const selection of composerAssistantSelectionsSnapshot) {
+            addComposerAssistantSelectionToDraft(selection);
+          }
+          addComposerDraftBrowserAnnotations(threadIdForSend, composerBrowserAnnotationsSnapshot);
+          for (const comment of composerFileCommentsSnapshot) {
+            addComposerFileCommentToDraft(comment);
+          }
+          addComposerTerminalContextsToDraft(composerTerminalContextsSnapshot);
+          addComposerPastedTextsToDraft(composerPastedTextsSnapshot);
+          addComposerPullRequestContextsToDraft(composerPullRequestContextsSnapshot);
+          updateSelectedComposerSkills(composerSkillsSnapshot);
+          updateSelectedComposerMentions(composerMentionsSnapshot);
+          setComposerTrigger(detectComposerTrigger(promptForSend, promptForSend.length));
+        }
+        resetLocalDispatch();
+        tailAnchorScrollInFlightRef.current = false;
+        if (isCenteredEmptyLanding) {
+          setFirstSendLandingHandoff(null);
+        }
+        sendInFlightRef.current = false;
+      };
+
+      let workspace: Awaited<ReturnType<typeof prepareChatSendWorkspace>>;
+      try {
+        workspace = await prepareChatSendWorkspace({
+          activeThread,
+          isServerThread,
+          hasNativeUserMessages,
+          composerImagesForSend,
+          trimmedPromptForSend,
+          composerFilesForSend,
+          composerAssistantSelectionsForSend,
+          composerBrowserAnnotationsForSend,
+          sendableComposerTerminalContexts,
+          composerFileCommentsForSend,
+          sendableComposerPastedTexts,
+          selectedModelSelectionForSend,
+          selectedModelForSend,
+          activeProject,
+          chatWorkspaceRoot,
+          isHomeChatContainer,
+          isStudioContainer,
+          resolvedThreadWorktreePath,
+          runtimeModeForSend,
+          envModeForSend,
+          resolvedThreadWorkingDirectory,
+          currentActiveGitBranch,
+          isContainerLandingProject,
+          api,
+          syncServerShellSnapshot,
+          clearProjectDraftThreadId,
+          setDraftThreadContext,
+          activeRootBranch,
+          gitBranchSourceCwd,
+          setStoreThreadError,
+          queryClient,
+        });
+      } catch (error) {
+        rollbackOptimisticSend();
+        throw error;
+      }
+      if (workspace === false) {
+        rollbackOptimisticSend();
+        return false;
+      }
+      if (hasPendingCacheReview()) {
+        rollbackOptimisticSend();
+        return false;
+      }
+      const {
+        title,
+        targetProjectIdForSend,
+        targetProjectKindForSend,
+        targetProjectCwdForSend,
+        targetProjectDefaultModelSelectionForSend,
+        nextRuntimeModeForSend,
+        nextThreadEnvMode,
+        nextThreadBranch,
+        nextThreadWorktreePath,
+        nextThreadWorkingDirectory,
+        nextAssociatedWorktreePath,
+        nextAssociatedWorktreeBranch,
+        nextAssociatedWorktreeRef,
+        shouldResumeSettledLocalThread,
+        currentActiveGitBranchForSend,
+        baseBranchForWorktree,
+        setupScriptForWorktree,
+        worktreeSetupScriptName,
+        worktreeCopiesLocalChanges,
+      } = workspace;
+      const worktreeSetupResolution = baseBranchForWorktree
+        ? createWorktreeSetupResolution()
+        : null;
+      worktreeSetupResolutionRef.current = worktreeSetupResolution;
+      if (worktreeSetupResolution) {
+        setWorktreeSetupPendingAction(null);
+      }
+      if (baseBranchForWorktree) {
+        // The dispatch bridge is already up; attach the setup stepper without
+        // disturbing its startedAt (resolveNextLocalDispatchSnapshot merges).
+        beginLocalDispatch({
+          expectedUserMessageId: messageIdForSend,
+          worktreeSetupStepId: "create-branch" as const,
+          setupScriptName: worktreeSetupScriptName,
+          copyLocalChanges: worktreeCopiesLocalChanges,
+        });
+      }
+
       return executePreparedTurn({
         nextThreadEnvMode,
         nextThreadBranch,
@@ -946,7 +1049,7 @@ export function useChatTurnSubmission({
         composerMentionsSnapshot,
       }).then((turnStarted) => {
         if (!turnStarted && isCenteredEmptyLanding) {
-          firstSendLandingHandoffRef.current = null;
+          setFirstSendLandingHandoff(null);
         }
         return turnStarted;
       });
@@ -984,7 +1087,8 @@ export function useChatTurnSubmission({
       setStoreThreadError,
       queryClient,
       isCenteredEmptyLanding,
-      firstSendLandingHandoffRef,
+      setFirstSendLandingHandoff,
+      emptyLandingComposerBlockRef,
       setEnvironmentPanelPreferenceOpen,
       environmentPanelPreferenceOpen,
       setTailAnchor,
@@ -1003,6 +1107,14 @@ export function useChatTurnSubmission({
       setPendingUserInputAnswersByRequestId,
       composerEditorRef,
       promptRef,
+      composerImagesRef,
+      composerFilesRef,
+      composerAssistantSelectionsRef,
+      composerBrowserAnnotationsRef,
+      composerFileCommentsRef,
+      composerTerminalContextsRef,
+      composerPastedTextsRef,
+      composerPullRequestContextsRef,
       composerImages,
       composerFiles,
       composerAssistantSelections,
@@ -1041,6 +1153,18 @@ export function useChatTurnSubmission({
       setAutomationDraftOpen,
       armTranscriptAutoFollow,
       tailAnchorScrollInFlightRef,
+      resetLocalDispatch,
+      setPrompt,
+      addComposerImagesToDraft,
+      addComposerFilesToDraft,
+      addComposerAssistantSelectionToDraft,
+      addComposerDraftBrowserAnnotations,
+      addComposerFileCommentToDraft,
+      addComposerTerminalContextsToDraft,
+      addComposerPastedTextsToDraft,
+      addComposerPullRequestContextsToDraft,
+      updateSelectedComposerSkills,
+      updateSelectedComposerMentions,
       prepareAutomationFormForCreate,
       createAutomationFromForm,
       providerStatuses,

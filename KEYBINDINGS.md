@@ -37,6 +37,11 @@ See the full schema for more details: [`packages/contracts/src/keybindings.ts`](
 
 For most up to date defaults, see [`DEFAULT_KEYBINDINGS` in `apps/server/src/keybindings.ts`](apps/server/src/keybindings.ts)
 
+### Built-in (not configurable)
+
+- `Esc`: stop the running turn while the Stop control is visible (composer or transcript focus; menus, dialogs, and the terminal keep their own Escape)
+- `Ctrl+C` (macOS): interrupt the running turn from the composer
+
 ## Configuration
 
 ### Rule Shape

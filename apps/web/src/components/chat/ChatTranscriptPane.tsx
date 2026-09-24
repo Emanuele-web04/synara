@@ -37,6 +37,7 @@ import type { AgentActivityDetail } from "./agentActivity.logic";
 interface ChatTranscriptPaneProps {
   activeThreadId: string;
   activeTurnId?: TurnId | null;
+  interruptedTurnId?: TurnId | null;
   activeTurnInProgress: boolean;
   activeTurnStartedAt: string | null;
   agentActivityDetail?: AgentActivityDetail | null;
@@ -119,6 +120,7 @@ interface ChatTranscriptPaneProps {
 export function ChatTranscriptPane({
   activeThreadId,
   activeTurnId,
+  interruptedTurnId,
   activeTurnInProgress,
   activeTurnStartedAt,
   agentActivityDetail,
@@ -254,6 +256,7 @@ export function ChatTranscriptPane({
             worktreeSetupPendingAction={worktreeSetupPendingAction ?? null}
             {...(onResolveWorktreeSetup ? { onResolveWorktreeSetup } : {})}
             activeTurnId={activeTurnId ?? null}
+            interruptedTurnId={interruptedTurnId ?? null}
             activeTurnInProgress={activeTurnInProgress}
             activeTurnStartedAt={activeTurnStartedAt}
             listRef={listRef}

@@ -8,6 +8,7 @@ import { ChatComposerFooter } from "./ChatComposerFooter";
 function mountFooter(input: {
   phase: SessionPhase;
   connecting: boolean;
+  stopping?: boolean;
   onInterrupt?: () => void;
 }) {
   return render(
@@ -34,6 +35,8 @@ function mountFooter(input: {
         phase: input.phase,
         busy: false,
         connecting: input.connecting,
+        interruptible: input.phase === "running" || input.connecting,
+        stopping: input.stopping ?? false,
         expired: false,
         preparingImages: false,
         preparingWorktree: false,
@@ -74,6 +77,36 @@ describe("ChatComposerFooter stop control", () => {
       await expect.element(stop).toBeVisible();
       await stop.click();
       expect(onInterrupt).toHaveBeenCalledOnce();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("hides Stop when connecting has no pending turn", async () => {
+    const screen = await mountFooter({ phase: "ready", connecting: false });
+    try {
+      await expect
+        .element(page.getByRole("button", { name: "Stop generation" }))
+        .not.toBeInTheDocument();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("disables Stop and reads 'Stopping' while a stop is in flight", async () => {
+    const onInterrupt = vi.fn();
+    const screen = await mountFooter({
+      phase: "running",
+      connecting: false,
+      stopping: true,
+      onInterrupt,
+    });
+    try {
+      const stop = page.getByRole("button", { name: "Stopping" });
+      await expect.element(stop).toBeVisible();
+      await expect.element(stop).toBeDisabled();
+      await stop.click({ force: true }).catch(() => undefined);
+      expect(onInterrupt).not.toHaveBeenCalled();
     } finally {
       await screen.unmount();
     }

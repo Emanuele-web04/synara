@@ -474,6 +474,8 @@ interface MessagesTimelineProps {
    */
   editableUserMessageId?: MessageId | null;
   activeTurnId?: TurnId | null;
+  /** Turn that ended via user interrupt — its settled header reads "Stopped after Xs". */
+  interruptedTurnId?: TurnId | null;
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onIsAtEndChange?: (isAtEnd: boolean) => void;
@@ -558,6 +560,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onRespondToAsyncUserInput,
   editableUserMessageId,
   activeTurnId,
+  interruptedTurnId,
   isRevertingCheckpoint,
   onImageExpand,
   onIsAtEndChange,
@@ -768,6 +771,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         activeTurnInProgress,
         activeTurnId,
         activeTurnStartedAt,
+        interruptedTurnId,
         turnDiffSummaryByAssistantMessageId,
         revertTurnCountByUserMessageId,
       }),
@@ -778,6 +782,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       activeTurnInProgress,
       activeTurnId,
       activeTurnStartedAt,
+      interruptedTurnId,
       turnDiffSummaryByAssistantMessageId,
       revertTurnCountByUserMessageId,
     ],
@@ -914,6 +919,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       settledTurnCollapseTransitions,
       submittingEditedUserMessageId,
       toolGroupSummaryOverrides,
+      // The "working" shimmer row caches its render; a bare label change
+      // (Thinking → "Starting <provider>…") must still re-render it.
+      workingLabel,
     }),
     [
       crossTaskOrigin,
@@ -932,6 +940,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       settledTurnCollapseTransitions,
       submittingEditedUserMessageId,
       toolGroupSummaryOverrides,
+      workingLabel,
     ],
   );
   // Latest rows kept in a ref so the imperative scroll controller can look up a message's
@@ -1874,6 +1883,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               ? (goalAchievementByTurnId.get(row.message.turnId) ?? null)
               : null;
           const assistantMeta = [
+            row.assistantTurnInterrupted ? "Stopped" : null,
             isTerminalAssistantMessage
               ? formatDayAwareTimestamp(row.message.createdAt, timestampFormat)
               : null,
@@ -2193,8 +2203,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     >
                       <span>
                         {row.collapsedWorkElapsed
-                          ? `Worked for ${row.collapsedWorkElapsed}`
-                          : "Details"}
+                          ? row.collapsedTurnInterrupted
+                            ? `Stopped after ${row.collapsedWorkElapsed}`
+                            : `Worked for ${row.collapsedWorkElapsed}`
+                          : row.collapsedTurnInterrupted
+                            ? "Stopped"
+                            : "Details"}
                       </span>
                       <DisclosureChevron
                         open={isCollapsedWorkExpanded}

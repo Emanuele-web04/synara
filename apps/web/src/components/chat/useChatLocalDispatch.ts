@@ -11,6 +11,7 @@ import {
   hasLiveTurnTakenOver,
   hasServerAcknowledgedLocalDispatch,
   resolveNextLocalDispatchSnapshot,
+  shouldHoldLocalDispatchAcrossTurnStart,
   worktreeSetupHasError,
   type LocalDispatchSnapshot,
   type WorktreeSetupDispatchOptions,
@@ -92,7 +93,22 @@ export function useChatLocalDispatch({
     ],
   );
   const isSendBusy = localDispatch !== null && !serverAcknowledgedLocalDispatch;
-  const isAwaitingTurnStart = localDispatch !== null && !turnTakenOver;
+  // Takeover can fire while the session is still in the connecting → ready
+  // gap (turn startedAt/activeTurnId lands before phase flips to "running").
+  // Releasing the bridge there blanks the indicator for a frame and restarts
+  // the "Working for" counter — the visible draft→server promotion seam.
+  const holdDispatchAcrossTurnStart = shouldHoldLocalDispatchAcrossTurnStart({
+    phase,
+    latestTurn: activeLatestTurn,
+    session: activeThread?.session ?? null,
+    hasPendingApproval: activePendingApproval !== null,
+    hasPendingUserInput: activePendingUserInput !== null,
+    threadError: activeThread?.error,
+  });
+  // While the start is held ahead of the session phase the turn is not
+  // observably live yet, so the dispatch bridge still counts as awaiting.
+  const isAwaitingTurnStart =
+    localDispatch !== null && (!turnTakenOver || holdDispatchAcrossTurnStart);
   const activeWorktreeSetup = localDispatch?.worktreeSetup ?? null;
   const isPreparingWorktree = activeWorktreeSetup !== null;
 
@@ -223,6 +239,11 @@ export function useChatLocalDispatch({
     if (!turnTakenOver) {
       return;
     }
+    // Turn started but the session has not caught up to "running" yet: keep
+    // the bridge alive so isWorking never dips between takeover and live.
+    if (holdDispatchAcrossTurnStart) {
+      return;
+    }
     // A failed worktree setup would otherwise reset in the same commit that
     // painted the error (thread errors count as takeover), so hold the
     // row briefly before letting it animate out.
@@ -248,6 +269,7 @@ export function useChatLocalDispatch({
     }
     resetLocalDispatch();
   }, [
+    holdDispatchAcrossTurnStart,
     localDispatch?.startedAt,
     localDispatchWorktreeSetupFailed,
     resetLocalDispatch,

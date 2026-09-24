@@ -24,6 +24,7 @@ export function showContextMenuFallback<T extends string>(
     overlay.style.cssText = "position:fixed;inset:0;z-index:9999";
 
     const menu = document.createElement("div");
+    menu.dataset.slot = "context-menu-popup";
     menu.className =
       "fixed z-[10000] min-w-[180px] rounded-xl border border-white/[0.08] shadow-xl animate-in fade-in zoom-in-95";
 

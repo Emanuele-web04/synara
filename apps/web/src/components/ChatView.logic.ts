@@ -1381,22 +1381,68 @@ export function hasServerAcknowledgedLocalDispatch(input: {
 /** Fail-open bound for the post-ack "awaiting turn start" Thinking bridge. */
 export const LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS = 60_000;
 
-/** The exact label set the transcript's working indicator can render. */
-export type WorkingLabel = "Loading" | "Thinking" | `Starting ${string}…`;
-
-export function resolveWorkingLabel(input: {
-  isSendBusy: boolean;
-  turnTakenOver: boolean;
-  isConnecting?: boolean;
-  providerName?: string;
-}): WorkingLabel {
-  if (input.isSendBusy && !input.turnTakenOver) {
-    return "Loading";
+/**
+ * A worktree-setup dispatch only owns something interruptible once its
+ * "start-session" step begins — before that there is no provider session for
+ * an interrupt to cancel (the request fails and appends an error row, and the
+ * turn still starts after setup). The setup card's own actions cover the
+ * earlier steps.
+ */
+export function localDispatchSessionStartReached(
+  localDispatch: LocalDispatchSnapshot | null,
+): boolean {
+  if (localDispatch === null) {
+    return false;
   }
-  if (input.isConnecting && input.providerName) {
-    return `Starting ${input.providerName}…`;
+  const setup = localDispatch.worktreeSetup;
+  if (setup === null) {
+    return true;
+  }
+  const startStep = setup.steps.find((step) => step.id === "start-session");
+  return startStep !== undefined && (startStep.status === "active" || startStep.status === "done");
+}
+
+/** The exact label set the transcript's working indicator can render. */
+export type WorkingLabel = "Thinking" | "Stopping…" | `Starting ${string}…`;
+
+/**
+ * The shimmer is "Thinking" by default. A provider name is passed only once a
+ * cold session start has been visibly long (callers gate it on a delay), so the
+ * label never flashes "Starting X…" for a sub-second connect. A stop request in
+ * flight takes precedence over both.
+ */
+export function resolveWorkingLabel(input: {
+  stoppingTurn?: boolean;
+  startingProviderName?: string | null;
+}): WorkingLabel {
+  if (input.stoppingTurn) {
+    return "Stopping…";
+  }
+  if (input.startingProviderName) {
+    return `Starting ${input.startingProviderName}…`;
   }
   return "Thinking";
+}
+
+/**
+ * A projected `latestTurn.state === "running"` counts as in-flight work only
+ * while its session can still carry output. A closed/errored session can
+ * transiently hold a running turn until the runtime reconciler settles it
+ * (startup reconciliation or the ~15s stale sweep); without this gate the
+ * Working row + Stop button would pin for the whole reconcile window.
+ */
+export function isUnsettledTurnWork(input: {
+  latestTurn: Thread["latestTurn"] | null;
+  latestTurnSettled: boolean;
+  phase: SessionPhase;
+  sessionStatus: string | undefined;
+}): boolean {
+  return (
+    input.latestTurn?.state === "running" &&
+    !input.latestTurnSettled &&
+    input.phase !== "disconnected" &&
+    input.sessionStatus !== "error"
+  );
 }
 
 /**
@@ -1419,7 +1465,25 @@ export function hasLiveTurnTakenOver(input: {
   if (!input.localDispatch) {
     return false;
   }
-  if (input.phase === "running" || input.phase === "connecting") {
+  // "connecting" is NOT takeover: the backend goes connecting → ready →
+  // running, and treating the gap as live blanks the indicator mid-start. Only
+  // a running session (or the evidence below) releases the local bridge.
+  if (input.phase === "running") {
+    return true;
+  }
+  if (input.session?.status === "error") {
+    return true;
+  }
+  // Stop during startup settles the whole session server-side
+  // (processThreadSessionStop): no turn ever goes live, so none of the
+  // turn-based clauses fire and the bridge would pin until the time bound —
+  // which worktree sends suppress entirely. A session that lands on "stopped"
+  // after dispatch is takeover; one already stopped at dispatch is not, since
+  // the send still owns its connecting bridge.
+  if (
+    input.session?.orchestrationStatus === "stopped" &&
+    input.localDispatch.sessionOrchestrationStatus !== "stopped"
+  ) {
     return true;
   }
   if (input.session?.activeTurnId != null) {
@@ -1617,6 +1681,64 @@ export function resolveQueuedComposerAutoDispatchHold(input: {
 }
 
 export const ACTIVE_TURN_LAYOUT_SETTLE_DELAY_MS = 180;
+
+export interface LatchedWorkStart {
+  threadId: ThreadId | null;
+  startedAt: string | null;
+}
+
+/**
+ * "Working for Xs" needs a stable origin for the whole live span: the local
+ * dispatch time covers the pre-turn window, then the real turn's startedAt
+ * arrives — without a latch the counter would jump back to 0s. The first
+ * non-null start wins until the thread goes idle or changes.
+ */
+export function nextLatchedActiveWorkStart(input: {
+  previous: LatchedWorkStart;
+  isWorking: boolean;
+  threadId: ThreadId | null;
+  candidate: string | null;
+}): LatchedWorkStart {
+  if (!input.isWorking || input.threadId === null) {
+    return { threadId: input.threadId, startedAt: null };
+  }
+  if (input.previous.threadId === input.threadId && input.previous.startedAt !== null) {
+    return input.previous;
+  }
+  return { threadId: input.threadId, startedAt: input.candidate };
+}
+
+/**
+ * Takeover can fire while the session is still in the connecting → ready gap:
+ * the turn's startedAt/activeTurnId landed but the session phase has not
+ * flipped to "running" yet. Releasing the local dispatch in that window blanks
+ * the working indicator for a frame (and restarts the "Working for" counter),
+ * which is the visible draft→server promotion seam. Hold the bridge until the
+ * session actually reports running or the start provably ended (turn settled,
+ * approval/input pending, or an error).
+ */
+export function shouldHoldLocalDispatchAcrossTurnStart(input: {
+  phase: SessionPhase;
+  latestTurn: Thread["latestTurn"];
+  session: Thread["session"] | null;
+  hasPendingApproval: boolean;
+  hasPendingUserInput: boolean;
+  threadError: string | null | undefined;
+}): boolean {
+  if (input.phase !== "ready" && input.phase !== "connecting") {
+    return false;
+  }
+  if (input.hasPendingApproval || input.hasPendingUserInput || input.threadError) {
+    return false;
+  }
+  if (input.session?.status === "error" || input.session?.status === "closed") {
+    return false;
+  }
+  if (input.latestTurn === null) {
+    return input.session?.activeTurnId != null;
+  }
+  return input.latestTurn.state === "running";
+}
 
 export function shouldStartActiveTurnLayoutGrace(options: {
   previousTurnLayoutLive: boolean;

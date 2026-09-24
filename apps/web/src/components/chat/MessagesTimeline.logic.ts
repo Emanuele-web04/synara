@@ -280,6 +280,10 @@ export type MessagesTimelineRow =
       inlineWorkGroupId?: string;
       collapsedTurnItems?: CollapsedTurnItem[];
       collapsedWorkElapsed?: string | null;
+      collapsedTurnInterrupted?: boolean;
+      /** Interrupted turn's terminal message with nothing to fold — the meta
+          row shows a muted "Stopped" in place of the collapsed header. */
+      assistantTurnInterrupted?: boolean;
       durationStart: string;
       showAssistantCopyButton: boolean;
       assistantCopyStreaming: boolean;
@@ -609,6 +613,8 @@ export function deriveMessagesTimelineRows(input: {
   activeTurnInProgress?: boolean;
   activeTurnId?: TurnId | null | undefined;
   activeTurnStartedAt: string | null;
+  /** Turn that ended via user interrupt — its settled header reads "Stopped after Xs". */
+  interruptedTurnId?: TurnId | null | undefined;
   turnDiffSummaryByAssistantMessageId: ReadonlyMap<MessageId, TurnDiffSummary>;
   revertTurnCountByUserMessageId: ReadonlyMap<MessageId, number>;
 }): MessagesTimelineRow[] {
@@ -781,6 +787,7 @@ export function deriveMessagesTimelineRows(input: {
     terminalAssistantMessageIds,
     activeTurnInProgress: input.activeTurnInProgress ?? false,
     activeTurnId: input.activeTurnId ?? null,
+    interruptedTurnId: input.interruptedTurnId ?? null,
   });
 
   // The live turn wears a "Working for Xs" header + divider — the counting-up
@@ -846,9 +853,11 @@ function collapseSettledTurns(
     terminalAssistantMessageIds: ReadonlySet<string>;
     activeTurnInProgress: boolean;
     activeTurnId: TurnId | null;
+    interruptedTurnId: TurnId | null;
   },
 ): void {
-  const { terminalAssistantMessageIds, activeTurnInProgress, activeTurnId } = options;
+  const { terminalAssistantMessageIds, activeTurnInProgress, activeTurnId, interruptedTurnId } =
+    options;
   const lastTerminalAssistantMessageId = activeTurnInProgress
     ? findTailTerminalAssistantMessageId(rows, terminalAssistantMessageIds)
     : null;
@@ -874,9 +883,6 @@ function collapseSettledTurns(
     if (message.asyncUserInput) continue;
     // Only the terminal message of a turn owns the collapsed group.
     if (!terminalAssistantMessageIds.has(message.id)) continue;
-    // Never collapse the live turn: streaming text or the in-progress turn stays
-    // inline so the user sees output as it arrives.
-    if (message.streaming) continue;
     const turnId = message.turnId ?? null;
     const turnIsActive =
       activeTurnInProgress &&
@@ -885,6 +891,16 @@ function collapseSettledTurns(
           message.id === lastTerminalAssistantMessageId
         : message.id === lastTerminalAssistantMessageId);
     if (turnIsActive) continue;
+    // Interrupted terminal message: mark provisionally for the meta "Stopped";
+    // cleared below if the turn folds into a "Stopped after Xs" header instead.
+    // Runs before the streaming skip — a reconcile-settled turn can leave the
+    // message flagged streaming with no terminal delta ever arriving.
+    if (turnId !== null && turnId === interruptedTurnId) {
+      row.assistantTurnInterrupted = true;
+    }
+    // Never collapse the live turn: streaming text or the in-progress turn stays
+    // inline so the user sees output as it arrives.
+    if (message.streaming) continue;
 
     // Scan back to the response boundary collecting rows to fold. Provider
     // mini-turns can have distinct turnIds inside one assistant answer, so the
@@ -966,6 +982,10 @@ function collapseSettledTurns(
       const elapsed = formatElapsed(collapsedStart, message.completedAt);
       row.collapsedTurnItems = collapsedItems;
       row.collapsedWorkElapsed = elapsed ?? null;
+      row.collapsedTurnInterrupted = turnId !== null && turnId === interruptedTurnId;
+      // The "Stopped after Xs" disclosure owns the interrupted marker — the
+      // meta "Stopped" must never render alongside it.
+      delete row.assistantTurnInterrupted;
       delete row.leadingWorkEntries;
       delete row.leadingWorkGroupId;
       delete row.inlineWorkEntries;
@@ -1257,6 +1277,8 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.inlineWorkGroupId === bm.inlineWorkGroupId &&
         collapsedTurnItemsEqual(a.collapsedTurnItems, bm.collapsedTurnItems) &&
         a.collapsedWorkElapsed === bm.collapsedWorkElapsed &&
+        a.collapsedTurnInterrupted === bm.collapsedTurnInterrupted &&
+        a.assistantTurnInterrupted === bm.assistantTurnInterrupted &&
         a.durationStart === bm.durationStart &&
         a.showAssistantCopyButton === bm.showAssistantCopyButton &&
         a.assistantCopyStreaming === bm.assistantCopyStreaming &&

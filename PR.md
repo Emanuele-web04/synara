@@ -1,83 +1,37 @@
-# Empty home composer polish
+# Home composer and working-state polish
 
 ## Summary
 
-- Centered the empty-chat hero and composer in one responsive landing stack.
-- Reduced the Synara logo and heading scale and tightened the spacing to match the Monocode reference.
-- Added staged landing motion using only opacity and transform, with a reduced-motion override.
-- Added a home-specific browser geometry regression, thread-scoped send handoff coverage, and rejected-send recovery coverage.
-
-## Reference findings
-
-The supplied recordings were decoded frame by frame before implementation.
-
-- Synara reference: `Screen Recording 2026-09-24 at 14.06.58.mov` - 1,038 decoded frames (1,039 in container metadata), about 20.27 seconds.
-- Monocode reference: `VcmDJi_9rOeYPF0Y.mp4` - 1,504 frames, about 25.07 seconds.
-- Monocode keeps the empty title and composer close together near the vertical center.
-- Monocode's first-send composer handoff takes about 300ms.
-- The previous Synara layout kept the title high and the composer near the bottom.
+- The empty home keeps the hero and composer centered as one stack.
+- On the first send, the composer card now slides from the center into the bottom dock (FLIP with WAAPI, 480ms, `cubic-bezier(0.22, 1, 0.36, 1)`), based on Monocode's `useComposerDockMotion`. It replaces the old 300ms opacity fade. Reduced motion skips it.
+- The optimistic send now happens before workspace prep, so the slide starts right after Enter (about 90 to 230ms, down from 420 to 500ms). Prep failures roll back like a rejected dispatch. The composer is only restored if the user has not started a new draft. Queued turns never touch the live composer.
+- The working indicator no longer flickers. Before: `Loading` → `Starting Codex…` → blank → `Working for 0s` + `Thinking`, with a layout jump, and another blank at the draft→server promotion. Now the header and `Thinking` show up together at dispatch and stay mounted, and the counter never resets. `Starting <provider>…` only shows after 1.2s of continuous connecting.
+  - Root cause: `hasLiveTurnTakenOver` treated `connecting` as takeover. That released the local dispatch bridge in the normal connecting → ready → running gap.
+  - A bare reconnect with no pending turn no longer shows the indicator or the Stop button.
+- Stop:
+  - The button, Ctrl+C, and the new Esc shortcut all show `Stopping…` right away and disable Stop until the turn settles.
+  - Stop stays visible for the whole working span (the server honors interrupts during startup), except during pre-session worktree setup.
+  - Stopped turns read `Stopped after Xs` in the collapsed header, or `Stopped` in the reply's meta row.
+- The empty home placeholder uses the new-chat copy. It stays `Ask for follow-up changes` for the whole working span.
+- Consecutive provider retry warnings (`Reconnecting... n/5`) collapse into one row that updates in place. They are identified by a new optional `RuntimeWarningPayload.willRetry` field (Codex, Pi, OpenCode retry events), not by matching message text.
 
 ## Verification
 
-### Passed
+- `bun run --cwd apps/web typecheck`, server typecheck: pass.
+- `bun run lint`: 0 errors (existing warnings only).
+- `bunx oxfmt --check` on changed files: pass.
+- `bun run --cwd apps/web test`: 5245 passed, 3 skipped.
+- `bun run --cwd apps/web test:browser -- src/components/ChatView.browser.tsx`: 161/161.
+- Server: `providerRuntimeActivityProjection.test.ts` 28, `CodexAdapter.test.ts` 48.
+- `chatHotPath` compiler test: 39/39 (ChatView and the submission hook stay compiler-eligible).
+- Live, on the normal dev instance (web :5733, server :3773), using Playwright with a DOM mutation timeline:
+  - First send from the empty home.
+  - Draft→server promotion.
+  - Stop by button and by Esc.
+  - A retry storm on a degraded Codex gateway.
+- Two independent code reviews. All findings were fixed.
 
-- `bun install --frozen-lockfile`
-- `bun run typecheck` - all 7 packages passed; existing suggestions remain.
-- `bun run --cwd apps/web typecheck` - passed after the final handoff isolation change; existing suggestions remain.
-- `bun run lint` - 0 errors and 728 existing warnings.
-- `bunx oxfmt --check apps/web/src/components/ChatView.tsx apps/web/src/components/ChatView.browser.tsx apps/web/src/components/chat/chatSendTypes.ts apps/web/src/components/chat/useChatTurnSubmission.ts apps/web/src/index.css PR.md`
-- `bun run --cwd apps/web test -- --testTimeout=15000` - 399 files passed, 5,225 tests passed, 3 skipped.
-- `bun run --cwd apps/web test:browser -- src/components/ChatView.browser.tsx -t 'keeps the first sent message|does not carry the first-send handoff|does not reuse a first-send handoff|centers the home landing stack|preserves a new-chat draft'` - 6 passed, 137 skipped. The run emitted one non-failing TanStack Router stderr warning in the rejected-send case.
-- `bun run build` - all 5 build tasks passed before the final handoff isolation change; existing chunk-size and build-plugin warnings remain.
-- `git diff --check`
+## Known gaps
 
-The browser suite emitted an existing `ResizeObserver loop completed with undelivered notifications` warning. It did not fail the run.
-
-### Manual flow checks
-
-The earlier fixture app was exercised with DOM-only checks, without screenshots, visual comparison, or CUA-driver.
-
-- Empty home: passed.
-- Short input: passed; send became enabled.
-- Long multiline input: passed on desktop and at `390x700`; the editor capped at 200px and scrolled internally without clipping the shell.
-- Send: passed; the optimistic user message and transcript appeared.
-- Return home: passed.
-- Reduced motion: passed; landing animations computed as `none`.
-
-### Dev app
-
-- Started `SYNARA_NO_BROWSER=1 bun run dev` against the normal `/Users/user/.synara` setup.
-- Web UI served at `http://localhost:5733`; server served at `http://127.0.0.1:3773`.
-- Opened the web UI in the default macOS browser.
-- The dev process was left running for inspection.
-
-Live provider streaming was not completed in the earlier isolated fixture run. That provider retried through reconnect steps `2/5` to `5/5`, then reported a provider runtime error and turn failure. Fixture-based streaming scenarios in the browser suite passed.
-
-## Known verification gaps
-
-The full `ChatView.browser.tsx` browser suite passed all 140 tests before the final handoff changes. A post-change full-suite rerun was not completed because browser startup stalled. The final changes have focused browser coverage instead.
-
-Visual comparison was intentionally not run. The request prohibited screenshots and visual comparison; the recording decode and DOM geometry checks are the available evidence.
-
-React Doctor full and changed-lines scans exceeded the 120-second command timeout, so no React Doctor score was produced.
-
-The root `bun run fmt:check` still reports existing formatting problems in `.mind/*`, `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, and `docs/computer-use-cua/handoffs/codex-parity-handoff-2026-09-23.md`. Those user-owned files were not reformatted or included in the change.
-
-## Scope and commits
-
-Only these task files are included:
-
-- `apps/web/src/components/ChatView.tsx`
-- `apps/web/src/components/ChatView.browser.tsx`
-- `apps/web/src/components/chat/chatSendTypes.ts`
-- `apps/web/src/components/chat/useChatTurnSubmission.ts`
-- `apps/web/src/index.css`
-- `PR.md`
-
-No dependencies or lockfiles changed. Changes remain local; nothing was pushed or opened as a remote PR. The implementation commits are:
-
-- `dc64a9571` `feat(web): center empty chat landing`
-- `87c73c6d8` `fix(web): scope landing handoff to first send`
-- `cd48b0876` `fix(web): isolate landing handoff state`
-
-Documentation updates are separate local commits.
+- The provider environment was degraded during live testing. The Codex gateway rejected upgrades, and OpenCode was slow to start. The settled `Stopped` states are covered by browser tests and one live plain-reply capture.
+- The last part of the send-to-slide latency is the React commit that mounts the transcript. Removing it would mean keeping the composer mounted across the transition. I did not attempt that.

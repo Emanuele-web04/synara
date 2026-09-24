@@ -38,6 +38,10 @@ interface ChatComposerFooterProps {
     phase: SessionPhase;
     busy: boolean;
     connecting: boolean;
+    /** The Stop control's visibility rule: live turn, or a pending turn still connecting. */
+    interruptible: boolean;
+    /** Interrupt dispatched, waiting for the turn to settle. */
+    stopping: boolean;
     expired: boolean;
     hasPendingCacheReview?: boolean;
     preparingImages: boolean;
@@ -165,15 +169,20 @@ export function ChatComposerFooter({
                 ? "Submit answers"
                 : "Next question"}
           </Button>
-        ) : submission.phase === "running" || submission.connecting ? (
+        ) : submission.interruptible ? (
           <Button
             type="button"
             variant="prominent"
             size="icon-xs"
             className="sm:size-[26px]"
             onClick={submission.onInterrupt}
-            aria-label="Stop generation"
-            title="Stop the current response. On Mac, press Ctrl+C to interrupt."
+            disabled={submission.stopping}
+            aria-label={submission.stopping ? "Stopping" : "Stop generation"}
+            title={
+              submission.stopping
+                ? "Stopping…"
+                : "Stop the current response (Esc). On Mac, press Ctrl+C to interrupt."
+            }
           >
             <span aria-hidden="true" className="block size-2 rounded-[1px] bg-current" />
           </Button>

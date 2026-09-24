@@ -35,6 +35,8 @@ export interface PlanFollowUpSubmission {
 export interface FirstSendLandingHandoff {
   sourceThreadId: ThreadId;
   targetThreadId: ThreadId;
+  /** Landing composer block geometry at send time, for the FLIP slide into the dock. */
+  from: { top: number; centerX: number; at: number } | null;
 }
 
 /**
@@ -94,7 +96,11 @@ export interface ChatTurnSubmissionInput {
   setStoreThreadError: (threadId: ThreadId, error: string | null) => void;
   queryClient: QueryClient;
   isCenteredEmptyLanding: boolean;
-  firstSendLandingHandoffRef: RefObject<FirstSendLandingHandoff | null>;
+  // Writes the ref AND the render-visible pending flag — the docked composer's
+  // deferral skip is driven by render state (React Compiler forbids ref reads
+  // during render), while the FLIP measurement itself still reads the ref.
+  setFirstSendLandingHandoff: (handoff: FirstSendLandingHandoff | null) => void;
+  emptyLandingComposerBlockRef: RefObject<HTMLDivElement | null>;
   setEnvironmentPanelPreferenceOpen: Dispatch<SetStateAction<boolean | null>>;
   environmentPanelPreferenceOpen: boolean | null;
   setTailAnchor: Dispatch<SetStateAction<{ threadId: ThreadId; messageId: MessageId } | null>>;

@@ -2049,14 +2049,14 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain(expectedText);
   });
 
-  it("shows Loading when a new local send has no server turn id yet", async () => {
+  it("shows Thinking when a new local send has no server turn id yet", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const previousTurnId = TurnId.makeUnsafe("turn-previous");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         hasMessages
         isWorking
-        workingLabel="Loading"
+        workingLabel="Thinking"
         activeTurnInProgress
         activeTurnId={null}
         activeTurnStartedAt={null}
@@ -2128,7 +2128,7 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain(">Loading<");
+    expect(markup).toContain(">Thinking<");
   });
 
   it("attaches trailing tool rows to the last assistant reply after completion", async () => {
