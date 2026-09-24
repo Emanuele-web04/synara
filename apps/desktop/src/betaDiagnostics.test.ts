@@ -387,6 +387,91 @@ describe("BetaDiagnostics", () => {
     expect(lines).toHaveLength(1);
   });
 
+  it("keeps events tracked while a flush request is in flight", async () => {
+    // First request is held open until the test releases it; later requests
+    // answer immediately.
+    const received: string[] = [];
+    let firstRequest = true;
+    let landed: () => void = () => {};
+    let release: () => void = () => {};
+    const requestLanded = new Promise<void>((resolve) => (landed = resolve));
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        received.push(...body.trim().split("\n"));
+        if (firstRequest) {
+          firstRequest = false;
+          release = () => res.writeHead(200).end();
+          landed();
+        } else {
+          res.writeHead(200).end();
+        }
+      });
+    });
+    servers.push(server);
+    const port = await listen(server);
+
+    const root = makeRoot();
+    const diag = makeDiagnostics(root, `http://127.0.0.1:${port}`);
+    diag.track("app.start", { kind: "lifecycle" });
+    const flushing = diag.flush();
+    await requestLanded;
+    // Tracked while the fetch is still waiting for a response.
+    diag.track("app.exit", { kind: "lifecycle" });
+    release();
+    await flushing;
+
+    const queuePath = join(root, "diagnostics", "events.jsonl");
+    const queued = readFileSync(queuePath, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line).event);
+    expect(queued).toEqual(["app.exit"]);
+    expect(received.map((line) => JSON.parse(line).event)).toEqual(["app.start"]);
+
+    await diag.flush();
+    expect(received.map((line) => JSON.parse(line).event)).toEqual(["app.start", "app.exit"]);
+    expect(existsSync(queuePath)).toBe(false);
+  });
+
+  it("dispose waits for an in-flight flush, then sends what queued meanwhile", async () => {
+    const received: string[] = [];
+    let firstRequest = true;
+    let landed: () => void = () => {};
+    let release: () => void = () => {};
+    const requestLanded = new Promise<void>((resolve) => (landed = resolve));
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        received.push(...body.trim().split("\n"));
+        if (firstRequest) {
+          firstRequest = false;
+          release = () => res.writeHead(200).end();
+          landed();
+        } else {
+          res.writeHead(200).end();
+        }
+      });
+    });
+    servers.push(server);
+    const port = await listen(server);
+
+    const root = makeRoot();
+    const diag = makeDiagnostics(root, `http://127.0.0.1:${port}`);
+    diag.track("app.start", { kind: "lifecycle" });
+    const flushing = diag.flush();
+    await requestLanded;
+    diag.track("beta.left", { kind: "beta", outcome: "trash" });
+    const disposing = diag.dispose(5_000);
+    release();
+    await Promise.all([flushing, disposing]);
+
+    expect(received.map((line) => JSON.parse(line).event)).toEqual(["app.start", "beta.left"]);
+    expect(existsSync(join(root, "diagnostics", "events.jsonl"))).toBe(false);
+  });
+
   const readQueue = (root: string) => {
     const queuePath = join(root, "diagnostics", "events.jsonl");
     if (!existsSync(queuePath)) return [];

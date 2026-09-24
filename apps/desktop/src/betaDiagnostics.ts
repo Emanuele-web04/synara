@@ -352,6 +352,7 @@ export class BetaDiagnostics {
   private flushTimer: ReturnType<typeof setInterval> | null = null;
   private usageTimers: ReturnType<typeof setTimeout>[] = [];
   private flushing = false;
+  private flushPromise: Promise<void> | null = null;
   private disposed = false;
 
   constructor(input: {
@@ -393,14 +394,20 @@ export class BetaDiagnostics {
       }
       mkdirSync(diagnosticsDir, { recursive: true });
       const generated = randomUUID();
-      writeFileSync(idPath, `${generated}\n`, { encoding: "utf8", mode: 0o600 });
+      writeFileSync(`${idPath}.tmp-${process.pid}`, `${generated}\n`, {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+      renameSync(`${idPath}.tmp-${process.pid}`, idPath);
       try {
         // Durable marker so a first launch whose backend never comes up still
         // reports beta.installed on the next launch.
-        writeFileSync(this.installPendingPath, `${new Date().toISOString()}\n`, {
+        const pendingTmp = `${this.installPendingPath}.tmp-${process.pid}`;
+        writeFileSync(pendingTmp, `${new Date().toISOString()}\n`, {
           encoding: "utf8",
           mode: 0o600,
         });
+        renameSync(pendingTmp, this.installPendingPath);
       } catch {
         // Marker write must not fail install-id creation.
       }
@@ -430,7 +437,7 @@ export class BetaDiagnostics {
       void this.flush();
     }, FLUSH_INTERVAL_MS);
     this.flushTimer.unref?.();
-    // First usage relay 10 minutes after startup, then every 6h. Timers are
+    // First usage relay 2 minutes after startup, then every 6h. Timers are
     // unref'd so diagnostics never hold the process open.
     const first = setTimeout(() => {
       this.maybeTrackDailyUsage();
@@ -610,6 +617,20 @@ export class BetaDiagnostics {
   async flush(timeoutMs = 15_000): Promise<void> {
     if (this.flushing || this.disposed) return;
     this.flushing = true;
+    // The promise resolves only after `flushing` clears, so dispose() can
+    // chain a final flush on it.
+    this.flushPromise = (async () => {
+      try {
+        await this.flushQueue(timeoutMs);
+      } finally {
+        this.flushing = false;
+        this.flushPromise = null;
+      }
+    })();
+    await this.flushPromise;
+  }
+
+  private async flushQueue(timeoutMs: number): Promise<void> {
     try {
       if (!existsSync(this.queuePath)) return;
       const raw = readFileSync(this.queuePath, "utf8");
@@ -634,7 +655,28 @@ export class BetaDiagnostics {
       });
       if (!response.ok) return;
 
-      const rest = lines.slice(batch.length);
+      // Events can be appended while the request was in flight, and a trim can
+      // rewrite the head, so match the sent lines by id rather than position.
+      const sentIds = new Set<string>();
+      for (const line of batch) {
+        try {
+          const id = (JSON.parse(line) as { id?: unknown }).id;
+          if (typeof id === "string") sentIds.add(id);
+        } catch {
+          // unparseable sent line: leave a defensive retry in place below
+        }
+      }
+      const current = readFileSync(this.queuePath, "utf8")
+        .split("\n")
+        .filter((line) => line.length > 0);
+      const rest = current.filter((line) => {
+        try {
+          const id = (JSON.parse(line) as { id?: unknown }).id;
+          return !(typeof id === "string" && sentIds.has(id));
+        } catch {
+          return true;
+        }
+      });
       const stagingPath = `${this.queuePath}.flush-${process.pid}`;
       if (rest.length > 0) {
         writeFileSync(stagingPath, `${rest.join("\n")}\n`, {
@@ -653,8 +695,6 @@ export class BetaDiagnostics {
       }
     } catch {
       // Offline / endpoint down: keep the queue for the next flush.
-    } finally {
-      this.flushing = false;
     }
   }
 
@@ -670,8 +710,19 @@ export class BetaDiagnostics {
     }
     for (const timer of this.usageTimers) clearTimeout(timer);
     this.usageTimers = [];
+    const deadline = Date.now() + timeoutMs;
     try {
-      await this.flush(timeoutMs);
+      // Let an in-flight flush finish within the budget, then send whatever
+      // was queued while it ran (usage snapshot, beta.left, app.exit).
+      const inFlight = this.flushPromise;
+      if (inFlight) {
+        await Promise.race([
+          inFlight,
+          new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, deadline - Date.now()))),
+        ]);
+      }
+      const remaining = deadline - Date.now();
+      if (remaining > 0) await this.flush(remaining);
     } catch {
       // shutting down
     } finally {
