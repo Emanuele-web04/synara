@@ -354,9 +354,9 @@ export function planRestartTurnReconciliation(input: {
  * failed individual dispatch must never block the server from coming up.
  *
  * Deliberately not a second `getCommandReadModel()` load. That query costs ~150ms
- * on a large database and this runs on the blocking startup path, after several
- * reactors have already started — so re-reading it would be both slower and
- * staler than the model the engine is already maintaining.
+ * on a large database and this runs on the blocking startup path, after the
+ * orchestration reactor has already started — so re-reading it would be both
+ * slower and staler than the model the engine is already maintaining.
  *
  * The durable pending-interaction rows are read once, up front. Rows created
  * after that read belong to a runtime started in *this* process and stay
