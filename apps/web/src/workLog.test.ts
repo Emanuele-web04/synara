@@ -682,6 +682,85 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
+  it("exposes deterministic worker monitor notices for coordinator rows", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      // Monitor rows are posted with no turn id and must survive the
+      // visible-turn filter a coordinator conversation always applies.
+      makeActivity({
+        id: "worker-settled",
+        createdAt: "2026-02-23T00:00:05.000Z",
+        kind: "synara.worker.settled",
+        summary: "✓ Mars rocket research finished",
+        tone: "info",
+        payload: {
+          source: "worker_monitor",
+          eventType: "thread.turn-diff-completed",
+          marker: "✓",
+          phrase: "finished",
+          thread: {
+            threadId: "thread-mars",
+            title: "Mars rocket research",
+            outcome: "completed",
+          },
+        },
+      }),
+      makeActivity({
+        id: "worker-stuck",
+        createdAt: "2026-02-23T00:00:06.000Z",
+        kind: "synara.worker.stuck",
+        summary: "⚠ Quiet worker has not reported for over 10 minutes",
+        tone: "approval",
+        payload: {
+          source: "worker_monitor",
+          eventType: "worker.silent",
+          marker: "⚠",
+          phrase: "has not reported for over 10 minutes",
+          thread: { threadId: "thread-quiet", title: "Quiet worker", outcome: null },
+        },
+      }),
+      makeActivity({
+        id: "workers-rollup",
+        createdAt: "2026-02-23T00:00:07.000Z",
+        kind: "synara.workers.settled",
+        summary: "All 3 threads settled: A ✓, B ✓, C ⚠ needs approval",
+        tone: "approval",
+        payload: {
+          source: "worker_monitor",
+          batchId: "batch-1",
+          threads: [
+            { threadId: "thread-a", title: "A", outcome: "completed" },
+            { threadId: "thread-b", title: "B", outcome: "completed" },
+            { threadId: "thread-c", title: "C", outcome: "waiting-approval" },
+          ],
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-1"), {
+      visibleTurnIds: new Set(["turn-other"]),
+    });
+    const settled = entries.find((entry) => entry.id === "worker-settled");
+    expect(settled?.synaraWorkerNotice).toEqual({
+      kind: "settled",
+      marker: "✓",
+      phrase: "finished",
+      threads: [{ threadId: "thread-mars", title: "Mars rocket research", outcome: "completed" }],
+    });
+    const stuck = entries.find((entry) => entry.id === "worker-stuck");
+    expect(stuck?.synaraWorkerNotice?.kind).toBe("stuck");
+    const rollup = entries.find((entry) => entry.id === "workers-rollup");
+    expect(rollup?.synaraWorkerNotice).toEqual({
+      kind: "rollup",
+      marker: null,
+      phrase: null,
+      threads: [
+        { threadId: "thread-a", title: "A", outcome: "completed" },
+        { threadId: "thread-b", title: "B", outcome: "completed" },
+        { threadId: "thread-c", title: "C", outcome: "waiting-approval" },
+      ],
+    });
+  });
+
   it("omits checkpoint captured info entries", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

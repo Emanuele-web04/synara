@@ -316,6 +316,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [112, "CoordinatorAppearance"],
         [113, "ProjectAgentWakeCursor"],
         [114, "ProjectAgentLifecycle"],
+        [115, "ProjectAgentManagedWorkers"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -382,6 +383,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 112, name: "CoordinatorAppearance" },
           { migration_id: 113, name: "ProjectAgentWakeCursor" },
           { migration_id: 114, name: "ProjectAgentLifecycle" },
+          { migration_id: 115, name: "ProjectAgentManagedWorkers" },
         ],
       );
       const groupConfigColumns = yield* sql<{ readonly name: string }>`
@@ -528,6 +530,7 @@ agentGatewayRetentionLegacyLayer(
           [112, "CoordinatorAppearance"],
           [113, "ProjectAgentWakeCursor"],
           [114, "ProjectAgentLifecycle"],
+          [115, "ProjectAgentManagedWorkers"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -637,6 +640,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [112, "CoordinatorAppearance"],
         [113, "ProjectAgentWakeCursor"],
         [114, "ProjectAgentLifecycle"],
+        [115, "ProjectAgentManagedWorkers"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -687,6 +691,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [112, "CoordinatorAppearance"],
           [113, "ProjectAgentWakeCursor"],
           [114, "ProjectAgentLifecycle"],
+          [115, "ProjectAgentManagedWorkers"],
         ],
       );
 
@@ -791,6 +796,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [112, "CoordinatorAppearance"],
         [113, "ProjectAgentWakeCursor"],
         [114, "ProjectAgentLifecycle"],
+        [115, "ProjectAgentManagedWorkers"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -837,6 +843,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [112, "CoordinatorAppearance"],
           [113, "ProjectAgentWakeCursor"],
           [114, "ProjectAgentLifecycle"],
+          [115, "ProjectAgentManagedWorkers"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`

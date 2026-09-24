@@ -90,6 +90,31 @@ memory.
 
 ![Coordinator conversation](./screenshots/groups-coordinator-chat.png)
 
+## How the coordinator monitors threads
+
+Monitoring is deterministic — the server does it, not the model's memory. Every
+thread the coordinator starts is recorded as a **managed worker** whether or not
+the group has an active goal, so finishing a thread always reports back.
+
+- **Settle rows** — when a tracked worker finishes, stops, fails, is
+  interrupted, goes missing, or starts waiting on an approval or a user answer,
+  the server posts a compact system row into the coordinator's conversation
+  (for example `✓ Mars rocket research finished` or `⚠ Web page is waiting for
+approval`). Each row links straight to that thread, then wakes the
+  coordinator so it can react.
+- **Batch roll-up** — when every worker the coordinator started in one request
+  has settled, the server posts a single roll-up row (`All 3 threads finished`,
+  or `All 3 threads settled: A ✓, B ✓, C ⚠ needs approval`) and wakes the
+  coordinator once to summarize for you.
+- **Stuck detection** — a health check runs every minute. A worker is reported
+  stuck once per episode when it runs with no new activity for more than 10
+  minutes, waits on an approval or user input for more than 5 minutes, or its
+  session errors or disappears. When the worker recovers, the episode ends and
+  a later stall reports again.
+
+The same tracked-worker set drives the Threads tab in the Group panel and the
+Focus list, so what you see matches what the coordinator watches.
+
 ## The Group panel and Overview
 
 Open the **Group** panel from the chat header. It shows the group folder, the coordinator and its

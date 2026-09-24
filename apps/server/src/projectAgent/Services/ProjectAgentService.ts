@@ -220,6 +220,9 @@ export interface ProjectAgentServiceShape {
   readonly recordManagedWorkerThreads: (input: {
     readonly callerThreadId: ThreadId;
     readonly requestId: string;
+    /** Creation-batch key used by the all-workers-settled roll-up; the caller
+     * passes its per-turn operation id so each creation call is one batch. */
+    readonly batchId?: string;
     readonly threadIds: ReadonlyArray<ThreadId>;
     readonly titles: ReadonlyArray<string>;
   }) => Effect.Effect<void, ProjectAgentServiceError>;

@@ -4238,3 +4238,263 @@ it.effect("keeps instructions and the memory index when the packet truncates", (
     assert.equal(packet.includes("## Tasks"), false);
   }).pipe(Effect.provide(harness.layer));
 });
+
+// Coordinator-managed worker monitoring: every thread the coordinator
+// creates is a tracked worker, so settle/stuck reporting works without an
+// active goal.
+it.effect("tracks every coordinator-created thread as a managed worker, goal or not", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-mon-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const workerThreadId = ThreadId.makeUnsafe("thread-mon-worker");
+    // No active goal: the group was configured without a goal record, so the
+    // old code path indexed the thread but never tracked it as a worker.
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-mon-record",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [workerThreadId],
+      titles: ["Mars rocket research"],
+    });
+    const tasks = yield* repository.listTasks({
+      projectId: groupId,
+      includeArchived: false,
+      limit: 10,
+    });
+    assert.equal(tasks.length, 0);
+    const worker = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(worker), true);
+    if (Option.isSome(worker)) {
+      assert.equal(worker.value.projectId, groupId);
+      assert.equal(worker.value.batchId, "req-mon-record");
+      assert.equal(worker.value.requestId, "req-mon-record");
+      assert.equal(worker.value.title, "Mars rocket research");
+      assert.equal(worker.value.taskId, null);
+      assert.equal(worker.value.settledAt, null);
+    }
+    const batch = yield* repository.listManagedWorkersByBatch({
+      projectId: groupId,
+      batchId: "req-mon-record",
+    });
+    assert.equal(batch.length, 1);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("posts a settle row into the coordinator thread and wakes it", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-settle-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const workerThreadId = ThreadId.makeUnsafe("thread-settle-worker");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-settle-record",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [workerThreadId],
+      titles: ["Mars rocket research"],
+    });
+    harness.dispatched.length = 0;
+    harness.runNowCalls.length = 0;
+
+    yield* service.ingestSettledThreadEvent({
+      threadId: workerThreadId,
+      sourceEventId: "settle-worker-done",
+      eventType: "thread.turn-diff-completed",
+      createdAt: "2026-09-20T00:05:00.000Z",
+    });
+
+    const inbox = yield* repository.listInboxAfter({ projectId: groupId, limit: 10 });
+    const event = inbox.find((row) => row.sourceEventId === "settle-worker-done");
+    assert.equal(event?.eligibleWake, true);
+    const rows = harness.dispatched.filter(
+      (command) =>
+        command.type === "thread.activity.append" &&
+        command.activity.kind === "synara.worker.settled",
+    );
+    assert.equal(rows.length, 1);
+    const row = rows[0]!;
+    assert.equal(row.type === "thread.activity.append" ? row.threadId : null, coordinatorThreadId);
+    if (row.type === "thread.activity.append") {
+      assert.equal(row.activity.summary, "✓ Mars rocket research finished");
+    }
+    const worker = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(worker) ? worker.value.settleOutcome : null, "completed");
+    assert.equal(Option.isSome(worker) ? worker.value.settledAt !== null : false, true);
+    // The wake pipeline hands the coordinator a turn through the automation.
+    assert.equal(harness.runNowCalls.length >= 1, true);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("posts one roll-up when every worker in the creation batch settles", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-roll-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const threadA = ThreadId.makeUnsafe("thread-roll-a");
+    const threadB = ThreadId.makeUnsafe("thread-roll-b");
+    const threadC = ThreadId.makeUnsafe("thread-roll-c");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-roll-record",
+      batchId: "batch-roll",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [threadA, threadB, threadC],
+      titles: ["Alpha research", "Beta survey", "Gamma page"],
+    });
+    harness.dispatched.length = 0;
+    const rollups = () =>
+      harness.dispatched.filter(
+        (command) =>
+          command.type === "thread.activity.append" &&
+          command.activity.kind === "synara.workers.settled",
+      );
+
+    yield* service.ingestSettledThreadEvent({
+      threadId: threadA,
+      sourceEventId: "roll-a-done",
+      eventType: "thread.turn-diff-completed",
+      createdAt: "2026-09-20T00:05:00.000Z",
+    });
+    yield* service.ingestSettledThreadEvent({
+      threadId: threadB,
+      sourceEventId: "roll-b-done",
+      eventType: "thread.turn-diff-completed",
+      createdAt: "2026-09-20T00:06:00.000Z",
+    });
+    assert.equal(rollups().length, 0);
+
+    yield* service.ingestSettledThreadEvent({
+      threadId: threadC,
+      sourceEventId: "roll-c-wait",
+      eventType: "thread.approval-response-requested",
+      createdAt: "2026-09-20T00:07:00.000Z",
+    });
+    assert.equal(rollups().length, 1);
+    const rollup = rollups()[0]!;
+    if (rollup.type === "thread.activity.append") {
+      assert.equal(
+        rollup.activity.summary,
+        "All 3 threads settled: Alpha research ✓, Beta survey ✓, Gamma page ⚠ needs approval",
+      );
+      assert.equal(rollup.threadId, coordinatorThreadId);
+    }
+    // The roll-up also records a wakeable inbox event for reconciliation.
+    const inbox = yield* repository.listInboxAfter({ projectId: groupId, limit: 20 });
+    const batchEvent = inbox.find((row) => row.eventType === "workers.settled");
+    assert.equal(batchEvent?.eligibleWake, true);
+
+    // Re-ingesting the same settle event reposts nothing: the row and the
+    // roll-up stay at one apiece.
+    yield* service.ingestSettledThreadEvent({
+      threadId: threadC,
+      sourceEventId: "roll-c-wait",
+      eventType: "thread.approval-response-requested",
+      createdAt: "2026-09-20T00:07:00.000Z",
+    });
+    assert.equal(rollups().length, 1);
+    const settledRows = harness.dispatched.filter(
+      (command) =>
+        command.type === "thread.activity.append" &&
+        command.activity.kind === "synara.worker.settled",
+    );
+    assert.equal(settledRows.length, 3);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("flags quiet and overdue workers once per episode", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-stuck-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const quietThread = ThreadId.makeUnsafe("thread-stuck-quiet");
+    const waitingThread = ThreadId.makeUnsafe("thread-stuck-waiting");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-stuck-record",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [quietThread, waitingThread],
+      titles: ["Quiet worker", "Waiting worker"],
+    });
+    // Running silent past the quiet threshold.
+    harness.threadShells[quietThread] = {
+      projectId: groupId,
+      title: "Quiet worker",
+      session: { status: "running", updatedAt: "2020-01-01T00:00:00.000Z", lastError: null },
+      latestTurn: { state: "running", startedAt: "2020-01-01T00:00:00.000Z" },
+    };
+    // Waiting on an approval since before the waiting threshold.
+    harness.threadShells[waitingThread] = {
+      projectId: groupId,
+      title: "Waiting worker",
+      session: { status: "ready", updatedAt: now, lastError: null },
+      hasPendingApprovals: true,
+    };
+    yield* service.ingestSettledThreadEvent({
+      threadId: waitingThread,
+      sourceEventId: "stuck-waiting-approval",
+      eventType: "thread.approval-response-requested",
+      createdAt: "2020-01-01T00:00:00.000Z",
+    });
+    harness.dispatched.length = 0;
+
+    const stuckRows = () =>
+      harness.dispatched.filter(
+        (command) =>
+          command.type === "thread.activity.append" &&
+          command.activity.kind === "synara.worker.stuck",
+      );
+    yield* service.inspectWorkerHealth();
+    assert.equal(stuckRows().length, 2);
+    const summaries = new Set(
+      stuckRows().map((row) => (row.type === "thread.activity.append" ? row.activity.summary : "")),
+    );
+    assert.equal(summaries.has("⚠ Quiet worker has not reported for over 10 minutes"), true);
+    assert.equal(summaries.has("⚠ Waiting worker has been waiting for over 5 minutes"), true);
+    const quiet = yield* repository.findManagedWorkerByThread(quietThread);
+    assert.equal(Option.isSome(quiet) ? quiet.value.stuckKind : null, "silent");
+    const waiting = yield* repository.findManagedWorkerByThread(waitingThread);
+    assert.equal(Option.isSome(waiting) ? waiting.value.stuckKind : null, "waiting");
+
+    // Same episode, same dedupe keys: a second pass posts nothing new.
+    yield* service.inspectWorkerHealth();
+    assert.equal(stuckRows().length, 2);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("reports a missing worker shell once", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-missing-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const missingThread = ThreadId.makeUnsafe("thread-missing-worker");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-missing-record",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [missingThread],
+      titles: ["Lost worker"],
+    });
+    // No thread shell entry: the health check reports the worker missing.
+    harness.dispatched.length = 0;
+    const missingRows = () =>
+      harness.dispatched.filter(
+        (command) =>
+          command.type === "thread.activity.append" &&
+          command.activity.kind === "synara.worker.settled" &&
+          command.activity.summary === "✗ Lost worker went missing",
+      );
+    yield* service.inspectWorkerHealth();
+    assert.equal(missingRows().length, 1);
+    const worker = yield* repository.findManagedWorkerByThread(missingThread);
+    assert.equal(Option.isSome(worker) ? worker.value.settleOutcome : null, "missing");
+    // The settled missing worker stays quiet while its shell is still gone.
+    yield* service.inspectWorkerHealth();
+    assert.equal(missingRows().length, 1);
+  }).pipe(Effect.provide(harness.layer));
+});

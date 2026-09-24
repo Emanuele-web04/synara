@@ -340,6 +340,43 @@ export const ProjectInboxEvent = Schema.Struct({
 });
 export type ProjectInboxEvent = typeof ProjectInboxEvent.Type;
 
+export const ProjectManagedWorkerSettleOutcome = Schema.Literals([
+  "completed",
+  "stopped",
+  "failed",
+  "interrupted",
+  "missing",
+  "waiting-approval",
+  "waiting-input",
+]);
+export type ProjectManagedWorkerSettleOutcome = typeof ProjectManagedWorkerSettleOutcome.Type;
+
+export const ProjectManagedWorkerStuckKind = Schema.Literals(["missing", "silent", "waiting"]);
+export type ProjectManagedWorkerStuckKind = typeof ProjectManagedWorkerStuckKind.Type;
+
+// Durable record for a thread the coordinator created. Unlike a task it does
+// not require an active goal, so settle/wake/stuck reporting covers every
+// coordinator-created thread. `batchId` identifies the creation batch (the
+// gateway operation id, which is caller+turn+requestId scoped) and drives the
+// all-workers-settled roll-up; `requestId` is the model's creation request id
+// kept for receipts and task/attempt ids.
+export const ProjectManagedWorker = Schema.Struct({
+  projectId: ProjectId,
+  threadId: ThreadId,
+  batchId: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
+  requestId: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
+  title: TrimmedNonEmptyString.check(Schema.isMaxLength(240)),
+  taskId: Schema.NullOr(ProjectTaskId),
+  settledAt: Schema.NullOr(IsoDateTime),
+  settleOutcome: Schema.NullOr(ProjectManagedWorkerSettleOutcome),
+  waitingSince: Schema.NullOr(IsoDateTime),
+  stuckKind: Schema.NullOr(ProjectManagedWorkerStuckKind),
+  stuckSince: Schema.NullOr(IsoDateTime),
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+export type ProjectManagedWorker = typeof ProjectManagedWorker.Type;
+
 export const ProjectAgentBlocker = Schema.Struct({
   taskId: ProjectTaskId,
   title: TrimmedNonEmptyString.check(Schema.isMaxLength(240)),

@@ -119,6 +119,10 @@ export interface WorkLogEntry {
   subagentAction?: WorkLogSubagentAction;
   automation?: WorkLogAutomation;
   synaraThreadCreation?: WorkLogSynaraThreadCreation;
+  // Deterministic coordinator-monitor rows (worker settled / stuck /
+  // batch roll-up) render as compact centered pills in the coordinator
+  // conversation, each carrying a link into the reported thread.
+  synaraWorkerNotice?: WorkLogSynaraWorkerNotice;
   // Computer-control denial rows render as an actionable card (enable control
   // and retry) instead of a plain error line; carry just what that card needs.
   computerControlDenied?: WorkLogComputerControlDenied;
@@ -180,6 +184,19 @@ export interface WorkLogSynaraThreadCreation {
   requestedCount: number;
   createdCount: number;
   threads: ReadonlyArray<WorkLogSynaraCreatedThread>;
+}
+
+export interface WorkLogSynaraWorkerNoticeThread {
+  threadId: string;
+  title: string;
+  outcome: string | null;
+}
+
+export interface WorkLogSynaraWorkerNotice {
+  kind: "settled" | "stuck" | "rollup";
+  marker: string | null;
+  phrase: string | null;
+  threads: ReadonlyArray<WorkLogSynaraWorkerNoticeThread>;
 }
 
 export interface WorkLogSubagent {
@@ -415,6 +432,17 @@ function shouldKeepActivityForWorkLog(
     return true;
   }
 
+  // Coordinator monitor rows are posted server-side with no turn id; a
+  // coordinator conversation is all turns, so the turn filter would hide every
+  // settle/stuck/roll-up pill.
+  if (
+    activity.kind === "synara.worker.settled" ||
+    activity.kind === "synara.worker.stuck" ||
+    activity.kind === "synara.workers.settled"
+  ) {
+    return true;
+  }
+
   // An empty set means the transcript has no turn-stamped assistant messages
   // (e.g. providers that never supply turn ids); fall back to the legacy
   // latest-turn filter instead of hiding the whole work log.
@@ -523,6 +551,46 @@ function extractWorkLogSynaraThreadCreation(
       ? payload.createdCount
       : threads.length;
   return { operationId, requestedCount, createdCount, threads };
+}
+
+function extractWorkLogSynaraWorkerNotice(
+  payload: Record<string, unknown> | null,
+  activityKind: OrchestrationThreadActivity["kind"],
+): WorkLogSynaraWorkerNotice | null {
+  if (!payload || payload.source !== "worker_monitor") {
+    return null;
+  }
+  const parseThreads = (values: unknown): WorkLogSynaraWorkerNoticeThread[] => {
+    if (!Array.isArray(values)) {
+      return [];
+    }
+    return values.flatMap((value): WorkLogSynaraWorkerNoticeThread[] => {
+      const thread = asRecord(value);
+      const threadId = asTrimmedString(thread?.threadId);
+      const title = asTrimmedString(thread?.title);
+      if (!threadId || !title) {
+        return [];
+      }
+      return [{ threadId, title, outcome: asTrimmedString(thread?.outcome) ?? null }];
+    });
+  };
+  if (activityKind === "synara.workers.settled") {
+    const threads = parseThreads(payload.threads);
+    return threads.length > 0 ? { kind: "rollup", marker: null, phrase: null, threads } : null;
+  }
+  if (activityKind === "synara.worker.settled" || activityKind === "synara.worker.stuck") {
+    const threads = parseThreads([payload.thread]);
+    if (threads.length === 0) {
+      return null;
+    }
+    return {
+      kind: activityKind === "synara.worker.stuck" ? "stuck" : "settled",
+      marker: asTrimmedString(payload.marker) ?? null,
+      phrase: asTrimmedString(payload.phrase) ?? null,
+      threads,
+    };
+  }
+  return null;
 }
 
 export interface TaskListTaskSnapshot {
@@ -743,6 +811,16 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     const synaraThreadCreation = extractWorkLogSynaraThreadCreation(payload);
     if (synaraThreadCreation) {
       entry.synaraThreadCreation = synaraThreadCreation;
+    }
+  }
+  if (
+    activity.kind === "synara.worker.settled" ||
+    activity.kind === "synara.worker.stuck" ||
+    activity.kind === "synara.workers.settled"
+  ) {
+    const notice = extractWorkLogSynaraWorkerNotice(payload, activity.kind);
+    if (notice) {
+      entry.synaraWorkerNotice = notice;
     }
   }
   if (activity.kind === COMPUTER_SETUP_REQUIRED_ACTIVITY_KIND) {

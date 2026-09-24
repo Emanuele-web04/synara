@@ -1,4 +1,12 @@
+import type { ProjectManagedWorkerSettleOutcome } from "@synara/contracts";
+
 export const PROJECT_AGENT_WORKER_HEALTH_INTERVAL_MS = 60_000;
+
+// Stuck detection thresholds (checked by inspectWorkerHealth on the health
+// loop). A worker counts as stuck when it runs quiet for longer than
+// QUIET_MS, or waits on an approval/user input for longer than WAITING_MS.
+export const WORKER_STUCK_RUNNING_QUIET_MS = 10 * 60_000;
+export const WORKER_STUCK_WAITING_MS = 5 * 60_000;
 
 export function isFailedWorkerSessionStatus(status: string | null | undefined): boolean {
   return status === "error" || status === "interrupted" || status === "stopped";
@@ -23,6 +31,8 @@ const WORKER_ALERT_EVENT_TYPES = new Set([
   "worker.interrupted",
   "worker.missing",
   "worker.stopped",
+  "worker.silent",
+  "worker.waiting-overdue",
   "thread.approval-response-requested",
   "thread.user-input-response-requested",
 ]);
@@ -86,6 +96,136 @@ export function classifyWorkerSettlement(input: {
     return "completed";
   }
   return "updated";
+}
+
+// One compact row posted into the coordinator thread per notable worker
+// event. `settle` rows mark the worker settled (they count toward the batch
+// roll-up); `stuck` rows report a stuck episode without settling it.
+export interface WorkerMonitorNotice {
+  readonly kind: "settle" | "stuck";
+  readonly outcome: ProjectManagedWorkerSettleOutcome | null;
+  readonly tone: "info" | "approval" | "error";
+  readonly marker: "\u2713" | "\u26a0" | "\u2717";
+  readonly phrase: string;
+}
+
+export function workerMonitorNoticeForEvent(eventType: string): WorkerMonitorNotice | null {
+  switch (eventType) {
+    case "thread.turn-diff-completed":
+      return {
+        kind: "settle",
+        outcome: "completed",
+        tone: "info",
+        marker: "\u2713",
+        phrase: "finished",
+      };
+    case "thread.session-stop-requested":
+    case "worker.stopped":
+      return {
+        kind: "settle",
+        outcome: "stopped",
+        tone: "info",
+        marker: "\u2713",
+        phrase: "stopped",
+      };
+    case "thread.approval-response-requested":
+      return {
+        kind: "settle",
+        outcome: "waiting-approval",
+        tone: "approval",
+        marker: "\u26a0",
+        phrase: "is waiting for approval",
+      };
+    case "thread.user-input-response-requested":
+      return {
+        kind: "settle",
+        outcome: "waiting-input",
+        tone: "approval",
+        marker: "\u26a0",
+        phrase: "needs input",
+      };
+    case "thread.turn-interrupt-requested":
+    case "worker.interrupted":
+      return {
+        kind: "settle",
+        outcome: "interrupted",
+        tone: "error",
+        marker: "\u26a0",
+        phrase: "was interrupted",
+      };
+    case "worker.error":
+      return {
+        kind: "settle",
+        outcome: "failed",
+        tone: "error",
+        marker: "\u2717",
+        phrase: "failed",
+      };
+    case "worker.missing":
+      return {
+        kind: "settle",
+        outcome: "missing",
+        tone: "error",
+        marker: "\u2717",
+        phrase: "went missing",
+      };
+    case "worker.silent":
+      return {
+        kind: "stuck",
+        outcome: null,
+        tone: "approval",
+        marker: "\u26a0",
+        phrase: "has not reported for over 10 minutes",
+      };
+    case "worker.waiting-overdue":
+      return {
+        kind: "stuck",
+        outcome: null,
+        tone: "approval",
+        marker: "\u26a0",
+        phrase: "has been waiting for over 5 minutes",
+      };
+    default:
+      return null;
+  }
+}
+
+export function formatWorkerMonitorRow(input: {
+  readonly title: string;
+  readonly marker: string;
+  readonly phrase: string;
+}): string {
+  return `${input.marker} ${input.title} ${input.phrase}`;
+}
+
+const WORKER_ROLLUP_ENTRY_LABELS: Record<ProjectManagedWorkerSettleOutcome, string> = {
+  completed: "\u2713",
+  stopped: "\u2713",
+  failed: "\u2717 failed",
+  interrupted: "\u26a0 interrupted",
+  missing: "\u2717 missing",
+  "waiting-approval": "\u26a0 needs approval",
+  "waiting-input": "\u26a0 needs input",
+};
+
+export function formatWorkerBatchRollup(input: {
+  readonly threads: ReadonlyArray<{
+    readonly title: string;
+    readonly outcome: ProjectManagedWorkerSettleOutcome;
+  }>;
+}): string {
+  const count = input.threads.length;
+  const noun = count === 1 ? "thread" : "threads";
+  const allFinished = input.threads.every(
+    (thread) => thread.outcome === "completed" || thread.outcome === "stopped",
+  );
+  if (allFinished) {
+    return `All ${count} ${noun} finished`;
+  }
+  const entries = input.threads.map(
+    (thread) => `${thread.title} ${WORKER_ROLLUP_ENTRY_LABELS[thread.outcome]}`,
+  );
+  return `All ${count} ${noun} settled: ${entries.join(", ")}`;
 }
 
 export function lastAssistantTextFromMessages(

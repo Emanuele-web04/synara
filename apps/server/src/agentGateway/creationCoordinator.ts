@@ -107,6 +107,7 @@ interface CreationCoordinatorDependencies {
   readonly recordManagedWorkerThreads?: (input: {
     readonly callerThreadId: ThreadId;
     readonly requestId: string;
+    readonly batchId?: string;
     readonly threadIds: ReadonlyArray<ThreadId>;
     readonly titles: ReadonlyArray<string>;
   }) => Effect.Effect<void, ToolInputError>;
@@ -1206,6 +1207,9 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                     environment: entry.environment,
                     branch,
                     worktreePath,
+                    // Ready-to-use markdown target for `message_user` replies
+                    // and thread mentions; renders as a clickable thread link.
+                    link: `thread://${entry.ids.threadId}`,
                     status: "task_dispatched" as const,
                   };
                 }),
@@ -1232,6 +1236,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
             yield* recordManagedWorkerThreads({
               callerThreadId: caller.id,
               requestId: input.requestId,
+              batchId: operationId,
               threadIds: result.threadIds,
               titles: result.threads.map((thread) => thread.title),
             });

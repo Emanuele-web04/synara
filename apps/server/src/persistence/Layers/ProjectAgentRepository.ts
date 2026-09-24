@@ -14,6 +14,7 @@ import {
   ProjectGoalStatus,
   ProjectId,
   ProjectInboxEvent,
+  ProjectManagedWorker,
   ProjectTask,
   ProjectTaskAttempt,
   ProjectTaskId,
@@ -106,6 +107,22 @@ const DependencyRow = Schema.Struct({
 
 const ChangedRow = Schema.Struct({ changed: Schema.Number });
 
+const WorkerRow = Schema.Struct({
+  projectId: ProjectId,
+  threadId: ThreadId,
+  batchId: ProjectManagedWorker.fields.batchId,
+  requestId: ProjectManagedWorker.fields.requestId,
+  title: ProjectManagedWorker.fields.title,
+  taskId: Schema.NullOr(ProjectTaskId),
+  settledAt: Schema.NullOr(IsoDateTime),
+  settleOutcome: ProjectManagedWorker.fields.settleOutcome,
+  waitingSince: Schema.NullOr(IsoDateTime),
+  stuckKind: ProjectManagedWorker.fields.stuckKind,
+  stuckSince: Schema.NullOr(IsoDateTime),
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+
 const SummaryRow = Schema.Struct({
   projectId: ProjectId,
   coordinatorName: ProjectAgentConfig.fields.coordinatorName,
@@ -159,6 +176,10 @@ function toConfig(row: typeof ConfigRow.Type): ProjectAgentConfig {
 }
 
 function toGoal(row: typeof GoalRow.Type): ProjectGoal {
+  return { ...row };
+}
+
+function toWorker(row: typeof WorkerRow.Type): ProjectManagedWorker {
   return { ...row };
 }
 
@@ -1127,6 +1148,7 @@ const makeProjectAgentRepository = Effect.gen(function* () {
               "project_agent_task_dependencies",
               "project_agent_task_attempts",
               "project_agent_evidence",
+              "project_agent_managed_workers",
               "project_agent_tasks",
               "project_agent_goals",
               "project_agent_documents",
@@ -1496,10 +1518,21 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         Effect.asVoid,
       ),
     countRunningWorkers: (projectId) =>
+      // Running capacity covers task-assigned threads plus managed workers
+      // that have not settled yet (coordinator-created threads tracked
+      // without a task); a thread appearing in both counts once.
       sql<{ readonly count: number }>`
         SELECT COUNT(*) AS count
-        FROM project_agent_tasks
-        WHERE project_id = ${projectId} AND status = 'running' AND archived_at IS NULL
+        FROM (
+          SELECT assigned_thread_id AS thread_id
+          FROM project_agent_tasks
+          WHERE project_id = ${projectId} AND status = 'running' AND archived_at IS NULL
+            AND assigned_thread_id IS NOT NULL
+          UNION
+          SELECT thread_id
+          FROM project_agent_managed_workers
+          WHERE project_id = ${projectId} AND settled_at IS NULL
+        )
       `.pipe(
         Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.countRunningWorkers")),
         Effect.map((rows) => rows[0]?.count ?? 0),
@@ -1514,6 +1547,101 @@ const makeProjectAgentRepository = Effect.gen(function* () {
         ),
         Effect.mapError(
           toPersistenceSqlOrDecodeError("ProjectAgentRepository.findTaskByAssignedThread", "task"),
+        ),
+      ),
+    upsertManagedWorker: (worker) =>
+      sql`
+        INSERT INTO project_agent_managed_workers (
+          project_id, thread_id, batch_id, request_id, title, task_id,
+          settled_at, settle_outcome, waiting_since, stuck_kind, stuck_since,
+          created_at, updated_at
+        ) VALUES (
+          ${worker.projectId}, ${worker.threadId}, ${worker.batchId}, ${worker.requestId},
+          ${worker.title}, ${worker.taskId}, ${worker.settledAt}, ${worker.settleOutcome},
+          ${worker.waitingSince}, ${worker.stuckKind}, ${worker.stuckSince},
+          ${worker.createdAt}, ${worker.updatedAt}
+        )
+        ON CONFLICT (project_id, thread_id) DO UPDATE SET
+          batch_id = excluded.batch_id,
+          request_id = excluded.request_id,
+          title = excluded.title,
+          task_id = COALESCE(excluded.task_id, project_agent_managed_workers.task_id),
+          settled_at = excluded.settled_at,
+          settle_outcome = excluded.settle_outcome,
+          waiting_since = excluded.waiting_since,
+          stuck_kind = excluded.stuck_kind,
+          stuck_since = excluded.stuck_since,
+          updated_at = excluded.updated_at
+      `.pipe(
+        Effect.mapError(toPersistenceSqlError("ProjectAgentRepository.upsertManagedWorker")),
+        Effect.as(worker),
+      ),
+    findManagedWorkerByThread: (threadId) =>
+      SqlSchema.findOneOption({
+        Request: Schema.Struct({ threadId: ThreadId }),
+        Result: WorkerRow,
+        execute: ({ threadId }) => sql`
+          SELECT
+            project_id AS "projectId", thread_id AS "threadId", batch_id AS "batchId",
+            request_id AS "requestId", title, task_id AS "taskId",
+            settled_at AS "settledAt", settle_outcome AS "settleOutcome",
+            waiting_since AS "waitingSince", stuck_kind AS "stuckKind",
+            stuck_since AS "stuckSince", created_at AS "createdAt", updated_at AS "updatedAt"
+          FROM project_agent_managed_workers
+          WHERE thread_id = ${threadId}
+        `,
+      })({ threadId }).pipe(
+        Effect.map(Option.map(toWorker)),
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProjectAgentRepository.findManagedWorkerByThread",
+            "worker",
+          ),
+        ),
+      ),
+    listManagedWorkers: (projectId) =>
+      SqlSchema.findAll({
+        Request: Schema.Struct({ projectId: ProjectId }),
+        Result: WorkerRow,
+        execute: ({ projectId }) => sql`
+          SELECT
+            project_id AS "projectId", thread_id AS "threadId", batch_id AS "batchId",
+            request_id AS "requestId", title, task_id AS "taskId",
+            settled_at AS "settledAt", settle_outcome AS "settleOutcome",
+            waiting_since AS "waitingSince", stuck_kind AS "stuckKind",
+            stuck_since AS "stuckSince", created_at AS "createdAt", updated_at AS "updatedAt"
+          FROM project_agent_managed_workers
+          WHERE project_id = ${projectId}
+          ORDER BY created_at ASC, thread_id ASC
+        `,
+      })({ projectId }).pipe(
+        Effect.map((rows) => rows.map(toWorker)),
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError("ProjectAgentRepository.listManagedWorkers", "worker"),
+        ),
+      ),
+    listManagedWorkersByBatch: (input) =>
+      SqlSchema.findAll({
+        Request: Schema.Struct({ projectId: ProjectId, batchId: Schema.String }),
+        Result: WorkerRow,
+        execute: ({ projectId, batchId }) => sql`
+          SELECT
+            project_id AS "projectId", thread_id AS "threadId", batch_id AS "batchId",
+            request_id AS "requestId", title, task_id AS "taskId",
+            settled_at AS "settledAt", settle_outcome AS "settleOutcome",
+            waiting_since AS "waitingSince", stuck_kind AS "stuckKind",
+            stuck_since AS "stuckSince", created_at AS "createdAt", updated_at AS "updatedAt"
+          FROM project_agent_managed_workers
+          WHERE project_id = ${projectId} AND batch_id = ${batchId}
+          ORDER BY created_at ASC, thread_id ASC
+        `,
+      })(input).pipe(
+        Effect.map((rows) => rows.map(toWorker)),
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProjectAgentRepository.listManagedWorkersByBatch",
+            "worker",
+          ),
         ),
       ),
   };

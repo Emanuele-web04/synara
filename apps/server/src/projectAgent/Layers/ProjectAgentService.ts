@@ -7,6 +7,7 @@ import {
   AutomationId,
   CommandId,
   DEFAULT_PROJECT_AGENT_LIMITS,
+  EventId,
   MessageId,
   PROJECT_AGENT_DIGEST_DEBOUNCE_MS,
   PROJECT_AGENT_INITIAL_SUMMARY_THREAD_COUNT,
@@ -26,6 +27,7 @@ import {
   type OrchestrationCommand,
   type ProjectActivity,
   type ProjectInboxEvent,
+  type ProjectManagedWorker,
   type OrchestrationThreadShell,
   type LibraryEntry,
   type ProjectThreadIndexEntry,
@@ -142,13 +144,18 @@ import {
 } from "../projectBotPlaybook.ts";
 import {
   classifyWorkerSettlement,
+  formatWorkerBatchRollup,
+  formatWorkerMonitorRow,
   formatWorkerSettlementReport,
   formatWorkerWatchLine,
   isFailedWorkerSessionStatus,
   isWorkerAlertEvent,
   lastAssistantTextFromMessages,
   shouldMaterializeWorkerSettlementReport,
+  WORKER_STUCK_RUNNING_QUIET_MS,
+  WORKER_STUCK_WAITING_MS,
   workerInboxReportPath,
+  workerMonitorNoticeForEvent,
 } from "../workerHealth.ts";
 import {
   ProjectAgentService,
@@ -373,20 +380,303 @@ export const makeProjectAgentService = Effect.gen(function* () {
       })
       .pipe(Effect.mapError(toServiceError("Failed to release the coordinator busy marker.")));
 
-  // Worker threads are the ones the coordinator assigned to a task — NOT every
-  // indexed group thread (which includes ordinary user chats in the group).
+  // Worker threads are the ones the coordinator tracks — NOT every indexed
+  // group thread (which includes ordinary user chats in the group). The set
+  // covers task-assigned threads plus every recorded managed worker, so
+  // coordinator-created threads without an active goal are tracked too.
   const assignedWorkerThreadIds = (projectId: ProjectId) =>
-    repository.listTasks({ projectId, includeArchived: false, limit: 500 }).pipe(
-      Effect.map(
-        (tasks) =>
-          new Set(
-            tasks
-              .map((task) => task.assignedThreadId)
-              .filter((threadId): threadId is ThreadId => threadId !== null),
-          ),
-      ),
-      Effect.mapError(toServiceError("Failed to load worker assignments.")),
+    Effect.all({
+      tasks: repository
+        .listTasks({ projectId, includeArchived: false, limit: 500 })
+        .pipe(Effect.mapError(toServiceError("Failed to load worker assignments."))),
+      workers: repository
+        .listManagedWorkers(projectId)
+        .pipe(Effect.mapError(toServiceError("Failed to load managed workers."))),
+    }).pipe(
+      Effect.map(({ tasks, workers }) => {
+        const ids = new Set<ThreadId>(workers.map((worker) => worker.threadId));
+        for (const task of tasks) {
+          if (task.assignedThreadId !== null) ids.add(task.assignedThreadId);
+        }
+        return ids;
+      }),
     );
+
+  // Compact system rows the server posts into the coordinator thread when a
+  // tracked worker settles or goes stuck — deterministic monitoring, not an
+  // LLM message. Rows carry deterministic command/activity ids so a replayed
+  // ingest or command receipt can never double-post.
+  const postWorkerMonitorRow = (input: {
+    readonly coordinatorThreadId: ThreadId;
+    readonly sourceKey: string;
+    readonly tone: "info" | "approval" | "error";
+    readonly kind: string;
+    readonly summary: string;
+    readonly payload: Record<string, unknown>;
+    readonly createdAt: string;
+  }) =>
+    orchestrationEngine
+      .dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe(`agent-monitor:${input.sourceKey}`),
+        threadId: input.coordinatorThreadId,
+        activity: {
+          id: EventId.makeUnsafe(`agent-monitor:${input.sourceKey}`),
+          tone: input.tone,
+          kind: input.kind,
+          summary: input.summary,
+          payload: JSON.parse(JSON.stringify(input.payload)),
+          turnId: null,
+          createdAt: input.createdAt,
+        },
+        createdAt: input.createdAt,
+      })
+      .pipe(Effect.catch(() => Effect.void));
+
+  // Apply one settle/stuck event to a managed worker: post the compact system
+  // row into the coordinator thread, update the durable worker row, then post
+  // the all-workers roll-up once every worker in the creation batch has
+  // settled (deduped by the batch's outcome signature so it fires once per
+  // distinct settled state).
+  const recordWorkerMonitorEvent = (input: {
+    readonly worker: ProjectManagedWorker;
+    readonly eventType: string;
+    readonly sourceEventId: string;
+    readonly createdAt: string;
+    readonly coordinatorThreadId: ThreadId;
+    readonly taskId: ProjectTaskId | null;
+  }) =>
+    Effect.gen(function* () {
+      const notice = workerMonitorNoticeForEvent(input.eventType);
+      if (notice === null) return;
+      const worker = input.worker;
+      const threadPayload = {
+        threadId: worker.threadId,
+        title: worker.title,
+        outcome: notice.outcome,
+      };
+      if (notice.kind === "stuck") {
+        yield* postWorkerMonitorRow({
+          coordinatorThreadId: input.coordinatorThreadId,
+          sourceKey: `stuck:${input.sourceEventId}`,
+          tone: notice.tone,
+          kind: "synara.worker.stuck",
+          summary: formatWorkerMonitorRow({
+            title: worker.title,
+            marker: notice.marker,
+            phrase: notice.phrase,
+          }),
+          payload: {
+            source: "worker_monitor",
+            eventType: input.eventType,
+            marker: notice.marker,
+            phrase: notice.phrase,
+            thread: threadPayload,
+          },
+          createdAt: input.createdAt,
+        });
+        return;
+      }
+      const updated: ProjectManagedWorker = {
+        ...worker,
+        taskId: input.taskId ?? worker.taskId,
+        settledAt: input.createdAt,
+        settleOutcome: notice.outcome,
+        waitingSince:
+          notice.outcome === "waiting-approval" || notice.outcome === "waiting-input"
+            ? (worker.waitingSince ?? input.createdAt)
+            : null,
+        // An event means the worker is alive; any stuck episode is over.
+        stuckKind: null,
+        stuckSince: null,
+        updatedAt: input.createdAt,
+      };
+      yield* repository
+        .upsertManagedWorker(updated)
+        .pipe(Effect.mapError(toServiceError("Failed to update managed worker.")));
+      yield* postWorkerMonitorRow({
+        coordinatorThreadId: input.coordinatorThreadId,
+        sourceKey: `settle:${input.sourceEventId}`,
+        tone: notice.tone,
+        kind: "synara.worker.settled",
+        summary: formatWorkerMonitorRow({
+          title: worker.title,
+          marker: notice.marker,
+          phrase: notice.phrase,
+        }),
+        payload: {
+          source: "worker_monitor",
+          eventType: input.eventType,
+          marker: notice.marker,
+          phrase: notice.phrase,
+          thread: threadPayload,
+        },
+        createdAt: input.createdAt,
+      });
+      const batch = yield* repository
+        .listManagedWorkersByBatch({ projectId: worker.projectId, batchId: worker.batchId })
+        .pipe(Effect.mapError(toServiceError("Failed to load worker batch.")));
+      // The just-written row is freshest; swap it into the batch listing in
+      // case a concurrent ingest left the read behind.
+      const peers = batch.map((row) => (row.threadId === worker.threadId ? updated : row));
+      if (peers.length > 1 && peers.every((row) => row.settledAt !== null)) {
+        const signature = peers.map((row) => row.settleOutcome ?? "pending").join("|");
+        const rollupKey = `${worker.batchId}:${signature}`;
+        const rollupInserted = yield* repository
+          .insertInboxEvent({
+            id: branded.inbox(),
+            projectId: worker.projectId,
+            sourceThreadId: worker.threadId,
+            sourceEventId: `worker-batch:${rollupKey}`,
+            eventType: "workers.settled",
+            taskId: input.taskId,
+            eligibleWake: true,
+            createdAt: input.createdAt,
+          })
+          .pipe(Effect.mapError(toServiceError("Failed to record worker batch roll-up.")));
+        if (rollupInserted.inserted) {
+          const threads = peers.map((row) => ({
+            threadId: row.threadId,
+            title: row.title,
+            outcome: row.settleOutcome ?? "failed",
+          }));
+          const allFinished = threads.every(
+            (thread) => thread.outcome === "completed" || thread.outcome === "stopped",
+          );
+          yield* postWorkerMonitorRow({
+            coordinatorThreadId: input.coordinatorThreadId,
+            sourceKey: `rollup:${rollupKey}`,
+            tone: allFinished ? "info" : "approval",
+            kind: "synara.workers.settled",
+            summary: formatWorkerBatchRollup({ threads }),
+            payload: { source: "worker_monitor", batchId: worker.batchId, threads },
+            createdAt: input.createdAt,
+          });
+        }
+      }
+    });
+
+  // Stuck checks the health loop applies to every recorded managed worker:
+  // missing shell (episode-keyed), failed session status, waiting on an
+  // approval/user input past the waiting threshold, and running silent past
+  // the quiet threshold. Terminal outcomes stop the waiting/silent checks.
+  const inspectManagedWorkerHealth = (input: {
+    readonly worker: ProjectManagedWorker;
+    readonly shell: Option.Option<OrchestrationThreadShell>;
+  }) =>
+    Effect.gen(function* () {
+      const worker = input.worker;
+      const nowIso = isoNow();
+      const nowMs = Date.now();
+      const serviceError = toServiceError("Failed to update managed worker health state.");
+      const ingestHealthEvent = (sourceEventId: string, eventType: string) =>
+        impl
+          .ingestSettledThreadEvent({
+            threadId: worker.threadId,
+            sourceEventId,
+            eventType,
+            createdAt: nowIso,
+          })
+          .pipe(
+            Effect.catch((error) =>
+              appendActivity({
+                projectId: worker.projectId,
+                kind: "error",
+                actorKind: "system",
+                actorThreadId: worker.threadId,
+                goalId: null,
+                taskId: null,
+                source: null,
+                summary: `Worker monitor ingest ${eventType} on ${worker.threadId}: ${String(error)}`,
+                createdAt: nowIso,
+              }),
+            ),
+          );
+
+      if (Option.isNone(input.shell)) {
+        // Missing shell: one episode, keyed by its first-seen timestamp. A
+        // worker already settled as missing stays quiet while the shell is
+        // still gone — a later settle event re-opens reporting.
+        if (worker.stuckKind === "missing" || worker.settleOutcome === "missing") return;
+        const stuckSince = nowIso;
+        yield* repository
+          .upsertManagedWorker({
+            ...worker,
+            stuckKind: "missing",
+            stuckSince,
+            updatedAt: nowIso,
+          })
+          .pipe(Effect.mapError(serviceError));
+        yield* ingestHealthEvent(
+          `worker-health:${worker.threadId}:missing:${stuckSince}`,
+          "worker.missing",
+        );
+        return;
+      }
+      const shell = input.shell.value;
+      const sessionStatus = shell.session?.status ?? null;
+      if (isFailedWorkerSessionStatus(sessionStatus)) {
+        const updatedAt = shell.session?.updatedAt ?? shell.updatedAt;
+        yield* ingestHealthEvent(
+          `worker-health:${worker.threadId}:${sessionStatus}:${updatedAt}`,
+          `worker.${sessionStatus}`,
+        );
+        return;
+      }
+
+      let updated = worker;
+      if (worker.stuckKind === "missing") {
+        updated = { ...updated, stuckKind: null, stuckSince: null };
+      }
+      const terminal =
+        worker.settleOutcome === "completed" ||
+        worker.settleOutcome === "stopped" ||
+        worker.settleOutcome === "failed" ||
+        worker.settleOutcome === "interrupted" ||
+        worker.settleOutcome === "missing";
+      if (!terminal) {
+        const waiting = shell.hasPendingApprovals || shell.hasPendingUserInput;
+        if (waiting) {
+          const waitingSince = updated.waitingSince ?? nowIso;
+          updated = { ...updated, waitingSince };
+          if (
+            nowMs - Date.parse(waitingSince) > WORKER_STUCK_WAITING_MS &&
+            updated.stuckKind !== "waiting"
+          ) {
+            updated = { ...updated, stuckKind: "waiting", stuckSince: waitingSince };
+            yield* ingestHealthEvent(
+              `worker-health:${worker.threadId}:waiting:${waitingSince}`,
+              "worker.waiting-overdue",
+            );
+          }
+        } else {
+          if (updated.waitingSince !== null) updated = { ...updated, waitingSince: null };
+          if (updated.stuckKind === "waiting") {
+            updated = { ...updated, stuckKind: null, stuckSince: null };
+          }
+          const lastActivity = shell.session?.updatedAt ?? shell.updatedAt;
+          if (
+            sessionStatus === "running" &&
+            nowMs - Date.parse(lastActivity) > WORKER_STUCK_RUNNING_QUIET_MS
+          ) {
+            if (updated.stuckKind !== "silent" || updated.stuckSince !== lastActivity) {
+              updated = { ...updated, stuckKind: "silent", stuckSince: lastActivity };
+              yield* ingestHealthEvent(
+                `worker-health:${worker.threadId}:silent:${lastActivity}`,
+                "worker.silent",
+              );
+            }
+          } else if (updated.stuckKind === "silent") {
+            updated = { ...updated, stuckKind: null, stuckSince: null };
+          }
+        }
+      }
+      if (updated !== worker) {
+        yield* repository
+          .upsertManagedWorker({ ...updated, updatedAt: nowIso })
+          .pipe(Effect.mapError(serviceError));
+      }
+    });
 
   // A digest left "running" by a crash or restart would block refresh forever;
   // reset those rows once at startup so the next schedule regenerates them.
@@ -1129,6 +1419,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
       const tasks = yield* repository
         .listTasks({ projectId: input.projectId, includeArchived: true, limit: 500 })
         .pipe(Effect.mapError(toServiceError("Failed to load group tasks.")));
+      const workers = yield* repository
+        .listManagedWorkers(input.projectId)
+        .pipe(Effect.mapError(toServiceError("Failed to load managed workers.")));
       const ids = new Set<ThreadId>();
       for (const thread of groupThreads) {
         if (thread.deletedAt === null && thread.threadId !== input.coordinatorThreadId) {
@@ -1142,6 +1435,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
         if (task.assignedThreadId && task.assignedThreadId !== input.coordinatorThreadId) {
           ids.add(task.assignedThreadId);
         }
+      }
+      for (const worker of workers) {
+        if (worker.threadId !== input.coordinatorThreadId) ids.add(worker.threadId);
       }
       const shells = yield* snapshotQuery
         .getThreadShellsByIds([...ids])
@@ -4005,6 +4301,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
           .pipe(Effect.mapError(toServiceError("Failed to load authorized goal.")));
         const activeGoal =
           Option.isSome(goal) && goal.value.status === "active" ? goal.value : null;
+        const batchId = input.batchId ?? input.requestId;
         for (const [index, threadId] of input.threadIds.entries()) {
           const title = input.titles[index] ?? `Worker ${index + 1}`;
           const indexEntry = {
@@ -4020,6 +4317,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
             .upsertThreadIndex(indexEntry)
             .pipe(Effect.mapError(toServiceError("Failed to index worker thread.")));
           yield* publishThreadIndexUpserts(principal.projectId, [indexEntry]);
+          let taskId: ProjectTaskId | null = null;
           if (activeGoal) {
             const task = yield* impl.createTask(
               {
@@ -4067,7 +4365,28 @@ export const makeProjectAgentService = Effect.gen(function* () {
                 finishedAt: null,
               })
               .pipe(Effect.mapError(toServiceError("Failed to record worker attempt.")));
+            taskId = task.id;
           }
+          // Every coordinator-created thread is a tracked worker — the durable
+          // record drives settle rows, the batch roll-up, and stuck detection
+          // even when no active goal produced a task for it.
+          yield* repository
+            .upsertManagedWorker({
+              projectId: principal.projectId,
+              threadId,
+              batchId,
+              requestId: input.requestId,
+              title,
+              taskId,
+              settledAt: null,
+              settleOutcome: null,
+              waitingSince: null,
+              stuckKind: null,
+              stuckSince: null,
+              createdAt: now,
+              updatedAt: now,
+            })
+            .pipe(Effect.mapError(toServiceError("Failed to track managed worker.")));
           yield* appendActivity({
             projectId: principal.projectId,
             kind: "task-created",
@@ -4341,6 +4660,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const task = yield* repository
           .findTaskByAssignedThread(input.threadId)
           .pipe(Effect.mapError(toServiceError("Failed to resolve task for event.")));
+        const worker = yield* repository
+          .findManagedWorkerByThread(input.threadId)
+          .pipe(Effect.mapError(toServiceError("Failed to resolve managed worker for event.")));
         const configByCoordinator = yield* repository
           .getConfigByCoordinatorThread(input.threadId)
           .pipe(Effect.mapError(toServiceError("Failed to resolve coordinator for event.")));
@@ -4349,11 +4671,13 @@ export const makeProjectAgentService = Effect.gen(function* () {
           .pipe(Effect.mapError(toServiceError("Failed to resolve thread for event.")));
         const projectId = Option.isSome(task)
           ? task.value.projectId
-          : Option.isSome(configByCoordinator)
-            ? configByCoordinator.value.projectId
-            : Option.isSome(shell)
-              ? shell.value.projectId
-              : null;
+          : Option.isSome(worker)
+            ? worker.value.projectId
+            : Option.isSome(configByCoordinator)
+              ? configByCoordinator.value.projectId
+              : Option.isSome(shell)
+                ? shell.value.projectId
+                : null;
         if (projectId === null) return;
         const config = yield* repository
           .getConfig(projectId)
@@ -4377,10 +4701,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
           yield* impl.scheduleDigest(projectId);
           return;
         }
-        // A worker is a thread the coordinator assigned to a task. Wakes come
-        // from those threads or from any group thread that ends in an alert
-        // (error / needs the user) — never from routine turns in group chats.
-        const managedWorker = Option.isSome(task);
+        // A worker is a tracked thread: a task assignment or a recorded
+        // managed worker (coordinator-created with or without an active goal).
+        // Wakes come from those threads or from any group thread that ends in
+        // an alert (error / needs the user) — never from routine group chats.
+        const managedWorker = Option.isSome(task) || Option.isSome(worker);
         const eligibleWake = managedWorker || isWorkerAlertEvent(input.eventType);
         const inserted = yield* repository
           .insertInboxEvent({
@@ -4477,6 +4802,20 @@ export const makeProjectAgentService = Effect.gen(function* () {
             yield* impl.scheduleDigest(projectId);
           }
           return;
+        }
+        // Deterministic monitoring: the fresh event posts its compact system
+        // row into the coordinator thread and, once every worker in the same
+        // creation batch has settled, the single roll-up row. The wake below
+        // then hands the coordinator a turn to react.
+        if (Option.isSome(worker)) {
+          yield* recordWorkerMonitorEvent({
+            worker: worker.value,
+            eventType: input.eventType,
+            sourceEventId: input.sourceEventId,
+            createdAt: input.createdAt,
+            coordinatorThreadId: config.value.coordinatorThreadId,
+            taskId: Option.isSome(task) ? task.value.id : null,
+          });
         }
         yield* impl.scheduleDigest(projectId);
         if (eligibleWake) {
@@ -4767,10 +5106,15 @@ export const makeProjectAgentService = Effect.gen(function* () {
         for (const config of configs) {
           if (!config.enabled) continue;
           if (config.pausedAt !== null || config.archivedAt !== null) continue;
-          // Only task-assigned threads are workers. Ordinary group chats stay
+          // Only tracked workers are checked. Ordinary group chats stay
           // indexed for context but a healthy idle/finished one must never
-          // produce reports, wakes, or digests.
+          // produce reports, wakes, or digests. Managed workers additionally
+          // get the quiet/waiting stuck checks.
           const workerThreadIds = yield* assignedWorkerThreadIds(config.projectId);
+          const workers = yield* repository
+            .listManagedWorkers(config.projectId)
+            .pipe(Effect.mapError(toServiceError("Failed to load managed workers.")));
+          const workerByThread = new Map(workers.map((worker) => [worker.threadId, worker]));
           for (const threadId of workerThreadIds) {
             if (threadId === config.coordinatorThreadId) {
               continue;
@@ -4778,6 +5122,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
             const shell = yield* snapshotQuery
               .getThreadShellById(threadId)
               .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+            const worker = workerByThread.get(threadId);
+            if (worker !== undefined) {
+              yield* inspectManagedWorkerHealth({ worker, shell });
+              continue;
+            }
             if (Option.isNone(shell)) {
               yield* impl.ingestSettledThreadEvent({
                 threadId,

@@ -2773,6 +2773,11 @@ describe("AgentGateway", () => {
       });
       assert.isFalse(isToolError(response.result), toolErrorText(response.result));
 
+      const created = toolResultJson(response.result).threads as Array<Record<string, unknown>>;
+      // The result carries a ready-to-use thread link so callers can write
+      // `[title](thread://<id>)` markdown instead of title-with-spaces links.
+      assert.equal(created[0]?.link, `thread://${String(created[0]?.threadId)}`);
+
       const creates = harness.dispatched.filter((command) => command.type === "thread.create");
       const turns = harness.dispatched.filter((command) => command.type === "thread.turn.start");
       assert.lengthOf(creates, 1);
