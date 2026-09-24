@@ -1,9 +1,9 @@
 // FILE: ProjectSidebarIcon.tsx
-// Purpose: Render the standard project folder icon with an optional favicon badge overlay.
+// Purpose: Render a project's favicon or its standard folder icon with a favicon badge.
 // Layer: Sidebar UI component
 // Exports: ProjectSidebarIcon
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { resolveWsHttpUrl } from "~/lib/wsHttpUrl";
 import { FolderClosed, FolderOpen } from "./FolderClosed";
@@ -19,10 +19,14 @@ export function ProjectSidebarIcon({
   cwd,
   expanded,
   glyphClassName: glyphClassNameProp,
+  presentation = "badge",
+  fallbackIcon,
 }: {
   cwd: string;
   expanded: boolean;
   glyphClassName?: string;
+  presentation?: "badge" | "favicon";
+  fallbackIcon?: ReactNode;
 }) {
   const glyphClassName = glyphClassNameProp ?? "size-4";
   const faviconSrc = resolveProjectFaviconUrl(cwd);
@@ -66,6 +70,25 @@ export function ProjectSidebarIcon({
     };
   }, [faviconSrc]);
 
+  const handleImageError = () => {
+    projectFaviconPresence.set(faviconSrc, false);
+    setProbe({ src: faviconSrc, present: false });
+  };
+
+  if (presentation === "favicon") {
+    return hasFavicon ? (
+      <img
+        src={faviconSrc}
+        alt=""
+        aria-hidden="true"
+        className={`${glyphClassName} rounded-[2px] object-contain`}
+        onError={handleImageError}
+      />
+    ) : (
+      (fallbackIcon ?? <FolderGlyph className={glyphClassName} />)
+    );
+  }
+
   return (
     <>
       <FolderGlyph className={glyphClassName} />
@@ -75,10 +98,7 @@ export function ProjectSidebarIcon({
           alt=""
           aria-hidden="true"
           className="absolute -right-1 -bottom-1 size-3 rounded-[4px] object-contain shadow-sm"
-          onError={() => {
-            projectFaviconPresence.set(faviconSrc, false);
-            setProbe({ src: faviconSrc, present: false });
-          }}
+          onError={handleImageError}
         />
       ) : null}
     </>
