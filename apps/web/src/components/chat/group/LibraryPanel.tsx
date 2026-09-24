@@ -634,7 +634,10 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
             ENVIRONMENT_PANEL_SURFACE_CLASS_NAME,
             ENVIRONMENT_PANEL_MOTION_CLASS,
             "flex w-72 flex-col",
-            fullHeight ? "h-full" : "max-h-full",
+            // Collapsed caps below the overlay so expand can visibly grow; content
+            // taller than the overlay would otherwise pin the card at max-h-full
+            // and make "Expand to full height" a no-op.
+            fullHeight ? "h-full" : "max-h-[70%]",
             open
               ? "pointer-events-auto translate-x-0 opacity-100"
               : "pointer-events-none translate-x-full opacity-0",
