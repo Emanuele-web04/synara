@@ -3594,7 +3594,7 @@ describe("MessagesTimeline", () => {
     );
   });
 
-  it("renders an automation-dispatched coordinator prompt as a compact check-in row", async () => {
+  it("renders an automation-dispatched coordinator prompt without a check-in pill", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -3619,11 +3619,12 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Coordinator check-in");
-    expect(markup).toContain("Show details");
-    // The compact system row must not render the user bubble chrome.
-    expect(markup).not.toContain("--app-user-message-background");
-    expect(markup).not.toContain("Sent via Automation");
+    // Check-in turns never appear as a compact row; when one reaches the
+    // timeline it renders like any other user message.
+    expect(markup).not.toContain("Coordinator check-in");
+    expect(markup).not.toContain("Show details");
+    expect(markup).toContain("--app-user-message-background");
+    expect(markup).toContain("Sent via Automation");
   });
 
   it("keeps automation-origin user messages as bubbles outside coordinator conversations", async () => {
