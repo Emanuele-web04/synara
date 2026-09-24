@@ -112,8 +112,11 @@ The stable app offers a one-click handoff under **Settings → General → Synar
 - **Install Synara Beta** (macOS) downloads the newest `v*-beta.N` release's
   `beta-mac.yml`, picks the zip for the current architecture, verifies its
   sha512, unpacks it with `ditto`, checks the bundle id is
-  `com.emanueledipietro.synara.beta`, and moves `Synara Beta.app` into
-  `/Applications` — then opens it. On other platforms the card opens the public
+  `com.emanueledipietro.synara.beta`, and verifies the code signature is valid
+  and signed by the same team id as the running app (`codesign --verify
+--deep --strict` plus a `TeamIdentifier` match; skipped when the running
+  build is itself unsigned). Only then is `Synara Beta.app` moved into
+  `/Applications` — then opened. On other platforms the card opens the public
   download page instead.
 - **Copy my data and open** installs first when needed, then writes a marker at
   `~/.synara-beta/import-requested.json` and launches the beta app. On its next

@@ -144,6 +144,8 @@ function fakeApp(dir: string, bundleId = "com.emanueledipietro.synara.beta"): st
   return join(dir, "Synara Beta.app");
 }
 
+const noTeamIdReadCommand = () => ({ status: 0, stdout: "", stderr: "Executable=/tmp/x\n" });
+
 describe("verifyBetaAppBundle", () => {
   it("accepts the beta bundle id", () => {
     const root = makeRoot();
@@ -237,6 +239,82 @@ describe("installBetaFromFeed", () => {
     await expect(installBetaFromFeed(bad, () => {})).rejects.toThrow(/not Synara Beta/);
     expect(existsSync(join(installDir, "Synara Beta.app"))).toBe(false);
   });
+
+  const codesignStub = (teamId: string | null, verifyOk = true) => {
+    const calls: string[][] = [];
+    return {
+      calls,
+      readCommand: (command: string, args: readonly string[]) => {
+        expect(command).toBe("codesign");
+        calls.push([...args]);
+        if (args[0] === "--verify") {
+          return { status: verifyOk ? 0 : 1, stdout: "", stderr: verifyOk ? "" : "invalid" };
+        }
+        // codesign -dv prints TeamIdentifier on stderr.
+        return {
+          status: 0,
+          stdout: "",
+          stderr: teamId === null ? "TeamIdentifier=not set\n" : `TeamIdentifier=${teamId}\n`,
+        };
+      },
+    };
+  };
+
+  it("installs when the download is signed by the expected team", async () => {
+    const root = makeRoot();
+    const { deps, installDir } = feedDeps(root);
+    const { calls, readCommand } = codesignStub("TEAM1234AB");
+    const target = await installBetaFromFeed(
+      { ...deps, expectedTeamId: "TEAM1234AB", readCommand },
+      () => {},
+    );
+    expect(target).toBe(join(installDir, "Synara Beta.app"));
+    expect(calls).toHaveLength(2);
+  });
+
+  it("rejects a bundle signed by a different team", async () => {
+    const root = makeRoot();
+    const { deps, installDir } = feedDeps(root);
+    const { readCommand } = codesignStub("OTHER9999");
+    await expect(
+      installBetaFromFeed({ ...deps, expectedTeamId: "TEAM1234AB", readCommand }, () => {}),
+    ).rejects.toThrow("The beta download isn't signed by Synara. It wasn't installed.");
+    expect(existsSync(join(installDir, "Synara Beta.app"))).toBe(false);
+  });
+
+  it("rejects a bundle whose signature fails verification", async () => {
+    const root = makeRoot();
+    const { deps, installDir } = feedDeps(root);
+    const { readCommand } = codesignStub("TEAM1234AB", false);
+    await expect(
+      installBetaFromFeed({ ...deps, expectedTeamId: "TEAM1234AB", readCommand }, () => {}),
+    ).rejects.toThrow(/isn't signed by Synara/);
+    expect(existsSync(join(installDir, "Synara Beta.app"))).toBe(false);
+  });
+
+  it("rejects a bundle with no TeamIdentifier line", async () => {
+    const root = makeRoot();
+    const { deps, installDir } = feedDeps(root);
+    await expect(
+      installBetaFromFeed(
+        { ...deps, expectedTeamId: "TEAM1234AB", readCommand: noTeamIdReadCommand },
+        () => {},
+      ),
+    ).rejects.toThrow(/isn't signed by Synara/);
+    expect(existsSync(join(installDir, "Synara Beta.app"))).toBe(false);
+  });
+
+  it("skips codesign entirely when the running app is unsigned", async () => {
+    const root = makeRoot();
+    const { deps, installDir } = feedDeps(root);
+    const { calls, readCommand } = codesignStub(null);
+    const target = await installBetaFromFeed(
+      { ...deps, expectedTeamId: null, readCommand },
+      () => {},
+    );
+    expect(target).toBe(join(installDir, "Synara Beta.app"));
+    expect(calls).toHaveLength(0);
+  });
 });
 
 describe("httpsFetchText transport policy", () => {
@@ -246,6 +324,22 @@ describe("httpsFetchText transport policy", () => {
 
   it("refuses non-HTTP protocols", async () => {
     await expect(httpsFetchText("file:///etc/passwd")).rejects.toThrow(/Unsupported/);
+  });
+
+  it("rejects after 5 redirects", async () => {
+    const server = createServer((request, response) => {
+      response.writeHead(302, { location: `${request.url}x` });
+      response.end();
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const { port } = server.address() as AddressInfo;
+      await expect(httpsFetchText(`http://127.0.0.1:${port}/a`)).rejects.toThrow(
+        "Too many redirects",
+      );
+    } finally {
+      server.close();
+    }
   });
 
   it("accepts plain HTTP from a loopback demo feed", async () => {

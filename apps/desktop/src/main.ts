@@ -4798,6 +4798,28 @@ function ownMacAppBundlePath(): string {
   return Path.resolve(process.execPath, "..", "..", "..");
 }
 
+/**
+ * Team id of the running app's signature, used to verify a downloaded beta
+ * bundle before it is installed. Unsigned builds (dev, local, demo) yield
+ * "not set" or a non-zero exit — the install then skips the check. A lookup
+ * failure must never break startup, so every path resolves to null.
+ */
+function ownAppTeamId(): string | null {
+  if (process.platform !== "darwin") return null;
+  try {
+    const result = ChildProcess.spawnSync(
+      "codesign",
+      ["-dv", "--verbose=4", ownMacAppBundlePath()],
+      { encoding: "utf8" },
+    );
+    if (result.status !== 0) return null;
+    const teamId = /^TeamIdentifier=(\S+)$/m.exec(result.stderr ?? "")?.[1];
+    return teamId && teamId !== "not set" ? teamId : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Only ever trash the packaged beta bundle this process runs from. */
 function isTrashableBetaBundle(): boolean {
   return (
@@ -5160,6 +5182,7 @@ function registerIpcHandlers(): void {
             : "production",
     feedUrlOverride: process.env.SYNARA_BETA_FEED_URL,
     installDirOverride: process.env.SYNARA_BETA_INSTALL_DIR,
+    expectedTeamId: ownAppTeamId(),
     betaUserDataDir: process.env.SYNARA_BETA_USER_DATA,
     stableExecutablePath: desktopFlavor === "production" ? process.execPath : undefined,
     stableHomeDir: desktopFlavor === "production" ? BASE_DIR : undefined,

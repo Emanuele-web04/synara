@@ -7,7 +7,7 @@
 // `beta-mac.yml` plus the files it lists. Without it, the newest GitHub
 // `v*-beta.N` release on Emanuele-web04/synara provides the manifest.
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createWriteStream, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { get as httpGet } from "node:http";
@@ -139,6 +139,7 @@ export interface BetaFeedLocation {
 export type FetchText = (url: string) => Promise<string>;
 
 const FEED_IDLE_TIMEOUT_MS = 30_000;
+const FEED_MAX_REDIRECTS = 5;
 
 /**
  * HTTPS everywhere; plain HTTP is accepted only for loopback hosts so a local
@@ -168,8 +169,10 @@ function feedGet(
   return request;
 }
 
-/** Default fetch over HTTPS, following GitHub's release-asset redirects. */
-export const httpsFetchText: FetchText = (url) =>
+/** Default fetch over HTTPS, following at most 5 release-asset redirects. */
+export const httpsFetchText: FetchText = (url) => fetchTextWithRedirects(url, 0);
+
+const fetchTextWithRedirects = (url: string, redirects: number): Promise<string> =>
   new Promise((resolvePromise, rejectPromise) => {
     let request;
     try {
@@ -178,7 +181,11 @@ export const httpsFetchText: FetchText = (url) =>
         const location = response.headers.location;
         if (status >= 300 && status < 400 && typeof location === "string") {
           response.resume();
-          resolvePromise(httpsFetchText(new URL(location, url).toString()));
+          if (redirects >= FEED_MAX_REDIRECTS) {
+            rejectPromise(new Error("Too many redirects"));
+            return;
+          }
+          resolvePromise(fetchTextWithRedirects(new URL(location, url).toString(), redirects + 1));
           return;
         }
         if (status !== 200) {
@@ -249,6 +256,14 @@ export type DownloadFile = (
 
 /** Streams a URL to disk, reporting percent when the server sends a length. */
 export const httpsDownloadFile: DownloadFile = (url, destinationPath, onProgress) =>
+  downloadFileWithRedirects(url, destinationPath, onProgress, 0);
+
+const downloadFileWithRedirects = (
+  url: string,
+  destinationPath: string,
+  onProgress: (percent: number | null) => void,
+  redirects: number,
+): Promise<void> =>
   new Promise((resolvePromise, rejectPromise) => {
     let request;
     try {
@@ -257,8 +272,17 @@ export const httpsDownloadFile: DownloadFile = (url, destinationPath, onProgress
         const location = response.headers.location;
         if (status >= 300 && status < 400 && typeof location === "string") {
           response.resume();
+          if (redirects >= FEED_MAX_REDIRECTS) {
+            rejectPromise(new Error("Too many redirects"));
+            return;
+          }
           resolvePromise(
-            httpsDownloadFile(new URL(location, url).toString(), destinationPath, onProgress),
+            downloadFileWithRedirects(
+              new URL(location, url).toString(),
+              destinationPath,
+              onProgress,
+              redirects + 1,
+            ),
           );
           return;
         }
@@ -292,6 +316,43 @@ const execFile: RunCommand = (command, args) => {
   execFileSync(command, [...args], { stdio: "pipe" });
 };
 
+export type ReadCommand = (
+  command: string,
+  args: readonly string[],
+) => { status: number; stdout: string; stderr: string };
+
+const readCommandDefault: ReadCommand = (command, args) => {
+  const result = spawnSync(command, [...args], { encoding: "utf8" });
+  return {
+    status: result.status ?? 1,
+    stdout: typeof result.stdout === "string" ? result.stdout : "",
+    stderr: typeof result.stderr === "string" ? result.stderr : "",
+  };
+};
+
+const TEAM_ID_LINE_PATTERN = /^TeamIdentifier=(\S+)$/m;
+const UNSIGNED_BETA_MESSAGE = "The beta download isn't signed by Synara. It wasn't installed.";
+
+/**
+ * Gatekeeper never assesses downloads made by our own HTTPS client, and the
+ * sha512 comes from the same release feed as the zip — so the signature is
+ * checked against the team id of the app doing the installing. A null team id
+ * means the running app is unsigned itself (local/demo builds) and there is
+ * nothing to compare against, so the check is skipped.
+ */
+export function verifyBetaCodeSignature(
+  appPath: string,
+  expectedTeamId: string | null,
+  readCommand: ReadCommand,
+): void {
+  if (expectedTeamId === null) return;
+  const verify = readCommand("codesign", ["--verify", "--deep", "--strict", appPath]);
+  if (verify.status !== 0) throw new Error(UNSIGNED_BETA_MESSAGE);
+  const info = readCommand("codesign", ["-dv", "--verbose=4", appPath]);
+  const teamId = TEAM_ID_LINE_PATTERN.exec(info.stderr)?.[1];
+  if (teamId !== expectedTeamId) throw new Error(UNSIGNED_BETA_MESSAGE);
+}
+
 /**
  * The extracted bundle must be the beta flavor: a stray or renamed app in the
  * zip must fail the install instead of landing on disk.
@@ -314,9 +375,12 @@ export interface BetaInstallDeps {
   readonly arch: string;
   readonly installDir: string;
   readonly feedUrlOverride?: string | undefined;
+  /** Team id the downloaded bundle must be signed by; null skips the check. */
+  readonly expectedTeamId?: string | null;
   readonly fetchText?: FetchText;
   readonly downloadFile?: DownloadFile;
   readonly run?: RunCommand;
+  readonly readCommand?: ReadCommand;
   readonly tempBaseDir?: string;
 }
 
@@ -357,6 +421,11 @@ export async function installBetaFromFeed(
     run("ditto", ["-x", "-k", zipPath, extractDir]);
     const appPath = join(extractDir, BETA_MAC_APP_NAME);
     verifyBetaAppBundle(appPath);
+    verifyBetaCodeSignature(
+      appPath,
+      deps.expectedTeamId ?? null,
+      deps.readCommand ?? readCommandDefault,
+    );
     mkdirSync(deps.installDir, { recursive: true });
     const targetPath = join(deps.installDir, BETA_MAC_APP_NAME);
     rmSync(targetPath, { recursive: true, force: true });
