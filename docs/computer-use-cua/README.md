@@ -20,9 +20,11 @@ the current input, provider and concurrency corrections and their runtime limits
 
 ## Release support
 
-Synara 0.9.0 introduces Computer Use in beta on macOS only. Linux is coming soon.
-The Linux implementation and qualification material below describe development
-work, not released Linux Computer support.
+Computer Use is available in Synara Beta (and in Cua, Canary, and development
+builds) on macOS only; Stable builds do not include it — the feature is gated
+through `BETA_ONLY_FEATURES` in `packages/shared/src/betaFeatures.ts`. Linux is
+coming soon. The Linux implementation and qualification material below describe
+development work, not released Linux Computer support.
 
 ## Isolated packaged build
 

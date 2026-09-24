@@ -207,6 +207,32 @@ the chats and settings it had before.
 - The Trash step only runs for a packaged bundle named `Synara Beta.app`, so a
   source or dev build can never trash Electron itself.
 
+## Beta-only features
+
+`packages/shared/src/betaFeatures.ts` holds `BETA_ONLY_FEATURES`, the single
+list of features that ship in Beta but not in Stable. `isBetaFeatureEnabled`
+turns a listed feature off only for the `production` desktop flavor; Beta,
+Cua, Canary, development, and non-desktop hosts keep it.
+
+To put a feature behind the list:
+
+- Add its name to `BETA_ONLY_FEATURES`.
+- Gate it on the server, which is authoritative: resolve the host flavor with
+  `desktopFlavorFromBundleId(process.env[SYNARA_DESKTOP_BUNDLE_ID_ENV])` and
+  refuse the capability there, not just in the UI.
+- Hide it on the web with `COMPUTER_USE_ENABLED`-style constants built from
+  `desktopFlavorFromProtocol(window.location.protocol, import.meta.env.DEV)` —
+  hide entry points rather than disabling them, and coerce any persisted or
+  replayed value to off so stale state cannot re-arm the feature.
+- Keep any migrations or persisted fields additive and inert on Stable; a
+  user's stored preference must survive a Beta → Stable round trip untouched.
+
+Promote a feature to Stable by deleting its entry; every gate resolves itself.
+
+Computer Use is currently the only entry. On Stable the server reports the
+computer backend as unavailable with a Beta pointer, the desktop never starts
+the CUA driver host, and the web hides every surface.
+
 ## Diagnostics
 
 Beta builds ship always-on diagnostics — crash reports plus anonymous usage
