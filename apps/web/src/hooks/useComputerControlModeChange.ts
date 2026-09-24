@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef } from "react";
-import { COMPUTER_USE_ENABLED } from "../betaFeatures";
 import type { ThreadId } from "@synara/contracts";
 import type { ComposerComputerControlMode } from "~/computerControlMode";
 import { readNativeApi } from "~/nativeApi";
@@ -32,9 +31,6 @@ export function useComputerControlModeChange({
   );
   const change = useCallback(
     (mode: ComposerComputerControlMode) => {
-      // Stable has no computer use; entry points are gated too, but a stale
-      // path (e.g. a denial card in an imported chat) must not arm the mode.
-      if (!COMPUTER_USE_ENABLED) return;
       const api = readNativeApi();
       if (!api) return;
       const request = ++sequence.current;

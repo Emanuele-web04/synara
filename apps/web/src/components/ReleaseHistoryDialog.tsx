@@ -8,12 +8,7 @@
 
 import { ChangelogAccordion } from "../whatsNew/ChangelogAccordion";
 import { WHATS_NEW_ENTRIES } from "../whatsNew/entries";
-import { isBetaFeatureOn } from "../betaFeatures";
-import {
-  filterEntriesByBetaFeature,
-  sortEntriesByVersionDesc,
-  type WhatsNewEntry,
-} from "../whatsNew/logic";
+import { sortEntriesByVersionDesc, type WhatsNewEntry } from "../whatsNew/logic";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -46,7 +41,7 @@ export default function ReleaseHistoryDialog({
   entries: entriesProp,
   defaultExpandedVersion: defaultExpandedVersionProp,
 }: ReleaseHistoryDialogProps) {
-  const entries = filterEntriesByBetaFeature(entriesProp ?? WHATS_NEW_ENTRIES, isBetaFeatureOn);
+  const entries = entriesProp ?? WHATS_NEW_ENTRIES;
   const defaultExpandedVersion = defaultExpandedVersionProp ?? null;
   // Sort at render time so the source of truth (`entries.ts`) stays free of
   // ordering rules — authors can prepend, append, or reorder entries freely.

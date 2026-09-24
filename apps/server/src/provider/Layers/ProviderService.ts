@@ -56,7 +56,6 @@ import {
 } from "effect";
 import { nonEmptyTrimmed } from "@synara/shared/text";
 import { computerApprovalGate } from "../../computer/ComputerApprovalGate.ts";
-import { ComputerService } from "../../computer/Services/ComputerService.ts";
 
 import {
   type ProviderAdapterError,
@@ -456,15 +455,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
     const registry = yield* ProviderAdapterRegistry;
     const directory = yield* ProviderSessionDirectory;
-    const computerService = yield* Effect.serviceOption(ComputerService);
-    // Stable ships no computer backend, so a persisted or replayed
-    // enableComputerControl flag must never reach an adapter: Pi hard-fails a
-    // start that names computer tools the gateway omits, and Claude would get
-    // computer instructions it cannot act on.
-    const computerUseSupported =
-      Option.isNone(computerService) || computerService.value.supported === true;
-    const readAllowedComputerControl = (runtimePayload: ProviderRuntimeBinding["runtimePayload"]) =>
-      computerUseSupported && readPersistedComputerControl(runtimePayload);
     type ResolvedProviderSessionStartInput = ProviderSessionStartInput & {
       readonly provider: ProviderKind;
     };
@@ -1073,7 +1063,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           const existingBinding = yield* directory.getBinding(input.threadId);
           const enableComputerControl =
             Option.isSome(existingBinding) &&
-            readAllowedComputerControl(existingBinding.value.runtimePayload);
+            readPersistedComputerControl(existingBinding.value.runtimePayload);
           // The row must keep the generation that owned this dispatch alongside
           // the computer-control flag, atomically with the turn intent write.
           // A retained older dispatch settling after a lifecycle rotation must
@@ -1115,7 +1105,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                       ...(input.modelSelection !== undefined
                         ? { modelSelection: input.modelSelection }
                         : {}),
-                      enableComputerControl,
+                      ...(enableComputerControl ? { enableComputerControl: true } : {}),
                     },
                   }
                 : {}),
@@ -1140,7 +1130,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               ...(input.modelSelection !== undefined
                 ? { modelSelection: input.modelSelection }
                 : {}),
-              enableComputerControl,
+              ...(enableComputerControl ? { enableComputerControl: true } : {}),
               activeTurnId: input.turnId,
               lastRuntimeEvent: input.lastRuntimeEvent,
               lastRuntimeEventAt: new Date().toISOString(),
@@ -1345,7 +1335,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               status: preserveShutdownStop ? "stopped" : eventStatus,
               ...(resumeCursor !== undefined ? { resumeCursor } : {}),
               runtimePayload: {
-                enableComputerControl: readAllowedComputerControl(binding.runtimePayload),
+                ...(readPersistedComputerControl(binding.runtimePayload)
+                  ? { enableComputerControl: true }
+                  : {}),
                 activeTurnId: preserveShutdownStop ? null : activeTurnId,
                 lastRuntimeEvent: preserveShutdownStop ? "provider.stopAll" : event.type,
                 lastRuntimeEventAt: preserveShutdownStop ? shutdownStartedAt : event.createdAt,
@@ -1623,7 +1615,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             const persistedCwd = readPersistedCwd(binding.runtimePayload);
             const persistedModelSelection = readPersistedModelSelection(binding.runtimePayload);
             const persistedProviderOptions = readPersistedProviderOptions(binding.runtimePayload);
-            const persistedComputerControl = readAllowedComputerControl(binding.runtimePayload);
+            const persistedComputerControl = readPersistedComputerControl(binding.runtimePayload);
             yield* validateAutoRuntimeMode(
               input.operation,
               binding.provider,
@@ -1656,7 +1648,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               threadId,
               upsertSessionBinding(resumed, threadId, {
                 lifecycleGeneration: lease.generation,
-                enableComputerControl: persistedComputerControl,
+                ...(persistedComputerControl ? { enableComputerControl: true } : {}),
               }).pipe(
                 Effect.andThen(
                   requiresCredentialRotation
@@ -1665,7 +1657,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                         provider: binding.provider,
                         runtimePayload: {
                           [AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED]: false,
-                          enableComputerControl: persistedComputerControl,
+                          ...(persistedComputerControl ? { enableComputerControl: true } : {}),
                         },
                       })
                     : Effect.void,
@@ -1920,11 +1912,10 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   ? readPersistedProviderOptions(persistedBinding.runtimePayload)
                   : undefined);
               const effectiveComputerControl =
-                computerUseSupported &&
-                (input.enableComputerControl ??
-                  (persistedBinding?.provider === input.provider
-                    ? readPersistedComputerControl(persistedBinding.runtimePayload)
-                    : false));
+                input.enableComputerControl ??
+                (persistedBinding?.provider === input.provider
+                  ? readPersistedComputerControl(persistedBinding.runtimePayload)
+                  : false);
               let replacementStarted = false;
               const startupLifecycle = new ProviderStartupLifecycle();
               const startAndPersistReplacement = Effect.gen(function* () {
@@ -2026,7 +2017,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                     lifecycleGeneration: lease.generation,
                     runtimePayload: {
                       [AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED]: false,
-                      enableComputerControl: effectiveComputerControl,
+                      ...(effectiveComputerControl ? { enableComputerControl: true } : {}),
                       [PRIOR_TRANSCRIPT_BOOTSTRAP_PENDING]: priorTranscriptBootstrapPending,
                     },
                   }),
@@ -2071,7 +2062,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               const previousProviderOptions = readPersistedProviderOptions(
                 persistedBinding.runtimePayload,
               );
-              const previousComputerControl = readAllowedComputerControl(
+              const previousComputerControl = readPersistedComputerControl(
                 persistedBinding.runtimePayload,
               );
               // The recycled flag is a (value, generation) pair with the restored
@@ -2081,7 +2072,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               // admitted it against live durable intent) and wins. Otherwise the
               // previous binding's value is recycled with its generation.
               const restoredComputerControl =
-                computerUseSupported && (input.enableComputerControl ?? previousComputerControl);
+                input.enableComputerControl ?? previousComputerControl;
               const previousCwd = readPersistedCwd(persistedBinding.runtimePayload);
               yield* previousAdapter.stopSession(threadId);
 
@@ -2274,7 +2265,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   : {}),
                 // The fork writes the thread's first binding row, so the flag
                 // must land here or resumeSession re-leases without it.
-                enableComputerControl: computerUseSupported && input.enableComputerControl === true,
+                ...(input.enableComputerControl ? { enableComputerControl: true } : {}),
                 lastRuntimeEvent: "provider.thread.forked",
                 lastRuntimeEventAt: new Date().toISOString(),
               });
@@ -2297,8 +2288,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   ...(effectiveProviderOptions !== undefined
                     ? { providerOptions: effectiveProviderOptions }
                     : {}),
-                  enableComputerControl:
-                    computerUseSupported && input.enableComputerControl === true,
+                  ...(input.enableComputerControl ? { enableComputerControl: true } : {}),
                   lastRuntimeEvent: "provider.thread.forked",
                   lastRuntimeEventAt: new Date().toISOString(),
                 },

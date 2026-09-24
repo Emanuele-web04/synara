@@ -2006,7 +2006,6 @@ const make = Effect.gen(function* () {
       // silently drop an active computer task at the fork boundary.
       const parentCanContinueChatControl =
         Option.isSome(computerService) &&
-        computerService.value.supported === true &&
         computerService.value.manager.canContinueChatControl(thread.forkSourceThreadId);
       const forkComputerControl = Option.isSome(computerService)
         ? yield* Effect.promise(() =>
@@ -2231,10 +2230,7 @@ const make = Effect.gen(function* () {
     const goalPromptOverheadChars = providerGoalPromptOverheadChars(activeThreadGoal(thread));
     const providerPromptOverheadChars = debugPromptOverheadChars + goalPromptOverheadChars;
     const computerInvocation =
-      (input.dispatchOrigin === undefined || input.dispatchOrigin === "user") &&
-      // Stable ships no computer backend; a typed /computer-use must pass
-      // through literally instead of being rewritten into a provider prompt.
-      (Option.isNone(computerService) || computerService.value.supported === true)
+      input.dispatchOrigin === undefined || input.dispatchOrigin === "user"
         ? parseComputerInvocation(input.messageText)
         : null;
     // Synara owns this command. Keep it in durable user text for provenance,
@@ -2352,22 +2348,18 @@ const make = Effect.gen(function* () {
     const generation = activation.computerControlGeneration;
     const enableComputerControl = Option.isNone(computerService)
       ? activation.enableComputerControl
-      : computerService.value.supported !== true
-        ? // Stable ships no computer backend; neither a chat opt-in nor
-          // /computer-use activates control.
-          false
-        : input.turnKind === "goal-continuation"
-          ? computerService.value.manager.canContinueChatControl(input.threadId)
-          : input.dispatchMode === "steer" && requestedMode === "off"
-            ? false // Ordinary steering does not change the active turn's intent.
-            : yield* Effect.promise(() =>
-                computerService.value.manager.admitControl(
-                  input.threadId,
-                  requestedMode,
-                  generation,
-                  requestedMode === "request" && computerInvocation !== null,
-                ),
-              );
+      : input.turnKind === "goal-continuation"
+        ? computerService.value.manager.canContinueChatControl(input.threadId)
+        : input.dispatchMode === "steer" && requestedMode === "off"
+          ? false // Ordinary steering does not change the active turn's intent.
+          : yield* Effect.promise(() =>
+              computerService.value.manager.admitControl(
+                input.threadId,
+                requestedMode,
+                generation,
+                requestedMode === "request" && computerInvocation !== null,
+              ),
+            );
     yield* Effect.logDebug("provider command reactor computer inputs", {
       threadId: input.threadId,
       mode: activation.computerControlMode,
@@ -3491,11 +3483,10 @@ const make = Effect.gen(function* () {
         event.payload.dispatchMode === "steer" &&
         activation.enableComputerControl &&
         (Option.isNone(computerService) ||
-          (computerService.value.supported === true &&
-            computerService.value.manager.canActivateControl(
-              event.payload.threadId,
-              activation.computerControlGeneration,
-            ))) &&
+          computerService.value.manager.canActivateControl(
+            event.payload.threadId,
+            activation.computerControlGeneration,
+          )) &&
         !(Option.isSome(gatewaySessions) && gatewaySessions.value.computerControlProvisioned
           ? gatewaySessions.value.computerControlProvisioned(
               event.payload.threadId,

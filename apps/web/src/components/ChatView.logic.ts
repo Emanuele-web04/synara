@@ -1,4 +1,3 @@
-import { COMPUTER_USE_ENABLED } from "../betaFeatures";
 import {
   resolveComputerControlMode,
   type ComposerComputerControlMode,
@@ -1697,10 +1696,7 @@ export function resolveEffectiveComputerControl(input: {
   readonly computerControlEnabled: boolean;
   /** True once the chat has any turn; the new-chat default no longer applies. */
   readonly chatHasTurns: boolean;
-  /** Beta-only feature flag; `false` forces control off. Defaults to the build flag. */
-  readonly computerUseEnabled?: boolean;
 }): boolean {
-  if ((input.computerUseEnabled ?? COMPUTER_USE_ENABLED) === false) return false;
   if (input.availability?.kind === "unsupported-platform") return false;
   return input.mode !== undefined
     ? input.mode !== "off"
@@ -1743,18 +1739,18 @@ export interface TurnDispatchSettings {
 export function resolveQueuedTurnDispatchSettings(
   settings: TurnDispatchSettings,
   queuedTurn: QueuedComposerTurn | null | undefined,
-  options?: { readonly computerUseEnabled?: boolean },
 ): TurnDispatchSettings {
   if (!queuedTurn) {
     return settings;
   }
-  const computerUseEnabled = options?.computerUseEnabled ?? COMPUTER_USE_ENABLED;
-  const queuedMode = computerUseEnabled
-    ? resolveComputerControlMode(queuedTurn.computerControlMode, queuedTurn.enableComputerControl)
-    : "off";
-  const liveMode = computerUseEnabled
-    ? resolveComputerControlMode(settings.computerControlMode, settings.enableComputerControl)
-    : "off";
+  const queuedMode = resolveComputerControlMode(
+    queuedTurn.computerControlMode,
+    queuedTurn.enableComputerControl,
+  );
+  const liveMode = resolveComputerControlMode(
+    settings.computerControlMode,
+    settings.enableComputerControl,
+  );
   const sameGeneration =
     settings.computerControlGeneration === undefined ||
     settings.computerControlGeneration === (queuedTurn.computerControlGeneration ?? 0);

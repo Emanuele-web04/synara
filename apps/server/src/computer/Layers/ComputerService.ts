@@ -4,8 +4,6 @@ import { Effect, Layer, Option } from "effect";
 import type { ComputerAvailability } from "@synara/contracts";
 
 import { CUA_HOST_SOCKET_ENV } from "@synara/shared/cuaDriverProtocol";
-import { desktopFlavorFromBundleId, isBetaFeatureEnabled } from "@synara/shared/betaFeatures";
-import { SYNARA_DESKTOP_BUNDLE_ID_ENV } from "@synara/shared/desktopIdentity";
 import { ComputerManager } from "../ComputerManager.ts";
 import { CuaComputerBackend } from "../CuaComputerBackend.ts";
 import { FakeComputerBackend } from "../FakeComputerBackend.ts";
@@ -21,8 +19,6 @@ export interface ComputerServiceLiveOptions {
   readonly supported?: boolean;
   /** Test override for the host platform; defaults to `process.platform`. */
   readonly platform?: NodeJS.Platform;
-  /** Test override for the process environment; defaults to `process.env`. */
-  readonly env?: Readonly<Record<string, string | undefined>>;
 }
 
 let warnedMissingControlStatePath = false;
@@ -31,17 +27,8 @@ export function makeComputerServiceLayer(options: ComputerServiceLiveOptions = {
   return Layer.effect(
     ComputerService,
     Effect.gen(function* () {
-      const env = options.env ?? process.env;
       const platform = options.platform ?? process.platform;
-      const requestedBackend = env.SYNARA_COMPUTER_BACKEND?.trim().toLowerCase();
-      // Computer use ships in Beta only. On the Stable desktop this is a hard
-      // product gate, independent of platform or backend selection — even the
-      // `SYNARA_COMPUTER_BACKEND=fake` test backend stays out. An explicit
-      // `options.backend` injection still wins (tests and embeddings).
-      const computerUseEnabled = isBetaFeatureEnabled(
-        "computerUse",
-        desktopFlavorFromBundleId(env[SYNARA_DESKTOP_BUNDLE_ID_ENV]),
-      );
+      const requestedBackend = process.env.SYNARA_COMPUTER_BACKEND?.trim().toLowerCase();
       const unavailableAvailability: ComputerAvailability =
         platform === "linux"
           ? {
@@ -54,17 +41,9 @@ export function makeComputerServiceLayer(options: ComputerServiceLiveOptions = {
       // configured explicitly (the provisioned upstream driver serving the
       // same socket protocol). No endpoint means no backend — the gate is
       // reachability, never platform optimism.
-      const hostEndpoint = env[CUA_HOST_SOCKET_ENV]?.trim();
+      const hostEndpoint = process.env[CUA_HOST_SOCKET_ENV]?.trim();
       const backend =
         options.backend ??
-        (!computerUseEnabled
-          ? new UnavailableComputerBackend("Computer use is available in Synara Beta.", {
-              availability: {
-                kind: "backend-unavailable",
-                message: "Computer use is available in Synara Beta.",
-              },
-            })
-          : undefined) ??
         (requestedBackend === "fake" ? new FakeComputerBackend() : undefined) ??
         (platform === "darwin" || hostEndpoint
           ? new CuaComputerBackend({

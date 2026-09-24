@@ -15,7 +15,6 @@ import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
 import {
   SETTINGS_NAV_GROUPS,
   SETTINGS_NAV_ITEMS,
-  visibleSettingsNavItems,
   type SettingsSectionId,
 } from "../settingsNavigation";
 import {
@@ -176,7 +175,7 @@ export function SettingsSidebarNav(props: {
       ) : (
         <nav aria-label="Settings sections" className="flex flex-col">
           {SETTINGS_NAV_GROUPS.map((group) => {
-            const items = visibleSettingsNavItems().filter((item) => item.group === group.id);
+            const items = SETTINGS_NAV_ITEMS.filter((item) => item.group === group.id);
             if (items.length === 0) {
               return null;
             }

@@ -179,7 +179,6 @@ export function describeExternalMcpProjects(input: {
 
 export function describeExternalMcpPermissions(
   capabilities: ReadonlyArray<ExternalMcpCapability>,
-  computerUseEnabled = true,
 ): string {
   const descriptions = ["Create and follow its own tasks"];
   if (capabilities.includes("tasks:read-project")) {
@@ -191,7 +190,7 @@ export function describeExternalMcpPermissions(
   if (capabilities.includes("runtime:full-access")) {
     descriptions.push("Run without approval prompts");
   }
-  if (computerUseEnabled && capabilities.includes("computer:control")) {
+  if (capabilities.includes("computer:control")) {
     descriptions.push("Control this Mac (per-action approval still applies)");
   }
   return descriptions.join(" · ");

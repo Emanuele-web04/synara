@@ -663,36 +663,3 @@ describe("composerSlashCommands", () => {
     }
   });
 });
-
-describe("computerUseEnabled flag", () => {
-  const baseInput = {
-    provider: "codex" as const,
-    supportsFastSlashCommand: false,
-    canOfferCompactCommand: false,
-    canOfferReviewCommand: false,
-    canOfferForkCommand: false,
-    canOfferSideCommand: false,
-    canOfferExportCommand: false,
-  };
-
-  it("offers /computer-use when the feature is enabled", () => {
-    expect(getAvailableComposerSlashCommands({ ...baseInput, computerUseEnabled: true })).toContain(
-      "computer-use",
-    );
-    // Omitted means enabled: existing callers keep today's behavior.
-    expect(getAvailableComposerSlashCommands(baseInput)).toContain("computer-use");
-  });
-
-  it("omits /computer-use when the feature is disabled, for both provider families", () => {
-    expect(
-      getAvailableComposerSlashCommands({ ...baseInput, computerUseEnabled: false }),
-    ).not.toContain("computer-use");
-    expect(
-      getAvailableComposerSlashCommands({
-        ...baseInput,
-        provider: "claudeAgent",
-        computerUseEnabled: false,
-      }),
-    ).not.toContain("computer-use");
-  });
-});

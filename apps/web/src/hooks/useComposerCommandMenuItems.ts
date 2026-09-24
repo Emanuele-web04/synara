@@ -8,7 +8,6 @@ import type {
   ProviderPluginDescriptor,
   ProviderSkillDescriptor,
 } from "@synara/contracts";
-import { COMPUTER_USE_ENABLED } from "~/betaFeatures";
 import { getAgentMentionAutocompleteAliases } from "@synara/contracts";
 import {
   buildCommandSearchFields,
@@ -401,7 +400,6 @@ export function useComposerCommandMenuItems(input: {
       canOfferSideCommand,
       canOfferExportCommand,
       providerNativeCommandNames: providerNativeCommands.map((command) => command.name),
-      computerUseEnabled: COMPUTER_USE_ENABLED,
     });
     const visibleAppCommands = surfaceAppSlashCommands
       ? availableCommands.filter((command) => surfaceAppSlashCommands.has(command))

@@ -23,7 +23,6 @@ import {
   describeExternalMcpProjects,
   externalMcpSetupAction,
 } from "./externalMcpSetup";
-import { COMPUTER_USE_ENABLED } from "../../betaFeatures";
 import { SettingsListRow, SettingsRow, SettingsSection } from "./SettingsPanelPrimitives";
 
 const INTEGRATIONS_QUERY_KEY = ["server", "externalMcpIntegrations"] as const;
@@ -97,7 +96,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
     if (allowProjectRead) next.push("tasks:read-project");
     if (allowLocal) next.push("runtime:local");
     if (allowFullAccess) next.push("runtime:full-access");
-    if (COMPUTER_USE_ENABLED && allowComputerControl) next.push("computer:control");
+    if (allowComputerControl) next.push("computer:control");
     return next;
   }, [allowComputerControl, allowFullAccess, allowLocal, allowProjectRead]);
 
@@ -358,21 +357,16 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
                 </div>
                 <Switch checked={allowFullAccess} onCheckedChange={setAllowFullAccess} />
               </div>
-              {COMPUTER_USE_ENABLED && (
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <div className="text-xs font-medium">Computer control</div>
-                    <div className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
-                      High impact. Tasks may drive this Mac&apos;s screen — observe, click, type,
-                      menus, clipboard. Every computer action still asks for your approval.
-                    </div>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-xs font-medium">Computer control</div>
+                  <div className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+                    High impact. Tasks may drive this Mac&apos;s screen — observe, click, type,
+                    menus, clipboard. Every computer action still asks for your approval.
                   </div>
-                  <Switch
-                    checked={allowComputerControl}
-                    onCheckedChange={setAllowComputerControl}
-                  />
                 </div>
-              )}
+                <Switch checked={allowComputerControl} onCheckedChange={setAllowComputerControl} />
+              </div>
             </DisclosureRegion>
           </SettingsRow>
           <SettingsRow
@@ -589,11 +583,7 @@ export function ExternalMcpSettingsPanel(props: { active: boolean }) {
                     <div>{status}</div>
                     <div>Projects: {describeExternalMcpProjects(integration)}</div>
                     <div>
-                      Permissions:{" "}
-                      {describeExternalMcpPermissions(
-                        integration.capabilities,
-                        COMPUTER_USE_ENABLED,
-                      )}
+                      Permissions: {describeExternalMcpPermissions(integration.capabilities)}
                     </div>
                     <div>
                       Created {formatDate(integration.createdAt)} · Last used{" "}

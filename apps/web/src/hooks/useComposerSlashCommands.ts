@@ -1,4 +1,3 @@
-import { COMPUTER_USE_ENABLED } from "../betaFeatures";
 import {
   PROVIDER_DISPLAY_NAMES,
   THREAD_GOAL_MAX_CHARS,
@@ -168,7 +167,6 @@ export function useComposerSlashCommands(input: {
     canOfferSideCommand: true,
     canOfferExportCommand,
     providerNativeCommandNames,
-    computerUseEnabled: COMPUTER_USE_ENABLED,
   });
 
   const compactProviderThread = useCallback(async (): Promise<boolean> => {

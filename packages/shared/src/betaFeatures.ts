@@ -12,11 +12,12 @@ import {
 } from "./desktopIdentity";
 
 /**
- * Features that ship only in non-Stable builds. Promote a feature to Stable by
- * deleting its entry here; the gates resolve themselves.
+ * Features that ship only in non-Stable builds. Keep a feature out of Stable
+ * by adding its key here; promote it by deleting the entry. Empty today —
+ * every feature ships everywhere.
  */
-export const BETA_ONLY_FEATURES = ["computerUse"] as const;
-export type BetaOnlyFeature = (typeof BETA_ONLY_FEATURES)[number];
+export type BetaOnlyFeature = string;
+export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [];
 
 /**
  * Whether a Beta-only feature is on for this host. Only the Stable

@@ -230,8 +230,7 @@ import { RelocateProjectDialog } from "./RelocateProjectDialog";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import ReleaseHistoryDialog from "./ReleaseHistoryDialog";
 import { WHATS_NEW_ENTRIES } from "../whatsNew/entries";
-import { isBetaFeatureOn } from "../betaFeatures";
-import { filterEntriesByBetaFeature, sortEntriesByVersionDesc } from "../whatsNew/logic";
+import { sortEntriesByVersionDesc } from "../whatsNew/logic";
 import {
   SidebarSearchPalette,
   type ImportProviderKind,
@@ -814,9 +813,7 @@ const SYNARA_DOCS_URL = "https://trysynara.com/docs";
 
 // Latest curated releases surfaced directly in the help menu. Static data, so
 // computed once at module scope rather than per render.
-const HELP_MENU_RELEASE_ENTRIES = sortEntriesByVersionDesc(
-  filterEntriesByBetaFeature(WHATS_NEW_ENTRIES, isBetaFeatureOn),
-).slice(0, 3);
+const HELP_MENU_RELEASE_ENTRIES = sortEntriesByVersionDesc(WHATS_NEW_ENTRIES).slice(0, 3);
 
 // Footer help menu; swapped out for the desktop-update pill while an update is
 // available (see SidebarFooter).

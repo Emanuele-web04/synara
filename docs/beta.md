@@ -216,11 +216,11 @@ Cua, Canary, development, and non-desktop hosts keep it.
 
 To put a feature behind the list:
 
-- Add its name to `BETA_ONLY_FEATURES`.
+- Add its key to `BETA_ONLY_FEATURES`.
 - Gate it on the server, which is authoritative: resolve the host flavor with
   `desktopFlavorFromBundleId(process.env[SYNARA_DESKTOP_BUNDLE_ID_ENV])` and
   refuse the capability there, not just in the UI.
-- Hide it on the web with `COMPUTER_USE_ENABLED`-style constants built from
+- Hide it on the web with a constant built from
   `desktopFlavorFromProtocol(window.location.protocol, import.meta.env.DEV)` —
   hide entry points rather than disabling them, and coerce any persisted or
   replayed value to off so stale state cannot re-arm the feature.
@@ -229,9 +229,7 @@ To put a feature behind the list:
 
 Promote a feature to Stable by deleting its entry; every gate resolves itself.
 
-Computer Use is currently the only entry. On Stable the server reports the
-computer backend as unavailable with a Beta pointer, the desktop never starts
-the CUA driver host, and the web hides every surface.
+The list is currently empty — nothing is Beta-only right now.
 
 ## Diagnostics
 
