@@ -62,7 +62,7 @@ export function WorkerMonitorNoticePill({
       className={cn(
         // Reads as part of the coordinator's reply: left-aligned body text,
         // no pill, no status glyphs.
-        "flex max-w-full flex-wrap items-center gap-x-1 gap-y-1 text-foreground",
+        "flex max-w-full flex-wrap items-center gap-x-1 gap-y-1 text-chat text-foreground",
       )}
       data-worker-monitor-kind={notice.kind}
     >
