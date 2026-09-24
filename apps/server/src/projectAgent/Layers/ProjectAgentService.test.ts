@@ -4433,12 +4433,21 @@ it.effect("posts one roll-up when every worker in the creation batch settles", (
       eventType: "approval.requested",
       createdAt: "2026-09-20T00:07:00.000Z",
     });
+    // Waiting on approval is not an end state: no roll-up yet.
+    assert.equal(rollups().length, 0);
+
+    yield* service.ingestSettledThreadEvent({
+      threadId: threadC,
+      sourceEventId: "roll-c-done",
+      eventType: "thread.turn-diff-completed",
+      createdAt: "2026-09-20T00:08:00.000Z",
+    });
     assert.equal(rollups().length, 1);
     const rollup = rollups()[0]!;
     if (rollup.type === "thread.activity.append") {
       assert.equal(
         rollup.activity.summary,
-        "All 3 threads settled: Alpha research ✓ — no result filed, Beta survey ✓ — no result filed, Gamma page ⚠ needs approval",
+        "All 3 threads finished: Alpha research ✓ — no result filed, Beta survey ✓ — no result filed, Gamma page ✓ — no result filed",
       );
       assert.equal(rollup.threadId, coordinatorThreadId);
     }
@@ -4447,16 +4456,12 @@ it.effect("posts one roll-up when every worker in the creation batch settles", (
     const batchEvent = inbox.find((row) => row.eventType === "workers.settled");
     assert.equal(batchEvent?.eligibleWake, true);
 
-    // Re-ingesting the same settle event reposts nothing: the row and the
-    // roll-up stay at one apiece.
+    // Re-ingesting the same settle event reposts nothing.
     yield* service.ingestSettledThreadEvent({
       threadId: threadC,
-      sourceEventId: "roll-c-wait",
-      // The request-side signal rides the activity-appended kind — the
-      // response-requested event fires when the USER answers, not when the
-      // worker waits.
-      eventType: "approval.requested",
-      createdAt: "2026-09-20T00:07:00.000Z",
+      sourceEventId: "roll-c-done",
+      eventType: "thread.turn-diff-completed",
+      createdAt: "2026-09-20T00:08:00.000Z",
     });
     assert.equal(rollups().length, 1);
     const settledRows = harness.dispatched.filter(
@@ -4464,7 +4469,8 @@ it.effect("posts one roll-up when every worker in the creation batch settles", (
         command.type === "thread.activity.append" &&
         command.activity.kind === "synara.worker.settled",
     );
-    assert.equal(settledRows.length, 3);
+    // Alpha done, Beta done, Gamma waiting, Gamma done.
+    assert.equal(settledRows.length, 4);
   }).pipe(Effect.provide(harness.layer));
 });
 

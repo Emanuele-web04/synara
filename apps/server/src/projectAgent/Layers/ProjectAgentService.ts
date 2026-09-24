@@ -611,7 +611,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
       if (
         input.suppressRows !== true &&
         peers.length > 1 &&
-        peers.every((row) => row.settledAt !== null)
+        // Waiting on approval/input records a settle row but is not an end
+        // state — the roll-up waits until every worker has really finished.
+        peers.every(
+          (row) => row.settledAt !== null && isTerminalWorkerSettleOutcome(row.settleOutcome),
+        )
       ) {
         const signature = peers.map((row) => row.settleOutcome ?? "pending").join("|");
         const rollupKey = `${worker.batchId}:${signature}`;

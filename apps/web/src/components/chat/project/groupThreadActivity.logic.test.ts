@@ -139,7 +139,7 @@ describe("buildGroupThreadActivitySeries", () => {
     expect(series.points[series.points.length - 1]).toBe(1);
   });
 
-  it("shrinks the window to the group's first thread when the group is young", () => {
+  it("keeps a full one-hour window for a young group: flat, then rising", () => {
     const series = buildGroupThreadActivitySeries({
       nowMs: NOW,
       threads: [
@@ -149,12 +149,13 @@ describe("buildGroupThreadActivitySeries", () => {
         }),
       ],
     });
-    expect(series.windowStartMs).toBe(NOW - 5 * MIN);
-    expect(series.points.length).toBe(5);
-    // Work began one minute after the thread was created — the first bucket is
-    // empty, every bucket after is 1.
-    expect(series.points[0]).toBe(0);
-    expect(series.points.slice(1).every((count) => count === 1)).toBe(true);
+    expect(series.windowStartMs).toBe(NOW - 60 * MIN);
+    expect(series.points.length).toBe(60);
+    // The hour before the thread started is flat at zero; the last four
+    // buckets carry the running thread.
+    expect(series.points.slice(0, 56).every((count) => count === 0)).toBe(true);
+    expect(series.points.slice(56).every((count) => count === 1)).toBe(true);
+    expect(series.currentCount).toBe(1);
     expect(series.peakCount).toBe(1);
   });
 

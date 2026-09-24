@@ -7,13 +7,13 @@ import { MUTED_LABEL_TEXT_CLASS_NAME } from "~/surfaceStyles";
 import { Button } from "../ui/button";
 
 const OUTCOME_LABELS: Record<string, string> = {
-  completed: "✓",
-  stopped: "✓",
-  failed: "✗ failed",
-  interrupted: "⚠ interrupted",
-  missing: "✗ missing",
-  "waiting-approval": "⚠ needs approval",
-  "waiting-input": "⚠ needs input",
+  completed: "done",
+  stopped: "stopped",
+  failed: "failed",
+  interrupted: "interrupted",
+  missing: "missing",
+  "waiting-approval": "needs your approval",
+  "waiting-input": "needs your input",
 };
 
 interface WorkerMonitorNoticePillProps {
@@ -60,47 +60,53 @@ export function WorkerMonitorNoticePill({
   return (
     <div
       className={cn(
-        "inline-flex max-w-full flex-wrap items-center justify-center gap-1.5 rounded-full px-2 py-0.5",
-        MUTED_LABEL_TEXT_CLASS_NAME,
+        // Reads as part of the coordinator's reply: left-aligned body text,
+        // no pill, no status glyphs.
+        "flex max-w-full flex-wrap items-center gap-x-1 gap-y-1 text-foreground",
       )}
       data-worker-monitor-kind={notice.kind}
     >
       {notice.kind === "rollup" ? (
-        <>
+        <div className="flex w-full flex-col gap-1">
           <span>
             {entry.label.includes(":")
-              ? `${entry.label.slice(0, entry.label.indexOf(":") + 1)} `
+              ? entry.label.slice(0, entry.label.indexOf(":") + 1)
               : entry.label}
           </span>
-          {notice.threads.map((thread) => (
-            <span
-              key={`worker-monitor-thread:${thread.threadId}`}
-              className="inline-flex items-center gap-1"
-            >
-              <button
-                type="button"
-                className="inline p-0 text-inherit underline decoration-foreground/30 underline-offset-2 hover:decoration-foreground/70"
-                onClick={() => onOpenThread?.(ThreadId.makeUnsafe(thread.threadId))}
-              >
-                {thread.title}
-                {thread.outcome ? ` ${OUTCOME_LABELS[thread.outcome] ?? thread.outcome}` : ""}
-              </button>
-              {thread.pr ? (
-                <a
-                  href={thread.pr}
-                  target="_blank"
-                  rel="noreferrer"
+          <ul className="flex list-disc flex-col gap-0.5 pl-5">
+            {notice.threads.map((thread) => (
+              <li key={`worker-monitor-thread:${thread.threadId}`}>
+                <button
+                  type="button"
                   className="inline p-0 text-inherit underline decoration-foreground/30 underline-offset-2 hover:decoration-foreground/70"
+                  onClick={() => onOpenThread?.(ThreadId.makeUnsafe(thread.threadId))}
                 >
-                  PR
-                </a>
-              ) : null}
-            </span>
-          ))}
-        </>
+                  {thread.title}
+                </button>
+                {thread.outcome ? (
+                  <span className={MUTED_LABEL_TEXT_CLASS_NAME}>
+                    {` (${OUTCOME_LABELS[thread.outcome] ?? thread.outcome})`}
+                  </span>
+                ) : null}
+                {thread.pr ? (
+                  <>
+                    {" · "}
+                    <a
+                      href={thread.pr}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline p-0 text-inherit underline decoration-foreground/30 underline-offset-2 hover:decoration-foreground/70"
+                    >
+                      PR
+                    </a>
+                  </>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </div>
       ) : (
         <>
-          {notice.marker ? <span aria-hidden>{notice.marker}</span> : null}
           {notice.threads.map((thread) => (
             <span
               key={`worker-monitor-thread:${thread.threadId}`}
@@ -125,7 +131,7 @@ export function WorkerMonitorNoticePill({
               ) : null}
             </span>
           ))}
-          {notice.phrase ? <span>{notice.phrase}</span> : null}
+          {notice.phrase ? <span>{`${notice.phrase}.`}</span> : null}
         </>
       )}
       {needsYouThread && projectId ? (

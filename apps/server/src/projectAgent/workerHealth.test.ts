@@ -79,7 +79,7 @@ describe("worker health", () => {
         ],
       }),
     ).toBe(
-      "All 3 threads settled: Alpha: Shipped the migration — 12 files — https://github.com/diliprt/synara/pull/42, Beta \u2713 — no result filed, Gamma \u26a0 needs approval",
+      "All 3 threads are done: Alpha: Shipped the migration — 12 files — https://github.com/diliprt/synara/pull/42, Beta \u2713 — no result filed, Gamma \u26a0 needs approval",
     );
     expect(
       formatWorkerBatchRollup({

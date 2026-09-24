@@ -1501,8 +1501,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         conversationOnly &&
         (() => {
           // Server-posted coordinator monitor rows (worker settled / stuck /
-          // batch roll-up) render as compact centered pills — like automation
-          // check-ins — instead of full work entries.
+          // batch roll-up) read as part of the coordinator's chat reply —
+          // left-aligned body text in the message column, not centered pills
+          // or work entries.
           const notices = row.groupedEntries.flatMap((workEntry) =>
             workEntry.synaraWorkerNotice
               ? [{ entry: workEntry, notice: workEntry.synaraWorkerNotice }]
@@ -1512,7 +1513,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             return null;
           }
           return (
-            <div className="flex w-full flex-col items-center gap-1.5">
+            <div className="chat-message-segment flex w-full flex-col items-start gap-1.5 pl-[2px] pr-[2px]">
               {notices.map(({ entry, notice }) => (
                 <WorkerMonitorNoticePill
                   key={`worker-monitor:${entry.id}`}
