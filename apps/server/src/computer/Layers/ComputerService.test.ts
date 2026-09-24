@@ -169,4 +169,82 @@ describe("ComputerServiceLive", () => {
       vi.unstubAllEnvs();
     }
   });
+
+  describe("Stable gate", () => {
+    const withLayerEnv = (
+      env: Readonly<Record<string, string | undefined>>,
+      body: (service: ComputerServiceShape) => void,
+      options?: { backend?: FakeComputerBackend },
+    ) =>
+      Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const service = yield* ComputerService;
+            body(service);
+          }).pipe(
+            Effect.provide(
+              makeComputerServiceLayer({ platform: "darwin", env, ...options }),
+            ),
+          ),
+        ),
+      );
+
+    it("reports computer use as a Beta feature on the production desktop", async () => {
+      await withLayerEnv(
+        { SYNARA_DESKTOP_BUNDLE_ID: "com.emanueledipietro.synara" },
+        (service) => {
+          expect(service.supported).toBe(false);
+          expect(service.availability).toEqual({
+            kind: "backend-unavailable",
+            message: "Computer use is available in Synara Beta.",
+          });
+        },
+      );
+    });
+
+    it("does not let the fake-backend override bypass the Stable gate", async () => {
+      await withLayerEnv(
+        {
+          SYNARA_DESKTOP_BUNDLE_ID: "com.emanueledipietro.synara",
+          SYNARA_COMPUTER_BACKEND: "fake",
+        },
+        (service) => {
+          expect(service.supported).toBe(false);
+          expect(service.availability).toEqual({
+            kind: "backend-unavailable",
+            message: "Computer use is available in Synara Beta.",
+          });
+        },
+      );
+    });
+
+    it("keeps computer use enabled for every other flavor and for unknown hosts", async () => {
+      for (const bundleId of [
+        "com.emanueledipietro.synara.beta",
+        "com.emanueledipietro.synara.cua",
+        "com.emanueledipietro.synara.canary",
+        "com.emanueledipietro.synara.dev",
+        undefined,
+        "com.example.other",
+      ]) {
+        await withLayerEnv({ SYNARA_DESKTOP_BUNDLE_ID: bundleId }, (service) => {
+          expect(service.supported).toBe(true);
+        });
+      }
+    });
+
+    it("lets an injected backend win even on the production desktop", async () => {
+      await withLayerEnv(
+        { SYNARA_DESKTOP_BUNDLE_ID: "com.emanueledipietro.synara" },
+        (service) => {
+          expect(service.supported).toBe(true);
+          expect(service.availability).toEqual({
+            kind: "available",
+            backend: "fake",
+          });
+        },
+        { backend: new FakeComputerBackend() },
+      );
+    });
+  });
 });

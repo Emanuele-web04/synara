@@ -2006,6 +2006,7 @@ const make = Effect.gen(function* () {
       // silently drop an active computer task at the fork boundary.
       const parentCanContinueChatControl =
         Option.isSome(computerService) &&
+        computerService.value.supported === true &&
         computerService.value.manager.canContinueChatControl(thread.forkSourceThreadId);
       const forkComputerControl = Option.isSome(computerService)
         ? yield* Effect.promise(() =>
@@ -2348,11 +2349,15 @@ const make = Effect.gen(function* () {
     const generation = activation.computerControlGeneration;
     const enableComputerControl = Option.isNone(computerService)
       ? activation.enableComputerControl
-      : input.turnKind === "goal-continuation"
-        ? computerService.value.manager.canContinueChatControl(input.threadId)
-        : input.dispatchMode === "steer" && requestedMode === "off"
-          ? false // Ordinary steering does not change the active turn's intent.
-          : yield* Effect.promise(() =>
+      : computerService.value.supported !== true
+        ? // Stable ships no computer backend; neither a chat opt-in nor
+          // /computer-use activates control.
+          false
+        : input.turnKind === "goal-continuation"
+          ? computerService.value.manager.canContinueChatControl(input.threadId)
+          : input.dispatchMode === "steer" && requestedMode === "off"
+            ? false // Ordinary steering does not change the active turn's intent.
+            : yield* Effect.promise(() =>
               computerService.value.manager.admitControl(
                 input.threadId,
                 requestedMode,
@@ -3483,10 +3488,11 @@ const make = Effect.gen(function* () {
         event.payload.dispatchMode === "steer" &&
         activation.enableComputerControl &&
         (Option.isNone(computerService) ||
-          computerService.value.manager.canActivateControl(
-            event.payload.threadId,
-            activation.computerControlGeneration,
-          )) &&
+          (computerService.value.supported === true &&
+            computerService.value.manager.canActivateControl(
+              event.payload.threadId,
+              activation.computerControlGeneration,
+            ))) &&
         !(Option.isSome(gatewaySessions) && gatewaySessions.value.computerControlProvisioned
           ? gatewaySessions.value.computerControlProvisioned(
               event.payload.threadId,
