@@ -5,6 +5,7 @@ import { ComputerFrameTap } from "./computerFrameTap";
 import { ComputerShield } from "./computerShield";
 import { registerComputerDesktopLifecycle } from "./computerDesktopLifecycle";
 import { COMPUTER_PERMISSION_KINDS } from "@synara/shared/computerGrants";
+import { isBetaFeatureEnabled } from "@synara/shared/betaFeatures";
 import { CUA_HOST_SOCKET_ENV } from "@synara/shared/cuaDriverProtocol";
 import { MODEL_SCREEN_IMAGE_MAX_DIMENSION } from "@synara/shared/modelImageBudget";
 // FILE: main.ts
@@ -3843,7 +3844,15 @@ async function attachCuaHost(host: CuaDriverHost): Promise<void> {
 
 async function startCuaHost(): Promise<void> {
   if ((process.platform !== "darwin" && process.platform !== "linux") || cuaDriverHost) return;
+  // Runs for Stable too: a cua-driver a previous Beta install orphaned on this
+  // machine should not keep running just because this build has no computer
+  // use.
   sweepOrphanedCuaDrivers();
+  // Computer use is a Beta-only feature: the Stable desktop never starts the
+  // driver host or its Escape kill-switch monitors, so no CUA_HOST_SOCKET is
+  // handed to the backend and no input monitor is armed. AppSnap is unaffected:
+  // its manager starts on its own and shares no state with the host.
+  if (!isBetaFeatureEnabled("computerUse", desktopFlavor)) return;
   if (process.platform === "linux") {
     linuxEscapeKillSwitchMonitor ??= new LinuxEscapeKillSwitchMonitor({
       shortcutRegistry: globalShortcut,
