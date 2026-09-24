@@ -182,24 +182,19 @@ describe("ComputerServiceLive", () => {
             const service = yield* ComputerService;
             body(service);
           }).pipe(
-            Effect.provide(
-              makeComputerServiceLayer({ platform: "darwin", env, ...options }),
-            ),
+            Effect.provide(makeComputerServiceLayer({ platform: "darwin", env, ...options })),
           ),
         ),
       );
 
     it("reports computer use as a Beta feature on the production desktop", async () => {
-      await withLayerEnv(
-        { SYNARA_DESKTOP_BUNDLE_ID: "com.emanueledipietro.synara" },
-        (service) => {
-          expect(service.supported).toBe(false);
-          expect(service.availability).toEqual({
-            kind: "backend-unavailable",
-            message: "Computer use is available in Synara Beta.",
-          });
-        },
-      );
+      await withLayerEnv({ SYNARA_DESKTOP_BUNDLE_ID: "com.emanueledipietro.synara" }, (service) => {
+        expect(service.supported).toBe(false);
+        expect(service.availability).toEqual({
+          kind: "backend-unavailable",
+          message: "Computer use is available in Synara Beta.",
+        });
+      });
     });
 
     it("does not let the fake-backend override bypass the Stable gate", async () => {

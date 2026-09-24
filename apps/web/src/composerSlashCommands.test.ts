@@ -676,9 +676,9 @@ describe("computerUseEnabled flag", () => {
   };
 
   it("offers /computer-use when the feature is enabled", () => {
-    expect(
-      getAvailableComposerSlashCommands({ ...baseInput, computerUseEnabled: true }),
-    ).toContain("computer-use");
+    expect(getAvailableComposerSlashCommands({ ...baseInput, computerUseEnabled: true })).toContain(
+      "computer-use",
+    );
     // Omitted means enabled: existing callers keep today's behavior.
     expect(getAvailableComposerSlashCommands(baseInput)).toContain("computer-use");
   });

@@ -3534,9 +3534,7 @@ describe("resolveEffectiveComputerControl", () => {
         chatHasTurns: false,
       },
     ]) {
-      expect(
-        resolveEffectiveComputerControl({ ...input, computerUseEnabled: false }),
-      ).toBe(false);
+      expect(resolveEffectiveComputerControl({ ...input, computerUseEnabled: false })).toBe(false);
     }
   });
 });

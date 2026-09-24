@@ -1750,10 +1750,7 @@ export function resolveQueuedTurnDispatchSettings(
   }
   const computerUseEnabled = options?.computerUseEnabled ?? COMPUTER_USE_ENABLED;
   const queuedMode = computerUseEnabled
-    ? resolveComputerControlMode(
-        queuedTurn.computerControlMode,
-        queuedTurn.enableComputerControl,
-      )
+    ? resolveComputerControlMode(queuedTurn.computerControlMode, queuedTurn.enableComputerControl)
     : "off";
   const liveMode = computerUseEnabled
     ? resolveComputerControlMode(settings.computerControlMode, settings.enableComputerControl)

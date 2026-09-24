@@ -3,10 +3,7 @@
 // Layer: Route/UI support
 // Exports: COMPUTER_USE_ENABLED
 
-import {
-  desktopFlavorFromProtocol,
-  isBetaFeatureEnabled,
-} from "@synara/shared/betaFeatures";
+import { desktopFlavorFromProtocol, isBetaFeatureEnabled } from "@synara/shared/betaFeatures";
 
 // The desktop serves the app from its own scheme, so the protocol names the
 // host flavor (branding.ts uses the same signal for display names). A dev

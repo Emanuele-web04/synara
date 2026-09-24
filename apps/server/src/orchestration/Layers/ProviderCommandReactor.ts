@@ -2358,13 +2358,13 @@ const make = Effect.gen(function* () {
           : input.dispatchMode === "steer" && requestedMode === "off"
             ? false // Ordinary steering does not change the active turn's intent.
             : yield* Effect.promise(() =>
-              computerService.value.manager.admitControl(
-                input.threadId,
-                requestedMode,
-                generation,
-                requestedMode === "request" && computerInvocation !== null,
-              ),
-            );
+                computerService.value.manager.admitControl(
+                  input.threadId,
+                  requestedMode,
+                  generation,
+                  requestedMode === "request" && computerInvocation !== null,
+                ),
+              );
     yield* Effect.logDebug("provider command reactor computer inputs", {
       threadId: input.threadId,
       mode: activation.computerControlMode,
