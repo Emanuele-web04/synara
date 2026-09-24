@@ -368,13 +368,71 @@ describe("ProjectPanel polished sections", () => {
         expect(rect.right).toBeLessThanOrEqual(barRect.right + 0.5);
       }
       expect(bar!.scrollWidth).toBeLessThanOrEqual(bar!.clientWidth + 1);
-      // The open section keeps its label under the icon; others are reserved
-      // (invisible) so the bar height stays fixed.
-      const labels = buttons.map((button) =>
-        button.querySelector<HTMLElement>(":scope > span:last-child"),
+      // The label renders only under the open section's icon.
+      for (const [index, button] of buttons.entries()) {
+        const label = button.querySelector<HTMLElement>(":scope > span:nth-child(2)");
+        expect(label !== null).toBe(index === 0);
+        if (label !== null) {
+          expect(label.textContent).toBe("Threads");
+        }
+      }
+      await unmount();
+    }
+  });
+
+  it("centres the section-bar icons horizontally and vertically, pills included", async () => {
+    for (const open of [null, "threads"] as const) {
+      const { container, unmount } = await render(
+        <div style={{ width: "290px" }} data-testid={`bar-centre-${open ?? "none"}`}>
+          <GroupPanelSectionBar
+            sections={GROUP_PANEL_SECTIONS}
+            sectionCounts={{
+              threads: { count: 12, waiting: 2 },
+              "pull-requests": { count: 0, waiting: 0 },
+              automations: { count: 3, waiting: 0 },
+              context: { count: 9, waiting: 0 },
+            }}
+            openSectionId={open}
+            regionId="sections-region"
+            onToggle={() => {}}
+          />
+        </div>,
       );
-      expect(labels[0]?.classList.contains("invisible")).toBe(false);
-      expect(labels[1]?.classList.contains("invisible")).toBe(true);
+      const bar = container.querySelector<HTMLElement>("[data-testid^=bar-centre-] > div")!;
+      const barRect = bar.getBoundingClientRect();
+      const iconCentres = Array.from(bar.querySelectorAll("button")).map((button) => {
+        // First child span is the icon wrapper; the corner pill hangs off it
+        // absolutely and must not pull the icon off-centre.
+        const icon = button.querySelector<HTMLElement>(":scope > span")!;
+        const iconRect = icon.getBoundingClientRect();
+        const buttonRect = button.getBoundingClientRect();
+        return {
+          x: iconRect.left + iconRect.width / 2,
+          slotX: buttonRect.left + buttonRect.width / 2,
+          y: iconRect.top + iconRect.height / 2,
+        };
+      });
+      // Icon centres sit on their slot centres and are evenly spaced.
+      const gaps: number[] = [];
+      for (const [index, centre] of iconCentres.entries()) {
+        expect(Math.abs(centre.x - centre.slotX)).toBeLessThanOrEqual(1);
+        if (index > 0) {
+          gaps.push(centre.x - iconCentres[index - 1]!.x);
+        }
+      }
+      for (const gap of gaps.slice(1)) {
+        expect(Math.abs(gap - gaps[0]!)).toBeLessThanOrEqual(1.5);
+      }
+      // All icons share one row and, with nothing open, sit dead-centre.
+      for (const centre of iconCentres) {
+        expect(Math.abs(centre.y - iconCentres[0]!.y)).toBeLessThanOrEqual(0.5);
+      }
+      if (open === null) {
+        const barCentreY = barRect.top + barRect.height / 2;
+        for (const centre of iconCentres) {
+          expect(Math.abs(centre.y - barCentreY)).toBeLessThanOrEqual(1);
+        }
+      }
       await unmount();
     }
   });
@@ -407,6 +465,58 @@ describe("ProjectPanel polished sections", () => {
     expect(document.body.textContent).not.toContain("No threads in progress or waiting on you.");
     // The body holds Focus only — the Threads section owns the full list.
     expect(document.body.textContent).not.toContain("Other threads");
+  });
+
+  it("caps the panel at the overlay height and scrolls inside, keeping the bar pinned", async () => {
+    // Enough idle threads that the open Threads section overflows the overlay.
+    const threads = Array.from({ length: 60 }, (_, index) =>
+      makeThreadSummary(ThreadId.makeUnsafe(`thread-cap-${index}`), { title: `Idle ${index}` }),
+    );
+    harness.api.projectAgent.listThreadIndex.mockResolvedValue(
+      threadIndexEntries(threads.map((thread) => thread.id)),
+    );
+    setSidebarSummaries(threads);
+    await renderPanel();
+
+    const overlay = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLElement>("[data-environment-panel-variant]");
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    const surface = overlay.firstElementChild as HTMLElement;
+
+    await page.getByRole("button", { name: /^Threads/ }).click();
+    await vi.waitFor(() => expect(document.body.textContent).toContain("Idle 59"));
+    // Let the disclosure's open animation settle before measuring.
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 350));
+
+    const overlayRect = overlay.getBoundingClientRect();
+    const surfaceRect = surface.getBoundingClientRect();
+    // The panel grows with content but never past the overlay's inner height —
+    // viewport minus the wrapper's top offset and bottom margin.
+    expect(surfaceRect.height).toBeLessThanOrEqual(
+      overlayRect.height -
+        parseFloat(getComputedStyle(overlay).paddingTop) -
+        parseFloat(getComputedStyle(overlay).paddingBottom) +
+        1,
+    );
+
+    // The body scrolls inside; header (title) and section bar stay pinned
+    // inside the capped surface.
+    const scrollBody = surface.querySelector<HTMLElement>("div.overflow-y-auto");
+    expect(scrollBody).not.toBeNull();
+    expect(scrollBody!.scrollHeight).toBeGreaterThan(scrollBody!.clientHeight);
+    const bar = surface.lastElementChild as HTMLElement;
+    const title = Array.from(surface.querySelectorAll("div")).find(
+      (el) => el.textContent === "Groups",
+    )!;
+    expect(title.getBoundingClientRect().top).toBeGreaterThanOrEqual(surfaceRect.top - 0.5);
+    expect(bar.getBoundingClientRect().bottom).toBeLessThanOrEqual(surfaceRect.bottom + 1);
+    // Scrolling the body moves rows — the bar stays put.
+    const barTopBefore = bar.getBoundingClientRect().top;
+    scrollBody!.scrollTop = scrollBody!.scrollHeight;
+    await vi.waitFor(() => expect(scrollBody!.scrollTop).toBeGreaterThan(0));
+    expect(Math.abs(bar.getBoundingClientRect().top - barTopBefore)).toBeLessThanOrEqual(1);
   });
 
   it("renders the coordinator model line without repeating the provider name", async () => {

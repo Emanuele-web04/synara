@@ -62,12 +62,15 @@ const SECTION_COUNT_PILL_CLASS_NAME =
   "absolute -right-2.5 -top-1.5 flex h-3 min-w-3 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--foreground)_8%,transparent)] px-0.5 text-ui-2xs leading-none tabular-nums text-muted-foreground/90";
 
 /**
- * The Group panel's bottom bar: one evenly spaced icon button per section.
- * Only the open section shows its label under the icon (reserved-height line so
- * toggling does not shift the bar); every button carries the label in a tooltip
- * and in its accessible name. Counts ride on the icon's top-right corner and a
- * "waiting on you" dot on the top-left, so the bar stays readable from ~260px
- * up where inline labels ran together.
+ * The Group panel's bottom bar: one evenly spaced icon button per section, each
+ * centred in its equal slot so the row reads as a centred, evenly spaced unit.
+ * Only the open section shows its label under the icon — closed buttons render
+ * no label, so an all-closed bar is a vertically centred icon row with no dead
+ * space under it. Every button carries the label in a tooltip and its
+ * accessible name. Counts ride on the icon's top-right corner and a "waiting on
+ * you" dot on the top-left; both are absolutely positioned and never shift the
+ * icon off-centre, so the bar stays readable from ~260px up where inline labels
+ * ran together.
  */
 export function GroupPanelSectionBar({
   sections,
@@ -132,9 +135,7 @@ export function GroupPanelSectionBar({
                   </span>
                 ) : null}
               </span>
-              <span className={cn("min-w-0 max-w-full truncate", !isOpen && "invisible")}>
-                {section.label}
-              </span>
+              {isOpen ? <span className="min-w-0 max-w-full truncate">{section.label}</span> : null}
             </TooltipTrigger>
             <TooltipPopup>
               <p>{section.label}</p>
