@@ -423,6 +423,8 @@ export function ProjectPanel({
         </div>
       )}
 
+      {/* One scroll area holds the body plus whichever section is open, so the
+          pinned header and section bar never leave the capped panel. */}
       <div className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-1.5">
         {configured && projectId !== null ? (
           <div className="flex min-h-full flex-col">
@@ -442,6 +444,47 @@ export function ProjectPanel({
                 Blocked: {blocker.title} — {blocker.reason}
               </p>
             ))}
+
+            <DisclosureRegion
+              open={openSection !== null}
+              className="border-t border-[color:var(--color-border-light)]"
+              contentClassName="px-1.5 py-1.5"
+            >
+              <div id={sectionsRegionId} role="region" aria-label="Group sections">
+                {openSection === "threads" ? (
+                  <GroupThreadsSection
+                    sections={threadSections}
+                    agent={agent}
+                    onOpenThread={onOpenThread}
+                    onOpenThreadSplit={onOpenThreadSplit}
+                  />
+                ) : null}
+                {openSection === "pull-requests" ? (
+                  <GroupPullRequestsSection rows={pullRequestRows} onOpenThread={onOpenThread} />
+                ) : null}
+                {openSection === "automations" ? (
+                  <GroupAutomationsSection
+                    definitions={scopedAutomations}
+                    automations={automations}
+                    onOpenAutomation={onOpenAutomation}
+                  />
+                ) : null}
+                {openSection === "context" ? (
+                  <div className="flex flex-col gap-0.5 pb-1">
+                    {contextDocuments.map((document) => (
+                      <ProjectContextFile
+                        key={document.logicalPath}
+                        logicalPath={document.logicalPath}
+                        editable={document.editable}
+                        enabled={open}
+                        projectId={projectId}
+                        agent={agent}
+                      />
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </DisclosureRegion>
           </div>
         ) : (
           <p className="px-2 py-1 text-ui text-muted-foreground">
@@ -452,57 +495,15 @@ export function ProjectPanel({
       </div>
 
       {configured && projectId !== null ? (
-        <>
-          <DisclosureRegion
-            open={openSection !== null}
-            className="shrink-0 border-t border-[color:var(--color-border-light)]"
-            contentClassName="max-h-[45svh] overflow-y-auto px-1.5 py-1.5"
-          >
-            <div id={sectionsRegionId} role="region" aria-label="Group sections">
-              {openSection === "threads" ? (
-                <GroupThreadsSection
-                  sections={threadSections}
-                  agent={agent}
-                  onOpenThread={onOpenThread}
-                  onOpenThreadSplit={onOpenThreadSplit}
-                />
-              ) : null}
-              {openSection === "pull-requests" ? (
-                <GroupPullRequestsSection rows={pullRequestRows} onOpenThread={onOpenThread} />
-              ) : null}
-              {openSection === "automations" ? (
-                <GroupAutomationsSection
-                  definitions={scopedAutomations}
-                  automations={automations}
-                  onOpenAutomation={onOpenAutomation}
-                />
-              ) : null}
-              {openSection === "context" ? (
-                <div className="flex flex-col gap-0.5 pb-1">
-                  {contextDocuments.map((document) => (
-                    <ProjectContextFile
-                      key={document.logicalPath}
-                      logicalPath={document.logicalPath}
-                      editable={document.editable}
-                      enabled={open}
-                      projectId={projectId}
-                      agent={agent}
-                    />
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          </DisclosureRegion>
-          <div className="shrink-0 border-t border-[color:var(--color-border-light)] px-1 py-1">
-            <GroupPanelSectionBar
-              sections={GROUP_PANEL_SECTIONS}
-              sectionCounts={sectionCounts}
-              openSectionId={openSection}
-              regionId={sectionsRegionId}
-              onToggle={setOpenSection}
-            />
-          </div>
-        </>
+        <div className="shrink-0 border-t border-[color:var(--color-border-light)] px-1 py-1">
+          <GroupPanelSectionBar
+            sections={GROUP_PANEL_SECTIONS}
+            sectionCounts={sectionCounts}
+            openSectionId={openSection}
+            regionId={sectionsRegionId}
+            onToggle={setOpenSection}
+          />
+        </div>
       ) : null}
     </div>
   );
