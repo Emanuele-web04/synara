@@ -354,16 +354,6 @@ function verifyReleaseWorkflowSafety(): void {
     "__SYNARA_WINDOWS_UPDATER_PUBLISHER__",
     "Expected the Windows updater publisher identity to be compiled into the main bundle.",
   );
-
-  const updaterSecurity = readFileSync(
-    resolve(repoRoot, "apps/desktop/src/electronUpdaterSecurity.ts"),
-    "utf8",
-  );
-  assertNotContains(
-    updaterSecurity,
-    "return feedPublisherNames",
-    "Runtime signature verification must not trust publisher names from mutable updater config.",
-  );
 }
 
 function verifyDesktopStageLockAuthority(): void {

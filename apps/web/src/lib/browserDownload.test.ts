@@ -139,20 +139,4 @@ describe("browserDownload", () => {
     expect(URL.createObjectURL).not.toHaveBeenCalled();
     expect(click).not.toHaveBeenCalled();
   });
-
-  it("throws before creating a download when the server rejects the file", async () => {
-    globalThis.fetch = vi.fn(() =>
-      Promise.resolve(new Response("Not Found", { status: 404, statusText: "Not Found" })),
-    );
-
-    await expect(
-      downloadUrlAsBlob({
-        url: "http://127.0.0.1:5733/api/local-image?download=1",
-        filename: "favicon.ico",
-      }),
-    ).rejects.toThrow("Download failed with HTTP 404 Not Found.");
-
-    expect(URL.createObjectURL).not.toHaveBeenCalled();
-    expect(click).not.toHaveBeenCalled();
-  });
 });

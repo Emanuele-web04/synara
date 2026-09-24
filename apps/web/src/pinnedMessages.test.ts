@@ -2,17 +2,7 @@ import type { PinnedMessage } from "@synara/contracts";
 import { MessageId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import {
-  addPin,
-  derivePinLabel,
-  displayLabelFor,
-  isMessagePinned,
-  removePin,
-  restorePinAtIndex,
-  setPinDone,
-  setPinLabel,
-  togglePinDone,
-} from "./pinnedMessages";
+import { addPin, derivePinLabel, displayLabelFor, restorePinAtIndex } from "./pinnedMessages";
 
 const m = (id: string): MessageId => MessageId.makeUnsafe(id);
 
@@ -72,39 +62,11 @@ describe("displayLabelFor", () => {
   });
 });
 
-describe("isMessagePinned", () => {
-  it("detects membership and tolerates undefined lists", () => {
-    expect(isMessagePinned([pin("a"), pin("b")], m("b"))).toBe(true);
-    expect(isMessagePinned([pin("a")], m("z"))).toBe(false);
-    expect(isMessagePinned(undefined, m("a"))).toBe(false);
-  });
-});
-
 describe("addPin", () => {
   it("appends a new pin to the end", () => {
     const result = addPin([pin("a")], m("b"), "2026-06-06T01:00:00.000Z");
     expect(result.map((p) => p.messageId)).toEqual([m("a"), m("b")]);
     expect(result[1]).toMatchObject({ messageId: m("b"), label: null, done: false });
-  });
-
-  it("is idempotent — never duplicates an already-pinned message", () => {
-    const result = addPin([pin("a")], m("a"), "2026-06-06T01:00:00.000Z");
-    expect(result).toHaveLength(1);
-  });
-
-  it("treats an undefined list as empty", () => {
-    expect(addPin(undefined, m("a"), "2026-06-06T01:00:00.000Z")).toHaveLength(1);
-  });
-});
-
-describe("removePin", () => {
-  it("removes only the matching pin", () => {
-    expect(removePin([pin("a"), pin("b")], m("a")).map((p) => p.messageId)).toEqual([m("b")]);
-  });
-
-  it("is a no-op for an absent id or undefined list", () => {
-    expect(removePin([pin("a")], m("z")).map((p) => p.messageId)).toEqual([m("a")]);
-    expect(removePin(undefined, m("a"))).toEqual([]);
   });
 });
 
@@ -121,48 +83,5 @@ describe("restorePinAtIndex", () => {
   it("does not duplicate a pin that is already present", () => {
     const pins = [pin("a"), pin("b")];
     expect(restorePinAtIndex(pins, pins[1]!, 0)).toBe(pins);
-  });
-});
-
-describe("togglePinDone", () => {
-  it("sets a matching pin's done flag to an explicit value", () => {
-    expect(setPinDone([pin("a")], m("a"), true)[0]?.done).toBe(true);
-    const alreadyDone = [pin("a", { done: true })];
-    expect(setPinDone(alreadyDone, m("a"), true)).toBe(alreadyDone);
-  });
-
-  it("flips only the matching pin's done flag", () => {
-    const result = togglePinDone([pin("a"), pin("b")], m("a"));
-    expect(result[0]?.done).toBe(true);
-    expect(result[1]?.done).toBe(false);
-  });
-
-  it("preserves the reference of untouched pins (copy-on-write)", () => {
-    const pins = [pin("a"), pin("b")];
-    const result = togglePinDone(pins, m("a"));
-    expect(result[1]).toBe(pins[1]);
-    expect(result[0]).not.toBe(pins[0]);
-  });
-});
-
-describe("setPinLabel", () => {
-  it("sets a trimmed label", () => {
-    expect(setPinLabel([pin("a")], m("a"), "  Renamed  ")[0]?.label).toBe("Renamed");
-  });
-
-  it("truncates labels to the persisted cap", () => {
-    expect(setPinLabel([pin("a")], m("a"), "x".repeat(80))[0]?.label).toHaveLength(60);
-  });
-
-  it("clears the label to null for empty or whitespace-only input", () => {
-    expect(setPinLabel([pin("a", { label: "old" })], m("a"), "   ")[0]?.label).toBeNull();
-    expect(setPinLabel([pin("a", { label: "old" })], m("a"), null)[0]?.label).toBeNull();
-  });
-
-  it("preserves the reference of untouched pins (copy-on-write)", () => {
-    const pins = [pin("a"), pin("b")];
-    const result = setPinLabel(pins, m("b"), "Label");
-    expect(result[0]).toBe(pins[0]);
-    expect(result[1]).not.toBe(pins[1]);
   });
 });

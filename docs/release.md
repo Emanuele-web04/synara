@@ -105,6 +105,8 @@ Use this before publication to validate the real native macOS, Linux, and Window
 5. Download the workflow artifacts and sanity-check installation on each OS.
 
 To publish from a manual dispatch instead of a tag push, pass `publish_release=true`. This is intentionally opt-in.
+The public updater repository lookup runs only when publication is enabled;
+build-only validation does not need that GitHub API check.
 
 For one-platform qualification, add `-f platform=mac-arm64`, `mac-x64`,
 `linux-x64`, or `win-x64`. `-f stage=artifact` (the default) still runs quality

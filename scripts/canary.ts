@@ -91,7 +91,7 @@ export function canaryCloneArgs(originUrl: string, source: string): ReadonlyArra
   return ["clone", "--", originUrl, source];
 }
 
-export function canaryStartArgs(): ReadonlyArray<string> {
+function canaryStartArgs(): ReadonlyArray<string> {
   // Invoke the desktop launcher directly. `bun run --cwd apps/desktop start`
   // adds a short-lived package-script process in front of the launcher, so the
   // PID persisted by Canary goes stale while Electron is still running. The

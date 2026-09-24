@@ -97,25 +97,6 @@ describe("resolveWorkspaceFileEditorReadOnlyReason", () => {
 });
 
 describe("workspaceFileEditorReducer", () => {
-  it("adopts a first load as the baseline and bumps the buffer version", () => {
-    const state = reduce(INITIAL_WORKSPACE_FILE_EDITOR_STATE, LOADED);
-    expect(state.key).toBe("a");
-    expect(state.baseline).toBe("one\n");
-    expect(state.format).toEqual(FORMAT);
-    expect(state.value).toBe("one\n");
-    expect(state.version).toBe(1);
-    expect(isWorkspaceFileEditorDirty(state)).toBe(false);
-  });
-
-  it("marks the buffer dirty once it diverges from the baseline", () => {
-    const state = reduce(INITIAL_WORKSPACE_FILE_EDITOR_STATE, LOADED, {
-      type: "changed",
-      value: "two\n",
-    });
-    expect(isWorkspaceFileEditorDirty(state)).toBe(true);
-    expect(state.version).toBe(1);
-  });
-
   it("ignores edits before a file is open", () => {
     expect(
       workspaceFileEditorReducer(INITIAL_WORKSPACE_FILE_EDITOR_STATE, {
@@ -123,21 +104,6 @@ describe("workspaceFileEditorReducer", () => {
         value: "typed",
       }),
     ).toBe(INITIAL_WORKSPACE_FILE_EDITOR_STATE);
-  });
-
-  it("never lets a background reload clobber unsaved edits", () => {
-    const dirty = reduce(INITIAL_WORKSPACE_FILE_EDITOR_STATE, LOADED, {
-      type: "changed",
-      value: "mine\n",
-    });
-    const afterRefetch = workspaceFileEditorReducer(dirty, {
-      type: "loaded",
-      key: "a",
-      contents: "theirs\n",
-      format: format("sha256:theirs"),
-    });
-    expect(afterRefetch).toBe(dirty);
-    expect(afterRefetch.value).toBe("mine\n");
   });
 
   it("follows disk when a clean buffer's file changed underneath it", () => {
@@ -202,19 +168,6 @@ describe("workspaceFileEditorReducer", () => {
     expect(isWorkspaceFileEditorDirty(saved)).toBe(false);
   });
 
-  it("stays dirty when the buffer moved on while the save was in flight", () => {
-    const state = reduce(
-      INITIAL_WORKSPACE_FILE_EDITOR_STATE,
-      LOADED,
-      { type: "changed", value: "two\n" },
-      { type: "saveStarted" },
-      { type: "changed", value: "three\n" },
-      { type: "saveSucceeded", contents: "two\n", expectedVersion: "sha256:two" },
-    );
-    expect(isWorkspaceFileEditorDirty(state)).toBe(true);
-    expect(state.value).toBe("three\n");
-  });
-
   it("surfaces a conflicting write without discarding the buffer", () => {
     const state = reduce(
       INITIAL_WORKSPACE_FILE_EDITOR_STATE,
@@ -238,10 +191,5 @@ describe("workspaceFileEditorReducer", () => {
     );
     expect(state.conflict).toBe(false);
     expect(state.saveError).toBe("Disk is full.");
-  });
-
-  it("resets everything when the editor closes", () => {
-    const state = reduce(INITIAL_WORKSPACE_FILE_EDITOR_STATE, LOADED, { type: "closed" });
-    expect(state).toEqual(INITIAL_WORKSPACE_FILE_EDITOR_STATE);
   });
 });

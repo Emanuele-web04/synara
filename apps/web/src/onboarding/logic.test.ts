@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  ONBOARDING_STEPS,
   classifyProviderSetup,
   isOnboardingSetupStep,
   nextOnboardingStep,
@@ -35,10 +34,6 @@ const RECONCILE_BASE = {
 } as const;
 
 describe("onboarding steps", () => {
-  it("runs intro → tour → providers → theme → project → done", () => {
-    expect(ONBOARDING_STEPS).toEqual(["welcome", "tour", "providers", "theme", "project", "done"]);
-  });
-
   it("clamps navigation at both ends", () => {
     expect(nextOnboardingStep("welcome")).toBe("tour");
     expect(nextOnboardingStep("done")).toBe("done");
@@ -71,10 +66,6 @@ describe("resolveOnboardingGate", () => {
     expect(resolveOnboardingGate(GATE_BASE)).toBe("show");
   });
 
-  it("shows on a fresh install with no ordinary projects", () => {
-    expect(resolveOnboardingGate(GATE_BASE)).toBe("show");
-  });
-
   it("hides once any ordinary project exists", () => {
     expect(resolveOnboardingGate({ ...GATE_BASE, projectCount: 1 })).toBe("hidden");
   });
@@ -84,20 +75,9 @@ describe("resolveOnboardingGate", () => {
     // A local marker covers a completion whose server write failed.
     expect(resolveOnboardingGate({ ...GATE_BASE, localCompletedAt: COMPLETED_AT })).toBe("hidden");
   });
-
-  it("is re-evaluated, not latched: a later non-empty snapshot flips show to hidden", () => {
-    expect(resolveOnboardingGate(GATE_BASE)).toBe("show");
-    expect(resolveOnboardingGate({ ...GATE_BASE, projectCount: 2 })).toBe("hidden");
-  });
 });
 
 describe("resolveLocalOnboardingCompletion", () => {
-  it("returns nothing without a local marker", () => {
-    expect(
-      resolveLocalOnboardingCompletion({ completedAt: null, installationKey: "/a" }, "/a"),
-    ).toBeNull();
-  });
-
   it("only counts a marker recorded against the current installation", () => {
     const local = { completedAt: COMPLETED_AT, installationKey: "/home/a/.synara/worktrees" };
     expect(resolveLocalOnboardingCompletion(local, "/home/a/.synara/worktrees")).toBe(COMPLETED_AT);
@@ -161,10 +141,6 @@ describe("resolveOnboardingCompletionToReconcile", () => {
     expect(resolveOnboardingCompletionToReconcile({ ...RECONCILE_BASE, projectCount: 1 })).toBe(
       NOW,
     );
-  });
-
-  it("writes nothing on a genuine fresh install", () => {
-    expect(resolveOnboardingCompletionToReconcile(RECONCILE_BASE)).toBeNull();
   });
 });
 

@@ -30,7 +30,7 @@ export const MAC_ICON_COMPOSER_DEPLOYMENT_TARGET = "26.0";
 export const MAC_ICON_ASSETS_CAR_STAGE_PATH = "apps/desktop/resources/Assets.car";
 export const MAC_ICON_ASSETS_CAR_BUNDLE_PATH = "Resources/Assets.car";
 const MAC_DMG_ICON_PATH = "icon.icns";
-export const NODE_PTY_ASAR_UNPACK_GLOBS = ["node_modules/node-pty/**"] as const;
+const NODE_PTY_ASAR_UNPACK_GLOBS = ["node_modules/node-pty/**"] as const;
 
 export interface DesktopPlatformBuildConfig {
   readonly afterSign?: string;

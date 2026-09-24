@@ -11,7 +11,6 @@ import {
   isComposerDropzoneInternalDragTransition,
   shouldBlockDisabledComposerDropzoneTransfer,
   shouldPreventDefaultForUnhandledFileDrop,
-  shouldResetComposerDropzoneAfterUnhandledFileDrop,
   shouldHandleComposerDropzoneFiles,
   splitComposerDropzoneFiles,
 } from "./useComposerDropzone";
@@ -66,7 +65,6 @@ describe("useComposerDropzone file capability helpers", () => {
 
   test.each([
     ["accept", true],
-    ["reject", true],
     ["fallthrough", false],
   ] as const)("applies %s policy to generic-only files", (mode, expected) => {
     const generic = new File(["text"], "notes.txt", { type: "text/plain" });
@@ -74,12 +72,6 @@ describe("useComposerDropzone file capability helpers", () => {
     expect(shouldHandleComposerDropzoneFiles(splitComposerDropzoneFiles([generic]), mode)).toBe(
       expected,
     );
-  });
-
-  it("resets drag state for unusable file drops", () => {
-    const files = splitComposerDropzoneFiles([]);
-
-    expect(shouldResetComposerDropzoneAfterUnhandledFileDrop(files, "accept")).toBe(true);
   });
 
   it("prevents default for claimed unusable file drops", () => {

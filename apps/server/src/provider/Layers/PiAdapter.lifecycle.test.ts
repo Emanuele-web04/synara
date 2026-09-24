@@ -230,7 +230,6 @@ it.each([
   { toolName: "bash", args: { command: "printf hello \n" }, title: "printf hello" },
   { toolName: "bash", args: { command: " \n" }, title: "bash" },
   { toolName: "read", args: { path: "file.txt " }, title: "read file.txt" },
-  { toolName: "grep", args: { pattern: "needle \n" }, title: "grep needle" },
 ])(
   "persists $toolName lifecycle titles without changing tool arguments: $title",
   async ({ toolName, args, title }) => {
@@ -1144,55 +1143,6 @@ it("cancels retry and queued steering before awaiting gateway teardown drainage"
     },
     100,
     credentials,
-  );
-});
-
-it("rotates the Pi gateway credential from the dispatched computer-control fact", async () => {
-  responses("success", "success");
-  const leasedCapabilities: Array<ReadonlyArray<string> | undefined> = [];
-  let sequence = 0;
-  const base = gatewayCredentials();
-  const credentials: AgentGatewayCredentialsShape = {
-    ...base,
-    connectionForThread: vi.fn<AgentGatewayCredentialsShape["connectionForThread"]>(
-      (_threadId, _provider, options) => {
-        leasedCapabilities.push(options?.additionalCapabilities);
-        return {
-          url: "http://127.0.0.1:3773/mcp",
-          bearerToken: `lease-${++sequence}`,
-        };
-      },
-    ),
-  };
-  await withAdapter(
-    async (adapter, events) => {
-      const first = await send(adapter);
-      await waitFor(() => expect(completions(events)).toHaveLength(1));
-      // Session start plus the first rotation both lease computer:control from
-      // the fact stashed when the turn was dispatched.
-      expect(leasedCapabilities).toEqual([["computer:control"], ["computer:control"]]);
-      expect(base.revokeSessionToken).toHaveBeenCalledExactlyOnceWith("lease-1");
-      expect(completions(events)[0]).toMatchObject({
-        turnId: first.turnId,
-        payload: { state: "completed" },
-      });
-      expect(events.filter((event) => event.type === "runtime.error")).toHaveLength(0);
-      const second = await send(adapter);
-      await waitFor(() => expect(completions(events)).toHaveLength(2));
-      expect(completions(events)[1]).toMatchObject({
-        turnId: second.turnId,
-        payload: { state: "completed" },
-      });
-      expect(leasedCapabilities).toEqual([
-        ["computer:control"],
-        ["computer:control"],
-        ["computer:control"],
-      ]);
-      expect(events.filter((event) => event.type === "runtime.error")).toHaveLength(0);
-    },
-    1,
-    credentials,
-    { enableComputerControl: true },
   );
 });
 

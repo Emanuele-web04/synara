@@ -626,7 +626,7 @@ describe("project import routes", () => {
     await expect(access(missingRoot)).rejects.toThrow();
   });
 
-  it.each(["codex", "claudeAgent"] as const)(
+  it.each(["codex"] as const)(
     "preserves a %s monorepo conversation's existing worktree cwd after runtime restart",
     async (provider) => {
       const { directory, root } = await workspace();

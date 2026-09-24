@@ -1243,23 +1243,6 @@ export function resolveAppModelSelection(
   );
 }
 
-export function getCustomModelOptionsByProvider(
-  settings: Pick<AppSettings, CustomModelSettingsKey>,
-): Record<ProviderKind, ReadonlyArray<ProviderModelOption>> {
-  const customModelsByProvider = getCustomModelsByProvider(settings);
-  return {
-    codex: getAppModelOptions("codex", customModelsByProvider.codex),
-    claudeAgent: getAppModelOptions("claudeAgent", customModelsByProvider.claudeAgent),
-    cursor: getAppModelOptions("cursor", customModelsByProvider.cursor),
-    devin: getAppModelOptions("devin", customModelsByProvider.devin),
-    antigravity: getAppModelOptions("antigravity", customModelsByProvider.antigravity),
-    grok: getAppModelOptions("grok", customModelsByProvider.grok),
-    droid: getAppModelOptions("droid", customModelsByProvider.droid),
-    opencode: getAppModelOptions("opencode", customModelsByProvider.opencode),
-    pi: getAppModelOptions("pi", customModelsByProvider.pi),
-  };
-}
-
 export function getProviderStartOptions(
   settings: Pick<
     AppSettings,

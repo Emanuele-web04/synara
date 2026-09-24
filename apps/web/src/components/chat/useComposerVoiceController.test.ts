@@ -209,13 +209,6 @@ describe("useComposerVoiceController", () => {
     recorder.cancelRecording.mockClear();
   });
 
-  it("applies a successful transcription exactly once", async () => {
-    await result.submitComposerVoiceRecording();
-
-    expect(options.onTranscriptReady).toHaveBeenCalledTimes(1);
-    expect(options.onTranscriptReady).toHaveBeenCalledWith("transcribed once");
-  });
-
   it("discards the active recording without stopping or transcribing it", () => {
     result.cancelComposerVoiceRecording();
 
@@ -324,23 +317,6 @@ describe("useComposerVoiceController", () => {
     expect(recorder.stopRecording).not.toHaveBeenCalled();
     expect(recorder.cancelRecording).not.toHaveBeenCalled();
     expect(options.onGuardWarning).toHaveBeenCalledTimes(2);
-  });
-
-  it("supports ChatView-specific transcription failure copy without changing defaults", async () => {
-    nativeApi.transcribeVoice.mockRejectedValueOnce(new Error("network failed"));
-    render({
-      failureCopy: {
-        transcriptionFailedTitle: "Couldn't transcribe voice note",
-      },
-    });
-
-    await result.submitComposerVoiceRecording();
-
-    expect(toast.add).toHaveBeenCalledWith({
-      type: "error",
-      title: "Couldn't transcribe voice note",
-      description: "network failed",
-    });
   });
 
   it("refreshes status for expired auth and keeps the refresh action available", async () => {

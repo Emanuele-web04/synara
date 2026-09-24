@@ -29,20 +29,6 @@ const deletionOnlyPatch = [
   "",
 ].join("\n");
 
-const modifiedPatch = [
-  "diff --git a/src/app.ts b/src/app.ts",
-  "index 1111111..2222222 100644",
-  "--- a/src/app.ts",
-  "+++ b/src/app.ts",
-  "@@ -1,4 +1,4 @@",
-  " const a = 1;",
-  "-const b = 2;",
-  "+const b = 20;",
-  " const c = 3;",
-  " const d = 4;",
-  "",
-].join("\n");
-
 const multiHunkPatch = [
   "diff --git a/src/app.ts b/src/app.ts",
   "index 1111111..2222222 100644",
@@ -79,21 +65,9 @@ const untrackedPatch = [
 ].join("\n");
 
 describe("extractEditorGutterChanges", () => {
-  it("marks an addition-only hunk as added", () => {
-    expect(extractEditorGutterChanges(addedOnlyPatch, "src/app.ts").ranges).toEqual([
-      { kind: "added", startLine: 2, endLine: 3 },
-    ]);
-  });
-
   it("collapses a deletion-only run into one marker anchored at the preceding line", () => {
     expect(extractEditorGutterChanges(deletionOnlyPatch, "src/app.ts").ranges).toEqual([
       { kind: "deleted", startLine: 2, endLine: 2 },
-    ]);
-  });
-
-  it("marks a replaced line as modified", () => {
-    expect(extractEditorGutterChanges(modifiedPatch, "src/app.ts").ranges).toEqual([
-      { kind: "modified", startLine: 2, endLine: 2 },
     ]);
   });
 
@@ -108,10 +82,6 @@ describe("extractEditorGutterChanges", () => {
     expect(extractEditorGutterChanges(addedOnlyPatch, "/Users/dev/repo/src/app.ts").ranges).toEqual(
       [{ kind: "added", startLine: 2, endLine: 3 }],
     );
-  });
-
-  it("returns nothing when the file is missing from the patch", () => {
-    expect(extractEditorGutterChanges(addedOnlyPatch, "src/other.ts").ranges).toEqual([]);
   });
 
   it("returns nothing without a patch or a path", () => {

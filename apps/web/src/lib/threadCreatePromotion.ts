@@ -19,7 +19,7 @@ interface PromoteThreadCreateOptions {
 
 const inFlightThreadCreateById = new Map<ThreadId, Promise<PromoteThreadCreateResult>>();
 
-export function isDuplicateThreadCreateError(error: unknown, threadId: ThreadId): boolean {
+function isDuplicateThreadCreateError(error: unknown, threadId: ThreadId): boolean {
   const message =
     error instanceof Error
       ? error.message

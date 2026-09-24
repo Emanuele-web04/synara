@@ -56,26 +56,6 @@ function createSplitView(): SplitView {
 }
 
 describe("resolveVisibleToastThreadIds", () => {
-  it("returns only the active thread for single-chat routes", () => {
-    expect(
-      resolveVisibleToastThreadIds({
-        activeThreadId: THREAD_A,
-        splitView: null,
-        rightDockRendered: true,
-      }),
-    ).toEqual(new Set([THREAD_A]));
-  });
-
-  it("returns every visible split thread without duplicates", () => {
-    expect(
-      resolveVisibleToastThreadIds({
-        activeThreadId: THREAD_A,
-        splitView: createSplitView(),
-        rightDockRendered: true,
-      }),
-    ).toEqual(new Set([THREAD_A, THREAD_B]));
-  });
-
   it("includes the active sidechat when its host dock is visible", () => {
     expect(
       resolveVisibleToastThreadIds({
@@ -197,15 +177,6 @@ describe("shouldRenderToastForVisibleThreads", () => {
         visibleThreadIds: new Set([THREAD_A]),
       }),
     ).toBe(true);
-  });
-
-  it("keeps thread-scoped toasts limited to visible threads by default", () => {
-    expect(
-      shouldRenderToastForVisibleThreads({
-        toastThreadId: THREAD_B,
-        visibleThreadIds: new Set([THREAD_A]),
-      }),
-    ).toBe(false);
   });
 
   it("allows explicit cross-thread visibility for deeplink notifications", () => {

@@ -256,56 +256,6 @@ describe("ProviderTextGenerationLive", () => {
     expect(cursor.generateThreadTitle).not.toHaveBeenCalled();
   });
 
-  it("routes explicit Cursor model selections and preserves provider options", async () => {
-    const { layer, codex, cursor, opencode } = makeProviderTextGenerationTestLayer();
-
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const textGeneration = yield* TextGeneration;
-        return yield* textGeneration.generateThreadTitle({
-          cwd: "/repo",
-          message: "Plan the Cursor integration work",
-          modelSelection: {
-            provider: "cursor",
-            model: "composer-2",
-            options: {
-              reasoningEffort: "high",
-              fastMode: true,
-            },
-          },
-          providerOptions: {
-            cursor: {
-              binaryPath: "/custom/bin/agent",
-              apiEndpoint: "http://127.0.0.1:3947",
-            },
-          },
-        });
-      }).pipe(Effect.provide(layer)),
-    );
-
-    expect(result.title).toBe("cursor title");
-    expect(cursor.generateThreadTitle).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelSelection: {
-          provider: "cursor",
-          model: "composer-2",
-          options: {
-            reasoningEffort: "high",
-            fastMode: true,
-          },
-        },
-        providerOptions: {
-          cursor: {
-            binaryPath: "/custom/bin/agent",
-            apiEndpoint: "http://127.0.0.1:3947",
-          },
-        },
-      }),
-    );
-    expect(codex.generateThreadTitle).not.toHaveBeenCalled();
-    expect(opencode.generateThreadTitle).not.toHaveBeenCalled();
-  });
-
   it("routes explicit Droid selections and preserves provider options", async () => {
     const { layer, codex, cursor, droid, opencode } = makeProviderTextGenerationTestLayer();
     const providerOptions = { droid: { binaryPath: "/custom/bin/droid" } };

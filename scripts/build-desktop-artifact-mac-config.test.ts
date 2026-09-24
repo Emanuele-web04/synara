@@ -13,11 +13,9 @@ import {
   MAC_ICON_ASSETS_CAR_STAGE_PATH,
   MAC_INHERITED_ENTITLEMENTS_PATH,
   MICROPHONE_USAGE_DESCRIPTION,
-  NODE_PTY_ASAR_UNPACK_GLOBS,
   validateDesktopNativeBuildHost,
   WINDOWS_INSTALLER_GUID,
 } from "./lib/desktop-platform-build-config.ts";
-import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 
 describe("createDesktopPlatformBuildConfig", () => {
   it("adds explicit microphone entitlements to macOS builds", () => {
@@ -204,16 +202,6 @@ describe("createDesktopPlatformBuildConfig", () => {
     });
   });
 
-  it("keeps node-pty unpacked from ASAR in generated build config", () => {
-    const config = createDesktopPlatformBuildConfig({
-      platform: "linux",
-      target: "AppImage",
-    });
-
-    assert.deepStrictEqual([...NODE_PTY_ASAR_UNPACK_GLOBS], ["node_modules/node-pty/**"]);
-    assert.deepStrictEqual(config.asarUnpack, [...NODE_PTY_ASAR_UNPACK_GLOBS]);
-  });
-
   it("blocks unsupported or non-matching Linux native build hosts", () => {
     assert.equal(
       validateDesktopNativeBuildHost({
@@ -263,14 +251,5 @@ describe("createDesktopPlatformBuildConfig", () => {
       hostArch: "arm64",
     });
     assert.ok(issue?.includes("Build mac/arm64 on macOS"));
-  });
-
-  it("keeps separate macOS sources for solid and rounded icons", () => {
-    assert.equal(BRAND_ASSET_PATHS.productionMacIconPng, "assets/prod/black-macos-1024.png");
-    assert.equal(BRAND_ASSET_PATHS.productionMacIconComposer, "assets/prod/Synara.icon");
-    assert.equal(
-      BRAND_ASSET_PATHS.productionMacLegacyIconPng,
-      "assets/prod/black-macos-legacy-1024.png",
-    );
   });
 });

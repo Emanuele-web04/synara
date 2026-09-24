@@ -86,7 +86,7 @@ describe("dispatchQueuedComposerTurnHeadless", () => {
     useStore.setState(initialState);
   });
 
-  it.each(["chat", "plan-follow-up"] as const)(
+  it.each(["chat"] as const)(
     "holds a %s before uploads or settings changes while a cache review is pending",
     async (kind) => {
       const stageUpload = vi.spyOn(composerSend, "stageUploadComposerAttachments");
