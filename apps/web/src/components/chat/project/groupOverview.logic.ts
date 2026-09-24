@@ -121,13 +121,18 @@ export function buildGroupThreadRows(input: {
   readonly projectNameById: ReadonlyMap<ProjectId, string>;
   readonly groupProjectId: ProjectId;
   readonly groupProjectName: string;
+  /** Managed workers the recovery ladder flagged "Waiting on you". */
+  readonly needsYouThreadIds?: ReadonlySet<ThreadId>;
 }): GroupThreadRow[] {
   const rows: GroupThreadRow[] = [];
   for (const thread of input.threads) {
     const task = input.taskByThreadId.get(thread.id) ?? null;
     const pullRequest = input.pullRequests.get(thread.id) ?? null;
     const state = resolveGroupThreadState({
-      thread,
+      thread: {
+        ...thread,
+        needsYou: input.needsYouThreadIds?.has(thread.id) === true,
+      },
       task,
       indexArchived: input.indexArchivedThreadIds.has(thread.id),
       pullRequest,

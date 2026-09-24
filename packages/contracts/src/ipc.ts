@@ -93,6 +93,8 @@ import type {
   ProjectAgentLibraryRestoreInput,
   ProjectAgentLibraryStatusInput,
   ProjectAgentLibraryStatusResult,
+  ProjectAgentResolveWorkerInput,
+  ProjectAgentResolveWorkerResult,
   ProjectDocumentRevision,
   ProjectGoal,
   ProjectTask,
@@ -1156,6 +1158,9 @@ export interface NativeApi {
     unarchiveGroup: (input: ProjectAgentGroupControlInput) => Promise<ProjectAgentOverview>;
     restartCoordinator: (input: ProjectAgentGroupControlInput) => Promise<ProjectAgentOverview>;
     deleteGroup: (input: ProjectAgentDeleteGroupInput) => Promise<ProjectAgentDeleteGroupResult>;
+    resolveWorker: (
+      input: ProjectAgentResolveWorkerInput,
+    ) => Promise<ProjectAgentResolveWorkerResult>;
     library: {
       list: (input: ProjectAgentLibraryListInput) => Promise<ProjectAgentLibraryListResult>;
       mkdir: (input: ProjectAgentLibraryMkdirInput) => Promise<ProjectAgentLibraryMutationResult>;

@@ -671,21 +671,39 @@ export function deriveMessagesTimelineRows(input: {
     }
 
     if (timelineEntry.kind === "work") {
-      const groupedEntries = [timelineEntry.entry];
+      const run = [
+        { entry: timelineEntry.entry, id: timelineEntry.id, createdAt: timelineEntry.createdAt },
+      ];
       let cursor = index + 1;
       while (cursor < input.timelineEntries.length) {
         const nextEntry = input.timelineEntries[cursor];
         if (!nextEntry || nextEntry.kind !== "work") break;
-        groupedEntries.push(nextEntry.entry);
+        run.push({ entry: nextEntry.entry, id: nextEntry.id, createdAt: nextEntry.createdAt });
         cursor += 1;
       }
-      flushPendingWorkGroup();
-      pendingWorkGroup = {
-        kind: "work",
-        id: timelineEntry.id,
-        createdAt: timelineEntry.createdAt,
-        groupedEntries,
-      };
+      // Server-posted coordinator monitor rows keep their own work row: the
+      // leading/inline merges into an assistant message hide them on
+      // conversation-only surfaces, so they must never join a mergeable group.
+      for (const runEntry of run) {
+        if (runEntry.entry.synaraWorkerNotice) {
+          flushPendingWorkGroup();
+          nextRows.push({
+            kind: "work",
+            id: runEntry.id,
+            createdAt: runEntry.createdAt,
+            groupedEntries: [runEntry.entry],
+          });
+        } else if (pendingWorkGroup) {
+          pendingWorkGroup.groupedEntries.push(runEntry.entry);
+        } else {
+          pendingWorkGroup = {
+            kind: "work",
+            id: runEntry.id,
+            createdAt: runEntry.createdAt,
+            groupedEntries: [runEntry.entry],
+          };
+        }
+      }
       index = cursor - 1;
       continue;
     }
@@ -897,6 +915,10 @@ function collapseSettledTurns(
     for (let scan = pass - 1; scan >= 0; scan -= 1) {
       const prev = rows[scan]!;
       if (prev.kind === "work") {
+        // Coordinator monitor rows are server-posted system pills, not turn
+        // work — folding them into a collapsed turn would hide them on
+        // conversation-only surfaces.
+        if (prev.groupedEntries.some((entry) => entry.synaraWorkerNotice)) continue;
         foldIndices.push(scan);
         continue;
       }

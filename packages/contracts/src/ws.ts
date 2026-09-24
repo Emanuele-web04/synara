@@ -48,6 +48,7 @@ import {
   ProjectAgentDeleteGroupInput,
   ProjectAgentGroupControlInput,
   ProjectAgentLibraryStatusInput,
+  ProjectAgentResolveWorkerInput,
 } from "./projectAgent";
 import {
   ClientOrchestrationCommand,
@@ -376,6 +377,7 @@ export const WS_METHODS = {
   projectAgentLibraryHistory: "projectAgent.library.history",
   projectAgentLibraryRestore: "projectAgent.library.restore",
   projectAgentLibraryStatus: "projectAgent.library.status",
+  projectAgentResolveWorker: "projectAgent.resolveWorker",
   subscribeProjectAgentEvents: "projectAgent.subscribe",
 } as const;
 
@@ -629,6 +631,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.projectAgentLibraryHistory, ProjectAgentLibraryHistoryInput),
   tagRequestBody(WS_METHODS.projectAgentLibraryRestore, ProjectAgentLibraryRestoreInput),
   tagRequestBody(WS_METHODS.projectAgentLibraryStatus, ProjectAgentLibraryStatusInput),
+  tagRequestBody(WS_METHODS.projectAgentResolveWorker, ProjectAgentResolveWorkerInput),
   tagRequestBody(WS_METHODS.subscribeProjectAgentEvents, ProjectAgentSubscribeInput),
 ]);
 

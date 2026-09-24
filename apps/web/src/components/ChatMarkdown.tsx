@@ -242,9 +242,19 @@ function restoreLiteralDollarPlaceholders(value: string): string {
     .replaceAll(encodeURIComponent(LITERAL_DOLLAR_PLACEHOLDER), "$");
 }
 
+// synara://thread/<target> links carry an id or title that may be
+// %-encoded; a malformed sequence keeps the raw target instead of throwing.
+function decodeSynaraThreadLinkTarget(target: string): string {
+  try {
+    return decodeURIComponent(target).trim();
+  } catch {
+    return target.trim();
+  }
+}
+
 function markdownUrlTransform(href: string): string {
   const restoredHref = restoreLiteralDollarPlaceholders(href);
-  if (restoredHref.startsWith("thread://")) {
+  if (restoredHref.startsWith("thread://") || restoredHref.startsWith("synara://thread/")) {
     return restoredHref;
   }
   return rewriteMarkdownFileUriHref(restoredHref) ?? defaultUrlTransform(restoredHref);
@@ -1096,7 +1106,9 @@ const MARKDOWN_COMPONENTS: Components = {
     const restoredHref = href ? restoreLiteralDollarPlaceholders(href) : href;
     const threadHref = restoredHref?.startsWith("thread://")
       ? restoredHref.slice("thread://".length)
-      : null;
+      : restoredHref?.startsWith("synara://thread/")
+        ? decodeSynaraThreadLinkTarget(restoredHref.slice("synara://thread/".length))
+        : null;
     if (threadHref && onOpenThread) {
       return (
         <button

@@ -1,7 +1,7 @@
 export const PROJECT_BOT_PLAYBOOK_PATH = "docs/project-bot.md";
 
 export const PROJECT_BOT_HEARTBEAT_PROMPT =
-  "Watch this group's threads. When a thread finishes, dies, errors, hits a quota limit, or is interrupted, reply in this chat with a short status. Review the outcome and update decisions.md. If a thread dies, start a new thread for the same job or choose an alternate path. Do not wait for the user to ask. Do not expand scope. Do not ask the user to start a goal.";
+  "Watch this group's threads. When a thread finishes, dies, errors, hits a quota limit, or is interrupted, reply in this chat with a short status. Review the outcome and update decisions.md. If a thread dies, start a new thread for the same job or choose an alternate path. Do not wait for the user to ask. Do not expand scope. Do not ask the user to start a goal. If everything is on track and nothing needs the user's attention, reply with exactly \"SILENT\" — no other text.";
 
 export const PROJECT_BOT_WATCH_RULES =
   "Threads you start stay your job. Completions, failures, quota limits, and interrupts wake you in this chat. Reply with a short status. Start a new thread for the same job if one dies. Do not say you will not wait. Do not ask the user to start a goal. Goals are optional.";

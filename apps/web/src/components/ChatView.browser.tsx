@@ -4327,10 +4327,31 @@ describe("ChatView transcript geometry (full app)", () => {
 
       const scrollSpy = installImmediateScrollToSpy(scrollContainer);
       restoreScrollTo = scrollSpy.restore;
-      // Let mount-time tail/image expansion retries (max 260ms) settle before
-      // isolating scrolls caused by the state transitions below.
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 300));
-      await waitForLayout();
+      // The virtual list's bootstrap initial-scroll session can stay armed
+      // past mount — or re-arm on the next layout change after an abort — and
+      // dispatches a one-shot correction scroll once its reveal settles. Drive
+      // one real transition, then stay quiet so its rAF-driven passes settle
+      // without the resolved offset moving; repeat once in case the first
+      // session aborted silently and only re-arms on this change. The
+      // dispatch is captured by the spy and cleared instead of landing inside
+      // the assertions below.
+      for (const warmStatus of ["starting", "ready"] as const) {
+        syncActiveThread((thread) => ({
+          ...thread,
+          session: thread.session ? { ...thread.session, status: warmStatus } : null,
+        }));
+        await waitForLayout();
+        // Quiet window: also covers mount-time tail/image expansion retries
+        // (scheduled at up to 260ms, possibly late under load).
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 300));
+          await waitForLayout();
+          if (scrollSpy.calls.length === 0) {
+            break;
+          }
+          scrollSpy.calls.length = 0;
+        }
+      }
       scrollSpy.calls.length = 0;
 
       // Buffering/connecting state changes generic turn chrome, but does not add a

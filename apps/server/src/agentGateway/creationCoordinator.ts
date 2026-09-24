@@ -107,8 +107,10 @@ interface CreationCoordinatorDependencies {
   readonly recordManagedWorkerThreads?: (input: {
     readonly callerThreadId: ThreadId;
     readonly requestId: string;
+    readonly batchId?: string;
     readonly threadIds: ReadonlyArray<ThreadId>;
     readonly titles: ReadonlyArray<string>;
+    readonly prompts?: ReadonlyArray<string | null>;
   }) => Effect.Effect<void, ToolInputError>;
   readonly assertCreateTargetProject?: (input: {
     readonly callerThreadId: string;
@@ -1206,6 +1208,9 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                     environment: entry.environment,
                     branch,
                     worktreePath,
+                    // Ready-to-use markdown target for `message_user` replies
+                    // and thread mentions; renders as a clickable thread link.
+                    link: `thread://${entry.ids.threadId}`,
                     status: "task_dispatched" as const,
                   };
                 }),
@@ -1229,11 +1234,16 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
             now: gatewayIsoNow(),
           });
           if (recordManagedWorkerThreads && caller) {
+            const promptByThreadId = new Map(
+              createdThreads.map((entry) => [entry.ids.threadId, entry.spec.prompt]),
+            );
             yield* recordManagedWorkerThreads({
               callerThreadId: caller.id,
               requestId: input.requestId,
+              batchId: operationId,
               threadIds: result.threadIds,
               titles: result.threads.map((thread) => thread.title),
+              prompts: result.threadIds.map((threadId) => promptByThreadId.get(threadId) ?? null),
             });
           }
           return { kind: "created" as const, result };

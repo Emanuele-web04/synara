@@ -69,6 +69,8 @@ import {
   ProjectAgentLibraryRestoreInput,
   ProjectAgentLibraryStatusInput,
   ProjectAgentLibraryStatusResult,
+  ProjectAgentResolveWorkerInput,
+  ProjectAgentResolveWorkerResult,
   ProjectDocumentRevision,
   ProjectGoal,
   ProjectTask,
@@ -1762,6 +1764,11 @@ export const WsProjectAgentLibraryStatusRpc = Rpc.make(WS_METHODS.projectAgentLi
   success: ProjectAgentLibraryStatusResult,
   error: WsRpcError,
 });
+export const WsProjectAgentResolveWorkerRpc = Rpc.make(WS_METHODS.projectAgentResolveWorker, {
+  payload: ProjectAgentResolveWorkerInput,
+  success: ProjectAgentResolveWorkerResult,
+  error: WsRpcError,
+});
 export const WsSubscribeProjectAgentEventsRpc = Rpc.make(WS_METHODS.subscribeProjectAgentEvents, {
   payload: ProjectAgentSubscribeInput,
   success: ProjectAgentStreamEvent,
@@ -1944,5 +1951,6 @@ export const WsProjectAgentRpcGroup = RpcGroup.make(
   WsProjectAgentLibraryHistoryRpc,
   WsProjectAgentLibraryRestoreRpc,
   WsProjectAgentLibraryStatusRpc,
+  WsProjectAgentResolveWorkerRpc,
   WsSubscribeProjectAgentEventsRpc,
 );

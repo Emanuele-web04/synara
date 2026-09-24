@@ -852,6 +852,7 @@ export function createWsNativeApi(): NativeApi {
       restartCoordinator: (input) =>
         transport.request(WS_METHODS.projectAgentRestartCoordinator, input),
       deleteGroup: (input) => transport.request(WS_METHODS.projectAgentDeleteGroup, input),
+      resolveWorker: (input) => transport.request(WS_METHODS.projectAgentResolveWorker, input),
       startGoal: (input) => transport.request(WS_METHODS.projectAgentStartGoal, input),
       updateGoal: (input) => transport.request(WS_METHODS.projectAgentUpdateGoal, input),
       pauseGoal: (input) => transport.request(WS_METHODS.projectAgentPauseGoal, input),

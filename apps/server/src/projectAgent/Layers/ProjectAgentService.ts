@@ -7,6 +7,7 @@ import {
   AutomationId,
   CommandId,
   DEFAULT_PROJECT_AGENT_LIMITS,
+  EventId,
   MessageId,
   PROJECT_AGENT_DIGEST_DEBOUNCE_MS,
   PROJECT_AGENT_INITIAL_SUMMARY_THREAD_COUNT,
@@ -25,19 +26,24 @@ import {
   PROVIDER_DISPLAY_NAMES,
   type OrchestrationCommand,
   type ProjectActivity,
+  type ProjectActivityKind,
   type ProjectInboxEvent,
+  type ProjectManagedWorker,
   type OrchestrationThreadShell,
   type LibraryEntry,
   type ProjectThreadIndexEntry,
   type ProjectAgentDeleteGroupResult,
   type ProjectAgentGroupThreadEntry,
   type ProjectAgentOverview,
+  type ProjectAgentResolveWorkerInput,
   type ProjectAgentSummary,
   type ProjectAgentStreamEvent,
   type ProjectDocumentRevision,
   type ProjectTaskStatus,
+  type ProviderSession,
 } from "@synara/contracts";
 import { groupThreadStateLabel, resolveGroupThreadState } from "@synara/shared/groupThreadState";
+import { coordinatorCheckinTurnReport } from "@synara/shared/coordinatorCheckin";
 import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
 import { isOrdinaryProjectRow } from "@synara/shared/projectContainers";
 import {
@@ -84,6 +90,7 @@ import {
 } from "@synara/shared/projectAgent";
 import {
   Cause,
+  Clock,
   Duration,
   Effect,
   Equal,
@@ -102,6 +109,8 @@ import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { providerDisabledSettingsMessage } from "../../provider/enabledProviderAdapter.ts";
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
+import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import { ProjectionThreadSessionRepository } from "../../persistence/Services/ProjectionThreadSessions.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { TextGeneration } from "../../git/Services/TextGeneration.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
@@ -142,13 +151,27 @@ import {
 } from "../projectBotPlaybook.ts";
 import {
   classifyWorkerSettlement,
+  formatWorkerBatchRollup,
+  formatWorkerMonitorRow,
   formatWorkerSettlementReport,
   formatWorkerWatchLine,
   isFailedWorkerSessionStatus,
+  isTerminalWorkerSettleOutcome,
   isWorkerAlertEvent,
   lastAssistantTextFromMessages,
   shouldMaterializeWorkerSettlementReport,
+  WORKER_DISCONNECT_GRACE_MS,
+  WORKER_NEVER_STARTED_MS,
+  WORKER_RECOVERY_MAX_ATTEMPTS,
+  WORKER_RECOVERY_NUDGE_TEXT,
+  WORKER_RECOVERY_COMMAND_PREFIX,
+  WORKER_RECOVERY_REDELIVER_DELAY_MS,
+  WORKER_STUCK_RUNNING_QUIET_MS,
+  WORKER_STUCK_WAITING_MS,
+  WORKER_TOOL_OVERTIME_MS,
+  WORKER_WAKE_EVENT_TYPES,
   workerInboxReportPath,
+  workerMonitorNoticeForEvent,
 } from "../workerHealth.ts";
 import {
   ProjectAgentService,
@@ -302,6 +325,8 @@ export const makeProjectAgentService = Effect.gen(function* () {
   const serverConfig = yield* ServerConfig;
   const serverSettingsService = yield* ServerSettingsService;
   const providerHealth = yield* ProviderHealth;
+  const providerService = yield* ProviderService;
+  const projectionThreadSessionRepository = yield* ProjectionThreadSessionRepository;
   const textGeneration = yield* TextGeneration;
   const git = yield* GitCore;
   const events = yield* PubSub.unbounded<ProjectAgentStreamEvent>();
@@ -373,20 +398,844 @@ export const makeProjectAgentService = Effect.gen(function* () {
       })
       .pipe(Effect.mapError(toServiceError("Failed to release the coordinator busy marker.")));
 
-  // Worker threads are the ones the coordinator assigned to a task — NOT every
-  // indexed group thread (which includes ordinary user chats in the group).
+  // Worker threads are the ones the coordinator tracks — NOT every indexed
+  // group thread (which includes ordinary user chats in the group). The set
+  // covers task-assigned threads plus every recorded managed worker, so
+  // coordinator-created threads without an active goal are tracked too.
   const assignedWorkerThreadIds = (projectId: ProjectId) =>
-    repository.listTasks({ projectId, includeArchived: false, limit: 500 }).pipe(
-      Effect.map(
-        (tasks) =>
-          new Set(
-            tasks
-              .map((task) => task.assignedThreadId)
-              .filter((threadId): threadId is ThreadId => threadId !== null),
-          ),
-      ),
-      Effect.mapError(toServiceError("Failed to load worker assignments.")),
+    Effect.all({
+      tasks: repository
+        .listTasks({ projectId, includeArchived: false, limit: 500 })
+        .pipe(Effect.mapError(toServiceError("Failed to load worker assignments."))),
+      workers: repository
+        .listManagedWorkers(projectId)
+        .pipe(Effect.mapError(toServiceError("Failed to load managed workers."))),
+    }).pipe(
+      Effect.map(({ tasks, workers }) => {
+        const ids = new Set<ThreadId>(workers.map((worker) => worker.threadId));
+        for (const task of tasks) {
+          if (task.assignedThreadId !== null) ids.add(task.assignedThreadId);
+        }
+        return ids;
+      }),
     );
+
+  // Compact system rows the server posts into the coordinator thread when a
+  // tracked worker settles or goes stuck — deterministic monitoring, not an
+  // LLM message. Rows carry deterministic command/activity ids so a replayed
+  // ingest or command receipt can never double-post.
+  const postWorkerMonitorRow = (input: {
+    readonly coordinatorThreadId: ThreadId;
+    readonly sourceKey: string;
+    readonly tone: "info" | "approval" | "error";
+    readonly kind: string;
+    readonly summary: string;
+    readonly payload: Record<string, unknown>;
+    readonly createdAt: string;
+  }) =>
+    orchestrationEngine
+      .dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe(`agent-monitor:${input.sourceKey}`),
+        threadId: input.coordinatorThreadId,
+        activity: {
+          id: EventId.makeUnsafe(`agent-monitor:${input.sourceKey}`),
+          tone: input.tone,
+          kind: input.kind,
+          summary: input.summary,
+          payload: JSON.parse(JSON.stringify(input.payload)),
+          turnId: null,
+          createdAt: input.createdAt,
+        },
+        createdAt: input.createdAt,
+      })
+      .pipe(Effect.catch(() => Effect.void));
+
+  // Apply one settle/stuck event to a managed worker: post the compact system
+  // row into the coordinator thread, update the durable worker row, then post
+  // the all-workers roll-up once every worker in the creation batch has
+  // settled (deduped by the batch's outcome signature so it fires once per
+  // distinct settled state).
+  const recordWorkerMonitorEvent = (input: {
+    readonly worker: ProjectManagedWorker;
+    readonly eventType: string;
+    readonly sourceEventId: string;
+    readonly createdAt: string;
+    readonly coordinatorThreadId: ThreadId;
+    readonly taskId: ProjectTaskId | null;
+    /** Paused/archived groups keep recording worker state but post no rows. */
+    readonly suppressRows?: boolean;
+    /** Tracked PR association for the worker thread, when one exists. */
+    readonly lastKnownPr?: { readonly url: string } | null;
+  }) =>
+    Effect.gen(function* () {
+      const notice = workerMonitorNoticeForEvent(input.eventType);
+      if (notice === null) return;
+      const worker = input.worker;
+      // A terminal settle already reported: same-episode re-ingests — a
+      // replayed stop or the health loop's status pass — must not post a
+      // second row, and a settled worker cannot go stuck. A genuinely new
+      // terminal transition (missing → completed) still reports.
+      if (
+        isTerminalWorkerSettleOutcome(worker.settleOutcome) &&
+        (notice.kind === "stuck" || notice.outcome === worker.settleOutcome)
+      ) {
+        return;
+      }
+      // The worker's structured report beats the generic outcome phrase —
+      // "Shipped the migration, 12 files changed" over "finished".
+      const resultPhrase = (() => {
+        const line = worker.resultSummary?.split("\n")[0]?.trim();
+        if (line) return line.length > 140 ? `${line.slice(0, 137)}...` : line;
+        // A finished worker that never filed a structured result gets the
+        // gap noted inline so nobody has to open the thread to check.
+        if (notice.outcome === "completed") return `${notice.phrase} — no result filed`;
+        return notice.phrase;
+      })();
+      const prUrl = input.lastKnownPr?.url ?? null;
+      const threadPayload = {
+        threadId: worker.threadId,
+        title: worker.title,
+        outcome: notice.outcome,
+        projectId: worker.projectId,
+        ...(worker.resultSummary ? { result: worker.resultSummary } : {}),
+        ...(prUrl !== null ? { pr: prUrl } : {}),
+      };
+      // The finish row carries the tracked PR link plus the no-result note.
+      const rowPhrase =
+        prUrl !== null && notice.outcome === "completed"
+          ? `${resultPhrase} — ${prUrl}`
+          : resultPhrase;
+      if (notice.kind === "stuck") {
+        if (input.suppressRows === true) return;
+        const needsYou = input.eventType === "worker.needs-you";
+        yield* postWorkerMonitorRow({
+          coordinatorThreadId: input.coordinatorThreadId,
+          sourceKey: `stuck:${input.sourceEventId}`,
+          tone: notice.tone,
+          // The needs-you row is a Synara-native action card (retry / stop /
+          // open thread) — NOT a fake provider user-input request.
+          kind: needsYou ? "synara.worker.needs-you" : "synara.worker.stuck",
+          summary: formatWorkerMonitorRow({
+            title: worker.title,
+            marker: notice.marker,
+            phrase: resultPhrase,
+          }),
+          payload: {
+            source: "worker_monitor",
+            eventType: input.eventType,
+            marker: notice.marker,
+            phrase: resultPhrase,
+            thread: threadPayload,
+            ...(needsYou ? { actions: ["retry", "stop", "open"] } : {}),
+          },
+          createdAt: input.createdAt,
+        });
+        return;
+      }
+      const updated: ProjectManagedWorker = {
+        ...worker,
+        taskId: input.taskId ?? worker.taskId,
+        settledAt: input.createdAt,
+        settleOutcome: notice.outcome,
+        waitingSince:
+          notice.outcome === "waiting-approval" || notice.outcome === "waiting-input"
+            ? (worker.waitingSince ?? input.createdAt)
+            : null,
+        // An event means the worker is alive; any stuck episode and recovery
+        // ladder run is over, and a flagged "Waiting on you" resolves.
+        // `recoveriesUsed` only resets on a genuine success — the ladder's own
+        // re-dispatches keep the count so the cap can't loop forever.
+        recoveriesUsed: notice.outcome === "completed" ? 0 : worker.recoveriesUsed,
+        stuckKind: null,
+        stuckSince: null,
+        recoveryEpisode: null,
+        recoveryStep: 0,
+        nudgeAt: null,
+        needsYou: false,
+        needsYouAt: null,
+        updatedAt: input.createdAt,
+      };
+      const saved = yield* repository
+        .saveManagedWorkerMonitor({ worker: updated, expectedUpdatedAt: worker.updatedAt })
+        .pipe(Effect.mapError(toServiceError("Failed to update managed worker.")));
+      let persistedWorker = updated;
+      if (!saved.applied) {
+        // CAS miss: a concurrent write moved the row. Re-read once and apply
+        // the settle facts on top — losing a settle is worse than retrying.
+        const fresh = yield* repository
+          .findManagedWorkerByThread(worker.threadId)
+          .pipe(Effect.mapError(toServiceError("Failed to re-read managed worker.")));
+        if (Option.isSome(fresh)) {
+          persistedWorker = {
+            ...updated,
+            taskId: fresh.value.taskId ?? updated.taskId,
+            recoveriesUsed: updated.recoveriesUsed,
+            updatedAt: fresh.value.updatedAt,
+          };
+          yield* repository
+            .saveManagedWorkerMonitor({
+              worker: persistedWorker,
+              expectedUpdatedAt: fresh.value.updatedAt,
+            })
+            .pipe(Effect.mapError(toServiceError("Failed to update managed worker.")));
+        }
+      }
+      if (input.suppressRows !== true) {
+        yield* postWorkerMonitorRow({
+          coordinatorThreadId: input.coordinatorThreadId,
+          sourceKey: `settle:${input.sourceEventId}`,
+          tone: notice.tone,
+          kind: "synara.worker.settled",
+          summary: formatWorkerMonitorRow({
+            title: worker.title,
+            marker: notice.marker,
+            phrase: rowPhrase,
+          }),
+          payload: {
+            source: "worker_monitor",
+            eventType: input.eventType,
+            marker: notice.marker,
+            phrase: rowPhrase,
+            thread: threadPayload,
+          },
+          createdAt: input.createdAt,
+        });
+      }
+      const batch = yield* repository
+        .listManagedWorkersByBatch({ projectId: worker.projectId, batchId: worker.batchId })
+        .pipe(Effect.mapError(toServiceError("Failed to load worker batch.")));
+      // The just-written row is freshest; swap it into the batch listing in
+      // case a concurrent ingest left the read behind.
+      const peers = batch.map((row) => (row.threadId === worker.threadId ? persistedWorker : row));
+      if (
+        input.suppressRows !== true &&
+        peers.length > 1 &&
+        peers.every((row) => row.settledAt !== null)
+      ) {
+        const signature = peers.map((row) => row.settleOutcome ?? "pending").join("|");
+        const rollupKey = `${worker.batchId}:${signature}`;
+        const rollupInserted = yield* repository
+          .insertInboxEvent({
+            id: branded.inbox(),
+            projectId: worker.projectId,
+            sourceThreadId: worker.threadId,
+            sourceEventId: `worker-batch:${rollupKey}`,
+            eventType: "workers.settled",
+            taskId: input.taskId,
+            eligibleWake: true,
+            createdAt: input.createdAt,
+          })
+          .pipe(Effect.mapError(toServiceError("Failed to record worker batch roll-up.")));
+        if (rollupInserted.inserted) {
+          // Each finished worker's tracked PR belongs in the roll-up — the
+          // current shell is already read; batch-fetch the peers' for theirs.
+          const peerShells = yield* snapshotQuery
+            .getThreadShellsByIds(peers.map((row) => row.threadId))
+            .pipe(
+              Effect.catch(() => Effect.succeed([] as ReadonlyArray<OrchestrationThreadShell>)),
+            );
+          const prByThread = new Map(
+            peerShells.map((peer) => [peer.id, peer.lastKnownPr?.url ?? null]),
+          );
+          const threads = peers.map((row) => ({
+            threadId: row.threadId,
+            title: row.title,
+            outcome: row.settleOutcome ?? "failed",
+            result: row.resultSummary,
+            pr: row.threadId === worker.threadId ? prUrl : (prByThread.get(row.threadId) ?? null),
+          }));
+          const allFinished = threads.every(
+            (thread) => thread.outcome === "completed" || thread.outcome === "stopped",
+          );
+          yield* postWorkerMonitorRow({
+            coordinatorThreadId: input.coordinatorThreadId,
+            sourceKey: `rollup:${rollupKey}`,
+            tone: allFinished ? "info" : "approval",
+            kind: "synara.workers.settled",
+            summary: formatWorkerBatchRollup({ threads }),
+            payload: { source: "worker_monitor", batchId: worker.batchId, threads },
+            createdAt: input.createdAt,
+          });
+        }
+      }
+    });
+
+  // Stuck checks the health loop applies to every recorded managed worker:
+  // missing shell (episode-keyed), failed session status, waiting on an
+  // approval/user input past the waiting threshold, and running silent past
+  // the quiet threshold. Terminal outcomes stop the waiting/silent checks.
+  // The recovery ladder rides the silent check: each silent episode nudges the
+  // worker once, then interrupts + re-dispatches its recorded task prompt once
+  // the post-nudge delay elapses, bounded by WORKER_RECOVERY_MAX_ATTEMPTS per
+  // episode chain. Exhaustion latches "Waiting on you" (needs-you dot + one
+  // wake to tell the user). All ladder state lives on the durable worker row,
+  // so a restart mid-episode resumes the same step.
+  const inspectManagedWorkerHealth = (input: {
+    readonly worker: ProjectManagedWorker;
+    readonly shell: Option.Option<OrchestrationThreadShell>;
+    /** Thread ids with a live provider session (connecting/ready/running).
+     * null when the live listing failed — the disconnect check is skipped. */
+    readonly liveWorkerThreadIds: ReadonlySet<string> | null;
+  }) =>
+    Effect.gen(function* () {
+      const worker = input.worker;
+      const nowMs = yield* Clock.currentTimeMillis;
+      const nowIso = new Date(nowMs).toISOString();
+      const serviceError = toServiceError("Failed to update managed worker health state.");
+      // CAS stamp of the freshest known row — every successful write advances
+      // it so claims later in the same tick CAS against the latest revision.
+      let rowStamp = worker.updatedAt;
+      // All health-loop writes go through here: CAS on `rowStamp`, and on a
+      // miss re-read once and merge only the ladder-owned fields on top of the
+      // winning row — a concurrent settle or the dispatch-triggered
+      // recordWorkerTurnRequest write must neither drop the ladder's claim
+      // nor be clobbered by it.
+      const persistWorkerUpdate = (next: ProjectManagedWorker) =>
+        Effect.gen(function* () {
+          const claimed = yield* repository
+            .saveManagedWorkerMonitor({ worker: next, expectedUpdatedAt: rowStamp })
+            .pipe(Effect.mapError(serviceError));
+          if (claimed.applied) {
+            rowStamp = next.updatedAt;
+            return true;
+          }
+          const fresh = yield* repository
+            .findManagedWorkerByThread(worker.threadId)
+            .pipe(Effect.mapError(serviceError));
+          if (Option.isNone(fresh)) return false;
+          const merged: ProjectManagedWorker = {
+            ...fresh.value,
+            stuckKind: next.stuckKind,
+            stuckSince: next.stuckSince,
+            waitingSince: next.waitingSince,
+            recoveryEpisode: next.recoveryEpisode,
+            recoveryStep: next.recoveryStep,
+            nudgeAt: next.nudgeAt,
+            recoveriesUsed: next.recoveriesUsed,
+            needsYou: next.needsYou,
+            needsYouAt: next.needsYouAt,
+            updatedAt: next.updatedAt,
+          };
+          const retried = yield* repository
+            .saveManagedWorkerMonitor({
+              worker: merged,
+              expectedUpdatedAt: fresh.value.updatedAt,
+            })
+            .pipe(Effect.mapError(serviceError));
+          if (retried.applied) {
+            rowStamp = merged.updatedAt;
+            return true;
+          }
+          return false;
+        });
+      let updated = worker;
+      // Claim a ladder step BEFORE dispatching its command: the row write
+      // lands first so the async recordWorkerTurnRequest rewrite can't drop
+      // recoveriesUsed / recoveryStep when it lands between the dispatch and
+      // the save. A failed dispatch rolls the claim back so a transient
+      // engine error doesn't burn an attempt.
+      const claimLadderStep = (
+        patch: Partial<ProjectManagedWorker>,
+        dispatch: Effect.Effect<boolean, ProjectAgentServiceError>,
+      ) =>
+        Effect.gen(function* () {
+          const claimed: ProjectManagedWorker = { ...updated, ...patch, updatedAt: nowIso };
+          const previous = updated;
+          if (!(yield* persistWorkerUpdate(claimed))) return false;
+          const dispatched = yield* dispatch;
+          if (!dispatched) {
+            yield* persistWorkerUpdate(previous);
+            return false;
+          }
+          updated = claimed;
+          return true;
+        });
+      const ingestHealthEvent = (sourceEventId: string, eventType: string) =>
+        impl
+          .ingestSettledThreadEvent({
+            threadId: worker.threadId,
+            sourceEventId,
+            eventType,
+            createdAt: nowIso,
+          })
+          .pipe(
+            Effect.catch((error) =>
+              appendActivity({
+                projectId: worker.projectId,
+                kind: "error",
+                actorKind: "system",
+                actorThreadId: worker.threadId,
+                goalId: null,
+                taskId: null,
+                source: null,
+                summary: `Worker monitor ingest ${eventType} on ${worker.threadId}: ${String(error)}`,
+                createdAt: nowIso,
+              }),
+            ),
+          );
+
+      // Recovery dispatches reuse the same orchestration commands the
+      // coordinator tools send (steer message, interrupt, queued turn). Their
+      // deterministic command ids carry the WORKER_RECOVERY_COMMAND_PREFIX so
+      // the settle reactor ignores the interrupt side effects, and a crash
+      // between dispatch and the row write replays the same ids.
+      const dispatchRecovery = (command: OrchestrationCommand) =>
+        orchestrationEngine.dispatch(command).pipe(
+          Effect.as(true),
+          Effect.catch((error) =>
+            appendActivity({
+              projectId: worker.projectId,
+              kind: "error",
+              actorKind: "system",
+              actorThreadId: worker.threadId,
+              goalId: null,
+              taskId: null,
+              source: null,
+              summary: `Worker recovery dispatch ${command.type} on ${worker.threadId}: ${String(error)}`,
+              createdAt: nowIso,
+            }).pipe(Effect.as(false)),
+          ),
+        );
+
+      // A terminal settle already reported: monitoring ends there, so the
+      // health checks below (missing shell, failed status, overdue waiting,
+      // silent running + recovery) must not post another episode.
+      if (isTerminalWorkerSettleOutcome(worker.settleOutcome)) return;
+      if (Option.isNone(input.shell)) {
+        // Missing shell: one episode, keyed by its first-seen timestamp. A
+        // worker already settled as missing stays quiet while the shell is
+        // still gone — a later settle event re-opens reporting.
+        if (worker.stuckKind === "missing") return;
+        const stuckSince = nowIso;
+        if (
+          yield* persistWorkerUpdate({
+            ...worker,
+            stuckKind: "missing",
+            stuckSince,
+            updatedAt: nowIso,
+          })
+        ) {
+          yield* ingestHealthEvent(
+            `worker-health:${worker.threadId}:missing:${stuckSince}`,
+            "worker.missing",
+          );
+        }
+        return;
+      }
+      const shell = input.shell.value;
+      const sessionStatus = shell.session?.status ?? null;
+      if (isFailedWorkerSessionStatus(sessionStatus)) {
+        const updatedAt = shell.session?.updatedAt ?? shell.updatedAt;
+        yield* ingestHealthEvent(
+          `worker-health:${worker.threadId}:${sessionStatus}:${updatedAt}`,
+          `worker.${sessionStatus}`,
+        );
+        return;
+      }
+
+      // Silence is measured from the thread's last runtime activity of ANY
+      // kind — ingestion maintains `lastActivityAt` on the projected session;
+      // `updatedAt` (lifecycle only) and the shell stamp stay as fallbacks.
+      const lastActivity =
+        shell.session?.lastActivityAt ?? shell.session?.updatedAt ?? shell.updatedAt;
+
+      // Immediate liveness: the projection says running but no live provider
+      // session owns the thread — the process died or disconnected while its
+      // status stayed "running". The grace covers adapter-listing lag on a
+      // fresh spawn.
+      if (
+        sessionStatus === "running" &&
+        input.liveWorkerThreadIds !== null &&
+        !input.liveWorkerThreadIds.has(worker.threadId) &&
+        nowMs - Date.parse(shell.session?.updatedAt ?? lastActivity) > WORKER_DISCONNECT_GRACE_MS
+      ) {
+        yield* ingestHealthEvent(
+          `worker-health:${worker.threadId}:disconnected:${shell.session?.updatedAt ?? lastActivity}`,
+          "worker.disconnected",
+        );
+        return;
+      }
+
+      if (worker.stuckKind === "missing") {
+        updated = { ...updated, stuckKind: null, stuckSince: null };
+      }
+      const terminal =
+        worker.settleOutcome === "completed" ||
+        worker.settleOutcome === "stopped" ||
+        worker.settleOutcome === "failed" ||
+        worker.settleOutcome === "interrupted" ||
+        worker.settleOutcome === "missing";
+
+      // "Waiting on you": the latch is the same for every path that reaches
+      // it — flag + Synara-native row with retry/stop actions (posted by the
+      // `worker.needs-you` ingest), never a fake provider request.
+      const latchNeedsYou = (dedupeKey: string) =>
+        Effect.gen(function* () {
+          if (updated.needsYou) return;
+          const claimed: ProjectManagedWorker = {
+            ...updated,
+            needsYou: true,
+            needsYouAt: nowIso,
+            updatedAt: nowIso,
+          };
+          if (yield* persistWorkerUpdate(claimed)) {
+            updated = claimed;
+            yield* ingestHealthEvent(
+              `worker-health:${worker.threadId}:needs-you:${dedupeKey}`,
+              "worker.needs-you",
+            );
+          }
+        });
+      const redispatchCommand = (step: string) => {
+        const prompt = worker.taskPrompt;
+        if (prompt === null || prompt.trim().length === 0) return null;
+        const commandId = `${WORKER_RECOVERY_COMMAND_PREFIX}${worker.threadId}:${lastActivity}:${step}`;
+        return {
+          type: "thread.turn.start" as const,
+          commandId: CommandId.makeUnsafe(commandId),
+          threadId: worker.threadId,
+          message: {
+            messageId: MessageId.makeUnsafe(`${commandId}:message`),
+            role: "user" as const,
+            text: prompt,
+            attachments: [] as Array<never>,
+          },
+          dispatchMode: "queue" as const,
+          dispatchOrigin: "automation" as const,
+          runtimeMode: shell.runtimeMode,
+          interactionMode: shell.interactionMode,
+          createdAt: nowIso,
+        };
+      };
+      const nudgeCommand = (step: string) => {
+        const commandId = `${WORKER_RECOVERY_COMMAND_PREFIX}${worker.threadId}:${lastActivity}:${step}`;
+        return {
+          type: "thread.turn.start" as const,
+          commandId: CommandId.makeUnsafe(commandId),
+          threadId: worker.threadId,
+          message: {
+            messageId: MessageId.makeUnsafe(`${commandId}:message`),
+            role: "user" as const,
+            text: WORKER_RECOVERY_NUDGE_TEXT,
+            attachments: [] as Array<never>,
+          },
+          dispatchMode: "steer" as const,
+          dispatchOrigin: "automation" as const,
+          runtimeMode: shell.runtimeMode,
+          interactionMode: shell.interactionMode,
+          createdAt: nowIso,
+        };
+      };
+
+      // Never started: the coordinator created the worker but no session or
+      // first turn landed within the grace window — one counted re-dispatch,
+      // then "Waiting on you" under the same recovery cap.
+      const turnStarted =
+        shell.session?.activeTurnId != null || shell.latestTurn?.startedAt != null;
+      if (!turnStarted && nowMs - Date.parse(worker.createdAt) > WORKER_NEVER_STARTED_MS) {
+        if (updated.stuckKind !== "never-started") {
+          const claimed: ProjectManagedWorker = {
+            ...updated,
+            stuckKind: "never-started",
+            stuckSince: worker.createdAt,
+            updatedAt: nowIso,
+          };
+          if (yield* persistWorkerUpdate(claimed)) {
+            updated = claimed;
+            yield* ingestHealthEvent(
+              `worker-health:${worker.threadId}:never-started:${worker.createdAt}`,
+              "worker.never-started",
+            );
+          }
+        }
+        if (updated.recoveriesUsed >= WORKER_RECOVERY_MAX_ATTEMPTS) {
+          yield* latchNeedsYou(`never-started:${worker.createdAt}`);
+        } else if (
+          updated.nudgeAt === null ||
+          nowMs - Date.parse(updated.nudgeAt) > WORKER_RECOVERY_REDELIVER_DELAY_MS
+        ) {
+          const command = redispatchCommand("never-started-redispatch");
+          if (command === null) {
+            yield* latchNeedsYou(`never-started:${worker.createdAt}`);
+          } else {
+            const claimed = yield* claimLadderStep(
+              {
+                recoveriesUsed: updated.recoveriesUsed + 1,
+                nudgeAt: nowIso,
+              },
+              dispatchRecovery(command),
+            );
+            if (claimed) {
+              yield* ingestHealthEvent(
+                `worker-health:${worker.threadId}:never-started-redispatched:${worker.createdAt}`,
+                "worker.recovery-redispatched",
+              );
+            }
+          }
+        }
+      } else if (!terminal && !updated.needsYou) {
+        if (updated.stuckKind === "never-started") {
+          updated = { ...updated, stuckKind: null, stuckSince: null };
+        }
+        const waiting = shell.hasPendingApprovals || shell.hasPendingUserInput;
+        if (waiting) {
+          const waitingSince = updated.waitingSince ?? nowIso;
+          updated = { ...updated, waitingSince };
+          if (
+            nowMs - Date.parse(waitingSince) > WORKER_STUCK_WAITING_MS &&
+            updated.stuckKind !== "waiting"
+          ) {
+            const claimed: ProjectManagedWorker = {
+              ...updated,
+              stuckKind: "waiting",
+              stuckSince: waitingSince,
+              updatedAt: nowIso,
+            };
+            if (yield* persistWorkerUpdate(claimed)) {
+              updated = claimed;
+              yield* ingestHealthEvent(
+                `worker-health:${worker.threadId}:waiting:${waitingSince}`,
+                "worker.waiting-overdue",
+              );
+            }
+          }
+        } else {
+          if (updated.waitingSince !== null) updated = { ...updated, waitingSince: null };
+          if (updated.stuckKind === "waiting") {
+            updated = { ...updated, stuckKind: null, stuckSince: null };
+          }
+          const toolRows = yield* projectionThreadSessionRepository
+            .getToolInFlight({ threadId: worker.threadId })
+            .pipe(Effect.catch(() => Effect.succeed([])));
+          const toolInFlight = toolRows.length > 0;
+          const oldestTool = toolRows[0];
+          const quietForMs = nowMs - Date.parse(lastActivity);
+          const userTurn = updated.activeTurnOrigin === "user";
+          // "Real progress" is what unsticks a worker: agent output, tool
+          // lifecycle, or a new turn AFTER the ladder's last action (the
+          // nudge's own echo back is activity without progress). Only
+          // progress clears the ladder — anything less just re-anchors the
+          // quiet window while the chain keeps its position.
+          const lastProgress = shell.session?.lastProgressAt ?? null;
+          const progressAnchor = updated.nudgeAt ?? updated.stuckSince;
+          const madeProgress =
+            lastProgress !== null && progressAnchor !== null && lastProgress > progressAnchor;
+          if (toolInFlight && oldestTool !== undefined) {
+            if (updated.stuckKind === "silent") {
+              // A tool started mid-episode — the silence was queued work, not
+              // a stall; clear the ladder state.
+              const claimed: ProjectManagedWorker = {
+                ...updated,
+                stuckKind: null,
+                stuckSince: null,
+                recoveryEpisode: null,
+                recoveryStep: 0,
+                nudgeAt: null,
+                updatedAt: nowIso,
+              };
+              if (yield* persistWorkerUpdate(claimed)) updated = claimed;
+            }
+            // Past the hard cap the ladder only nudges + notifies — a running
+            // tool is never interrupted.
+            if (!userTurn && nowMs - Date.parse(oldestTool.startedAt) > WORKER_TOOL_OVERTIME_MS) {
+              if (updated.stuckKind !== "tool-overtime") {
+                const claimed: ProjectManagedWorker = {
+                  ...updated,
+                  stuckKind: "tool-overtime",
+                  stuckSince: oldestTool.startedAt,
+                  updatedAt: nowIso,
+                };
+                if (yield* persistWorkerUpdate(claimed)) updated = claimed;
+              }
+              yield* ingestHealthEvent(
+                `worker-health:${worker.threadId}:tool-overtime:${oldestTool.startedAt}`,
+                "worker.tool-overtime",
+              );
+              if (updated.nudgeAt !== oldestTool.startedAt) {
+                yield* claimLadderStep(
+                  { nudgeAt: oldestTool.startedAt },
+                  dispatchRecovery(nudgeCommand("tool-overtime-nudge")),
+                );
+              }
+            }
+          } else if (!userTurn) {
+            // Turn-ownership gate: the ladder only acts on turns it or the
+            // coordinator started — a user-owned turn is never steered,
+            // interrupted, or re-prompted. null (pre-feature workers) stays
+            // monitored like "coordinator".
+            if (sessionStatus === "running" && quietForMs > WORKER_STUCK_RUNNING_QUIET_MS) {
+              if (updated.stuckKind === "silent" && !madeProgress) {
+                // Activity arrived but produced no work (e.g. the nudge
+                // echoing back) — re-anchor the quiet window to the newest
+                // stamp WITHOUT resetting the ladder's position, so the same
+                // chain keeps escalating instead of restarting each echo.
+                if (
+                  updated.stuckSince !== lastActivity ||
+                  updated.recoveryEpisode !== lastActivity
+                ) {
+                  const claimed: ProjectManagedWorker = {
+                    ...updated,
+                    stuckSince: lastActivity,
+                    recoveryEpisode: lastActivity,
+                    updatedAt: nowIso,
+                  };
+                  if (yield* persistWorkerUpdate(claimed)) updated = claimed;
+                }
+              } else {
+                if (updated.stuckKind === "silent") {
+                  // Real progress landed since the ladder's last action — the
+                  // chain is over. A fresh episode still keys below if the
+                  // quiet window has since elapsed again.
+                  const claimed: ProjectManagedWorker = {
+                    ...updated,
+                    stuckKind: null,
+                    stuckSince: null,
+                    recoveryEpisode: null,
+                    recoveryStep: 0,
+                    nudgeAt: null,
+                    updatedAt: nowIso,
+                  };
+                  if (yield* persistWorkerUpdate(claimed)) updated = claimed;
+                }
+                if (updated.stuckKind !== "silent") {
+                  // A fresh silent episode keys the chain on the quiet-window
+                  // stamp — the lifetime recovery count survives so the cap
+                  // still bounds the loop.
+                  const claimed: ProjectManagedWorker = {
+                    ...updated,
+                    stuckKind: "silent",
+                    stuckSince: lastActivity,
+                    recoveryEpisode: lastActivity,
+                    recoveryStep: 0,
+                    nudgeAt: null,
+                    updatedAt: nowIso,
+                  };
+                  if (yield* persistWorkerUpdate(claimed)) {
+                    updated = claimed;
+                    yield* ingestHealthEvent(
+                      `worker-health:${worker.threadId}:silent:${lastActivity}`,
+                      "worker.silent",
+                    );
+                  }
+                }
+              }
+              if (updated.recoveryEpisode === lastActivity) {
+                if (updated.recoveryStep === 0) {
+                  if (updated.recoveriesUsed >= WORKER_RECOVERY_MAX_ATTEMPTS) {
+                    yield* latchNeedsYou(`silent:${lastActivity}`);
+                  } else {
+                    // Step 1 — nudge through the same steer path the
+                    // coordinator's send tool uses. The nudge itself counts
+                    // against the cap so a provider that merely echoes it
+                    // can't loop forever.
+                    const claimed = yield* claimLadderStep(
+                      {
+                        recoveryStep: 1,
+                        nudgeAt: nowIso,
+                        recoveriesUsed: updated.recoveriesUsed + 1,
+                      },
+                      dispatchRecovery(nudgeCommand("nudge")),
+                    );
+                    if (claimed) {
+                      yield* ingestHealthEvent(
+                        `worker-health:${worker.threadId}:nudged:${lastActivity}`,
+                        "worker.nudged",
+                      );
+                    }
+                  }
+                } else if (
+                  updated.recoveryStep === 1 &&
+                  updated.nudgeAt !== null &&
+                  nowMs - Date.parse(updated.nudgeAt) > WORKER_RECOVERY_REDELIVER_DELAY_MS
+                ) {
+                  // Step 2 — still quiet after the nudge: interrupt the
+                  // stalled turn, then re-dispatch the recorded task prompt
+                  // once. The step's claim persists before either dispatch.
+                  if (updated.recoveriesUsed >= WORKER_RECOVERY_MAX_ATTEMPTS) {
+                    yield* latchNeedsYou(`silent:${lastActivity}`);
+                  } else {
+                    const command = redispatchCommand("redispatch");
+                    if (command === null) {
+                      yield* latchNeedsYou(`silent:${lastActivity}`);
+                    } else {
+                      const turnActive =
+                        shell.session?.activeTurnId != null ||
+                        shell.latestTurn?.state === "running";
+                      const interruptCommandId = `${WORKER_RECOVERY_COMMAND_PREFIX}${worker.threadId}:${lastActivity}:interrupt`;
+                      const dispatchStep = Effect.gen(function* () {
+                        const interrupted = turnActive
+                          ? yield* dispatchRecovery({
+                              type: "thread.turn.interrupt",
+                              commandId: CommandId.makeUnsafe(interruptCommandId),
+                              threadId: worker.threadId,
+                              createdAt: nowIso,
+                            })
+                          : true;
+                        if (!interrupted) return false;
+                        return yield* dispatchRecovery(command);
+                      });
+                      const claimed = yield* claimLadderStep(
+                        {
+                          recoveryStep: 2,
+                          nudgeAt: nowIso,
+                          recoveriesUsed: updated.recoveriesUsed + 1,
+                        },
+                        dispatchStep,
+                      );
+                      if (claimed) {
+                        yield* ingestHealthEvent(
+                          `worker-health:${worker.threadId}:redispatched:${lastActivity}`,
+                          "worker.recovery-redispatched",
+                        );
+                      }
+                    }
+                  }
+                } else if (
+                  updated.recoveryStep === 2 &&
+                  updated.nudgeAt !== null &&
+                  nowMs - Date.parse(updated.nudgeAt) > WORKER_STUCK_RUNNING_QUIET_MS
+                ) {
+                  // The re-dispatch produced no events within a full quiet
+                  // window — that stall counts as another episode of the same
+                  // chain and either starts a new cycle or, at the cap, flags
+                  // the worker "Waiting on you".
+                  const claimed: ProjectManagedWorker = {
+                    ...updated,
+                    recoveryStep: 0,
+                    updatedAt: nowIso,
+                  };
+                  if (yield* persistWorkerUpdate(claimed)) updated = claimed;
+                  if (updated.recoveriesUsed >= WORKER_RECOVERY_MAX_ATTEMPTS) {
+                    yield* latchNeedsYou(`silent:${lastActivity}`);
+                  }
+                }
+              }
+            } else if (
+              (updated.stuckKind === "silent" || updated.stuckKind === "tool-overtime") &&
+              madeProgress
+            ) {
+              // Fresh activity only ends the episode when it produced real
+              // work — a nudge echo must not clear the ladder it was meant to
+              // unstick (that path re-anchors above instead).
+              const claimed: ProjectManagedWorker = {
+                ...updated,
+                stuckKind: null,
+                stuckSince: null,
+                recoveryEpisode: null,
+                recoveryStep: 0,
+                nudgeAt: null,
+                updatedAt: nowIso,
+              };
+              if (yield* persistWorkerUpdate(claimed)) updated = claimed;
+            }
+          }
+        }
+      }
+      if (updated !== worker) {
+        yield* persistWorkerUpdate({ ...updated, updatedAt: nowIso });
+      }
+    });
 
   // A digest left "running" by a crash or restart would block refresh forever;
   // reset those rows once at startup so the next schedule regenerates them.
@@ -728,6 +1577,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
           digest: null,
           blockers: [],
           recentOutcomes: [],
+          workers: [],
           coordinatorStatus: "unconfigured",
         };
       }
@@ -754,6 +1604,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
       const activity = yield* repository
         .listActivity({ projectId, limit: 8 })
         .pipe(Effect.mapError(toServiceError("Failed to load project activity.")));
+      // Managed workers go out with the overview so the web can show
+      // "Waiting on you" badges and per-worker state without a second call.
+      const workers = yield* repository
+        .listManagedWorkers(projectId)
+        .pipe(Effect.mapError(toServiceError("Failed to load managed workers.")));
       const blockers = tasks
         .filter((task) => task.status === "blocked")
         .map((task) => ({
@@ -791,6 +1646,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         digest: digestValue,
         blockers,
         recentOutcomes: activity,
+        workers,
         coordinatorStatus: coordinatorStatusFromGoal(
           true,
           goalValue?.status ?? null,
@@ -1129,6 +1985,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
       const tasks = yield* repository
         .listTasks({ projectId: input.projectId, includeArchived: true, limit: 500 })
         .pipe(Effect.mapError(toServiceError("Failed to load group tasks.")));
+      const workers = yield* repository
+        .listManagedWorkers(input.projectId)
+        .pipe(Effect.mapError(toServiceError("Failed to load managed workers.")));
       const ids = new Set<ThreadId>();
       for (const thread of groupThreads) {
         if (thread.deletedAt === null && thread.threadId !== input.coordinatorThreadId) {
@@ -1142,6 +2001,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
         if (task.assignedThreadId && task.assignedThreadId !== input.coordinatorThreadId) {
           ids.add(task.assignedThreadId);
         }
+      }
+      for (const worker of workers) {
+        if (worker.threadId !== input.coordinatorThreadId) ids.add(worker.threadId);
       }
       const shells = yield* snapshotQuery
         .getThreadShellsByIds([...ids])
@@ -2304,6 +3166,14 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const indexArchivedByThreadId = new Map(
           index.map((entry) => [entry.threadId, entry.archived] as const),
         );
+        const workers = yield* repository
+          .listManagedWorkers(input.projectId)
+          .pipe(Effect.mapError(toServiceError("Failed to load managed workers.")));
+        const needsYouByThreadId = new Map(
+          workers
+            .filter((worker) => worker.needsYou)
+            .map((worker) => [worker.threadId, true] as const),
+        );
         const projectShells = yield* snapshotQuery
           .getProjectShellsByIds([...new Set(shells.map((shell) => shell.projectId))])
           .pipe(Effect.mapError(toServiceError("Failed to load group projects.")));
@@ -2315,6 +3185,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
               archivedAt: shell.archivedAt ?? null,
               hasPendingApprovals: shell.hasPendingApprovals,
               hasPendingUserInput: shell.hasPendingUserInput,
+              needsYou: needsYouByThreadId.has(shell.id),
               session: shell.session,
               latestTurn: shell.latestTurn,
             },
@@ -4003,11 +4874,14 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const principal = yield* impl.resolvePrincipalForThread(input.callerThreadId);
         if (principal.kind !== "coordinator") return;
         const now = isoNow();
+        // createdAt feeds the never-started grace, which runs on Clock time.
+        const clockCreatedAt = new Date(yield* Clock.currentTimeMillis).toISOString();
         const goal = yield* repository
           .getActiveGoal(principal.projectId)
           .pipe(Effect.mapError(toServiceError("Failed to load authorized goal.")));
         const activeGoal =
           Option.isSome(goal) && goal.value.status === "active" ? goal.value : null;
+        const batchId = input.batchId ?? input.requestId;
         for (const [index, threadId] of input.threadIds.entries()) {
           const title = input.titles[index] ?? `Worker ${index + 1}`;
           const indexEntry = {
@@ -4023,6 +4897,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
             .upsertThreadIndex(indexEntry)
             .pipe(Effect.mapError(toServiceError("Failed to index worker thread.")));
           yield* publishThreadIndexUpserts(principal.projectId, [indexEntry]);
+          let taskId: ProjectTaskId | null = null;
           if (activeGoal) {
             const task = yield* impl.createTask(
               {
@@ -4070,7 +4945,41 @@ export const makeProjectAgentService = Effect.gen(function* () {
                 finishedAt: null,
               })
               .pipe(Effect.mapError(toServiceError("Failed to record worker attempt.")));
+            taskId = task.id;
           }
+          // Every coordinator-created thread is a tracked worker — the durable
+          // record drives settle rows, the batch roll-up, and stuck detection
+          // even when no active goal produced a task for it. The task prompt
+          // is stored so the stall-recovery ladder can re-dispatch it after a
+          // restart without re-reading the thread.
+          yield* repository
+            .upsertManagedWorker({
+              projectId: principal.projectId,
+              threadId,
+              batchId,
+              requestId: input.requestId,
+              title,
+              taskId,
+              settledAt: null,
+              settleOutcome: null,
+              waitingSince: null,
+              stuckKind: null,
+              stuckSince: null,
+              taskPrompt: input.prompts?.[index] ?? null,
+              recoveryEpisode: null,
+              recoveryStep: 0,
+              nudgeAt: null,
+              recoveriesUsed: 0,
+              needsYou: false,
+              needsYouAt: null,
+              activeTurnOrigin: "coordinator",
+              activeTurnCommandId: null,
+              resultSummary: null,
+              resultAt: null,
+              createdAt: clockCreatedAt,
+              updatedAt: clockCreatedAt,
+            })
+            .pipe(Effect.mapError(toServiceError("Failed to track managed worker.")));
           yield* appendActivity({
             projectId: principal.projectId,
             kind: "task-created",
@@ -4243,6 +5152,27 @@ export const makeProjectAgentService = Effect.gen(function* () {
             createdAt: now,
           })
           .pipe(Effect.mapError(toServiceError("Failed to record evidence.")));
+        // The structured summary lands on the managed-worker row — the settle
+        // row and the batch roll-up quote it instead of generic text.
+        if (principal.kind !== "user") {
+          const workerOption = yield* repository
+            .findManagedWorkerByThread(principal.threadId)
+            .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+          if (Option.isSome(workerOption)) {
+            const worker = workerOption.value;
+            yield* repository
+              .saveManagedWorkerMonitor({
+                worker: {
+                  ...worker,
+                  resultSummary: input.summary,
+                  resultAt: now,
+                  updatedAt: now,
+                },
+                expectedUpdatedAt: worker.updatedAt,
+              })
+              .pipe(Effect.catch(() => Effect.void));
+          }
+        }
         if (task.status === "running") {
           const reviewed: ProjectTask = {
             ...task,
@@ -4344,6 +5274,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const task = yield* repository
           .findTaskByAssignedThread(input.threadId)
           .pipe(Effect.mapError(toServiceError("Failed to resolve task for event.")));
+        const worker = yield* repository
+          .findManagedWorkerByThread(input.threadId)
+          .pipe(Effect.mapError(toServiceError("Failed to resolve managed worker for event.")));
         const configByCoordinator = yield* repository
           .getConfigByCoordinatorThread(input.threadId)
           .pipe(Effect.mapError(toServiceError("Failed to resolve coordinator for event.")));
@@ -4352,26 +5285,64 @@ export const makeProjectAgentService = Effect.gen(function* () {
           .pipe(Effect.mapError(toServiceError("Failed to resolve thread for event.")));
         const projectId = Option.isSome(task)
           ? task.value.projectId
-          : Option.isSome(configByCoordinator)
-            ? configByCoordinator.value.projectId
-            : Option.isSome(shell)
-              ? shell.value.projectId
-              : null;
+          : Option.isSome(worker)
+            ? worker.value.projectId
+            : Option.isSome(configByCoordinator)
+              ? configByCoordinator.value.projectId
+              : Option.isSome(shell)
+                ? shell.value.projectId
+                : null;
         if (projectId === null) return;
         const config = yield* repository
           .getConfig(projectId)
           .pipe(Effect.mapError(toServiceError("Failed to load coordinator for event.")));
         if (Option.isNone(config) || !config.value.enabled) return;
+        // A diff-completed event whose checkpoint closed missing/error belongs
+        // to a turn that did not finish cleanly — e.g. a turn the recovery
+        // ladder itself interrupted. Reclassify it so everything downstream
+        // treats it as an interruption (never `completed`): no false
+        // "finished" row, and the recovery counter is not reset by the
+        // ladder's own interrupt.
+        const eventType =
+          input.eventType === "thread.turn-diff-completed" &&
+          input.checkpointStatus !== undefined &&
+          input.checkpointStatus !== "ready"
+            ? "worker.interrupted"
+            : input.eventType;
         if (Option.isSome(configByCoordinator)) {
+          // Coordinator self-events never wake coordination. Automation
+          // "check-in" turns additionally stay out of the coordinator
+          // transcript entirely — the activity log records what each check-in
+          // concluded instead.
+          let summary = "Coordinator self-events do not wake coordination.";
+          let kind: ProjectActivityKind = "wake-skipped";
+          if (input.eventType === "thread.turn-diff-completed" && input.turnId !== undefined) {
+            const detail = yield* snapshotQuery
+              .getThreadDetailById(input.threadId)
+              .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+            const checkin = Option.isSome(detail)
+              ? coordinatorCheckinTurnReport({
+                  messages: detail.value.messages,
+                  turnId: input.turnId,
+                })
+              : null;
+            if (checkin !== null) {
+              kind = "coordinator-checkin";
+              summary =
+                checkin.silent || checkin.replyText === null
+                  ? "Coordinator check-in: nothing to report."
+                  : `Coordinator check-in: ${checkin.replyText.trim().slice(0, 500)}`;
+            }
+          }
           yield* appendActivity({
             projectId,
-            kind: "wake-skipped",
+            kind,
             actorKind: "system",
             actorThreadId: input.threadId,
             goalId: null,
             taskId: null,
             source: null,
-            summary: "Coordinator self-events do not wake coordination.",
+            summary,
             createdAt: input.createdAt,
           });
           // Coordinator turns still change what the digest should say (tasks
@@ -4380,25 +5351,34 @@ export const makeProjectAgentService = Effect.gen(function* () {
           yield* impl.scheduleDigest(projectId);
           return;
         }
-        // A worker is a thread the coordinator assigned to a task. Wakes come
-        // from those threads or from any group thread that ends in an alert
-        // (error / needs the user) — never from routine turns in group chats.
-        const managedWorker = Option.isSome(task);
-        const eligibleWake = managedWorker || isWorkerAlertEvent(input.eventType);
+        // A worker is a tracked thread: a task assignment or a recorded
+        // managed worker (coordinator-created with or without an active goal).
+        // Wakes come from those threads or from any group thread that ends in
+        // an alert (error / needs the user) — never from routine group chats.
+        // For managed workers the wake set is narrower: ladder bookkeeping
+        // (silent/nudged/redispatched/waiting-overdue/never-started/… )
+        // posts its rows but never burns a coordinator turn; the model is
+        // woken only when the ladder gives up or the worker settles.
+        const managedWorker = Option.isSome(task) || Option.isSome(worker);
+        const eligibleWake = managedWorker
+          ? WORKER_WAKE_EVENT_TYPES.has(eventType)
+          : isWorkerAlertEvent(eventType);
+        // Paused/archived groups still record state (inbox event, worker row,
+        // settlement report) — only the coordinator-thread rows suppress.
+        const suppressRows = config.value.pausedAt != null || config.value.archivedAt != null;
         const inserted = yield* repository
           .insertInboxEvent({
             id: branded.inbox(),
             projectId,
             sourceThreadId: input.threadId,
             sourceEventId: input.sourceEventId,
-            eventType: input.eventType,
+            eventType,
             taskId: Option.isSome(task) ? task.value.id : null,
             eligibleWake,
             createdAt: input.createdAt,
           })
           .pipe(Effect.mapError(toServiceError("Failed to record project inbox event.")));
-        const shouldReport =
-          managedWorker && shouldMaterializeWorkerSettlementReport(input.eventType);
+        const shouldReport = managedWorker && shouldMaterializeWorkerSettlementReport(eventType);
         let reportRewritten = false;
         if (shouldReport) {
           const detail = yield* snapshotQuery
@@ -4413,13 +5393,13 @@ export const makeProjectAgentService = Effect.gen(function* () {
             ? lastAssistantTextFromMessages(detail.value.messages)
             : null;
           const outcome = classifyWorkerSettlement({
-            eventType: input.eventType,
+            eventType,
             sessionStatus: Option.isSome(shell) ? shell.value.session?.status : null,
           });
           const report = formatWorkerSettlementReport({
             title,
             threadId: input.threadId,
-            eventType: input.eventType,
+            eventType,
             status: Option.isSome(shell) ? shell.value.session?.status : null,
             lastError: Option.isSome(shell) ? shell.value.session?.lastError : null,
             lastAssistantText,
@@ -4480,6 +5460,22 @@ export const makeProjectAgentService = Effect.gen(function* () {
             yield* impl.scheduleDigest(projectId);
           }
           return;
+        }
+        // Deterministic monitoring: the fresh event posts its compact system
+        // row into the coordinator thread and, once every worker in the same
+        // creation batch has settled, the single roll-up row. The wake below
+        // then hands the coordinator a turn to react.
+        if (Option.isSome(worker)) {
+          yield* recordWorkerMonitorEvent({
+            worker: worker.value,
+            eventType,
+            sourceEventId: input.sourceEventId,
+            createdAt: input.createdAt,
+            coordinatorThreadId: config.value.coordinatorThreadId,
+            taskId: Option.isSome(task) ? task.value.id : null,
+            lastKnownPr: Option.isSome(shell) ? (shell.value.lastKnownPr ?? null) : null,
+            suppressRows,
+          });
         }
         yield* impl.scheduleDigest(projectId);
         if (eligibleWake) {
@@ -4767,13 +5763,36 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const configs = yield* repository
           .listConfigs()
           .pipe(Effect.mapError(toServiceError("Failed to list project coordinators.")));
+        // One live listing per tick powers the disconnect check: a session
+        // whose projection says running but that no provider adapter owns is
+        // a dead process. A failed listing (null) skips just that check —
+        // never every check.
+        const liveSessions = yield* providerService
+          .listSessions()
+          .pipe(Effect.catch(() => Effect.succeed(null)));
+        const liveWorkerThreadIds =
+          liveSessions === null
+            ? null
+            : new Set<string>(
+                liveSessions
+                  .filter(
+                    (session: ProviderSession) =>
+                      session.status !== "error" && session.status !== "closed",
+                  )
+                  .map((session: ProviderSession) => session.threadId),
+              );
         for (const config of configs) {
           if (!config.enabled) continue;
           if (config.pausedAt !== null || config.archivedAt !== null) continue;
-          // Only task-assigned threads are workers. Ordinary group chats stay
+          // Only tracked workers are checked. Ordinary group chats stay
           // indexed for context but a healthy idle/finished one must never
-          // produce reports, wakes, or digests.
+          // produce reports, wakes, or digests. Managed workers additionally
+          // get the quiet/waiting stuck checks.
           const workerThreadIds = yield* assignedWorkerThreadIds(config.projectId);
+          const workers = yield* repository
+            .listManagedWorkers(config.projectId)
+            .pipe(Effect.mapError(toServiceError("Failed to load managed workers.")));
+          const workerByThread = new Map(workers.map((worker) => [worker.threadId, worker]));
           for (const threadId of workerThreadIds) {
             if (threadId === config.coordinatorThreadId) {
               continue;
@@ -4781,6 +5800,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
             const shell = yield* snapshotQuery
               .getThreadShellById(threadId)
               .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+            const worker = workerByThread.get(threadId);
+            if (worker !== undefined) {
+              yield* inspectManagedWorkerHealth({ worker, shell, liveWorkerThreadIds });
+              continue;
+            }
             if (Option.isNone(shell)) {
               yield* impl.ingestSettledThreadEvent({
                 threadId,
@@ -4801,6 +5825,183 @@ export const makeProjectAgentService = Effect.gen(function* () {
             });
           }
         }
+      }),
+
+    recordWorkerTurnRequest: (input) =>
+      Effect.gen(function* () {
+        // `thread.turn-queued` only enqueues the request behind whatever turn
+        // is running — the running turn keeps its ownership until promotion
+        // emits `thread.turn-start-requested`. Flipping ownership here would
+        // let a queued coordinator message claim a running user turn.
+        if (input.eventType === "thread.turn-queued") return;
+        const existing = yield* repository
+          .findManagedWorkerByThread(input.threadId)
+          .pipe(Effect.mapError(toServiceError("Failed to load managed worker.")));
+        if (Option.isNone(existing)) return;
+        const worker = existing.value;
+        // Turn ownership: "user" requests belong to the person at the
+        // keyboard; ladder-originated commands carry the recovery prefix;
+        // everything else (coordinator dispatch, automation wake) monitors
+        // as "coordinator".
+        const origin =
+          input.dispatchOrigin === "user"
+            ? ("user" as const)
+            : input.commandId !== null && input.commandId.startsWith(WORKER_RECOVERY_COMMAND_PREFIX)
+              ? ("ladder" as const)
+              : ("coordinator" as const);
+        const updated: ProjectManagedWorker = {
+          ...worker,
+          activeTurnOrigin: origin,
+          activeTurnCommandId: input.commandId ?? worker.activeTurnCommandId,
+          // Re-arm: a new coordinator/ladder turn on a settled worker re-opens
+          // monitoring — the next settle reports again.
+          ...(origin !== "user"
+            ? {
+                settledAt: null,
+                settleOutcome: null,
+                waitingSince: null,
+                needsYou: false,
+                needsYouAt: null,
+              }
+            : {}),
+          updatedAt: input.createdAt,
+        };
+        const saved = yield* repository
+          .saveManagedWorkerMonitor({
+            worker: updated,
+            expectedUpdatedAt: worker.updatedAt,
+          })
+          .pipe(Effect.catch(() => Effect.succeed({ applied: false as const })));
+        if (!saved.applied) {
+          // CAS miss — a ladder claim or settle landed in between. Re-read
+          // once and apply the ownership facts on top so the mark isn't lost.
+          const fresh = yield* repository
+            .findManagedWorkerByThread(input.threadId)
+            .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+          if (Option.isSome(fresh)) {
+            const retried: ProjectManagedWorker = {
+              ...updated,
+              // Keep the ladder/monitor state the winner wrote; only the
+              // ownership + re-arm fields are reapplied.
+              stuckKind: fresh.value.stuckKind,
+              stuckSince: fresh.value.stuckSince,
+              recoveryEpisode: fresh.value.recoveryEpisode,
+              recoveryStep: fresh.value.recoveryStep,
+              nudgeAt: fresh.value.nudgeAt,
+              recoveriesUsed: fresh.value.recoveriesUsed,
+              needsYou: fresh.value.needsYou,
+              needsYouAt: fresh.value.needsYouAt,
+              updatedAt: fresh.value.updatedAt,
+            };
+            yield* repository
+              .saveManagedWorkerMonitor({
+                worker: retried,
+                expectedUpdatedAt: fresh.value.updatedAt,
+              })
+              .pipe(Effect.catch(() => Effect.void));
+          }
+        }
+      }),
+
+    resolveWorkerAlert: (input: ProjectAgentResolveWorkerInput, principal) =>
+      Effect.gen(function* () {
+        if (!isUserPrincipal(principal)) {
+          return yield* Effect.fail(
+            fail("Only the signed-in user can resolve worker alerts.", "forbidden"),
+          );
+        }
+        const config = yield* repository
+          .getConfig(input.projectId)
+          .pipe(Effect.mapError(toServiceError("Failed to load project coordinator.")));
+        if (Option.isNone(config)) {
+          return yield* Effect.fail(fail("Project coordinator not found.", "not-found"));
+        }
+        const workerOption = yield* repository
+          .findManagedWorkerByThread(input.threadId)
+          .pipe(Effect.mapError(toServiceError("Failed to load managed worker.")));
+        if (Option.isNone(workerOption) || workerOption.value.projectId !== input.projectId) {
+          return yield* Effect.fail(fail("Managed worker not found.", "not-found"));
+        }
+        const worker = workerOption.value;
+        const nowIso = isoNow();
+        // Persist the resolve decision with CAS on the row's updatedAt; on a
+        // miss re-read once and reapply the resolve-owned fields — a swallowed
+        // CAS failure leaves "Waiting on you" stuck flagged forever.
+        const persistWorkerResolve = (patch: Partial<ProjectManagedWorker>) =>
+          Effect.gen(function* () {
+            const saved = yield* repository
+              .saveManagedWorkerMonitor({
+                worker: { ...worker, ...patch, updatedAt: nowIso },
+                expectedUpdatedAt: worker.updatedAt,
+              })
+              .pipe(Effect.catch(() => Effect.succeed({ applied: false as const })));
+            if (saved.applied) return;
+            const fresh = yield* repository
+              .findManagedWorkerByThread(worker.threadId)
+              .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+            if (Option.isNone(fresh)) return;
+            yield* repository
+              .saveManagedWorkerMonitor({
+                worker: { ...fresh.value, ...patch, updatedAt: fresh.value.updatedAt },
+                expectedUpdatedAt: fresh.value.updatedAt,
+              })
+              .pipe(Effect.catch(() => Effect.void));
+          });
+        if (input.action === "stop") {
+          yield* orchestrationEngine
+            .dispatch({
+              type: "thread.turn.interrupt",
+              commandId: CommandId.makeUnsafe(`agent-resolve:${input.requestId}:stop`),
+              threadId: worker.threadId,
+              createdAt: nowIso,
+            })
+            .pipe(Effect.mapError(toServiceError("Failed to interrupt the worker thread.")));
+          yield* persistWorkerResolve({ needsYou: false, needsYouAt: null });
+          return { resolved: true };
+        }
+        // retry — re-dispatch the recorded task prompt as a queued turn.
+        const prompt = worker.taskPrompt;
+        if (prompt === null || prompt.trim().length === 0) {
+          return yield* Effect.fail(
+            fail("This worker has no recorded task prompt to retry.", "invalid"),
+          );
+        }
+        const shell = yield* snapshotQuery
+          .getThreadShellById(worker.threadId)
+          .pipe(Effect.mapError(toServiceError("Failed to load worker thread.")));
+        if (Option.isNone(shell)) {
+          return yield* Effect.fail(fail("Worker thread was not found.", "not-found"));
+        }
+        const commandId = `agent-resolve:${input.requestId}:retry`;
+        yield* orchestrationEngine
+          .dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe(commandId),
+            threadId: worker.threadId,
+            message: {
+              messageId: MessageId.makeUnsafe(`${commandId}:message`),
+              role: "user",
+              text: prompt,
+              attachments: [],
+            },
+            dispatchMode: "queue",
+            dispatchOrigin: "user",
+            runtimeMode: shell.value.runtimeMode,
+            interactionMode: shell.value.interactionMode,
+            createdAt: nowIso,
+          })
+          .pipe(Effect.mapError(toServiceError("Failed to re-dispatch the worker turn.")));
+        // The retry belongs to the user — mark ownership so the health ladder
+        // doesn't steer over it — and the worker is monitored again.
+        yield* persistWorkerResolve({
+          activeTurnOrigin: "user",
+          activeTurnCommandId: commandId,
+          needsYou: false,
+          needsYouAt: null,
+          settledAt: null,
+          settleOutcome: null,
+        });
+        return { resolved: true };
       }),
 
     resolvePrincipalForThread: (threadId) =>

@@ -42,6 +42,8 @@ import type {
   ProjectAgentReadDocumentResult,
   ProjectAgentRefreshDigestInput,
   ProjectAgentReportResultInput,
+  ProjectAgentResolveWorkerInput,
+  ProjectAgentResolveWorkerResult,
   ProjectAgentStartGoalInput,
   ProjectAgentStreamEvent,
   ProjectAgentSubscribeInput,
@@ -220,8 +222,14 @@ export interface ProjectAgentServiceShape {
   readonly recordManagedWorkerThreads: (input: {
     readonly callerThreadId: ThreadId;
     readonly requestId: string;
+    /** Creation-batch key used by the all-workers-settled roll-up; the caller
+     * passes its per-turn operation id so each creation call is one batch. */
+    readonly batchId?: string;
     readonly threadIds: ReadonlyArray<ThreadId>;
     readonly titles: ReadonlyArray<string>;
+    /** The task prompt each thread was created with — stored durably so the
+     * stall-recovery ladder can re-dispatch it after a restart. */
+    readonly prompts?: ReadonlyArray<string | null>;
   }) => Effect.Effect<void, ProjectAgentServiceError>;
   readonly reconcilePendingWakes: () => Effect.Effect<void, ProjectAgentServiceError>;
   readonly inspectWorkerHealth: () => Effect.Effect<void, ProjectAgentServiceError>;
@@ -237,11 +245,44 @@ export interface ProjectAgentServiceShape {
     readonly threadId: ThreadId;
     readonly sourceEventId: string;
     readonly eventType: string;
+    /** Checkpoint status carried by `thread.turn-diff-completed` — a diff that
+     * ended `missing`/`error` describes an interrupted turn, never a clean
+     * finish, and must not settle the worker as `completed`. */
+    readonly checkpointStatus?: string;
+    /** Turn the event belongs to — used to classify coordinator check-in
+     * turns for the group activity log. */
+    readonly turnId?: string;
     readonly createdAt: string;
   }) => Effect.Effect<void, ProjectAgentServiceError>;
   readonly processPendingWakes: (
     projectId: ProjectId,
   ) => Effect.Effect<void, ProjectAgentServiceError>;
+  /**
+   * Turn-ownership signal from the reactor: classifies the originating
+   * command (coordinator / ladder / user), clears a latched needs-you on any
+   * new turn, and re-arms monitoring on a terminally settled worker when the
+   * new turn is coordinator- or ladder-originated.
+   */
+  readonly recordWorkerTurnRequest: (input: {
+    readonly threadId: ThreadId;
+    readonly commandId: string | null;
+    readonly dispatchOrigin: string | null;
+    readonly turnId: string | null;
+    /** Orchestration event type that carried the request
+     * (`thread.turn-start-requested` starts the turn; `thread.turn-queued`
+     * only enqueues it behind a running turn and must not take ownership). */
+    readonly eventType?: string;
+    readonly createdAt: string;
+  }) => Effect.Effect<void, ProjectAgentServiceError>;
+  /**
+   * User decision on a "Waiting on you" worker: `stop` interrupts its turn
+   * and settles it; `retry` clears the latch and re-dispatches the recorded
+   * task prompt under the ladder's ownership.
+   */
+  readonly resolveWorkerAlert: (
+    input: ProjectAgentResolveWorkerInput,
+    principal: ProjectAgentPrincipal,
+  ) => Effect.Effect<ProjectAgentResolveWorkerResult, ProjectAgentServiceError>;
   readonly resolvePrincipalForThread: (
     threadId: ThreadId,
   ) => Effect.Effect<ProjectAgentPrincipal, ProjectAgentServiceError>;

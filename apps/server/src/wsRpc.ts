@@ -2623,6 +2623,11 @@ const makeWsRpcHandlersLayer = () =>
             ),
             "Failed to load library status",
           ),
+        [WS_METHODS.projectAgentResolveWorker]: (input) =>
+          rpcEffect(
+            projectAgentService.resolveWorkerAlert(input, { kind: "user" }),
+            "Failed to resolve worker alert",
+          ),
         [WS_METHODS.subscribeProjectAgentEvents]: (input, { clientId }) =>
           streamAdmission.guard(
             clientId,

@@ -1,4 +1,5 @@
 import {
+  IsoDateTime,
   ProjectActivity,
   ProjectAgentConfig,
   ProjectAgentRequestId,
@@ -11,6 +12,7 @@ import {
   ProjectGoalId,
   ProjectId,
   ProjectInboxEvent,
+  ProjectManagedWorker,
   ProjectTask,
   ProjectTaskAttempt,
   ProjectTaskId,
@@ -252,6 +254,28 @@ export interface ProjectAgentRepositoryShape {
   readonly findTaskByAssignedThread: (
     threadId: ThreadId,
   ) => Effect.Effect<Option.Option<ProjectTask>, ProjectAgentRepositoryError>;
+  readonly upsertManagedWorker: (
+    worker: ProjectManagedWorker,
+  ) => Effect.Effect<ProjectManagedWorker, ProjectAgentRepositoryError>;
+  /**
+   * Compare-and-set write of the monitor-owned worker columns guarded by the
+   * row's `updated_at` — a stale read cannot revert a concurrent settle.
+   * `applied: false` on a guard miss; the caller re-reads or drops the write.
+   */
+  readonly saveManagedWorkerMonitor: (input: {
+    readonly worker: ProjectManagedWorker;
+    readonly expectedUpdatedAt: IsoDateTime;
+  }) => Effect.Effect<{ readonly applied: boolean }, ProjectAgentRepositoryError>;
+  readonly findManagedWorkerByThread: (
+    threadId: ThreadId,
+  ) => Effect.Effect<Option.Option<ProjectManagedWorker>, ProjectAgentRepositoryError>;
+  readonly listManagedWorkers: (
+    projectId: ProjectId,
+  ) => Effect.Effect<ReadonlyArray<ProjectManagedWorker>, ProjectAgentRepositoryError>;
+  readonly listManagedWorkersByBatch: (input: {
+    readonly projectId: ProjectId;
+    readonly batchId: string;
+  }) => Effect.Effect<ReadonlyArray<ProjectManagedWorker>, ProjectAgentRepositoryError>;
 }
 
 export class ProjectAgentRepository extends ServiceMap.Service<

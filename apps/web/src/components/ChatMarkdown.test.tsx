@@ -41,6 +41,14 @@ async function renderUserMarkdown(text: string) {
   );
 }
 
+async function renderMarkdownWithThreadOpener(text: string) {
+  const { default: ChatMarkdown } = await import("./ChatMarkdown");
+
+  return renderWithQueryClient(
+    <ChatMarkdown text={text} cwd={undefined} isStreaming={false} onOpenThread={() => {}} />,
+  );
+}
+
 describe("streamingCodeHighlightIntervalMs", () => {
   it(
     "keeps the base cadence for small blocks and stretches it with block size",
@@ -83,6 +91,29 @@ describe("ChatMarkdown", () => {
 
     expect(markup).not.toContain("data-github-alert");
     expect(markup).toContain("[!NOTE] not an alert");
+  });
+
+  it("renders synara://thread links as thread buttons, accepting encoded titles", async () => {
+    const markup = await renderMarkdownWithThreadOpener(
+      "Finished [Mars public opinion research](synara://thread/Mars%20public%20opinion%20research) and [raw id](synara://thread/thread-abc-123).",
+    );
+
+    // Both links take the thread-button branch instead of rendering as raw
+    // anchors or unparseable text.
+    expect(markup).toContain("<button");
+    expect(markup).toContain("Mars public opinion research");
+    expect(markup).toContain("raw id");
+    expect(markup).not.toContain("synara://thread/");
+  });
+
+  it("renders thread:// links as thread buttons", async () => {
+    const markup = await renderMarkdownWithThreadOpener(
+      "Finished [Mars research](thread://thread-abc-123).",
+    );
+
+    expect(markup).toContain("<button");
+    expect(markup).toContain("Mars research");
+    expect(markup).not.toContain("thread://thread-abc-123");
   });
 
   it("renders inline math with KaTeX", async () => {

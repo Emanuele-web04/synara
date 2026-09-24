@@ -253,6 +253,15 @@ export function ProjectPanel({
     () => new Set(agent.threads.filter((entry) => entry.archived).map((entry) => entry.threadId)),
     [agent.threads],
   );
+  const needsYouThreadIds = useMemo(
+    () =>
+      new Set(
+        (agent.overview?.workers ?? [])
+          .filter((worker) => worker.needsYou)
+          .map((worker) => worker.threadId),
+      ),
+    [agent.overview?.workers],
+  );
 
   const threadRows = useMemo(
     () =>
@@ -266,6 +275,7 @@ export function ProjectPanel({
             projectNameById,
             groupProjectId: projectId,
             groupProjectName: projectName,
+            needsYouThreadIds,
           }),
     [
       projectId,
@@ -275,6 +285,7 @@ export function ProjectPanel({
       pullRequestsByThreadId,
       projectNameById,
       projectName,
+      needsYouThreadIds,
     ],
   );
   const threadSections = useMemo(() => partitionGroupThreadRows(threadRows), [threadRows]);

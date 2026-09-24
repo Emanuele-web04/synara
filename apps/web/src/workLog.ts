@@ -26,6 +26,7 @@ import {
   summarizeToolRawOutput,
 } from "@synara/shared/toolOutputSummary";
 import { pluralize, stripTerminalControlSequences } from "@synara/shared/text";
+import { suppressCoordinatorCheckinMessages } from "@synara/shared/coordinatorCheckin";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import {
   deriveReadableToolTitle,
@@ -119,6 +120,10 @@ export interface WorkLogEntry {
   subagentAction?: WorkLogSubagentAction;
   automation?: WorkLogAutomation;
   synaraThreadCreation?: WorkLogSynaraThreadCreation;
+  // Deterministic coordinator-monitor rows (worker settled / stuck /
+  // batch roll-up) render as compact centered pills in the coordinator
+  // conversation, each carrying a link into the reported thread.
+  synaraWorkerNotice?: WorkLogSynaraWorkerNotice;
   // Computer-control denial rows render as an actionable card (enable control
   // and retry) instead of a plain error line; carry just what that card needs.
   computerControlDenied?: WorkLogComputerControlDenied;
@@ -180,6 +185,25 @@ export interface WorkLogSynaraThreadCreation {
   requestedCount: number;
   createdCount: number;
   threads: ReadonlyArray<WorkLogSynaraCreatedThread>;
+}
+
+export interface WorkLogSynaraWorkerNoticeThread {
+  threadId: string;
+  title: string;
+  outcome: string | null;
+  result: string | null;
+  pr: string | null;
+  /** Owning group project — the needs-you actions resolve against it. */
+  projectId: string | null;
+}
+
+export interface WorkLogSynaraWorkerNotice {
+  kind: "settled" | "stuck" | "needs-you" | "rollup";
+  marker: string | null;
+  phrase: string | null;
+  threads: ReadonlyArray<WorkLogSynaraWorkerNoticeThread>;
+  /** Synara-native action ids on a needs-you card (retry / stop / open). */
+  actions?: ReadonlyArray<"retry" | "stop" | "open">;
 }
 
 export interface WorkLogSubagent {
@@ -415,6 +439,18 @@ function shouldKeepActivityForWorkLog(
     return true;
   }
 
+  // Coordinator monitor rows are posted server-side with no turn id; a
+  // coordinator conversation is all turns, so the turn filter would hide every
+  // settle/stuck/roll-up pill.
+  if (
+    activity.kind === "synara.worker.settled" ||
+    activity.kind === "synara.worker.stuck" ||
+    activity.kind === "synara.worker.needs-you" ||
+    activity.kind === "synara.workers.settled"
+  ) {
+    return true;
+  }
+
   // An empty set means the transcript has no turn-stamped assistant messages
   // (e.g. providers that never supply turn ids); fall back to the legacy
   // latest-turn filter instead of hiding the whole work log.
@@ -523,6 +559,71 @@ function extractWorkLogSynaraThreadCreation(
       ? payload.createdCount
       : threads.length;
   return { operationId, requestedCount, createdCount, threads };
+}
+
+function extractWorkLogSynaraWorkerNotice(
+  payload: Record<string, unknown> | null,
+  activityKind: OrchestrationThreadActivity["kind"],
+): WorkLogSynaraWorkerNotice | null {
+  if (!payload || payload.source !== "worker_monitor") {
+    return null;
+  }
+  const parseThreads = (values: unknown): WorkLogSynaraWorkerNoticeThread[] => {
+    if (!Array.isArray(values)) {
+      return [];
+    }
+    return values.flatMap((value): WorkLogSynaraWorkerNoticeThread[] => {
+      const thread = asRecord(value);
+      const threadId = asTrimmedString(thread?.threadId);
+      const title = asTrimmedString(thread?.title);
+      if (!threadId || !title) {
+        return [];
+      }
+      return [
+        {
+          threadId,
+          title,
+          outcome: asTrimmedString(thread?.outcome) ?? null,
+          result: asTrimmedString(thread?.result) ?? null,
+          pr: asTrimmedString(thread?.pr) ?? null,
+          projectId: asTrimmedString(thread?.projectId) ?? null,
+        },
+      ];
+    });
+  };
+  if (activityKind === "synara.workers.settled") {
+    const threads = parseThreads(payload.threads);
+    return threads.length > 0 ? { kind: "rollup", marker: null, phrase: null, threads } : null;
+  }
+  if (
+    activityKind === "synara.worker.settled" ||
+    activityKind === "synara.worker.stuck" ||
+    activityKind === "synara.worker.needs-you"
+  ) {
+    const threads = parseThreads([payload.thread]);
+    if (threads.length === 0) {
+      return null;
+    }
+    const actions = Array.isArray(payload.actions)
+      ? payload.actions.flatMap(
+          (action): Array<"retry" | "stop" | "open"> =>
+            action === "retry" || action === "stop" || action === "open" ? [action] : [],
+        )
+      : undefined;
+    return {
+      kind:
+        activityKind === "synara.worker.needs-you"
+          ? "needs-you"
+          : activityKind === "synara.worker.stuck"
+            ? "stuck"
+            : "settled",
+      marker: asTrimmedString(payload.marker) ?? null,
+      phrase: asTrimmedString(payload.phrase) ?? null,
+      threads,
+      ...(actions ? { actions } : {}),
+    };
+  }
+  return null;
 }
 
 export interface TaskListTaskSnapshot {
@@ -743,6 +844,17 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     const synaraThreadCreation = extractWorkLogSynaraThreadCreation(payload);
     if (synaraThreadCreation) {
       entry.synaraThreadCreation = synaraThreadCreation;
+    }
+  }
+  if (
+    activity.kind === "synara.worker.settled" ||
+    activity.kind === "synara.worker.stuck" ||
+    activity.kind === "synara.worker.needs-you" ||
+    activity.kind === "synara.workers.settled"
+  ) {
+    const notice = extractWorkLogSynaraWorkerNotice(payload, activity.kind);
+    if (notice) {
+      entry.synaraWorkerNotice = notice;
     }
   }
   if (activity.kind === COMPUTER_SETUP_REQUIRED_ACTIVITY_KIND) {
@@ -2647,11 +2759,29 @@ export function deriveTimelineEntries(
   messages: ChatMessage[],
   proposedPlans: ProposedPlan[],
   workEntries: WorkLogEntry[],
+  options?: { readonly suppressCoordinatorCheckins?: boolean },
 ): TimelineEntry[] {
+  // Coordinator check-ins (automation-dispatched heartbeat/wake turns) never
+  // render: the automation prompt row, its work/plan rows bound to the check-in
+  // turn, and the reply when it is a silent "nothing to report". A non-silent
+  // reply stays as an ordinary coordinator message.
+  const checkinSuppression = options?.suppressCoordinatorCheckins
+    ? suppressCoordinatorCheckinMessages(messages)
+    : null;
+  const visibleMessages = checkinSuppression ? checkinSuppression.messages : messages;
+  const checkinTurnIds = checkinSuppression?.checkinTurnIds;
+  const visibleProposedPlans = checkinTurnIds
+    ? proposedPlans.filter((plan) => plan.turnId == null || !checkinTurnIds.has(plan.turnId))
+    : proposedPlans;
+  const visibleWorkEntries = checkinTurnIds
+    ? workEntries.filter((entry) => entry.turnId == null || !checkinTurnIds.has(entry.turnId))
+    : workEntries;
   const proposedPlanTurnIds = new Set(
-    proposedPlans.flatMap((proposedPlan) => (proposedPlan.turnId ? [proposedPlan.turnId] : [])),
+    visibleProposedPlans.flatMap((proposedPlan) =>
+      proposedPlan.turnId ? [proposedPlan.turnId] : [],
+    ),
   );
-  const messageRows: TimelineEntry[] = messages.flatMap((message): TimelineEntry[] => {
+  const messageRows: TimelineEntry[] = visibleMessages.flatMap((message): TimelineEntry[] => {
     const displayMessage =
       message.role === "assistant" && message.turnId && proposedPlanTurnIds.has(message.turnId)
         ? { ...message, text: stripProposedPlanBlocksFromText(message.text) }
@@ -2694,13 +2824,13 @@ export function deriveTimelineEntries(
       },
     ];
   });
-  const proposedPlanRows: TimelineEntry[] = proposedPlans.map((proposedPlan) => ({
+  const proposedPlanRows: TimelineEntry[] = visibleProposedPlans.map((proposedPlan) => ({
     id: proposedPlan.id,
     kind: "proposed-plan",
     createdAt: proposedPlan.createdAt,
     proposedPlan,
   }));
-  const workRows: TimelineEntry[] = workEntries.map((entry) => ({
+  const workRows: TimelineEntry[] = visibleWorkEntries.map((entry) => ({
     id: entry.id,
     kind: "work",
     createdAt: entry.createdAt,
@@ -2713,13 +2843,13 @@ export function deriveTimelineEntries(
   const userStarts: string[] = [];
   const messageOrder = new Map<string, number>();
   const turnOrder = new Map<string, number>();
-  const messagesOrdered = messages.every(
+  const messagesOrdered = visibleMessages.every(
     (message, index) =>
-      index === 0 || messages[index - 1]!.createdAt.localeCompare(message.createdAt) <= 0,
+      index === 0 || visibleMessages[index - 1]!.createdAt.localeCompare(message.createdAt) <= 0,
   );
   const orderedMessages = messagesOrdered
-    ? messages
-    : messages.toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
+    ? visibleMessages
+    : visibleMessages.toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
   for (const message of orderedMessages) {
     // Effective dispatch semantics are recorded before an emulated steer waits
     // for interruption/promotion. Fall back to turn binding for events written

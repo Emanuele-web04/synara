@@ -42,6 +42,9 @@ import { wakeReceiptRequestId } from "../digest.ts";
 import { resolveLibraryRoot } from "../libraryStore.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
+import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import { ProjectionThreadSessionRepository } from "../../persistence/Services/ProjectionThreadSessions.ts";
+import type { ProviderSession } from "@synara/contracts";
 import { ProjectAgentService } from "../Services/ProjectAgentService.ts";
 import { ProjectAgentServiceLive } from "./ProjectAgentService.ts";
 
@@ -73,13 +76,21 @@ function makeTestLayer(options?: {
   readonly failCommandTypes?: ReadonlyArray<OrchestrationCommand["type"]>;
   readonly disabledProviders?: ReadonlyArray<ProviderKind>;
   readonly unavailableProviders?: ReadonlyArray<ProviderKind>;
+  readonly providerSessions?: ReadonlyArray<ProviderSession>;
 }) {
   const threadShells: Record<
     string,
     {
       projectId: ProjectId;
       title: string;
-      session: { status: string; updatedAt: string; lastError: string | null } | null;
+      session: {
+        status: string;
+        updatedAt: string;
+        lastError: string | null;
+        activeTurnId?: string | null;
+        lastActivityAt?: string | null;
+        lastProgressAt?: string | null;
+      } | null;
       latestTurn?: {
         state: string;
         startedAt?: string;
@@ -141,6 +152,20 @@ function makeTestLayer(options?: {
       }),
     );
   };
+  // Thread detail stubs for code paths that hydrate messages (worker reports,
+  // coordinator check-in classification). Shells alone are enough elsewhere.
+  const threadDetails: Record<
+    string,
+    {
+      messages: Array<{
+        id: string;
+        role: string;
+        text: string;
+        turnId?: string | null;
+        dispatchOrigin?: string | null;
+      }>;
+    }
+  > = {};
   const dispatched: OrchestrationCommand[] = [];
   const automationDefinitions: Array<{
     readonly id: string;
@@ -159,6 +184,13 @@ function makeTestLayer(options?: {
   const digestGenerationInputs: unknown[] = [];
   let failFirstImport = options?.failFirstImport === true;
   let shellBatchCalls = 0;
+  // Live provider-session snapshot the health loop consults for dead-session
+  // detection, and durable in-flight tool rows the liveness tracking writes.
+  const providerSessions: ProviderSession[] = [...(options?.providerSessions ?? [])];
+  const toolInFlightByThread: Record<
+    string,
+    Array<{ itemId: string; turnId: string | null; startedAt: string }>
+  > = {};
   const snapshotLayer = Layer.effect(
     ProjectionSnapshotQuery,
     Effect.gen(function* () {
@@ -267,7 +299,12 @@ function makeTestLayer(options?: {
             return shells;
           }) as ReturnType<ProjectionSnapshotQuery["Service"]["getProjectShellsByIds"]>;
         },
-        getThreadDetailById: () => Effect.succeed(Option.none()),
+        getThreadDetailById: (threadId: ThreadId) =>
+          Effect.succeed(
+            threadId in threadDetails
+              ? Option.some(threadDetails[threadId] as never)
+              : Option.none(),
+          ),
         getThreadShellById,
         getThreadShellsByIds: (threadIds: ReadonlyArray<ThreadId>) =>
           Effect.forEach(threadIds, getThreadShellById).pipe(
@@ -357,6 +394,9 @@ function makeTestLayer(options?: {
     automationRuns,
     digestGenerationInputs,
     threadShells,
+    threadDetails,
+    providerSessions,
+    toolInFlightByThread,
     shellBatchCalls: () => shellBatchCalls,
     layer: ProjectAgentServiceLive.pipe(
       Layer.provide(snapshotLayer),
@@ -387,6 +427,23 @@ function makeTestLayer(options?: {
         Layer.succeed(ProjectionThreadRepository, {
           listByProjectId: () => Effect.succeed([]),
         } as unknown as ProjectionThreadRepository["Service"]),
+      ),
+      Layer.provide(
+        Layer.succeed(ProviderService, {
+          listSessions: () => Effect.succeed([...providerSessions]),
+        } as unknown as ProviderService["Service"]),
+      ),
+      Layer.provide(
+        Layer.succeed(ProjectionThreadSessionRepository, {
+          getToolInFlight: (input: { threadId: string }) =>
+            Effect.succeed(
+              (toolInFlightByThread[input.threadId] ?? []).map((row) => ({
+                itemId: row.itemId,
+                turnId: row.turnId,
+                startedAt: row.startedAt,
+              })),
+            ),
+        } as unknown as ProjectionThreadSessionRepository["Service"]),
       ),
       Layer.provideMerge(ProjectAgentRepositoryLive),
       Layer.provideMerge(SqlitePersistenceMemory),
@@ -1333,7 +1390,7 @@ it.effect("indexes routine group turns as non-wake and alert settles as wakeable
     yield* service.ingestSettledThreadEvent({
       threadId: groupMemberThreadId,
       sourceEventId: "needs-user-1",
-      eventType: "thread.user-input-response-requested",
+      eventType: "user-input.requested",
       createdAt: "2026-09-20T00:01:00.000Z",
     });
     const after = yield* repository.listInboxAfter({ projectId: groupId, limit: 10 });
@@ -4237,4 +4294,1621 @@ it.effect("keeps instructions and the memory index when the packet truncates", (
     assert.equal(packet.includes("UNIQUE-DECISION-TAIL"), false);
     assert.equal(packet.includes("## Tasks"), false);
   }).pipe(Effect.provide(harness.layer));
+});
+
+// Coordinator-managed worker monitoring: every thread the coordinator
+// creates is a tracked worker, so settle/stuck reporting works without an
+// active goal.
+it.effect("tracks every coordinator-created thread as a managed worker, goal or not", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-mon-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const workerThreadId = ThreadId.makeUnsafe("thread-mon-worker");
+    // No active goal: the group was configured without a goal record, so the
+    // old code path indexed the thread but never tracked it as a worker.
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-mon-record",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [workerThreadId],
+      titles: ["Mars rocket research"],
+    });
+    const tasks = yield* repository.listTasks({
+      projectId: groupId,
+      includeArchived: false,
+      limit: 10,
+    });
+    assert.equal(tasks.length, 0);
+    const worker = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(worker), true);
+    if (Option.isSome(worker)) {
+      assert.equal(worker.value.projectId, groupId);
+      assert.equal(worker.value.batchId, "req-mon-record");
+      assert.equal(worker.value.requestId, "req-mon-record");
+      assert.equal(worker.value.title, "Mars rocket research");
+      assert.equal(worker.value.taskId, null);
+      assert.equal(worker.value.settledAt, null);
+    }
+    const batch = yield* repository.listManagedWorkersByBatch({
+      projectId: groupId,
+      batchId: "req-mon-record",
+    });
+    assert.equal(batch.length, 1);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("posts a settle row into the coordinator thread and wakes it", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-settle-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const workerThreadId = ThreadId.makeUnsafe("thread-settle-worker");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-settle-record",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [workerThreadId],
+      titles: ["Mars rocket research"],
+    });
+    harness.dispatched.length = 0;
+    harness.runNowCalls.length = 0;
+
+    yield* service.ingestSettledThreadEvent({
+      threadId: workerThreadId,
+      sourceEventId: "settle-worker-done",
+      eventType: "thread.turn-diff-completed",
+      createdAt: "2026-09-20T00:05:00.000Z",
+    });
+
+    const inbox = yield* repository.listInboxAfter({ projectId: groupId, limit: 10 });
+    const event = inbox.find((row) => row.sourceEventId === "settle-worker-done");
+    assert.equal(event?.eligibleWake, true);
+    const rows = harness.dispatched.filter(
+      (command) =>
+        command.type === "thread.activity.append" &&
+        command.activity.kind === "synara.worker.settled",
+    );
+    assert.equal(rows.length, 1);
+    const row = rows[0]!;
+    assert.equal(row.type === "thread.activity.append" ? row.threadId : null, coordinatorThreadId);
+    if (row.type === "thread.activity.append") {
+      assert.equal(row.activity.summary, "✓ Mars rocket research finished — no result filed");
+    }
+    const worker = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(worker) ? worker.value.settleOutcome : null, "completed");
+    assert.equal(Option.isSome(worker) ? worker.value.settledAt !== null : false, true);
+    // The wake pipeline hands the coordinator a turn through the automation.
+    assert.equal(harness.runNowCalls.length >= 1, true);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("posts one roll-up when every worker in the creation batch settles", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-roll-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const threadA = ThreadId.makeUnsafe("thread-roll-a");
+    const threadB = ThreadId.makeUnsafe("thread-roll-b");
+    const threadC = ThreadId.makeUnsafe("thread-roll-c");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-roll-record",
+      batchId: "batch-roll",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [threadA, threadB, threadC],
+      titles: ["Alpha research", "Beta survey", "Gamma page"],
+    });
+    harness.dispatched.length = 0;
+    const rollups = () =>
+      harness.dispatched.filter(
+        (command) =>
+          command.type === "thread.activity.append" &&
+          command.activity.kind === "synara.workers.settled",
+      );
+
+    yield* service.ingestSettledThreadEvent({
+      threadId: threadA,
+      sourceEventId: "roll-a-done",
+      eventType: "thread.turn-diff-completed",
+      createdAt: "2026-09-20T00:05:00.000Z",
+    });
+    yield* service.ingestSettledThreadEvent({
+      threadId: threadB,
+      sourceEventId: "roll-b-done",
+      eventType: "thread.turn-diff-completed",
+      createdAt: "2026-09-20T00:06:00.000Z",
+    });
+    assert.equal(rollups().length, 0);
+
+    yield* service.ingestSettledThreadEvent({
+      threadId: threadC,
+      sourceEventId: "roll-c-wait",
+      // The request-side signal rides the activity-appended kind — the
+      // response-requested event fires when the USER answers, not when the
+      // worker waits.
+      eventType: "approval.requested",
+      createdAt: "2026-09-20T00:07:00.000Z",
+    });
+    assert.equal(rollups().length, 1);
+    const rollup = rollups()[0]!;
+    if (rollup.type === "thread.activity.append") {
+      assert.equal(
+        rollup.activity.summary,
+        "All 3 threads settled: Alpha research ✓ — no result filed, Beta survey ✓ — no result filed, Gamma page ⚠ needs approval",
+      );
+      assert.equal(rollup.threadId, coordinatorThreadId);
+    }
+    // The roll-up also records a wakeable inbox event for reconciliation.
+    const inbox = yield* repository.listInboxAfter({ projectId: groupId, limit: 20 });
+    const batchEvent = inbox.find((row) => row.eventType === "workers.settled");
+    assert.equal(batchEvent?.eligibleWake, true);
+
+    // Re-ingesting the same settle event reposts nothing: the row and the
+    // roll-up stay at one apiece.
+    yield* service.ingestSettledThreadEvent({
+      threadId: threadC,
+      sourceEventId: "roll-c-wait",
+      // The request-side signal rides the activity-appended kind — the
+      // response-requested event fires when the USER answers, not when the
+      // worker waits.
+      eventType: "approval.requested",
+      createdAt: "2026-09-20T00:07:00.000Z",
+    });
+    assert.equal(rollups().length, 1);
+    const settledRows = harness.dispatched.filter(
+      (command) =>
+        command.type === "thread.activity.append" &&
+        command.activity.kind === "synara.worker.settled",
+    );
+    assert.equal(settledRows.length, 3);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("flags quiet and overdue workers once per episode", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-stuck-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const quietThread = ThreadId.makeUnsafe("thread-stuck-quiet");
+    const waitingThread = ThreadId.makeUnsafe("thread-stuck-waiting");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-stuck-record",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [quietThread, waitingThread],
+      titles: ["Quiet worker", "Waiting worker"],
+    });
+    // Running silent past the quiet threshold (TestClock starts at the unix
+    // epoch — last activity at epoch goes quiet 10 minutes in).
+    harness.threadShells[quietThread] = {
+      projectId: groupId,
+      title: "Quiet worker",
+      session: { status: "running", updatedAt: "1970-01-01T00:00:00.000Z", lastError: null },
+      latestTurn: { state: "running", startedAt: "1970-01-01T00:00:00.000Z" },
+    };
+    // Waiting on an approval since before the waiting threshold. Its turn
+    // started (approvals only come from live turns) so the never-started
+    // check must not claim it.
+    harness.threadShells[waitingThread] = {
+      projectId: groupId,
+      title: "Waiting worker",
+      session: { status: "ready", updatedAt: "1970-01-01T00:00:00.000Z", lastError: null },
+      latestTurn: { state: "running", startedAt: "1970-01-01T00:00:00.000Z" },
+      hasPendingApprovals: true,
+    };
+    // The quiet worker's projection says running and the live provider list
+    // still carries it — no disconnect, the silence backstop applies.
+    harness.providerSessions.push(liveProviderSession(quietThread));
+    yield* service.ingestSettledThreadEvent({
+      threadId: waitingThread,
+      sourceEventId: "stuck-waiting-approval",
+      // The request-side signal rides the activity-appended kind — the
+      // response-requested event fires when the USER answers, not when the
+      // worker waits.
+      eventType: "approval.requested",
+      createdAt: "1970-01-01T00:00:00.000Z",
+    });
+    harness.dispatched.length = 0;
+
+    const stuckRows = () =>
+      harness.dispatched.filter(
+        (command) =>
+          command.type === "thread.activity.append" &&
+          command.activity.kind === "synara.worker.stuck",
+      );
+    yield* TestClock.adjust("11 minutes");
+    yield* service.inspectWorkerHealth();
+    // The quiet worker reports silent and takes the ladder's first step (an
+    // automatic nudge); the waiting worker reports overdue.
+    assert.equal(stuckRows().length, 3);
+    const summaries = new Set(
+      stuckRows().map((row) => (row.type === "thread.activity.append" ? row.activity.summary : "")),
+    );
+    assert.equal(summaries.has("⚠ Quiet worker has not reported for over 10 minutes"), true);
+    assert.equal(
+      summaries.has("⚠ Quiet worker was nudged after 10 minutes without progress"),
+      true,
+    );
+    assert.equal(summaries.has("⚠ Waiting worker has been waiting for over 5 minutes"), true);
+    const quiet = yield* repository.findManagedWorkerByThread(quietThread);
+    assert.equal(Option.isSome(quiet) ? quiet.value.stuckKind : null, "silent");
+    const waiting = yield* repository.findManagedWorkerByThread(waitingThread);
+    assert.equal(Option.isSome(waiting) ? waiting.value.stuckKind : null, "waiting");
+
+    // Same episode, same dedupe keys: a second pass posts nothing new.
+    yield* service.inspectWorkerHealth();
+    assert.equal(stuckRows().length, 3);
+  }).pipe(Effect.provide(Layer.merge(harness.layer, TestClock.layer())));
+});
+
+it.effect("reports a missing worker shell once", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-missing-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const missingThread = ThreadId.makeUnsafe("thread-missing-worker");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-missing-record",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [missingThread],
+      titles: ["Lost worker"],
+    });
+    // No thread shell entry: the health check reports the worker missing.
+    harness.dispatched.length = 0;
+    const missingRows = () =>
+      harness.dispatched.filter(
+        (command) =>
+          command.type === "thread.activity.append" &&
+          command.activity.kind === "synara.worker.settled" &&
+          command.activity.summary === "✗ Lost worker went missing",
+      );
+    yield* service.inspectWorkerHealth();
+    assert.equal(missingRows().length, 1);
+    const worker = yield* repository.findManagedWorkerByThread(missingThread);
+    assert.equal(Option.isSome(worker) ? worker.value.settleOutcome : null, "missing");
+    // The settled missing worker stays quiet while its shell is still gone.
+    yield* service.inspectWorkerHealth();
+    assert.equal(missingRows().length, 1);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+// Programmatic stall recovery: the health loop runs the ladder off durable
+// worker-row state — it nudges a worker silent past the quiet threshold,
+// interrupts + re-dispatches the recorded task prompt after the post-nudge
+// delay, then flags it "Waiting on you" once the per-episode cap is hit.
+// Every pass re-reads the row, so a mid-episode restart resumes the same step.
+const recoveryCommands = (harness: ReturnType<typeof makeTestLayer>) =>
+  harness.dispatched.filter((command) => command.commandId.startsWith("agent-recovery:"));
+
+const stuckRowSummaries = (harness: ReturnType<typeof makeTestLayer>) =>
+  harness.dispatched
+    .filter(
+      (command) =>
+        command.type === "thread.activity.append" &&
+        command.activity.kind === "synara.worker.stuck",
+    )
+    .map((command) => (command.type === "thread.activity.append" ? command.activity.summary : ""));
+
+const quietRunningShell = (updatedAt: string) =>
+  ({
+    projectId: groupId,
+    title: "Stalled worker",
+    session: {
+      status: "running",
+      updatedAt,
+      lastError: null,
+      activeTurnId: "turn-live",
+    },
+    latestTurn: { state: "running", startedAt: updatedAt },
+  }) as const;
+
+// A live provider session matching a projection that says running — keeps the
+// dead-session check from claiming workers whose liveness is genuinely fine.
+const liveProviderSession = (
+  threadId: ThreadId,
+  updatedAt = "1970-01-01T00:00:00.000Z",
+): ProviderSession =>
+  ({
+    provider: "codex",
+    status: "running",
+    runtimeMode: "full-access",
+    threadId,
+    createdAt: updatedAt,
+    updatedAt,
+  }) as ProviderSession;
+
+it.effect("nudges a silent worker once per stall episode, then holds", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-nudge-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const workerThreadId = ThreadId.makeUnsafe("thread-nudge-worker");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-nudge-record",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [workerThreadId],
+      titles: ["Stalled worker"],
+    });
+    // TestClock starts at the unix epoch: last activity at epoch means the
+    // quiet threshold is reached 10 minutes in.
+    harness.threadShells[workerThreadId] = quietRunningShell("1970-01-01T00:00:00.000Z");
+    harness.providerSessions.push(liveProviderSession(workerThreadId));
+    harness.dispatched.length = 0;
+
+    yield* TestClock.adjust("9 minutes");
+    yield* service.inspectWorkerHealth();
+    assert.equal(recoveryCommands(harness).length, 0);
+
+    yield* TestClock.adjust("2 minutes");
+    yield* service.inspectWorkerHealth();
+    const nudges = recoveryCommands(harness).filter(
+      (command) => command.type === "thread.turn.start",
+    );
+    assert.equal(nudges.length, 1);
+    const nudge = nudges[0]!;
+    if (nudge.type === "thread.turn.start") {
+      assert.equal(nudge.threadId, workerThreadId);
+      assert.equal(nudge.dispatchMode, "steer");
+      assert.equal(nudge.dispatchOrigin, "automation");
+      assert.equal(
+        nudge.message.text,
+        "Automatic check from the coordinator: you have produced no output for 10 minutes. Post a one-line status, then continue or report a blocker.",
+      );
+    }
+    assert.equal(
+      stuckRowSummaries(harness).includes(
+        "⚠ Stalled worker was nudged after 10 minutes without progress",
+      ),
+      true,
+    );
+    const worker = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(worker) ? worker.value.recoveryStep : null, 1);
+    assert.equal(Option.isSome(worker) ? worker.value.nudgeAt !== null : false, true);
+
+    // Same stall episode: a repeat pass dispatches nothing new.
+    yield* service.inspectWorkerHealth();
+    assert.equal(recoveryCommands(harness).length, 1);
+  }).pipe(Effect.provide(Layer.merge(harness.layer, TestClock.layer())));
+});
+
+it.effect("interrupts and re-dispatches the recorded prompt after the nudge delay", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-redispatch-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const workerThreadId = ThreadId.makeUnsafe("thread-redispatch-worker");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-redispatch-record",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [workerThreadId],
+      titles: ["Stalled worker"],
+      prompts: ["Draft the schema migration"],
+    });
+    harness.threadShells[workerThreadId] = quietRunningShell("1970-01-01T00:00:00.000Z");
+    harness.providerSessions.push(liveProviderSession(workerThreadId));
+    harness.dispatched.length = 0;
+
+    yield* TestClock.adjust("11 minutes");
+    yield* service.inspectWorkerHealth();
+    assert.equal(recoveryCommands(harness).length, 1);
+    // The persisted step-1 state is all the next pass needs — the same call
+    // sequence resumes correctly after a server restart mid-episode.
+    const midEpisode = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(midEpisode) ? midEpisode.value.recoveryStep : null, 1);
+
+    yield* TestClock.adjust("4 minutes");
+    yield* service.inspectWorkerHealth();
+    // Only 4 minutes since the nudge: the redeliver delay has not elapsed.
+    assert.equal(recoveryCommands(harness).length, 1);
+
+    yield* TestClock.adjust("2 minutes");
+    yield* service.inspectWorkerHealth();
+    const commands = recoveryCommands(harness);
+    assert.equal(commands.filter((command) => command.type === "thread.turn.interrupt").length, 1);
+    const redispatches = commands.filter((command) => command.type === "thread.turn.start");
+    assert.equal(redispatches.length, 2);
+    const redispatch = redispatches[1]!;
+    if (redispatch.type === "thread.turn.start") {
+      assert.equal(redispatch.threadId, workerThreadId);
+      assert.equal(redispatch.dispatchMode, "queue");
+      assert.equal(redispatch.message.text, "Draft the schema migration");
+    }
+    assert.equal(
+      stuckRowSummaries(harness).includes(
+        "⚠ Stalled worker was interrupted and had its task re-dispatched",
+      ),
+      true,
+    );
+    const worker = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(worker) ? worker.value.recoveryStep : null, 2);
+    // Nudge + re-dispatch each count against the cap.
+    assert.equal(Option.isSome(worker) ? worker.value.recoveriesUsed : null, 2);
+
+    // Deduped within the episode: a repeat pass dispatches nothing new.
+    yield* service.inspectWorkerHealth();
+    assert.equal(recoveryCommands(harness).length, 3);
+  }).pipe(Effect.provide(Layer.merge(harness.layer, TestClock.layer())));
+});
+
+it.effect("flags the worker Waiting on you once the recovery cap is exhausted", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-cap-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const workerThreadId = ThreadId.makeUnsafe("thread-cap-worker");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-cap-record",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [workerThreadId],
+      titles: ["Stalled worker"],
+      prompts: ["Draft the schema migration"],
+    });
+    harness.threadShells[workerThreadId] = quietRunningShell("1970-01-01T00:00:00.000Z");
+    harness.providerSessions.push(liveProviderSession(workerThreadId));
+    harness.dispatched.length = 0;
+
+    // Recovery 1: nudge at +11m (attempt 1), interrupt + re-dispatch at +17m
+    // (attempt 2) — the cap is spent inside the first cycle.
+    yield* TestClock.adjust("11 minutes");
+    yield* service.inspectWorkerHealth();
+    yield* TestClock.adjust("6 minutes");
+    yield* service.inspectWorkerHealth();
+    const workerAfterFirst = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(workerAfterFirst) ? workerAfterFirst.value.recoveriesUsed : null, 2);
+
+    // The next full quiet window finds the re-dispatch produced nothing —
+    // the spent cap latches "Waiting on you" — a Synara-native needs-you row
+    // on the coordinator thread (with real actions, not a fake provider
+    // request) and one wake for the coordinator to tell the user.
+    yield* TestClock.adjust("11 minutes");
+    yield* service.inspectWorkerHealth();
+    const workerAfterSecond = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(
+      Option.isSome(workerAfterSecond) ? workerAfterSecond.value.recoveriesUsed : null,
+      2,
+    );
+    const needsYouRows = harness.dispatched.filter(
+      (command) =>
+        command.type === "thread.activity.append" &&
+        command.activity.kind === "synara.worker.needs-you",
+    );
+    assert.equal(needsYouRows.length, 1);
+    const needsYouRow = needsYouRows[0]!;
+    if (needsYouRow.type === "thread.activity.append") {
+      assert.equal(needsYouRow.threadId, coordinatorThreadId);
+      assert.equal(
+        needsYouRow.activity.summary,
+        "✗ Stalled worker needs you — automatic recovery is exhausted",
+      );
+    }
+    // Never a fake provider user-input request — nothing the provider would
+    // reject answering.
+    const fakeProviderRequests = harness.dispatched.filter(
+      (command) =>
+        command.type === "thread.activity.append" &&
+        command.activity.kind === "user-input.requested",
+    );
+    assert.equal(fakeProviderRequests.length, 0);
+    const worker = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(worker) ? worker.value.needsYou : null, true);
+    const inbox = yield* repository.listInboxAfter({ projectId: groupId, limit: 50 });
+    assert.equal(
+      inbox.some((row) => row.eventType === "worker.needs-you" && row.eligibleWake),
+      true,
+    );
+
+    // No further automatic action while the latch holds.
+    const dispatchedBefore = harness.dispatched.length;
+    yield* service.inspectWorkerHealth();
+    assert.equal(harness.dispatched.length, dispatchedBefore);
+  }).pipe(Effect.provide(Layer.merge(harness.layer, TestClock.layer())));
+});
+
+// Dead-session liveness: the projection still claims "running" but the live
+// provider list no longer carries the thread — the worker died silently.
+it.effect("settles a running worker whose live session disappeared", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-disc-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const workerThreadId = ThreadId.makeUnsafe("thread-disc-worker");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-disc-record",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [workerThreadId],
+      titles: ["Disconnected worker"],
+    });
+    harness.threadShells[workerThreadId] = {
+      projectId: groupId,
+      title: "Disconnected worker",
+      session: {
+        status: "running",
+        updatedAt: "1970-01-01T00:00:00.000Z",
+        lastError: null,
+        activeTurnId: "turn-live",
+      },
+      latestTurn: { state: "running", startedAt: "1970-01-01T00:00:00.000Z" },
+    };
+    // Empty live provider list: no session owns the thread anymore.
+    harness.dispatched.length = 0;
+
+    // Inside the 90s grace a freshly spawned session may just not be listed.
+    yield* TestClock.adjust("60 seconds");
+    yield* service.inspectWorkerHealth();
+    assert.equal(harness.dispatched.length, 0);
+
+    yield* TestClock.adjust("60 seconds");
+    yield* service.inspectWorkerHealth();
+    const settled = harness.dispatched.filter(
+      (command) =>
+        command.type === "thread.activity.append" &&
+        command.activity.kind === "synara.worker.settled",
+    );
+    assert.equal(settled.length, 1);
+    const settleRow = settled[0]!;
+    if (settleRow.type === "thread.activity.append") {
+      assert.equal(settleRow.activity.summary, "\u2717 Disconnected worker lost its session");
+    }
+    const worker = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(worker) ? worker.value.settleOutcome : null, "failed");
+
+    // Deduped: a second pass posts nothing.
+    yield* service.inspectWorkerHealth();
+    assert.equal(settled.length, 1);
+  }).pipe(Effect.provide(Layer.merge(harness.layer, TestClock.layer())));
+});
+
+// Never-started: the coordinator created the thread but no session or first
+// turn landed inside the 3-minute grace — one counted re-dispatch, then
+// "Waiting on you" under the shared recovery cap.
+it.effect("re-dispatches a worker that never starts once, then waits on you", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-never-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const workerThreadId = ThreadId.makeUnsafe("thread-never-worker");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-never-record",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [workerThreadId],
+      titles: ["Unstarted worker"],
+      prompts: ["Survey the Mars data"],
+    });
+    // Shell exists but carries no session and no started turn.
+    harness.threadShells[workerThreadId] = {
+      projectId: groupId,
+      title: "Unstarted worker",
+      session: null,
+    };
+    harness.dispatched.length = 0;
+
+    // Inside the grace window the worker may still be spawning.
+    yield* TestClock.adjust("2 minutes");
+    yield* service.inspectWorkerHealth();
+    assert.equal(harness.dispatched.length, 0);
+
+    yield* TestClock.adjust("2 minutes");
+    yield* service.inspectWorkerHealth();
+    assert.equal(
+      stuckRowSummaries(harness).includes(
+        "\u26a0 Unstarted worker never started — no session or turn within 3 minutes",
+      ),
+      true,
+    );
+    const firstRedispatches = recoveryCommands(harness).filter(
+      (command) => command.type === "thread.turn.start",
+    );
+    assert.equal(firstRedispatches.length, 1);
+    const redispatch = firstRedispatches[0]!;
+    if (redispatch.type === "thread.turn.start") {
+      assert.equal(redispatch.dispatchMode, "queue");
+      assert.equal(redispatch.message.text, "Survey the Mars data");
+    }
+    const afterFirst = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(afterFirst) ? afterFirst.value.recoveriesUsed : null, 1);
+
+    // The re-dispatch produced no session either — second counted attempt.
+    yield* TestClock.adjust("6 minutes");
+    yield* service.inspectWorkerHealth();
+    assert.equal(recoveryCommands(harness).length, 2);
+
+    // Cap spent (WORKER_RECOVERY_MAX_ATTEMPTS): "Waiting on you" latches and
+    // no further automatic dispatches fire.
+    yield* TestClock.adjust("6 minutes");
+    yield* service.inspectWorkerHealth();
+    const latched = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(latched) ? latched.value.needsYou : null, true);
+    assert.equal(
+      harness.dispatched.some(
+        (command) =>
+          command.type === "thread.activity.append" &&
+          command.activity.kind === "synara.worker.needs-you",
+      ),
+      true,
+    );
+  }).pipe(Effect.provide(Layer.merge(harness.layer, TestClock.layer())));
+});
+
+// synara_project_report_result drives the settle row and the roll-up instead
+// of generic text; a finished worker without one gets "no result filed".
+it.effect("quotes report_result in the settle row and roll-up", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-result-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const threadA = ThreadId.makeUnsafe("thread-result-a");
+    const threadB = ThreadId.makeUnsafe("thread-result-b");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-result-record",
+      batchId: "batch-result",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [threadA, threadB],
+      titles: ["Alpha work", "Beta work"],
+    });
+    harness.threadShells[threadA] = {
+      projectId: groupId,
+      title: "Alpha work",
+      session: { status: "ready", updatedAt: now, lastError: null },
+    };
+    harness.threadShells[threadB] = {
+      projectId: groupId,
+      title: "Beta work",
+      session: { status: "ready", updatedAt: now, lastError: null },
+    };
+    yield* repository.saveGoal(
+      {
+        id: ProjectGoalId.makeUnsafe("goal-result"),
+        projectId: groupId,
+        objective: "Ship the migration",
+        authorizationSource: "user",
+        scopeVersion: 1,
+        acceptanceCriteria: null,
+        limits,
+        status: "active",
+        continuationCount: 0,
+        workerCreationCount: 0,
+        authorizedAt: now,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+      },
+      null,
+    );
+    const task = yield* repository.saveTask(
+      {
+        id: ProjectTaskId.makeUnsafe("task-result-a"),
+        projectId: groupId,
+        goalId: ProjectGoalId.makeUnsafe("goal-result"),
+        title: "Alpha work",
+        description: null,
+        acceptanceCriteria: null,
+        status: "running",
+        dependsOnTaskIds: [],
+        assignedThreadId: threadA,
+        repairCount: 0,
+        archivedAt: null,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+      },
+      null,
+    );
+    yield* service.reportResult(
+      {
+        requestId: "req-result-1",
+        projectId: groupId,
+        taskId: task.id,
+        summary: "Shipped the migration — 12 files changed",
+      },
+      { kind: "worker", threadId: threadA, projectId: groupId, taskId: task.id },
+    );
+    harness.dispatched.length = 0;
+
+    yield* service.ingestSettledThreadEvent({
+      threadId: threadA,
+      sourceEventId: "result-a-done",
+      eventType: "thread.turn-diff-completed",
+      createdAt: "2026-09-20T00:05:00.000Z",
+    });
+    yield* service.ingestSettledThreadEvent({
+      threadId: threadB,
+      sourceEventId: "result-b-done",
+      eventType: "thread.turn-diff-completed",
+      createdAt: "2026-09-20T00:06:00.000Z",
+    });
+
+    const settledRows = harness.dispatched.filter(
+      (command) =>
+        command.type === "thread.activity.append" &&
+        command.activity.kind === "synara.worker.settled",
+    );
+    assert.equal(settledRows.length, 2);
+    const summaryOf = (row: OrchestrationCommand) =>
+      row.type === "thread.activity.append" ? row.activity.summary : "";
+    // The structured result replaces the generic "finished" phrase.
+    assert.equal(
+      summaryOf(settledRows[0]!),
+      "\u2713 Alpha work Shipped the migration — 12 files changed",
+    );
+    // No result filed: the gap is noted inline so nobody opens the thread.
+    assert.equal(summaryOf(settledRows[1]!), "\u2713 Beta work finished — no result filed");
+    const rollups = harness.dispatched.filter(
+      (command) =>
+        command.type === "thread.activity.append" &&
+        command.activity.kind === "synara.workers.settled",
+    );
+    assert.equal(rollups.length, 1);
+    if (rollups[0]!.type === "thread.activity.append") {
+      assert.equal(
+        rollups[0]!.activity.summary,
+        "All 2 threads finished: Alpha work: Shipped the migration — 12 files changed, Beta work \u2713 — no result filed",
+      );
+    }
+  }).pipe(Effect.provide(harness.layer));
+});
+
+// The finished settle row and the roll-up carry the thread's tracked PR link
+// when the server knows one.
+it.effect("adds the tracked PR link to finished rows and the roll-up", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const overview = yield* configureTestGroup(service, "req-pr-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const threadA = ThreadId.makeUnsafe("thread-pr-a");
+    const threadB = ThreadId.makeUnsafe("thread-pr-b");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-pr-record",
+      batchId: "batch-pr",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [threadA, threadB],
+      titles: ["Linked work", "Plain work"],
+    });
+    harness.threadShells[threadA] = {
+      projectId: groupId,
+      title: "Linked work",
+      session: { status: "ready", updatedAt: now, lastError: null },
+      lastKnownPr: {
+        url: "https://github.com/diliprt/synara/pull/42",
+        state: "open",
+        isDraft: false,
+      },
+    };
+    harness.threadShells[threadB] = {
+      projectId: groupId,
+      title: "Plain work",
+      session: { status: "ready", updatedAt: now, lastError: null },
+    };
+    harness.dispatched.length = 0;
+
+    yield* service.ingestSettledThreadEvent({
+      threadId: threadA,
+      sourceEventId: "pr-a-done",
+      eventType: "thread.turn-diff-completed",
+      createdAt: "2026-09-20T00:05:00.000Z",
+    });
+    yield* service.ingestSettledThreadEvent({
+      threadId: threadB,
+      sourceEventId: "pr-b-done",
+      eventType: "thread.turn-diff-completed",
+      createdAt: "2026-09-20T00:06:00.000Z",
+    });
+
+    const settledRows = harness.dispatched.filter(
+      (command) =>
+        command.type === "thread.activity.append" &&
+        command.activity.kind === "synara.worker.settled",
+    );
+    const summaryOf = (row: OrchestrationCommand) =>
+      row.type === "thread.activity.append" ? row.activity.summary : "";
+    assert.equal(
+      summaryOf(settledRows[0]!),
+      "\u2713 Linked work finished — no result filed — https://github.com/diliprt/synara/pull/42",
+    );
+    assert.equal(summaryOf(settledRows[1]!), "\u2713 Plain work finished — no result filed");
+    const rollups = harness.dispatched.filter(
+      (command) =>
+        command.type === "thread.activity.append" &&
+        command.activity.kind === "synara.workers.settled",
+    );
+    assert.equal(rollups.length, 1);
+    if (rollups[0]!.type === "thread.activity.append") {
+      assert.equal(
+        rollups[0]!.activity.summary,
+        "All 2 threads finished: Linked work \u2713 — no result filed — https://github.com/diliprt/synara/pull/42, Plain work \u2713 — no result filed",
+      );
+    }
+  }).pipe(Effect.provide(harness.layer));
+});
+
+// Silence is measured from the durable last-runtime-activity stamp, not the
+// session lifecycle updatedAt — a busy worker streaming output stays quiet-
+// safe even though its session row never moved.
+it.effect("measures silence from last runtime activity, not the lifecycle stamp", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-lastact-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const workerThreadId = ThreadId.makeUnsafe("thread-lastact-worker");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-lastact-record",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [workerThreadId],
+      titles: ["Busy worker"],
+    });
+    // Lifecycle stamp is frozen at epoch, but the worker produced runtime
+    // output 9 minutes in — a 12-minute test suite must not get nudged.
+    harness.threadShells[workerThreadId] = {
+      projectId: groupId,
+      title: "Busy worker",
+      session: {
+        status: "running",
+        updatedAt: "1970-01-01T00:00:00.000Z",
+        lastError: null,
+        activeTurnId: "turn-live",
+        lastActivityAt: "1970-01-01T00:09:00.000Z",
+      },
+      latestTurn: { state: "running", startedAt: "1970-01-01T00:00:00.000Z" },
+    };
+    harness.providerSessions.push(liveProviderSession(workerThreadId));
+    harness.dispatched.length = 0;
+
+    yield* TestClock.adjust("11 minutes");
+    yield* service.inspectWorkerHealth();
+    // Only 2 minutes of real quiet — updatedAt alone would have flagged it.
+    assert.equal(harness.dispatched.length, 0);
+    const worker = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(worker) ? worker.value.stuckKind : "x", null);
+
+    // Real quiet: another 9 minutes without runtime activity tips it over.
+    yield* TestClock.adjust("9 minutes");
+    yield* service.inspectWorkerHealth();
+    assert.equal(
+      stuckRowSummaries(harness).includes(
+        "\u26a0 Busy worker has not reported for over 10 minutes",
+      ),
+      true,
+    );
+  }).pipe(Effect.provide(Layer.merge(harness.layer, TestClock.layer())));
+});
+
+// A running tool call is runtime activity: the ladder never nudges or
+// interrupts while one is in flight — only a >45-minute tool gets a nudge +
+// notify, never an interrupt.
+it.effect("never interrupts a tool call in flight, only nudges past the hard cap", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-tool-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const workerThreadId = ThreadId.makeUnsafe("thread-tool-worker");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-tool-record",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [workerThreadId],
+      titles: ["Tool worker"],
+      prompts: ["Run the suite"],
+    });
+    harness.threadShells[workerThreadId] = quietRunningShell("1970-01-01T00:00:00.000Z");
+    harness.providerSessions.push(liveProviderSession(workerThreadId));
+    harness.toolInFlightByThread[workerThreadId] = [
+      { itemId: "tool-item-1", turnId: "turn-live", startedAt: "1970-01-01T00:00:00.000Z" },
+    ];
+    harness.dispatched.length = 0;
+
+    // Past the silence threshold with a tool mid-flight: no nudge, no row.
+    yield* TestClock.adjust("12 minutes");
+    yield* service.inspectWorkerHealth();
+    assert.equal(recoveryCommands(harness).length, 0);
+    assert.equal(stuckRowSummaries(harness).length, 0);
+
+    // Past the 45-minute hard cap: one nudge + notify, never an interrupt.
+    yield* TestClock.adjust("40 minutes");
+    yield* service.inspectWorkerHealth();
+    assert.equal(
+      stuckRowSummaries(harness).includes(
+        "\u26a0 Tool worker has a tool call running for over 45 minutes",
+      ),
+      true,
+    );
+    const worker = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(worker) ? worker.value.stuckKind : null, "tool-overtime");
+    const commands = recoveryCommands(harness);
+    const nudges = commands.filter(
+      (command) => command.type === "thread.turn.start" && command.dispatchMode === "steer",
+    );
+    assert.equal(nudges.length, 1);
+    assert.equal(commands.filter((command) => command.type === "thread.turn.interrupt").length, 0);
+    assert.equal(
+      commands.filter(
+        (command) => command.type === "thread.turn.start" && command.dispatchMode === "queue",
+      ).length,
+      0,
+    );
+
+    // Deduped per in-flight tool: no second nudge for the same call.
+    yield* service.inspectWorkerHealth();
+    assert.equal(recoveryCommands(harness).length, 1);
+  }).pipe(Effect.provide(Layer.merge(harness.layer, TestClock.layer())));
+});
+
+// The lifetime recovery count survives across distinct episodes — the real
+// sequence is activity moving between stalls (the re-dispatch's own turn
+// updates lastActivityAt), not a frozen timestamp.
+it.effect("keeps the recovery count across episodes and caps the chain", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-episode-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const workerThreadId = ThreadId.makeUnsafe("thread-episode-worker");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-episode-record",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [workerThreadId],
+      titles: ["Stalled worker"],
+      prompts: ["Draft the schema migration"],
+    });
+    harness.providerSessions.push(liveProviderSession(workerThreadId));
+    // `stallAt` models the projected session: activity that also produced
+    // real work stamps `lastProgressAt`; a bare echo leaves it unset.
+    const stallAt = (iso: string, progressIso?: string) => {
+      harness.threadShells[workerThreadId] = {
+        projectId: groupId,
+        title: "Stalled worker",
+        session: {
+          status: "running",
+          updatedAt: iso,
+          lastError: null,
+          activeTurnId: "turn-live",
+          lastActivityAt: iso,
+          ...(progressIso === undefined ? {} : { lastProgressAt: progressIso }),
+        },
+        latestTurn: { state: "running", startedAt: iso },
+      };
+    };
+    stallAt("1970-01-01T00:00:00.000Z");
+    harness.dispatched.length = 0;
+
+    // Episode 1: nudge at +11m (attempt 1), interrupt + re-dispatch at +17m
+    // (attempt 2).
+    yield* TestClock.adjust("11 minutes");
+    yield* service.inspectWorkerHealth();
+    yield* TestClock.adjust("6 minutes");
+    yield* service.inspectWorkerHealth();
+    const afterFirst = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(afterFirst) ? afterFirst.value.recoveriesUsed : null, 2);
+
+    // The re-dispatch produced real output: work landed at t=18m, so the
+    // quiet pass clears the episode — but the lifetime count stays.
+    stallAt("1970-01-01T00:18:00.000Z", "1970-01-01T00:18:00.000Z");
+    yield* service.inspectWorkerHealth();
+    const healthy = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(healthy) ? healthy.value.recoveriesUsed : null, 2);
+    assert.equal(Option.isSome(healthy) ? healthy.value.stuckKind : "x", null);
+    // Ladder steps post rows only — they never wake the coordinator model.
+    assert.equal(harness.runNowCalls.length, 0);
+
+    // Episode 2 at t=29m+: the spent cap latches "Waiting on you" instead of
+    // cycling another recovery.
+    yield* TestClock.adjust("12 minutes");
+    yield* service.inspectWorkerHealth();
+    yield* TestClock.adjust("6 minutes");
+    yield* service.inspectWorkerHealth();
+    const afterSecond = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(afterSecond) ? afterSecond.value.recoveriesUsed : null, 2);
+    assert.equal(Option.isSome(afterSecond) ? afterSecond.value.needsYou : null, true);
+
+    // Activity + another stall while the latch holds: nothing else fires.
+    stallAt("1970-01-01T00:35:00.000Z", "1970-01-01T00:35:00.000Z");
+    yield* TestClock.adjust("12 minutes");
+    yield* service.inspectWorkerHealth();
+    const latched = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(latched) ? latched.value.needsYou : null, true);
+    assert.equal(harness.runNowCalls.length >= 1, true);
+  }).pipe(Effect.provide(Layer.merge(harness.layer, TestClock.layer())));
+});
+
+// Turn ownership: a turn the user started is never nudged, interrupted, or
+// re-prompted; the next coordinator turn re-arms monitoring.
+it.effect("leaves user-owned turns alone and re-arms on coordinator turns", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-owner-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const workerThreadId = ThreadId.makeUnsafe("thread-owner-worker");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-owner-record",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [workerThreadId],
+      titles: ["Owned worker"],
+      prompts: ["Draft the schema migration"],
+    });
+    harness.threadShells[workerThreadId] = quietRunningShell("1970-01-01T00:00:00.000Z");
+    harness.providerSessions.push(liveProviderSession(workerThreadId));
+    harness.dispatched.length = 0;
+
+    // The user took over the thread — dispatchOrigin "user" marks ownership.
+    yield* service.recordWorkerTurnRequest({
+      threadId: workerThreadId,
+      commandId: "cmd-user-takeover",
+      dispatchOrigin: "user",
+      turnId: "turn-user-1",
+      createdAt: "1970-01-01T00:01:00.000Z",
+    });
+    yield* TestClock.adjust("15 minutes");
+    yield* service.inspectWorkerHealth();
+    // Silent for 15 minutes but the active turn is the user's: no ladder.
+    assert.equal(recoveryCommands(harness).length, 0);
+    assert.equal(stuckRowSummaries(harness).length, 0);
+    const owned = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(owned) ? owned.value.activeTurnOrigin : null, "user");
+
+    // A new coordinator-originated turn re-arms the ladder.
+    yield* service.recordWorkerTurnRequest({
+      threadId: workerThreadId,
+      commandId: "cmd-coordinator-followup",
+      dispatchOrigin: "automation",
+      turnId: "turn-coord-2",
+      createdAt: "1970-01-01T00:16:00.000Z",
+    });
+    yield* TestClock.adjust("1 minutes");
+    yield* service.inspectWorkerHealth();
+    assert.equal(
+      recoveryCommands(harness).filter((command) => command.type === "thread.turn.start").length >=
+        1,
+      true,
+    );
+    const rearmed = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(rearmed) ? rearmed.value.activeTurnOrigin : null, "coordinator");
+  }).pipe(Effect.provide(Layer.merge(harness.layer, TestClock.layer())));
+});
+
+// Re-arm: after a terminal settle, a new coordinator/ladder turn re-opens
+// monitoring — the next stall reports again.
+it.effect("re-arms monitoring after settle when a new turn starts", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-rearm-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const workerThreadId = ThreadId.makeUnsafe("thread-rearm-worker");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-rearm-record",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [workerThreadId],
+      titles: ["Rearmed worker"],
+      prompts: ["Draft the schema migration"],
+    });
+    harness.threadShells[workerThreadId] = quietRunningShell("1970-01-01T00:00:00.000Z");
+    harness.providerSessions.push(liveProviderSession(workerThreadId));
+
+    yield* service.ingestSettledThreadEvent({
+      threadId: workerThreadId,
+      sourceEventId: "rearm-settle",
+      eventType: "thread.turn-diff-completed",
+      createdAt: "1970-01-01T00:02:00.000Z",
+    });
+    const settledWorker = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(
+      Option.isSome(settledWorker) ? settledWorker.value.settleOutcome : null,
+      "completed",
+    );
+
+    // A follow-up coordinator turn clears the settle and ownership marks the
+    // turn as coordinator's — the quiet ladder applies again.
+    yield* service.recordWorkerTurnRequest({
+      threadId: workerThreadId,
+      commandId: "cmd-coordinator-rearm",
+      dispatchOrigin: "automation",
+      turnId: "turn-rearm",
+      createdAt: "1970-01-01T00:03:00.000Z",
+    });
+    const rearmed = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(rearmed) ? rearmed.value.settledAt : "x", null);
+    assert.equal(Option.isSome(rearmed) ? rearmed.value.settleOutcome : "x", null);
+
+    harness.dispatched.length = 0;
+    yield* TestClock.adjust("12 minutes");
+    yield* service.inspectWorkerHealth();
+    assert.equal(
+      stuckRowSummaries(harness).includes(
+        "\u26a0 Rearmed worker has not reported for over 10 minutes",
+      ),
+      true,
+    );
+  }).pipe(Effect.provide(Layer.merge(harness.layer, TestClock.layer())));
+});
+
+// Paused groups: state still records but no coordinator rows post.
+it.effect("suppresses monitor rows while the group is paused", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-pause-mon-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const workerThreadId = ThreadId.makeUnsafe("thread-pause-worker");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-pause-record",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [workerThreadId],
+      titles: ["Paused worker"],
+    });
+    yield* service.pauseGroup({ requestId: "req-pause", projectId: groupId }, { kind: "user" });
+    harness.dispatched.length = 0;
+
+    yield* service.ingestSettledThreadEvent({
+      threadId: workerThreadId,
+      sourceEventId: "pause-settle",
+      eventType: "thread.turn-diff-completed",
+      createdAt: "2026-09-20T00:05:00.000Z",
+    });
+
+    // The worker's row still recorded the settle — only the rows suppress.
+    const worker = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(worker) ? worker.value.settleOutcome : null, "completed");
+    const monitorRows = harness.dispatched.filter(
+      (command) =>
+        command.type === "thread.activity.append" &&
+        String(command.activity.kind).startsWith("synara.worker"),
+    );
+    assert.equal(monitorRows.length, 0);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+// Response-side events: `*-response-requested` fires when the USER answers —
+// it must not mark the worker waiting or post rows.
+it.effect("ignores user-answer events for waiting detection", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-resp-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const workerThreadId = ThreadId.makeUnsafe("thread-resp-worker");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-resp-record",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [workerThreadId],
+      titles: ["Answering worker"],
+    });
+    harness.dispatched.length = 0;
+
+    yield* service.ingestSettledThreadEvent({
+      threadId: workerThreadId,
+      sourceEventId: "resp-answered",
+      eventType: "thread.approval-response-requested",
+      createdAt: "2026-09-20T00:05:00.000Z",
+    });
+
+    const worker = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(worker) ? worker.value.settledAt : "x", null);
+    assert.equal(Option.isSome(worker) ? worker.value.waitingSince : "x", null);
+    assert.equal(harness.dispatched.length, 0);
+    const inbox = yield* repository.listInboxAfter({ projectId: groupId, limit: 10 });
+    const event = inbox.find((row) => row.sourceEventId === "resp-answered");
+    assert.equal(event?.eligibleWake, false);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+// Compare-and-set: a monitor write built on a stale row loses, it doesn't
+// revert a concurrent settle.
+it.effect("rejects a monitor write built on a stale worker row", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-cas-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const workerThreadId = ThreadId.makeUnsafe("thread-cas-worker");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-cas-record",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [workerThreadId],
+      titles: ["CAS worker"],
+    });
+    const stale = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(stale), true);
+    if (Option.isNone(stale)) return;
+
+    yield* service.ingestSettledThreadEvent({
+      threadId: workerThreadId,
+      sourceEventId: "cas-settle",
+      eventType: "thread.turn-diff-completed",
+      createdAt: "2026-09-20T00:05:00.000Z",
+    });
+
+    // A write carrying the pre-settle updatedAt must not land — the settle
+    // would be reverted by a stale-read upsert.
+    const result = yield* repository.saveManagedWorkerMonitor({
+      worker: { ...stale.value, needsYou: true },
+      expectedUpdatedAt: stale.value.updatedAt,
+    });
+    assert.equal(result.applied, false);
+    const fresh = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(fresh) ? fresh.value.settleOutcome : null, "completed");
+    assert.equal(Option.isSome(fresh) ? fresh.value.needsYou : null, false);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("logs coordinator check-ins to the activity log without waking it", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-checkin-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    harness.runNowCalls.length = 0;
+
+    harness.threadDetails[coordinatorThreadId] = {
+      messages: [
+        {
+          id: "msg-checkin-user",
+          role: "user",
+          text: "[automation] Hourly heartbeat",
+          turnId: "turn-checkin-1",
+          dispatchOrigin: "automation",
+        },
+        {
+          id: "msg-checkin-assistant",
+          role: "assistant",
+          text: "SILENT",
+          turnId: "turn-checkin-1",
+        },
+      ],
+    };
+    yield* service.ingestSettledThreadEvent({
+      threadId: coordinatorThreadId,
+      sourceEventId: "checkin-silent-1",
+      eventType: "thread.turn-diff-completed",
+      createdAt: "2026-09-20T00:10:00.000Z",
+      turnId: "turn-checkin-1",
+    });
+
+    harness.threadDetails[coordinatorThreadId] = {
+      messages: [
+        {
+          id: "msg-checkin-user-2",
+          role: "user",
+          text: "[automation] Hourly heartbeat",
+          turnId: "turn-checkin-2",
+          dispatchOrigin: "automation",
+        },
+        {
+          id: "msg-checkin-assistant-2",
+          role: "assistant",
+          text: "Beta survey failed — needs a look.",
+          turnId: "turn-checkin-2",
+        },
+      ],
+    };
+    yield* service.ingestSettledThreadEvent({
+      threadId: coordinatorThreadId,
+      sourceEventId: "checkin-report-1",
+      eventType: "thread.turn-diff-completed",
+      createdAt: "2026-09-20T01:10:00.000Z",
+      turnId: "turn-checkin-2",
+    });
+
+    const activity = yield* repository.listActivity({ projectId: groupId, limit: 40 });
+    const checkinRows = activity.filter((row) => row.kind === "coordinator-checkin");
+    assert.equal(checkinRows.length, 2);
+    assert.equal(checkinRows[1]?.summary, "Coordinator check-in: nothing to report.");
+    assert.equal(
+      checkinRows[0]?.summary,
+      "Coordinator check-in: Beta survey failed — needs a look.",
+    );
+    // Check-in turns never wake the coordinator.
+    assert.equal(harness.runNowCalls.length, 0);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+// A turn-diff that closed missing/error belongs to a turn the ladder
+// interrupted — it settles `interrupted`, never `completed`: the recovery
+// count survives and no false "finished" row posts. A `ready` diff still
+// settles completed and refunds the count (a genuine success).
+it.effect("settles a missing diff as interrupted without resetting the recovery count", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-missing-diff-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const workerThreadId = ThreadId.makeUnsafe("thread-missing-diff-worker");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-missing-diff-record",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [workerThreadId],
+      titles: ["Stalled worker"],
+      prompts: ["Draft the schema migration"],
+    });
+    harness.threadShells[workerThreadId] = quietRunningShell("1970-01-01T00:00:00.000Z");
+    harness.providerSessions.push(liveProviderSession(workerThreadId));
+    harness.dispatched.length = 0;
+
+    // Drive the ladder to step 2: nudge at +11m, interrupt + re-dispatch at
+    // +17m — the cap is spent inside the first cycle.
+    yield* TestClock.adjust("11 minutes");
+    yield* service.inspectWorkerHealth();
+    yield* TestClock.adjust("6 minutes");
+    yield* service.inspectWorkerHealth();
+    const mid = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(mid) ? mid.value.recoveriesUsed : null, 2);
+
+    // The ladder's own interrupt closes the checkpoint `missing`: the
+    // diff-completed event must not read as a clean finish.
+    yield* service.ingestSettledThreadEvent({
+      threadId: workerThreadId,
+      sourceEventId: "diff-missing-1",
+      eventType: "thread.turn-diff-completed",
+      checkpointStatus: "missing",
+      createdAt: "1970-01-01T00:18:00.000Z",
+    });
+    const worker = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(worker) ? worker.value.settleOutcome : null, "interrupted");
+    // The ladder's own interrupt never refunds the attempts it spent.
+    assert.equal(Option.isSome(worker) ? worker.value.recoveriesUsed : null, 2);
+    const settled = harness.dispatched.filter(
+      (command) =>
+        command.type === "thread.activity.append" &&
+        command.activity.kind === "synara.worker.settled",
+    );
+    assert.equal(settled.length, 1);
+    if (settled[0]!.type === "thread.activity.append") {
+      assert.equal(settled[0]!.activity.summary, "⚠ Stalled worker was interrupted");
+    }
+
+    // A re-armed worker whose next turn genuinely finishes still settles
+    // completed — and refunds the recovery count.
+    yield* service.recordWorkerTurnRequest({
+      threadId: workerThreadId,
+      commandId: "coordinator:follow-up",
+      dispatchOrigin: null,
+      turnId: "turn-follow-up",
+      eventType: "thread.turn-start-requested",
+      createdAt: "1970-01-01T00:19:00.000Z",
+    });
+    yield* service.ingestSettledThreadEvent({
+      threadId: workerThreadId,
+      sourceEventId: "diff-ready-1",
+      eventType: "thread.turn-diff-completed",
+      checkpointStatus: "ready",
+      createdAt: "1970-01-01T00:25:00.000Z",
+    });
+    const finished = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(finished) ? finished.value.settleOutcome : null, "completed");
+    assert.equal(Option.isSome(finished) ? finished.value.recoveriesUsed : null, 0);
+    const settledRows = harness.dispatched.filter(
+      (command) =>
+        command.type === "thread.activity.append" &&
+        command.activity.kind === "synara.worker.settled",
+    );
+    assert.equal(settledRows.length, 2);
+    if (settledRows[1]!.type === "thread.activity.append") {
+      assert.equal(settledRows[1]!.activity.summary, "✓ Stalled worker finished — no result filed");
+    }
+  }).pipe(Effect.provide(Layer.merge(harness.layer, TestClock.layer())));
+});
+
+// A provider that only echoes the recovery steer emits activity without real
+// progress: the ladder re-anchors the quiet window but keeps its position —
+// it never clears and never restarts. Two counted attempts later the spent
+// cap latches "Waiting on you" instead of re-nudging every 10 minutes.
+it.effect("escalates through a nudge echo instead of clearing the ladder", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-echo-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const workerThreadId = ThreadId.makeUnsafe("thread-echo-worker");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-echo-record",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [workerThreadId],
+      titles: ["Stalled worker"],
+      prompts: ["Draft the schema migration"],
+    });
+    const shellAt = (iso: string) => {
+      // Activity moves (the provider echoed the steer) but nothing produced
+      // work — `lastProgressAt` stays unset.
+      harness.threadShells[workerThreadId] = {
+        projectId: groupId,
+        title: "Stalled worker",
+        session: {
+          status: "running",
+          updatedAt: iso,
+          lastError: null,
+          activeTurnId: "turn-live",
+          lastActivityAt: iso,
+        },
+        latestTurn: { state: "running", startedAt: iso },
+      };
+    };
+    shellAt("1970-01-01T00:00:00.000Z");
+    harness.providerSessions.push(liveProviderSession(workerThreadId));
+    harness.dispatched.length = 0;
+
+    // Nudge at +11m (attempt 1).
+    yield* TestClock.adjust("11 minutes");
+    yield* service.inspectWorkerHealth();
+    assert.equal(
+      recoveryCommands(harness).filter((command) => command.type === "thread.turn.start").length,
+      1,
+    );
+
+    // The provider echoes the steer back — activity moves, no real work.
+    shellAt("1970-01-01T00:11:30.000Z");
+    yield* TestClock.adjust("6 minutes");
+    yield* service.inspectWorkerHealth();
+    // The echo did NOT clear the ladder — and it must not re-nudge either.
+    assert.equal(
+      recoveryCommands(harness).filter((command) => command.type === "thread.turn.start").length,
+      1,
+    );
+    const afterEcho = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(afterEcho) ? afterEcho.value.recoveryStep : null, 1);
+
+    // Once the quiet window elapses past the echo stamp, the SAME chain
+    // resumes: interrupt + re-dispatch (attempt 2).
+    yield* TestClock.adjust("5 minutes");
+    yield* service.inspectWorkerHealth();
+    const stepTwo = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(stepTwo) ? stepTwo.value.recoveriesUsed : null, 2);
+    assert.equal(
+      recoveryCommands(harness).filter((command) => command.type === "thread.turn.interrupt")
+        .length,
+      1,
+    );
+
+    // Another echo with no work, another quiet window — the spent cap
+    // latches "Waiting on you" instead of re-nudging forever.
+    shellAt("1970-01-01T00:23:00.000Z");
+    yield* TestClock.adjust("12 minutes");
+    yield* service.inspectWorkerHealth();
+    const latched = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(latched) ? latched.value.needsYou : null, true);
+    // Total automatic dispatches: one nudge steer + one interrupt + one
+    // re-dispatch. No silent infinite loop.
+    const starts = recoveryCommands(harness).filter(
+      (command) => command.type === "thread.turn.start",
+    );
+    assert.equal(starts.length, 2);
+    assert.equal(
+      recoveryCommands(harness).filter((command) => command.type === "thread.turn.interrupt")
+        .length,
+      1,
+    );
+  }).pipe(Effect.provide(Layer.merge(harness.layer, TestClock.layer())));
+});
+
+// The ladder claims its step on the durable row BEFORE the dispatch: the
+// async ownership write that the dispatch triggers (`recordWorkerTurnRequest`
+// on the turn-start-requested event) must not drop the claimed step or the
+// recovery count.
+it.effect("keeps the claimed ladder step when the ownership write lands after it", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-claim-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const workerThreadId = ThreadId.makeUnsafe("thread-claim-worker");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-claim-record",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [workerThreadId],
+      titles: ["Stalled worker"],
+      prompts: ["Draft the schema migration"],
+    });
+    harness.threadShells[workerThreadId] = quietRunningShell("1970-01-01T00:00:00.000Z");
+    harness.providerSessions.push(liveProviderSession(workerThreadId));
+    harness.dispatched.length = 0;
+
+    yield* TestClock.adjust("11 minutes");
+    yield* service.inspectWorkerHealth();
+    const claimed = yield* repository.findManagedWorkerByThread(workerThreadId);
+    // The claim is durable already — before the nudge's own turn-request
+    // event could possibly land.
+    assert.equal(Option.isSome(claimed) ? claimed.value.recoveryStep : null, 1);
+    assert.equal(Option.isSome(claimed) ? claimed.value.recoveriesUsed : null, 1);
+    const nudge = recoveryCommands(harness)[0]!;
+
+    // The steer lands and the engine reports the new turn — the ownership
+    // rewrite must keep the claimed ladder state.
+    yield* service.recordWorkerTurnRequest({
+      threadId: workerThreadId,
+      commandId: nudge.commandId,
+      dispatchOrigin: "automation",
+      turnId: "turn-nudge-1",
+      eventType: "thread.turn-start-requested",
+      createdAt: now,
+    });
+    const worker = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(worker) ? worker.value.recoveryStep : null, 1);
+    assert.equal(Option.isSome(worker) ? worker.value.recoveriesUsed : null, 1);
+    assert.equal(Option.isSome(worker) ? worker.value.activeTurnOrigin : null, "ladder");
+  }).pipe(Effect.provide(Layer.merge(harness.layer, TestClock.layer())));
+});
+
+// A coordinator message that queues behind a running USER turn must not
+// flip the running turn's ownership — the promotion's turn-start-requested
+// event is where ownership changes hands.
+it.effect("keeps user-turn ownership while a coordinator turn is only queued", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    const overview = yield* configureTestGroup(service, "req-queued-setup");
+    const coordinatorThreadId = overview.config!.coordinatorThreadId!;
+    const workerThreadId = ThreadId.makeUnsafe("thread-queued-worker");
+    yield* service.recordManagedWorkerThreads({
+      requestId: "req-queued-record",
+      callerThreadId: coordinatorThreadId,
+      threadIds: [workerThreadId],
+      titles: ["Busy worker"],
+    });
+
+    // The user started a turn — ownership is theirs.
+    yield* service.recordWorkerTurnRequest({
+      threadId: workerThreadId,
+      commandId: "user:turn-1",
+      dispatchOrigin: "user",
+      turnId: "turn-user-1",
+      eventType: "thread.turn-start-requested",
+      createdAt: now,
+    });
+    // A coordinator message lands while the user's turn still runs — it
+    // queues. Ownership must stay with the running user turn.
+    yield* service.recordWorkerTurnRequest({
+      threadId: workerThreadId,
+      commandId: "coordinator:msg-1",
+      dispatchOrigin: null,
+      turnId: null,
+      eventType: "thread.turn-queued",
+      createdAt: now,
+    });
+    const queued = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(queued) ? queued.value.activeTurnOrigin : null, "user");
+    assert.equal(Option.isSome(queued) ? queued.value.activeTurnCommandId : null, "user:turn-1");
+
+    // The queued coordinator turn is promoted — NOW ownership moves.
+    yield* service.recordWorkerTurnRequest({
+      threadId: workerThreadId,
+      commandId: "server:dispatch-queued-turn:7",
+      dispatchOrigin: null,
+      turnId: "turn-coord-1",
+      eventType: "thread.turn-start-requested",
+      createdAt: now,
+    });
+    const promoted = yield* repository.findManagedWorkerByThread(workerThreadId);
+    assert.equal(Option.isSome(promoted) ? promoted.value.activeTurnOrigin : null, "coordinator");
+  }).pipe(Effect.provide(Layer.merge(harness.layer, TestClock.layer())));
 });

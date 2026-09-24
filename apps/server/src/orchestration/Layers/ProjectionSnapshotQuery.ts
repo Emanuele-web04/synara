@@ -454,6 +454,8 @@ function toProjectedSession(row: ProjectionThreadSessionDbRow): OrchestrationSes
     runtimeMode: row.runtimeMode,
     activeTurnId: row.activeTurnId,
     lastError: row.lastError,
+    lastActivityAt: row.lastActivityAt,
+    lastProgressAt: row.lastProgressAt,
     updatedAt: row.updatedAt,
   };
 }
@@ -1373,6 +1375,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           runtime_mode AS "runtimeMode",
           active_turn_id AS "activeTurnId",
           last_error AS "lastError",
+          last_activity_at AS "lastActivityAt",
+          last_progress_at AS "lastProgressAt",
           updated_at AS "updatedAt"
         FROM projection_thread_sessions
         ORDER BY thread_id ASC
@@ -2079,6 +2083,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           runtime_mode AS "runtimeMode",
           active_turn_id AS "activeTurnId",
           last_error AS "lastError",
+          last_activity_at AS "lastActivityAt",
+          last_progress_at AS "lastProgressAt",
           updated_at AS "updatedAt"
         FROM projection_thread_sessions
         WHERE thread_id IN ${sql.in(threadIds)}
@@ -2133,6 +2139,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           runtime_mode AS "runtimeMode",
           active_turn_id AS "activeTurnId",
           last_error AS "lastError",
+          last_activity_at AS "lastActivityAt",
+          last_progress_at AS "lastProgressAt",
           updated_at AS "updatedAt"
         FROM projection_thread_sessions
         WHERE thread_id = ${threadId}

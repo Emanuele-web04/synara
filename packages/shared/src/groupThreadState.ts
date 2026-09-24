@@ -67,6 +67,9 @@ export interface GroupThreadStateThread {
   readonly hasPendingUserInput?: boolean | undefined;
   /** Live work attached behind the latest turn (web-only; absent server-side). */
   readonly hasLiveTailWork?: boolean | undefined;
+  /** The coordinator's recovery ladder gave up on this thread — the managed
+   * worker is latched "needs you" and waits on a human decision. */
+  readonly needsYou?: boolean | undefined;
   readonly session?: GroupThreadSessionView | null | undefined;
   readonly latestTurn?: GroupThreadLatestTurnView | null | undefined;
 }
@@ -164,6 +167,9 @@ export function groupThreadNeedsAttention(thread: GroupThreadStateThread): boole
   if (isGroupThreadErrored(thread)) {
     return true;
   }
+  if (thread.needsYou === true) {
+    return true;
+  }
   const session = thread.session ?? null;
   return (
     canSessionAnswerPendingRequests(session) === true &&
@@ -256,7 +262,7 @@ export function resolveGroupThreadState(input: {
   const canAnswer = canSessionAnswerPendingRequests(session);
   const hasPendingRequest =
     canAnswer && (thread.hasPendingApprovals === true || thread.hasPendingUserInput === true);
-  if (hasPendingRequest || isGroupThreadErrored(thread)) {
+  if (hasPendingRequest || thread.needsYou === true || isGroupThreadErrored(thread)) {
     return "waiting";
   }
   if (

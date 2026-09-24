@@ -1461,6 +1461,98 @@ describe("deriveMessagesTimelineRows", () => {
 
     expect(rows.map((row) => row.kind)).toEqual(["message", "working"]);
   });
+
+  const workerMonitorEntry = (id: string, createdAt: string, label: string): TimelineEntry => ({
+    id: `entry-${id}`,
+    kind: "work",
+    createdAt,
+    entry: {
+      id,
+      createdAt,
+      label,
+      tone: "info",
+      synaraWorkerNotice: {
+        kind: "settled",
+        marker: "✓",
+        phrase: "finished",
+        threads: [
+          {
+            threadId: "thread-1",
+            title: "Worker",
+            outcome: "completed",
+            result: null,
+            pr: null,
+            projectId: null,
+          },
+        ],
+      },
+    },
+  });
+
+  it("keeps a worker-monitor row standalone before an assistant message", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        workEntry("w1", "2026-01-01T00:00:01Z", "tool 1"),
+        workerMonitorEntry("m1", "2026-01-01T00:00:02Z", "✓ Worker finished"),
+        assistantEntry("a1", "2026-01-01T00:00:03Z", {
+          turnId: "t1",
+          text: "All done.",
+          completedAt: "2026-01-01T00:00:04Z",
+        }),
+      ],
+    });
+
+    // The monitor pill must stay its own work row: merging it into the
+    // assistant's leading/inline work entries (or its collapsed turn) hides it
+    // on conversation-only surfaces.
+    const monitorRow = rows.find(
+      (row): row is Extract<MessagesTimelineRow, { kind: "work" }> =>
+        row.kind === "work" &&
+        row.groupedEntries.some((entry) => entry.synaraWorkerNotice !== undefined),
+    );
+    expect(monitorRow?.id).toBe("entry-m1");
+    const assistant = messageRow(rows, "a1")!;
+    expect(
+      (assistant.leadingWorkEntries ?? []).some(
+        (entry) => entry.synaraWorkerNotice !== undefined,
+      ) ||
+        (assistant.inlineWorkEntries ?? []).some(
+          (entry) => entry.synaraWorkerNotice !== undefined,
+        ) ||
+        (assistant.collapsedTurnItems ?? []).some(
+          (item) => item.kind === "work" && item.entry.synaraWorkerNotice !== undefined,
+        ),
+    ).toBe(false);
+  });
+
+  it("keeps a worker-monitor row standalone after an assistant message", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        assistantEntry("a1", "2026-01-01T00:00:01Z", {
+          turnId: "t1",
+          text: "Working on it.",
+          completedAt: "2026-01-01T00:00:02Z",
+        }),
+        workerMonitorEntry("m1", "2026-01-01T00:00:03Z", "⚠ Worker is waiting for approval"),
+      ],
+    });
+
+    const monitorRow = rows.find(
+      (row): row is Extract<MessagesTimelineRow, { kind: "work" }> =>
+        row.kind === "work" &&
+        row.groupedEntries.some((entry) => entry.synaraWorkerNotice !== undefined),
+    );
+    expect(monitorRow?.id).toBe("entry-m1");
+    expect(
+      (messageRow(rows, "a1")?.inlineWorkEntries ?? []).some(
+        (entry) => entry.synaraWorkerNotice !== undefined,
+      ),
+    ).toBe(false);
+  });
 });
 
 const toolItem = (

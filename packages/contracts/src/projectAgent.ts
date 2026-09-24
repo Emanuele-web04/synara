@@ -262,6 +262,7 @@ export const ProjectActivityKind = Schema.Literals([
   "digest-failed",
   "wake-enqueued",
   "wake-skipped",
+  "coordinator-checkin",
   "error",
 ]);
 export type ProjectActivityKind = typeof ProjectActivityKind.Type;
@@ -340,6 +341,77 @@ export const ProjectInboxEvent = Schema.Struct({
 });
 export type ProjectInboxEvent = typeof ProjectInboxEvent.Type;
 
+export const ProjectManagedWorkerSettleOutcome = Schema.Literals([
+  "completed",
+  "stopped",
+  "failed",
+  "interrupted",
+  "missing",
+  "waiting-approval",
+  "waiting-input",
+]);
+export type ProjectManagedWorkerSettleOutcome = typeof ProjectManagedWorkerSettleOutcome.Type;
+
+export const ProjectManagedWorkerStuckKind = Schema.Literals([
+  "missing",
+  "silent",
+  "waiting",
+  "tool-overtime",
+  "never-started",
+]);
+export type ProjectManagedWorkerStuckKind = typeof ProjectManagedWorkerStuckKind.Type;
+
+// Durable record for a thread the coordinator created. Unlike a task it does
+// not require an active goal, so settle/wake/stuck reporting covers every
+// coordinator-created thread. `batchId` identifies the creation batch (the
+// gateway operation id, which is caller+turn+requestId scoped) and drives the
+// all-workers-settled roll-up; `requestId` is the model's creation request id
+// kept for receipts and task/attempt ids.
+export const ProjectManagedWorker = Schema.Struct({
+  projectId: ProjectId,
+  threadId: ThreadId,
+  batchId: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
+  requestId: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
+  title: TrimmedNonEmptyString.check(Schema.isMaxLength(240)),
+  taskId: Schema.NullOr(ProjectTaskId),
+  settledAt: Schema.NullOr(IsoDateTime),
+  settleOutcome: Schema.NullOr(ProjectManagedWorkerSettleOutcome),
+  waitingSince: Schema.NullOr(IsoDateTime),
+  stuckKind: Schema.NullOr(ProjectManagedWorkerStuckKind),
+  stuckSince: Schema.NullOr(IsoDateTime),
+  /** Task prompt recorded at creation so the stall-recovery ladder can
+   * re-dispatch it durably after a restart. */
+  taskPrompt: Schema.NullOr(Schema.String),
+  /** Stall-recovery ladder state, all durable. `recoveryEpisode` keys the
+   * active silent episode (its `stuckSince` value); `recoveryStep` is the
+   * furthest step attempted for it (0 none, 1 nudged, 2 re-dispatched);
+   * `recoveriesUsed` is the lifetime count feeding the per-thread cap. */
+  recoveryEpisode: Schema.NullOr(IsoDateTime),
+  recoveryStep: Schema.Int,
+  nudgeAt: Schema.NullOr(IsoDateTime),
+  recoveriesUsed: Schema.Int,
+  needsYou: Schema.Boolean,
+  needsYouAt: Schema.NullOr(IsoDateTime),
+  /** Origin of the turn currently owning the thread: the coordinator ("agent"
+   * dispatches), the recovery ladder ("automation"), or the user. The ladder
+   * only steers/interrupts turns it or the coordinator started — a
+   * user-originated turn is left alone. */
+  activeTurnOrigin: Schema.NullOr(Schema.Literals(["coordinator", "ladder", "user"])),
+  /** Command id that requested the current turn — provenance for
+   * `activeTurnOrigin`. */
+  activeTurnCommandId: Schema.NullOr(Schema.String),
+  /** Latest structured `synara_project_report_result` summary; the settle row
+   * and batch roll-up prefer it over the generic outcome phrase. */
+  resultSummary: Schema.NullOr(Schema.String),
+  resultAt: Schema.NullOr(IsoDateTime),
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+export type ProjectManagedWorker = typeof ProjectManagedWorker.Type;
+
+export const ProjectManagedWorkerTurnOrigin = Schema.Literals(["coordinator", "ladder", "user"]);
+export type ProjectManagedWorkerTurnOrigin = typeof ProjectManagedWorkerTurnOrigin.Type;
+
 export const ProjectAgentBlocker = Schema.Struct({
   taskId: ProjectTaskId,
   title: TrimmedNonEmptyString.check(Schema.isMaxLength(240)),
@@ -359,8 +431,26 @@ export const ProjectAgentOverview = Schema.Struct({
   blockers: Schema.Array(ProjectAgentBlocker),
   recentOutcomes: Schema.Array(ProjectActivity),
   coordinatorStatus: Schema.Literals(["unconfigured", "idle", "running", "paused", "stopped"]),
+  /** Durable managed-worker rows so the Overview can bucket threads (a
+   * `needsYou` worker lands in "Waiting on you") and render worker state. */
+  workers: Schema.optional(Schema.Array(ProjectManagedWorker)),
 });
 export type ProjectAgentOverview = typeof ProjectAgentOverview.Type;
+
+export const ProjectAgentResolveWorkerInput = Schema.Struct({
+  requestId: ProjectAgentRequestId,
+  projectId: ProjectId,
+  threadId: ThreadId,
+  /** "stop" interrupts the worker's active turn; "retry" re-dispatches its
+   * recorded task prompt under the recovery ladder's ownership. */
+  action: Schema.Literals(["stop", "retry"]),
+});
+export type ProjectAgentResolveWorkerInput = typeof ProjectAgentResolveWorkerInput.Type;
+
+export const ProjectAgentResolveWorkerResult = Schema.Struct({
+  resolved: Schema.Boolean,
+});
+export type ProjectAgentResolveWorkerResult = typeof ProjectAgentResolveWorkerResult.Type;
 
 export const ProjectAgentListPage = Schema.Struct({
   cursor: Schema.optional(TrimmedNonEmptyString),
