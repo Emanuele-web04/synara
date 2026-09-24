@@ -53,9 +53,9 @@ Each group is a single row: its coordinator. There is no separate folder row.
   are labelled with the repository name.
 - **An amber dot** ("A thread needs you") means a thread in the group is waiting on you.
 - **Pin** the coordinator with the pin that appears on hover (**Pin coordinator**), or right-click
-  the row and choose **Pin project agent**. Pinned coordinators stay in the pinned section at the
+  the row and choose **Pin coordinator**. Pinned coordinators stay in the pinned section at the
   top of the sidebar.
-- **Right-click** the row for **Edit project agent** (opens group settings), **Edit name**, **Open
+- **Right-click** the row for **Edit coordinator** (opens group settings), **Edit name**, **Open
   in Finder**, and the other folder actions.
 - Archived groups are listed under **Archived groups**, each with an **Unarchive** button.
 
@@ -292,7 +292,7 @@ coordinator cannot be handed off.
 ## Settings reference
 
 Open settings from the gear in the Groups panel (**Group settings**), or right-click the group in
-the sidebar and choose **Edit project agent**. The model pickers list every provider's models, just
+the sidebar and choose **Edit coordinator**. The model pickers list every provider's models, just
 like the composer.
 
 | Section         | Settings                                                                                                                                     |

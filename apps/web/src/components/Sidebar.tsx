@@ -6998,7 +6998,7 @@ export default function Sidebar() {
                     }
                   >
                     <ProjectContextMenuIcon icon={BotIcon} />
-                    <span>Edit project agent</span>
+                    <span>Edit coordinator</span>
                   </MenuItem>
                   <MenuItem
                     className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
@@ -7012,7 +7012,7 @@ export default function Sidebar() {
                     <ProjectContextMenuIcon icon={PinIcon} />
                     <span>
                       {pinActionLabel(
-                        "project agent",
+                        "coordinator",
                         pinnedProjectAgentIdSet.has(projectContextMenuState.projectId),
                       )}
                     </span>

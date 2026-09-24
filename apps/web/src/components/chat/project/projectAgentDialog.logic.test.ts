@@ -24,7 +24,7 @@ describe("project agent dialog defaults", () => {
         configured: false,
         coordinatorName: "Master Bot",
       }),
-    ).toBe("Set up project agent");
+    ).toBe("Set up coordinator");
   });
 
   it("keeps a pinned project agent visible when the folder is collapsed", () => {
