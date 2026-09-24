@@ -487,6 +487,8 @@ export function getAvailableComposerSlashCommands(input: {
   canOfferSideCommand: boolean;
   canOfferExportCommand: boolean;
   providerNativeCommandNames?: ReadonlyArray<string>;
+  /** Beta-only feature flag; `false` drops /computer-use from the lists. */
+  computerUseEnabled?: boolean;
 }): ComposerSlashCommand[] {
   const collidingNativeCommandNames = new Set<ComposerSlashCommand>(
     expandProviderNativeSlashCommandNames(
@@ -539,7 +541,11 @@ export function getAvailableComposerSlashCommands(input: {
           "feedback",
           "automation",
         ];
-  return availableCommands.filter((command) => !collidingNativeCommandNames.has(command));
+  return availableCommands.filter(
+    (command) =>
+      !collidingNativeCommandNames.has(command) &&
+      (command !== "computer-use" || input.computerUseEnabled !== false),
+  );
 }
 
 export function hasProviderNativeSlashCommand(

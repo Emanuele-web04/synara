@@ -3405,6 +3405,16 @@ describe("turn dispatch settings", () => {
     expect(resolved.enableComputerControl).toBe(false);
     expect(resolved.computerControlMode).toBe("off");
   });
+
+  it("replays no computer control on a build without the feature", () => {
+    // A draft queued on Beta and reopened on Stable must not re-arm control.
+    const queuedRequest = { ...QUEUED_CHAT_TURN, computerControlMode: "request" as const };
+    const resolved = resolveQueuedTurnDispatchSettings(LIVE_SETTINGS, queuedRequest, {
+      computerUseEnabled: false,
+    });
+    expect(resolved.enableComputerControl).toBe(false);
+    expect(resolved.computerControlMode).toBe("off");
+  });
 });
 
 describe("resolveEffectiveComputerControl", () => {
@@ -3506,5 +3516,27 @@ describe("resolveEffectiveComputerControl", () => {
         chatHasTurns: false,
       }),
     ).toBe(true);
+  });
+
+  it("is forced off when the build has no computer use, overriding every other input", () => {
+    for (const input of [
+      {
+        draftOverride: true,
+        availability: { kind: "available", backend: "mac" },
+        computerControlEnabled: true,
+        chatHasTurns: true,
+      },
+      {
+        draftOverride: undefined,
+        mode: "request" as const,
+        availability: { kind: "available", backend: "mac" },
+        computerControlEnabled: false,
+        chatHasTurns: false,
+      },
+    ]) {
+      expect(
+        resolveEffectiveComputerControl({ ...input, computerUseEnabled: false }),
+      ).toBe(false);
+    }
   });
 });

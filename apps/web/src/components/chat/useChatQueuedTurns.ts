@@ -1,3 +1,4 @@
+import { COMPUTER_USE_ENABLED } from "../../betaFeatures";
 import { ThreadId } from "@synara/contracts";
 import type { RefObject } from "react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -248,10 +249,12 @@ export function useChatQueuedTurns({
       setComposerDraftRuntimeMode(activeThread.id, queuedTurn.runtimeMode);
       setComposerDraftInteractionMode(activeThread.id, queuedTurn.interactionMode);
       // Restore the frozen switch plus its revocation generation.
-      const restoredComputerMode = resolveComputerControlMode(
-        queuedTurn.computerControlMode,
-        queuedTurn.enableComputerControl,
-      );
+      const restoredComputerMode = COMPUTER_USE_ENABLED
+        ? resolveComputerControlMode(
+            queuedTurn.computerControlMode,
+            queuedTurn.enableComputerControl,
+          )
+        : "off";
       setComposerDraftComputerControlMode(activeThread.id, restoredComputerMode, {
         generation: queuedTurn.computerControlGeneration ?? 0,
       });

@@ -3,6 +3,8 @@
 // Layer: Route/UI support
 // Exports: section ids, nav items, and search normalization helper
 
+import { COMPUTER_USE_ENABLED } from "./betaFeatures";
+
 export const SETTINGS_SECTION_IDS = [
   "general",
   "profile",
@@ -208,8 +210,25 @@ export function settingRowAnchorId(title: string): string {
   return `setting-${slug}`;
 }
 
-export function normalizeSettingsSection(value: unknown): SettingsSectionId {
+/**
+ * The nav as this build shows it. `computer` is a Beta-only feature: on Stable
+ * it is dropped entirely, and a stale deep link to the section resolves to
+ * General through `normalizeSettingsSection`.
+ */
+export function visibleSettingsNavItems(
+  computerUseEnabled: boolean = COMPUTER_USE_ENABLED,
+): readonly SettingsNavItem[] {
+  return SETTINGS_NAV_ITEMS.filter((item) => item.id !== "computer" || computerUseEnabled);
+}
+
+export function normalizeSettingsSection(
+  value: unknown,
+  computerUseEnabled: boolean = COMPUTER_USE_ENABLED,
+): SettingsSectionId {
   if (typeof value !== "string") {
+    return "general";
+  }
+  if (value === "computer" && !computerUseEnabled) {
     return "general";
   }
   return SETTINGS_SECTION_IDS.find((candidate) => candidate === value) ?? "general";

@@ -1,3 +1,4 @@
+import { COMPUTER_USE_ENABLED } from "../../betaFeatures";
 import { flushWorkspaceEditors } from "~/lib/workspaceEditorSession";
 import { resolveComputerInvocationMode } from "@synara/shared/computerInvocation";
 import {
@@ -336,10 +337,12 @@ export function useChatTurnSubmission({
       if (queuedChatTurn === null) {
         // Read the live editor snapshot, not an earlier React render. A queued
         // command already froze its mode and generation and must not be inferred again.
-        const mode = resolveComputerInvocationMode({
-          messageText: promptForSend,
-          enableComputerControl: settings.computerControlEnabled,
-        });
+        const mode = COMPUTER_USE_ENABLED
+          ? resolveComputerInvocationMode({
+              messageText: promptForSend,
+              enableComputerControl: settings.computerControlEnabled,
+            })
+          : "off";
         dispatchSettings = {
           ...dispatchSettings,
           computerControlMode: mode,

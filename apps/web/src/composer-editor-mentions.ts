@@ -1,3 +1,4 @@
+import { COMPUTER_USE_ENABLED } from "./betaFeatures";
 import { isBuiltInComposerSlashCommand, type ComposerSlashCommand } from "./composerSlashCommands";
 import {
   INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
@@ -69,7 +70,9 @@ const SLASH_COMMAND_CHIP_TOKEN_REGEX = /(^|\s)\/([a-zA-Z][a-zA-Z0-9_-]*)(?=\s)/i
 const COMPOSER_SLASH_COMMAND_CHIP_NAMES = new Set<ComposerSlashCommand>([
   "automation",
   "goal",
-  "computer-use",
+  // On Stable /computer-use is not a command, so it must not chip while typing
+  // or in sent messages.
+  ...(COMPUTER_USE_ENABLED ? (["computer-use"] as const) : []),
 ]);
 
 // While typing (composer) a URL only becomes a chip once a delimiter follows it,

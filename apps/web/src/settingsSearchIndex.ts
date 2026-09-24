@@ -5,6 +5,7 @@
 // Exports: entry type, the index, section label lookup, and the ranking helper
 
 import { rankProviderDiscoveryItems } from "~/lib/providerDiscovery";
+import { COMPUTER_USE_ENABLED } from "./betaFeatures";
 import {
   settingRowAnchorId,
   SETTINGS_NAV_ITEMS,
@@ -42,10 +43,17 @@ export interface SettingsSearchContext {
    * is known.
    */
   readonly computerBackendIsVisibleDesktop: boolean;
+  /**
+   * Whether this build offers computer use at all (Beta-only). When false the
+   * Computer use section is hidden, so its rows must not appear in search.
+   * Defaults to the build flag; tests inject it.
+   */
+  readonly computerUseEnabled: boolean;
 }
 
 const DEFAULT_SETTINGS_SEARCH_CONTEXT: SettingsSearchContext = {
   computerBackendIsVisibleDesktop: false,
+  computerUseEnabled: COMPUTER_USE_ENABLED,
 };
 
 /** DOM id a result deep-links to, or null for panel-level entries with no anchored row. */
@@ -310,6 +318,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     // Reconnecting / Unavailable), so link to the section rather than an
     // anchored row.
     target: null,
+    applies: (context) => context.computerUseEnabled,
   },
   {
     id: "computer:open-automatically",
@@ -317,7 +326,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: "Preview",
     keywords:
       "Show the in-chat Computer preview the first time an agent acts on the desktop, and choose its size. open automatically compact large. auto open computer use",
-    applies: () => true,
+    applies: (context) => context.computerUseEnabled,
   },
   {
     id: "computer:how-agents-use-the-desktop",
@@ -325,6 +334,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: "Computer control",
     keywords:
       "Let the agent use the desktop in any chat. Approval gates and Stop still apply. enable toggle permission desktop agent computer use control",
+    applies: (context) => context.computerUseEnabled,
   },
   {
     id: "computer:cursor-colors",
@@ -332,6 +342,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: "Cursor colors",
     keywords:
       "The agent pointer's colors: stock monochrome by default, or custom fill and rim. agent cursor arrow pointer color hex custom",
+    applies: (context) => context.computerUseEnabled,
   },
   {
     id: "computer:always-allowed",
@@ -340,6 +351,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords:
       "Durable per-app always-allow grants from computer approvals, with expiry and revoke. always allow approval grant revoke app bundle consent computer use",
     target: null,
+    applies: (context) => context.computerUseEnabled,
   },
 
   // ── Behavior ──────────────────────────────────────────────────────────────────
@@ -542,7 +554,7 @@ export function rankSettingsSearchEntries(
   if (trimmed.length === 0) {
     return [];
   }
-  const resolvedContext = context ?? DEFAULT_SETTINGS_SEARCH_CONTEXT;
+  const resolvedContext = { ...DEFAULT_SETTINGS_SEARCH_CONTEXT, ...(context ?? {}) };
   const available = SETTINGS_SEARCH_ENTRIES.filter(
     (entry) => entry.applies?.(resolvedContext) ?? true,
   );

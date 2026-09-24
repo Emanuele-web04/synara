@@ -4,6 +4,7 @@
 // Exports: TimelineWorkEntryRow, EditedFileRowContent, prefersCompactWorkEntryRow
 
 import type { TurnId } from "@synara/contracts";
+import { COMPUTER_USE_ENABLED } from "../../betaFeatures";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import {
   createElement,
@@ -614,7 +615,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   // A computer-control denial renders as an actionable card (enable + retry)
   // instead of a buried tool-error line. Kept after the hooks above so the
   // early return never changes hook order.
-  if (workEntry.computerSetupRequired) {
+  if (workEntry.computerSetupRequired && COMPUTER_USE_ENABLED) {
     return (
       <ConnectedComputerSetupRequiredCard
         {...workEntry.computerSetupRequired}
@@ -625,7 +626,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   }
 
   const computerControlDenied = workEntry.computerControlDenied;
-  if (computerControlDenied) {
+  if (computerControlDenied && COMPUTER_USE_ENABLED) {
     return (
       <div className={cn(compact ? "py-0.5" : "py-1")}>
         <ComputerControlDeniedCard

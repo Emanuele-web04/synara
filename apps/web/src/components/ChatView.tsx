@@ -1,3 +1,4 @@
+import { COMPUTER_USE_ENABLED } from "../betaFeatures";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
   parseComputerInvocation,
@@ -860,7 +861,8 @@ export default function ChatView({
   const activeThread = serverThread ?? localDraftThread;
   // Invocation needs the current revocation generation before the preview appears.
   useThreadComputerStateSeed(threadId);
-  const computerAvailability = useThreadComputerAvailability(threadId);
+  const rawComputerAvailability = useThreadComputerAvailability(threadId);
+  const computerAvailability = COMPUTER_USE_ENABLED ? rawComputerAvailability : undefined;
   const computerControlGeneration =
     useThreadComputerControlGeneration(threadId) ?? composerDraft.computerControlGeneration ?? 0;
   const computerControlAvailable = computerAvailability?.kind === "available";
@@ -1309,10 +1311,12 @@ export default function ChatView({
   });
   // A command enables only this draft's turn. Settings remains a separate
   // explicit default; clearing the draft removes request activation.
-  const computerControlMode = resolveComputerInvocationMode({
-    messageText: prompt,
-    enableComputerControl: settings.computerControlEnabled,
-  });
+  const computerControlMode = COMPUTER_USE_ENABLED
+    ? resolveComputerInvocationMode({
+        messageText: prompt,
+        enableComputerControl: settings.computerControlEnabled,
+      })
+    : "off";
   const enableComputerControl = computerControlMode !== "off";
   const featureFlags = useFeatureFlags();
   const showDebugTaskBanner = import.meta.env.DEV && featureFlags["show-debug-task-banner"];
@@ -5101,6 +5105,7 @@ export default function ChatView({
   const previewReservesInset =
     environmentOverlayVariant === "docked" &&
     settings.autoOpenComputerPane &&
+    COMPUTER_USE_ENABLED &&
     previewSession?.phase === "live" &&
     (previewLayout?.hasFrame === true || previewLayout?.hasVisibleStatus === true) &&
     previewLayout?.floating !== true;
@@ -5968,7 +5973,9 @@ export default function ChatView({
                     onOpenThread={onNavigateToThread}
                     onOpenAutomation={onOpenAutomation}
                     computerControlEnabled={enableComputerControl}
-                    onEnableComputerControl={handleEnableComputerControlFromDenial}
+                    onEnableComputerControl={
+                      COMPUTER_USE_ENABLED ? handleEnableComputerControlFromDenial : undefined
+                    }
                     revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
                     onRevertUserMessage={onRevertUserMessage}
                     onUndoTurnFiles={onUndoTurnFiles}
@@ -6101,7 +6108,7 @@ export default function ChatView({
               open={environmentPanelVisible}
               variant={environmentOverlayVariant}
               railBottom={
-                previewSession ? (
+                previewSession && COMPUTER_USE_ENABLED ? (
                   <AmbientRailSlot envOpen={environmentPanelVisible}>
                     <ComputerPreviewPopover
                       key={threadId}
