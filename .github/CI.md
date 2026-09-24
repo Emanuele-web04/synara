@@ -44,8 +44,9 @@ Test and typecheck task results remain uncached.
 
 Release smoke shares the static runner, removing one checkout/install/runner and
 one duplicate identity scan. The platform-independent Windows boundary scanner
-runs there once; native Windows validation is not removed. Release preflight
-still installs the full workspace and runs the audited test suite. Signing, notarization,
+runs there once; native Windows validation is not removed. Release quality lanes
+still install the full workspace and run the audited test suite while unsigned
+preparation proceeds in parallel. Packaging waits for every quality gate. Signing, notarization,
 source provenance, publication and production dependency staging are unchanged.
 
 ## Cross-platform setup measurements: September 14, 2026
