@@ -9,25 +9,28 @@
 //      Synara's version, derived from the same helpers the sidebar uses.
 
 import type { AutomationDefinition, ThreadId } from "@synara/contracts";
-import { type MouseEvent as ReactMouseEvent, useState } from "react";
+import { type MouseEvent as ReactMouseEvent, useEffect, useState } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
 import { IconButton } from "~/components/ui/icon-button";
 import { Switch } from "~/components/ui/switch";
 import { toastManager } from "~/components/ui/toast";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { PanelStateMessage } from "~/components/chat/PanelStateMessage";
 import { PrStateChip } from "~/components/pullRequest/PrStateChip";
 import { resolvePrStatePresentation } from "~/components/pullRequest/pullRequestStatePresentation";
 import { ProviderIcon } from "~/components/ProviderIcon";
 import { EnvironmentSectionLabel } from "~/components/chat/environment/EnvironmentRow";
 import { CheckIcon, Columns2Icon, EllipsisIcon, GitHubIcon, RotateCcwIcon } from "~/lib/icons";
+import type { GroupPanelSectionDescriptor, GroupPanelSectionId } from "./groupPanelSections";
 import { formatSchedule } from "~/lib/automationForm";
 import { formatRelativeTime } from "~/lib/relativeTime";
 import { archiveThreadFromClient, unarchiveThreadFromClient } from "~/lib/threadArchive";
 import { cn } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import type { useAutomations } from "~/routes/-automations.shared";
+import type { SidebarThreadSummary } from "~/types";
 
 import {
   GROUP_THREAD_SECTIONS,
@@ -35,6 +38,7 @@ import {
   type GroupThreadRow as GroupThreadRowData,
   type GroupThreadSectionId,
 } from "./groupOverview.logic";
+import { buildGroupThreadActivitySeries } from "./groupThreadActivity.logic";
 import type { useProjectAgent } from "./useProjectAgent";
 
 type ProjectAgent = ReturnType<typeof useProjectAgent>;
@@ -49,6 +53,227 @@ const REOPEN_MENU_ICON = renderToStaticMarkup(<RotateCcwIcon />);
 // Row titles size off the same token as sidebar thread rows and the Focus card,
 // never the panel's ambient font size.
 const GROUP_OVERVIEW_ROW_TITLE_CLASS_NAME = "min-w-0 truncate text-ui font-medium text-foreground";
+
+// — Section bar —
+
+// Corner pill for a section's item count — small enough to sit on the icon
+// without touching neighbouring buttons at the panel's narrowest width.
+const SECTION_COUNT_PILL_CLASS_NAME =
+  "absolute -right-2.5 -top-1.5 flex h-3 min-w-3 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--foreground)_8%,transparent)] px-0.5 text-ui-2xs leading-none tabular-nums text-muted-foreground/90";
+
+/**
+ * The Group panel's bottom bar: one evenly spaced icon button per section.
+ * Only the open section shows its label under the icon (reserved-height line so
+ * toggling does not shift the bar); every button carries the label in a tooltip
+ * and in its accessible name. Counts ride on the icon's top-right corner and a
+ * "waiting on you" dot on the top-left, so the bar stays readable from ~260px
+ * up where inline labels ran together.
+ */
+export function GroupPanelSectionBar({
+  sections,
+  sectionCounts,
+  openSectionId,
+  regionId,
+  onToggle,
+}: {
+  readonly sections: readonly GroupPanelSectionDescriptor[];
+  readonly sectionCounts: Readonly<
+    Record<GroupPanelSectionId, { readonly count: number; readonly waiting: number }>
+  >;
+  readonly openSectionId: GroupPanelSectionId | null;
+  readonly regionId: string;
+  readonly onToggle: (sectionId: GroupPanelSectionId | null) => void;
+}) {
+  return (
+    <div className="flex items-stretch">
+      {sections.map((section) => {
+        const counts = sectionCounts[section.id];
+        const isOpen = openSectionId === section.id;
+        const ariaLabel =
+          counts.waiting > 0
+            ? `${section.label}, ${counts.waiting} waiting on you`
+            : counts.count > 0
+              ? `${section.label}, ${counts.count}`
+              : section.label;
+        const toggle = () => {
+          onToggle(isOpen ? null : section.id);
+        };
+        return (
+          <Tooltip key={section.id}>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label={ariaLabel}
+                  aria-expanded={isOpen}
+                  aria-controls={regionId}
+                  aria-pressed={isOpen}
+                  className={cn(
+                    "flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-lg px-1 py-1 text-ui-xs transition-colors",
+                    isOpen
+                      ? "bg-foreground/8 text-foreground"
+                      : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+                  )}
+                  onClick={toggle}
+                />
+              }
+            >
+              <span className="relative flex size-4 items-center justify-center">
+                <section.icon className="size-4" aria-hidden />
+                {counts.waiting > 0 ? (
+                  <span
+                    className="absolute -left-1.5 -top-1 block size-1.5 rounded-full bg-amber-500 dark:bg-amber-300/90"
+                    aria-hidden
+                  />
+                ) : null}
+                {counts.count > 0 ? (
+                  <span className={SECTION_COUNT_PILL_CLASS_NAME} aria-hidden>
+                    {counts.count}
+                  </span>
+                ) : null}
+              </span>
+              <span className={cn("min-w-0 max-w-full truncate", !isOpen && "invisible")}>
+                {section.label}
+              </span>
+            </TooltipTrigger>
+            <TooltipPopup>
+              <p>{section.label}</p>
+            </TooltipPopup>
+          </Tooltip>
+        );
+      })}
+    </div>
+  );
+}
+
+// — Activity sparkline —
+
+const SPARKLINE_VIEW_WIDTH = 100;
+const SPARKLINE_VIEW_HEIGHT = 40;
+const SPARKLINE_PAD_Y = 4;
+const SPARKLINE_TICK_MS = 15_000;
+const SPARKLINE_GRID_ROWS = [10, 20, 30] as const;
+const SPARKLINE_GRID_COLUMNS = [25, 50, 75] as const;
+
+/**
+ * "Threads working" sparkline for the top of the Group panel: a thin accent
+ * line over a faint dotted grid, a highlighted dot on the latest point, no
+ * axes. The series is rebuilt from the store's thread summaries each render and
+ * the window advances on a slow tick, so it updates as threads start and
+ * finish. Hidden until the group has produced any work — a brand-new group has
+ * nothing to chart.
+ */
+export function GroupThreadActivitySparkline({
+  threads,
+}: {
+  readonly threads: readonly SidebarThreadSummary[];
+}) {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const interval = window.setInterval(() => setNowMs(Date.now()), SPARKLINE_TICK_MS);
+    return () => window.clearInterval(interval);
+  }, []);
+  const series = buildGroupThreadActivitySeries({ threads, nowMs });
+  if (series.points.length === 0) {
+    return null;
+  }
+  const peak = Math.max(1, series.peakCount);
+  const pointCount = series.points.length;
+  const stepX = pointCount > 1 ? SPARKLINE_VIEW_WIDTH / (pointCount - 1) : 0;
+  const coordinates = series.points.map((count, index) => ({
+    x: pointCount > 1 ? index * stepX : SPARKLINE_VIEW_WIDTH / 2,
+    y:
+      SPARKLINE_VIEW_HEIGHT -
+      SPARKLINE_PAD_Y -
+      (count / peak) * (SPARKLINE_VIEW_HEIGHT - SPARKLINE_PAD_Y * 2),
+  }));
+  const lastPoint = coordinates[coordinates.length - 1];
+  const pathData =
+    coordinates.length > 1
+      ? `M${coordinates.map((point) => `${point.x.toFixed(1)} ${point.y.toFixed(1)}`).join(" L")}`
+      : null;
+  const workingLabel = series.currentCount === 1 ? "1 thread" : `${series.currentCount} threads`;
+  const accessibleLabel = `${workingLabel} working now, peak ${series.peakCount} in the last hour`;
+  return (
+    <div
+      role="img"
+      aria-label={accessibleLabel}
+      title={accessibleLabel}
+      tabIndex={0}
+      className="relative mx-3 mb-0.5 mt-1 h-11"
+    >
+      <svg
+        viewBox={`0 0 ${SPARKLINE_VIEW_WIDTH} ${SPARKLINE_VIEW_HEIGHT}`}
+        preserveAspectRatio="none"
+        className="block size-full"
+        aria-hidden
+      >
+        {SPARKLINE_GRID_ROWS.map((y) => (
+          <line
+            key={`row-${y}`}
+            x1={0}
+            y1={y}
+            x2={SPARKLINE_VIEW_WIDTH}
+            y2={y}
+            stroke="var(--color-border-light)"
+            strokeWidth={1}
+            strokeDasharray="1 4"
+            strokeLinecap="round"
+            vectorEffect="non-scaling-stroke"
+          />
+        ))}
+        {SPARKLINE_GRID_COLUMNS.map((x) => (
+          <line
+            key={`col-${x}`}
+            x1={x}
+            y1={0}
+            x2={x}
+            y2={SPARKLINE_VIEW_HEIGHT}
+            stroke="var(--color-border-light)"
+            strokeWidth={1}
+            strokeDasharray="1 4"
+            strokeLinecap="round"
+            vectorEffect="non-scaling-stroke"
+          />
+        ))}
+        {pathData !== null ? (
+          <path
+            d={pathData}
+            fill="none"
+            stroke="var(--color-text-accent)"
+            strokeWidth={1.5}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            vectorEffect="non-scaling-stroke"
+          />
+        ) : null}
+      </svg>
+      {lastPoint !== undefined ? (
+        <>
+          <span
+            className="pointer-events-none absolute size-4 rounded-full"
+            style={{
+              left: `calc(${(lastPoint.x / SPARKLINE_VIEW_WIDTH) * 100}% - 8px)`,
+              top: `calc(${(lastPoint.y / SPARKLINE_VIEW_HEIGHT) * 100}% - 8px)`,
+              backgroundColor: "var(--color-text-accent)",
+              opacity: 0.2,
+            }}
+            aria-hidden
+          />
+          <span
+            className="pointer-events-none absolute size-2 rounded-full"
+            style={{
+              left: `calc(${(lastPoint.x / SPARKLINE_VIEW_WIDTH) * 100}% - 4px)`,
+              top: `calc(${(lastPoint.y / SPARKLINE_VIEW_HEIGHT) * 100}% - 4px)`,
+              backgroundColor: "var(--color-text-accent)",
+            }}
+            aria-hidden
+          />
+        </>
+      ) : null}
+    </div>
+  );
+}
 
 // — Threads —
 

@@ -1,5 +1,4 @@
 import {
-  PROVIDER_DISPLAY_NAMES,
   type AutomationDefinition,
   type ModelSelection,
   type ProjectId,
@@ -12,7 +11,6 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 import ChatMarkdown from "~/components/ChatMarkdown";
 import { ProviderIcon } from "~/components/ProviderIcon";
-import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
 import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
 import { IconButton } from "~/components/ui/icon-button";
 import { Textarea } from "~/components/ui/textarea";
@@ -24,20 +22,8 @@ import {
 import { ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME } from "~/components/chat/environment/environmentPanelStyles";
 import { useThreadPullRequests } from "~/hooks/useThreadPullRequests";
 import { resolveGroupCoordinatorDisplayName } from "~/lib/groupCoordinatorName";
-import {
-  BotIcon,
-  ChatBubbleIcon,
-  ClockIcon,
-  FastModeIcon,
-  GitPullRequestIcon,
-  PageTextIcon,
-  PauseIcon,
-  PlayIcon,
-  SettingsIcon,
-  XIcon,
-  type LucideIcon,
-} from "~/lib/icons";
-import { resolveThreadModelSummary } from "~/lib/threadModelSummary";
+import { BotIcon, FastModeIcon, PauseIcon, PlayIcon, SettingsIcon, XIcon } from "~/lib/icons";
+import { formatThreadModelSummaryLabel, resolveThreadModelSummary } from "~/lib/threadModelSummary";
 import { cn } from "~/lib/utils";
 import { useAutomations } from "~/routes/-automations.shared";
 import { useStore } from "~/store";
@@ -48,16 +34,17 @@ import {
   ENVIRONMENT_ROW_ICON_CLASS_NAME,
   EnvironmentPanelTitle,
   EnvironmentRow,
-  EnvironmentSectionLabel,
 } from "../environment/EnvironmentRow";
 import { GroupSettingsDialog } from "../group/GroupSettingsDialog";
 import type { GroupSettingsSection } from "../group/groupSettingsDialog.logic";
 import {
   GroupAutomationsSection,
+  GroupPanelSectionBar,
   GroupPullRequestsSection,
-  GroupThreadRow,
+  GroupThreadActivitySparkline,
   GroupThreadsSection,
 } from "./GroupOverview";
+import { GROUP_PANEL_SECTIONS, type GroupPanelSectionId } from "./groupPanelSections";
 import { projectAgentOverviewConfigured } from "./projectAgentOverview.logic";
 import {
   buildGroupThreadRows,
@@ -68,7 +55,6 @@ import {
   partitionGroupThreadRows,
   type GroupPullRequestRow,
   type GroupThreadRow as GroupThreadRowData,
-  type GroupThreadSectionId,
 } from "./groupOverview.logic";
 import {
   mergeProjectFocusRows,
@@ -80,27 +66,6 @@ import {
 } from "./projectPanel.logic";
 import { useProjectAgent } from "./useProjectAgent";
 import { useProjectAgentSummaries } from "./useProjectAgentSummaries";
-
-type GroupPanelSectionId = "threads" | "pull-requests" | "automations" | "context";
-
-const GROUP_PANEL_SECTIONS: ReadonlyArray<{
-  readonly id: GroupPanelSectionId;
-  readonly label: string;
-  readonly icon: LucideIcon;
-}> = [
-  { id: "threads", label: "Threads", icon: ChatBubbleIcon },
-  { id: "pull-requests", label: "Pull requests", icon: GitPullRequestIcon },
-  { id: "automations", label: "Automations", icon: ClockIcon },
-  { id: "context", label: "Context", icon: PageTextIcon },
-];
-
-// The bar's Threads section holds the live buckets; idle and resolved rows sit
-// in the body's collapsed "Other threads" area instead.
-const GROUP_PANEL_LIVE_THREAD_SECTIONS: readonly GroupThreadSectionId[] = [
-  "waiting",
-  "working",
-  "review",
-];
 
 const EMPTY_SIDEBAR_THREADS: readonly SidebarThreadSummary[] = [];
 const EMPTY_GROUP_THREAD_ROWS: readonly GroupThreadRowData[] = [];
@@ -268,7 +233,6 @@ export function ProjectPanel({
   });
 
   const [openSection, setOpenSection] = useState<GroupPanelSectionId | null>(null);
-  const [otherThreadsOpen, setOtherThreadsOpen] = useState(false);
   const sectionsRegionId = useId();
 
   const pullRequestsByThreadId = useThreadPullRequests({
@@ -315,14 +279,6 @@ export function ProjectPanel({
   );
   const threadSections = useMemo(() => partitionGroupThreadRows(threadRows), [threadRows]);
   const waitingThreadCount = threadSections.get("waiting")?.length ?? 0;
-  const liveThreadCount = GROUP_PANEL_LIVE_THREAD_SECTIONS.reduce(
-    (count, id) => count + (threadSections.get(id)?.length ?? 0),
-    0,
-  );
-  const otherThreadRows = useMemo(
-    () => [...(threadSections.get("idle") ?? []), ...(threadSections.get("resolved") ?? [])],
-    [threadSections],
-  );
   const pullRequestRows = useMemo(
     () =>
       projectId === null
@@ -348,7 +304,9 @@ export function ProjectPanel({
     [automations.data.definitions, projectId, memberThreadIds],
   );
   const sectionCounts: Record<GroupPanelSectionId, { count: number; waiting: number }> = {
-    threads: { count: liveThreadCount, waiting: waitingThreadCount },
+    // The bar's Threads section lists every group thread (all five state
+    // buckets), so the badge is the full count — not just the live rows.
+    threads: { count: threadRows.length, waiting: waitingThreadCount },
     "pull-requests": { count: pullRequestRows.length, waiting: 0 },
     automations: { count: scopedAutomations.length, waiting: 0 },
     context: { count: contextDocuments.length, waiting: 0 },
@@ -404,43 +362,46 @@ export function ProjectPanel({
       ) : null}
 
       {configured ? (
-        <button
-          type="button"
-          className="mx-1.5 flex items-center gap-1.5 rounded-md px-2 py-1 text-left text-ui text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
-          aria-label={`Open ${coordinatorDisplayName}`}
-          title={coordinatorDisplayName}
-          onClick={openCoordinatorThread}
-        >
-          {coordinatorModelSummary ? (
-            <ProviderIcon
-              provider={coordinatorModelSummary.provider}
-              className="size-3.5 shrink-0"
-            />
-          ) : null}
-          <span className="min-w-0 flex-1 truncate">
-            {coordinatorModelSummary
-              ? `${PROVIDER_DISPLAY_NAMES[coordinatorModelSummary.provider]} · ${coordinatorModelSummary.modelLabel}${coordinatorModelSummary.statusLabel ? ` ${coordinatorModelSummary.statusLabel}` : ""}`
-              : coordinatorDisplayName}
-          </span>
-          {coordinatorModelSummary?.fastMode ? (
-            <FastModeIcon
-              className="size-3 shrink-0 text-[var(--color-text-foreground-secondary)]"
-              aria-hidden
-            />
-          ) : null}
-          {coordinatorStatusDot ? (
-            <span className="flex size-3 shrink-0 items-center justify-center" aria-hidden>
-              <span
-                className={cn(
-                  "block size-1.5 rounded-full",
-                  coordinatorStatusDot.dotClassName,
-                  coordinatorStatusDot.pulse && "animate-pulse",
-                )}
-                title={coordinatorStatusDot.label}
+        <>
+          <GroupThreadActivitySparkline threads={groupThreads} />
+          <button
+            type="button"
+            className="mx-1.5 flex items-center gap-1.5 rounded-md px-2 py-1 text-left text-ui text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
+            aria-label={`Open ${coordinatorDisplayName}`}
+            title={coordinatorDisplayName}
+            onClick={openCoordinatorThread}
+          >
+            {coordinatorModelSummary ? (
+              <ProviderIcon
+                provider={coordinatorModelSummary.provider}
+                className="size-3.5 shrink-0"
               />
+            ) : null}
+            <span className="min-w-0 flex-1 truncate">
+              {coordinatorModelSummary
+                ? formatThreadModelSummaryLabel(coordinatorModelSummary)
+                : coordinatorDisplayName}
             </span>
-          ) : null}
-        </button>
+            {coordinatorModelSummary?.fastMode ? (
+              <FastModeIcon
+                className="size-3 shrink-0 text-[var(--color-text-foreground-secondary)]"
+                aria-hidden
+              />
+            ) : null}
+            {coordinatorStatusDot ? (
+              <span className="flex size-3 shrink-0 items-center justify-center" aria-hidden>
+                <span
+                  className={cn(
+                    "block size-1.5 rounded-full",
+                    coordinatorStatusDot.dotClassName,
+                    coordinatorStatusDot.pulse && "animate-pulse",
+                  )}
+                  title={coordinatorStatusDot.label}
+                />
+              </span>
+            ) : null}
+          </button>
+        </>
       ) : (
         <div className="px-1.5">
           <EnvironmentRow
@@ -470,41 +431,6 @@ export function ProjectPanel({
                 Blocked: {blocker.title} — {blocker.reason}
               </p>
             ))}
-
-            {otherThreadRows.length > 0 ? (
-              <section className="mx-1 flex flex-col">
-                <button
-                  type="button"
-                  className="flex items-center gap-1.5 rounded-md px-1 py-1 text-left"
-                  aria-expanded={otherThreadsOpen}
-                  onClick={() => setOtherThreadsOpen((current) => !current)}
-                >
-                  <DisclosureChevron
-                    open={otherThreadsOpen}
-                    className="size-3 shrink-0 opacity-70"
-                  />
-                  <span className="flex-1">
-                    <EnvironmentSectionLabel>Other threads</EnvironmentSectionLabel>
-                  </span>
-                  <span className="text-ui-xs text-muted-foreground/80">
-                    {otherThreadRows.length}
-                  </span>
-                </button>
-                <DisclosureRegion open={otherThreadsOpen}>
-                  <div className="flex flex-col gap-0.5 pb-1">
-                    {otherThreadRows.map((row) => (
-                      <GroupThreadRow
-                        key={row.thread.id}
-                        row={row}
-                        agent={agent}
-                        onOpenThread={onOpenThread}
-                        onOpenThreadSplit={onOpenThreadSplit}
-                      />
-                    ))}
-                  </div>
-                </DisclosureRegion>
-              </section>
-            ) : null}
           </div>
         ) : (
           <p className="px-2 py-1 text-ui text-muted-foreground">
@@ -525,8 +451,6 @@ export function ProjectPanel({
               {openSection === "threads" ? (
                 <GroupThreadsSection
                   sections={threadSections}
-                  sectionIds={GROUP_PANEL_LIVE_THREAD_SECTIONS}
-                  emptyMessage="No threads in progress or waiting on you."
                   agent={agent}
                   onOpenThread={onOpenThread}
                   onOpenThreadSplit={onOpenThreadSplit}
@@ -559,57 +483,13 @@ export function ProjectPanel({
             </div>
           </DisclosureRegion>
           <div className="shrink-0 border-t border-[color:var(--color-border-light)] px-1 py-1">
-            <div className="flex items-stretch">
-              {GROUP_PANEL_SECTIONS.map((section) => {
-                const counts = sectionCounts[section.id];
-                const isOpen = openSection === section.id;
-                const ariaLabel =
-                  counts.waiting > 0
-                    ? `${section.label}, ${counts.waiting} waiting on you`
-                    : counts.count > 0
-                      ? `${section.label}, ${counts.count}`
-                      : section.label;
-                const toggle = () => {
-                  setOpenSection(isOpen ? null : section.id);
-                };
-                return (
-                  <button
-                    key={section.id}
-                    type="button"
-                    title={section.label}
-                    aria-label={ariaLabel}
-                    aria-expanded={isOpen}
-                    aria-controls={sectionsRegionId}
-                    aria-pressed={isOpen}
-                    className={cn(
-                      "flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-lg px-1 py-1 text-ui-xs transition-colors",
-                      isOpen
-                        ? "bg-foreground/8 text-foreground"
-                        : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
-                    )}
-                    onClick={toggle}
-                  >
-                    <span className="relative flex size-4 items-center justify-center">
-                      <section.icon className="size-4" aria-hidden />
-                      {counts.waiting > 0 ? (
-                        <span
-                          className="absolute -right-1 -top-0.5 block size-1.5 rounded-full bg-amber-500 dark:bg-amber-300/90"
-                          aria-hidden
-                        />
-                      ) : null}
-                    </span>
-                    <span className="flex min-w-0 items-center gap-1">
-                      <span className="truncate">{section.label}</span>
-                      {counts.count > 0 ? (
-                        <span className="shrink-0 tabular-nums text-muted-foreground/70">
-                          {counts.count}
-                        </span>
-                      ) : null}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
+            <GroupPanelSectionBar
+              sections={GROUP_PANEL_SECTIONS}
+              sectionCounts={sectionCounts}
+              openSectionId={openSection}
+              regionId={sectionsRegionId}
+              onToggle={setOpenSection}
+            />
           </div>
         </>
       ) : null}
