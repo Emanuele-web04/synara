@@ -199,9 +199,10 @@ describe("ProjectPanel configured state", () => {
       expect(harness.api.projectAgent.listTasks).toHaveBeenCalled();
       expect(harness.api.projectAgent.listThreadIndex).toHaveBeenCalled();
     });
-    await expect
-      .element(page.getByRole("button", { name: /alpha Coordinator/ }))
-      .toBeInTheDocument();
+    await expect.element(page.getByText("Groups", { exact: true })).toBeInTheDocument();
+    // The coordinator row is a single model line: the group name (default
+    // coordinator name resolves to it) opens the coordinator thread.
+    await expect.element(page.getByRole("button", { name: "Open alpha" })).toBeInTheDocument();
     // The settings dialog closed on save; the edit-mode affordance is up.
     await expect.element(page.getByText("Set up your group")).not.toBeInTheDocument();
     await expect.element(page.getByRole("button", { name: "Group settings" })).toBeInTheDocument();

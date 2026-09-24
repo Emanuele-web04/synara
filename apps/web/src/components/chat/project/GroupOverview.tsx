@@ -1,57 +1,44 @@
 // FILE: GroupOverview.tsx
-// Purpose: The Group panel's Overview body — Threads grouped by live state, Pull
-//          requests opened by group threads, and group-scoped Automations.
+// Purpose: Section bodies for the Group panel's bottom section bar — Threads
+//          grouped by live state, Pull requests opened by group threads, and
+//          group-scoped Automations. The panel hoists the derivation (thread
+//          rows, PR rows, automation scoping) so the bar's badges and the
+//          expanded body read the same data.
 // Layer: Group panel UI
 // Why: Claude Code's Projects Overview lists every thread by live state; this is
 //      Synara's version, derived from the same helpers the sidebar uses.
 
-import type { AutomationDefinition, ProjectId, ProjectTask, ThreadId } from "@synara/contracts";
-import { type MouseEvent as ReactMouseEvent, useMemo, useState } from "react";
+import type { AutomationDefinition, ThreadId } from "@synara/contracts";
+import { type MouseEvent as ReactMouseEvent, useState } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
 import { IconButton } from "~/components/ui/icon-button";
 import { Switch } from "~/components/ui/switch";
 import { toastManager } from "~/components/ui/toast";
-import { SettingsSegmentedControl } from "~/components/settings/SettingControls";
 import { PanelStateMessage } from "~/components/chat/PanelStateMessage";
 import { PrStateChip } from "~/components/pullRequest/PrStateChip";
 import { resolvePrStatePresentation } from "~/components/pullRequest/pullRequestStatePresentation";
 import { ProviderIcon } from "~/components/ProviderIcon";
 import { EnvironmentSectionLabel } from "~/components/chat/environment/EnvironmentRow";
-import { useThreadPullRequests } from "~/hooks/useThreadPullRequests";
 import { CheckIcon, Columns2Icon, EllipsisIcon, GitHubIcon, RotateCcwIcon } from "~/lib/icons";
 import { formatSchedule } from "~/lib/automationForm";
 import { formatRelativeTime } from "~/lib/relativeTime";
 import { archiveThreadFromClient, unarchiveThreadFromClient } from "~/lib/threadArchive";
 import { cn } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
-import { useAutomations } from "~/routes/-automations.shared";
+import type { useAutomations } from "~/routes/-automations.shared";
 
-import type { SidebarThreadSummary } from "~/types";
 import {
   GROUP_THREAD_SECTIONS,
-  buildGroupThreadRows,
-  collectGroupAutomations,
-  collectGroupPullRequestRows,
-  partitionGroupThreadRows,
-  type GroupThreadRow,
+  type GroupPullRequestRow,
+  type GroupThreadRow as GroupThreadRowData,
   type GroupThreadSectionId,
 } from "./groupOverview.logic";
 import type { useProjectAgent } from "./useProjectAgent";
 
 type ProjectAgent = ReturnType<typeof useProjectAgent>;
-
-type GroupOverviewTab = "threads" | "pull-requests" | "automations";
-
-const GROUP_OVERVIEW_TAB_OPTIONS: ReadonlyArray<{
-  readonly value: GroupOverviewTab;
-  readonly label: string;
-}> = [
-  { value: "threads", label: "Threads" },
-  { value: "pull-requests", label: "Pull requests" },
-  { value: "automations", label: "Automations" },
-];
+type Automations = ReturnType<typeof useAutomations>;
 
 // The native context menu renders icons from SVG markup, so the same glyphs used
 // in React rows are rasterized once here.
@@ -59,131 +46,24 @@ const RESOLVE_MENU_ICON = renderToStaticMarkup(<CheckIcon />);
 const SPLIT_VIEW_MENU_ICON = renderToStaticMarkup(<Columns2Icon />);
 const REOPEN_MENU_ICON = renderToStaticMarkup(<RotateCcwIcon />);
 
-const EMPTY_THREADS: readonly SidebarThreadSummary[] = [];
-
 // Row titles size off the same token as sidebar thread rows and the Focus card,
 // never the panel's ambient font size.
 const GROUP_OVERVIEW_ROW_TITLE_CLASS_NAME = "min-w-0 truncate text-ui font-medium text-foreground";
 
-export function GroupOverview({
-  groupProjectId,
-  groupName,
-  memberThreadIds,
-  groupThreads,
-  projectNameById,
-  projectCwdById,
-  agent,
-  onOpenThread,
-  onOpenThreadSplit,
-  onOpenAutomation,
-}: {
-  readonly groupProjectId: ProjectId;
-  readonly groupName: string;
-  readonly memberThreadIds: ReadonlySet<ThreadId>;
-  readonly groupThreads: readonly SidebarThreadSummary[];
-  readonly projectNameById: ReadonlyMap<ProjectId, string>;
-  readonly projectCwdById: ReadonlyMap<ProjectId, string>;
-  readonly agent: ProjectAgent;
-  readonly onOpenThread: (threadId: ThreadId) => void;
-  readonly onOpenThreadSplit: (threadId: ThreadId) => void;
-  readonly onOpenAutomation: (automationId: string) => void;
-}) {
-  const [tab, setTab] = useState<GroupOverviewTab>("threads");
-  const wantsPullRequests = tab === "threads" || tab === "pull-requests";
-  const pullRequestsByThreadId = useThreadPullRequests({
-    // An empty thread list registers zero queries — the Automations tab stays cheap.
-    threads: wantsPullRequests ? groupThreads : EMPTY_THREADS,
-    projectCwdById,
-  });
-
-  const taskByThreadId = useMemo(() => {
-    const map = new Map<ThreadId, ProjectTask>();
-    for (const task of agent.tasks) {
-      if (task.assignedThreadId) map.set(task.assignedThreadId, task);
-    }
-    return map;
-  }, [agent.tasks]);
-  const indexArchivedThreadIds = useMemo(
-    () => new Set(agent.threads.filter((entry) => entry.archived).map((entry) => entry.threadId)),
-    [agent.threads],
-  );
-
-  const threadRows = useMemo(
-    () =>
-      buildGroupThreadRows({
-        threads: groupThreads,
-        taskByThreadId,
-        indexArchivedThreadIds,
-        pullRequests: pullRequestsByThreadId,
-        projectNameById,
-        groupProjectId,
-        groupProjectName: groupName,
-      }),
-    [
-      groupThreads,
-      taskByThreadId,
-      indexArchivedThreadIds,
-      pullRequestsByThreadId,
-      projectNameById,
-      groupProjectId,
-      groupName,
-    ],
-  );
-  const threadSections = useMemo(() => partitionGroupThreadRows(threadRows), [threadRows]);
-
-  const pullRequestRows = useMemo(
-    () =>
-      collectGroupPullRequestRows({
-        threads: groupThreads,
-        pullRequests: pullRequestsByThreadId,
-        projectNameById,
-        groupProjectId,
-        groupProjectName: groupName,
-      }),
-    [groupThreads, pullRequestsByThreadId, projectNameById, groupProjectId, groupName],
-  );
-
-  return (
-    <div className="flex flex-col px-1 pb-1">
-      <div className="px-1 py-1">
-        <SettingsSegmentedControl
-          value={tab}
-          onValueChange={setTab}
-          options={GROUP_OVERVIEW_TAB_OPTIONS}
-          ariaLabel="Overview sections"
-        />
-      </div>
-      {tab === "threads" ? (
-        <GroupThreadsTab
-          sections={threadSections}
-          agent={agent}
-          onOpenThread={onOpenThread}
-          onOpenThreadSplit={onOpenThreadSplit}
-        />
-      ) : null}
-      {tab === "pull-requests" ? (
-        <GroupPullRequestsTab rows={pullRequestRows} onOpenThread={onOpenThread} />
-      ) : null}
-      {tab === "automations" ? (
-        <GroupAutomationsTab
-          groupProjectId={groupProjectId}
-          memberThreadIds={memberThreadIds}
-          onOpenAutomation={onOpenAutomation}
-        />
-      ) : null}
-    </div>
-  );
-}
-
 // — Threads —
 
-function GroupThreadsTab({
+export function GroupThreadsSection({
   sections,
+  sectionIds,
+  emptyMessage,
   agent,
   onOpenThread,
   onOpenThreadSplit,
 }: {
-  readonly sections: ReadonlyMap<GroupThreadSectionId, readonly GroupThreadRow[]>;
+  readonly sections: ReadonlyMap<GroupThreadSectionId, readonly GroupThreadRowData[]>;
+  /** Limit the rendered state buckets; defaults to all five. */
+  readonly sectionIds?: readonly GroupThreadSectionId[] | undefined;
+  readonly emptyMessage?: string | undefined;
   readonly agent: ProjectAgent;
   readonly onOpenThread: (threadId: ThreadId) => void;
   readonly onOpenThreadSplit: (threadId: ThreadId) => void;
@@ -193,20 +73,26 @@ function GroupThreadsTab({
   const [toggledSections, setToggledSections] = useState<ReadonlySet<GroupThreadSectionId>>(
     () => new Set(),
   );
-  const totalRows = GROUP_THREAD_SECTIONS.reduce(
+  const visibleSections = sectionIds
+    ? GROUP_THREAD_SECTIONS.filter((section) => sectionIds.includes(section.id))
+    : GROUP_THREAD_SECTIONS;
+  const totalRows = visibleSections.reduce(
     (count, section) => count + (sections.get(section.id)?.length ?? 0),
     0,
   );
   if (totalRows === 0) {
     return (
       <PanelStateMessage density="compact">
-        <p>No threads yet. Ask the coordinator for work and it will start threads here.</p>
+        <p>
+          {emptyMessage ??
+            "No threads yet. Ask the coordinator for work and it will start threads here."}
+        </p>
       </PanelStateMessage>
     );
   }
   return (
     <div className="flex flex-col gap-1">
-      {GROUP_THREAD_SECTIONS.map((section) => {
+      {visibleSections.map((section) => {
         const rows = sections.get(section.id) ?? [];
         if (rows.length === 0) return null;
         const collapsed = section.defaultOpen === toggledSections.has(section.id);
@@ -252,13 +138,13 @@ function GroupThreadsTab({
   );
 }
 
-function GroupThreadRow({
+export function GroupThreadRow({
   row,
   agent,
   onOpenThread,
   onOpenThreadSplit,
 }: {
-  readonly row: GroupThreadRow;
+  readonly row: GroupThreadRowData;
   readonly agent: ProjectAgent;
   readonly onOpenThread: (threadId: ThreadId) => void;
   readonly onOpenThreadSplit: (threadId: ThreadId) => void;
@@ -382,15 +268,11 @@ function GroupThreadRow({
 
 // — Pull requests —
 
-function GroupPullRequestsTab({
+export function GroupPullRequestsSection({
   rows,
   onOpenThread,
 }: {
-  readonly rows: ReadonlyArray<{
-    readonly thread: SidebarThreadSummary;
-    readonly pullRequest: NonNullable<GroupThreadRow["pullRequest"]>;
-    readonly projectName: string | null;
-  }>;
+  readonly rows: readonly GroupPullRequestRow[];
   readonly onOpenThread: (threadId: ThreadId) => void;
 }) {
   if (rows.length === 0) {
@@ -443,34 +325,23 @@ function GroupPullRequestsTab({
 
 // — Automations —
 
-function GroupAutomationsTab({
-  groupProjectId,
-  memberThreadIds,
+export function GroupAutomationsSection({
+  definitions,
+  automations,
   onOpenAutomation,
 }: {
-  readonly groupProjectId: ProjectId;
-  readonly memberThreadIds: ReadonlySet<ThreadId>;
+  readonly definitions: readonly AutomationDefinition[];
+  readonly automations: Automations;
   readonly onOpenAutomation: (automationId: string) => void;
 }) {
-  const automations = useAutomations();
-  const scoped = useMemo(
-    () =>
-      collectGroupAutomations({
-        definitions: automations.data.definitions,
-        groupProjectId,
-        memberThreadIds,
-      }),
-    [automations.data.definitions, groupProjectId, memberThreadIds],
-  );
-
-  if (automations.isLoading && scoped.length === 0) {
+  if (automations.isLoading && definitions.length === 0) {
     return (
       <PanelStateMessage density="compact">
         <p>Loading automations…</p>
       </PanelStateMessage>
     );
   }
-  if (scoped.length === 0) {
+  if (definitions.length === 0) {
     return (
       <PanelStateMessage density="compact">
         <p>No automations yet. Ask the coordinator to check something on a schedule.</p>
@@ -479,7 +350,7 @@ function GroupAutomationsTab({
   }
   return (
     <div className="flex flex-col gap-0.5">
-      {scoped.map((definition) => (
+      {definitions.map((definition) => (
         <GroupAutomationRow
           key={definition.id}
           definition={definition}

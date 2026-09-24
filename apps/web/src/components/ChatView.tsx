@@ -145,6 +145,7 @@ import {
   deriveLatestContextWindowState,
 } from "../lib/contextWindow";
 import { reconcileDeletedThreadFromClient } from "../lib/deletedThreadClientReconciliation";
+import { resolveGroupCoordinatorDisplayName } from "../lib/groupCoordinatorName";
 import {
   normalizeRuntimeModeForProvider,
   providerModelSupportsAutoRuntimeMode,
@@ -4936,7 +4937,14 @@ export default function ChatView({
   }
 
   const activeThreadDisplayTitle = resolveActiveThreadTitle({
-    title: activeThread.title,
+    title: isCoordinatorConversation
+      ? resolveGroupCoordinatorDisplayName({
+          coordinatorName: activeGroupSummary?.coordinatorName ?? null,
+          threadTitle: activeThread.title,
+          groupName: activeProjectDisplayName ?? activeProject?.name ?? activeThread.title,
+          remoteName: activeProject?.remoteName ?? null,
+        })
+      : activeThread.title,
     subagentTitle: activeThread.parentThreadId
       ? resolveSubagentPresentationForThread({
           thread: activeThread,

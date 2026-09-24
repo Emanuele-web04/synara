@@ -343,6 +343,8 @@ describe("buildGroupConfigureInput", () => {
     });
     expect("coordinatorName" in clean).toBe(false);
 
+    // The stored "alpha Coordinator" is the generated default for group "alpha",
+    // so a rename carries the new group name verbatim (no suffix is appended).
     const renamed = buildGroupConfigureInput({
       projectId,
       requestId: "req",
@@ -350,7 +352,7 @@ describe("buildGroupConfigureInput", () => {
       draft: makeDraft({ name: "beta" }),
       baseline: makeBaseline(),
     });
-    expect(renamed.coordinatorName).toBe("beta Coordinator");
+    expect(renamed.coordinatorName).toBe("beta");
 
     const onboarding = buildGroupConfigureInput({
       projectId,
@@ -359,7 +361,23 @@ describe("buildGroupConfigureInput", () => {
       draft: makeDraft({ name: "gamma" }),
       baseline: makeBaseline({}, null),
     });
-    expect(onboarding.coordinatorName).toBe("gamma Coordinator");
+    expect(onboarding.coordinatorName).toBe("gamma");
+  });
+
+  it("keeps a user-chosen coordinator name untouched by a group rename", () => {
+    const customConfig: ProjectAgentConfig = {
+      ...baseConfig,
+      coordinatorName: "Team lead",
+    };
+    const renamed = buildGroupConfigureInput({
+      projectId,
+      requestId: "req",
+      mode: "edit",
+      draft: makeDraft({ name: "beta" }),
+      baseline: makeBaseline({}, customConfig),
+      projectRemoteName: "alpha",
+    });
+    expect("coordinatorName" in renamed).toBe(false);
   });
 
   it("sends null for fields cleared relative to the baseline, and omits ones that were already empty", () => {
@@ -427,7 +445,7 @@ describe("saveGroupSettings", () => {
       },
     });
     expect(result.ok).toBe(true);
-    expect(calls).toEqual(["configure:beta Coordinator", "rename:beta"]);
+    expect(calls).toEqual(["configure:beta", "rename:beta"]);
   });
 
   it("does not rename when configure fails", async () => {
