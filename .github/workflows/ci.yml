@@ -342,6 +342,12 @@ jobs:
           src/filesystemPlatform.test.ts
           src/platformEnvironment.test.ts
 
+      - name: Test Windows project import paths
+        run: >-
+          bun run --cwd apps/server test
+          src/orchestration/projectImportPaths.test.ts
+          src/orchestration/projectImportCatalog.test.ts
+
       - name: Test Windows lifecycle and process trees
         run: >-
           bun run --cwd apps/server test

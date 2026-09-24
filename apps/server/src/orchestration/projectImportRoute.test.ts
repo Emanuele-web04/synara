@@ -290,6 +290,14 @@ describe("project import routes", () => {
     expect(test.importExternalThread.mock.calls[1]?.[0].modelSelection.provider).toBe(
       "claudeAgent",
     );
+    expect(test.commands.filter((command) => command.type === "thread.create")).toEqual([
+      expect.objectContaining({ runtimeMode: "approval-required" }),
+      expect.objectContaining({ runtimeMode: "approval-required" }),
+    ]);
+    expect(test.importExternalThread.mock.calls.map(([input]) => input.runtimeMode)).toEqual([
+      "approval-required",
+      "approval-required",
+    ]);
     expect(test.readHistory.mock.calls.map(([value]) => value.nativeId)).toEqual([
       "codex-original-copy",
       "claudeAgent-original-copy",
