@@ -9,6 +9,7 @@ import {
   type DesktopBridge,
   type ThreadId,
 } from "@synara/contracts";
+import { defaultAppSnapShortcut } from "@synara/shared/appSnapShortcut";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef } from "react";
 
@@ -287,7 +288,7 @@ export function AppSnapCoordinator() {
     const shortcut: DesktopAppSnapShortcut =
       shortcutModifier && shortcutKey
         ? { kind: "key-chord", modifier: shortcutModifier, key: shortcutKey }
-        : { kind: "both-option-keys" };
+        : defaultAppSnapShortcut();
     // The opt-in preference lives in the renderer settings store. This root
     // coordinator is mounted for the full UI lifetime and owns the native listener.
     // AppSnap is macOS-only, so unsupported desktop platforms must not attempt

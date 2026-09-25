@@ -10,11 +10,11 @@ import {
   type ResolvedKeybindingsConfig,
 } from "@synara/contracts";
 import {
-  DEFAULT_APP_SNAP_SHORTCUT,
   appSnapModifierFromEventCode,
   appSnapShortcutLabels,
   appSnapShortcutModifierLabel,
   appSnapShortcutSystemConflict,
+  defaultAppSnapShortcut,
   isAppSnapShortcutKey,
   sameAppSnapShortcut,
 } from "@synara/shared/appSnapShortcut";
@@ -22,7 +22,7 @@ import { useRef, useState, type KeyboardEvent } from "react";
 
 import { appSnapShortcutConflictCommand } from "~/appSnapShortcut";
 import { shortcutSheetCommandLabel } from "~/shortcutsSheet";
-import { cn } from "~/lib/utils";
+import { cn, isMacNavigatorPlatform } from "~/lib/utils";
 import { Button } from "~/components/ui/button";
 import { Kbd, KbdGroup } from "~/components/ui/kbd";
 import { toastManager } from "~/components/ui/toast";
@@ -74,7 +74,10 @@ export function AppSnapShortcutControl({
   // Source of truth for held modifiers: consecutive keydowns can arrive before
   // React re-renders, so the render-time capture state may lag one event behind.
   const heldCodesRef = useRef<string[]>([]);
-  const labels = appSnapShortcutLabels(candidate);
+  const isMac = isMacNavigatorPlatform();
+  const labelStyle = isMac ? ("macos" as const) : ("windows" as const);
+  const platformDefault = defaultAppSnapShortcut();
+  const labels = appSnapShortcutLabels(candidate, labelStyle);
   const changed = !sameAppSnapShortcut(candidate, shortcut);
   const canSave = changed && checkState.availability?.available === true;
   const capturedModifiers = heldModifiers(capture.heldModifierCodes);
@@ -91,14 +94,14 @@ export function AppSnapShortcutControl({
       reportUnavailable(`Synara already uses this for “${commandLabel}”.`);
       return;
     }
-    const systemConflict = appSnapShortcutSystemConflict(nextCandidate);
+    const systemConflict = appSnapShortcutSystemConflict(nextCandidate, labelStyle);
     if (systemConflict) {
       reportUnavailable(systemConflict);
       return;
     }
     const bridge = window.desktopBridge?.appSnap;
     if (!bridge) {
-      reportUnavailable("Requires the Synara desktop app on macOS.");
+      reportUnavailable("Requires the Synara desktop app.");
       return;
     }
     setCheckState({ status: "checking", availability: null });
@@ -150,7 +153,9 @@ export function AppSnapShortcutControl({
     if (modifiers.length === 0) {
       setCapture((previous) => ({
         ...previous,
-        hint: "Hold ⌘, ⌃, ⌥ or ⇧ first, then press the other key.",
+        hint: isMac
+          ? "Hold ⌘, ⌃, ⌥ or ⇧ first, then press the other key."
+          : "Hold Ctrl, Alt, Shift, or Win first, then press the other key.",
       }));
       return;
     }
@@ -208,7 +213,9 @@ export function AppSnapShortcutControl({
         ? "Now press the other key…"
         : "Hold a modifier, then press one other key. Esc cancels."))
     : checkState.status === "checking"
-      ? "Checking macOS and other apps…"
+      ? isMac
+        ? "Checking macOS and other apps…"
+        : "Checking Windows and other apps…"
       : checkState.availability
         ? checkState.availability.available
           ? "Available — save to apply."
@@ -241,7 +248,7 @@ export function AppSnapShortcutControl({
             capturedModifiers.length > 0 ? (
               <KbdGroup>
                 {capturedModifiers.map((modifier) => (
-                  <Kbd key={modifier}>{appSnapShortcutModifierLabel(modifier)}</Kbd>
+                  <Kbd key={modifier}>{appSnapShortcutModifierLabel(modifier, labelStyle)}</Kbd>
                 ))}
                 <span className="text-ui leading-snug text-muted-foreground">+</span>
                 <span className="animate-pulse px-0.5 text-ui leading-snug text-muted-foreground">
@@ -265,12 +272,8 @@ export function AppSnapShortcutControl({
           <Button size="xs" disabled={!canSave} onClick={() => void saveShortcut(candidate)}>
             Save
           </Button>
-        ) : candidate.kind !== "both-option-keys" ? (
-          <Button
-            size="xs"
-            variant="ghost"
-            onClick={() => void saveShortcut(DEFAULT_APP_SNAP_SHORTCUT)}
-          >
+        ) : !sameAppSnapShortcut(candidate, platformDefault) ? (
+          <Button size="xs" variant="ghost" onClick={() => void saveShortcut(platformDefault)}>
             Reset
           </Button>
         ) : null}

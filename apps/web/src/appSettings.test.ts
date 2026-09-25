@@ -5,7 +5,8 @@
 
 import { Schema } from "effect";
 import { DEFAULT_MODEL_BY_PROVIDER, DEFAULT_SERVER_SETTINGS_VIEW } from "@synara/contracts";
-import { describe, expect, it } from "vitest";
+import { defaultAppSnapShortcut } from "@synara/shared/appSnapShortcut";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   AppSettingsSchema,
@@ -1144,7 +1145,7 @@ describe("AppSettingsSchema", () => {
       desktopAppIcon: "default",
       useCustomTitleBar: true,
       enableAppSnap: false,
-      appSnapShortcut: { kind: "both-option-keys" },
+      appSnapShortcut: defaultAppSnapShortcut(),
       appSnapPlaySound: true,
       enableAssistantStreaming: true,
       followUpBehavior: DEFAULT_FOLLOW_UP_BEHAVIOR,
@@ -1187,5 +1188,30 @@ describe("AppSettingsSchema", () => {
     expect(
       normalizeStoredAppSettings(decode(JSON.stringify({ enableAppshots: true }))),
     ).not.toHaveProperty("enableAppshots");
+  });
+
+  it("replaces the macOS-only AppSnap default with the Windows chord on Windows", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+    const stored = decode(JSON.stringify({ appSnapShortcut: { kind: "both-option-keys" } }));
+
+    vi.stubGlobal("navigator", { platform: "Win32" });
+    try {
+      expect(normalizeStoredAppSettings(stored).appSnapShortcut).toEqual({
+        kind: "key-chord",
+        modifier: "control",
+        key: "KeyY",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    vi.stubGlobal("navigator", { platform: "MacIntel" });
+    try {
+      expect(normalizeStoredAppSettings(stored).appSnapShortcut).toEqual({
+        kind: "both-option-keys",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

@@ -17,7 +17,7 @@ import { createLatestAppSnapRequestGuard } from "~/appSnap.logic";
 import { useRefreshOnWindowReturn } from "~/hooks/useRefreshOnWindowReturn";
 import { playAppSnapCaptureSound } from "~/lib/appSnapSound";
 import { CentralIcon } from "~/lib/central-icons";
-import { cn } from "~/lib/utils";
+import { cn, isMacNavigatorPlatform } from "~/lib/utils";
 import { isElectron } from "~/env";
 import {
   buildNotificationSettingsSupportText,
@@ -42,11 +42,14 @@ import { toastManager } from "~/components/ui/toast";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 
 function appSnapStatusText(state: DesktopAppSnapState | null): string {
+  const labelStyle = isMacNavigatorPlatform() ? ("macos" as const) : ("windows" as const);
   if (!state) return "Available in the Synara desktop app";
-  if (!state.supported) return state.message ?? "Available on macOS only";
+  if (!state.supported) return state.message ?? "Available on macOS and Windows only";
   if (state.status === "ready") {
     const shortcut = state.shortcut;
-    const label = shortcut ? appSnapShortcutLabels(shortcut).join(" + ") : "the shortcut";
+    const label = shortcut
+      ? appSnapShortcutLabels(shortcut, labelStyle).join(" + ")
+      : "the shortcut";
     return `Listening — press ${label} to snap`;
   }
   if (state.status === "disabled") return "Off";
@@ -258,7 +261,7 @@ export function AppSnapSettingsPanel({
       toastManager.add({
         type: "warning",
         title: "AppSnap unavailable",
-        description: "AppSnap requires the Synara desktop app on macOS.",
+        description: "AppSnap requires the Synara desktop app.",
       });
       return;
     }
@@ -321,8 +324,9 @@ export function AppSnapSettingsPanel({
           {!supported ? (
             <p className={cn(SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME, "pt-0.5")}>
               {appSnapState
-                ? (appSnapState.message ?? "AppSnap is available only in the macOS desktop app.")
-                : "AppSnap requires the Synara desktop app on macOS."}
+                ? (appSnapState.message ??
+                  "AppSnap is available only in the macOS and Windows desktop apps.")
+                : "AppSnap requires the Synara desktop app."}
             </p>
           ) : null}
         </div>
@@ -353,7 +357,7 @@ export function AppSnapSettingsPanel({
 
         <SettingsRow
           title="Shortcut"
-          description="Choose exactly two keys: one modifier and one other key. Synara checks its own bindings and asks macOS whether another app already owns the shortcut before saving it."
+          description="Choose exactly two keys: one modifier and one other key. Synara checks its own bindings and asks your operating system whether another app already owns the shortcut before saving it."
           control={
             <AppSnapShortcutControl
               key={
