@@ -1,0 +1,147 @@
+name: Beta cadence
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: synara-beta-cadence
+  cancel-in-progress: false
+
+jobs:
+  cut:
+    name: Cut next beta
+    # Opt-in only: set the SYNARA_BETA_CADENCE repository variable to 1. The tag
+    # push must come from the release app token because GITHUB_TOKEN pushes do
+    # not trigger the release workflow.
+    if: ${{ vars.SYNARA_BETA_CADENCE == '1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - id: app_token
+        name: Mint release app token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ steps.app_token.outputs.token }}
+          persist-credentials: true
+
+      - id: app_bot
+        name: Resolve GitHub App bot identity
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          APP_SLUG: ${{ steps.app_token.outputs.app-slug }}
+        run: |
+          user_id="$(gh api "/users/${APP_SLUG}[bot]" --jq .id)"
+          echo "name=${APP_SLUG}[bot]" >> "$GITHUB_OUTPUT"
+          echo "email=${user_id}+${APP_SLUG}[bot]@users.noreply.github.com" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
+      - id: next
+        name: Resolve next beta version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          HIGHEST="$(git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)"
+          if [[ -z "$HIGHEST" ]]; then
+            echo "No stable tag exists yet; beta naming needs a stable base."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          STABLE="${HIGHEST#v}"
+          BASE="${STABLE%.*}.$(( ${STABLE##*.} + 1 ))"
+
+          # A tag push while a release still runs only queues it; piling up
+          # beta tags would serialize hours of builds behind the first one.
+          busy=0
+          for status in in_progress queued; do
+            count="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/release.yml/runs?status=${status}&per_page=1" --jq '.total_count')"
+            busy=$(( busy + count ))
+          done
+          if [[ "$busy" -gt 0 ]]; then
+            echo "A release run is in progress or queued; skipping this cadence tick."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          LATEST_BETA="$(git tag --list "v${BASE}-beta.*" | sort -V | tail -1)"
+          if [[ -n "$LATEST_BETA" ]]; then
+            # The beta bump commit's parent was the main tip it was cut from
+            # (this checkout's HEAD). When main has not moved since, there is
+            # nothing new to ship.
+            if git merge-base --is-ancestor HEAD "$LATEST_BETA"; then
+              echo "No new commits on main since $LATEST_BETA; skipping."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            NEXT_N=$(( ${LATEST_BETA##*-beta.} + 1 ))
+          else
+            NEXT_N=1
+          fi
+
+          VERSION="${BASE}-beta.${NEXT_N}"
+          TAG="v${VERSION}"
+          if git ls-remote --tags origin "refs/tags/${TAG}" | grep -q .; then
+            echo "Tag $TAG already exists on the remote; skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - id: update_versions
+        name: Update version strings
+        if: steps.next.outputs.skip == 'false'
+        env:
+          VERSION: ${{ steps.next.outputs.version }}
+        run: node scripts/update-release-package-versions.ts "$VERSION"
+
+      - name: Format package.json files
+        if: steps.next.outputs.skip == 'false'
+        run: bunx oxfmt apps/server/package.json apps/desktop/package.json apps/web/package.json packages/contracts/package.json
+
+      - name: Refresh lockfile
+        if: steps.next.outputs.skip == 'false'
+        run: bun install --lockfile-only --ignore-scripts
+
+      - name: Commit and tag beta
+        if: steps.next.outputs.skip == 'false'
+        shell: bash
+        env:
+          TAG: ${{ steps.next.outputs.tag }}
+          GIT_USER_NAME: ${{ steps.app_bot.outputs.name }}
+          GIT_USER_EMAIL: ${{ steps.app_bot.outputs.email }}
+        run: |
+          git config user.name "$GIT_USER_NAME"
+          git config user.email "$GIT_USER_EMAIL"
+
+          git add apps/server/package.json apps/desktop/package.json apps/web/package.json packages/contracts/package.json bun.lock
+          git commit -m "chore(release): prepare $TAG"
+          git tag "$TAG"
+          git push origin "refs/tags/$TAG"

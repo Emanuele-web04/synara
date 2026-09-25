@@ -122,7 +122,14 @@ beta channel and the beta desktop flavor; every other suffix keeps today's behav
    on top of the stable commit as `vX.Y.(Z+1)-beta.1` (skipped when any beta
    for that base already exists, or when the release just published is not the
    highest stable tag — a re-release of an old line does not cut a beta).
-   Later betas on the same base stay manual.
+   Later betas on the same base are cut by the cadence workflow or by hand:
+   with the repository variable `SYNARA_BETA_CADENCE=1`, `beta-cadence.yml`
+   continues the series every six hours, tagging `main` as the next
+   `vX.Y.(Z+1)-beta.N`. A tick is skipped when the latest beta for that base
+   already contains every `main` commit, or when a release run is in progress
+   or queued. The tag push uses the release app token because `GITHUB_TOKEN`
+   pushes do not trigger the release workflow. The same cutter runs on demand
+   via `workflow_dispatch`.
 
 ### Signing
 
