@@ -262,6 +262,7 @@ import {
   getDesktopUpdateDownloadPercent,
   getDesktopUpdateErrorSignature,
   isDesktopUpdateButtonDisabled,
+  isDesktopUpdateInstallInFlight,
   resolveDesktopUpdateButtonAction,
   shouldRecommendManualDesktopDownload,
   shouldShowArm64IntelBuildWarning,
@@ -5562,6 +5563,17 @@ export default function Sidebar() {
     });
   }, [desktopUpdateState, surfaceDesktopUpdateError]);
 
+  // Install failures deliberately preserve "downloaded" so the same artifact
+  // can be retried. Watch the error as well as the status to release the latch.
+  useEffect(() => {
+    if (
+      desktopUpdateState?.status !== "downloaded" ||
+      desktopUpdateState.errorContext === "install"
+    ) {
+      setInstallingDesktopUpdate(false);
+    }
+  }, [desktopUpdateState?.status, desktopUpdateState?.errorContext]);
+
   const showDesktopUpdateButton = isElectron && shouldShowDesktopUpdateButton(desktopUpdateState);
   const isBetaDesktopFlavor = desktopUpdateState?.flavor === "beta";
 
@@ -5854,7 +5866,9 @@ export default function Sidebar() {
         .installUpdate()
         .then((result) => {
           setDesktopUpdateState(result.state);
-          setInstallingDesktopUpdate(false);
+          if (!isDesktopUpdateInstallInFlight(result)) {
+            setInstallingDesktopUpdate(false);
+          }
           const alreadyCurrentNotice = getDesktopUpdateAlreadyCurrentNotice(result);
           if (alreadyCurrentNotice) {
             toastManager.add({

@@ -2,13 +2,35 @@
 
 ## Unreleased
 
+## [0.9.2] — 2026-09-25
+
+**Synara Beta arrives as a separate app, with Oh My Pi available in Beta.** The stable 0.9.2 release includes the path to try Beta and a set of reliability fixes; OMP remains gated off in Stable.
+
 ### Added
 
-- Added Oh My Pi (OMP) as an ACP provider (Synara Beta only), with model discovery via `omp models --json`, per-model reasoning efforts (including `max`), eager catalog pre-warming at startup, and OMP thread/session normalization.
+- Synara Beta installs alongside Stable with its own data directory and update feed. On macOS, Settings → General can install Beta, copy Stable data into it after confirmation, or open an existing Beta installation. Beta sends crash reports and anonymous usage statistics; Stable does not.
+- Oh My Pi (OMP) is an ACP provider in Synara Beta only. It discovers models with `omp models --json` and presents the thinking levels reported for each model. Install and authenticate OMP separately; runtime and account configuration determine availability.
+- Computer asks for approval before bringing a Mac app into the foreground.
+
+### Changed
+
+- Provider model catalogs persist across server restarts. Completed managed worktrees receive more complete cleanup.
+- Release packaging can prepare verified native artifacts in parallel with release gates; this does not change the runtime performance claim.
 
 ### Fixed
 
-- Fixed OMP threads being mislabeled as Codex when the session-provider normalizer fell through to the Codex default instead of preserving the OMP provider.
+- OMP sessions retain their provider identity instead of appearing as Codex.
+- Project import handles unavailable Windows paths and blank provider path settings.
+- Restarted tasks settle orphaned turns before background work resumes; Windows editor detection no longer blocks the event loop.
+- Fresh installs recognize already installed agents, transcript following resets when switching tasks, and the desktop update button stays latched during quit and install.
+- Approval cards redact credential parameters, Claude session grants stay scoped to command and file prompts, and stdio/frame transports handle failures more reliably.
+
+### Verification
+
+- Local `bun run fmt:check`, `bun run lint`, `bun run typecheck`, `bun run release:smoke`, `bun run build`, `bun run test`, `bun run windows-runtime:check`, and `bun run migrations:check` passed with Node 24.21.0 and Bun 1.4.2. The full suite passed 12,972 tests with 36 skipped; lint reported warnings but no errors.
+- The public website's documentation tests, external-link check, lint, and build passed locally. Packaged Windows startup, provenance, macOS signing/notarization, and public publication remain release-workflow gates.
+
+[Complete commit comparison](https://github.com/Emanuele-web04/synara/compare/v0.9.1...v0.9.2).
 
 ## [0.9.1] — 2026-09-22
 

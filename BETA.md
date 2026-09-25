@@ -277,7 +277,8 @@ To put a feature behind the list:
 
 Promote a feature to Stable by deleting its entry; every gate resolves itself.
 
-The list is currently empty — nothing is Beta-only right now.
+The list currently contains `omp` (Oh My Pi). It is available in Beta and gated
+off in Stable.
 
 ## Diagnostics
 

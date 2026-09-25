@@ -22,6 +22,46 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.9.2",
+    date: "Sep 25",
+    features: [
+      {
+        id: "synara-beta",
+        title: "Meet Synara Beta",
+        description:
+          "Try upcoming features in a separate app alongside Synara. On macOS, open Settings → General to install Beta or copy your Stable data into it.",
+        details:
+          "Stable and Beta keep separate data and update feeds. Copying data goes from Stable to Beta only and replaces existing Beta data after confirmation. Beta shares crash reports and anonymous usage statistics; Stable does not send these diagnostics. Beta installers arrive with a separate prerelease.",
+      },
+      {
+        id: "omp-beta",
+        title: "Oh My Pi in Beta",
+        description:
+          "Synara Beta can connect to an installed Oh My Pi (OMP) runtime as a provider, with its discovered models and per-model thinking levels.",
+        details:
+          "Install and authenticate OMP separately, then select it in Beta provider settings. OMP is gated off in Stable for now; model availability depends on your OMP configuration and account.",
+      },
+      {
+        id: "computer-approval",
+        title: "Approve before Computer takes focus",
+        description:
+          "Computer asks on an approval card before bringing a Mac app to the foreground.",
+      },
+      {
+        id: "session-recovery",
+        title: "More dependable task recovery",
+        description:
+          "Restarted tasks settle interrupted turns, and completed worktrees are cleaned up more completely.",
+      },
+      {
+        id: "small-fixes-092",
+        title: "Everyday fixes",
+        description:
+          "Project import handles missing Windows paths and blank provider paths; fresh installs detect existing agents more accurately, and the update button stays active while installation starts.",
+      },
+    ],
+  },
+  {
     version: "0.9.1",
     date: "Sep 22",
     features: [
