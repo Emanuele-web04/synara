@@ -102,7 +102,7 @@ branch, its now-empty managed folder, and the recovery snapshots cached for that
 retention keeps the 15 most recently archived worktrees and snapshots older ones before removing
 them; those snapshots expire after 30 days.
 
-![Delete worktree on archive setting](assets/worktree-cleanup/setting-delete-worktree-on-archive.png)
+![Delete worktree on archive setting](assets/worktree-cleanup/1-setting-delete-worktree-on-archive.png)
 
 ## Providers, models, and sessions
 
