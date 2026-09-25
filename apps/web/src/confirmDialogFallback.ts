@@ -18,7 +18,6 @@ export function showConfirmDialogFallback(message: string): Promise<boolean> {
     backdrop.className = "fixed inset-0 z-50 bg-black/50";
     // The data-slot markers let native surfaces (the browser panel) hide under this dialog.
     backdrop.dataset.slot = "alert-dialog-backdrop";
-    backdrop.style.cssText = "animation:fadeIn .15s ease-out";
 
     // Viewport (centers the dialog)
     const viewport = document.createElement("div");
@@ -32,7 +31,6 @@ export function showConfirmDialogFallback(message: string): Promise<boolean> {
     popup.setAttribute("aria-modal", "true");
     popup.className =
       "flex w-full max-w-[22rem] flex-col rounded-xl border border-[color:var(--color-border-light)] bg-[var(--composer-surface)] text-[var(--color-text-foreground)] shadow-xl";
-    popup.style.cssText = "animation:scaleIn .15s ease-out";
 
     // Header
     const header = document.createElement("div");
@@ -91,7 +89,7 @@ export function showConfirmDialogFallback(message: string): Promise<boolean> {
     confirmBtn.type = "button";
     confirmBtn.textContent = "Confirm";
     confirmBtn.className =
-      "inline-flex h-8 min-w-20 cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-foreground bg-foreground px-3 text-ui-lg font-medium text-background outline-none transition-all duration-150 hover:scale-[1.02] hover:bg-foreground/92 focus-visible:ring-1 focus-visible:ring-ring/60";
+      "inline-flex h-8 min-w-20 cursor-pointer items-center justify-center whitespace-nowrap rounded-md border border-foreground bg-foreground px-3 text-ui-lg font-medium text-background outline-none transition-[background-color,transform] duration-150 hover:scale-[1.02] hover:bg-foreground/92 focus-visible:ring-1 focus-visible:ring-ring/60";
 
     confirmBtn.addEventListener("click", () => cleanup(true));
 
@@ -103,6 +101,23 @@ export function showConfirmDialogFallback(message: string): Promise<boolean> {
     document.body.appendChild(backdrop);
     document.body.appendChild(viewport);
     notifyNativeSurfaceOcclusionChange();
+
+    // Entrance — the @keyframes these used to name (fadeIn/scaleIn) were never
+    // defined in index.css, so the inline animations were dead. Same recipe as
+    // the context-menu fallback: backdrop fades, popup scales from center.
+    if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      backdrop.animate([{ opacity: 0 }, { opacity: 1 }], {
+        duration: 150,
+        easing: "ease-out",
+      });
+      popup.animate(
+        [
+          { opacity: 0, transform: "scale(0.96)" },
+          { opacity: 1, transform: "scale(1)" },
+        ],
+        { duration: 200, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
+      );
+    }
 
     // Auto-focus confirm button
     requestAnimationFrame(() => confirmBtn.focus());

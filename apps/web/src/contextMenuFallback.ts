@@ -1,12 +1,23 @@
 import type { ContextMenuItem } from "@synara/contracts";
 import { createCentralIconElement } from "./lib/central-icons";
 import { isInlineSvgMenuIcon } from "./lib/nativeMenuIcons";
+import {
+  SIDEBAR_CONTEXT_MENU_ICON_CLASS_NAME,
+  SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME,
+  SIDEBAR_CONTEXT_MENU_PANEL_CLASS_NAME,
+} from "./components/sidebarContextMenuStyles";
 
 function createMenuIconElement(icon: string): HTMLElement | null {
-  if (!isInlineSvgMenuIcon(icon)) return createCentralIconElement(icon, "opacity-60");
   const wrapper = document.createElement("span");
-  wrapper.className = "flex size-4 shrink-0 items-center justify-center opacity-60 [&>svg]:size-4";
-  wrapper.innerHTML = icon;
+  wrapper.className = SIDEBAR_CONTEXT_MENU_ICON_CLASS_NAME;
+  wrapper.setAttribute("aria-hidden", "true");
+  if (isInlineSvgMenuIcon(icon)) {
+    wrapper.innerHTML = icon;
+    return wrapper;
+  }
+  const central = createCentralIconElement(icon);
+  if (!central) return null;
+  wrapper.appendChild(central);
   return wrapper;
 }
 
@@ -25,8 +36,11 @@ export function showContextMenuFallback<T extends string>(
 
     const menu = document.createElement("div");
     menu.dataset.slot = "context-menu-popup";
-    menu.className =
-      "fixed z-[10000] min-w-[180px] rounded-xl border border-white/[0.08] shadow-xl animate-in fade-in zoom-in-95";
+    menu.setAttribute("role", "menu");
+    // Generic label: this fallback also serves non-thread callers (file
+    // references, kanban cards), so it cannot claim "Thread actions".
+    menu.setAttribute("aria-label", "Context menu");
+    menu.className = `fixed z-[10000] ${SIDEBAR_CONTEXT_MENU_PANEL_CLASS_NAME} rounded-xl border border-border shadow-xl`;
 
     const x = position?.x ?? 0;
     const y = position?.y ?? 0;
@@ -87,14 +101,16 @@ export function showContextMenuFallback<T extends string>(
       if ((item.separatorBefore === true || isDestructive) && i > 0) {
         const sep = document.createElement("div");
         sep.className = "mx-2.5 my-1 h-px bg-border";
+        sep.setAttribute("role", "separator");
         inner.appendChild(sep);
       }
 
       const btn = document.createElement("button");
       btn.type = "button";
+      btn.setAttribute("role", "menuitem");
       btn.className = isDestructive
-        ? "flex w-full min-h-7 cursor-default select-none items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-ui text-foreground/86 transition-colors"
-        : "flex w-full min-h-7 cursor-default select-none items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-ui text-foreground/86 transition-colors";
+        ? "flex w-full min-h-7 cursor-default select-none items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-ui text-destructive transition-colors"
+        : `flex w-full min-h-7 cursor-default select-none items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-ui transition-colors ${SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME}`;
 
       const icon = item.icon ? createMenuIconElement(item.icon) : null;
       if (icon) {
@@ -130,5 +146,23 @@ export function showContextMenuFallback<T extends string>(
         menu.style.top = `${window.innerHeight - rect.height - 4}px`;
       }
     });
+
+    // WAAPI entrance — the same scale-from-origin + fade as POPUP_MOTION_CLASS
+    // on real menus (Tailwind's animate-in/zoom-in utilities are not compiled in
+    // apps/web, so the class-based version was dead code).
+    if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      menu.style.transformOrigin = "top left";
+      menu.animate(
+        [
+          { opacity: 0, transform: "scale(0.97)" },
+          { opacity: 1, transform: "scale(1)" },
+        ],
+        { duration: 150, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
+      );
+    }
+
+    // Keyboard path: focus lands on the first item so Shift+F10 -> ArrowDown
+    // moves rather than spending a press on entering the menu.
+    focusItem(0);
   });
 }
