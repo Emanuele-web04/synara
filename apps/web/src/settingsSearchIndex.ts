@@ -76,7 +76,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: "general",
     title: "Delete worktree on archive",
     keywords:
-      "When a task is archived and no other task uses its worktree, remove the worktree, its temporary branch, and cached snapshots. worktree archive cleanup disk space remove delete",
+      "After Archive's Undo period, remove a clean worktree only when its task has stopped and no other task uses it. Keep its branch for recovery. worktree archive cleanup disk space remove delete",
   },
   {
     id: "general:welcome-tour",

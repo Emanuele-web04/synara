@@ -10,9 +10,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { GitCoreShape } from "./git/Services/GitCore.ts";
 import type { ProjectionSnapshotQueryShape } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
+  archivedWorktreeHasNoOtherOwners,
   classifyManagedWorktreeRemovalCandidates,
   discardManagedWorktreeResidue,
   isManagedWorktreePath,
+  isManagedWorktreePathCanonical,
   listManagedWorktrees,
   MANAGED_WORKTREE_RETENTION_COUNT,
   MANAGED_WORKTREE_SNAPSHOT_RETENTION_MS,
@@ -20,6 +22,37 @@ import {
   pruneExpiredManagedWorktreeSnapshots,
   pruneProjectedArchivedManagedWorktrees,
 } from "./managedWorktrees.ts";
+
+it("keeps an archived checkout when another task reaches it through a symlink", async () => {
+  const root = await makeTemporaryRoot();
+  const managed = path.join(root, "managed");
+  const alias = path.join(root, "alias");
+  const worktree = path.join(managed, "project", "task");
+  await fs.mkdir(worktree, { recursive: true });
+  await fs.symlink(managed, alias);
+
+  expect(
+    await Effect.runPromise(
+      isManagedWorktreePathCanonical({ worktreesDir: alias, worktreePath: worktree }),
+    ),
+  ).toBe(true);
+  expect(
+    await Effect.runPromise(
+      archivedWorktreeHasNoOtherOwners({
+        worktreePath: worktree,
+        threadId: "archived",
+        threads: [
+          { id: "archived", archivedAt: "2026-09-25T00:00:00.000Z", worktreePath: worktree },
+          {
+            id: "other",
+            archivedAt: "2026-09-25T00:00:00.000Z",
+            worktreePath: path.join(alias, "project", "task"),
+          },
+        ],
+      }),
+    ),
+  ).toBe(false);
+});
 
 const temporaryRoots: string[] = [];
 

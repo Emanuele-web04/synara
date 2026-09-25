@@ -27,6 +27,7 @@ import { releaseOrphanedWorktreeAfterArchive } from "./archiveThreadWorktreeClea
 const ARCHIVED_ID = ThreadId.makeUnsafe("thread-archived");
 const SIBLING_ID = ThreadId.makeUnsafe("thread-sibling");
 const WORKTREE_PATH = "/home/user/.synara/worktrees/repo/feature-a";
+const ARCHIVE_SEQUENCE = 42;
 
 // Folds single-thread fixture states together: ids concatenate, per-thread maps merge.
 function makeStateWithThreads(threads: readonly Thread[]): AppState {
@@ -66,6 +67,7 @@ describe("releaseOrphanedWorktreeAfterArchive", () => {
     await expect(
       releaseOrphanedWorktreeAfterArchive({
         threadId: ARCHIVED_ID,
+        archiveSequence: ARCHIVE_SEQUENCE,
         enabled: false,
         removeWorktree,
       }),
@@ -75,7 +77,7 @@ describe("releaseOrphanedWorktreeAfterArchive", () => {
     expect(harness.toast).not.toHaveBeenCalled();
   });
 
-  it("keeps a worktree another thread still uses", async () => {
+  it("asks the server to validate a worktree another thread may still use", async () => {
     harness.state = makeStateWithThreads([
       archivedThread(),
       makeThread({ id: SIBLING_ID, envMode: "worktree", worktreePath: WORKTREE_PATH }),
@@ -83,42 +85,46 @@ describe("releaseOrphanedWorktreeAfterArchive", () => {
     const removeWorktree = vi.fn();
 
     await expect(
-      releaseOrphanedWorktreeAfterArchive({ threadId: ARCHIVED_ID, enabled: true, removeWorktree }),
-    ).resolves.toBe("skipped");
-
-    expect(removeWorktree).not.toHaveBeenCalled();
-  });
-
-  it("keeps a worktree a thread that moved back to local still points at", async () => {
-    harness.state = makeStateWithThreads([
-      archivedThread(),
-      makeThread({ id: SIBLING_ID, worktreePath: null, associatedWorktreePath: WORKTREE_PATH }),
-    ]);
-    const removeWorktree = vi.fn();
-
-    await expect(
-      releaseOrphanedWorktreeAfterArchive({ threadId: ARCHIVED_ID, enabled: true, removeWorktree }),
-    ).resolves.toBe("skipped");
-
-    expect(removeWorktree).not.toHaveBeenCalled();
-  });
-
-  it("skips a thread whose turn is still running", async () => {
-    harness.state = makeStateWithThreads([
-      archivedThread({
-        session: {
-          provider: "codex",
-          status: "running",
-          orchestrationStatus: "running",
-          createdAt: "2026-09-01T00:00:00.000Z",
-          updatedAt: "2026-09-01T00:00:00.000Z",
-        },
+      releaseOrphanedWorktreeAfterArchive({
+        threadId: ARCHIVED_ID,
+        archiveSequence: ARCHIVE_SEQUENCE,
+        enabled: true,
+        removeWorktree,
       }),
+    ).resolves.toBe("removed");
+
+    expect(removeWorktree).toHaveBeenCalledOnce();
+  });
+
+  it("asks the server to validate an associated worktree after moving local", async () => {
+    harness.state = makeStateWithThreads([
+      archivedThread({ worktreePath: null, associatedWorktreePath: WORKTREE_PATH }),
     ]);
     const removeWorktree = vi.fn();
 
     await expect(
-      releaseOrphanedWorktreeAfterArchive({ threadId: ARCHIVED_ID, enabled: true, removeWorktree }),
+      releaseOrphanedWorktreeAfterArchive({
+        threadId: ARCHIVED_ID,
+        archiveSequence: ARCHIVE_SEQUENCE,
+        enabled: true,
+        removeWorktree,
+      }),
+    ).resolves.toBe("removed");
+
+    expect(removeWorktree).toHaveBeenCalledWith(expect.objectContaining({ path: WORKTREE_PATH }));
+  });
+
+  it("skips a thread that was restored before cleanup", async () => {
+    harness.state = makeStateWithThreads([archivedThread({ archivedAt: null })]);
+    const removeWorktree = vi.fn();
+
+    await expect(
+      releaseOrphanedWorktreeAfterArchive({
+        threadId: ARCHIVED_ID,
+        archiveSequence: ARCHIVE_SEQUENCE,
+        enabled: true,
+        removeWorktree,
+      }),
     ).resolves.toBe("skipped");
 
     expect(removeWorktree).not.toHaveBeenCalled();
@@ -128,18 +134,25 @@ describe("releaseOrphanedWorktreeAfterArchive", () => {
     const removeWorktree = vi.fn().mockResolvedValue(undefined);
 
     await expect(
-      releaseOrphanedWorktreeAfterArchive({ threadId: ARCHIVED_ID, enabled: true, removeWorktree }),
+      releaseOrphanedWorktreeAfterArchive({
+        threadId: ARCHIVED_ID,
+        archiveSequence: ARCHIVE_SEQUENCE,
+        enabled: true,
+        removeWorktree,
+      }),
     ).resolves.toBe("removed");
 
     expect(removeWorktree).toHaveBeenCalledWith({
       cwd: "/repo",
       path: WORKTREE_PATH,
       force: false,
+      reclaimTemporaryBranch: false,
+      archiveCleanup: { threadId: ARCHIVED_ID, archiveSequence: ARCHIVE_SEQUENCE },
     });
     expect(harness.toast).toHaveBeenCalledWith({
       type: "success",
       title: "Worktree removed",
-      description: "feature-a was deleted because no other task uses it.",
+      description: "feature-a was deleted. Its branch remains available for recovery.",
     });
   });
 
@@ -148,13 +161,19 @@ describe("releaseOrphanedWorktreeAfterArchive", () => {
     const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => {});
 
     await expect(
-      releaseOrphanedWorktreeAfterArchive({ threadId: ARCHIVED_ID, enabled: true, removeWorktree }),
+      releaseOrphanedWorktreeAfterArchive({
+        threadId: ARCHIVED_ID,
+        archiveSequence: ARCHIVE_SEQUENCE,
+        enabled: true,
+        removeWorktree,
+      }),
     ).resolves.toBe("kept");
 
     expect(harness.toast).toHaveBeenCalledWith({
       type: "info",
       title: "Worktree kept",
-      description: "feature-a has uncommitted changes or is still in use.",
+      description:
+        "feature-a could not be removed safely. Check its task, Git status, or connection.",
     });
     consoleInfo.mockRestore();
   });

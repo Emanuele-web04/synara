@@ -43,6 +43,45 @@ export function isManagedWorktreePath(input: {
   );
 }
 
+/** Resolve aliases before classifying an existing checkout or its recorded owners. */
+export function isManagedWorktreePathCanonical(input: {
+  readonly worktreesDir: string;
+  readonly worktreePath: string;
+}): Effect.Effect<boolean, Error> {
+  return Effect.tryPromise({
+    try: async () =>
+      isManagedWorktreePath({
+        worktreesDir: await fs.realpath(input.worktreesDir),
+        worktreePath: await canonicalizeRemovedPath(input.worktreePath),
+      }),
+    catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
+  });
+}
+
+/** Archive cleanup is conservative: even an archived sibling can be restored. */
+export function archivedWorktreeHasNoOtherOwners(input: {
+  readonly worktreePath: string;
+  readonly threadId: string;
+  readonly threads: ReadonlyArray<ManagedWorktreeThreadRef>;
+}): Effect.Effect<boolean, Error> {
+  return Effect.tryPromise({
+    try: async () => {
+      const target = await fs.realpath(input.worktreePath);
+      let targetOwnsPath = false;
+      for (const thread of input.threads) {
+        for (const recorded of [thread.worktreePath, thread.associatedWorktreePath]) {
+          if (!recorded) continue;
+          if ((await canonicalizeRemovedPath(recorded)) !== target) continue;
+          if (thread.id !== input.threadId) return false;
+          targetOwnsPath = true;
+        }
+      }
+      return targetOwnsPath;
+    },
+    catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
+  });
+}
+
 /**
  * The only thread state managed-worktree retention reads. Structural on purpose so
  * both the narrow projection row and a full `OrchestrationThread` satisfy it, and so

@@ -546,7 +546,7 @@ function SettingsRouteView() {
           settingKey: "archiveDeletesOrphanedWorktree",
           title: "Delete worktree on archive",
           description:
-            "When a task is archived and no other task uses its worktree, remove the worktree, its temporary branch, and cached snapshots. Worktrees with uncommitted changes are kept.",
+            "After Archive's Undo period, remove a clean worktree only if the task has stopped and no other task uses it. Its branch remains available for recovery.",
           resetLabel: "delete worktree on archive",
           ariaLabel: "Delete worktree on archive",
         })}

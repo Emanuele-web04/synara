@@ -55,7 +55,10 @@ function resolveCardWorkspacePath(card: KanbanCard): string | null {
 
 async function archiveCardThread(
   threadId: ThreadId,
-  worktreeRelease: Omit<Parameters<typeof releaseOrphanedWorktreeAfterArchive>[0], "threadId">,
+  worktreeRelease: Omit<
+    Parameters<typeof releaseOrphanedWorktreeAfterArchive>[0],
+    "threadId" | "archiveSequence"
+  >,
 ) {
   const api = readNativeApi();
   if (!api) return;
@@ -64,13 +67,19 @@ async function archiveCardThread(
   // Archived threads leave the board's thread feed, so a live optimistic
   // dispatch entry could never reconcile — drop it with the card.
   useKanbanUiStore.getState().clearOptimisticDispatch(threadId);
-  await archiveThreadFromClient(api.orchestration, threadId);
-  // Accepted archive: the opt-in worktree release reports itself and never fails it.
-  void releaseOrphanedWorktreeAfterArchive({ threadId, ...worktreeRelease }).catch(
-    (error: unknown) => {
+  const archiveSequence = await archiveThreadFromClient(api.orchestration, threadId);
+  if (!worktreeRelease.enabled) return;
+  // Kanban has no Undo toast. Give the asynchronous archive cleanup time to
+  // stop the provider before asking the server to validate and remove anything.
+  globalThis.setTimeout(() => {
+    void releaseOrphanedWorktreeAfterArchive({
+      threadId,
+      archiveSequence,
+      ...worktreeRelease,
+    }).catch((error: unknown) => {
       console.error("Failed to release worktree after archiving thread", { threadId, error });
-    },
-  );
+    });
+  }, 8_000);
 }
 
 async function setThreadPinned(threadId: ThreadId, isPinned: boolean) {

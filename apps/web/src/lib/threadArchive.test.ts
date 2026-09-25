@@ -20,7 +20,7 @@ describe("threadArchive client helpers", () => {
     const dispatchCommand = vi.fn(async () => ({ sequence: 1 }));
     const api = { dispatchCommand };
 
-    await archiveThreadFromClient(api, THREAD_ID);
+    await expect(archiveThreadFromClient(api, THREAD_ID)).resolves.toBe(1);
     await unarchiveThreadFromClient(api, THREAD_ID);
 
     expect(dispatchCommand).toHaveBeenNthCalledWith(

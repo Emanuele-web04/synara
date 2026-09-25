@@ -23,6 +23,7 @@ import {
   type DeviceEvent,
   type ComputerEvent,
   type GitActionProgressEvent,
+  type GitRemoveWorktreeInput,
   type GitHubProjectProvisionProgressEvent,
   type GitWorktreeSetupProgressEvent,
   type OrchestrationCommand,
@@ -91,8 +92,10 @@ import { Keybindings } from "./keybindings";
 import { createLocalPreviewGrant } from "./localImageFiles";
 import { listLocalServers, stopLocalServer } from "./localServerMonitor";
 import {
+  archivedWorktreeHasNoOtherOwners,
+  discardEmptyManagedWorktreeParent,
   discardManagedWorktreeResidue,
-  isManagedWorktreePath,
+  isManagedWorktreePathCanonical,
   listManagedWorktrees,
   managedWorktreeSnapshotsDir,
   pruneProjectedArchivedManagedWorktrees,
@@ -781,6 +784,79 @@ const makeWsRpcHandlersLayer = () =>
           Effect.forkDetach,
           Effect.asVoid,
         );
+
+      const validateArchiveWorktreeRemoval = (input: GitRemoveWorktreeInput) =>
+        Effect.gen(function* () {
+          if (!input.archiveCleanup) return;
+          const { threadId, archiveSequence } = input.archiveCleanup;
+          const events = yield* Stream.runCollect(
+            orchestrationEngine.readThreadEventsThrough(
+              threadId,
+              Math.max(0, archiveSequence - 1),
+              archiveSequence,
+              ["thread.archived"],
+            ),
+          );
+          const archiveEvent = [...events].find((event) => event.sequence === archiveSequence);
+          const shell = Option.getOrUndefined(
+            yield* projectionReadModelQuery.getThreadShellById(threadId),
+          );
+          if (
+            archiveEvent?.type !== "thread.archived" ||
+            !archiveEvent.payload.archivedAt ||
+            !shell ||
+            shell.archivedAt !== archiveEvent.payload.archivedAt ||
+            (shell.session !== null && shell.session.status !== "stopped")
+          ) {
+            return yield* Effect.fail(
+              new WsRpcError({ message: "Archive cleanup is no longer safe for this task." }),
+            );
+          }
+          if (
+            !(yield* isManagedWorktreePathCanonical({
+              worktreesDir: config.worktreesDir,
+              worktreePath: input.path,
+            }))
+          ) {
+            return yield* Effect.fail(
+              new WsRpcError({ message: "Archive cleanup only removes managed worktrees." }),
+            );
+          }
+          // A detached HEAD may contain commits with no branch reference. Do
+          // not silently make those commits unreachable through auto-cleanup.
+          const branchContext = yield* git.readBranchContext(input.path);
+          if (!branchContext.isRepo || branchContext.branch === null) {
+            return yield* Effect.fail(
+              new WsRpcError({ message: "Archive cleanup kept a worktree without a branch." }),
+            );
+          }
+          const owners = yield* projectionReadModelQuery.listManagedWorktreeThreads();
+          if (
+            !(yield* archivedWorktreeHasNoOtherOwners({
+              worktreePath: input.path,
+              threadId,
+              threads: owners,
+            }))
+          ) {
+            return yield* Effect.fail(
+              new WsRpcError({ message: "Another task still refers to this worktree." }),
+            );
+          }
+          // Archive's terminal reactor is asynchronous. Close only sessions
+          // opened before this archive event, preserving a newer restored one.
+          yield* terminalManager.closeSessionsOpenedAtOrBefore({
+            threadId,
+            openedAtOrBefore: archiveEvent.payload.archivedAt,
+          });
+          const afterTerminalCleanup = Option.getOrUndefined(
+            yield* projectionReadModelQuery.getThreadShellById(threadId),
+          );
+          if (afterTerminalCleanup?.archivedAt !== archiveEvent.payload.archivedAt) {
+            return yield* Effect.fail(
+              new WsRpcError({ message: "The task was restored during archive cleanup." }),
+            );
+          }
+        });
 
       const pruneManagedWorktrees = pruneProjectedArchivedManagedWorktrees({
         homeDir: config.homeDir,
@@ -1599,20 +1675,37 @@ const makeWsRpcHandlersLayer = () =>
               input.cwd,
               git.withMutation(
                 input.cwd,
-                git.removeWorktree(input).pipe(
-                  // An explicit removal retires the worktree for good, so its
-                  // recovery snapshots and empty managed folder go with it.
+                validateArchiveWorktreeRemoval(input).pipe(
+                  Effect.andThen(
+                    git.removeWorktree(
+                      input.archiveCleanup
+                        ? { ...input, force: false, reclaimTemporaryBranch: false }
+                        : input,
+                    ),
+                  ),
+                  // Automatic archive cleanup preserves recovery data; an
+                  // explicit removal discards snapshots and empty directories.
                   Effect.tap(() =>
-                    isManagedWorktreePath({
+                    isManagedWorktreePathCanonical({
                       worktreesDir: config.worktreesDir,
                       worktreePath: input.path,
-                    })
-                      ? discardManagedWorktreeResidue({
-                          worktreesDir: config.worktreesDir,
-                          snapshotsDir: managedWorktreeSnapshotsDir(config.homeDir),
-                          worktreePath: input.path,
-                        })
-                      : Effect.void,
+                    }).pipe(
+                      Effect.flatMap((managed) =>
+                        !managed
+                          ? Effect.void
+                          : input.archiveCleanup
+                            ? discardEmptyManagedWorktreeParent({
+                                worktreesDir: config.worktreesDir,
+                                worktreePath: input.path,
+                              })
+                            : discardManagedWorktreeResidue({
+                                worktreesDir: config.worktreesDir,
+                                snapshotsDir: managedWorktreeSnapshotsDir(config.homeDir),
+                                worktreePath: input.path,
+                              }),
+                      ),
+                      Effect.catch(() => Effect.void),
+                    ),
                   ),
                 ),
               ),

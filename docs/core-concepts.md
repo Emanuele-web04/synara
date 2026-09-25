@@ -95,12 +95,15 @@ several tasks in the same repository.
 ### Cleaning up worktrees
 
 Deleting a task offers to delete its worktree when no other task uses it. Turn on **Delete worktree
-on archive** in **Settings → General** to do the same when you archive a finished task; a worktree
-with uncommitted changes is kept. **Settings → Managed worktrees** lists every managed worktree and
-can delete any of them. Each of these removals also deletes the worktree's temporary `synara/*`
-branch, its now-empty managed folder, and the recovery snapshots cached for that path. Automatic
-retention keeps the 15 most recently archived worktrees and snapshots older ones before removing
-them; those snapshots expire after 30 days.
+on archive** in **Settings → General** to remove a finished task's clean checkout after its Undo
+period ends. If another task still refers to the checkout, the session has not stopped, or Git finds
+uncommitted changes, the checkout stays. Automatic archive cleanup preserves its branch so commits
+remain recoverable. Restoring an archived task later restores its conversation, but a removed
+checkout must be recreated from that branch before work resumes. **Settings → Managed worktrees**
+lists managed worktrees for explicit removal. Those removals also delete the temporary `synara/*`
+branch, its empty managed folder, and recovery
+snapshots cached for that path. Automatic retention keeps the 15 most recently archived worktrees
+and snapshots older ones before removing them; those snapshots expire after 30 days.
 
 ![Delete worktree on archive setting](assets/worktree-cleanup/1-setting-delete-worktree-on-archive.png)
 
