@@ -50,6 +50,7 @@ jobs:
               { name: "provider:cursor", color: "bf8700", description: "Specific to the Cursor provider." },
               { name: "provider:gemini", color: "bf8700", description: "Specific to the Gemini provider." },
               { name: "provider:antigravity", color: "bf8700", description: "Specific to the Antigravity provider." },
+              { name: "provider:omp", color: "bf8700", description: "Specific to the Oh My Pi provider." },
               // os:*
               { name: "os:macos", color: "6e7781", description: "Only affects macOS." },
               { name: "os:windows", color: "6e7781", description: "Only affects Windows." },
