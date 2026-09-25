@@ -503,7 +503,6 @@ function verifyReleaseWorkflowSafety(): void {
     "git push origin HEAD",
     "The next-beta job must never push a branch.",
   );
-
 }
 
 function verifyDesktopStageLockAuthority(): void {
