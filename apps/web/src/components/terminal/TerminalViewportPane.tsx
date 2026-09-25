@@ -61,10 +61,13 @@ function normalizeWeights(weights: number[]): number[] {
   return weights.map((weight) => (Number.isFinite(weight) && weight > 0 ? weight : 1));
 }
 
+// The visible hairline stays 1px; an invisible ::after band (±3px) makes the
+// handle grabbable. `z-[2]` keeps the band above the z-[1] pane content it
+// overlaps, and below the z-10 floating controls (find bar, scroll-to-bottom).
 function splitHandleClassName(direction: ThreadTerminalSplitNode["direction"]): string {
   return direction === "horizontal"
-    ? "shrink-0 w-px cursor-col-resize bg-border/70 hover:bg-[var(--sidebar-accent)]"
-    : "shrink-0 h-px cursor-row-resize bg-border/70 hover:bg-[var(--sidebar-accent)]";
+    ? "relative z-[2] shrink-0 w-px cursor-col-resize bg-border/70 hover:bg-[var(--sidebar-accent)] after:absolute after:inset-y-0 after:-inset-x-[3px] after:content-['']"
+    : "relative z-[2] shrink-0 h-px cursor-row-resize bg-border/70 hover:bg-[var(--sidebar-accent)] after:absolute after:-inset-y-[3px] after:inset-x-0 after:content-['']";
 }
 
 function canMoveTerminalToOwnGroup(node: ThreadTerminalLayoutNode, terminalId: string): boolean {
@@ -363,6 +366,8 @@ export default function TerminalViewportPane({
               </div>
               {index < node.children.length - 1 ? (
                 <div
+                  role="separator"
+                  aria-orientation={node.direction === "horizontal" ? "vertical" : "horizontal"}
                   className={splitHandleClassName(node.direction)}
                   onPointerDown={(event) => beginResize(node, index, event)}
                   onDoubleClick={() =>

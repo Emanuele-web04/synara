@@ -673,7 +673,9 @@ export default function ThreadTerminalDrawer({
     >
       {!isWorkspaceMode ? (
         <div
-          className="absolute inset-x-0 top-0 z-20 h-1.5 cursor-row-resize"
+          role="separator"
+          aria-orientation="horizontal"
+          className="absolute inset-x-0 top-0 z-20 h-1.5 cursor-row-resize transition-colors hover:bg-[var(--sidebar-accent)]"
           onPointerDown={handleResizePointerDown}
           onPointerMove={handleResizePointerMove}
           onPointerUp={handleResizePointerEnd}

@@ -608,14 +608,14 @@ export function resolveBrowserChromeStatus(input: {
   if (!input.hasActiveTab) {
     return {
       tone: "default",
-      label: input.workspaceReady ? "No tabs open" : "Starting browser...",
+      label: input.workspaceReady ? "No tabs open" : "Starting browser…",
     };
   }
 
   if (input.activeTabStatus === "suspended") {
     return {
       tone: "default",
-      label: "Restoring tab...",
+      label: "Restoring tab…",
     };
   }
 

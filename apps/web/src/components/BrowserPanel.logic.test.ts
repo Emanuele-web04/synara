@@ -614,7 +614,7 @@ describe("resolveBrowserChromeStatus", () => {
       }),
     ).toEqual({
       tone: "default",
-      label: "Starting browser...",
+      label: "Starting browser…",
     });
   });
 });
