@@ -45,7 +45,7 @@ describe("buildCollapsedProposedPlanPreviewMarkdown", () => {
       buildCollapsedProposedPlanPreviewMarkdown("# Integrate RPC\n\n- step 1\n- step 2\n- step 3", {
         maxLines: 2,
       }),
-    ).toBe("- step 1\n- step 2\n\n...");
+    ).toBe("- step 1\n- step 2\n\n…");
   });
 });
 

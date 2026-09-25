@@ -1023,7 +1023,7 @@ function extractCollabActionTitle(payload: Record<string, unknown> | null): stri
   for (const candidate of candidates) {
     const title = asTrimmedString(candidate);
     if (title && !isGenericToolTitle(title)) {
-      return title.length > 120 ? `${title.slice(0, 117).trimEnd()}...` : title;
+      return title.length > 120 ? `${title.slice(0, 119).trimEnd()}…` : title;
     }
   }
   return null;

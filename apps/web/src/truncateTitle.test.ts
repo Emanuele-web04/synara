@@ -12,6 +12,6 @@ describe("truncateTitle", () => {
   });
 
   it("appends ellipsis when text exceeds max length", () => {
-    expect(truncateTitle("abcdefghij", 5)).toBe("abcde...");
+    expect(truncateTitle("abcdefghij", 5)).toBe("abcde…");
   });
 });

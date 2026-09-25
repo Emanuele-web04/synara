@@ -3,5 +3,5 @@ export function truncateTitle(text: string, maxLength = 50): string {
   if (trimmed.length <= maxLength) {
     return trimmed;
   }
-  return `${trimmed.slice(0, maxLength)}...`;
+  return `${trimmed.slice(0, maxLength)}…`;
 }

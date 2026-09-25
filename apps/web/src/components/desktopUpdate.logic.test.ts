@@ -213,7 +213,7 @@ describe("desktop update button state", () => {
     expect(resolveDesktopUpdateButtonAction(state)).toBe("check");
     expect(isDesktopUpdateButtonDisabled(state)).toBe(true);
     expect(getDesktopUpdateButtonTooltip(state)).toContain("Checking for updates");
-    expect(getDesktopUpdateButtonPresentation(state).label).toBe("Checking...");
+    expect(getDesktopUpdateButtonPresentation(state).label).toBe("Checking…");
   });
 
   it("shows retry labels for actionable update errors", () => {
@@ -274,9 +274,9 @@ describe("desktop update button state", () => {
       availableVersion: "1.1.0",
     };
     const presentation = getDesktopUpdateButtonPresentation(installingState, { installing: true });
-    expect(presentation.label).toBe("Updating...");
+    expect(presentation.label).toBe("Updating…");
     expect(getDesktopUpdateButtonTooltip(installingState, { installing: true })).toBe(
-      "Applying update...",
+      "Applying update…",
     );
   });
 });

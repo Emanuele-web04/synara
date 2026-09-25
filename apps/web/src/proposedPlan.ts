@@ -55,7 +55,7 @@ export function buildCollapsedProposedPlanPreviewMarkdown(
   }
 
   if (hasMoreContent) {
-    previewLines.push("", "...");
+    previewLines.push("", "…");
   }
 
   return previewLines.join("\n");

@@ -349,7 +349,7 @@ function getBranchTriggerLabel(input: {
 function getCreateBranchActionLabel(trimmedBranchQuery: string): string {
   return trimmedBranchQuery.length > 0
     ? `Create and checkout "${trimmedBranchQuery}"`
-    : "Create and checkout new branch...";
+    : "Create and checkout new branch…";
 }
 
 function getCurrentBranchChangeSummary(
@@ -823,9 +823,11 @@ export function BranchToolbarBranchSelector({
         <div className="flex w-full items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
             <div className="flex items-center justify-between gap-2">
-              <span className="truncate">{itemValue}</span>
+              <span className="truncate" title={itemValue}>
+                {itemValue}
+              </span>
               {badge && (
-                <span className="shrink-0 text-ui-xs text-muted-foreground/45">{badge}</span>
+                <span className="shrink-0 text-ui-xs text-muted-foreground/80">{badge}</span>
               )}
             </div>
             {currentBranchChangeSummary ? (
@@ -878,7 +880,9 @@ export function BranchToolbarBranchSelector({
         ) : (
           <>
             <CentralIcon name="branch" className="size-3.5 shrink-0" />
-            <span className="max-w-[240px] truncate">{triggerLabel}</span>
+            <span className="max-w-[240px] truncate" title={triggerLabel}>
+              {triggerLabel}
+            </span>
             <ChevronDownIcon className="size-3 opacity-60" />
           </>
         )}
@@ -888,7 +892,7 @@ export function BranchToolbarBranchSelector({
           <ComboboxInput
             className="rounded-xl border-[color:var(--color-border)] bg-[var(--color-background-control-opaque)] shadow-none before:hidden has-focus-visible:border-[color:var(--color-border-focus)] has-focus-visible:ring-0 [&_input]:font-sans"
             inputClassName="ring-0"
-            placeholder="Search branches..."
+            placeholder="Search branches…"
             showTrigger={false}
             size="sm"
             value={branchQuery}
@@ -1029,7 +1033,7 @@ export function BranchToolbarBranchSelector({
           </DialogHeader>
           <DialogPanel className="space-y-4">
             {stashDiscardDialog?.loading ? (
-              <p className="text-muted-foreground text-ui leading-snug">Loading stash details...</p>
+              <p className="text-muted-foreground text-ui leading-snug">Loading stash details…</p>
             ) : stashDiscardDialog?.error ? (
               <p className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-destructive text-ui leading-snug">
                 {stashDiscardDialog.error}
@@ -1102,7 +1106,7 @@ export function BranchToolbarBranchSelector({
               disabled={!stashDiscardDialog?.info || isDroppingStash}
               onClick={discardStashFromDialog}
             >
-              {isDroppingStash ? "Discarding..." : "Discard stash"}
+              {isDroppingStash ? "Discarding…" : "Discard stash"}
             </Button>
           </DialogFooter>
         </DialogPopup>

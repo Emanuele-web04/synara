@@ -64,8 +64,8 @@ function truncateText(
 ): string | undefined {
   if (!value) return undefined;
   if (value.length <= maxLength) return value;
-  if (maxLength <= 3) return "...".slice(0, maxLength);
-  return `${value.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+  if (maxLength <= 1) return "…".slice(0, maxLength);
+  return `${value.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
 }
 
 export function resolveDefaultCreateBranchName(
@@ -84,28 +84,28 @@ export function buildGitActionProgressStages(input: {
   featureBranch?: boolean;
   shouldPushBeforePr?: boolean;
 }): string[] {
-  const branchStages = input.featureBranch ? ["Preparing feature branch..."] : [];
-  const pushStage = input.pushTarget ? `Pushing to ${input.pushTarget}...` : "Pushing...";
+  const branchStages = input.featureBranch ? ["Preparing feature branch…"] : [];
+  const pushStage = input.pushTarget ? `Pushing to ${input.pushTarget}…` : "Pushing…";
   if (input.action === "push") {
     return [pushStage];
   }
   if (input.action === "create_pr") {
-    return input.shouldPushBeforePr ? [pushStage, "Creating PR..."] : ["Creating PR..."];
+    return input.shouldPushBeforePr ? [pushStage, "Creating PR…"] : ["Creating PR…"];
   }
   const shouldIncludeCommitStages =
     !input.forcePushOnly && (input.action === "commit" || input.hasWorkingTreeChanges);
   const commitStages = !shouldIncludeCommitStages
     ? []
     : input.hasCustomCommitMessage
-      ? ["Committing..."]
-      : ["Generating commit message...", "Committing..."];
+      ? ["Committing…"]
+      : ["Generating commit message…", "Committing…"];
   if (input.action === "commit") {
     return [...branchStages, ...commitStages];
   }
   if (input.action === "commit_push") {
     return [...branchStages, ...commitStages, pushStage];
   }
-  return [...branchStages, ...commitStages, pushStage, "Creating PR..."];
+  return [...branchStages, ...commitStages, pushStage, "Creating PR…"];
 }
 
 const withDescription = (title: string, description: string | undefined) =>
@@ -869,7 +869,7 @@ export function resolvePromotedPullPresentation(input: {
   isPullRunning: boolean;
 }): PromotedPullPresentation | null {
   if (!shouldPromotePullAction(input)) return null;
-  return { label: input.isPullRunning ? "Pulling..." : "Pull" };
+  return { label: input.isPullRunning ? "Pulling…" : "Pull" };
 }
 
 export function shouldOfferCreateBranchPrompt(input: {
@@ -943,7 +943,7 @@ export function resolveLiveThreadBranchUpdate(input: {
   }
 
   // Branch list not ready yet — don't treat "status arrived first" as out-of-sync
-  // or we permanently invalidate and show "Refreshing git status...".
+  // or we permanently invalidate and show "Refreshing git status…".
   if (input.threadBranch === null) {
     return null;
   }

@@ -28,7 +28,7 @@ describe("desktop update button presentation timeline", () => {
       status: "checking",
     });
     expect(checking).toEqual({
-      label: "Checking...",
+      label: "Checking…",
       secondaryLabel: null,
     });
 

@@ -480,7 +480,7 @@ describe("when: branch is behind upstream", () => {
         quickAction: busyQuickAction,
         isPullRunning: true,
       }),
-      { label: "Pulling..." },
+      { label: "Pulling…" },
     );
   });
 
@@ -1778,7 +1778,7 @@ describe("buildGitActionProgressStages", () => {
       hasWorkingTreeChanges: false,
       pushTarget: "origin/feature/test",
     });
-    assert.deepEqual(stages, ["Pushing to origin/feature/test..."]);
+    assert.deepEqual(stages, ["Pushing to origin/feature/test…"]);
   });
 
   it("shows push and pr stages when create-pr needs to publish first", () => {
@@ -1789,7 +1789,7 @@ describe("buildGitActionProgressStages", () => {
       pushTarget: "origin/feature/test",
       shouldPushBeforePr: true,
     });
-    assert.deepEqual(stages, ["Pushing to origin/feature/test...", "Creating PR..."]);
+    assert.deepEqual(stages, ["Pushing to origin/feature/test…", "Creating PR…"]);
   });
 
   it("shows only push progress when push-only is forced", () => {
@@ -1800,7 +1800,7 @@ describe("buildGitActionProgressStages", () => {
       forcePushOnly: true,
       pushTarget: "origin/feature/test",
     });
-    assert.deepEqual(stages, ["Pushing to origin/feature/test..."]);
+    assert.deepEqual(stages, ["Pushing to origin/feature/test…"]);
   });
 
   it("skips commit stages for create-pr flow when push-only is forced", () => {
@@ -1811,7 +1811,7 @@ describe("buildGitActionProgressStages", () => {
       forcePushOnly: true,
       pushTarget: "origin/feature/test",
     });
-    assert.deepEqual(stages, ["Pushing to origin/feature/test...", "Creating PR..."]);
+    assert.deepEqual(stages, ["Pushing to origin/feature/test…", "Creating PR…"]);
   });
 
   it("includes commit stages for commit+push when working tree is dirty", () => {
@@ -1822,9 +1822,9 @@ describe("buildGitActionProgressStages", () => {
       pushTarget: "origin/feature/test",
     });
     assert.deepEqual(stages, [
-      "Generating commit message...",
-      "Committing...",
-      "Pushing to origin/feature/test...",
+      "Generating commit message…",
+      "Committing…",
+      "Pushing to origin/feature/test…",
     ]);
   });
 });
@@ -1918,7 +1918,7 @@ describe("summarizeGitResult", () => {
 
     assert.deepEqual(result, {
       title: "Created PR #99",
-      description: "feat: this title is intentionally extremely long so we can validate t...",
+      description: "feat: this title is intentionally extremely long so we can validate tha…",
     });
   });
 });
