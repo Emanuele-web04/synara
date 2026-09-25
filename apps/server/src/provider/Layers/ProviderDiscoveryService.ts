@@ -142,7 +142,21 @@ const make = Effect.gen(function* () {
     }),
   );
   yield* Effect.forkScoped(
-    Effect.forever(Effect.flatMap(Queue.take(catalogWriteQueue), writeCatalogSnapshot)),
+    Effect.forever(
+      Effect.flatMap(Queue.take(catalogWriteQueue), (first) => {
+        // Coalesce bursts: each queued item is a full snapshot, so drain to the
+        // newest before writing (e.g. several providers discovered at boot).
+        let latest = first;
+        for (
+          let taken = Queue.takeUnsafe(catalogWriteQueue);
+          taken !== undefined;
+          taken = Queue.takeUnsafe(catalogWriteQueue)
+        ) {
+          if (Exit.isSuccess(taken)) latest = taken.value;
+        }
+        return writeCatalogSnapshot(latest);
+      }),
+    ),
   );
   const modelDiscoveryCache = makeProviderModelDiscoveryCache<ProviderDiscoveryError>({
     persistedCatalogs,
@@ -355,15 +369,19 @@ const make = Effect.gen(function* () {
         };
       }
       const listModelsFromAdapter = adapter.listModels;
-      return yield* modelDiscoveryCache.lookup(
-        providerModelDiscoveryCacheKey(parsed),
-        // Suspend so the adapter is only touched when the cache actually misses.
-        Effect.suspend(() => listModelsFromAdapter(parsed)).pipe(
-          Effect.flatMap((result) =>
-            isolateMalformedModelDescriptors({ provider: parsed.provider, result }),
-          ),
+      const discover = Effect.suspend(() => listModelsFromAdapter(parsed)).pipe(
+        Effect.flatMap((result) =>
+          isolateMalformedModelDescriptors({ provider: parsed.provider, result }),
         ),
       );
+      // OMP re-resolves file-backed modelRoles per request, so a shared fresh
+      // window would freeze role/config edits for up to 30 minutes and persist
+      // them across restarts. `omp models` is a cheap subprocess — bypass the
+      // shared cache so every picker read reflects the live catalog.
+      if (parsed.provider === "omp") {
+        return yield* discover;
+      }
+      return yield* modelDiscoveryCache.lookup(providerModelDiscoveryCacheKey(parsed), discover);
     });
 
   const listAgents: ProviderDiscoveryServiceShape["listAgents"] = (input) =>

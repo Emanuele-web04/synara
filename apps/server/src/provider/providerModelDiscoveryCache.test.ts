@@ -367,8 +367,9 @@ describe("makeProviderModelDiscoveryCache", () => {
     expect(calls).toBe(0);
   });
 
-  it("drops hydrated entries already past the stale TTL", async () => {
+  it("drops hydrated entries already past the stale TTL and emits the cleanup", async () => {
     const clock = makeClock();
+    const snapshots: Array<ReadonlyArray<PersistedModelCatalogEntryInput>> = [];
     const cache = makeProviderModelDiscoveryCache<ProviderAdapterRequestError>({
       now: clock.now,
       staleTtlMs: 1_000,
@@ -379,7 +380,11 @@ describe("makeProviderModelDiscoveryCache", () => {
           storedAt: clock.now() - 5_000,
         },
       ],
+      onCatalogsChanged: (entries) => snapshots.push(entries),
     });
+
+    // Dead entries are dropped at hydration and the file is rewritten empty.
+    expect(snapshots).toEqual([[]]);
     let calls = 0;
     const discover = Effect.sync(() => {
       calls += 1;
@@ -393,7 +398,7 @@ describe("makeProviderModelDiscoveryCache", () => {
     expect(cache.size()).toBe(1);
   });
 
-  it("emits the full snapshot after stores, authoritative clears, and clear()", async () => {
+  it("emits the full snapshot on store, authoritative empty removal, and clear()", async () => {
     const clock = makeClock();
     const snapshots: Array<ReadonlyArray<PersistedModelCatalogEntryInput>> = [];
     const cache = makeProviderModelDiscoveryCache<ProviderAdapterRequestError>({
@@ -415,16 +420,19 @@ describe("makeProviderModelDiscoveryCache", () => {
     ]);
 
     // An authoritative empty result removes the stored catalog and emits.
-    const empty = Effect.succeed({ ...CATALOG, models: [] });
     clock.advance(60 * 60_000);
+    const empty = Effect.succeed({ ...CATALOG, models: [] });
     await Effect.runPromise(cache.lookup(KEY, empty));
     await flush();
 
     expect(cache.size()).toBe(0);
     expect(snapshots.at(-1)).toEqual([]);
 
-    // The empty result replays as a short-lived failure entry; clear() still
-    // emits the (unchanged) empty snapshot for the persistence writer.
+    // The empty result replays as a short-lived failure entry; wait it out,
+    // re-store, then clear() emits the emptied snapshot.
+    clock.advance(31_000);
+    await Effect.runPromise(cache.lookup(KEY, discover));
+    await flush();
     cache.clear();
     expect(snapshots.at(-1)).toEqual([]);
   });

@@ -11,6 +11,7 @@
  */
 import { ProviderListModelsResult } from "@synara/contracts";
 import { Cause, Effect, FileSystem, Schema } from "effect";
+import * as path from "node:path";
 
 import { writeFileStringAtomically } from "../atomicWrite";
 
@@ -37,7 +38,7 @@ const decodePersistedModelCatalogs = Schema.decodeUnknownEffect(
 );
 
 export function resolveProviderModelCatalogCachePath(input: { readonly stateDir: string }): string {
-  return `${input.stateDir}/provider-models/catalogs.json`;
+  return path.join(input.stateDir, "provider-models", "catalogs.json");
 }
 
 // Ignore unreadable or malformed snapshots so the server still boots and falls

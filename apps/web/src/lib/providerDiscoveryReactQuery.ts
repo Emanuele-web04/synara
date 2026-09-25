@@ -472,9 +472,9 @@ export function providerModelsQueryOptions(input: {
     // persisted across restarts), so a refetch is a cheap RPC — but there is no
     // value in asking more often than the cache can change. Catalogs only move
     // on CLI updates or settings edits, which also bust the query key.
-    // OMP stays on a short window: file-backed modelRoles are re-resolved per
-    // request, so config edits must reach the server on the ordinary
-    // focus/mount refetch cadence.
+    // OMP bypasses the server cache entirely: file-backed modelRoles are
+    // re-resolved per request, so role/config edits must reach the adapter on
+    // the ordinary focus/mount refetch cadence.
     staleTime:
       input.provider === "devin"
         ? (query) => (query.state.data?.error ? 0 : 15 * 60_000)
@@ -485,8 +485,8 @@ export function providerModelsQueryOptions(input: {
             : 15 * 60_000,
     // Devin deliberately returns a usable static catalog when CLI discovery
     // fails. Keep it visible, but retry while observed instead of treating the
-    // degraded result as a successful 30-minute cache entry. A failed refresh
-    // retains healthy data, so the query error must also keep recovery polling alive.
+    // degraded result as fresh — a failed refresh retains healthy data, so the
+    // query error must also keep recovery polling alive.
     ...(input.provider === "devin"
       ? {
           refetchInterval: (query) =>

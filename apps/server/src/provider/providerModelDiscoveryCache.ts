@@ -136,27 +136,38 @@ export function makeProviderModelDiscoveryCache<E>(options?: {
   const inflight = new Map<string, Deferred.Deferred<ProviderListModelsResult, unknown>>();
 
   const emitCatalogsChanged = () => {
-    options?.onCatalogsChanged?.(
-      [...catalogs.entries()].map(([key, entry]) => ({
-        key,
-        result: entry.result,
-        storedAt: entry.storedAt,
-      })),
-    );
+    try {
+      options?.onCatalogsChanged?.(
+        [...catalogs.entries()].map(([key, entry]) => ({
+          key,
+          result: entry.result,
+          storedAt: entry.storedAt,
+        })),
+      );
+    } catch {
+      // The listener persists snapshots; a throwing listener must not strand
+      // the deferred waiters that applyExit resolves right after this call.
+    }
   };
 
   // Hydrate from the persisted snapshot; entries already past the stale TTL are
-  // dead on arrival and dropped.
+  // dead on arrival and dropped (emitting once so the file is cleaned too).
   const bootedAt = now();
+  let droppedPersisted = false;
   for (const entry of options?.persistedCatalogs ?? []) {
-    if (bootedAt - entry.storedAt > staleTtlMs) continue;
+    if (bootedAt - entry.storedAt > staleTtlMs) {
+      droppedPersisted = true;
+      continue;
+    }
     catalogs.set(entry.key, { result: entry.result, storedAt: entry.storedAt });
     while (catalogs.size > maxEntries) {
       const oldest = catalogs.keys().next().value;
       if (oldest === undefined) break;
       catalogs.delete(oldest);
+      droppedPersisted = true;
     }
   }
+  if (droppedPersisted) emitCatalogsChanged();
 
   const readCatalog = (serialized: string, at: number): CatalogEntry | undefined => {
     const entry = catalogs.get(serialized);
@@ -296,9 +307,10 @@ export function makeProviderModelDiscoveryCache<E>(options?: {
   return {
     lookup,
     clear: () => {
+      const hadCatalogs = catalogs.size > 0;
       catalogs.clear();
       failures.clear();
-      emitCatalogsChanged();
+      if (hadCatalogs) emitCatalogsChanged();
     },
     size: () => catalogs.size,
   };
