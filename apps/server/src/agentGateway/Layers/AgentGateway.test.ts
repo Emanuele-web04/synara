@@ -1401,7 +1401,13 @@ function makeClaudeGatewayRuntime(models: ModelInfo[]) {
       };
     },
   }).pipe(
-    Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-gateway-test", "/tmp")),
+    Layer.provideMerge(
+      // Isolated state dir: provider model catalogs now persist under stateDir,
+      // so a fixed path would leak one test's catalog into the next.
+      ServerConfig.layerTest("/tmp/claude-gateway-test", {
+        prefix: "claude-gateway-test-",
+      }),
+    ),
     Layer.provideMerge(NodeServices.layer),
   );
   return {
