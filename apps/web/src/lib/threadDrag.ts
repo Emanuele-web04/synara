@@ -1,7 +1,7 @@
 // FILE: threadDrag.ts
 // Purpose: Shared native drag contract for dragging a thread row (sidebar, activity view) onto chat surfaces.
 // Layer: Web UI helpers
-// Exports: THREAD_DRAG_MIME, ThreadDragPayload, beginThreadDrag, endThreadDrag, getActiveThreadDragId, isThreadDragTransfer, readThreadDragPayload, THREAD_MENTION_DROPZONE_ATTRIBUTE, isWithinThreadMentionDropzone
+// Exports: THREAD_DRAG_MIME, ThreadDragPayload, beginThreadDrag, endThreadDrag, getActiveThreadDragId, isThreadDragTransfer, readThreadDragPayload, THREAD_MENTION_DROPZONE_ATTRIBUTE, isWithinThreadMentionDropzone, resolveSidebarFolderDropTarget, SIDEBAR_FOLDER_ROOT_GUTTER_PX
 
 import { type ThreadId } from "@synara/contracts";
 
@@ -80,4 +80,18 @@ export function isWithinThreadMentionDropzone(target: unknown): boolean {
   const element = target instanceof Element ? target : target.parentElement;
   if (!element) return false;
   return element.closest(`[${THREAD_MENTION_DROPZONE_ATTRIBUTE}="true"]`) !== null;
+}
+
+// Dropping a thread inside the project row's leading gutter means "move to the
+// project root"; past the gutter the pointer is over a folder row.
+export const SIDEBAR_FOLDER_ROOT_GUTTER_PX = 20;
+
+export function resolveSidebarFolderDropTarget(input: {
+  clientX: number;
+  containerLeft: number;
+  folderId: string;
+}): string | null {
+  return input.clientX <= input.containerLeft + SIDEBAR_FOLDER_ROOT_GUTTER_PX
+    ? null
+    : input.folderId;
 }

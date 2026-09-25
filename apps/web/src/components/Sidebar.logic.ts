@@ -861,6 +861,86 @@ export function resolveSidebarThreadListPaging(input: {
   };
 }
 
+// The sidebar can render beside a split chat, where the focused pane differs from
+// the route owner. Preview folding must retain the thread the user is actually viewing.
+export function resolveActiveSidebarThreadId(input: {
+  focusedThreadId: ThreadId | null;
+  optimisticThreadId: ThreadId | null;
+  routeThreadId: ThreadId | null;
+}): ThreadId | null {
+  return input.optimisticThreadId ?? input.focusedThreadId ?? input.routeThreadId;
+}
+
+// `??` inside a `try` body bails the React Compiler out of memoizing the sidebar,
+// so the folder-archive predicate lives here instead of inline; see
+// chatHotPath.compiler.test.ts.
+export function shouldArchiveThreadInFolder(
+  thread: { archivedAt?: string | null } | undefined,
+): boolean {
+  return thread !== undefined && (thread.archivedAt ?? null) === null;
+}
+
+// Archives every not-yet-archived thread of a folder. Module scope for the same
+// compiler reason as `deleteThreadsForFolderRemoval` below: `for...of` lowers to a
+// value block, and value blocks inside a component's `try` bail the whole sidebar
+// out of memoization.
+export async function archiveThreadsForFolderRemoval(input: {
+  threadIds: readonly ThreadId[];
+  getThread: (threadId: ThreadId) => { archivedAt?: string | null } | undefined;
+  archiveThread: (
+    threadId: ThreadId,
+    options: { fallbackExcludedThreadIds: ReadonlySet<ThreadId> },
+  ) => Promise<boolean>;
+}): Promise<void> {
+  const folderThreadIds = new Set(input.threadIds);
+
+  for (const threadId of input.threadIds) {
+    const thread = input.getThread(threadId);
+    if (!shouldArchiveThreadInFolder(thread)) continue;
+
+    // A false result means another archive for the same thread is already in
+    // flight. Abort the folder archive instead of hiding a member that is still
+    // active; the caller clears its pending marker and surfaces the failure.
+    const archived = await input.archiveThread(threadId, {
+      fallbackExcludedThreadIds: folderThreadIds,
+    });
+    if (!archived) {
+      throw new Error(
+        "A thread could not be archived. Wait for any pending archive to finish, then try again.",
+      );
+    }
+  }
+}
+
+// Deletes every thread of a folder one by one and reconciles the ones that were
+// deleted even when a later delete fails. Lives at module scope (not inside the
+// Sidebar component) because `try/finally` and `throw` inside a try body bail the
+// React Compiler out of memoizing the sidebar; see chatHotPath.compiler.test.ts.
+export async function deleteThreadsForFolderRemoval(input: {
+  threadIds: readonly ThreadId[];
+  deleteThread: (
+    threadId: ThreadId,
+    options: { deletedThreadIds: ReadonlySet<ThreadId>; reconcileDeletedThread: boolean },
+  ) => Promise<void>;
+  reconcileDeletedThreads: (threadIds: readonly ThreadId[]) => Promise<void>;
+}): Promise<void> {
+  const deletedThreadIds = new Set(input.threadIds);
+  const successfullyDeletedIds: ThreadId[] = [];
+
+  try {
+    for (const threadId of input.threadIds) {
+      await input.deleteThread(threadId, {
+        deletedThreadIds,
+        reconcileDeletedThread: false,
+      });
+      successfullyDeletedIds.push(threadId);
+    }
+  } finally {
+    if (successfullyDeletedIds.length > 0) {
+      await input.reconcileDeletedThreads(successfullyDeletedIds);
+    }
+  }
+}
 export interface SidebarThreadTreeRow<
   T extends Pick<SidebarThreadSummary, "id" | "parentThreadId">,
 > {
@@ -871,11 +951,20 @@ export interface SidebarThreadTreeRow<
 
 function collectActiveThreadAncestorIds<
   T extends Pick<SidebarThreadSummary, "id" | "parentThreadId">,
->(threadById: Map<T["id"], T>, forceVisibleThreadId: T["id"] | undefined): Set<T["id"]> {
+>(
+  threadById: Map<T["id"], T>,
+  forceVisibleThreadId: T["id"] | undefined,
+  detachedThreadIds: ReadonlySet<T["id"]>,
+): Set<T["id"]> {
   const ancestorIds = new Set<T["id"]>();
   let currentThreadId = forceVisibleThreadId;
 
   while (currentThreadId) {
+    // A detached thread is a tree root: its real parent is not an ancestor of the
+    // rendered row, so the walk stops there instead of revealing the old chain.
+    if (detachedThreadIds.has(currentThreadId)) {
+      break;
+    }
     const parentThreadId = threadById.get(currentThreadId)?.parentThreadId ?? undefined;
     if (!parentThreadId) {
       break;
@@ -887,20 +976,82 @@ function collectActiveThreadAncestorIds<
   return ancestorIds;
 }
 
+// A subagent row is organization-eligible when it is a normal top-level thread or
+// when the user detached it, which promotes it to a top-level row.
+export function isThreadFolderAssignable<
+  T extends { id: ThreadId; parentThreadId?: ThreadId | null },
+>(thread: T | undefined, detachedThreadIds: ReadonlySet<ThreadId>): thread is T {
+  if (thread === undefined) return false;
+  return (thread.parentThreadId ?? null) === null || detachedThreadIds.has(thread.id);
+}
+
+const EMPTY_THREAD_ID_SET: ReadonlySet<ThreadId> = new Set<ThreadId>();
+
+// Finished subagent rows disappear from the normal sidebar after the configured
+// delay. The thread being viewed, its visible ancestor chain, and rows waiting on
+// approvals or user input always stay, so navigation never strands the user and
+// nothing actionable is hidden.
+export function resolveHiddenFinishedSubagentThreadIds(input: {
+  threads: readonly SidebarThreadSummary[];
+  detachedThreadIds: ReadonlySet<ThreadId>;
+  activeThreadId: ThreadId | undefined;
+  autoHideMinutes: number;
+  nowMs: number;
+}): ReadonlySet<ThreadId> {
+  const { activeThreadId, autoHideMinutes, detachedThreadIds, nowMs, threads } = input;
+  if (!Number.isFinite(autoHideMinutes) || autoHideMinutes <= 0) {
+    return EMPTY_THREAD_ID_SET;
+  }
+
+  const threadById = new Map(threads.map((thread) => [thread.id, thread] as const));
+  const protectedThreadIds = collectActiveThreadAncestorIds(
+    threadById,
+    activeThreadId,
+    detachedThreadIds,
+  );
+  if (activeThreadId !== undefined) {
+    protectedThreadIds.add(activeThreadId);
+  }
+
+  const hiddenThreadIds = new Set<ThreadId>();
+  const cutoffMs = nowMs - autoHideMinutes * 60_000;
+
+  for (const thread of threads) {
+    if ((thread.parentThreadId ?? null) === null) continue;
+    if (protectedThreadIds.has(thread.id)) continue;
+    if (thread.hasPendingApprovals || thread.hasPendingUserInput) continue;
+
+    const latestTurn = thread.latestTurn;
+    if (latestTurn === null || latestTurn.state === "running") continue;
+    const finishedAtMs =
+      latestTurn.completedAt === null ? null : Date.parse(latestTurn.completedAt);
+    if (finishedAtMs === null || Number.isNaN(finishedAtMs)) continue;
+    if (finishedAtMs <= cutoffMs) {
+      hiddenThreadIds.add(thread.id);
+    }
+  }
+
+  return hiddenThreadIds;
+}
+
 // Build the project-local parent/child thread tree while preserving sort order from the input list.
 export function buildProjectThreadTree<
   T extends Pick<SidebarThreadSummary, "id" | "parentThreadId">,
 >(input: {
   threads: readonly T[];
   forceVisibleThreadId?: T["id"] | undefined;
+  detachedThreadIds?: ReadonlySet<T["id"]> | undefined;
 }): SidebarThreadTreeRow<T>[] {
   const { forceVisibleThreadId, threads } = input;
+  const detachedThreadIds = input.detachedThreadIds ?? EMPTY_THREAD_ID_SET;
   const threadById = new Map(threads.map((thread) => [thread.id, thread] as const));
   const childrenByParentId = new Map<T["id"], T[]>();
   const roots: T[] = [];
 
   for (const thread of threads) {
-    const parentThreadId = thread.parentThreadId ?? null;
+    const parentThreadId = detachedThreadIds.has(thread.id)
+      ? null
+      : (thread.parentThreadId ?? null);
     if (!parentThreadId) {
       roots.push(thread);
       continue;
@@ -916,7 +1067,11 @@ export function buildProjectThreadTree<
     childrenByParentId.set(parentThreadId, siblings);
   }
 
-  const activeThreadAncestorIds = collectActiveThreadAncestorIds(threadById, forceVisibleThreadId);
+  const activeThreadAncestorIds = collectActiveThreadAncestorIds(
+    threadById,
+    forceVisibleThreadId,
+    detachedThreadIds,
+  );
   const orderedRows: SidebarThreadTreeRow<T>[] = [];
 
   const visit = (thread: T, depth: number, rootThreadId: T["id"]) => {
@@ -1414,6 +1569,7 @@ export function deriveSidebarProjectData(input: {
   activeSidebarThreadId: ThreadId | undefined;
   previewLimit: number;
   previewPageSize: number;
+  detachedThreadIds?: ReadonlySet<ThreadId> | undefined;
   resolveThreadStatus?: (
     thread: SidebarThreadSummary,
   ) => ReturnType<typeof resolveThreadStatusPill>;
@@ -1476,6 +1632,7 @@ export function deriveSidebarProjectData(input: {
     const projectThreadTree = buildProjectThreadTree({
       threads: projectThreads,
       forceVisibleThreadId: input.activeSidebarThreadId,
+      detachedThreadIds: input.detachedThreadIds,
     });
     const orderedEntries: SidebarProjectEntry[] = projectThreadTree.map(
       ({ thread, depth, rootThreadId }) => ({

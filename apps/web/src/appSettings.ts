@@ -75,6 +75,11 @@ export const DEFAULT_CHAT_FONT_SIZE_PX = 13;
 export const MIN_TERMINAL_FONT_SIZE_PX = 10;
 export const MAX_TERMINAL_FONT_SIZE_PX = 22;
 export const DEFAULT_TERMINAL_FONT_SIZE_PX = 12;
+// Subagent rows auto-hide this many minutes after their last turn settles.
+// 0 disables the auto-hide. Presets are what the Settings select offers.
+export const SUBAGENT_AUTO_HIDE_MINUTE_OPTIONS = [0, 5, 15, 30, 60, 240] as const;
+export const DEFAULT_SUBAGENT_AUTO_HIDE_MINUTES = 30;
+export const MAX_SUBAGENT_AUTO_HIDE_MINUTES = 24 * 60;
 
 // Terminal font is a free-form font-family value: the user can type any font
 // installed on their machine. An empty value keeps the bundled default stack
@@ -316,6 +321,17 @@ export const AppSettingsSchema = Schema.Struct({
   // (and the surfaces derived from it: Kanban, Activity, project picker). Runs stay
   // listed on the automation's page and findable via search either way.
   showAutomationRunThreads: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Local-only UI preference for the normal Projects sidebar: optional visual folders
+  // that group top-level threads inside a project. Folders are organization only;
+  // turning them off returns every thread to the project list without deleting
+  // assignments, so re-enabling restores the previous grouping.
+  showThreadFolders: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Local-only UI preference: hide a finished subagent row from the normal sidebar
+  // this many minutes after its last turn settles (0 = never). The thread being
+  // viewed and rows waiting on approvals or user input always stay visible.
+  subagentAutoHideMinutes: Schema.Number.pipe(
+    withDefaults(() => DEFAULT_SUBAGENT_AUTO_HIDE_MINUTES),
+  ),
   // Local-only UI preferences: which optional sections of the chat Environment panel are
   // shown. The git block (Changes/Worktree/branch/Commit and Push) is always visible; these
   // toggle the sections beneath it via the panel header's gear menu.
@@ -573,6 +589,14 @@ export function normalizeChatFontSizePx(value: number | null | undefined): numbe
   return Math.min(MAX_CHAT_FONT_SIZE_PX, Math.max(MIN_CHAT_FONT_SIZE_PX, Math.round(value)));
 }
 
+export function normalizeSubagentAutoHideMinutes(value: number | null | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_SUBAGENT_AUTO_HIDE_MINUTES;
+  }
+
+  return Math.min(MAX_SUBAGENT_AUTO_HIDE_MINUTES, Math.max(0, Math.round(value)));
+}
+
 export function normalizeTerminalFontSizePx(value: number | null | undefined): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return DEFAULT_TERMINAL_FONT_SIZE_PX;
@@ -692,6 +716,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     agentCursorRimColor: normalizeCursorHexColor(settings.agentCursorRimColor),
     chatFontSizePx: normalizeChatFontSizePx(settings.chatFontSizePx),
     terminalFontSizePx: normalizeTerminalFontSizePx(settings.terminalFontSizePx),
+    subagentAutoHideMinutes: normalizeSubagentAutoHideMinutes(settings.subagentAutoHideMinutes),
     terminalFontFamily: normalizeTerminalFontFamily(settings.terminalFontFamily),
     customCodexModels: normalizeCustomModelSlugs(settings.customCodexModels, "codex"),
     customClaudeModels: normalizeCustomModelSlugs(settings.customClaudeModels, "claudeAgent"),
