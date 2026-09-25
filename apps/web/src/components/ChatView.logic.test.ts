@@ -948,6 +948,21 @@ describe("voice helpers", () => {
       canStartVoiceNotes: false,
       showVoiceNotesControl: true,
     });
+
+    expect(
+      deriveComposerVoiceState({
+        authStatus: "unauthenticated",
+        voiceTranscriptionAvailable: false,
+        isRecording: false,
+        isTranscribing: false,
+        voiceTranscriptionProvider: "auto",
+        groqApiKeyConfigured: true,
+      }),
+    ).toEqual({
+      canRenderVoiceNotes: true,
+      canStartVoiceNotes: true,
+      showVoiceNotesControl: true,
+    });
   });
 });
 
