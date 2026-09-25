@@ -13,7 +13,7 @@ import {
   ProviderReadPluginInput,
   type ProviderSkillDescriptor,
 } from "@synara/contracts";
-import { Effect, Layer, Option, Schema, SchemaIssue } from "effect";
+import { Effect, Exit, Layer, Option, Queue, Schema, SchemaIssue } from "effect";
 
 import { isServerBetaFeatureEnabled } from "../../betaFeatureGate.ts";
 import { ServerConfig } from "../../config.ts";
@@ -26,9 +26,15 @@ import {
   type ProviderDiscoveryServiceShape,
 } from "../Services/ProviderDiscoveryService.ts";
 import {
+  type PersistedModelCatalogEntryInput,
   makeProviderModelDiscoveryCache,
   providerModelDiscoveryCacheKey,
 } from "../providerModelDiscoveryCache.ts";
+import {
+  readProviderModelCatalogCache,
+  resolveProviderModelCatalogCachePath,
+  writeProviderModelCatalogCache,
+} from "../providerModelCatalogCache.ts";
 import {
   discoverSkillsCatalog,
   filterDisabledSkills,
@@ -98,7 +104,52 @@ const make = Effect.gen(function* () {
   // One catalog cache for every provider: adapters that spawn a CLI/ACP process
   // per listModels call share stale-while-revalidate, single-flight, and
   // failure-replay behaviour with adapters that reuse a running process.
-  const modelDiscoveryCache = makeProviderModelDiscoveryCache<ProviderDiscoveryError>();
+  // Snapshots persist to stateDir so a restart reopens the picker with
+  // last-known models instead of a fresh discovery wait.
+  const catalogCachePath = resolveProviderModelCatalogCachePath({
+    stateDir: serverConfig.stateDir,
+  });
+  const persistedCatalogs = yield* readProviderModelCatalogCache(catalogCachePath);
+  // Writes serialize through a queue so concurrent cache mutations can't race
+  // the atomic file write.
+  const catalogWriteQueue =
+    yield* Queue.unbounded<ReadonlyArray<PersistedModelCatalogEntryInput>>();
+  const writeCatalogSnapshot = (entries: ReadonlyArray<PersistedModelCatalogEntryInput>) =>
+    writeProviderModelCatalogCache({ filePath: catalogCachePath, entries }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("failed to persist provider model catalogs", {
+          path: catalogCachePath,
+          issues: cause.toString(),
+        }),
+      ),
+    );
+  // Registered before the writer fiber: finalizers run LIFO, so at scope close
+  // the writer is interrupted first and this then drains anything still queued.
+  // The newest snapshot always reaches disk even on shutdown.
+  yield* Effect.addFinalizer(() =>
+    Effect.suspend(() => {
+      // Queue.takeAll would block on an empty queue; takeUnsafe drains
+      // synchronously so the newest queued snapshot wins.
+      let latest: ReadonlyArray<PersistedModelCatalogEntryInput> | undefined;
+      for (
+        let taken = Queue.takeUnsafe(catalogWriteQueue);
+        taken !== undefined;
+        taken = Queue.takeUnsafe(catalogWriteQueue)
+      ) {
+        if (Exit.isSuccess(taken)) latest = taken.value;
+      }
+      return latest === undefined ? Effect.void : writeCatalogSnapshot(latest);
+    }),
+  );
+  yield* Effect.forkScoped(
+    Effect.forever(Effect.flatMap(Queue.take(catalogWriteQueue), writeCatalogSnapshot)),
+  );
+  const modelDiscoveryCache = makeProviderModelDiscoveryCache<ProviderDiscoveryError>({
+    persistedCatalogs,
+    onCatalogsChanged: (entries) => {
+      Queue.offerUnsafe(catalogWriteQueue, entries);
+    },
+  });
   const providerIsEnabled = Effect.fn("providerIsEnabled")(function* (
     provider: ProviderGetComposerCapabilitiesInput["provider"],
   ) {

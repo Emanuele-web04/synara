@@ -15,7 +15,7 @@ import { Deferred, Effect, Exit, Option } from "effect";
 import { ProviderAdapterRequestError } from "./Errors.ts";
 
 /** A successful catalog is served without touching the adapter for this long. */
-export const PROVIDER_MODEL_DISCOVERY_FRESH_TTL_MS = 10 * 60_000;
+export const PROVIDER_MODEL_DISCOVERY_FRESH_TTL_MS = 30 * 60_000;
 /**
  * After the fresh window a catalog is still served immediately (marked
  * `cached: true`) while a background revalidation runs. Entries older than
@@ -84,8 +84,14 @@ export function providerModelDiscoveryCacheKey(
   };
 }
 
-const serializeKey = (key: ProviderModelDiscoveryCacheKey): string =>
-  JSON.stringify([key.provider, key.binaryPath, key.apiEndpoint, key.agentDir, key.cwd]);
+/**
+ * Stable serialization for a cache key. This is the on-disk contract for the
+ * persisted catalog snapshot (providerModelCatalogCache.ts), so field order
+ * here is a file format, not an implementation detail.
+ */
+export const serializeProviderModelDiscoveryCacheKey = (
+  key: ProviderModelDiscoveryCacheKey,
+): string => JSON.stringify([key.provider, key.binaryPath, key.apiEndpoint, key.agentDir, key.cwd]);
 
 /**
  * Only a non-empty, error-free catalog is worth remembering as "good". Static
@@ -96,6 +102,13 @@ const serializeKey = (key: ProviderModelDiscoveryCacheKey): string =>
 const isUsableCatalog = (result: ProviderListModelsResult): boolean =>
   result.models.length > 0 && result.error === undefined;
 
+export interface PersistedModelCatalogEntryInput {
+  /** Serialized ProviderModelDiscoveryCacheKey — the map key. */
+  readonly key: string;
+  readonly result: ProviderListModelsResult;
+  readonly storedAt: number;
+}
+
 export function makeProviderModelDiscoveryCache<E>(options?: {
   readonly now?: () => number;
   readonly freshTtlMs?: number;
@@ -103,6 +116,13 @@ export function makeProviderModelDiscoveryCache<E>(options?: {
   readonly failureTtlMs?: number;
   readonly timeoutMs?: number;
   readonly maxEntries?: number;
+  /**
+   * Snapshots hydrated from disk (providerModelCatalogCache.ts). `storedAt` is
+   * preserved so fresh/stale windows stay honest across restarts.
+   */
+  readonly persistedCatalogs?: ReadonlyArray<PersistedModelCatalogEntryInput>;
+  /** Invoked with the full catalog snapshot after every mutation (store, expiry, clear). */
+  readonly onCatalogsChanged?: (entries: ReadonlyArray<PersistedModelCatalogEntryInput>) => void;
 }): ProviderModelDiscoveryCache<E> {
   const now = options?.now ?? (() => Date.now());
   const freshTtlMs = options?.freshTtlMs ?? PROVIDER_MODEL_DISCOVERY_FRESH_TTL_MS;
@@ -115,11 +135,35 @@ export function makeProviderModelDiscoveryCache<E>(options?: {
   const failures = new Map<string, FailureEntry>();
   const inflight = new Map<string, Deferred.Deferred<ProviderListModelsResult, unknown>>();
 
+  const emitCatalogsChanged = () => {
+    options?.onCatalogsChanged?.(
+      [...catalogs.entries()].map(([key, entry]) => ({
+        key,
+        result: entry.result,
+        storedAt: entry.storedAt,
+      })),
+    );
+  };
+
+  // Hydrate from the persisted snapshot; entries already past the stale TTL are
+  // dead on arrival and dropped.
+  const bootedAt = now();
+  for (const entry of options?.persistedCatalogs ?? []) {
+    if (bootedAt - entry.storedAt > staleTtlMs) continue;
+    catalogs.set(entry.key, { result: entry.result, storedAt: entry.storedAt });
+    while (catalogs.size > maxEntries) {
+      const oldest = catalogs.keys().next().value;
+      if (oldest === undefined) break;
+      catalogs.delete(oldest);
+    }
+  }
+
   const readCatalog = (serialized: string, at: number): CatalogEntry | undefined => {
     const entry = catalogs.get(serialized);
     if (entry === undefined) return undefined;
     if (at - entry.storedAt > staleTtlMs) {
       catalogs.delete(serialized);
+      emitCatalogsChanged();
       return undefined;
     }
     return entry;
@@ -145,6 +189,7 @@ export function makeProviderModelDiscoveryCache<E>(options?: {
       if (oldest === undefined) break;
       catalogs.delete(oldest);
     }
+    emitCatalogsChanged();
   };
 
   const storeFailure = (
@@ -168,8 +213,8 @@ export function makeProviderModelDiscoveryCache<E>(options?: {
     }
     // An error-free empty response is authoritative: do not keep offering
     // models the provider has removed. Replay it briefly before rediscovery.
-    if (Exit.isSuccess(exit) && exit.value.error === undefined) {
-      catalogs.delete(serialized);
+    if (Exit.isSuccess(exit) && exit.value.error === undefined && catalogs.delete(serialized)) {
+      emitCatalogsChanged();
     }
     storeFailure(serialized, exit, at);
   };
@@ -223,7 +268,7 @@ export function makeProviderModelDiscoveryCache<E>(options?: {
 
   const lookup: ProviderModelDiscoveryCache<E>["lookup"] = (key, discover) =>
     Effect.gen(function* () {
-      const serialized = serializeKey(key);
+      const serialized = serializeProviderModelDiscoveryCacheKey(key);
       const at = now();
       const entry = readCatalog(serialized, at);
       const failure = readFailure(serialized, at);
@@ -253,6 +298,7 @@ export function makeProviderModelDiscoveryCache<E>(options?: {
     clear: () => {
       catalogs.clear();
       failures.clear();
+      emitCatalogsChanged();
     },
     size: () => catalogs.size,
   };

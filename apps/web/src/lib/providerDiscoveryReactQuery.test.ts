@@ -273,7 +273,7 @@ describe("providerModelsQueryOptions", () => {
       source: "devin-cli",
       cached: false,
     };
-    expect(staleTime({ state: { data: healthy } })).toBe(30_000);
+    expect(staleTime({ state: { data: healthy } })).toBe(15 * 60_000);
     expect(refetchInterval({ state: { data: healthy } })).toBe(false);
   });
 
@@ -307,6 +307,19 @@ describe("providerModelsQueryOptions", () => {
     );
     expect(listModels).toHaveBeenCalledTimes(1);
     expect(queryClient.getQueryData(options.queryKey)).toBeUndefined();
+  });
+
+  it("caches runtime catalogs long enough to skip respawning provider CLIs", () => {
+    // Server-side catalogs persist across restarts (30min fresh / 24h SWR), so
+    // the client keeps a matching window; OMP stays short because its
+    // file-backed modelRoles are re-resolved per request.
+    expect(providerModelsQueryOptions({ provider: "cursor" }).staleTime).toBe(15 * 60_000);
+    expect(providerModelsQueryOptions({ provider: "codex" }).staleTime).toBe(15 * 60_000);
+    expect(providerModelsQueryOptions({ provider: "droid" }).staleTime).toBe(30 * 60_000);
+    expect(providerModelsQueryOptions({ provider: "droid" }).refetchOnWindowFocus).toBe(false);
+    expect(providerModelsQueryOptions({ provider: "omp" }).staleTime).toBe(30_000);
+    expect(providerModelsQueryOptions({ provider: "omp" }).refetchOnWindowFocus).toBe(true);
+    expect(providerModelsQueryOptions({ provider: "cursor" }).gcTime).toBe(24 * 60 * 60_000);
   });
 
   it("does not mask OMP's initial fetch with a placeholder", () => {
