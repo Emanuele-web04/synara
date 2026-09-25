@@ -12,7 +12,7 @@ describe("smooth reveal lifecycle", () => {
       let now = 1_000;
       for (let frame = 0; frame < hz * 3; frame += 1) {
         now += 1_000 / hz;
-        const step = stepSmoothReveal(state, now, 100, emitted);
+        const step = stepSmoothReveal(state, now, "x".repeat(100), emitted, true);
         if (step.emitCount !== null) {
           expect(step.emitCount).toBeGreaterThan(emitted);
           expect(step.emitCount).toBeLessThanOrEqual(100);
@@ -28,12 +28,14 @@ describe("smooth reveal lifecycle", () => {
       expect(state.shown).toBe(100);
       expect(state.velocity).toBe(0);
       expect(state.lastFrameAt).toBe(0);
-      expect(stepSmoothReveal(state, now + 60_000, 100, emitted)).toEqual({
+      expect(stepSmoothReveal(state, now + 60_000, "x".repeat(100), emitted, true)).toEqual({
         emitCount: null,
         done: true,
       });
       // A sleeping loop must still wake for the next append-only burst.
-      expect(stepSmoothReveal(state, now + 60_001, 200, emitted).done).toBe(false);
+      expect(stepSmoothReveal(state, now + 60_001, "x".repeat(200), emitted, true).done).toBe(
+        false,
+      );
     },
   );
 
@@ -44,7 +46,7 @@ describe("smooth reveal lifecycle", () => {
       lastFrameAt: 1_000,
       lastEmitAt: 1_000,
     };
-    expect(stepSmoothReveal(state, 1_004, 100, 99)).toEqual({
+    expect(stepSmoothReveal(state, 1_004, "x".repeat(100), 99, true)).toEqual({
       emitCount: 100,
       done: true,
     });
@@ -53,7 +55,7 @@ describe("smooth reveal lifecycle", () => {
 
   it("does not snap a meaningful backlog", () => {
     const state = createSmoothRevealState(0);
-    const step = stepSmoothReveal(state, 1_000, 100, 0);
+    const step = stepSmoothReveal(state, 1_000, "x".repeat(100), 0, true);
     expect(step.done).toBe(false);
     expect(step.emitCount).toBeNull();
     expect(state.shown).toBe(0);

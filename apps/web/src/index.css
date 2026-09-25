@@ -1153,6 +1153,26 @@ label:has(> select#reasoning-effort) select {
   font-family: inherit !important;
 }
 
+/* Streaming word reveal: each word let out by the paced emit fades in. Words
+   already present at mount carry data-chat-word-fade="instant" so history
+   renders and virtualization remounts never replay the fade. Opacity only —
+   a word that moved would jostle the line. */
+@keyframes chat-word-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.chat-markdown--word-fading [data-chat-word-fade]:not([data-chat-word-fade="instant"]) {
+  animation: chat-word-fade-in 300ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-markdown--word-fading [data-chat-word-fade] {
+    animation: none;
+  }
+}
+
 .editor-file-viewer__plain,
 .editor-file-viewer__highlight .shiki {
   min-height: 100%;

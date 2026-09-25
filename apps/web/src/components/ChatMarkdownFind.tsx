@@ -63,24 +63,68 @@ function findMatchClassName(part: {
     .join(" ");
 }
 
-function renderFindTextParts(parts: ReturnType<typeof splitTextWithFindMatches>): ReactNode {
-  if (parts.length === 1 && !parts[0]!.match) {
+// Past this many words-worth of source offset (~5k words) the fade stops adding
+// value and word spans would only grow the DOM — emit bare text instead.
+export const WORD_FADE_MAX_OFFSET = 30_000;
+
+interface WordFadeRenderOptions {
+  /** Words starting below this absolute offset render without the fade. */
+  instantBelow: number;
+}
+
+/**
+ * Split `text` into one keyed span per word with bare whitespace siblings.
+ * Keys are the word's absolute source offset (`w:<offset>`), stable under
+ * append: a growing paragraph adds spans without remounting earlier ones, so
+ * an already-shown word never re-fades.
+ */
+function fadeWords(text: string, baseOffset: number, instantBelow: number): ReactNode[] {
+  let offset = baseOffset;
+  return text
+    .split(/(\s+)/)
+    .filter(Boolean)
+    .map((part) => {
+      const start = offset;
+      offset += part.length;
+      if (/^\s/.test(part)) return part;
+      if (start >= WORD_FADE_MAX_OFFSET) return part;
+      return (
+        <span key={`w:${start}`} data-chat-word-fade={start < instantBelow ? "instant" : ""}>
+          {part}
+        </span>
+      );
+    });
+}
+
+function renderFindTextParts(
+  parts: ReturnType<typeof splitTextWithFindMatches>,
+  fade?: WordFadeRenderOptions,
+  sourceOffset = 0,
+): ReactNode {
+  if (parts.length === 1 && !parts[0]!.match && !fade) {
     return parts[0]!.text;
   }
-  return parts.map((part, index) =>
-    part.match ? (
-      <span
-        key={`${part.startOffset ?? index}:${index}`}
-        className={findMatchClassName(part)}
-        data-chat-find-match={part.active ? "active" : "true"}
-        data-chat-find-start={part.startOffset}
-      >
-        {part.text}
-      </span>
-    ) : (
-      <span key={`text:${index}`}>{part.text}</span>
-    ),
-  );
+  let cursor = sourceOffset;
+  return parts.map((part, index) => {
+    const partStart = cursor;
+    cursor += part.text.length;
+    if (part.match) {
+      return (
+        <span
+          key={`${part.startOffset ?? index}:${index}`}
+          className={findMatchClassName(part)}
+          data-chat-find-match={part.active ? "active" : "true"}
+          data-chat-find-start={part.startOffset}
+        >
+          {part.text}
+        </span>
+      );
+    }
+    if (fade) {
+      return fadeWords(part.text, partStart, fade.instantBelow);
+    }
+    return <span key={`text:${index}`}>{part.text}</span>;
+  });
 }
 
 function renderFindWrappedText(
@@ -92,7 +136,11 @@ function renderFindWrappedText(
   return renderFindTextParts(splitTextWithFindMatches(text, query, activeRange, sourceOffset));
 }
 
-export function FindAwareMarkdownText(props: { text: string; sourceOffset: number }) {
+export function FindAwareMarkdownText(props: {
+  text: string;
+  sourceOffset: number;
+  fade?: WordFadeRenderOptions | undefined;
+}) {
   const highlight = React.useContext(ChatFindRenderContext);
   return renderFindTextParts(
     splitTextWithFindRanges(
@@ -101,6 +149,8 @@ export function FindAwareMarkdownText(props: { text: string; sourceOffset: numbe
       highlight.activeRange,
       props.sourceOffset,
     ),
+    props.fade,
+    props.sourceOffset,
   );
 }
 

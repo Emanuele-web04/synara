@@ -20,7 +20,10 @@ interface SmoothTextProps {
 // needs many quantized commits to drain it, so partially-revealed states are
 // reliably observable between polls and a handful of stray frames cannot
 // accidentally finish the reveal before an assertion runs.
-const LONG_DELTA = "x".repeat(1_200);
+// Space-bearing words, not one whitespaceless blob: the reveal emits on
+// whole-word boundaries now, and a 1.2k-char single word would dribble raw
+// through the REVEAL_WORD_HOLD_CHARS guard instead of exercising them.
+const LONG_DELTA = "lorem ipsum dolor ".repeat(67);
 
 function renderSmoothText(initialProps: SmoothTextProps) {
   return renderHook(
@@ -104,6 +107,54 @@ describe("useSmoothStreamedText", () => {
     // must not be typewriter-animated from a stale prefix.
     await hook.rerender({ text: "Rewritten from scratch", isStreaming: true });
     expect(hook.result.current).toBe("Rewritten from scratch");
+
+    await hook.unmount();
+  });
+
+  it("never commits a mid-word prefix while streaming", async () => {
+    const mountText = "Hello ";
+    const hook = await renderSmoothText({ text: mountText, isStreaming: true });
+
+    const full = mountText + LONG_DELTA;
+    await hook.rerender({ text: full, isStreaming: true });
+
+    // Sample every observed emitted prefix: each must stop at a word boundary —
+    // the char after the prefix is a space, or the prefix is the whole target.
+    let midWordSeen = "";
+    await expect
+      .poll(
+        () => {
+          const value = hook.result.current;
+          if (
+            value !== full &&
+            value.length > 0 &&
+            full[value.length] !== " " &&
+            full[value.length - 1] !== " "
+          ) {
+            midWordSeen = value;
+          }
+          return value === full;
+        },
+        { timeout: 10_000 },
+      )
+      .toBe(true);
+    expect(midWordSeen).toBe("");
+
+    await hook.unmount();
+  });
+
+  it("releases a stalled trailing word after the hold window", async () => {
+    const hook = await renderSmoothText({ text: "Hello ", isStreaming: true });
+
+    // "wor" is a still-growing word: the reveal holds it back once caught up.
+    await hook.rerender({ text: "Hello brave new wor", isStreaming: true });
+    await expect.poll(() => hook.result.current, { timeout: 5_000 }).toBe("Hello brave new ");
+
+    // A genuine stall keeps the partial word hidden past ordinary flush jitter;
+    // the hold timer then emits the arrived text in full.
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(hook.result.current).toBe("Hello brave new ");
+    await expect.poll(() => hook.result.current, { timeout: 5_000 }).toBe("Hello brave new wor");
 
     await hook.unmount();
   });

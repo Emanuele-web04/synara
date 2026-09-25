@@ -15,7 +15,7 @@
 //      re-rendering the growing message) is the dominant CPU cost of a streaming turn,
 //      while a ~25/s multi-character reveal is visually equivalent.
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useMediaQuery } from "./useMediaQuery";
 
 // Drain the current backlog over this window. Kept above the ~100ms network flush so a
@@ -33,6 +33,44 @@ const MAX_FRAME_SECONDS = 0.05;
 // Minimum spacing between React commits. The reveal float still advances every frame at
 // the smoothed velocity; this only batches how often the grown prefix is pushed to state.
 export const MIN_EMIT_INTERVAL_MS = 40;
+// Commit spacing while the transcript tail is not being followed. The paced
+// reveal still matters then — snapping to full text would jerk a detached
+// reader's anchor — but each commit costs the virtualized list a
+// measure/compensate pass, so off-screen growth lands at a coarse cadence.
+export const DETACHED_EMIT_INTERVAL_MS = 250;
+// Cap on how far a pending word boundary may sit behind the reveal position.
+// A whitespaceless blob (minified line, giant URL) would otherwise emit nothing
+// for its entire drain — past this many held-back characters the reveal
+// dribbles raw offsets instead of stalling.
+export const REVEAL_WORD_HOLD_CHARS = 80;
+// Once the reveal catches up while streaming, a still-growing trailing word is
+// held back this long; past it the stream has stalled mid-word, so the honest
+// partial text shows. Sized ~3x the ~100ms transport flush cadence.
+export const REVEAL_WORD_HOLD_MS = 300;
+// Duration of one streamed word's opacity fade; also the linger window after
+// the last stream activity so the final word's fade finishes.
+export const STREAM_WORD_FADE_MS = 300;
+
+function isSpace(code: number): boolean {
+  return code === 32 || code === 10 || code === 9 || code === 13;
+}
+
+/**
+ * Where to stop emitting `text` for a reveal position of `at`: the end of the
+ * word `at` falls in, so a word is never shown half-written and a markdown
+ * token like `**bold**` arrives atomically instead of flashing literal syntax.
+ * While `streaming`, a text still mid-word trims back to the last whole word;
+ * a finished text runs out to its full length.
+ */
+export function revealWordEnd(text: string, at: number, streaming: boolean): number {
+  for (let i = Math.max(0, Math.ceil(at)); i < text.length; i++) {
+    if (isSpace(text.charCodeAt(i))) return i;
+  }
+  if (!streaming) return text.length;
+  let end = text.length;
+  while (end > 0 && !isSpace(text.charCodeAt(end - 1))) end--;
+  return end;
+}
 
 /**
  * Mutable per-message reveal state. Owned by the hook via refs; the pure stepper below
@@ -72,9 +110,12 @@ export interface SmoothRevealStep {
 export function stepSmoothReveal(
   state: SmoothRevealState,
   nowMs: number,
-  targetLength: number,
+  targetText: string,
   emittedCount: number,
+  streaming: boolean,
+  minEmitIntervalMs: number = MIN_EMIT_INTERVAL_MS,
 ): SmoothRevealStep {
+  const targetLength = targetText.length;
   const previousFrameAt = state.lastFrameAt;
   const dt = previousFrameAt ? Math.min((nowMs - previousFrameAt) / 1000, MAX_FRAME_SECONDS) : 0;
   state.lastFrameAt = nowMs;
@@ -99,10 +140,17 @@ export function stepSmoothReveal(
   }
 
   const nextCount = Math.floor(state.shown);
-  const caughtUp = nextCount >= targetLength;
+  // Emit on whole-word boundaries so a partial word (and partial markdown
+  // syntax) never reaches the DOM. A boundary further than
+  // REVEAL_WORD_HOLD_CHARS behind the reveal is a whitespaceless blob — emit
+  // the raw floored count rather than holding the whole blob.
+  const wordEnd = revealWordEnd(targetText, nextCount, streaming);
+  const emitCount = nextCount - wordEnd > REVEAL_WORD_HOLD_CHARS ? nextCount : wordEnd;
   const emitDue =
-    nextCount !== emittedCount &&
-    (caughtUp || state.lastEmitAt === 0 || nowMs - state.lastEmitAt >= MIN_EMIT_INTERVAL_MS);
+    emitCount > emittedCount &&
+    (emitCount >= targetLength ||
+      state.lastEmitAt === 0 ||
+      nowMs - state.lastEmitAt >= minEmitIntervalMs);
   if (emitDue) {
     state.lastEmitAt = nowMs;
   }
@@ -112,7 +160,7 @@ export function stepSmoothReveal(
     state.velocity = 0;
     state.lastFrameAt = 0;
   }
-  return { emitCount: emitDue ? nextCount : null, done };
+  return { emitCount: emitDue ? emitCount : null, done };
 }
 
 /**
@@ -123,8 +171,15 @@ export function stepSmoothReveal(
  * - Snaps to the full text the instant streaming ends (no trailing typewriter once the
  *   agent is done).
  * - Text already present on mount is shown immediately; only newly-arriving deltas animate.
+ * - `liveTail` false marks the transcript as detached from the tail: the reveal
+ *   keeps pacing (no snap) but React commits thin out to DETACHED_EMIT_INTERVAL_MS
+ *   since an off-screen row does not need per-frame growth.
  */
-export function useSmoothStreamedText(text: string, isStreaming: boolean): string {
+export function useSmoothStreamedText(
+  text: string,
+  isStreaming: boolean,
+  liveTail: boolean = true,
+): string {
   const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   // Testable env (jsdom/vitest) has no rAF or has mocked timers – smooth reveal would
   // jank and never settle. Fall back to immediate text so streaming tests stay
@@ -148,15 +203,31 @@ export function useSmoothStreamedText(text: string, isStreaming: boolean): strin
   const emittedRef = useRef(text.length);
   const rafRef = useRef<number | null>(null);
   const tickRef = useRef<(now: number) => void>(() => undefined);
+  // Commit spacing for the rAF loop — ref so a follow/detach flip mid-burst
+  // changes the next emit without resubscribing the animation effect.
+  const emitIntervalRef = useRef(MIN_EMIT_INTERVAL_MS);
+  useEffect(() => {
+    emitIntervalRef.current = liveTail ? MIN_EMIT_INTERVAL_MS : DETACHED_EMIT_INTERVAL_MS;
+  }, [liveTail]);
+  // One-shot stall release: when the reveal catches up but is holding back a
+  // still-growing trailing word, this emits the full arrived text after
+  // REVEAL_WORD_HOLD_MS so a genuine pause shows the partial word honestly.
+  const holdTimerRef = useRef<number | null>(null);
+  const clearHold = useCallback(() => {
+    if (holdTimerRef.current !== null) {
+      window.clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
+  }, []);
 
-  const cancelFrame = () => {
+  const cancelFrame = useCallback(() => {
     if (rafRef.current != null) {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     }
-  };
+  }, []);
 
-  const scheduleFrame = () => {
+  const scheduleFrame = useCallback(() => {
     if (rafRef.current != null) {
       return;
     }
@@ -164,7 +235,7 @@ export function useSmoothStreamedText(text: string, isStreaming: boolean): strin
       rafRef.current = null;
       tickRef.current(now);
     });
-  };
+  }, []);
 
   // Installed in an effect (not during render — that write would make the
   // whole hook ineligible for React Compiler). The tick reads everything
@@ -172,22 +243,42 @@ export function useSmoothStreamedText(text: string, isStreaming: boolean): strin
   useEffect(() => {
     tickRef.current = (now: number) => {
       const target = targetRef.current;
-      const step = stepSmoothReveal(stateRef.current, now, target.length, emittedRef.current);
+      const step = stepSmoothReveal(
+        stateRef.current,
+        now,
+        target,
+        emittedRef.current,
+        /* streaming */ true,
+        emitIntervalRef.current,
+      );
       if (step.emitCount !== null) {
+        clearHold();
         emittedRef.current = step.emitCount;
         setRevealed(step.emitCount >= target.length ? target : target.slice(0, step.emitCount));
       }
       if (!step.done) {
         scheduleFrame();
+      } else if (emittedRef.current < target.length && holdTimerRef.current === null) {
+        // Caught up mid-word: hold the partial word briefly; if the stream has
+        // really stalled on it, release everything that has arrived.
+        holdTimerRef.current = window.setTimeout(() => {
+          holdTimerRef.current = null;
+          const latest = targetRef.current;
+          emittedRef.current = latest.length;
+          setRevealed(latest);
+        }, REVEAL_WORD_HOLD_MS);
       }
       // When done, the loop sleeps; the text-update effect wakes it on the next flush.
     };
-  }, [scheduleFrame]);
+  }, [clearHold, scheduleFrame]);
 
   useEffect(() => {
     const previousTarget = targetRef.current;
     const isAppendOnly = text.length >= previousTarget.length && text.startsWith(previousTarget);
     targetRef.current = text;
+    // New arrivals are fresh stream activity — any armed stall release belongs
+    // to the previous target and would snap ahead of the paced reveal.
+    clearHold();
 
     if (!animate || !isAppendOnly) {
       cancelFrame();
@@ -200,9 +291,38 @@ export function useSmoothStreamedText(text: string, isStreaming: boolean): strin
     if (text.length > stateRef.current.shown) {
       scheduleFrame();
     }
-  }, [animate, cancelFrame, scheduleFrame, text]);
+  }, [animate, cancelFrame, clearHold, scheduleFrame, text]);
 
-  useEffect(() => () => cancelFrame(), [cancelFrame]);
+  useEffect(
+    () => () => {
+      cancelFrame();
+      clearHold();
+    },
+    [cancelFrame, clearHold],
+  );
 
   return animate ? revealed : text;
+}
+
+/**
+ * Whether a streamed message's words may still fade: true while `active` (the
+ * stream is live or a paced reveal is still behind the wire) and for one
+ * STREAM_WORD_FADE_MS linger after, so the last let-out words finish fading.
+ * Once off it stays off — a finished reply folded away and reopened must not
+ * replay the fade.
+ */
+export function useStreamingFadeLinger(active: boolean): boolean {
+  const [lingering, setLingering] = useState(false);
+
+  useEffect(() => {
+    if (active) {
+      setLingering(true);
+      return;
+    }
+    if (!lingering) return;
+    const timer = window.setTimeout(() => setLingering(false), STREAM_WORD_FADE_MS);
+    return () => window.clearTimeout(timer);
+  }, [active, lingering]);
+
+  return active || lingering;
 }
