@@ -17,7 +17,14 @@ import { afterEach, expect, it, vi } from "vitest";
 import { render, cleanup } from "vitest-browser-react";
 
 import { gitWorkingTreeDiffQueryOptions } from "~/lib/gitReactQuery";
+import { pauseWorkspaceEditors } from "~/lib/workspaceEditorSession";
 import { WorkspaceFilePreview } from "./WorkspaceFilePreview";
+
+// The 400ms autosave can land between real keystrokes under suite load and race
+// every call-count and version assertion, and browser-mode module mocks do not
+// reach the app's transitive imports. Pause the real sessions before typing
+// instead; explicit saves unpause. Autosave timing has dedicated coverage in
+// the session tests.
 
 /** Mirrors the Source control pane: a mounted observer of the unstaged patch. */
 function UnstagedChangesObserver(props: { cwd: string }) {
@@ -45,8 +52,15 @@ function installNativeApi(api: NativeApi): () => void {
   };
 }
 
+let lastQueryClient: QueryClient | undefined;
+
 function makeQueryClient() {
-  return new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  lastQueryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return lastQueryClient;
+}
+
+function pauseEditorAutosave() {
+  if (lastQueryClient) pauseWorkspaceEditors(lastQueryClient);
 }
 
 function loadedFile(overrides: Partial<ProjectReadFileResult> = {}): ProjectReadFileResult {
@@ -68,6 +82,7 @@ function shortcut(key: string): string {
 }
 
 async function replaceEditorContents(editor: Locator, contents: string): Promise<void> {
+  pauseEditorAutosave();
   await editor.click();
   await userEvent.keyboard(shortcut("a"));
   // Fill replaces DOM text without updating Pierre's document; use native input.
@@ -679,6 +694,7 @@ it("preserves unsaved Markdown edits across Preview and Source", async () => {
       </StrictMode>,
     );
     const editor = page.getByRole("textbox", { name: "Edit README.md" });
+    pauseEditorAutosave();
     await editor.click();
     await userEvent.keyboard(shortcut("a") + "unsaved");
     await expect.element(page.getByRole("status", { name: "Unsaved changes" })).toBeVisible();
@@ -707,10 +723,14 @@ it("preserves edits and focus when a save completes while typing", async () => {
       </QueryClientProvider>,
     );
     const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}` });
+    pauseEditorAutosave();
     await editor.click();
     await userEvent.keyboard(shortcut("a") + "first");
     await userEvent.keyboard(shortcut("s"));
     await vi.waitFor(() => expect(writeFile).toHaveBeenCalledTimes(1));
+    // The explicit save unpauses autosave; re-pause before typing through the
+    // pending write so a slow save cannot arm a trailing autosave flush.
+    pauseEditorAutosave();
     await userEvent.keyboard("second");
     await expect.element(editor).toHaveTextContent("firstsecond");
     complete({ relativePath: FILE_PATH, version: SAVED_VERSION });

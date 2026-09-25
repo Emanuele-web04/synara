@@ -23,6 +23,7 @@ import {
   MenuSubTrigger,
   MenuTrigger,
 } from "./ui/menu";
+import { waitForTransientPopups } from "../lib/browserPopupCleanup";
 
 const api = vi.hoisted(() => ({
   browser: {
@@ -161,7 +162,8 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await waitForTransientPopups();
   document.body.innerHTML = "";
 });
 
