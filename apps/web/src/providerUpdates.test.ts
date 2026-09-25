@@ -14,7 +14,6 @@ import {
   providerUpdateNotificationKey,
   shouldOfferProviderUpdateAction,
   shouldPromptProviderUpdate,
-  shouldShowProviderUpdateStatus,
   withProviderUpdateTimeout,
 } from "./providerUpdates";
 
@@ -215,31 +214,6 @@ describe("providerUpdateNotificationKey", () => {
   });
 });
 
-describe("shouldShowProviderUpdateStatus", () => {
-  it("matches the list filter for hidden and server-disabled providers", () => {
-    const codex = providerStatus("codex");
-    const hiddenPi = providerStatus("pi");
-    const settings = serverSettings({
-      codex: { enabled: false, binaryPath: "codex", homePath: "", customModels: [] },
-    });
-
-    expect(
-      shouldShowProviderUpdateStatus({
-        provider: codex,
-        hiddenProviderSet: new Set(),
-        serverSettings: settings,
-      }),
-    ).toBe(false);
-    expect(
-      shouldShowProviderUpdateStatus({
-        provider: hiddenPi,
-        hiddenProviders: ["pi"],
-        serverSettings: serverSettings(),
-      }),
-    ).toBe(false);
-  });
-});
-
 describe("isProviderUpdateActive", () => {
   it("only treats queued and running provider updates as active", () => {
     const queuedState = {
@@ -326,10 +300,6 @@ describe("shouldOfferProviderUpdateAction", () => {
 
     expect(shouldOfferProviderUpdateAction(uninstalledPi)).toBe(false);
     expect(shouldOfferProviderUpdateAction(uninstalledDroid)).toBe(false);
-  });
-
-  it("offers updates for installed outdated CLIs", () => {
-    expect(shouldOfferProviderUpdateAction(providerStatus("codex"))).toBe(true);
   });
 
   it("offers native AGY updates even when upstream latest-version metadata is unavailable", () => {

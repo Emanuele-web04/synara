@@ -36,7 +36,7 @@ export interface RunningChatsQuitStoreSlice {
 
 const UNTITLED_CHAT_TITLE = "Untitled thread";
 
-export function runningChatDisplayTitle(title: string | null | undefined): string {
+function runningChatDisplayTitle(title: string | null | undefined): string {
   const trimmed = title?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : UNTITLED_CHAT_TITLE;
 }

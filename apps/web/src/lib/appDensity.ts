@@ -34,7 +34,7 @@ export function normalizeUiDensity(value: unknown, fallback = DEFAULT_UI_DENSITY
   return isUiDensity(value) ? value : fallback;
 }
 
-export function getDensityScale(mode: UiDensity = DEFAULT_UI_DENSITY): number {
+function getDensityScale(mode: UiDensity = DEFAULT_UI_DENSITY): number {
   return DENSITY_SCALE_BY_MODE[mode];
 }
 

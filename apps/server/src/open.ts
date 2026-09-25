@@ -265,7 +265,7 @@ function resolveWindowsEditorUri(scheme: string, target: string): string {
   return `${scheme}://file${filePathSeparator}${encodedPath}${directorySuffix}${positionSuffix}`;
 }
 
-export function resolveWindowsEditorUriLaunch(
+function resolveWindowsEditorUriLaunch(
   editor: EditorDefinition,
   target: string,
   platform: NodeJS.Platform = process.platform,
@@ -280,10 +280,7 @@ export function resolveWindowsEditorUriLaunch(
   };
 }
 
-export function isCommandAvailable(
-  command: string,
-  options: CommandAvailabilityOptions = {},
-): boolean {
+function isCommandAvailable(command: string, options: CommandAvailabilityOptions = {}): boolean {
   return resolveExecutable(command, options) !== null;
 }
 

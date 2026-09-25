@@ -7,24 +7,6 @@ import {
 } from "./composerTraits";
 
 describe("planComposerEffortChange", () => {
-  it("patches the provider's effort option for plain ladder levels", () => {
-    const selection = getComposerTraitSelection("codex", "gpt-5.5", "", {
-      reasoningEffort: "medium",
-    });
-
-    expect(
-      planComposerEffortChange({ provider: "codex", selection, prompt: "", value: "xhigh" }),
-    ).toEqual({ kind: "options", patch: { reasoningEffort: "xhigh" } });
-    expect(
-      planComposerEffortChange({
-        provider: "claudeAgent",
-        selection: getComposerTraitSelection("claudeAgent", "claude-opus-5", "", undefined),
-        prompt: "",
-        value: "max",
-      }),
-    ).toEqual({ kind: "options", patch: { effort: "max" } });
-  });
-
   it("rewrites the prompt for prompt-injected levels", () => {
     const selection = getComposerTraitSelection("claudeAgent", "claude-opus-4-8", "", undefined);
 

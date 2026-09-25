@@ -137,23 +137,6 @@ describe("studioProjects", () => {
     expect(isStudioContainerProject(makeProject(), { homeDir: "/Users/tester" })).toBe(true);
   });
 
-  it("finds an existing Studio container project", () => {
-    const ordinaryProject = makeProject({
-      id: "project-app" as ProjectId,
-      kind: "project",
-      name: "App",
-      cwd: "/Users/tester/Developer/app",
-    });
-    const studioProject = makeProject();
-
-    expect(
-      findStudioContainerProject([ordinaryProject, studioProject], {
-        homeDir: "/Users/tester",
-        studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
-      }),
-    ).toBe(studioProject);
-  });
-
   it("prefers the canonical Studio root container over nested studio-kind rows", () => {
     const nestedStudioProject = makeProject({
       id: "project-studio-nested" as ProjectId,

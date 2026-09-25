@@ -249,7 +249,7 @@ export function deriveChromeUserAgent(
   return userAgent.replace(/\s{2,}/g, " ").trim();
 }
 
-export function chromeMajorVersionFromUserAgent(userAgent: string): string | null {
+function chromeMajorVersionFromUserAgent(userAgent: string): string | null {
   const match = /Chrome\/(\d+)/i.exec(userAgent);
   return match?.[1] ?? null;
 }

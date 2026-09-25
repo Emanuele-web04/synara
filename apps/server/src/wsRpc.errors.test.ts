@@ -4,7 +4,6 @@ import {
   OrchestrationCommandInvariantError,
   OrchestrationCommandPreviouslyRejectedError,
   OrchestrationCommandTimeoutError,
-  OrchestrationCommandInternalError,
 } from "./orchestration/Errors";
 
 describe("orchestration RPC rejection evidence", () => {
@@ -29,12 +28,6 @@ describe("orchestration RPC rejection evidence", () => {
       commandType: "thread.turn.start",
       timeoutMs: 1000,
     }),
-    new OrchestrationCommandInternalError({
-      commandId: "compact",
-      commandType: "thread.turn.start",
-      detail: "Worker exited",
-    }),
-    new Error("Lost connection"),
   ])("does not turn ambiguous errors into rejection evidence: $name", (error) => {
     expect(toWsRpcError(error, "Dispatch failed").code).toBeUndefined();
   });

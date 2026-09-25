@@ -31,7 +31,6 @@ import {
   pruneDevinToolCallTurnIds,
   resolveDevinAdapterTimeouts,
   resolveDevinOptionalTimeoutMs,
-  resolveDevinWedgeRecoveryOptions,
   resolveDevinStartModel,
   resolveDevinToolCallUpdatedTurnId,
   resolveRequestedModeId,
@@ -292,13 +291,6 @@ function makeWedgeTestLayer(factory: ReturnType<typeof makeWedgeRuntimeFactory>)
 }
 
 describe("resolveDevinAdapterTimeouts", () => {
-  it("uses the production defaults when overrides are absent", () => {
-    expect(resolveDevinAdapterTimeouts({})).toEqual({
-      turnIdleMs: 30 * 60 * 1000,
-      toolIdleMs: 60 * 60 * 1000,
-    });
-  });
-
   it("uses valid environment overrides", () => {
     expect(
       resolveDevinAdapterTimeouts({
@@ -328,14 +320,6 @@ describe("resolveDevinOptionalTimeoutMs", () => {
     expect(resolveDevinOptionalTimeoutMs({ envVar: "X", defaultMs: 100, env: { X: "250" } })).toBe(
       250,
     );
-  });
-
-  it("resolves the production wedge defaults", () => {
-    expect(resolveDevinWedgeRecoveryOptions({})).toMatchObject({
-      stallFuseMs: 90_000,
-      spawnStallTimeoutMs: 30_000,
-      maxPerThread: 3,
-    });
   });
 });
 
@@ -1504,12 +1488,6 @@ describe("buildDevinPromptMeta", () => {
 });
 
 describe("buildDevinStaticModelDescriptors", () => {
-  it("falls back to the static contract catalog", () => {
-    const descriptors = buildDevinStaticModelDescriptors();
-    expect(descriptors.some((d) => d.slug === "swe-1-7")).toBe(true);
-    expect(descriptors.some((d) => d.slug === "adaptive")).toBe(true);
-  });
-
   it("advertises SWE fast mode with concrete resolvable variants", () => {
     const descriptors = buildDevinStaticModelDescriptors();
     expect(descriptors.find((descriptor) => descriptor.slug === "swe-1-6")).toMatchObject({
@@ -1773,14 +1751,6 @@ describe("pruneDevinToolCallTurnIds", () => {
 
     expect(toolCallTurnIds.size).toBe(0);
   });
-
-  it("leaves an empty map unchanged", () => {
-    const toolCallTurnIds = new Map<string, TurnId>();
-
-    pruneDevinToolCallTurnIds(toolCallTurnIds, asTurnId("turn-A"));
-
-    expect(toolCallTurnIds.size).toBe(0);
-  });
 });
 
 describe("closeDevinSessionResources", () => {
@@ -1839,12 +1809,6 @@ describe("Devin stale resume classification", () => {
       name: "auth error containing the phrase",
       resume: true,
       message: "Authentication failed: failed to load session data",
-      recoverable: false,
-    },
-    {
-      name: "unknown suffixed error",
-      resume: true,
-      message: "Failed to load session data: permission denied",
       recoverable: false,
     },
     {

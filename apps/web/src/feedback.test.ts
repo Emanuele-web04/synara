@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { APP_VERSION } from "./branding";
 import {
   buildFeedbackSubmission,
-  FEEDBACK_CATEGORIES,
   formatFeedbackSummary,
   type FeedbackDiagnostics,
   type FeedbackThreadContext,
@@ -34,36 +34,6 @@ const DIAGNOSTICS: FeedbackDiagnostics = {
 };
 
 describe("formatFeedbackSummary", () => {
-  it("opens in the reporter's voice and lists the diagnostics a maintainer needs", () => {
-    const summary = formatFeedbackSummary({
-      category: "bug",
-      diagnostics: DIAGNOSTICS,
-    });
-
-    expect(summary).toBe(
-      [
-        "I ran into a bug in Synara 0.5.1, using codex with gpt-5.6-sol.",
-        "",
-        "Report type: Bug",
-        "App version: 0.5.1",
-        "Provider: codex",
-        "Model: gpt-5.6-sol",
-        "Project kind: project",
-        "Environment mode: worktree",
-        "Runtime mode: full-access",
-        "Interaction mode: default",
-        "Session status: running",
-        "Latest turn state: error",
-        "Thread size: 12 messages, 8 activities",
-        "At submission: the thread was in an error state, the agent was waiting for input.",
-        "Platform: MacIntel, viewport 1440x900",
-        "Language: en-US",
-        "User agent: Synara test agent",
-        "Submitted at: 2026-07-15T18:00:00.000Z",
-      ].join("\n"),
-    );
-  });
-
   it("falls back to a neutral opening and omits fields the session never set", () => {
     const summary = formatFeedbackSummary({
       category: null,
@@ -88,16 +58,6 @@ describe("formatFeedbackSummary", () => {
     expect(summary).not.toContain("Project kind:");
     expect(summary).not.toContain("Session status:");
   });
-
-  it.each(FEEDBACK_CATEGORIES)(
-    "routes the $label report with its own opening line",
-    ({ value, label, lead }) => {
-      const summary = formatFeedbackSummary({ category: value, diagnostics: DIAGNOSTICS });
-
-      expect(summary.startsWith(`${lead} in Synara 0.5.1`)).toBe(true);
-      expect(summary).toContain(`Report type: ${label}`);
-    },
-  );
 
   it("describes feedback sent outside an active chat without inventing provider context", () => {
     const summary = formatFeedbackSummary({
@@ -148,10 +108,26 @@ describe("buildFeedbackSubmission", () => {
       },
     });
     expect(submission.summary).toBe(
-      formatFeedbackSummary({
-        category: "bug",
-        diagnostics: submission.diagnostics,
-      }),
+      [
+        `I ran into a bug in Synara ${APP_VERSION}, using codex with gpt-5.6-sol.`,
+        "",
+        "Report type: Bug",
+        `App version: ${APP_VERSION}`,
+        "Provider: codex",
+        "Model: gpt-5.6-sol",
+        "Project kind: project",
+        "Environment mode: worktree",
+        "Runtime mode: full-access",
+        "Interaction mode: default",
+        "Session status: running",
+        "Latest turn state: error",
+        "Thread size: 12 messages, 8 activities",
+        "At submission: the thread was in an error state, the agent was waiting for input.",
+        "Platform: MacIntel, viewport 1440x900",
+        "Language: en-US",
+        "User agent: Synara test agent",
+        "Submitted at: 2026-07-15T18:00:00.000Z",
+      ].join("\n"),
     );
     expect(submission.summary).not.toContain("The composer stopped responding.");
     expect(submission).not.toHaveProperty("screenshot");

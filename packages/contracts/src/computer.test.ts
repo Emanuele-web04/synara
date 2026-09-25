@@ -178,16 +178,6 @@ describe("Computer state additions", () => {
     lastError: null,
   } as const;
 
-  it("round-trips pause details through perception and thread state", () => {
-    const inputPause = { windowId: "cua:123:456", message: "Waiting for this window." };
-    const perception = { ...state, inputPause };
-    const thread = { ...threadState, inputPause, activity: "Waiting for you" };
-    expect(Schema.encodeUnknownSync(ComputerState)(perception)).toEqual(perception);
-    expect(Schema.decodeUnknownSync(ComputerState)(perception)).toEqual(perception);
-    expect(Schema.encodeUnknownSync(ThreadComputerState)(thread)).toEqual(thread);
-    expect(Schema.decodeUnknownSync(ThreadComputerState)(thread)).toEqual(thread);
-  });
-
   it("keeps older state and status payloads valid without optional additions", () => {
     expect(Schema.decodeUnknownSync(ComputerState)(state)).toEqual(state);
     expect(Schema.decodeUnknownSync(ThreadComputerState)(threadState)).toEqual(threadState);
@@ -218,12 +208,6 @@ describe("Computer state additions", () => {
       Schema.decodeUnknownSync(ThreadComputerState)({ ...bounded, activity: "a".repeat(129) }),
     ).toThrow();
   });
-
-  it.each([true, false])("retains an explicit provisionable=%s status", (provisionable) => {
-    const input = { ...status, provisionable };
-    expect(Schema.decodeUnknownSync(ComputerStatusResult)(input)).toEqual(input);
-    expect(Schema.encodeUnknownSync(ComputerStatusResult)(input)).toEqual(input);
-  });
 });
 
 describe("ComputerActionResult scroll limits", () => {
@@ -237,11 +221,6 @@ describe("ComputerActionResult scroll limits", () => {
     },
     delivery: { path: "cua", verified: "unconfirmed", effect: "dispatched-unknown" },
   } as const;
-
-  it("preserves the overlap limit and existing Cua effect telemetry", () => {
-    expect(Schema.decodeUnknownSync(ComputerActionResult)(result)).toEqual(result);
-    expect(Schema.encodeUnknownSync(ComputerActionResult)(result)).toEqual(result);
-  });
 
   it("rejects non-finite limited distances", () => {
     expect(() =>

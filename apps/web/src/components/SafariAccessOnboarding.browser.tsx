@@ -101,31 +101,28 @@ describe("Safari access onboarding", () => {
     },
   );
 
-  it.each(["web", "unsupported", "unavailable"])(
-    "does not show macOS onboarding on %s",
-    async (mode) => {
-      if (mode === "web") delete window.desktopBridge;
-      else
-        window.desktopBridge = {
-          safariAccess: {
-            ...api,
-            getInfo:
-              mode === "unsupported"
-                ? async () => ({ supported: false })
-                : async () => {
-                    throw new Error("unavailable");
-                  },
-          },
-        } as unknown as DesktopBridge;
-      await render(<Harness />);
-      await expect.element(page.getByText("Next welcome")).toBeVisible();
-      await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
-      await expect
-        .element(page.getByRole("button", { name: "Safari import setup" }))
-        .not.toBeInTheDocument();
-      expect(localStorage.getItem(SAFARI_ACCESS_STORAGE_KEY)).toBeNull();
-    },
-  );
+  it.each(["web", "unavailable"])("does not show macOS onboarding on %s", async (mode) => {
+    if (mode === "web") delete window.desktopBridge;
+    else
+      window.desktopBridge = {
+        safariAccess: {
+          ...api,
+          getInfo:
+            mode === "unsupported"
+              ? async () => ({ supported: false })
+              : async () => {
+                  throw new Error("unavailable");
+                },
+        },
+      } as unknown as DesktopBridge;
+    await render(<Harness />);
+    await expect.element(page.getByText("Next welcome")).toBeVisible();
+    await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+    await expect
+      .element(page.getByRole("button", { name: "Safari import setup" }))
+      .not.toBeInTheDocument();
+    expect(localStorage.getItem(SAFARI_ACCESS_STORAGE_KEY)).toBeNull();
+  });
 
   it("does not reopen for a late Settings response after skipping", async () => {
     let resolve!: (opened: boolean) => void;

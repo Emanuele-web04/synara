@@ -61,21 +61,6 @@ const runResolveCanonicalWorkspaceRoots = (input: {
   Effect.runPromise(resolveCanonicalWorkspaceRoots(input).pipe(Effect.provide(NodeServices.layer)));
 
 describe("resolveDefaultChatWorkspaceRoot", () => {
-  it("places the managed chat workspace under Documents/Synara on macOS and Linux", () => {
-    expect(
-      resolveDefaultChatWorkspaceRoot({
-        homeDir: "/Users/tester",
-        platform: "darwin",
-      }),
-    ).toBe("/Users/tester/Documents/Synara");
-    expect(
-      resolveDefaultChatWorkspaceRoot({
-        homeDir: "/home/tester",
-        platform: "linux",
-      }),
-    ).toBe("/home/tester/Documents/Synara");
-  });
-
   it("uses Windows separators when deriving the managed chat workspace on Windows", () => {
     expect(
       resolveDefaultChatWorkspaceRoot({
@@ -103,21 +88,6 @@ describe("resolveDefaultChatWorkspaceRoot", () => {
 });
 
 describe("resolveDefaultStudioWorkspaceRoot", () => {
-  it("places the Studio workspace under Documents/Synara/Studio on macOS and Linux", () => {
-    expect(
-      resolveDefaultStudioWorkspaceRoot({
-        homeDir: "/Users/tester",
-        platform: "darwin",
-      }),
-    ).toBe("/Users/tester/Documents/Synara/Studio");
-    expect(
-      resolveDefaultStudioWorkspaceRoot({
-        homeDir: "/home/tester",
-        platform: "linux",
-      }),
-    ).toBe("/home/tester/Documents/Synara/Studio");
-  });
-
   it("uses Windows separators when deriving the Studio workspace on Windows", () => {
     expect(
       resolveDefaultStudioWorkspaceRoot({

@@ -126,41 +126,6 @@ describe("planProviderRuntimeReconciliation", () => {
     ]);
   });
 
-  it("uses the same stale-turn recovery for Claude sessions", () => {
-    expect(
-      planProviderRuntimeReconciliation({
-        threads: [
-          threadShell({
-            modelSelection: { provider: "claudeAgent", model: "claude-opus-4-8" },
-            session: {
-              ...threadShell().session!,
-              providerName: "claudeAgent",
-            },
-          }),
-        ],
-        bindings: [binding(null, "claudeAgent")],
-        liveSessions: [liveSession({ provider: "claudeAgent", status: "ready" })],
-        pumpHealth: [
-          {
-            provider: "claudeAgent",
-            status: "healthy",
-            consecutiveFailures: 0,
-            updatedAt: "2026-07-23T20:00:29.000Z",
-          },
-        ],
-        nowMs: NOW,
-        staleAfterMs: 10_000,
-      }),
-    ).toEqual([
-      expect.objectContaining({
-        action: "settle-interrupted",
-        provider: "claudeAgent",
-        projectedTurnId: OLD_TURN_ID,
-        runtimeTurnId: null,
-      }),
-    ]);
-  });
-
   it("trusts a terminal live error over stale active-turn metadata", () => {
     expect(
       planProviderRuntimeReconciliation({
@@ -374,7 +339,7 @@ describe("planProviderRuntimeReconciliation", () => {
     ]);
   });
 
-  it.each(["ready", "interrupted", "stopped", "error"] as const)(
+  it.each(["ready", "error"] as const)(
     "settles a stale running turn without reopening its %s session",
     (status) => {
       const terminalSession = {

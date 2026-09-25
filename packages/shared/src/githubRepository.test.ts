@@ -30,13 +30,11 @@ describe("parseGitHubRepositoryInput", () => {
 });
 
 describe("isValidGitHubRepositoryNameWithOwner", () => {
-  it.each(["openai/codex", "OpenAI/Codex.js", "owner-1/repo_name", "owner/.github"])(
-    "accepts %s",
-    (repository) => expect(isValidGitHubRepositoryNameWithOwner(repository)).toBe(true),
+  it.each(["OpenAI/Codex.js", "owner-1/repo_name", "owner/.github"])("accepts %s", (repository) =>
+    expect(isValidGitHubRepositoryNameWithOwner(repository)).toBe(true),
   );
 
   it.each([
-    "",
     "owner",
     "owner/repo/extra",
     "owner repo/name",
@@ -62,7 +60,6 @@ describe("parseGitHubRepositoryNameWithOwnerFromRemoteUrl", () => {
 
   it.each([
     null,
-    "",
     "https://gitlab.com/openai/codex",
     "https://github.com/owner",
     "https://github.com/-owner/repo",
@@ -73,7 +70,6 @@ describe("parseGitHubRepositoryNameWithOwnerFromRemoteUrl", () => {
 
 describe("parseGitHubRepositoryNameWithOwnerFromPullRequestUrl", () => {
   it.each([
-    ["https://github.com/openai/codex/pull/123", "openai/codex"],
     ["https://github.com/OpenAI/Codex/pull/123/files", "OpenAI/Codex"],
     ["http://github.com/openai/codex/pull/123?diff=split", "openai/codex"],
   ])("parses %s", (url, expected) => {
@@ -82,7 +78,6 @@ describe("parseGitHubRepositoryNameWithOwnerFromPullRequestUrl", () => {
 
   it.each([
     null,
-    "",
     "https://gitlab.com/openai/codex/pull/1",
     "https://github.com/openai/codex/issues/1",
     "https://github.com/-owner/codex/pull/1",

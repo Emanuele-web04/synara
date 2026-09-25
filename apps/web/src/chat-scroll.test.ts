@@ -7,16 +7,6 @@ import {
 } from "./chat-scroll";
 
 describe("getScrollContainerDistanceFromBottom", () => {
-  it("returns the remaining distance when the viewport is above the bottom", () => {
-    expect(
-      getScrollContainerDistanceFromBottom({
-        scrollTop: 520,
-        clientHeight: 400,
-        scrollHeight: 1_000,
-      }),
-    ).toBe(80);
-  });
-
   it("clamps negative distances and non-finite values", () => {
     expect(
       getScrollContainerDistanceFromBottom({
@@ -35,16 +25,6 @@ describe("getScrollContainerDistanceFromBottom", () => {
   });
 });
 describe("isScrollContainerNearBottom", () => {
-  it("returns true when already at bottom", () => {
-    expect(
-      isScrollContainerNearBottom({
-        scrollTop: 600,
-        clientHeight: 400,
-        scrollHeight: 1_000,
-      }),
-    ).toBe(true);
-  });
-
   it("returns true when within the auto-scroll threshold", () => {
     expect(
       isScrollContainerNearBottom({

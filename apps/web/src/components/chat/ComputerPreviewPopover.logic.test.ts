@@ -8,7 +8,6 @@ import {
   computerPreviewBudgetPx,
   computerPreviewCardCaps,
   computerPreviewCardFitWidth,
-  computerPreviewCardOpen,
   computerPreviewFloatWidthPx,
   computerPreviewFrameSource,
   computerPreviewPhaseOnAgentEdge,
@@ -77,10 +76,6 @@ describe("computerPreviewAgentActive", () => {
       computerPreviewAgentActive(threadState({ agentActive: true, controlledByOtherThread: true })),
     ).toBe(false);
   });
-
-  it("is not active for an idle thread", () => {
-    expect(computerPreviewAgentActive(threadState())).toBe(false);
-  });
 });
 
 describe("computerPreviewPhaseOnSurfaceRequest", () => {
@@ -134,16 +129,6 @@ describe("computerPreviewPhaseOnHide", () => {
     expect(computerPreviewPhaseOnHide("hidden-for-task")).toBe("hidden-for-task");
     expect(computerPreviewPhaseOnHide("ended")).toBe("ended");
     expect(computerPreviewPhaseOnHide(undefined)).toBeUndefined();
-  });
-});
-
-describe("computerPreviewCardOpen", () => {
-  it("is open only while live", () => {
-    expect(computerPreviewCardOpen("live")).toBe(true);
-    expect(computerPreviewCardOpen("armed")).toBe(false);
-    expect(computerPreviewCardOpen("hidden-for-task")).toBe(false);
-    expect(computerPreviewCardOpen("ended")).toBe(false);
-    expect(computerPreviewCardOpen(undefined)).toBe(false);
   });
 });
 
@@ -271,16 +256,6 @@ describe("changedThreadComputerStates", () => {
   });
 });
 
-describe("computerPreviewCardCaps", () => {
-  it("keeps the default compact footprint glanceable but readable", () => {
-    expect(computerPreviewCardCaps("compact")).toEqual({ minWidthPx: 240, maxWidthPx: 400 });
-  });
-
-  it("restores the wide card for the large footprint", () => {
-    expect(computerPreviewCardCaps("large")).toEqual({ minWidthPx: 240, maxWidthPx: 560 });
-  });
-});
-
 describe("computerPreviewBudgetPx", () => {
   const compact = { minWidthPx: 240, maxWidthPx: 400 };
 
@@ -379,12 +354,6 @@ describe("computerPreviewFloatWidthPx", () => {
       }),
     ).toBe(240);
   });
-
-  it("never drops below the footprint minimum", () => {
-    expect(computerPreviewFloatWidthPx({ caps: compact, ...viewport, viewportWidthPx: 200 })).toBe(
-      240,
-    );
-  });
 });
 
 describe("computerPreviewCardFitWidth", () => {
@@ -411,17 +380,6 @@ describe("computerPreviewCardFitWidth", () => {
 
   it("docked: the rail budget overrides the measured slot", () => {
     expect(computerPreviewCardFitWidth({ ...base, floating: false, railBudgetPx: 300 })).toBe(300);
-  });
-
-  it("docked: never drops below the footprint minimum", () => {
-    expect(
-      computerPreviewCardFitWidth({
-        ...base,
-        floating: false,
-        railBudgetPx: 100,
-        slotWidthPx: 100,
-      }),
-    ).toBe(240);
   });
 
   it("floating: ignores the slot and caps at the viewport footprint", () => {

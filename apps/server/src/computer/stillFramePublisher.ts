@@ -57,7 +57,7 @@ export function resolveStillIntervalMs(intervalMs: number | undefined): number {
  * different sizes never even reach the hash, then a digest of the pixels —
  * cheap next to the PNG encode that produced them.
  */
-export function frameDigest(bytes: Uint8Array): string {
+function frameDigest(bytes: Uint8Array): string {
   return `${bytes.byteLength}:${createHash("sha1").update(bytes).digest("hex")}`;
 }
 
@@ -67,7 +67,7 @@ export function frameDigest(bytes: Uint8Array): string {
  * receiver with nothing to draw still gets a picture via `force`, including
  * a force that arrives mid-capture.
  */
-export class StillFrameDedupe {
+class StillFrameDedupe {
   #publishedDigest: string | undefined;
   #pendingForce = false;
 

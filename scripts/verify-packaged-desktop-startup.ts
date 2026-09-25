@@ -359,9 +359,7 @@ export function readPackagedStartupLogTails(logDirectory: string): string {
     .join("\n");
 }
 
-export function resolveNativePackagedDesktopPlatform(
-  platform: NodeJS.Platform,
-): PackagedDesktopPlatform {
+function resolveNativePackagedDesktopPlatform(platform: NodeJS.Platform): PackagedDesktopPlatform {
   if (platform === "darwin") return "mac";
   if (platform === "win32") return "win";
   return "linux";

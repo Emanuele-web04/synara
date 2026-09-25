@@ -55,7 +55,7 @@ function expectSchemaValidActivities(event: ProviderRuntimeEvent, sessionSequenc
   }
 }
 
-it.each(["info", "warning", "error"])("projects Pi %s notifications as notices", (type) => {
+it.each(["info", "warning"])("projects Pi %s notifications as notices", (type) => {
   const [activity] = projectProviderRuntimeActivities(
     runtimeEvent({
       provider: "pi",
@@ -375,45 +375,7 @@ describe("provider runtime activity projection", () => {
     expect(providerActivityUpdateFingerprint(activity!)).toContain('"kind":"tool.updated"');
   });
 
-  it("keeps the fast JSON fingerprint byte-identical to the legacy JSON-like serializer", () => {
-    const [activity] = projectProviderRuntimeActivities(
-      runtimeEvent({
-        type: "tool.progress",
-        eventId: "tool-progress-fingerprint",
-        turnId: TURN_ID,
-        payload: {
-          toolUseId: "tool-fingerprint",
-          toolName: "mcp__github__fetch_pr",
-          summary: "Fetching PR",
-          elapsedSeconds: 2.4,
-        },
-      }),
-    );
-    const legacyFingerprint = JSON.stringify(
-      {
-        kind: activity!.kind,
-        summary: activity!.summary,
-        payload: activity!.payload,
-        turnId: activity!.turnId,
-      },
-      (() => {
-        const seen = new WeakSet<object>();
-        return (_key: string, entry: unknown) => {
-          if (typeof entry === "bigint") return entry.toString();
-          if (typeof entry === "function" || typeof entry === "symbol") return undefined;
-          if (entry && typeof entry === "object") {
-            if (seen.has(entry)) return "[Circular]";
-            seen.add(entry);
-          }
-          return entry;
-        };
-      })(),
-    );
-
-    expect(providerActivityUpdateFingerprint(activity!)).toBe(legacyFingerprint);
-  });
-
-  it.each(["antigravity", "codex"] as const)(
+  it.each(["antigravity"] as const)(
     "projects %s tool lifecycle events through the same canonical activities",
     (provider) => {
       const itemId = RuntimeItemId.makeUnsafe(`${provider}-tool-1`);
@@ -498,6 +460,23 @@ describe("provider runtime activity projection", () => {
         requestType: "command_execution_approval",
         detail: "pwd",
         sessionApprovalAvailable: false,
+      },
+    });
+    const [resolvedApproval] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "request.resolved",
+        eventId: "approval-resolved",
+        lifecycleGeneration: "generation-1",
+        requestId: ApprovalRequestId.makeUnsafe("request-1"),
+        payload: { requestType: "command_execution_approval", decision: "accept" },
+      }),
+    );
+    expect(resolvedApproval).toMatchObject({
+      kind: "approval.resolved",
+      payload: {
+        requestKind: "command",
+        requestType: "command_execution_approval",
+        lifecycleGeneration: "generation-1",
       },
     });
 

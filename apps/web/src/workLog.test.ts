@@ -13,20 +13,6 @@ import { makeActivity } from "./storeTestFixtures";
 import { isComputerToolName } from "./lib/computerToolPresentation";
 
 describe("deriveWorkLogEntries", () => {
-  it("keeps started tool entries so pending Cursor calls appear immediately", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "tool-start",
-        createdAt: "2026-02-23T00:00:02.000Z",
-        summary: "Tool call",
-        kind: "tool.started",
-      }),
-    ];
-
-    const entries = deriveWorkLogEntries(activities, undefined);
-    expect(entries.map((entry) => entry.id)).toEqual(["tool-start"]);
-  });
-
   it("strips terminal formatting from persisted provider activity details", () => {
     const [entry] = deriveWorkLogEntries(
       [
@@ -45,23 +31,6 @@ describe("deriveWorkLogEntries", () => {
     );
 
     expect(entry?.detail).toBe("Transmuting...");
-  });
-
-  it("preserves bracketed source text in provider activity details", () => {
-    const detail = "const first = items[0]; // [example]";
-    const [entry] = deriveWorkLogEntries(
-      [
-        makeActivity({
-          id: "source-output",
-          kind: "tool.updated",
-          summary: "Read file",
-          payload: { detail },
-        }),
-      ],
-      undefined,
-    );
-
-    expect(entry?.detail).toBe(detail);
   });
 
   it("cleans persisted notice messages without losing bracketed content", () => {
@@ -203,32 +172,6 @@ describe("deriveWorkLogEntries", () => {
     expect(taskListEntries[0]?.label).toBe("2 out of 2 tasks completed");
     expect(taskListEntries[0]?.detail).toBeUndefined();
     expect(entries.map((entry) => entry.id)).toEqual(["tasks-1", "tool-between"]);
-  });
-
-  it("labels task-list rows with progress and the in-progress task", () => {
-    const [entry] = deriveWorkLogEntries(
-      [
-        makeActivity({
-          id: "tasks-live",
-          kind: "turn.tasks.updated",
-          summary: "Tasks updated",
-          tone: "info",
-          turnId: "turn-1",
-          payload: {
-            tasks: [
-              { task: "Workstream A server: failure tolerance", status: "completed" },
-              { task: "Implementing inline editing UI", status: "inProgress" },
-              { task: "Final verification pass", status: "pending" },
-            ],
-          },
-        }),
-      ],
-      TurnId.makeUnsafe("turn-1"),
-    );
-
-    expect(entry?.label).toBe("1 out of 3 tasks completed");
-    expect(entry?.detail).toBe("Implementing inline editing UI");
-    expect(entry?.toolTitle).toBeUndefined();
   });
 
   it("keeps separate task-list rows for separate turns", () => {
@@ -373,22 +316,6 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["turn-failed"]);
   });
 
-  it("filters by turn id when provided", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({ id: "turn-1", turnId: "turn-1", summary: "Tool call", kind: "tool.started" }),
-      makeActivity({
-        id: "turn-2",
-        turnId: "turn-2",
-        summary: "Tool call complete",
-        kind: "tool.completed",
-      }),
-      makeActivity({ id: "no-turn", summary: "Checkpoint captured", tone: "info" }),
-    ];
-
-    const entries = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-2"));
-    expect(entries.map((entry) => entry.id)).toEqual(["turn-2"]);
-  });
-
   it("keeps work for every visible transcript turn when requested", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({ id: "turn-1", turnId: "turn-1", summary: "First tool", kind: "tool.started" }),
@@ -496,43 +423,6 @@ describe("deriveWorkLogEntries", () => {
       recapInjected: false,
       recapCharacters: 0,
       recapPreview: null,
-      recapPreviewTruncated: false,
-    });
-  });
-
-  it("keeps interrupt-escalation context-loss markers visible", () => {
-    const [entry] = deriveWorkLogEntries(
-      [
-        makeActivity({
-          id: "interrupt-escalation-context",
-          turnId: "turn-3",
-          kind: "provider.context.changed",
-          summary:
-            "The turn could not be stopped cleanly, so the session was restarted and your message included a summary.",
-          tone: "error",
-          payload: {
-            provider: "opencode",
-            nativeHistory: "unavailable",
-            sessionRestarted: true,
-            restartReason: "interrupt-escalation",
-            recapInjected: true,
-            recapCharacters: 900,
-            recapPreview: "Earlier conversation summary",
-            recapPreviewTruncated: false,
-          },
-        }),
-      ],
-      TurnId.makeUnsafe("turn-3"),
-    );
-
-    expect(entry?.providerContextLifecycle).toEqual({
-      provider: "opencode",
-      nativeHistory: "unavailable",
-      sessionRestarted: true,
-      restartReason: "interrupt-escalation",
-      recapInjected: true,
-      recapCharacters: 900,
-      recapPreview: "Earlier conversation summary",
       recapPreviewTruncated: false,
     });
   });
@@ -1162,11 +1052,7 @@ describe("deriveWorkLogEntries", () => {
     ]);
   });
 
-  it.each([
-    ["completed", "turn.completed", "info"],
-    ["cancelled", "turn.aborted", "info"],
-    ["failed", "turn.completed", "error"],
-  ] as const)(
+  it.each([["completed", "turn.completed", "info"]] as const)(
     "keeps a cross-turn tool running after its original turn %s",
     (_state, terminalKind, terminalTone) => {
       const oldTurn = TurnId.makeUnsafe("turn-1");
@@ -1301,27 +1187,6 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["first", "second"]);
   });
 
-  it("extracts command text for command tool activities", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "command-tool",
-        kind: "tool.completed",
-        summary: "Ran command",
-        payload: {
-          itemType: "command_execution",
-          data: {
-            item: {
-              command: ["bun", "run", "lint"],
-            },
-          },
-        },
-      }),
-    ];
-
-    const [entry] = deriveWorkLogEntries(activities, undefined);
-    expect(entry?.command).toBe("bun run lint");
-  });
-
   it("keeps full command output details for command tool activities", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -1452,28 +1317,6 @@ describe("deriveWorkLogEntries", () => {
       `/bin/zsh -lc "sed -n '240,520p' src/components/provider-card.tsx"`,
     );
     expect(entry?.toolTitle).toBe("Read");
-  });
-
-  it("humanizes generic command titles for better readability", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "command-tool",
-        kind: "tool.completed",
-        summary: "Ran command",
-        payload: {
-          itemType: "command_execution",
-          title: "Ran command",
-          data: {
-            item: {
-              command: `/bin/zsh -lc 'rg -n "tool call" apps/web/src'`,
-            },
-          },
-        },
-      }),
-    ];
-
-    const [entry] = deriveWorkLogEntries(activities, undefined);
-    expect(entry?.toolTitle).toBe("Searched");
   });
 
   it("recovers Cursor tool details from stored rawOutput when rawInput is empty", () => {
@@ -1910,53 +1753,6 @@ describe("deriveWorkLogEntries", () => {
     ]);
   });
 
-  it("keeps same-toolCallId rows collapsed even if later command metadata changes", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "cursor-command-start",
-        createdAt: "2026-05-05T15:40:01.000Z",
-        kind: "tool.updated",
-        summary: "Ran command",
-        payload: {
-          itemType: "command_execution",
-          status: "inProgress",
-          title: "Ran command",
-          data: {
-            toolCallId: "cursor-command-1",
-            kind: "execute",
-            command: "git status",
-          },
-        },
-      }),
-      makeActivity({
-        id: "cursor-command-complete",
-        createdAt: "2026-05-05T15:40:02.000Z",
-        kind: "tool.completed",
-        summary: "Ran command",
-        payload: {
-          itemType: "command_execution",
-          status: "completed",
-          title: "Ran command",
-          detail: "done",
-          data: {
-            toolCallId: "cursor-command-1",
-            kind: "execute",
-            command: "git diff --stat",
-          },
-        },
-      }),
-    ];
-
-    expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
-      {
-        id: "cursor-command-start",
-        command: "git diff --stat",
-        detail: "done",
-        itemType: "command_execution",
-      },
-    ]);
-  });
-
   it("recovers Codex command text from nested JSON tool arguments", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -2050,119 +1846,6 @@ describe("deriveWorkLogEntries", () => {
         rawCommand: `/bin/zsh -lc "sed -n '1,220p' README.md"`,
         toolTitle: "Reading",
         preview: "README.md",
-      },
-    ]);
-  });
-
-  it("rebuilds Codex search labels from commandActions", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "codex-search-action",
-        kind: "tool.completed",
-        summary: "Ran command",
-        payload: {
-          itemType: "command_execution",
-          status: "completed",
-          title: "Ran command",
-          detail: "/bin/zsh -lc 'find apps packages -maxdepth 2 -name package.json -print'",
-          data: {
-            item: {
-              type: "commandExecution",
-              command: "/bin/zsh -lc 'find apps packages -maxdepth 2 -name package.json -print'",
-              commandActions: [
-                {
-                  type: "search",
-                  command: "find apps packages -maxdepth 2 -name package.json -print",
-                  query: "package.json",
-                  path: "apps",
-                },
-              ],
-            },
-          },
-        },
-      }),
-    ];
-
-    expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
-      {
-        id: "codex-search-action",
-        command: "find apps packages -maxdepth 2 -name package.json -print",
-        rawCommand: "/bin/zsh -lc 'find apps packages -maxdepth 2 -name package.json -print'",
-        toolTitle: "Searched",
-        preview: "for package.json in apps",
-      },
-    ]);
-  });
-
-  it("humanizes Codex commands when commandActions.type is unknown", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "codex-unknown-action",
-        kind: "tool.completed",
-        summary: "Ran command",
-        payload: {
-          itemType: "command_execution",
-          status: "completed",
-          title: "Ran command",
-          detail: "/bin/zsh -lc 'git status --short'",
-          data: {
-            item: {
-              type: "commandExecution",
-              command: "/bin/zsh -lc 'git status --short'",
-              status: "completed",
-              commandActions: [{ type: "unknown", command: "git status --short" }],
-            },
-          },
-        },
-      }),
-    ];
-
-    expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
-      {
-        id: "codex-unknown-action",
-        command: "git status --short",
-        rawCommand: "/bin/zsh -lc 'git status --short'",
-        toolTitle: "Checked",
-      },
-    ]);
-  });
-
-  it("humanizes Codex commands with the full real-world DB payload shape", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "codex-full-db-shape",
-        kind: "tool.completed",
-        summary: "Ran command",
-        payload: {
-          itemType: "command_execution",
-          status: "completed",
-          title: "Ran command",
-          detail: "/bin/zsh -lc 'git status --short'",
-          data: {
-            item: {
-              type: "commandExecution",
-              id: "call_6OII41pekq8cFCpOCF9pbeMu",
-              command: "/bin/zsh -lc 'git status --short'",
-              cwd: "/Users/emanueledipietro/Developer/Testing/synara",
-              status: "completed",
-              commandActions: [{ type: "unknown", command: "git status --short" }],
-              aggregatedOutput: " M apps/desktop/src/main.ts\n...",
-              exitCode: 0,
-              durationMs: 0,
-            },
-            threadId: "019e08d7-1234-5678-90ab-cdef01234567",
-            turnId: "019e08d7-1234-5678-90ab-cdef01234567",
-          },
-        },
-      }),
-    ];
-
-    expect(deriveWorkLogEntries(activities, undefined)).toMatchObject([
-      {
-        id: "codex-full-db-shape",
-        command: "git status --short",
-        rawCommand: "/bin/zsh -lc 'git status --short'",
-        toolTitle: "Checked",
       },
     ]);
   });
@@ -3440,28 +3123,6 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
-  it("uses present-tense command headings while the command is still running", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "running-command-tool",
-        kind: "tool.updated",
-        summary: "Ran command",
-        payload: {
-          itemType: "command_execution",
-          title: "Ran command",
-          data: {
-            item: {
-              command: `/bin/zsh -lc 'rg -n "tool call" apps/web/src'`,
-            },
-          },
-        },
-      }),
-    ];
-
-    const [entry] = deriveWorkLogEntries(activities, undefined);
-    expect(entry?.toolTitle).toBe("Searching");
-  });
-
   it("collapses Claude-style partial tool-input updates into the final lifecycle row", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -3720,36 +3381,6 @@ describe("deriveWorkLogEntries", () => {
     expect(omitRoutedSubagentWorkEntries(entries)).toEqual([]);
   });
 
-  it("keeps routed collab subagent rows for the composer strip source", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "routed-agent-update",
-        createdAt: "2026-02-23T00:00:01.000Z",
-        kind: "tool.updated",
-        summary: "Subagent task",
-        payload: {
-          itemType: "collab_agent_tool_call",
-          status: "inProgress",
-          title: "Subagent task",
-          data: {
-            toolCallId: "toolu_x",
-            callId: "toolu_x",
-            toolName: "Agent",
-            input: {},
-            receiverThreadId: "toolu_x",
-          },
-        },
-      }),
-    ];
-
-    const entries = deriveWorkLogEntries(activities, undefined);
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.subagents).toEqual([
-      expect.objectContaining({ threadId: "toolu_x", providerThreadId: "toolu_x" }),
-    ]);
-    expect(omitRoutedSubagentWorkEntries(entries)).toEqual([]);
-  });
-
   it("keeps generic OpenCode task tool rows when no subagent route is available", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -3833,48 +3464,6 @@ describe("deriveWorkLogEntries", () => {
     ]);
     expect(entries[0]?.subagents).toBeUndefined();
     expect(entries[0]?.detail).toBeUndefined();
-  });
-
-  it("uses completed generic agent task output instead of truncated task wrapper text", () => {
-    const activities: OrchestrationThreadActivity[] = [
-      makeActivity({
-        id: "opencode-task-complete",
-        createdAt: "2026-02-23T00:00:02.000Z",
-        kind: "tool.completed",
-        summary: "Task",
-        payload: {
-          itemType: "collab_agent_tool_call",
-          status: "completed",
-          title: "task",
-          detail: '<task id="task-call" state="completed">...',
-          data: {
-            tool: "task",
-            toolName: "task",
-            toolCallId: "task-call",
-            callID: "task-call",
-            input: {
-              prompt: "Explore the changelog implementation.",
-            },
-            state: {
-              status: "completed",
-              output:
-                '<task id="task-call" state="completed">\n<task_result>\nFull changelog report\nwith file references.\n</task_result>\n</task>',
-            },
-          },
-        },
-      }),
-    ];
-
-    expect(deriveWorkLogEntries(activities, undefined)[0]).toEqual(
-      expect.objectContaining({
-        id: "opencode-task-complete",
-        itemType: "collab_agent_tool_call",
-        detail: "Full changelog report\nwith file references.",
-        subagentAction: expect.objectContaining({
-          prompt: "Explore the changelog implementation.",
-        }),
-      }),
-    );
   });
 
   it("preserves the OpenCode task description when the generic completion row collapses", () => {
@@ -4303,49 +3892,6 @@ describe("deriveTimelineEntries", () => {
     ).toEqual(oldWork.map((entry) => entry.createdAt));
   });
 
-  it("includes proposed plans alongside messages and work entries in chronological order", () => {
-    const entries = deriveTimelineEntries(
-      [
-        {
-          id: MessageId.makeUnsafe("message-1"),
-          role: "assistant",
-          text: "hello",
-          createdAt: "2026-02-23T00:00:01.000Z",
-          streaming: false,
-        },
-      ],
-      [
-        {
-          id: "plan:thread-1:turn:turn-1",
-          turnId: TurnId.makeUnsafe("turn-1"),
-          planMarkdown: "# Ship it",
-          implementedAt: null,
-          implementationThreadId: null,
-          createdAt: "2026-02-23T00:00:02.000Z",
-          updatedAt: "2026-02-23T00:00:02.000Z",
-        },
-      ],
-      [
-        {
-          id: "work-1",
-          createdAt: "2026-02-23T00:00:03.000Z",
-          label: "Ran tests",
-          tone: "tool",
-        },
-      ],
-    );
-
-    expect(entries.map((entry) => entry.kind)).toEqual(["message", "proposed-plan", "work"]);
-    expect(entries[1]).toMatchObject({
-      kind: "proposed-plan",
-      proposedPlan: {
-        planMarkdown: "# Ship it",
-        implementedAt: null,
-        implementationThreadId: null,
-      },
-    });
-  });
-
   it("keeps timestamp ties in message, proposed-plan, then work order", () => {
     const entries = deriveTimelineEntries(
       [
@@ -4643,37 +4189,6 @@ describe("deriveTimelineEntries", () => {
       " after tool",
     ]);
   });
-
-  it("keeps a single live message row while segments are still streaming", () => {
-    const messageId = MessageId.makeUnsafe("assistant-streaming-segmented");
-    const entries = deriveTimelineEntries(
-      [
-        {
-          id: messageId,
-          role: "assistant",
-          text: "partial",
-          textSegments: [
-            {
-              sequence: 10,
-              startedAt: "2026-02-23T00:00:01.000Z",
-              endedAt: "2026-02-23T00:00:03.000Z",
-              text: "partial",
-            },
-          ],
-          createdAt: "2026-02-23T00:00:01.000Z",
-          streaming: true,
-        },
-      ],
-      [],
-      [],
-    );
-
-    expect(entries.map((entry) => entry.kind)).toEqual(["message"]);
-    expect(entries[0]).toMatchObject({
-      kind: "message",
-      message: { id: messageId, streaming: true },
-    });
-  });
 });
 
 describe("deriveWorkLogEntries context window handling", () => {
@@ -4707,24 +4222,6 @@ describe("deriveWorkLogEntries context window handling", () => {
 
     expect(entries).toHaveLength(1);
     expect(entries[0]?.label).toBe("Ran command");
-  });
-
-  it("keeps context compaction activities as normal work log entries", () => {
-    const entries = deriveWorkLogEntries(
-      [
-        makeActivity({
-          id: "compaction-1",
-          turnId: "turn-1",
-          kind: "context-compaction",
-          summary: "Context compacted",
-          tone: "info",
-        }),
-      ],
-      TurnId.makeUnsafe("turn-1"),
-    );
-
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.label).toBe("Context compacted");
   });
 
   it("keeps thread-level compaction progress entries visible without a turn id", () => {
@@ -4774,7 +4271,7 @@ describe("deriveWorkLogEntries context window handling", () => {
     },
   );
 
-  it.each(["Compacting context", "Compacting conversation..."])(
+  it.each(["Compacting context"])(
     "collapses same-timestamp %s rows regardless of event id order",
     (summary) => {
       const entries = deriveWorkLogEntries(

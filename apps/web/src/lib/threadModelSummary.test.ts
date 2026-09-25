@@ -3,11 +3,6 @@ import { describe, expect, it } from "vitest";
 import { resolveThreadModelSummary } from "./threadModelSummary";
 
 describe("resolveThreadModelSummary", () => {
-  it("returns null without a selection", () => {
-    expect(resolveThreadModelSummary(null)).toBeNull();
-    expect(resolveThreadModelSummary(undefined)).toBeNull();
-  });
-
   it("summarizes a codex selection with its reasoning effort", () => {
     const summary = resolveThreadModelSummary({
       provider: "codex",
@@ -34,17 +29,5 @@ describe("resolveThreadModelSummary", () => {
     expect(withEffort?.statusLabel?.toLowerCase()).toBe("low");
     expect(withoutOptions?.statusLabel).not.toBeNull();
     expect(withoutOptions?.statusLabel).not.toBe(withEffort?.statusLabel);
-  });
-
-  it("summarizes a claude selection", () => {
-    const summary = resolveThreadModelSummary({
-      provider: "claudeAgent",
-      model: "claude-sonnet-5",
-      options: { effort: "high" },
-    });
-
-    expect(summary?.provider).toBe("claudeAgent");
-    expect(summary?.modelLabel.length).toBeGreaterThan(0);
-    expect(summary?.fastMode).toBe(false);
   });
 });

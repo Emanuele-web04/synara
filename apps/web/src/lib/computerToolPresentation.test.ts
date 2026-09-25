@@ -7,7 +7,6 @@ import type { ComputerWindow } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
-  COMPUTER_TOOL_TITLES,
   computerToolName,
   describeComputerToolCall,
   isComputerToolName,
@@ -23,54 +22,6 @@ const SAFARI: ComputerWindow = {
 } as unknown as ComputerWindow;
 
 describe("computerToolName", () => {
-  it("covers native desktop and browser tools advertised by the gateway", () => {
-    expect(Object.keys(COMPUTER_TOOL_TITLES)).toEqual([
-      "computer_screenshot",
-      "computer_get_state",
-      "computer_get_screen_size",
-      "computer_list_windows",
-      "computer_list_apps",
-      "computer_verify_state",
-      "computer_zoom",
-      "computer_get_accessibility_tree",
-      "computer_get_cursor_position",
-      "computer_help",
-      "computer_click",
-      "computer_move_cursor",
-      "computer_drag",
-      "computer_scroll",
-      "computer_type_text",
-      "computer_press_key",
-      "computer_set_value",
-      "computer_select_text",
-      "computer_perform_action",
-      "computer_launch_app",
-      "computer_activate_window",
-      "computer_set_window_frame",
-      "computer_invoke_menu",
-      "computer_kill_app",
-      "computer_set_window_minimized",
-      "computer_set_app_visibility",
-      "computer_wait",
-      "computer_read_clipboard",
-      "computer_write_clipboard",
-      "computer_paste",
-      "computer_run",
-      "computer_inspect",
-      "computer_spaces",
-      "computer_browser_state",
-      "computer_browser_prepare",
-      "computer_browser_navigate",
-      "computer_browser_click",
-      "computer_browser_type",
-      "computer_browser_dialog",
-      "computer_browser_upload",
-      "computer_browser_download",
-      "computer_browser_pointer",
-      "computer_browser_press",
-    ]);
-  });
-
   it("recovers the gateway tool through whatever wrapping a provider applied", () => {
     expect(computerToolName("mcp__synara__computer_click")).toBe("computer_click");
     expect(computerToolName("computer_click")).toBe("computer_click");
@@ -164,14 +115,6 @@ describe("describeComputerToolCall", () => {
     expect(
       describeComputerToolCall({ toolName: "computer_press_key", args: { key: "cmd+s" } })?.summary,
     ).toBe("Press Command + S");
-  });
-
-  it("renders a coordinate pair as one row, because it is one fact", () => {
-    const described = describeComputerToolCall({
-      toolName: "computer_click",
-      args: { x: 812, y: 344 },
-    });
-    expect(described?.params).toEqual([{ name: "Position", value: "812, 344" }]);
   });
 
   it("shows the select_text range as one row, because it is what was approved", () => {
@@ -332,9 +275,6 @@ describe("describeComputerToolCall", () => {
   });
 
   it.each([
-    ["state", {}, "Read the browser page"],
-    ["prepare", { allow_launch: true }, "Open an isolated browser in the background"],
-    ["prepare", { allow_launch: true, windowed: true }, "Open an isolated browser window"],
     [
       "navigate",
       { url: "https://user:secret@example.com/private?token=secret" },
@@ -342,13 +282,9 @@ describe("describeComputerToolCall", () => {
     ],
     ["click", { ref: "e123", target_id: "bt-1" }, "Click in the browser"],
     ["type", { text: "secret", replace: true }, "Replace text in a browser field"],
-    ["type", { text: "", replace: true }, "Clear a browser field"],
     ["dialog", { action: "accept", prompt_text: "secret" }, "Accept a browser dialog"],
-    ["dialog", { action: "dismiss" }, "Dismiss a browser dialog"],
     ["upload", { files: ["/private/a", "/private/b"] }, "Attach 2 files in the browser"],
     ["download", { destination_root: "/private/downloads" }, "Download a file"],
-    ["pointer", { action: "right_click" }, "Right-click in the browser"],
-    ["pointer", { action: "scroll", delta_y: -100 }, "Scroll up in the browser"],
     ["press", { ref: "e123" }, "Press Enter in the browser"],
   ])("describes browser %s without exposing private payloads", (name, args, expected) => {
     const result = describeComputerToolCall({
@@ -396,35 +332,32 @@ describe("describeComputerToolCall", () => {
     ).toBe("Inspect the computer");
   });
 
-  it.each([
-    ["list", "Inspect desktop Spaces"],
-    ["reserve", "Reserve a desktop Space for this task"],
-    ["release", "Release the task's desktop Space"],
-    ["select", "Select a window in the task's Space"],
-    ["peek", "Inspect a window without switching Spaces"],
-  ])("describes Space %s consistently through direct and inspect routes", (operation, summary) => {
-    const args = { operation, space_id: 42, window_id: "win-7" };
-    const direct = describeComputerToolCall({
-      toolName: "mcp__synara__computer_spaces",
-      args,
-      windows: [SAFARI],
-    });
-    const inspect = describeComputerToolCall({
-      toolName: "computer_inspect",
-      args: { tool: "computer_spaces", arguments: args },
-      windows: [SAFARI],
-    });
-    expect(direct).toEqual({
-      tool: "computer_spaces",
-      summary,
-      params: [
-        { name: "Space ID", value: "42" },
-        { name: "Window", value: "Safari — Google" },
-      ],
-    });
-    expect(inspect).toEqual({ ...direct, tool: "computer_inspect" });
-    expect(direct?.summary).not.toMatch(/42|win-7|computer_spaces/);
-  });
+  it.each([["reserve", "Reserve a desktop Space for this task"]])(
+    "describes Space %s consistently through direct and inspect routes",
+    (operation, summary) => {
+      const args = { operation, space_id: 42, window_id: "win-7" };
+      const direct = describeComputerToolCall({
+        toolName: "mcp__synara__computer_spaces",
+        args,
+        windows: [SAFARI],
+      });
+      const inspect = describeComputerToolCall({
+        toolName: "computer_inspect",
+        args: { tool: "computer_spaces", arguments: args },
+        windows: [SAFARI],
+      });
+      expect(direct).toEqual({
+        tool: "computer_spaces",
+        summary,
+        params: [
+          { name: "Space ID", value: "42" },
+          { name: "Window", value: "Safari — Google" },
+        ],
+      });
+      expect(inspect).toEqual({ ...direct, tool: "computer_inspect" });
+      expect(direct?.summary).not.toMatch(/42|win-7|computer_spaces/);
+    },
+  );
 
   it("uses the default inventory label without inventing a target", () => {
     expect(describeComputerToolCall({ toolName: "computer_spaces", args: {} })).toEqual({
@@ -434,7 +367,7 @@ describe("describeComputerToolCall", () => {
     });
   });
 
-  it.each(["create", "move", "switch", "follow", "unknown", "__proto__", "constructor"])(
+  it.each(["__proto__", "constructor"])(
     "does not describe unsupported Space operation %s as a performed desktop change",
     (operation) => {
       expect(

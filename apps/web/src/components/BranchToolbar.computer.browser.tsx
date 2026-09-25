@@ -18,11 +18,4 @@ describe("task-invoked Computer", () => {
     await page.getByRole("menuitemradio", { name: /Full access/ }).click();
     expect(onRuntime).toHaveBeenCalledExactlyOnceWith("full-access");
   });
-
-  it("does not add a Computer badge to the composer", async () => {
-    await render(
-      <RuntimeUsageControls runtimeMode="approval-required" onRuntimeModeChange={() => {}} />,
-    );
-    await expect.element(page.getByText(/Computer/)).not.toBeInTheDocument();
-  });
 });

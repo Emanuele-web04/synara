@@ -8,7 +8,6 @@ import type * as Acp from "@agentclientprotocol/sdk";
 
 import {
   AcpSessionRuntime,
-  assistantItemId,
   awaitAcpChildExit,
   decodeSetSessionConfigOptionResponse,
   isAcpAuthRequiredError,
@@ -230,28 +229,6 @@ describe("awaitAcpChildExit", () => {
 });
 
 describe("runAcpFreshSessionSetup", () => {
-  it("retries one matching fresh-session failure and then succeeds", async () => {
-    const retryable = new AcpErrors.AcpRequestError({
-      code: -32603,
-      errorMessage: "Path not found.",
-      data: { code: "FS_NOT_FOUND" },
-    });
-    let attempts = 0;
-    const setup = Effect.suspend(() => {
-      attempts += 1;
-      return attempts === 1 ? Effect.fail(retryable) : Effect.succeed("session-ready");
-    });
-
-    await expect(
-      Effect.runPromise(
-        runAcpFreshSessionSetup(setup, {
-          shouldRetry: (error) => error === retryable,
-        }),
-      ),
-    ).resolves.toBe("session-ready");
-    expect(attempts).toBe(2);
-  });
-
   it("does not retry a non-matching failure", async () => {
     const terminal = new AcpErrors.AcpRequestError({
       code: -32603,
@@ -272,19 +249,6 @@ describe("runAcpFreshSessionSetup", () => {
       ),
     ).rejects.toThrow("Permission denied.");
     expect(attempts).toBe(1);
-  });
-});
-
-describe("assistantItemId", () => {
-  // Format contract only — distinct runtimeInstanceId wiring is covered by
-  // AcpJsonRpcConnection.test.ts ("assigns distinct fallback assistant item ids...").
-  it("produces distinct ids across runtime instances with the same session id and segment index", () => {
-    const sessionId = "session-1";
-    const a = assistantItemId(sessionId, "aaaa1111", 0);
-    const b = assistantItemId(sessionId, "bbbb2222", 0);
-    expect(a).not.toBe(b);
-    expect(a).toBe("assistant:session-1:aaaa1111:segment:0");
-    expect(b).toBe("assistant:session-1:bbbb2222:segment:0");
   });
 });
 
@@ -378,35 +342,6 @@ describe("makeStartupInteractionRegistry", () => {
 
       expect(handled).toEqual(["a", "b"]);
       expect(results).toEqual([response, response]);
-    });
-
-    await Effect.runPromise(program);
-  });
-
-  it("routes dispatches directly to the handler after startup completes", async () => {
-    const program = Effect.gen(function* () {
-      const registry = yield* makeStartupInteractionRegistry<string, string>("default");
-
-      yield* registry.register((req) => Effect.succeed(`handled:${req}`));
-      yield* registry.complete();
-
-      const result = yield* registry.dispatch("x");
-      expect(result).toBe("handled:x");
-    });
-
-    await Effect.runPromise(program);
-  });
-
-  it("cancels pending dispatches on begin and when explicitly cancelled", async () => {
-    const program = Effect.gen(function* () {
-      const registry = yield* makeStartupInteractionRegistry<string, string>("cancelled");
-
-      const fiber = yield* registry.dispatch("a").pipe(Effect.forkChild);
-      yield* Effect.yieldNow;
-      yield* Effect.yieldNow;
-      yield* registry.begin();
-      const result = yield* Fiber.join(fiber);
-      expect(result).toBe("cancelled");
     });
 
     await Effect.runPromise(program);

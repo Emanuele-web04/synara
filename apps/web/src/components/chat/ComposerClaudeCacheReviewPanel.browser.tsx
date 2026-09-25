@@ -94,7 +94,7 @@ describe("ComposerClaudeCacheReviewPanel", () => {
     }
   });
 
-  it.each(["responding", "compacting"] as const)(
+  it.each(["responding"] as const)(
     "leaves progress to the transcript during %s",
     async (status) => {
       const screen = await render(

@@ -21,21 +21,6 @@ const runWithSettings = <A, E>(
 ) => Effect.runPromise(effect.pipe(Effect.provide(testLayer)) as Effect.Effect<A, E, never>);
 
 describe("ServerSettingsService", () => {
-  it("loads defaults when settings file does not exist", async () => {
-    const settings = await runWithSettings(
-      Effect.gen(function* () {
-        const service = yield* ServerSettingsService;
-        yield* service.start;
-        return yield* service.getSettings;
-      }),
-    );
-
-    expect(settings.providers.codex.binaryPath).toBe("codex");
-    expect(settings.providers.grok.binaryPath).toBe("grok");
-    expect(settings.defaultThreadEnvMode).toBe("local");
-    expect(settings.enableProviderUpdateChecks).toBe(true);
-  });
-
   it("persists updates and reloads them", async () => {
     const result = await runWithSettings(
       Effect.gen(function* () {

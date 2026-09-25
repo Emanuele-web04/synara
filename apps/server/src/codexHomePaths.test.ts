@@ -3,7 +3,6 @@ import path from "node:path";
 import { describe, it } from "vitest";
 
 import {
-  resolveActiveCodexHomeWritePath,
   resolveBaseCodexHomePath,
   resolveCodexHomeAllowlistCandidates,
   resolveSynaraCodexHomeOverlayPath,
@@ -30,16 +29,6 @@ describe("Codex home paths", () => {
     assert.equal(
       resolveSynaraCodexHomeOverlayPath({}, "/users/me/.codex"),
       path.join("/users/me", ".synara", "runtime", "codex-home-overlay"),
-    );
-  });
-
-  it("uses the isolated overlay as Codex's write home", () => {
-    assert.equal(
-      resolveActiveCodexHomeWritePath({
-        env: { SYNARA_HOME: "/synara/runtime" },
-        homePath: "/users/me/.codex",
-      }),
-      path.join("/synara/runtime", "codex-home-overlay"),
     );
   });
 

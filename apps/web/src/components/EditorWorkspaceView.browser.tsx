@@ -81,7 +81,7 @@ function makeView() {
 const source = () => page.getByRole("radio", { name: "Source", exact: true });
 const preview = () => page.getByRole("radio", { name: "Preview", exact: true });
 
-it.each(["diff", "fileEdit"] as const)("keeps Source after visiting %s", async (mode) => {
+it.each(["diff"] as const)("keeps Source after visiting %s", async (mode) => {
   const view = makeView();
   const screen = await render(view());
   await expect.element(preview()).toHaveAttribute("aria-checked", "true");

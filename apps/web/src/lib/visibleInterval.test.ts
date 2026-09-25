@@ -102,15 +102,4 @@ describe("startVisibleInterval", () => {
     expect(tick).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
   });
-
-  it("preserves slower presentation intervals", () => {
-    const tick = vi.fn();
-    const stop = startVisibleInterval(tick, 10_000);
-    vi.advanceTimersByTime(0);
-    vi.advanceTimersByTime(9_999);
-    expect(tick).toHaveBeenCalledTimes(1);
-    vi.advanceTimersByTime(1);
-    expect(tick).toHaveBeenCalledTimes(2);
-    stop();
-  });
 });

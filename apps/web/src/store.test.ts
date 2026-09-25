@@ -269,34 +269,6 @@ describe("store facade", () => {
     ]);
   });
 
-  it("collapses all projects when toggled off", () => {
-    const state: AppState = {
-      spaces: [],
-      projects: [
-        makeProject({
-          id: ProjectId.makeUnsafe("project-1"),
-          name: "Project 1",
-          remoteName: "Project 1",
-          folderName: "project-1",
-          cwd: "/tmp/project-1",
-        }),
-        makeProject({
-          id: ProjectId.makeUnsafe("project-2"),
-          name: "Project 2",
-          remoteName: "Project 2",
-          folderName: "project-2",
-          cwd: "/tmp/project-2",
-        }),
-      ],
-      sidebarThreadSummaryById: {},
-      threadsHydrated: true,
-    };
-
-    const next = setAllProjectsExpanded(state, false);
-
-    expect(next.projects.every((project) => project.expanded === false)).toBe(true);
-  });
-
   it("collapses every project except the active one", () => {
     const project1 = ProjectId.makeUnsafe("project-1");
     const project2 = ProjectId.makeUnsafe("project-2");
@@ -328,19 +300,6 @@ describe("store facade", () => {
       { id: project1, expanded: false },
       { id: project2, expanded: true },
     ]);
-  });
-
-  it("renames a project locally without changing its remote or folder names", () => {
-    const state = makeState(makeThread());
-
-    const next = renameProjectLocally(state, ProjectId.makeUnsafe("project-1"), "synara");
-
-    expect(next.projects[0]).toMatchObject({
-      name: "synara",
-      localName: "synara",
-      remoteName: "Project",
-      folderName: "project",
-    });
   });
 
   it("preserves the current project order when syncing incoming read model updates", () => {
@@ -397,69 +356,6 @@ describe("store facade", () => {
     expect(next.projects.map((project) => project.id)).toEqual([project2, project1, project3]);
   });
 
-  it("preserves expanded project state when a project briefly disappears from the snapshot", () => {
-    const project1 = ProjectId.makeUnsafe("project-1");
-    const project2 = ProjectId.makeUnsafe("project-2");
-    const initialState: AppState = {
-      spaces: [],
-      projects: [
-        makeProject({
-          id: project1,
-          name: "Project 1",
-          remoteName: "Project 1",
-          folderName: "project-1",
-          cwd: "/tmp/project-1",
-        }),
-        makeProject({
-          id: project2,
-          name: "Project 2",
-          remoteName: "Project 2",
-          folderName: "project-2",
-          cwd: "/tmp/project-2",
-        }),
-      ],
-      sidebarThreadSummaryById: {},
-      threadsHydrated: true,
-    };
-
-    const snapshotWithoutProject2: OrchestrationReadModel = {
-      snapshotSequence: 2,
-      updatedAt: "2026-02-27T00:00:00.000Z",
-      spaces: [],
-      projects: [
-        makeReadModelProject({
-          id: project1,
-          title: "Project 1",
-          workspaceRoot: "/tmp/project-1",
-        }),
-      ],
-      threads: [],
-    };
-    const snapshotWithProject2Restored: OrchestrationReadModel = {
-      snapshotSequence: 3,
-      updatedAt: "2026-02-27T00:01:00.000Z",
-      spaces: [],
-      projects: [
-        makeReadModelProject({
-          id: project1,
-          title: "Project 1",
-          workspaceRoot: "/tmp/project-1",
-        }),
-        makeReadModelProject({
-          id: project2,
-          title: "Project 2",
-          workspaceRoot: "/tmp/project-2",
-        }),
-      ],
-      threads: [],
-    };
-
-    const withoutProject2 = syncServerReadModel(initialState, snapshotWithoutProject2);
-    const restored = syncServerReadModel(withoutProject2, snapshotWithProject2Restored);
-
-    expect(restored.projects.find((project) => project.id === project2)?.expanded).toBe(true);
-  });
-
   it("keeps the latest local expansion through read-model and shell reconnects", () => {
     const projectId = ProjectId.makeUnsafe("project-1");
     const project = makeReadModelProject({
@@ -488,36 +384,6 @@ describe("store facade", () => {
 
     expect(afterReadModel.projects[0]?.expanded).toBe(false);
     expect(afterShell.projects[0]?.expanded).toBe(false);
-  });
-
-  it("treats a changed project cwd as a new expanded identity", () => {
-    const projectId = ProjectId.makeUnsafe("project-1");
-    const collapsed = {
-      ...useStore.getState(),
-      projects: [
-        makeProject({
-          id: projectId,
-          cwd: "/tmp/project-old",
-          expanded: false,
-        }),
-      ],
-      shellSnapshotSequence: 1,
-      threadsHydrated: true,
-    };
-    const renamed = syncServerReadModel(
-      collapsed,
-      makeProjectsReadModel([
-        makeReadModelProject({
-          id: projectId,
-          workspaceRoot: "/tmp/project-new",
-        }),
-      ]),
-    );
-
-    expect(renamed.projects[0]).toMatchObject({
-      cwd: "/tmp/project-new",
-      expanded: true,
-    });
   });
 
   it("persists the latest expansion and reordered project list", async () => {

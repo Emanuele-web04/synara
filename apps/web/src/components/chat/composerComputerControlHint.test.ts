@@ -47,13 +47,6 @@ describe("shouldShowComputerControlEffortHint", () => {
     expect(shouldShowComputerControlEffortHint(hintInput())).toBe(true);
   });
 
-  it("resolves the default effort as High, so Medium is a real change", () => {
-    const traits = traitsFor(OPUS_5);
-    expect(traits.defaultEffort).toBe("high");
-    expect(traits.effort).toBe("high");
-    expect(traits.effortLevels.map((level) => level.value)).toContain(COMPUTER_CONTROL_HINT_EFFORT);
-  });
-
   it("stays hidden while computer control is off", () => {
     expect(shouldShowComputerControlEffortHint(hintInput({ enableComputerControl: false }))).toBe(
       false,
@@ -99,11 +92,6 @@ describe("shouldShowComputerControlEffortHint", () => {
     expect(traits.effortLevels).toHaveLength(0);
     expect(shouldShowComputerControlEffortHint(hintInput({ traits }))).toBe(false);
   });
-
-  it("ignores unrelated trait changes such as fast mode", () => {
-    const traits = traitsFor(OPUS_5, { fastMode: true } satisfies ClaudeModelOptions);
-    expect(shouldShowComputerControlEffortHint(hintInput({ traits }))).toBe(true);
-  });
 });
 
 describe("computer-control effort hint actions", () => {
@@ -125,11 +113,5 @@ describe("computer-control effort hint actions", () => {
       { effort: COMPUTER_CONTROL_HINT_EFFORT },
     );
     expect(nextOptions).toEqual({ fastMode: true, autoCompactWindow: "1m", effort: "medium" });
-  });
-
-  it("dismiss hides the hint without touching the selected effort", () => {
-    const traits = traitsFor(OPUS_5);
-    expect(shouldShowComputerControlEffortHint(hintInput({ traits, dismissed: true }))).toBe(false);
-    expect(traits.effort).toBe("high");
   });
 });

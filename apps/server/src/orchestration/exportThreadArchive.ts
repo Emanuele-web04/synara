@@ -9,7 +9,7 @@
 //          a running CRC), so the server never materializes a full entry
 //          string or uncompressed buffer — peak memory is bounded by the
 //          compressed bytes of one entry.
-// Exports: threadArchiveChunks, buildThreadArchiveBytes, threadArchiveFileName.
+// Exports: threadArchiveChunks, threadArchiveFileName.
 // The export-eligibility guard lives in @synara/shared/threadExport so the
 // web composer and the HTTP route share one predicate.
 
@@ -224,15 +224,6 @@ export async function* threadArchiveChunks(thread: OrchestrationThread): AsyncGe
     u32(offset), // offset of central directory
     u16(0), // comment length
   ]);
-}
-
-// Convenience for tests and small callers that want the whole archive at once.
-export async function buildThreadArchiveBytes(thread: OrchestrationThread): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of threadArchiveChunks(thread)) {
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks);
 }
 
 const FILENAME_SAFE_REPLACE = /[^a-z0-9-]+/g;

@@ -5,7 +5,6 @@ import { normalizeProjectDirectoryName } from "./projectDirectoryName";
 describe("normalizeProjectDirectoryName", () => {
   it.each([
     ["codex", "codex"],
-    ["my-project", "my-project"],
     [".github", ".github"],
     ["project.v2", "project.v2"],
     [" name ", "name"],

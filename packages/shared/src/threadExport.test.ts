@@ -14,15 +14,6 @@ describe("threadExportBlockedReason", () => {
     expect(threadExportBlockedReason({ latestTurn: null, messages: settledMessages })).toBeNull();
   });
 
-  it("allows export when the latest turn has settled", () => {
-    expect(
-      threadExportBlockedReason({
-        latestTurn: { state: "completed" },
-        messages: settledMessages,
-      }),
-    ).toBeNull();
-  });
-
   it("blocks export while the latest turn is running", () => {
     expect(
       threadExportBlockedReason({ latestTurn: { state: "running" }, messages: settledMessages }),

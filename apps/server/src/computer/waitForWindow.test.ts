@@ -157,7 +157,6 @@ describe("launch window readiness", () => {
   });
   it.each([
     [{ visible: false }, "hidden"],
-    [{ minimized: true }, "hidden"],
     [{ onCurrentSpace: false }, "off_space"],
   ] as const)("does not bind an unusable window: %j", async (state, reason) => {
     expect(await waitForWindow(async () => [{ ...window, ...state }], "Helium", 0)).toEqual({

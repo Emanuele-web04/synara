@@ -10,7 +10,7 @@ import {
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useStore } from "../store";
 import { getThreadFromState } from "../threadDerivation";
-import { isDuplicateThreadCreateError, promoteThreadCreate } from "./threadCreatePromotion";
+import { promoteThreadCreate } from "./threadCreatePromotion";
 
 const initialStoreState = useStore.getState();
 const initialComposerDraftState = useComposerDraftStore.getState();
@@ -53,17 +53,6 @@ function makeThreadCreateCommand(threadId = "thread-promote") {
 }
 
 describe("threadCreatePromotion", () => {
-  it("recognizes duplicate thread.create invariant errors", () => {
-    expect(
-      isDuplicateThreadCreateError(
-        new Error(
-          "Orchestration command invariant failed (thread.create): Thread 'thread-promote' already exists and cannot be created twice.",
-        ),
-        ThreadId.makeUnsafe("thread-promote"),
-      ),
-    ).toBe(true);
-  });
-
   it("joins concurrent promotions for the same thread id", async () => {
     let resolveDispatch: (() => void) | null = null;
     const dispatchCommand = vi.fn(

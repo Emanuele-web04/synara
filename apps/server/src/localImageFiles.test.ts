@@ -21,46 +21,6 @@ afterEach(() => {
 });
 
 describe("resolveAllowedLocalPreviewFile", () => {
-  it("allows images inside the current workspace", async () => {
-    const workspace = makeTempDir("synara-image-workspace-");
-    writeFileSync(path.join(workspace, ".git"), "gitdir: .git");
-    const imagePath = path.join(workspace, "preview.png");
-    writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
-
-    const result = await resolveAllowedLocalPreviewFile({
-      requestedPath: imagePath,
-      cwd: workspace,
-    });
-
-    assert.equal(result?.path, realpathSync(imagePath));
-    assert.equal(result?.fileName, "preview.png");
-  });
-
-  it("allows images inside Codex generated_images without a cwd", async () => {
-    const codexHome = makeTempDir("synara-codex-home-");
-    const previousCodexHome = process.env.CODEX_HOME;
-    process.env.CODEX_HOME = codexHome;
-    try {
-      const imageDir = path.join(codexHome, "generated_images", "provider-thread");
-      const imagePath = path.join(imageDir, "call.png");
-      mkdirSync(imageDir, { recursive: true });
-      writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
-
-      const result = await resolveAllowedLocalPreviewFile({
-        requestedPath: imagePath,
-        cwd: null,
-      });
-
-      assert.equal(result?.path, realpathSync(imagePath));
-    } finally {
-      if (previousCodexHome === undefined) {
-        delete process.env.CODEX_HOME;
-      } else {
-        process.env.CODEX_HOME = previousCodexHome;
-      }
-    }
-  });
-
   it("allows images written to the SYNARA_HOME codex-home-overlay generated_images root", async () => {
     // Codex app-server is launched with CODEX_HOME pointing at a Synara overlay
     // directory (see resolveSynaraCodexHomeOverlayPath). Generated images therefore

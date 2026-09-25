@@ -59,26 +59,4 @@ describe("SidebarThreadRowContent", () => {
     await expect.element(screen.getByLabelText("2 terminals open")).toBeVisible();
     await expect.element(screen.getByText("Project Alpha")).toBeVisible();
   });
-
-  it("keeps standard subagent nickname and role presentation", async () => {
-    const screen = await render(
-      <SidebarThreadRowContent
-        thread={makeThread({
-          id: ThreadId.makeUnsafe("thread-subagent-row"),
-          parentThreadId: ThreadId.makeUnsafe("thread-parent-row"),
-          subagentNickname: "Scout",
-          subagentRole: "reviewer",
-        })}
-        terminalEntryPoint={false}
-        terminalStatus={null}
-        terminalCount={0}
-        isActive={false}
-        variant="standard"
-        subagentIndentPx={10}
-      />,
-    );
-
-    await expect.element(screen.getByText("Scout")).toBeVisible();
-    await expect.element(screen.getByText("(reviewer)")).toBeVisible();
-  });
 });

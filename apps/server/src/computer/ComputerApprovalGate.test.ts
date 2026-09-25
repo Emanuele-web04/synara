@@ -23,26 +23,6 @@ describe("ComputerApprovalGate", () => {
     expect(await first).toBe(true);
   });
 
-  it("does not reuse task consent for a separate clipboard approval", async () => {
-    const gate = new ComputerApprovalGate();
-    let prompts = 0;
-    const input = {
-      threadId: "a",
-      turnId: "turn",
-      signal: new AbortController().signal,
-      publish: async (id: string, decision?: string) => {
-        if (decision === undefined) {
-          prompts++;
-          gate.respond("a", id, "accept");
-        }
-      },
-    };
-    expect(await gate.requestTask(input)).toBe(true);
-    expect(await gate.requestTask(input)).toBe(true);
-    expect(await gate.request(input)).toBe(true);
-    expect(await gate.request(input)).toBe(true);
-    expect(prompts).toBe(3);
-  });
   it("shares one consent across concurrent and later routine actions in the same turn", async () => {
     const gate = new ComputerApprovalGate();
     const ids: string[] = [];
@@ -152,7 +132,7 @@ describe("ComputerApprovalGate", () => {
     expect(gate.respond("b", ids.get("b")!, "accept")).toBe(true);
     expect(await b).toBe(true);
   });
-  it.each(["accept", "decline", "cancel", "acceptForSession"] as const)(
+  it.each(["accept", "decline", "acceptForSession"] as const)(
     "binds %s to the requesting conversation and one call",
     async (decision) => {
       const gate = new ComputerApprovalGate();

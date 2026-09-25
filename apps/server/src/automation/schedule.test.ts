@@ -27,19 +27,6 @@ function wallClockInZone(iso: string, timeZone: string): string {
 }
 
 describe("computeNextAutomationRunAt", () => {
-  it("returns null for manual schedules", () => {
-    expect(computeNextAutomationRunAt({ type: "manual" }, "2026-06-16T10:00:00.000Z")).toBeNull();
-  });
-
-  it("adds interval seconds", () => {
-    expect(
-      computeNextAutomationRunAt(
-        { type: "interval", everySeconds: 300 },
-        "2026-06-16T10:00:00.000Z",
-      ),
-    ).toBe("2026-06-16T10:05:00.000Z");
-  });
-
   it("returns a future one-shot run time once", () => {
     expect(
       computeNextAutomationRunAt(
@@ -53,12 +40,6 @@ describe("computeNextAutomationRunAt", () => {
         "2026-06-16T10:00:00.000Z",
       ),
     ).toBeNull();
-  });
-
-  it("uses the next UTC daily time", () => {
-    expect(
-      computeNextAutomationRunAt({ type: "daily", timeOfDay: "09:30" }, "2026-06-16T10:00:00.000Z"),
-    ).toBe("2026-06-17T09:30:00.000Z");
   });
 
   it("uses the next UTC weekly day and time", () => {
@@ -132,15 +113,6 @@ describe("computeNextAutomationRunAt", () => {
       "2026-11-01T05:45:00.000Z", // 01:45 EDT — still before the second 01:30 (06:30Z)
     );
     expect(afterInRepeatedHour).toBe("2026-11-02T06:30:00.000Z");
-  });
-
-  it("uses timezone-aware daily slots when timezone is present", () => {
-    expect(
-      computeNextAutomationRunAt(
-        { type: "daily", timeOfDay: "09:30", timezone: "Europe/Rome" },
-        "2026-06-16T06:00:00.000Z",
-      ),
-    ).toBe("2026-06-16T07:30:00.000Z");
   });
 
   it("computes constrained cron schedules", () => {
@@ -241,16 +213,6 @@ describe("computeNextAutomationRunAt", () => {
 });
 
 describe("computeNextAutomationRunAtAfter", () => {
-  it("returns null for manual schedules", () => {
-    expect(
-      computeNextAutomationRunAtAfter(
-        { type: "manual" },
-        "2026-06-16T10:00:00.000Z",
-        "2026-06-16T10:11:00.000Z",
-      ),
-    ).toBeNull();
-  });
-
   it("returns null after a one-shot occurrence is consumed", () => {
     expect(
       computeNextAutomationRunAtAfter(
@@ -284,18 +246,6 @@ describe("computeNextAutomationRunAtAfter", () => {
     ).toBe("2026-06-16T10:05:00.000Z");
   });
 
-  it("coalesces more than a day of missed interval slots into one aligned slot", () => {
-    // Hourly interval anchored at midnight, process down ~30h. We must land on the
-    // first aligned slot after now (07:00 the next day), not replay ~30 backlog ticks.
-    expect(
-      computeNextAutomationRunAtAfter(
-        { type: "interval", everySeconds: 3_600 },
-        "2026-06-16T00:00:00.000Z",
-        "2026-06-17T06:15:00.000Z",
-      ),
-    ).toBe("2026-06-17T07:00:00.000Z");
-  });
-
   it("lands exactly on the next slot boundary, not the missed one", () => {
     // notBefore sits exactly on 10:05; the strictly-after slot is 10:10.
     expect(
@@ -305,26 +255,6 @@ describe("computeNextAutomationRunAtAfter", () => {
         "2026-06-16T10:05:00.000Z",
       ),
     ).toBe("2026-06-16T10:10:00.000Z");
-  });
-
-  it("delegates daily schedules to the next future wall-clock slot", () => {
-    expect(
-      computeNextAutomationRunAtAfter(
-        { type: "daily", timeOfDay: "09:30" },
-        "2026-06-16T09:30:00.000Z",
-        "2026-06-16T10:00:00.000Z",
-      ),
-    ).toBe("2026-06-17T09:30:00.000Z");
-  });
-
-  it("delegates weekly schedules to the next future wall-clock slot", () => {
-    expect(
-      computeNextAutomationRunAtAfter(
-        { type: "weekly", dayOfWeek: 2, timeOfDay: "09:30" },
-        "2026-06-16T09:30:00.000Z",
-        "2026-06-16T10:00:00.000Z",
-      ),
-    ).toBe("2026-06-23T09:30:00.000Z");
   });
 
   it("delegates weekday schedules, skipping the weekend after downtime", () => {

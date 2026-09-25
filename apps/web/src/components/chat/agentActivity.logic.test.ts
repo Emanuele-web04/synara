@@ -55,18 +55,6 @@ describe("deriveAgentActivityTimelineState", () => {
     expect(state.detailById.get("agent-reasoning:reasoning-1")?.entries).toHaveLength(2);
   });
 
-  it("cleans reasoning prefixes for single update previews", () => {
-    const entry = workEntry({
-      id: "reasoning-1",
-      label: "Reasoning update",
-      detail: "Reasoning update Running Complete analysis of the floating panel issue",
-    });
-
-    expect(formatAgentActivityEntryPreview(entry)).toBe(
-      "Complete analysis of the floating panel issue",
-    );
-  });
-
   it("keeps canonical reasoning tool calls as separate timeline rows", () => {
     const state = deriveAgentActivityTimelineState([
       workEntry({

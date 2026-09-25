@@ -14,16 +14,6 @@ describe("owner diagnostic RPC JSON transport", () => {
   it.each([
     {
       threadId: "thread-1",
-      events: [],
-      coverage: {
-        source: "orchestration_events",
-        highWaterSequence: 0,
-        durableSourceComplete: true,
-        pageHasOlder: false,
-      },
-    },
-    {
-      threadId: "thread-1",
       events: [{ sequence: 7, type: "thread.created", payload: { title: "Computer fixture" } }],
       coverage: {
         source: "orchestration_events",

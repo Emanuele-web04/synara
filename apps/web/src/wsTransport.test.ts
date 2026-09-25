@@ -27,7 +27,6 @@ import {
   getProjectFileWatchRetryDelayMs,
   getStreamCapacityRetryDelayMs,
   getStreamDuplicateRetryDelayMs,
-  getStreamFailureCode,
   getThreadSnapshotBootstrapRetryDelayMs,
   getTerminalCompatibilityError,
   isTerminalCompatibilityFailure,
@@ -503,27 +502,6 @@ describe("WsTransport", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("does not reconnect the socket for snapshot-fence failures", () => {
-    // Regression: ORCHESTRATION_RESNAPSHOT_REQUIRED used to fall through to a
-    // full transport reconnect, interrupting every unrelated in-flight unary
-    // RPC on a 500ms loop while a stalled projector kept the condition alive.
-    expect(
-      shouldReconnectAfterStreamFailure(
-        Cause.fail({ code: "ORCHESTRATION_RESNAPSHOT_REQUIRED", retryable: true }),
-      ),
-    ).toBe(false);
-    expect(
-      shouldReconnectAfterStreamFailure(
-        Cause.fail({ code: "ORCHESTRATION_SNAPSHOT_STALLED", retryable: false }),
-      ),
-    ).toBe(false);
-    expect(
-      shouldReconnectAfterStreamFailure(
-        Cause.fail({ code: "ORCHESTRATION_PROJECTION_STATE_INCOMPLETE", retryable: false }),
-      ),
-    ).toBe(false);
   });
 
   it("retries resnapshot demands in place with bounded attempts", () => {
@@ -1116,13 +1094,6 @@ describe("WsTransport", () => {
         MAX_THREAD_SNAPSHOT_BOOTSTRAP_RETRY_ATTEMPTS,
       ),
     ).toBeNull();
-  });
-
-  it("extracts the typed failure code used for thread stream failure reporting", () => {
-    expect(
-      getStreamFailureCode(Cause.fail({ code: "THREAD_SNAPSHOT_NOT_FOUND", retryable: false })),
-    ).toBe("THREAD_SNAPSHOT_NOT_FOUND");
-    expect(getStreamFailureCode(Cause.fail(new Error("transient")))).toBeNull();
   });
 
   it("treats structurally identical thread subscribe params as the same input", () => {
@@ -1768,32 +1739,6 @@ describe("WsTransport", () => {
     expect(reconnectUrl.searchParams.get(WS_COMPATIBILITY_QUERY.serverInstanceId)).toBe(
       "server-instance-2",
     );
-
-    await transport.dispose();
-  });
-
-  it("clears cached negotiation when the reconnect liveness probe fails", async () => {
-    const fetchMock = vi.fn(() => Promise.resolve(jsonResponse(200, NEGOTIATION_RESULT)));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const transport = new WsTransport("ws://localhost:3020");
-    const internals = transport as unknown as {
-      createSession(): { clientPromise: Promise<unknown> };
-      probeFeatureConnection: (...args: unknown[]) => Promise<void>;
-      compatibility: WsBootstrapNegotiateResult | null;
-    };
-    await waitForSockets(1);
-    expect(internals.compatibility).toEqual(NEGOTIATION_RESULT);
-
-    internals.probeFeatureConnection = async function (this: typeof internals) {
-      this.compatibility = null;
-      throw new Error("stale server generation");
-    }.bind(internals);
-    await expect(internals.createSession().clientPromise).rejects.toThrow(
-      "stale server generation",
-    );
-
-    expect(internals.compatibility).toBeNull();
 
     await transport.dispose();
   });

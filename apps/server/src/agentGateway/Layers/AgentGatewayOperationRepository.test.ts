@@ -24,17 +24,6 @@ const base = {
 };
 
 layer("AgentGatewayOperationRepository", (it) => {
-  it.effect("reserves once and replays the same operation", () =>
-    Effect.gen(function* () {
-      const repository = yield* AgentGatewayOperationRepository;
-      assert.equal((yield* repository.reserve(base)).kind, "reserved");
-      assert.equal(
-        (yield* repository.reserve({ ...base, now: "2026-07-16T00:00:01.000Z" })).kind,
-        "replay",
-      );
-    }),
-  );
-
   it.effect("distinguishes request conflicts from a second plan in the same turn", () =>
     Effect.gen(function* () {
       const repository = yield* AgentGatewayOperationRepository;

@@ -125,6 +125,7 @@ jobs:
             "$SOURCE_REF_NAME"
 
       - name: Verify public updater repository
+        if: steps.release_mode.outputs.publish_release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

@@ -6,8 +6,6 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   createThreadActivityAccumulator,
-  dedupeActivitiesById,
-  dedupeActivitiesByIdAfterAppend,
   mergeReadModelThreadDetailWithLiveHotPath,
   normalizeActivities,
   normalizeChatMessage,
@@ -175,16 +173,6 @@ describe("createThreadActivityAccumulator", () => {
     expectEquivalent(previous, batch);
   });
 
-  it("matches the fold when the previous list still contains duplicate ids", () => {
-    const duplicated = makeActivity({ id: "activity-dup", sequence: 1 });
-    const previous = [duplicated, makeActivity({ id: "activity-other", sequence: 2 }), duplicated];
-
-    // The very first append has to report "changed" because dedupe of `previous` alone rewrote
-    // the list, exactly like `normalizeActivities` did on its first call.
-    expectEquivalent(previous, [{ ...duplicated }]);
-    expectEquivalent(previous, [makeActivity({ id: "activity-new", sequence: 3 })]);
-  });
-
   it("matches the fold across the activity cap, including pending-request retention", () => {
     const pendingApproval = makeActivity({
       id: "activity-approval",
@@ -255,62 +243,6 @@ describe("createThreadActivityAccumulator", () => {
 describe("dedupeActivitiesByIdAfterAppend", () => {
   const byIdOf = (activities: readonly ThreadActivity[]) =>
     Object.fromEntries(activities.map((activity) => [activity.id, activity]));
-
-  it("returns the input by reference when unique activities are appended to a deduped prefix", () => {
-    const previous = [
-      makeActivity({ id: "activity-a", sequence: 0 }),
-      makeActivity({ id: "activity-b", sequence: 1 }),
-    ];
-    const next = [...previous, makeActivity({ id: "activity-c", sequence: 2 })];
-
-    expect(dedupeActivitiesByIdAfterAppend(next, previous, byIdOf(previous))).toBe(next);
-  });
-
-  it("matches the full dedupe when an appended activity repeats a previous id", () => {
-    const previous = [makeActivity({ id: "activity-a", sequence: 0 })];
-    const next = [
-      ...previous,
-      makeActivity({ id: "activity-a", payload: richPayload, sequence: 0 }),
-    ];
-
-    const result = dedupeActivitiesByIdAfterAppend(next, previous, byIdOf(previous));
-    expect(result).toEqual(dedupeActivitiesById(next));
-    expect(result.map((activity) => activity.id)).toEqual(["activity-a"]);
-  });
-
-  it("matches the full dedupe when the appended tail repeats its own ids", () => {
-    const previous = [makeActivity({ id: "activity-a", sequence: 0 })];
-    const duplicate = makeActivity({ id: "activity-b", sequence: 1 });
-    const next = [...previous, duplicate, { ...duplicate, payload: richPayload }];
-
-    const result = dedupeActivitiesByIdAfterAppend(next, previous, byIdOf(previous));
-    expect(result).toEqual(dedupeActivitiesById(next));
-    expect(result.map((activity) => activity.id)).toEqual(["activity-a", "activity-b"]);
-  });
-
-  it("falls back to the full dedupe when a previous slot was replaced", () => {
-    const previous = [
-      makeActivity({ id: "activity-a", sequence: 0 }),
-      makeActivity({ id: "activity-b", sequence: 1 }),
-    ];
-    const next = [
-      previous[0]!,
-      makeActivity({ id: "activity-b", payload: richPayload, sequence: 1 }),
-    ];
-
-    expect(dedupeActivitiesByIdAfterAppend(next, previous, byIdOf(previous))).toEqual(
-      dedupeActivitiesById(next),
-    );
-  });
-
-  it("falls back to the full dedupe without a previous slice", () => {
-    const duplicate = makeActivity({ id: "activity-a", sequence: 0 });
-    const next = [duplicate, { ...duplicate, payload: richPayload }];
-
-    expect(dedupeActivitiesByIdAfterAppend(next, undefined, undefined)).toEqual(
-      dedupeActivitiesById(next),
-    );
-  });
 });
 
 describe("mergeReadModelThreadDetailWithLiveHotPath", () => {

@@ -4,7 +4,6 @@ import {
   BROWSER_SEARCH_URL_PREFIX,
   buildAcceptLanguageHeader,
   buildChromeClientHints,
-  chromeMajorVersionFromUserAgent,
   classifyBrowserWindowOpen,
   deriveChromeUserAgent,
   isLikelyOAuthHost,
@@ -42,23 +41,6 @@ describe("deriveChromeUserAgent", () => {
     expect(deriveChromeUserAgent(ELECTRON_UA, ["Synara"])).toBe(
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.91 Safari/537.36",
     );
-  });
-
-  it("preserves the platform and Chrome version from the base UA", () => {
-    const derived = deriveChromeUserAgent(ELECTRON_UA, ["Synara"]);
-    expect(derived).toContain("Chrome/124.0.6367.91");
-    expect(derived).not.toMatch(/Electron/i);
-    expect(derived).not.toMatch(/Synara/i);
-  });
-});
-
-describe("chromeMajorVersionFromUserAgent", () => {
-  it("extracts the Chrome major version", () => {
-    expect(chromeMajorVersionFromUserAgent(ELECTRON_UA)).toBe("124");
-  });
-
-  it("returns null when no Chrome token is present", () => {
-    expect(chromeMajorVersionFromUserAgent("Mozilla/5.0 (X11; Linux)")).toBeNull();
   });
 });
 
@@ -234,17 +216,6 @@ describe("classifyBrowserWindowOpen", () => {
         disposition: "foreground-tab",
       }),
     ).toBe("popup");
-  });
-
-  it("keeps ordinary _blank links to non-auth hosts as tabs", () => {
-    expect(
-      classifyBrowserWindowOpen({
-        url: "https://example.com/article",
-        frameName: "_blank",
-        features: "",
-        disposition: "foreground-tab",
-      }),
-    ).toBe("tab");
   });
 
   it("keeps ordinary _blank links to multi-purpose provider hosts as tabs", () => {

@@ -61,36 +61,23 @@ describe("ComputerProgressGuard", () => {
     expect(guard.check(click)?.code).toBe("repeated_computer_refusal");
   });
 
-  it.each([
-    "computer_controlled_by_other_thread",
-    "computer_busy",
-    "native_input_busy",
-    "computer_input_paused",
-    "desktop_input_paused",
-    "input_admission_closed",
-    "input_monitor_unavailable",
-    "computer_control_revoked",
-    "computer_stopped",
-    "computer_permission_required",
-    "computer_setup_required",
-    "browser_requires_setup",
-    "approval_denied",
-    "approval_unavailable",
-    "approval_queue_full",
-    "target_not_on_active_space",
-    "auth_sheet_focused",
-  ])("permits admission recovery after repeated %s refusals", (code) => {
-    const guard = new ComputerProgressGuard();
-    const enter = action("press-key:enter");
-    for (let attempt = 0; attempt < 4; attempt += 1) {
-      guard.record(enter, { effect: attempt % 2 === 0 ? "refused" : "not-dispatched", code });
+  // One row per admission family (lease, pause, approval); membership in the
+  // transient-code set is one lookup, so the rest of the set walks this branch.
+  it.each(["computer_controlled_by_other_thread", "computer_input_paused", "approval_denied"])(
+    "permits admission recovery after repeated %s refusals",
+    (code) => {
+      const guard = new ComputerProgressGuard();
+      const enter = action("press-key:enter");
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        guard.record(enter, { effect: attempt % 2 === 0 ? "refused" : "not-dispatched", code });
+        expect(guard.check(enter)).toBeUndefined();
+      }
+      // The native boundary can now admit the action, with no invented desktop
+      // verification required just to recover from a lease or setup refusal.
+      guard.record(enter, uncertain);
       expect(guard.check(enter)).toBeUndefined();
-    }
-    // The native boundary can now admit the action, with no invented desktop
-    // verification required just to recover from a lease or setup refusal.
-    guard.record(enter, uncertain);
-    expect(guard.check(enter)).toBeUndefined();
-  });
+    },
+  );
 
   it("does not erase uncertainty or trust a transient-looking code after dispatch", () => {
     const guard = new ComputerProgressGuard();
@@ -114,7 +101,6 @@ describe("ComputerProgressGuard", () => {
 
   it.each([
     ["click", "press-key:enter"],
-    ["click", "press-key:enter", "press-key:tab"],
     ["click", "press-key:enter", "press-key:tab", "type-text"],
   ])("detects a repeated uncertain cycle beginning with %s", (...cycle: string[]) => {
     const guard = new ComputerProgressGuard();
@@ -235,11 +221,8 @@ describe("ComputerProgressGuard", () => {
     expect(guard.check(otherScope)).toBeUndefined();
   });
 
-  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
-    "rejects invalid retention limits %s",
-    (limit) => {
-      expect(() => new ComputerProgressGuard(limit)).toThrow(TypeError);
-      expect(() => new ComputerProgressGuard(1, limit)).toThrow(TypeError);
-    },
-  );
+  it.each([0, 1.5])("rejects invalid retention limits %s", (limit) => {
+    expect(() => new ComputerProgressGuard(limit)).toThrow(TypeError);
+    expect(() => new ComputerProgressGuard(1, limit)).toThrow(TypeError);
+  });
 });

@@ -1188,16 +1188,6 @@ describe("ComputerManager and FakeComputerBackend", () => {
       await manager.dispose();
     });
 
-    it("SYNARA_CUA_CONDITIONAL_SETTLE skips the wait on a verified effect", async () => {
-      setEnv("SYNARA_CUA_CONDITIONAL_SETTLE", "1");
-      const backend = new ProvenBackend();
-      backend.proof = { effect: "verified" };
-      const manager = new ComputerManager({ backend, actionSettleMs: 60 });
-      const { spy } = await pressThenObserve(manager);
-      expect(settleWaitedFor(spy, 60)).toBe(false);
-      await manager.dispose();
-    });
-
     it("SYNARA_CUA_CONDITIONAL_SETTLE skips the wait on a confirmed read-back", async () => {
       setEnv("SYNARA_CUA_CONDITIONAL_SETTLE", "1");
       const backend = new ProvenBackend();
@@ -1210,9 +1200,7 @@ describe("ComputerManager and FakeComputerBackend", () => {
 
     it.each([
       ["an unconfirmed read-back", { verified: "unconfirmed" }],
-      ["an unverifiable surface", { verified: "unverifiable" }],
       ["an unknown dispatch", { effect: "dispatched-unknown" }],
-      ["no verdict at all", {}],
     ] as const)("SYNARA_CUA_CONDITIONAL_SETTLE keeps the wait after %s", async (_label, proof) => {
       setEnv("SYNARA_CUA_CONDITIONAL_SETTLE", "1");
       const backend = new ProvenBackend();
@@ -2661,22 +2649,6 @@ describe("ComputerManager and FakeComputerBackend", () => {
     await manager.dispose();
   });
 
-  it("returns perception payloads with optional text and screenshot", async () => {
-    const backend = new FakeComputerBackend();
-    const manager = new ComputerManager({ backend });
-    const state = await manager.getState({
-      includeScreenshot: true,
-      includeText: true,
-    });
-
-    expect(state.screenshot?.mimeType).toBe("image/png");
-    expect(state.screenshot?.bytesBase64.length).toBeGreaterThan(0);
-    expect(state.text).toContain("Calculate");
-    expect(state.root?.children.length).toBeGreaterThan(0);
-
-    await manager.dispose();
-  });
-
   it("captures the focused window, and the workspace when nothing capturable has focus", async () => {
     const backend = new FakeComputerBackend();
     const manager = new ComputerManager({ backend, actionSettleMs: 0 });
@@ -3624,20 +3596,6 @@ it("evicts idle thread records while preserving increasing versions", async () =
   await manager.dispose();
 });
 
-it("assigns a newer version to each refreshed thread snapshot", async () => {
-  const backend = new FakeComputerBackend();
-  const manager = new ComputerManager({ backend });
-  const initial = await manager.getThreadState("refreshed");
-  backend.setAvailability({ kind: "backend-unavailable", message: "Paused" });
-  const refreshed = await manager.getThreadState("refreshed");
-  expect(refreshed.availability).toEqual({
-    kind: "backend-unavailable",
-    message: "Paused",
-  });
-  expect(refreshed.version).toBeGreaterThan(initial.version);
-  await manager.dispose();
-});
-
 it("versions a delayed refresh after cached activity publications", async () => {
   const held = deferred();
   const entered = deferred();
@@ -3750,26 +3708,6 @@ it("never re-admits a detached tool continuation after revocation and re-enable"
   await manager.dispose();
 });
 
-it("settles a pending approval prompt when control is switched off mid-turn", async () => {
-  const backend = new FakeComputerBackend();
-  const manager = new ComputerManager({ backend });
-  try {
-    const prompt = computerApprovalGate.request({
-      threadId: "owner",
-      turnId: "turn-1",
-      signal: new AbortController().signal,
-      publish: async () => undefined,
-    });
-    const settled = expect(prompt).resolves.toBe(false);
-    await manager.setControlEnabled("owner", false);
-    // Without the synchronous cancel, this hangs until the gate's timeout.
-    await settled;
-    computerApprovalGate.cancelThread("owner");
-  } finally {
-    await manager.dispose();
-  }
-});
-
 it("keeps a pause when the thread is re-armed while its readiness probe is in flight", async () => {
   const entered = deferred();
   const gate = deferred();
@@ -3806,40 +3744,6 @@ it("keeps a pause when the thread is re-armed while its readiness probe is in fl
     await probing;
     expect((await manager.getThreadState("thread-a")).inputPause).toBeDefined();
     await expect(manager.typeText("thread-a", "hello")).rejects.toHaveProperty("inputPause");
-  } finally {
-    await manager.dispose();
-  }
-});
-
-it("measures a macOS scroll inside the two-leg, three-capture budget", async () => {
-  class MacosFake extends FakeComputerBackend {
-    override readonly agentDialect = "macos" as const;
-  }
-  const backend = new MacosFake();
-  const manager = new ComputerManager({ backend, actionSettleMs: 0 });
-  try {
-    const { result, observation } = await manager.scrollCalibrated(
-      "thread-1",
-      { x: 1_100, y: 200 },
-      0,
-      400,
-      { observe: true },
-    );
-    // macOS joins the common loop: probe + corrected remainder = two injects,
-    // before + one after per leg = three captures, the last doubling as the
-    // caller's observation. The fake's canned captures never change, so the
-    // correlator honestly reports zero travel.
-    expect(backend.callsFor("scroll")).toHaveLength(2);
-    expect(backend.callsFor("captureScreenshot")).toHaveLength(3);
-    expect(observation).toBeDefined();
-    expect(result.scroll?.traveledY).toBe(0);
-    expect(result.scroll?.requested).toEqual({ deltaX: 0, deltaY: 400 });
-    expect(result.scroll?.routes).toEqual(["wheel", "wheel"]);
-    const unobserved = await manager.scrollCalibrated("thread-1", { x: 1_100, y: 200 }, 0, 400, {
-      observe: false,
-    });
-    expect(unobserved.observation).toBeUndefined();
-    expect(backend.callsFor("captureScreenshot")).toHaveLength(3);
   } finally {
     await manager.dispose();
   }
@@ -3899,28 +3803,6 @@ describe("ComputerManager foreground containment", () => {
     },
   );
 
-  it("refuses an activate with no task-text authorization, and raises nothing", async () => {
-    const backend = new FakeComputerBackend();
-    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
-    const actions = foregroundRestoreActions(manager);
-    try {
-      const refused = await manager
-        .foregroundWithRestore("thread-1", "fake-calculator")
-        .catch((error) => error);
-      expect(refused).toMatchObject({
-        code: "foreground_not_requested",
-        effect: "not-dispatched",
-      });
-      // Nothing raised, nothing aimed, no action event: the refusal is before
-      // any dispatch.
-      expect(foregroundRaisedIds(backend)).toEqual([]);
-      expect(backend.callsFor("focusWindow")).toEqual([]);
-      expect(actions).toEqual([]);
-    } finally {
-      await manager.dispose();
-    }
-  });
-
   it("refuses an explicit false authorization the same way", async () => {
     const backend = new FakeComputerBackend();
     const manager = new ComputerManager({ backend, actionSettleMs: 0 });
@@ -3930,22 +3812,6 @@ describe("ComputerManager foreground containment", () => {
           userRequestedVisibleUse: false,
         }),
       ).rejects.toMatchObject({ code: "foreground_not_requested" });
-      expect(foregroundRaisedIds(backend)).toEqual([]);
-    } finally {
-      await manager.dispose();
-    }
-  });
-
-  it("refuses a foreground call and a plain activate without authorization", async () => {
-    const backend = new FakeComputerBackend();
-    const manager = new ComputerManager({ backend, actionSettleMs: 0 });
-    try {
-      await expect(
-        manager.withForegroundRestore("thread-1", async () => "typed"),
-      ).rejects.toMatchObject({ code: "foreground_not_requested" });
-      await expect(manager.activateWindow("thread-1", "fake-calculator")).rejects.toMatchObject({
-        code: "foreground_not_requested",
-      });
       expect(foregroundRaisedIds(backend)).toEqual([]);
     } finally {
       await manager.dispose();

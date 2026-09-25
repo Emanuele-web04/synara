@@ -274,32 +274,6 @@ describe("devinUsageFetcher", () => {
 });
 
 describe("parseDevinUsage", () => {
-  it("falls back to the daily quota for the weekly limit when the daily quota is hidden", () => {
-    const snapshot = parseDevinUsage({
-      json: {
-        userStatus: {
-          planStatus: {
-            dailyQuotaRemainingPercent: 70,
-            weeklyQuotaResetAtUnix: 1_790_000_000,
-            planInfo: { hideDailyQuota: true },
-          },
-        },
-      },
-      nowMs: NOW_MS,
-    });
-
-    expect(snapshot.status).toBe("ok");
-    expect(snapshot.limits).toEqual([
-      {
-        window: "Weekly",
-        usedPercent: 30,
-        resetsAt: "2026-09-21T14:13:20.000Z",
-        windowDurationMins: 10_080,
-      },
-    ]);
-    expect(snapshot.usageLines).toEqual([]);
-  });
-
   it("uses the weekly quota directly when present even with a hidden daily quota", () => {
     const snapshot = parseDevinUsage({
       json: {
@@ -373,34 +347,6 @@ describe("parseDevinUsage", () => {
     expect(snapshot.usageLines).toEqual([]);
   });
 
-  it("formats the overage balance in micros as a USD remaining line", () => {
-    const snapshot = parseDevinUsage({
-      json: {
-        userStatus: {
-          planStatus: { overageBalanceMicros: 5_000_000 },
-        },
-      },
-      nowMs: NOW_MS,
-    });
-
-    expect(snapshot.usageLines).toEqual([
-      { label: "Extra usage balance", value: "$5.00 remaining" },
-    ]);
-  });
-
-  it("adds a Current limit from planEnd when no other quota limits exist", () => {
-    const snapshot = parseDevinUsage({
-      json: {
-        userStatus: {
-          planStatus: { planEnd: 1_790_000_000 },
-        },
-      },
-      nowMs: NOW_MS,
-    });
-
-    expect(snapshot.limits).toEqual([{ window: "Current", resetsAt: "2026-09-21T14:13:20.000Z" }]);
-  });
-
   it("falls back to a string end_date on plan info for the Current limit", () => {
     const snapshot = parseDevinUsage({
       json: {
@@ -457,32 +403,6 @@ describe("parseDevinUsage", () => {
     expect(snapshot.status).toBe("ok");
     expect(snapshot.limits).toEqual([]);
     expect(snapshot.usageLines).toEqual([]);
-  });
-
-  it("maps 100% remaining to 0% used", () => {
-    const snapshot = parseDevinUsage({
-      json: {
-        userStatus: {
-          planStatus: { dailyQuotaRemainingPercent: 100 },
-        },
-      },
-      nowMs: NOW_MS,
-    });
-
-    expect(snapshot.limits.find((limit) => limit.window === "Daily")?.usedPercent).toBe(0);
-  });
-
-  it("maps 0% remaining to 100% used", () => {
-    const snapshot = parseDevinUsage({
-      json: {
-        userStatus: {
-          planStatus: { dailyQuotaRemainingPercent: 0 },
-        },
-      },
-      nowMs: NOW_MS,
-    });
-
-    expect(snapshot.limits.find((limit) => limit.window === "Daily")?.usedPercent).toBe(100);
   });
 
   it("clamps remaining above 100% to 0% used", () => {

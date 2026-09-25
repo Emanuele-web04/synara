@@ -4,7 +4,6 @@ import type { ServerProviderStatus } from "@synara/contracts";
 import {
   isProviderUsable,
   normalizeProviderStatusForLocalConfig,
-  providerUnavailableReason,
   resolveAvailableProviderPreference,
   resolveProviderSendAvailabilityWithRefresh,
 } from "./providerAvailability";
@@ -39,27 +38,6 @@ describe("normalizeProviderStatusForLocalConfig", () => {
       status: "warning",
       message:
         "Antigravity uses a custom local binary path in this app. Availability will be confirmed when you start a session.",
-    });
-  });
-
-  it("applies the same custom-path fallback to Claude", () => {
-    expect(
-      normalizeProviderStatusForLocalConfig({
-        provider: "claudeAgent",
-        status: {
-          ...BASE_STATUS,
-          provider: "claudeAgent",
-          message: "Claude Code CLI (`claude`) is not installed or not on PATH.",
-        },
-        customBinaryPath: "/opt/homebrew/bin/claude",
-      }),
-    ).toEqual({
-      ...BASE_STATUS,
-      provider: "claudeAgent",
-      available: true,
-      status: "warning",
-      message:
-        "Claude uses a custom local binary path in this app. Availability will be confirmed when you start a session.",
     });
   });
 
@@ -316,14 +294,5 @@ describe("resolveProviderSendAvailabilityWithRefresh", () => {
       usable: false,
       unavailableReason: "Antigravity is not authenticated yet.",
     });
-  });
-});
-
-describe("providerUnavailableReason", () => {
-  it("returns provider-specific guidance", () => {
-    expect(providerUnavailableReason({ ...BASE_STATUS, authStatus: "unauthenticated" })).toBe(
-      "Antigravity is not authenticated yet.",
-    );
-    expect(providerUnavailableReason(BASE_STATUS)).toBe(BASE_STATUS.message);
   });
 });

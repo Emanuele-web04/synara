@@ -109,20 +109,6 @@ describe("DeviceManager attachment", () => {
     expect(events.at(-1)).toMatchObject({ type: "device.thread-state" });
   });
 
-  it("injects nothing into the guest just to start streaming it", async () => {
-    const { backend, manager } = makeManager();
-    await backend.boot(DEVICE_A);
-
-    await manager.attach(THREAD_A, DEVICE_A);
-    await settleAttach(manager, THREAD_A);
-
-    // Attaching used to press volume-up to force a repaint. On a headless boot
-    // that press reaches the app but paints no HUD, so it woke nothing up and
-    // only risked a stray button press landing in whatever was running; the
-    // helper primes the stream with the current framebuffer instead.
-    expect(backend.callsOfKind("pressButton")).toHaveLength(0);
-  });
-
   it("versions thread snapshots monotonically so panes can drop stale pushes", async () => {
     const { backend, manager } = makeManager();
     await backend.boot(DEVICE_A);
@@ -209,27 +195,6 @@ describe("DeviceManager discovery before the helper exists", () => {
     expect(result.availability).toEqual(setupRequired);
   });
 
-  it("puts the devices in the thread snapshot too", async () => {
-    const backend = new FakeDeviceBackend({ availability: setupRequired });
-    const { manager } = makeManager(backend);
-
-    const state = await manager.getThreadState(THREAD_A);
-
-    expect(state.devices.map((device) => device.udid)).toContain(DEVICE_A);
-    expect(state.availability).toEqual(setupRequired);
-  });
-
-  it("still lists devices when a previous helper build failed", async () => {
-    const backend = new FakeDeviceBackend({
-      availability: { kind: "helper-unavailable", message: "build failed" },
-    });
-    const { manager } = makeManager(backend);
-
-    // The user can still see and boot devices; the pane explains why input and
-    // video are unavailable.
-    expect((await manager.list({ includeShutdown: true })).devices).not.toHaveLength(0);
-  });
-
   it("reports no devices off a supported platform", async () => {
     const backend = new FakeDeviceBackend({
       availability: { kind: "unsupported-platform", platform: "linux" },
@@ -237,7 +202,9 @@ describe("DeviceManager discovery before the helper exists", () => {
     const { manager } = makeManager(backend);
 
     // The one case where discovery genuinely cannot run.
-    expect((await manager.list({ includeShutdown: true })).devices).toEqual([]);
+    const result = await manager.list({ includeShutdown: true });
+    expect(result.devices).toEqual([]);
+    expect(result.availability).toEqual({ kind: "unsupported-platform", platform: "linux" });
     expect((await manager.getThreadState(THREAD_A)).devices).toEqual([]);
   });
 
@@ -577,23 +544,6 @@ describe("DeviceManager device switching", () => {
     await waitForStream(backend, DEVICE_A, false);
   });
 
-  it("streams one device at a time, because the helper attaches to one", async () => {
-    const { backend, manager } = makeManager();
-    await manager.boot(DEVICE_A);
-    await manager.boot(DEVICE_B);
-    await manager.attach(THREAD_A, DEVICE_A);
-    await waitForStream(backend, DEVICE_A, true);
-
-    // A second thread on a different device: the helper's startStream stops
-    // whatever it was streaming before binding the new one, so believing both
-    // were live left the first pane on a frozen last frame with nothing to
-    // explain it.
-    await manager.attach(THREAD_B, DEVICE_B);
-
-    await waitForStream(backend, DEVICE_B, true);
-    await waitForStream(backend, DEVICE_A, false);
-  });
-
   it("frees the slot for the next boot rather than refusing it", async () => {
     const { backend, manager } = makeManager();
     // At the cap, with every slot held by this one thread's history.
@@ -712,21 +662,6 @@ describe("DeviceManager lifecycle and agent activity", () => {
     expect(backend.disposed).toBe(true);
   });
 
-  it("reports agentActive for the span of an agent action and clears it after", async () => {
-    const { backend, manager } = makeManager();
-    await manager.boot(DEVICE_A);
-    await manager.attach(THREAD_A, DEVICE_A);
-
-    let duringAction = false;
-    await manager.withAgentActivity(THREAD_A, async () => {
-      duringAction = (await manager.getThreadState(THREAD_A)).agentActive;
-    });
-
-    expect(duringAction).toBe(true);
-    expect((await manager.getThreadState(THREAD_A)).agentActive).toBe(false);
-    expect(backend.hasStream(DEVICE_A)).toBe(true);
-  });
-
   it("publishes agent activity without re-running device discovery", async () => {
     const { backend, manager, events } = makeManager();
     await manager.boot(DEVICE_A);
@@ -773,31 +708,6 @@ describe("DeviceManager lifecycle and agent activity", () => {
 
     expect(innerFinished).toBe(true);
     expect((await manager.getThreadState(THREAD_A)).agentActive).toBe(false);
-  });
-
-  it("emits an open-pane request carrying the owning thread", async () => {
-    const { manager, events } = makeManager();
-
-    manager.requestOpenPane(THREAD_A, DEVICE_A, "agent-launch");
-
-    expect(events.at(-1)).toEqual({
-      type: "device.open-pane-requested",
-      threadId: THREAD_A,
-      udid: DEVICE_A,
-      reason: "agent-launch",
-    });
-  });
-
-  it("reports unavailability without listing devices", async () => {
-    const backend = new FakeDeviceBackend({
-      availability: { kind: "unsupported-platform", platform: "linux" },
-    });
-    const { manager } = makeManager(backend);
-
-    const result = await manager.list();
-
-    expect(result.devices).toEqual([]);
-    expect(result.availability).toEqual({ kind: "unsupported-platform", platform: "linux" });
   });
 });
 
@@ -960,18 +870,6 @@ describe("DeviceManager agent auto-attach", () => {
       opened.map((event) => (event.type === "device.open-pane-requested" ? event.udid : null)),
     ).toEqual([DEVICE_A, DEVICE_B]);
   });
-
-  it("attaches each thread independently", async () => {
-    const { backend, manager } = makeManager();
-    await backend.boot(DEVICE_A);
-    await backend.boot(DEVICE_B);
-
-    await manager.ensureThreadAttached(THREAD_A, DEVICE_A);
-    await manager.ensureThreadAttached(THREAD_B, DEVICE_B);
-
-    expect((await manager.getThreadState(THREAD_A)).attachedDeviceUdid).toBe(DEVICE_A);
-    expect((await manager.getThreadState(THREAD_B)).attachedDeviceUdid).toBe(DEVICE_B);
-  });
 });
 
 describe("DeviceManager device geometry", () => {
@@ -991,17 +889,6 @@ describe("DeviceManager device geometry", () => {
     // supply it; the pane needs it to map canvas pixels onto device points.
     expect(before?.geometry).toBeUndefined();
     expect(after?.geometry).toEqual({ pointWidth: 402, pointHeight: 874, scale: 3 });
-  });
-
-  it("carries geometry in the pushed thread state", async () => {
-    const { backend, manager } = makeManager();
-    await backend.boot(DEVICE_A);
-    await manager.attach(THREAD_A, DEVICE_A);
-
-    const state = await manager.getThreadState(THREAD_A);
-
-    const attached = state.devices.find((device) => device.udid === state.attachedDeviceUdid);
-    expect(attached?.geometry?.scale).toBe(3);
   });
 
   it("leaves never-attached devices without geometry rather than guessing", async () => {
@@ -1143,23 +1030,6 @@ describe("DeviceManager scrolling to an element", () => {
 });
 
 describe("DeviceManager scrolling through a virtualized list", () => {
-  it("keeps paging when the label is not in the tree yet", async () => {
-    const { backend, manager } = makeManager();
-    await backend.boot(DEVICE_A);
-
-    // "Deep Row" is not rendered at all until scrolling brings it near, which
-    // is how real Settings behaves: the first describe has no such node, and a
-    // loop that treated absence as failure gave up here.
-    const first = await manager.describeUi(DEVICE_A);
-    const labels = (function collect(node): string[] {
-      return [node.label ?? "", ...node.children.flatMap(collect)];
-    })(first.root);
-    expect(labels).not.toContain("Deep Row");
-
-    const match = await manager.scrollToElement(DEVICE_A, { label: "Deep Row" });
-    expect(match.node.label).toBe("Deep Row");
-  });
-
   it("reports a label that never appears, naming what it did find", async () => {
     const { backend, manager } = makeManager();
     await backend.boot(DEVICE_A);

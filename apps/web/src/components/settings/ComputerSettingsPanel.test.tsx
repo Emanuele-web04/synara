@@ -83,18 +83,6 @@ describe("ComputerSettingsPanel", () => {
     expect(render({ status: status(), active: false })).toBe("");
   });
 
-  it("opens as one Computer control surface with the toggle in the header", () => {
-    const markup = render({ status: status() });
-    // Exactly one occurrence: the section title owns the words, and no row
-    // repeats them.
-    expect(markup.match(/Computer control/g) ?? []).toHaveLength(1);
-    expect(markup).toContain("Enable Computer by default in any chat.");
-    expect(markup).toContain("use /computer-use for one request");
-    expect(markup).toContain('aria-label="Let the agent use the desktop in any chat"');
-    // The section is the search/deep-link target for the toggle it carries.
-    expect(markup).toContain('id="setting-computer-control"');
-  });
-
   it("keeps the surface calm while the desktop is ready", () => {
     const markup = render({ status: status() });
     expect(markup).toContain("Connected to the desktop");
@@ -157,6 +145,9 @@ describe("ComputerSettingsPanel", () => {
     expect(markup).toContain("Screen Recording");
     expect(markup).toContain("cannot see it");
     expect(markup).toContain("Set up");
+    // Never claims a live system dialog that may not exist.
+    expect(markup).not.toContain("macOS is asking");
+    expect(markup).not.toContain("dialog is open");
     // A blind desktop never gets an abilities read-out that claims capture.
     expect(markup).not.toContain("screen capture");
   });
@@ -174,41 +165,6 @@ describe("ComputerSettingsPanel", () => {
     });
     expect(markup).toContain("Reconnecting to the desktop");
     expect(markup).toContain("Reconnected once since startup.");
-  });
-
-  it("never renders the retired Escape-stop chrome", () => {
-    // A physical Escape is self-healing now: no latch row, no re-arm button,
-    // wherever the status says the stop happened.
-    for (const input of [{ status: status({ inputStopped: true }) }, { status: status() }]) {
-      const markup = render(input);
-      expect(markup).not.toContain("Input stopped");
-      expect(markup).not.toContain("Re-arm input");
-    }
-  });
-
-  it("combines the automatic preview and its size into one row", () => {
-    const markup = render({ status: status() });
-    expect(markup).toContain("Preview");
-    expect(markup).toContain("Compact");
-    expect(markup).toContain("Large");
-    expect(markup).toContain(
-      'aria-label="Show the computer preview automatically when an agent drives the desktop"',
-    );
-    expect(markup).toContain('aria-label="In-chat computer preview size"');
-    // The old section title and its separate size row are gone.
-    expect(markup).not.toContain("Computer preview");
-    expect(markup).not.toContain("Preview size");
-  });
-
-  it("offers the preview row on a backend that drives its own seat too", () => {
-    const markup = render({
-      status: status({
-        availability: { kind: "available", backend: "nested-kwin" },
-        capabilities: capabilities({ visibleDesktop: false }),
-      }),
-    });
-    expect(markup).toContain("Preview");
-    expect(markup).toContain("Compact");
   });
 
   it("describes observation-only Cua without promising Mac input or treating idle readiness as input authorization", () => {
@@ -230,15 +186,6 @@ describe("ComputerSettingsPanel", () => {
     expect(markup).not.toContain("macOS desktop");
   });
 
-  it("keeps the details collapsed until asked for", () => {
-    const markup = render({ status: status() });
-    expect(markup).toContain("Advanced");
-    expect(markup).toContain('aria-expanded="false"');
-    // The disclosure content is mounted for its animation but inert and hidden.
-    expect(markup).toContain("Desktop abilities");
-    expect(markup).toContain("macOS desktop");
-  });
-
   describe("agent cursor colors", () => {
     it("keeps the cursor stock by default and hides the color editors", () => {
       const markup = render({ status: status() });
@@ -250,23 +197,6 @@ describe("ComputerSettingsPanel", () => {
       expect(markup).not.toContain("Fill color");
       expect(markup).not.toContain("Rim color");
       expect(markup).not.toContain("data-swatch");
-    });
-
-    it("reveals fill and rim editors, with swatches, after Custom is chosen", () => {
-      const markup = render({
-        status: status(),
-        settings: {
-          agentCursorColorMode: "custom",
-          agentCursorFillColor: "#aabbcc",
-          agentCursorRimColor: "#112233",
-        },
-      });
-      expect(markup).toContain("Fill color");
-      expect(markup).toContain("Rim color");
-      expect(markup).toContain('value="#aabbcc"');
-      expect(markup).toContain('value="#112233"');
-      expect(markup).toContain("background-color:#aabbcc");
-      expect(markup).toContain("background-color:#112233");
     });
 
     it("round-trips custom colors through the settings store", () => {

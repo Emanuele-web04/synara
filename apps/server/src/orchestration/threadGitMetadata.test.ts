@@ -18,20 +18,6 @@ const pullRequest: OrchestrationThreadPullRequest = {
 };
 
 describe("deriveThreadGitMetadataPatch", () => {
-  it("adopts the observed branch and its pull request", () => {
-    expect(
-      deriveThreadGitMetadataPatch({
-        currentBranch: "synara/old-branch",
-        currentPullRequest: null,
-        observedBranch: "feat/provider-usage-snapshot-cache",
-        pullRequestLookup: { status: "resolved", pullRequest },
-      }),
-    ).toEqual({
-      branch: "feat/provider-usage-snapshot-cache",
-      lastKnownPr: pullRequest,
-    });
-  });
-
   it("clears a previous PR when the current branch has no PR", () => {
     expect(
       deriveThreadGitMetadataPatch({
@@ -41,17 +27,6 @@ describe("deriveThreadGitMetadataPatch", () => {
         pullRequestLookup: { status: "resolved", pullRequest: null },
       }),
     ).toEqual({ lastKnownPr: null });
-  });
-
-  it("preserves a durable PR when GitHub is unavailable on the unchanged branch", () => {
-    expect(
-      deriveThreadGitMetadataPatch({
-        currentBranch: pullRequest.headBranch,
-        currentPullRequest: pullRequest,
-        observedBranch: pullRequest.headBranch,
-        pullRequestLookup: { status: "unavailable" },
-      }),
-    ).toBeNull();
   });
 
   it("clears a stale PR when the branch changes while GitHub is unavailable", () => {

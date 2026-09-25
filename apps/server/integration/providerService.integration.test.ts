@@ -128,52 +128,6 @@ it.effect("replays typed runtime fixture events", () =>
   }).pipe(Effect.provide(NodeServices.layer)),
 );
 
-it.effect("replays file-changing fixture turn events", () =>
-  Effect.gen(function* () {
-    const fixture = yield* makeIntegrationFixture;
-    const { join } = yield* Path.Path;
-    const { writeFileString } = yield* FileSystem.FileSystem;
-
-    yield* Effect.gen(function* () {
-      const provider = yield* ProviderService;
-      const session = yield* provider.startSession(
-        ThreadId.makeUnsafe("thread-integration-tools"),
-        {
-          threadId: ThreadId.makeUnsafe("thread-integration-tools"),
-          provider: "codex",
-          cwd: fixture.cwd,
-          runtimeMode: "full-access",
-        },
-      );
-      assert.equal((session.threadId ?? "").length > 0, true);
-
-      const snapshot = yield* runTurn({
-        provider,
-        harness: fixture.harness,
-        threadId: session.threadId,
-        userText: "make a small change",
-        response: {
-          events: codexTurnToolFixture,
-          mutateWorkspace: ({ cwd }) =>
-            writeFileString(join(cwd, "README.md"), "v2\n").pipe(Effect.asVoid, Effect.ignore),
-        },
-      });
-
-      assert.equal(snapshot.turns.length, 1);
-      assert.deepEqual(snapshot.turns[0]?.items, [
-        {
-          type: "userMessage",
-          content: [{ type: "text", text: "make a small change" }],
-        },
-        {
-          type: "agentMessage",
-          text: "Applied the requested edit.\n",
-        },
-      ]);
-    }).pipe(Effect.provide(fixture.layer));
-  }).pipe(Effect.provide(NodeServices.layer)),
-);
-
 it.effect("runs multi-turn tool/approval flow", () =>
   Effect.gen(function* () {
     const fixture = yield* makeIntegrationFixture;

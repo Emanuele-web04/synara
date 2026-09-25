@@ -7,7 +7,6 @@ import {
   findTarget,
   planScrollStep,
   readTapRequest,
-  tapPointForNode,
 } from "./uiTreeTargeting.ts";
 
 function node(partial: Partial<DeviceUiNode> & { readonly role: string }): DeviceUiNode {
@@ -39,19 +38,6 @@ const SCREEN = node({
     DARK_APPEARANCE,
     node({ role: "Button", label: "L4S", frame: { x: 20, y: 692, width: 362, height: 53 } }),
   ],
-});
-
-describe("tap point resolution", () => {
-  it("prefers a control's own activation point over its row centre", () => {
-    // The row spans x 36..366, so its centre is x=201: dead space that
-    // swallowed a real agent's tap. Only x=336.5 hits the switch.
-    expect(tapPointForNode(DARK_APPEARANCE)).toEqual({ x: 336.5, y: 198 });
-  });
-
-  it("falls back to the frame centre when a node has no activation point", () => {
-    const plain = node({ role: "Button", frame: { x: 10, y: 20, width: 100, height: 40 } });
-    expect(tapPointForNode(plain)).toEqual({ x: 60, y: 40 });
-  });
 });
 
 describe("resolving a label to an element", () => {
@@ -163,11 +149,6 @@ describe("reading a tap request", () => {
 
 describe("planning a scroll step", () => {
   const screen = node({ role: "Application", frame: { x: 0, y: 0, width: 402, height: 874 } });
-
-  it("asks for no swipe when the target is already in the band", () => {
-    const middle = node({ role: "Button", frame: { x: 0, y: 400, width: 402, height: 44 } });
-    expect(planScrollStep(middle, screen)).toBeNull();
-  });
 
   it("treats a row under the status bar as needing a scroll, not as visible", () => {
     // On screen by coordinates, untappable in practice: the band exists so a

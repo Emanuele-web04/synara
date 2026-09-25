@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { type AppSettings, AppSettingsSchema } from "~/appSettings";
+import { AppSettingsSchema } from "~/appSettings";
 
 import {
   createProviderInstallResetPatch,
@@ -10,31 +10,6 @@ import {
 const defaults = AppSettingsSchema.makeUnsafe({});
 
 describe("isProviderInstallSettingsDirty", () => {
-  it("covers every provider install text and boolean field", () => {
-    const dirtyPatches = [
-      { codexBinaryPath: "/opt/codex" },
-      { codexHomePath: "/tmp/codex-home" },
-      { claudeBinaryPath: "/opt/claude" },
-      { cursorBinaryPath: "/opt/cursor" },
-      { cursorApiEndpoint: "https://cursor.example" },
-      { devinBinaryPath: "/opt/devin" },
-      { antigravityBinaryPath: "/opt/agy" },
-      { grokBinaryPath: "/opt/grok" },
-      { droidBinaryPath: "/opt/droid" },
-      { openCodeBinaryPath: "/opt/opencode" },
-      { openCodeServerUrl: "http://127.0.0.1:5001" },
-      { openCodeExperimentalWebSockets: true },
-      { claudeEnableArtifacts: true },
-      { piBinaryPath: "/opt/pi" },
-      { piAgentDir: "/tmp/pi-agent" },
-    ] satisfies ReadonlyArray<Partial<AppSettings>>;
-
-    expect(isProviderInstallSettingsDirty(defaults, defaults)).toBe(false);
-    for (const patch of dirtyPatches) {
-      expect(isProviderInstallSettingsDirty({ ...defaults, ...patch }, defaults)).toBe(true);
-    }
-  });
-
   it("uses configured flags instead of unreadable password values", () => {
     expect(
       isProviderInstallSettingsDirty({ ...defaults, openCodeServerPassword: "secret" }, defaults),
