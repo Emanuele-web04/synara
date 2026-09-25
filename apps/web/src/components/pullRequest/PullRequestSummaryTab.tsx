@@ -114,7 +114,7 @@ export function PullRequestSummaryTab({ detail }: { detail: PullRequestDetail })
     <div className="h-full overflow-y-auto">
       <section className="space-y-4 px-5 py-5">
         <div className="min-w-0">
-          <h1 className="text-lg font-semibold leading-snug">{detail.title}</h1>
+          <h1 className="font-heading font-semibold text-ui-lg leading-snug">{detail.title}</h1>
           {/* Muted line, with the author the one thing lifted out of it. */}
           <PullRequestMetaLine
             className={cn(PR_META_TEXT_CLASS_NAME, "mt-1.5 flex-wrap text-muted-foreground")}

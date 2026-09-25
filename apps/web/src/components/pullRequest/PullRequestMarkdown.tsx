@@ -26,7 +26,7 @@ function DetailsSection({ summary, body, cwd }: { summary: string; body: string;
       <CollapsibleTrigger
         className={cn(
           PR_META_TEXT_CLASS_NAME,
-          "flex items-center gap-1 rounded px-1 py-0.5 text-left font-medium text-muted-foreground transition-colors hover:text-foreground",
+          "flex items-center gap-1 rounded px-1 py-1 text-left font-medium text-muted-foreground transition-colors hover:text-foreground",
         )}
       >
         <DisclosureChevron open={open} />

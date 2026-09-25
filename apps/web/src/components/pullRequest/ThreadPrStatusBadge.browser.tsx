@@ -9,9 +9,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { ThreadPrStatusBadge } from "./ThreadPrStatusBadge";
+import { waitForTransientPopups } from "../../lib/browserPopupCleanup";
 
 describe("ThreadPrStatusBadge", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await waitForTransientPopups();
     document.body.innerHTML = "";
   });
 
