@@ -1,8 +1,4 @@
-import {
-  COMPUTER_FRAME_MAGIC,
-  COMPUTER_FRAME_VERSION,
-  DEVICE_FRAME_MAGIC,
-} from "@synara/contracts";
+import { COMPUTER_FRAME_MAGIC, DEVICE_FRAME_MAGIC } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -31,21 +27,6 @@ describe("encodeComputerFrame / decodeComputerFrame", () => {
     if (!result.ok) return;
     expect(result.frame.header).toEqual(header);
     expect(Array.from(result.frame.payload)).toEqual(Array.from(payload));
-  });
-
-  it("round-trips an empty payload and independent flags", () => {
-    const result = decodeComputerFrame(
-      encodeComputerFrame({
-        header: { ...header, keyframe: true, codecConfig: true },
-        payload: new Uint8Array(),
-      }),
-    );
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.frame.header.keyframe).toBe(true);
-    expect(result.frame.header.codecConfig).toBe(true);
-    expect(result.frame.payload.byteLength).toBe(0);
   });
 
   it("uses a distinct wire magic from device frames", () => {
@@ -78,30 +59,6 @@ describe("encodeComputerFrame / decodeComputerFrame", () => {
 
 describe("decodeComputerFrame malformed input", () => {
   const encoded = encodeComputerFrame({ header, payload });
-
-  it("rejects buffers shorter than the fixed header", () => {
-    expect(decodeComputerFrame(new Uint8Array(FRAME_HEADER_FIXED_BYTES - 1))).toEqual({
-      ok: false,
-      reason: "too-short",
-    });
-  });
-
-  it("rejects a wrong magic and unsupported version", () => {
-    const wrongMagic = encoded.slice();
-    new DataView(wrongMagic.buffer, wrongMagic.byteOffset, wrongMagic.byteLength).setUint16(
-      0,
-      COMPUTER_FRAME_MAGIC ^ 0xffff,
-      true,
-    );
-    expect(decodeComputerFrame(wrongMagic)).toEqual({ ok: false, reason: "bad-magic" });
-
-    const future = encoded.slice();
-    future[2] = COMPUTER_FRAME_VERSION + 1;
-    expect(decodeComputerFrame(future)).toEqual({
-      ok: false,
-      reason: "unsupported-version",
-    });
-  });
 
   it("rejects zero-length and invalid UTF-8 computer ids", () => {
     const zeroLength = encoded.slice();

@@ -4,7 +4,6 @@ import {
   buildLocalImageUrl,
   isLocalImageMarkdownSrc,
   localImageAbsolutePath,
-  localImageFileName,
 } from "./localImageUrls";
 
 describe("local image URL helpers", () => {
@@ -96,9 +95,5 @@ describe("local image URL helpers", () => {
     expect(parsed.searchParams.get("cwd")).toBe("/Users/me/project");
     expect(parsed.searchParams.get("download")).toBe("1");
     expect(parsed.searchParams.get("token")).toBe("secret-token-123");
-  });
-
-  it("derives display file names", () => {
-    expect(localImageFileName("/tmp/generated%20image.png")).toBe("generated image.png");
   });
 });

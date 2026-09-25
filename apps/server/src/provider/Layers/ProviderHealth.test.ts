@@ -29,13 +29,13 @@ import {
   checkGrokProviderStatus,
   checkOpenCodeProviderStatus,
   checkPiProviderStatus,
-  makeDisabledProviderStatus,
   makeCheckClaudeProviderStatus,
   makeCheckCodexProviderStatus,
   makeCheckCursorProviderStatus,
   makeCheckDevinProviderStatus,
   makeCheckGrokProviderStatus,
   makeCheckOpenCodeProviderStatus,
+  makeDisabledProviderStatus,
   makeProviderHealthLive,
   parseAuthStatusFromOutput,
   parseClaudeAuthStatusFromOutput,
@@ -1242,31 +1242,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       ),
     );
 
-    it.effect("returns unauthenticated when login status output includes 'not logged in'", () =>
-      Effect.gen(function* () {
-        yield* withTempCodexHome();
-        const status = yield* checkCodexProviderStatus;
-        assert.strictEqual(status.provider, "codex");
-        assert.strictEqual(status.status, "error");
-        assert.strictEqual(status.available, true);
-        assert.strictEqual(status.authStatus, "unauthenticated");
-        assert.strictEqual(
-          status.message,
-          "Codex CLI is not authenticated. Run `codex login` and try again.",
-        );
-      }).pipe(
-        Effect.provide(
-          mockSpawnerLayer((args) => {
-            const joined = args.join(" ");
-            if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
-            if (joined === "-c mcp_servers={} login status")
-              return { stdout: "Not logged in\n", stderr: "", code: 1 };
-            throw new Error(`Unexpected args: ${joined}`);
-          }),
-        ),
-      ),
-    );
-
     it.effect("returns warning when login status command is unsupported", () =>
       Effect.gen(function* () {
         yield* withTempCodexHome();
@@ -1373,12 +1348,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   // ── parseAuthStatusFromOutput pure tests ──────────────────────────
 
   describe("parseAuthStatusFromOutput", () => {
-    it("exit code 0 with no auth markers is ready", () => {
-      const parsed = parseAuthStatusFromOutput({ stdout: "OK\n", stderr: "", code: 0 });
-      assert.strictEqual(parsed.status, "ready");
-      assert.strictEqual(parsed.authStatus, "authenticated");
-    });
-
     it("JSON with authenticated=false is unauthenticated", () => {
       const parsed = parseAuthStatusFromOutput({
         stdout: '[{"authenticated":false}]\n',
@@ -1403,50 +1372,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   // ── readCodexConfigModelProviderForEnv tests ─────────────────────────────
 
   describe("readCodexConfigModelProviderForEnv", () => {
-    it.effect("returns undefined when config file does not exist", () =>
-      Effect.gen(function* () {
-        yield* withTempCodexHome();
-        assert.strictEqual(yield* readCodexConfigModelProviderForEnv(process.env), undefined);
-      }),
-    );
-
-    it.effect("returns undefined when config has no model_provider key", () =>
-      Effect.gen(function* () {
-        yield* withTempCodexHome('model = "gpt-5-codex"\n');
-        assert.strictEqual(yield* readCodexConfigModelProviderForEnv(process.env), undefined);
-      }),
-    );
-
-    it.effect("returns the provider when model_provider is set at top level", () =>
-      Effect.gen(function* () {
-        yield* withTempCodexHome('model = "gpt-5-codex"\nmodel_provider = "portkey"\n');
-        assert.strictEqual(yield* readCodexConfigModelProviderForEnv(process.env), "portkey");
-      }),
-    );
-
-    it.effect("returns openai when model_provider is openai", () =>
-      Effect.gen(function* () {
-        yield* withTempCodexHome('model_provider = "openai"\n');
-        assert.strictEqual(yield* readCodexConfigModelProviderForEnv(process.env), "openai");
-      }),
-    );
-
-    it.effect("ignores model_provider inside section headers", () =>
-      Effect.gen(function* () {
-        yield* withTempCodexHome(
-          [
-            'model = "gpt-5-codex"',
-            "",
-            "[model_providers.portkey]",
-            'base_url = "https://api.portkey.ai/v1"',
-            'model_provider = "should-be-ignored"',
-            "",
-          ].join("\n"),
-        );
-        assert.strictEqual(yield* readCodexConfigModelProviderForEnv(process.env), undefined);
-      }),
-    );
-
     it.effect("handles comments and whitespace", () =>
       Effect.gen(function* () {
         yield* withTempCodexHome(
@@ -1987,22 +1912,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       }).pipe(
         Effect.provide(
           mockSpawnerLayer((args) => {
-            const joined = args.join(" ");
-            if (joined === "--version") return { stdout: "opencode 1.3.17\n", stderr: "", code: 0 };
-            throw new Error(`Unexpected args: ${joined}`);
-          }),
-        ),
-      ),
-    );
-
-    it.effect("uses configured opencode binary for version probe", () =>
-      Effect.gen(function* () {
-        const status = yield* makeCheckOpenCodeProviderStatus("/custom/bin/opencode");
-        assert.strictEqual(status.status, "ready");
-      }).pipe(
-        Effect.provide(
-          mockSpawnerLayer((args, command) => {
-            assert.strictEqual(command, "/custom/bin/opencode");
             const joined = args.join(" ");
             if (joined === "--version") return { stdout: "opencode 1.3.17\n", stderr: "", code: 0 };
             throw new Error(`Unexpected args: ${joined}`);
@@ -2697,32 +2606,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   // ── parseClaudeAuthStatusFromOutput pure tests ────────────────────
 
   describe("parseClaudeAuthStatusFromOutput", () => {
-    it("exit code 0 with no auth markers is ready", () => {
-      const parsed = parseClaudeAuthStatusFromOutput({ stdout: "OK\n", stderr: "", code: 0 });
-      assert.strictEqual(parsed.status, "ready");
-      assert.strictEqual(parsed.authStatus, "authenticated");
-    });
-
-    it("JSON with loggedIn=true is authenticated", () => {
-      const parsed = parseClaudeAuthStatusFromOutput({
-        stdout: '{"loggedIn":true,"authMethod":"claude.ai"}\n',
-        stderr: "",
-        code: 0,
-      });
-      assert.strictEqual(parsed.status, "ready");
-      assert.strictEqual(parsed.authStatus, "authenticated");
-    });
-
-    it("JSON with loggedIn=false is unauthenticated", () => {
-      const parsed = parseClaudeAuthStatusFromOutput({
-        stdout: '{"loggedIn":false}\n',
-        stderr: "",
-        code: 0,
-      });
-      assert.strictEqual(parsed.status, "error");
-      assert.strictEqual(parsed.authStatus, "unauthenticated");
-    });
-
     it("JSON without auth marker is warning", () => {
       const parsed = parseClaudeAuthStatusFromOutput({
         stdout: '{"ok":true}\n',

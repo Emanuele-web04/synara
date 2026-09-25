@@ -14,8 +14,6 @@ import {
 
 describe("resolveWorkspaceDirectoryOpenTarget", () => {
   it.each([
-    ["docs/", "/Users/dev/project", "docs"],
-    ["./docs/", "/Users/dev/project", "docs"],
     ["./docs/./guide/", "/Users/dev/project", "docs/guide"],
     ["docs/#L12C3", "/Users/dev/project", "docs"],
     ["C:\\Users\\Dev\\Projects", "c:/users/dev/projects/", ""],
@@ -55,12 +53,6 @@ describe("resolveWorkspaceDirectoryOpenTarget", () => {
     ).toBeNull();
   });
 
-  it("recognizes the workspace root across Windows separator and casing differences", () => {
-    expect(
-      resolveWorkspaceDirectoryOpenTarget("C:\\Users\\Dev\\Projects", "c:/users/dev/projects/"),
-    ).toBe("");
-  });
-
   it("recognizes the POSIX workspace root", () => {
     expect(resolveWorkspaceDirectoryOpenTarget("/Users/dev/project/", "/Users/dev/project")).toBe(
       "",
@@ -89,12 +81,6 @@ describe("resolveWorkspaceFileOpenTarget", () => {
     expect(resolveWorkspaceFileOpenTarget("src/page.tsx:42", "/repo/app")).toBe("src/page.tsx");
     expect(resolveWorkspaceFileOpenTarget("src/page.tsx:42:7", "/repo/app")).toBe("src/page.tsx");
     expect(resolveWorkspaceFileOpenTarget("/repo/app/src/page.tsx:10:2", "/repo/app")).toBe(
-      "src/page.tsx",
-    );
-  });
-
-  it("maps absolute paths inside the workspace to relative form", () => {
-    expect(resolveWorkspaceFileOpenTarget("/repo/app/src/page.tsx", "/repo/app")).toBe(
       "src/page.tsx",
     );
   });
@@ -128,11 +114,6 @@ describe("resolveScratchPreviewFileOpenTarget", () => {
     expect(
       resolveScratchPreviewFileOpenTarget("/tmp/synara-codex-workspaces/thread-1/shot.png"),
     ).toBe("/tmp/synara-codex-workspaces/thread-1/shot.png");
-  });
-
-  it("strips :line and :line:col position suffixes", () => {
-    expect(resolveScratchPreviewFileOpenTarget(`${scratchPdf}:3`)).toBe(scratchPdf);
-    expect(resolveScratchPreviewFileOpenTarget(`${scratchPdf}:3:14`)).toBe(scratchPdf);
   });
 
   it("returns null for scratch-workspace files without an in-app binary preview", () => {

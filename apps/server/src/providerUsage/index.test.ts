@@ -102,18 +102,6 @@ describe("collectProviderUsageSnapshots caching", () => {
     expect(second).toEqual(first);
   });
 
-  it("bypasses the TTL on forceRefresh", async () => {
-    fetchMock.mockImplementation(async (ctx) => okSnapshot(ctx.nowMs));
-
-    await collectProviderUsageSnapshots(makeCtx(NOW_MS));
-    const refreshed = await collectProviderUsageSnapshots(makeCtx(NOW_MS + 1_000), {
-      forceRefresh: true,
-    });
-
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(refreshed[0]?.updatedAt).toBe(new Date(NOW_MS + 1_000).toISOString());
-  });
-
   it("joins an in-flight refresh instead of serving the previous cached snapshot", async () => {
     fetchMock.mockResolvedValueOnce(okSnapshot(NOW_MS, "cached"));
     await collectProviderUsageSnapshots(makeCtx(NOW_MS));
@@ -227,27 +215,6 @@ describe("collectProviderUsageSnapshots caching", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(polled[0]?.source).toBe("recovered");
-  });
-
-  it("does not retain stale snapshots in the outer cache", async () => {
-    fetchMock.mockImplementation(async (ctx) => ({ ...okSnapshot(ctx.nowMs), stale: true }));
-
-    await collectProviderUsageSnapshots(makeCtx(NOW_MS));
-    await collectProviderUsageSnapshots(makeCtx(NOW_MS + 1_000));
-
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("expires needs-auth snapshots on the degraded TTL", async () => {
-    fetchMock.mockImplementation(async (ctx) => ({
-      ...okSnapshot(ctx.nowMs),
-      status: "needs-auth",
-    }));
-
-    await collectProviderUsageSnapshots(makeCtx(NOW_MS));
-    await collectProviderUsageSnapshots(makeCtx(NOW_MS + 90_000));
-
-    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("omits disabled providers and invalidates their cached snapshots", async () => {

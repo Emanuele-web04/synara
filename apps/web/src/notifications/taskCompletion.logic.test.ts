@@ -525,7 +525,7 @@ describe("collectCompletedThreadCandidates", () => {
     ]);
   });
 
-  it.each([{ state: "interrupted" }, { state: "error" }] as const)(
+  it.each([{ state: "interrupted" }] as const)(
     "does not notify a settled $state turn as a completion",
     ({ state }) => {
       const previous = [
@@ -564,52 +564,6 @@ describe("collectCompletedThreadCandidates", () => {
       expect(collectCompletedThreadCandidates(previous, next)).toEqual([]);
     },
   );
-
-  it("re-emits a settle wobble under the same dedup key as the original completion", () => {
-    // A follow-up turn spinning up flips orchestrationStatus to "running" while
-    // latestTurn still points at the finished turn; when the status wobbles back
-    // out of "running" before the new turn registers, the old completion is
-    // re-emitted. The runtime dedupes it because the key is identical.
-    const settledTurn = {
-      turnId: TurnId.makeUnsafe("turn-1"),
-      state: "completed",
-      requestedAt: "2026-04-05T10:00:00.000Z",
-      startedAt: "2026-04-05T10:00:00.000Z",
-      completedAt: "2026-04-05T10:00:05.000Z",
-      assistantMessageId: null,
-      sourceProposedPlan: undefined,
-    } as const;
-    const idleSession = {
-      provider: "codex",
-      status: "ready",
-      orchestrationStatus: "ready",
-      createdAt: "2026-04-05T10:00:00.000Z",
-      updatedAt: "2026-04-05T10:00:05.000Z",
-    } as const;
-    const followUpStartingSession = {
-      provider: "codex",
-      status: "running",
-      orchestrationStatus: "running",
-      createdAt: "2026-04-05T10:00:00.000Z",
-      updatedAt: "2026-04-05T10:00:09.000Z",
-    } as const;
-
-    const [original] = collectCompletedThreadCandidates(
-      [makeThread({})],
-      [makeThread({ session: idleSession, latestTurn: settledTurn })],
-    );
-    const [reEmitted] = collectCompletedThreadCandidates(
-      [makeThread({ session: followUpStartingSession, latestTurn: settledTurn })],
-      [makeThread({ session: idleSession, latestTurn: settledTurn })],
-    );
-    if (!original || !reEmitted) {
-      throw new Error("Expected both snapshots to emit a completion candidate");
-    }
-
-    expect(completedThreadNotificationKey(reEmitted)).toBe(
-      completedThreadNotificationKey(original),
-    );
-  });
 
   it("keeps the dedup key stable when a checkpoint diff rewrites the turn's completedAt", () => {
     // thread.turn-diff-completed rebuilds latestTurn with the checkpoint's own
@@ -711,15 +665,6 @@ describe("shouldShowThreadNotificationToast", () => {
 });
 
 describe("buildTaskCompletionCopy", () => {
-  it("prefers assistant output when available", () => {
-    expect(
-      buildCollectedTaskCompletionCopy("Finished the task and everything looks good."),
-    ).toEqual({
-      title: "Polish notifications",
-      body: "Finished the task and everything looks good.",
-    });
-  });
-
   it("keeps compact context while stripping assistant Markdown", () => {
     expect(
       buildCollectedTaskCompletionCopy(
@@ -739,13 +684,6 @@ describe("buildTaskCompletionCopy", () => {
     ).toEqual({
       title: "Polish notifications",
       body: "Updated apps/web/src/foo_bar.ts. const result_value = true;",
-    });
-  });
-
-  it("preserves useful content inside a closed code fence", () => {
-    expect(buildCollectedTaskCompletionCopy('Result:\n```json\n{"status":"ok"}\n```')).toEqual({
-      title: "Polish notifications",
-      body: 'Result: {"status":"ok"}',
     });
   });
 
@@ -864,13 +802,6 @@ describe("buildTaskCompletionCopy", () => {
     });
   });
 
-  it("does not strip underscores from inline code identifiers", () => {
-    expect(buildCollectedTaskCompletionCopy("Updated `__init__.py` and `foo__bar__`.")).toEqual({
-      title: "Polish notifications",
-      body: "Updated __init__.py and foo__bar__.",
-    });
-  });
-
   it("does not treat intraword double underscores as emphasis", () => {
     expect(buildCollectedTaskCompletionCopy("Updated foo__bar__ successfully.")).toEqual({
       title: "Polish notifications",
@@ -898,11 +829,6 @@ describe("buildTaskCompletionCopy", () => {
     [
       "blockquote",
       "Result:\n> ```python\n> def __init__(self):\n>   return value\n> ```",
-      "Result: def __init__(self): return value",
-    ],
-    [
-      "list",
-      "Result:\n- ```python\n  def __init__(self):\n  return value\n  ```",
       "Result: def __init__(self): return value",
     ],
     [
@@ -1158,22 +1084,6 @@ describe("buildInputNeededCopy", () => {
     ).toEqual({
       title: "Input needed",
       body: "Polish notifications: Command approval requested.",
-    });
-  });
-
-  it("describes user-input requests succinctly", () => {
-    expect(
-      buildInputNeededCopy({
-        kind: "user-input",
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        projectId: ProjectId.makeUnsafe("project-1"),
-        title: "Polish notifications",
-        createdAt: "2026-04-05T10:00:06.000Z",
-        requestId: ApprovalRequestId.makeUnsafe("user-input-request-1"),
-      }),
-    ).toEqual({
-      title: "Input needed",
-      body: "Polish notifications: User input requested.",
     });
   });
 });

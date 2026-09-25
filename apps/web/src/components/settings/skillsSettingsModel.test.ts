@@ -5,7 +5,10 @@
 import type { ProviderSkillDescriptor } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
-import { buildSettingsSkillGroups, buildSettingsSkillSections } from "./skillsSettingsModel";
+import {
+  buildSettingsSkillGroups,
+  buildSettingsSkillSectionsFromGroups,
+} from "./skillsSettingsModel";
 
 function skill(partial: Partial<ProviderSkillDescriptor>): ProviderSkillDescriptor {
   return {
@@ -50,6 +53,9 @@ describe("buildSettingsSkillGroups", () => {
     const cursorOnly = groups.find((group) => group.key === "cursor-only");
     expect(cursorOnly?.section).toBe("cursor");
     expect(cursorOnly?.providers).toEqual(["cursor"]);
+    const sections = buildSettingsSkillSectionsFromGroups(groups);
+    expect(sections.map((section) => section.title)).toEqual(["Shared skills", "From Cursor"]);
+    expect(sections[0]?.groups.map((group) => group.key)).toEqual(["check-code"]);
   });
 
   it("does not show provider icons for shared alias-only skills", () => {
@@ -64,30 +70,5 @@ describe("buildSettingsSkillGroups", () => {
 
     expect(groups[0]?.providers).toEqual([]);
     expect(groups[0]?.section).toBe("agents");
-  });
-});
-
-describe("buildSettingsSkillSections", () => {
-  it("places shared skill groups before provider-only sections", () => {
-    const sections = buildSettingsSkillSections([
-      skill({
-        name: "logic-consolidator",
-        path: "/Users/test/.codex/skills/logic-consolidator/SKILL.md",
-        scope: "codex",
-      }),
-      skill({
-        name: "logic-consolidator",
-        path: "/Users/test/.claude/skills/logic-consolidator/SKILL.md",
-        scope: "claude",
-      }),
-      skill({
-        name: "cursor-only",
-        path: "/Users/test/.cursor/skills/cursor-only/SKILL.md",
-        scope: "cursor",
-      }),
-    ]);
-
-    expect(sections.map((section) => section.title)).toEqual(["Shared skills", "From Cursor"]);
-    expect(sections[0]?.groups.map((group) => group.key)).toEqual(["logic-consolidator"]);
   });
 });

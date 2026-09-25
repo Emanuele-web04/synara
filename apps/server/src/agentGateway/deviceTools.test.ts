@@ -112,23 +112,12 @@ describe("agent gateway device tools surface", () => {
       "device_scroll_to_element",
     ]);
     expect(tools.every((tool) => tool.requiredCapability === "device:control")).toBe(true);
-  });
-
-  it("requires an active turn for every tool, including the read-only ones", async () => {
-    const { tools } = await setup();
-
+    // Every tool, the read-only ones included, needs a live caller turn.
     expect(tools.every((tool) => tool.requiresActiveTurn === true)).toBe(true);
   });
+});
 
-  it("marks read tools read-only and input tools as writes", async () => {
-    const { byName } = await setup();
-
-    expect(byName.get("device_describe_ui")?.definition.annotations?.readOnlyHint).toBe(true);
-    expect(byName.get("device_screenshot")?.definition.annotations?.readOnlyHint).toBe(true);
-    expect(byName.get("device_tap")?.definition.annotations?.readOnlyHint).toBe(false);
-    expect(byName.get("device_open_url")?.definition.annotations?.openWorldHint).toBe(true);
-  });
-
+describe("agent gateway device tool handlers", () => {
   it("publishes the operational rules on the tools that need them", async () => {
     const { byName } = await setup();
     const description = (name: string) => byName.get(name)?.definition.description ?? "";
@@ -170,9 +159,7 @@ describe("agent gateway device tools surface", () => {
       expect(description(name)).toContain("do not retry");
     }
   });
-});
 
-describe("agent gateway device tool handlers", () => {
   it("lists devices with their availability", async () => {
     const { structured } = await setup();
 
@@ -183,14 +170,6 @@ describe("agent gateway device tool handlers", () => {
 
     expect(result.availability).toEqual({ kind: "available" });
     expect(result.devices.find((device) => device.udid === DEVICE)?.bootSource).toBe("synara");
-  });
-
-  it("taps through to the backend with the requested device points", async () => {
-    const { backend, structured } = await setup();
-
-    await structured("device_tap", { udid: DEVICE, x: 100, y: 220 });
-
-    expect(backend.callsOfKind("tap")[0]).toMatchObject({ udid: DEVICE, x: 100, y: 220 });
   });
 
   it("taps a label at the control's own point and reports its prior state", async () => {
@@ -337,14 +316,6 @@ describe("agent gateway device tool handlers", () => {
     expect(excessiveDuration.isError).toBe(true);
     expect(excessiveScrolls.isError).toBe(true);
     expect(backend.callsOfKind("swipe")).toHaveLength(0);
-  });
-
-  it("marks the thread agent-active only while a tool runs", async () => {
-    const { manager, structured } = await setup();
-
-    await structured("device_describe_ui", { udid: DEVICE });
-
-    expect((await manager.getThreadState(THREAD)).agentActive).toBe(false);
   });
 });
 
@@ -501,34 +472,38 @@ describe("agent gateway device tools surface the pane on any interaction", () =>
         },
       ]);
     });
-
-    it(`asks the pane to open only once across repeated ${name} calls`, async () => {
-      const { manager, call } = await setup();
-      const opened = collectOpenPaneRequests(manager);
-
-      await call(name, { ...args });
-      await call(name, { ...args });
-      await call(name, { ...args });
-
-      // An agent taps every few seconds; re-requesting per call would spam the
-      // UI and could yank back a user who navigated away.
-      expect(opened).toHaveLength(1);
-    });
-
-    it(`never steals a thread already watching another device on ${name}`, async () => {
-      const { backend, manager, call } = await setup();
-      await backend.boot("FAKE-0002");
-      await manager.attach(THREAD, "FAKE-0002");
-      const opened = collectOpenPaneRequests(manager);
-
-      await call(name, { ...args });
-
-      expect((await manager.getThreadState(THREAD)).attachedDeviceUdid).toBe("FAKE-0002");
-      // The attachment the user chose survives; the request names the agent's
-      // device, which stays reachable from the picker.
-      expect(opened.map((event) => event.udid)).toEqual([DEVICE]);
-    });
   }
+
+  // Idempotency and non-stealing live in the one shared surfacing wrapper
+  // (handleInteraction -> manager.surfaceDeviceForAgent), so one tool proves them.
+  const [tapName, tapArgs] = INTERACTION_CALLS[0];
+
+  it("asks the pane to open only once across repeated device_tap calls", async () => {
+    const { manager, call } = await setup();
+    const opened = collectOpenPaneRequests(manager);
+
+    await call(tapName, { ...tapArgs });
+    await call(tapName, { ...tapArgs });
+    await call(tapName, { ...tapArgs });
+
+    // An agent taps every few seconds; re-requesting per call would spam the
+    // UI and could yank back a user who navigated away.
+    expect(opened).toHaveLength(1);
+  });
+
+  it("never steals a thread already watching another device on device_tap", async () => {
+    const { backend, manager, call } = await setup();
+    await backend.boot("FAKE-0002");
+    await manager.attach(THREAD, "FAKE-0002");
+    const opened = collectOpenPaneRequests(manager);
+
+    await call(tapName, { ...tapArgs });
+
+    expect((await manager.getThreadState(THREAD)).attachedDeviceUdid).toBe("FAKE-0002");
+    // The attachment the user chose survives; the request names the agent's
+    // device, which stays reachable from the picker.
+    expect(opened.map((event) => event.udid)).toEqual([DEVICE]);
+  });
 
   it("does not surface the pane for device_list", async () => {
     const { manager, structured } = await setup();

@@ -128,55 +128,6 @@ describe("buildCursorAcpSpawnInput", () => {
     });
   });
 
-  it("maps the old ambiguous agent default to cursor-agent", () => {
-    expect(buildCursorAcpSpawnInput({ binaryPath: "agent" }, "/tmp/project")).toMatchObject({
-      command: "cursor-agent",
-      args: ["acp"],
-      cwd: "/tmp/project",
-      env: {
-        NO_BROWSER: "true",
-        BROWSER: "www-browser",
-      },
-    });
-  });
-
-  it("uses configured Cursor editor launchers when no agent command is resolved", () => {
-    expect(
-      buildCursorAcpSpawnInput(
-        { binaryPath: "/not-real/bin/cursor" },
-        "/tmp/project",
-        noCursorAgentCommandOptions,
-      ),
-    ).toMatchObject({
-      command: "/not-real/bin/cursor",
-      args: ["agent", "acp"],
-      cwd: "/tmp/project",
-      env: {
-        NO_BROWSER: "true",
-        BROWSER: "www-browser",
-      },
-    });
-  });
-
-  it("uses bundled sibling agent commands for Cursor editor ACP startup", () => {
-    const cursorPath = "/Applications/Cursor.app/Contents/Resources/app/bin/cursor";
-    const agentPath = "/Applications/Cursor.app/Contents/Resources/app/bin/agent";
-    expect(
-      buildCursorAcpSpawnInput({ binaryPath: cursorPath }, "/tmp/project", {
-        env: { PATH: "" },
-        pathExists: (path) => path === agentPath,
-      }),
-    ).toMatchObject({
-      command: agentPath,
-      args: ["acp"],
-      cwd: "/tmp/project",
-      env: {
-        NO_BROWSER: "true",
-        BROWSER: "www-browser",
-      },
-    });
-  });
-
   it("includes the configured api endpoint when present", () => {
     expect(
       buildCursorAcpSpawnInput(

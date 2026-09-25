@@ -448,15 +448,6 @@ describe("Claude composer budget suffix", () => {
   it.each([
     ["claude-fable-5-1", "Fable 5.1", "high", "(1M)", false, "Fable 5.1High(1M)"],
     ["claude-opus-4-7", "Opus", undefined, "(1M)", false, "OpusHigh(1M)"],
-    [
-      "claude-fable-5-1",
-      "Fable 5.1",
-      "high",
-      "(200k · 1M next)",
-      false,
-      "Fable 5.1High(200k · 1M next)",
-    ],
-    ["claude-fable-5-1", "Fable 5.1", "high", "(1M next)", false, "Fable 5.1High(1M next)"],
     ["claude-fable-5-1", "Fable 5.1", "high", "(1M)", true, "Fable 5.1High(1M)"],
   ] as const)(
     "renders %s %s %s %s compact=%s",

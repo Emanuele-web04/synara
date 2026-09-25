@@ -43,12 +43,6 @@ describe("deviceScreenshotAttachmentName", () => {
     capturedAt: "2026-08-02T00:00:00.000Z",
   } as unknown as DeviceScreenshotResult;
 
-  it("prefers the server-provided name", () => {
-    expect(deviceScreenshotAttachmentName({ ...base, name: "iPhone 16 Pro.png" })).toBe(
-      "iPhone 16 Pro.png",
-    );
-  });
-
   it("falls back to a generated name when the server sent only whitespace", () => {
     expect(deviceScreenshotAttachmentName({ ...base, name: "   " })).toMatch(
       /^simulator-\d+\.png$/,

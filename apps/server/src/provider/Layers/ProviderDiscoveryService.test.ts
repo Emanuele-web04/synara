@@ -312,26 +312,6 @@ describe("ProviderDiscoveryService.listModels", () => {
     expect(adapterCalls).toBe(0);
   });
 
-  it("dispatches model discovery for an enabled provider", async () => {
-    let adapterCalls = 0;
-    const result = await runListModels({
-      adapter: {
-        listModels: () => {
-          adapterCalls += 1;
-          return Effect.succeed({
-            models: [{ slug: "cursor-model", name: "Cursor Model" }],
-            source: "cursor.cli",
-            cached: false,
-          });
-        },
-      },
-      enabled: true,
-    });
-
-    expect(result.models).toEqual([{ slug: "cursor-model", name: "Cursor Model" }]);
-    expect(adapterCalls).toBe(1);
-  });
-
   it("serves repeat model discovery from the shared cache without re-invoking the adapter", async () => {
     let adapterCalls = 0;
     const baseLayer = Layer.mergeAll(

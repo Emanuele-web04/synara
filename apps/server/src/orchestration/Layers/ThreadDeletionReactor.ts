@@ -33,7 +33,7 @@ const ARCHIVE_CLEANUP_RETRY_DELAY_MS = 100;
 
 const MISSING_PROVIDER_BINDING_DETAIL = "no persisted provider binding exists";
 
-export function isThreadLifecycleCleanupEvent(
+function isThreadLifecycleCleanupEvent(
   event: OrchestrationEvent,
 ): event is ThreadLifecycleCleanupEvent {
   return event.type === "thread.deleted" || event.type === "thread.archived";

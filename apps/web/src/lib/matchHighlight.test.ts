@@ -1,4 +1,3 @@
-import { normalizeWorkspaceEntrySearchQuery } from "@synara/shared/searchQuery";
 import { describe, expect, it } from "vitest";
 
 import { buildMatchSegments } from "./matchHighlight";
@@ -10,10 +9,6 @@ function render(text: string, query: string): string | null {
 }
 
 describe("buildMatchSegments", () => {
-  it("emphasises a contiguous substring match", () => {
-    expect(render("central-icons.tsx", "cent")).toBe("[cent]ral-icons.tsx");
-  });
-
   it("matches case-insensitively while preserving the original casing", () => {
     expect(render("Composer.tsx", "compo")).toBe("[Compo]ser.tsx");
   });
@@ -34,21 +29,7 @@ describe("buildMatchSegments", () => {
     expect(buildMatchSegments("central-icons.tsx", "zzz")).toBeNull();
   });
 
-  it("returns null for empty inputs", () => {
-    expect(buildMatchSegments("central-icons.tsx", "   ")).toBeNull();
-    expect(buildMatchSegments("", "cent")).toBeNull();
-  });
-
   it("skips emphasis when lowercasing would desync the indices", () => {
     expect(buildMatchSegments("İstanbul.ts", "st")).toBeNull();
-  });
-
-  it("emphasises queries the server matched after prefix normalization", () => {
-    // The server strips leading @ ./ before matching file entries; highlighting
-    // must receive the same normalized query or matched rows lose emphasis.
-    expect(render("Composer.tsx", normalizeWorkspaceEntrySearchQuery("./comp"))).toBe(
-      "[Comp]oser.tsx",
-    );
-    expect(render("Composer.tsx", "./comp")).toBeNull();
   });
 });

@@ -179,12 +179,6 @@ export function buildSettingsSkillGroups(
     .sort((left, right) => left.displayName.localeCompare(right.displayName));
 }
 
-export function buildSettingsSkillSections(
-  skills: ReadonlyArray<ProviderSkillDescriptor>,
-): SettingsSkillSection[] {
-  return buildSettingsSkillSectionsFromGroups(buildSettingsSkillGroups(skills));
-}
-
 /** Sections from already-built groups, so callers that need both do not run the grouping twice. */
 export function buildSettingsSkillSectionsFromGroups(
   groups: ReadonlyArray<SettingsSkillGroup>,

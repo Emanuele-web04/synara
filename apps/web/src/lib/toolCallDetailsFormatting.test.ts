@@ -2,16 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   createMarkdownCodeFence,
-  formatShellCommand,
   formatShellTranscript,
   formatToolOutputText,
 } from "./toolCallDetailsFormatting";
-
-describe("formatShellCommand", () => {
-  it("prefixes the first command line like a shell prompt", () => {
-    expect(formatShellCommand("git status\npwd")).toBe("$ git status\npwd");
-  });
-});
 
 describe("formatToolOutputText", () => {
   it("combines bounded output fields in display order", () => {

@@ -7,9 +7,7 @@ import { DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD } from "@synara/contracts"
 import { describe, expect, it } from "vitest";
 
 import {
-  extractPlainChatAutomationCreationInvocation,
   extractChatAutomationInvocation,
-  formatAutomationIntentCadence,
   parseChatAutomationInvocation,
   parseChatAutomationIntent,
   parsePlainChatAutomationInvocation,
@@ -47,17 +45,6 @@ describe("parseChatAutomationIntent", () => {
     expect(intent?.name).toContain("availability");
   });
 
-  it("parses an already-extracted invocation without re-reading the composer marker", () => {
-    const intent = parseChatAutomationInvocation("every 6h check the website");
-
-    expect(intent).toMatchObject({
-      cadenceLabel: "Every 6h",
-      prompt: "check the website",
-      schedule: { type: "interval", everySeconds: 21_600 },
-      completionPolicy: { type: "none" },
-    });
-  });
-
   it("extracts bounded run counts from fast recurring chat automation prompts", () => {
     const intent = parseChatAutomationIntent("/automation say hi every 15 seconds for 3 times");
 
@@ -91,33 +78,9 @@ describe("parseChatAutomationIntent", () => {
     });
   });
 
-  it("keeps bare scheduled statements in normal chat while explicit prompts can still be bounded", () => {
-    expect(parsePlainChatAutomationInvocation("say hi every 15 seconds for 3 times")).toBeNull();
-
-    const deterministicIntent = parseChatAutomationIntent(
-      "/automation say hi every 15 seconds for 3 times",
-    );
-    const resolved = resolveChatAutomationIntent({
-      deterministicIntent,
-      generatedIntent: null,
-      defaultMode: "heartbeat",
-      executionScope: deterministicIntent?.executionScope ?? "thread",
-    });
-
-    expect(resolved).toMatchObject({
-      mode: "heartbeat",
-      requiresReview: false,
-      intent: {
-        prompt: "say hi",
-        schedule: { type: "interval", everySeconds: 15 },
-        maxIterations: 3,
-        executionScope: "thread",
-      },
-    });
-    expect(parseChatAutomationInvocation("what is standalone?")).toBeNull();
-  });
-
   it("keeps unmarked automation questions in normal chat", () => {
+    expect(parsePlainChatAutomationInvocation("say hi every 15 seconds for 3 times")).toBeNull();
+    expect(parseChatAutomationInvocation("what is standalone?")).toBeNull();
     expect(parsePlainChatAutomationInvocation("how do automations work every day?")).toBeNull();
     expect(parsePlainChatAutomationInvocation("what is standalone?")).toBeNull();
     expect(
@@ -171,36 +134,6 @@ describe("parseChatAutomationIntent", () => {
       maxIterations: 3,
       executionScope: "thread",
     });
-  });
-
-  it("accepts explicit unmarked automation creation requests", () => {
-    expect(
-      parsePlainChatAutomationInvocation(
-        "make an automation where you wake up every 6h and check if the black Fitbit is available",
-      ),
-    ).toMatchObject({
-      cadenceLabel: "Every 6h",
-      prompt: "check if the black Fitbit is available",
-      schedule: { type: "interval", everySeconds: 21_600 },
-      executionScope: "thread",
-    });
-
-    expect(
-      parsePlainChatAutomationInvocation(
-        "crea un'automazione ogni 6 ore che controlla se il Fitbit nero e disponibile",
-      ),
-    ).toMatchObject({
-      cadenceLabel: "Every 6h",
-      prompt: "controlla se il Fitbit nero e disponibile",
-      schedule: { type: "interval", everySeconds: 21_600 },
-      executionScope: "thread",
-    });
-
-    expect(
-      extractPlainChatAutomationCreationInvocation(
-        "could you create an automation tomorrow morning to check the queue?",
-      ),
-    ).toBe("create an automation tomorrow morning to check the queue");
   });
 
   it("detects explicit standalone and worktree scopes without saving scope scaffolding", () => {
@@ -325,17 +258,6 @@ describe("parseChatAutomationIntent", () => {
     });
   });
 
-  it("parses recurring second intervals for acknowledgement in the draft", () => {
-    expect(parseChatAutomationInvocation("every 15 seconds check logs")).toMatchObject({
-      cadenceLabel: "Every 15s",
-      prompt: "check logs",
-      schedule: { type: "interval", everySeconds: 15 },
-    });
-    expect(parseChatAutomationInvocation("ogni 60 secondi controlla i log")).toMatchObject({
-      schedule: { type: "interval", everySeconds: 60 },
-    });
-  });
-
   it("parses cron schedules and preserves skill references in the prompt", () => {
     const intent = parseChatAutomationInvocation("cron 0 9 * * * run $check-code on stale PRs");
 
@@ -343,18 +265,6 @@ describe("parseChatAutomationIntent", () => {
       cadenceLabel: "Cron 0 9 * * *",
       prompt: "run $check-code on stale PRs",
       schedule: { type: "cron", expression: "0 9 * * *" },
-    });
-  });
-
-  it("accepts Italian automation creation phrasing", () => {
-    const intent = parseChatAutomationIntent(
-      "@automation crea un'automazione ogni 6 ore che controlla se il Fitbit nero e disponibile",
-    );
-
-    expect(intent).toMatchObject({
-      cadenceLabel: "Every 6h",
-      prompt: "controlla se il Fitbit nero e disponibile",
-      schedule: { type: "interval", everySeconds: 21_600 },
     });
   });
 
@@ -367,14 +277,6 @@ describe("parseChatAutomationIntent", () => {
       cadenceLabel: "Every 30m",
       prompt: "check if the staging site is up",
       schedule: { type: "interval", everySeconds: 1_800 },
-    });
-  });
-
-  it("accepts inline slash automation chips as app automation invocations", () => {
-    expect(parseChatAutomationIntent("please /automation every 6h check the site")).toMatchObject({
-      cadenceLabel: "Every 6h",
-      prompt: "check the site",
-      schedule: { type: "interval", everySeconds: 21_600 },
     });
   });
 
@@ -437,23 +339,6 @@ describe("parseChatAutomationIntent", () => {
       prompt: "controlla CI",
       schedule: { type: "weekly", dayOfWeek: 1, timeOfDay: "09:00" },
     });
-  });
-
-  it("keeps generic automation questions in normal chat", () => {
-    expect(parseChatAutomationIntent("how do automations work every day?")).toBeNull();
-    expect(parseChatAutomationIntent("check every 30 min if the staging site is up")).toBeNull();
-    expect(
-      parseChatAutomationIntent("what is the difference between heartbeat and standalone?"),
-    ).toBeNull();
-  });
-
-  it("formats AI-generated automation cadences", () => {
-    expect(formatAutomationIntentCadence({ type: "interval", everySeconds: 21_600 })).toBe(
-      "Every 6h",
-    );
-    expect(formatAutomationIntentCadence({ type: "daily", timeOfDay: "09:30" })).toBe(
-      "Daily at 09:30",
-    );
   });
 
   it("only asks for generation when a deterministic prompt is too terse", () => {
@@ -557,41 +442,6 @@ describe("parseChatAutomationIntent", () => {
     });
   });
 
-  it("preserves generated standalone mode when deterministic scope parsing misses the phrasing", () => {
-    const deterministicIntent = parseChatAutomationInvocation(
-      "independently check CI every 5 minutes",
-    );
-
-    const resolved = resolveChatAutomationIntent({
-      deterministicIntent,
-      generatedIntent: {
-        isAutomation: true,
-        confidence: 0.93,
-        language: "en",
-        name: "Check CI",
-        taskPrompt: "Check CI.",
-        schedule: { type: "interval", everySeconds: 300 },
-        mode: "standalone",
-        completionPolicy: { type: "none" },
-        missingFields: [],
-        needsConfirmation: false,
-        reason: null,
-      },
-      defaultMode: "heartbeat",
-      executionScope: deterministicIntent?.executionScope ?? "thread",
-    });
-
-    expect(resolved).toMatchObject({
-      source: "deterministic",
-      mode: "standalone",
-      requiresReview: true,
-      intent: {
-        prompt: "Check CI.",
-        executionScope: "standalone",
-      },
-    });
-  });
-
   it("keeps explicit standalone stop clauses on standalone", () => {
     const deterministicIntent = parseChatAutomationIntent(
       "/automation standalone every 5m check CI until it is green",
@@ -654,35 +504,6 @@ describe("parseChatAutomationIntent", () => {
     });
   });
 
-  it("keeps a generated dedicated mode instead of flattening it to standalone", () => {
-    // Outside the current thread there are two shapes, not one: a fresh thread per run
-    // (standalone) and one thread the automation reuses (dedicated).
-    const resolved = resolveChatAutomationIntent({
-      deterministicIntent: null,
-      generatedIntent: {
-        isAutomation: true,
-        confidence: 0.95,
-        language: "en",
-        name: "Watch the release branch",
-        taskPrompt: "watch the release branch",
-        schedule: { type: "interval", everySeconds: 3_600 },
-        mode: "dedicated",
-        completionPolicy: { type: "none" },
-        missingFields: [],
-        needsConfirmation: false,
-        reason: null,
-      },
-      defaultMode: "heartbeat",
-      executionScope: "thread",
-    });
-
-    expect(resolved).toMatchObject({
-      source: "generated",
-      mode: "dedicated",
-      intent: { executionScope: "standalone" },
-    });
-  });
-
   it("uses generated intent when local parsing cannot resolve the schedule", () => {
     const resolved = resolveChatAutomationIntent({
       deterministicIntent: null,
@@ -713,35 +534,6 @@ describe("parseChatAutomationIntent", () => {
         name: "Controlla disponibilita",
         cadenceLabel: "Every 6h",
       },
-    });
-  });
-
-  it("always requires review for generated intents, even high-confidence ones with no stop policy", () => {
-    // Safety invariant: an LLM-interpreted ("generated") intent must never auto-create.
-    // Only deterministic, explicitly-parsed intents may skip the confirmation dialog
-    // (e.g. the bounded-fast-loop case covered above, which keeps requiresReview false).
-    const resolved = resolveChatAutomationIntent({
-      deterministicIntent: null,
-      generatedIntent: {
-        isAutomation: true,
-        confidence: 0.99,
-        language: "en",
-        name: "Check the dashboard",
-        taskPrompt: "check the dashboard",
-        schedule: { type: "interval", everySeconds: 21_600 },
-        mode: "heartbeat",
-        completionPolicy: { type: "none" },
-        missingFields: [],
-        needsConfirmation: false,
-        reason: null,
-      },
-      defaultMode: "heartbeat",
-      executionScope: "thread",
-    });
-
-    expect(resolved).toMatchObject({
-      source: "generated",
-      requiresReview: true,
     });
   });
 

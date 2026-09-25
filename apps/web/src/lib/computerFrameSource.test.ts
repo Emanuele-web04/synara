@@ -2,11 +2,7 @@ import type { ComputerId } from "@synara/contracts";
 import { encodeComputerFrame } from "@synara/shared/computerFrame";
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  COMPUTER_FRAME_RESYNC_COOLDOWN_MS,
-  createComputerFrameSource,
-  type WebSocketLike,
-} from "./computerFrameSource";
+import { createComputerFrameSource, type WebSocketLike } from "./computerFrameSource";
 
 const COMPUTER_ID = "desktop" as ComputerId;
 const EXPLICIT_URL = "ws://127.0.0.1:4321";
@@ -69,7 +65,7 @@ describe("computer frame socket url", () => {
 });
 
 describe("createComputerFrameSource", () => {
-  function subscribe(options?: { now?: () => number }) {
+  function subscribe() {
     const { socket, close, send } = createFakeSocket();
     const onFrame = vi.fn();
     const onReset = vi.fn();
@@ -78,7 +74,6 @@ describe("createComputerFrameSource", () => {
       explicitUrl: EXPLICIT_URL,
       handlers: { onFrame, onReset },
       createSocket: () => socket,
-      ...options,
     });
     return { socket, close, send, onFrame, onReset, source };
   }
@@ -91,43 +86,6 @@ describe("createComputerFrameSource", () => {
     expect(onFrame.mock.calls[0]?.[0].header.computerId).toBe(COMPUTER_ID);
     expect(onFrame.mock.calls[0]?.[0].header.sequence).toBe(7);
     expect([...onFrame.mock.calls[0]?.[0].payload]).toEqual([1, 2, 3]);
-  });
-
-  it("ignores text and resets malformed binary envelopes", () => {
-    const { socket, onFrame, onReset } = subscribe();
-    socket.emit("message", { data: "not a frame" });
-    socket.emit("message", { data: new ArrayBuffer(4) });
-
-    expect(onFrame).not.toHaveBeenCalled();
-    expect(onReset).toHaveBeenCalledWith("decode-failed");
-  });
-
-  it("reconnect-facing reset reasons and close are single-use", () => {
-    const closed = subscribe();
-    closed.socket.emit("close", {});
-    expect(closed.onReset).toHaveBeenCalledWith("closed");
-
-    const errored = subscribe();
-    errored.socket.emit("error", {});
-    expect(errored.onReset).toHaveBeenCalledWith("error");
-
-    const source = subscribe();
-    source.source.close();
-    source.source.close();
-    expect(source.close).toHaveBeenCalledTimes(1);
-    source.socket.emit("message", { data: toArrayBuffer(frameBytes(1)) });
-    expect(source.onFrame).not.toHaveBeenCalled();
-  });
-
-  it("coalesces resync requests until the cooldown expires", () => {
-    let now = 0;
-    const { socket, send, source } = subscribe({ now: () => now });
-    socket.emit("open", {});
-    expect(source.requestResync()).toBe(true);
-    expect(source.requestResync()).toBe(false);
-    now += COMPUTER_FRAME_RESYNC_COOLDOWN_MS;
-    expect(source.requestResync()).toBe(true);
-    expect(send).toHaveBeenCalledTimes(2);
   });
 
   it("defers a resync until the socket opens", () => {

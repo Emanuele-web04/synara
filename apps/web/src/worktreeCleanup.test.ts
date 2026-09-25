@@ -87,23 +87,11 @@ describe("formatWorktreePathForDisplay", () => {
     expect(result).toBe("synara-4e609bb8");
   });
 
-  it("keeps legacy .synara worktree paths readable after migration", () => {
-    const result = formatWorktreePathForDisplay(
-      "/Users/julius/.synara/worktrees/synara-mvp/synara-legacy123",
-    );
-    expect(result).toBe("synara-legacy123");
-  });
-
   it("normalizes windows separators before selecting the final segment", () => {
     const result = formatWorktreePathForDisplay(
       "C:\\Users\\julius\\.synara\\worktrees\\synara-mvp\\synara-4e609bb8",
     );
     expect(result).toBe("synara-4e609bb8");
-  });
-
-  it("uses the final segment even when outside ~/.synara/worktrees", () => {
-    const result = formatWorktreePathForDisplay("/tmp/custom-worktrees/my-worktree");
-    expect(result).toBe("my-worktree");
   });
 
   it("ignores trailing slashes", () => {

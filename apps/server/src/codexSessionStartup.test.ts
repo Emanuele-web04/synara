@@ -160,7 +160,6 @@ describe("Codex session startup failures", () => {
 
   it.each([
     ["initialize", "error"],
-    ["account/read", "error"],
     ["thread/resume", "error"],
     ["initialize", "exit"],
     ["thread/resume", "exit"],

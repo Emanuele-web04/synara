@@ -2504,11 +2504,8 @@ function shouldEmitToolCallUpdate(
   return previous.detail !== next.detail;
 }
 
-export const assistantItemId = (
-  sessionId: string,
-  runtimeInstanceId: string,
-  segmentIndex: number,
-) => `assistant:${sessionId}:${runtimeInstanceId}:segment:${segmentIndex}`;
+const assistantItemId = (sessionId: string, runtimeInstanceId: string, segmentIndex: number) =>
+  `assistant:${sessionId}:${runtimeInstanceId}:segment:${segmentIndex}`;
 
 const ensureActiveAssistantSegment = ({
   getSessionEpoch,

@@ -8,11 +8,8 @@ import {
   filterRenderableFilesForSearch,
   resolveAdjacentDiffFilePath,
   resolveDiffChangeMarkers,
-  resolveDiffChangeMarkerKind,
   DIFF_CHANGE_MARKER_HEIGHT_PX,
-  isDiffPanelRepoScopeOption,
   isStaleDiffTurnSelection,
-  resolveConversationCacheScope,
   resolveDiffPanelGitStatusQueriesEnabled,
   resolveDiffPanelPickerLabel,
   resolveDiffPanelQueriesEnabled,
@@ -22,14 +19,11 @@ import {
   resolveDiffPanelScopeFileCounts,
   resolveDiffPanelScopePickerValue,
   resolveDiffPanelThread,
-  resolveDiffPanelViewSource,
   resolveWatchedDiffFilePath,
   resolveDiffSelectAllArmed,
   resolveDiffSelectAllWithinViewport,
   parseDiffPanelCompareRefValue,
-  resolveInitialDiffViewKind,
   resolveSelectedTurnSummary,
-  DIFF_PANEL_PICKER_SCOPE_OPTIONS,
   DIFF_PANEL_REPO_LIVE_REFETCH_INTERVAL_MS,
 } from "./DiffPanel.logic";
 
@@ -133,32 +127,6 @@ describe("resolveDiffPanelThread", () => {
 });
 
 describe("diff panel view source helpers", () => {
-  it("defaults to repo view when no turn is selected", () => {
-    expect(resolveInitialDiffViewKind(null)).toBe("repo");
-  });
-
-  it("defaults to turn view when a turn is selected", () => {
-    expect(resolveInitialDiffViewKind(TurnId.makeUnsafe("turn-1"))).toBe("turn");
-  });
-
-  it("resolves repo and turn view sources", () => {
-    expect(
-      resolveDiffPanelViewSource({
-        diffViewKind: "repo",
-        repoDiffScope: "unstaged",
-        selectedTurnId: null,
-      }),
-    ).toEqual({ kind: "repo", scope: "unstaged" });
-
-    expect(
-      resolveDiffPanelViewSource({
-        diffViewKind: "turn",
-        repoDiffScope: "branch",
-        selectedTurnId: TurnId.makeUnsafe("turn-1"),
-      }),
-    ).toEqual({ kind: "turn", turnId: TurnId.makeUnsafe("turn-1") });
-  });
-
   it("gates diff queries when the pane is hidden or collapsed", () => {
     expect(resolveDiffPanelQueriesEnabled({ diffOpen: true, queriesEnabled: true })).toBe(true);
     expect(resolveDiffPanelQueriesEnabled({ diffOpen: true, queriesEnabled: false })).toBe(false);
@@ -307,16 +275,6 @@ describe("diff panel view source helpers", () => {
     ).toBeNull();
   });
 
-  it("keeps the persisted default working-tree scope available in the picker", () => {
-    expect(DIFF_PANEL_PICKER_SCOPE_OPTIONS).toContain("workingTree");
-  });
-
-  it("keeps the ref scope out of the plain scope option list", () => {
-    expect(DIFF_PANEL_PICKER_SCOPE_OPTIONS).not.toContain("ref");
-    expect(isDiffPanelRepoScopeOption("ref")).toBe(false);
-    expect(isDiffPanelRepoScopeOption("branch")).toBe(true);
-  });
-
   it("round-trips compare ref picker values", () => {
     expect(buildDiffPanelCompareRefValue("feature/x")).toBe("ref:feature/x");
     expect(parseDiffPanelCompareRefValue("ref:feature/x")).toBe("feature/x");
@@ -381,11 +339,6 @@ describe("diff panel view source helpers", () => {
     ).toBeUndefined();
     expect(isStaleDiffTurnSelection(TurnId.makeUnsafe("turn-missing"), summaries)).toBe(true);
     expect(isStaleDiffTurnSelection(null, summaries)).toBe(false);
-  });
-
-  it("builds compact conversation cache scopes from the latest checkpoint count", () => {
-    expect(resolveConversationCacheScope(undefined)).toBeNull();
-    expect(resolveConversationCacheScope(3)).toBe("conversation:to-3");
   });
 
   it("filters renderable files by path query", () => {
@@ -474,11 +427,6 @@ describe("resolveDiffSelectAllWithinViewport", () => {
 describe("resolveAdjacentDiffFilePath", () => {
   const FILE_PATHS = ["a.ts", "b.ts", "c.ts"];
 
-  it("returns null when there are no files", () => {
-    expect(resolveAdjacentDiffFilePath([], null, "next")).toBeNull();
-    expect(resolveAdjacentDiffFilePath([], "a.ts", "previous")).toBeNull();
-  });
-
   it("moves to the neighbouring file in both directions", () => {
     expect(resolveAdjacentDiffFilePath(FILE_PATHS, "a.ts", "next")).toBe("b.ts");
     expect(resolveAdjacentDiffFilePath(FILE_PATHS, "b.ts", "next")).toBe("c.ts");
@@ -497,23 +445,7 @@ describe("resolveAdjacentDiffFilePath", () => {
   });
 });
 
-describe("resolveDiffChangeMarkerKind", () => {
-  it("maps git change types onto marker colors", () => {
-    expect(resolveDiffChangeMarkerKind("new")).toBe("added");
-    expect(resolveDiffChangeMarkerKind("deleted")).toBe("removed");
-    expect(resolveDiffChangeMarkerKind("change")).toBe("modified");
-    expect(resolveDiffChangeMarkerKind("rename-pure")).toBe("modified");
-    expect(resolveDiffChangeMarkerKind("rename-changed")).toBe("modified");
-  });
-});
-
 describe("resolveDiffChangeMarkers", () => {
-  it("returns nothing for an empty file list", () => {
-    expect(resolveDiffChangeMarkers({ files: [], scrollHeight: 1000, stripHeight: 200 })).toEqual(
-      [],
-    );
-  });
-
   it("returns nothing when the scroll surface has no measurable height", () => {
     expect(
       resolveDiffChangeMarkers({

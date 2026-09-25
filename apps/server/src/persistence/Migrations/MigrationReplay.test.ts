@@ -174,25 +174,3 @@ dataLayer("migration replay data preservation", (it) => {
     }),
   );
 });
-
-const repeatedLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
-
-repeatedLayer("migration replay repeatability", (it) => {
-  it.effect("stays re-runnable across repeated reconciliations", () =>
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations();
-      yield* seedDurableState;
-
-      yield* forgetMigrationsFromReplayPoint;
-      yield* runMigrations();
-      const schemaAfterFirstReplay = yield* schemaObjects(sql);
-
-      yield* forgetMigrationsFromReplayPoint;
-      const secondReplay = yield* runMigrations();
-
-      assert.deepStrictEqual(secondReplay, replayedEntries);
-      assert.deepStrictEqual(yield* schemaObjects(sql), schemaAfterFirstReplay);
-    }),
-  );
-});

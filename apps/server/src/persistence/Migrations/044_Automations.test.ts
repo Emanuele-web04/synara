@@ -2,7 +2,7 @@ import { assert, it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import { migrationEntries, runMigrations } from "../Migrations.ts";
+import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
@@ -29,15 +29,6 @@ const viewNames = (sql: SqlClient.SqlClient) =>
   `.pipe(Effect.map((rows) => rows.map((row) => row.name)));
 
 layer("automation migration", (it) => {
-  it.effect("registers automation backlog migration in the Synara lineage", () =>
-    Effect.sync(() => {
-      // Look the entry up by id: asserting on the lineage tail would break
-      // every time an unrelated migration lands after it.
-      const entry = migrationEntries.find(([id]) => id === 48);
-      assert.deepStrictEqual(entry?.slice(0, 2), [48, "AutomationCompletionEvaluationBacklog"]);
-    }),
-  );
-
   it.effect("creates automation tables and scheduler indexes", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;

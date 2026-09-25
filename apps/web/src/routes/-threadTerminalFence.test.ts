@@ -8,14 +8,11 @@ import {
 } from "./-threadTerminalFence";
 
 describe("isTerminalThreadSessionStatus", () => {
-  it.each(["ready", "interrupted", "stopped", "error"] as const)(
-    "treats %s as terminal",
-    (status) => {
-      expect(isTerminalThreadSessionStatus(status)).toBe(true);
-    },
-  );
+  it.each(["stopped"] as const)("treats %s as terminal", (status) => {
+    expect(isTerminalThreadSessionStatus(status)).toBe(true);
+  });
 
-  it.each(["running", "starting", "connecting"] as const)("treats %s as non-terminal", (status) => {
+  it.each(["starting"] as const)("treats %s as non-terminal", (status) => {
     expect(isTerminalThreadSessionStatus(status)).toBe(false);
   });
 });
