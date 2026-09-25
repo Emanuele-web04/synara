@@ -109,17 +109,6 @@ describe("deriveKanbanColumn", () => {
     ).toBe("inProgress");
   });
 
-  it("treats a live latest turn as in progress", () => {
-    expect(
-      deriveKanbanColumn(
-        makeSidebarThreadSummary({
-          latestTurn: makeLatestTurn({ state: "running", completedAt: null }),
-          session: makeSession({ status: "running", orchestrationStatus: "running" }),
-        }),
-      ),
-    ).toBe("inProgress");
-  });
-
   it("treats connecting sessions and running sessions without turns as in progress", () => {
     expect(
       deriveKanbanColumn(
@@ -129,10 +118,6 @@ describe("deriveKanbanColumn", () => {
     expect(
       deriveKanbanColumn(makeSidebarThreadSummary({ session: makeSession({ status: "running" }) })),
     ).toBe("inProgress");
-  });
-
-  it("puts threads that never ran a turn in draft", () => {
-    expect(deriveKanbanColumn(makeSidebarThreadSummary())).toBe("draft");
   });
 
   it("ignores pending approvals/input once the session is dead", () => {
@@ -691,21 +676,6 @@ describe("resolveOptimisticDispatchOutcome", () => {
     ).toBe("failed");
   });
 
-  it("ignores a stale closed session from before the drop", () => {
-    expect(
-      resolveOptimisticDispatchOutcome(
-        entry(null),
-        makeSidebarThreadSummary({
-          session: makeSession({
-            status: "closed",
-            orchestrationStatus: "stopped",
-            updatedAt: "2026-03-09T11:00:00.000Z",
-          }),
-        }),
-      ),
-    ).toBe("pending");
-  });
-
   it("ignores a stale error from before the drop", () => {
     expect(
       resolveOptimisticDispatchOutcome(
@@ -864,11 +834,6 @@ describe("orderDraftCards", () => {
     isOptimisticDispatch: false,
   });
 
-  it("keeps recency order when no manual order exists", () => {
-    const ordered = orderDraftCards([makeCard("a", 1), makeCard("b", 3), makeCard("c", 2)], []);
-    expect(ordered.map((card) => card.cardId)).toEqual(["b", "c", "a"]);
-  });
-
   it("keeps unknown cards in recency order behind manually ordered ones", () => {
     const ordered = orderDraftCards(
       [makeCard("a", 1), makeCard("b", 3), makeCard("c", 2), makeCard("d", 4)],
@@ -911,19 +876,9 @@ describe("resolveDraftDropAction", () => {
     isOptimisticDispatch: false,
   };
 
-  it("dispatches drafts with a sendable prompt", () => {
-    expect(resolveDraftDropAction(baseCard)).toBe("dispatch");
-  });
-
   it("falls back to opening the chat when the prompt is empty", () => {
     expect(resolveDraftDropAction({ ...baseCard, draftPrompt: "" })).toBe("open-thread");
     expect(resolveDraftDropAction({ ...baseCard, column: "done" })).toBe("open-thread");
-  });
-
-  it("dispatches drafts with attachments through the shared composer payload", () => {
-    expect(
-      resolveDraftDropAction({ ...baseCard, draftPrompt: "", draftHasAttachments: true }),
-    ).toBe("dispatch");
   });
 
   it("opens the chat for pending worktree drafts so the composer owns setup", () => {

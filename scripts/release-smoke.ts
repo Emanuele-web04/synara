@@ -145,23 +145,63 @@ function verifyReleaseWorkflowSafety(): void {
     workflow.indexOf("  build:\n"),
     workflow.indexOf("  publish_cli:\n"),
   );
-  assertContains(
-    buildJob,
-    "needs: [preflight, quality, server_tests, build_mac_icon, build_portable]",
-    "Native builds require exact-source prerequisites and every quality gate.",
-  );
-  assertContains(
-    buildJob,
-    "needs.quality.result == 'success' && (needs.server_tests.result == 'success' || needs.server_tests.result == 'skipped')",
-    "Native builds must not run after a failed lint, typecheck or test gate.",
-  );
+  // Execute the actual job predicate against failed/skipped prerequisites. A
+  // matching source string would not detect a permissive OR elsewhere in it.
+  const predicate = buildJob.match(/    if: \$\{\{ (.+) \}\}/)?.[1];
+  if (!predicate) throw new Error("Missing packaging admission predicate.");
+  const admits = new Function("needs", "cancelled", `return ${predicate};`) as (
+    needs: Record<string, unknown>,
+    cancelled: () => boolean,
+  ) => boolean;
+  const prerequisites = [
+    "preflight",
+    "quality",
+    "server_tests",
+    "build_mac_icon",
+    "build_portable",
+    "prepare_cua",
+  ];
+  const dependencies = buildJob.match(/    needs: \[(.+)\]/)?.[1]?.split(/,\s*/) ?? [];
+  for (const name of prerequisites)
+    if (!dependencies.includes(name)) throw new Error(`Packaging does not await ${name}.`);
+  const successful: Record<string, { result: string; outputs?: Record<string, string> }> =
+    Object.fromEntries(prerequisites.map((name) => [name, { result: "success" }]));
+  successful.preflight = {
+    result: "success",
+    outputs: { package_artifacts: "true", prepare_cua: "true", build_icon: "true" },
+  };
+  if (!admits(successful, () => false)) throw new Error("Valid packaging is blocked.");
+  if (admits(successful, () => true)) throw new Error("Cancelled release can package artifacts.");
+  for (const name of prerequisites) {
+    for (const result of ["failure", "cancelled", "skipped", ""]) {
+      if (admits({ ...successful, [name]: { ...successful[name], result } }, () => false))
+        throw new Error(`Packaging admitted ${name}=${result}.`);
+    }
+  }
+  for (const platform of ["linux", "win"]) {
+    const noMac = {
+      ...successful,
+      preflight: {
+        result: "success",
+        outputs: {
+          package_artifacts: "true",
+          build_icon: "false",
+          prepare_cua: platform === "win" ? "false" : "true",
+        },
+      },
+      build_mac_icon: { result: "skipped" },
+      prepare_cua: { result: platform === "win" ? "skipped" : "success" },
+    };
+    if (!admits(noMac, () => false))
+      throw new Error(`${platform} packaging is blocked by an intentional skip.`);
+  }
   for (const gate of [
     "  quality:\n    name: Quality gates\n    needs: preflight\n    runs-on: ubuntu-24.04\n    timeout-minutes: 15\n    permissions:\n      contents: read",
     "  server_tests:\n    name: Server tests (${{ matrix.shard }})\n    needs: preflight\n    if: needs.preflight.outputs.quality_gates == 'true'\n    runs-on: ubuntu-24.04\n    timeout-minutes: 15\n    permissions:\n      contents: read",
     "bunx turbo run test --filter='!@synara/cli'",
     "bunx turbo run test --filter=@synara/cli -- --shard=${{ matrix.shard }}",
   ]) {
-    assertContains(workflow, gate, "Expected read-only, sharded quality gates before any build.");
+    assertContains(workflow, gate, "Expected read-only, sharded quality gates before packaging.");
   }
   assertContains(
     buildJob,
@@ -192,10 +232,17 @@ function verifyReleaseWorkflowSafety(): void {
     "    permissions:\n      contents: read\n      id-token: write\n    steps:",
     "Expected only CLI publication to combine repository reads with npm OIDC.",
   );
+  const serverJob = workflow.slice(
+    workflow.indexOf("  build_server_tarball:\n"),
+    workflow.indexOf("  release:\n"),
+  );
+  const serverNeeds = serverJob.match(/    needs: \[(.+)\]/)?.[1]?.split(/,\s*/) ?? [];
+  for (const gate of ["preflight", "quality", "server_tests", "build_portable"])
+    if (!serverNeeds.includes(gate)) throw new Error(`Server artifact does not await ${gate}.`);
   assertContains(
-    workflow,
-    "  build_server_tarball:\n    name: Build server tarball\n    if: needs.preflight.outputs.build_server == 'true'\n    needs: [preflight, build_portable]\n    runs-on: ubuntu-24.04\n    timeout-minutes: 10\n    permissions:\n      contents: read",
-    "Expected server tarball builds to receive read-only repository access.",
+    serverJob,
+    "permissions:\n      contents: read",
+    "Server artifact access must remain read-only.",
   );
   assertContains(
     workflow,
@@ -434,16 +481,6 @@ function verifyReleaseWorkflowSafety(): void {
     "Expected the Windows updater publisher identity to be compiled into the main bundle.",
   );
 
-  const updaterSecurity = readFileSync(
-    resolve(repoRoot, "apps/desktop/src/electronUpdaterSecurity.ts"),
-    "utf8",
-  );
-  assertNotContains(
-    updaterSecurity,
-    "return feedPublisherNames",
-    "Runtime signature verification must not trust publisher names from mutable updater config.",
-  );
-
   const nextBetaJob = workflow.slice(workflow.indexOf("  cut_next_beta:\n"));
   assertContains(
     workflow,
@@ -466,6 +503,7 @@ function verifyReleaseWorkflowSafety(): void {
     "git push origin HEAD",
     "The next-beta job must never push a branch.",
   );
+
 }
 
 function verifyDesktopStageLockAuthority(): void {

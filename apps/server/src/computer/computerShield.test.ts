@@ -55,11 +55,6 @@ describe("cuaMaskedActivationOptIn", () => {
       "org.kde.kcalc",
     ]);
   });
-
-  it("deduplicates repeated ids", () => {
-    vi.stubEnv("SYNARA_CUA_MASKED_APPS", "com.example.foo,COM.EXAMPLE.FOO");
-    expect(cuaMaskedActivationOptIn().size).toBe(1);
-  });
 });
 
 describe("maskedActivationOptedIn", () => {

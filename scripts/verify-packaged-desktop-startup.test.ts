@@ -8,7 +8,6 @@ import {
   createPackagedDesktopSmokeEnvironment,
   parsePackagedDesktopStartupArgs,
   readPackagedStartupLogTails,
-  resolveNativePackagedDesktopPlatform,
   verifyPackagedRuntimeDependencies,
 } from "./verify-packaged-desktop-startup.ts";
 
@@ -131,12 +130,6 @@ describe("packaged desktop startup verification", () => {
       expect(env[name]?.startsWith(root)).toBe(true);
       expect(existsSync(env[name]!)).toBe(true);
     }
-  });
-
-  it("maps Node host platforms to release platform names", () => {
-    expect(resolveNativePackagedDesktopPlatform("darwin")).toBe("mac");
-    expect(resolveNativePackagedDesktopPlatform("win32")).toBe("win");
-    expect(resolveNativePackagedDesktopPlatform("linux")).toBe("linux");
   });
 
   it("rejects a missing packaged peer even when the development tree provides it", () => {

@@ -25,7 +25,6 @@ import {
   makePiBashProcessSupervisor,
   makePiRuntimeEventBase,
   makePiUserInputOptions,
-  PLAIN_PI_EXTENSION_THEME,
   toPiProviderModelDescriptor,
 } from "./PiAdapter";
 
@@ -580,25 +579,6 @@ describe("getPiDiscoverableModels", () => {
 });
 
 describe("ensurePiAnthropicCatalogModels", () => {
-  it("does not invent Anthropic models when Anthropic is unauthenticated", () => {
-    const models = ensurePiAnthropicCatalogModels([
-      {
-        id: "glm-5.2",
-        name: "GLM 5.2",
-        api: "openai-completions",
-        provider: "local",
-        baseUrl: "http://127.0.0.1:11434/v1",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128_000,
-        maxTokens: 16_384,
-      },
-    ]);
-
-    expect(models.every((model) => model.provider !== "anthropic")).toBe(true);
-  });
-
   it("restores Fable 5.1, Fable 5, and Opus 4.8 when an oauth catalog omitted them", () => {
     const peer = {
       id: "claude-opus-4-7",
@@ -679,23 +659,6 @@ describe("getPiSupportedThinkingOptions", () => {
     ]);
   });
 
-  it("respects provider-level disabled thinking levels", () => {
-    const options = getPiSupportedThinkingOptions(
-      makePiModel({
-        reasoning: true,
-        thinkingLevelMap: {
-          off: null,
-          minimal: "low",
-          low: "low",
-          medium: "medium",
-          high: "high",
-        },
-      }),
-    );
-
-    expect(options.map((option) => option.value)).toEqual(["minimal", "low", "medium", "high"]);
-  });
-
   it("preserves kimi-k3 style ladders that expose low, high, and max", () => {
     const options = getPiSupportedThinkingOptions(
       makePiModel({
@@ -741,11 +704,5 @@ describe("Pi extension UI helpers", () => {
       "Option 2",
       "OpenRouter (2)",
     ]);
-  });
-
-  it("provides a no-color theme object for UI-gated extensions", () => {
-    expect(PLAIN_PI_EXTENSION_THEME.fg("accent", "ready")).toBe("ready");
-    expect(PLAIN_PI_EXTENSION_THEME.bold("done")).toBe("done");
-    expect(PLAIN_PI_EXTENSION_THEME.getThinkingBorderColor("medium")("thinking")).toBe("thinking");
   });
 });

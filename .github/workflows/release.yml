@@ -63,6 +63,8 @@ jobs:
       lockfile_sha256: ${{ steps.source_provenance.outputs.lockfile_sha256 }}
       ref: ${{ steps.source_provenance.outputs.source_commit }}
       matrix: ${{ steps.scope.outputs.matrix }}
+      cua_matrix: ${{ steps.scope.outputs.cua_matrix }}
+      prepare_cua: ${{ steps.scope.outputs.prepare_cua }}
       build_icon: ${{ steps.scope.outputs.build_icon }}
       build_js: ${{ steps.scope.outputs.build_js }}
       build_native: ${{ steps.scope.outputs.build_native }}
@@ -126,6 +128,7 @@ jobs:
             "$SOURCE_REF_NAME"
 
       - name: Verify public updater repository
+        if: steps.release_mode.outputs.publish_release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -256,8 +259,8 @@ jobs:
 
   build_portable:
     name: Build portable JavaScript
-    needs: [preflight, quality, server_tests]
-    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.quality.result == 'success' && (needs.server_tests.result == 'success' || needs.server_tests.result == 'skipped') && needs.preflight.outputs.build_js == 'true' }}
+    needs: preflight
+    if: needs.preflight.outputs.build_js == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -294,8 +297,8 @@ jobs:
 
   build_mac_icon:
     name: Compile macOS icon
-    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.quality.result == 'success' && (needs.server_tests.result == 'success' || needs.server_tests.result == 'skipped') && needs.preflight.outputs.build_icon == 'true' }}
-    needs: [preflight, quality, server_tests]
+    if: needs.preflight.outputs.build_icon == 'true'
+    needs: preflight
     runs-on: macos-26
     timeout-minutes: 10
     permissions:
@@ -331,12 +334,54 @@ jobs:
           path: ${{ runner.temp }}/mac-icon/Assets.car
           if-no-files-found: error
 
+  prepare_cua:
+    name: Prepare Cua ${{ matrix.label }}
+    needs: preflight
+    if: needs.preflight.outputs.prepare_cua == 'true'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ needs.preflight.outputs.benchmark_native == 'true' && 25 || 30 }}
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.preflight.outputs.cua_matrix) }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - name: Report runner capacity
+        run: node scripts/report-build-runner.ts
+      - name: Provision verified Cua
+        uses: ./.github/actions/provision-cua
+        with:
+          benchmark-baseline: ${{ inputs.cua_benchmark_baseline || '' }}
+      - name: Upload prepared Cua for this candidate
+        if: needs.preflight.outputs.package_artifacts == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: prepared-cua-${{ matrix.platform }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/cua-artifact
+          retention-days: 1
+          if-no-files-found: error
+      - name: Upload Cua benchmark evidence
+        if: ${{ always() && needs.preflight.outputs.benchmark_native == 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: cua-benchmark-${{ matrix.arch }}
+          path: ${{ runner.temp }}/cua-benchmark/evidence
+          if-no-files-found: error
+
   build:
     name: Build ${{ matrix.label }}
-    needs: [preflight, quality, server_tests, build_mac_icon, build_portable]
-    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.quality.result == 'success' && (needs.server_tests.result == 'success' || needs.server_tests.result == 'skipped') && needs.preflight.outputs.build_native == 'true' && (needs.build_mac_icon.result == 'success' || needs.build_mac_icon.result == 'skipped') && (needs.build_portable.result == 'success' || needs.build_portable.result == 'skipped') }}
+    needs: [preflight, quality, server_tests, build_mac_icon, build_portable, prepare_cua]
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.quality.result == 'success' && needs.server_tests.result == 'success' && needs.preflight.outputs.package_artifacts == 'true' && (needs.prepare_cua.result == 'success' || (needs.preflight.outputs.prepare_cua == 'false' && needs.prepare_cua.result == 'skipped')) && (needs.build_mac_icon.result == 'success' || (needs.preflight.outputs.build_icon == 'false' && needs.build_mac_icon.result == 'skipped')) && needs.build_portable.result == 'success' }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: ${{ needs.preflight.outputs.benchmark_native == 'true' && 25 || 60 }}
+    timeout-minutes: 60
     permissions:
       contents: read
     strategy:
@@ -390,19 +435,11 @@ jobs:
       - name: Report runner capacity
         run: node scripts/report-build-runner.ts
 
-      - name: Provision verified Cua
+      - name: Import this candidate's verified Cua
         if: matrix.platform == 'mac' || matrix.platform == 'linux'
         uses: ./.github/actions/provision-cua
         with:
-          benchmark-baseline: ${{ inputs.cua_benchmark_baseline || '' }}
-
-      - name: Upload Cua benchmark evidence
-        if: ${{ always() && needs.preflight.outputs.benchmark_native == 'true' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: cua-benchmark-${{ matrix.arch }}
-          path: ${{ runner.temp }}/cua-benchmark/evidence
-          if-no-files-found: error
+          prepared-artifact: prepared-cua-${{ matrix.platform }}-${{ matrix.arch }}
 
       - name: Restore portable outputs
         if: needs.preflight.outputs.package_artifacts == 'true'
@@ -627,7 +664,7 @@ jobs:
   build_server_tarball:
     name: Build server tarball
     if: needs.preflight.outputs.build_server == 'true'
-    needs: [preflight, build_portable]
+    needs: [preflight, quality, server_tests, build_portable]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:

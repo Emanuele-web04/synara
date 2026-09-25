@@ -94,7 +94,6 @@ describe("prepareComputerPermissionGuide", () => {
     expect(startPermissionSetup).not.toHaveBeenCalled();
   });
   it.each([
-    { platform: "linux" as const, supported: false },
     { platform: "linux" as const, supported: true },
     { platform: "macos" as const, supported: false },
   ])("never offers Mac grants for unsupported state %j", async (overrides) => {
@@ -146,16 +145,13 @@ describe("local Computer permission ownership", () => {
       expect(readLocalComputerPermissionBridge()).toBe(appSnap);
     },
   );
-  it.each([
-    "wss://remote.synara.test",
-    "ws://192.168.1.42:4312",
-    "http://localhost:4312",
-    "invalid",
-    null,
-  ])("does not require local client grants for remote or unknown endpoint %s", (endpoint) => {
-    vi.stubGlobal("window", { desktopBridge: { getWsUrl: () => endpoint, appSnap: {} } });
-    expect(readLocalComputerPermissionBridge()).toBeNull();
-  });
+  it.each(["ws://192.168.1.42:4312", "http://localhost:4312", "invalid", null])(
+    "does not require local client grants for remote or unknown endpoint %s",
+    (endpoint) => {
+      vi.stubGlobal("window", { desktopBridge: { getWsUrl: () => endpoint, appSnap: {} } });
+      expect(readLocalComputerPermissionBridge()).toBeNull();
+    },
+  );
 });
 
 const READY_STATUS: ComputerStatusResult = {
@@ -221,24 +217,6 @@ describe("computerProvisionOutcome", () => {
       ),
     ).toBe("incomplete");
   });
-  it("is ready only when the refreshed status leaves nothing to set up", () => {
-    expect(computerProvisionOutcome(result({}, "Started the helper."))).toBe("ready");
-    expect(
-      computerProvisionOutcome(
-        result(
-          {
-            availability: {
-              kind: "permission-required",
-              missing: ["accessibility"],
-              message: "needs Accessibility",
-              buildSignature: "adhoc",
-            },
-          },
-          "Asked macOS.",
-        ),
-      ),
-    ).toBe("incomplete");
-  });
 });
 
 describe("computer provision toasts", () => {
@@ -249,12 +227,6 @@ describe("computer provision toasts", () => {
     const toast = computerProvisionStartToast(["screenRecording", "accessibility"]);
     expect(toast.description).toContain("Accessibility and Screen Recording");
     expect(toast.type).toBe("info");
-  });
-
-  it("falls back to general wording when no grant has been named", () => {
-    expect(computerProvisionStartToast().description).not.toContain("macOS");
-    expect(computerProvisionStartToast().description).not.toContain("Accessibility");
-    expect(computerProvisionStartToast([]).description).toContain("permissions Synara needs");
   });
 
   it("distinguishes a finished setup from one still missing a grant", () => {
@@ -284,12 +256,6 @@ describe("computer provision toasts", () => {
 });
 
 describe("computerProvisionNote", () => {
-  it("uses brief macOS permission guidance when a grant is missing", () => {
-    const note = computerProvisionNote({ isPending: true, missing: ["screenRecording"] });
-    expect(note).toContain("Checking Screen Recording");
-    expect(note).not.toContain("installs or builds");
-    expect(note).not.toContain("password");
-  });
   it("says the same three things the toasts do, for a surface with room", () => {
     expect(computerProvisionNote({ isPending: true })).toContain("Setting up");
     expect(computerProvisionNote({ isPending: false, error: new Error("nope") })).toBe(

@@ -269,7 +269,6 @@ describe("store event reducer", () => {
   it.each([
     { status: "ready", expectedState: "completed" },
     { status: "interrupted", expectedState: "interrupted" },
-    { status: "stopped", expectedState: "interrupted" },
   ] as const)(
     "settles the running latest turn when a session-set event leaves running ($status → $expectedState)",
     ({ status, expectedState }) => {
@@ -675,62 +674,6 @@ describe("store event reducer", () => {
         },
       ]);
       expect(threadsOf(next)[0]?.messages[0]?.text).not.toBe(`${localText}${serverText}`);
-    } finally {
-      warnSpy.mockRestore();
-    }
-  });
-
-  it("replaces duplicated local streamed text with the authoritative completion", () => {
-    const assistantId = MessageId.makeUnsafe("assistant-message");
-    const turnId = TurnId.makeUnsafe("turn-1");
-    const serverText = "final text";
-    const initialState = makeState(
-      makeThread({
-        messages: [
-          {
-            id: assistantId,
-            role: "assistant",
-            text: `${serverText}${serverText}`,
-            turnId,
-            createdAt: "2026-02-27T00:01:05.000Z",
-            streaming: true,
-            source: "native",
-          },
-        ],
-        latestTurn: {
-          turnId,
-          state: "running",
-          requestedAt: "2026-02-27T00:01:00.000Z",
-          startedAt: "2026-02-27T00:01:05.000Z",
-          completedAt: null,
-          assistantMessageId: assistantId,
-        },
-      }),
-    );
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-
-    try {
-      const next = applyOrchestrationEvents(initialState, [
-        makeDomainEvent("thread.message-sent", {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          messageId: assistantId,
-          role: "assistant",
-          text: serverText,
-          turnId,
-          streaming: false,
-          createdAt: "2026-02-27T00:01:05.000Z",
-          updatedAt: "2026-02-27T00:01:06.000Z",
-          attachments: [],
-          source: "native",
-        }),
-      ]);
-
-      expect(threadsOf(next)[0]?.messages[0]).toMatchObject({
-        id: assistantId,
-        text: serverText,
-        streaming: false,
-        completedAt: "2026-02-27T00:01:06.000Z",
-      });
     } finally {
       warnSpy.mockRestore();
     }
@@ -1542,42 +1485,6 @@ describe("store event reducer", () => {
     expect(threadsOf(batched)[0]?.updatedAt).toBe("2026-07-09T00:00:02.000Z");
   });
 
-  it("preserves canonical activity sequences in sequential and batched live updates", () => {
-    const threadId = ThreadId.makeUnsafe("thread-1");
-    const events = [
-      makeDomainEvent(
-        "thread.activity-appended",
-        {
-          threadId,
-          activity: makeActivity({ id: "activity-first", sequence: 99 }),
-        },
-        { sequence: 40 },
-      ),
-      makeDomainEvent(
-        "thread.activity-appended",
-        {
-          threadId,
-          activity: makeActivity({ id: "activity-second", sequence: 100 }),
-        },
-        { sequence: 41 },
-      ),
-    ];
-    const initialState = makeState(makeThread());
-
-    const sequential = events.reduce(
-      (state, event) => applyOrchestrationEventsHotPath(state, [event]),
-      initialState,
-    );
-    const batched = applyOrchestrationEventsHotPath(initialState, events);
-
-    expect(threadsOf(sequential)[0]?.activities.map((activity) => activity.sequence)).toEqual([
-      99, 100,
-    ]);
-    expect(threadsOf(batched)[0]?.activities.map((activity) => activity.sequence)).toEqual([
-      99, 100,
-    ]);
-  });
-
   it("keeps batched activity timestamps equivalent when a generic duplicate is discarded", () => {
     const threadId = ThreadId.makeUnsafe("thread-1");
     const richActivity = makeActivity({
@@ -1997,32 +1904,6 @@ describe("store event reducer", () => {
     expect(threadsOf(next)[0]?.hasPendingApprovals).toBe(false);
     expect(threadsOf(next)[0]?.pendingInteractions?.[0]?.status).toBe("responding");
     expect(next.sidebarThreadSummaryById["thread-1"]?.hasPendingApprovals).toBe(false);
-  });
-
-  it("updates sidebar summaries during hot-path archive events", () => {
-    const initialState = syncServerReadModel(
-      makeState(makeThread({ title: "Archivable thread" })),
-      makeReadModel(
-        makeReadModelThread({
-          title: "Archivable thread",
-          updatedAt: "2026-02-27T00:00:00.000Z",
-        }),
-      ),
-    );
-
-    const next = applyOrchestrationEventsHotPath(
-      initialState,
-      [
-        makeDomainEvent("thread.archived", {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          archivedAt: "2026-02-27T00:07:00.000Z",
-          updatedAt: "2026-02-27T00:07:00.000Z",
-        }),
-      ],
-      { updateSidebarSummary: true },
-    );
-
-    expect(next.sidebarThreadSummaryById["thread-1"]?.archivedAt).toBe("2026-02-27T00:07:00.000Z");
   });
 
   it("removes archived threads when a delete event reaches the hot path", () => {

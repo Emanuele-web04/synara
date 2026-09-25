@@ -210,7 +210,7 @@ function hashLabelSeed(seed: string): number {
   return hash;
 }
 
-export function subagentAccentColor(seed: string | null | undefined): string {
+function subagentAccentColor(seed: string | null | undefined): string {
   const normalized = normalizeWhitespace(seed)?.toLowerCase() ?? "subagent";
   const index = hashLabelSeed(normalized) % SUBAGENT_ACCENT_PALETTE.length;
   return SUBAGENT_ACCENT_PALETTE[index] ?? SUBAGENT_ACCENT_PALETTE[0];

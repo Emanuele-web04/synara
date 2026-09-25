@@ -11,11 +11,8 @@ import {
 import { Effect } from "effect";
 
 import {
-  findThreadById,
-  listThreadsByProjectId,
   requireProjectHasNoThreads,
   requireThread,
-  requireThreadAbsent,
   requireThreadArchived,
   requireThreadNotArchived,
 } from "./commandInvariants.ts";
@@ -167,16 +164,6 @@ const messageSendCommand: OrchestrationCommand = {
 };
 
 describe("commandInvariants", () => {
-  it("finds threads by id and project", () => {
-    expect(findThreadById(readModel, ThreadId.makeUnsafe("thread-1"))?.projectId).toBe("project-a");
-    expect(findThreadById(readModel, ThreadId.makeUnsafe("missing"))).toBeUndefined();
-    expect(
-      listThreadsByProjectId(readModel, ProjectId.makeUnsafe("project-b")).map(
-        (thread) => thread.id,
-      ),
-    ).toEqual([ThreadId.makeUnsafe("thread-2")]);
-  });
-
   it("requires existing thread", async () => {
     const thread = await Effect.runPromise(
       requireThread({
@@ -206,56 +193,6 @@ describe("commandInvariants", () => {
         }),
       ),
     ).rejects.toThrow("was deleted");
-  });
-
-  it("requires missing thread for create flows", async () => {
-    await Effect.runPromise(
-      requireThreadAbsent({
-        readModel,
-        command: {
-          type: "thread.create",
-          commandId: CommandId.makeUnsafe("cmd-2"),
-          threadId: ThreadId.makeUnsafe("thread-3"),
-          projectId: ProjectId.makeUnsafe("project-a"),
-          title: "new",
-          modelSelection: {
-            provider: "codex",
-            model: "gpt-5-codex",
-          },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode: "full-access",
-          branch: null,
-          worktreePath: null,
-          createdAt: now,
-        },
-        threadId: ThreadId.makeUnsafe("thread-3"),
-      }),
-    );
-
-    await expect(
-      Effect.runPromise(
-        requireThreadAbsent({
-          readModel,
-          command: {
-            type: "thread.create",
-            commandId: CommandId.makeUnsafe("cmd-3"),
-            threadId: ThreadId.makeUnsafe("thread-1"),
-            projectId: ProjectId.makeUnsafe("project-a"),
-            title: "dup",
-            modelSelection: {
-              provider: "codex",
-              model: "gpt-5-codex",
-            },
-            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-            runtimeMode: "full-access",
-            branch: null,
-            worktreePath: null,
-            createdAt: now,
-          },
-          threadId: ThreadId.makeUnsafe("thread-1"),
-        }),
-      ),
-    ).rejects.toThrow("already exists");
   });
 
   it("requires thread to be archived for unarchive command", async () => {

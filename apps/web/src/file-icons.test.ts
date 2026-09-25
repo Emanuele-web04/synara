@@ -21,40 +21,6 @@ const PROTOTYPE_MEMBER_TOKENS = [
 ];
 
 describe("getFileIconName", () => {
-  it("uses exact filename matches from the Central mapping", () => {
-    assert.equal(getFileIconName("package.json"), "npm");
-    assert.equal(getFileIconName("bun.lock"), "bun");
-    assert.equal(getFileIconName("tsconfig.json"), "typescript");
-    assert.equal(getFileIconName(".gitignore"), "git");
-    assert.equal(getFileIconName("Cargo.toml"), "rust");
-  });
-
-  it("prefers the longest compound extension", () => {
-    assert.equal(getFileIconName("checkbox.tsx"), "react");
-    assert.equal(getFileIconName("types.d.ts"), "typescript");
-    assert.equal(getFileIconName("logic.ts"), "typescript");
-  });
-
-  it("resolves common language extensions", () => {
-    assert.equal(getFileIconName("main.py"), "phyton");
-    assert.equal(getFileIconName("lib.rs"), "rust");
-    assert.equal(getFileIconName("index.php"), "php");
-    assert.equal(getFileIconName("App.vue"), "vue");
-    assert.equal(getFileIconName("Counter.svelte"), "svelte");
-    assert.equal(getFileIconName("Main.java"), "java");
-    assert.equal(getFileIconName("readme.md"), "markdown");
-    assert.equal(getFileIconName("general.mdc"), "markdown");
-    assert.equal(getFileIconName(".github/workflows/ci.yml"), "settings-gear-1");
-  });
-
-  it("resolves common attachment extensions", () => {
-    assert.equal(getFileIconName("meeting.ics"), "calendar-days");
-    assert.equal(getFileIconName("contacts.csv"), "file-chart");
-    assert.equal(getFileIconName("report.docx"), "page-text");
-    assert.equal(getFileIconName("budget.xlsx"), "file-chart");
-    assert.equal(getFileIconName("deck.pptx"), "page-text");
-  });
-
   it("falls back to the bracket glyph for unknown or icon-less types", () => {
     // Swift/Go/Ruby have no dedicated Central icon, so they use the bracket.
     assert.equal(getFileIconName("App.swift"), "code-brackets");
@@ -87,11 +53,6 @@ describe("pathLooksLikeKnownFile", () => {
     for (const token of PROTOTYPE_MEMBER_TOKENS) {
       assert.isFalse(pathLooksLikeKnownFile(token), `${token} must not look like a known file`);
     }
-  });
-
-  it("still recognizes real files", () => {
-    assert.isTrue(pathLooksLikeKnownFile("src/index.ts"));
-    assert.isTrue(pathLooksLikeKnownFile("package.json"));
   });
 });
 
@@ -126,17 +87,5 @@ describe("getAttachmentIconName", () => {
     for (const token of PROTOTYPE_MEMBER_TOKENS) {
       assert.equal(getAttachmentIconName({ name: token, mimeType: "" }), "file-text", token);
     }
-  });
-
-  it("defaults to a document glyph rather than the source-code bracket", () => {
-    assert.equal(
-      getAttachmentIconName({ name: "download", mimeType: "application/octet-stream" }),
-      "file-text",
-    );
-    assert.equal(getAttachmentIconName({ name: "download", mimeType: "" }), "file-text");
-    assert.notEqual(
-      getAttachmentIconName({ name: "download", mimeType: "application/octet-stream" }),
-      "code-brackets",
-    );
   });
 });

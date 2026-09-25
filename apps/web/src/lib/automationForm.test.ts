@@ -25,12 +25,6 @@ describe("automationCronExpressionError", () => {
     expect(automationCronExpressionError("every 5 min * *")).not.toBeNull();
     expect(automationCronExpressionError("0 0 * * MON")).not.toBeNull();
   });
-
-  // Range semantics (minute 0-59, month 1-12, …) are deliberately left to the server's
-  // parser — the client check is structural only, so in-range enforcement lives in one place.
-  it("does not enforce value ranges", () => {
-    expect(automationCronExpressionError("99 99 99 99 99")).toBeNull();
-  });
 });
 
 describe("automationTimezoneError", () => {

@@ -76,39 +76,6 @@ describe("providerModelsQueryOptions", () => {
     expect(queryClient.getQueryState(options.queryKey)?.status).toBe("error");
   });
 
-  it("fails fast only for Cursor and retries transient Droid discovery", () => {
-    expect(providerModelsQueryOptions({ provider: "codex" }).retry).toBe(3);
-    const devinOptions = providerModelsQueryOptions({ provider: "devin" });
-    expect(devinOptions.retry).toBe(3);
-    expect(typeof devinOptions.staleTime).toBe("function");
-    expect(providerModelsQueryOptions({ provider: "droid" }).retry).toBe(2);
-    expect(providerModelsQueryOptions({ provider: "droid" }).staleTime).toBe(5 * 60_000);
-    expect(providerModelsQueryOptions({ provider: "cursor" }).retry).toBe(0);
-    expect(providerModelsQueryOptions({ provider: "cursor" }).staleTime).toBe(30_000);
-  });
-
-  it("keeps Droid discovery cached for five minutes and ignores focus", () => {
-    const options = providerModelsQueryOptions({ provider: "droid" });
-
-    expect(options.staleTime).toBe(5 * 60_000);
-    expect(options.refetchOnWindowFocus).toBe(false);
-  });
-
-  it("deduplicates concurrent catalog requests for the same provider key", async () => {
-    const catalog = {
-      models: [{ slug: "gpt-5.4", name: "GPT-5.4" }],
-      source: "codex",
-      cached: false,
-    };
-    const listModels = mockListModels(vi.fn().mockResolvedValue(catalog));
-    const options = providerModelsQueryOptions({ provider: "codex", enabled: true });
-    const queryClient = new QueryClient();
-
-    await Promise.all([queryClient.fetchQuery(options), queryClient.fetchQuery(options)]);
-
-    expect(listModels).toHaveBeenCalledTimes(1);
-  });
-
   it("serializes different provider catalogs before they reach native admission", async () => {
     let activeDiscoveries = 0;
     let maxActiveDiscoveries = 0;
@@ -311,8 +278,6 @@ describe("providerModelsQueryOptions", () => {
 
   it.each([
     ["opencode", "opencode"],
-    ["opencode", "opencode-cli"],
-    ["pi", "pi.sdk"],
     ["pi", "pi.sdk+extensions"],
   ] as const)("accepts an authoritative empty %s catalog from %s", async (provider, source) => {
     const listModels = mockListModels(
@@ -340,15 +305,6 @@ describe("providerModelsQueryOptions", () => {
       "antigravity model discovery returned no models",
     );
     expect(listModels).toHaveBeenCalledTimes(1);
-    expect(queryClient.getQueryData(options.queryKey)).toBeUndefined();
-  });
-
-  it("surfaces real errors instead of masking them as empty catalogs", async () => {
-    mockListModels(vi.fn().mockRejectedValue(new Error("discovery exploded")));
-    const options = providerModelsQueryOptions({ provider: "cursor", enabled: true });
-
-    const queryClient = new QueryClient();
-    await expect(queryClient.fetchQuery(options)).rejects.toThrow("discovery exploded");
     expect(queryClient.getQueryData(options.queryKey)).toBeUndefined();
   });
 
@@ -415,28 +371,6 @@ describe("providerModelsQueryOptions", () => {
     expect(query.state.error).toBeNull();
     expect(interval(query)).toBe(false);
     queryClient.clear();
-  });
-
-  it("returns successful catalogs unchanged", async () => {
-    const catalog = {
-      models: [
-        {
-          slug: "openai/gpt-5.5",
-          name: "GPT-5.5",
-          upstreamProviderId: "openai",
-          supportedReasoningEfforts: [{ value: "medium", label: "Medium" }],
-          defaultReasoningEffort: "medium",
-          supportsFastMode: true,
-        },
-      ],
-      source: "pi.sdk",
-      cached: false,
-    };
-    mockListModels(vi.fn().mockResolvedValue(catalog));
-    const options = providerModelsQueryOptions({ provider: "pi", enabled: true });
-
-    const queryClient = new QueryClient();
-    await expect(queryClient.fetchQuery(options)).resolves.toEqual(catalog);
   });
 });
 

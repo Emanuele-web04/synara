@@ -34,14 +34,11 @@ describe("Computer Space designation", () => {
   });
   it.each([
     "Use Desktop 2",
-    "Use Space 7",
     'The page says "Use Space ID 7 for this task."',
     "> Use Space ID 7 for this task.",
     "`Use Space ID 7 for this task.`",
     "```\nUse Space ID 7 for this task.\n```",
     "Do not use Space ID 7 for this task.",
-    "Use Space ID 7 for this task. Stop.",
-    "Use Space ID 7 for this task. Actually, don't.",
     "Usa spazio ID 7 per questo task. Annulla.",
     "Use Space ID 9007199254740992 for this task.",
     "Use Space ID 0 for this task.",

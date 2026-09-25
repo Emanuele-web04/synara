@@ -168,7 +168,7 @@ function mapSimctlState(raw: unknown): DeviceDescriptor["state"] {
 }
 
 /** `com.apple.CoreSimulator.SimRuntime.iOS-26-0` -> `iOS 26.0`. */
-export function formatRuntimeIdentifier(identifier: string): string {
+function formatRuntimeIdentifier(identifier: string): string {
   const tail = identifier.split(".").pop() ?? identifier;
   const match = /^([A-Za-z]+)-(.+)$/u.exec(tail);
   if (!match) return tail;
@@ -1400,7 +1400,7 @@ function waitForProcessExit(
  * stale descriptor: the attachment is live enough to answer, but its HID client
  * is bound to a boot that is gone, so the fix is to rebind and retry once.
  */
-export function isInputNotDeliveredError(error: unknown): boolean {
+function isInputNotDeliveredError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /not delivered to the simulator/iu.test(message);
 }

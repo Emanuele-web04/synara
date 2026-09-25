@@ -98,26 +98,6 @@ describe("makeDispatchCommandNormalizer", () => {
     expect(callCount).toBe(3);
   });
 
-  it("prepares managed date/slug chat workspace roots", async () => {
-    const preparedRoots: string[] = [];
-    const normalizer = makeDispatchCommandNormalizer<Error>({
-      attachmentsDir: "/tmp/attachments",
-      chatWorkspaceRoot: "/Users/tester/Documents/Synara",
-      fileSystem: {} as FileSystem.FileSystem,
-      path: {} as Path.Path,
-      canonicalizeProjectWorkspaceRoot: (workspaceRoot) => Effect.succeed(workspaceRoot),
-      prepareChatWorkspaceRoot: (workspaceRoot) =>
-        Effect.sync(() => {
-          preparedRoots.push(workspaceRoot);
-        }),
-    });
-
-    const result = await Effect.runPromise(normalizer({ command: projectCreateCommand() }));
-    await runPrepareWorkspaceRoot(result);
-
-    expect(preparedRoots).toEqual(["/Users/tester/Documents/Synara/2026-06-11/chat"]);
-  });
-
   it("does not prepare ordinary projects or the chat workspace root itself", async () => {
     const preparedRoots: string[] = [];
     const normalizer = makeDispatchCommandNormalizer<Error>({

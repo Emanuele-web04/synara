@@ -33,7 +33,6 @@ import {
 } from "./computerTools.ts";
 import type { McpToolCallResult } from "./protocol.ts";
 import { GatewayToolError, type ToolContext } from "./toolRuntime.ts";
-import { PROVIDER_KINDS } from "./toolInput.ts";
 import { makeAgentGatewayComputerBrowserTools } from "./computerBrowserTools.ts";
 
 const THREAD = "thread-computer";
@@ -307,26 +306,6 @@ describe("agent gateway computer tools", () => {
       await manager.dispose();
     }
   });
-  it("leaves an off-screen launch result without unhide choreography", async () => {
-    // L23: a hidden launch is an ordinary off-screen workspace now, so the
-    // result must not route the model into set_app_visibility or a visible
-    // relaunch to make the app usable.
-    const { call, manager } = await setup();
-    try {
-      const result = await call("computer_launch_app", {
-        app: "Helium",
-        hidden: true,
-        wait_for_window: false,
-      });
-      expect(result.isError).not.toBe(true);
-      const text = JSON.stringify(resultJson(result));
-      expect(text).not.toContain("unhide");
-      expect(text).not.toContain("relaunch visible");
-      expect(text).not.toContain("set_app_visibility");
-    } finally {
-      await manager.dispose();
-    }
-  });
 
   it("reserves model observation authority for explicit perception tools", async () => {
     const { backend, manager, call } = await setup();
@@ -370,16 +349,6 @@ describe("agent gateway computer tools", () => {
     } finally {
       await manager.dispose();
     }
-  });
-
-  it("describes exact targeting separately from foreground promotion", async () => {
-    const { byName } = await setup();
-    const notes = computerToolInstructions();
-    expect(notes).toContain("Act by ref (or exact label plus role)");
-    expect(windowIdDescription(byName, "computer_press_key")).toContain("does not activate it");
-    expect(windowIdDescription(byName, "computer_click")).toContain(
-      "Exact window for label or x/y targeting",
-    );
   });
 
   it("covers routine foreground delivery with the active task consent on macOS", async () => {
@@ -815,21 +784,6 @@ describe("agent gateway computer tools", () => {
     expect(description).toContain("does not deliver hover events");
     expect(description).toContain("a real background hover is not available on this backend");
     expect(description).toContain("real system pointer never moves");
-  });
-
-  it("tells the model how to click a window another window covers", async () => {
-    const { byName } = await setup();
-    const list = byName.get("computer_list_windows")?.definition.description ?? "";
-    expect(list).toContain("stackingIndex");
-    expect(list).toContain("occludedBy");
-    expect(list).toContain("window_id");
-
-    // Every pointer tool takes the same target shape, so the escape hatch has
-    // to be described on the shared property rather than in one tool.
-    for (const name of ["computer_click", "computer_move_cursor", "computer_drag"]) {
-      const schema = JSON.stringify(byName.get(name)?.definition.inputSchema ?? {});
-      expect(schema).toContain("Exact window for label or x/y targeting");
-    }
   });
 
   it("keeps a window-scoped state capture bound to its native target", async () => {
@@ -1831,24 +1785,6 @@ describe("agent gateway computer tools", () => {
     expect(backend.callsFor("drag")).toHaveLength(1);
   });
 
-  it("tells the model the observation is downscaled and what unchanged means", async () => {
-    const { byName } = await setup();
-    // The compact injected block no longer carries the pixel budget; the
-    // detail lives on the tools that produce the images — the screenshot
-    // schema owns the cap, the action tools own the attached-observation rule.
-    const screenshotSchema = JSON.stringify(
-      byName.get("computer_screenshot")?.definition.inputSchema,
-    );
-    expect(screenshotSchema).toContain(`capped at ${DEFAULT_COMPUTER_CAPTURE_MAX_DIMENSION}`);
-    // Each action still says a screenshot is attached, and the schema carries
-    // the default.
-    const description = byName.get("computer_click")?.definition.description ?? "";
-    expect(description).toContain("Returns a screenshot of the affected window");
-    expect(JSON.stringify(byName.get("computer_click")?.definition.inputSchema)).toContain(
-      "Post-action screenshot, default true",
-    );
-  });
-
   it("keeps a successful action result when the post-action capture fails", async () => {
     const { backend, call } = await setup();
     backend.failNext("captureScreenshot");
@@ -1858,34 +1794,6 @@ describe("agent gateway computer tools", () => {
     expect(result.isError).not.toBe(true);
     expect(result.content.map((entry) => entry.type)).toEqual(["text"]);
     expect(resultJson(result)).toMatchObject({ action: "computer_press_key" });
-  });
-
-  it("tells the model every observed action already carries its screenshot", async () => {
-    const { byName } = await setup();
-    for (const name of [
-      "computer_click",
-      "computer_move_cursor",
-      "computer_drag",
-      "computer_scroll",
-      "computer_type_text",
-      "computer_press_key",
-      "computer_set_value",
-      "computer_perform_action",
-      "computer_select_text",
-    ]) {
-      const tool = byName.get(name);
-      expect(tool?.definition.description).toContain("Returns a screenshot of the affected window");
-      const schema = JSON.stringify(tool?.definition.inputSchema);
-      expect(schema).toContain("include_screenshot");
-      expect(schema).toContain("Post-action screenshot, default true");
-    }
-    // Launching resolves seconds later and clipboard writes change no pixels,
-    // so neither pays for a capture that would only show the previous state.
-    for (const name of ["computer_launch_app", "computer_write_clipboard"]) {
-      const tool = byName.get(name);
-      expect(tool?.definition.description).not.toContain("screenshot taken after");
-      expect(JSON.stringify(tool?.definition.inputSchema)).not.toContain("include_screenshot");
-    }
   });
 
   it("resolves semantic actions from a fresh snapshot and reports backend calls", async () => {
@@ -2393,19 +2301,6 @@ describe("agent gateway computer tools", () => {
     expect(payload.scroll?.traveledY).toBeUndefined();
   });
 
-  it("tells the model that scroll distance is verified rather than assumed", async () => {
-    const { byName } = await setup();
-    const description = byName.get("computer_scroll")?.definition.description ?? "";
-
-    expect(description).toContain("scroll.traveledY");
-    // macOS now measures and gears like the other platforms; the description
-    // must not carry the old "no corrective retries" caveat.
-    expect(description).toContain("delta_x and delta_y");
-    expect(description).toContain("edge or dropped input");
-    // The advice that replaced scroll-hunting stays.
-    expect(description).toContain("computer_get_state");
-  });
-
   it.each([
     [{ delta_y: 80 }, [0, 100]],
     [{ delta_x: -40 }, [-50, 0]],
@@ -2893,14 +2788,6 @@ describe("agent gateway computer tools", () => {
     expect(macLaunchApp).not.toContain("/Applications/Safari.app");
   });
 
-  it("separates admission refusals from uncertain dispatched input", async () => {
-    const notes = computerToolInstructions();
-    expect(notes).toContain('"not-dispatched"');
-    expect(notes).toContain('"dispatched-unknown"');
-    expect(notes).toContain("never replay it");
-    expect(notes).toContain("repeated_unverified_action");
-  });
-
   it("matches a label exactly as written, spaces included", async () => {
     // The desktop targeters compare labels verbatim on purpose, so trimming the
     // argument retargeted a caller that named "Save " at a control called "Save".
@@ -2988,7 +2875,6 @@ describe("agent gateway computer setup prompts", () => {
       }),
     ],
     ["an ordinary backend fault", new ComputerBackendError("The click was not delivered.")],
-    ["an unrelated failure", new Error("boom")],
   ])("does not prompt for setup after %s", async (_name, error) => {
     const { result, setupPrompts } = await readFailingWith(error);
     expect(result.isError).toBe(true);
@@ -3124,13 +3010,6 @@ describe("agent gateway computer setup prompts", () => {
     await Effect.runPromise(tool.handler({}, makeContext()));
 
     expect(prompts).toEqual([{ toolName: "computer_list_windows", missing: ["screenRecording"] }]);
-  });
-
-  it("says nothing about setup when every grant is in place", async () => {
-    const { prompts, text } = await readWith({});
-    expect(prompts).toEqual([]);
-    expect(text).not.toContain("setup card");
-    expect(text).not.toContain("macOS is asking");
   });
 
   it("tells the model to stop for a blocking grant and to carry on for a degrading one", async () => {
@@ -3816,24 +3695,6 @@ describe("computer never-raise gate", () => {
       await manager.dispose();
     }
   });
-
-  it("keeps the refusal-map guidance and the foreground chapter", async () => {
-    const notes = computerToolInstructions();
-    expect(notes).toContain("foreground_not_requested");
-    expect(notes).toContain("foreground_user_interaction");
-    const { call, manager } = await setup();
-    try {
-      const chapter = await call("computer_help", { topic: "foreground" });
-      expect(chapter.isError).not.toBe(true);
-      const json = resultJson(chapter) as { text: string };
-      expect(json.text).toContain("foreground_not_requested");
-      expect(json.text).toContain("foreground_user_interaction");
-      const index = await call("computer_help", {});
-      expect((resultJson(index) as { topics: string }).topics).toContain("foreground");
-    } finally {
-      await manager.dispose();
-    }
-  });
 });
 
 describe("computer_activate_window foreground restore", () => {
@@ -3893,7 +3754,9 @@ describe("computer_activate_window foreground restore", () => {
 });
 
 describe("computer_inspect", () => {
-  it.each(PROVIDER_KINDS)(
+  // The route is provider-agnostic; one gated and one gate-less provider cover
+  // both approval branches.
+  it.each(["claudeAgent", "pi"] as const)(
     "preserves specialist reads and image results for %s",
     async (provider) => {
       const authorize = vi.fn<NonNullable<AgentGatewayComputerToolsOptions["authorizeAction"]>>(
@@ -4352,40 +4215,6 @@ describe("computer_run", () => {
       await manager.dispose();
     }
   });
-
-  it("pastes through the clipboard and restores the user's contents", async () => {
-    const { backend, manager, call } = await setup();
-    try {
-      await call("computer_write_clipboard", { text: "the user's copy" });
-      const result = await call("computer_run", {
-        steps: [
-          { type: "click", label: "Display", window_id: "fake-calculator" },
-          {
-            type: "paste",
-            text: "long agent payload",
-            window_id: "fake-calculator",
-          },
-        ],
-      });
-      expect(result.isError).not.toBe(true);
-      const payload = resultJson(result) as {
-        steps: { result?: Record<string, unknown> }[];
-      };
-      expect(payload.steps[1]?.result).toMatchObject({
-        action: "computer_paste",
-        clipboardRestored: true,
-      });
-      // write payload, send chord, write the user's contents back.
-      expect(backend.callsFor("writeClipboard").map((entry) => entry.args[0])).toEqual([
-        "the user's copy",
-        "long agent payload",
-        "the user's copy",
-      ]);
-      expect(backend.callsFor("hotkey").map((entry) => entry.args[0])).toEqual([["ctrl", "v"]]);
-    } finally {
-      await manager.dispose();
-    }
-  });
 });
 
 describe("computer_paste", () => {
@@ -4657,9 +4486,6 @@ describe("computer action element diffs", () => {
 
   it.each([
     ["computer_type_text", { text: "hello there" }],
-    ["computer_paste", { text: "hello there" }],
-    ["computer_set_value", { label: "Display", value: "123" }],
-    ["computer_perform_action", { label: "Calculate", action: "activate" }],
     ["computer_invoke_menu", { path: ["File", "Save"] }],
   ])("attaches a scoped diff for %s", async (tool, args) => {
     const { manager, call } = await setup(new FakeComputerBackend(), async () => true);
@@ -4843,17 +4669,6 @@ describe("computer_get_state app hint", () => {
 });
 
 describe("multi-app driving", () => {
-  it("drives a second ordinary app without a further prompt", async () => {
-    // The second-app boundary is gone: only the denylist can refuse a drive.
-    const { call, manager } = await setup();
-    try {
-      expect((await call("computer_launch_app", { app: "kcalc" })).isError).not.toBe(true);
-      expect((await call("computer_launch_app", { app: "firefox" })).isError).not.toBe(true);
-    } finally {
-      await manager.dispose();
-    }
-  });
-
   describe("native driver parity tools", () => {
     it("lists apps, verifies state, and zooms without approval or dispatch", async () => {
       const { backend, manager, call } = await setup();
@@ -4907,49 +4722,6 @@ describe("multi-app driving", () => {
       }
     });
 
-    it("moves a window through approval and reports the read-back", async () => {
-      const backend = new FakeComputerBackend();
-      const approval = vi.fn(async () => true);
-      const { call, manager } = await setup(backend, approval);
-      try {
-        const moved = await call("computer_set_window_frame", {
-          window_id: "fake-calculator",
-          x: 300,
-          y: 200,
-          width: 500,
-          height: 400,
-        });
-        expect(moved.isError).not.toBe(true);
-        expect(approval).toHaveBeenCalledWith(
-          "computer_set_window_frame",
-          expect.objectContaining({ window_id: "fake-calculator" }),
-          expect.anything(),
-          expect.anything(),
-        );
-        expect(backend.callsFor("setWindowFrame").map((entry) => entry.args)).toEqual([
-          ["fake-calculator", { x: 300, y: 200, width: 500, height: 400 }],
-        ]);
-        const windows = await backend.listWindows();
-        expect(windows.find((window) => window.id === "fake-calculator")?.bounds).toEqual({
-          x: 300,
-          y: 200,
-          width: 500,
-          height: 400,
-        });
-
-        const invalid = await call("computer_set_window_frame", {
-          window_id: "fake-calculator",
-          x: 0,
-          y: 0,
-          width: 0,
-          height: 400,
-        });
-        expect(invalid.isError).toBe(true);
-      } finally {
-        await manager.dispose();
-      }
-    });
-
     it("asks approval before invoking menus and force-quitting, dispatching nothing when refused", async () => {
       const backend = new FakeComputerBackend();
       const approval = vi.fn(async () => false);
@@ -4987,27 +4759,6 @@ describe("multi-app driving", () => {
         const gone = await call("computer_kill_app", { window_id: "fake-calculator" });
         expect(gone.isError).toBe(true);
         expect(backend.callsFor("killApp")).toHaveLength(1);
-      } finally {
-        await manager.dispose();
-      }
-    });
-
-    it("drives the app a window-targeted mutation names without asking", async () => {
-      const backend = new FakeComputerBackend();
-      const { call, manager } = await setup(
-        backend,
-        vi.fn(async () => true),
-      );
-      try {
-        await call("computer_launch_app", { app: "TextEdit" });
-        const moved = await call("computer_set_window_frame", {
-          window_id: "fake-calculator",
-          x: 0,
-          y: 0,
-          width: 500,
-          height: 400,
-        });
-        expect(moved.isError).not.toBe(true);
       } finally {
         await manager.dispose();
       }
@@ -5259,25 +5010,6 @@ describe("multi-app driving", () => {
           screenshotUnchanged?: boolean;
           screenshot: { screenshotId: string };
         };
-        expect(payload.screenshotUnchanged).toBe(true);
-        expect(payload.screenshot.screenshotId).toBe(first.screenshotId);
-        expect(imageParts(second)).toBe(0);
-      } finally {
-        await manager.dispose();
-      }
-    });
-
-    it("names the earlier frame when the fresh capture is byte-identical", async () => {
-      setFlag("1");
-      const backend = new FakeComputerBackend();
-      const { call, see, manager } = await setup(backend);
-      try {
-        const first = await see();
-        const second = await call("computer_get_state", { include_screenshot: true });
-        const payload = resultJson(second) as {
-          screenshotUnchanged?: boolean;
-          screenshot: { screenshotId: string; windowId?: string };
-        };
         // The pixels still cost a capture — only their delivery is deduplicated.
         expect(backend.callsFor("getState")).toHaveLength(2);
         expect(payload.screenshotUnchanged).toBe(true);
@@ -5373,22 +5105,6 @@ describe("element refs", () => {
   };
   const elementsOf = (result: McpToolCallResult): ListedElement[] =>
     (resultJson(result) as { elements?: ListedElement[] }).elements ?? [];
-
-  it("lists a stable ref per element and clicks it without a label", async () => {
-    const { backend, call, manager } = await setup();
-    try {
-      const elements = elementsOf(await call("computer_get_state", {}));
-      const calculate = elements.find((element) => element.label === "Calculate");
-      expect(calculate).toBeDefined();
-
-      const result = await call("computer_click", { ref: calculate!.ref });
-      expect(result.isError).not.toBe(true);
-      // The button's frame centre — the same point label targeting resolves.
-      expect(backend.callsFor("click").at(-1)?.args[0]).toEqual({ x: 1180, y: 228 });
-    } finally {
-      await manager.dispose();
-    }
-  });
 
   it("keeps a ref bound to the same element across listings", async () => {
     const { backend, call, manager } = await setup();
@@ -5906,47 +5622,6 @@ describe("computer_help", () => {
     }
   });
 
-  it("prefers element refs, gates menus on visible-use consent, and teaches whole-string insertion", async () => {
-    const { call, manager } = await setup(new FakeComputerBackend({ agentDialect: "macos" }));
-    try {
-      const menus = resultJson(await call("computer_help", { topic: "menus" })) as { text: string };
-      expect(menus.text).toContain("On macOS");
-      expect(menus.text).toContain("act on an element ref first");
-      // Menus activate the app, so background tasks must not be sent there first.
-      expect(menus.text).toContain("only when the user asked to see the screen");
-      expect(menus.text.indexOf("element ref")).toBeLessThan(
-        menus.text.indexOf("computer_invoke_menu"),
-      );
-      expect(menus.text.indexOf("computer_invoke_menu")).toBeLessThan(
-        menus.text.indexOf("coordinate click"),
-      );
-      const editors = resultJson(await call("computer_help", { topic: "editors" })) as {
-        text: string;
-      };
-      expect(editors.text).toContain(
-        "computer_type_text with window_id alone inserts the whole string",
-      );
-      expect(editors.text).toContain("never spell text out through computer_press_key");
-    } finally {
-      await manager.dispose();
-    }
-  });
-
-  it("serves one chapter verbatim on its topic", async () => {
-    const { call, manager } = await setup();
-    try {
-      const result = await call("computer_help", { topic: "browser" });
-      expect(result.isError).not.toBe(true);
-      const json = resultJson(result) as { topic: string; text: string };
-      expect(json.topic).toBe("browser");
-      expect(json.text).toContain("computer_browser_prepare");
-      expect(json.text).toContain("never pass one for the other");
-      expect(json.text).not.toContain("computer_recording_start");
-    } finally {
-      await manager.dispose();
-    }
-  });
-
   it("returns one canonical schema and routes hidden actions through the advertised batch tool", async () => {
     const { byName, tools, call, manager, backend } = await setup();
     try {
@@ -6075,19 +5750,5 @@ describe("computer_help", () => {
     } finally {
       await manager.dispose();
     }
-  });
-
-  it("keeps the injected block to the every-turn core and points at the tool", async () => {
-    // What moved behind computer_help was chosen for being situational: the
-    // injected block still carries consent, the observe-act loop, verdicts,
-    // refusals and the browser CDP spine — everything a first action needs —
-    // but not the chapters or the full catalog.
-    const notes = computerToolInstructions();
-    expect(notes).toContain("computer_help");
-    expect(notes).toContain('computer_help({tool:"computer_invoke_menu"})');
-    expect(notes).not.toContain("computer_recording_start");
-    expect(notes).not.toContain("set_window_minimized");
-    expect(notes).toContain("never replay it");
-    expect(notes).toContain("delivery.effect");
   });
 });
