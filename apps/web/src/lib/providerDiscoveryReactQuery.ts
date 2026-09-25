@@ -470,8 +470,9 @@ export function providerModelsQueryOptions(input: {
     retry: providerModelDiscoveryRetry(input.provider),
     // The server caches catalogs (30min fresh, then stale-while-revalidate,
     // persisted across restarts), so a refetch is a cheap RPC — but there is no
-    // value in asking more often than the cache can change. Catalogs only move
-    // on CLI updates or settings edits, which also bust the query key.
+    // value in asking more often than the cache can change. Changes to paths,
+    // endpoints, or cwd select a new key; CLI/account changes at the same paths
+    // become visible on revalidation.
     // OMP bypasses the server cache entirely: file-backed modelRoles are
     // re-resolved per request, so role/config edits must reach the adapter on
     // the ordinary focus/mount refetch cadence.
@@ -539,9 +540,11 @@ export function providerAgentsQueryOptions(input: {
       });
     },
     enabled: input.enabled ?? true,
-    // Agent/mode lists change as rarely as model catalogs; keep them fresh long
-    // enough that reopening the picker doesn't respawn the adapter.
-    staleTime: 15 * 60_000,
+    // Claude can answer "pending" while its SDK fills the agent inventory in
+    // the background. Retry that temporary result while the picker is observed;
+    // only completed catalogs should keep the longer freshness window.
+    staleTime: (query) => (query.state.data?.source === "pending" ? 0 : 15 * 60_000),
+    refetchInterval: (query) => (query.state.data?.source === "pending" ? 30_000 : false),
     placeholderData: (previous) => previous ?? EMPTY_AGENTS_RESULT,
   });
 }
