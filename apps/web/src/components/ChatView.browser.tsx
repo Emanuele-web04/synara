@@ -95,6 +95,7 @@ import { resetWsNativeApiForTest } from "../wsNativeApi";
 // Pre-transform the compiler-heavy component outside the first case's timeout.
 // The router's auto-split route otherwise requests this module on first mount.
 import "./ChatView";
+import { waitForTransientPopups } from "../lib/browserPopupCleanup";
 
 const THREAD_ID = "thread-browser-test" as ThreadId;
 const OTHER_THREAD_ID = "thread-browser-test-other" as ThreadId;
@@ -2224,6 +2225,7 @@ describe("ChatView transcript geometry (full app)", () => {
     await resetHomeChatProjectPrewarmStateForTests();
     await resetStudioProjectPrewarmStateForTests();
     resetRetainedThreadDetailSubscriptionsForTests();
+    await waitForTransientPopups();
     document.body.innerHTML = "";
   });
 
@@ -2415,7 +2417,13 @@ describe("ChatView transcript geometry (full app)", () => {
         for (const id of [1, 2, 3]) {
           await page.getByRole("button", { name: new RegExp(`Choice ${id}`) }).click();
           if (id < 3)
-            await page.getByRole("button", { name: "Next question", exact: true }).first().click();
+            // Manual Next and the 200ms auto-advance race under load; either
+            // path lands on the next question, so a timed-out click is fine.
+            await page
+              .getByRole("button", { name: "Next question", exact: true })
+              .first()
+              .click({ timeout: 2_000 })
+              .catch(() => {});
         }
         if (navigation === "custom") {
           await userEvent.click(await waitForComposerEditor());
@@ -2627,8 +2635,20 @@ describe("ChatView transcript geometry (full app)", () => {
       value: { ...api, orchestration: { ...api.orchestration, dispatchCommand } },
     });
     try {
-      await page.getByRole("button", { name: /Choice 1/ }).click();
-      await page.getByRole("button", { name: "Cancel", exact: true }).click();
+      // Synchronous DOM clicks: the 200ms single-select auto-advance must not
+      // fire between answering and cancelling, or "Choose option 2?" renders and
+      // the pending interaction (never resolved by the mocked dispatch) keeps it
+      // mounted.
+      const choiceButton = Array.from(document.querySelectorAll("button")).find((button) =>
+        button.textContent?.includes("Choice 1"),
+      );
+      expect(choiceButton, "Choice 1 button not found").toBeDefined();
+      choiceButton!.click();
+      const cancelButton = Array.from(document.querySelectorAll("button")).find(
+        (button) => button.textContent?.trim() === "Cancel",
+      );
+      expect(cancelButton, "Cancel button not found").toBeDefined();
+      cancelButton!.click();
       await vi.waitFor(() => expect(dispatchCommand).toHaveBeenCalledTimes(1));
       expect(dispatchCommand).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -3863,12 +3883,16 @@ describe("ChatView transcript geometry (full app)", () => {
       // Rows above the anchor settle to their real height mid-slide (late image
       // loads, markdown remeasure, estimated virtualized rows mounting). Visible
       // content preservation is off while an anchor is set, so this is exactly
-      // what shifts the anchored row under the in-flight slide.
+      // what shifts the anchored row under the in-flight slide. Record each
+      // shock's fire time so the approach check can tell an injected layout
+      // shift apart from a genuine bounce in the slide itself.
+      const growthShockTimes: number[] = [];
       const earlierMessageId = currentSnapshot.threads
         .find((thread) => thread.id === THREAD_ID)!
         .messages.at(-2)!.id;
       for (const [index, delayMs] of [260, 340, 430].entries()) {
         at(delayMs, () => {
+          growthShockTimes.push(performance.now() - startedAt);
           syncActiveThread((thread) => ({
             ...thread,
             messages: thread.messages.map((message) =>
@@ -3942,6 +3966,13 @@ describe("ChatView transcript geometry (full app)", () => {
       // browser frame sampling cannot prove the intermediate path because a
       // loaded runner may present no frames between the first move and arrival.
       const approach = firstArrivalIndex >= 0 ? visible.slice(0, firstArrivalIndex + 1) : visible;
+      // A growth shock shifts the row's viewport offset instantly, while the
+      // slide only re-targets on the next frame — the pair reads as down-then-up.
+      // Skip deltas measured across a recorded shock so only a bounce the slide
+      // itself produced can count. The shock's row shift stays fully visible to
+      // the post-arrival assertions below, which expect zero residual motion.
+      const withinShock = (t: number) =>
+        growthShockTimes.some((shockAt) => t >= shockAt - 5 && t <= shockAt + 110);
       let approachReversals = 0;
       let approachDirection = 0;
       for (let index = 1; index < approach.length; index += 1) {
@@ -3949,7 +3980,7 @@ describe("ChatView transcript geometry (full app)", () => {
         // Chromium can report a one-pixel layout/compositor rounding shift before
         // the anchor animation starts. Match the arrival tolerance so that noise
         // does not count as an extra change of direction.
-        if (Math.abs(delta) <= 2) continue;
+        if (Math.abs(delta) <= 2 || withinShock(approach[index]!.t)) continue;
         const direction = Math.sign(delta);
         if (approachDirection !== 0 && direction !== approachDirection) approachReversals += 1;
         approachDirection = direction;
@@ -4212,20 +4243,6 @@ describe("ChatView transcript geometry (full app)", () => {
           expect(getScrollContainerDistanceFromBottom(container)).toBeGreaterThanOrEqual(10),
         );
         await waitForLayout();
-        // Native wheel and key scrolling may continue after the input command
-        // resolves. Record the reader position only once the viewport is quiet.
-        let lastTop = container.scrollTop;
-        let stableSince = performance.now();
-        await vi.waitFor(
-          () => {
-            if (container.scrollTop !== lastTop) {
-              lastTop = container.scrollTop;
-              stableSince = performance.now();
-            }
-            expect(performance.now() - stableSince).toBeGreaterThanOrEqual(150);
-          },
-          { timeout: 3_000, interval: 20 },
-        );
         const viewport = container.getBoundingClientRect();
         const readingAnchor = Array.from(
           container.querySelectorAll<HTMLElement>("[data-message-id] p, [data-message-id] li"),
@@ -4244,6 +4261,34 @@ describe("ChatView transcript geometry (full app)", () => {
             .querySelector(anchorSelector)!
             .querySelectorAll("p, li")
             [anchorIndex]!.getBoundingClientRect().top;
+        // Settle on the anchor's viewport position, not scrollTop: while
+        // detached the list keeps adjusting scrollTop on every streamed emit to
+        // hold the reader's place, so scrollTop alone never goes quiet.
+        const waitForAnchorQuiet = async () => {
+          let lastAnchorTop = readAnchorTop();
+          let stableSince = performance.now();
+          const deltas: number[] = [];
+          try {
+            await vi.waitFor(
+              () => {
+                const top = readAnchorTop();
+                if (top !== lastAnchorTop) {
+                  deltas.push(Math.round((top - lastAnchorTop) * 10) / 10);
+                  lastAnchorTop = top;
+                  stableSince = performance.now();
+                }
+                expect(performance.now() - stableSince).toBeGreaterThanOrEqual(150);
+              },
+              { timeout: 3_000, interval: 20 },
+            );
+          } catch (error) {
+            throw new Error(
+              `anchor never quieted; deltas=${deltas.slice(-20).join(",")} last=${lastAnchorTop.toFixed(1)} scrollTop=${Math.round(container.scrollTop)} max=${Math.round(container.scrollHeight - container.clientHeight)}`,
+              { cause: error },
+            );
+          }
+        };
+        await waitForAnchorQuiet();
         const detachedTop = readAnchorTop();
         for (let index = 0; index < 3; index += 1) {
           grow();
@@ -4268,8 +4313,10 @@ describe("ChatView transcript geometry (full app)", () => {
           }));
           await waitForLayout();
         }
-        // The list may compensate scrollTop as estimated rows settle. The text
-        // the reader is looking at must remain at the same viewport position.
+        // The list may compensate scrollTop a frame after streamed growth
+        // lands. The text the reader is looking at must settle back at the
+        // same viewport position.
+        await waitForAnchorQuiet();
         expect(readAnchorTop()).toBeCloseTo(detachedTop, 0);
         if (action === "thread switch") {
           await mounted.router.navigate({
@@ -5010,10 +5057,10 @@ describe("ChatView transcript geometry (full app)", () => {
       branchTrigger.click();
 
       const branchSearch = await waitForElement(
-        () => document.querySelector<HTMLInputElement>('input[placeholder="Search branches..."]'),
+        () => document.querySelector<HTMLInputElement>('input[placeholder="Search branches…"]'),
         "Unable to find branch selector search input.",
       );
-      await page.getByPlaceholder("Search branches...").fill("stale-query");
+      await page.getByPlaceholder("Search branches…").fill("stale-query");
       expect(branchSearch.value).toBe("stale-query");
 
       await mounted.router.navigate({
@@ -5030,7 +5077,7 @@ describe("ChatView transcript geometry (full app)", () => {
       await vi.waitFor(
         () => {
           expect(
-            document.querySelector('input[placeholder="Search branches..."]'),
+            document.querySelector('input[placeholder="Search branches…"]'),
             "Branch selector state remained open after switching threads.",
           ).toBeNull();
         },
@@ -5043,7 +5090,7 @@ describe("ChatView transcript geometry (full app)", () => {
       );
       nextBranchTrigger.click();
       const resetSearch = await waitForElement(
-        () => document.querySelector<HTMLInputElement>('input[placeholder="Search branches..."]'),
+        () => document.querySelector<HTMLInputElement>('input[placeholder="Search branches…"]'),
         "Unable to reopen branch selector after switching threads.",
       );
       expect(resetSearch.value).toBe("");

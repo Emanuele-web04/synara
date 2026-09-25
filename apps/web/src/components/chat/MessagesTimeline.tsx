@@ -2249,6 +2249,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       text={messageText}
                       cwd={markdownCwd}
                       isStreaming={Boolean(row.message.streaming)}
+                      followLiveOutput={followLiveOutput}
                       style={chatTypographyStyle}
                       onImageExpand={onImageExpand}
                       knownAbsoluteFilePaths={knownAbsoluteFilePaths}
@@ -2638,11 +2639,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
         maintainScrollAtEnd={followLiveOutput && !tailAnchorSlideInFlight}
         maintainScrollAtEndThreshold={0.1}
-        {...(tailAnchorMessageId !== null
-          ? { maintainVisibleContentPosition: false }
-          : !followLiveOutput
-            ? { maintainVisibleContentPosition: true }
-            : {})}
+        {...(tailAnchorMessageId !== null ? { maintainVisibleContentPosition: false } : {})}
         onClickCapture={onMessagesClickCapture}
         onMouseUp={onMessagesMouseUp}
         onPointerCancel={handleMessagesPointerCancel}

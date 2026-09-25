@@ -70,6 +70,13 @@ export function useChatTranscriptScroll({
   // Guards isAtEndRef from flipping during reflow-induced scroll events that
   // fire immediately after an explicit scrollToEnd.
   const programmaticScrollUntilRef = useRef(0);
+  // A scroll event carries the position from when it was generated, not when it
+  // is delivered: a list stick-to-end queued before an upward gesture can fire
+  // isAtEnd after detach latched and be misread as the user reaching the bottom.
+  // Bare isAtEnd notifications may not re-stick inside this grace; explicit
+  // gesture-end calls (release/decide) bypass it.
+  const detachedAtRef = useRef(0);
+  const DETACHED_RESTICK_GRACE_MS = 250;
   // User scroll gestures take ownership from streaming auto-follow. Ref updates
   // are immediate; state updates project into the `followLiveOutput` prop.
   const [isUserScrollDetached, setIsUserScrollDetached] = useState(false);
@@ -81,9 +88,18 @@ export function useChatTranscriptScroll({
   const pendingScrollGestureRef = useRef<{
     container: HTMLElement;
     scrollTop: number;
+    scrollHeight: number;
     wasFollowing: boolean;
+    movedUp?: boolean;
     keyboard?: boolean;
   } | null>(null);
+  // A wheel/key gesture judged a no-op can still be real: under load the
+  // compositor scroll lands after the settle check, and the late scroll would
+  // otherwise be read as an unsolicited departure and snapped back to the tail.
+  // For a short window after the re-stick, a scroll below the gesture origin
+  // re-detaches follow instead.
+  const lateGestureScrollRef = useRef<{ until: number; scrollTop: number } | null>(null);
+  const LATE_GESTURE_VERIFY_MS = 500;
   const pendingScrollGestureFrameRef = useRef<number | null>(null);
   const cancelPendingScrollGesture = useCallback(() => {
     const frameId = pendingScrollGestureFrameRef.current;
@@ -108,6 +124,7 @@ export function useChatTranscriptScroll({
   const armTranscriptAutoFollow = useCallback(
     (targetThreadId: ThreadId, animated = false) => {
       cancelPendingScrollGesture();
+      lateGestureScrollRef.current = null;
       autoFollowThreadIdRef.current = targetThreadId;
       animateNextAutoFollowScrollRef.current = animated;
       isAtEndRef.current = true;
@@ -131,6 +148,10 @@ export function useChatTranscriptScroll({
       const container = legendListRef.current?.getScrollableNode();
       const detached =
         container instanceof HTMLElement && container.scrollHeight > container.clientHeight + 1;
+      if (detached) {
+        detachedAtRef.current = performance.now();
+        lateGestureScrollRef.current = null;
+      }
       if (detached !== isUserScrollDetachedRef.current) {
         // Disable list-owned follow before an already queued animation frame can
         // run. Continuous wheel events otherwise defer this prop update in React.
@@ -169,9 +190,19 @@ export function useChatTranscriptScroll({
     tailKey: transcriptTailKey,
   });
   const onIsAtEndChange = useCallback(
-    (isAtEnd: boolean) => {
+    (isAtEnd: boolean, fromGestureEnd = false) => {
       const container = legendListRef.current?.getScrollableNode();
       const pending = pendingScrollGestureRef.current;
+      if (
+        pending &&
+        container === pending.container &&
+        container.scrollTop < pending.scrollTop - 1
+      ) {
+        // Streamed growth can compensate the offset back above the gesture's
+        // origin before the settle check runs; remember that real upward
+        // movement happened so the gesture is not misread as a no-op.
+        pending.movedUp = true;
+      }
       if (pending?.keyboard && container === pending.container) {
         // Native key scrolling can begin after keyup and after multiple frames.
         if (container.scrollTop >= pending.scrollTop || isScrollContainerNearBottom(container, 1))
@@ -179,6 +210,42 @@ export function useChatTranscriptScroll({
         pendingScrollGestureRef.current = null;
       }
       if (!isAtEnd && !isUserScrollDetachedRef.current) {
+        const lateGesture = lateGestureScrollRef.current;
+        if (lateGesture && container instanceof HTMLElement) {
+          // Inside the verify window a departure from the bottom may be the
+          // gesture arriving late, with its scrollTop already compensated back
+          // above the origin by streamed growth — but it may equally be an emit
+          // transient. Transients re-pin within a frame or two while a gesture
+          // stays off the bottom, so verify persistence before detaching. Past
+          // the window only an observed dip below the origin still counts
+          // (growth alone never decreases scrollTop).
+          if (container.scrollTop < lateGesture.scrollTop - 1) {
+            lateGestureScrollRef.current = null;
+            clearTranscriptAutoFollow(true);
+            return;
+          }
+          const inWindow = performance.now() <= lateGesture.until;
+          if (!inWindow) {
+            lateGestureScrollRef.current = null;
+          } else if (!isScrollContainerNearBottom(container, 1)) {
+            // Verify against this exact record: a later arm, gesture, or dip
+            // clears the ref and retires the pending check with it.
+            const record = lateGesture;
+            window.requestAnimationFrame(() =>
+              window.requestAnimationFrame(() => {
+                if (lateGestureScrollRef.current !== record) return;
+                lateGestureScrollRef.current = null;
+                if (
+                  !isUserScrollDetachedRef.current &&
+                  legendListRef.current?.getScrollableNode() === container &&
+                  !isScrollContainerNearBottom(container, 1)
+                )
+                  clearTranscriptAutoFollow(true);
+              }),
+            );
+            return;
+          }
+        }
         if (
           hasStreamingAssistantText &&
           container instanceof HTMLElement &&
@@ -212,12 +279,20 @@ export function useChatTranscriptScroll({
         return;
       }
       // The list can report its content end while the viewport is still inside
-      // the bottom inset. A detached reader resumes only at the actual bottom.
+      // the bottom inset, and its isAtEnd flag can also arrive stale when this
+      // handler reads it before the list's own scroll pass. A detached reader
+      // therefore resumes only on the container's physical position: actually
+      // at the bottom, outside the post-detach grace that filters stale events
+      // (explicit gesture-end calls bypass the grace).
+      const nearBottom =
+        container instanceof HTMLElement && isScrollContainerNearBottom(container, 1);
       const atEnd =
-        isAtEnd &&
+        (isAtEnd || (isUserScrollDetachedRef.current && nearBottom)) &&
         (!isUserScrollDetachedRef.current ||
           !(container instanceof HTMLElement) ||
-          isScrollContainerNearBottom(container, 1));
+          (nearBottom &&
+            (fromGestureEnd ||
+              performance.now() - detachedAtRef.current > DETACHED_RESTICK_GRACE_MS)));
       if (atEnd === isAtEndRef.current && (!atEnd || !isUserScrollDetachedRef.current)) return;
       // A gesture can detach without changing the previous edge notification.
       if (atEnd) {
@@ -231,7 +306,13 @@ export function useChatTranscriptScroll({
       }
       isAtEndRef.current = atEnd;
     },
-    [legendListRef, hasStreamingAssistantText, scrollToEnd, setTranscriptScrollDetached],
+    [
+      legendListRef,
+      hasStreamingAssistantText,
+      scrollToEnd,
+      setTranscriptScrollDetached,
+      clearTranscriptAutoFollow,
+    ],
   );
   const cancelPendingInteractionAnchorAdjustment = useCallback(() => {
     const pendingFrame = pendingInteractionAnchorFrameRef.current;
@@ -278,7 +359,7 @@ export function useChatTranscriptScroll({
   }, [clearTranscriptAutoFollow]);
   const releaseTranscriptScrollGesture = useCallback(() => {
     const state = legendListRef.current?.getState();
-    if (state) onIsAtEndChange(state.isAtEnd);
+    if (state) onIsAtEndChange(state.isAtEnd, /* fromGestureEnd */ true);
   }, [legendListRef, onIsAtEndChange]);
   const onMessagesPointerCancelBase = releaseTranscriptScrollGesture;
   const onMessagesPointerUpBase = releaseTranscriptScrollGesture;
@@ -302,6 +383,7 @@ export function useChatTranscriptScroll({
           : {
               container,
               scrollTop: container.scrollTop,
+              scrollHeight: container.scrollHeight,
               wasFollowing:
                 isAtEndRef.current &&
                 !isUserScrollDetachedRef.current &&
@@ -309,22 +391,56 @@ export function useChatTranscriptScroll({
             };
       clearTranscriptAutoFollow(true);
       pendingScrollGestureRef.current = origin;
-      // Native scrolling can settle on the next rendering pass. Keep one
-      // pending check per gesture burst, preserving ownership from its first event.
-      pendingScrollGestureFrameRef.current = window.requestAnimationFrame(() => {
+      const decide = () => {
+        pendingScrollGestureRef.current = null;
+        // A wheel that never moved the scroll position upward is a no-op —
+        // sub-pixel delta, nested target, or already at the limit — and must
+        // not strand live follow. Real upward movement can be compensated
+        // back above the origin by streamed growth inside this window, so the
+        // gesture is judged by the lowest offset observed (movedUp), not the
+        // final one.
+        if (container.scrollTop < origin.scrollTop - 1) origin.movedUp = true;
+        if (origin.wasFollowing && !origin.movedUp) {
+          lateGestureScrollRef.current = {
+            until: performance.now() + LATE_GESTURE_VERIFY_MS,
+            scrollTop: origin.scrollTop,
+          };
+          setTranscriptScrollDetached(false);
+          onIsAtEndChange(true, /* fromGestureEnd */ true);
+          scrollToEnd();
+        } else {
+          releaseTranscriptScrollGesture();
+        }
+      };
+      if (!upward) {
+        // Native scrolling can settle on the next rendering pass. Keep one
+        // pending check per gesture burst, preserving ownership from its first event.
         pendingScrollGestureFrameRef.current = window.requestAnimationFrame(() => {
-          pendingScrollGestureFrameRef.current = null;
-          pendingScrollGestureRef.current = null;
-          if (origin.wasFollowing && container.scrollTop >= origin.scrollTop) {
-            // A nested or no-op wheel must not strand follow, even if new text
-            // increased the distance from the bottom while the gesture settled.
-            setTranscriptScrollDetached(false);
-            onIsAtEndChange(true);
-            scrollToEnd();
-          } else {
-            releaseTranscriptScrollGesture();
-          }
+          pendingScrollGestureFrameRef.current = window.requestAnimationFrame(() => {
+            pendingScrollGestureFrameRef.current = null;
+            decide();
+          });
         });
+        return;
+      }
+      // An upward wheel's scroll lands on the compositor a few frames after the
+      // event; under load the two-frame window can close first and an unmoved
+      // scrollTop would be misread as a no-op. Like the keyboard path below,
+      // give the gesture rendering time before deciding it did nothing.
+      const deadline = performance.now() + 150;
+      const check = () => {
+        pendingScrollGestureFrameRef.current = null;
+        if (pendingScrollGestureRef.current !== origin) return;
+        if (container.scrollTop < origin.scrollTop - 1) origin.movedUp = true;
+        const settled = origin.movedUp || container.scrollHeight !== origin.scrollHeight;
+        if (!settled && performance.now() < deadline) {
+          pendingScrollGestureFrameRef.current = window.requestAnimationFrame(check);
+          return;
+        }
+        decide();
+      };
+      pendingScrollGestureFrameRef.current = window.requestAnimationFrame(() => {
+        pendingScrollGestureFrameRef.current = window.requestAnimationFrame(check);
       });
     },
     [
@@ -375,6 +491,7 @@ export function useChatTranscriptScroll({
             : {
                 container,
                 scrollTop: container.scrollTop,
+                scrollHeight: container.scrollHeight,
                 wasFollowing: isAtEndRef.current && !isUserScrollDetachedRef.current,
                 keyboard: true,
               };
@@ -397,15 +514,19 @@ export function useChatTranscriptScroll({
       const check = () => {
         pendingScrollGestureFrameRef.current = null;
         if (pendingScrollGestureRef.current !== origin) return;
-        const movedUp = origin.container.scrollTop < origin.scrollTop - 1;
-        if (!movedUp && performance.now() < deadline) {
+        if (origin.container.scrollTop < origin.scrollTop - 1) origin.movedUp = true;
+        if (!origin.movedUp && performance.now() < deadline) {
           pendingScrollGestureFrameRef.current = window.requestAnimationFrame(check);
           return;
         }
         pendingScrollGestureRef.current = null;
-        if (origin.wasFollowing && !movedUp) {
+        if (origin.wasFollowing && !origin.movedUp) {
+          lateGestureScrollRef.current = {
+            until: performance.now() + LATE_GESTURE_VERIFY_MS,
+            scrollTop: origin.scrollTop,
+          };
           setTranscriptScrollDetached(false);
-          onIsAtEndChange(true);
+          onIsAtEndChange(true, /* fromGestureEnd */ true);
           scrollToEnd();
         } else {
           releaseTranscriptScrollGesture();
@@ -498,6 +619,7 @@ export function useChatTranscriptScroll({
 
   const onScrollToBottom = useCallback(() => {
     cancelPendingScrollGesture();
+    lateGestureScrollRef.current = null;
     tailAnchorScrollInFlightRef.current = false;
     setTranscriptScrollDetached(false);
     isAtEndRef.current = true;
