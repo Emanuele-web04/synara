@@ -70,11 +70,14 @@ export async function insertAppSnapCaptureIntoDraft(
     };
     const sourceWithIcon = await sourceWithCachedIcon(source);
     const appSnapImage = { ...image, source: sourceWithIcon };
-    blobKey = await persistComposerImageBlob({
+    // A const keeps the narrowed `string` type inside the retry closure below;
+    // the outer `blobKey` stays nullable for the rollback paths.
+    const persistedBlobKey = await persistComposerImageBlob({
       threadId,
       imageId: appSnapImage.id,
       file: appSnapImage.file,
     });
+    blobKey = persistedBlobKey;
 
     if (!draftStore.addImage(threadId, appSnapImage)) {
       throw new Error(
@@ -94,7 +97,7 @@ export async function insertAppSnapCaptureIntoDraft(
           name: appSnapImage.name,
           mimeType: appSnapImage.mimeType,
           sizeBytes: appSnapImage.sizeBytes,
-          blobKey,
+          blobKey: persistedBlobKey,
           source: sourceWithIcon,
         },
       ]);

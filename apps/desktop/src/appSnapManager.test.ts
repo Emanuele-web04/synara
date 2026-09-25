@@ -2628,7 +2628,7 @@ describe("Windows native AppSnap", () => {
   it("reports when another app owns the Windows accelerator", () => {
     const f = createWindowsManager({
       enabled: false,
-      shortcutRegistry: { register: () => false, unregister: vi.fn() },
+      shortcutRegistry: { register: vi.fn(() => false), unregister: vi.fn() },
     });
     try {
       expect(
