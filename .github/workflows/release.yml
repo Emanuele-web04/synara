@@ -1051,7 +1051,8 @@ jobs:
   cut_next_beta:
     name: Cut next beta
     # Stable releases only: tag the next beta off the stable commit so beta installs are never shadowed. Never pushes to main.
-    if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_AUTO_BETA == '1' && needs.preflight.outputs.is_prerelease == 'false' }}
+    # On by default; set the SYNARA_AUTO_BETA repository variable to 0 to pause.
+    if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_AUTO_BETA != '0' && needs.preflight.outputs.is_prerelease == 'false' }}
     needs: [preflight, release]
     runs-on: ubuntu-24.04
     timeout-minutes: 10

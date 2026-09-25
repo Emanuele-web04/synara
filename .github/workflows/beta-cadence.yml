@@ -14,10 +14,10 @@ concurrency:
 jobs:
   cut:
     name: Cut next beta
-    # Opt-in only: set the SYNARA_BETA_CADENCE repository variable to 1. The tag
-    # push must come from the release app token because GITHUB_TOKEN pushes do
-    # not trigger the release workflow.
-    if: ${{ vars.SYNARA_BETA_CADENCE == '1' }}
+    # On by default; set the SYNARA_BETA_CADENCE repository variable to 0 to
+    # pause. The tag push must come from the release app token because
+    # GITHUB_TOKEN pushes do not trigger the release workflow.
+    if: ${{ vars.SYNARA_BETA_CADENCE != '0' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
