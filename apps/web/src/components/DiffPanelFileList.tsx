@@ -9,13 +9,7 @@ import {
 } from "@synara/shared/localPreviewFiles";
 import { type MouseEvent as ReactMouseEvent } from "react";
 import { useCopyPathToClipboard } from "~/hooks/useCopyToClipboard";
-import {
-  ChevronDownIcon,
-  CopyIcon,
-  EllipsisIcon,
-  MessageCircleIcon,
-  PencilIcon,
-} from "~/lib/icons";
+import { CopyIcon, EllipsisIcon, MessageCircleIcon, PencilIcon } from "~/lib/icons";
 
 import {
   buildFileDiffRenderKey,
@@ -28,6 +22,7 @@ import { resolveDiffLineBlameTarget, type DiffLineBlameTarget } from "./DiffLine
 import { LocalImagePreview } from "./LocalImagePreview";
 import { PanelStateMessage } from "./chat/PanelStateMessage";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
+import { DisclosureChevron } from "./ui/DisclosureChevron";
 import { IconButton } from "./ui/icon-button";
 import { Menu, MenuItem, MenuTrigger } from "./ui/menu";
 
@@ -103,29 +98,6 @@ function DiffFileHeaderActionsMenu(props: {
   );
 }
 
-function DiffFileCollapseChevron(props: { collapsed: boolean }) {
-  return (
-    <span
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        padding: "2px",
-        color: "inherit",
-      }}
-    >
-      <ChevronDownIcon
-        style={{
-          width: "14px",
-          height: "14px",
-          transition: "transform 150ms ease",
-          transform: props.collapsed ? "rotate(-90deg)" : "rotate(0deg)",
-          opacity: 0.5,
-        }}
-      />
-    </span>
-  );
-}
-
 const DiffPanelFileRow = function DiffPanelFileRow(props: {
   fileDiff: FileDiffMetadata;
   resolvedTheme: "light" | "dark";
@@ -163,7 +135,18 @@ const DiffPanelFileRow = function DiffPanelFileRow(props: {
           />
         </span>
       ) : null}
-      <DiffFileCollapseChevron collapsed={isCollapsed} />
+      <IconButton
+        variant="ghost"
+        size="icon-xs"
+        className="text-muted-foreground hover:text-foreground"
+        data-diff-header-menu="true"
+        aria-expanded={!isCollapsed}
+        label={isCollapsed ? "Expand file diff" : "Collapse file diff"}
+        title={isCollapsed ? "Expand file diff" : "Collapse file diff"}
+        onClick={() => props.onToggleFileCollapsed(fileKey)}
+      >
+        <DisclosureChevron open={!isCollapsed} className="opacity-50" />
+      </IconButton>
     </>
   );
   const { onBlameLine } = props;

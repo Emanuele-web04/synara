@@ -9,7 +9,8 @@ import { DiffTruncationWarning } from "./DiffTruncationWarning";
 it("clearly identifies a size-bounded patch as a partial diff", async () => {
   await render(<DiffTruncationWarning />);
 
-  await expect.element(page.getByRole("alert")).toBeVisible();
+  // Non-error alerts render role="status" (assertive "alert" is reserved for errors).
+  await expect.element(page.getByRole("status")).toBeVisible();
   await expect.element(page.getByText("Partial diff", { exact: true })).toBeVisible();
   await expect.element(page.getByText(/some files or changes may be missing/i)).toBeVisible();
 });

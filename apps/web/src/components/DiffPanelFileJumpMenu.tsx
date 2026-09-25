@@ -11,6 +11,7 @@ import { SearchIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { filterRenderableFilesForSearch } from "./DiffPanel.logic";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
+import { DOCK_HEADER_ICON_BUTTON_CLASS } from "./chat/chatHeaderControls";
 import { PickerPanelShell } from "./chat/PickerPanelShell";
 import { FileEntryIcon } from "./chat/FileEntryIcon";
 import { DiffStat } from "./chat/DiffStatLabel";
@@ -59,7 +60,7 @@ function DiffFileJumpRow(props: {
       <div className="min-w-0 flex flex-1 items-center gap-2 overflow-hidden">
         <div className="min-w-0 flex flex-1 items-baseline gap-1.5 overflow-hidden">
           <span className="shrink-0 text-ui-sm font-medium text-foreground/85">{name}</span>
-          {dir ? <span className="truncate text-ui-sm text-muted-foreground/55">{dir}</span> : null}
+          {dir ? <span className="truncate text-ui-sm text-muted-foreground">{dir}</span> : null}
         </div>
         <DiffStat
           additions={stat.additions}
@@ -94,7 +95,10 @@ export function DiffPanelFileJumpMenu(props: {
           <IconButton
             variant="ghost"
             size="icon-xs"
-            className="text-muted-foreground hover:text-foreground"
+            className={cn(
+              DOCK_HEADER_ICON_BUTTON_CLASS,
+              "text-muted-foreground hover:text-foreground",
+            )}
             label="Jump to file"
             title="Jump to file"
           >

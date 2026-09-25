@@ -149,7 +149,7 @@ it.each(["Last turn", "All turns"])(
     await expect.element(page.getByText("export const value = 2;", { exact: true })).toBeVisible();
     expectNoHardCapacityError();
     expect(document.body.textContent).not.toContain("Diff refresh delayed.");
-    expect(document.body.textContent).not.toContain("Refreshing diff...");
+    expect(document.body.textContent).not.toContain("Refreshing diff…");
   },
 );
 
@@ -175,14 +175,14 @@ it.each(["files", "raw"])(
       resolveRefresh = resolve;
     });
     getDiff.mockImplementation(() => refreshed);
-    await expect.element(page.getByText("Refreshing diff...", { exact: true })).toBeVisible();
+    await expect.element(page.getByText("Refreshing diff…", { exact: true })).toBeVisible();
     await expect.element(page.getByText(previousText, { exact: true })).toBeVisible();
     expectNoHardCapacityError();
 
     resolveRefresh({ diff: "Recovered raw patch" });
     await expect.element(page.getByText("Recovered raw patch", { exact: true })).toBeVisible();
     expect(document.body.textContent).not.toContain("Diff refresh delayed.");
-    expect(document.body.textContent).not.toContain("Refreshing diff...");
+    expect(document.body.textContent).not.toContain("Refreshing diff…");
     expectNoHardCapacityError();
   },
 );
