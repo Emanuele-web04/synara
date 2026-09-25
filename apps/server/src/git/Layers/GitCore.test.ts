@@ -1925,6 +1925,63 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("removeWorktree prunes metadata of worktrees deleted out of band", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+        const removedPath = path.join(tmp, "wt-explicit-remove");
+        const vanishedPath = path.join(tmp, "wt-vanished");
+        yield* core.createDetachedWorktree({ cwd: tmp, ref: "HEAD", path: removedPath });
+        yield* core.createDetachedWorktree({ cwd: tmp, ref: "HEAD", path: vanishedPath });
+        // Simulate a directory disappearing without `git worktree remove`.
+        yield* Effect.promise(() => fs.rm(vanishedPath, { recursive: true, force: true }));
+        expect(yield* git(tmp, ["worktree", "list", "--porcelain"])).toContain("wt-vanished");
+
+        yield* core.removeWorktree({ cwd: tmp, path: removedPath });
+
+        const listing = yield* git(tmp, ["worktree", "list", "--porcelain"]);
+        expect(listing).not.toContain("wt-explicit-remove");
+        expect(listing).not.toContain("wt-vanished");
+      }),
+    );
+
+    it.effect("removeWorktree still succeeds and reclaims its branch when prune fails", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const realCore = yield* GitCore;
+        const wtPath = path.join(tmp, "wt-prune-fails");
+        yield* realCore.createDetachedWorktree({
+          cwd: tmp,
+          ref: "HEAD",
+          path: wtPath,
+          newBranch: "synara/ab12cd34",
+        });
+        const operations: string[] = [];
+        const core = yield* makeIsolatedGitCore((input) => {
+          operations.push(input.operation);
+          if (input.operation === "GitCore.removeWorktree.prune") {
+            return Effect.succeed({ code: 1, stdout: "", stderr: "fatal: prune exploded" });
+          }
+          return realCore.execute(input);
+        });
+
+        yield* core.removeWorktree({
+          cwd: tmp,
+          path: wtPath,
+          reclaimTemporaryBranch: true,
+        });
+
+        expect(operations).toContain("GitCore.removeWorktree.prune");
+        expect(operations.indexOf("GitCore.removeWorktree.prune")).toBeLessThan(
+          operations.indexOf("GitCore.removeWorktree.reclaimBranch"),
+        );
+        expect(existsSync(wtPath)).toBe(false);
+        expect(yield* git(tmp, ["branch", "--list", "synara/ab12cd34"])).toBe("");
+      }),
+    );
+
     it.effect("atomically replaces an incomplete worktree snapshot", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();

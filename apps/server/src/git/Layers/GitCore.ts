@@ -3709,6 +3709,22 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             ),
           ),
         );
+        // Drop administrative entries for worktrees whose directories vanished
+        // out of band, so stale `.git/worktrees/<name>` metadata cannot pin their
+        // branches or confuse later listings. The removal itself already
+        // succeeded; a prune failure is logged, never surfaced.
+        yield* executeGit("GitCore.removeWorktree.prune", input.cwd, ["worktree", "prune"], {
+          timeoutMs: 10_000,
+        }).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("worktree removal could not prune stale worktree metadata", {
+              cwd: input.cwd,
+              path: input.path,
+              error: error instanceof Error ? error.message : String(error),
+            }),
+          ),
+          Effect.asVoid,
+        );
         if (temporaryBranch !== null) {
           // Compare-and-delete against the HEAD observed above: if a concurrent
           // Git process repointed the ref since then, its commits survive. The

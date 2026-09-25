@@ -50,6 +50,7 @@ type ThreadToastData = {
   archiveUndo?: {
     onUndo: () => boolean | Promise<boolean>;
     onViewArchived: () => void | Promise<void>;
+    onNoUndo?: () => void;
   };
 };
 
@@ -172,6 +173,7 @@ function ThreadToastVisibleAutoDismiss({
   const paused = pausedProp ?? false;
   const toastId = toast.id;
   const toastRef = toast.ref;
+  const onNoUndo = toast.data?.archiveUndo?.onNoUndo;
   useEffect(() => {
     if (!dismissAfterVisibleMs || dismissAfterVisibleMs <= 0) return;
     if (typeof window === "undefined" || typeof document === "undefined") return;
@@ -198,6 +200,7 @@ function ThreadToastVisibleAutoDismiss({
       if (closed) return;
       closed = true;
       threadToastVisibleTimeoutRemainingMs.delete(toastId);
+      onNoUndo?.();
       toastManager.close(toastId);
     };
 
@@ -261,7 +264,7 @@ function ThreadToastVisibleAutoDismiss({
       pause();
       clearTimer();
     };
-  }, [dismissAfterVisibleMs, toastId, toastRef, paused]);
+  }, [dismissAfterVisibleMs, onNoUndo, toastId, toastRef, paused]);
 
   return null;
 }
@@ -326,9 +329,11 @@ function ToastActions({
 
 function ToastCloseButton({
   compact: compactProp,
+  disabled,
   onClose,
 }: {
   compact?: boolean;
+  disabled?: boolean;
   onClose?: (() => void) | undefined;
 }) {
   const compact = compactProp ?? false;
@@ -342,6 +347,7 @@ function ToastCloseButton({
         compact ? "size-5" : "absolute top-2 right-2 size-6",
       )}
       data-slot="toast-close"
+      disabled={disabled}
       onClick={() => {
         onClose?.();
       }}
@@ -402,6 +408,7 @@ function ArchiveUndoToastSurface({
 
   const handleViewArchivedClick = () => {
     if (actionsDisabled) return;
+    archiveUndo.onNoUndo?.();
     void archiveUndo.onViewArchived();
   };
 
@@ -444,7 +451,7 @@ function ArchiveUndoToastSurface({
             Settings
           </Toast.Close>
         </Toast.Title>
-        <ToastCloseButton compact />
+        <ToastCloseButton compact disabled={undoPending} onClose={archiveUndo.onNoUndo} />
       </Toast.Content>
     </>
   );

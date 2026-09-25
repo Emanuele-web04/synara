@@ -19,6 +19,7 @@ import {
 } from "../components/Sidebar.logic";
 import { toastManager } from "../components/ui/toast";
 import { deleteActiveThreadFromClient } from "../lib/activeThreadDelete";
+import { releaseOrphanedWorktreeAfterArchive } from "../lib/archiveThreadWorktreeCleanup";
 import { reconcileDeletedThreadsFromClient } from "../lib/deletedThreadClientReconciliation";
 import { gitRemoveWorktreeMutationOptions } from "../lib/gitReactQuery";
 import {
@@ -87,7 +88,10 @@ export function useSidebarThreadActions(input: {
   readonly activeSplitView: SplitView | null | undefined;
   readonly appSettings: Pick<
     AppSettings,
-    "confirmThreadArchive" | "confirmThreadDelete" | "sidebarThreadSortOrder"
+    | "archiveDeletesOrphanedWorktree"
+    | "confirmThreadArchive"
+    | "confirmThreadDelete"
+    | "sidebarThreadSortOrder"
   >;
   readonly clearTerminalState: (threadId: ThreadId) => void;
   readonly handleNewChat: (options?: { fresh?: boolean }) => Promise<unknown>;
@@ -129,6 +133,7 @@ export function useSidebarThreadActions(input: {
 
   const archivePendingThreadIdsRef = useRef<Set<ThreadId>>(new Set());
   const archiveUndoPendingThreadIdsRef = useRef<Set<ThreadId>>(new Set());
+  const archiveCleanupSequenceByThreadIdRef = useRef<Map<ThreadId, number>>(new Map());
   const legacyPinMigrationThreadIdsRef = useRef(new Set<ThreadId>());
   const optimisticPinnedStateByThreadIdRef = useRef(new Map<ThreadId, boolean>());
   const latestPinnedMutationVersionByThreadIdRef = useRef(new Map<ThreadId, number>());
@@ -561,8 +566,24 @@ export function useSidebarThreadActions(input: {
     [deleteThread, appSettings.confirmThreadDelete, sidebarThreadSummaryById],
   );
 
+  const releaseArchivedWorktree = useCallback(
+    (threadId: ThreadId, archiveSequence: number) => {
+      if (archiveCleanupSequenceByThreadIdRef.current.get(threadId) !== archiveSequence) return;
+      archiveCleanupSequenceByThreadIdRef.current.delete(threadId);
+      void releaseOrphanedWorktreeAfterArchive({
+        threadId,
+        archiveSequence,
+        enabled: appSettings.archiveDeletesOrphanedWorktree,
+        removeWorktree: (worktree) => removeWorktreeMutation.mutateAsync(worktree),
+      }).catch((error: unknown) => {
+        console.error("Failed to release worktree after archiving thread", { threadId, error });
+      });
+    },
+    [appSettings.archiveDeletesOrphanedWorktree, removeWorktreeMutation],
+  );
+
   const archiveThread = useCallback(
-    async (threadId: ThreadId): Promise<boolean> => {
+    async (threadId: ThreadId, options?: { waitForUndo?: boolean }): Promise<boolean> => {
       const api = readNativeApi();
       if (!api) return false;
       const thread = getThreadFromState(useStore.getState(), threadId);
@@ -572,7 +593,16 @@ export function useSidebarThreadActions(input: {
 
       pendingThreadIds.add(threadId);
       const runArchive = async (): Promise<boolean> => {
-        await archiveThreadFromClient(api.orchestration, threadId);
+        const archiveSequence = await archiveThreadFromClient(api.orchestration, threadId);
+        archiveCleanupSequenceByThreadIdRef.current.set(threadId, archiveSequence);
+        // Undo owns its visible lifetime. Other archive entry points get the
+        // same grace period, allowing provider and terminal cleanup to settle.
+        if (appSettings.archiveDeletesOrphanedWorktree && !options?.waitForUndo) {
+          globalThis.setTimeout(
+            () => releaseArchivedWorktree(threadId, archiveSequence),
+            ARCHIVE_UNDO_TOAST_DURATION_MS,
+          );
+        }
         if (routeThreadId === threadId) {
           const fallbackThreadId = getFallbackThreadIdAfterDelete({
             threads: sidebarThreads,
@@ -596,7 +626,15 @@ export function useSidebarThreadActions(input: {
         pendingThreadIds.delete(threadId);
       });
     },
-    [appSettings.sidebarThreadSortOrder, handleNewChat, routeThreadId, sidebarThreads, navigate],
+    [
+      appSettings.archiveDeletesOrphanedWorktree,
+      appSettings.sidebarThreadSortOrder,
+      handleNewChat,
+      releaseArchivedWorktree,
+      routeThreadId,
+      sidebarThreads,
+      navigate,
+    ],
   );
 
   const restoreArchivedThreadFromToast = useCallback(
@@ -619,6 +657,7 @@ export function useSidebarThreadActions(input: {
             return false;
           }
           await unarchiveThreadIgnoringAlreadyRestored(restoreInput.threadId);
+          archiveCleanupSequenceByThreadIdRef.current.delete(restoreInput.threadId);
           if (restoreInput.returnToThreadOnUndo) {
             void navigate({
               to: "/$threadId",
@@ -644,14 +683,21 @@ export function useSidebarThreadActions(input: {
   );
 
   const showArchiveUndoToast = useCallback(
-    (threadId: ThreadId, options?: { returnToThreadOnUndo?: boolean }) => {
+    (threadId: ThreadId, archiveSequence: number, options?: { returnToThreadOnUndo?: boolean }) => {
       toastManager.add({
         id: `archive-undo:${threadId}:${randomUUID()}`,
         timeout: 0,
+        // Covers swipe/Escape dismissal as well as the visible timer. A pending
+        // Undo must never turn a disappearing toast into a cleanup request.
+        onClose: () => {
+          if (archiveUndoPendingThreadIdsRef.current.has(threadId)) return;
+          releaseArchivedWorktree(threadId, archiveSequence);
+        },
         data: {
           allowCrossThreadVisibility: true,
           dismissAfterVisibleMs: ARCHIVE_UNDO_TOAST_DURATION_MS,
           archiveUndo: {
+            onNoUndo: () => releaseArchivedWorktree(threadId, archiveSequence),
             onUndo: () =>
               restoreArchivedThreadFromToast({
                 threadId,
@@ -664,15 +710,20 @@ export function useSidebarThreadActions(input: {
         },
       });
     },
-    [navigate, restoreArchivedThreadFromToast],
+    [navigate, releaseArchivedWorktree, restoreArchivedThreadFromToast],
   );
 
   const archiveThreadWithUndo = useCallback(
     async (threadId: ThreadId) => {
       try {
         const returnToThreadOnUndo = routeThreadId === threadId;
-        const archived = await archiveThread(threadId);
-        if (archived) showArchiveUndoToast(threadId, { returnToThreadOnUndo });
+        const archived = await archiveThread(threadId, { waitForUndo: true });
+        if (archived) {
+          const archiveSequence = archiveCleanupSequenceByThreadIdRef.current.get(threadId);
+          if (archiveSequence !== undefined) {
+            showArchiveUndoToast(threadId, archiveSequence, { returnToThreadOnUndo });
+          }
+        }
       } catch (error) {
         toastManager.add({
           type: "error",
