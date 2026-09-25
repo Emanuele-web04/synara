@@ -553,6 +553,7 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
       query.state.data?.install && query.state.data.install.phase !== "error" ? 500 : 30_000,
   });
   const [actionPending, setActionPending] = useState<"copy" | "open" | "install" | null>(null);
+  const [copyDialogOpen, setCopyDialogOpen] = useState(false);
   const [leaveDialogOpen, setLeaveDialogOpen] = useState(false);
   const [sharesDisclosureOpen, setSharesDisclosureOpen] = useState(false);
   const state: DesktopBetaChannelState | null = betaStateQuery.data ?? null;
@@ -638,8 +639,9 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
         <div className="min-w-0 flex-1 space-y-1">
           <p className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>You're on Synara Beta</p>
           <p className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>
-            New features land here first. To help us fix things quickly, Beta shares crash reports
-            and anonymous usage stats. We don't collect your chats, code, or files.
+            New features land here first. To help us fix things quickly, Beta shares crash reports,
+            app errors, and anonymous usage counts. Crash reports can contain fragments of app
+            memory.
           </p>
           <button
             type="button"
@@ -657,7 +659,7 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
                 <ul className="m-0 list-disc space-y-0.5 pl-4 pt-0.5 text-ui-sm text-muted-foreground">
                   <li>A random ID for this install, not linked to you</li>
                   <li>When Beta opens, closes, installs, or is removed</li>
-                  <li>Crashes and errors, with emails, keys, and usernames removed</li>
+                  <li>Crashes and errors; text is redacted where possible</li>
                   <li>App version, OS version, and language</li>
                   <li>
                     Which providers you use, and how many projects, chats, and turns (just counts)
@@ -666,17 +668,19 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
                 </ul>
               </div>
               <div>
-                <p className="m-0 text-ui-sm font-medium text-foreground">Not collected</p>
+                <p className="m-0 text-ui-sm font-medium text-foreground">
+                  Not included in usage counts
+                </p>
                 <ul className="m-0 list-disc space-y-0.5 pl-4 pt-0.5 text-ui-sm text-muted-foreground">
                   <li>Your chats, prompts, or agent replies</li>
                   <li>Your code, files, or project names</li>
-                  <li>Keys, passwords, or anything that says who you are</li>
+                  <li>Keys, passwords, or account details</li>
                 </ul>
               </div>
               <p className="m-0 text-ui-xs text-muted-foreground">
-                If Beta crashes, a snapshot of the app's memory is sent so we can find the cause. It
-                stays private to the Synara team and is deleted after 90 days. Other reports are
-                kept for a year.
+                Error text can still contain fragments of your work despite redaction. If Beta
+                crashes, a snapshot of app memory is sent and may contain sensitive fragments. Crash
+                dumps are deleted after 90 days; other reports are kept for a year.
               </p>
             </div>
           </DisclosureRegion>
@@ -765,7 +769,7 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
                     size="xs"
                     variant="outline"
                     disabled={actionPending !== null}
-                    onClick={() => void copyDataAndLaunch()}
+                    onClick={() => setCopyDialogOpen(true)}
                   >
                     {actionPending === "copy" ? "Installing…" : "Copy my data and open"}
                   </Button>
@@ -794,7 +798,7 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
                       ? "Quit Synara Beta first so it can pick up the import on its next launch."
                       : undefined
                   }
-                  onClick={() => void copyDataAndLaunch()}
+                  onClick={() => setCopyDialogOpen(true)}
                 >
                   {actionPending === "copy"
                     ? "Copying…"
@@ -815,6 +819,33 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
           </div>
         </div>
       </div>
+      <AlertDialog open={copyDialogOpen} onOpenChange={setCopyDialogOpen}>
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Replace Synara Beta data?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Copying from Synara replaces Beta chats and projects. Chats and projects created only
+              in Beta will be lost. Matching settings and provider sign-ins are overwritten, but
+              Beta-only sign-ins may remain. Your data in Synara will not change.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogClose render={<Button variant="outline" size="sm" />}>
+              Keep Beta data
+            </AlertDialogClose>
+            <Button
+              size="sm"
+              disabled={actionPending !== null}
+              onClick={() => {
+                setCopyDialogOpen(false);
+                void copyDataAndLaunch();
+              }}
+            >
+              Replace Beta data and open
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
     </SettingsCard>
   );
 }

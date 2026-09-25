@@ -23,8 +23,8 @@ shares stable's data directory or update feed.
   `BETA_ONLY_FEATURES` in `packages/shared/src/betaFeatures.ts`. The code ships in
   both apps; Stable just switches listed features off. Remove the entry to promote
   a feature to Stable. See [Beta-only features](#beta-only-features).
-- **Diagnostics are Beta-only.** Beta sends redacted crash reports and anonymous
-  usage counts to a private dashboard. Stable sends nothing. See
+- **Diagnostics are Beta-only.** Beta sends redacted error events, raw crash
+  dumps, and anonymous usage counts to a private dashboard. Stable sends nothing. See
   [Diagnostics](#diagnostics).
 
 ### Release order
@@ -160,7 +160,9 @@ The stable app offers a one-click handoff under **Settings → General → Synar
 - **Copy my data and open** installs first when needed, then writes a marker at
   `~/.synara-beta/import-requested.json` and launches the beta app. On its next
   startup the beta server consumes the marker, snapshots stable's database,
-  copies settings and provider secrets, then deletes the marker. The snapshot
+  copies settings and provider secrets, then deletes the marker. The button
+  first confirms that this replaces existing Beta chats, projects, and settings;
+  work created only in Beta will be lost, while Stable remains unchanged. The snapshot
   uses `VACUUM INTO` when the source is quiescent; while stable is running it
   holds `state.sqlite` under `PRAGMA locking_mode = EXCLUSIVE`, so the importer
   falls back to a file-level copy of the database and its WAL, retried until no
@@ -168,7 +170,9 @@ The stable app offers a one-click handoff under **Settings → General → Synar
   pair), and vacuums that staged copy into a checkpointed snapshot. Either way
   the result is a consistent point-in-time copy and the outcome is written to
   `~/.synara-beta/import-result.json` so the stable settings card can report
-  success or the failure reason.
+  success or the failure reason. The importer stages every file first, rejects
+  symbolic links in copied state, and rolls back normal filesystem commit errors
+  rather than reporting success with only part of the state copied.
 - Only a packaged beta (`SYNARA_DESKTOP_BUNDLE_ID` is the beta bundle id)
   consumes the marker, and only from stable's data folder (`SYNARA_STABLE_HOME`
   handed over by stable, else `~/.synara`). A stray marker in any other home
@@ -266,19 +270,14 @@ To put a feature behind the list:
 
 Promote a feature to Stable by deleting its entry; every gate resolves itself.
 
-OMP (`"omp"`) is currently the only entry. On Stable the server treats OMP as
-disabled — sessions, automations, and commit-message generation refuse it with
-"Oh My Pi is available in Synara Beta." — while the user's saved OMP setting is left
-untouched on disk. The web hides OMP from Settings > Providers, onboarding, and
-the provider pickers; existing OMP threads still render but cannot continue on
-Stable.
+The list is currently empty — nothing is Beta-only right now.
 
 ## Diagnostics
 
 Beta builds ship always-on diagnostics — crash reports plus anonymous usage
 counts (which providers are used, how many chats and turns) — while stable
 builds contain no sender code at all. See [diagnostics.md](docs/diagnostics.md) for
-exactly what is collected, what is never collected, and how the Cloudflare
+exactly what is collected, what usage counters exclude, and how the Cloudflare
 ingest works.
 
 ## Data

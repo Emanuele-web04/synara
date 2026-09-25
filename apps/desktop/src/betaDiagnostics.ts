@@ -10,8 +10,9 @@
 //   before they are written to the queue. Paths in them are reduced to the
 //   file name; folder and repo names are dropped. Redaction is best-effort:
 //   error text can still include fragments of whatever was on screen.
-// - No prompts, chat text, file contents, provider payloads, credentials, or
-//   environment variables are collected.
+// - Usage counters do not read prompts, chat text, file contents, provider
+//   payloads, credentials, or environment variables. Free-text error fields
+//   can still contain fragments; raw crash dumps are not redacted.
 // - The install id is a random UUID generated on first launch of a beta install;
 //   it identifies an install, not a person.
 // - Stable/production builds never construct this object, so the stable binary

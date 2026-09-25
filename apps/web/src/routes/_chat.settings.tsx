@@ -313,6 +313,9 @@ function SettingsRouteView() {
     ...(!isDefaultActiveTheme ? [`${resolvedTheme === "dark" ? "Dark" : "Light"} theme pack`] : []),
     ...(settings.defaultProvider !== defaults.defaultProvider ? ["Default provider"] : []),
     ...(settings.defaultThreadEnvMode !== defaults.defaultThreadEnvMode ? ["New thread mode"] : []),
+    ...(settings.archiveDeletesOrphanedWorktree !== defaults.archiveDeletesOrphanedWorktree
+      ? ["Delete worktree on archive"]
+      : []),
     ...(settings.sidebarProjectSortOrder !== defaults.sidebarProjectSortOrder
       ? ["Project sort order"]
       : []),
@@ -540,6 +543,15 @@ function SettingsRouteView() {
             </SettingsSelectControl>
           }
         />
+
+        {renderBooleanSettingRow({
+          settingKey: "archiveDeletesOrphanedWorktree",
+          title: "Delete worktree on archive",
+          description:
+            "After Archive's Undo period, remove a clean worktree only if the task has stopped and no other task uses it. Its branch remains available for recovery.",
+          resetLabel: "delete worktree on archive",
+          ariaLabel: "Delete worktree on archive",
+        })}
 
         <SettingsRow
           title="Welcome tour"

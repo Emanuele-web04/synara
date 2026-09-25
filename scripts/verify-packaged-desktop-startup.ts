@@ -270,7 +270,7 @@ function prepareLaunch(
 
 export function createPackagedDesktopSmokeEnvironment(
   root: string,
-  options: Pick<PackagedDesktopStartupOptions, "platform" | "version">,
+  options: Pick<PackagedDesktopStartupOptions, "platform" | "version" | "executableName">,
   inheritedEnvironment: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
@@ -283,6 +283,7 @@ export function createPackagedDesktopSmokeEnvironment(
     XDG_CACHE_HOME: join(root, "xdg-cache"),
     XDG_DATA_HOME: join(root, "xdg-data"),
     SYNARA_HOME: join(root, "synara-home"),
+    SYNARA_BETA_HOME: join(root, "synara-beta-home"),
     SYNARA_DISABLE_AUTO_UPDATE: "1",
     ELECTRON_ENABLE_LOGGING: "1",
   };
@@ -296,11 +297,17 @@ export function createPackagedDesktopSmokeEnvironment(
     env.XDG_CACHE_HOME,
     env.XDG_DATA_HOME,
     env.SYNARA_HOME,
+    env.SYNARA_BETA_HOME,
   ]) {
     if (path) mkdirSync(path, { recursive: true });
   }
   if (options.platform === "mac") {
-    const userDataPath = join(env.HOME!, "Library", "Application Support", "synara");
+    const userDataPath = join(
+      env.HOME!,
+      "Library",
+      "Application Support",
+      options.executableName === "synara-beta" ? "synara-beta" : "synara",
+    );
     mkdirSync(userDataPath, { recursive: true });
     // Prevent the packaged app's update-only icon repair from registering this
     // temporary bundle in the runner's normal Launch Services database.
@@ -404,7 +411,10 @@ export async function verifyPackagedDesktopStartup(
     const launch = prepareLaunch(options, extractionRoot);
     const env = createPackagedDesktopSmokeEnvironment(join(temporaryRoot, "state"), options);
     verifyPackagedRuntimeDependencies(launch.runtime, env, options.timeoutMs);
-    logDirectory = join(env.SYNARA_HOME!, "userdata", "logs");
+    // Beta deliberately ignores SYNARA_HOME to avoid opening Stable's data.
+    const appHome =
+      options.executableName === "synara-beta" ? env.SYNARA_BETA_HOME! : env.SYNARA_HOME!;
+    logDirectory = join(appHome, "userdata", "logs");
     const logPath = join(logDirectory, "desktop-main.log");
     child = spawn(launch.command, [...launch.args], {
       cwd: launch.cwd,

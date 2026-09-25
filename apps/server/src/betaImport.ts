@@ -14,10 +14,13 @@
 import {
   closeSync,
   existsSync,
+  lstatSync,
   mkdirSync,
+  mkdtempSync,
   openSync,
   readFileSync,
   readSync,
+  realpathSync,
   renameSync,
   rmSync,
   cpSync,
@@ -91,25 +94,57 @@ function writeImportResult(betaHomeDir: string, result: { ok: boolean; error?: s
   renameSync(tempPath, resultPath);
 }
 
-function copyStateEntries(sourceStateDir: string, targetStateDir: string): void {
-  mkdirSync(targetStateDir, { recursive: true });
+function rejectLinkedEntry(path: string): boolean {
+  if (lstatSync(path).isSymbolicLink()) {
+    throw new Error(`Cannot import a linked state entry: ${path}`);
+  }
+  return true;
+}
+
+function copyStateEntries(
+  sourceStateDir: string,
+  stagedStateDir: string,
+  existingStateDir: string,
+): string[] {
+  mkdirSync(stagedStateDir, { recursive: true });
+  const copiedEntries: string[] = [];
   for (const entry of readdirSync(sourceStateDir)) {
     if (EXCLUDED_STATE_ENTRIES.has(entry)) continue;
     if (STATE_DB_ENTRY_PATTERN.test(entry)) continue;
     if (entry.endsWith(".lifecycle-lock")) continue;
     const sourcePath = join(sourceStateDir, entry);
-    const targetPath = join(targetStateDir, entry);
-    try {
-      const stats = statSync(sourcePath);
-      if (stats.isDirectory()) {
-        cpSync(sourcePath, targetPath, { recursive: true, force: true });
-      } else if (stats.isFile()) {
-        cpSync(sourcePath, targetPath, { force: true });
-      }
-    } catch {
-      // A single unreadable entry must not fail the whole import.
+    const stagedPath = join(stagedStateDir, entry);
+    const stats = lstatSync(sourcePath);
+    if (stats.isSymbolicLink()) {
+      throw new Error(`Cannot import a linked state entry: ${sourcePath}`);
     }
+    if (stats.isDirectory()) {
+      const existingPath = join(existingStateDir, entry);
+      const existing = lstatSync(existingPath, { throwIfNoEntry: false });
+      if (existing?.isDirectory()) {
+        // The old overlay semantics keep Beta-only files inside a shared
+        // directory, such as provider secrets absent from Stable.
+        cpSync(existingPath, stagedPath, {
+          recursive: true,
+          force: true,
+          filter: rejectLinkedEntry,
+        });
+      } else if (existing?.isSymbolicLink()) {
+        throw new Error(`Cannot replace a linked Beta state entry: ${existingPath}`);
+      }
+      cpSync(sourcePath, stagedPath, {
+        recursive: true,
+        force: true,
+        filter: rejectLinkedEntry,
+      });
+    } else if (stats.isFile()) {
+      cpSync(sourcePath, stagedPath, { force: true });
+    } else {
+      continue;
+    }
+    copiedEntries.push(entry);
   }
+  return copiedEntries;
 }
 
 /** Sidecars that carry committed state. `-shm` is only a rebuildable index. */
@@ -240,6 +275,57 @@ async function snapshotStableDatabase(
   }
 }
 
+function commitStagedImport(
+  stagedStateDir: string,
+  targetStateDir: string,
+  copiedEntries: readonly string[],
+): void {
+  mkdirSync(targetStateDir, { recursive: true });
+  const backupDir = mkdtempSync(join(resolve(targetStateDir, ".."), ".beta-import-backup-"));
+  const committed: Array<{ name: string; hadPrevious: boolean }> = [];
+  const entries = [
+    ...copiedEntries,
+    ...LIVE_SIDECAR_SUFFIXES.map((suffix) => `state.sqlite${suffix}`),
+    "state.sqlite",
+  ];
+
+  try {
+    for (const name of entries) {
+      const targetPath = join(targetStateDir, name);
+      const previousPath = join(backupDir, name);
+      const stagedPath = join(stagedStateDir, name);
+      const hadPrevious = lstatSync(targetPath, { throwIfNoEntry: false }) !== undefined;
+      if (hadPrevious) renameSync(targetPath, previousPath);
+      committed.push({ name, hadPrevious });
+      if (lstatSync(stagedPath, { throwIfNoEntry: false }) !== undefined) {
+        renameSync(stagedPath, targetPath);
+      }
+    }
+  } catch (error) {
+    const rollbackErrors: string[] = [];
+    for (const { name, hadPrevious } of committed.reverse()) {
+      try {
+        rmSync(join(targetStateDir, name), { recursive: true, force: true });
+        if (hadPrevious) renameSync(join(backupDir, name), join(targetStateDir, name));
+      } catch (rollbackError) {
+        rollbackErrors.push(`${name}: ${String(rollbackError)}`);
+      }
+    }
+    if (rollbackErrors.length > 0) {
+      // Preserve the backup for manual recovery instead of deleting the only
+      // remaining copy of Beta data after a filesystem failure.
+      throw new Error(
+        `Beta import failed and rollback was incomplete. Previous data remains at ${backupDir}: ${rollbackErrors.join("; ")}`,
+        { cause: error },
+      );
+    }
+    rmSync(backupDir, { recursive: true, force: true });
+    throw error;
+  }
+
+  rmSync(backupDir, { recursive: true, force: true });
+}
+
 /** Stable homes a beta may import from: the one stable handed over, else the default. */
 export function allowedImportSourceHomes(env: NodeJS.ProcessEnv = process.env): string[] {
   const handedOver = env[SYNARA_STABLE_HOME_ENV]?.trim();
@@ -307,15 +393,36 @@ export async function runBetaImportIfRequested(input: {
   }
 
   try {
-    // Snapshot the database first: if it fails, beta must keep its own db and
-    // receive none of stable's files — copying entries first would leave
-    // stable's settings/secrets on top of beta's existing database.
-    await snapshotStableDatabase(
+    if (realpathSync(sourceHomeDir) === realpathSync(input.betaHomeDir)) {
+      return finish(false, "import source points at the beta home itself");
+    }
+    for (const sourcePath of [
+      sourceStateDir,
       sourceDbPath,
-      join(input.stateDir, "state.sqlite"),
-      input.latestMigrationId,
-    );
-    copyStateEntries(sourceStateDir, input.stateDir);
+      ...LIVE_SIDECAR_SUFFIXES.map((suffix) => `${sourceDbPath}${suffix}`),
+    ]) {
+      if (lstatSync(sourcePath, { throwIfNoEntry: false })?.isSymbolicLink()) {
+        return finish(false, `Cannot import a linked state entry: ${sourcePath}`);
+      }
+    }
+    if (lstatSync(input.stateDir, { throwIfNoEntry: false })?.isSymbolicLink()) {
+      return finish(false, "beta state folder cannot be a symbolic link");
+    }
+    // Validate and copy every source entry before changing Beta. An unreadable
+    // secret or a linked file must not report success after replacing its DB.
+    const stagedRoot = mkdtempSync(join(input.betaHomeDir, ".beta-import-"));
+    try {
+      const stagedStateDir = join(stagedRoot, "userdata");
+      await snapshotStableDatabase(
+        sourceDbPath,
+        join(stagedStateDir, "state.sqlite"),
+        input.latestMigrationId,
+      );
+      const copiedEntries = copyStateEntries(sourceStateDir, stagedStateDir, input.stateDir);
+      commitStagedImport(stagedStateDir, input.stateDir, copiedEntries);
+    } finally {
+      rmSync(stagedRoot, { recursive: true, force: true });
+    }
     return finish(true);
   } catch (error) {
     return finish(false, error instanceof Error ? error.message : String(error));

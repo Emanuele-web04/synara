@@ -297,6 +297,8 @@ export const AppSettingsSchema = Schema.Struct({
   openCodeExperimentalWebSockets: Schema.Boolean.pipe(withDefaults(() => false)),
   defaultThreadEnvMode: EnvMode.pipe(withDefaults(() => "local" as const satisfies EnvMode)),
   confirmThreadDelete: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Opt-in: archiving a task also releases its worktree when nothing else uses it.
+  archiveDeletesOrphanedWorktree: Schema.Boolean.pipe(withDefaults(() => false)),
   // Desktop quit dialog: remember interrupted chats and continue them on the next launch.
   resumeChatsAfterQuit: Schema.Boolean.pipe(withDefaults(() => true)),
   confirmThreadArchive: Schema.Boolean.pipe(withDefaults(() => false)),

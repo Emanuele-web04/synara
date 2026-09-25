@@ -18,12 +18,13 @@ type ThreadCommandDispatcher = Pick<NativeApi["orchestration"], "dispatchCommand
 export async function archiveThreadFromClient(
   api: ThreadCommandDispatcher,
   threadId: ThreadId,
-): Promise<void> {
-  await api.dispatchCommand({
+): Promise<number> {
+  const receipt = await api.dispatchCommand({
     type: "thread.archive",
     commandId: newCommandId(),
     threadId,
   });
+  return receipt.sequence;
 }
 
 // Detects the server invariant returned when an Undo races another restore (the
