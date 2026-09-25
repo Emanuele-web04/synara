@@ -2973,8 +2973,8 @@ describe("Antigravity background task helpers (#752)", () => {
           agyText(10, "Command finished."),
         );
         yield* io.waitUntil(() => io.counts.assistantMessages === 1);
-        yield* Effect.sleep("250 millis");
-        expect(io.counts.teardowns).toBe(1);
+        // Stop teardown waits a short grace period for the final result record.
+        yield* io.waitUntil(() => io.counts.teardowns === 1);
         expect(io.taskEvents).toEqual([
           { type: "task.started", taskId: "session-b/task-8" },
           { type: "task.completed", taskId: "session-b/task-8" },
@@ -3798,4 +3798,216 @@ describe("Antigravity background task helpers (#752)", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+});
+
+describe("Antigravity print result telemetry", () => {
+  it.each([true, false])(
+    "persists the usage baseline across restarts (legacy=%s)",
+    async (legacy) => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-agy-baseline-"));
+      const totals = [10_000, 10_300, 10_500];
+      const spawnProcess: NonNullable<AntigravityAdapterDependencies["spawnProcess"]> = () => {
+        const child = new EventEmitter() as ReturnType<
+          NonNullable<AntigravityAdapterDependencies["spawnProcess"]>
+        >;
+        const stdout = new PassThrough();
+        Object.assign(child, {
+          stdout,
+          stderr: new PassThrough(),
+          killed: false,
+          kill: () => true,
+        });
+        setTimeout(() => {
+          stdout.end(
+            `${JSON.stringify({
+              event: "result",
+              result: {
+                conversation_id: "existing-conversation",
+                status: "SUCCESS",
+                response: "answer",
+                usage: { total_tokens: totals.shift() },
+              },
+            })}\n`,
+          );
+          child.emit("close", 0, null);
+        }, 20);
+        return child;
+      };
+      try {
+        await Effect.runPromise(
+          Effect.gen(function* () {
+            const adapter = yield* AntigravityAdapter;
+            const threadId = ThreadId.makeUnsafe("thread-usage-baseline");
+            let resumeCursor: unknown = legacy ? "existing-conversation" : undefined;
+            for (let index = 0; index < 3; index++) {
+              yield* adapter.startSession({
+                provider: "antigravity",
+                threadId,
+                runtimeMode: "full-access",
+                cwd: root,
+                ...(resumeCursor !== undefined ? { resumeCursor } : {}),
+                providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+              });
+              const eventsFiber = yield* adapter.streamEvents.pipe(
+                Stream.takeUntil((event) => event.type === "turn.completed"),
+                Stream.runCollect,
+                Effect.forkChild,
+              );
+              yield* adapter.sendTurn({ threadId, input: "reply", attachments: [] });
+              const events = Array.from(
+                yield* Fiber.join(eventsFiber).pipe(Effect.timeout("3 seconds")),
+              );
+              const tokens = events.filter((event) => event.type === "thread.token-usage.updated");
+              if (legacy && index === 0) {
+                expect(tokens).toHaveLength(0);
+              } else {
+                expect(tokens).toHaveLength(1);
+                expect(tokens[0]).toMatchObject({
+                  payload: {
+                    usage: {
+                      totalProcessedTokens: legacy
+                        ? [0, 300, 500][index]
+                        : [10_000, 10_300, 10_500][index],
+                    },
+                  },
+                });
+              }
+              resumeCursor = JSON.parse(
+                JSON.stringify((yield* adapter.listSessions())[0]?.resumeCursor),
+              );
+              expect(resumeCursor).toEqual({
+                conversationId: "existing-conversation",
+                usageBaseline: legacy ? 10_000 : 0,
+              });
+              yield* adapter.stopSession(threadId);
+            }
+          }).pipe(
+            Effect.provide(
+              makeAntigravityAdapterLive({
+                ensurePlugin: async () => undefined,
+                spawnProcess,
+                teardownProcessTree: async () => completeProcessTeardown(),
+              }).pipe(
+                Layer.provideMerge(
+                  ServerConfig.layerTest(root, { prefix: "antigravity-baseline-test-" }),
+                ),
+                Layer.provideMerge(NodeServices.layer),
+              ),
+            ),
+          ),
+        );
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "drains the result record after stop and unwraps responses (error=%s)",
+    async (failed) => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-agy-json-"));
+      let teardownCalls = 0;
+      const spawnProcess: NonNullable<AntigravityAdapterDependencies["spawnProcess"]> = (
+        _command,
+        args,
+        options,
+      ) => {
+        expect(args).toEqual(expect.arrayContaining(["--output-format", "stream-json"]));
+        const child = new EventEmitter() as ReturnType<
+          NonNullable<AntigravityAdapterDependencies["spawnProcess"]>
+        >;
+        const stdout = new PassThrough();
+        Object.assign(child, {
+          stdout,
+          stderr: new PassThrough(),
+          killed: false,
+          kill: () => true,
+        });
+        fsSync.appendFileSync(options.env!.SYNARA_ANTIGRAVITY_EVENTS!, "stop\t{}\n");
+        // The hook is observed first. A normal CLI then flushes its result record.
+        setTimeout(() => {
+          stdout.end(
+            `${JSON.stringify({
+              event: "result",
+              result: {
+                conversation_id: "json-conversation",
+                status: failed ? "ERROR" : "SUCCESS",
+                response: "visible answer",
+                ...(failed ? { error: "provider failed" } : {}),
+                usage: { input_tokens: 80, output_tokens: 20, total_tokens: 100 },
+              },
+            })}\n`,
+          );
+          child.emit("close", 0, null);
+        }, 600);
+        return child;
+      };
+      try {
+        await Effect.runPromise(
+          Effect.gen(function* () {
+            const adapter = yield* AntigravityAdapter;
+            const eventsFiber = yield* adapter.streamEvents.pipe(
+              Stream.takeUntil((event) => event.type === "turn.completed"),
+              Stream.runCollect,
+              Effect.forkChild,
+            );
+            const threadId = ThreadId.makeUnsafe("thread-json-output");
+            yield* adapter.startSession({
+              provider: "antigravity",
+              threadId,
+              runtimeMode: "full-access",
+              cwd: root,
+              providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+            });
+            yield* adapter.sendTurn({ threadId, input: "reply", attachments: [] });
+            const events = Array.from(
+              yield* Fiber.join(eventsFiber).pipe(Effect.timeout("3 seconds")),
+            );
+            const tokens = events.filter((event) => event.type === "thread.token-usage.updated");
+            expect(tokens).toHaveLength(1);
+            expect(tokens[0]).toMatchObject({
+              threadId,
+              payload: { usage: { usedTokens: 0, totalProcessedTokens: 100 } },
+            });
+            expect(events.at(-1)).toMatchObject({
+              type: "turn.completed",
+              payload: {
+                state: failed ? "failed" : "completed",
+                ...(failed ? { errorMessage: "provider failed" } : {}),
+              },
+            });
+            expect(
+              events
+                .filter((event) => event.type === "content.delta")
+                .map((event) => event.payload.delta),
+            ).toEqual(["visible answer"]);
+            expect(teardownCalls).toBe(0);
+            expect((yield* adapter.listSessions())[0]?.resumeCursor).toEqual({
+              conversationId: "json-conversation",
+              usageBaseline: 0,
+            });
+            yield* adapter.stopSession(threadId);
+          }).pipe(
+            Effect.provide(
+              makeAntigravityAdapterLive({
+                ensurePlugin: async () => undefined,
+                spawnProcess,
+                teardownProcessTree: async () => {
+                  teardownCalls++;
+                  return completeProcessTeardown();
+                },
+              }).pipe(
+                Layer.provideMerge(
+                  ServerConfig.layerTest(root, { prefix: "antigravity-json-test-" }),
+                ),
+                Layer.provideMerge(NodeServices.layer),
+              ),
+            ),
+          ),
+        );
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 });

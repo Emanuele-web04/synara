@@ -61,6 +61,7 @@ import {
   type ProviderThreadSnapshot,
 } from "../Services/ProviderAdapter.ts";
 import { createAntigravityPrintResultParser } from "../antigravityPrintResult.ts";
+import { nonNegativeInteger } from "../tokenUsage.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { makeBoundedCallbackIngress } from "../boundedCallbackIngress.ts";
 import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
@@ -158,6 +159,7 @@ type AntigravitySessionContext = ToolSurfaceCounters & {
   eventFile?: string | undefined;
   transcriptPath?: string | undefined;
   conversationId?: string | undefined;
+  usageBaseline: number | undefined;
   modelName?: string | undefined;
   modelOptions?: AntigravityModelOptions | undefined;
   processedHookBytes: number;
@@ -234,6 +236,15 @@ function resumeConversationId(value: unknown): string | undefined {
     if (typeof record[key] === "string" && record[key].trim()) return record[key].trim();
   }
   return undefined;
+}
+
+// Keep the baseline in the opaque resume cursor so a server restart cannot
+// turn pre-upgrade history into newly attributed usage.
+function antigravityResumeCursor(context: AntigravitySessionContext) {
+  return {
+    conversationId: context.conversationId,
+    ...(context.usageBaseline !== undefined ? { usageBaseline: context.usageBaseline } : {}),
+  };
 }
 
 function transcriptPathForConversation(conversationId: string): string {
@@ -1376,13 +1387,28 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       }
       const child = context.activeProcess;
       context.stopTeardownRequested = true;
-      void teardownProcessTree(child).catch(() => {
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // Process may already be gone.
+      // The stop hook runs before print mode writes its final result record.
+      // Allow a normal exit to flush response/usage; still bound lingering CLI
+      // processes, and never tear down a later turn or new background work.
+      const timer = setTimeout(() => {
+        if (
+          context.activeProcess !== child ||
+          context.turnTerminalEmitted ||
+          context.pendingBackgroundTasks.size > 0 ||
+          context.pendingAnonymousBackgroundTasks.length > 0
+        ) {
+          return;
         }
-      });
+        void teardownProcessTree(child).catch(() => {
+          try {
+            child.kill("SIGKILL");
+          } catch {
+            // Process may already be gone.
+          }
+        });
+      }, 1_000);
+      timer.unref();
+      child.once("close", () => clearTimeout(timer));
     };
 
     /**
@@ -1432,7 +1458,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       context.session = {
         ...inactiveSession,
         status: failed ? "error" : "ready",
-        ...(context.conversationId ? { resumeCursor: context.conversationId } : {}),
+        ...(context.conversationId ? { resumeCursor: antigravityResumeCursor(context) } : {}),
         updatedAt: new Date().toISOString(),
         ...(failed && input.errorMessage ? { lastError: input.errorMessage } : {}),
       };
@@ -1966,7 +1992,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         if (learnedConversation) {
           context.session = {
             ...context.session,
-            resumeCursor: conversationId,
+            resumeCursor: antigravityResumeCursor(context),
             updatedAt: new Date().toISOString(),
           };
           offer({
@@ -2247,6 +2273,13 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         }
         const now = new Date().toISOString();
         const conversationId = resumeConversationId(input.resumeCursor);
+        const usageBaseline = conversationId
+          ? nonNegativeInteger(
+              typeof input.resumeCursor === "object" && input.resumeCursor !== null
+                ? (input.resumeCursor as Record<string, unknown>).usageBaseline
+                : undefined,
+            )
+          : 0;
         const modelSelection =
           input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;
         const model = modelSelection?.model ?? DEFAULT_MODEL;
@@ -2257,7 +2290,14 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           cwd: trim(input.cwd) ?? serverConfig.cwd,
           model,
           threadId: input.threadId,
-          ...(conversationId ? { resumeCursor: conversationId } : {}),
+          ...(conversationId
+            ? {
+                resumeCursor: {
+                  conversationId,
+                  ...(usageBaseline !== undefined ? { usageBaseline } : {}),
+                },
+              }
+            : {}),
           createdAt: now,
           updatedAt: now,
         };
@@ -2269,6 +2309,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
             ? { lifecycleGeneration: input.lifecycleGeneration }
             : {}),
           binaryPath,
+          usageBaseline,
           turns: [],
           ...(conversationId ? { conversationId } : {}),
           ...(modelSelection?.options ? { modelOptions: modelSelection.options } : {}),
@@ -2572,6 +2613,9 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               return;
             }
             const printResult = outputParser.finish();
+            if (!context.conversationId && printResult?.conversationId) {
+              context.conversationId = printResult.conversationId;
+            }
             const responseText = printResult?.response ?? stdout.trim();
             if (!context.sawAssistant && responseText) {
               emitTextItem(
@@ -2589,6 +2633,26 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               if (context.activeProcess === child) delete context.activeProcess;
               await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
               return;
+            }
+            if (printResult?.usage) {
+              const total = printResult.usage.totalProcessedTokens!;
+              // A legacy resume has no trustworthy pre-turn counter. Its first
+              // result establishes the baseline, including that first turn;
+              // only later increments can be attributed without guessing.
+              context.usageBaseline ??= total;
+              const trackedTotal = total - context.usageBaseline;
+              if (trackedTotal > 0) {
+                offer({
+                  ...base(context),
+                  type: "thread.token-usage.updated",
+                  payload: {
+                    usage:
+                      context.usageBaseline === 0
+                        ? printResult.usage
+                        : { usedTokens: 0, totalProcessedTokens: trackedTotal },
+                  },
+                } satisfies ProviderRuntimeEvent);
+              }
             }
             // Only our stop-hook teardown may replace a missing clean process exit.
             // A provider ERROR is authoritative even when earlier response steps are DONE.
@@ -2639,7 +2703,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         return {
           threadId: input.threadId,
           turnId,
-          ...(context.conversationId ? { resumeCursor: context.conversationId } : {}),
+          ...(context.conversationId ? { resumeCursor: antigravityResumeCursor(context) } : {}),
         };
       });
 
@@ -2743,6 +2807,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           context.turns.splice(Math.max(0, context.turns.length - Math.max(0, numTurns)));
           // Antigravity has no rollback cursor; ProviderService will rebuild local context.
           delete context.conversationId;
+          context.usageBaseline = 0;
           delete context.transcriptPath;
           delete context.processedTranscriptPath;
           context.processedTranscriptBytes = 0;

@@ -1,3 +1,7 @@
+import type { ThreadTokenUsageSnapshot } from "@synara/contracts";
+
+import { nonNegativeInteger, positiveInteger } from "./tokenUsage.ts";
+
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -20,6 +24,31 @@ type Step = {
   type?: unknown;
   text: string;
 };
+
+// The headless result's usage is cumulative over the conversation, including
+// resumed invocations. Forward total_tokens unchanged: thinking is already in
+// output_tokens, and cache_read_tokens must not be added to the reported total.
+// https://antigravity.google/docs/cli/headless/#read-the-results
+function resultUsage(
+  result: Record<string, unknown> | undefined,
+): ThreadTokenUsageSnapshot | undefined {
+  const usage = record(result?.usage);
+  const totalProcessedTokens = positiveInteger(usage?.total_tokens);
+  if (!usage || totalProcessedTokens === undefined) return undefined;
+  const inputTokens = nonNegativeInteger(usage.input_tokens);
+  const outputTokens = nonNegativeInteger(usage.output_tokens);
+  const cachedInputTokens = nonNegativeInteger(usage.cache_read_tokens);
+  const reasoningOutputTokens = nonNegativeInteger(usage.thinking_tokens);
+  return {
+    // These are processed-token counters, not context occupancy.
+    usedTokens: 0,
+    totalProcessedTokens,
+    ...(inputTokens !== undefined ? { inputTokens } : {}),
+    ...(outputTokens !== undefined ? { outputTokens } : {}),
+    ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
+    ...(reasoningOutputTokens !== undefined ? { reasoningOutputTokens } : {}),
+  };
+}
 
 /** Consume complete records as they arrive; an interrupted final line must not erase prior output. */
 export function createAntigravityPrintResultParser() {
@@ -103,6 +132,7 @@ export function createAntigravityPrintResultParser() {
             : result?.status === "SUCCESS"
               ? "completed"
               : undefined;
+      const usage = resultUsage(result);
       let lastResponseIndex = -1;
       let lastResponse: Step | undefined;
       for (const [index, step] of steps) {
@@ -136,6 +166,10 @@ export function createAntigravityPrintResultParser() {
                 ? `Antigravity ended with status ${result?.status}.`
                 : undefined)),
         failed: state === "failed",
+        ...(typeof result?.conversation_id === "string" && result.conversation_id.trim()
+          ? { conversationId: result.conversation_id.trim() }
+          : {}),
+        ...(usage ? { usage } : {}),
       };
     },
   };
