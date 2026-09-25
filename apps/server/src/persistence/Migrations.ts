@@ -273,7 +273,7 @@ export const makeMigrationLoader = (throughId?: number) =>
  * prevented at the source instead, by `scripts/check-migration-lineage.ts`.
  */
 export const LAST_SHARED_LINEAGE_MIGRATION_ID = 16;
-const LATEST_MIGRATION_ID = Math.max(...migrationEntries.map(([id]) => id));
+export const LATEST_MIGRATION_ID = Math.max(...migrationEntries.map(([id]) => id));
 
 const canonicalMigrationNamesById: ReadonlyMap<number, string> = new Map(
   migrationEntries.map(([id, name]) => [id, name] as const),

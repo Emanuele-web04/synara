@@ -32,6 +32,7 @@ const baseState: DesktopUpdateState = {
   errorContext: null,
   canRetry: false,
   installFailureCount: 0,
+  flavor: "production",
   releaseUrl: null,
 };
 

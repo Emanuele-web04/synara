@@ -50,7 +50,40 @@ describe("packaged desktop startup verification", () => {
       arch: "x64",
       version: "1.2.3",
       timeoutMs: 60_000,
+      executableName: "synara",
     });
+
+    expect(
+      parsePackagedDesktopStartupArgs([
+        "--assets-dir",
+        "./release-publish",
+        "--platform",
+        "linux",
+        "--arch",
+        "x64",
+        "--version",
+        "1.2.3",
+        "--executable-name",
+        "synara-beta",
+      ]),
+    ).toMatchObject({ executableName: "synara-beta" });
+
+    for (const bad of ["../outside", "a/b", "..", "synara\\beta"]) {
+      expect(() =>
+        parsePackagedDesktopStartupArgs([
+          "--assets-dir",
+          "./release-publish",
+          "--platform",
+          "linux",
+          "--arch",
+          "x64",
+          "--version",
+          "1.2.3",
+          "--executable-name",
+          bad,
+        ]),
+      ).toThrow("Invalid packaged startup executable name");
+    }
 
     expect(() =>
       parsePackagedDesktopStartupArgs([
@@ -74,7 +107,7 @@ describe("packaged desktop startup verification", () => {
 
     const env = createPackagedDesktopSmokeEnvironment(
       root,
-      { platform: "linux", version: "1.2.3" },
+      { platform: "linux", version: "1.2.3", executableName: "synara-beta" },
       {
         PATH: process.env.PATH,
         SYNARA_AUTH_TOKEN: "must-not-leak",
@@ -93,10 +126,12 @@ describe("packaged desktop startup verification", () => {
       "XDG_CACHE_HOME",
       "XDG_DATA_HOME",
       "SYNARA_HOME",
+      "SYNARA_BETA_HOME",
     ] as const) {
       expect(env[name]?.startsWith(root)).toBe(true);
       expect(existsSync(env[name]!)).toBe(true);
     }
+    expect(env.SYNARA_BETA_HOME).not.toBe(env.SYNARA_HOME);
   });
 
   it("rejects a missing packaged peer even when the development tree provides it", () => {

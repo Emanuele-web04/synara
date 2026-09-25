@@ -209,6 +209,13 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.removeListener(IPC.zoomFactorChanged, wrappedListener);
     };
   },
+  beta: {
+    getState: () => ipcRenderer.invoke(IPC.beta.getState),
+    install: () => ipcRenderer.invoke(IPC.beta.install),
+    launch: () => ipcRenderer.invoke(IPC.beta.launch),
+    importAndLaunch: () => ipcRenderer.invoke(IPC.beta.importAndLaunch),
+    leave: (input: { readonly moveToTrash: boolean }) => ipcRenderer.invoke(IPC.beta.leave, input),
+  },
   getUpdateState: () => ipcRenderer.invoke(IPC.updateGetState),
   checkForUpdates: () => ipcRenderer.invoke(IPC.updateCheck),
   downloadUpdate: () => ipcRenderer.invoke(IPC.updateDownload),
