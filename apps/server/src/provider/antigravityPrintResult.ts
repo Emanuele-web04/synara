@@ -29,7 +29,9 @@ type Step = {
 // resumed invocations. Forward total_tokens unchanged: thinking is already in
 // output_tokens, and cache_read_tokens must not be added to the reported total.
 // https://antigravity.google/docs/cli/headless/#read-the-results
-function resultUsage(result: Record<string, unknown> | undefined): ThreadTokenUsageSnapshot | undefined {
+function resultUsage(
+  result: Record<string, unknown> | undefined,
+): ThreadTokenUsageSnapshot | undefined {
   const usage = record(result?.usage);
   const totalProcessedTokens = positiveInteger(usage?.total_tokens);
   if (!usage || totalProcessedTokens === undefined) return undefined;

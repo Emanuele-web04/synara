@@ -1386,6 +1386,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         return;
       }
       const child = context.activeProcess;
+      context.stopTeardownRequested = true;
       // The stop hook runs before print mode writes its final result record.
       // Allow a normal exit to flush response/usage; still bound lingering CLI
       // processes, and never tear down a later turn or new background work.
@@ -1398,7 +1399,6 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         ) {
           return;
         }
-        context.stopTeardownRequested = true;
         void teardownProcessTree(child).catch(() => {
           try {
             child.kill("SIGKILL");
