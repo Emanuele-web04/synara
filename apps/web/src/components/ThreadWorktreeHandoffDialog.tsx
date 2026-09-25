@@ -98,7 +98,7 @@ export function ThreadWorktreeHandoffDialog({
             Cancel
           </Button>
           <Button size="sm" onClick={handleSubmit} disabled={!canSubmit}>
-            {busy ? "Handing off..." : "Hand off"}
+            {busy ? "Handing off…" : "Hand off"}
           </Button>
         </DialogFooter>
       </DialogPopup>

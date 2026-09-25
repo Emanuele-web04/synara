@@ -160,8 +160,11 @@ export function buildSettingsSkillGroups(
       );
       const section =
         sources.length > 1 ? SHARED_SKILLS_SECTION : (sources[0]?.origin ?? PERSONAL_ORIGIN);
+      const rawDescription = primarySkill.interface?.shortDescription ?? primarySkill.description;
+      // Stray markup artifacts (e.g. a lone `>` from a YAML scalar) carry no
+      // information — fall back instead of rendering them as the description.
       const description =
-        primarySkill.interface?.shortDescription ?? primarySkill.description ?? "No description.";
+        rawDescription && /[a-z0-9]/i.test(rawDescription) ? rawDescription : "No description.";
       return {
         key,
         displayName: skillDisplayName(primarySkill),

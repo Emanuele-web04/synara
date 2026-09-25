@@ -52,6 +52,19 @@ describe("buildSettingsSkillGroups", () => {
     expect(cursorOnly?.providers).toEqual(["cursor"]);
   });
 
+  it("falls back when a skill description carries no real text", () => {
+    const groups = buildSettingsSkillGroups([
+      skill({
+        name: "stray-marker",
+        description: ">",
+        path: "/Users/test/.agents/skills/stray-marker/SKILL.md",
+        scope: "agents",
+      }),
+    ]);
+
+    expect(groups[0]?.description).toBe("No description.");
+  });
+
   it("does not show provider icons for shared alias-only skills", () => {
     const groups = buildSettingsSkillGroups([
       skill({

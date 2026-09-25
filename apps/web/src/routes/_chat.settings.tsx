@@ -300,9 +300,12 @@ function SettingsRouteView() {
   useEffect(() => {
     if (!settingsTarget) return;
     const frame = window.requestAnimationFrame(() => {
-      document
-        .getElementById(settingsTarget)
-        ?.scrollIntoView({ block: "start", behavior: "smooth" });
+      document.getElementById(settingsTarget)?.scrollIntoView({
+        block: "start",
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+          ? "instant"
+          : "smooth",
+      });
     });
     return () => window.cancelAnimationFrame(frame);
   }, [activeSection, settingsTarget]);

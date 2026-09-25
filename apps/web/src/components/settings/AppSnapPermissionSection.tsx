@@ -92,9 +92,9 @@ function AppSnapPermissionBadge({ permission }: { permission: DesktopAppSnapPerm
         className={cn(
           "size-1.5 rounded-full",
           permission === "granted"
-            ? "bg-emerald-500"
+            ? "bg-status-success"
             : permission === "denied" || permission === "restricted"
-              ? "bg-red-500"
+              ? "bg-status-failure"
               : "bg-[color:var(--color-border)]",
         )}
       />
@@ -350,7 +350,7 @@ export function AppSnapPermissionSection({
       {showRecheck ? (
         <SettingsRow
           title="Permission status"
-          description="Grant each permission with the steps above. If you take longer than 10 minutes, press Set up again."
+          description="Grant each permission with the steps above. If you take longer than 10 minutes, press Recheck permissions again."
           control={
             <Button
               type="button"

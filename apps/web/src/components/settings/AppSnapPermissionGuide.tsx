@@ -63,7 +63,7 @@ export function AppSnapPermissionGuide(props: {
             </span>
           </>
         ) : (
-          <span className="text-ui-sm font-medium text-emerald-600">Permission granted.</span>
+          <span className="text-ui-sm font-medium text-success">Permission granted.</span>
         )}
       </div>
       <p className="text-ui-sm text-muted-foreground">
