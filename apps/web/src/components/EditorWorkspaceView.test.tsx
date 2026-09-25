@@ -176,7 +176,7 @@ describe("EditorWorkspaceView", () => {
       </SidebarProvider>,
     );
 
-    expect(markup).toContain('aria-label="Loading changed files..."');
+    expect(markup).toContain('aria-label="Loading changed files…"');
     expect(markup).not.toContain("No files in this diff.");
   });
 
@@ -280,7 +280,7 @@ describe("EditorWorkspaceView", () => {
     // The custom viewer renders its own surface (here the initial loading state
     // since document fetch runs in an effect) rather than the browser iframe or
     // the text preview.
-    expect(markup).toContain('aria-label="Loading PDF..."');
+    expect(markup).toContain('aria-label="Loading PDF…"');
     expect(markup).not.toContain("<iframe");
     expect(markup).not.toContain("editor-file-viewer__plain");
     expect(markup).not.toContain("editor-file-viewer__highlight");
@@ -313,7 +313,7 @@ describe("EditorWorkspaceView", () => {
       </QueryClientProvider>,
     );
 
-    expect(markup).toContain('aria-label="Loading PDF..."');
+    expect(markup).toContain('aria-label="Loading PDF…"');
     expect(markup).not.toContain("No workspace is attached");
   });
 
@@ -379,7 +379,7 @@ describe("EditorWorkspaceView", () => {
       </QueryClientProvider>,
     );
 
-    expect(markup).toContain('aria-label="Loading file..."');
+    expect(markup).toContain('aria-label="Loading file…"');
     expect(markup).not.toContain("/api/local-image?path=%2FUsers%2Ftester%2FDownloads%2Fshot.png");
     expect(markup).not.toContain("No workspace is attached");
     expect(markup).not.toContain("cwd=");
@@ -480,7 +480,7 @@ describe("EditorWorkspaceView", () => {
       </QueryClientProvider>,
     );
 
-    expect(markup).toContain('placeholder="Search files..."');
+    expect(markup).toContain('placeholder="Search files…"');
     expect(markup).toContain("Search files by name or path.");
   });
 

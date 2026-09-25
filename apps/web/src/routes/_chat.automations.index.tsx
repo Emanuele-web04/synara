@@ -119,7 +119,7 @@ function AutomationListRow({
         <span
           className={cn(
             "truncate text-ui leading-snug",
-            dimmed ? "text-muted-foreground/60" : "text-muted-foreground",
+            dimmed ? "text-muted-foreground/80" : "text-muted-foreground",
           )}
         >
           {detail}
@@ -315,6 +315,7 @@ function AutomationsRouteView() {
         <button
           key={value}
           type="button"
+          aria-pressed={statusFilter === value}
           onClick={() => setStatusFilter(value)}
           className={cn(
             "rounded-lg px-2.5 py-1 text-ui leading-snug font-medium capitalize transition-colors",
@@ -393,7 +394,7 @@ function AutomationsRouteView() {
             </h1>
             {isLoading ? (
               <div className="py-16 text-center text-ui leading-snug text-muted-foreground">
-                Loading automations...
+                Loading automations…
               </div>
             ) : data.definitions.length === 0 ? (
               <div className="flex flex-col items-center gap-1 py-16 text-center">

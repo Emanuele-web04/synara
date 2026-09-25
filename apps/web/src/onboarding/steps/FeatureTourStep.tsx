@@ -9,6 +9,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { ShortcutKbd } from "~/components/ui/shortcut-kbd";
+import { useRadioGroupKeyboardNav } from "~/hooks/useRadioGroupKeyboardNav";
 import { shortcutLabelForCommand } from "~/keybindings";
 import { ExternalLinkIcon } from "~/lib/icons";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
@@ -16,6 +17,7 @@ import { cn } from "~/lib/utils";
 import { TOUR_CARDS, TOUR_SHORTCUT_COMMANDS } from "../tourContent";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
+const TOUR_CARD_IDS = TOUR_CARDS.map((card) => card.id);
 
 export function TourShortcutList(props: { className?: string }) {
   const keybindingsQuery = useQuery({
@@ -44,11 +46,22 @@ export function TourShortcutList(props: { className?: string }) {
 export function FeatureTourStep() {
   const [selectedId, setSelectedId] = useState<string>(TOUR_CARDS[0]?.id ?? "");
   const selectedCard = TOUR_CARDS.find((card) => card.id === selectedId) ?? TOUR_CARDS[0];
+  // APG tab semantics: roving tabindex + arrow keys move selection and focus.
+  const tabItemProps = useRadioGroupKeyboardNav({
+    values: TOUR_CARD_IDS,
+    value: selectedCard?.id ?? "",
+    onValueChange: setSelectedId,
+  });
   if (!selectedCard) return null;
 
   return (
     <div className="grid min-h-0 flex-1 grid-cols-[220px_minmax(0,1fr)] gap-8">
-      <div className="flex flex-col gap-0.5" role="tablist" aria-label="Synara capabilities">
+      <div
+        className="flex flex-col gap-0.5"
+        role="tablist"
+        aria-label="Synara capabilities"
+        aria-orientation="vertical"
+      >
         {TOUR_CARDS.map((card) => {
           const Icon = card.icon;
           const selected = card.id === selectedCard.id;
@@ -60,6 +73,7 @@ export function FeatureTourStep() {
               aria-selected={selected}
               aria-controls="onboarding-tour-panel"
               id={`onboarding-tour-tab-${card.id}`}
+              {...tabItemProps(card.id)}
               className={cn(
                 "flex h-[34px] items-center gap-2.5 rounded-lg px-2.5 text-start text-ui-lg outline-none transition-colors motion-reduce:transition-none",
                 "focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset",
@@ -88,7 +102,7 @@ export function FeatureTourStep() {
         aria-labelledby={`onboarding-tour-tab-${selectedCard.id}`}
         className="flex min-w-0 flex-col gap-3.5 pt-1.5"
       >
-        <h3 className="text-base font-medium tracking-[-0.005em] text-foreground">
+        <h3 className="text-ui-lg font-medium tracking-[-0.005em] text-foreground">
           {selectedCard.title}
         </h3>
         <p className="text-ui-lg leading-relaxed text-muted-foreground">

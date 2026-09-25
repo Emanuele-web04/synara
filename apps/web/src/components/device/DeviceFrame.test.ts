@@ -20,6 +20,15 @@ describe("side button controls", () => {
       expect(NUB_ACTIONS[nub]?.hint).toBeUndefined();
     }
   });
+
+  it("explains every drawn nub that cannot be pressed", () => {
+    // The action button and the Android volume rocker are drawn but inert; a
+    // nub with no button and no hint renders nothing and is a dead end.
+    for (const nub of ["action", "volumeRocker"]) {
+      expect(NUB_ACTIONS[nub]?.button).toBeUndefined();
+      expect(NUB_ACTIONS[nub]?.hint).toBeTruthy();
+    }
+  });
 });
 
 describe("deviceKindFor", () => {

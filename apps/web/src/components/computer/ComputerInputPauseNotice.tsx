@@ -37,7 +37,7 @@ export function ComputerInputPauseNotice({
   return (
     <div
       role="status"
-      className="flex shrink-0 items-center gap-3 border-b border-amber-500/20 bg-amber-500/10 px-3 py-2 text-ui"
+      className="flex shrink-0 items-center gap-3 border-b border-warning/20 bg-warning/10 px-3 py-2 text-ui"
     >
       <div className="min-w-0 flex-1">
         <p className="font-medium">Input paused — return to {target}</p>

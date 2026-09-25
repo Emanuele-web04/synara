@@ -227,7 +227,7 @@ function DiffFileRow(props: {
         <div className="flex min-w-0 items-baseline gap-1.5 overflow-hidden">
           <span className="shrink-0 truncate font-medium">{name}</span>
           {dir ? (
-            <span className="min-w-0 truncate text-ui-sm text-muted-foreground/55">{dir}</span>
+            <span className="min-w-0 truncate text-ui-sm text-muted-foreground">{dir}</span>
           ) : null}
         </div>
       </div>
@@ -244,7 +244,7 @@ const DIFF_FILE_SKELETON_ROW_WIDTHS = ["w-10/12", "w-7/12", "w-9/12", "w-6/12", 
 
 function DiffFilesLoadingRows() {
   return (
-    <div className="space-y-1 px-1 py-1" role="status" aria-label="Loading changed files...">
+    <div className="space-y-1 px-1 py-1" role="status" aria-label="Loading changed files…">
       {DIFF_FILE_SKELETON_ROW_WIDTHS.map((width) => (
         <div key={width} className="flex h-8 items-center gap-1.5 px-2">
           <Skeleton className="size-3.5 shrink-0 rounded-sm" />
@@ -596,7 +596,10 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
             <span className="truncate text-ui-lg font-medium text-foreground">
               {props.projectName ?? "Workspace"}
             </span>
-            <span className="hidden truncate text-ui-sm text-muted-foreground/70 sm:inline">
+            <span
+              className="hidden truncate text-ui-sm text-muted-foreground sm:inline"
+              title={props.workspaceRoot ?? undefined}
+            >
               {props.workspaceRoot ?? "No workspace"}
             </span>
           </div>

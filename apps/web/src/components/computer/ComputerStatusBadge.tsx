@@ -19,9 +19,7 @@ export function ComputerStatusBadge({
         <span
           className={cn(
             "flex shrink-0 items-center gap-1 text-ui-xs",
-            healthBadge.tone === "danger"
-              ? "text-destructive"
-              : "text-amber-600 dark:text-amber-400",
+            healthBadge.tone === "danger" ? "text-destructive" : "text-warning",
           )}
           title={healthBadge.title}
         >
@@ -34,10 +32,7 @@ export function ComputerStatusBadge({
           {healthBadge.label}
         </span>
       ) : state?.inputPause ? (
-        <span
-          className="text-ui-xs text-amber-600 dark:text-amber-400"
-          title={state.inputPause.message}
-        >
+        <span className="text-ui-xs text-warning" title={state.inputPause.message}>
           Input paused
         </span>
       ) : state?.controlledByOtherThread ? (
@@ -49,7 +44,7 @@ export function ComputerStatusBadge({
           {state.controlOwnerLabel ?? "Another conversation"} is controlling
         </span>
       ) : agentActive ? (
-        <span className="flex shrink-0 items-center gap-1 text-ui-xs text-emerald-600 dark:text-emerald-400">
+        <span className="flex shrink-0 items-center gap-1 text-ui-xs text-status-success">
           <span className="size-1.5 animate-pulse rounded-full bg-current motion-reduce:animate-none" />
           {state?.activity ??
             (visibleDesktop ? "Agent controlling this computer" : "Agent controlling")}

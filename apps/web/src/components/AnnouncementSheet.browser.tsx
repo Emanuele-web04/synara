@@ -7,6 +7,7 @@ import { render } from "vitest-browser-react";
 
 import { AnnouncementSheet } from "./AnnouncementSheet";
 import { useAnnouncementSheetSlotStore } from "./announcementSheetSlot";
+import { waitForTransientPopups } from "../lib/browserPopupCleanup";
 
 function Sheet(props: { title: string }) {
   const [open, setOpen] = useState(true);
@@ -25,8 +26,9 @@ function Sheet(props: { title: string }) {
 }
 
 describe("AnnouncementSheet", () => {
-  afterEach(() => {
+  afterEach(async () => {
     useAnnouncementSheetSlotStore.setState({ owner: null, handedOff: false });
+    await waitForTransientPopups();
     document.body.innerHTML = "";
   });
 

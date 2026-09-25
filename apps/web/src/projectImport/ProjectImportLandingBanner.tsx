@@ -37,7 +37,7 @@ export function ProjectImportLandingBanner(props: { className?: string }) {
       <button
         type="button"
         aria-label="Dismiss project import banner"
-        className="absolute -right-1.5 -top-1.5 flex size-[22px] items-center justify-center rounded-full border border-border/70 bg-background text-muted-foreground opacity-0 shadow-xs transition-opacity duration-150 ease-out hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 group-hover/import-banner:opacity-100 motion-reduce:transition-none"
+        className="absolute -right-1.5 -top-1.5 flex size-6 items-center justify-center rounded-full border border-border/70 bg-background text-muted-foreground opacity-0 pointer-events-none shadow-xs transition-opacity duration-150 ease-out hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 group-hover/import-banner:opacity-100 group-hover/import-banner:pointer-events-auto motion-reduce:transition-none"
         onClick={() => setDismissed(true)}
       >
         <XIcon className="size-3" />

@@ -66,7 +66,7 @@ export function AnnouncementSheet(props: {
           </div>
 
           <DialogHeader className="gap-2 p-0">
-            <DialogTitle className="text-[19px] leading-tight">{props.title}</DialogTitle>
+            <DialogTitle>{props.title}</DialogTitle>
             <DialogDescription className="text-ui-lg leading-normal">
               {props.description}
             </DialogDescription>

@@ -77,7 +77,7 @@ export function ProjectImportProjectCard(props: {
             {!project.directoryExists ? (
               <span className="block text-warning">Folder unavailable</span>
             ) : (
-              <span className="block text-muted-foreground/70">
+              <span className="block text-muted-foreground">
                 {project.existingProjectId ? "Adds to existing" : "New project"}
               </span>
             )}

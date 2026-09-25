@@ -233,13 +233,13 @@ export function runStatusVariant(
 export function runStatusDotClassName(status: AutomationRun["status"]): string {
   switch (runStatusVariant(status)) {
     case "success":
-      return "text-emerald-500";
+      return "text-status-success";
     case "error":
-      return "text-destructive";
+      return "text-status-failure";
     case "warning":
-      return "text-amber-500";
+      return "text-warning";
     case "info":
-      return "text-blue-500";
+      return "text-info";
     case "outline":
       return "text-muted-foreground/50";
   }
@@ -421,22 +421,22 @@ export function automationListRowIcon(
   if (isLiveRun(latestRun)) {
     return {
       name: "loading-circle",
-      className: "size-4 animate-spin text-blue-500 motion-reduce:animate-none",
+      className: "size-4 animate-spin text-info motion-reduce:animate-none",
     };
   }
   if (!definition.enabled) {
     // Auto-disabled after consecutive failures is a problem to look at, not a pause the
     // user chose — keep the warning glyph so the row doesn't read as intentionally idle.
     if (definition.disabledReason === "failures") {
-      return { name: "exclamation-circle", className: "size-4 text-amber-500" };
+      return { name: "exclamation-circle", className: "size-4 text-warning" };
     }
     return { name: "pause", className: "size-4 text-muted-foreground/40" };
   }
   if (latestRun?.status === "succeeded") {
-    return { name: "circle-check", className: "size-4 text-green-500" };
+    return { name: "circle-check", className: "size-4 text-status-success" };
   }
   if (latestRun && automationAttentionLabel(latestRun) !== null) {
-    return { name: "exclamation-circle", className: "size-4 text-amber-500" };
+    return { name: "exclamation-circle", className: "size-4 text-warning" };
   }
   if (definition.nextRunAt) {
     return { name: "clock", className: "size-4 text-foreground/70" };
@@ -1127,7 +1127,7 @@ export function AutomationDialog({
                       className="mt-0.5"
                     />
                   ) : (
-                    <span className="mt-1 size-1.5 shrink-0 rounded-full bg-amber-500" />
+                    <span className="mt-1 size-1.5 shrink-0 rounded-full bg-warning" />
                   )}
                   <span className="min-w-0">
                     <span className="font-medium text-foreground">{warning.title}</span>
@@ -1138,7 +1138,7 @@ export function AutomationDialog({
             </div>
           ) : null}
           {fastIntervalLimitMessage ? (
-            <div className="mt-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-ui leading-snug text-amber-700 dark:text-amber-300">
+            <div className="mt-2 rounded-md border border-warning/30 bg-warning/10 px-2.5 py-2 text-ui leading-snug text-warning">
               {fastIntervalLimitMessage}
             </div>
           ) : null}

@@ -124,9 +124,7 @@ function OnboardingFlow(props: {
       case "theme":
         return { label: "Continue", onPrimary: goNext };
       case "project":
-        return projectResults.length > 0
-          ? { label: "Continue", onPrimary: goNext }
-          : { label: "Skip for now", onPrimary: goNext };
+        return { label: "Continue", onPrimary: goNext };
       case "done":
         return { label: `Start using ${APP_BASE_NAME}`, onPrimary: props.onComplete };
     }
@@ -134,59 +132,62 @@ function OnboardingFlow(props: {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col outline-none" tabIndex={-1}>
-      <DialogHeader
-        className={cn(
-          "gap-1.5 pt-8 pb-0",
-          ONBOARDING_INSET_CLASS_NAME,
-          hero && "items-center text-center",
-        )}
-      >
-        {step === "welcome" ? <SynaraLogo aria-hidden className="mb-3.5 size-11" /> : null}
-        {step === "done" ? (
-          <span
-            aria-hidden
-            className="mb-3.5 flex size-11 items-center justify-center rounded-full bg-success/8 text-success dark:bg-success/16"
-          >
-            <CheckIcon className="size-5" />
-          </span>
-        ) : null}
-        {hero ? null : (
-          <span className="text-ui-sm font-medium tracking-[0.04em] text-muted-foreground/70 uppercase">
-            Step {stepIndex + 1} of {ONBOARDING_STEPS.length}
-          </span>
-        )}
-        <DialogTitle className="text-[22px] tracking-[-0.01em]">{STEP_TITLES[step]}</DialogTitle>
-        {description ? (
-          <DialogDescription className="max-w-[560px] text-ui-lg leading-normal">
-            {description}
-          </DialogDescription>
-        ) : null}
-      </DialogHeader>
-      <div
-        className={cn(
-          "flex min-h-0 flex-1 flex-col overflow-y-auto pt-6",
-          ONBOARDING_INSET_CLASS_NAME,
-          hero && "justify-center pb-6",
-        )}
-      >
-        {step === "welcome" ? <WelcomeStep /> : null}
-        {step === "tour" ? <FeatureTourStep /> : null}
-        {step === "providers" ? <ProvidersStep /> : null}
-        {step === "theme" ? <ThemeStep /> : null}
-        {step === "project" ? (
-          <ProjectStep
-            results={projectResults}
-            onBusyChange={props.onProjectBusyChange}
-            onResult={(result) =>
-              setProjectResults((current) =>
-                current.some((entry) => entry.projectId === result.projectId)
-                  ? current
-                  : [...current, result],
-              )
-            }
-          />
-        ) : null}
-        {step === "done" ? <DoneStep /> : null}
+      {/* Keyed remount replays the shared surface-enter fade so steps don't hard-cut. */}
+      <div key={step} className="sidebar-surface-enter flex min-h-0 flex-1 flex-col">
+        <DialogHeader
+          className={cn(
+            "gap-1.5 pt-8 pb-0",
+            ONBOARDING_INSET_CLASS_NAME,
+            hero && "items-center text-center",
+          )}
+        >
+          {step === "welcome" ? <SynaraLogo aria-hidden className="mb-3.5 size-11" /> : null}
+          {step === "done" ? (
+            <span
+              aria-hidden
+              className="mb-3.5 flex size-11 items-center justify-center rounded-full bg-success/8 text-success dark:bg-success/16"
+            >
+              <CheckIcon className="size-5" />
+            </span>
+          ) : null}
+          {hero ? null : (
+            <span className="text-ui-sm font-medium tracking-[0.04em] text-muted-foreground uppercase">
+              Step {stepIndex + 1} of {ONBOARDING_STEPS.length}
+            </span>
+          )}
+          <DialogTitle className="text-[22px] tracking-[-0.01em]">{STEP_TITLES[step]}</DialogTitle>
+          {description ? (
+            <DialogDescription className="max-w-[560px] text-ui-lg leading-normal">
+              {description}
+            </DialogDescription>
+          ) : null}
+        </DialogHeader>
+        <div
+          className={cn(
+            "flex min-h-0 flex-1 flex-col overflow-y-auto pt-6",
+            ONBOARDING_INSET_CLASS_NAME,
+            hero && "justify-center pb-6",
+          )}
+        >
+          {step === "welcome" ? <WelcomeStep /> : null}
+          {step === "tour" ? <FeatureTourStep /> : null}
+          {step === "providers" ? <ProvidersStep /> : null}
+          {step === "theme" ? <ThemeStep /> : null}
+          {step === "project" ? (
+            <ProjectStep
+              results={projectResults}
+              onBusyChange={props.onProjectBusyChange}
+              onResult={(result) =>
+                setProjectResults((current) =>
+                  current.some((entry) => entry.projectId === result.projectId)
+                    ? current
+                    : [...current, result],
+                )
+              }
+            />
+          ) : null}
+          {step === "done" ? <DoneStep /> : null}
+        </div>
       </div>
       <OnboardingStepFooter
         step={step}
@@ -196,6 +197,9 @@ function OnboardingFlow(props: {
         onPrimary={primaryAction.onPrimary}
         primaryBusy={step === "project" && props.projectBusy}
         navigationLocked={props.projectBusy}
+        {...(step === "project" && projectResults.length === 0
+          ? { secondaryLabel: "Skip for now", onSecondary: goNext }
+          : {})}
       />
     </div>
   );
