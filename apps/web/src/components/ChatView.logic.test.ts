@@ -546,12 +546,35 @@ describe("prompt history navigation", () => {
     ).toBe(true);
   });
 
-  it("navigates older prompts from a non-empty draft and restores the draft at the end", () => {
+  it.each(["draft in progress", "first\nsecond", "wrapped draft ".repeat(30), " \n"])(
+    "leaves a nonempty draft to normal caret navigation: %j",
+    (prompt) => {
+      for (const cursor of [0, Math.floor(prompt.length / 2), prompt.length]) {
+        expect(
+          resolvePromptHistoryNavigation({
+            direction: "older",
+            history: ["previous prompt"],
+            currentPrompt: prompt,
+            currentExpandedCursor: cursor,
+            selectionCollapsed: true,
+            state: null,
+          }),
+        ).toEqual({
+          handled: false,
+          prompt,
+          expandedCursor: cursor,
+          state: null,
+        });
+      }
+    },
+  );
+
+  it("navigates history from an empty composer and returns to the empty draft", () => {
     const history = ["third prompt", "second prompt", "first prompt"];
     const first = resolvePromptHistoryNavigation({
       direction: "older",
       history,
-      currentPrompt: "draft in progress",
+      currentPrompt: "",
       currentExpandedCursor: 0,
       selectionCollapsed: true,
       state: null,
@@ -561,7 +584,7 @@ describe("prompt history navigation", () => {
       handled: true,
       prompt: "third prompt",
       expandedCursor: "third prompt".length,
-      state: { index: 0, draft: "draft in progress" },
+      state: { index: 0, draft: "" },
     });
 
     const second = resolvePromptHistoryNavigation({
@@ -577,7 +600,7 @@ describe("prompt history navigation", () => {
       handled: true,
       prompt: "second prompt",
       expandedCursor: "second prompt".length,
-      state: { index: 1, draft: "draft in progress" },
+      state: { index: 1, draft: "" },
     });
 
     const newer = resolvePromptHistoryNavigation({
@@ -592,7 +615,7 @@ describe("prompt history navigation", () => {
     expect(newer).toMatchObject({
       handled: true,
       prompt: "third prompt",
-      state: { index: 0, draft: "draft in progress" },
+      state: { index: 0, draft: "" },
     });
 
     const restored = resolvePromptHistoryNavigation({
@@ -606,8 +629,8 @@ describe("prompt history navigation", () => {
 
     expect(restored).toEqual({
       handled: true,
-      prompt: "draft in progress",
-      expandedCursor: "draft in progress".length,
+      prompt: "",
+      expandedCursor: 0,
       state: null,
     });
   });
