@@ -1,5 +1,6 @@
-// Beta icon generator v7 — square artwork (dock applies the mask), Apple-extracted colors.
-// Colors sampled pixel-exact from the installed Xcode 26 icon: vertical #0FC3FD -> #186FFA.
+// Beta icon generator. The macOS fallback has a quiet glass finish; other
+// platforms keep the original blueprint artwork. The native macOS 26 icon is
+// the layered Synara.icon asset, rendered by the system.
 import AppKit
 import CoreGraphics
 import Foundation
@@ -74,14 +75,38 @@ let markPath: CGPath = {
   return p
 }()
 
-let markScale: CGFloat = 1.00
+enum IconStyle { case blueprint, macGlass }
+
 let markCenter = CGPoint(x: 235, y: 252)
-func addMark(to ctx: CGContext) {
-  var t = CGAffineTransform(translationX: 274 + markCenter.x * (1 - markScale), y: 280 + markCenter.y * (1 - markScale)).scaledBy(x: markScale, y: markScale)
+func addMark(to ctx: CGContext, style: IconStyle) {
+  // The macOS fallback matches the black icon's measured Y bounds (about
+  // x=275...749, y=256...767); keep the v38 artwork unchanged elsewhere.
+  let scaleX: CGFloat = style == .macGlass ? 1.01 : 1.00
+  let scaleY: CGFloat = style == .macGlass ? 1.016 : 1.00
+  let origin = style == .macGlass ? CGPoint(x: 277, y: 260) : CGPoint(x: 274, y: 280)
+  var t = CGAffineTransform(translationX: origin.x + markCenter.x * (1 - scaleX), y: origin.y + markCenter.y * (1 - scaleY)).scaledBy(x: scaleX, y: scaleY)
   if let moved = markPath.copy(using: &t) { ctx.addPath(moved) }
 }
 
-func drawIcon(_ p: Palette, name: String) {
+func drawBlueprintGuides(to ctx: CGContext) {
+  ctx.setLineWidth(3)
+  ctx.setStrokeColor(cg(0xFFFFFF, 0.15))
+  for step in 1...4 {
+    let v = CGFloat(step) * D / 5
+    ctx.move(to: CGPoint(x: v, y: 0)); ctx.addLine(to: CGPoint(x: v, y: D))
+    ctx.move(to: CGPoint(x: 0, y: v)); ctx.addLine(to: CGPoint(x: D, y: v))
+  }
+  ctx.strokePath()
+  ctx.setLineWidth(3.2)
+  ctx.setStrokeColor(cg(0xFFFFFF, 0.22))
+  ctx.strokeEllipse(in: CGRect(x: 512 - 385, y: 512 - 385, width: 770, height: 770))
+  ctx.setLineWidth(3)
+  ctx.setStrokeColor(cg(0xFFFFFF, 0.18))
+  ctx.addPath(CGPath(roundedRect: CGRect(x: 72, y: 72, width: D - 144, height: D - 144), cornerWidth: 160, cornerHeight: 160, transform: nil))
+  ctx.strokePath()
+}
+
+func drawIcon(_ p: Palette, name: String, style: IconStyle) {
   let cs = CGColorSpace(name: CGColorSpace.sRGB)!
   guard let ctx = CGContext(data: nil, width: PX, height: PX, bitsPerComponent: 8, bytesPerRow: 0,
                             space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { print("no ctx"); return }
@@ -92,13 +117,21 @@ func drawIcon(_ p: Palette, name: String) {
   ctx.setShouldAntialias(true)
   ctx.clear(CGRect(x: 0, y: 0, width: D, height: D))
 
-  // Inset rounded tile with transparent margin (macOS does not mask
-  // third-party bundle art, so the margin is baked, prod geometry).
-  ctx.addPath(CGPath(roundedRect: CGRect(x: 102, y: 102, width: 820, height: 820), cornerWidth: 193, cornerHeight: 193, transform: nil))
+  // The fallback is a bitmap, so it needs the same inset geometry as the
+  // native icon. Keep its outside pixels transparent for the Dock.
+  let tile = CGPath(roundedRect: CGRect(x: 102, y: 102, width: 820, height: 820), cornerWidth: 193, cornerHeight: 193, transform: nil)
+  if style == .macGlass {
+    ctx.saveGState()
+    ctx.setShadow(offset: CGSize(width: 0, height: 8), blur: 24, color: cg(0x061941, 0.34))
+    ctx.addPath(tile)
+    ctx.setFillColor(cg(0x0E62D9))
+    ctx.fillPath()
+    ctx.restoreGState()
+  }
+  ctx.addPath(tile)
   ctx.clip()
 
   // Tile gradient, clipped to the inset tile by the caller.
-  let stops = [cg(p.top), cg(p.upperMid), cg(p.lowerMid), cg(p.bottom)] as CFArray
   if let g = CGGradient(colorsSpace: cs, colors: [cg(p.top), cg(p.upperMid), cg(p.lowerMid), cg(p.bottom)] as CFArray, locations: [0, 0.35, 0.7, 1]) {
     ctx.drawLinearGradient(g, start: CGPoint(x: 0, y: 0), end: CGPoint(x: 0, y: D), options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
   }
@@ -115,25 +148,19 @@ func drawIcon(_ p: Palette, name: String) {
     ctx.drawLinearGradient(g, start: CGPoint(x: 0, y: D), end: CGPoint(x: 0, y: D - 140), options: [])
   }
 
-  // Blueprint shell: clean 5x5 grid (Xcode 26), guide circles and squircle inset (classic beta)
-  ctx.setLineWidth(3)
-  ctx.setStrokeColor(cg(0xFFFFFF, 0.15))
-  for step in 1...4 {
-    let v = CGFloat(step) * D / 5
-    ctx.move(to: CGPoint(x: v, y: 0)); ctx.addLine(to: CGPoint(x: v, y: D))
-    ctx.move(to: CGPoint(x: 0, y: v)); ctx.addLine(to: CGPoint(x: D, y: v))
+  if style == .macGlass {
+    // Match the black icon's soft top highlight and deep lower edge while
+    // retaining Beta's blue hue and its original blueprint guides.
+    if let g = CGGradient(colorsSpace: cs, colors: [cg(0xFFFFFF, 0.24), cg(0xFFFFFF, 0)] as CFArray, locations: [0, 1]) {
+      ctx.drawRadialGradient(g, startCenter: CGPoint(x: 280, y: 180), startRadius: 0, endCenter: CGPoint(x: 280, y: 180), endRadius: 550, options: [])
+    }
+    if let g = CGGradient(colorsSpace: cs, colors: [cg(0x051B69, 0), cg(0x051B69, 0.22)] as CFArray, locations: [0, 1]) {
+      ctx.drawLinearGradient(g, start: CGPoint(x: 0, y: 520), end: CGPoint(x: 0, y: 940), options: [])
+    }
   }
-  ctx.strokePath()
 
-  // Concentric guide circles
-  ctx.setLineWidth(3.2)
-  ctx.setStrokeColor(cg(0xFFFFFF, 0.22))
-  ctx.strokeEllipse(in: CGRect(x: 512 - 385, y: 512 - 385, width: 770, height: 770))
-  // Squircle inset guide
-  ctx.setLineWidth(3)
-  ctx.setStrokeColor(cg(0xFFFFFF, 0.18))
-  ctx.addPath(CGPath(roundedRect: CGRect(x: 72, y: 72, width: D - 144, height: D - 144), cornerWidth: 160, cornerHeight: 160, transform: nil))
-  ctx.strokePath()
+  // Keep the original blueprint grid, circle, and inset guide on macOS too.
+  drawBlueprintGuides(to: ctx)
 
   // Depth layer 3: glass rim on the tile edge
   // Directional glass rim: light from top-left, fading clockwise into a deep base.
@@ -151,9 +178,11 @@ func drawIcon(_ p: Palette, name: String) {
   // bright top catchlight. Reads white at dock size, glass up close.
   ctx.saveGState()
   ctx.setShadow(offset: CGSize(width: 8, height: -18), blur: 44, color: cg(0x021233, 0.33))
-  addMark(to: ctx)
+  addMark(to: ctx, style: style)
   ctx.clip()
-  if let g = CGGradient(colorsSpace: cs, colors: [cg(0xEFF7FF), cg(0xD5E9FF)] as CFArray, locations: [0, 1]) {
+  let markTop = style == .macGlass ? 0xF8F8FA : 0xEFF7FF
+  let markBottom = style == .macGlass ? 0xC7C7CB : 0xD5E9FF
+  if let g = CGGradient(colorsSpace: cs, colors: [cg(UInt32(markTop)), cg(UInt32(markBottom))] as CFArray, locations: [0, 1]) {
     ctx.drawLinearGradient(g, start: CGPoint(x: 0, y: 260), end: CGPoint(x: 0, y: 805), options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
   }
   if let g = CGGradient(colorsSpace: cs, colors: [cg(0xFFFFFF, 1.0), cg(0xFFFFFF, 0)] as CFArray, locations: [0, 1]) {
@@ -164,16 +193,16 @@ func drawIcon(_ p: Palette, name: String) {
   }
   ctx.restoreGState()
   ctx.saveGState()
-  addMark(to: ctx)
+  addMark(to: ctx, style: style)
   ctx.clip()
   ctx.saveGState()
   ctx.clip(to: CGRect(x: 0, y: 0, width: D, height: 440))
-  addMark(to: ctx)
+  addMark(to: ctx, style: style)
   ctx.setStrokeColor(cg(0xFFFFFF, 1.0))
   ctx.setLineWidth(4)
   ctx.strokePath()
   ctx.restoreGState()
-  addMark(to: ctx)
+  addMark(to: ctx, style: style)
   ctx.setStrokeColor(cg(0xFFFFFF, 0.70))
   ctx.setLineWidth(8)
   ctx.strokePath()
@@ -197,4 +226,34 @@ func drawIcon(_ p: Palette, name: String) {
   print("saved \(name).png")
 }
 
-drawIcon(light, name: "assets/beta/beta-macos-1024")
+func drawComposerBackground(_ p: Palette) {
+  let cs = CGColorSpace(name: CGColorSpace.sRGB)!
+  let ctx = CGContext(data: nil, width: PX, height: PX, bitsPerComponent: 8, bytesPerRow: 0,
+                      space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+  ctx.translateBy(x: 0, y: CGFloat(PX))
+  ctx.scaleBy(x: SS, y: -SS)
+  if let g = CGGradient(colorsSpace: cs, colors: [cg(p.top), cg(p.upperMid), cg(p.lowerMid), cg(p.bottom)] as CFArray, locations: [0, 0.35, 0.7, 1]) {
+    ctx.drawLinearGradient(g, start: CGPoint(x: 0, y: 0), end: CGPoint(x: 0, y: D), options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
+  }
+  drawBlueprintGuides(to: ctx)
+  let image = ctx.makeImage()!
+  let rep = NSBitmapImageRep(cgImage: image)
+  let scaled = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(D), pixelsHigh: Int(D),
+    bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+    colorSpaceName: .deviceRGB, bitmapFormat: [], bytesPerRow: 0, bitsPerPixel: 0)!
+  NSGraphicsContext.saveGraphicsState()
+  NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: scaled)
+  let source = NSImage(size: NSSize(width: D, height: D))
+  source.addRepresentation(rep)
+  source.draw(in: NSRect(x: 0, y: 0, width: D, height: D), from: .zero, operation: .copy, fraction: 1)
+  NSGraphicsContext.restoreGraphicsState()
+  let png = scaled.representation(using: .png, properties: [:])!
+  let output = URL(fileURLWithPath: FileManager.default.currentDirectoryPath + "/assets/beta/Synara.icon/Assets/background.png")
+  try! png.write(to: output)
+  print("saved \(output.path)")
+}
+
+drawIcon(light, name: "assets/beta/beta-macos-1024", style: .macGlass)
+drawIcon(light, name: "assets/beta/beta-macos-legacy-1024", style: .macGlass)
+drawIcon(light, name: "assets/beta/beta-universal-1024", style: .blueprint)
+drawComposerBackground(light)

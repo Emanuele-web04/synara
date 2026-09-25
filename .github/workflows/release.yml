@@ -318,11 +318,11 @@ jobs:
           xcodebuild -version
           mkdir -p "$RUNNER_TEMP/mac-icon"
           # Same source selection as scripts/lib/brand-assets.ts
-          # desktopIconAssetPaths(flavor).macIconComposer; --app-icon names the
-          # catalog asset Synara regardless of the .icon bundle filename.
+          # desktopIconAssetPaths(flavor).macIconComposer. The .icon folder
+          # must be named Synara to match CFBundleIconName in the app bundle.
           icon_source="assets/prod/Synara.icon"
           if [[ "$DESKTOP_FLAVOR" == "beta" ]]; then
-            icon_source="assets/beta/Synara-Beta.icon"
+            icon_source="assets/beta/Synara.icon"
           fi
           xcrun actool "$icon_source" --compile "$RUNNER_TEMP/mac-icon" --platform macosx --minimum-deployment-target 26.0 --app-icon Synara --include-all-app-icons --output-partial-info-plist "$RUNNER_TEMP/icon-partial.plist" --output-format human-readable-text
           test -s "$RUNNER_TEMP/mac-icon/Assets.car"

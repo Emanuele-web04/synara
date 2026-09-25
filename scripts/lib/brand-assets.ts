@@ -23,7 +23,7 @@ export const BETA_ASSET_PATHS = {
   betaMacIconPng: "assets/beta/beta-macos-1024.png",
   // Icon Composer source for the beta macOS 26 bundle icon: same layered
   // treatment as production so beta gets Liquid Glass on the dock.
-  betaMacIconComposer: "assets/beta/Synara-Beta.icon",
+  betaMacIconComposer: "assets/beta/Synara.icon",
   betaMacLegacyIconPng: "assets/beta/beta-macos-legacy-1024.png",
   // One artwork serves both appearances: the dark dock slot reuses the rounded legacy file.
   betaMacLegacyDarkIconPng: "assets/beta/beta-macos-legacy-1024.png",
