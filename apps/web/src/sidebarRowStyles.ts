@@ -35,7 +35,7 @@ export const SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME = "text-foreground/89";
 export const SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME = "text-foreground/95";
 
 /** Section label ("Threads"/"Pinned" and settings "App"/"Synara"). */
-export const SIDEBAR_SECTION_LABEL_CLASS_NAME = "text-ui font-normal text-muted-foreground/58";
+export const SIDEBAR_SECTION_LABEL_CLASS_NAME = "text-ui font-normal text-muted-foreground";
 
 /** Project/chat/settings header rows and settings sidebar nav items. */
 export const SIDEBAR_HEADER_ROW_CLASS_NAME = [

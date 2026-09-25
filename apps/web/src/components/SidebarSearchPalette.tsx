@@ -57,6 +57,7 @@ import {
   matchSidebarSearchProjects,
   matchSidebarSearchThemes,
   matchSidebarSearchThreads,
+  normalizeDisplayText,
 } from "./SidebarSearchPalette.logic";
 import { useTheme } from "../hooks/useTheme";
 import { getAvailableCodeThemes, getCodeThemeSeed } from "../theme/theme.logic";
@@ -78,14 +79,14 @@ import { Input } from "./ui/input";
 const PALETTE_INPUT_CLASS =
   "font-system-ui h-11 w-full min-w-0 bg-transparent px-3.5 text-ui-lg text-foreground outline-none placeholder:text-muted-foreground/70";
 const PALETTE_GROUP_LABEL_CLASS =
-  "flex items-center justify-between px-2.5 pt-2 pb-1 font-normal text-ui-xs text-muted-foreground/70";
+  "flex items-center justify-between px-2.5 pt-2 pb-1 font-normal text-ui-xs text-muted-foreground";
 const PALETTE_ITEM_CLASS =
   "palette-row min-h-[30px] cursor-pointer items-center gap-3 rounded-[20px] px-2.5 py-0 text-foreground data-highlighted:bg-zinc-500/8 data-highlighted:text-foreground sm:min-h-[30px] dark:data-highlighted:bg-zinc-400/10";
 const PALETTE_ICON_CLASS = "size-3.5 shrink-0 text-muted-foreground";
 const PALETTE_TEXT_CLASS = "min-w-0 flex-1 truncate text-ui";
-const PALETTE_META_CLASS = "max-w-[45%] shrink-0 truncate text-ui-meta text-muted-foreground/70";
+const PALETTE_META_CLASS = "max-w-[45%] shrink-0 truncate text-ui-meta text-muted-foreground/80";
 const PALETTE_KBD_CLASS = "h-[17px] min-w-0 rounded-md px-1.5 text-ui-xs text-muted-foreground/80";
-const PALETTE_STATUS_CLASS = "px-4 pt-1 pb-3 text-ui text-muted-foreground/79";
+const PALETTE_STATUS_CLASS = "px-4 pt-1 pb-3 text-ui text-muted-foreground/80";
 
 // Actions that live under the "Settings" heading when the palette is idle.
 const SETTINGS_ACTION_IDS: ReadonlySet<string> = new Set([
@@ -785,7 +786,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                   }
                   onClick={submitImport}
                 >
-                  {isImporting ? "Importing..." : "Import"}
+                  {isImporting ? "Importing…" : "Import"}
                 </Button>
               </div>
             </div>
@@ -962,6 +963,15 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                     {matchedThreads.map(({ id, matchKind, messageMatchCount, snippet, thread }) => {
                       const matchLabel = threadMatchLabel({ matchKind, messageMatchCount });
                       const normalizedQuery = trimmedQuery.replaceAll(/\s+/g, " ").toLowerCase();
+                      // A project can be named after the chat it contains, which would make
+                      // the meta slot repeat the title verbatim; add the branch so the slot
+                      // still carries context.
+                      const threadMetaLabel =
+                        thread.branch !== null &&
+                        normalizeDisplayText(thread.projectName) ===
+                          normalizeDisplayText(thread.title || "Untitled thread")
+                          ? `${thread.projectName} · ${thread.branch}`
+                          : thread.projectName;
                       const matchContext =
                         snippet ??
                         (matchKind === "project"
@@ -1011,15 +1021,15 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                                 />
                               </div>
                               {/* Keep the idle row compact; metadata search context appears below. */}
-                              <span className={PALETTE_META_CLASS}>{thread.projectName}</span>
+                              <span className={PALETTE_META_CLASS}>{threadMetaLabel}</span>
                             </div>
                             {matchContext ? (
                               <div className="flex items-start gap-3">
-                                <div className="min-w-0 flex-1 line-clamp-1 text-ui-meta leading-4 text-muted-foreground/78">
+                                <div className="min-w-0 flex-1 line-clamp-1 text-ui-meta leading-4 text-muted-foreground/80">
                                   <HighlightedText text={matchContext} query={query} />
                                 </div>
                                 {matchLabel ? (
-                                  <span className="shrink-0 text-ui-meta leading-4 text-muted-foreground/58">
+                                  <span className="shrink-0 text-ui-meta leading-4 text-muted-foreground/80">
                                     {matchLabel}
                                   </span>
                                 ) : null}
@@ -1204,7 +1214,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                       <div className={cn(PALETTE_STATUS_CLASS, "flex justify-between gap-3")}>
                         <span>
                           {isAddingProject
-                            ? "Adding project..."
+                            ? "Adding project…"
                             : "Type a path, ↑↓ to navigate folders."}
                         </span>
                         <span>
@@ -1218,7 +1228,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                     </>
                   )
                 ) : !hasSearchResults ? (
-                  <div className={PALETTE_STATUS_CLASS}>No matches.</div>
+                  <div className={PALETTE_STATUS_CLASS}>No results for “{trimmedQuery}”</div>
                 ) : null}
               </CommandStatus>
             </Command>

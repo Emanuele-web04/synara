@@ -71,7 +71,7 @@ function ModelRow({ model }: { model: ThreadModelSummary }) {
         <FastModeIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground/75" />
       ) : null}
       {model.statusLabel ? (
-        <span className="shrink-0 text-muted-foreground/70">{model.statusLabel}</span>
+        <span className="shrink-0 text-muted-foreground/80">{model.statusLabel}</span>
       ) : null}
     </span>
   );
@@ -108,7 +108,7 @@ export function ThreadHoverCardContent({
           {title}
         </span>
         {timeLabel ? (
-          <span className="shrink-0 text-ui-xs tabular-nums text-muted-foreground/55">
+          <span className="shrink-0 text-ui-xs tabular-nums text-muted-foreground/80">
             {timeLabel}
           </span>
         ) : null}

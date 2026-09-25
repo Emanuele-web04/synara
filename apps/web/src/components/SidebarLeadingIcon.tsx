@@ -29,7 +29,7 @@ export const SidebarLeadingIcon = forwardRef<HTMLSpanElement, SidebarLeadingIcon
     ref,
   ) {
     const size = sizeProp ?? "md";
-    const tone = toneProp ?? "text-muted-foreground/79";
+    const tone = toneProp ?? "text-muted-foreground/80";
     return (
       <span
         {...props}

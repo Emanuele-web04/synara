@@ -788,8 +788,15 @@ export function buildThemeCssVariables(
     "--sidebar": readCodexVariable("--color-background-surface"),
     "--sidebar-accent": readCodexVariable("--color-background-button-secondary-hover"),
     "--sidebar-accent-active": readCodexVariable("--color-background-button-secondary-hover"),
-    // Selected sidebar row shares the user-message bubble gray so it pairs with the theme.
-    "--sidebar-selected": chatCodeSurface,
+    // Selected sidebar row stays one step stronger than the pack's hover wash
+    // (--sidebar-accent: ink 3% light / 6–9% dark). A fixed share of the pack's
+    // own foreground ink keeps tinted packs paired without re-merging the two
+    // states the way chatCodeSurface did (equal to hover in light, weaker in
+    // dark).
+    "--sidebar-selected":
+      variant === "dark"
+        ? "color-mix(in srgb, var(--sidebar-foreground) 10%, transparent)"
+        : "color-mix(in srgb, var(--sidebar-foreground) 6%, transparent)",
     "--sidebar-accent-foreground": readCodexVariable("--color-text-foreground"),
     "--sidebar-border": readCodexVariable("--color-border"),
     "--sidebar-foreground": readCodexVariable("--color-text-foreground"),

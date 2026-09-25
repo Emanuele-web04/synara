@@ -152,7 +152,7 @@ export function SettingsSidebarNav(props: {
           spellCheck={false}
           autoCorrect="off"
           autoCapitalize="off"
-          placeholder="Search settings..."
+          placeholder="Search settings…"
           aria-label="Search settings"
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={handleSearchKeyDown}

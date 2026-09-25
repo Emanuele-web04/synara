@@ -63,7 +63,7 @@ export function ProjectHoverCardContent({
           onClick={onTogglePin}
           className={cn(
             "-mr-1 shrink-0 cursor-pointer rounded-sm p-1 transition-colors",
-            isPinned ? "text-foreground" : "text-muted-foreground/55 hover:text-foreground",
+            isPinned ? "text-foreground" : "text-muted-foreground/80 hover:text-foreground",
           )}
         >
           <PinStatusIcon pinned={isPinned} className="size-3" aria-hidden />

@@ -203,6 +203,7 @@ import {
   SIDEBAR_HOVER_CARD_POPUP_PROPS,
   SIDEBAR_HOVER_CARD_SURFACE_CLASS_NAME,
   SIDEBAR_HOVER_CARD_TRIGGER_PROPS,
+  SIDEBAR_PROJECT_HOVER_CARD_TRIGGER_PROPS,
 } from "./sidebarHoverCardStyles";
 import {
   abbreviateHomePath,
@@ -337,6 +338,7 @@ import {
   type SettingsBackTarget,
   resolveSidebarNewThreadEnvMode,
   resolveSidebarProjectRowLabel,
+  resolveThreadDisplayBranch,
   resolveThreadHoverCardMetadata,
   resolveThreadProjectLabel,
   resolveThreadRowClassName,
@@ -383,6 +385,7 @@ import {
   SIDEBAR_ROW_HOVER_CLASS_NAME,
   SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
   SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
+  SIDEBAR_ROW_RADIUS_CLASS_NAME,
   SIDEBAR_SECTION_LABEL_CLASS_NAME,
 } from "../sidebarRowStyles";
 import { SettingsSidebarNav } from "./SettingsSidebarNav";
@@ -601,7 +604,7 @@ function ProjectRunIndicatorDot({ className }: { className?: string }) {
       aria-hidden="true"
       title="Dev server running"
       className={cn(
-        "size-1.5 shrink-0 rounded-full bg-emerald-400 motion-safe:animate-pulse",
+        "size-1.5 shrink-0 rounded-full bg-success motion-safe:animate-pulse",
         className,
       )}
     />
@@ -624,7 +627,7 @@ function threadRowStatusSlotClassName(isSubagentThread: boolean, toneClassName?:
       : // Nudge the timestamp a hair above the meta scale while still tracking the user's
         // typography setting (the CSS var is always set; the 11px is just an SSR fallback).
         "text-[length:calc(var(--app-font-size-ui-meta,11px)+0.5px)]",
-    toneClassName ?? (isSubagentThread ? "text-muted-foreground/26" : "text-muted-foreground/38"),
+    toneClassName ?? "text-muted-foreground/80",
   );
 }
 
@@ -695,13 +698,7 @@ function resolveThreadRowMetaChips(input: {
     chips.push({
       id: "fork",
       tooltip: "Forked thread",
-      icon: (
-        <SidebarGlyph
-          icon={GoRepoForked}
-          variant="meta"
-          className="text-emerald-600 dark:text-emerald-300/90"
-        />
-      ),
+      icon: <SidebarGlyph icon={GoRepoForked} variant="meta" className="text-success" />,
     });
   }
 
@@ -773,7 +770,7 @@ function ProjectSortMenu({
       />
       <ComposerPickerMenuPopup align="end" side="bottom" className="min-w-44">
         <MenuGroup>
-          <div className="px-2 py-1 sm:text-ui leading-snug font-medium text-muted-foreground">
+          <div className="px-2 py-1 text-ui leading-snug font-medium text-muted-foreground">
             Sort projects
           </div>
           <MenuRadioGroup
@@ -787,7 +784,7 @@ function ProjectSortMenu({
                 <MenuRadioItem
                   key={value}
                   value={value}
-                  className="min-h-7 py-1 sm:text-ui leading-snug"
+                  className="min-h-7 py-1 text-ui leading-snug"
                 >
                   {label}
                 </MenuRadioItem>
@@ -796,7 +793,7 @@ function ProjectSortMenu({
           </MenuRadioGroup>
         </MenuGroup>
         <MenuGroup>
-          <div className="px-2 pt-2 pb-1 sm:text-ui leading-snug font-medium text-muted-foreground">
+          <div className="px-2 pt-2 pb-1 text-ui leading-snug font-medium text-muted-foreground">
             Sort threads
           </div>
           <ThreadSortMenuItems
@@ -851,7 +848,7 @@ function SidebarHelpMenu({
         />
         <ComposerPickerMenuPopup align="end" side="top" className="w-64 min-w-64">
           <MenuGroup>
-            <div className="px-2 py-1 sm:text-ui leading-snug font-medium text-muted-foreground">
+            <div className="px-2 py-1 text-ui leading-snug font-medium text-muted-foreground">
               What’s new
             </div>
             {HELP_MENU_RELEASE_ENTRIES.map((entry) => (
@@ -933,7 +930,7 @@ function ThreadSortMenuItems({
     >
       {(Object.entries(SIDEBAR_THREAD_SORT_LABELS) as Array<[SidebarThreadSortOrder, string]>).map(
         ([value, label]) => (
-          <MenuRadioItem key={value} value={value} className="min-h-7 py-1 sm:text-ui leading-snug">
+          <MenuRadioItem key={value} value={value} className="min-h-7 py-1 text-ui leading-snug">
             {label}
           </MenuRadioItem>
         ),
@@ -960,7 +957,7 @@ function ChatSortMenu({
       />
       <ComposerPickerMenuPopup align="end" side="bottom" className="min-w-44">
         <MenuGroup>
-          <div className="px-2 py-1 sm:text-ui leading-snug font-medium text-muted-foreground">
+          <div className="px-2 py-1 text-ui leading-snug font-medium text-muted-foreground">
             Sort chats
           </div>
           <ThreadSortMenuItems
@@ -1244,7 +1241,7 @@ function SidebarActivityBellButton({
               SIDEBAR_ROW_FOCUS_CLASS_NAME,
               active
                 ? "bg-[color-mix(in_srgb,var(--color-text-accent)_15%,transparent)] text-[var(--color-text-accent)]"
-                : "sidebar-icon-button text-muted-foreground/75 hover:text-foreground",
+                : "sidebar-icon-button text-muted-foreground/80 hover:text-foreground",
             )}
           />
         }
@@ -3016,7 +3013,7 @@ export default function Sidebar() {
           ...handoffItems,
           {
             id: "copy-path",
-            label: "Copy Path",
+            label: "Copy path",
             icon: THREAD_CONTEXT_MENU_ICONS.copy,
             separatorBefore: true,
           },
@@ -3024,12 +3021,12 @@ export default function Sidebar() {
             ? [
                 {
                   id: "open-path-in-terminal",
-                  label: "Open Path in Terminal",
+                  label: "Open path in Terminal",
                   icon: THREAD_CONTEXT_MENU_ICONS.openInTerminal,
                 },
               ]
             : []),
-          { id: "copy-thread-id", label: "Copy Thread ID", icon: THREAD_CONTEXT_MENU_ICONS.copy },
+          { id: "copy-thread-id", label: "Copy thread ID", icon: THREAD_CONTEXT_MENU_ICONS.copy },
           ...(options?.extraItems ?? []),
           // Subagent threads are archived and restored through their parent
           // (thread.archive cascades); archiving one alone would strand it with
@@ -4692,7 +4689,7 @@ export default function Sidebar() {
                   // touching the worktree chip. It costs no space when the row is idle.
                   <span
                     className={cn(
-                      "max-w-[40%] shrink-0 truncate text-right text-ui-meta text-muted-foreground/38 transition-[margin] duration-150 ease-out",
+                      "max-w-[40%] shrink-0 truncate text-right text-ui-meta text-muted-foreground/80 transition-[margin] duration-150 ease-out",
                       hasTrailingStatusGlyph && "mr-2",
                     )}
                   >
@@ -4708,10 +4705,10 @@ export default function Sidebar() {
                 threadJumpLabelParts,
                 rightMetaChips,
                 threadStatus,
-                timestampToneClassName: "text-muted-foreground/38",
+                timestampToneClassName: "text-muted-foreground/80",
                 hoverActions: renderThreadHoverActions({
                   threadId: thread.id,
-                  toneClassName: "text-muted-foreground/42",
+                  toneClassName: "text-muted-foreground/80",
                   isPinned: true,
                   compact: isSubagentThread,
                 }),
@@ -4751,7 +4748,7 @@ export default function Sidebar() {
       draftThreadsByThreadId[thread.id]?.isTemporary === true;
     const secondaryMetaClass = isHighlighted
       ? "text-foreground/54 dark:text-foreground/64"
-      : "text-muted-foreground/34";
+      : "text-muted-foreground/80";
     const rightMetaChips = resolveThreadRowMetaChips({
       thread,
       includeHandoffBadge: !isTemporaryThread,
@@ -4888,7 +4885,7 @@ export default function Sidebar() {
                 timestampToneClassName: isSubagentThread
                   ? isHighlighted
                     ? "text-foreground/38 dark:text-foreground/46"
-                    : "text-muted-foreground/24"
+                    : "text-muted-foreground/80"
                   : secondaryMetaClass,
                 hoverActions: renderThreadHoverActions({
                   threadId: thread.id,
@@ -4947,7 +4944,7 @@ export default function Sidebar() {
       <div className="group/collapsible">
         <PreviewCard>
           <PreviewCardTrigger
-            {...SIDEBAR_HOVER_CARD_TRIGGER_PROPS}
+            {...SIDEBAR_PROJECT_HOVER_CARD_TRIGGER_PROPS}
             render={
               <div
                 className="group/project-header relative"
@@ -5041,7 +5038,7 @@ export default function Sidebar() {
               aria-pressed={isProjectPinned}
               title={pinActionLabel(project.name, isProjectPinned)}
               className={cn(
-                "sidebar-icon-button absolute left-2 top-1/2 z-20 inline-flex size-4 -translate-y-1/2 cursor-pointer items-center justify-center rounded-sm transition-opacity hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring",
+                "sidebar-icon-button absolute left-2 top-1/2 z-20 inline-flex size-5 -translate-y-1/2 cursor-pointer items-center justify-center rounded-sm transition-opacity hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring",
                 SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
                 isProjectPinned
                   ? "pointer-events-auto opacity-100"
@@ -5143,7 +5140,10 @@ export default function Sidebar() {
                         render={<button type="button" />}
                         data-thread-selection-safe
                         size="sm"
-                        className="h-7 flex-1 translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-ui text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground"
+                        className={cn(
+                          SIDEBAR_ROW_RADIUS_CLASS_NAME,
+                          "h-7 flex-1 translate-x-0 justify-start pr-2 pl-8 text-left text-ui text-muted-foreground/80 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground",
+                        )}
                         onMouseDown={preventFocusOnMouseDown}
                         onClick={() => {
                           showMoreThreadsForProject(project.cwd, threadListExtraPages);
@@ -5158,7 +5158,8 @@ export default function Sidebar() {
                         data-thread-selection-safe
                         size="sm"
                         className={cn(
-                          "h-7 translate-x-0 justify-start rounded-lg text-left text-ui text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground",
+                          SIDEBAR_ROW_RADIUS_CLASS_NAME,
+                          "h-7 translate-x-0 justify-start text-left text-ui text-muted-foreground/80 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground",
                           // Keep the left indent when "Show less" is the only affordance left.
                           canShowMoreThreads ? "w-auto flex-none px-2" : "flex-1 pr-2 pl-8",
                         )}
@@ -5615,7 +5616,7 @@ export default function Sidebar() {
       },
       {
         id: "import-thread",
-        label: "Import thread from...",
+        label: "Import thread from…",
         description: "Attach a local thread to an existing provider session.",
         keywords: [
           "import",
@@ -5911,7 +5912,7 @@ export default function Sidebar() {
 
   const wordmark = (
     <div className="flex w-full items-center gap-1.5">
-      <SidebarTrigger className="shrink-0 text-muted-foreground/75 hover:text-foreground md:hidden" />
+      <SidebarTrigger className="shrink-0 text-muted-foreground/80 hover:text-foreground md:hidden" />
       {headerControls}
     </div>
   );
@@ -6169,8 +6170,8 @@ export default function Sidebar() {
                         renderThreadRow(row.thread, studioChatThreadIds, row.depth, true),
                       )
                     ) : (
-                      <div className="px-2 pt-4 text-center text-ui text-muted-foreground/58">
-                        {threadsHydrated ? "No studio chats yet" : "Loading Studio..."}
+                      <div className="px-2 pt-4 text-center text-ui text-muted-foreground/80">
+                        {threadsHydrated ? "No studio chats yet" : "Loading Studio…"}
                       </div>
                     )}
                   </SidebarMenu>
@@ -6315,13 +6316,13 @@ export default function Sidebar() {
                       aria-live="polite"
                       aria-label="Loading projects"
                     >
-                      <div className="text-center text-ui text-muted-foreground/58">
-                        Loading projects...
+                      <div className="text-center text-ui text-muted-foreground/80">
+                        Loading projects…
                       </div>
                       <div className="mx-auto grid w-full max-w-42 gap-1.5 opacity-70">
-                        <div className="h-2 rounded-full bg-muted/55 animate-pulse" />
-                        <div className="mx-auto h-2 w-4/5 rounded-full bg-muted/40 animate-pulse" />
-                        <div className="mx-auto h-2 w-3/5 rounded-full bg-muted/30 animate-pulse" />
+                        <div className="h-2 rounded-full bg-muted/55 motion-safe:animate-pulse" />
+                        <div className="mx-auto h-2 w-4/5 rounded-full bg-muted/40 motion-safe:animate-pulse" />
+                        <div className="mx-auto h-2 w-3/5 rounded-full bg-muted/30 motion-safe:animate-pulse" />
                       </div>
                     </div>
                   )}
@@ -6363,12 +6364,14 @@ export default function Sidebar() {
                   }}
                 >
                   <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
-                    <span className="truncate font-system-ui text-ui font-normal text-muted-foreground/79">
+                    <span
+                      className={cn("truncate font-system-ui", SIDEBAR_SECTION_LABEL_CLASS_NAME)}
+                    >
                       Chats
                     </span>
                     <DisclosureChevron
                       open={chatSectionExpanded}
-                      className="text-muted-foreground/79"
+                      className="text-muted-foreground/80"
                     />
                   </div>
                 </SidebarMenuButton>
@@ -6410,7 +6413,7 @@ export default function Sidebar() {
                         ),
                       )
                     ) : (
-                      <div className="px-2 py-2 text-ui text-muted-foreground/48">No chats yet</div>
+                      <div className="px-2 py-2 text-ui text-muted-foreground/80">No chats yet</div>
                     )}
                     {canShowMoreChatThreads || canShowLessChatThreads ? (
                       <SidebarMenuItem className="w-full">
@@ -6418,7 +6421,10 @@ export default function Sidebar() {
                           {canShowMoreChatThreads ? (
                             <SidebarMenuButton
                               size="sm"
-                              className="h-7 flex-1 justify-start rounded-lg pr-2 pl-8 text-left text-ui font-normal text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground"
+                              className={cn(
+                                SIDEBAR_ROW_RADIUS_CLASS_NAME,
+                                "h-7 flex-1 justify-start pr-2 pl-8 text-left text-ui font-normal text-muted-foreground/80 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground",
+                              )}
                               onMouseDown={preventFocusOnMouseDown}
                               onClick={() =>
                                 setChatThreadListExtraPages(chatThreadListEffectiveExtraPages + 1)
@@ -6431,7 +6437,8 @@ export default function Sidebar() {
                             <SidebarMenuButton
                               size="sm"
                               className={cn(
-                                "h-7 justify-start rounded-lg text-left text-ui font-normal text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground",
+                                SIDEBAR_ROW_RADIUS_CLASS_NAME,
+                                "h-7 justify-start text-left text-ui font-normal text-muted-foreground/80 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground",
                                 // Keep the left indent when "Show less" is the only affordance left.
                                 canShowMoreChatThreads
                                   ? "w-auto flex-none px-2"
@@ -6625,7 +6632,7 @@ export default function Sidebar() {
                 }
               >
                 <ProjectContextMenuIcon icon={CopyIcon} />
-                <span>Copy Path</span>
+                <span>Copy path</span>
               </MenuItem>
               <MenuSeparator />
               {projectContextMenuIsRunning ? (
@@ -6838,7 +6845,7 @@ export default function Sidebar() {
         <DialogPopup className="max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-base">
-              <PlayIcon className="size-4 text-emerald-500" />
+              <PlayIcon className="size-4 text-success" />
               Start dev
             </DialogTitle>
             <DialogDescription>
@@ -7055,6 +7062,7 @@ function SidebarSearchPaletteController(props: {
             props.projectById.get(thread.projectId)?.remoteName ?? "Unknown project",
           spaceName: searchProjectById.get(thread.projectId)?.spaceName ?? "Global",
           provider: thread.modelSelection.provider,
+          branch: resolveThreadDisplayBranch(thread),
           createdAt: thread.createdAt,
           updatedAt: thread.updatedAt,
           messages: searchPaletteMessagesFor(thread),

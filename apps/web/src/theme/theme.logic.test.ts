@@ -383,7 +383,7 @@ describe("buildThemeCssVariables", () => {
     expect(cssVariables.variables["--sidebar-accent"]).toBe("rgba(227, 228, 230, 0.058)");
     expect(cssVariables.variables["--sidebar-accent-active"]).toBe("rgba(227, 228, 230, 0.058)");
     expect(cssVariables.variables["--sidebar-selected"]).toBe(
-      cssVariables.variables["--app-user-message-background"],
+      "color-mix(in srgb, var(--sidebar-foreground) 10%, transparent)",
     );
     expect(cssVariables.variables["--theme-font-ui-family"]).toBe("Inter");
     expect(cssVariables.variables["--theme-font-code-family"]).toBe(
