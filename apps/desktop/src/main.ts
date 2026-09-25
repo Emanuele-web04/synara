@@ -2028,11 +2028,20 @@ function initializeDesktopAppSnap(): void {
     },
     onError: (error, focusApp) => {
       const window = focusApp ? ensureMainWindowForAppSnap() : mainWindow;
+      const notification = {
+        title: error.code === "pending-capture-overflow" ? "AppSnap discarded" : "AppSnap failed",
+        body: error.message,
+      };
       if (!sendAppSnapEvent(window, (webContents) => sendAppSnapError(webContents, error))) {
-        showDesktopNotification({
-          title: error.code === "pending-capture-overflow" ? "AppSnap discarded" : "AppSnap failed",
-          body: error.message,
-        });
+        showDesktopNotification(notification);
+        return;
+      }
+      // A hotkey capture usually fails while the user is in another app, where
+      // the in-window toast is never seen. Mirror the failure to the OS
+      // notification center (badged by showDesktopNotification) so a blocked
+      // or stalled capture is never silent.
+      if (!isMainWindowForeground(mainWindow)) {
+        showDesktopNotification(notification);
       }
     },
   });
