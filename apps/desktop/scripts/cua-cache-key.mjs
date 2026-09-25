@@ -46,6 +46,7 @@ export function collectCuaCacheInputs(root, env = process.env) {
     "apps/desktop/scripts/provision-cua-driver.mjs",
     "apps/desktop/scripts/cua-artifact-provenance.mjs",
     "apps/desktop/scripts/cua-cache-key.mjs",
+    "apps/desktop/scripts/find-cua-artifact.mjs",
     "scripts/lib/build-timing.ts",
     ".github/actions/provision-cua/action.yml",
     ...readdirSync(resolve(root, patchRoot))

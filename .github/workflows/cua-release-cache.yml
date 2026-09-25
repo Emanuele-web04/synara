@@ -8,12 +8,17 @@ on:
       - apps/desktop/scripts/provision-cua-driver.mjs
       - apps/desktop/scripts/cua-artifact-provenance.mjs
       - apps/desktop/scripts/cua-cache-key.mjs
+      - apps/desktop/scripts/find-cua-artifact.mjs
       - scripts/lib/build-timing.ts
       - .github/actions/provision-cua/action.yml
       - .github/workflows/cua-release-cache.yml
   workflow_dispatch:
+  schedule:
+    # Refresh before retention expires and detect hosted SDK/library drift.
+    - cron: "23 4 * * *"
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: cua-release-cache-${{ github.ref }}
   cancel-in-progress: false
@@ -32,5 +37,13 @@ jobs:
         with:
           node-version-file: package.json
       - uses: ./.github/actions/provision-cua
+        id: cua
         with:
           save-cache: "true"
+      - name: Retain verified unsigned Cua outside the cache quota
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.cua.outputs.cache-key }}
+          path: ${{ runner.temp }}/cua-artifact
+          retention-days: 30
+          if-no-files-found: error
