@@ -50,13 +50,17 @@ endpoint. Minidumps are memory snapshots of the crashed process and can in
 principle contain fragments of that process's memory; they are stored in R2 and
 can't be redacted, so they are deleted after 90 days by an R2 expiry rule.
 
-## What is never collected
+## What usage counters do not collect
 
 - Chat messages, prompts, agent output, or transcripts (usage events carry counts only)
 - File contents, workspace contents, project names, or git metadata
 - Provider keys, tokens, or anything under `secrets/`
 - IP-derived identifiers, device IDs, or account identity
 - Screenshots, window contents, or keystrokes
+
+These are not intentionally sampled for the usage counters. Free-text error
+fields may still contain fragments of work despite redaction, and raw crash
+minidumps can contain fragments of process memory, including sensitive data.
 
 The only free-text fields are `message`, `stack`, and `logTail`. Before they
 are written to the queue, each is passed through `redactDiagnosticText`

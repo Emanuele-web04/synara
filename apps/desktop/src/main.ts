@@ -404,7 +404,8 @@ app.setPath("userData", userDataPath);
 
 // Beta-only diagnostics: constructed solely when the baked build flavor is
 // "beta", so production binaries never run a collection path. The payload
-// schema is an allowlist — no prompts, file contents, or paths are collected.
+// schema is an allowlist; error text may still contain fragments of user data,
+// and Electron crash dumps are raw process memory.
 const betaDiagnostics =
   desktopFlavor === "beta"
     ? new BetaDiagnostics({

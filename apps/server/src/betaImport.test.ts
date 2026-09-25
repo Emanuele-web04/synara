@@ -8,6 +8,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -121,6 +122,47 @@ describe("runBetaImportIfRequested", () => {
     expect(existsSync(join(betaState, "secrets", "token.json"))).toBe(true);
     expect(existsSync(join(betaState, "logs"))).toBe(false);
     expect(existsSync(join(betaState, "server-runtime.json"))).toBe(false);
+  });
+
+  it("keeps the existing Beta database and settings if a Stable secret is linked", async () => {
+    const stableHome = await seedStableHome(makeRoot());
+    const stableState = join(stableHome, "userdata");
+    const betaHome = join(stableHome, "..", ".synara-beta");
+    const betaState = join(betaHome, "userdata");
+    mkdirSync(betaState, { recursive: true });
+    const { DatabaseSync } = await import("node:sqlite");
+    const betaDb = new DatabaseSync(join(betaState, "state.sqlite"));
+    betaDb.exec("CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT)");
+    betaDb.exec("INSERT INTO threads VALUES ('beta', 'Beta-only chat')");
+    betaDb.close();
+    writeFileSync(join(betaState, "settings.json"), JSON.stringify({ theme: "beta" }));
+    symlinkSync(join(stableState, "settings.json"), join(stableState, "secrets", "linked.json"));
+    writeMarker(betaHome, stableHome);
+
+    const outcome = await run({ betaHomeDir: betaHome, stateDir: betaState });
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error).toContain("linked state entry");
+    const stillBeta = new DatabaseSync(join(betaState, "state.sqlite"), { readOnly: true });
+    expect(stillBeta.prepare("SELECT title FROM threads").get()).toEqual({
+      title: "Beta-only chat",
+    });
+    stillBeta.close();
+    expect(readFileSync(join(betaState, "settings.json"), "utf8")).toContain("beta");
+    expect(existsSync(join(betaState, "secrets", "linked.json"))).toBe(false);
+  });
+
+  it("preserves Beta-only entries inside a directory while re-copying Stable data", async () => {
+    const stableHome = await seedStableHome(makeRoot());
+    const betaHome = join(stableHome, "..", ".synara-beta");
+    const betaState = join(betaHome, "userdata");
+    mkdirSync(join(betaState, "secrets"), { recursive: true });
+    writeFileSync(join(betaState, "secrets", "beta-only.json"), "beta-only");
+    writeMarker(betaHome, stableHome);
+
+    const outcome = await run({ betaHomeDir: betaHome, stateDir: betaState });
+    expect(outcome).toEqual({ consumed: true, ok: true });
+    expect(readFileSync(join(betaState, "secrets", "beta-only.json"), "utf8")).toBe("beta-only");
+    expect(existsSync(join(betaState, "secrets", "token.json"))).toBe(true);
   });
 
   it("never carries database sidecars or lifecycle locks into the beta home", async () => {
