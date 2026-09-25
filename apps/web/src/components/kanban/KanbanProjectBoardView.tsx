@@ -7,6 +7,7 @@
 import {
   DndContext,
   DragOverlay,
+  KeyboardSensor,
   PointerSensor,
   closestCorners,
   pointerWithin,
@@ -16,6 +17,7 @@ import {
   type DragEndEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
+import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import { useRef, useState } from "react";
 
 import {
@@ -84,6 +86,13 @@ export function KanbanProjectBoardView({
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: { distance: 6 },
+    }),
+    // Space lifts a focused card, arrows move it, Space drops, Escape cancels.
+    // Enter stays a plain click so it keeps opening the card; mid-drag it
+    // drops instead (the sensor preventDefaults, suppressing the click).
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+      keyboardCodes: { start: ["Space"], cancel: ["Escape"], end: ["Space", "Enter"] },
     }),
   );
   const handleOpenCard = (card: KanbanCard) => {
@@ -263,7 +272,7 @@ export function KanbanProjectBoardView({
           {...(nowMs !== undefined ? { nowMs } : {})}
         />
       </div>
-      <DragOverlay dropAnimation={null}>
+      <DragOverlay>
         {activeCard ? (
           <KanbanCardView
             card={activeCard}

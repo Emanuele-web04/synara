@@ -10,6 +10,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { SidebarHeaderNavigationControls } from "~/components/SidebarHeaderNavigationControls";
 import { Button } from "~/components/ui/button";
+import { IconButton } from "~/components/ui/icon-button";
 import { Kbd, KbdGroup } from "~/components/ui/kbd";
 import { RouteInsetSurface } from "../RouteInsetSurface";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
@@ -43,6 +44,7 @@ import {
   CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
   CHAT_SURFACE_HEADER_HEIGHT_CLASS,
   CHAT_SURFACE_HEADER_PADDING_X_CLASS,
+  DOCK_HEADER_ICON_BUTTON_CLASS,
 } from "../chat/chatHeaderControls";
 import { CHAT_BACKGROUND_CLASS_NAME } from "../chat/composerPickerStyles";
 import { KanbanNewTaskDialog } from "./KanbanNewTaskDialog";
@@ -185,19 +187,21 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
             <SidebarHeaderNavigationControls />
             <div className="flex min-w-0 flex-1 items-center gap-2 [-webkit-app-region:no-drag]">
               {projectBoard ? (
-                <Button
+                <IconButton
+                  variant="chrome"
                   size="icon-xs"
-                  variant="ghost"
+                  label="Back to all projects"
+                  tooltip="Back to all projects"
+                  className={DOCK_HEADER_ICON_BUTTON_CLASS}
                   onClick={handleBackToOverview}
-                  aria-label="Back to all projects"
                 >
                   <ArrowLeftIcon className="size-3.5" />
-                </Button>
+                </IconButton>
               ) : null}
               <h2 className="max-w-[clamp(16rem,50vw,40rem)] truncate text-ui-lg font-medium text-foreground">
                 {projectBoard ? projectBoard.projectName : "Kanban"}
               </h2>
-              <span className="shrink-0 text-ui leading-snug text-muted-foreground/70">
+              <span className="shrink-0 text-ui leading-snug text-muted-foreground">
                 {projectBoard ? projectBoard.totalCount : board.totalCount} tasks
               </span>
               <Tooltip>
@@ -230,6 +234,10 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
           </div>
         </header>
 
+        {/* Pre-hydration every project's count is 0, so the overview would flash
+            its empty state before the cards arrive. Hold it back until the
+            thread store is hydrated (the stale-project redirect waits on the
+            same flag). */}
         <div className="min-h-0 min-w-0 flex-1 pt-3">
           {projectBoard ? (
             <KanbanProjectBoardView
@@ -240,7 +248,7 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
               prByThreadId={prByThreadId}
               nowMs={nowMs}
             />
-          ) : (
+          ) : threadsHydrated ? (
             <KanbanOverview
               board={board}
               onOpenProject={handleOpenProject}
@@ -250,7 +258,7 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
               prByThreadId={prByThreadId}
               nowMs={nowMs}
             />
-          )}
+          ) : null}
         </div>
       </div>
 

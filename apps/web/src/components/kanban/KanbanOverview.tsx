@@ -6,6 +6,7 @@
 
 import type { ProjectId } from "@synara/contracts";
 import { Button } from "~/components/ui/button";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "~/components/ui/empty";
 import { ChevronRightIcon, PlusIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { KanbanCardView, type KanbanCardPrLookup } from "./KanbanCardView";
@@ -49,7 +50,7 @@ const OverviewProjectColumn = function OverviewProjectColumn({
           <h2 className="min-w-0 truncate text-ui-lg font-semibold text-foreground/90">
             {projectBoard.projectName}
           </h2>
-          <span className="text-ui leading-snug text-muted-foreground/70">
+          <span className="text-ui leading-snug text-muted-foreground">
             {projectBoard.totalCount}
           </span>
           <ChevronRightIcon className="ml-auto size-3.5 shrink-0 text-muted-foreground/50 opacity-0 transition-opacity group-hover/kanban-project:opacity-100 group-focus-visible/kanban-project:opacity-100" />
@@ -116,14 +117,17 @@ export function KanbanOverview({
 
   if (visibleProjects.length === 0) {
     return (
-      <div className="flex h-full items-center justify-center px-6">
-        <div className="max-w-sm text-center">
-          <div className="text-ui-lg font-medium text-foreground/85">Nothing on the board yet</div>
-          <div className="mt-1 text-ui leading-snug text-muted-foreground">
-            Drafted prompts, running turns, and completed chats will show up here automatically.
-          </div>
-        </div>
-      </div>
+      <Empty className="h-full">
+        <EmptyHeader>
+          <EmptyTitle className="text-ui-lg font-medium text-foreground/85">
+            Nothing on the board yet
+          </EmptyTitle>
+          <EmptyDescription>
+            Drafted prompts, running turns, and completed chats will show up here automatically. Add
+            one with New task.
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
     );
   }
 
