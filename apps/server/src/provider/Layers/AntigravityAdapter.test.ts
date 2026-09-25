@@ -2973,8 +2973,8 @@ describe("Antigravity background task helpers (#752)", () => {
           agyText(10, "Command finished."),
         );
         yield* io.waitUntil(() => io.counts.assistantMessages === 1);
-        yield* Effect.sleep("250 millis");
-        expect(io.counts.teardowns).toBe(1);
+        // Stop teardown waits a short grace period for the final result record.
+        yield* io.waitUntil(() => io.counts.teardowns === 1);
         expect(io.taskEvents).toEqual([
           { type: "task.started", taskId: "session-b/task-8" },
           { type: "task.completed", taskId: "session-b/task-8" },
