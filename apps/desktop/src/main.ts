@@ -228,6 +228,7 @@ import {
   reduceDesktopUpdateStateOnDownloadStart,
   reduceDesktopUpdateStateOnInstallFailure,
   reduceDesktopUpdateStateOnInstallRestartFailure,
+  reduceDesktopUpdateStateOnInstallStart,
   reduceDesktopUpdateStateOnNoUpdate,
   reduceDesktopUpdateStateOnUpdateAvailable,
 } from "./updateMachine";
@@ -3569,8 +3570,9 @@ async function installDownloadedUpdate(): Promise<{
     return { accepted: false, completed: false };
   }
   isUpdaterInstallPreparing = true;
-
   try {
+    // A retry must not retain the last failure while the new handoff is pending.
+    setUpdateState(reduceDesktopUpdateStateOnInstallStart(updateState));
     return await runDownloadedUpdateInstall(preparationAttempt);
   } finally {
     if (!isUpdaterQuitAndInstallInFlight && isUpdaterInstallPreparing) {

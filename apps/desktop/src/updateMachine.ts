@@ -154,6 +154,12 @@ export function reduceDesktopUpdateStateOnDownloadComplete(
   };
 }
 
+export function reduceDesktopUpdateStateOnInstallStart(
+  state: DesktopUpdateState,
+): DesktopUpdateState {
+  return { ...state, message: null, errorContext: null, canRetry: false };
+}
+
 export function reduceDesktopUpdateStateOnInstallFailure(
   state: DesktopUpdateState,
   message: string,

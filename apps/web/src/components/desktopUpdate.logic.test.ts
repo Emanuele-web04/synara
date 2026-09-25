@@ -10,6 +10,7 @@ import {
   getDesktopUpdateDownloadPercent,
   getDesktopUpdateErrorSignature,
   isDesktopUpdateButtonDisabled,
+  isDesktopUpdateInstallInFlight,
   resolveDesktopUpdateButtonAction,
   shouldRecommendManualDesktopDownload,
   shouldShowArm64IntelBuildWarning,
@@ -307,6 +308,64 @@ describe("getDesktopUpdateAlreadyCurrentNotice", () => {
       },
     };
     expect(getDesktopUpdateAlreadyCurrentNotice(result)).toBeNull();
+  });
+});
+
+describe("isDesktopUpdateInstallInFlight", () => {
+  it("keeps an accepted install latched while the updater still reports downloaded", () => {
+    const result: DesktopUpdateActionResult = {
+      accepted: true,
+      completed: false,
+      state: {
+        ...baseState,
+        status: "downloaded",
+        downloadedVersion: "1.1.0",
+        availableVersion: "1.1.0",
+      },
+    };
+    expect(isDesktopUpdateInstallInFlight(result)).toBe(true);
+  });
+
+  it("clears for rejected, completed, or already-failed installs", () => {
+    expect(
+      isDesktopUpdateInstallInFlight({
+        accepted: false,
+        completed: false,
+        state: {
+          ...baseState,
+          status: "downloaded",
+          downloadedVersion: "1.1.0",
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isDesktopUpdateInstallInFlight({
+        accepted: true,
+        completed: true,
+        state: {
+          ...baseState,
+          status: "downloaded",
+          downloadedVersion: "1.1.0",
+        },
+      }),
+    ).toBe(false);
+    // Both an immediate handoff failure and the watchdog preserve the artifact
+    // as downloaded so Retry can install it without downloading again.
+    const failedState: DesktopUpdateState = {
+      ...baseState,
+      status: "downloaded",
+      downloadedVersion: "1.1.0",
+      errorContext: "install",
+      message: "Backend did not stop in time",
+      canRetry: true,
+    };
+    expect(
+      isDesktopUpdateInstallInFlight({
+        accepted: true,
+        completed: false,
+        state: failedState,
+      }),
+    ).toBe(false);
   });
 });
 
