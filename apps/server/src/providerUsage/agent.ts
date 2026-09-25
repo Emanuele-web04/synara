@@ -14,12 +14,13 @@ import type {
 export const AGENT_PROVIDER_USAGE_MAX_AGE_MS = 5 * 60 * 1000;
 
 const EMAIL_PATTERN = /[\w.+-]+@[\w-]+\.[\w.]+/;
+const EMAIL_PATTERN_GLOBAL = new RegExp(EMAIL_PATTERN.source, "g");
 
 // Identity metadata is for Settings; agents only get quota and informational lines.
 function scrubAccountMetadata(snapshot: ServerProviderUsageSnapshot): ServerProviderUsageSnapshot {
   return {
     ...snapshot,
-    detail: snapshot.detail?.replaceAll(EMAIL_PATTERN, "[account]"),
+    detail: snapshot.detail?.replace(EMAIL_PATTERN_GLOBAL, "[account]"),
     usageLines: snapshot.usageLines.filter(
       (line) =>
         line.label.toLowerCase() !== "account" &&

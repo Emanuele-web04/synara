@@ -140,7 +140,9 @@ describe("Synara harness policy", () => {
   });
 
   it("keeps the gateway policy below its prompt budget", () => {
-    assert.isAtMost(renderSynaraHarnessPolicy({ gatewayControlAvailable: true }).length, 6_030);
+    // Budget raised for the one-line usage-budgets affordance
+    // above (84 chars); it still guards against accidental bloat.
+    assert.isAtMost(renderSynaraHarnessPolicy({ gatewayControlAvailable: true }).length, 6_120);
   });
 
   it("withholds device guidance from sessions with no gateway control", () => {
