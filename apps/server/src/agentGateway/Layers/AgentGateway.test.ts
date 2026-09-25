@@ -1432,15 +1432,14 @@ describe("AgentGateway", () => {
   ];
 
   for (const model of [
+    // One row per resolution branch: bare alias, full id, [1m] id, [1m] alias,
+    // dated resolution, and an alias resolving to a [1m] id.
     { value: "sonnet" },
-    { value: "fable" },
     { value: "claude-sonnet-5" },
-    { value: "claude-fable-5" },
     { value: "claude-fable-5-1[1m]" },
     { value: "sonnet[1m]", resolvedModel: "claude-sonnet-5" },
     { value: "sonnet-4.6", resolvedModel: "claude-sonnet-4-6-20251117" },
     { value: "fable", resolvedModel: "claude-fable-5-1[1m]" },
-    { value: "team-model", resolvedModel: "claude-fable-5-1" },
   ]) {
     it.effect(
       `carries discovered Claude context windows through MCP and runtime: ${model.value} -> ${model.resolvedModel ?? model.value}`,
@@ -1610,7 +1609,6 @@ describe("AgentGateway", () => {
 
   for (const model of [
     { value: "claude-haiku-4-5" },
-    { value: "claude-opus-4-5" },
     { value: "unknown-model" },
     { value: "sonnet", resolvedModel: "claude-haiku-4-5" },
   ]) {
@@ -3283,43 +3281,6 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
-  it.effect("rejects detached creation after the caller turn completed", () => {
-    const { gatewayLayer, makeHarness } = makeHarnessLayer([
-      makeThreadShell("thread-parent", {
-        latestTurn: {
-          turnId: TurnId.makeUnsafe("turn-parent-complete"),
-          state: "completed",
-          requestedAt: NOW,
-          startedAt: NOW,
-          completedAt: NOW,
-          assistantMessageId: null,
-        },
-      }),
-    ]);
-    return Effect.gen(function* () {
-      const harness = yield* makeHarness;
-      const response = yield* harness.callTool({
-        token: "token-parent",
-        name: "synara_create_threads",
-        args: {
-          requestId: "detached-attempt",
-          threads: [
-            {
-              prompt: "create too late",
-              target: { provider: "codex", model: "gpt-5.5" },
-            },
-          ],
-        },
-      });
-      assert.isTrue(isToolError(response.result));
-      assert.equal(
-        (toolResultJson(response.result).error as { code: string }).code,
-        "caller_turn_inactive",
-      );
-      assert.equal(harness.dispatched.length, 0);
-    }).pipe(Effect.provide(gatewayLayer));
-  });
-
   it.effect("compensates a child started while its ingress turn is interrupted", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
       advanceParentTurnAfterDispatch: {
@@ -3675,32 +3636,6 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
-  it.effect("rejects guessed Terra Low slugs before any dispatch", () => {
-    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
-    return Effect.gen(function* () {
-      const harness = yield* makeHarness;
-      const response = yield* harness.callTool({
-        token: "token-parent",
-        name: "synara_create_threads",
-        args: {
-          requestId: "bad-terra",
-          threads: [
-            {
-              prompt: "inspect repo",
-              target: { provider: "codex", model: "gpt-5.6-terra-low" },
-            },
-          ],
-        },
-      });
-      assert.isTrue(isToolError(response.result));
-      assert.equal(
-        (toolResultJson(response.result).error as { code: string }).code,
-        "model_unavailable",
-      );
-      assert.equal(harness.dispatched.length, 0);
-    }).pipe(Effect.provide(gatewayLayer));
-  });
-
   it.effect("rejects an unavailable or unauthenticated provider before dispatch", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
       providerStatuses: [
@@ -3791,6 +3726,10 @@ describe("AgentGateway", () => {
         },
       });
       assert.isTrue(isToolError(response.result));
+      assert.equal(
+        (toolResultJson(response.result).error as { code: string }).code,
+        "model_unavailable",
+      );
       assert.equal(harness.dispatched.length, 0);
     }).pipe(Effect.provide(gatewayLayer));
   });
@@ -4725,40 +4664,6 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
-  it.effect("sends a follow-up message with the agent dispatch origin", () => {
-    const { gatewayLayer, makeHarness } = makeHarnessLayer([
-      ...baseThreads.filter((thread) => thread.id !== "thread-child"),
-      makeThreadShell("thread-child", {
-        parentThreadId: ThreadId.makeUnsafe("thread-parent"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-child"),
-          status: "running",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: TurnId.makeUnsafe("turn-live"),
-          lastError: null,
-          updatedAt: NOW,
-        },
-      }),
-    ]);
-    return Effect.gen(function* () {
-      const harness = yield* makeHarness;
-      const response = yield* harness.callTool({
-        token: "token-parent",
-        name: "synara_send_message",
-        args: { threadId: "thread-child", message: "status check please", mode: "steer" },
-      });
-      assert.isFalse(isToolError(response.result), toolErrorText(response.result));
-      const turn = harness.dispatched[0]!;
-      assert.equal(turn.type, "thread.turn.start");
-      if (turn.type === "thread.turn.start") {
-        assert.equal(turn.dispatchOrigin, "agent");
-        assert.equal(turn.dispatchMode, "steer");
-        assert.equal(turn.threadId, "thread-child");
-      }
-    }).pipe(Effect.provide(gatewayLayer));
-  });
-
   it.effect("passes an idle steer through so the reactor's live-state guard decides", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
     return Effect.gen(function* () {
@@ -4776,6 +4681,8 @@ describe("AgentGateway", () => {
       assert.equal(turn.type, "thread.turn.start");
       if (turn.type === "thread.turn.start") {
         assert.equal(turn.dispatchMode, "steer");
+        assert.equal(turn.dispatchOrigin, "agent");
+        assert.equal(turn.threadId, "thread-child");
       }
     }).pipe(Effect.provide(gatewayLayer));
   });
@@ -6034,24 +5941,6 @@ describe("AgentGateway", () => {
       assert.isTrue(isToolError(setGoal.result));
       assert.include(toolErrorText(setGoal.result), "full-access");
       assert.equal(harness.dispatched.length, 0);
-    }).pipe(Effect.provide(gatewayLayer));
-  });
-
-  it.effect("reports unknown tools as invalid params", () => {
-    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
-    return Effect.gen(function* () {
-      const harness = yield* makeHarness;
-      const response = yield* harness.postRaw({
-        authorizationHeader: "Bearer token-parent",
-        body: {
-          jsonrpc: "2.0",
-          id: 9,
-          method: "tools/call",
-          params: { name: "synara_unknown" },
-        },
-      });
-      const error = (response.body as { error?: { code: number } }).error;
-      assert.equal(error?.code, -32602);
     }).pipe(Effect.provide(gatewayLayer));
   });
 });

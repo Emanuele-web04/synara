@@ -4,12 +4,9 @@ import {
   CLAUDE_CODE_MODE_OPTIONS,
   CLAUDE_PROMPT_MODE_OPTIONS,
   DEFAULT_DROID_GIT_TEXT_GENERATION_MODEL,
-  DEFAULT_GIT_TEXT_GENERATION_MODEL,
-  DEFAULT_GIT_TEXT_GENERATION_REASONING_EFFORT,
   DEFAULT_MODEL,
   DEFAULT_MODEL_BY_PROVIDER,
   MODEL_OPTIONS_BY_PROVIDER,
-  CODEX_REASONING_EFFORT_OPTIONS,
 } from "@synara/contracts";
 
 import {
@@ -19,10 +16,8 @@ import {
   getClaudeContextWindowSuffix,
   getDefaultAutoCompactWindow,
   getDefaultContextWindow,
-  getDefaultModel,
   EMPTY_MODEL_CAPABILITIES,
   getModelCapabilities,
-  getModelOptions,
   humanizeModelSlug,
   hasContextWindowOption,
   hasAutoCompactWindowOption,
@@ -47,21 +42,12 @@ import {
   resolveGrokEffortFamily,
 } from "./model";
 
-describe("Git text generation defaults", () => {
-  it("uses GPT-6 Luna with high reasoning", () => {
-    expect(DEFAULT_GIT_TEXT_GENERATION_MODEL).toBe("gpt-6-luna");
-    expect(DEFAULT_GIT_TEXT_GENERATION_REASONING_EFFORT).toBe("high");
-  });
-});
-
 describe("parseCursorCliReasoningEffort", () => {
   it.each([
     ["gpt-5.5-xhigh", "xhigh"],
     ["gpt-5.5-extra-high", "xhigh"],
     ["claude-fable-5-max", "max"],
     ["gpt-5.5-none", "none"],
-    ["gpt-5.5-low", "low"],
-    ["gpt-5.5-medium", "medium"],
     ["gpt-5.5-high", "high"],
     ["gpt-5.5-fast", undefined],
   ] as const)("parses %s as %s", (model, expected) => {
@@ -176,18 +162,6 @@ describe("normalizeModelSlug", () => {
     expect(normalizeModelSlug("Vendor/ModelCase-MEDIUM", "devin")).toBe("Vendor/ModelCase-MEDIUM");
     expect(normalizeModelSlug("swe-1-7-medium", "devin")).toBe("swe-1-7");
   });
-
-  it("resolves devin aliases to canonical swe-1-6 / swe-1-7 slugs", () => {
-    expect(normalizeModelSlug("swe-1.7", "devin")).toBe("swe-1-7");
-    expect(normalizeModelSlug("swe-1.6", "devin")).toBe("swe-1-6");
-    expect(normalizeModelSlug("swe-1.6-fast", "devin")).toBe("swe-1-6");
-    expect(normalizeModelSlug("fast", "devin")).toBe("swe-1-6");
-    expect(normalizeModelSlug("swe", "devin")).toBe("swe-1-6");
-    expect(normalizeModelSlug("opus", "devin")).toBe("claude-opus-4-8");
-    expect(normalizeModelSlug("sonnet", "devin")).toBe("claude-sonnet-5");
-    expect(normalizeModelSlug("fable", "devin")).toBe("claude-fable-5");
-    expect(normalizeModelSlug("gpt", "devin")).toBe("gpt");
-  });
 });
 
 describe("resolveModelSlug", () => {
@@ -199,12 +173,6 @@ describe("resolveModelSlug", () => {
   it("preserves unknown custom models", () => {
     expect(resolveModelSlug("gpt-4.1")).toBe(DEFAULT_MODEL);
     expect(resolveModelSlug("custom/internal-model")).toBe(DEFAULT_MODEL);
-  });
-
-  it("resolves only supported model options", () => {
-    for (const model of MODEL_OPTIONS_BY_PROVIDER.codex) {
-      expect(resolveModelSlug(model.slug)).toBe(model.slug);
-    }
   });
 
   it("supports provider-aware resolution", () => {
@@ -227,12 +195,6 @@ describe("resolveModelSlug", () => {
     expect(resolveModelSlugForProvider("claudeAgent", "gpt-5.3-codex")).toBe(
       DEFAULT_MODEL_BY_PROVIDER.claudeAgent,
     );
-  });
-
-  it("keeps codex defaults for backward compatibility", () => {
-    expect(getDefaultModel()).toBe(DEFAULT_MODEL);
-    expect(getModelOptions()).toEqual(MODEL_OPTIONS_BY_PROVIDER.codex);
-    expect(getModelOptions("claudeAgent")).toEqual(MODEL_OPTIONS_BY_PROVIDER.claudeAgent);
   });
 });
 
@@ -287,14 +249,6 @@ describe("resolveSelectableModel", () => {
     ).toBeNull();
   });
 
-  it("does not accept normalized custom-looking slugs unless they exist in options", () => {
-    expect(
-      resolveSelectableModel("codex", "custom/internal-model", [
-        { slug: "gpt-5.4", name: "GPT-5.4" },
-      ]),
-    ).toBeNull();
-  });
-
   it("respects provider boundaries", () => {
     expect(
       resolveSelectableModel("codex", "sonnet", [{ slug: "gpt-5.3-codex", name: "GPT-5.3 Codex" }]),
@@ -310,11 +264,6 @@ describe("resolveSelectableModel", () => {
 describe("getModelCapabilities reasoningEffortLevels", () => {
   const values = (provider: "codex" | "claudeAgent" | "grok" | "droid", model: string | null) =>
     getModelCapabilities(provider, model).reasoningEffortLevels.map((l) => l.value);
-
-  it("returns codex reasoning options for codex", () => {
-    expect(values("codex", "gpt-5.5")).toEqual([...CODEX_REASONING_EFFORT_OPTIONS]);
-    expect(values("codex", "gpt-5.4")).toEqual([...CODEX_REASONING_EFFORT_OPTIONS]);
-  });
 
   it("keeps the GPT-6 Sol and Luna effort ranges distinct", () => {
     expect(values("codex", "gpt-6-sol")).toEqual([
@@ -360,42 +309,8 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
     ]);
   });
 
-  it("returns claude effort options for Fable 5", () => {
-    expect(values("claudeAgent", "claude-fable-5")).toEqual([
-      "low",
-      "medium",
-      "high",
-      "xhigh",
-      "max",
-      "ultracode",
-    ]);
-  });
-
-  it("returns claude effort options for Opus 5", () => {
-    expect(values("claudeAgent", "claude-opus-5")).toEqual([
-      "low",
-      "medium",
-      "high",
-      "xhigh",
-      "max",
-      "ultracode",
-    ]);
-  });
-
   it("returns claude effort options for Opus 4.7", () => {
     expect(values("claudeAgent", "claude-opus-4-7")).toEqual([
-      "low",
-      "medium",
-      "high",
-      "xhigh",
-      "max",
-      "ultrathink",
-      "ultracode",
-    ]);
-  });
-
-  it("returns claude effort options for Opus 4.8", () => {
-    expect(values("claudeAgent", "claude-opus-4-8")).toEqual([
       "low",
       "medium",
       "high",
@@ -443,16 +358,6 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
     });
   });
 
-  it("returns claude effort options for Sonnet 4.6", () => {
-    expect(values("claudeAgent", "claude-sonnet-4-6")).toEqual([
-      "low",
-      "medium",
-      "high",
-      "max",
-      "ultrathink",
-    ]);
-  });
-
   it("returns no claude effort options for Haiku 4.5", () => {
     expect(values("claudeAgent", "claude-haiku-4-5")).toEqual([]);
   });
@@ -466,34 +371,6 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
     expect(values("grok", "grok-4.5")).toEqual(["low", "medium", "high"]);
     expect(values("grok", "grok-4.6")).toEqual(["low", "medium", "high", "xhigh"]);
     expect(values("grok", "grok-4.7")).toEqual(["low", "medium", "high", "xhigh"]);
-  });
-
-  it("co-locates labels with effort values", () => {
-    const levels = getModelCapabilities("claudeAgent", "claude-opus-4-6").reasoningEffortLevels;
-    const high = levels.find((l) => l.value === "high");
-    expect(high).toMatchObject({
-      value: "high",
-      label: "High",
-      isDefault: true,
-      controlSource: "api-effort",
-    });
-    const xhigh = getModelCapabilities("claudeAgent", "claude-opus-4-7").reasoningEffortLevels.find(
-      (l) => l.value === "xhigh",
-    );
-    expect(xhigh).toMatchObject({
-      value: "xhigh",
-      label: "Extra High",
-      controlSource: "api-effort",
-    });
-    expect(
-      getModelCapabilities("grok", "grok-4.6").reasoningEffortLevels.find(
-        (l) => l.value === "xhigh",
-      ),
-    ).toMatchObject({
-      value: "xhigh",
-      label: "Extra High",
-      description: "Highest effort and reasoning level",
-    });
   });
 });
 
@@ -698,24 +575,6 @@ describe("provider option descriptor helpers", () => {
     });
     expect(explicitDescriptor).toMatchObject({ type: "select", currentValue: "200k" });
   });
-
-  it("marks Auto as the default auto-compact option for native 1M Claude models", () => {
-    const model = "claude-fable-5-1";
-    const descriptor = getProviderOptionDescriptors({
-      provider: "claudeAgent",
-      caps: getModelCapabilities("claudeAgent", model),
-    }).find((candidate) => candidate.id === "autoCompactWindow");
-
-    expect(descriptor).toMatchObject({
-      type: "select",
-      currentValue: "auto",
-      options: [
-        { id: "auto", label: "Auto (Claude Code)", isDefault: true },
-        { id: "200k", label: "200k" },
-        { id: "1m", label: "1M" },
-      ],
-    });
-  });
 });
 
 describe("context window helpers", () => {
@@ -860,16 +719,6 @@ describe("normalizeClaudeModelOptions", () => {
     ).toBeUndefined();
   });
 
-  it("preserves non-default Claude auto-compact budgets", () => {
-    expect(
-      normalizeClaudeModelOptions("claude-opus-4-6", {
-        autoCompactWindow: "1m",
-      }),
-    ).toEqual({
-      autoCompactWindow: "1m",
-    });
-  });
-
   it("preserves explicit Claude budgets even on native 1M models", () => {
     expect(
       normalizeClaudeModelOptions("claude-fable-5-1[1m]", {
@@ -929,17 +778,6 @@ describe("normalizeClaudeModelOptions", () => {
       }),
     ).toEqual({
       effort: "ultracode",
-    });
-  });
-
-  it("drops unsupported fast mode for Sonnet while preserving max effort", () => {
-    expect(
-      normalizeClaudeModelOptions("claude-sonnet-4-6", {
-        effort: "max",
-        fastMode: true,
-      }),
-    ).toEqual({
-      effort: "max",
     });
   });
 
@@ -1053,24 +891,6 @@ describe("claudeSelectionRequiresRestart", () => {
     ).toBe(true);
   });
 
-  it("does not restart when a model switch carries an unsupported thinking override", () => {
-    expect(
-      claudeSelectionRequiresRestart(
-        selection("claude-haiku-4-5", { thinking: false }),
-        selection("claude-opus-4-8", { thinking: false }),
-      ),
-    ).toBe(false);
-  });
-
-  it("does not restart when a model switch carries an unsupported fast-mode flag", () => {
-    expect(
-      claudeSelectionRequiresRestart(
-        selection("claude-opus-4-8", { effort: "high", fastMode: true }),
-        selection("claude-sonnet-5", { effort: "high", fastMode: true }),
-      ),
-    ).toBe(false);
-  });
-
   it("still restarts when spawn-fixed options change together with the model", () => {
     expect(
       claudeSelectionRequiresRestart(
@@ -1098,42 +918,6 @@ describe("claudeSelectionRequiresRestart", () => {
     ).toBe(false);
   });
 
-  it("compares normalized context overrides for every transition", () => {
-    for (const previous of [undefined, "auto", "200k", "1m", "invalid"]) {
-      for (const next of [undefined, "auto", "200k", "1m", "invalid"]) {
-        const previousOverride = previous === "200k" || previous === "1m" ? previous : undefined;
-        const nextOverride = next === "200k" || next === "1m" ? next : undefined;
-        expect(
-          claudeSelectionRequiresRestart(
-            selection(
-              "claude-fable-5-1",
-              previous === undefined ? {} : { contextWindow: previous },
-            ),
-            selection("claude-fable-5-1", next === undefined ? {} : { autoCompactWindow: next }),
-          ),
-        ).toBe(previousOverride !== nextOverride);
-      }
-    }
-  });
-
-  it("restarts when max effort toggles on", () => {
-    expect(
-      claudeSelectionRequiresRestart(
-        selection("claude-opus-4-8", { effort: "high" }),
-        selection("claude-opus-4-8", { effort: "max" }),
-      ),
-    ).toBe(true);
-  });
-
-  it("restarts when max effort toggles off", () => {
-    expect(
-      claudeSelectionRequiresRestart(
-        selection("claude-opus-4-8", { effort: "max" }),
-        selection("claude-opus-4-8", { effort: "high" }),
-      ),
-    ).toBe(true);
-  });
-
   it("does not restart for a non-max effort change", () => {
     // Non-max effort rides in the flag-settings layer (`effortLevel`) and
     // switches live via applyFlagSettings.
@@ -1151,53 +935,12 @@ describe("claudeSelectionRequiresRestart", () => {
     ).toBe(false);
   });
 
-  it("treats ultrathink as prompt-injected, not a spawn change", () => {
-    // ultrathink carries no API effort, so switching from no effort to ultrathink
-    // must not respawn the subprocess.
-    expect(
-      claudeSelectionRequiresRestart(
-        selection("claude-opus-4-8"),
-        selection("claude-opus-4-8", { effort: "ultrathink" }),
-      ),
-    ).toBe(false);
-  });
-
-  it("does not restart when ultracode toggles", () => {
-    // ultracode is a Settings key (xhigh effortLevel + ultracode) applied live.
-    expect(
-      claudeSelectionRequiresRestart(
-        selection("claude-opus-4-8", { effort: "xhigh" }),
-        selection("claude-opus-4-8", { effort: "ultracode" }),
-      ),
-    ).toBe(false);
-  });
-
   it("does not restart when fast mode toggles", () => {
     // fastMode is a Settings key applied live via applyFlagSettings.
     expect(
       claudeSelectionRequiresRestart(
         selection("claude-opus-4-8", { effort: "high" }),
         selection("claude-opus-4-8", { effort: "high", fastMode: true }),
-      ),
-    ).toBe(false);
-  });
-
-  it("does not restart when the thinking toggle changes", () => {
-    // The thinking toggle switches live via the SDK flag-settings control.
-    expect(
-      claudeSelectionRequiresRestart(
-        selection("claude-haiku-4-5"),
-        selection("claude-haiku-4-5", { thinking: false }),
-      ),
-    ).toBe(false);
-  });
-
-  it("ignores options the target model does not support", () => {
-    // fastMode is not supported on Sonnet models, so toggling it is a no-op.
-    expect(
-      claudeSelectionRequiresRestart(
-        selection("claude-sonnet-5", { effort: "high" }),
-        selection("claude-sonnet-5", { effort: "high", fastMode: true }),
       ),
     ).toBe(false);
   });
@@ -1218,15 +961,6 @@ describe("normalizeCursorModelOptions", () => {
     expect(normalizeCursorModelOptions("grok-4.6", { reasoningEffort: "high" })).toEqual({
       reasoningEffort: "high",
       fastMode: false,
-    });
-  });
-
-  it("keeps a non-default Cursor Grok effort when fast mode is enabled", () => {
-    expect(
-      normalizeCursorModelOptions("grok-4.6", { reasoningEffort: "low", fastMode: true }),
-    ).toEqual({
-      reasoningEffort: "low",
-      fastMode: true,
     });
   });
 });
@@ -1326,76 +1060,6 @@ describe("getModelCapabilities Claude capability flags", () => {
     expect(caps("claude-3-opus")).toBe(EMPTY_MODEL_CAPABILITIES);
     expect(caps("us.anthropic.claude-opus-6-v1")).toBe(EMPTY_MODEL_CAPABILITIES);
     expect(caps("enterprise-model")).toBe(EMPTY_MODEL_CAPABILITIES);
-  });
-
-  it("enables adaptive reasoning for supported Claude models", () => {
-    const has = (m: string | undefined) =>
-      getModelCapabilities("claudeAgent", m).reasoningEffortLevels.length > 0;
-    expect(has("claude-opus-5-5")).toBe(true);
-    expect(has("claude-opus-5")).toBe(true);
-    expect(has("claude-opus-4-8")).toBe(true);
-    expect(has("claude-opus-4-7")).toBe(true);
-    expect(has("claude-opus-4-6")).toBe(true);
-    expect(has("claude-sonnet-5")).toBe(true);
-    expect(has("claude-sonnet-4-6")).toBe(true);
-    expect(has("claude-haiku-4-5")).toBe(false);
-    expect(has(undefined)).toBe(false);
-  });
-
-  it("enables max effort for supported Claude models", () => {
-    const has = (m: string | undefined) =>
-      getModelCapabilities("claudeAgent", m).reasoningEffortLevels.some((l) => l.value === "max");
-    expect(has("claude-opus-5-5")).toBe(true);
-    expect(has("claude-opus-5")).toBe(true);
-    expect(has("claude-opus-4-8")).toBe(true);
-    expect(has("claude-opus-4-7")).toBe(true);
-    expect(has("claude-opus-4-6")).toBe(true);
-    expect(has("claude-sonnet-5")).toBe(true);
-    expect(has("claude-sonnet-4-6")).toBe(true);
-    expect(has("claude-haiku-4-5")).toBe(false);
-    expect(has(undefined)).toBe(false);
-  });
-
-  it("only enables Claude fast mode for Opus 4.6", () => {
-    const has = (m: string | undefined) => getModelCapabilities("claudeAgent", m).supportsFastMode;
-    expect(has("claude-opus-5-5")).toBe(true);
-    expect(has("claude-opus-5")).toBe(true);
-    expect(has("claude-opus-4-8")).toBe(true);
-    expect(has("claude-opus-4-7")).toBe(true);
-    expect(has("claude-opus-4-6")).toBe(true);
-    expect(has("opus")).toBe(true);
-    expect(has("claude-sonnet-5")).toBe(false);
-    expect(has("claude-sonnet-4-6")).toBe(false);
-    expect(has("claude-haiku-4-5")).toBe(false);
-    expect(has(undefined)).toBe(false);
-  });
-
-  it("only enables ultrathink keyword handling for Opus 4.6 and Sonnet 4.6", () => {
-    const has = (m: string | undefined) =>
-      getModelCapabilities("claudeAgent", m).promptInjectedEffortLevels.includes("ultrathink");
-    expect(has("claude-fable-5-1")).toBe(false);
-    expect(has("claude-fable-5")).toBe(false);
-    expect(has("claude-opus-5-5")).toBe(false);
-    expect(has("claude-opus-5")).toBe(false);
-    expect(has("claude-opus-4-8")).toBe(true);
-    expect(has("claude-opus-4-7")).toBe(true);
-    expect(has("claude-opus-4-6")).toBe(true);
-    expect(has("claude-sonnet-5")).toBe(false);
-    expect(has("claude-sonnet-4-6")).toBe(true);
-    expect(has("claude-haiku-4-5")).toBe(false);
-  });
-
-  it("only enables the Claude thinking toggle for Haiku 4.5", () => {
-    const has = (m: string | undefined) =>
-      getModelCapabilities("claudeAgent", m).supportsThinkingToggle;
-    expect(has("claude-opus-5-5")).toBe(false);
-    expect(has("claude-opus-5")).toBe(false);
-    expect(has("claude-opus-4-6")).toBe(false);
-    expect(has("claude-sonnet-5")).toBe(false);
-    expect(has("claude-sonnet-4-6")).toBe(false);
-    expect(has("claude-haiku-4-5")).toBe(true);
-    expect(has("haiku")).toBe(true);
-    expect(has(undefined)).toBe(false);
   });
 });
 

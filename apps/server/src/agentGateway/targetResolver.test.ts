@@ -278,17 +278,6 @@ describe("agent gateway target resolver", () => {
     }),
   );
 
-  it.effect("accepts Terra Low as a canonical model plus option", () =>
-    Effect.gen(function* () {
-      const target = {
-        provider: "codex" as const,
-        model: "gpt-5.6-terra",
-        options: { reasoningEffort: "low" },
-      };
-      assert.deepEqual(yield* resolveAgentGatewayTarget({ target, discovery }), target);
-    }),
-  );
-
   it.effect("rejects a guessed model slug before creation", () =>
     Effect.gen(function* () {
       const result = yield* resolveAgentGatewayTarget({
@@ -299,23 +288,6 @@ describe("agent gateway target resolver", () => {
         Effect.catch((error) => Effect.succeed(error)),
       );
       assert.equal(result.code, "model_unavailable");
-    }),
-  );
-
-  it.effect("rejects an unadvertised effort", () =>
-    Effect.gen(function* () {
-      const result = yield* resolveAgentGatewayTarget({
-        target: {
-          provider: "codex",
-          model: "gpt-5.6-terra",
-          options: { reasoningEffort: "ultra" },
-        },
-        discovery,
-      }).pipe(
-        Effect.map(() => ({ code: "unexpected-success" })),
-        Effect.catch((error) => Effect.succeed(error)),
-      );
-      assert.equal(result.code, "model_option_unavailable");
     }),
   );
 

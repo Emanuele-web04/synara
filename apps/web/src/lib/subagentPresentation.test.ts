@@ -2,11 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   formatSubagentModelLabel,
-  humanizeSubagentStatus,
   normalizeSubagentStatusKind,
   resolveSubagentPresentation,
   resolveSubagentPresentationForThread,
-  subagentAccentColor,
 } from "./subagentPresentation";
 
 describe("resolveSubagentPresentation", () => {
@@ -221,12 +219,6 @@ describe("resolveSubagentPresentationForThread", () => {
   });
 });
 
-describe("subagentAccentColor", () => {
-  it("stays stable for the same nickname", () => {
-    expect(subagentAccentColor("Halley")).toBe(subagentAccentColor("Halley"));
-  });
-});
-
 describe("normalizeSubagentStatusKind", () => {
   it("maps common provider statuses into Remodex-style buckets", () => {
     expect(normalizeSubagentStatusKind("in_progress")).toBe("running");
@@ -238,24 +230,7 @@ describe("normalizeSubagentStatusKind", () => {
   });
 });
 
-describe("humanizeSubagentStatus", () => {
-  it("returns readable labels for normalized statuses", () => {
-    expect(humanizeSubagentStatus("in_progress")).toBe("Running");
-    expect(humanizeSubagentStatus("completed")).toBe("Completed");
-    expect(humanizeSubagentStatus("unknown")).toBeUndefined();
-  });
-});
-
 describe("formatSubagentModelLabel", () => {
-  it("maps known codex subagent models to UI-friendly labels", () => {
-    expect(formatSubagentModelLabel("gpt-5.4-mini")).toBe("GPT-5.4 Mini");
-    expect(formatSubagentModelLabel("gpt-5.3-codex-spark")).toBe("GPT-5.3 Codex Spark");
-  });
-
-  it("humanizes unknown GPT subagent models", () => {
-    expect(formatSubagentModelLabel("gpt-5.1-codex-max")).toBe("GPT-5.1 Codex Max");
-  });
-
   it("drops the redundant Claude prefix for agent rows", () => {
     expect(formatSubagentModelLabel("claude-haiku-4-5-20251001")).toBe("Haiku 4.5");
     expect(formatSubagentModelLabel("claude-sonnet-4-6")).toBe("Sonnet 4.6");

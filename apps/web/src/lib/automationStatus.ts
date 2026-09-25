@@ -8,7 +8,7 @@ import type { AutomationDefinition, AutomationSchedule } from "@synara/contracts
 export type AutomationLifecycleState = "active" | "paused" | "scheduled" | "done";
 
 /** A "once" automation fires a single time; every other schedule recurs (or is manual). */
-export function isOneTimeSchedule(schedule: AutomationSchedule): boolean {
+function isOneTimeSchedule(schedule: AutomationSchedule): boolean {
   return schedule.type === "once";
 }
 

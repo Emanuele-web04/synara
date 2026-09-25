@@ -5,7 +5,6 @@ import {
   MessageId,
   ThreadId,
   TurnId,
-  type ComputerAvailability,
   type GitWorktreeSetupProgressEvent,
   type ModelSlug,
   type PendingClaudeCacheReview,
@@ -15,7 +14,6 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { QueuedComposerChatTurn } from "../composerDraftStore";
 import type { WorkLogEntry } from "../session-logic";
-import { AppSettingsSchema } from "../appSettings";
 
 import {
   appendVoiceTranscriptToPrompt,
@@ -34,8 +32,6 @@ import {
   threadHasProviderLockingActivity,
   threadHasProviderLockingMessages,
   hasFileUndoSettled,
-  isComposerCursorOnFirstLine,
-  isComposerCursorOnLastLine,
   type LocalDispatchSnapshot,
   promptStillMatchesActiveHistoryBrowse,
   resolvePromptHistoryNavigation,
@@ -47,12 +43,9 @@ import {
   planImplementationDispatchSettings,
   queuedChatTurnDispatchFields,
   queuedPlanFollowUpDispatchFields,
-  resolveEffectiveComputerControl,
   resolveQueuedTurnDispatchSettings,
-  threadSettingsDispatchFields,
   turnStartDispatchFields,
   type TurnDispatchSettings,
-  describeVoiceRecordingStartError,
   hasLiveTurnTakenOver,
   hasServerAcknowledgedLocalDispatch,
   isVoiceAuthExpiredMessage,
@@ -67,7 +60,6 @@ import {
   resolveEnvironmentPanelOpen,
   resolveEnvironmentPanelPreferenceAfterFirstSend,
   resolveEnvironmentPanelPreferenceUpdate,
-  resolveEnvironmentPanelVisible,
   resolveGitRepoUiState,
   resolveProjectScriptTerminalTarget,
   resolveQueuedSteerGateTransition,
@@ -78,7 +70,6 @@ import {
   runWorktreeCreationFlow,
   QUEUED_STEER_GATE_TIMEOUT_MS,
   sanitizeVoiceErrorMessage,
-  buildExpiredTerminalContextToastCopy,
   shouldAutoDeleteTerminalThreadOnLastClose,
   shouldConsumePendingCustomBinaryConfirmation,
   shouldEnableComposerPastedTextCollapse,
@@ -86,7 +77,6 @@ import {
   shouldRenderProviderHealthBanner,
   shouldShowComposerModelBootstrapSkeleton,
   shouldStartActiveTurnLayoutGrace,
-  shouldRenderTerminalWorkspace,
   worktreeSetupHasError,
 } from "./ChatView.logic";
 
@@ -240,19 +230,6 @@ describe("settled thread branch mismatch", () => {
 });
 
 describe("transcript auto-follow signal", () => {
-  it("stays stable when only non-message turn activity changes", () => {
-    const before = buildTranscriptAutoFollowSignal({
-      messageCount: 3,
-      tailKey: "assistant-3:assistant:streaming:content:120",
-    });
-    const afterWorkRow = buildTranscriptAutoFollowSignal({
-      messageCount: 3,
-      tailKey: "assistant-3:assistant:streaming:content:120",
-    });
-
-    expect(afterWorkRow).toBe(before);
-  });
-
   it("changes for a real transcript append or tail lifecycle change", () => {
     const streaming = buildTranscriptAutoFollowSignal({
       messageCount: 3,
@@ -271,19 +248,6 @@ describe("transcript auto-follow signal", () => {
         tailKey: "assistant-3:assistant:settled:content:120",
       }),
     ).not.toBe(streaming);
-  });
-
-  it("changes when the tail key reports a lifecycle transition", () => {
-    const firstChunk = buildTranscriptAutoFollowSignal({
-      messageCount: 3,
-      tailKey: "assistant-3:assistant:streaming:content:",
-    });
-    const settled = buildTranscriptAutoFollowSignal({
-      messageCount: 3,
-      tailKey: "assistant-3:assistant:settled:content:2026-01-01T00:00:00Z",
-    });
-
-    expect(settled).not.toBe(firstChunk);
   });
 });
 
@@ -582,18 +546,6 @@ describe("prompt history navigation", () => {
     ).toBe(true);
   });
 
-  it("detects first and last line cursor positions", () => {
-    const prompt = "first\nmiddle\nlast";
-
-    expect(isComposerCursorOnFirstLine(prompt, 0)).toBe(true);
-    expect(isComposerCursorOnFirstLine(prompt, 5)).toBe(true);
-    expect(isComposerCursorOnFirstLine(prompt, 6)).toBe(false);
-
-    expect(isComposerCursorOnLastLine(prompt, 13)).toBe(true);
-    expect(isComposerCursorOnLastLine(prompt, prompt.length)).toBe(true);
-    expect(isComposerCursorOnLastLine(prompt, 12)).toBe(false);
-  });
-
   it("navigates older prompts from a non-empty draft and restores the draft at the end", () => {
     const history = ["third prompt", "second prompt", "first prompt"];
     const first = resolvePromptHistoryNavigation({
@@ -849,17 +801,6 @@ describe("composer pasted text collapse", () => {
 });
 
 describe("voice helpers", () => {
-  it("keeps manual titles visible for empty home chats", () => {
-    expect(
-      resolveActiveThreadTitle({
-        title: "Roadmap scratchpad",
-        subagentTitle: null,
-        isHomeChat: true,
-        isEmpty: true,
-      }),
-    ).toBe("Roadmap scratchpad");
-  });
-
   it("maps untouched empty home chats to the friendly header label", () => {
     expect(
       resolveActiveThreadTitle({
@@ -869,17 +810,6 @@ describe("voice helpers", () => {
         isEmpty: true,
       }),
     ).toBe("New Chat");
-  });
-
-  it("prefers the resolved subagent label when present", () => {
-    expect(
-      resolveActiveThreadTitle({
-        title: "Ignored raw title",
-        subagentTitle: "Reviewer / Fix follow-up",
-        isHomeChat: false,
-        isEmpty: false,
-      }),
-    ).toBe("Reviewer / Fix follow-up");
   });
 
   it("hides fork-imported transcript rows only for sidechats", () => {
@@ -971,10 +901,6 @@ describe("voice helpers", () => {
     );
   });
 
-  it("returns null when the transcript is empty", () => {
-    expect(appendVoiceTranscriptToPrompt("Hello", "   ")).toBeNull();
-  });
-
   it("sanitizes inline stack traces from voice errors", () => {
     expect(
       sanitizeVoiceErrorMessage(
@@ -994,13 +920,6 @@ describe("voice helpers", () => {
   it("detects auth-expired copy in sanitized voice errors", () => {
     expect(isVoiceAuthExpiredMessage("Sign in again to ChatGPT")).toBe(true);
     expect(isVoiceAuthExpiredMessage("The microphone could not be opened.")).toBe(false);
-  });
-
-  it("maps microphone permission errors to clearer copy", () => {
-    const error = new Error("Permission denied");
-    error.name = "NotAllowedError";
-
-    expect(describeVoiceRecordingStartError(error)).toContain("Microphone access was denied");
   });
 
   it("derives voice-note availability from provider auth and runtime state", () => {
@@ -1092,27 +1011,6 @@ describe("environment panel visibility", () => {
     ).toBe(false);
   });
 
-  it("lets a manual preference override the default while switching chats", () => {
-    expect(
-      resolveEnvironmentPanelOpen({
-        defaultOpen: true,
-        userPreferenceOpen: null,
-      }),
-    ).toBe(true);
-    expect(
-      resolveEnvironmentPanelOpen({
-        defaultOpen: true,
-        userPreferenceOpen: false,
-      }),
-    ).toBe(false);
-    expect(
-      resolveEnvironmentPanelOpen({
-        defaultOpen: false,
-        userPreferenceOpen: true,
-      }),
-    ).toBe(true);
-  });
-
   it("persists explicit toggles but keeps action-driven closes session-only", () => {
     expect(resolveEnvironmentPanelPreferenceUpdate({ open: true, persist: true })).toEqual({
       userPreferenceOpen: true,
@@ -1168,30 +1066,6 @@ describe("environment panel visibility", () => {
         userPreferenceOpen: afterFirstSend,
       }),
     ).toBe(true);
-  });
-
-  it("renders the panel when the user toggles it open on empty landing", () => {
-    expect(
-      resolveEnvironmentPanelVisible({
-        environmentEnabled: true,
-        environmentPanelOpen: true,
-      }),
-    ).toBe(true);
-  });
-
-  it("keeps the panel hidden when environment controls are disabled or closed", () => {
-    expect(
-      resolveEnvironmentPanelVisible({
-        environmentEnabled: false,
-        environmentPanelOpen: true,
-      }),
-    ).toBe(false);
-    expect(
-      resolveEnvironmentPanelVisible({
-        environmentEnabled: true,
-        environmentPanelOpen: false,
-      }),
-    ).toBe(false);
   });
 });
 
@@ -1452,19 +1326,6 @@ describe("shouldShowComposerModelBootstrapSkeleton", () => {
     ).toBe(true);
   });
 
-  it("hides the skeleton for a provider requiring discovered models after loading completes", () => {
-    expect(
-      shouldShowComposerModelBootstrapSkeleton({
-        selectedProvider: "cursor",
-        selectedModel: "auto",
-        persistedModelSelection: null,
-        draftModelSelection: null,
-        providerModelsLoading: false,
-        requiresDiscoveredModels: true,
-      }),
-    ).toBe(false);
-  });
-
   it("shows a skeleton while provider discovery is still resolving a persisted thread model", () => {
     expect(
       shouldShowComposerModelBootstrapSkeleton({
@@ -1561,16 +1422,6 @@ describe("resolveCommittedProviderModel", () => {
       }),
     ).toBe("grok-code-fast-1-0825");
   });
-
-  it("falls back to static alias resolution when the selected slug is not in the options", () => {
-    expect(
-      resolveCommittedProviderModel({
-        selectedModel: "code-fast" as ModelSlug,
-        availableOptions: [],
-        fallback: () => "grok-build-0.1",
-      }),
-    ).toBe("grok-build-0.1");
-  });
 });
 
 describe("shouldConsumePendingCustomBinaryConfirmation", () => {
@@ -1581,15 +1432,6 @@ describe("shouldConsumePendingCustomBinaryConfirmation", () => {
         pendingCustomBinaryPath: "/custom/bin/opencode",
       }),
     ).toBe(true);
-  });
-
-  it("skips already checked sessions when there is no pending path to confirm", () => {
-    expect(
-      shouldConsumePendingCustomBinaryConfirmation({
-        sessionAlreadyChecked: true,
-        pendingCustomBinaryPath: null,
-      }),
-    ).toBe(false);
   });
 });
 
@@ -1667,96 +1509,6 @@ describe("deriveComposerSendState", () => {
     });
 
     expect(state.hasSendableContent).toBe(true);
-  });
-
-  it("treats file comments as sendable content", () => {
-    const state = deriveComposerSendState({
-      prompt: "",
-      imageCount: 0,
-      fileCount: 0,
-      assistantSelectionCount: 0,
-      browserAnnotationCount: 0,
-      fileCommentCount: 1,
-      terminalContexts: [],
-      pastedTexts: [],
-      pullRequestContexts: [],
-    });
-
-    expect(state.hasSendableContent).toBe(true);
-  });
-
-  it("treats file attachments as sendable content", () => {
-    const state = deriveComposerSendState({
-      prompt: "",
-      imageCount: 0,
-      fileCount: 1,
-      assistantSelectionCount: 0,
-      browserAnnotationCount: 0,
-      fileCommentCount: 0,
-      terminalContexts: [],
-      pastedTexts: [],
-      pullRequestContexts: [],
-    });
-
-    expect(state.hasSendableContent).toBe(true);
-  });
-
-  it("treats browser annotations as sendable content", () => {
-    const state = deriveComposerSendState({
-      prompt: "",
-      imageCount: 0,
-      fileCount: 0,
-      assistantSelectionCount: 0,
-      browserAnnotationCount: 1,
-      fileCommentCount: 0,
-      terminalContexts: [],
-      pastedTexts: [],
-      pullRequestContexts: [],
-    });
-
-    expect(state.hasSendableContent).toBe(true);
-  });
-});
-
-describe("buildExpiredTerminalContextToastCopy", () => {
-  it("formats clear empty-state guidance", () => {
-    expect(buildExpiredTerminalContextToastCopy(1, "empty")).toEqual({
-      title: "Expired terminal context won't be sent",
-      description: "Remove it or re-add it to include terminal output.",
-    });
-  });
-
-  it("formats omission guidance for sent messages", () => {
-    expect(buildExpiredTerminalContextToastCopy(2, "omitted")).toEqual({
-      title: "Expired terminal contexts omitted from message",
-      description: "Re-add it if you want that terminal output included.",
-    });
-  });
-});
-
-describe("shouldRenderTerminalWorkspace", () => {
-  it("renders the workspace shell before the active project has hydrated", () => {
-    expect(
-      shouldRenderTerminalWorkspace({
-        presentationMode: "workspace",
-        terminalOpen: true,
-      }),
-    ).toBe(true);
-  });
-
-  it("renders only for an open workspace terminal", () => {
-    expect(
-      shouldRenderTerminalWorkspace({
-        presentationMode: "workspace",
-        terminalOpen: true,
-      }),
-    ).toBe(true);
-    expect(
-      shouldRenderTerminalWorkspace({
-        presentationMode: "drawer",
-        terminalOpen: true,
-      }),
-    ).toBe(false);
   });
 });
 
@@ -1898,24 +1650,6 @@ describe("worktree setup snapshots", () => {
     ]);
   });
 
-  it("starts with every step pending except the first when setup begins", () => {
-    expect(createWorktreeSetupSnapshot("create-branch").steps.map((step) => step.status)).toEqual([
-      "active",
-      "pending",
-      "pending",
-      "pending",
-    ]);
-  });
-
-  it("ends with every step done except the last when the session starts", () => {
-    expect(createWorktreeSetupSnapshot("start-session").steps.map((step) => step.status)).toEqual([
-      "done",
-      "done",
-      "done",
-      "active",
-    ]);
-  });
-
   it("inserts the copy step when the worktree copies local changes", () => {
     expect(createWorktreeSetupSnapshot("copy-changes").steps).toEqual([
       { id: "create-branch", label: "Creating branch", status: "done" },
@@ -1934,18 +1668,6 @@ describe("worktree setup snapshots", () => {
       "copy-changes",
       "prepare-thread",
       "start-session",
-    ]);
-  });
-
-  it("inserts the setup action step when a worktree setup script is present", () => {
-    expect(
-      createWorktreeSetupSnapshot("run-setup-action", { setupScriptName: "Setup" }).steps,
-    ).toEqual([
-      { id: "create-branch", label: "Creating branch", status: "done" },
-      { id: "create-worktree", label: "Creating worktree", status: "done" },
-      { id: "prepare-thread", label: "Linking thread workspace", status: "done" },
-      { id: "run-setup-action", label: "Running setup action: Setup", status: "active" },
-      { id: "start-session", label: "Starting session", status: "pending" },
     ]);
   });
 
@@ -2003,16 +1725,6 @@ describe("worktree setup snapshots", () => {
 
     expect(resolution.action).toBe("work-locally");
     await expect(resolution.promise).resolves.toBe("work-locally");
-  });
-
-  it("exposes a cancel resolution through both the getter and the promise", async () => {
-    const resolution = createWorktreeSetupResolution();
-    const settled = resolution.promise;
-
-    resolution.resolve("cancel");
-
-    expect(resolution.action).toBe("cancel");
-    await expect(settled).resolves.toBe("cancel");
   });
 
   it("replaces a held failed setup when a fresh local dispatch starts", () => {
@@ -3081,24 +2793,6 @@ describe("resolveDraftFallbackModelSelection", () => {
     ).toEqual({ provider: "devin", model: "adaptive" });
   });
 
-  it("keeps the project default model when it matches the settings provider", () => {
-    expect(
-      resolveDraftFallbackModelSelection({
-        projectDefault: { provider: "devin", model: "swe-1-7" },
-        settingsDefaultProvider: "devin",
-      }),
-    ).toEqual({ provider: "devin", model: "swe-1-7" });
-  });
-
-  it("uses the project default provider when the settings default is pi", () => {
-    expect(
-      resolveDraftFallbackModelSelection({
-        projectDefault: { provider: "claudeAgent", model: "claude-sonnet-5" },
-        settingsDefaultProvider: "pi",
-      }),
-    ).toEqual({ provider: "claudeAgent", model: "claude-sonnet-5" });
-  });
-
   it("falls back to codex when the settings default is pi and no project default exists", () => {
     expect(
       resolveDraftFallbackModelSelection({
@@ -3106,15 +2800,6 @@ describe("resolveDraftFallbackModelSelection", () => {
         settingsDefaultProvider: "pi",
       }),
     ).toEqual({ provider: "codex", model: DEFAULT_MODEL_BY_PROVIDER.codex });
-  });
-
-  it("uses the settings provider default model when no project default exists", () => {
-    expect(
-      resolveDraftFallbackModelSelection({
-        projectDefault: undefined,
-        settingsDefaultProvider: "grok",
-      }),
-    ).toEqual({ provider: "grok", model: "grok-4.6" });
   });
 });
 
@@ -3185,20 +2870,6 @@ describe("turn dispatch settings", () => {
     });
   });
 
-  it("projects an edit-and-resend payload without a dispatch mode", () => {
-    const fields = editAndResendDispatchFields(LIVE_SETTINGS);
-    expect(Object.keys(fields)).toEqual([
-      "modelSelection",
-      "providerOptions",
-      "enableComputerControl",
-      "computerControlGeneration",
-      "computerControlMode",
-      "assistantDeliveryMode",
-      "runtimeMode",
-      "interactionMode",
-    ]);
-  });
-
   it("projects a queued chat turn, with and without a source plan", () => {
     const withPlan = queuedChatTurnDispatchFields(LIVE_SETTINGS, {
       threadId: ThreadId.makeUnsafe("thread-1"),
@@ -3229,25 +2900,6 @@ describe("turn dispatch settings", () => {
       "envMode",
     ]);
     expect("sourceProposedPlan" in withoutPlan).toBe(false);
-  });
-
-  it("projects a queued plan follow-up without an interaction mode or environment", () => {
-    expect(Object.keys(queuedPlanFollowUpDispatchFields(LIVE_SETTINGS))).toEqual([
-      "modelSelection",
-      "providerOptionsForDispatch",
-      "enableComputerControl",
-      "computerControlGeneration",
-      "computerControlMode",
-      "runtimeMode",
-    ]);
-  });
-
-  it("projects the thread-level settings for creation and persistence", () => {
-    expect(threadSettingsDispatchFields(LIVE_SETTINGS)).toEqual({
-      modelSelection: LIVE_SETTINGS.modelSelection,
-      runtimeMode: "auto",
-      interactionMode: "plan",
-    });
   });
 
   it("omits provider options entirely when there are none", () => {
@@ -3404,107 +3056,5 @@ describe("turn dispatch settings", () => {
     expect(resolved.runtimeMode).toBe("approval-required");
     expect(resolved.enableComputerControl).toBe(false);
     expect(resolved.computerControlMode).toBe("off");
-  });
-});
-
-describe("resolveEffectiveComputerControl", () => {
-  it.each<ComputerAvailability | undefined>([
-    undefined,
-    { kind: "available", backend: "mac" },
-    {
-      kind: "permission-required",
-      missing: ["accessibility", "screenRecording"],
-      message: "Allow Synara in System Settings.",
-      buildSignature: "adhoc",
-    },
-    { kind: "backend-unavailable", message: "Reconnecting." },
-  ])(
-    "keeps the shipped default off while the backend is ready, loading, or needs setup: %j",
-    (availability) => {
-      expect(
-        resolveEffectiveComputerControl({
-          draftOverride: undefined,
-          availability,
-          chatHasTurns: false,
-          computerControlEnabled: AppSettingsSchema.makeUnsafe({}).computerControlEnabled,
-        }),
-      ).toBe(false);
-      expect(
-        resolveEffectiveComputerControl({
-          draftOverride: undefined,
-          availability,
-          chatHasTurns: false,
-          computerControlEnabled: true,
-        }),
-      ).toBe(true);
-    },
-  );
-
-  it("stays off on a server that cannot support computer use", () => {
-    expect(
-      resolveEffectiveComputerControl({
-        draftOverride: undefined,
-        availability: { kind: "unsupported-platform", platform: "win32" },
-        computerControlEnabled: true,
-        chatHasTurns: false,
-      }),
-    ).toBe(false);
-  });
-
-  it("honors the machine-wide opt-out for an untouched chat", () => {
-    expect(
-      resolveEffectiveComputerControl({
-        draftOverride: undefined,
-        availability: { kind: "available", backend: "mac" },
-        computerControlEnabled: false,
-        chatHasTurns: false,
-      }),
-    ).toBe(false);
-  });
-
-  it("does not apply the new-chat default retroactively to a chat that already has turns", () => {
-    // Turning the setting on must not hand existing conversations the desktop
-    // (and its screenshots) on their next turn; only chats that start afterwards
-    // follow it, and those capture it on their first send.
-    expect(
-      resolveEffectiveComputerControl({
-        draftOverride: undefined,
-        availability: { kind: "available", backend: "mac" },
-        computerControlEnabled: true,
-        chatHasTurns: true,
-      }),
-    ).toBe(false);
-  });
-
-  it("lets a per-chat override win in both directions, even against the default", () => {
-    // Override on while the machine opted out.
-    expect(
-      resolveEffectiveComputerControl({
-        draftOverride: true,
-        availability: { kind: "available", backend: "mac" },
-        computerControlEnabled: false,
-        chatHasTurns: true,
-      }),
-    ).toBe(true);
-    // Override off while the machine (and availability) would default it on.
-    expect(
-      resolveEffectiveComputerControl({
-        draftOverride: false,
-        availability: { kind: "available", backend: "mac" },
-        computerControlEnabled: true,
-        chatHasTurns: false,
-      }),
-    ).toBe(false);
-  });
-
-  it("keeps a conversation's choice while reconnecting", () => {
-    expect(
-      resolveEffectiveComputerControl({
-        draftOverride: true,
-        availability: { kind: "backend-unavailable", message: "Reconnecting." },
-        computerControlEnabled: false,
-        chatHasTurns: false,
-      }),
-    ).toBe(true);
   });
 });

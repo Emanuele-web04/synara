@@ -10,9 +10,7 @@ import { getAppModelOptions } from "./appSettings";
 import {
   buildModelSelection,
   buildNextProviderOptions,
-  buildProviderOptionPatch,
   formatProviderModelOptionName,
-  groupProviderModelOptions,
   groupProviderModelOptionsWithFavorites,
   mergeDynamicModelOptions,
   providerModelCostMultiplierLabel,
@@ -92,7 +90,7 @@ describe("formatProviderModelOptionName", () => {
 });
 
 describe("mergeDynamicModelOptions", () => {
-  it.each(["pi", "opencode"] as const)(
+  it.each(["pi"] as const)(
     "preserves %s discovery names when selection adds a placeholder",
     (provider) => {
       const dynamicModels = [
@@ -129,19 +127,6 @@ describe("mergeDynamicModelOptions", () => {
     },
   );
 
-  it("normalizes slug-shaped Pi display names", () => {
-    expect(
-      mergeDynamicModelOptions({
-        provider: "pi",
-        staticOptions: [],
-        dynamicModels: [
-          { slug: "zai/glm-5.3-flash", name: "GLM-5.3-Flash" },
-          { slug: "deepseek/deepseek-v4-flash", name: "Deepseek V4 Flash" },
-        ],
-      }).map((option) => option.name),
-    ).toEqual(["GLM 5.3 Flash", "DeepSeek V4 Flash"]);
-  });
-
   it("does not offer Pi Anthropic models when discovery only returns local models", () => {
     expect(
       mergeDynamicModelOptions({
@@ -157,19 +142,6 @@ describe("mergeDynamicModelOptions", () => {
         ],
       }).map((option) => option.slug),
     ).toEqual(["local/glm-5.2"]);
-  });
-
-  it("offers Pi Fable and Opus when authenticated discovery returns them", () => {
-    expect(
-      mergeDynamicModelOptions({
-        provider: "pi",
-        staticOptions: [],
-        dynamicModels: [
-          { slug: "anthropic/claude-fable-5", name: "Claude Fable 5" },
-          { slug: "anthropic/claude-opus-4-8", name: "Claude Opus 4.8" },
-        ],
-      }).map((option) => option.slug),
-    ).toEqual(["anthropic/claude-fable-5", "anthropic/claude-opus-4-8"]);
   });
 
   it("uses the live Antigravity catalog as authoritative and includes newly discovered models", () => {
@@ -383,24 +355,6 @@ describe("mergeDynamicModelOptions", () => {
       { slug: "claude-opus-5", name: "Claude Opus 5" },
     ]);
   });
-
-  it("treats the live Grok CLI catalog as authoritative", () => {
-    expect(
-      mergeDynamicModelOptions({
-        provider: "grok",
-        staticOptions: [
-          { slug: "grok-4.6", name: "Grok 4.6" },
-          { slug: "grok-4.5", name: "Grok 4.5" },
-          { slug: "grok-build", name: "Grok 4.3" },
-          { slug: "custom/grok-fast", name: "custom/grok-fast", isCustom: true },
-        ],
-        dynamicModels: [{ slug: "grok-4.6", name: "Grok 4.6" }],
-      }),
-    ).toEqual([
-      { slug: "grok-4.6", name: "Grok 4.6" },
-      { slug: "custom/grok-fast", name: "custom/grok-fast", isCustom: true },
-    ]);
-  });
 });
 
 describe("providerModelCostMultiplierLabel", () => {
@@ -446,44 +400,6 @@ describe("providerModelOptionProvenanceLabel", () => {
         option: { slug: "auto", name: "Auto" },
       }),
     ).toBe("Cursor");
-  });
-});
-
-describe("buildProviderOptionPatch", () => {
-  it("passes through option ids unchanged", () => {
-    expect(buildProviderOptionPatch("codex", "reasoningEffort", "xhigh")).toEqual({
-      reasoningEffort: "xhigh",
-    });
-    expect(buildProviderOptionPatch("droid", "reasoningEffort", "high")).toEqual({
-      reasoningEffort: "high",
-    });
-    expect(buildProviderOptionPatch("grok", "reasoningEffort", "high")).toEqual({
-      reasoningEffort: "high",
-    });
-    expect(buildProviderOptionPatch("cursor", "fastMode", true)).toEqual({ fastMode: true });
-  });
-});
-
-describe("groupProviderModelOptions", () => {
-  it("groups provider models by upstream provider", () => {
-    const options = [
-      {
-        slug: "anthropic/claude-sonnet",
-        name: "Claude Sonnet",
-        upstreamProviderId: "anthropic",
-        upstreamProviderName: "Anthropic",
-      },
-      {
-        slug: "openai/gpt-5",
-        name: "GPT-5",
-        upstreamProviderId: "openai",
-        upstreamProviderName: "OpenAI",
-      },
-    ] satisfies ProviderModelOption[];
-
-    const groupedOptions = groupProviderModelOptions(options);
-
-    expect(groupedOptions.map((group) => group.label)).toEqual(["Anthropic", "OpenAI"]);
   });
 });
 

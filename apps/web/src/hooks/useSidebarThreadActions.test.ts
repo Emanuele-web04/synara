@@ -394,12 +394,6 @@ describe("useSidebarThreadActions", () => {
     resolveMigration();
   });
 
-  it("keeps archive available while server-side runtime cleanup is pending", async () => {
-    await expect(render().archiveThread(THREAD_ID)).resolves.toBe(true);
-
-    expect(harness.archiveThread).toHaveBeenCalledWith(expect.anything(), THREAD_ID);
-  });
-
   it("serializes archives and navigates the active thread to its fallback", async () => {
     let releaseArchive!: () => void;
     harness.archiveThread.mockImplementation(

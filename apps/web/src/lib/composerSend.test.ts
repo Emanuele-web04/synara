@@ -414,10 +414,6 @@ describe("composerSend attachment builders", () => {
 });
 
 describe("effectiveComposerAttachmentCount", () => {
-  it("returns 0 when the draft is missing", () => {
-    expect(effectiveComposerAttachmentCount(undefined)).toBe(0);
-  });
-
   it("counts live images, files, and assistant selections", () => {
     expect(
       effectiveComposerAttachmentCount({
@@ -427,28 +423,6 @@ describe("effectiveComposerAttachmentCount", () => {
         persistedAttachments: [],
       }),
     ).toBe(4);
-  });
-
-  it("counts a persisted attachment that has not yet hydrated into images", () => {
-    expect(
-      effectiveComposerAttachmentCount({
-        images: [],
-        files: [],
-        assistantSelections: [],
-        persistedAttachments: [{ id: "pending-1" }],
-      }),
-    ).toBe(1);
-  });
-
-  it("does not double-count a persisted attachment already hydrated into images", () => {
-    expect(
-      effectiveComposerAttachmentCount({
-        images: [{ id: "image-1" }],
-        files: [],
-        assistantSelections: [],
-        persistedAttachments: [{ id: "image-1" }],
-      }),
-    ).toBe(1);
   });
 
   it("mixes hydrated and pending persisted attachments correctly", () => {

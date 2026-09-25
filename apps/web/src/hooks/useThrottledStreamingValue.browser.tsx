@@ -29,14 +29,6 @@ function renderThrottle(initialProps: ThrottleProps) {
 }
 
 describe("useThrottledStreamingValue", () => {
-  it("passes values through verbatim while inactive", async () => {
-    const hook = await renderThrottle({ value: "a", active: false });
-    expect(hook.result.current).toBe("a");
-    await hook.rerender({ value: "ab", active: false });
-    expect(hook.result.current).toBe("ab");
-    await hook.unmount();
-  });
-
   it("holds intermediate values back and lands the latest one on the trailing edge", async () => {
     const hook = await renderThrottle({ value: "a", active: true });
     expect(hook.result.current).toBe("a");

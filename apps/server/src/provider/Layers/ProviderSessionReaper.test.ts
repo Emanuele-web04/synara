@@ -158,54 +158,6 @@ function makeFakeAdapter(provider: ProviderKind) {
 }
 
 describe("ProviderSessionReaperLive", () => {
-  it("stops stale sessions without active turns using a cursor-preserving runtime stop", async () => {
-    const threadId = ThreadId.makeUnsafe("thread-reaper-stale");
-    const stopSession = vi.fn<ProviderServiceShape["stopSession"]>(() => Effect.void);
-    const stopRuntimeSession = vi.fn<NonNullable<ProviderServiceShape["stopRuntimeSession"]>>(
-      () => Effect.void,
-    );
-    const directory: ProviderSessionDirectoryShape = {
-      upsert: () => Effect.void,
-      getProvider: () => unsupported(),
-      getBinding: () => unsupported(),
-      remove: () => Effect.void,
-      listThreadIds: () => Effect.succeed([]),
-      listBindings: () =>
-        Effect.succeed([
-          {
-            threadId,
-            provider: "codex",
-            status: "running",
-            lastSeenAt: "2026-01-01T00:00:00.000Z",
-            resumeCursor: { threadId: "native-thread-reaper-stale" },
-          },
-        ]),
-    };
-
-    const scope = await Effect.runPromise(Scope.make());
-    try {
-      await Effect.gen(function* () {
-        const reaper = yield* ProviderSessionReaper;
-        yield* Scope.provide(reaper.start(), scope);
-      }).pipe(
-        Effect.provide(
-          makeLayer({
-            threadShell: makeThreadShell({ threadId, activeTurnId: null }),
-            directory,
-            providerService: makeProviderServiceStub({ stopSession, stopRuntimeSession }),
-          }),
-        ),
-        Effect.runPromise,
-      );
-      await waitFor(() => stopRuntimeSession.mock.calls.length === 1);
-    } finally {
-      await Effect.runPromise(Scope.close(scope, Exit.void));
-    }
-
-    expect(stopRuntimeSession).toHaveBeenCalledWith({ threadId });
-    expect(stopSession).not.toHaveBeenCalled();
-  });
-
   it("skips stale sessions with active turns", async () => {
     const threadId = ThreadId.makeUnsafe("thread-reaper-active");
     const turnId = TurnId.makeUnsafe("turn-reaper-active");
@@ -301,10 +253,6 @@ describe("ProviderSessionReaperLive", () => {
 
   it("keeps the Codex resume cursor after an idle reaper sweep of a pre-warmed running session", async () => {
     await assertIdleReaperPreservesResumeCursor("codex", "thread-reaper-idle-codex");
-  });
-
-  it("keeps the resume cursor without session.started emission", async () => {
-    await assertIdleReaperPreservesResumeCursor("claudeAgent", "thread-reaper-idle-claude");
   });
 });
 

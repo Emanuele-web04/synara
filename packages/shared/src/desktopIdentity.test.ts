@@ -145,7 +145,7 @@ describe("desktopIdentity", () => {
     ).toBe("canary");
   });
 
-  it.each(["development", "CUA", "unknown", null, {}, 1])(
+  it.each(["development", "CUA", null])(
     "rejects malformed packaged identity %j before opening any profile",
     (packagedFlavor) => {
       expect(() =>

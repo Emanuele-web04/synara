@@ -8,13 +8,11 @@ import { GitCoreLive } from "./Layers/GitCore.ts";
 import { GitCore } from "./Services/GitCore.ts";
 import { detectPrTemplate } from "./PrTemplateDetection.ts";
 
+// One row per location; case-insensitive matching is covered by the mixed-case test below.
 const SINGLE_TEMPLATE_PATHS = [
   ".github/pull_request_template.md",
-  ".github/PULL_REQUEST_TEMPLATE.md",
-  "pull_request_template.md",
   "PULL_REQUEST_TEMPLATE.md",
   "docs/pull_request_template.md",
-  "docs/PULL_REQUEST_TEMPLATE.md",
 ] as const;
 
 const TEMPLATE_DIRECTORIES = [

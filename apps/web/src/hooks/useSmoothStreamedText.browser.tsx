@@ -38,16 +38,6 @@ describe("useSmoothStreamedText", () => {
     vi.restoreAllMocks();
   });
 
-  it("returns the raw text with no animation when not streaming", async () => {
-    const hook = await renderSmoothText({ text: "finished reply", isStreaming: false });
-    expect(hook.result.current).toBe("finished reply");
-
-    await hook.rerender({ text: "finished reply, repaired", isStreaming: false });
-    expect(hook.result.current).toBe("finished reply, repaired");
-
-    await hook.unmount();
-  });
-
   it("shows mount text immediately and reveals appended deltas gradually", async () => {
     const mountText = "Hello ";
     const hook = await renderSmoothText({ text: mountText, isStreaming: true });

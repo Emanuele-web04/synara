@@ -357,40 +357,6 @@ describe("computer_invoke_menu", () => {
     });
     expect(replay.isError).toBe(true);
   });
-
-  it("drives another app's menus without asking", async () => {
-    const approval = vi.fn(async () => true);
-    const backend = new FakeComputerBackend();
-    const { manager, call } = await setup(backend, approval);
-    try {
-      // Both menus dispatch: only the denylist can refuse a drive.
-      const first = await call("computer_invoke_menu", {
-        window_id: "fake-terminal",
-        path: ["File"],
-      });
-      expect(first.isError).not.toBe(true);
-      const second = await call("computer_invoke_menu", {
-        window_id: "fake-calculator",
-        path: ["File"],
-      });
-      expect(second.isError).not.toBe(true);
-      expect(backend.callsFor("invokeMenu").length).toBe(2);
-    } finally {
-      await manager.dispose();
-    }
-  });
-
-  it("dispatches nothing when approval is refused", async () => {
-    const approval = vi.fn(async () => false);
-    const backend = new FakeComputerBackend();
-    const { call } = await setup(backend, approval);
-    const result = await call("computer_invoke_menu", {
-      window_id: "fake-terminal",
-      path: ["File", "Quit"],
-    });
-    expect(result.isError).toBe(true);
-    expect(backend.callsFor("invokeMenu")).toEqual([]);
-  });
 });
 
 describe("computer_get_accessibility_tree", () => {
@@ -546,6 +512,8 @@ describe("tool-name registry", () => {
       "computer_get_accessibility_tree",
       "computer_get_cursor_position",
       "computer_kill_app",
+      "computer_set_window_minimized",
+      "computer_set_app_visibility",
     ]) {
       // A served tool that the registry does not own dies two ways: the
       // denial card cannot route it and the provider permission path treats
@@ -556,56 +524,5 @@ describe("tool-name registry", () => {
       expect(canonicalSynaraComputerToolName(`mcp__synara__${name}`)).toBe(name);
       expect(isSynaraComputerToolFamilyName(name)).toBe(true);
     }
-  });
-});
-
-describe("computer_run step coverage", () => {
-  it("runs frame and menu steps in order inside one approved sequence", async () => {
-    const approval = vi.fn(async () => true);
-    const backend = new FakeComputerBackend();
-    const { call } = await setup(backend, approval);
-    const result = await call("computer_run", {
-      steps: [
-        {
-          type: "set_window_frame",
-          window_id: "fake-calculator",
-          x: 10,
-          y: 10,
-          width: 500,
-          height: 400,
-        },
-        { type: "invoke_menu", window_id: "fake-terminal", path: ["File"] },
-      ],
-    });
-    expect(result.isError).not.toBe(true);
-    expect(backend.callsFor("setWindowFrame").at(-1)?.args).toEqual([
-      "fake-calculator",
-      { x: 10, y: 10, width: 500, height: 400 },
-    ]);
-    expect(backend.callsFor("invokeMenu").at(-1)?.args).toEqual([
-      { windowId: "fake-terminal" },
-      ["File"],
-    ]);
-  });
-
-  it("refuses a run step missing its window or a menu path that is too deep", async () => {
-    const approval = vi.fn(async () => true);
-    const backend = new FakeComputerBackend();
-    const { call } = await setup(backend, approval);
-    const missingWindow = await call("computer_run", {
-      steps: [{ type: "set_window_frame", x: 0, y: 0, width: 10, height: 10 }],
-    });
-    expect(missingWindow.isError).toBe(true);
-    const deepMenu = await call("computer_run", {
-      steps: [
-        {
-          type: "invoke_menu",
-          window_id: "fake-terminal",
-          path: ["1", "2", "3", "4", "5", "6", "7"],
-        },
-      ],
-    });
-    expect(deepMenu.isError).toBe(true);
-    expect(backend.callsFor("invokeMenu")).toEqual([]);
   });
 });

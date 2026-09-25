@@ -1428,7 +1428,7 @@ function firstPiUserInputAnswer(
   return undefined;
 }
 
-export const PLAIN_PI_EXTENSION_THEME = {
+const PLAIN_PI_EXTENSION_THEME = {
   fg(_color: string, text: string) {
     return text;
   },

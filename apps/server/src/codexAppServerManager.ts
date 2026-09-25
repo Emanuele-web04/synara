@@ -827,7 +827,7 @@ export function normalizeCodexModelSlug(
   return normalized;
 }
 
-export function buildCodexInitializeParams() {
+function buildCodexInitializeParams() {
   return {
     clientInfo: {
       name: "synara_desktop",
