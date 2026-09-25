@@ -237,6 +237,7 @@ function render(
   return useSidebarThreadActions({
     activeSplitView: overrides.activeSplitView ?? null,
     appSettings: {
+      archiveDeletesOrphanedWorktree: false,
       confirmThreadArchive: false,
       confirmThreadDelete: false,
       sidebarThreadSortOrder: "updated_at",

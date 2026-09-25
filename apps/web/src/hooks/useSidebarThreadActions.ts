@@ -19,6 +19,7 @@ import {
 } from "../components/Sidebar.logic";
 import { toastManager } from "../components/ui/toast";
 import { deleteActiveThreadFromClient } from "../lib/activeThreadDelete";
+import { releaseOrphanedWorktreeAfterArchive } from "../lib/archiveThreadWorktreeCleanup";
 import { reconcileDeletedThreadsFromClient } from "../lib/deletedThreadClientReconciliation";
 import { gitRemoveWorktreeMutationOptions } from "../lib/gitReactQuery";
 import {
@@ -87,7 +88,10 @@ export function useSidebarThreadActions(input: {
   readonly activeSplitView: SplitView | null | undefined;
   readonly appSettings: Pick<
     AppSettings,
-    "confirmThreadArchive" | "confirmThreadDelete" | "sidebarThreadSortOrder"
+    | "archiveDeletesOrphanedWorktree"
+    | "confirmThreadArchive"
+    | "confirmThreadDelete"
+    | "sidebarThreadSortOrder"
   >;
   readonly clearTerminalState: (threadId: ThreadId) => void;
   readonly handleNewChat: (options?: { fresh?: boolean }) => Promise<unknown>;
@@ -573,6 +577,15 @@ export function useSidebarThreadActions(input: {
       pendingThreadIds.add(threadId);
       const runArchive = async (): Promise<boolean> => {
         await archiveThreadFromClient(api.orchestration, threadId);
+        // The archive is already accepted: the opt-in worktree release runs in the
+        // background, reports its own outcome, and can never fail the archive.
+        void releaseOrphanedWorktreeAfterArchive({
+          threadId,
+          enabled: appSettings.archiveDeletesOrphanedWorktree,
+          removeWorktree: (worktree) => removeWorktreeMutation.mutateAsync(worktree),
+        }).catch((error: unknown) => {
+          console.error("Failed to release worktree after archiving thread", { threadId, error });
+        });
         if (routeThreadId === threadId) {
           const fallbackThreadId = getFallbackThreadIdAfterDelete({
             threads: sidebarThreads,
@@ -596,7 +609,15 @@ export function useSidebarThreadActions(input: {
         pendingThreadIds.delete(threadId);
       });
     },
-    [appSettings.sidebarThreadSortOrder, handleNewChat, routeThreadId, sidebarThreads, navigate],
+    [
+      appSettings.archiveDeletesOrphanedWorktree,
+      appSettings.sidebarThreadSortOrder,
+      handleNewChat,
+      removeWorktreeMutation,
+      routeThreadId,
+      sidebarThreads,
+      navigate,
+    ],
   );
 
   const restoreArchivedThreadFromToast = useCallback(

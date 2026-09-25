@@ -18,6 +18,7 @@ import { deleteActiveThreadFromClient } from "~/lib/activeThreadDelete";
 import { gitRemoveWorktreeMutationOptions } from "~/lib/gitReactQuery";
 import { THREAD_CONTEXT_MENU_ICONS } from "~/lib/contextMenuIcons";
 import { pinActionLabel } from "~/lib/pin";
+import { releaseOrphanedWorktreeAfterArchive } from "~/lib/archiveThreadWorktreeCleanup";
 import { archiveThreadFromClient } from "~/lib/threadArchive";
 import { dispatchThreadRename } from "~/lib/threadRename";
 import { newCommandId } from "~/lib/utils";
@@ -52,7 +53,10 @@ function resolveCardWorkspacePath(card: KanbanCard): string | null {
   });
 }
 
-async function archiveCardThread(threadId: ThreadId) {
+async function archiveCardThread(
+  threadId: ThreadId,
+  worktreeRelease: Omit<Parameters<typeof releaseOrphanedWorktreeAfterArchive>[0], "threadId">,
+) {
   const api = readNativeApi();
   if (!api) return;
   const thread = getThreadFromState(useStore.getState(), threadId);
@@ -61,6 +65,12 @@ async function archiveCardThread(threadId: ThreadId) {
   // dispatch entry could never reconcile — drop it with the card.
   useKanbanUiStore.getState().clearOptimisticDispatch(threadId);
   await archiveThreadFromClient(api.orchestration, threadId);
+  // Accepted archive: the opt-in worktree release reports itself and never fails it.
+  void releaseOrphanedWorktreeAfterArchive({ threadId, ...worktreeRelease }).catch(
+    (error: unknown) => {
+      console.error("Failed to release worktree after archiving thread", { threadId, error });
+    },
+  );
 }
 
 async function setThreadPinned(threadId: ThreadId, isPinned: boolean) {
@@ -214,7 +224,10 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
           );
           if (!confirmed) return;
         }
-        await archiveCardThread(card.threadId);
+        await archiveCardThread(card.threadId, {
+          enabled: settings.archiveDeletesOrphanedWorktree,
+          removeWorktree: (worktree) => removeWorktreeMutation.mutateAsync(worktree),
+        });
         return;
       }
       if (clicked !== "delete") return;

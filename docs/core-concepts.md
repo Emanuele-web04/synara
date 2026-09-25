@@ -92,6 +92,18 @@ history while keeping files and branch state separate.
 Read the [Git worktrees guide](https://www.trysynara.com/docs/workflows/worktrees) before starting
 several tasks in the same repository.
 
+### Cleaning up worktrees
+
+Deleting a task offers to delete its worktree when no other task uses it. Turn on **Delete worktree
+on archive** in **Settings → General** to do the same when you archive a finished task; a worktree
+with uncommitted changes is kept. **Settings → Managed worktrees** lists every managed worktree and
+can delete any of them. Each of these removals also deletes the worktree's temporary `synara/*`
+branch, its now-empty managed folder, and the recovery snapshots cached for that path. Automatic
+retention keeps the 15 most recently archived worktrees and snapshots older ones before removing
+them; those snapshots expire after 30 days.
+
+![Delete worktree on archive setting](assets/worktree-cleanup/setting-delete-worktree-on-archive.png)
+
 ## Providers, models, and sessions
 
 A provider is the coding-agent runtime Synara operates, such as Claude Code, Codex, OpenCode, Cursor,

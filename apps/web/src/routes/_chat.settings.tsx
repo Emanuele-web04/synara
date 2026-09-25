@@ -312,6 +312,9 @@ function SettingsRouteView() {
     ...(!isDefaultActiveTheme ? [`${resolvedTheme === "dark" ? "Dark" : "Light"} theme pack`] : []),
     ...(settings.defaultProvider !== defaults.defaultProvider ? ["Default provider"] : []),
     ...(settings.defaultThreadEnvMode !== defaults.defaultThreadEnvMode ? ["New thread mode"] : []),
+    ...(settings.archiveDeletesOrphanedWorktree !== defaults.archiveDeletesOrphanedWorktree
+      ? ["Delete worktree on archive"]
+      : []),
     ...(settings.sidebarProjectSortOrder !== defaults.sidebarProjectSortOrder
       ? ["Project sort order"]
       : []),
@@ -538,6 +541,15 @@ function SettingsRouteView() {
             </SettingsSelectControl>
           }
         />
+
+        {renderBooleanSettingRow({
+          settingKey: "archiveDeletesOrphanedWorktree",
+          title: "Delete worktree on archive",
+          description:
+            "When a task is archived and no other task uses its worktree, remove the worktree, its temporary branch, and cached snapshots. Worktrees with uncommitted changes are kept.",
+          resetLabel: "delete worktree on archive",
+          ariaLabel: "Delete worktree on archive",
+        })}
 
         <SettingsRow
           title="Welcome tour"

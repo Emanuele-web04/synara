@@ -90,7 +90,13 @@ import {
 import { Keybindings } from "./keybindings";
 import { createLocalPreviewGrant } from "./localImageFiles";
 import { listLocalServers, stopLocalServer } from "./localServerMonitor";
-import { listManagedWorktrees, pruneProjectedArchivedManagedWorktrees } from "./managedWorktrees";
+import {
+  discardManagedWorktreeResidue,
+  isManagedWorktreePath,
+  listManagedWorktrees,
+  managedWorktreeSnapshotsDir,
+  pruneProjectedArchivedManagedWorktrees,
+} from "./managedWorktrees";
 import {
   attachmentPrincipalForSession,
   CurrentManagedAttachmentPrincipal,
@@ -1591,7 +1597,25 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(
             refreshGitStatusAfter(
               input.cwd,
-              git.withMutation(input.cwd, git.removeWorktree(input)),
+              git.withMutation(
+                input.cwd,
+                git.removeWorktree(input).pipe(
+                  // An explicit removal retires the worktree for good, so its
+                  // recovery snapshots and empty managed folder go with it.
+                  Effect.tap(() =>
+                    isManagedWorktreePath({
+                      worktreesDir: config.worktreesDir,
+                      worktreePath: input.path,
+                    })
+                      ? discardManagedWorktreeResidue({
+                          worktreesDir: config.worktreesDir,
+                          snapshotsDir: managedWorktreeSnapshotsDir(config.homeDir),
+                          worktreePath: input.path,
+                        })
+                      : Effect.void,
+                  ),
+                ),
+              ),
             ),
             "Failed to remove worktree",
           ),

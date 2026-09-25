@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
@@ -10,9 +11,13 @@ import type { GitCoreShape } from "./git/Services/GitCore.ts";
 import type { ProjectionSnapshotQueryShape } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
   classifyManagedWorktreeRemovalCandidates,
+  discardManagedWorktreeResidue,
+  isManagedWorktreePath,
   listManagedWorktrees,
   MANAGED_WORKTREE_RETENTION_COUNT,
+  MANAGED_WORKTREE_SNAPSHOT_RETENTION_MS,
   pruneArchivedManagedWorktrees,
+  pruneExpiredManagedWorktreeSnapshots,
   pruneProjectedArchivedManagedWorktrees,
 } from "./managedWorktrees.ts";
 
@@ -81,6 +86,37 @@ function makeGit(input: {
     removeWorktree: ({ path: worktreePath }: { path: string }) =>
       Effect.sync(() => input.removals.push(worktreePath)),
   } as unknown as GitCoreShape;
+}
+
+async function makeTemporaryRoot(prefix = "synara-managed-worktree-residue-") {
+  const root = await fs.realpath(await fs.mkdtemp(path.join(tmpdir(), prefix)));
+  temporaryRoots.push(root);
+  return root;
+}
+
+async function writeSnapshot(
+  snapshotsDir: string,
+  name: string,
+  manifest: Record<string, unknown> | null,
+) {
+  const snapshotPath = path.join(snapshotsDir, name);
+  await fs.mkdir(path.join(snapshotPath, "files"), { recursive: true });
+  await fs.writeFile(path.join(snapshotPath, "changes.patch"), "");
+  if (manifest !== null) {
+    await fs.writeFile(path.join(snapshotPath, "snapshot.json"), JSON.stringify(manifest));
+  }
+  return snapshotPath;
+}
+
+function snapshotDigest(worktreePath: string) {
+  return createHash("sha256").update(worktreePath).digest("hex").slice(0, 12);
+}
+
+async function pathExists(target: string) {
+  return fs.stat(target).then(
+    () => true,
+    () => false,
+  );
 }
 
 afterEach(async () => {
@@ -248,6 +284,50 @@ describe("managed worktrees", () => {
     expect(removals).toEqual([paths[1]]);
   });
 
+  it("removes the emptied per-worktree parent after an automatic removal", async () => {
+    const { root, paths } = await makeManagedRoot(2);
+    const [activePath, deletedPath] = paths as [string, string];
+    const removals: string[] = [];
+    // Retention removes through Git, which deletes the checkout directory itself.
+    const git = {
+      ...makeGit({ removals }),
+      removeWorktree: ({ path: worktreePath }: { path: string }) =>
+        Effect.promise(async () => {
+          removals.push(worktreePath);
+          await fs.rm(worktreePath, { recursive: true, force: true });
+        }),
+    } as unknown as GitCoreShape;
+    const threads = [
+      {
+        id: "thread-active",
+        worktreePath: paths[0],
+        associatedWorktreePath: paths[0],
+        archivedAt: null,
+        deletedAt: null,
+      },
+      {
+        id: "thread-deleted",
+        worktreePath: paths[1],
+        associatedWorktreePath: paths[1],
+        archivedAt: null,
+        deletedAt: "2026-08-01T00:00:00.000Z",
+      },
+    ] as unknown as OrchestrationThread[];
+
+    await Effect.runPromise(
+      pruneArchivedManagedWorktrees({
+        worktreesDir: root,
+        snapshotsDir: path.join(root, "snapshots"),
+        threads,
+        git,
+      }),
+    );
+
+    expect(removals).toEqual([deletedPath]);
+    await expect(fs.access(path.dirname(deletedPath))).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.access(path.dirname(activePath))).resolves.toBeUndefined();
+  });
+
   it("refuses to force-remove a dirty deleted worktree", async () => {
     const { root, paths } = await makeManagedRoot(1);
     const removals: string[] = [];
@@ -382,5 +462,220 @@ describe("managed worktrees", () => {
     expect(candidates.map((candidate) => [candidate.entry.path, candidate.reason])).toEqual([
       ["/wt/deleted", "deleted"],
     ]);
+  });
+});
+
+describe("managed worktree residue", () => {
+  it("recognizes only paths strictly inside the worktrees directory", () => {
+    expect(isManagedWorktreePath({ worktreesDir: "/w", worktreePath: "/w/repo/branch" })).toBe(
+      true,
+    );
+    expect(isManagedWorktreePath({ worktreesDir: "/w", worktreePath: "/w" })).toBe(false);
+    expect(isManagedWorktreePath({ worktreesDir: "/w", worktreePath: "/elsewhere/repo" })).toBe(
+      false,
+    );
+    expect(isManagedWorktreePath({ worktreesDir: "/w", worktreePath: "/w/../x/repo" })).toBe(false);
+    expect(isManagedWorktreePath({ worktreesDir: "/w", worktreePath: "/w2/repo" })).toBe(false);
+  });
+
+  it("discards snapshots matched by path digest or recorded source worktree", async () => {
+    const root = await makeTemporaryRoot();
+    const worktreesDir = path.join(root, "worktrees");
+    const snapshotsDir = path.join(root, "snapshots");
+    const worktreePath = path.join(worktreesDir, "repo", "feature");
+    const otherPath = path.join(worktreesDir, "repo", "other");
+    await fs.mkdir(path.join(worktreesDir, "repo"), { recursive: true });
+
+    const byDigest = await writeSnapshot(
+      snapshotsDir,
+      `thread-a-${snapshotDigest(worktreePath)}`,
+      null,
+    );
+    const bySource = await writeSnapshot(snapshotsDir, "legacy-snapshot", {
+      sourceWorktree: worktreePath,
+      createdAt: new Date().toISOString(),
+    });
+    const unrelated = await writeSnapshot(snapshotsDir, `thread-b-${snapshotDigest(otherPath)}`, {
+      sourceWorktree: otherPath,
+      createdAt: new Date().toISOString(),
+    });
+
+    await Effect.runPromise(
+      discardManagedWorktreeResidue({ worktreesDir, snapshotsDir, worktreePath }),
+    );
+
+    expect(await pathExists(byDigest)).toBe(false);
+    expect(await pathExists(bySource)).toBe(false);
+    expect(await pathExists(unrelated)).toBe(true);
+  });
+
+  it("matches snapshots when the removal path reaches the worktree through a symlink", async () => {
+    const root = await makeTemporaryRoot();
+    const worktreesDir = path.join(root, "worktrees");
+    const snapshotsDir = path.join(root, "snapshots");
+    const canonicalWorktreePath = path.join(worktreesDir, "repo", "feature");
+    await fs.mkdir(path.join(worktreesDir, "repo"), { recursive: true });
+    const linkRoot = await makeTemporaryRoot("synara-managed-worktree-residue-link-");
+    const symlinkedWorktreesDir = path.join(linkRoot, "worktrees");
+    await fs.symlink(worktreesDir, symlinkedWorktreesDir);
+    const snapshot = await writeSnapshot(
+      snapshotsDir,
+      `thread-a-${snapshotDigest(canonicalWorktreePath)}`,
+      null,
+    );
+
+    await Effect.runPromise(
+      discardManagedWorktreeResidue({
+        worktreesDir: symlinkedWorktreesDir,
+        snapshotsDir,
+        worktreePath: path.join(symlinkedWorktreesDir, "repo", "feature"),
+      }),
+    );
+
+    expect(await pathExists(snapshot)).toBe(false);
+    expect(await pathExists(path.join(worktreesDir, "repo"))).toBe(false);
+  });
+
+  it("removes an empty per-worktree parent directly under the worktrees directory", async () => {
+    const root = await makeTemporaryRoot();
+    const worktreesDir = path.join(root, "worktrees");
+    const parent = path.join(worktreesDir, "ab12");
+    await fs.mkdir(parent, { recursive: true });
+
+    await Effect.runPromise(
+      discardManagedWorktreeResidue({
+        worktreesDir,
+        snapshotsDir: path.join(root, "snapshots"),
+        worktreePath: path.join(parent, "synara"),
+      }),
+    );
+
+    expect(await pathExists(parent)).toBe(false);
+    expect(await pathExists(worktreesDir)).toBe(true);
+  });
+
+  it("keeps a parent that still holds other worktrees", async () => {
+    const root = await makeTemporaryRoot();
+    const worktreesDir = path.join(root, "worktrees");
+    const parent = path.join(worktreesDir, "repo");
+    await fs.mkdir(path.join(parent, "sibling"), { recursive: true });
+
+    await Effect.runPromise(
+      discardManagedWorktreeResidue({
+        worktreesDir,
+        snapshotsDir: path.join(root, "snapshots"),
+        worktreePath: path.join(parent, "feature"),
+      }),
+    );
+
+    expect(await pathExists(path.join(parent, "sibling"))).toBe(true);
+  });
+
+  it("never removes the worktrees directory itself or folders nested deeper", async () => {
+    const root = await makeTemporaryRoot();
+    const worktreesDir = path.join(root, "worktrees");
+    const nestedParent = path.join(worktreesDir, "repo", "group");
+    await fs.mkdir(nestedParent, { recursive: true });
+
+    await Effect.runPromise(
+      discardManagedWorktreeResidue({
+        worktreesDir,
+        snapshotsDir: path.join(root, "snapshots"),
+        worktreePath: path.join(worktreesDir, "direct-child"),
+      }),
+    );
+    await Effect.runPromise(
+      discardManagedWorktreeResidue({
+        worktreesDir,
+        snapshotsDir: path.join(root, "snapshots"),
+        worktreePath: path.join(nestedParent, "feature"),
+      }),
+    );
+
+    expect(await pathExists(worktreesDir)).toBe(true);
+    expect(await pathExists(nestedParent)).toBe(true);
+  });
+});
+
+describe("managed worktree snapshot expiry", () => {
+  const NOW = Date.UTC(2026, 8, 1);
+
+  it("removes expired snapshots and keeps fresh or unreadable ones", async () => {
+    const snapshotsDir = await makeTemporaryRoot();
+    const expired = await writeSnapshot(snapshotsDir, "thread-old-aaaaaaaaaaaa", {
+      createdAt: new Date(NOW - MANAGED_WORKTREE_SNAPSHOT_RETENTION_MS - 1_000).toISOString(),
+    });
+    const fresh = await writeSnapshot(snapshotsDir, "thread-new-bbbbbbbbbbbb", {
+      createdAt: new Date(NOW - 1_000).toISOString(),
+    });
+    const unreadable = await writeSnapshot(snapshotsDir, "thread-odd-cccccccccccc", null);
+    const unparsableDate = await writeSnapshot(snapshotsDir, "thread-bad-dddddddddddd", {
+      createdAt: "not a date",
+    });
+
+    const removed = await Effect.runPromise(
+      pruneExpiredManagedWorktreeSnapshots({ snapshotsDir, now: NOW }),
+    );
+
+    expect(removed).toEqual([expired]);
+    expect(await pathExists(expired)).toBe(false);
+    expect(await pathExists(fresh)).toBe(true);
+    expect(await pathExists(unreadable)).toBe(true);
+    expect(await pathExists(unparsableDate)).toBe(true);
+  });
+
+  it("removes stale staging directories left by an interrupted snapshot", async () => {
+    const snapshotsDir = await makeTemporaryRoot();
+    const staleStaging = await writeSnapshot(
+      snapshotsDir,
+      "thread-a-aaaaaaaaaaaa.tmp-Ab12Cd",
+      null,
+    );
+    const freshStaging = await writeSnapshot(
+      snapshotsDir,
+      "thread-b-bbbbbbbbbbbb.tmp-Ef34Gh",
+      null,
+    );
+    const staleTime = new Date(NOW - MANAGED_WORKTREE_SNAPSHOT_RETENTION_MS - 1_000);
+    await fs.utimes(staleStaging, staleTime, staleTime);
+    const freshTime = new Date(NOW - 1_000);
+    await fs.utimes(freshStaging, freshTime, freshTime);
+
+    const removed = await Effect.runPromise(
+      pruneExpiredManagedWorktreeSnapshots({ snapshotsDir, now: NOW }),
+    );
+
+    expect(removed).toEqual([staleStaging]);
+    expect(await pathExists(freshStaging)).toBe(true);
+  });
+
+  it("treats a missing snapshots directory as nothing to prune", async () => {
+    const root = await makeTemporaryRoot();
+    await expect(
+      Effect.runPromise(
+        pruneExpiredManagedWorktreeSnapshots({ snapshotsDir: path.join(root, "missing") }),
+      ),
+    ).resolves.toEqual([]);
+  });
+
+  it("expires old snapshots during a retention pass with no removal candidates", async () => {
+    const { root } = await makeManagedRoot(0);
+    const snapshotsDir = path.join(root, "snapshots");
+    const expired = await writeSnapshot(snapshotsDir, "thread-old-aaaaaaaaaaaa", {
+      createdAt: new Date(
+        Date.now() - MANAGED_WORKTREE_SNAPSHOT_RETENTION_MS - 60_000,
+      ).toISOString(),
+    });
+
+    await Effect.runPromise(
+      pruneArchivedManagedWorktrees({
+        worktreesDir: root,
+        snapshotsDir,
+        threads: [],
+        git: makeGit({ removals: [] }),
+      }),
+    );
+
+    expect(await pathExists(expired)).toBe(false);
   });
 });

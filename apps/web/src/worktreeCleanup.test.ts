@@ -2,7 +2,11 @@ import { ProjectId, ThreadId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
-import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "./worktreeCleanup";
+import {
+  formatWorktreePathForDisplay,
+  getOrphanedWorktreePathForThread,
+  isThreadAssociatedWithWorktree,
+} from "./worktreeCleanup";
 
 function makeThread(overrides: Partial<Thread> = {}): Thread {
   return {
@@ -109,5 +113,44 @@ describe("formatWorktreePathForDisplay", () => {
   it("ignores trailing slashes", () => {
     const result = formatWorktreePathForDisplay("/tmp/custom-worktrees/my-worktree/");
     expect(result).toBe("my-worktree");
+  });
+});
+
+describe("isThreadAssociatedWithWorktree", () => {
+  const worktreePath = "/tmp/repo/worktrees/feature-a";
+
+  it("matches the current worktree path", () => {
+    expect(isThreadAssociatedWithWorktree({ worktreePath }, worktreePath)).toBe(true);
+  });
+
+  it("matches the associated worktree path when the thread moved back to local", () => {
+    expect(
+      isThreadAssociatedWithWorktree(
+        { worktreePath: null, associatedWorktreePath: worktreePath },
+        worktreePath,
+      ),
+    ).toBe(true);
+  });
+
+  it("ignores surrounding whitespace in recorded paths", () => {
+    expect(
+      isThreadAssociatedWithWorktree({ worktreePath: `  ${worktreePath}\n` }, worktreePath),
+    ).toBe(true);
+  });
+
+  it("does not match missing, blank, or different paths", () => {
+    expect(isThreadAssociatedWithWorktree({}, worktreePath)).toBe(false);
+    expect(
+      isThreadAssociatedWithWorktree(
+        { worktreePath: "   ", associatedWorktreePath: undefined },
+        worktreePath,
+      ),
+    ).toBe(false);
+    expect(
+      isThreadAssociatedWithWorktree(
+        { worktreePath: "/tmp/repo/worktrees/feature-b" },
+        worktreePath,
+      ),
+    ).toBe(false);
   });
 });

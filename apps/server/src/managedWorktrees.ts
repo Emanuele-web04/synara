@@ -11,6 +11,37 @@ import type { ProjectionSnapshotQueryShape } from "./orchestration/Services/Proj
 
 const MANAGED_WORKTREE_SCAN_DEPTH = 6;
 export const MANAGED_WORKTREE_RETENTION_COUNT = 15;
+/** Recovery snapshots written before automatic removal expire after 30 days. */
+export const MANAGED_WORKTREE_SNAPSHOT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const SNAPSHOT_MANIFEST_FILENAME = "snapshot.json";
+// `GitCore.snapshotWorktree` stages into `<outputPath>.tmp-XXXXXX` before an
+// atomic rename; a crash in between strands the staging directory.
+const SNAPSHOT_STAGING_DIR_PATTERN = /\.tmp-[A-Za-z0-9]+$/u;
+
+/** The single owner of where managed-worktree recovery snapshots live. */
+export function managedWorktreeSnapshotsDir(homeDir: string): string {
+  return path.join(homeDir, "worktree-snapshots");
+}
+
+/**
+ * Whether `worktreePath` lives strictly inside `worktreesDir`. Only such paths are
+ * Synara-managed, so only they get residue cleanup (snapshots, empty parents).
+ */
+export function isManagedWorktreePath(input: {
+  readonly worktreesDir: string;
+  readonly worktreePath: string;
+}): boolean {
+  const relative = path.relative(
+    path.resolve(input.worktreesDir),
+    path.resolve(input.worktreePath),
+  );
+  return (
+    relative.length > 0 &&
+    !path.isAbsolute(relative) &&
+    relative !== ".." &&
+    !relative.startsWith(`..${path.sep}`)
+  );
+}
 
 /**
  * The only thread state managed-worktree retention reads. Structural on purpose so
@@ -153,12 +184,16 @@ function canonicalizeThreadWorktreePaths(
   });
 }
 
+function snapshotDigestForWorktreePath(worktreePath: string): string {
+  return createHash("sha256").update(worktreePath).digest("hex").slice(0, 12);
+}
+
 function snapshotOutputPath(input: {
   readonly snapshotsDir: string;
   readonly threadId: string;
   readonly worktreePath: string;
 }): string {
-  const digest = createHash("sha256").update(input.worktreePath).digest("hex").slice(0, 12);
+  const digest = snapshotDigestForWorktreePath(input.worktreePath);
   const threadPathSegment = input.threadId
     .replace(/[^a-z0-9._-]+/giu, "-")
     .replace(/^-+|-+$/gu, "")
@@ -254,7 +289,7 @@ const snapshotExists = (snapshotPath: string) =>
   Effect.tryPromise({
     try: () =>
       fs
-        .stat(path.join(snapshotPath, "snapshot.json"))
+        .stat(path.join(snapshotPath, SNAPSHOT_MANIFEST_FILENAME))
         .then((entry) => entry.isFile())
         .catch((cause: unknown) => {
           if ((cause as NodeJS.ErrnoException).code === "ENOENT") return false;
@@ -264,6 +299,7 @@ const snapshotExists = (snapshotPath: string) =>
   });
 
 function removeManagedWorktreeSafely(input: {
+  readonly worktreesDir: string;
   readonly snapshotsDir: string;
   readonly candidate: ManagedWorktreeRemovalCandidate;
   readonly git: GitCoreShape;
@@ -313,6 +349,12 @@ function removeManagedWorktreeSafely(input: {
           force: false,
           reclaimTemporaryBranch: true,
         });
+        // The snapshot stays as the recovery net for this automatic removal, but
+        // the per-worktree parent folder has nothing left to hold.
+        yield* discardEmptyManagedWorktreeParent({
+          worktreesDir: input.worktreesDir,
+          worktreePath: entry.path,
+        });
         return true;
       }),
     )
@@ -343,24 +385,28 @@ export function pruneArchivedManagedWorktrees(input: {
       threads: input.threads,
       canonicalByRecordedPath,
     });
-    if (removalCandidates.length === 0) return inventory;
-
-    yield* ensureSnapshotsDir(input.snapshotsDir);
     const removedPaths = new Set<string>();
-    yield* Effect.forEach(
-      removalCandidates,
-      (candidate) =>
-        removeManagedWorktreeSafely({
-          snapshotsDir: input.snapshotsDir,
-          candidate,
-          git: input.git,
-        }).pipe(
-          Effect.tap((removed) =>
-            removed ? Effect.sync(() => removedPaths.add(candidate.entry.path)) : Effect.void,
+    if (removalCandidates.length > 0) {
+      yield* ensureSnapshotsDir(input.snapshotsDir);
+      yield* Effect.forEach(
+        removalCandidates,
+        (candidate) =>
+          removeManagedWorktreeSafely({
+            worktreesDir: input.worktreesDir,
+            snapshotsDir: input.snapshotsDir,
+            candidate,
+            git: input.git,
+          }).pipe(
+            Effect.tap((removed) =>
+              removed ? Effect.sync(() => removedPaths.add(candidate.entry.path)) : Effect.void,
+            ),
           ),
-        ),
-      { discard: true, concurrency: 1 },
-    );
+        { discard: true, concurrency: 1 },
+      );
+    }
+    // The age sweep runs on every pass (startup, retention, listing) even when
+    // nothing was removed now, so snapshots from earlier passes still expire.
+    yield* pruneExpiredManagedWorktreeSnapshots({ snapshotsDir: input.snapshotsDir });
     return inventory.filter((entry) => !removedPaths.has(entry.path));
   });
 }
@@ -377,9 +423,214 @@ export function pruneProjectedArchivedManagedWorktrees(input: {
     const threads = yield* input.snapshotQuery.listManagedWorktreeThreads();
     return yield* pruneArchivedManagedWorktrees({
       worktreesDir: input.worktreesDir,
-      snapshotsDir: path.join(input.homeDir, "worktree-snapshots"),
+      snapshotsDir: managedWorktreeSnapshotsDir(input.homeDir),
       threads,
       git: input.git,
     });
   });
+}
+
+const errorMessage = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
+
+const isMissingPathError = (cause: unknown) =>
+  (cause as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
+
+async function listSnapshotDirectories(snapshotsDir: string): Promise<string[]> {
+  try {
+    const entries = await fs.readdir(snapshotsDir, { withFileTypes: true });
+    return entries
+      .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
+      .map((entry) => path.join(snapshotsDir, entry.name));
+  } catch (cause) {
+    if (isMissingPathError(cause)) return [];
+    throw cause;
+  }
+}
+
+async function readSnapshotManifest(
+  snapshotPath: string,
+): Promise<{ readonly sourceWorktree?: unknown; readonly createdAt?: unknown } | null> {
+  try {
+    const parsed: unknown = JSON.parse(
+      await fs.readFile(path.join(snapshotPath, SNAPSHOT_MANIFEST_FILENAME), "utf8"),
+    );
+    return parsed !== null && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+// A removed worktree no longer exists, so realpath it through its parent (which
+// usually still does) to reach the same canonical form the inventory scan and
+// snapshot digests used. Falls back to plain resolution.
+async function canonicalizeRemovedPath(targetPath: string): Promise<string> {
+  const resolved = path.resolve(targetPath);
+  return fs
+    .realpath(resolved)
+    .catch(() =>
+      fs
+        .realpath(path.dirname(resolved))
+        .then((parent) => path.join(parent, path.basename(resolved))),
+    )
+    .catch(() => resolved);
+}
+
+/**
+ * Remove the per-worktree parent folder (`<worktreesDir>/<repo>` or
+ * `<worktreesDir>/<id>`) once it is empty. Only a direct child of `worktreesDir`
+ * qualifies: never `worktreesDir` itself, never anything outside it. Never fails.
+ */
+export function discardEmptyManagedWorktreeParent(input: {
+  readonly worktreesDir: string;
+  readonly worktreePath: string;
+}): Effect.Effect<void, never> {
+  return Effect.tryPromise({
+    try: async () => {
+      const parent = path.dirname(path.resolve(input.worktreePath));
+      const [canonicalWorktreesDir, canonicalGrandparent] = await Promise.all([
+        canonicalizeRemovedPath(input.worktreesDir),
+        canonicalizeRemovedPath(path.dirname(parent)),
+      ]);
+      if (canonicalGrandparent !== canonicalWorktreesDir) return;
+      let entries: string[];
+      try {
+        entries = await fs.readdir(parent);
+      } catch (cause) {
+        if (isMissingPathError(cause)) return;
+        throw cause;
+      }
+      if (entries.length > 0) return;
+      // rmdir refuses a non-empty directory, so a worktree created here since the
+      // readdir above cannot be lost.
+      await fs.rmdir(parent);
+    },
+    catch: (cause) => cause,
+  }).pipe(
+    Effect.catch((cause) =>
+      Effect.logWarning("managed worktree cleanup could not remove its empty parent folder", {
+        worktreePath: input.worktreePath,
+        error: errorMessage(cause),
+      }),
+    ),
+  );
+}
+
+/**
+ * Best-effort cleanup of what an explicit managed-worktree removal leaves behind:
+ * recovery snapshots taken for that path, and the per-worktree parent folder
+ * (`<worktreesDir>/<repo>` or `<worktreesDir>/<id>`) once it is empty. Never fails;
+ * every problem is logged and skipped.
+ */
+export function discardManagedWorktreeResidue(input: {
+  readonly worktreesDir: string;
+  readonly snapshotsDir: string;
+  readonly worktreePath: string;
+}): Effect.Effect<void, never> {
+  const discardSnapshots = Effect.tryPromise({
+    try: async () => {
+      const canonicalPath = await canonicalizeRemovedPath(input.worktreePath);
+      const pathForms = new Set([
+        input.worktreePath,
+        path.resolve(input.worktreePath),
+        canonicalPath,
+      ]);
+      const digestSuffixes = [...pathForms].map(
+        (candidate) => `-${snapshotDigestForWorktreePath(candidate)}`,
+      );
+      const removed: string[] = [];
+      for (const snapshotPath of await listSnapshotDirectories(input.snapshotsDir)) {
+        const name = path.basename(snapshotPath);
+        let matches = digestSuffixes.some(
+          (suffix) => name.endsWith(suffix) || name.includes(`${suffix}.tmp-`),
+        );
+        if (!matches) {
+          const manifest = await readSnapshotManifest(snapshotPath);
+          const sourceWorktree = manifest?.sourceWorktree;
+          matches =
+            typeof sourceWorktree === "string" &&
+            (pathForms.has(sourceWorktree) ||
+              pathForms.has(await canonicalizeRemovedPath(sourceWorktree)));
+        }
+        if (!matches) continue;
+        await fs.rm(snapshotPath, { recursive: true, force: true });
+        removed.push(snapshotPath);
+      }
+      return removed;
+    },
+    catch: (cause) => cause,
+  }).pipe(
+    Effect.catch((cause) =>
+      Effect.logWarning("managed worktree cleanup could not discard recovery snapshots", {
+        worktreePath: input.worktreePath,
+        error: errorMessage(cause),
+      }),
+    ),
+  );
+
+  return Effect.andThen(
+    discardSnapshots,
+    discardEmptyManagedWorktreeParent({
+      worktreesDir: input.worktreesDir,
+      worktreePath: input.worktreePath,
+    }),
+  );
+}
+
+/**
+ * Delete recovery snapshots older than {@link MANAGED_WORKTREE_SNAPSHOT_RETENTION_MS}.
+ * Snapshots without a readable manifest are kept, except for staging directories an
+ * interrupted snapshot left behind, which expire by mtime. Never fails.
+ */
+export function pruneExpiredManagedWorktreeSnapshots(input: {
+  readonly snapshotsDir: string;
+  readonly now?: number;
+}): Effect.Effect<ReadonlyArray<string>, never> {
+  return Effect.tryPromise({
+    try: () => listSnapshotDirectories(input.snapshotsDir),
+    catch: (cause) => cause,
+  }).pipe(
+    Effect.flatMap((snapshotPaths) => {
+      const now = input.now ?? Date.now();
+      return Effect.forEach(
+        snapshotPaths,
+        (snapshotPath) =>
+          Effect.tryPromise({
+            try: async () => {
+              let createdAtMs: number;
+              if (SNAPSHOT_STAGING_DIR_PATTERN.test(path.basename(snapshotPath))) {
+                createdAtMs = (await fs.stat(snapshotPath)).mtimeMs;
+              } else {
+                const createdAt = (await readSnapshotManifest(snapshotPath))?.createdAt;
+                if (typeof createdAt !== "string") return null;
+                createdAtMs = Date.parse(createdAt);
+              }
+              if (
+                !Number.isFinite(createdAtMs) ||
+                now - createdAtMs <= MANAGED_WORKTREE_SNAPSHOT_RETENTION_MS
+              ) {
+                return null;
+              }
+              await fs.rm(snapshotPath, { recursive: true, force: true });
+              return snapshotPath;
+            },
+            catch: (cause) => cause,
+          }).pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("managed worktree snapshot expiry skipped an entry", {
+                snapshotPath,
+                error: errorMessage(cause),
+              }).pipe(Effect.as(null)),
+            ),
+          ),
+        { concurrency: 1 },
+      );
+    }),
+    Effect.map((removed) => removed.filter((entry): entry is string => entry !== null)),
+    Effect.catch((cause) =>
+      Effect.logWarning("managed worktree snapshot expiry could not scan snapshots", {
+        snapshotsDir: input.snapshotsDir,
+        error: errorMessage(cause),
+      }).pipe(Effect.as([] as ReadonlyArray<string>)),
+    ),
+  );
 }
