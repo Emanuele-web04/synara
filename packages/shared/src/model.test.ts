@@ -28,6 +28,7 @@ import {
   normalizeCursorModelOptions,
   normalizeGrokModelOptions,
   normalizeModelDisplayName,
+  normalizeOmpModelOptions,
   normalizeModelSlug,
   normalizePiModelOptions,
   parseCursorCliReasoningEffort,
@@ -256,6 +257,32 @@ describe("resolveSelectableModel", () => {
     expect(
       resolveSelectableModel("claudeAgent", "5.3", [
         { slug: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+      ]),
+    ).toBeNull();
+  });
+
+  it.each(["omp", "pi", "opencode"] as const)(
+    "resolves a bare %s model id to its unique scoped catalog slug",
+    (provider) => {
+      expect(
+        resolveSelectableModel(provider, "muse-spark-1.3-contributor", [
+          { slug: "opencode-go/muse-spark-1.3-contributor", name: "Muse Spark 1.3 Contributor" },
+          { slug: "opencode-go/deepseek-v4-flash", name: "DeepSeek V4 Flash" },
+        ]),
+      ).toBe("opencode-go/muse-spark-1.3-contributor");
+    },
+  );
+
+  it("does not resolve a bare model id when multiple scoped rows share it", () => {
+    expect(
+      resolveSelectableModel("omp", "shared-model", [
+        { slug: "provider-a/shared-model", name: "Shared Model (A)" },
+        { slug: "provider-b/shared-model", name: "Shared Model (B)" },
+      ]),
+    ).toBeNull();
+    expect(
+      resolveSelectableModel("codex", "muse-spark-1.3-contributor", [
+        { slug: "opencode-go/muse-spark-1.3-contributor", name: "Muse Spark 1.3 Contributor" },
       ]),
     ).toBeNull();
   });
@@ -1030,6 +1057,36 @@ describe("normalizeAntigravityModelOptions", () => {
         runtimeCapabilities,
       ),
     ).toEqual({ reasoningEffort: "high" });
+  });
+});
+describe("normalizePiModelOptions", () => {
+  it("accepts pi thinking levels and drops invalid values", () => {
+    expect(normalizePiModelOptions({ thinkingLevel: "off" })).toEqual({ thinkingLevel: "off" });
+    expect(normalizePiModelOptions({ thinkingLevel: "xhigh" })).toEqual({ thinkingLevel: "xhigh" });
+    expect(normalizePiModelOptions({ thinkingLevel: "max" })).toEqual({ thinkingLevel: "max" });
+    expect(normalizePiModelOptions({ thinkingLevel: "bogus" as never })).toBeUndefined();
+    expect(normalizePiModelOptions({ thinkingLevel: "  " as never })).toBeUndefined();
+    expect(normalizePiModelOptions(null)).toBeUndefined();
+    expect(normalizePiModelOptions(undefined)).toBeUndefined();
+    expect(normalizePiModelOptions({})).toBeUndefined();
+  });
+});
+
+describe("normalizeOmpModelOptions", () => {
+  it("accepts OMP thinking levels including max and drops invalid values", () => {
+    expect(normalizeOmpModelOptions({ thinkingLevel: "max" })).toEqual({ thinkingLevel: "max" });
+    expect(normalizeOmpModelOptions({ thinkingLevel: "xhigh" })).toEqual({
+      thinkingLevel: "xhigh",
+    });
+    expect(normalizeOmpModelOptions({ thinkingLevel: "minimal" })).toEqual({
+      thinkingLevel: "minimal",
+    });
+    expect(normalizeOmpModelOptions({ thinkingLevel: "off" })).toEqual({ thinkingLevel: "off" });
+    expect(normalizeOmpModelOptions({ thinkingLevel: "bogus" as never })).toBeUndefined();
+    expect(normalizeOmpModelOptions({ thinkingLevel: "  " as never })).toBeUndefined();
+    expect(normalizeOmpModelOptions(null)).toBeUndefined();
+    expect(normalizeOmpModelOptions(undefined)).toBeUndefined();
+    expect(normalizeOmpModelOptions({})).toBeUndefined();
   });
 });
 

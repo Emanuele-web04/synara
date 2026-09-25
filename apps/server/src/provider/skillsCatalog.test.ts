@@ -147,6 +147,39 @@ describe("discoverSkillsCatalog", () => {
     expect(byName.get("pi-only")?.scope).toBe("pi");
   });
 
+  it("honors a custom agentDir for omp and pi skill roots", async () => {
+    const ompAgentDir = path.join(root, "custom-omp-agent");
+    const piAgentDir = path.join(root, "custom-pi-agent");
+    await writeSkill(
+      path.join(ompAgentDir, "skills", "omp-custom"),
+      "omp-custom",
+      "OMP profile skill",
+    );
+    await writeSkill(path.join(piAgentDir, "skills", "pi-custom"), "pi-custom", "Pi profile skill");
+    await writeSkill(
+      path.join(homeDir, ".omp", "agent", "skills", "omp-default"),
+      "omp-default",
+      "Default root skill",
+    );
+
+    const ompSkills = await discoverSkillsCatalog({
+      homeDir,
+      synaraBaseDir,
+      provider: "omp",
+      agentDir: ompAgentDir,
+    });
+    expect(ompSkills.find((s) => s.name === "omp-custom")?.scope).toBe("omp");
+    expect(ompSkills.find((s) => s.name === "omp-default")).toBeUndefined();
+
+    const piSkills = await discoverSkillsCatalog({
+      homeDir,
+      synaraBaseDir,
+      provider: "pi",
+      agentDir: piAgentDir,
+    });
+    expect(piSkills.find((s) => s.name === "pi-custom")?.scope).toBe("pi");
+  });
+
   it("discovers Devin's project-local native skill roots", async () => {
     const cwd = path.join(root, "repo", "packages", "web");
     await mkdir(cwd, { recursive: true });

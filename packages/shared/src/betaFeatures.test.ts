@@ -15,7 +15,17 @@ import {
 } from "./desktopIdentity";
 
 describe("isBetaFeatureEnabled", () => {
-  it("enables every feature everywhere while the list is empty", () => {
+  it("turns a listed feature off only for the production flavor", () => {
+    expect(BETA_ONLY_FEATURES).toContain("omp");
+    for (const flavor of ["development", "canary", "cua", "beta", "unknown"] as const) {
+      expect(isBetaFeatureEnabled("omp", flavor)).toBe(true);
+    }
+    expect(isBetaFeatureEnabled("omp", "production")).toBe(false);
+  });
+
+  it("leaves unlisted features enabled everywhere", () => {
+    // The list is the whole gate: a feature not present is enabled everywhere,
+    // which is also the steady state once a feature is promoted to Stable.
     for (const flavor of [
       "development",
       "canary",
@@ -24,14 +34,8 @@ describe("isBetaFeatureEnabled", () => {
       "unknown",
       "production",
     ] as const) {
-      expect(isBetaFeatureEnabled("computerUse", flavor)).toBe(true);
+      expect(isBetaFeatureEnabled("codex", flavor)).toBe(true);
     }
-  });
-
-  it("keeps the gate list empty until a feature opts in", () => {
-    // The list is the whole gate: a feature not present is enabled everywhere,
-    // which is also the steady state once a feature is promoted to Stable.
-    expect(BETA_ONLY_FEATURES).not.toContain("computerUse");
   });
 });
 

@@ -364,6 +364,7 @@ describe("resolveAppModelSelection", () => {
           droid: [],
           opencode: [],
           pi: [],
+          omp: [],
         },
         "galapagos-alpha",
       ),
@@ -384,6 +385,7 @@ describe("resolveAppModelSelection", () => {
           droid: [],
           opencode: [],
           pi: [],
+          omp: [],
         },
         "",
       ),
@@ -517,6 +519,8 @@ describe("getProviderStartOptions", () => {
         piAgentDir: "",
         piBinaryPath: "",
         devinBinaryPath: "/usr/local/bin/devin",
+        ompBinaryPath: "",
+        ompAgentDir: "",
       }),
     ).toEqual({
       claudeAgent: {
@@ -558,6 +562,8 @@ describe("getProviderStartOptions", () => {
         piAgentDir: "",
         piBinaryPath: "",
         devinBinaryPath: "",
+        ompBinaryPath: "",
+        ompAgentDir: "",
       }),
     ).toBeUndefined();
   });
@@ -579,6 +585,8 @@ describe("getProviderStartOptions", () => {
         openCodeServerUrl: "",
         piAgentDir: "",
         piBinaryPath: "pi",
+        ompBinaryPath: "",
+        ompAgentDir: "",
       }),
     ).toBeUndefined();
   });
@@ -595,6 +603,7 @@ describe("provider-indexed custom model settings", () => {
     customDevinModels: ["devin/custom-model"],
     customOpenCodeModels: ["openrouter/gpt-oss-120b"],
     customPiModels: ["anthropic/custom-pi"],
+    customOmpModels: [],
   } as const;
 
   it("builds a complete provider-indexed custom model record", () => {
@@ -608,6 +617,7 @@ describe("provider-indexed custom model settings", () => {
       devin: ["devin/custom-model"],
       opencode: ["openrouter/gpt-oss-120b"],
       pi: ["anthropic/custom-pi"],
+      omp: [],
     });
   });
 });

@@ -12,7 +12,8 @@ export type ProviderChildKind =
   | "droid"
   | "grok"
   | "opencode"
-  | "pi";
+  | "pi"
+  | "omp";
 
 const PROVIDER_CREDENTIAL_KEYS = new Set([
   "ANTHROPIC_API_KEY",
@@ -65,6 +66,7 @@ const PROVIDER_CREDENTIAL_GRANTS: Record<ProviderChildKind, "all" | ReadonlySet<
   codex: "all",
   opencode: "all",
   pi: "all",
+  omp: "all",
 };
 
 const INHERITED_NATIVE_CAPABILITY_KEYS = new Set([

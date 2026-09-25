@@ -188,6 +188,16 @@ function capturedProcessesForSignal(
   });
 }
 
+/**
+ * Roots a teardown must never collect or signal: pid <= 1 (launchd/init),
+ * out-of-range values, and this process itself. A fake or stale pid reaching
+ * teardown (a test handle claiming pid 1 walked launchd's whole descendant
+ * tree and SIGTERM'd the user session) must fail closed, not kill.
+ */
+function isUnsafeProcessTreeRoot(rootPid: number): boolean {
+  return !isSignalablePid(rootPid) || rootPid === globalThis.process.pid;
+}
+
 export function createProcessTreeKiller(
   dependencies: Partial<ProcessTreeKillerDependencies> = {},
 ): ProcessTreeKiller {
@@ -201,7 +211,7 @@ export function createProcessTreeKiller(
 
   return {
     capture: (rootPid) => {
-      if (!isSignalablePid(rootPid)) {
+      if (isUnsafeProcessTreeRoot(rootPid)) {
         return { descendants: [], captureComplete: false };
       }
       if (globalThis.process.platform === "win32") {
@@ -218,6 +228,13 @@ export function createProcessTreeKiller(
         childrenByParentPid = deps.captureChildrenMap();
       }
       if (!childrenByParentPid) return { descendants: [], captureComplete: false };
+      // A root absent from the snapshot — neither a child of another process
+      // nor a parent key — is provably not running, and refusing to collect
+      // also closes the stale-pid kill path. Sparse maps may legitimately list
+      // a live root only as a parent key, so parentage alone counts as presence.
+      if (!childrenByParentPid.has(rootPid) && !processesByPid(childrenByParentPid).has(rootPid)) {
+        return { descendants: [], captureComplete: true };
+      }
       return {
         descendants: collectDescendantProcesses(rootPid, childrenByParentPid),
         captureComplete: true,
@@ -252,7 +269,10 @@ export function createProcessTreeKiller(
       includeRootTree = true,
       onError,
     }) => {
-      if (!isSignalablePid(rootPid)) return;
+      // Refuse even when a caller supplies its own tree: signalTree (tree-kill)
+      // walks the live process table itself, so an unsafe rootPid would kill
+      // far more than `tree.descendants`.
+      if (isUnsafeProcessTreeRoot(rootPid)) return;
       const capturedProcesses = capturedProcessesForSignal(
         tree.descendants,
         signal,
@@ -292,7 +312,7 @@ export async function captureProcessTree(
   rootPid: number,
   options: PlatformProcessTreeOptions = {},
 ): Promise<CapturedProcessTree> {
-  if (!isSignalablePid(rootPid)) {
+  if (isUnsafeProcessTreeRoot(rootPid)) {
     return { descendants: [], captureComplete: false };
   }
   const platform = options.platform ?? process.platform;

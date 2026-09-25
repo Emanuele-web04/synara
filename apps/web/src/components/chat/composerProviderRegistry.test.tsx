@@ -47,6 +47,32 @@ const CURSOR_RUNTIME_MODEL_300K: ProviderModelDescriptor = {
   defaultContextWindow: "300k",
 };
 
+const PI_RUNTIME_MODEL_WITH_REASONING: ProviderModelDescriptor = {
+  slug: "openai/gpt-5.5",
+  name: "GPT-5.5",
+  upstreamProviderId: "openai",
+  upstreamProviderName: "OpenAI",
+  supportedReasoningEfforts: [
+    { value: "off", label: "Off" },
+    { value: "medium", label: "Medium" },
+    { value: "xhigh", label: "Extra High" },
+  ],
+  defaultReasoningEffort: "medium",
+};
+
+const OMP_RUNTIME_MODEL_WITH_REASONING: ProviderModelDescriptor = {
+  slug: "deepseek/deepseek-v4-flash",
+  name: "DeepSeek V4 Flash",
+  upstreamProviderId: "deepseek",
+  upstreamProviderName: "DeepSeek",
+  supportedReasoningEfforts: [
+    { value: "off", label: "Off" },
+    { value: "medium", label: "Medium" },
+    { value: "max", label: "Max" },
+  ],
+  defaultReasoningEffort: "medium",
+};
+
 const DROID_RUNTIME_GPT_5_6_WITH_REASONING: ProviderModelDescriptor = {
   slug: "gpt-5.6-sol",
   name: "GPT-5.6 Sol",
@@ -806,6 +832,55 @@ describe("getComposerProviderState", () => {
         thinkingLevel: "max",
       },
     });
+  });
+
+  it("keeps Omp thinking selections on the thinkingLevel field", () => {
+    const selection = getComposerTraitSelection(
+      "omp",
+      "deepseek/deepseek-v4-flash",
+      "",
+      { thinkingLevel: "max" },
+      OMP_RUNTIME_MODEL_WITH_REASONING,
+    );
+    const state = getComposerProviderState({
+      provider: "omp",
+      model: "deepseek/deepseek-v4-flash",
+      runtimeModel: OMP_RUNTIME_MODEL_WITH_REASONING,
+      prompt: "",
+      modelOptions: {
+        omp: {
+          thinkingLevel: "max",
+        },
+      },
+    });
+
+    expect(selection.primarySelectDescriptor?.id).toBe("thinkingLevel");
+    expect(selection.effort).toBe("max");
+    expect(state).toEqual({
+      provider: "omp",
+      promptEffort: "max",
+      modelOptionsForDispatch: {
+        thinkingLevel: "max",
+      },
+    });
+  });
+
+  it("does not render a traits picker for OpenCode models without exposed controls", () => {
+    const threadId = ThreadId.makeUnsafe("thread-opencode-traits-hidden");
+
+    const picker = renderToStaticMarkup(
+      <TraitsPicker
+        provider="opencode"
+        threadId={threadId}
+        model="openrouter/gpt-oss-120b:free"
+        modelOptions={undefined}
+        prompt=""
+        includeFastMode={false}
+        onPromptChange={vi.fn()}
+      />,
+    );
+
+    expect(picker).toBe("");
   });
 
   it("keeps OpenCode runtime thinking selections on the variant field", () => {

@@ -149,6 +149,7 @@ import { derivePendingApprovals, derivePendingUserInputs } from "../session-logi
 import { useThreadPullRequests } from "../hooks/useThreadPullRequests";
 import {
   providerComposerCapabilitiesQueryOptions,
+  providerModelsQueryOptions,
   supportsThreadImport,
 } from "../lib/providerDiscoveryReactQuery";
 import {
@@ -229,6 +230,7 @@ import { RenameDialog } from "./RenameDialog";
 import { RelocateProjectDialog } from "./RelocateProjectDialog";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import ReleaseHistoryDialog from "./ReleaseHistoryDialog";
+import { isBetaFeatureOn } from "../betaFeatures";
 import { WHATS_NEW_ENTRIES } from "../whatsNew/entries";
 import { sortEntriesByVersionDesc } from "../whatsNew/logic";
 import {
@@ -2764,7 +2766,7 @@ export default function Sidebar() {
       }
 
       const providerDefaultModel = getDefaultModel(provider);
-      const modelSelection =
+      let modelSelection =
         activeProject.defaultModelSelection?.provider === provider
           ? activeProject.defaultModelSelection
           : providerDefaultModel
@@ -2773,8 +2775,32 @@ export default function Sidebar() {
                 model: providerDefaultModel,
               }
             : null;
+      if (!modelSelection && provider === "omp") {
+        // OMP has no static default model; the imported session's own last-used
+        // model wins server-side during import. The thread record still needs a
+        // catalog-valid placeholder selection.
+        const catalog = await queryClient
+          .fetchQuery(
+            providerModelsQueryOptions({
+              provider: "omp",
+              cwd: activeProject.cwd,
+            }),
+          )
+          .catch(() => null);
+        const fallbackModel = catalog?.models[0]?.slug;
+        modelSelection = fallbackModel
+          ? {
+              provider: "omp",
+              model: fallbackModel,
+            }
+          : null;
+      }
       if (!modelSelection) {
-        throw new Error("Select a Pi model before importing a Pi thread.");
+        throw new Error(
+          provider === "omp"
+            ? "No Oh My Pi models are discovered yet; configure an OMP provider before importing."
+            : "Select a Pi model before importing a Pi thread.",
+        );
       }
       const threadId = newThreadId();
       const createdAt = new Date().toISOString();
@@ -2787,7 +2813,9 @@ export default function Sidebar() {
             ? `Imported Cursor session${suffix ? ` ${suffix}` : ""}`
             : provider === "opencode"
               ? `Imported OpenCode session${suffix ? ` ${suffix}` : ""}`
-              : `Imported Codex thread${suffix ? ` ${suffix}` : ""}`;
+              : provider === "omp"
+                ? `Imported Oh My Pi session${suffix ? ` ${suffix}` : ""}`
+                : `Imported Codex thread${suffix ? ` ${suffix}` : ""}`;
       let createdThread = false;
 
       try {
@@ -2831,7 +2859,13 @@ export default function Sidebar() {
         throw error;
       }
     },
-    [appSettings.defaultThreadEnvMode, currentProjectShortcutTargetId, navigate, projects],
+    [
+      appSettings.defaultThreadEnvMode,
+      currentProjectShortcutTargetId,
+      navigate,
+      projects,
+      queryClient,
+    ],
   );
 
   const commitRename = useCallback(
@@ -7036,15 +7070,19 @@ function SidebarSearchPaletteController(props: {
   // structurally nested side chats stay out of standalone thread results.
   const selectSidebarDisplayThreads = useMemo(() => createSidebarDisplayThreadsSelector(), []);
   const importProviderCapabilityQueries = useQueries({
-    queries: (["codex", "claudeAgent", "cursor", "opencode"] as const).map((provider) =>
+    queries: (["codex", "claudeAgent", "cursor", "opencode", "omp"] as const).map((provider) =>
       providerComposerCapabilitiesQueryOptions(provider),
     ),
   });
   const threads = useStore(selectAllThreads);
   const sidebarDisplayThreads = useStore(selectSidebarDisplayThreads);
   const importProviders: ReadonlyArray<ImportProviderKind> = (
-    ["codex", "claudeAgent", "cursor", "opencode"] as const
-  ).filter((provider, index) => supportsThreadImport(importProviderCapabilityQueries[index]?.data));
+    ["codex", "claudeAgent", "cursor", "opencode", "omp"] as const
+  ).filter(
+    (provider, index) =>
+      isBetaFeatureOn(provider) &&
+      supportsThreadImport(importProviderCapabilityQueries[index]?.data),
+  );
   // `threads` is rebuilt on every streamed store flush, so this projection is
   // cheap by construction (message text is cached per thread-messages array
   // below) and its result keeps the previous identity while nothing the

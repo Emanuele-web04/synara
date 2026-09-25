@@ -6,7 +6,7 @@
 // Layer: Web UI component
 
 import type { ProviderKind, ServerProviderStatus } from "@synara/contracts";
-import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
+import { VISIBLE_PROVIDER_DESCRIPTORS } from "../../betaFeatures";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -128,7 +128,7 @@ export function ProvidersStep(props: { readonly detection: ProviderDetection }) 
     void detection.detect({ silent: true });
   }, [detection]);
 
-  const rows = PROVIDER_DESCRIPTORS.map((descriptor) => {
+  const rows = VISIBLE_PROVIDER_DESCRIPTORS.map((descriptor) => {
     const status = findProviderStatus(statuses, descriptor.kind);
     const state = classifyProviderSetup({
       status,

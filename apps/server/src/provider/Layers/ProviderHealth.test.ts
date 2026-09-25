@@ -35,6 +35,7 @@ import {
   makeCheckDevinProviderStatus,
   makeCheckGrokProviderStatus,
   makeCheckOpenCodeProviderStatus,
+  makeDisabledProviderStatus,
   makeProviderHealthLive,
   parseAuthStatusFromOutput,
   parseClaudeAuthStatusFromOutput,
@@ -57,6 +58,7 @@ function mockHandle(
 ) {
   return ChildProcessSpawner.makeHandle({
     pid: ChildProcessSpawner.ProcessId(0x7ff_f_fffe),
+
     exitCode: options?.exitCode ?? Effect.succeed(ChildProcessSpawner.ExitCode(result.code)),
     isRunning: Effect.succeed(false),
     kill: () => Effect.void,
@@ -164,6 +166,7 @@ const allProvidersDisabledSettings = {
     droid: { enabled: false },
     opencode: { enabled: false },
     pi: { enabled: false },
+    omp: { enabled: false },
   },
 } as const;
 
@@ -179,6 +182,7 @@ const allProvidersDisabledServerSettings = {
     droid: { ...DEFAULT_SERVER_SETTINGS.providers.droid, enabled: false },
     opencode: { ...DEFAULT_SERVER_SETTINGS.providers.opencode, enabled: false },
     pi: { ...DEFAULT_SERVER_SETTINGS.providers.pi, enabled: false },
+    omp: { ...DEFAULT_SERVER_SETTINGS.providers.omp, enabled: false },
   },
 } satisfies typeof DEFAULT_SERVER_SETTINGS;
 
@@ -485,6 +489,30 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   });
 
   describe("disabled provider handling", () => {
+    it("builds an inert status for disabled providers", () => {
+      assert.deepStrictEqual(makeDisabledProviderStatus("opencode", "2026-06-16T12:00:00.000Z"), {
+        provider: "opencode",
+        status: "warning",
+        available: false,
+        authStatus: "unknown",
+        checkedAt: "2026-06-16T12:00:00.000Z",
+        message: "Provider is disabled in Synara settings.",
+      });
+    });
+
+    it("projects disabled settings over cached ready statuses", () => {
+      const statuses = projectProviderStatusesForSettings(
+        [cachedReadyCodexStatus],
+        allProvidersDisabledServerSettings,
+        "2026-06-16T12:05:00.000Z",
+      );
+      const codex = statuses.find((status) => status.provider === "codex");
+
+      assert.strictEqual(statuses.length, 10);
+      assert.strictEqual(codex?.available, false);
+      assert.strictEqual(codex?.message, "Provider is disabled in Synara settings.");
+    });
+
     it("suppresses cached update advisories when automatic update checks are disabled", () => {
       const statuses = projectProviderStatusesForSettings(
         [
@@ -615,7 +643,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         const providerHealth = yield* ProviderHealth;
         const statuses = yield* providerHealth.refresh;
 
-        assert.strictEqual(statuses.length, 9);
+        assert.strictEqual(statuses.length, 10);
         for (const status of statuses) {
           assert.strictEqual(status.available, false);
           assert.strictEqual(status.message, "Provider is disabled in Synara settings.");

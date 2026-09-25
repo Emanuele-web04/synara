@@ -122,6 +122,28 @@ const COMPUTER_SCOPES: Record<
             },
     ),
   },
+  "device-task": {
+    prompt: "Allow Device for this task?",
+    actions: WITHOUT_SESSION_APPROVAL.map((action) =>
+      action.decision === "accept"
+        ? {
+            ...action,
+            label: "Allow Device for this task",
+            description:
+              "Continue routine device actions until this response ends. Stop cancels access.",
+          }
+        : action.decision === "decline"
+          ? {
+              ...action,
+              description: "Stop device control for this turn, agent continues without tools",
+            }
+          : {
+              ...action,
+              label: "Cancel this request",
+              description: "Use Stop to end the agent turn.",
+            },
+    ),
+  },
 };
 
 const KIND_PROMPT: Record<PendingApproval["requestKind"], string> = {

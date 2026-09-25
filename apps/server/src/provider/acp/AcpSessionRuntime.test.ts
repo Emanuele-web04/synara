@@ -58,6 +58,7 @@ it.each(["overflow", "scope close"])(
           agentConnection = agentApp.connect(OfficialAcp.ndJsonStream(output, input));
           return ChildProcessSpawner.makeHandle({
             pid: ChildProcessSpawner.ProcessId(0x7ff_f_fffe),
+
             exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
             isRunning: Effect.succeed(true),
             kill: () => Effect.void,
@@ -527,6 +528,7 @@ describe("AcpSessionRuntime initialize validation", () => {
           agentApp.connect(OfficialAcp.ndJsonStream(agentOutput, agentInput));
           return ChildProcessSpawner.makeHandle({
             pid: ChildProcessSpawner.ProcessId(0x7ff_f_fffe),
+
             exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
             isRunning: Effect.succeed(true),
             kill: () => Effect.void,
@@ -666,6 +668,7 @@ describe("AcpSessionRuntime startup timeouts", () => {
           input.agentApp.connect(OfficialAcp.ndJsonStream(agentOutput, agentInput));
           return ChildProcessSpawner.makeHandle({
             pid: ChildProcessSpawner.ProcessId(0x7ff_f_fffe),
+
             exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
             isRunning: Effect.succeed(true),
             kill: () => Effect.void,
@@ -729,6 +732,7 @@ describe("AcpSessionRuntime startup timeouts", () => {
         errorMessage: "ACP agent did not respond to initialize within 1s.",
         data: { reason: "acp-startup-timeout", step: "initialize", timeoutMs: STEP_TIMEOUT_MS },
       });
+
       expect(tornDownPids).toEqual([0x7ff_f_fffe]);
     },
     TEST_TIMEOUT_MS,
@@ -754,6 +758,7 @@ describe("AcpSessionRuntime startup timeouts", () => {
         errorMessage: "ACP agent did not respond to authenticate within 1s.",
         data: { reason: "acp-startup-timeout", step: "authenticate", timeoutMs: STEP_TIMEOUT_MS },
       });
+
       expect(tornDownPids).toEqual([0x7ff_f_fffe]);
     },
     TEST_TIMEOUT_MS,
@@ -780,6 +785,7 @@ describe("AcpSessionRuntime startup timeouts", () => {
         errorMessage: "ACP agent did not respond to session/new within 1s.",
         data: { reason: "acp-startup-timeout", step: "session/new", timeoutMs: STEP_TIMEOUT_MS },
       });
+
       expect(tornDownPids).toEqual([0x7ff_f_fffe]);
     },
     TEST_TIMEOUT_MS,

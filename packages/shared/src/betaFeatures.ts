@@ -13,11 +13,11 @@ import {
 
 /**
  * Features that ship only in non-Stable builds. Keep a feature out of Stable
- * by adding its key here; promote it by deleting the entry. Empty today —
- * every feature ships everywhere.
+ * by adding its key here; promote it by deleting the entry. A provider's key
+ * is its ProviderKind: today that is "omp" only.
  */
 export type BetaOnlyFeature = string;
-export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [];
+export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = ["omp"];
 
 /**
  * Whether a Beta-only feature is on for this host. Only the Stable

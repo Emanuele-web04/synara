@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Added Oh My Pi (OMP) as an ACP provider (Synara Beta only), with model discovery via `omp models --json`, per-model reasoning efforts (including `max`), eager catalog pre-warming at startup, and OMP thread/session normalization.
+
+### Fixed
+
+- Fixed OMP threads being mislabeled as Codex when the session-provider normalizer fell through to the Codex default instead of preserving the OMP provider.
+
 ## [0.9.1] — 2026-09-22
 
 **Claude Opus 5.5 and GPT-6 Sol & Luna lead this update.** Synara also improves environment task navigation, OpenCode startup, Computer control feedback, and several high-frequency paths.

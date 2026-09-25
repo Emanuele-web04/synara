@@ -1057,17 +1057,21 @@ export const makeAgentGateway = Effect.gen(function* () {
   };
 
   /**
-   * The approval card for one Computer consent prompt: routine task consent,
-   * visible-use consent, or a single-call approval (clipboard reads).
+   * The approval card for one Computer or Device consent prompt: routine task
+   * consent, visible-use consent, or a single-call approval (clipboard reads).
+   * Device names share this path because provider-native permission bridges
+   * cannot see MCP calls and would otherwise let a mutating device action run
+   * unasked.
    */
   const publishComputerApproval =
     (
       name: string,
       args: Record<string, unknown>,
       context: Parameters<NonNullable<AgentGatewayComputerToolsOptions["authorizeAction"]>>[2],
-      approvalScope: "computer-task" | "computer-foreground" | undefined,
+      approvalScope: "computer-task" | "computer-foreground" | "device-task" | undefined,
     ) =>
     async (requestId: string, decision?: ProviderApprovalDecision): Promise<void> => {
+      const deviceTool = name.startsWith("device_");
       const createdAt = isoNow();
       const eventKey = `${requestId}:${decision === undefined ? "open" : "resolved"}`;
       await Effect.runPromise(
@@ -1081,12 +1085,14 @@ export const makeAgentGateway = Effect.gen(function* () {
             kind: decision === undefined ? "approval.requested" : "approval.resolved",
             summary:
               decision !== undefined
-                ? "Computer approval resolved"
+                ? `${deviceTool ? "Device" : "Computer"} approval resolved`
                 : approvalScope === "computer-foreground"
                   ? "Show Computer on screen for this task"
-                  : approvalScope === "computer-task"
-                    ? "Allow Computer for this task"
-                    : "Computer action needs approval",
+                  : approvalScope === "device-task"
+                    ? "Allow Device for this task"
+                    : approvalScope === "computer-task"
+                      ? "Allow Computer for this task"
+                      : `${deviceTool ? "Device" : "Computer"} action needs approval`,
             payload: {
               requestId,
               requestKind: "tool",
@@ -1106,10 +1112,10 @@ export const makeAgentGateway = Effect.gen(function* () {
     };
 
   /**
-   * The Computer approval path, shared by the desktop tools and the
-   * driver-backed `computer_browser_*` family — same capability, same
-   * task-scoped consent, same disclosure. Browser names take task consent
-   * like every other mutating computer tool.
+   * The Computer approval path, shared by the desktop tools, the
+   * driver-backed `computer_browser_*` family, and the device family — same
+   * capability, same task-scoped consent, same disclosure. Browser and device
+   * names take task consent like every other mutating computer tool.
    */
   const authorizeComputerAction: NonNullable<
     AgentGatewayComputerToolsOptions["authorizeAction"]
@@ -1120,14 +1126,17 @@ export const makeAgentGateway = Effect.gen(function* () {
       { signal },
     );
     if (Option.isNone(caller)) return false;
+    const deviceTool = name.startsWith("device_");
     // Computer capability is issued only after task activation. Full
     // access already consents to routine desktop actions, including
     // foreground delivery; focus is not a second approval boundary.
     if (caller.value.runtimeMode === "full-access") {
-      await Effect.runPromise(
-        surfaceComputerControlDisclosure(context.callerThreadId, context.callerTurnId),
-        { signal },
-      ).catch(() => undefined);
+      if (!deviceTool) {
+        await Effect.runPromise(
+          surfaceComputerControlDisclosure(context.callerThreadId, context.callerTurnId),
+          { signal },
+        ).catch(() => undefined);
+      }
       return true;
     }
     const taskConsent = name !== "computer_read_clipboard" && context.callerTurnId !== null;
@@ -1142,10 +1151,10 @@ export const makeAgentGateway = Effect.gen(function* () {
         name,
         args,
         context,
-        taskConsent ? "computer-task" : undefined,
+        taskConsent ? (deviceTool ? "device-task" : "computer-task") : undefined,
       ),
     });
-    if (approved) {
+    if (approved && !deviceTool) {
       await Effect.runPromise(
         surfaceComputerControlDisclosure(context.callerThreadId, context.callerTurnId),
         { signal },
@@ -1206,7 +1215,10 @@ export const makeAgentGateway = Effect.gen(function* () {
     ...automationTools,
     ...browserTools,
     ...(deviceService?.supported === true
-      ? makeAgentGatewayDeviceTools({ manager: deviceService.manager })
+      ? makeAgentGatewayDeviceTools({
+          manager: deviceService.manager,
+          authorizeAction: authorizeComputerAction,
+        })
       : []),
     ...(computerService?.supported === true
       ? makeAgentGatewayComputerTools({

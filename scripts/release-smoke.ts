@@ -481,6 +481,16 @@ function verifyReleaseWorkflowSafety(): void {
     "Expected the Windows updater publisher identity to be compiled into the main bundle.",
   );
 
+  const updaterSecurity = readFileSync(
+    resolve(repoRoot, "apps/desktop/src/electronUpdaterSecurity.ts"),
+    "utf8",
+  );
+  assertNotContains(
+    updaterSecurity,
+    "return feedPublisherNames",
+    "Runtime signature verification must not trust publisher names from mutable updater config.",
+  );
+
   const nextBetaJob = workflow.slice(workflow.indexOf("  cut_next_beta:\n"));
   assertContains(
     workflow,

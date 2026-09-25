@@ -11,6 +11,7 @@ import {
   isInitialModelDiscoveryPending,
   prioritizeProviderModelDiscovery,
   providerCommandsQueryOptions,
+  providerDiscoveryQueryKeys,
   providerModelsQueryOptions,
 } from "./providerDiscoveryReactQuery";
 import * as nativeApi from "../nativeApi";
@@ -308,6 +309,16 @@ describe("providerModelsQueryOptions", () => {
     expect(queryClient.getQueryData(options.queryKey)).toBeUndefined();
   });
 
+  it("does not mask OMP's initial fetch with a placeholder", () => {
+    // OMP has no static model fallback, so an empty placeholder would surface a
+    // false "No matches" during its ~3s `omp models` discovery. OMP opts out of
+    // placeholderData to report a genuine `isLoading` pending state; other
+    // providers keep the placeholder to suppress refetch flicker.
+    expect(providerModelsQueryOptions({ provider: "omp" }).placeholderData).toBeUndefined();
+    expect(providerModelsQueryOptions({ provider: "cursor" }).placeholderData).toBeDefined();
+    expect(providerModelsQueryOptions({ provider: "pi" }).placeholderData).toBeDefined();
+  });
+
   it("preserves the cached catalog when a background refetch fails", async () => {
     const catalog = {
       models: [{ slug: "auto", name: "Auto" }],
@@ -371,6 +382,31 @@ describe("providerModelsQueryOptions", () => {
     expect(query.state.error).toBeNull();
     expect(interval(query)).toBe(false);
     queryClient.clear();
+  });
+
+  it("scopes OMP's model query by cwd so project modelRoles participate", () => {
+    const options = providerModelsQueryOptions({
+      provider: "omp",
+      binaryPath: "/bin/omp",
+      agentDir: "/agent",
+      cwd: "/some/project",
+    });
+    // The catalog is global, but OMP merges `<cwd>/.omp/config.yml` roles into
+    // the picker — the query key carries cwd so a project's own roles show.
+    expect(options.queryKey).toEqual(
+      providerDiscoveryQueryKeys.models("omp", "/bin/omp", null, "/agent", "/some/project"),
+    );
+  });
+
+  it("scopes non-OMP providers by cwd in their query key", () => {
+    const options = providerModelsQueryOptions({
+      provider: "opencode",
+      binaryPath: "/bin/opencode",
+      cwd: "/some/project",
+    });
+    expect(options.queryKey).toEqual(
+      providerDiscoveryQueryKeys.models("opencode", "/bin/opencode", null, null, "/some/project"),
+    );
   });
 });
 

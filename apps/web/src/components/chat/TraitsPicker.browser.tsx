@@ -49,6 +49,7 @@ function ClaudeTraitsPickerHarness(props: {
       droid: [],
       opencode: [],
       pi: [],
+      omp: [],
     },
   });
   const handlePromptChange = (nextPrompt: string) => {
@@ -595,6 +596,7 @@ function OpenCodeTraitsPickerHarness(props: {
       droid: [],
       opencode: [],
       pi: [],
+      omp: [],
     },
   });
   const handlePromptChange = (nextPrompt: string) => {

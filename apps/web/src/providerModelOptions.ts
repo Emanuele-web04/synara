@@ -23,6 +23,9 @@ import {
   type GrokModelOptions,
   type GrokModelSelection,
   type ModelSelection,
+  type OmpModelOptions,
+  type OmpModelSelection,
+  type OmpThinkingLevel,
   type OpenCodeModelOptions,
   type OpenCodeModelSelection,
   type PiModelOptions,
@@ -40,6 +43,7 @@ export interface ProviderModelOption {
   description?: string;
   upstreamProviderId?: string;
   upstreamProviderName?: string;
+  role?: { name: string; model: string; thinkingLevel?: OmpThinkingLevel };
 }
 
 export interface ProviderModelOptionGroup {
@@ -90,7 +94,7 @@ export function formatProviderModelOptionName(input: {
     return trimmedSlug;
   }
 
-  if (input.provider === "opencode" || input.provider === "pi") {
+  if (input.provider === "opencode" || input.provider === "pi" || input.provider === "omp") {
     const modelIdentifier = trimmedSlug.includes("/")
       ? trimmedSlug.slice(trimmedSlug.lastIndexOf("/") + 1)
       : trimmedSlug;
@@ -235,17 +239,42 @@ export function mergeDynamicModelOptions(input: {
     });
   }
 
+  // Scoped providers (omp/pi/opencode) surface catalog slugs as
+  // `<upstream-provider>/<model>`. A bare custom slug naming the same model id
+  // duplicates the discovered row; drop it only when exactly one discovered
+  // option carries that id so an ambiguous name never silently wins.
+  const scopedProvider =
+    input.provider === "omp" || input.provider === "pi" || input.provider === "opencode";
+  const dynamicIdPartCounts = scopedProvider
+    ? normalizedDynamicOptions.reduce((counts, option) => {
+        const idPart = option.slug.slice(option.slug.lastIndexOf("/") + 1);
+        counts.set(idPart, (counts.get(idPart) ?? 0) + 1);
+        return counts;
+      }, new Map<string, number>())
+    : undefined;
+
   // Droid validates model values against its live ACP select options, so an
   // arbitrary custom slug is guaranteed to fail at session configuration.
   const customOnlyModels =
     input.provider === "droid"
       ? []
-      : input.staticOptions.filter(
-          (model) =>
-            "isCustom" in model &&
-            model.isCustom &&
-            !dynamicNormalizedSlugs.has(normalizeDynamicModelSlug(input.provider, model.slug)),
-        );
+      : input.staticOptions.filter((model) => {
+          if (!("isCustom" in model) || !model.isCustom) {
+            return false;
+          }
+          const normalizedCustomSlug = normalizeDynamicModelSlug(input.provider, model.slug);
+          if (dynamicNormalizedSlugs.has(normalizedCustomSlug)) {
+            return false;
+          }
+          if (
+            dynamicIdPartCounts !== undefined &&
+            !normalizedCustomSlug.includes("/") &&
+            dynamicIdPartCounts.get(normalizedCustomSlug) === 1
+          ) {
+            return false;
+          }
+          return true;
+        });
   const staticBuiltInModels = input.staticOptions.filter(
     (model) => !("isCustom" in model) || model.isCustom !== true,
   );
@@ -406,6 +435,12 @@ export function buildNextProviderOptions(
       ...patch,
     } as OpenCodeModelOptions;
   }
+  if (provider === "omp") {
+    return {
+      ...(modelOptions as OmpModelOptions | undefined),
+      ...patch,
+    } as OmpModelOptions;
+  }
   return {
     ...(modelOptions as PiModelOptions | undefined),
     ...patch,
@@ -466,6 +501,11 @@ export function buildModelSelection(
   model: string,
   options?: DevinModelOptions | null | undefined,
 ): DevinModelSelection;
+export function buildModelSelection(
+  provider: "omp",
+  model: string,
+  options?: OmpModelOptions | null | undefined,
+): OmpModelSelection;
 export function buildModelSelection(
   provider: ProviderKind,
   model: string,
@@ -548,6 +588,14 @@ export function buildModelSelection(
             provider,
             model,
             options: options as PiModelOptions,
+          }
+        : { provider, model };
+    case "omp":
+      return options
+        ? {
+            provider,
+            model,
+            options: options as OmpModelOptions,
           }
         : { provider, model };
   }

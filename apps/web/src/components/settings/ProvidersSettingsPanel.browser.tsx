@@ -83,7 +83,10 @@ it("shows installation and auth beside activity switches with visible setup guid
     .element(page.getByRole("switch", { name: "Disable OpenCode", exact: true }))
     .toBeChecked();
   for (const descriptor of PROVIDER_DESCRIPTORS) {
-    const guide = page.getByRole("link", { name: `${descriptor.displayName} setup guide` });
+    const guide = page.getByRole("link", {
+      name: `${descriptor.displayName} setup guide`,
+      exact: true,
+    });
     await expect.element(guide).toBeVisible();
     expect(guide.element().getAttribute("href")).toBe(descriptor.setupDocsHref);
   }

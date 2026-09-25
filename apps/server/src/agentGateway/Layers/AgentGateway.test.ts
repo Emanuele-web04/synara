@@ -943,6 +943,7 @@ function makeHarnessLayer(
     "droid",
     "opencode",
     "pi",
+    "omp",
   ];
   let providerStatuses =
     options.providerStatuses ??

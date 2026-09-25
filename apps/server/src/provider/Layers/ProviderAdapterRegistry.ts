@@ -27,6 +27,7 @@ import { DroidAdapter } from "../Services/DroidAdapter.ts";
 import { GrokAdapter } from "../Services/GrokAdapter.ts";
 import { OpenCodeAdapter } from "../Services/OpenCodeAdapter.ts";
 import { PiAdapter } from "../Services/PiAdapter.ts";
+import { OmpAdapter } from "../Services/OmpAdapter.ts";
 import { AntigravityAdapter } from "../Services/AntigravityAdapter.ts";
 
 export interface ProviderAdapterRegistryLiveOptions {
@@ -47,6 +48,7 @@ const makeProviderAdapterRegistry = (options?: ProviderAdapterRegistryLiveOption
             yield* GrokAdapter,
             yield* DroidAdapter,
             yield* OpenCodeAdapter,
+            yield* OmpAdapter,
             yield* PiAdapter,
           ];
 

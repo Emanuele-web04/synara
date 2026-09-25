@@ -74,6 +74,11 @@ const PROVIDER_MODEL_DISCOVERY_PRIORITY_RANK: Record<ProviderModelDiscoveryPrior
   foreground: 2,
 };
 
+// The queue slot is single and discovery runs over IPC into CLI subprocesses
+// that can hang indefinitely. Without a bound, one stuck provider discovery
+// starves every other provider's catalog loads.
+const PROVIDER_MODEL_DISCOVERY_TIMEOUT_MS = 90_000;
+
 function queryKeysMatch(left: readonly unknown[], right: readonly unknown[]): boolean {
   return (
     left.length === right.length && left.every((value, index) => Object.is(value, right[index]))
@@ -119,13 +124,28 @@ function drainProviderModelDiscoveryQueue(): void {
   }
 
   providerModelDiscoveryRunning = true;
+  let taskSettled = false;
+  const finishTask = (settle: () => void) => {
+    if (taskSettled) return;
+    taskSettled = true;
+    clearTimeout(timeoutId);
+    task.signal.removeEventListener("abort", onTaskAbort);
+    providerModelDiscoveryRunning = false;
+    settle();
+    drainProviderModelDiscoveryQueue();
+  };
+  const onTaskAbort = () => finishTask(() => task.reject(abortReason(task.signal)));
+  const timeoutId = setTimeout(
+    () => finishTask(() => task.reject(new Error("Provider model discovery timed out."))),
+    PROVIDER_MODEL_DISCOVERY_TIMEOUT_MS,
+  );
+  task.signal.addEventListener("abort", onTaskAbort, { once: true });
   void Promise.resolve()
     .then(task.discover)
-    .then(task.resolve, task.reject)
-    .finally(() => {
-      providerModelDiscoveryRunning = false;
-      drainProviderModelDiscoveryQueue();
-    });
+    .then(
+      (value) => finishTask(() => task.resolve(value)),
+      (reason) => finishTask(() => task.reject(reason)),
+    );
 }
 
 export function prioritizeProviderModelDiscovery(
@@ -410,12 +430,18 @@ export function providerModelsQueryOptions(input: {
   enabled?: boolean;
   priority?: ProviderModelDiscoveryPriority | undefined;
 }) {
+  // The OMP catalog is global (`omp models --json` is not project-scoped), but
+  // `modelRoles` merge a project layer (`<cwd>/.omp/config.yml`), so cwd stays
+  // in the query key for roles to reflect the active project. The server still
+  // shares one catalog cache across cwds, so a per-cwd entry only pays for the
+  // role config reads.
+  const cwd = input.cwd ?? null;
   const queryKey = providerDiscoveryQueryKeys.models(
     input.provider,
     input.binaryPath ?? null,
     input.apiEndpoint ?? null,
     input.agentDir ?? null,
-    input.cwd ?? null,
+    cwd,
   );
   return queryOptions<ProviderListModelsResult, Error, ProviderListModelsResult, typeof queryKey>({
     queryKey,
@@ -431,7 +457,7 @@ export function providerModelsQueryOptions(input: {
             ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
             ...(input.apiEndpoint ? { apiEndpoint: input.apiEndpoint } : {}),
             ...(input.agentDir ? { agentDir: input.agentDir } : {}),
-            ...(input.cwd ? { cwd: input.cwd } : {}),
+            ...(cwd ? { cwd } : {}),
           });
           const previous = client.getQueryData<ProviderListModelsResult>(queryKey);
           return requireDiscoveredModels(input.provider, result, previous);
@@ -441,6 +467,9 @@ export function providerModelsQueryOptions(input: {
     // Cached catalogs paint immediately while stale entries revalidate in the
     // background. Droid discovery starts a disposable ACP session, so retain its
     // longer cache and never repeat that work merely because the window regained focus.
+    // OMP keeps the standard 30s staleness: the CLI catalog is server-cached 5min,
+    // but file-backed modelRoles are re-resolved per request, so config edits must
+    // reach the server on the ordinary focus/mount refetch cadence.
     retry: providerModelDiscoveryRetry(input.provider),
     staleTime:
       input.provider === "devin"
@@ -458,11 +487,27 @@ export function providerModelsQueryOptions(input: {
             query.state.data?.error || query.state.error ? 30_000 : false,
         }
       : {}),
+    // Droid discovery starts a disposable ACP session, so it must not refetch
+    // on focus. OMP discovery is a cheap `omp models` subprocess (server-cached
+    // 5min; modelRoles are re-read per request), so it refetches on focus and,
+    // where the renderer's timers allow, on an interval while observed —
+    // otherwise config/role edits only appear after an app restart.
     ...(input.provider === "droid" ? { refetchOnWindowFocus: false } : {}),
+    ...(input.provider === "omp"
+      ? { refetchOnWindowFocus: true, refetchInterval: 60_000, refetchIntervalInBackground: true }
+      : {}),
     // 30min — matches NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS in
     // providerModelPrefetch.ts (not imported: that module imports from here).
     gcTime: 30 * 60_000,
-    placeholderData: (previous) => previous ?? EMPTY_MODELS_RESULT,
+    // OMP has no static model fallback, so masking its first `omp models` fetch
+    // with an empty placeholder would surface a false "No matches" during the
+    // ~3s discovery. Omit placeholderData for OMP so React Query reports a
+    // genuine `isLoading` pending state and the catalog renders the loading
+    // skeleton instead. Other providers keep the placeholder to suppress
+    // refetch flicker against their static catalogs.
+    ...(input.provider !== "omp"
+      ? { placeholderData: (previous) => previous ?? EMPTY_MODELS_RESULT }
+      : {}),
   });
 }
 

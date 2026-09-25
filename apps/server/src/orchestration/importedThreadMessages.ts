@@ -296,3 +296,50 @@ export function mapFactorySnapshotMessages(input: {
     }),
   );
 }
+
+export function mapOmpSnapshotMessages(input: {
+  readonly importedAt: string;
+  readonly threadId: ThreadId;
+  readonly turns: ReadonlyArray<{ readonly items: ReadonlyArray<unknown> }>;
+}): ReadonlyArray<ThreadHandoffImportedMessage> {
+  let messageIndex = 0;
+  return input.turns.flatMap((turn, turnIndex) =>
+    turn.items.flatMap((item, itemIndex) => {
+      if (!item || typeof item !== "object") return [];
+      const candidate = item as {
+        readonly type?: unknown;
+        readonly id?: unknown;
+        readonly role?: unknown;
+        readonly text?: unknown;
+        readonly timestamp?: unknown;
+      };
+      if (candidate.type !== "ompMessage") return [];
+      const role =
+        candidate.role === "user" ? "user" : candidate.role === "assistant" ? "assistant" : null;
+      const text = typeof candidate.text === "string" ? candidate.text.trim() : "";
+      if (!role || !text) return [];
+      const sourceId =
+        typeof candidate.id === "string" && candidate.id.trim()
+          ? candidate.id.trim()
+          : `${turnIndex}:${itemIndex}`;
+      const parsedTimestamp =
+        typeof candidate.timestamp === "string" ? Date.parse(candidate.timestamp) : Number.NaN;
+      const fallbackTimestamp = Date.parse(input.importedAt) + messageIndex;
+      const createdAt = new Date(
+        Number.isFinite(parsedTimestamp) ? parsedTimestamp : fallbackTimestamp,
+      ).toISOString();
+      messageIndex += 1;
+      return [
+        {
+          messageId: MessageId.makeUnsafe(
+            `import:${String(input.threadId)}:omp:${turnIndex}:${itemIndex}:${sourceId}`,
+          ),
+          role,
+          text,
+          createdAt,
+          updatedAt: createdAt,
+        },
+      ];
+    }),
+  );
+}

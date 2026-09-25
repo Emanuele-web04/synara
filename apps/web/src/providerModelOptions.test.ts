@@ -34,6 +34,36 @@ describe("Antigravity model options", () => {
     });
   });
 });
+describe("OMP model options", () => {
+  it("builds an OMP model selection carrying a max thinking level", () => {
+    expect(
+      buildModelSelection("omp", "anthropic/claude-sonnet-4", { thinkingLevel: "max" }),
+    ).toEqual({
+      provider: "omp",
+      model: "anthropic/claude-sonnet-4",
+      options: { thinkingLevel: "max" },
+    });
+  });
+
+  it("builds an OMP model selection without options when none are provided", () => {
+    expect(buildModelSelection("omp", "anthropic/claude-sonnet-4")).toEqual({
+      provider: "omp",
+      model: "anthropic/claude-sonnet-4",
+    });
+  });
+
+  it("strips the upstream provider prefix from OMP slugs in display names", () => {
+    // omp sits in the slug-prefix condition alongside pi/opencode/kilo, so the
+    // "anthropic/" prefix must be stripped; regressing omp out of that condition
+    // would leave the slash in the display name.
+    const name = formatProviderModelOptionName({
+      provider: "omp",
+      slug: "anthropic/claude-sonnet-4",
+    });
+    expect(name).not.toContain("/");
+    expect(name.length).toBeGreaterThan(0);
+  });
+});
 
 describe("Claude model selections", () => {
   it("preserves the discovered Auto capability with the selected model", () => {
@@ -355,6 +385,74 @@ describe("mergeDynamicModelOptions", () => {
       { slug: "claude-opus-5", name: "Claude Opus 5" },
     ]);
   });
+
+  it.each(["omp", "opencode"] as const)(
+    "drops a bare %s custom slug that uniquely matches a discovered scoped row",
+    (provider) => {
+      expect(
+        mergeDynamicModelOptions({
+          provider,
+          staticOptions: [
+            {
+              slug: "muse-spark-1.3-contributor",
+              name: "muse-spark-1.3-contributor",
+              isCustom: true,
+            },
+          ],
+          dynamicModels: [
+            {
+              slug: "opencode-go/muse-spark-1.3-contributor",
+              name: "Muse Spark 1.3 Contributor",
+              upstreamProviderId: "opencode-go",
+              upstreamProviderName: "OpenCode Go",
+            },
+            {
+              slug: "opencode-go/deepseek-v4-flash",
+              name: "DeepSeek V4 Flash",
+              upstreamProviderId: "opencode-go",
+              upstreamProviderName: "OpenCode Go",
+            },
+          ],
+        }).map((option) => option.slug),
+      ).toEqual(["opencode-go/muse-spark-1.3-contributor", "opencode-go/deepseek-v4-flash"]);
+    },
+  );
+
+  it.each(["omp", "opencode"] as const)(
+    "keeps a bare %s custom slug when multiple discovered rows share its model id",
+    (provider) => {
+      expect(
+        mergeDynamicModelOptions({
+          provider,
+          staticOptions: [{ slug: "shared-model", name: "shared-model", isCustom: true }],
+          dynamicModels: [
+            { slug: "provider-a/shared-model", name: "Shared Model (A)" },
+            { slug: "provider-b/shared-model", name: "Shared Model (B)" },
+          ],
+        }).map((option) => option.slug),
+      ).toEqual(["provider-a/shared-model", "provider-b/shared-model", "shared-model"]);
+    },
+  );
+
+  it.each(["omp", "opencode"] as const)(
+    "keeps scoped %s custom slugs that do not exactly match a discovered row",
+    (provider) => {
+      expect(
+        mergeDynamicModelOptions({
+          provider,
+          staticOptions: [
+            { slug: "other-host/muse-spark-1.3-contributor", name: "custom", isCustom: true },
+          ],
+          dynamicModels: [
+            { slug: "opencode-go/muse-spark-1.3-contributor", name: "Muse Spark 1.3 Contributor" },
+          ],
+        }).map((option) => option.slug),
+      ).toEqual([
+        "opencode-go/muse-spark-1.3-contributor",
+        "other-host/muse-spark-1.3-contributor",
+      ]);
+    },
+  );
 });
 
 describe("providerModelCostMultiplierLabel", () => {
