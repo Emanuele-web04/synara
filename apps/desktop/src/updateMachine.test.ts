@@ -10,6 +10,7 @@ import {
   reduceDesktopUpdateStateOnDownloadStart,
   reduceDesktopUpdateStateOnInstallFailure,
   reduceDesktopUpdateStateOnInstallRestartFailure,
+  reduceDesktopUpdateStateOnInstallStart,
   reduceDesktopUpdateStateOnNoUpdate,
   reduceDesktopUpdateStateOnUpdateAvailable,
 } from "./updateMachine";
@@ -94,6 +95,30 @@ describe("updateMachine", () => {
     expect(failedInstall.status).toBe("downloaded");
     expect(failedInstall.errorContext).toBe("install");
     expect(failedInstall.canRetry).toBe(true);
+  });
+
+  it("clears the previous failure for a retry without discarding the artifact or failure count", () => {
+    const failed = reduceDesktopUpdateStateOnInstallFailure(
+      {
+        ...createInitialDesktopUpdateState("1.0.0", runtimeInfo),
+        enabled: true,
+        status: "downloaded",
+        availableVersion: "1.1.0",
+        downloadedVersion: "1.1.0",
+        installFailureCount: 2,
+      },
+      "The update could not be installed automatically",
+    );
+    const retry = reduceDesktopUpdateStateOnInstallStart(failed);
+    expect(retry).toMatchObject({
+      status: "downloaded",
+      downloadedVersion: "1.1.0",
+      availableVersion: "1.1.0",
+      installFailureCount: 2,
+      errorContext: null,
+      message: null,
+      canRetry: false,
+    });
   });
 
   it("restores a durable restart failure without stale downloaded state", () => {

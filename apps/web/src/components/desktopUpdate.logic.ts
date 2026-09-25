@@ -239,7 +239,12 @@ export function shouldToastDesktopUpdateActionResult(result: DesktopUpdateAction
 // the updater still reports "downloaded". That state means the install is in
 // flight, so callers must not treat the accepted-but-incomplete result as done.
 export function isDesktopUpdateInstallInFlight(result: DesktopUpdateActionResult): boolean {
-  return result.accepted && !result.completed && result.state.status === "downloaded";
+  return (
+    result.accepted &&
+    !result.completed &&
+    result.state.status === "downloaded" &&
+    result.state.errorContext !== "install"
+  );
 }
 
 // A download/install request can resolve to "up-to-date" when the offered version

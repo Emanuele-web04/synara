@@ -5563,15 +5563,16 @@ export default function Sidebar() {
     });
   }, [desktopUpdateState, surfaceDesktopUpdateError]);
 
-  // An accepted install leaves the updater status at "downloaded" while the
-  // quit-and-install handoff runs, so the installing latch is released by the
-  // next pushed state instead — a watchdog failure, a superseded update, or a
-  // fresh check result.
+  // Install failures deliberately preserve "downloaded" so the same artifact
+  // can be retried. Watch the error as well as the status to release the latch.
   useEffect(() => {
-    if (desktopUpdateState?.status !== "downloaded") {
+    if (
+      desktopUpdateState?.status !== "downloaded" ||
+      desktopUpdateState.errorContext === "install"
+    ) {
       setInstallingDesktopUpdate(false);
     }
-  }, [desktopUpdateState?.status]);
+  }, [desktopUpdateState?.status, desktopUpdateState?.errorContext]);
 
   const showDesktopUpdateButton = isElectron && shouldShowDesktopUpdateButton(desktopUpdateState);
   const isBetaDesktopFlavor = desktopUpdateState?.flavor === "beta";

@@ -349,17 +349,21 @@ describe("isDesktopUpdateInstallInFlight", () => {
         },
       }),
     ).toBe(false);
+    // Both an immediate handoff failure and the watchdog preserve the artifact
+    // as downloaded so Retry can install it without downloading again.
+    const failedState: DesktopUpdateState = {
+      ...baseState,
+      status: "downloaded",
+      downloadedVersion: "1.1.0",
+      errorContext: "install",
+      message: "Backend did not stop in time",
+      canRetry: true,
+    };
     expect(
       isDesktopUpdateInstallInFlight({
         accepted: true,
         completed: false,
-        state: {
-          ...baseState,
-          status: "error",
-          downloadedVersion: "1.1.0",
-          errorContext: "install",
-          message: "Backend did not stop in time",
-        },
+        state: failedState,
       }),
     ).toBe(false);
   });
