@@ -1,4 +1,5 @@
 import { appendAppSnapPromptContext } from "../../provider/appSnapPromptContext.ts";
+import { isServerBetaFeatureEnabled } from "../../betaFeatureGate";
 import { computerActivationMetadata } from "../../computer/computerActivation.ts";
 import { parseComputerInvocation } from "@synara/shared/computerInvocation";
 import { AgentGatewaySessionRegistry } from "../../agentGateway/Services/AgentGatewaySessionRegistry";
@@ -1735,7 +1736,11 @@ const make = Effect.gen(function* () {
       return yield* new ProviderAdapterValidationError({
         provider: preferredProvider,
         operation: "thread.turn.start",
-        issue: `${providerDisabledSettingsMessage(preferredProvider)} Re-enable it to continue this thread.`,
+        // A Beta-only provider can never be re-enabled on this build, so the
+        // re-enable hint only makes sense for an ordinary settings disable.
+        issue: isServerBetaFeatureEnabled(preferredProvider)
+          ? `${providerDisabledSettingsMessage(preferredProvider)} Re-enable it to continue this thread.`
+          : providerDisabledSettingsMessage(preferredProvider),
       });
     }
     const resolvedProviderOptions = providerStartOptionsFromServerSettings(settings);

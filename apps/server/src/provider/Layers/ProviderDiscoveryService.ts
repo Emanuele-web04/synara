@@ -15,8 +15,9 @@ import {
 } from "@synara/contracts";
 import { Effect, Layer, Option, Schema, SchemaIssue } from "effect";
 
+import { isServerBetaFeatureEnabled } from "../../betaFeatureGate.ts";
 import { ServerConfig } from "../../config.ts";
-import { ServerSettingsService } from "../../serverSettings.ts";
+import { gateBetaOnlyProviders, ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderValidationError } from "../Errors.ts";
 import type { ProviderDiscoveryError } from "../Services/ProviderDiscoveryService.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
@@ -103,7 +104,7 @@ const make = Effect.gen(function* () {
   ) {
     return yield* serverSettings.getSettings.pipe(
       Effect.map((settings) => settings.providers[provider].enabled),
-      Effect.orElseSucceed(() => true),
+      Effect.orElseSucceed(() => isServerBetaFeatureEnabled(provider)),
     );
   });
 
@@ -181,7 +182,7 @@ const make = Effect.gen(function* () {
         catalog: catalogSkills,
       });
       const settings = yield* serverSettings.getSettings.pipe(
-        Effect.orElseSucceed(() => DEFAULT_SERVER_SETTINGS),
+        Effect.orElseSucceed(() => gateBetaOnlyProviders(DEFAULT_SERVER_SETTINGS)),
       );
       return {
         skills: filterDisabledSkills(merged, settings.skills.disabled),
@@ -218,7 +219,7 @@ const make = Effect.gen(function* () {
       // Server-owned like the session start options, so discovery lists the
       // same commands a new Claude session will actually have.
       const settings = yield* serverSettings.getSettings.pipe(
-        Effect.orElseSucceed(() => DEFAULT_SERVER_SETTINGS),
+        Effect.orElseSucceed(() => gateBetaOnlyProviders(DEFAULT_SERVER_SETTINGS)),
       );
       return yield* adapter.listCommands({
         ...parsed,

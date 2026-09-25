@@ -6,7 +6,7 @@
 // The popup is a fixed 800×540 frame for every step so the window never resizes as the
 // user moves through the tour; hero steps (welcome, done) center their content in it.
 
-import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
+import { VISIBLE_PROVIDER_DESCRIPTORS } from "../betaFeatures";
 import { useEffect, useState } from "react";
 
 import { useAppSettings } from "~/appSettings";
@@ -94,7 +94,7 @@ function OnboardingFlow(props: {
   }, [markEngaged, step]);
 
   const providerSummary = summarizeProviderSetup(
-    PROVIDER_DESCRIPTORS.map((descriptor) => ({
+    VISIBLE_PROVIDER_DESCRIPTORS.map((descriptor) => ({
       provider: descriptor.kind,
       state: classifyProviderSetup({
         status: findProviderStatus(statuses, descriptor.kind),

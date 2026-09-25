@@ -13,6 +13,7 @@ import {
   type ModelSelection,
   ServerSettings,
   ServerSettingsError,
+  type ProviderKind,
   type ServerSettingsPatch,
   type ServerSettingsView,
 } from "@synara/contracts";
@@ -34,6 +35,7 @@ import {
 } from "effect";
 import * as Semaphore from "effect/Semaphore";
 import { writeFileStringAtomically } from "./atomicWrite";
+import { isServerBetaFeatureEnabled } from "./betaFeatureGate";
 import { ServerConfig } from "./config";
 import {
   GIT_TEXT_GENERATION_PROVIDER_ORDER,
@@ -111,9 +113,9 @@ export class ServerSettingsService extends ServiceMap.Service<
         const revisionRef = yield* Ref.make(0);
         const emitChange = (settings: ServerSettings) =>
           PubSub.publish(changesPubSub, settings).pipe(Effect.asVoid);
-        const getSettings = Ref.get(currentSettingsRef).pipe(
-          Effect.map(resolveTextGenerationProvider),
-        );
+        const projectSettings = (settings: ServerSettings) =>
+          resolveTextGenerationProvider(gateBetaOnlyProviders(settings));
+        const getSettings = Ref.get(currentSettingsRef).pipe(Effect.map(projectSettings));
         const updateSettings = (patch: ServerSettingsPatch) =>
           Ref.get(currentSettingsRef).pipe(
             Effect.flatMap((currentSettings) =>
@@ -122,7 +124,7 @@ export class ServerSettingsService extends ServiceMap.Service<
             Effect.tap((nextSettings) => Ref.set(currentSettingsRef, nextSettings)),
             Effect.tap(() => Ref.update(revisionRef, (revision) => revision + 1)),
             Effect.tap(emitChange),
-            Effect.map(resolveTextGenerationProvider),
+            Effect.map(projectSettings),
           );
 
         return {
@@ -144,11 +146,11 @@ export class ServerSettingsService extends ServiceMap.Service<
           updateSettingsView: (patch) =>
             updateSettings(patch).pipe(Effect.map(toServerSettingsView)),
           get streamChanges() {
-            return Stream.fromPubSub(changesPubSub).pipe(Stream.map(resolveTextGenerationProvider));
+            return Stream.fromPubSub(changesPubSub).pipe(Stream.map(projectSettings));
           },
           get streamViews() {
             return Stream.fromPubSub(changesPubSub).pipe(
-              Stream.map(resolveTextGenerationProvider),
+              Stream.map(projectSettings),
               Stream.map(toServerSettingsView),
             );
           },
@@ -157,7 +159,32 @@ export class ServerSettingsService extends ServiceMap.Service<
     );
 }
 
-function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings {
+/**
+ * Beta-only providers read as disabled on Stable, projected at the read
+ * boundary only — the persisted file and `settingsRef` keep the user's own
+ * value so a Beta -> Stable round trip never loses it.
+ */
+export function gateBetaOnlyProviders(
+  settings: ServerSettings,
+  isEnabled: (feature: string) => boolean = isServerBetaFeatureEnabled,
+): ServerSettings {
+  let changed = false;
+  // A Record view for the write: the fixed Struct keys each keep their own
+  // settings shape at runtime, which index assignment cannot express.
+  const providers = { ...settings.providers } as Record<
+    ProviderKind,
+    ServerSettings["providers"][ProviderKind]
+  >;
+  for (const provider of Object.keys(providers) as ProviderKind[]) {
+    const current = providers[provider];
+    if (!current.enabled || isEnabled(provider)) continue;
+    providers[provider] = { ...current, enabled: false };
+    changed = true;
+  }
+  return changed ? { ...settings, providers: providers as ServerSettings["providers"] } : settings;
+}
+
+export function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings {
   const selection = settings.textGenerationModelSelection;
   if (
     hasDedicatedTextGenerationProvider(selection.provider) &&
@@ -504,7 +531,9 @@ const makeServerSettings = Effect.gen(function* () {
     yield* Deferred.succeed(startedDeferred, undefined).pipe(Effect.orDie);
   });
 
-  const getSettings = Ref.get(settingsRef).pipe(Effect.map(resolveTextGenerationProvider));
+  const projectSettings = (settings: ServerSettings) =>
+    resolveTextGenerationProvider(gateBetaOnlyProviders(settings));
+  const getSettings = Ref.get(settingsRef).pipe(Effect.map(projectSettings));
   const updateSettings = (patch: ServerSettingsPatch) =>
     writeSemaphore.withPermits(1)(
       Effect.gen(function* () {
@@ -540,7 +569,7 @@ const makeServerSettings = Effect.gen(function* () {
         yield* Ref.set(settingsRef, next);
         yield* Ref.set(revisionRef, nextRevision);
         yield* emitChange(next);
-        return resolveTextGenerationProvider(next);
+        return projectSettings(next);
       }),
     );
 
@@ -559,11 +588,11 @@ const makeServerSettings = Effect.gen(function* () {
     updateSettings,
     updateSettingsView: (patch) => updateSettings(patch).pipe(Effect.map(toServerSettingsView)),
     get streamChanges() {
-      return Stream.fromPubSub(changesPubSub).pipe(Stream.map(resolveTextGenerationProvider));
+      return Stream.fromPubSub(changesPubSub).pipe(Stream.map(projectSettings));
     },
     get streamViews() {
       return Stream.fromPubSub(changesPubSub).pipe(
-        Stream.map(resolveTextGenerationProvider),
+        Stream.map(projectSettings),
         Stream.map(toServerSettingsView),
       );
     },

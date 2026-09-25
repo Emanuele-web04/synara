@@ -8,7 +8,7 @@ import {
   type ServerProviderStatus,
   type ServerSettings,
 } from "@synara/contracts";
-import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
+import { isBetaFeatureOn, VISIBLE_PROVIDER_DESCRIPTORS } from "../../betaFeatures";
 import { pluralize } from "@synara/shared/text";
 import {
   closestCenter,
@@ -123,7 +123,7 @@ type ProviderInstallSettings = {
   readonly fields: readonly ProviderInstallField[];
 };
 
-const PROVIDER_VISIBILITY_OPTIONS = PROVIDER_DESCRIPTORS.map((descriptor) => ({
+const PROVIDER_VISIBILITY_OPTIONS = VISIBLE_PROVIDER_DESCRIPTORS.map((descriptor) => ({
   provider: descriptor.kind,
   title: descriptor.displayName,
   setupDocsHref: descriptor.setupDocsHref,
@@ -407,6 +407,12 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
     ],
   },
 ];
+
+// Beta-only providers (OMP on Stable) keep their stored install fields but
+// their install row is hidden.
+const VISIBLE_PROVIDER_INSTALL_SETTINGS = PROVIDER_INSTALL_SETTINGS.filter((config) =>
+  isBetaFeatureOn(config.provider),
+);
 
 function isProviderInstallFieldDirty(
   field: ProviderInstallField,
@@ -1297,7 +1303,7 @@ export function ProvidersSettingsPanel({
           >
             <div className="mt-4">
               <div className={SETTINGS_INSET_LIST_CLASS_NAME}>
-                {PROVIDER_INSTALL_SETTINGS.map((config) => (
+                {VISIBLE_PROVIDER_INSTALL_SETTINGS.map((config) => (
                   <ProviderToolRow
                     key={config.provider}
                     config={config}

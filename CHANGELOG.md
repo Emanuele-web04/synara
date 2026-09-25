@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added Oh My Pi (OMP) as an ACP provider, with model discovery via `omp models --json`, per-model reasoning efforts (including `max`), eager catalog pre-warming at startup, and OMP thread/session normalization.
+- Added Oh My Pi (OMP) as an ACP provider (Synara Beta only), with model discovery via `omp models --json`, per-model reasoning efforts (including `max`), eager catalog pre-warming at startup, and OMP thread/session normalization.
 
 ### Fixed
 
