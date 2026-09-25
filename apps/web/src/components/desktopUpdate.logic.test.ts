@@ -10,6 +10,7 @@ import {
   getDesktopUpdateDownloadPercent,
   getDesktopUpdateErrorSignature,
   isDesktopUpdateButtonDisabled,
+  isDesktopUpdateInstallInFlight,
   resolveDesktopUpdateButtonAction,
   shouldRecommendManualDesktopDownload,
   shouldShowArm64IntelBuildWarning,
@@ -307,6 +308,60 @@ describe("getDesktopUpdateAlreadyCurrentNotice", () => {
       },
     };
     expect(getDesktopUpdateAlreadyCurrentNotice(result)).toBeNull();
+  });
+});
+
+describe("isDesktopUpdateInstallInFlight", () => {
+  it("keeps an accepted install latched while the updater still reports downloaded", () => {
+    const result: DesktopUpdateActionResult = {
+      accepted: true,
+      completed: false,
+      state: {
+        ...baseState,
+        status: "downloaded",
+        downloadedVersion: "1.1.0",
+        availableVersion: "1.1.0",
+      },
+    };
+    expect(isDesktopUpdateInstallInFlight(result)).toBe(true);
+  });
+
+  it("clears for rejected, completed, or already-failed installs", () => {
+    expect(
+      isDesktopUpdateInstallInFlight({
+        accepted: false,
+        completed: false,
+        state: {
+          ...baseState,
+          status: "downloaded",
+          downloadedVersion: "1.1.0",
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isDesktopUpdateInstallInFlight({
+        accepted: true,
+        completed: true,
+        state: {
+          ...baseState,
+          status: "downloaded",
+          downloadedVersion: "1.1.0",
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isDesktopUpdateInstallInFlight({
+        accepted: true,
+        completed: false,
+        state: {
+          ...baseState,
+          status: "error",
+          downloadedVersion: "1.1.0",
+          errorContext: "install",
+          message: "Backend did not stop in time",
+        },
+      }),
+    ).toBe(false);
   });
 });
 

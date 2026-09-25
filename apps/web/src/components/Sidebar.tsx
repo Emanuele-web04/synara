@@ -262,6 +262,7 @@ import {
   getDesktopUpdateDownloadPercent,
   getDesktopUpdateErrorSignature,
   isDesktopUpdateButtonDisabled,
+  isDesktopUpdateInstallInFlight,
   resolveDesktopUpdateButtonAction,
   shouldRecommendManualDesktopDownload,
   shouldShowArm64IntelBuildWarning,
@@ -5562,6 +5563,16 @@ export default function Sidebar() {
     });
   }, [desktopUpdateState, surfaceDesktopUpdateError]);
 
+  // An accepted install leaves the updater status at "downloaded" while the
+  // quit-and-install handoff runs, so the installing latch is released by the
+  // next pushed state instead — a watchdog failure, a superseded update, or a
+  // fresh check result.
+  useEffect(() => {
+    if (desktopUpdateState?.status !== "downloaded") {
+      setInstallingDesktopUpdate(false);
+    }
+  }, [desktopUpdateState?.status]);
+
   const showDesktopUpdateButton = isElectron && shouldShowDesktopUpdateButton(desktopUpdateState);
   const isBetaDesktopFlavor = desktopUpdateState?.flavor === "beta";
 
@@ -5854,7 +5865,9 @@ export default function Sidebar() {
         .installUpdate()
         .then((result) => {
           setDesktopUpdateState(result.state);
-          setInstallingDesktopUpdate(false);
+          if (!isDesktopUpdateInstallInFlight(result)) {
+            setInstallingDesktopUpdate(false);
+          }
           const alreadyCurrentNotice = getDesktopUpdateAlreadyCurrentNotice(result);
           if (alreadyCurrentNotice) {
             toastManager.add({
