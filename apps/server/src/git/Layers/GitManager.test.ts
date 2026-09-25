@@ -97,7 +97,18 @@ function makeTempDir(
 ): Effect.Effect<string, PlatformError.PlatformError, FileSystem.FileSystem | Scope.Scope> {
   return Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
-    return yield* fileSystem.makeTempDirectoryScoped({ prefix });
+    const directory = yield* fileSystem.makeTempDirectory({ prefix });
+    yield* Effect.addFinalizer(() =>
+      Effect.promise(() =>
+        fs.promises.rm(directory, {
+          recursive: true,
+          force: true,
+          maxRetries: 10,
+          retryDelay: 100,
+        }),
+      ).pipe(Effect.ignore({ log: true })),
+    );
+    return directory;
   });
 }
 
