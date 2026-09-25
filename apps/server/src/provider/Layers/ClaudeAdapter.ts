@@ -4701,6 +4701,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 ...(workflowAgentPhases ? { workflowAgentPhases } : {}),
                 ...(workflowAgentPlans ? { workflowAgentPlans } : {}),
                 ...(message.tool_use_id ? { toolUseId: message.tool_use_id } : {}),
+                ...(message.is_backgrounded !== undefined
+                  ? { isBackgrounded: message.is_backgrounded }
+                  : {}),
               },
             });
             return;
