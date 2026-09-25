@@ -4,6 +4,8 @@ import {
   restoreUserInputDraft,
   type PendingUserInputRecoveryDraft,
 } from "../../pendingUserInputRecovery";
+import { cn } from "~/lib/utils";
+import { TRANSCRIPT_TEXT_BUTTON_CLASS_NAME } from "./MessageActionButton";
 
 export function ComposerExpiredUserInputNotice({
   threadId,
@@ -40,10 +42,18 @@ export function ComposerExpiredUserInputNotice({
     >
       <p>These questions have expired. Restore your answers to review and send as a new message.</p>
       <div className="mt-2 flex gap-3">
-        <button type="button" className="font-medium underline" onClick={restore}>
+        <button
+          type="button"
+          className={cn("rounded-sm font-medium underline", TRANSCRIPT_TEXT_BUTTON_CLASS_NAME)}
+          onClick={restore}
+        >
           Restore answers
         </button>
-        <button type="button" className="text-muted-foreground" onClick={dismiss}>
+        <button
+          type="button"
+          className={cn("rounded-sm text-muted-foreground", TRANSCRIPT_TEXT_BUTTON_CLASS_NAME)}
+          onClick={dismiss}
+        >
           Dismiss
         </button>
       </div>

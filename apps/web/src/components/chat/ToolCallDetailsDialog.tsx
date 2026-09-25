@@ -87,7 +87,7 @@ export function ToolCallDetailsContent({
                 className="overflow-hidden rounded-lg border border-border/45 bg-background/58"
               >
                 {edit.path ? (
-                  <div className="border-b border-border/45 px-3 py-2 font-chat-code text-chat-code text-muted-foreground/72">
+                  <div className="border-b border-border/45 px-3 py-2 font-chat-code text-chat-code text-muted-foreground/80">
                     {edit.path}
                   </div>
                 ) : null}
@@ -144,11 +144,11 @@ function LiveActivityMetadata({
   return (
     <ToolDetailSection title="Activity">
       <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1.5 rounded-lg border border-border/45 bg-background/60 px-3 py-2.5 text-ui-sm">
-        <dt className="text-muted-foreground/56">Status</dt>
+        <dt className="text-muted-foreground/80">Status</dt>
         <dd className="text-foreground/84">{stateLabel}</dd>
         {activity.startedAt ? (
           <>
-            <dt className="text-muted-foreground/56">Started</dt>
+            <dt className="text-muted-foreground/80">Started</dt>
             <dd className="text-foreground/84">
               <time dateTime={activity.startedAt} title={activity.startedAt}>
                 {formatActivityTimestamp(activity.startedAt, timestampFormat)}
@@ -156,7 +156,7 @@ function LiveActivityMetadata({
             </dd>
           </>
         ) : null}
-        <dt className="text-muted-foreground/56">Last activity</dt>
+        <dt className="text-muted-foreground/80">Last activity</dt>
         <dd className="text-foreground/84">
           <time dateTime={activity.lastActivityAt} title={activity.lastActivityAt}>
             {formatActivityTimestamp(activity.lastActivityAt, timestampFormat)}
@@ -164,19 +164,19 @@ function LiveActivityMetadata({
         </dd>
         {elapsed ? (
           <>
-            <dt className="text-muted-foreground/56">Elapsed</dt>
+            <dt className="text-muted-foreground/80">Elapsed</dt>
             <dd className="tabular-nums text-foreground/84">{elapsed}</dd>
           </>
         ) : null}
         {progress ? (
           <>
-            <dt className="text-muted-foreground/56">Progress</dt>
+            <dt className="text-muted-foreground/80">Progress</dt>
             <dd className="tabular-nums text-foreground/84">{progress}</dd>
           </>
         ) : null}
         {activity.detail ? (
           <>
-            <dt className="text-muted-foreground/56">Detail</dt>
+            <dt className="text-muted-foreground/80">Detail</dt>
             <dd className="break-words text-foreground/84">{activity.detail}</dd>
           </>
         ) : null}
@@ -198,7 +198,7 @@ function MarkdownToolCodeBlock(props: { language: string; children: string }) {
 function ToolDetailSection(props: { title: string; children: ReactNode }) {
   return (
     <section className="space-y-2">
-      <h3 className="text-ui-sm font-medium text-muted-foreground/56">{props.title}</h3>
+      <h3 className="text-ui-sm font-medium text-muted-foreground/80">{props.title}</h3>
       {props.children}
     </section>
   );
@@ -209,14 +209,14 @@ function ToolOutputMetadata({ output }: { output: WorkLogToolOutputDetails }) {
     return null;
   }
   return (
-    <div className="flex flex-wrap items-center gap-2 text-ui-sm text-muted-foreground/68">
+    <div className="flex flex-wrap items-center gap-2 text-ui-sm text-muted-foreground/80">
       {output.exitCode !== undefined ? (
         <span className="rounded-full border border-border/45 px-2 py-0.5">
           Exit code {output.exitCode}
         </span>
       ) : null}
       {output.truncated ? (
-        <span className="rounded-full border border-amber-500/30 bg-amber-500/8 px-2 py-0.5 text-amber-200/90">
+        <span className="rounded-full border border-warning/30 bg-warning/8 px-2 py-0.5 text-warning">
           Truncated
         </span>
       ) : null}
@@ -253,7 +253,7 @@ function LabeledCodeBlock(props: { title: string; tone: "output" | "error"; chil
       <div
         className={cn(
           DETAIL_HEADER_CLASS_NAME,
-          props.tone === "error" ? "text-rose-200/88" : "text-muted-foreground/60",
+          props.tone === "error" ? "text-status-failure" : "text-muted-foreground/80",
         )}
       >
         {props.title}
@@ -268,13 +268,13 @@ function TextChangeBlock(props: { title: string; tone: "add" | "remove"; childre
     <div
       className={cn(
         "min-w-0 border-border/45 md:[&:not(:first-child)]:border-l",
-        props.tone === "add" ? "bg-emerald-500/5" : "bg-rose-500/5",
+        props.tone === "add" ? "bg-status-success/5" : "bg-status-failure/5",
       )}
     >
       <div
         className={cn(
           DETAIL_HEADER_CLASS_NAME,
-          props.tone === "add" ? "text-emerald-200/82" : "text-rose-200/82",
+          props.tone === "add" ? "text-status-success" : "text-status-failure",
         )}
       >
         {props.title}
@@ -289,7 +289,7 @@ function ToolCodeBlock(props: { children: string; tone?: "default" | "command"; 
     <pre
       className={cn(
         DETAIL_CODE_BLOCK_CLASS_NAME,
-        props.tone === "command" && "text-sky-100/92",
+        props.tone === "command" && "text-info",
         props.bare
           ? "px-3 py-2.5"
           : "rounded-lg border border-border/45 bg-background/70 px-3 py-2.5",
@@ -310,13 +310,13 @@ function DiffCodeBlock({ children }: { children: string }) {
           className={cn(
             "block min-w-max whitespace-pre-wrap break-words px-3",
             line.startsWith("+") && !line.startsWith("+++")
-              ? "bg-emerald-500/8 text-emerald-100/92"
+              ? "bg-status-success/8 text-status-success"
               : null,
             line.startsWith("-") && !line.startsWith("---")
-              ? "bg-rose-500/8 text-rose-100/92"
+              ? "bg-status-failure/8 text-status-failure"
               : null,
-            line.startsWith("@@") ? "text-sky-200/90" : null,
-            /^(diff --git|index |--- |\+\+\+ )/.test(line) ? "text-muted-foreground/62" : null,
+            line.startsWith("@@") ? "text-info" : null,
+            /^(diff --git|index |--- |\+\+\+ )/.test(line) ? "text-muted-foreground/80" : null,
           )}
         >
           {line.length > 0 ? line : " "}

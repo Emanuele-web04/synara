@@ -7,6 +7,7 @@ import { render } from "vitest-browser-react";
 import { ProviderModelPicker } from "./ProviderModelPicker";
 import { mergeDynamicModelOptions, type ProviderModelOption } from "../../providerModelOptions";
 import { FAVORITE_MODEL_STORAGE_KEYS } from "../../lib/modelFavorites";
+import { waitForTransientPopups } from "../../lib/browserPopupCleanup";
 
 const MODEL_OPTIONS_BY_PROVIDER = {
   claudeAgent: [
@@ -206,7 +207,8 @@ async function mountPicker(props: {
 }
 
 describe("ProviderModelPicker", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await waitForTransientPopups();
     document.body.innerHTML = "";
     localStorage.clear();
   });

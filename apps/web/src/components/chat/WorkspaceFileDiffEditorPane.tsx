@@ -136,7 +136,7 @@ export function WorkspaceFileDiffEditorPane(props: WorkspaceFileDiffEditorPanePr
         </PanelStateMessage>
       ) : session.loading || originalQuery.isLoading || !session.canEdit ? (
         <PanelStateMessage density="compact" fill="flex">
-          <p>Loading diff...</p>
+          <p>Loading diff…</p>
         </PanelStateMessage>
       ) : (
         <CodeDiffEditorPane

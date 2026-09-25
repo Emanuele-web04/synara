@@ -440,7 +440,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
       {visibleAvailableProviderOptions.length > 0 ? <MenuSeparator /> : null}
       <MenuItem onClick={() => appHistory.push("/settings?section=providers")}>
         <PlusIcon aria-hidden="true" className="size-3 shrink-0 text-muted-foreground/85" />
-        <span>Add Providers</span>
+        <span>Add providers</span>
       </MenuItem>
     </>
   );

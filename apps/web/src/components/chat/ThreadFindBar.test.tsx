@@ -23,7 +23,7 @@ describe("ThreadFindBar", () => {
     expect(markup).toContain('data-testid="thread-find-bar"');
     expect(markup).toContain('data-thread-find-layout="panel"');
     expect(markup).toContain("Find in thread");
-    expect(markup).toContain("Search chat...");
+    expect(markup).toContain("Search chat…");
     expect(markup).toContain("Previous match (Shift+Enter)");
     expect(markup).toContain("Next match (Enter)");
     expect(markup).toContain("Close find (Esc)");

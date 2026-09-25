@@ -45,7 +45,7 @@ function LocalServersRefreshButton({
       onClick={onRefresh}
       aria-label="Refresh local servers"
       title="Refresh"
-      className="inline-flex size-5 items-center justify-center rounded-md p-0 text-muted-foreground/60 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)] data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)]"
+      className="inline-flex size-6 items-center justify-center rounded-md p-0 text-muted-foreground transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)] data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)]"
     >
       <RefreshCwIcon className={cn("size-3", refreshing && "animate-spin")} />
     </MenuItem>
@@ -116,7 +116,7 @@ function LocalServersPlaceholder({
     <div className="flex flex-col items-center gap-1 px-3 py-3 text-center">
       <span className="text-muted-foreground/40">{icon}</span>
       <span className="text-ui text-muted-foreground">{title}</span>
-      {subtitle ? <span className="text-ui-xs text-muted-foreground/60">{subtitle}</span> : null}
+      {subtitle ? <span className="text-ui-xs text-muted-foreground/80">{subtitle}</span> : null}
     </div>
   );
 }
@@ -162,7 +162,7 @@ export function EnvironmentLocalServersSection({ enabled }: { enabled: boolean }
       </MenuTrigger>
       <ComposerPickerMenuPopup align="start" side="bottom" className="w-72 min-w-72">
         <div className="flex items-center justify-between gap-2 pb-0.5 pl-2 pr-3 pt-px">
-          <span className="truncate text-ui-xs font-normal text-muted-foreground/50">
+          <span className="truncate text-ui-xs font-normal text-muted-foreground/80">
             {localServersQuery.isLoading ? "Scanning ports…" : describeServerCount(serverCount)}
           </span>
           <LocalServersRefreshButton

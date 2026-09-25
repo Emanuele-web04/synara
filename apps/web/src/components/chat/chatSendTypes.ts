@@ -103,7 +103,13 @@ export interface ChatTurnSubmissionInput {
   // Writes the ref AND the render-visible pending flag — the docked composer's
   // deferral skip is driven by render state (React Compiler forbids ref reads
   // during render), while the FLIP measurement itself still reads the ref.
-  setFirstSendLandingHandoff: (handoff: FirstSendLandingHandoff | null) => void;
+  // `preserveHeroExit` is for the dock commit only — it consumes the handoff while
+  // the hero overlay is still fading. Every other clear is a rollback/unwind and
+  // drops the overlay with the handoff.
+  setFirstSendLandingHandoff: (
+    handoff: FirstSendLandingHandoff | null,
+    options?: { preserveHeroExit?: boolean },
+  ) => void;
   emptyLandingComposerBlockRef: RefObject<HTMLDivElement | null>;
   setEnvironmentPanelPreferenceOpen: Dispatch<SetStateAction<boolean | null>>;
   environmentPanelPreferenceOpen: boolean | null;

@@ -74,7 +74,7 @@ function commandMenuTitle(
     case "subagents":
       return "Subagents";
     case "feedback":
-      return "Feedback Synara";
+      return "Share feedback";
     default:
       return humanizeProviderCommandName(item.command);
   }
@@ -388,7 +388,7 @@ export function ComposerCommandMenu(props: {
             >
               Files
             </p>
-            <p className="px-2 pt-0.5 text-ui-sm text-muted-foreground/55">
+            <p className="px-2 pt-0.5 text-ui-sm text-muted-foreground/80">
               Type to search for files
             </p>
           </div>
@@ -398,7 +398,7 @@ export function ComposerCommandMenu(props: {
         props.items.length === 0 ? (
           <p
             className={cn(
-              "text-muted-foreground/50 text-ui-sm",
+              "text-muted-foreground/80 text-ui-sm",
               props.isLoading
                 ? "flex h-[calc(1.625rem+0.5rem)] items-center px-2 text-left"
                 : "px-2 py-1.5",
@@ -406,10 +406,10 @@ export function ComposerCommandMenu(props: {
           >
             {props.isLoading
               ? props.triggerKind === "mention"
-                ? "Searching mentions..."
+                ? "Searching mentions…"
                 : props.triggerKind === "skill"
-                  ? "Loading skills..."
-                  : "Loading commands..."
+                  ? "Loading skills…"
+                  : "Loading commands…"
               : (props.emptyStateText ??
                 (props.triggerKind === "mention"
                   ? "No matching plugin, chat, or file."

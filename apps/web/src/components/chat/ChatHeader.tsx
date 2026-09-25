@@ -193,7 +193,7 @@ function EditorChatHistoryMenu(props: {
             size="icon-xs"
             label="Chat history"
             title="Chat history"
-            className="size-5 shrink-0 text-muted-foreground hover:text-foreground"
+            className="size-6 shrink-0 text-muted-foreground hover:text-foreground"
           >
             <HistoryIcon className="size-3.5" />
           </IconButton>
@@ -414,7 +414,7 @@ function EditorRailTabs(props: {
                 size="icon-xs"
                 label="New editor rail item"
                 title="New"
-                className="size-5 shrink-0 text-muted-foreground hover:text-foreground"
+                className="size-6 shrink-0 text-muted-foreground hover:text-foreground"
               >
                 <PlusIcon className="size-3.5" />
               </IconButton>
@@ -469,13 +469,16 @@ function EditorRailTabs(props: {
           {terminalTabVisible ? (
             <SurfaceTabChip
               active={props.activeSurface === "terminal"}
-              title="Terminal"
+              title={props.terminalHasRunningActivity ? "Terminal, command running" : "Terminal"}
               label="Terminal"
               labelClassName="max-w-24"
               icon={<TerminalIcon className="size-3 shrink-0 text-[var(--color-text-accent)]" />}
               trailing={
                 props.terminalHasRunningActivity ? (
-                  <span className="size-1.5 shrink-0 rounded-full bg-emerald-500/80" />
+                  <>
+                    <span className="size-1.5 shrink-0 rounded-full bg-status-success" />
+                    <span className="sr-only">running</span>
+                  </>
                 ) : null
               }
               onSelect={openTerminalTab}
@@ -685,7 +688,7 @@ export function ChatHeader({
             )}
           >
             {threadBreadcrumbs.length > 0 ? (
-              <div className="flex min-w-0 items-center gap-1 overflow-hidden text-ui-sm text-muted-foreground/55">
+              <div className="flex min-w-0 items-center gap-1 overflow-hidden text-ui-sm text-muted-foreground">
                 {threadBreadcrumbs.map((breadcrumb, index) => (
                   <React.Fragment key={breadcrumb.threadId}>
                     {index > 0 ? (
@@ -738,10 +741,10 @@ export function ChatHeader({
                   <IconButton
                     variant="chrome"
                     size="icon-xs"
-                    label="Close selected Side"
-                    tooltip="Close selected Side"
+                    label="Close side chat"
+                    tooltip="Close side chat"
                     tooltipSide="bottom"
-                    className="size-5 rounded-lg [-webkit-app-region:no-drag] [&_svg]:size-3"
+                    className="size-6 rounded-lg [-webkit-app-region:no-drag] [&_svg]:size-3"
                     onClick={(event) => {
                       event.stopPropagation();
                       onCloseThreadPane();

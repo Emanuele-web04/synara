@@ -45,6 +45,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import { useCopyThreadIdToClipboard } from "~/hooks/useCopyToClipboard";
 import {
   useDesktopTopBarTrafficLightGutterClassName,
@@ -818,20 +819,28 @@ export default function ChatView({
   const [landingHeroExit, setLandingHeroExit] = useState<
     (NonNullable<FirstSendLandingHandoff["hero"]> & { threadId: ThreadId }) | null
   >(null);
-  const setFirstSendLandingHandoff = useCallback((handoff: FirstSendLandingHandoff | null) => {
-    firstSendLandingHandoffRef.current = handoff;
-    setPendingDockSlideThreadId(handoff?.targetThreadId ?? null);
-    // The hero overlay outlives the handoff itself — the dock commit consumes
-    // and clears the handoff while the overlay is still fading out. Its own
-    // effect tears it down after FIRST_SEND_HERO_EXIT_MS or on thread switch.
-    if (handoff?.hero) {
-      setLandingHeroExit(
-        window.matchMedia("(prefers-reduced-motion: reduce)").matches
-          ? null
-          : { ...handoff.hero, threadId: handoff.targetThreadId },
-      );
-    }
-  }, []);
+  const setFirstSendLandingHandoff = useCallback(
+    (handoff: FirstSendLandingHandoff | null, options?: { preserveHeroExit?: boolean }) => {
+      firstSendLandingHandoffRef.current = handoff;
+      setPendingDockSlideThreadId(handoff?.targetThreadId ?? null);
+      // The hero overlay outlives the handoff itself — the dock commit consumes
+      // and clears the handoff while the overlay is still fading out. Its own
+      // effect tears it down after FIRST_SEND_HERO_EXIT_MS or on thread switch.
+      if (handoff?.hero) {
+        setLandingHeroExit(
+          window.matchMedia("(prefers-reduced-motion: reduce)").matches
+            ? null
+            : { ...handoff.hero, threadId: handoff.targetThreadId },
+        );
+      } else if (handoff === null && !options?.preserveHeroExit) {
+        // Rollback/unwind clears (failed dispatch, stale handoff, thread switch)
+        // drop the overlay immediately — it would otherwise hang over the still
+        // mounted landing.
+        setLandingHeroExit(null);
+      }
+    },
+    [],
+  );
   const emptyLandingComposerBlockRef = useRef<HTMLDivElement | null>(null);
   const dockedComposerRef = useRef<HTMLDivElement | null>(null);
   // The dock slide is kept in a ref (not the layout effect's cleanup) so a
@@ -2085,7 +2094,7 @@ export default function ChatView({
     );
   const claudeCompactDisabledReason = !canRequestNativeClaudeCompaction
     ? isNativeCommandDiscoveryPending
-      ? "Checking Claude's available commands..."
+      ? "Checking Claude's available commands…"
       : "Compaction is unavailable for this Claude session."
     : hasLiveTurn || isConnecting || (activeBackgroundTasks?.activeCount ?? 0) > 0
       ? "Wait for Claude and its background tasks to finish."
@@ -2664,7 +2673,9 @@ export default function ChatView({
     const to = toCard.getBoundingClientRect();
     const dx = from.centerX - (to.left + to.width / 2);
     const dy = from.top - to.top;
-    setFirstSendLandingHandoff(null);
+    // The dock commit consumes the handoff while the hero overlay keeps fading —
+    // clearing here must not drop it.
+    setFirstSendLandingHandoff(null, { preserveHeroExit: true });
     if (Math.abs(dx) < 1 && Math.abs(dy) < 1) {
       return;
     }
@@ -2783,6 +2794,7 @@ export default function ChatView({
     }
     const element = landingHeroExitRef.current;
     if (element === null) {
+      setLandingHeroExit(null);
       return;
     }
     const animation = element.animate(
@@ -5225,7 +5237,7 @@ export default function ChatView({
             )}
           >
             <SidebarHeaderNavigationControls />
-            <span className="text-ui leading-snug text-muted-foreground/50">No active thread</span>
+            <span className="text-ui leading-snug text-muted-foreground/80">No active thread</span>
           </div>
         )}
         <div className="flex flex-1 items-center justify-center">
@@ -5409,7 +5421,7 @@ export default function ChatView({
       // both themes (chips float over the page), rounded on top only and flush against
       // the input shell below. No overlap/underlay tricks — in dark mode a slice tucked
       // behind the composer's translucent corners reads as a visible cut along the seam.
-      className="chat-composer-shell mx-auto flex min-h-8 w-full min-w-0 flex-nowrap items-center gap-x-1.5 overflow-hidden !rounded-b-none !rounded-t-[var(--composer-radius)] px-1.5 py-1 transition-colors duration-150 ease-out motion-reduce:transition-none sm:min-h-7"
+      className="chat-composer-shell mx-auto flex min-h-8 w-full min-w-0 flex-nowrap items-center gap-x-1.5 overflow-x-auto !rounded-b-none !rounded-t-[var(--composer-radius)] px-1.5 py-1 transition-colors duration-150 ease-out motion-reduce:transition-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:min-h-7"
     >
       {showContainerChatWorkspacePicker ? (
         <ProjectPicker
@@ -6363,21 +6375,27 @@ export default function ChatView({
               </div>
             ) : null}
 
-            {landingHeroExit !== null && landingHeroExit.threadId === threadId ? (
-              <div
-                ref={landingHeroExitRef}
-                aria-hidden="true"
-                data-first-send-hero-exit="true"
-                className="pointer-events-none fixed z-10"
-                style={{
-                  top: landingHeroExit.top,
-                  left: landingHeroExit.left,
-                  width: landingHeroExit.width,
-                }}
-              >
-                <EmptyLandingHero heading={landingHeroExit.heading} exitOverlay />
-              </div>
-            ) : null}
+            {landingHeroExit !== null && landingHeroExit.threadId === threadId
+              ? // Portaled to document.body so `position: fixed` resolves against the
+                // viewport — split panes use `contain: paint` and the right dock sets
+                // a will-change transform, both of which trap fixed descendants.
+                createPortal(
+                  <div
+                    ref={landingHeroExitRef}
+                    aria-hidden="true"
+                    data-first-send-hero-exit="true"
+                    className="pointer-events-none fixed z-10"
+                    style={{
+                      top: landingHeroExit.top,
+                      left: landingHeroExit.left,
+                      width: landingHeroExit.width,
+                    }}
+                  >
+                    <EmptyLandingHero heading={landingHeroExit.heading} exitOverlay />
+                  </div>,
+                  document.body,
+                )
+              : null}
 
             {shouldRenderChatPaneContent && !isCenteredEmptyLanding ? (
               <div className="flex min-h-0 flex-1 flex-col">
@@ -6537,7 +6555,7 @@ export default function ChatView({
             <div
               aria-hidden={!terminalWorkspaceTerminalTabActive}
               className={cn(
-                "absolute inset-0 min-h-0 min-w-0 transition-all duration-200 ease-out",
+                "absolute inset-0 min-h-0 min-w-0 transition-[opacity,transform] duration-200 ease-out",
                 terminalWorkspaceTerminalTabActive
                   ? "translate-y-0 opacity-100"
                   : "pointer-events-none translate-y-1 opacity-0",

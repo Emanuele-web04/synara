@@ -34,6 +34,7 @@ import {
 import { SearchIcon } from "~/lib/icons";
 import { starredModelSlotKey } from "~/lib/starredModels";
 import { cn, isMacNavigatorPlatform } from "~/lib/utils";
+import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Menu, MenuGroup, MenuGroupLabel } from "../ui/menu";
 import { Skeleton } from "../ui/skeleton";
@@ -395,7 +396,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
         align="start"
         side="top"
         // Glassier than the stock picker shell: thinner fill over a deeper, more saturated blur.
-        className="w-[min(18.5rem,92vw)] bg-popover/55 [--picker-option-min-h:1.75rem] before:backdrop-blur-3xl before:backdrop-saturate-200"
+        className="w-[min(22rem,92vw)] bg-popover/55 [--picker-option-min-h:1.75rem] before:backdrop-blur-3xl before:backdrop-saturate-200"
         {...{ [MODEL_PICKER_POPUP_ATTRIBUTE]: "" }}
         onKeyDownCapture={(event) => {
           // Tab walks the provider tabs instead of leaving (and closing) the menu.
@@ -456,8 +457,24 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
             )}
           >
             {discoveryError ? (
-              <div className="px-2 py-1.5 text-ui leading-snug text-destructive">
-                {discoveryError}
+              <div className="flex items-center gap-2 px-2 py-1.5">
+                <span className="min-w-0 flex-1 text-ui leading-snug text-destructive">
+                  {discoveryError}
+                </span>
+                {/* The provider tabs already route here; a discovery failure
+                    otherwise dead-ends inside the picker. */}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  className="shrink-0"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    appHistory.push("/settings?section=providers");
+                  }}
+                >
+                  Provider settings
+                </Button>
               </div>
             ) : null}
             {isTabLoading ? (

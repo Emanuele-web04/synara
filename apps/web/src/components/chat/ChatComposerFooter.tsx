@@ -164,7 +164,7 @@ export function ChatComposerFooter({
             }
           >
             {pendingInput.responding
-              ? "Submitting..."
+              ? "Submitting…"
               : pendingInput.progress.isLastQuestion
                 ? "Submit answers"
                 : "Next question"}
@@ -174,7 +174,7 @@ export function ChatComposerFooter({
             type="button"
             variant="prominent"
             size="icon-xs"
-            className="sm:size-[26px]"
+            className="sm:size-7"
             onClick={submission.onInterrupt}
             disabled={submission.stopping}
             aria-label={submission.stopping ? "Stopping" : "Stop generation"}
@@ -200,7 +200,7 @@ export function ChatComposerFooter({
                   submission.hasPendingCacheReview
                 }
               >
-                {submission.connecting || submission.busy ? "Sending..." : "Refine"}
+                {submission.connecting || submission.busy ? "Sending…" : "Refine"}
               </Button>
             ) : (
               <div className="flex items-center">
@@ -215,7 +215,7 @@ export function ChatComposerFooter({
                     submission.hasPendingCacheReview
                   }
                 >
-                  {submission.connecting || submission.busy ? "Sending..." : "Implement"}
+                  {submission.connecting || submission.busy ? "Sending…" : "Implement"}
                 </Button>
                 <Menu>
                   <MenuTrigger

@@ -173,11 +173,11 @@ export function EnvironmentEditableChecklistRow({
           className={cn(
             "min-w-0 flex-1 truncate text-left text-ui outline-none transition-colors",
             checked
-              ? "text-muted-foreground/55 line-through"
+              ? "text-muted-foreground/80 line-through"
               : "text-[var(--color-text-foreground)] hover:text-foreground",
             available
               ? "cursor-pointer hover:underline"
-              : "cursor-default text-muted-foreground/55",
+              : "cursor-default text-muted-foreground/80",
           )}
         >
           {displayLabel}

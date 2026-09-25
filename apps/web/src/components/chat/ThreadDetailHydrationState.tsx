@@ -15,14 +15,17 @@ export const ThreadDetailHydrationState = function ThreadDetailHydrationState({
 }) {
   if (state === "loading") {
     return (
-      <div className="flex flex-col items-center gap-3 select-none">
-        <Spinner aria-label="Loading conversation" className="size-5 text-muted-foreground/50" />
-        <span className="text-ui leading-snug text-muted-foreground/50">Loading conversation</span>
+      <div className="flex flex-col items-center gap-3">
+        <Spinner
+          aria-label="Loading conversation"
+          className="size-5 select-none text-muted-foreground/50"
+        />
+        <span className="text-ui leading-snug text-muted-foreground/80">Loading conversation</span>
       </div>
     );
   }
   return (
-    <div className="flex flex-col items-center gap-3 select-none">
+    <div className="flex flex-col items-center gap-3">
       <span className="text-ui leading-snug text-muted-foreground">
         This conversation didn't load.
       </span>

@@ -9,9 +9,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { SurfaceTabChip } from "./chatHeaderControls";
+import { waitForTransientPopups } from "../../lib/browserPopupCleanup";
 
 describe("SurfaceTabChip selection", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await waitForTransientPopups();
     document.body.innerHTML = "";
   });
 

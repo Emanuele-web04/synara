@@ -128,16 +128,16 @@ const ACTION_SUCCESS_TITLES: Record<PullRequestAction, string> = {
 };
 
 const ACTION_PENDING_TITLES: Record<Exclude<PullRequestAction, "merge">, string> = {
-  ready: "Marking ready for review...",
-  draft: "Converting to draft...",
-  close: "Closing pull request...",
-  reopen: "Reopening pull request...",
+  ready: "Marking ready for review…",
+  draft: "Converting to draft…",
+  close: "Closing pull request…",
+  reopen: "Reopening pull request…",
 };
 
 const MERGE_PENDING_TITLES: Record<PullRequestMergeMethod, string> = {
-  merge: "Merging pull request...",
-  squash: "Squashing and merging...",
-  rebase: "Rebasing and merging...",
+  merge: "Merging pull request…",
+  squash: "Squashing and merging…",
+  rebase: "Rebasing and merging…",
 };
 
 function checksToneIcon(tone: PullRequestChecksTone) {

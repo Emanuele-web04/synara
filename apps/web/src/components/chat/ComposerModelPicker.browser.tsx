@@ -25,6 +25,7 @@ import {
   deriveSelectedContextWindowSnapshot,
 } from "../../lib/contextWindow";
 import { ComposerModelPicker } from "./ComposerModelPicker";
+import { waitForTransientPopups } from "../../lib/browserPopupCleanup";
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-composer-model-picker");
 const GPT_5_5 = "gpt-5.5" as ModelSlug;
@@ -121,7 +122,8 @@ function readStoredStars(): unknown {
 }
 
 describe("ComposerModelPicker", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await waitForTransientPopups();
     document.body.innerHTML = "";
     localStorage.removeItem(COMPOSER_DRAFT_STORAGE_KEY);
     localStorage.removeItem(STARRED_MODELS_STORAGE_KEY);
@@ -441,7 +443,8 @@ describe("ComposerModelPicker", () => {
 });
 
 describe("Claude composer budget suffix", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await waitForTransientPopups();
     document.body.innerHTML = "";
   });
   it.each([

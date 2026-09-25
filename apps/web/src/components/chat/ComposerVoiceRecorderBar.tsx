@@ -53,7 +53,7 @@ export function ComposerVoiceRecorderBar(props: ComposerVoiceRecorderBarProps) {
       <div ref={trackRef} className="relative flex h-7 min-w-0 flex-1 items-center overflow-hidden">
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute inset-x-0 top-1/2 -translate-y-1/2 border-t border-dashed border-zinc-300 dark:border-zinc-700"
+          className="pointer-events-none absolute inset-x-0 top-1/2 -translate-y-1/2 border-t border-dashed border-muted-foreground/30"
         />
         <div
           className="relative ml-auto flex h-full items-center"
@@ -70,7 +70,7 @@ export function ComposerVoiceRecorderBar(props: ComposerVoiceRecorderBarProps) {
                 key={positionFromRight}
                 aria-hidden="true"
                 className={cn(
-                  "shrink-0 rounded-[1px] bg-zinc-900 dark:bg-zinc-100",
+                  "shrink-0 rounded-[1px] bg-foreground",
                   props.isTranscribing && "opacity-55",
                 )}
                 style={{
@@ -83,13 +83,15 @@ export function ComposerVoiceRecorderBar(props: ComposerVoiceRecorderBarProps) {
         </div>
       </div>
 
-      <span className="shrink-0 text-ui leading-snug font-medium tabular-nums tracking-[0.02em] text-zinc-500 dark:text-zinc-400">
+      <span className="shrink-0 text-ui leading-snug font-medium tabular-nums tracking-[0.02em] text-muted-foreground">
         {props.durationLabel}
       </span>
 
-      <button
+      <Button
         type="button"
-        className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full bg-zinc-200/80 text-zinc-700 transition-colors hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white/10 dark:text-zinc-100 dark:hover:bg-white/15 sm:h-7 sm:w-7"
+        variant="secondary"
+        size="icon-xs"
+        className="size-7 rounded-full sm:size-7"
         aria-label={props.isTranscribing ? "Transcribing voice note" : "Cancel voice recording"}
         disabled={props.disabled || props.isTranscribing}
         onClick={props.onDiscard}
@@ -99,7 +101,7 @@ export function ComposerVoiceRecorderBar(props: ComposerVoiceRecorderBarProps) {
         ) : (
           <XIcon aria-hidden="true" className="size-3.5" />
         )}
-      </button>
+      </Button>
 
       <Button
         type="button"

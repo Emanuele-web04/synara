@@ -101,10 +101,16 @@ export function ComposerModelPickerRow(props: {
           className={cn("size-3.5 shrink-0", getProviderIconClassName(row.provider))}
         />
       ) : null}
-      <span className={cn("truncate", row.detail !== null && "max-w-[62%] shrink-0")}>
+      <span
+        className={cn("truncate", row.detail !== null && "max-w-[62%] shrink-0")}
+        title={row.name}
+      >
         {row.name}
       </span>
-      <span className={cn("min-w-0 flex-1 truncate", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)}>
+      <span
+        className={cn("min-w-0 flex-1 truncate", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)}
+        title={row.detail ?? undefined}
+      >
         {row.detail}
       </span>
       {props.shortcutHint ? (

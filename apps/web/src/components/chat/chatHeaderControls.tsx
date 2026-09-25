@@ -160,7 +160,7 @@ export const DOCK_TAB_CHIP_CLASS_NAME = cn(
  *  Color is muted while the tab (not the close button) is hovered and brightens to full
  *  foreground on direct hover of the close button so the X reads as interactive. */
 export const DOCK_TAB_ICON_SLOT_CLASS_NAME =
-  "relative flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-full bg-transparent text-[var(--color-text-foreground-secondary)] transition-colors group-hover/dock-tab:bg-[var(--color-background-button-secondary-hover)] group-focus-within/dock-tab:bg-[var(--color-background-button-secondary-hover)] hover:bg-[var(--color-background-button-secondary)] hover:text-[var(--color-text-foreground)]";
+  "relative flex size-6 shrink-0 -m-1 cursor-pointer items-center justify-center rounded-full bg-transparent text-[var(--color-text-foreground-secondary)] transition-colors group-hover/dock-tab:bg-[var(--color-background-button-secondary-hover)] group-focus-within/dock-tab:bg-[var(--color-background-button-secondary-hover)] hover:bg-[var(--color-background-button-secondary)] hover:text-[var(--color-text-foreground)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/60";
 
 /** Dock-only extra: fade the resting glyph out so the hover X can swap in.
  *  Layered on top of {@link SurfaceChipIcon}'s shared size/strength. */
