@@ -396,6 +396,15 @@ export async function runBetaImportIfRequested(input: {
     if (realpathSync(sourceHomeDir) === realpathSync(input.betaHomeDir)) {
       return finish(false, "import source points at the beta home itself");
     }
+    for (const sourcePath of [
+      sourceStateDir,
+      sourceDbPath,
+      ...LIVE_SIDECAR_SUFFIXES.map((suffix) => `${sourceDbPath}${suffix}`),
+    ]) {
+      if (lstatSync(sourcePath, { throwIfNoEntry: false })?.isSymbolicLink()) {
+        return finish(false, `Cannot import a linked state entry: ${sourcePath}`);
+      }
+    }
     if (lstatSync(input.stateDir, { throwIfNoEntry: false })?.isSymbolicLink()) {
       return finish(false, "beta state folder cannot be a symbolic link");
     }

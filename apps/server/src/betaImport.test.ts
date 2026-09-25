@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -150,6 +151,30 @@ describe("runBetaImportIfRequested", () => {
     expect(readFileSync(join(betaState, "settings.json"), "utf8")).toContain("beta");
     expect(existsSync(join(betaState, "secrets", "linked.json"))).toBe(false);
   });
+
+  it.each(["userdata", "state.sqlite"])(
+    "rejects a linked Stable %s before changing Beta",
+    async (linkedEntry) => {
+      const stableHome = await seedStableHome(makeRoot());
+      const stableState = join(stableHome, "userdata");
+      const betaHome = join(stableHome, "..", ".synara-beta");
+      const betaState = join(betaHome, "userdata");
+      mkdirSync(betaState, { recursive: true });
+      writeFileSync(join(betaState, "settings.json"), "beta-only");
+
+      const sourcePath = linkedEntry === "userdata" ? stableState : join(stableState, linkedEntry);
+      const realPath = `${sourcePath}-real`;
+      renameSync(sourcePath, realPath);
+      symlinkSync(realPath, sourcePath);
+      writeMarker(betaHome, stableHome);
+
+      const outcome = await run({ betaHomeDir: betaHome, stateDir: betaState });
+      expect(outcome.ok).toBe(false);
+      expect(outcome.error).toContain("linked state entry");
+      expect(readFileSync(join(betaState, "settings.json"), "utf8")).toBe("beta-only");
+      expect(existsSync(join(betaState, "state.sqlite"))).toBe(false);
+    },
+  );
 
   it("preserves Beta-only entries inside a directory while re-copying Stable data", async () => {
     const stableHome = await seedStableHome(makeRoot());

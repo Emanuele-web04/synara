@@ -824,9 +824,9 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
           <AlertDialogHeader>
             <AlertDialogTitle>Replace Synara Beta data?</AlertDialogTitle>
             <AlertDialogDescription>
-              Copying from Synara replaces the chats, projects, settings, and provider sign-ins
-              currently in Synara Beta. Work done only in Beta will be lost. Your data in Synara
-              will not change.
+              Copying from Synara replaces Beta chats and projects. Chats and projects created only
+              in Beta will be lost. Matching settings and provider sign-ins are overwritten, but
+              Beta-only sign-ins may remain. Your data in Synara will not change.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
