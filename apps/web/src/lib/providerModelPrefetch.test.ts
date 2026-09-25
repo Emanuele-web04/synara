@@ -10,8 +10,8 @@ import { QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  NEW_THREAD_MODEL_PREFETCH_GC_TIME_MS,
   NEW_THREAD_MODEL_PREFETCH_PROVIDERS,
-  NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS,
   prefetchModelsForNewThread,
   providerModelsPrefetchQueryOptions,
   resolveNewThreadModelPrefetchCwd,
@@ -441,7 +441,7 @@ describe("prefetchModelsForNewThread — warm-option invariants", () => {
     // 9 models + 9 capabilities + 3 agents (claudeAgent, codex, opencode).
     expect(calls).toHaveLength(9 + 9 + 3);
     for (const options of calls) {
-      expect(options.gcTime).toBe(NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS);
+      expect(options.gcTime).toBe(NEW_THREAD_MODEL_PREFETCH_GC_TIME_MS);
     }
     const modelCalls = calls.filter((options) => options.queryKey[1] === "models");
     expect(modelCalls.find((options) => options.queryKey[2] === "cursor")?.retry).toBe(0);

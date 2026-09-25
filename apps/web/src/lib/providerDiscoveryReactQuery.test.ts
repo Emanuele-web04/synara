@@ -3,13 +3,18 @@
 //          stale-catalog preservation, and initial-vs-background pending (#103).
 // Layer: Web data fetching tests
 
-import type { NativeApi, ProviderListModelsResult } from "@synara/contracts";
+import type {
+  NativeApi,
+  ProviderListAgentsResult,
+  ProviderListModelsResult,
+} from "@synara/contracts";
 import { hashKey, QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   isInitialModelDiscoveryPending,
   prioritizeProviderModelDiscovery,
+  providerAgentsQueryOptions,
   providerCommandsQueryOptions,
   providerDiscoveryQueryKeys,
   providerModelsQueryOptions,
@@ -273,7 +278,7 @@ describe("providerModelsQueryOptions", () => {
       source: "devin-cli",
       cached: false,
     };
-    expect(staleTime({ state: { data: healthy } })).toBe(30_000);
+    expect(staleTime({ state: { data: healthy } })).toBe(15 * 60_000);
     expect(refetchInterval({ state: { data: healthy } })).toBe(false);
   });
 
@@ -307,6 +312,19 @@ describe("providerModelsQueryOptions", () => {
     );
     expect(listModels).toHaveBeenCalledTimes(1);
     expect(queryClient.getQueryData(options.queryKey)).toBeUndefined();
+  });
+
+  it("caches runtime catalogs long enough to skip respawning provider CLIs", () => {
+    // Server-side catalogs persist across restarts (30min fresh / 24h SWR), so
+    // the client keeps a matching window; OMP stays short because its
+    // file-backed modelRoles are re-resolved per request.
+    expect(providerModelsQueryOptions({ provider: "cursor" }).staleTime).toBe(15 * 60_000);
+    expect(providerModelsQueryOptions({ provider: "codex" }).staleTime).toBe(15 * 60_000);
+    expect(providerModelsQueryOptions({ provider: "droid" }).staleTime).toBe(30 * 60_000);
+    expect(providerModelsQueryOptions({ provider: "droid" }).refetchOnWindowFocus).toBe(false);
+    expect(providerModelsQueryOptions({ provider: "omp" }).staleTime).toBe(30_000);
+    expect(providerModelsQueryOptions({ provider: "omp" }).refetchOnWindowFocus).toBe(true);
+    expect(providerModelsQueryOptions({ provider: "cursor" }).gcTime).toBe(24 * 60 * 60_000);
   });
 
   it("does not mask OMP's initial fetch with a placeholder", () => {
@@ -420,5 +438,42 @@ describe("providerCommandsQueryOptions", () => {
 
   it("shares other providers' commands across threads of a workspace", () => {
     expect(keyFor("codex", "thread-a")).toBe(keyFor("codex", "thread-b"));
+  });
+});
+
+describe("providerAgentsQueryOptions", () => {
+  it("recovers from pending discovery while retaining completed catalogs", async () => {
+    const baseTime = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(baseTime);
+    const pending = { agents: [], source: "pending", cached: false };
+    const ready = {
+      agents: [{ name: "code-reviewer", displayName: "Code Reviewer" }],
+      source: "sdk",
+      cached: true,
+    };
+    const listAgents = vi.fn().mockResolvedValueOnce(pending).mockResolvedValue(ready);
+    vi.spyOn(nativeApi, "ensureNativeApi").mockReturnValue({
+      provider: { listAgents },
+    } as unknown as NativeApi);
+    const client = new QueryClient();
+    const options = providerAgentsQueryOptions({ provider: "claudeAgent" });
+    const refetchInterval = options.refetchInterval as (query: {
+      state: { data: ProviderListAgentsResult };
+    }) => number | false;
+    expect(refetchInterval({ state: { data: pending } })).toBe(30_000);
+    expect(refetchInterval({ state: { data: ready } })).toBe(false);
+    expect(refetchInterval({ state: { data: { ...ready, agents: [] } } })).toBe(false);
+    try {
+      expect(await client.fetchQuery(options)).toEqual(pending);
+      // The adapter completes supportedAgents() asynchronously. Reopening the
+      // picker must be able to read that result instead of caching "pending".
+      now.mockReturnValue(baseTime + 61_000);
+      expect(await client.fetchQuery(options)).toEqual(ready);
+      now.mockReturnValue(baseTime + 120_000);
+      expect(await client.fetchQuery(options)).toEqual(ready);
+      expect(listAgents).toHaveBeenCalledTimes(2);
+    } finally {
+      client.clear();
+    }
   });
 });

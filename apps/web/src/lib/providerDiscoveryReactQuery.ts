@@ -467,20 +467,27 @@ export function providerModelsQueryOptions(input: {
     // Cached catalogs paint immediately while stale entries revalidate in the
     // background. Droid discovery starts a disposable ACP session, so retain its
     // longer cache and never repeat that work merely because the window regained focus.
-    // OMP keeps the standard 30s staleness: the CLI catalog is server-cached 5min,
-    // but file-backed modelRoles are re-resolved per request, so config edits must
-    // reach the server on the ordinary focus/mount refetch cadence.
     retry: providerModelDiscoveryRetry(input.provider),
+    // The server caches catalogs (30min fresh, then stale-while-revalidate,
+    // persisted across restarts), so a refetch is a cheap RPC — but there is no
+    // value in asking more often than the cache can change. Changes to paths,
+    // endpoints, or cwd select a new key; CLI/account changes at the same paths
+    // become visible on revalidation.
+    // OMP bypasses the server cache entirely: file-backed modelRoles are
+    // re-resolved per request, so role/config edits must reach the adapter on
+    // the ordinary focus/mount refetch cadence.
     staleTime:
       input.provider === "devin"
-        ? (query) => (query.state.data?.error ? 0 : 30_000)
+        ? (query) => (query.state.data?.error ? 0 : 15 * 60_000)
         : input.provider === "droid"
-          ? 5 * 60_000
-          : 30_000,
+          ? 30 * 60_000
+          : input.provider === "omp"
+            ? 30_000
+            : 15 * 60_000,
     // Devin deliberately returns a usable static catalog when CLI discovery
     // fails. Keep it visible, but retry while observed instead of treating the
-    // degraded result as a successful 30-minute cache entry. A failed refresh
-    // retains healthy data, so the query error must also keep recovery polling alive.
+    // degraded result as fresh — a failed refresh retains healthy data, so the
+    // query error must also keep recovery polling alive.
     ...(input.provider === "devin"
       ? {
           refetchInterval: (query) =>
@@ -496,9 +503,10 @@ export function providerModelsQueryOptions(input: {
     ...(input.provider === "omp"
       ? { refetchOnWindowFocus: true, refetchInterval: 60_000, refetchIntervalInBackground: true }
       : {}),
-    // 30min — matches NEW_THREAD_MODEL_PREFETCH_STALE_TIME_MS in
-    // providerModelPrefetch.ts (not imported: that module imports from here).
-    gcTime: 30 * 60_000,
+    // Retain catalogs a full day — the server serves them stale-while-revalidate
+    // for the same window, so an idle reopen paints instantly instead of
+    // skeletoning while the (cache-answered) refetch lands.
+    gcTime: 24 * 60 * 60_000,
     // OMP has no static model fallback, so masking its first `omp models` fetch
     // with an empty placeholder would surface a false "No matches" during the
     // ~3s discovery. Omit placeholderData for OMP so React Query reports a
@@ -532,7 +540,11 @@ export function providerAgentsQueryOptions(input: {
       });
     },
     enabled: input.enabled ?? true,
-    staleTime: 60_000,
+    // Claude can answer "pending" while its SDK fills the agent inventory in
+    // the background. Retry that temporary result while the picker is observed;
+    // only completed catalogs should keep the longer freshness window.
+    staleTime: (query) => (query.state.data?.source === "pending" ? 0 : 15 * 60_000),
+    refetchInterval: (query) => (query.state.data?.source === "pending" ? 30_000 : false),
     placeholderData: (previous) => previous ?? EMPTY_AGENTS_RESULT,
   });
 }
