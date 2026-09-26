@@ -15,6 +15,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
 } from "node:fs";
 import { get as httpGet } from "node:http";
@@ -405,7 +406,8 @@ export interface BetaInstallDeps {
 /**
  * Downloads the newest beta build, verifies its sha512 and bundle identity,
  * and moves `Synara Beta.app` into `installDir`. Throws on any mismatch; an
- * interrupted run leaves no partial app behind.
+ * interrupted run leaves no partial app behind, and a failed move keeps the
+ * previously installed app.
  */
 export async function installBetaFromFeed(
   deps: BetaInstallDeps,
@@ -452,8 +454,23 @@ export async function installBetaFromFeed(
     );
     mkdirSync(deps.installDir, { recursive: true });
     const targetPath = join(deps.installDir, BETA_MAC_APP_NAME);
-    rmSync(targetPath, { recursive: true, force: true });
-    run("mv", [appPath, targetPath]);
+    // Set the installed app aside instead of deleting it: `mv` from the temp
+    // dir can fail (full disk, another volume, permissions), and the user
+    // should keep the old beta rather than end up with none.
+    const previousPath = `${targetPath}.previous`;
+    rmSync(previousPath, { recursive: true, force: true });
+    const hadPrevious = lstatSync(targetPath, { throwIfNoEntry: false }) !== undefined;
+    if (hadPrevious) renameSync(targetPath, previousPath);
+    try {
+      run("mv", [appPath, targetPath]);
+    } catch (error) {
+      if (hadPrevious) {
+        rmSync(targetPath, { recursive: true, force: true });
+        renameSync(previousPath, targetPath);
+      }
+      throw error;
+    }
+    rmSync(previousPath, { recursive: true, force: true });
     return targetPath;
   } finally {
     rmSync(workDir, { recursive: true, force: true });

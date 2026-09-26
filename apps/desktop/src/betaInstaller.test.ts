@@ -3,7 +3,15 @@
 //          checksum/bundle-identity gates in the macOS auto-install flow.
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -238,6 +246,34 @@ describe("installBetaFromFeed", () => {
     };
     await expect(installBetaFromFeed(bad, () => {})).rejects.toThrow(/not Synara Beta/);
     expect(existsSync(join(installDir, "Synara Beta.app"))).toBe(false);
+  });
+
+  it("replaces an existing install without leaving the old app behind", async () => {
+    const root = makeRoot();
+    const { deps, installDir } = feedDeps(root);
+    fakeApp(installDir);
+    await installBetaFromFeed(deps, () => {});
+    expect(readdirSync(installDir)).toEqual(["Synara Beta.app"]);
+  });
+
+  it("keeps the installed app when moving the new one into place fails", async () => {
+    const root = makeRoot();
+    const { deps, installDir } = feedDeps(root);
+    const installed = fakeApp(installDir);
+    const failingMove = {
+      ...deps,
+      run: (command: string, args: readonly string[]) => {
+        if (command === "mv") {
+          // A cross-device `mv` that dies mid-copy leaves a partial target behind.
+          mkdirSync(args[args.length - 1]!, { recursive: true });
+          throw new Error("mv: No space left on device");
+        }
+        deps.run(command, args);
+      },
+    };
+    await expect(installBetaFromFeed(failingMove, () => {})).rejects.toThrow(/No space left/);
+    expect(() => verifyBetaAppBundle(installed)).not.toThrow();
+    expect(readdirSync(installDir)).toEqual(["Synara Beta.app"]);
   });
 
   const codesignStub = (teamId: string | null, verifyOk = true) => {
