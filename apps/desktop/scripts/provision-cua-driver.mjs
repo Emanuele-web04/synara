@@ -51,6 +51,12 @@ const signIdentity = option("--sign-identity") ?? process.env.SYNARA_CUA_SIGN_ID
 /** Stable signing identifier so macOS TCC remembers the driver across rebuilds. */
 const CUA_DRIVER_SIGN_IDENTIFIER = "com.emanueledipietro.synara.cua.driver";
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+// Patch files must hash exactly as pinned in cuaDriverRelease.json. Windows
+// checkouts with core.autocrlf can carry CRLF bytes in the worktree, so compare
+// the LF-normalized text: normalization is a no-op for LF files and never
+// changes what gets applied, only what gets hashed.
+const normalizePatchBytes = (bytes) =>
+  Buffer.from(bytes.toString("utf8").replace(/\r\n/g, "\n"), "utf8");
 const patchPath = fileURLToPath(
   new URL("../patches/cua-driver/0001-synara-native.patch", import.meta.url),
 );
@@ -73,10 +79,21 @@ if (option("--archive"))
   throw new Error(
     "The upstream binary lacks Synara's native patch. Use --source-checkout or --artifact-dir instead.",
   );
-if (digest(patch) !== release.patchSha256) throw new Error("Cua native patch checksum mismatch.");
+if (digest(normalizePatchBytes(patch)) !== release.patchSha256)
+  throw new Error(
+    "Cua native patch checksum mismatch. The worktree patch differs from the pinned " +
+      "cuaDriverRelease.json hash even after line-ending normalization; do not provision " +
+      "from a locally edited patch.",
+  );
 if (platform === "linux") {
-  if (digest(await readFile(linuxPatchPath)) !== release.linuxBrowserPatchSha256)
-    throw new Error("Cua Linux browser patch checksum mismatch.");
+  if (
+    digest(normalizePatchBytes(await readFile(linuxPatchPath))) !== release.linuxBrowserPatchSha256
+  )
+    throw new Error(
+      "Cua Linux browser patch checksum mismatch. The worktree patch differs from the " +
+        "pinned cuaDriverRelease.json hash even after line-ending normalization; do not " +
+        "provision from a locally edited patch.",
+    );
   assertLinuxCuaBuildHost({
     platform,
     hostPlatform: process.platform,
