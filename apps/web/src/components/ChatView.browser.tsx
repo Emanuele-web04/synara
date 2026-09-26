@@ -1989,6 +1989,11 @@ async function mountChatView(options: {
 }): Promise<MountedChatView> {
   fixture = buildFixture(options.snapshot);
   options.configureFixture?.(fixture);
+  // Chat interactions start after onboarding; announcement behavior has its own tests.
+  localStorage.setItem(
+    "synara:project-import-announcement:v1",
+    JSON.stringify([fixture.serverConfig.worktreesDir]),
+  );
   await setViewport(options.viewport);
   await waitForProductionStyles();
 
