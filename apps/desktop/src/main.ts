@@ -5356,9 +5356,7 @@ function createWindow(): BrowserWindow {
 
   // Re-apply the persisted icon once the window exists: an NSIS update recreates
   // Windows shortcuts and reverts the shell stamp, and Linux needs the new window
-  // for setIcon. Best-effort and non-blocking — the serialized queue defers the
-  // Explorer COM stamp off the window-creation path. `default` is already
-  // reflected by the construction-time icon option, so it adds no extra work.
+  // for setIcon. Best-effort and non-blocking. `default` adds no extra work.
   if (
     (process.platform === "linux" || process.platform === "win32") &&
     readDesktopAppIcon() !== "default"
@@ -5763,20 +5761,6 @@ if (hasSingleInstanceLock) {
         }
       }
       applyInitialMacDockIcon();
-      // Windows has no dock: re-stamp the persisted icon without a window so a
-      // shortcut-recreating NSIS update heals on the next launch. createWindow
-      // re-applies with the window once it exists; the serialized queue keeps
-      // both applies ordered and non-blocking. `default` adds no extra work.
-      // Linux stays window-bound (see createWindow), so it is not restamped here.
-      if (process.platform === "win32" && readDesktopAppIcon() !== "default") {
-        void applyPersistedDesktopAppIcon(null, { reregisterTaskbarButton: false }).catch(
-          (error) => {
-            console.warn(
-              `[desktop] Failed to apply startup app icon: ${formatErrorMessage(error)}`,
-            );
-          },
-        );
-      }
       registerMacAppearanceIconSync();
       refreshMacIconCacheOnVersionChange();
       configureMediaPermissions();
