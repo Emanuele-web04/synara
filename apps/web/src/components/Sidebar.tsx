@@ -6439,8 +6439,9 @@ export default function Sidebar() {
               className={cn(
                 "flex items-center gap-1 pt-0 pb-1 pr-2.5 pl-1.5",
                 // Rail layout: the panel has no header above it, so the title row gets
-                // Codex's breathing room from the panel's top edge.
-                isRailLayout && "pt-3",
+                // breathing room from the panel's top edge. pt-1.5 puts the title's cap
+                // height as far from the top edge as its first letter is from the side.
+                isRailLayout && "pt-1.5",
               )}
             >
               <SidebarSurfacePicker

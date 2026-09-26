@@ -17,15 +17,24 @@ export function AppShellTopStrip() {
   // header's copy (SidebarHeaderNavigationControls) takes over while it is collapsed.
   const { open } = useSidebar();
   return (
+    // Zero intrinsic width: the column's width comes from the rail and panel only. The
+    // padding (including the traffic-light gutter) lives on the inner row, because a box's
+    // own padding still counts toward its width and would widen the column past the rail
+    // while the panel is collapsed.
     <header
       className={cn(
-        // Zero intrinsic width: the column's width comes from the rail and panel only.
-        "app-shell-top-strip drag-region flex w-0 min-w-full shrink-0 items-center overflow-hidden ps-4 pe-3 font-system-ui",
+        "drag-region flex w-0 min-w-full shrink-0 overflow-hidden font-system-ui",
         CHAT_SURFACE_HEADER_HEIGHT_CLASS,
-        isElectron && isMacNavigatorPlatform() && DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS,
       )}
     >
-      {open ? <SidebarLeadingControls /> : null}
+      <div
+        className={cn(
+          "app-shell-top-strip flex shrink-0 items-center ps-4 pe-3",
+          isElectron && isMacNavigatorPlatform() && DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS,
+        )}
+      >
+        {open ? <SidebarLeadingControls /> : null}
+      </div>
     </header>
   );
 }
