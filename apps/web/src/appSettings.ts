@@ -323,8 +323,8 @@ export const AppSettingsSchema = Schema.Struct({
     withDefaults(() => [...DEFAULT_SIDEBAR_NAV_ORDER]),
   ),
   hiddenSidebarNavItems: Schema.Array(SidebarNavItemId).pipe(withDefaults(() => [])),
-  // Local-only shell layout. Resolved through useSidebarLayout, which keeps it classic on
-  // Stable (Beta-only "sidebarV2") and on mobile, so a stored "rail" is inert there.
+  // Local-only shell layout, available in Stable and Beta. useSidebarLayout keeps
+  // mobile on classic even when the stored preference is "rail".
   sidebarLayout: SidebarLayout.pipe(withDefaults(() => DEFAULT_SIDEBAR_LAYOUT)),
   // Rail layout shortcuts the user added from the rail's "…" menu, in rail order:
   // "space:<id>" (the Void key for unfiled) or "project:<id>" (see appRail.logic).

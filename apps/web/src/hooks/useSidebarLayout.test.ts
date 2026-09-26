@@ -3,13 +3,13 @@ import { describe, expect, it } from "vitest";
 import { resolveSidebarLayout } from "./useSidebarLayout";
 
 describe("resolveSidebarLayout", () => {
-  it("returns rail when the setting, Beta gate, and desktop viewport all allow it", () => {
+  it("returns rail when the setting, feature gate, and desktop viewport all allow it", () => {
     expect(resolveSidebarLayout({ setting: "rail", betaFeatureOn: true, isMobile: false })).toBe(
       "rail",
     );
   });
 
-  it("keeps a stored rail setting inert on Stable", () => {
+  it("falls back to classic when the feature is disabled", () => {
     expect(resolveSidebarLayout({ setting: "rail", betaFeatureOn: false, isMobile: false })).toBe(
       "classic",
     );
