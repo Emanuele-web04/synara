@@ -9,7 +9,6 @@ import { type KeyboardEvent as ReactKeyboardEvent, useState } from "react";
 
 import { CentralIcon } from "~/lib/central-icons";
 import { cn } from "~/lib/utils";
-import { Badge } from "./ui/badge";
 import { SearchInput } from "./ui/search-input";
 import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
 import {
@@ -217,15 +216,6 @@ export function SettingsSidebarNav(props: {
                           <span className={SETTINGS_SIDEBAR_ITEM_LABEL_CLASS_NAME}>
                             {item.label}
                           </span>
-                          {item.badge ? (
-                            <Badge
-                              variant="outline"
-                              size="sm"
-                              className="ml-auto rounded-full px-1.5 font-normal text-muted-foreground"
-                            >
-                              {item.badge}
-                            </Badge>
-                          ) : null}
                         </button>
                       </li>
                     );
