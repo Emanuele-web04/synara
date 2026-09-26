@@ -3,6 +3,8 @@ import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import "../../index.css";
+
 const route = vi.hoisted(() => ({ threadId: "toast-thread" }));
 vi.mock("@tanstack/react-router", () => ({ useParams: () => route.threadId }));
 vi.mock("../../hooks/useDiffRouteSearch", () => ({ useDiffRouteSearch: () => ({}) }));
@@ -138,6 +140,29 @@ describe("toast focus and visible lifetime", () => {
     expect(onClose).toHaveBeenCalledOnce();
     expect(onNoUndo).not.toHaveBeenCalled();
     expect(document.activeElement).not.toBe(undo);
+  });
+
+  it("shows the dismiss control as disabled while archive undo is pending", () => {
+    flushSync(() =>
+      toastManager.add({
+        timeout: 0,
+        data: {
+          archiveUndo: {
+            onUndo: () => new Promise<boolean>(() => {}),
+            onViewArchived: () => {},
+            onNoUndo: () => {},
+          },
+        },
+      }),
+    );
+    const undo = Array.from(document.querySelectorAll("button")).find(
+      (button) => button.textContent === "Undo",
+    )!;
+    flushSync(() => undo.click());
+    const button = dismissButton();
+    expect(button.disabled).toBe(true);
+    expect(getComputedStyle(button).pointerEvents).toBe("none");
+    expect(getComputedStyle(button).opacity).toBe("0.55");
   });
 
   it("starts archive cleanup only after the Undo toast's visible lifetime", async () => {

@@ -343,7 +343,7 @@ function ToastCloseButton({
       className={cn(
         // pointer-events-auto keeps the X clickable even when a stacked/collapsed
         // toast still gates its content with pointer-events-none.
-        "pointer-events-auto z-10 inline-flex shrink-0 items-center justify-center rounded-full text-[var(--notification-fg)]/65 transition-colors hover:bg-[var(--notification-fg)]/10 hover:text-[var(--notification-fg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--notification-fg)]/35",
+        "pointer-events-auto z-10 inline-flex shrink-0 items-center justify-center rounded-full text-[var(--notification-fg)]/65 transition-colors hover:bg-[var(--notification-fg)]/10 hover:text-[var(--notification-fg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--notification-fg)]/35 disabled:pointer-events-none disabled:opacity-55",
         compact ? "size-5" : "absolute top-2 right-2 size-6",
       )}
       data-slot="toast-close"
