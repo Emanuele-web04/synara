@@ -2087,7 +2087,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       delete process.env.XAI_API_KEY;
       delete process.env.GROK_CODE_XAI_API_KEY;
       return Effect.gen(function* () {
-        const status = yield* checkGrokProviderStatus;
+        const status = yield* makeCheckGrokProviderStatus(undefined, async () => null);
         assert.strictEqual(status.provider, "grok");
         assert.strictEqual(status.status, "ready");
         assert.strictEqual(status.available, true);
@@ -2128,6 +2128,45 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.strictEqual(status.authStatus, "authenticated");
         assert.strictEqual(status.authType, "apiKey");
         assert.strictEqual(status.authLabel, "xAI API Key");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "grok 0.1.0\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (previousXaiApiKey === undefined) {
+              delete process.env.XAI_API_KEY;
+            } else {
+              process.env.XAI_API_KEY = previousXaiApiKey;
+            }
+            if (previousApiKey === undefined) {
+              delete process.env.GROK_CODE_XAI_API_KEY;
+            } else {
+              process.env.GROK_CODE_XAI_API_KEY = previousApiKey;
+            }
+          }),
+        ),
+      );
+    });
+
+    it.effect("marks Grok authenticated from a cached grok login", () => {
+      const previousXaiApiKey = process.env.XAI_API_KEY;
+      const previousApiKey = process.env.GROK_CODE_XAI_API_KEY;
+      delete process.env.XAI_API_KEY;
+      delete process.env.GROK_CODE_XAI_API_KEY;
+      return Effect.gen(function* () {
+        const status = yield* makeCheckGrokProviderStatus(undefined, async () => ({
+          accessToken: "cached-token",
+        }));
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.authStatus, "authenticated");
+        assert.strictEqual(status.authType, "grokLogin");
+        assert.strictEqual(status.authLabel, "Grok Account");
+        assert.strictEqual(status.message, undefined);
       }).pipe(
         Effect.provide(
           mockSpawnerLayer((args) => {

@@ -14,6 +14,7 @@ import {
   parseGrokApiKeyIdentity,
   parseGrokAuthRecord,
   parseGrokBilling,
+  readGrokCachedLogin,
 } from "./grok";
 
 const NOW_MS = 1_780_000_000_000;
@@ -78,6 +79,48 @@ describe("parseGrokAuthRecord", () => {
       plan: "SuperGrok",
       principalType: "User",
     });
+  });
+});
+
+describe("readGrokCachedLogin", () => {
+  const scope = "https://auth.x.ai::openid";
+  const future = new Date(NOW_MS + 60 * 60 * 1000).toISOString();
+  const past = new Date(NOW_MS - 60 * 60 * 1000).toISOString();
+
+  it("returns the cached grok login session", async () => {
+    const homeDir = makeGrokHome({ [scope]: { key: "token", expires_at: future } });
+    await expect(readGrokCachedLogin({}, homeDir, NOW_MS)).resolves.toMatchObject({
+      accessToken: "token",
+    });
+  });
+
+  it("honors GROK_HOME", async () => {
+    const homeDir = makeGrokHome({ [scope]: { key: "token", expires_at: future } });
+    const emptyHome = mkdtempSync(nodePath.join(os.tmpdir(), "synara-grok-usage-"));
+    tempDirs.push(emptyHome);
+    await expect(
+      readGrokCachedLogin({ GROK_HOME: nodePath.join(homeDir, ".grok") }, emptyHome, NOW_MS),
+    ).resolves.toMatchObject({ accessToken: "token" });
+  });
+
+  it("keeps an expired session that can be refreshed", async () => {
+    const homeDir = makeGrokHome({
+      [scope]: { key: "token", expires_at: past, refresh_token: "refresh" },
+    });
+    await expect(readGrokCachedLogin({}, homeDir, NOW_MS)).resolves.toMatchObject({
+      accessToken: "token",
+    });
+  });
+
+  it("returns null for an expired session without a refresh token", async () => {
+    const homeDir = makeGrokHome({ [scope]: { key: "token", expires_at: past } });
+    await expect(readGrokCachedLogin({}, homeDir, NOW_MS)).resolves.toBeNull();
+  });
+
+  it("returns null when grok has no cached login", async () => {
+    const homeDir = mkdtempSync(nodePath.join(os.tmpdir(), "synara-grok-usage-"));
+    tempDirs.push(homeDir);
+    await expect(readGrokCachedLogin({}, homeDir, NOW_MS)).resolves.toBeNull();
   });
 });
 
