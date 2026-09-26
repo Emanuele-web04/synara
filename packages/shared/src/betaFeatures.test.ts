@@ -23,6 +23,11 @@ describe("isBetaFeatureEnabled", () => {
     expect(isBetaFeatureEnabled("omp", "production")).toBe(false);
   });
 
+  it("keeps the rail sidebar layout Beta-only", () => {
+    expect(isBetaFeatureEnabled("sidebarV2", "beta")).toBe(true);
+    expect(isBetaFeatureEnabled("sidebarV2", "production")).toBe(false);
+  });
+
   it("leaves unlisted features enabled everywhere", () => {
     // The list is the whole gate: a feature not present is enabled everywhere,
     // which is also the steady state once a feature is promoted to Stable.
