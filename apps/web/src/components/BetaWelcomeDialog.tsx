@@ -32,7 +32,7 @@ const WELCOME_POINTS = [
   { icon: "shield-check", text: "Synara stays separate and untouched." },
   {
     icon: "heart",
-    text: "Beta sends crash reports and anonymous usage stats — never your chats, code, files, or keys by design.",
+    text: "Beta sends crash reports and anonymous usage counts — never your chats, code, files, or keys on purpose. Crash snapshots can't be redacted, so they're deleted after 90 days.",
   },
   { icon: "arrow-left-circle", text: "Switch back to Synara any time in Settings." },
 ] as const;

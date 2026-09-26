@@ -658,7 +658,7 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
                 <ul className="m-0 list-disc space-y-0.5 pl-4 pt-0.5 text-ui-sm text-muted-foreground">
                   <li>A random ID for this install, not linked to you</li>
                   <li>When Beta opens, closes, installs, or is removed</li>
-                  <li>Crashes and errors; text is redacted where possible</li>
+                  <li>Crashes and errors; error text is redacted where possible</li>
                   <li>App version, OS version, and language</li>
                   <li>
                     Which providers you use, and how many projects, chats, and turns (just counts)
@@ -677,8 +677,8 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
                 </ul>
               </div>
               <p className="m-0 text-ui-xs text-muted-foreground">
-                Crash reports are technical snapshots taken at the crash and are deleted after 90
-                days. Everything else is kept for a year.
+                Crash reports are snapshots of the app's memory at the crash and can't be redacted,
+                so they're deleted after 90 days. Other reports are kept for a year.
               </p>
             </div>
           </DisclosureRegion>
