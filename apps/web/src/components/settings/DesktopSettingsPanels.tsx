@@ -639,9 +639,8 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
         <div className="min-w-0 flex-1 space-y-1">
           <p className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>You're on Synara Beta</p>
           <p className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>
-            New features land here first. To help us fix things quickly, Beta shares crash reports,
-            app errors, and anonymous usage counts. Crash reports can contain fragments of app
-            memory.
+            New features land here first. To help us fix things quickly, Beta sends crash reports,
+            app errors, and anonymous usage counts.
           </p>
           <button
             type="button"
@@ -678,9 +677,8 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
                 </ul>
               </div>
               <p className="m-0 text-ui-xs text-muted-foreground">
-                Error text can still contain fragments of your work despite redaction. If Beta
-                crashes, a snapshot of app memory is sent and may contain sensitive fragments. Crash
-                dumps are deleted after 90 days; other reports are kept for a year.
+                Crash reports are technical snapshots taken at the crash and are deleted after 90
+                days. Everything else is kept for a year.
               </p>
             </div>
           </DisclosureRegion>
