@@ -41,6 +41,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 import {
   BETA_IMPORT_REQUEST_FILE_NAME,
   BETA_IMPORT_RESULT_FILE_NAME,
+  BETA_IMPORT_STORAGE_FILE_NAME,
   SYNARA_BETA_HOME_ENV,
   SYNARA_BETA_INSTALL_DIR_ENV,
   SYNARA_STABLE_EXECUTABLE_ENV,
@@ -58,7 +59,10 @@ import {
   resolveBetaHomeDir,
   stableLaunchEnvironment,
   writeBetaImportRequest,
+  writeBetaImportStorageSnapshot,
 } from "./betaChannel";
+
+import { resolveSynaraStorageSnapshotPath } from "./desktopStorageMigration";
 
 const roots: string[] = [];
 
@@ -69,8 +73,8 @@ function makeRoot(): string {
 }
 
 afterEach(() => {
-  while (roots.length > 0) {
-    rmSync(roots.pop()!, { recursive: true, force: true });
+  for (const root of roots.splice(0)) {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 
@@ -269,6 +273,92 @@ describe("import marker files", () => {
     const channel = makeChannel(root).getState();
     expect(channel.lastImportError).toBe("db locked");
     expect(channel.lastImportAt).toBeNull();
+  });
+});
+
+describe("import storage snapshot", () => {
+  const makeSnapshot = (entries: Record<string, string> = { "synara:theme": '"dark"' }) => ({
+    version: 1 as const,
+    exportedAt: new Date().toISOString(),
+    entries,
+  });
+
+  function fakeLinuxBetaInstall(root: string, executable: string): void {
+    const desktopDir = join(root, ".local", "share", "applications");
+    mkdirSync(desktopDir, { recursive: true });
+    writeFileSync(join(desktopDir, "synara-beta.desktop"), `Exec=${executable}\n`);
+  }
+
+  it("writes the snapshot sidecar and beta-profile snapshot alongside the marker", async () => {
+    const root = makeRoot();
+    fakeLinuxBetaInstall(root, "/opt/fake-beta");
+    const betaHome = join(root, ".synara-beta");
+    const betaUserDataDir = join(root, "beta-userdata");
+    const channel = makeChannel(root, "production", { betaUserDataDir });
+
+    const result = await channel.importAndLaunch(join(root, ".synara"), {
+      storageSnapshot: makeSnapshot(),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(existsSync(join(betaHome, BETA_IMPORT_REQUEST_FILE_NAME))).toBe(true);
+    const sidecar = JSON.parse(readFileSync(join(betaHome, BETA_IMPORT_STORAGE_FILE_NAME), "utf8"));
+    expect(sidecar.entries["synara:theme"]).toBe('"dark"');
+    const profilePath = resolveSynaraStorageSnapshotPath(betaUserDataDir);
+    expect(existsSync(profilePath)).toBe(true);
+    const profile = JSON.parse(readFileSync(profilePath, "utf8"));
+    expect(profile.version).toBe(1);
+    expect(profile.entries["synara:theme"]).toBe('"dark"');
+  });
+
+  it("removes the marker and both sidecars when launching beta throws", async () => {
+    const root = makeRoot();
+    fakeLinuxBetaInstall(root, "/opt/failing-beta");
+    const betaHome = join(root, ".synara-beta");
+    const betaUserDataDir = join(root, "beta-userdata");
+    const channel = makeChannel(root, "production", { betaUserDataDir });
+
+    const result = await channel.importAndLaunch(join(root, ".synara"), {
+      storageSnapshot: makeSnapshot(),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("internal");
+    expect(existsSync(join(betaHome, BETA_IMPORT_REQUEST_FILE_NAME))).toBe(false);
+    expect(existsSync(join(betaHome, BETA_IMPORT_STORAGE_FILE_NAME))).toBe(false);
+    expect(existsSync(resolveSynaraStorageSnapshotPath(betaUserDataDir))).toBe(false);
+  });
+
+  it("never writes a marker for a malformed snapshot", async () => {
+    const root = makeRoot();
+    fakeLinuxBetaInstall(root, "/opt/fake-beta");
+    const betaHome = join(root, ".synara-beta");
+    const betaUserDataDir = join(root, "beta-userdata");
+    const channel = makeChannel(root, "production", { betaUserDataDir });
+
+    const result = await channel.importAndLaunch(join(root, ".synara"), {
+      storageSnapshot: makeSnapshot({ "not-a-synara-key": "x" }),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("internal");
+    expect(existsSync(join(betaHome, BETA_IMPORT_REQUEST_FILE_NAME))).toBe(false);
+    expect(existsSync(join(betaHome, BETA_IMPORT_STORAGE_FILE_NAME))).toBe(false);
+    expect(existsSync(resolveSynaraStorageSnapshotPath(betaUserDataDir))).toBe(false);
+  });
+
+  it("writeBetaImportStorageSnapshot round-trips valid snapshots and rejects invalid ones", () => {
+    const root = makeRoot();
+    const betaHome = join(root, ".synara-beta");
+    writeBetaImportStorageSnapshot({ betaHomeDir: betaHome, snapshot: makeSnapshot() });
+    const sidecar = JSON.parse(readFileSync(join(betaHome, BETA_IMPORT_STORAGE_FILE_NAME), "utf8"));
+    expect(sidecar.version).toBe(1);
+    expect(() =>
+      writeBetaImportStorageSnapshot({
+        betaHomeDir: betaHome,
+        snapshot: makeSnapshot({ "not-a-synara-key": "x" }),
+      }),
+    ).toThrow();
   });
 });
 

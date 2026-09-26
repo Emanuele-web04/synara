@@ -436,6 +436,172 @@ describe("runBetaImportIfRequested", () => {
     db.close();
     expect(titles).toEqual(["hello stable"]);
   });
+
+  it("copies portable skills and MCP credentials, never pending pairings", async () => {
+    const stableHome = await seedStableHome(makeRoot());
+    mkdirSync(join(stableHome, "skills", "stable-skill"), { recursive: true });
+    writeFileSync(join(stableHome, "skills", "stable-skill", "SKILL.md"), "stable skill\n");
+    mkdirSync(join(stableHome, "mcp", "credentials"), { recursive: true });
+    writeFileSync(
+      join(stableHome, "mcp", "credentials", "client.json"),
+      JSON.stringify({ token: "stable" }),
+    );
+    mkdirSync(join(stableHome, "mcp", "pending-pairing"), { recursive: true });
+    writeFileSync(
+      join(stableHome, "mcp", "pending-pairing", "secret.json"),
+      JSON.stringify({ secret: "single-use" }),
+    );
+    // Runtime identity must not ride along even when beta has none of its own.
+    writeFileSync(join(stableHome, "userdata", "environment-id"), "stable-env\n");
+
+    const betaHome = join(stableHome, "..", ".synara-beta");
+    mkdirSync(join(betaHome, "skills", "beta-only-skill"), { recursive: true });
+    writeFileSync(join(betaHome, "skills", "beta-only-skill", "SKILL.md"), "beta only\n");
+    mkdirSync(join(betaHome, "mcp", "credentials"), { recursive: true });
+    writeFileSync(
+      join(betaHome, "mcp", "credentials", "beta-only.json"),
+      JSON.stringify({ token: "beta" }),
+    );
+    writeMarker(betaHome, stableHome);
+
+    const outcome = await run({ betaHomeDir: betaHome, stateDir: join(betaHome, "userdata") });
+    expect(outcome).toEqual({ consumed: true, ok: true });
+    expect(readFileSync(join(betaHome, "skills", "stable-skill", "SKILL.md"), "utf8")).toContain(
+      "stable skill",
+    );
+    expect(readFileSync(join(betaHome, "skills", "beta-only-skill", "SKILL.md"), "utf8")).toContain(
+      "beta only",
+    );
+    expect(readFileSync(join(betaHome, "mcp", "credentials", "client.json"), "utf8")).toContain(
+      "stable",
+    );
+    expect(readFileSync(join(betaHome, "mcp", "credentials", "beta-only.json"), "utf8")).toContain(
+      "beta",
+    );
+    expect(existsSync(join(betaHome, "mcp", "pending-pairing"))).toBe(false);
+    expect(existsSync(join(betaHome, "userdata", "environment-id"))).toBe(false);
+  });
+
+  it("keeps beta's own environment identity and boot-ownership claims", async () => {
+    const stableHome = await seedStableHome(makeRoot());
+    const stableState = join(stableHome, "userdata");
+    writeFileSync(join(stableState, "environment-id"), "stable-env\n");
+    writeFileSync(
+      join(stableState, "device-boot-ownership.json"),
+      JSON.stringify({ pid: 1, udids: ["stable-device"] }),
+    );
+
+    const betaHome = join(stableHome, "..", ".synara-beta");
+    const betaState = join(betaHome, "userdata");
+    mkdirSync(betaState, { recursive: true });
+    writeFileSync(join(betaState, "environment-id"), "beta-env\n");
+    writeFileSync(
+      join(betaState, "device-boot-ownership.json"),
+      JSON.stringify({ pid: 2, udids: ["beta-device"] }),
+    );
+    writeMarker(betaHome, stableHome);
+
+    const outcome = await run({ betaHomeDir: betaHome, stateDir: betaState });
+    expect(outcome).toEqual({ consumed: true, ok: true });
+    expect(readFileSync(join(betaState, "environment-id"), "utf8")).toBe("beta-env\n");
+    expect(readFileSync(join(betaState, "device-boot-ownership.json"), "utf8")).toContain(
+      "beta-device",
+    );
+  });
+
+  it("nulls source-home worktree paths while keeping branches and outside paths", async () => {
+    const root = makeRoot();
+    const stableHome = await seedStableHome(root);
+    const { DatabaseSync } = await import("node:sqlite");
+    const stableDb = new DatabaseSync(join(stableHome, "userdata", "state.sqlite"));
+    stableDb.exec(
+      "CREATE TABLE projection_threads (thread_id TEXT PRIMARY KEY, branch TEXT, worktree_path TEXT, associated_worktree_path TEXT, associated_worktree_branch TEXT)",
+    );
+    const insideWorktree = join(stableHome, ".worktrees", "thread-a");
+    const insideAssociated = join(stableHome, ".worktrees", "thread-a-associated");
+    stableDb
+      .prepare("INSERT INTO projection_threads VALUES ('inside', 'feature/a', ?, ?, 'feature/a')")
+      .run(insideWorktree, insideAssociated);
+    stableDb
+      .prepare(
+        "INSERT INTO projection_threads VALUES ('outside', 'feature/b', '/tmp/elsewhere', '/tmp/assoc', 'feature/b')",
+      )
+      .run();
+    // A sibling of the source home shares the name prefix but is not inside
+    // it; its paths must survive the import.
+    stableDb
+      .prepare("INSERT INTO projection_threads VALUES ('sibling', 'feature/c', ?, ?, 'feature/c')")
+      .run(`${stableHome}-backup/wt`, `${stableHome}-backup/assoc`);
+    stableDb.close();
+
+    const betaHome = join(root, ".synara-beta");
+    const betaState = join(betaHome, "userdata");
+    writeMarker(betaHome, stableHome);
+
+    const outcome = await run({ betaHomeDir: betaHome, stateDir: betaState });
+    expect(outcome).toEqual({ consumed: true, ok: true });
+    const betaDb = new DatabaseSync(join(betaState, "state.sqlite"), { readOnly: true });
+    const rows = betaDb
+      .prepare(
+        "SELECT thread_id, branch, worktree_path, associated_worktree_path, associated_worktree_branch FROM projection_threads ORDER BY thread_id",
+      )
+      .all() as Array<{
+      thread_id: string;
+      branch: string | null;
+      worktree_path: string | null;
+      associated_worktree_path: string | null;
+      associated_worktree_branch: string | null;
+    }>;
+    betaDb.close();
+    expect(rows).toEqual([
+      {
+        thread_id: "inside",
+        branch: "feature/a",
+        worktree_path: null,
+        associated_worktree_path: null,
+        associated_worktree_branch: "feature/a",
+      },
+      {
+        thread_id: "outside",
+        branch: "feature/b",
+        worktree_path: "/tmp/elsewhere",
+        associated_worktree_path: "/tmp/assoc",
+        associated_worktree_branch: "feature/b",
+      },
+      {
+        thread_id: "sibling",
+        branch: "feature/c",
+        worktree_path: `${stableHome}-backup/wt`,
+        associated_worktree_path: `${stableHome}-backup/assoc`,
+        associated_worktree_branch: "feature/c",
+      },
+    ]);
+  });
+
+  it("fails without touching beta when a skill file is linked", async () => {
+    const stableHome = await seedStableHome(makeRoot());
+    mkdirSync(join(stableHome, "skills", "linked-skill"), { recursive: true });
+    writeFileSync(join(stableHome, "skills", "linked-skill", "SKILL.md"), "real\n");
+    symlinkSync(
+      join(stableHome, "skills", "linked-skill", "SKILL.md"),
+      join(stableHome, "skills", "linked-skill", "evil.md"),
+    );
+
+    const betaHome = join(stableHome, "..", ".synara-beta");
+    const betaState = join(betaHome, "userdata");
+    mkdirSync(join(betaHome, "skills", "beta-only-skill"), { recursive: true });
+    writeFileSync(join(betaHome, "skills", "beta-only-skill", "SKILL.md"), "beta only\n");
+    writeMarker(betaHome, stableHome);
+
+    const outcome = await run({ betaHomeDir: betaHome, stateDir: betaState });
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error).toContain("linked state entry");
+    expect(existsSync(join(betaState, "state.sqlite"))).toBe(false);
+    expect(readFileSync(join(betaHome, "skills", "beta-only-skill", "SKILL.md"), "utf8")).toContain(
+      "beta only",
+    );
+    expect(existsSync(join(betaHome, "skills", "linked-skill"))).toBe(false);
+  });
 });
 
 describe("copyLiveDatabase", () => {
