@@ -48,10 +48,11 @@ export function createDesktopBundleFilePatterns(
     files.push(
       `${resources}app-icon-macos.png`,
       `${resources}dock-icon*.png`,
-      `${resources}dock-icon-beta.png`,
       `${resources}icon.icns`,
     );
   }
+  if (platform !== "linux")
+    files.push(`${resources}app-icon-linux.png`, `${resources}app-icon-beta-linux.png`);
   if (platform !== "win")
     files.push(
       `${resources}app-icon-windows.ico`,
