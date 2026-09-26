@@ -2681,10 +2681,8 @@ export function makeAgentGatewayComputerTools(
           throw new ToolInputError('A "wait" step with "absent" requires an element target.');
         }
         return async () => {
-          if (durationMs > 0)
-            await waitForComputer(durationMs, undefined, {
-              signal: desktopOperationSignal(),
-            });
+          // A pause between steps sends nothing: the pane's input may run.
+          if (durationMs > 0) await manager.observeFor(durationMs, desktopOperationSignal());
           return { waitedMs: durationMs };
         };
       }

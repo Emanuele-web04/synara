@@ -1,5 +1,6 @@
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { setTimeout as waitForTimeout } from "node:timers/promises";
 import { ComputerSpaceBroker, ComputerSpaceError } from "./ComputerSpaceBroker.ts";
 import { ComputerControlState } from "./ComputerControlState.ts";
 import { computerApprovalGate } from "./ComputerApprovalGate.ts";
@@ -307,6 +308,16 @@ export interface ComputerManagerOptions {
     before: Uint8Array,
     after: Uint8Array,
   ) => number | undefined | Promise<number | undefined>;
+}
+
+/** What `ComputerManager.getState` reads. */
+interface ComputerStateReadOptions {
+  readonly includeScreenshot?: boolean;
+  /** Render `root` to accessibility text. Implies `includeTree`. */
+  readonly includeText?: boolean;
+  /** Walk the accessibility tree. Defaults to whatever `includeText` asked for. */
+  readonly includeTree?: boolean;
+  readonly windowId?: string;
 }
 
 /**
@@ -1323,16 +1334,12 @@ export class ComputerManager {
    * here rather than in each backend so both display servers benefit from one
    * fix and answer with identically formatted text.
    */
-  async getState(
-    options: {
-      readonly includeScreenshot?: boolean;
-      /** Render `root` to accessibility text. Implies `includeTree`. */
-      readonly includeText?: boolean;
-      /** Walk the accessibility tree. Defaults to whatever `includeText` asked for. */
-      readonly includeTree?: boolean;
-      readonly windowId?: string;
-    } = {},
-  ): Promise<ComputerState> {
+  async getState(options: ComputerStateReadOptions = {}): Promise<ComputerState> {
+    // Observation: the human's pane input may run while it reads.
+    return this.observing(() => this.readState(options));
+  }
+
+  private async readState(options: ComputerStateReadOptions): Promise<ComputerState> {
     this.engageBackend();
     // A scoped read of a denied window refuses outright — its accessibility
     // tree carries field values. An unscoped read refuses only what it would
@@ -1388,6 +1395,10 @@ export class ComputerManager {
 
   /** Zoomed capture of one window or desktop region, with its pixel mapping. */
   async captureScreenshot(request: ComputerCaptureRequest): Promise<ComputerScreenshot> {
+    return this.observing(() => this.captureRequested(request));
+  }
+
+  private async captureRequested(request: ComputerCaptureRequest): Promise<ComputerScreenshot> {
     this.engageBackend();
     if (request.kind === "window") {
       await this.assertWindowContentAllowed(request.windowId);
@@ -1421,7 +1432,8 @@ export class ComputerManager {
     readonly mode: "observer" | "fixed";
   }> {
     this.engageBackend();
-    return this.withComputerCall(async () => {
+    // A wait for the UI, not input: the pane may take its input meanwhile.
+    return this.withObservingComputerCall(async () => {
       markComputerCall("computer_wait_settle");
       const window = (await this.readWindows()).find((entry) => entry.id === windowId);
       if (!window) throw windowNotFoundError(windowId);
@@ -1467,6 +1479,13 @@ export class ComputerManager {
   async captureFocusedWindow(
     maxDimension?: number,
     options: { readonly agentFocusOnly?: boolean } = {},
+  ): Promise<ComputerCapturedWindow> {
+    return this.observing(() => this.captureFocused(maxDimension, options));
+  }
+
+  private async captureFocused(
+    maxDimension: number | undefined,
+    options: { readonly agentFocusOnly?: boolean },
   ): Promise<ComputerCapturedWindow> {
     this.engageBackend();
     const limit = maxDimension === undefined ? {} : { maxDimension };
@@ -1532,7 +1551,11 @@ export class ComputerManager {
     threadId?: string,
     settle = true,
   ): Promise<ComputerActionObservation | undefined> {
-    return this.withComputerCall(async () => {
+    // The action already landed: its settle wait and capture are observation,
+    // so the pane may take its input meanwhile. Where the backend allows that,
+    // this observation can include the human's pane changes as well as the
+    // action's (see `ComputerBackend.concurrentObservationInput`).
+    return this.withObservingComputerCall(async () => {
       // A name only when the call did not already take one: an observed
       // action keeps its own name on the shared timing line.
       markComputerCall("computer_observe");
@@ -2165,6 +2188,12 @@ export class ComputerManager {
    * read the same way a targeted perception call is.
    */
   async getAccessibilityTree(windowId?: string): Promise<ComputerAccessibilityTreeResult> {
+    return this.observing(() => this.readAccessibilityTree(windowId));
+  }
+
+  private async readAccessibilityTree(
+    windowId: string | undefined,
+  ): Promise<ComputerAccessibilityTreeResult> {
     this.engageBackend();
     const read = this.backend.getAccessibilityTree?.bind(this.backend);
     if (!read) throw new ComputerBackendError("This backend cannot read the desktop inventory.");
@@ -2214,7 +2243,7 @@ export class ComputerManager {
     action: (target: ComputerTarget) => Promise<A>,
   ): Promise<A> {
     assertDesktopOperationAdmission();
-    return this.operations.run(async () => {
+    return this.queuePaneInput(async () => {
       if (this.agentDialect !== "macos") return action(point);
       this.engageBackend();
       const window = topmostWindowAtPoint(await this.readWindows(), point);
@@ -3785,6 +3814,41 @@ export class ComputerManager {
     });
   }
 
+  /**
+   * A pause of `durationMs` inside an agent's tool call — a wait between batch
+   * steps. It sends nothing, so it is observation: the human's pane input is
+   * not held behind it.
+   */
+  observeFor(durationMs: number, signal?: AbortSignal): Promise<void> {
+    return this.observing(() => waitForTimeout(durationMs, undefined, { signal }));
+  }
+
+  /**
+   * Whether the human's pane input may run while an agent's call observes:
+   * only where the backend says it serves input alongside an observation.
+   * Read on every use, like the backend's other optional members.
+   */
+  private paneInputDuringObservation(): boolean {
+    return this.backend.concurrentObservationInput === true;
+  }
+
+  /**
+   * Run a stretch of an agent's call that sends no input — a capture, a
+   * state or tree read, a settle wait — as observation, so the human's pane
+   * input may run during it instead of waiting out the agent's whole tool
+   * call. `DesktopOperationQueue.observing` explains why that cannot split an
+   * input. What the stretch observes can then include the human's changes.
+   * A plain call for a backend that has not opted in.
+   */
+  private observing<A>(action: () => Promise<A>): Promise<A> {
+    return this.paneInputDuringObservation() ? this.operations.observing(action) : action();
+  }
+
+  /** A computer call that only observes; see `observing`. */
+  private withObservingComputerCall<A>(run: () => Promise<A>): Promise<A> {
+    return this.observing(() => this.withComputerCall(run));
+  }
+
   private canUseBackgroundTarget(): boolean {
     return (
       this.backend.exactTargetBackgroundInput === true && desktopDeliveryMode() !== "foreground"
@@ -3872,6 +3936,42 @@ export class ComputerManager {
     );
   }
 
+  /**
+   * The human's pane input: on the queue's pane-input lane where the backend
+   * lets it run during an agent's observation (`observing`), otherwise on
+   * `fallback`, the exclusive lane it would take anyway.
+   */
+  private queuePaneInput<A>(
+    action: () => Promise<A>,
+    fallback: (action: () => Promise<A>) => Promise<A> = (run) => this.operations.run(run),
+  ): Promise<A> {
+    return this.paneInputDuringObservation()
+      ? this.operations.runPaneInput(action)
+      : fallback(action);
+  }
+
+  /**
+   * Queue one input transaction. The human's pane input (no owning thread)
+   * goes through `queuePaneInput`; an agent's input keeps the exclusive queue.
+   * Either way the input is marked `inputting`, so pane input never lands
+   * inside the agent's.
+   */
+  private queueInput<A>(owner: string | undefined, action: () => Promise<A>): Promise<A> {
+    const input = () => this.operations.inputting(action);
+    return owner === undefined ? this.queuePaneInput(input) : this.operations.run(input);
+  }
+
+  /** `queueInput` for exact-window input, on that window's scoped lane. */
+  private queueWindowInput<A>(
+    owner: string | undefined,
+    windowId: string,
+    action: () => Promise<A>,
+  ): Promise<A> {
+    const input = () => this.operations.inputting(action);
+    const scoped = (run: () => Promise<A>) => this.operations.runScoped(windowId, run);
+    return owner === undefined ? this.queuePaneInput(input, scoped) : scoped(input);
+  }
+
   private withBackgroundResourceControl<A>(
     threadId: string | undefined,
     resolve: () => Promise<BackgroundControlTarget>,
@@ -3882,7 +3982,7 @@ export class ComputerManager {
     if (owner === undefined) this.lastUserDesktopInputAt = this.now();
     // Process-scoped native input and its observation remain one exclusive
     // queue transaction. Only logical ownership is narrower than the desktop.
-    return this.operations.run(async () => {
+    return this.queueInput(owner, async () => {
       this.assertControlAuthority(owner);
       this.assertInputNotPaused(owner);
       const target = await resolve();
@@ -3991,7 +4091,7 @@ export class ComputerManager {
     // stamp it so a foreground excursion cannot raise a window into the middle
     // of their interaction.
     if (owner === undefined) this.lastUserDesktopInputAt = this.now();
-    return this.operations.runScoped(windowId, async () => {
+    return this.queueWindowInput(owner, windowId, async () => {
       this.assertControlAuthority(owner);
       this.assertInputNotPaused(owner);
       const target = await this.resolveWindowTarget(threadId, windowId);
@@ -4046,7 +4146,7 @@ export class ComputerManager {
     ) {
       return Promise.reject(new ComputerLeaseError());
     }
-    return this.operations.run(async () => {
+    return this.queueInput(owner, async () => {
       this.assertControlAuthority(owner);
       // Readiness first: a paused thread is refused before it can take the
       // lease, clear focus, or announce itself — all of which claimDesktopControl
