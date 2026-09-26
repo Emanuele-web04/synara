@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { Loader2Icon, XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import { MAX_WAVEFORM_SAMPLES } from "~/lib/voiceRecorder";
 import { Button } from "../ui/button";
 
 interface ComposerVoiceRecorderBarProps {
@@ -26,27 +27,38 @@ const BAR_MAX_HEIGHT_PX = 22;
 
 export function ComposerVoiceRecorderBar(props: ComposerVoiceRecorderBarProps) {
   const trackRef = useRef<HTMLDivElement | null>(null);
-  const [visibleBarCount, setVisibleBarCount] = useState(96);
+  const [trackWidth, setTrackWidth] = useState(96 * (BAR_WIDTH_PX + BAR_GAP_PX));
 
   useEffect(() => {
     const node = trackRef.current;
     if (!node) {
       return;
     }
-    const computeVisibleBars = () => {
-      const width = node.clientWidth;
+    const measureTrack = (entries?: ResizeObserverEntry[]) => {
+      const width = entries?.[0]?.contentRect.width ?? node.clientWidth;
       if (width <= 0) {
         return;
       }
-      setVisibleBarCount(Math.max(8, Math.floor(width / (BAR_WIDTH_PX + BAR_GAP_PX))));
+      setTrackWidth(width);
     };
-    computeVisibleBars();
-    const observer = new ResizeObserver(computeVisibleBars);
+    measureTrack();
+    const observer = new ResizeObserver(measureTrack);
     observer.observe(node);
     return () => observer.disconnect();
   }, []);
 
+  const visibleBarCount = Math.min(
+    MAX_WAVEFORM_SAMPLES,
+    // There is no gap after the final bar.
+    Math.max(8, Math.floor((trackWidth + BAR_GAP_PX) / (BAR_WIDTH_PX + BAR_GAP_PX))),
+  );
   const visibleLevels = props.waveformLevels.slice(-visibleBarCount);
+  // The recorder retains a bounded history. Spread that capacity across wide
+  // tracks, keeping partial recordings right-aligned as new samples arrive.
+  const barGap = Math.max(
+    BAR_GAP_PX,
+    (trackWidth - MAX_WAVEFORM_SAMPLES * BAR_WIDTH_PX) / (MAX_WAVEFORM_SAMPLES - 1),
+  );
 
   return (
     <div className="flex min-w-0 flex-1 items-center gap-2.5">
@@ -55,10 +67,7 @@ export function ComposerVoiceRecorderBar(props: ComposerVoiceRecorderBarProps) {
           aria-hidden="true"
           className="pointer-events-none absolute inset-x-0 top-1/2 -translate-y-1/2 border-t border-dashed border-zinc-300 dark:border-zinc-700"
         />
-        <div
-          className="relative ml-auto flex h-full items-center"
-          style={{ gap: `${BAR_GAP_PX}px` }}
-        >
+        <div className="relative ml-auto flex h-full items-center" style={{ gap: `${barGap}px` }}>
           {visibleLevels.map((level, index) => {
             const clamped = Math.max(0.04, Math.min(1, level));
             const height = Math.round(

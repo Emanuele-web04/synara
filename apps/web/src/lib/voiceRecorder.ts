@@ -29,7 +29,7 @@ interface RecorderRuntime {
   sampleRateHz: number;
 }
 
-const MAX_WAVEFORM_SAMPLES = 160;
+export const MAX_WAVEFORM_SAMPLES = 160;
 
 class VoiceRecordingCancelledError extends Error {
   override readonly name = "VoiceRecordingCancelledError";
