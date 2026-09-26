@@ -1,13 +1,20 @@
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
 import type * as Acp from "@agentclientprotocol/sdk";
-import { describe, expect, it } from "vitest";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import { describe, expect, it, vi } from "vitest";
 
+import {
+  AcpSessionRuntime,
+  type AcpSessionRuntimeOptions,
+  type AcpSessionRuntimeShape,
+} from "./AcpSessionRuntime.ts";
 import {
   applyCursorAcpModelSelection,
   buildCursorCliModelListCommand,
   buildCursorAcpModelDescriptorsFromAvailableModels,
   buildCursorAcpSpawnInput,
   flattenCursorAcpModelChoices,
+  makeCursorAcpRuntime,
   parseCursorCliModelList,
   type CursorAcpAvailableModel,
 } from "./CursorAcpSupport.ts";
@@ -240,6 +247,33 @@ describe("buildCursorCliModelListCommand", () => {
       command: "/not-real/bin/cursor",
       args: ["agent", "-e", "http://localhost:3000", "models"],
     });
+  });
+});
+
+describe("makeCursorAcpRuntime", () => {
+  it("selects on-demand authentication so session start skips the OAuth login page", async () => {
+    const fakeRuntime = {} as AcpSessionRuntimeShape;
+    let capturedOptions: AcpSessionRuntimeOptions | undefined;
+    const layerSpy = vi.spyOn(AcpSessionRuntime, "layer").mockImplementation((options) => {
+      capturedOptions = options;
+      return Layer.succeed(AcpSessionRuntime, fakeRuntime);
+    });
+
+    try {
+      const runtime = await Effect.runPromise(
+        makeCursorAcpRuntime({
+          childProcessSpawner: {} as ChildProcessSpawner.ChildProcessSpawner["Service"],
+          cursorSettings: undefined,
+          cwd: "/tmp/project",
+          clientInfo: { name: "Synara", version: "0.0.0" },
+        }).pipe(Effect.scoped),
+      );
+
+      expect(runtime).toBe(fakeRuntime);
+      expect(capturedOptions?.authPolicy).toBe("on-demand");
+    } finally {
+      layerSpy.mockRestore();
+    }
   });
 });
 

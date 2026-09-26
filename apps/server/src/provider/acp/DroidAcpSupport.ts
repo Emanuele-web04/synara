@@ -62,6 +62,11 @@ const DROID_PLAN_MODE_ID = "spec";
 const DROID_API_KEY_AUTH_METHOD_ID = "factory-api-key";
 const DROID_DEVICE_PAIRING_AUTH_METHOD_ID = "device-pairing";
 const DROID_API_KEY_ENV_KEYS = ["FACTORY_API_KEY"] as const;
+// Keep ACP startup browserless so session start never re-opens the OAuth login page (#1341).
+const DROID_ACP_BROWSERLESS_ENV = {
+  NO_BROWSER: "true",
+  BROWSER: "www-browser",
+} as const satisfies Readonly<Record<string, string>>;
 
 export function getDroidApiKeyEnv(env: NodeJS.ProcessEnv = process.env): string | undefined {
   for (const key of DROID_API_KEY_ENV_KEYS) {
@@ -131,7 +136,11 @@ export function buildDroidAcpSpawnInput(
     command: resolveDroidCliBinaryPath(droidSettings?.binaryPath),
     args,
     cwd,
-    env: buildProviderChildEnvironment({ provider: "droid" }),
+    // Keep ACP startup browserless without forcing CI/noninteractive flags onto user turns.
+    env: buildProviderChildEnvironment({
+      provider: "droid",
+      overrides: DROID_ACP_BROWSERLESS_ENV,
+    }),
   };
 }
 
@@ -168,6 +177,8 @@ export const makeDroidAcpRuntime = (
       AcpSessionRuntime.layer({
         ...input,
         spawn: buildDroidAcpSpawnInput(input.droidSettings, input.cwd),
+        // Authenticate on demand so session start never re-opens the OAuth login page (#1341).
+        authPolicy: "on-demand",
         resolveAuthMethodId: resolveDroidAcpAuthMethodId,
         authenticateMeta: { headless: true },
       }).pipe(
