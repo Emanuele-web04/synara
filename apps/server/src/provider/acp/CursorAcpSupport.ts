@@ -99,7 +99,8 @@ export function buildCursorAcpSpawnInput(
     command: command.command,
     args: command.args,
     cwd,
-    // Keep ACP startup browserless without forcing CI/noninteractive flags onto user turns.
+    // cursor-agent only honors NO_OPEN_BROWSER (not NO_BROWSER/BROWSER); the on-demand
+    // authPolicy below is what stops the login page re-opening on every session start.
     env: buildProviderChildEnvironment({
       provider: "cursor",
       overrides: CURSOR_AGENT_BROWSERLESS_ENV,
@@ -129,6 +130,9 @@ export const makeCursorAcpRuntime = (
       AcpSessionRuntime.layer({
         ...input,
         spawn: buildCursorAcpSpawnInput(input.cursorSettings, input.cwd),
+        // Authenticate on demand only: always-auth makes cursor-agent re-open the
+        // OAuth login page on every session start (#1341); same pattern as Devin.
+        authPolicy: "on-demand",
         authMethodId: "cursor_login",
         authenticateMeta: { headless: true },
         clientCapabilities: CURSOR_PARAMETERIZED_MODEL_PICKER_CAPABILITIES,

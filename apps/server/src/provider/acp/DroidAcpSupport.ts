@@ -168,6 +168,8 @@ export const makeDroidAcpRuntime = (
       AcpSessionRuntime.layer({
         ...input,
         spawn: buildDroidAcpSpawnInput(input.droidSettings, input.cwd),
+        // Authenticate on demand so session start never re-opens the OAuth login page (#1341).
+        authPolicy: "on-demand",
         resolveAuthMethodId: resolveDroidAcpAuthMethodId,
         authenticateMeta: { headless: true },
       }).pipe(

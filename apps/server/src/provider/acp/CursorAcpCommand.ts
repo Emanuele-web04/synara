@@ -21,8 +21,7 @@ export const DEFAULT_CURSOR_AGENT_BINARY = "cursor-agent";
 export const LEGACY_CURSOR_AGENT_BINARY = "agent";
 export const CURSOR_EDITOR_BINARY = "cursor";
 export const CURSOR_AGENT_BROWSERLESS_ENV = {
-  NO_BROWSER: "true",
-  BROWSER: "www-browser",
+  NO_OPEN_BROWSER: "1",
 } as const satisfies Readonly<Record<string, string>>;
 export const CURSOR_AGENT_HEADLESS_PROBE_ENV = {
   ...CURSOR_AGENT_BROWSERLESS_ENV,
@@ -277,7 +276,8 @@ export function buildCursorAgentCommand(
   return wrapPowerShellCommand(resolvedCommand.command, resolvedCommand.args);
 }
 
-// Cursor auth/status probes must stay headless so provider refreshes never open login browsers.
+// Cursor auth/status probes should not open login browsers; NO_OPEN_BROWSER is the
+// flag cursor-agent honors (open-browser.ts), CI/noninteractive are belt and braces.
 export function buildCursorAgentHeadlessEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {

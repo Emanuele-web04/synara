@@ -2410,8 +2410,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         Effect.provide(
           mockSpawnerLayer((args, command, env) => {
             assert.strictEqual(command, "cursor-agent");
-            assert.strictEqual(env?.NO_BROWSER, "true");
-            assert.strictEqual(env?.BROWSER, "www-browser");
+            assert.strictEqual(env?.NO_OPEN_BROWSER, "1");
             assert.strictEqual(env?.CI, "true");
             assert.strictEqual(env?.DEBIAN_FRONTEND, "noninteractive");
             const joined = args.join(" ");
