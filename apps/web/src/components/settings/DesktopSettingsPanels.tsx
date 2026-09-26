@@ -639,7 +639,7 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
         <div className="min-w-0 flex-1 space-y-1">
           <p className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>You're on Synara Beta</p>
           <p className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>
-            New features land here first. To help us fix things quickly, Beta sends crash reports,
+            New features land here first. To help us fix things quickly, Beta shares crash reports,
             app errors, and anonymous usage counts.
           </p>
           <button
