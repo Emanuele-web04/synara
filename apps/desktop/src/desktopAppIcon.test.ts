@@ -1,11 +1,32 @@
-import { describe, expect, it } from "vitest";
+import * as FS from "node:fs";
+import * as OS from "node:os";
+import * as Path from "node:path";
+
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   desktopAppIconResourceName,
   isDesktopAppIcon,
+  normalizeStoredDesktopAppIcon,
+  readDesktopAppIconPreference,
   shouldUpdateDesktopAppIcon,
   usesMacBundleAppIcon,
+  writeDesktopAppIconPreference,
 } from "./desktopAppIcon";
+
+const temporaryDirectories: string[] = [];
+
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) {
+    FS.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+function temporaryIconPath(): string {
+  const directory = FS.mkdtempSync(Path.join(OS.tmpdir(), "synara-app-icon-"));
+  temporaryDirectories.push(directory);
+  return Path.join(directory, "desktop-app-icon");
+}
 
 describe("desktop app icons", () => {
   it("accepts only supported preferences", () => {
@@ -87,5 +108,59 @@ describe("desktop app icons", () => {
     expect(shouldUpdateDesktopAppIcon("dark", "dark")).toBe(false);
     expect(shouldUpdateDesktopAppIcon("default", "dark")).toBe(true);
     expect(shouldUpdateDesktopAppIcon("dark", "icon")).toBe(true);
+  });
+});
+
+describe("desktop app icon preference reset", () => {
+  it("resets unrecognized persisted values to default and writes the reset back", () => {
+    const filePath = temporaryIconPath();
+    FS.writeFileSync(filePath, "beta", "utf8");
+
+    expect(normalizeStoredDesktopAppIcon("beta")).toEqual({ icon: "default", needsReset: true });
+    expect(readDesktopAppIconPreference(filePath)).toBe("default");
+    expect(FS.readFileSync(filePath, "utf8")).toBe("default");
+  });
+
+  it("reads a missing preference as default without creating the file", () => {
+    const filePath = temporaryIconPath();
+
+    expect(readDesktopAppIconPreference(filePath)).toBe("default");
+    expect(FS.existsSync(filePath)).toBe(false);
+  });
+
+  it("treats a blank persisted value as missing without writing", () => {
+    const filePath = temporaryIconPath();
+    FS.writeFileSync(filePath, "   \n", "utf8");
+
+    expect(normalizeStoredDesktopAppIcon("   \n")).toEqual({ icon: "default", needsReset: false });
+    expect(readDesktopAppIconPreference(filePath)).toBe("default");
+    expect(FS.readFileSync(filePath, "utf8")).toBe("   \n");
+  });
+
+  it("keeps valid persisted values untouched", () => {
+    for (const icon of ["default", "icon", "dark"] as const) {
+      const filePath = temporaryIconPath();
+      writeDesktopAppIconPreference(filePath, icon);
+
+      expect(normalizeStoredDesktopAppIcon(` ${icon}\n`)).toEqual({ icon, needsReset: false });
+      expect(readDesktopAppIconPreference(filePath)).toBe(icon);
+      expect(FS.readFileSync(filePath, "utf8")).toBe(icon);
+    }
+  });
+
+  it("reports no reset error for valid or missing values", () => {
+    const missingPath = temporaryIconPath();
+    let reported: unknown;
+    const onResetError = (error: unknown): void => {
+      reported = error;
+    };
+
+    expect(readDesktopAppIconPreference(missingPath, onResetError)).toBe("default");
+    expect(reported).toBeUndefined();
+
+    const validPath = temporaryIconPath();
+    writeDesktopAppIconPreference(validPath, "dark");
+    expect(readDesktopAppIconPreference(validPath, onResetError)).toBe("dark");
+    expect(reported).toBeUndefined();
   });
 });
