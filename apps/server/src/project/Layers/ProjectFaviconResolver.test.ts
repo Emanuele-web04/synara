@@ -55,6 +55,26 @@ it.layer(TestLayer)("ProjectFaviconResolverLive", (it) => {
       }),
     );
 
+    it.effect("finds favicons in a workspace web app", () =>
+      Effect.gen(function* () {
+        const resolver = yield* ProjectFaviconResolver;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "apps/web/public/favicon.png", "icon");
+
+        expect(yield* resolver.resolvePath(cwd)).toContain("apps/web/public/favicon.png");
+      }),
+    );
+
+    it.effect("finds favicons in a named dashboard app", () =>
+      Effect.gen(function* () {
+        const resolver = yield* ProjectFaviconResolver;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "vatrium-dashboard/public/favicon.png", "icon");
+
+        expect(yield* resolver.resolvePath(cwd)).toContain("vatrium-dashboard/public/favicon.png");
+      }),
+    );
+
     it.effect("resolves icon hrefs below dot-prefixed child directories", () =>
       Effect.gen(function* () {
         const resolver = yield* ProjectFaviconResolver;
