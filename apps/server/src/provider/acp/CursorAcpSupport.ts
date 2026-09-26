@@ -99,8 +99,7 @@ export function buildCursorAcpSpawnInput(
     command: command.command,
     args: command.args,
     cwd,
-    // cursor-agent only honors NO_OPEN_BROWSER (not NO_BROWSER/BROWSER); the on-demand
-    // authPolicy below is what stops the login page re-opening on every session start.
+    // Keep ACP startup browserless without forcing CI/noninteractive flags onto user turns.
     env: buildProviderChildEnvironment({
       provider: "cursor",
       overrides: CURSOR_AGENT_BROWSERLESS_ENV,
