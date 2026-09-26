@@ -47,6 +47,8 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+      # Reading the source commit's check runs decides whether gates are reused.
+      checks: read
     outputs:
       version: ${{ steps.release_meta.outputs.version }}
       tag: ${{ steps.release_meta.outputs.tag }}
@@ -72,6 +74,7 @@ jobs:
       quality_gates: ${{ steps.scope.outputs.quality_gates }}
       package_artifacts: ${{ steps.scope.outputs.package_artifacts }}
       build_server: ${{ steps.scope.outputs.build_server }}
+      verified_commit: ${{ steps.existing_checks.outputs.green }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -126,6 +129,40 @@ jobs:
             "$EXPECTED_COMMIT" \
             "$SOURCE_REF_TYPE" \
             "$SOURCE_REF_NAME"
+
+      # A commit whose required aggregate check already passed on main does not
+      # need the quality lanes re-run inside the release. The check name matches
+      # the required check in ci.yml exactly. Tag-only version bumps (cadence-cut
+      # betas) never run CI, so the verified content lives on the bump's parent.
+      - id: existing_checks
+        name: Detect already-verified gates
+        if: steps.release_mode.outputs.publish_release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_COMMIT: ${{ steps.source_provenance.outputs.source_commit }}
+        run: |
+          verified_on() {
+            gh api "repos/${GITHUB_REPOSITORY}/commits/$1/check-runs?per_page=100" \
+              --jq '[.check_runs[] | select(.name == "Format, Lint, Typecheck, Test, Browser Test, Build")] | map(.conclusion) | index("success") != null' \
+              2>/dev/null || echo false
+          }
+          green=false
+          checked="$SOURCE_COMMIT"
+          if [[ "$(verified_on "$SOURCE_COMMIT")" == "true" ]]; then
+            green=true
+          else
+            parent="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${SOURCE_COMMIT}" --jq '.parents[0].sha // ""' 2>/dev/null || true)"
+            if [[ -n "$parent" && "$(verified_on "$parent")" == "true" ]]; then
+              checked="$parent"
+              green=true
+            fi
+          fi
+          if [[ "$green" == "true" ]]; then
+            echo "Required check already passed on $checked; quality gates are reused."
+          else
+            echo "No green required check found; quality gates run normally."
+          fi
+          echo "green=$green" >> "$GITHUB_OUTPUT"
 
       - name: Verify public updater repository
         if: steps.release_mode.outputs.publish_release == 'true'
@@ -187,36 +224,34 @@ jobs:
         with:
           ref: ${{ needs.preflight.outputs.ref }}
 
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version-file: package.json
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-
       # Five workspace packages patch the one shared TypeScript install in their
       # prepare scripts; concurrent patching of that file is a race, so lifecycle
       # scripts run one at a time here.
-      - name: Install dependencies
-        run: bun install --frozen-lockfile --concurrent-scripts=1
+      - name: Setup workspace
+        if: needs.preflight.outputs.verified_commit != 'true'
+        uses: ./.github/actions/setup-workspace
+        with:
+          install-args: "--concurrent-scripts=1"
 
       - name: Verify Synara identity
+        if: needs.preflight.outputs.verified_commit != 'true'
         run: bun run brand:check
 
       - name: Lint
-        if: needs.preflight.outputs.quality_gates == 'true'
+        if: needs.preflight.outputs.quality_gates == 'true' && needs.preflight.outputs.verified_commit != 'true'
         run: bun run lint
 
       - name: Typecheck
-        if: needs.preflight.outputs.quality_gates == 'true'
+        if: needs.preflight.outputs.quality_gates == 'true' && needs.preflight.outputs.verified_commit != 'true'
         run: bun run typecheck
 
       - name: Test every package except the server
-        if: needs.preflight.outputs.quality_gates == 'true'
+        if: needs.preflight.outputs.quality_gates == 'true' && needs.preflight.outputs.verified_commit != 'true'
         run: bunx turbo run test --filter='!@synara/cli'
+
+      - name: Gates already verified
+        if: needs.preflight.outputs.verified_commit == 'true'
+        run: echo "The source commit already passed the required CI check; quality gates are reused."
 
   # The server package runs its files serially (see apps/server/package.json).
   # Vitest's native shards keep every file and assertion; only the distribution
@@ -241,21 +276,20 @@ jobs:
         with:
           ref: ${{ needs.preflight.outputs.ref }}
 
-      - name: Setup Node
-        uses: actions/setup-node@v6
+      # Same serialized lifecycle scripts as the quality lane.
+      - name: Setup workspace
+        if: needs.preflight.outputs.verified_commit != 'true'
+        uses: ./.github/actions/setup-workspace
         with:
-          node-version-file: package.json
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile --concurrent-scripts=1
+          install-args: "--concurrent-scripts=1"
 
       - name: Test server shard ${{ matrix.shard }}
+        if: needs.preflight.outputs.verified_commit != 'true'
         run: bunx turbo run test --filter=@synara/cli -- --shard=${{ matrix.shard }}
+
+      - name: Gates already verified
+        if: needs.preflight.outputs.verified_commit == 'true'
+        run: echo "The source commit already passed the required CI check; server test shards are reused."
 
   build_portable:
     name: Build portable JavaScript
@@ -277,6 +311,15 @@ jobs:
           node-version-file: package.json
       - name: Report runner capacity
         run: node scripts/report-build-runner.ts
+      # Filtered lanes never restore a full modules tree (see setup-workspace);
+      # the shared Bun package archive still turns the install into hardlinks.
+      - name: Restore Bun package cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-${{ runner.arch }}-bun-v2-${{ hashFiles('bun.lock', 'package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-bun-v2-
       - name: Install frozen dependencies
         run: bun install --frozen-lockfile --ignore-scripts --filter '!@synara/marketing'
       - name: Build portable outputs
@@ -292,7 +335,7 @@ jobs:
         with:
           name: portable-build
           path: ${{ runner.temp }}/portable-build/*
-          compression-level: 1
+          compression-level: 0
           if-no-files-found: error
 
   build_mac_icon:
@@ -367,6 +410,7 @@ jobs:
           name: prepared-cua-${{ matrix.platform }}-${{ matrix.arch }}
           path: ${{ runner.temp }}/cua-artifact
           retention-days: 1
+          compression-level: 0
           if-no-files-found: error
       - name: Upload Cua benchmark evidence
         if: ${{ always() && needs.preflight.outputs.benchmark_native == 'true' }}
@@ -403,6 +447,17 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version-file: package.json
+
+      # Filtered lanes never restore a full modules tree (see setup-workspace);
+      # the shared Bun package archive still turns the install into hardlinks.
+      - name: Restore Bun package cache
+        if: runner.os != 'Windows'
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-${{ runner.arch }}-bun-v2-${{ hashFiles('bun.lock', 'package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-bun-v2-
 
       - name: Install dependencies
         if: needs.preflight.outputs.package_artifacts == 'true'
@@ -619,6 +674,7 @@ jobs:
         with:
           name: desktop-${{ matrix.platform }}-${{ matrix.arch }}
           path: release-publish/*
+          compression-level: 0
           if-no-files-found: error
 
   publish_cli:
@@ -648,6 +704,30 @@ jobs:
           node-version-file: package.json
           registry-url: https://registry.npmjs.org
 
+      - id: modules
+        name: Restore node_modules
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            node_modules
+            apps/*/node_modules
+            packages/*/node_modules
+            scripts/node_modules
+          key: ${{ runner.os }}-${{ runner.arch }}-bun-modules-v2-electron-false-${{ hashFiles('bun.lock', 'package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-bun-modules-v2-electron-false-
+
+      # A modules hit already contains the dependency payload, so the package
+      # archive is only needed on a miss (same rule as setup-workspace).
+      - name: Restore Bun package cache
+        if: steps.modules.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-${{ runner.arch }}-bun-v2-${{ hashFiles('bun.lock', 'package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-bun-v2-
+
       - name: Install dependencies
         # Preflight already validates lifecycle scripts; the publish job only
         # needs dependencies available to build the package.
@@ -675,20 +755,12 @@ jobs:
         with:
           ref: ${{ needs.preflight.outputs.ref }}
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      # Preflight already validates lifecycle scripts; this job only needs
+      # dependencies available to build the package.
+      - name: Setup workspace
+        uses: ./.github/actions/setup-workspace
         with:
-          bun-version-file: package.json
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version-file: package.json
-
-      - name: Install dependencies
-        # Preflight already validates lifecycle scripts; this job only needs
-        # dependencies available to build the package.
-        run: bun install --frozen-lockfile --ignore-scripts
+          install-args: "--ignore-scripts"
 
       - name: Restore portable outputs
         uses: ./.github/actions/restore-portable-build
@@ -703,6 +775,7 @@ jobs:
         with:
           name: server-tarball
           path: release-server/*.tar.gz
+          compression-level: 0
           if-no-files-found: error
 
   release:
@@ -978,7 +1051,8 @@ jobs:
   cut_next_beta:
     name: Cut next beta
     # Stable releases only: tag the next beta off the stable commit so beta installs are never shadowed. Never pushes to main.
-    if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_AUTO_BETA == '1' && needs.preflight.outputs.is_prerelease == 'false' }}
+    # On by default; set the SYNARA_AUTO_BETA repository variable to 0 to pause.
+    if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_AUTO_BETA != '0' && needs.preflight.outputs.is_prerelease == 'false' }}
     needs: [preflight, release]
     runs-on: ubuntu-24.04
     timeout-minutes: 10

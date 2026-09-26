@@ -46,7 +46,12 @@ Release smoke shares the static runner, removing one checkout/install/runner and
 one duplicate identity scan. The platform-independent Windows boundary scanner
 runs there once; native Windows validation is not removed. Release quality lanes
 still install the full workspace and run the audited test suite while unsigned
-preparation proceeds in parallel. Packaging waits for every quality gate. Signing, notarization,
+preparation proceeds in parallel, unless the release commit (or its parent, for
+tag-only version bumps) already passed the required aggregate check — the lanes
+then skip the suite and still report success, so packaging keeps waiting on the
+same gates. Release installs restore the same caches read-only: full lanes reuse
+the modules and Bun archives, filtered lanes only the Bun package archive.
+Signing, notarization,
 source provenance, publication and production dependency staging are unchanged.
 
 ## Cross-platform setup measurements: September 14, 2026

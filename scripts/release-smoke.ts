@@ -494,8 +494,8 @@ function verifyReleaseWorkflowSafety(): void {
   const nextBetaJob = workflow.slice(workflow.indexOf("  cut_next_beta:\n"));
   assertContains(
     workflow,
-    "if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_AUTO_BETA == '1' && needs.preflight.outputs.is_prerelease == 'false' }}",
-    "Expected the next-beta cut to require an opted-in stable publication.",
+    "if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.SYNARA_AUTO_BETA != '0' && needs.preflight.outputs.is_prerelease == 'false' }}",
+    "Expected the next-beta cut to run on stable publications unless SYNARA_AUTO_BETA=0 opts out.",
   );
   assertContains(
     nextBetaJob,
