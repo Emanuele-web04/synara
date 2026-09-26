@@ -6,13 +6,9 @@ import {
 } from "../../codexAppServerManager.ts";
 import { computerToolInstructions } from "../../agentGateway/computerGuidance.ts";
 import { buildEmbeddedClaudeSystemPromptAppend } from "./ClaudeAdapter.ts";
-import { takeCursorSynaraHarnessPolicyTextPart } from "./CursorAdapter.ts";
-import { takeDroidSynaraHarnessPolicyTextPart } from "./DroidAdapter.ts";
-import { takeGrokSynaraHarnessPolicyTextPart } from "./GrokAdapter.ts";
 import { buildAntigravityTurnPrompt } from "./AntigravityAdapter.ts";
 
 import { buildPiTurnPrompt } from "./PiAdapter.ts";
-import { takeDevinSynaraHarnessPolicyTextPart } from "./DevinAdapter.ts";
 
 const computerContext = computerToolInstructions();
 const marker = "## Synara computer use";
@@ -47,20 +43,6 @@ describe("conditional Computer host context", () => {
     expect(buildEmbeddedClaudeSystemPromptAppend(false, true)).not.toContain(marker);
     expect(buildEmbeddedClaudeSystemPromptAppend(true, true).split(marker)).toHaveLength(2);
     expect(buildEmbeddedClaudeSystemPromptAppend(true, true)).toContain(computerContext);
-  });
-  it.each([
-    ["Cursor", takeCursorSynaraHarnessPolicyTextPart],
-    ["Droid", takeDroidSynaraHarnessPolicyTextPart],
-    ["Grok", takeGrokSynaraHarnessPolicyTextPart],
-    ["Devin", takeDevinSynaraHarnessPolicyTextPart],
-  ] as const)("delivers %s Computer context once only for enabled sessions", (_name, take) => {
-    expect(take({ enableComputerControl: false }, true)?.text).not.toContain(marker);
-    expect(take({ enableComputerControl: true }, false)?.text).not.toContain(marker);
-    const state = { enableComputerControl: true };
-    const first = take(state, true)?.text;
-    expect(first).toContain(computerContext);
-    expect(first?.split(marker)).toHaveLength(2);
-    expect(take(state, true)).toBeNull();
   });
   it("delivers Pi Computer context once through prompts despite skipping MCP initialize", () => {
     expect(

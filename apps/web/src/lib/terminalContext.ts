@@ -168,9 +168,7 @@ function buildTerminalContextBodyLines(selection: TerminalContextSelection): str
     .map((line, index) => `  ${selection.lineStart + index} | ${line}`);
 }
 
-export function buildTerminalContextBlock(
-  contexts: ReadonlyArray<TerminalContextSelection>,
-): string {
+function buildTerminalContextBlock(contexts: ReadonlyArray<TerminalContextSelection>): string {
   const normalizedContexts = contexts
     .map((context) => normalizeTerminalContextSelection(context))
     .filter((context): context is TerminalContextSelection => context !== null);
@@ -189,7 +187,7 @@ export function buildTerminalContextBlock(
   return ["<terminal_context>", ...lines, "</terminal_context>"].join("\n");
 }
 
-export function materializeInlineTerminalContextPrompt(
+function materializeInlineTerminalContextPrompt(
   prompt: string,
   contexts: ReadonlyArray<{
     terminalLabel: string;

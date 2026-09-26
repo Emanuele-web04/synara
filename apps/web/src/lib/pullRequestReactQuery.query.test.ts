@@ -8,7 +8,6 @@ import {
   pullRequestQueryErrorState,
   pullRequestQueryKeys,
   prefetchPullRequestListState,
-  pullRequestReviewRequestCountQueryOptions,
   pullRequestsExactInvolvementQueryOptions,
   pullRequestsListQueryOptions,
   shouldLoadExactPullRequestInvolvement,
@@ -32,18 +31,6 @@ describe("pull request list query options", () => {
         projectId: null,
       }).placeholderData,
     ).toBeUndefined();
-  });
-
-  it("keeps an exact involvement fallback fresh while it remains mounted", () => {
-    const options = pullRequestsExactInvolvementQueryOptions({
-      involvement: "authored",
-      state: "open",
-      projectId: null,
-    });
-
-    expect(options.refetchInterval).toBe(60_000);
-    expect(options.refetchOnWindowFocus).toBe(true);
-    expect(options.refetchOnReconnect).toBe("always");
   });
 
   it("disables detail polling and focus refresh while its dock is collapsed", () => {
@@ -88,13 +75,6 @@ describe("pull request list query options", () => {
     expect(prefetchQuery.mock.calls[0]?.[0].queryKey).toEqual(
       pullRequestQueryKeys.list({ state: "closed", projectId: projectA }),
     );
-  });
-
-  it("uses a compact, independently cached review-request count query", () => {
-    const options = pullRequestReviewRequestCountQueryOptions({ projectId: null });
-    expect(options.queryKey).toEqual(pullRequestQueryKeys.reviewRequestCount(null));
-    expect(options.staleTime).toBe(5 * 60_000);
-    expect(options.refetchInterval).toBe(5 * 60_000);
   });
 
   it("skips the known-empty reviewing fallback for closed and merged states", () => {

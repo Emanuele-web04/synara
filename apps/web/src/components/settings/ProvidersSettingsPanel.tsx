@@ -8,7 +8,7 @@ import {
   type ServerProviderStatus,
   type ServerSettings,
 } from "@synara/contracts";
-import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
+import { isBetaFeatureOn, VISIBLE_PROVIDER_DESCRIPTORS } from "../../betaFeatures";
 import { pluralize } from "@synara/shared/text";
 import {
   closestCenter,
@@ -85,7 +85,9 @@ type ProviderInstallTextKey =
   | "openCodeBinaryPath"
   | "openCodeServerUrl"
   | "piBinaryPath"
-  | "piAgentDir";
+  | "piAgentDir"
+  | "ompBinaryPath"
+  | "ompAgentDir";
 type ProviderInstallPasswordKey = "openCodeServerPassword";
 type ProviderInstallPasswordConfiguredKey = "openCodeServerPasswordConfigured";
 type ProviderInstallBooleanKey = "claudeEnableArtifacts" | "openCodeExperimentalWebSockets";
@@ -121,7 +123,7 @@ type ProviderInstallSettings = {
   readonly fields: readonly ProviderInstallField[];
 };
 
-const PROVIDER_VISIBILITY_OPTIONS = PROVIDER_DESCRIPTORS.map((descriptor) => ({
+const PROVIDER_VISIBILITY_OPTIONS = VISIBLE_PROVIDER_DESCRIPTORS.map((descriptor) => ({
   provider: descriptor.kind,
   title: descriptor.displayName,
   setupDocsHref: descriptor.setupDocsHref,
@@ -375,7 +377,42 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
       },
     ],
   },
+  {
+    provider: "omp",
+    docs: [
+      { label: "Docs", href: "https://omp.sh/docs" },
+      { label: "Install", href: "https://omp.sh/docs/quickstart" },
+      { label: "Source", href: "https://github.com/can1357/oh-my-pi" },
+    ],
+    fields: [
+      {
+        kind: "text",
+        settingsKey: "ompBinaryPath",
+        label: "Oh My Pi binary path",
+        placeholder: "Oh My Pi binary path",
+        description: (
+          <>
+            Leave blank to use <code>omp</code> from your PATH.
+          </>
+        ),
+      },
+      {
+        kind: "text",
+        settingsKey: "ompAgentDir",
+        label: "Oh My Pi agent directory",
+        placeholder: "Oh My Pi agent directory",
+        description:
+          "Optional custom Oh My Pi agent directory for auth, models, skills, and commands.",
+      },
+    ],
+  },
 ];
+
+// Beta-only providers (OMP on Stable) keep their stored install fields but
+// their install row is hidden.
+const VISIBLE_PROVIDER_INSTALL_SETTINGS = PROVIDER_INSTALL_SETTINGS.filter((config) =>
+  isBetaFeatureOn(config.provider),
+);
 
 function isProviderInstallFieldDirty(
   field: ProviderInstallField,
@@ -1266,7 +1303,7 @@ export function ProvidersSettingsPanel({
           >
             <div className="mt-4">
               <div className={SETTINGS_INSET_LIST_CLASS_NAME}>
-                {PROVIDER_INSTALL_SETTINGS.map((config) => (
+                {VISIBLE_PROVIDER_INSTALL_SETTINGS.map((config) => (
                   <ProviderToolRow
                     key={config.provider}
                     config={config}

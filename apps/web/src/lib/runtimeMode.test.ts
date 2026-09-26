@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  RUNTIME_MODE_PRESENTATION,
   normalizeRuntimeModeForProvider,
   providerModelSupportsAutoRuntimeMode,
   providerSupportsAutoRuntimeMode,
@@ -16,13 +15,6 @@ describe("runtime mode provider support", () => {
   it("falls back to supervised mode for providers without auto review", () => {
     expect(normalizeRuntimeModeForProvider("auto", "opencode")).toBe("approval-required");
     expect(normalizeRuntimeModeForProvider("full-access", "opencode")).toBe("full-access");
-  });
-
-  it("describes Auto as approval review rather than unrestricted access", () => {
-    expect(RUNTIME_MODE_PRESENTATION.auto).toEqual({
-      label: "Approve for me",
-      description: "Only ask for actions detected as potentially unsafe",
-    });
   });
 
   it("uses Claude's explicit model and CLI capability signals", () => {

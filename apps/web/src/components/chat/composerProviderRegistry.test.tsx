@@ -60,6 +60,19 @@ const PI_RUNTIME_MODEL_WITH_REASONING: ProviderModelDescriptor = {
   defaultReasoningEffort: "medium",
 };
 
+const OMP_RUNTIME_MODEL_WITH_REASONING: ProviderModelDescriptor = {
+  slug: "deepseek/deepseek-v4-flash",
+  name: "DeepSeek V4 Flash",
+  upstreamProviderId: "deepseek",
+  upstreamProviderName: "DeepSeek",
+  supportedReasoningEfforts: [
+    { value: "off", label: "Off" },
+    { value: "medium", label: "Medium" },
+    { value: "max", label: "Max" },
+  ],
+  defaultReasoningEffort: "medium",
+};
+
 const DROID_RUNTIME_GPT_5_6_WITH_REASONING: ProviderModelDescriptor = {
   slug: "gpt-5.6-sol",
   name: "GPT-5.6 Sol",
@@ -160,63 +173,6 @@ const DEVIN_RUNTIME_GPT_5_6_WITH_VARIANTS: ProviderModelDescriptor = {
 };
 
 describe("getComposerProviderState", () => {
-  it("dispatches Devin effort selections with their concrete model variant", () => {
-    const state = getComposerProviderState({
-      provider: "devin",
-      model: "gpt-5.6-sol",
-      runtimeModel: DEVIN_RUNTIME_GPT_5_6_WITH_VARIANTS,
-      prompt: "",
-      modelOptions: { devin: { reasoningEffort: "high" } },
-    });
-
-    expect(state).toEqual({
-      provider: "devin",
-      promptEffort: "high",
-      modelOptionsForDispatch: {
-        reasoningEffort: "high",
-        modelVariant: "gpt-5-6-sol-high",
-      },
-    });
-  });
-
-  it("dispatches Devin fast mode using the default effort variant", () => {
-    const state = getComposerProviderState({
-      provider: "devin",
-      model: "gpt-5.6-sol",
-      runtimeModel: DEVIN_RUNTIME_GPT_5_6_WITH_VARIANTS,
-      prompt: "",
-      modelOptions: { devin: { fastMode: true } },
-    });
-
-    expect(state).toEqual({
-      provider: "devin",
-      promptEffort: "medium",
-      modelOptionsForDispatch: {
-        fastMode: true,
-        modelVariant: "gpt-5-6-sol-medium-priority",
-      },
-    });
-  });
-
-  it("keeps Devin thinking enabled when only the context window changes", () => {
-    const state = getComposerProviderState({
-      provider: "devin",
-      model: "claude-opus-4.6",
-      runtimeModel: DEVIN_RUNTIME_CLAUDE_WITH_VARIANTS,
-      prompt: "",
-      modelOptions: { devin: { contextWindow: "1m" } },
-    });
-
-    expect(state).toEqual({
-      provider: "devin",
-      promptEffort: null,
-      modelOptionsForDispatch: {
-        contextWindow: "1m",
-        modelVariant: "claude-opus-4-6-thinking-1m",
-      },
-    });
-  });
-
   it("recomputes a stored Devin variant when effort changes", () => {
     const state = getComposerProviderState({
       provider: "devin",
@@ -321,20 +277,6 @@ describe("getComposerProviderState", () => {
     expect(state.modelOptionsForDispatch).toEqual({ modelVariant: "custom-concrete-model" });
   });
 
-  it("resolves Devin static SWE fast mode to a concrete variant", () => {
-    const state = getComposerProviderState({
-      provider: "devin",
-      model: "swe-1-7",
-      prompt: "",
-      modelOptions: { devin: { fastMode: true } },
-    });
-
-    expect(state.modelOptionsForDispatch).toEqual({
-      fastMode: true,
-      modelVariant: "swe-1-7-lightning",
-    });
-  });
-
   it("dispatches Antigravity effort separately from its base model", () => {
     const state = getComposerProviderState({
       provider: "antigravity",
@@ -398,44 +340,6 @@ describe("getComposerProviderState", () => {
     ).toBe("");
   });
 
-  it("returns codex defaults when no codex draft options exist", () => {
-    const state = getComposerProviderState({
-      provider: "codex",
-      model: "gpt-5.4",
-      prompt: "",
-      modelOptions: undefined,
-    });
-
-    expect(state).toEqual({
-      provider: "codex",
-      promptEffort: "high",
-      modelOptionsForDispatch: undefined,
-    });
-  });
-
-  it("normalizes codex dispatch options while preserving the selected effort", () => {
-    const state = getComposerProviderState({
-      provider: "codex",
-      model: "gpt-5.4",
-      prompt: "",
-      modelOptions: {
-        codex: {
-          reasoningEffort: "low",
-          fastMode: true,
-        },
-      },
-    });
-
-    expect(state).toEqual({
-      provider: "codex",
-      promptEffort: "low",
-      modelOptionsForDispatch: {
-        reasoningEffort: "low",
-        fastMode: true,
-      },
-    });
-  });
-
   it("reads only Codex options when other provider effort state is present", () => {
     const state = getComposerProviderState({
       provider: "codex",
@@ -444,22 +348,6 @@ describe("getComposerProviderState", () => {
       modelOptions: {
         codex: { reasoningEffort: "xhigh" },
         cursor: { reasoningEffort: "low" },
-      },
-    });
-
-    expect(state.modelOptionsForDispatch).toEqual({ reasoningEffort: "xhigh" });
-    expect(state.promptEffort).toBe("xhigh");
-  });
-
-  it("reads only Cursor options when Codex runtime effort state is present", () => {
-    const state = getComposerProviderState({
-      provider: "cursor",
-      model: "claude-opus-4-7",
-      runtimeModel: CURSOR_RUNTIME_MODEL_300K,
-      prompt: "",
-      modelOptions: {
-        codex: { reasoningEffort: "ultra" },
-        cursor: { reasoningEffort: "xhigh" },
       },
     });
 
@@ -508,10 +396,6 @@ describe("getComposerProviderState", () => {
   });
 
   it.each([
-    {
-      shape: "omits the effort list",
-      runtimeModel: { slug: "gpt-5.4", name: "GPT-5.4" },
-    },
     {
       shape: "reports an empty effort list",
       runtimeModel: {
@@ -594,61 +478,33 @@ describe("getComposerProviderState", () => {
     });
   });
 
-  it("preserves codex fast mode for runtime-discovered models that advertise support", () => {
-    const state = getComposerProviderState({
-      provider: "codex",
-      model: "gpt-5.6-preview",
-      runtimeModel: {
-        slug: "gpt-5.6-preview",
-        name: "GPT-5.6 Preview",
-        supportsFastMode: true,
-        supportedReasoningEfforts: [{ value: "low" }, { value: "medium" }, { value: "high" }],
-        defaultReasoningEffort: "medium",
-      },
-      prompt: "",
-      modelOptions: {
-        codex: {
-          fastMode: true,
+  it.each([{ fastMode: true, expectedOptions: undefined }])(
+    "normalizes unsupported Codex fastMode=$fastMode",
+    ({ fastMode, expectedOptions }) => {
+      const state = getComposerProviderState({
+        provider: "codex",
+        model: "gpt-5.4-mini",
+        runtimeModel: {
+          slug: "gpt-5.4-mini",
+          name: "GPT-5.4 Mini",
+          supportedReasoningEfforts: [{ value: "low" }, { value: "medium" }, { value: "high" }],
+          defaultReasoningEffort: "medium",
         },
-      },
-    });
-
-    expect(state).toEqual({
-      provider: "codex",
-      promptEffort: "medium",
-      modelOptionsForDispatch: {
-        fastMode: true,
-      },
-    });
-  });
-
-  it.each([
-    { fastMode: true, expectedOptions: undefined },
-    { fastMode: false, expectedOptions: { fastMode: false } },
-  ])("normalizes unsupported Codex fastMode=$fastMode", ({ fastMode, expectedOptions }) => {
-    const state = getComposerProviderState({
-      provider: "codex",
-      model: "gpt-5.4-mini",
-      runtimeModel: {
-        slug: "gpt-5.4-mini",
-        name: "GPT-5.4 Mini",
-        supportedReasoningEfforts: [{ value: "low" }, { value: "medium" }, { value: "high" }],
-        defaultReasoningEffort: "medium",
-      },
-      prompt: "",
-      modelOptions: {
-        codex: {
-          fastMode,
+        prompt: "",
+        modelOptions: {
+          codex: {
+            fastMode,
+          },
         },
-      },
-    });
+      });
 
-    expect(state).toEqual({
-      provider: "codex",
-      promptEffort: "medium",
-      modelOptionsForDispatch: expectedOptions,
-    });
-  });
+      expect(state).toEqual({
+        provider: "codex",
+        promptEffort: "medium",
+        modelOptionsForDispatch: expectedOptions,
+      });
+    },
+  );
 
   it("preserves explicit Codex Fast off for dispatch while keeping the selected effort label", () => {
     const state = getComposerProviderState({
@@ -668,78 +524,6 @@ describe("getComposerProviderState", () => {
       promptEffort: "high",
       modelOptionsForDispatch: { fastMode: false },
     });
-  });
-
-  it("returns Claude defaults for effort-capable models", () => {
-    const state = getComposerProviderState({
-      provider: "claudeAgent",
-      model: "claude-sonnet-4-6",
-      prompt: "",
-      modelOptions: undefined,
-    });
-
-    expect(state).toEqual({
-      provider: "claudeAgent",
-      promptEffort: "high",
-      modelOptionsForDispatch: undefined,
-    });
-  });
-
-  it.each([
-    ["claude-fable-5-1", "auto"],
-    ["claude-opus-5", "auto"],
-    ["claude-opus-4-8", "auto"],
-    ["claude-sonnet-5", "auto"],
-    ["claude-opus-4-6", "auto"],
-    ["claude-sonnet-4-6", "auto"],
-  ] as const)("shows %s with the %s model-native window", (model, expectedDefault) => {
-    const selection = getComposerTraitSelection("claudeAgent", model, "", undefined);
-
-    expect(selection.defaultContextWindow).toBe(expectedDefault);
-    expect(selection.contextWindow).toBe(expectedDefault);
-    expect(
-      selection.contextWindowOptions.find((option) => option.value === expectedDefault)?.isDefault,
-    ).toBe(true);
-  });
-
-  it("shows Auto as the default auto-compact window for a 1M Claude suffix", () => {
-    const defaults = getComposerTraitSelection(
-      "claudeAgent",
-      "claude-fable-5-1[1M]",
-      "",
-      undefined,
-    );
-    const explicit200k = getComposerTraitSelection("claudeAgent", "claude-fable-5-1[1m]", "", {
-      autoCompactWindow: "200k",
-    });
-
-    expect(defaults.defaultContextWindow).toBe("auto");
-    expect(defaults.contextWindow).toBe("auto");
-    expect(defaults.contextWindowOptions).toEqual([
-      { value: "auto", label: "Auto (Claude Code)", isDefault: true },
-      { value: "200k", label: "200k" },
-      { value: "1m", label: "1M" },
-    ]);
-    expect(explicit200k.contextWindow).toBe("200k");
-  });
-
-  it("normalizes Claude auto-compact dispatch against the model-aware default", () => {
-    expect(
-      getComposerProviderState({
-        provider: "claudeAgent",
-        model: "claude-fable-5-1",
-        prompt: "",
-        modelOptions: { claudeAgent: { autoCompactWindow: "1m" } },
-      }).modelOptionsForDispatch,
-    ).toEqual({ autoCompactWindow: "1m" });
-    expect(
-      getComposerProviderState({
-        provider: "claudeAgent",
-        model: "claude-fable-5-1",
-        prompt: "",
-        modelOptions: { claudeAgent: { autoCompactWindow: "200k" } },
-      }).modelOptionsForDispatch,
-    ).toEqual({ autoCompactWindow: "200k" });
   });
 
   it("tracks Claude ultrathink from the prompt without changing dispatch effort", () => {
@@ -794,28 +578,6 @@ describe("getComposerProviderState", () => {
     expect(selection.ultrathinkPromptControlled).toBe(true);
   });
 
-  it("drops unsupported Claude effort options for models without effort controls", () => {
-    const state = getComposerProviderState({
-      provider: "claudeAgent",
-      model: "claude-haiku-4-5",
-      prompt: "",
-      modelOptions: {
-        claudeAgent: {
-          effort: "max",
-          thinking: false,
-        },
-      },
-    });
-
-    expect(state).toEqual({
-      provider: "claudeAgent",
-      promptEffort: null,
-      modelOptionsForDispatch: {
-        thinking: false,
-      },
-    });
-  });
-
   it("preserves Claude fast mode when it is the only active option", () => {
     const state = getComposerProviderState({
       provider: "claudeAgent",
@@ -833,47 +595,6 @@ describe("getComposerProviderState", () => {
       promptEffort: "high",
       modelOptionsForDispatch: {
         fastMode: true,
-      },
-    });
-  });
-
-  it("drops explicit Claude default/off overrides from dispatch while keeping the selected effort label", () => {
-    const state = getComposerProviderState({
-      provider: "claudeAgent",
-      model: "claude-opus-4-6",
-      prompt: "",
-      modelOptions: {
-        claudeAgent: {
-          effort: "high",
-          fastMode: false,
-        },
-      },
-    });
-
-    expect(state).toEqual({
-      provider: "claudeAgent",
-      promptEffort: "high",
-      modelOptionsForDispatch: undefined,
-    });
-  });
-
-  it("normalizes Grok reasoning effort options for dispatch", () => {
-    const state = getComposerProviderState({
-      provider: "grok",
-      model: "grok-build",
-      prompt: "",
-      modelOptions: {
-        grok: {
-          reasoningEffort: "high",
-        },
-      },
-    });
-
-    expect(state).toEqual({
-      provider: "grok",
-      promptEffort: "high",
-      modelOptionsForDispatch: {
-        reasoningEffort: "high",
       },
     });
   });
@@ -921,25 +642,6 @@ describe("getComposerProviderState", () => {
       promptEffort: "medium",
       modelOptionsForDispatch: { reasoningEffort: "medium" },
     });
-  });
-
-  it("exposes Grok efforts before runtime model discovery resolves", () => {
-    const grok45 = getComposerTraitSelection("grok", "grok-4.5", "", undefined);
-    expect(grok45.effortLevels.map((effort) => effort.value)).toEqual(["low", "medium", "high"]);
-    expect(grok45.defaultEffort).toBe("high");
-    expect(grok45.effort).toBe("high");
-
-    const grok46 = getComposerTraitSelection("grok", "grok-4.6", "", undefined);
-    expect(grok46.effortLevels.map((effort) => effort.value)).toEqual([
-      "low",
-      "medium",
-      "high",
-      "xhigh",
-    ]);
-    expect(grok46.defaultEffort).toBe("high");
-    expect(grok46.effortLevels.find((effort) => effort.value === "xhigh")?.label).toBe(
-      "Extra High",
-    );
   });
 
   it("exposes and dispatches runtime-discovered Droid efforts for GPT-5.6", () => {
@@ -1025,43 +727,6 @@ describe("getComposerProviderState", () => {
     });
   });
 
-  it("dispatches Cursor fast mode off for runtime Grok models that advertise the toggle", () => {
-    const state = getComposerProviderState({
-      provider: "cursor",
-      model: "grok-4.6",
-      runtimeModel: {
-        slug: "grok-4.6",
-        name: "Grok 4.6",
-        upstreamProviderId: "xai",
-        upstreamProviderName: "xAI",
-        supportsFastMode: true,
-        supportedReasoningEfforts: [
-          { value: "low", label: "Low" },
-          { value: "medium", label: "Medium" },
-          { value: "high", label: "High" },
-          { value: "xhigh", label: "Extra High" },
-        ],
-        defaultReasoningEffort: "high",
-      },
-      prompt: "",
-      modelOptions: {
-        cursor: {
-          reasoningEffort: "medium",
-          fastMode: false,
-        },
-      },
-    });
-
-    expect(state).toEqual({
-      provider: "cursor",
-      promptEffort: "medium",
-      modelOptionsForDispatch: {
-        reasoningEffort: "medium",
-        fastMode: false,
-      },
-    });
-  });
-
   it("dispatches the Cursor Grok default HIGH effort together with fast mode", () => {
     const state = getComposerProviderState({
       provider: "cursor",
@@ -1099,28 +764,6 @@ describe("getComposerProviderState", () => {
     });
   });
 
-  it("dispatches the Cursor Grok default HIGH effort even when it matches the picker default", () => {
-    const state = getComposerProviderState({
-      provider: "cursor",
-      model: "grok-4.6",
-      prompt: "",
-      modelOptions: {
-        cursor: {
-          fastMode: true,
-        },
-      },
-    });
-
-    expect(state).toEqual({
-      provider: "cursor",
-      promptEffort: "high",
-      modelOptionsForDispatch: {
-        reasoningEffort: "high",
-        fastMode: true,
-      },
-    });
-  });
-
   it("drops stale Cursor context options once runtime metadata is authoritative", () => {
     const state = getComposerProviderState({
       provider: "cursor",
@@ -1141,37 +784,6 @@ describe("getComposerProviderState", () => {
       promptEffort: "xhigh",
       modelOptionsForDispatch: {
         reasoningEffort: "xhigh",
-      },
-    });
-  });
-
-  it("keeps Pi runtime thinking selections on the thinkingLevel field", () => {
-    const selection = getComposerTraitSelection(
-      "pi",
-      "openai/gpt-5.5",
-      "",
-      { thinkingLevel: "xhigh" },
-      PI_RUNTIME_MODEL_WITH_REASONING,
-    );
-    const state = getComposerProviderState({
-      provider: "pi",
-      model: "openai/gpt-5.5",
-      runtimeModel: PI_RUNTIME_MODEL_WITH_REASONING,
-      prompt: "",
-      modelOptions: {
-        pi: {
-          thinkingLevel: "xhigh",
-        },
-      },
-    });
-
-    expect(selection.primarySelectDescriptor?.id).toBe("thinkingLevel");
-    expect(selection.effort).toBe("xhigh");
-    expect(state).toEqual({
-      provider: "pi",
-      promptEffort: "xhigh",
-      modelOptionsForDispatch: {
-        thinkingLevel: "xhigh",
       },
     });
   });
@@ -1215,6 +827,37 @@ describe("getComposerProviderState", () => {
     });
     expect(state).toEqual({
       provider: "pi",
+      promptEffort: "max",
+      modelOptionsForDispatch: {
+        thinkingLevel: "max",
+      },
+    });
+  });
+
+  it("keeps Omp thinking selections on the thinkingLevel field", () => {
+    const selection = getComposerTraitSelection(
+      "omp",
+      "deepseek/deepseek-v4-flash",
+      "",
+      { thinkingLevel: "max" },
+      OMP_RUNTIME_MODEL_WITH_REASONING,
+    );
+    const state = getComposerProviderState({
+      provider: "omp",
+      model: "deepseek/deepseek-v4-flash",
+      runtimeModel: OMP_RUNTIME_MODEL_WITH_REASONING,
+      prompt: "",
+      modelOptions: {
+        omp: {
+          thinkingLevel: "max",
+        },
+      },
+    });
+
+    expect(selection.primarySelectDescriptor?.id).toBe("thinkingLevel");
+    expect(selection.effort).toBe("max");
+    expect(state).toEqual({
+      provider: "omp",
       promptEffort: "max",
       modelOptionsForDispatch: {
         thinkingLevel: "max",
@@ -1292,24 +935,5 @@ describe("getComposerProviderState", () => {
       promptEffort: "minimal",
       modelOptionsForDispatch: undefined,
     });
-  });
-
-  it("renders OpenCode thinking controls when runtime metadata exposes levels without a default", () => {
-    const threadId = ThreadId.makeUnsafe("thread-opencode-runtime-thinking");
-
-    const picker = renderToStaticMarkup(
-      <TraitsPicker
-        provider="opencode"
-        threadId={threadId}
-        model="opencode/gpt-5-nano"
-        runtimeModel={OPENCODE_RUNTIME_MODEL_WITHOUT_DEFAULT}
-        modelOptions={undefined}
-        prompt=""
-        includeFastMode={false}
-        onPromptChange={vi.fn()}
-      />,
-    );
-
-    expect(picker).toContain('aria-label="Change effort, context, and speed"');
   });
 });

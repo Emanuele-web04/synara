@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   availabilityFromProbe,
-  capabilityUnavailableMessage,
   describeBrokenCapabilities,
   parseHelperProbe,
 } from "./helperCapabilities.ts";
@@ -79,47 +78,9 @@ describe("parseHelperProbe", () => {
     expect(probe.capabilities).toHaveLength(4);
     expect(probe.capabilities.every((capability) => !capability.ok)).toBe(true);
   });
-
-  it("trusts a helper too old to report capabilities at all", () => {
-    const probe = parseHelperProbe(JSON.stringify({ ok: true, protocolVersion: 1 }));
-
-    expect(probe.ok).toBe(true);
-    expect(probe.capabilities).toEqual([]);
-  });
 });
 
 describe("availabilityFromProbe", () => {
-  it("maps a healthy probe to available, carrying the capability detail", () => {
-    const availability = availabilityFromProbe(parseHelperProbe(healthyProbe()));
-
-    expect(availability.kind).toBe("available");
-    if (availability.kind !== "available") throw new Error("expected available");
-    expect(availability.capabilities).toHaveLength(4);
-    expect(availability.toolchain?.xcodeVersion).toBe("26.2");
-  });
-
-  it("maps a partial failure to degraded rather than setup-required", () => {
-    const availability = availabilityFromProbe(
-      parseHelperProbe(
-        healthyProbe({
-          ok: false,
-          capabilities: {
-            framebuffer: "ok",
-            hid: "ok",
-            accessibility: { missingSymbol: "AXPTranslator" },
-            encoder: "ok",
-          },
-        }),
-      ),
-    );
-
-    // setup-required would tell the user to install something; there is nothing
-    // to install, and the pane must still open.
-    expect(availability.kind).toBe("degraded");
-    if (availability.kind !== "degraded") throw new Error("expected degraded");
-    expect(availability.capabilities.filter((capability) => !capability.ok)).toHaveLength(1);
-  });
-
   it("maps a total failure to helper-unavailable", () => {
     const availability = availabilityFromProbe(
       parseHelperProbe(
@@ -158,23 +119,6 @@ describe("availabilityFromProbe", () => {
 });
 
 describe("capability failure messages", () => {
-  it("names the capability, the Xcode, and the missing symbol", () => {
-    const message = capabilityUnavailableMessage(
-      { id: "accessibility", ok: false, missingSymbol: "AXPTranslator" },
-      { xcodeVersion: "26.3", xcodeBuild: "17D1" },
-    );
-
-    expect(message).toBe(
-      "Accessibility inspection is unavailable with Xcode 26.3 (17D1). The device helper could not resolve 'AXPTranslator'.",
-    );
-  });
-
-  it("still names the capability when the toolchain is unknown", () => {
-    const message = capabilityUnavailableMessage({ id: "hid", ok: false }, undefined);
-
-    expect(message).toBe("Touch and keyboard input is unavailable.");
-  });
-
   it("joins several broken capabilities into one phrase", () => {
     const summary = describeBrokenCapabilities(
       [

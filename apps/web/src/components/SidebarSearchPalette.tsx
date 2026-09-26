@@ -131,7 +131,7 @@ const IMPORT_PROJECTS_SOURCES: readonly {
 
 export type ImportProviderKind = Extract<
   ProviderKind,
-  "codex" | "claudeAgent" | "cursor" | "opencode"
+  "codex" | "claudeAgent" | "cursor" | "opencode" | "omp"
 >;
 
 function actionHandler(
@@ -724,7 +724,9 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                           ? "Cursor"
                           : provider === "opencode"
                             ? "OpenCode"
-                            : "Codex"}
+                            : provider === "omp"
+                              ? "Oh My Pi"
+                              : "Codex"}
                     </Button>
                   ))}
                 </div>
@@ -759,7 +761,9 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                       ? "Cursor resumes a persisted session by session id."
                       : importProvider === "opencode"
                         ? "OpenCode resumes a persisted session by session id."
-                        : "Codex resumes a persisted thread by thread id."}
+                        : importProvider === "omp"
+                          ? "Oh My Pi resumes a persisted session by session id."
+                          : "Codex resumes a persisted thread by thread id."}
                 </p>
               </div>
               {importError ? (

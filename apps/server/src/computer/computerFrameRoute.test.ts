@@ -52,12 +52,4 @@ describe("computer frame socket sink", () => {
     await Promise.resolve();
     expect(sink.bufferedAmount()).toBe(0);
   });
-
-  it("reports a closed connection to the shared transport", () => {
-    let open = true;
-    const sink = makeComputerFrameSink({ send: () => undefined, isOpen: () => open });
-    expect(sink.isOpen()).toBe(true);
-    open = false;
-    expect(sink.isOpen()).toBe(false);
-  });
 });

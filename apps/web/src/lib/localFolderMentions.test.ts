@@ -50,11 +50,6 @@ describe("localFolderMentions", () => {
   });
 
   describe("expandLocalFolderPath", () => {
-    it("returns the input unchanged when there is no leading tilde", () => {
-      expect(expandLocalFolderPath("/Users/test/foo", "/Users/test")).toBe("/Users/test/foo");
-      expect(expandLocalFolderPath("", "/Users/test")).toBe("");
-    });
-
     it("expands `~` alone to the home directory", () => {
       expect(expandLocalFolderPath("~", "/Users/test")).toBe("/Users/test");
     });

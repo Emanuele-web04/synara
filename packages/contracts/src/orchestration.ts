@@ -14,6 +14,7 @@ import {
   DroidModelOptions,
   GrokModelOptions,
   OpenCodeModelOptions,
+  OmpModelOptions,
   PiModelOptions,
 } from "./model";
 import { ProviderMentionReference, ProviderSkillReference } from "./providerDiscovery";
@@ -75,6 +76,7 @@ export const ProviderKind = Schema.Literals([
   "opencode",
   "pi",
   "devin",
+  "omp",
 ]);
 export type ProviderKind = typeof ProviderKind.Type;
 
@@ -174,6 +176,12 @@ export const PiModelSelection = Schema.Struct({
   options: Schema.optional(PiModelOptions),
 });
 export type PiModelSelection = typeof PiModelSelection.Type;
+export const OmpModelSelection = Schema.Struct({
+  provider: Schema.Literal("omp"),
+  model: TrimmedNonEmptyString,
+  options: Schema.optional(OmpModelOptions),
+});
+export type OmpModelSelection = typeof OmpModelSelection.Type;
 
 export const DevinModelSelection = Schema.Struct({
   provider: Schema.Literal("devin"),
@@ -192,6 +200,7 @@ export const ModelSelection = Schema.Union([
   DroidModelSelection,
   OpenCodeModelSelection,
   PiModelSelection,
+  OmpModelSelection,
 ]);
 export type ModelSelection = typeof ModelSelection.Type;
 
@@ -234,6 +243,10 @@ export const PiProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   agentDir: Schema.optional(TrimmedNonEmptyString),
 });
+export const OmpProviderStartOptions = Schema.Struct({
+  binaryPath: Schema.optional(TrimmedNonEmptyString),
+  agentDir: Schema.optional(TrimmedNonEmptyString),
+});
 
 export const DevinProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
@@ -249,6 +262,7 @@ export const ProviderStartOptions = Schema.Struct({
   droid: Schema.optional(DroidProviderStartOptions),
   opencode: Schema.optional(OpenCodeProviderStartOptions),
   pi: Schema.optional(PiProviderStartOptions),
+  omp: Schema.optional(OmpProviderStartOptions),
 });
 export type ProviderStartOptions = typeof ProviderStartOptions.Type;
 

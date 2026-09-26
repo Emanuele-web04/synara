@@ -48,7 +48,7 @@ export interface WhatsNewEntry {
  * missing segments fall back to 0 so a malformed version never crashes the
  * dialog — it just sorts as the lowest possible value.
  */
-export function parseVersion(version: string): readonly [number, number, number] {
+function parseVersion(version: string): readonly [number, number, number] {
   const [rawMajor = "0", rawMinor = "0", rawPatch = "0"] = version.split(".");
   const major = Number.parseInt(rawMajor, 10);
   const minor = Number.parseInt(rawMinor, 10);
@@ -64,7 +64,7 @@ export function parseVersion(version: string): readonly [number, number, number]
  * Three-way version comparison. Returns a negative number when `a < b`, zero
  * when equal, and a positive number when `a > b`. Suitable for `Array.sort`.
  */
-export function compareVersions(a: string, b: string): number {
+function compareVersions(a: string, b: string): number {
   const [majorA, minorA, patchA] = parseVersion(a);
   const [majorB, minorB, patchB] = parseVersion(b);
   if (majorA !== majorB) return majorA - majorB;
