@@ -581,7 +581,7 @@ function SettingsRouteView() {
         {isBetaFeatureOn("sidebarV2") ? (
           <SettingsRow
             title="Sidebar layout"
-            description="Classic keeps the single sidebar. Rail adds fixed icon tabs on the left, with projects and threads in a panel beside them. Beta."
+            description="Classic keeps the single sidebar. Rail adds fixed icon tabs on the left, with projects and threads in a panel beside them."
             resetAction={
               settings.sidebarLayout !== defaults.sidebarLayout ? (
                 <SettingResetButton

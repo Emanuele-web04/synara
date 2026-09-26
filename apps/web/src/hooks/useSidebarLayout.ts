@@ -10,9 +10,8 @@ import { useIsMobile } from "./useMediaQuery";
 export type { SidebarLayout };
 
 /**
- * The rail layout needs all three: the user chose it, the host is not Stable (the
- * Beta-only "sidebarV2" key), and the viewport is not mobile (the rail is a desktop
- * shell). Anything else is classic, which keeps a stored "rail" inert on Stable.
+ * The rail layout requires the user preference, an enabled feature, and a desktop
+ * viewport. It is available in both Stable and Beta; mobile stays classic.
  */
 export function resolveSidebarLayout(input: {
   setting: SidebarLayout;

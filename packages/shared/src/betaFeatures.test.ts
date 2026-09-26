@@ -23,9 +23,9 @@ describe("isBetaFeatureEnabled", () => {
     expect(isBetaFeatureEnabled("omp", "production")).toBe(false);
   });
 
-  it("keeps the rail sidebar layout Beta-only", () => {
+  it("enables the rail sidebar layout in both Beta and Stable", () => {
     expect(isBetaFeatureEnabled("sidebarV2", "beta")).toBe(true);
-    expect(isBetaFeatureEnabled("sidebarV2", "production")).toBe(false);
+    expect(isBetaFeatureEnabled("sidebarV2", "production")).toBe(true);
   });
 
   it("leaves unlisted features enabled everywhere", () => {
