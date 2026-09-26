@@ -11,7 +11,7 @@ export const SIDEBAR_PANEL_TITLE_CLASS_NAME =
 
 export function SidebarPanelTitle({ title, children }: { title: string; children?: ReactNode }) {
   return (
-    <div className="flex items-center gap-1 pt-3 pb-1 pr-2.5 pl-1.5">
+    <div className="flex items-center gap-1 pt-1.5 pb-1 pr-2.5 pl-1.5">
       <h2 className="flex h-8 min-w-0 items-center px-2.5">
         <span className={SIDEBAR_PANEL_TITLE_CLASS_NAME}>{title}</span>
       </h2>
