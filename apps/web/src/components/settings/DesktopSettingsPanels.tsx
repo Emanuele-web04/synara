@@ -639,9 +639,8 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
         <div className="min-w-0 flex-1 space-y-1">
           <p className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>You're on Synara Beta</p>
           <p className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>
-            New features land here first. To help us fix things quickly, Beta shares crash reports,
-            app errors, and anonymous usage counts. Crash reports can contain fragments of app
-            memory.
+            To help us fix things quickly, Beta sends crash reports and anonymous usage counts —
+            never your chats, code, files, or keys by design.
           </p>
           <button
             type="button"
@@ -659,7 +658,7 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
                 <ul className="m-0 list-disc space-y-0.5 pl-4 pt-0.5 text-ui-sm text-muted-foreground">
                   <li>A random ID for this install, not linked to you</li>
                   <li>When Beta opens, closes, installs, or is removed</li>
-                  <li>Crashes and errors; text is redacted where possible</li>
+                  <li>Crashes and errors</li>
                   <li>App version, OS version, and language</li>
                   <li>
                     Which providers you use, and how many projects, chats, and turns (just counts)
@@ -678,9 +677,8 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
                 </ul>
               </div>
               <p className="m-0 text-ui-xs text-muted-foreground">
-                Error text can still contain fragments of your work despite redaction. If Beta
-                crashes, a snapshot of app memory is sent and may contain sensitive fragments. Crash
-                dumps are deleted after 90 days; other reports are kept for a year.
+                A crash also sends a raw memory dump that can't be redacted; dumps are deleted after
+                90 days. Other reports are kept for a year.
               </p>
             </div>
           </DisclosureRegion>
