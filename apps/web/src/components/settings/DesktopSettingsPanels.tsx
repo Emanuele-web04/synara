@@ -677,8 +677,10 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
                 </ul>
               </div>
               <p className="m-0 text-ui-xs text-muted-foreground">
-                Crash reports are snapshots of the app's memory at the crash and can't be redacted,
-                so they're deleted after 90 days. Other reports are kept for a year.
+                A crash also sends a memory dump of the crashed process. Dumps can't be redacted and
+                are deleted after 90 days. Everything else, including crash and error reports, is
+                kept for a year. Error text is redacted where possible, but fragments can still slip
+                through.
               </p>
             </div>
           </DisclosureRegion>
