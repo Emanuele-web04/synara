@@ -8,6 +8,17 @@ import { withRendererGuestFocus } from "./betterwrightFocus";
 type Params = Record<string, unknown>;
 let nativeInputQueue: Promise<unknown> = Promise.resolve();
 
+function inputTransfersFocus(method: string, params: Record<string, unknown>): boolean {
+  if (method === "Page.bringToFront") return true;
+  if (method === "Input.insertText" || method === "Input.imeSetComposition") return true;
+  if (method === "Input.dispatchMouseEvent") return params.type === "mousePressed";
+  if (method === "Input.dispatchTouchEvent") return params.type === "touchStart";
+  return (
+    method === "Input.dispatchKeyEvent" &&
+    ["keyDown", "rawKeyDown", "char"].includes(String(params.type))
+  );
+}
+
 function enqueueNativeInput(operation: () => Promise<unknown>): Promise<unknown> {
   const pending = nativeInputQueue.then(operation, operation);
   nativeInputQueue = pending.catch(() => {});
@@ -89,6 +100,7 @@ export class BetterwrightCdpTarget {
     private readonly backendSessionId?: string,
     private readonly cookieImport = false,
     private readonly expectAgentInput?: BrowserAutomationVisibleRuntime["expectAgentInput"],
+    private readonly retainFocusAfterInput?: BrowserAutomationVisibleRuntime["retainFocusAfterInput"],
   ) {
     if (contents.isDestroyed()) throw new Error("Browser target is unavailable.");
     if (!contents.debugger.isAttached()) contents.debugger.attach("1.3");
@@ -288,6 +300,15 @@ export class BetterwrightCdpTarget {
         this.expectAgentInput?.(input),
       );
       const previousFocus = nativeInput ? webContents.getFocusedWebContents() : null;
+      const rendererGuest = this.contents.getType() === "webview";
+      let dispatched = false;
+      let retainDispatchedFocus = false;
+      const retainFocus = () => {
+        retainDispatchedFocus = Boolean(
+          inputTransfersFocus(method, params) && this.retainFocusAfterInput?.(),
+        );
+        return retainDispatchedFocus;
+      };
       try {
         // Native focus is shared across tabs; DOM focus alone cannot route text
         // to an offscreen preview. Keep focus and dispatch in the same lease.
@@ -328,16 +349,20 @@ export class BetterwrightCdpTarget {
           );
         };
         if (!nativeInput) return await send();
-        const focusedOperation = withRendererGuestFocus(this.contents, send);
+        const focusedOperation = withRendererGuestFocus(this.contents, send, retainFocus);
         this.pending.add(focusedOperation);
         try {
-          return await focusedOperation;
+          const result = await focusedOperation;
+          dispatched = true;
+          if (!rendererGuest) retainFocus();
+          return result;
         } finally {
           this.pending.delete(focusedOperation);
         }
       } finally {
         try {
           if (
+            !(dispatched && retainDispatchedFocus) &&
             previousFocus &&
             previousFocus !== this.contents &&
             !previousFocus.isDestroyed() &&

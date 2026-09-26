@@ -26,6 +26,7 @@ export function synaraHostTarget(
     uploadFiles?: readonly string[] | undefined;
     cookieImport?: boolean | undefined;
     expectAgentInput?: BrowserAutomationVisibleRuntime["expectAgentInput"] | undefined;
+    retainFocusAfterInput?: BrowserAutomationVisibleRuntime["retainFocusAfterInput"] | undefined;
     signal?: AbortSignal | undefined;
   } = {},
 ): SynaraHostTarget {
@@ -109,6 +110,7 @@ export function synaraHostTarget(
             options.uploadFiles ?? [],
             options.cookieImport ?? false,
             options.expectAgentInput,
+            options.retainFocusAfterInput,
           );
           pending.add(opening);
           const connection = await opening;
