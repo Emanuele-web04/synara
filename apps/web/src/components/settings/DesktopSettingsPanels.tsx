@@ -639,8 +639,8 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
         <div className="min-w-0 flex-1 space-y-1">
           <p className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>You're on Synara Beta</p>
           <p className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>
-            New features land here first. To help us fix things quickly, Beta shares crash reports,
-            app errors, and anonymous usage counts.
+            To help us fix things quickly, Beta sends crash reports and anonymous usage counts —
+            never your chats, code, files, or keys.
           </p>
           <button
             type="button"
@@ -658,7 +658,7 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
                 <ul className="m-0 list-disc space-y-0.5 pl-4 pt-0.5 text-ui-sm text-muted-foreground">
                   <li>A random ID for this install, not linked to you</li>
                   <li>When Beta opens, closes, installs, or is removed</li>
-                  <li>Crashes and errors; error text is redacted where possible</li>
+                  <li>Crashes and errors</li>
                   <li>App version, OS version, and language</li>
                   <li>
                     Which providers you use, and how many projects, chats, and turns (just counts)
@@ -677,10 +677,7 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
                 </ul>
               </div>
               <p className="m-0 text-ui-xs text-muted-foreground">
-                A crash also sends a memory dump of the crashed process. Dumps can't be redacted and
-                are deleted after 90 days. Everything else, including crash and error reports, is
-                kept for a year. Error text is redacted where possible, but fragments can still slip
-                through.
+                Crash details are deleted after 90 days; other reports are kept for a year.
               </p>
             </div>
           </DisclosureRegion>
