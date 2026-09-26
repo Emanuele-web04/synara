@@ -11,6 +11,7 @@ import { createPortal } from "react-dom";
 
 import type { RailItemId } from "~/appRail.logic";
 import { createCentralIconComponent } from "~/lib/central-icons";
+import { projectAppearanceKey, type ProjectAppearance } from "~/lib/projectAppearance";
 import { cn } from "~/lib/utils";
 import {
   SIDEBAR_ROW_ACTIVE_CLASS_NAME,
@@ -41,9 +42,12 @@ export function railCentralGlyphs(name: string): AppRailGlyphs {
   return glyphs;
 }
 
-/** Rail glyphs for a project shortcut: its favicon, or the folder the sidebar shows. */
-export function railProjectGlyphs(cwd: string): AppRailGlyphs {
-  const cacheKey = `project:${cwd}`;
+/** Rail glyphs for a project shortcut: the same glyph its sidebar row shows. */
+export function railProjectGlyphs(
+  cwd: string,
+  appearance: ProjectAppearance | null,
+): AppRailGlyphs {
+  const cacheKey = `project:${cwd}:${projectAppearanceKey(appearance)}`;
   const cached = glyphCache.get(cacheKey);
   if (cached) return cached;
   function ProjectRailGlyph({ className }: { className?: string }) {
@@ -51,6 +55,7 @@ export function railProjectGlyphs(cwd: string): AppRailGlyphs {
       <ProjectSidebarIcon
         cwd={cwd}
         expanded={false}
+        appearance={appearance}
         {...(className ? { glyphClassName: className } : {})}
       />
     );

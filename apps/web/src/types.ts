@@ -34,6 +34,7 @@ import type {
   ThreadCreationSource,
   ThreadEnvironmentMode,
 } from "@synara/contracts";
+import type { ProjectAppearance } from "./lib/projectAppearance";
 
 export type SessionPhase = "disconnected" | "connecting" | "ready" | "running";
 export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
@@ -190,6 +191,8 @@ export interface Project {
   remoteName: string;
   folderName: string;
   localName: string | null;
+  /** Local look in the sidebar and rail; missing or null is the default folder. */
+  appearance?: ProjectAppearance | null;
   cwd: string;
   defaultModelSelection: ModelSelection | null;
   expanded: boolean;

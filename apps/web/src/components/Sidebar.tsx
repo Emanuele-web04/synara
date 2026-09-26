@@ -252,7 +252,7 @@ import {
   SidebarThreadRowContent,
   type SidebarThreadTerminalStatus,
 } from "./SidebarThreadRowContent";
-import { RenameDialog } from "./RenameDialog";
+import { EditProjectDialog, type EditProjectValue } from "./EditProjectDialog";
 import { RelocateProjectDialog } from "./RelocateProjectDialog";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import ReleaseHistoryDialog from "./ReleaseHistoryDialog";
@@ -1370,6 +1370,7 @@ export default function Sidebar() {
   const collapseProjectsExcept = useStore((store) => store.collapseProjectsExcept);
   const reorderProjects = useStore((store) => store.reorderProjects);
   const renameProjectLocally = useStore((store) => store.renameProjectLocally);
+  const setProjectAppearanceLocally = useStore((store) => store.setProjectAppearanceLocally);
   const removeDeletedProjectFromClientState = useStore(
     (store) => store.removeDeletedProjectFromClientState,
   );
@@ -1588,7 +1589,11 @@ export default function Sidebar() {
   const [searchPaletteMode, setSearchPaletteMode] = useState<SidebarSearchPaletteMode>("search");
   const projectAdditionLockRef = useRef(false);
   const [renameDialogThreadId, setRenameDialogThreadId] = useState<ThreadId | null>(null);
-  const [renameProjectDialogId, setRenameProjectDialogId] = useState<ProjectId | null>(null);
+  // The project stays set after close so the dialog can play its exit transition.
+  const [editProjectDialog, setEditProjectDialog] = useState<{
+    projectId: ProjectId;
+    open: boolean;
+  } | null>(null);
   const [relocateProjectDialogId, setRelocateProjectDialogId] = useState<ProjectId | null>(null);
   const [projectContextMenuState, setProjectContextMenuState] =
     useState<ProjectContextMenuState | null>(null);
@@ -3615,7 +3620,7 @@ export default function Sidebar() {
         return;
       }
       if (clicked === "rename") {
-        setRenameProjectDialogId(projectId);
+        setEditProjectDialog({ projectId, open: true });
         return;
       }
       if (clicked === "toggle-pin") {
@@ -3920,16 +3925,17 @@ export default function Sidebar() {
     suppressProjectClickAfterDragRef.current = false;
   }, []);
 
-  const handleRenameProjectSave = useCallback(
-    (projectId: ProjectId, nextName: string, previousLocalName: string | null) => {
-      const trimmed = nextName.trim();
+  const handleEditProjectSave = useCallback(
+    (projectId: ProjectId, next: EditProjectValue, previousLocalName: string | null) => {
+      setProjectAppearanceLocally(projectId, next.appearance);
+      const trimmed = next.name.trim();
       const normalizedPrevious = previousLocalName?.trim() ?? "";
       if (trimmed === normalizedPrevious) {
         return;
       }
       renameProjectLocally(projectId, trimmed.length > 0 ? trimmed : null);
     },
-    [renameProjectLocally],
+    [renameProjectLocally, setProjectAppearanceLocally],
   );
 
   const sortedProjects = useMemo(
@@ -4628,6 +4634,7 @@ export default function Sidebar() {
           timeLabel={formatRelativeTime(thread.updatedAt ?? thread.createdAt)}
           projectName={hoverMetadata.projectName}
           projectCwd={hoverMetadata.projectCwd}
+          projectAppearance={hoverProject?.appearance ?? null}
           sourceProjectName={hoverMetadata.sourceProjectName}
           branch={hoverMetadata.branch}
           worktreeName={hoverMetadata.worktreeName}
@@ -4655,6 +4662,8 @@ export default function Sidebar() {
       >
         <ProjectHoverCardContent
           name={project.name}
+          cwd={project.cwd}
+          appearance={project.appearance ?? null}
           isPinned={pinnedProjectIdSet.has(project.id)}
           chatCount={chatCount}
           path={abbreviateHomePath(project.cwd, homeDir)}
@@ -5203,7 +5212,11 @@ export default function Sidebar() {
                 tone={SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME}
                 className={projectFolderIconClassName}
               >
-                <ProjectSidebarIcon cwd={project.cwd} expanded={project.expanded} />
+                <ProjectSidebarIcon
+                  cwd={project.cwd}
+                  expanded={project.expanded}
+                  appearance={project.appearance}
+                />
               </SidebarLeadingIcon>
               <div
                 className={cn(
@@ -5311,7 +5324,11 @@ export default function Sidebar() {
           }}
         >
           <SidebarLeadingIcon size="sm" tone={SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME}>
-            <ProjectSidebarIcon cwd={project.cwd} expanded={false} />
+            <ProjectSidebarIcon
+              cwd={project.cwd}
+              expanded={false}
+              appearance={project.appearance}
+            />
           </SidebarLeadingIcon>
           <span className={SIDEBAR_PROJECT_NAME_CLASS_NAME}>
             {resolveSidebarProjectRowLabel(project)}
@@ -5803,6 +5820,7 @@ export default function Sidebar() {
         remoteName: project.remoteName,
         folderName: project.folderName,
         localName: project.localName,
+        appearance: project.appearance ?? null,
         cwd: project.cwd,
         // Containers (Chats, Studio) are reachable from every Space, so they search as "Global".
         spaceName: isOrdinarySpaceProject(project, {
@@ -6241,7 +6259,7 @@ export default function Sidebar() {
     return [
       {
         id: shortcut.key,
-        glyphs: railProjectGlyphs(project.cwd),
+        glyphs: railProjectGlyphs(project.cwd, project.appearance ?? null),
         label: resolveSidebarProjectRowLabel(project),
         badge: null,
         active: activeRailShortcutKey === shortcut.key,
@@ -6317,8 +6335,8 @@ export default function Sidebar() {
   const relocateProjectDialogProject = relocateProjectDialogId
     ? (projectById.get(relocateProjectDialogId) ?? null)
     : null;
-  const renameProjectDialogProject = renameProjectDialogId
-    ? (projectById.get(renameProjectDialogId) ?? null)
+  const editProjectDialogProject = editProjectDialog
+    ? (projectById.get(editProjectDialog.projectId) ?? null)
     : null;
   const projectContextMenuProject = projectContextMenuState
     ? (projectById.get(projectContextMenuState.projectId) ?? null)
@@ -7152,7 +7170,7 @@ export default function Sidebar() {
                 }
               >
                 <ProjectContextMenuIcon icon={PencilIcon} />
-                <span>Edit name</span>
+                <span>Edit project</span>
               </MenuItem>
               <MenuItem
                 className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
@@ -7341,27 +7359,28 @@ export default function Sidebar() {
         />
       ) : null}
 
-      <RenameDialog
-        open={renameProjectDialogId !== null && renameProjectDialogProject !== null}
-        title="Rename project"
-        description="Keep it short and recognizable."
-        initialValue={
-          renameProjectDialogProject?.localName ?? renameProjectDialogProject?.name ?? ""
-        }
-        allowEmpty
-        placeholder={renameProjectDialogProject?.folderName}
-        onOpenChange={(nextOpen) => {
-          if (!nextOpen) setRenameProjectDialogId(null);
-        }}
-        onSave={(nextName) => {
-          if (!renameProjectDialogProject) return;
-          handleRenameProjectSave(
-            renameProjectDialogProject.id,
-            nextName,
-            renameProjectDialogProject.localName,
-          );
-        }}
-      />
+      {editProjectDialogProject ? (
+        <EditProjectDialog
+          open={editProjectDialog?.open ?? false}
+          cwd={editProjectDialogProject.cwd}
+          folderName={editProjectDialogProject.folderName}
+          initialValue={{
+            name: editProjectDialogProject.localName ?? "",
+            appearance: editProjectDialogProject.appearance ?? null,
+          }}
+          onOpenChange={(nextOpen) => {
+            if (!nextOpen)
+              setEditProjectDialog((current) => current && { ...current, open: false });
+          }}
+          onSave={(next) =>
+            handleEditProjectSave(
+              editProjectDialogProject.id,
+              next,
+              editProjectDialogProject.localName,
+            )
+          }
+        />
+      ) : null}
 
       {searchPaletteOpen ? (
         <SidebarSearchPaletteController

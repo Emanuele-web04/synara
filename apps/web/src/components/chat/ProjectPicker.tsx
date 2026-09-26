@@ -22,10 +22,12 @@ import { useStore } from "../../store";
 import { createSidebarDisplayThreadsSelector } from "../../storeSelectors";
 import { PlusIcon, XIcon } from "~/lib/icons";
 import { getLocalFoldersGroupLabel } from "~/lib/localFoldersGroupLabel";
+import type { ProjectAppearance } from "~/lib/projectAppearance";
 import { groupItemsBySpace, spaceDisplayName } from "~/lib/spaceGrouping";
 import { useVoidSpace } from "~/voidSpaceStore";
 import { cn } from "~/lib/utils";
 import { FolderClosed } from "../FolderClosed";
+import { ProjectSidebarIcon } from "../ProjectSidebarIcon";
 import { SpaceIcon } from "../SpaceIcon";
 import { PickerPanelShell } from "./PickerPanelShell";
 import { PickerTriggerButton } from "./PickerTriggerButton";
@@ -81,6 +83,8 @@ interface ProjectPickerProps {
 
 interface ActiveFolderOption {
   projectId: ProjectId | null;
+  /** The project's look; null for worktree and raw-path rows, which keep the plain folder. */
+  appearance: ProjectAppearance | null;
   spaceId: SpaceId | null;
   spaceName: string;
   cwd: string;
@@ -210,6 +214,7 @@ export const ProjectPicker = memo(function ProjectPicker({
       const spaceId = project.spaceId ?? null;
       nextOptions.push({
         projectId: project.id,
+        appearance: project.appearance ?? null,
         spaceId,
         spaceName: getSpaceName(spaceId),
         cwd: project.cwd,
@@ -234,6 +239,7 @@ export const ProjectPicker = memo(function ProjectPicker({
         const spaceId = projectById.get(thread.projectId)?.spaceId ?? null;
         nextOptions.push({
           projectId: null,
+          appearance: null,
           spaceId,
           spaceName: getSpaceName(spaceId),
           cwd: workspaceRoot,
@@ -253,6 +259,7 @@ export const ProjectPicker = memo(function ProjectPicker({
     ) {
       nextOptions.unshift({
         projectId: null,
+        appearance: null,
         spaceId: activeSpaceId,
         spaceName: getSpaceName(activeSpaceId),
         cwd: selectedWorkspaceRoot,
@@ -546,7 +553,18 @@ export const ProjectPicker = memo(function ProjectPicker({
         )}
       >
         <div className="flex min-w-0 items-center gap-2">
-          <FolderClosed className={PICKER_PANEL_ROW_ICON_CLASS_NAME} />
+          {folder.appearance ? (
+            <span className="relative inline-flex size-3.5 shrink-0 items-center justify-center text-muted-foreground/70">
+              <ProjectSidebarIcon
+                cwd={folder.cwd}
+                expanded={false}
+                appearance={folder.appearance}
+                glyphClassName="size-3.5"
+              />
+            </span>
+          ) : (
+            <FolderClosed className={PICKER_PANEL_ROW_ICON_CLASS_NAME} />
+          )}
           <span className="min-w-0 truncate">{folder.primaryLabel}</span>
           {folder.secondaryLabel ? (
             <span className="min-w-0 truncate text-muted-foreground/60 text-ui leading-snug">

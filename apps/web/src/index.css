@@ -546,6 +546,15 @@
   --status-open: var(--color-decoration-added, var(--success));
   --status-merged: var(--color-indigo-500);
   --status-neutral: var(--color-zinc-500);
+  /* Project palette (Edit project → Icons). Same recipe as the status tints: the plain
+     color in light, a step toward white in dark. */
+  --project-red: var(--color-red-500);
+  --project-orange: var(--color-orange-500);
+  --project-yellow: var(--color-yellow-500);
+  --project-green: var(--color-green-500);
+  --project-blue: var(--color-blue-500);
+  --project-purple: var(--color-violet-500);
+  --project-pink: var(--color-pink-500);
   --sidebar: var(--card);
   --sidebar-foreground: var(--foreground);
   --sidebar-primary: var(--primary);
@@ -609,6 +618,13 @@
     );
     --status-merged: color-mix(in srgb, var(--color-indigo-500) 72%, var(--color-white));
     --status-neutral: color-mix(in srgb, var(--color-zinc-500) 72%, var(--color-white));
+    --project-red: color-mix(in srgb, var(--color-red-500) 72%, var(--color-white));
+    --project-orange: color-mix(in srgb, var(--color-orange-500) 72%, var(--color-white));
+    --project-yellow: color-mix(in srgb, var(--color-yellow-400) 80%, var(--color-white));
+    --project-green: color-mix(in srgb, var(--color-green-500) 72%, var(--color-white));
+    --project-blue: color-mix(in srgb, var(--color-blue-500) 72%, var(--color-white));
+    --project-purple: color-mix(in srgb, var(--color-violet-500) 72%, var(--color-white));
+    --project-pink: color-mix(in srgb, var(--color-pink-500) 72%, var(--color-white));
     --sidebar: var(--card);
     --sidebar-foreground: var(--foreground);
     --sidebar-primary: var(--primary);

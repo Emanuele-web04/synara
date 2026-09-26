@@ -2157,6 +2157,53 @@ describe("ChatView transcript geometry (full app)", () => {
     document.body.innerHTML = "";
   });
 
+  it("preserves the automatic project name when saving only its appearance", async () => {
+    const snapshot = createSnapshotForTargetUser({
+      targetMessageId: MessageId.makeUnsafe("project-appearance-name"),
+      targetText: "Project appearance",
+    });
+    const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+    try {
+      await waitForLayout();
+      const projectRow = document.querySelector<HTMLButtonElement>(
+        `[data-project-hover-anchor="${PROJECT_ID}"] button`,
+      );
+      expect(projectRow).not.toBeNull();
+      projectRow!.dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, clientX: 120, clientY: 160 }),
+      );
+      await page.getByRole("menuitem", { name: "Edit project", exact: true }).click();
+      await page.getByRole("button", { name: "Choose icon" }).click();
+      await page.getByRole("radio", { name: "Blue", exact: true }).click();
+      await page.getByRole("radio", { name: "Launch", exact: true }).click();
+      await page.getByRole("button", { name: "Save", exact: true }).click();
+
+      const project = () => useStore.getState().projects.find((item) => item.id === PROJECT_ID);
+      await expect
+        .poll(() => project()?.appearance)
+        .toEqual({
+          kind: "icon",
+          icon: "rocket",
+          color: "blue",
+        });
+      expect(project()?.localName).toBeNull();
+      const persisted = JSON.parse(localStorage.getItem("synara:renderer-state:v8") ?? "{}");
+      expect(persisted.projectNamesByCwd["/repo/project"]).toBeUndefined();
+
+      useStore.getState().syncServerReadModel({
+        ...snapshot,
+        snapshotSequence: snapshot.snapshotSequence + 1,
+        projects: snapshot.projects.map((item) =>
+          item.id === PROJECT_ID ? { ...item, title: "Renamed upstream" } : item,
+        ),
+      });
+      expect(project()?.name).toBe("Renamed upstream");
+      expect(project()?.appearance).toEqual({ kind: "icon", icon: "rocket", color: "blue" });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("preserves absent project pins when toggling a rail Space shortcut", async () => {
     localStorage.setItem(
       "synara:app-settings:v1",

@@ -12,6 +12,7 @@ import type { OrchestrationThreadPullRequest } from "@synara/contracts";
 import type { MouseEvent, ReactNode } from "react";
 
 import { FastModeIcon, GitBranchIcon, WorktreeIcon } from "~/lib/icons";
+import type { ProjectAppearance } from "~/lib/projectAppearance";
 import type { ThreadModelSummary } from "~/lib/threadModelSummary";
 import { FolderClosed } from "./FolderClosed";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
@@ -34,6 +35,7 @@ export type ThreadHoverCardContentProps = {
   projectName: string | null;
   /** Project cwd, used to render the matching folder/favicon glyph. */
   projectCwd: string | null;
+  projectAppearance: ProjectAppearance | null;
   /** Underlying project folder/repo name, shown for worktree-backed chats. */
   sourceProjectName: string | null;
   branch: string | null;
@@ -82,6 +84,7 @@ export function ThreadHoverCardContent({
   timeLabel,
   projectName,
   projectCwd,
+  projectAppearance,
   sourceProjectName,
   branch,
   worktreeName,
@@ -137,6 +140,7 @@ export function ThreadHoverCardContent({
                     <ProjectSidebarIcon
                       cwd={projectCwd}
                       expanded={false}
+                      appearance={projectAppearance}
                       glyphClassName="size-3.5"
                     />
                   </span>

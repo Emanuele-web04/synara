@@ -373,6 +373,8 @@ export function normalizeProject(
   const folderName = basenameOfPath(incoming.workspaceRoot) ?? incoming.title;
   const localName =
     previous?.localName ?? rememberedUiState.projectNameForCwd(workspaceRootKey) ?? null;
+  const appearance =
+    previous?.appearance ?? rememberedUiState.projectAppearanceForCwd(workspaceRootKey) ?? null;
   const defaultModelSelection =
     incoming.defaultModelSelection === null
       ? null
@@ -408,6 +410,7 @@ export function normalizeProject(
     previous.remoteName === incoming.title &&
     previous.folderName === folderName &&
     previous.localName === localName &&
+    (previous.appearance ?? null) === appearance &&
     previous.cwd === incoming.workspaceRoot &&
     previous.defaultModelSelection === defaultModelSelection &&
     previous.expanded === expanded &&
@@ -427,6 +430,7 @@ export function normalizeProject(
     remoteName: incoming.title,
     folderName,
     localName,
+    appearance,
     cwd: incoming.workspaceRoot,
     defaultModelSelection,
     expanded,

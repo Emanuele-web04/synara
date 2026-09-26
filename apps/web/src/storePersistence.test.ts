@@ -37,6 +37,46 @@ describe("storePersistence", () => {
     expect(remembered.projectNameForCwd("/tmp/project-1")).toBeUndefined();
   });
 
+  it("keeps only persisted project appearances it can render", async () => {
+    const storage = new Map<string, string>();
+    storage.set(
+      PERSISTED_STATE_KEY,
+      JSON.stringify({
+        projectOrderCwds: [],
+        projectAppearanceByCwd: {
+          "/tmp/unknown-icon": { kind: "icon", icon: "../../etc/passwd", color: "red" },
+          "/tmp/unknown-color": { kind: "icon", icon: "rocket", color: "chartreuse" },
+          "/tmp/default-folder": { kind: "icon", icon: "folder-2", color: null },
+          "/tmp/text": { kind: "emoji", emoji: "hi" },
+          "/tmp/two-emoji": { kind: "emoji", emoji: "🐱🐶" },
+          "/tmp/zwj-emoji": { kind: "emoji", emoji: "🧑‍💻" },
+          "/tmp/keycap-emoji": { kind: "emoji", emoji: "1️⃣" },
+        },
+      }),
+    );
+    const { readPersistedState, getRememberedProjectUiState } =
+      await importStorePersistence(storage);
+    readPersistedState(initialState);
+    const remembered = getRememberedProjectUiState();
+    expect(remembered.projectAppearanceForCwd("/tmp/unknown-icon")).toBeUndefined();
+    expect(remembered.projectAppearanceForCwd("/tmp/unknown-color")).toEqual({
+      kind: "icon",
+      icon: "rocket",
+      color: null,
+    });
+    expect(remembered.projectAppearanceForCwd("/tmp/default-folder")).toBeUndefined();
+    expect(remembered.projectAppearanceForCwd("/tmp/text")).toBeUndefined();
+    expect(remembered.projectAppearanceForCwd("/tmp/two-emoji")).toBeUndefined();
+    expect(remembered.projectAppearanceForCwd("/tmp/zwj-emoji")).toEqual({
+      kind: "emoji",
+      emoji: "🧑‍💻",
+    });
+    expect(remembered.projectAppearanceForCwd("/tmp/keycap-emoji")).toEqual({
+      kind: "emoji",
+      emoji: "1️⃣",
+    });
+  });
+
   it("preserves legacy payloads that contain only expandedProjectCwds", async () => {
     const storage = new Map<string, string>();
     storage.set(
