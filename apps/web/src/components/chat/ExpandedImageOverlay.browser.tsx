@@ -6,9 +6,11 @@ import { render } from "vitest-browser-react";
 
 import { NATIVE_SURFACE_OCCLUSION_SYNC_EVENT } from "~/lib/nativeSurfaceOcclusion";
 import { ExpandedImageOverlay } from "./ExpandedImageOverlay";
+import { waitForTransientPopups } from "../../lib/browserPopupCleanup";
 
 describe("ExpandedImageOverlay", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await waitForTransientPopups();
     document.body.innerHTML = "";
   });
 

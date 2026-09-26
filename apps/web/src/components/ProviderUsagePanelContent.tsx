@@ -50,7 +50,7 @@ export function ProviderUsagePanelContent(props: {
         </div>
       ) : null}
       {props.notice ? (
-        <p className="flex items-start gap-1.5 text-chat-meta leading-relaxed text-amber-600 dark:text-amber-300/90">
+        <p className="flex items-start gap-1.5 text-chat-meta leading-relaxed text-warning">
           <TriangleAlertIcon className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
           <span>{props.notice}</span>
         </p>

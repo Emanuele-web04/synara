@@ -81,7 +81,7 @@ export function getDesktopUpdateButtonPresentation(
 ): DesktopUpdateButtonPresentation {
   if (options?.installing) {
     return {
-      label: "Updating...",
+      label: "Updating…",
       secondaryLabel: null,
     };
   }
@@ -95,7 +95,7 @@ export function getDesktopUpdateButtonPresentation(
 
   if (state.status === "checking") {
     return {
-      label: "Checking...",
+      label: "Checking…",
       secondaryLabel: null,
     };
   }
@@ -176,13 +176,13 @@ export function getDesktopUpdateButtonTooltip(
   options?: { installing?: boolean },
 ): string {
   if (options?.installing) {
-    return "Applying update...";
+    return "Applying update…";
   }
   if (state.status === "idle") {
     return "Check for updates";
   }
   if (state.status === "checking") {
-    return "Checking for updates...";
+    return "Checking for updates…";
   }
   if (state.status === "up-to-date") {
     return `You're up to date on ${state.currentVersion}. Click to check again.`;

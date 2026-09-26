@@ -362,23 +362,23 @@ export function ComputerSettingsPanel({
   const attentionTone = cn(
     "size-2 shrink-0 rounded-full",
     nativePermissionSetupError
-      ? "bg-red-500"
+      ? "bg-status-failure"
       : availabilityView.kind === "ready"
-        ? "bg-emerald-500"
+        ? "bg-status-success"
         : availabilityView.kind === "checking"
-          ? "animate-pulse bg-amber-500"
+          ? "animate-pulse bg-warning"
           : captureBlocked
-            ? "bg-amber-500"
-            : "bg-red-500",
+            ? "bg-warning"
+            : "bg-status-failure",
   );
   const attentionAction =
     needsSetup && !statusQuery.isError ? (
-      <Button size="sm" variant="outline" disabled={setup.isPending} onClick={setup.provision}>
+      <Button size="xs" variant="outline" disabled={setup.isPending} onClick={setup.provision}>
         {setup.isPending ? "Setting up…" : "Set up"}
       </Button>
     ) : statusQuery.isError ? (
       <Button
-        size="sm"
+        size="xs"
         variant="outline"
         disabled={statusQuery.isFetching}
         onClick={() => {
@@ -578,15 +578,15 @@ export function ComputerSettingsPanel({
                 showRecheck={false}
               />
             ) : null}
-            <SettingsCard>
-              {status && availabilityView.kind === "ready" ? (
+            {status && availabilityView.kind === "ready" ? (
+              <SettingsCard>
                 <SettingsRow
                   title="Desktop abilities"
                   description={capabilitiesDescription}
                   status={`${backend ? (BACKEND_DISPLAY_NAMES[backend] ?? backend) : "No backend"} · ${capabilitySummary(status.capabilities, !captureBlocked)}`}
                 />
-              ) : null}
-            </SettingsCard>
+              </SettingsCard>
+            ) : null}
           </div>
         </DisclosureRegion>
       </SettingsSectionShell>

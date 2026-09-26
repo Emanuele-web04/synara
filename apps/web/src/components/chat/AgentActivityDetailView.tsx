@@ -70,7 +70,7 @@ export function AgentActivityDetailView({
         <button
           type="button"
           data-scroll-anchor-ignore
-          className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-muted-foreground/70 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground"
+          className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-muted-foreground/80 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground"
           style={footerTextStyle}
           onClick={onBack}
         >
@@ -88,12 +88,12 @@ export function AgentActivityDetailView({
                 <h2 className="truncate text-[18px] font-medium leading-6 text-foreground/92">
                   {detail.title}
                 </h2>
-                <span className="rounded-full border border-border/45 px-2 py-0.5 text-ui-xs font-medium text-muted-foreground/56">
+                <span className="rounded-full border border-border/45 px-2 py-0.5 text-ui-xs font-medium text-muted-foreground/80">
                   {`${detail.entries.length} ${pluralize(detail.entries.length, "update")}`}
                 </span>
               </div>
               {detail.summary ? (
-                <p className="mt-1 max-w-4xl text-muted-foreground/58" style={chatTypographyStyle}>
+                <p className="mt-1 max-w-4xl text-muted-foreground/80" style={chatTypographyStyle}>
                   {detail.summary}
                 </p>
               ) : null}
@@ -148,7 +148,7 @@ export function AgentActivityDetailView({
 function AgentActivitySection(props: { title: string; children: ReactNode }) {
   return (
     <section className="border-b border-border/45 py-4 last:border-b-0">
-      <h3 className="mb-2 text-ui-sm font-medium text-muted-foreground/48">{props.title}</h3>
+      <h3 className="mb-2 text-ui-sm font-medium text-muted-foreground/80">{props.title}</h3>
       {props.children}
     </section>
   );
@@ -172,12 +172,12 @@ function AgentActivityEventRow(props: {
         <p className="truncate font-medium text-foreground/78" style={props.chatTypographyStyle}>
           {title}
         </p>
-        <p className="shrink-0 tabular-nums text-muted-foreground/38" style={props.footerTextStyle}>
+        <p className="shrink-0 tabular-nums text-muted-foreground/80" style={props.footerTextStyle}>
           {formatShortTimestamp(props.entry.createdAt, props.timestampFormat)}
         </p>
       </div>
       {body ? (
-        <div className="mt-1 text-muted-foreground/70">
+        <div className="mt-1 text-muted-foreground/80">
           <ChatMarkdown
             text={body}
             cwd={props.markdownCwd}

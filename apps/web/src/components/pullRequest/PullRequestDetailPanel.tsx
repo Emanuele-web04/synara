@@ -21,6 +21,7 @@ import {
   CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
   CHAT_SURFACE_CHIP_CLASS_NAME,
   CHAT_SURFACE_CONTROL_ACTIVE_CLASS_NAME,
+  CHAT_SURFACE_HEADER_HEIGHT_CLASS,
 } from "~/components/chat/chatHeaderControls";
 import { ComposerPickerMenuPopup } from "~/components/chat/ComposerPickerMenuPopup";
 import {
@@ -328,7 +329,9 @@ export function PullRequestDetailPanel({
     <div className="flex h-full min-h-0 w-full flex-col bg-[var(--color-background-surface)] text-foreground">
       {/* No rule under the header: the tab row already reads as its own band, and the section
           borders further down are the only dividers the panel needs. */}
-      <header className="flex min-h-12 shrink-0 items-center gap-2 px-2">
+      <header
+        className={cn("flex shrink-0 items-center gap-2 px-2", CHAT_SURFACE_HEADER_HEIGHT_CLASS)}
+      >
         {/* No state glyph here: the dock tab above already carries it, and the Summary tab
             spells the state out in words. A third copy in between was pure repetition. */}
         <nav className="flex min-w-0 items-center gap-0.5" aria-label="Pull request detail tabs">

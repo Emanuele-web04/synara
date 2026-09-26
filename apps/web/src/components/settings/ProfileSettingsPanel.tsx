@@ -129,7 +129,7 @@ function ProfileContent({
       </header>
 
       {/* Stat tiles */}
-      <div className="grid grid-cols-2 divide-x divide-y divide-border/50 overflow-hidden rounded-2xl border border-border/60 sm:grid-cols-3 lg:grid-cols-5 lg:divide-y-0">
+      <div className="grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-border/60 bg-border/50 sm:grid-cols-3 lg:grid-cols-5">
         <StatTile
           label="Lifetime tokens"
           value={tokensPending ? null : formatCompact(tokenStats?.lifetimeTotalTokens ?? null)}
@@ -307,7 +307,7 @@ function ProfileContent({
 
 function StatTile({ label, value }: { label: string; value: string | null }) {
   return (
-    <div className="flex flex-col items-center gap-0.5 px-3 py-3">
+    <div className="flex flex-col items-center gap-0.5 bg-background px-3 py-3">
       {value === null ? (
         <Skeleton className="h-4 w-12" />
       ) : (

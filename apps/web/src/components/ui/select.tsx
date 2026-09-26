@@ -8,6 +8,7 @@ import { ChevronDownIcon, ChevronsUpDownIcon, ChevronUpIcon } from "~/lib/icons"
 import * as React from "react";
 
 import { cn } from "~/lib/utils";
+import { POPUP_MOTION_CLASS } from "~/lib/disclosureMotion";
 import {
   APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME,
   COMPOSER_PICKER_MENU_POPUP_BODY_CLASS_NAME,
@@ -189,7 +190,7 @@ function SelectPopup({
           sideOffset={sideOffset}
         >
           <SelectPrimitive.Popup
-            className="origin-(--transform-origin) text-[var(--color-text-foreground)]"
+            className={cn(POPUP_MOTION_CLASS, "text-[var(--color-text-foreground)]")}
             data-slot="select-popup"
             {...props}
           >

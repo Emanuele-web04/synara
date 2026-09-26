@@ -38,6 +38,7 @@ import {
   summarizeRenderablePatchStats,
 } from "../lib/diffRendering";
 import { scrollDiffFileIntoView } from "../lib/diffScrollSurface";
+import { cn } from "../lib/utils";
 import {
   appendChatFileReference,
   appendComposerPromptText,
@@ -180,7 +181,10 @@ function EditorDiffOptionsMenu(props: {
           <IconButton
             variant="ghost"
             size="icon-xs"
-            className="text-muted-foreground hover:text-foreground"
+            className={cn(
+              DOCK_HEADER_ICON_BUTTON_CLASS,
+              "text-muted-foreground hover:text-foreground",
+            )}
             label="Diff options"
             title="Diff options"
             onClick={() => {
@@ -379,7 +383,7 @@ function EditorDiffControls(props: {
     <div className="flex items-center gap-1">
       <DiffPanelChangeNavigationButtons
         navigation={props.changeNavigation}
-        className="text-muted-foreground hover:text-foreground"
+        className={cn(DOCK_HEADER_ICON_BUTTON_CLASS, "text-muted-foreground hover:text-foreground")}
       />
       <EditorDiffOptionsMenu
         scopePickerValue={props.scopePickerValue}
@@ -1483,7 +1487,7 @@ export default function DiffPanel({
           {gitRepoStatusError}
         </PanelStateMessage>
       ) : gitRepoStatus === undefined && diffQueriesEnabled && activeCwd ? (
-        <DiffPanelLoadingState label="Checking git repository..." />
+        <DiffPanelLoadingState label="Checking git repository…" />
       ) : diffEnvironmentPending ? (
         <PanelStateMessage density="compact" fill="flex">
           This chat environment is still being prepared. Diffs will be available once the worktree
@@ -1515,10 +1519,10 @@ export default function DiffPanel({
               viewKind={diffViewKind}
               loadingLabel={
                 diffViewKind !== "repo"
-                  ? "Loading checkpoint diff..."
+                  ? "Loading checkpoint diff…"
                   : repoDiffScope === "ref"
-                    ? `Loading diff ${resolveRepoDiffScopeLabel(repoDiffScope, repoDiffCompareRef)}...`
-                    : `Loading ${REPO_DIFF_SCOPE_LABELS[repoDiffScope].toLowerCase()} diff...`
+                    ? `Loading diff ${resolveRepoDiffScopeLabel(repoDiffScope, repoDiffCompareRef)}…`
+                    : `Loading ${REPO_DIFF_SCOPE_LABELS[repoDiffScope].toLowerCase()} diff…`
               }
               emptyLabel={
                 diffViewKind === "repo"

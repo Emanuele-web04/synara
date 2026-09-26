@@ -73,8 +73,8 @@ export const COMPOSER_STACKED_PANEL_SCROLL_REGION_CLASS_NAME =
 
 /** Footer/meta row below stacked panel content (background agents). */
 export const COMPOSER_STACKED_PANEL_FOOTER_ROW_CLASS_NAME =
-  "flex items-center justify-between gap-2 px-2.5 py-1.5 text-ui-sm text-muted-foreground/70";
+  "flex items-center justify-between gap-2 px-2.5 py-1.5 text-ui-sm text-muted-foreground/80";
 
 /** Ghost icon button used in stacked panel header actions. */
 export const COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME =
-  "size-5 rounded-md text-[var(--color-text-foreground-tertiary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]";
+  "size-6 rounded-md text-[var(--color-text-foreground-tertiary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]";

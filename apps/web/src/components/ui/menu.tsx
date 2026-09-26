@@ -5,6 +5,7 @@ import { ChevronRightIcon } from "~/lib/icons";
 import * as React from "react";
 
 import { cn } from "~/lib/utils";
+import { POPUP_MOTION_CLASS } from "~/lib/disclosureMotion";
 import { observeNativeSurfaceOverlay } from "~/lib/nativeSurfaceOcclusion";
 import {
   APP_TRANSLUCENT_POPUP_SURFACE_CLASS_NAME,
@@ -109,7 +110,8 @@ function MenuPopupBase({
       >
         <MenuPrimitive.Popup
           className={cn(
-            "relative flex origin-(--transform-origin) text-[var(--color-text-foreground)] outline-none focus:outline-none",
+            POPUP_MOTION_CLASS,
+            "relative flex text-[var(--color-text-foreground)] outline-none focus:outline-none",
             isComposerSurface ? "min-w-0 max-w-[92vw]" : "w-full min-w-full",
             popupSurfaceClassName,
             // Last so a caller's className can override surface tokens (e.g. a rounder radius).
@@ -201,7 +203,7 @@ function MenuCheckboxItem({
           <MenuPrimitive.CheckboxItemIndicator
             className={cn(
               SWITCH_TRACK_CLASS_NAME,
-              "inset-shadow-[0_1px_--theme(--color-black/4%)] [--thumb-size:--spacing(4)] focus-visible:ring-1 sm:[--thumb-size:--spacing(3)]",
+              "inset-shadow-[0_1px_--theme(--color-black/4%)] [--thumb-size:--spacing(4)] focus-visible:ring-2 sm:[--thumb-size:--spacing(3)]",
             )}
             keepMounted
           >
@@ -328,7 +330,7 @@ function MenuGroupLabel({
       // headers (e.g. "Effort"). Picker menus may still override padding-block
       // via the `--picker-section-py` token on `[data-slot="menu-label"]`.
       className={cn(
-        "px-2 py-1.5 font-normal text-ui leading-snug text-muted-foreground/45 data-inset:ps-9 sm:data-inset:ps-8",
+        "px-2 py-1.5 font-normal text-ui leading-snug text-muted-foreground data-inset:ps-9 sm:data-inset:ps-8",
         className,
       )}
       data-inset={inset}
@@ -352,7 +354,7 @@ function MenuShortcut({ className, ...props }: React.ComponentProps<"kbd">) {
   return (
     <kbd
       className={cn(
-        "ms-auto font-medium font-sans text-muted-foreground/72 text-ui-xs tracking-widest",
+        "ms-auto font-medium font-sans text-muted-foreground text-ui-xs tracking-widest",
         className,
       )}
       data-slot="menu-shortcut"

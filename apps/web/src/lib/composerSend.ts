@@ -194,6 +194,17 @@ export function readFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
+/**
+ * Whether the live composer is untouched (empty prompt and no drafts) — the
+ * gate send-path rollbacks use before restoring the pre-send draft so text or
+ * attachments the user added while the send was in flight are never clobbered.
+ */
+export function composerDraftIsEmpty(
+  refs: ReadonlyArray<{ readonly current: { readonly length: number } }>,
+): boolean {
+  return refs.every((ref) => ref.current.length === 0);
+}
+
 // Provider-specific prompt massaging. Claude prompt-injected efforts must be
 // applied before filtering skill/mention references and before dispatch.
 export function formatOutgoingComposerPrompt(params: {

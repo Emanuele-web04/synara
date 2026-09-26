@@ -218,7 +218,7 @@ describe("MessagesTimeline worktree setup card", () => {
 
     try {
       await expect.poll(() => setupRow() !== null).toBe(true);
-      expect(setupRow()?.textContent).toContain("Preparing worktree...");
+      expect(setupRow()?.textContent).toContain("Preparing worktree…");
       expect(setupRow()?.textContent).toContain("Creating branch");
       expect(setupRow()?.querySelector(".shimmer")?.classList).not.toContain("shimmer-once");
       expect(setupRow()?.querySelector(".shimmer")?.getAnimations()[0]?.startTime).toBe(0);
@@ -290,7 +290,7 @@ describe("MessagesTimeline worktree setup card", () => {
     );
 
     try {
-      await expect.poll(() => setupRow()?.textContent).toContain("Cancelling...");
+      await expect.poll(() => setupRow()?.textContent).toContain("Cancelling…");
       const buttons = Array.from(setupRow()?.querySelectorAll("button") ?? []);
       expect(buttons.length).toBe(2);
       for (const button of buttons) {

@@ -220,7 +220,7 @@ describe("EnvironmentPullRequestSection", () => {
     await page.getByRole("menuitemradio", { name: "Closed", exact: true }).click();
     expect(runPullRequestAction).not.toHaveBeenCalled();
 
-    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await page.getByRole("button", { name: "Close pull request", exact: true }).click();
     await expect.poll(() => runPullRequestAction.mock.calls.length).toBe(1);
     expect(runPullRequestAction).toHaveBeenCalledWith({
       projectId,

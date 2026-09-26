@@ -56,6 +56,7 @@ import {
   SearchIcon,
 } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "./ui/empty";
 import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "./ui/input-group";
 import { SidebarInset } from "./ui/sidebar";
 import { SidebarHeaderNavigationControls } from "./SidebarHeaderNavigationControls";
@@ -289,19 +290,19 @@ function ProviderToggleButton({
 
 function EmptyPanel({ title, description }: { title: string; description: string }) {
   return (
-    <div className="flex min-h-40 items-center justify-center rounded-xl border border-dashed border-border/60 bg-background/40 px-5 py-6 text-center">
-      <div className="max-w-sm space-y-1">
-        <p className="text-ui-lg leading-snug font-medium text-foreground">{title}</p>
-        <p className="text-ui leading-snug text-muted-foreground">{description}</p>
-      </div>
-    </div>
+    <Empty className="min-h-40 flex-none gap-1 rounded-xl border border-dashed border-border/60 bg-background/40 px-5 py-6 md:px-5 md:py-6">
+      <EmptyHeader>
+        <EmptyTitle className="text-ui-lg">{title}</EmptyTitle>
+        <EmptyDescription>{description}</EmptyDescription>
+      </EmptyHeader>
+    </Empty>
   );
 }
 
 function InlineWarning({ children }: { children: ReactNode }) {
   return (
-    <div className="flex items-start gap-2 rounded-xl border border-amber-500/20 bg-amber-500/6 px-3 py-2.5 text-ui leading-snug text-muted-foreground">
-      <CircleAlertIcon className="mt-0.5 size-3.5 shrink-0 text-amber-500" />
+    <div className="flex items-start gap-2 rounded-xl border border-warning/20 bg-warning/6 px-3 py-2.5 text-ui leading-snug text-muted-foreground">
+      <CircleAlertIcon className="mt-0.5 size-3.5 shrink-0 text-warning" />
       <div>{children}</div>
     </div>
   );
@@ -310,7 +311,7 @@ function InlineWarning({ children }: { children: ReactNode }) {
 function InstalledStatus({ installed }: { installed: boolean }) {
   if (!installed) return null;
   return (
-    <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg border border-border/40 text-muted-foreground/60">
+    <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg border border-border/40 text-muted-foreground">
       <CheckIcon className="size-3.5" />
     </span>
   );
@@ -357,7 +358,7 @@ function SkillGridItem({ skill }: { skill: ProviderSkillDescriptor }) {
 }
 
 function SectionHeader({ title }: { title: string }) {
-  return <h2 className="px-3 pb-1 pt-2 text-[15px] font-semibold text-foreground">{title}</h2>;
+  return <h2 className="px-3 pb-1 pt-2 text-ui-lg font-semibold text-foreground">{title}</h2>;
 }
 
 // ── Main component ─────────────────────────────────────────────────────────
@@ -611,6 +612,7 @@ export function PluginLibrary() {
                   else setSkillSearch(e.target.value);
                 }}
                 placeholder={selectedTab === "plugins" ? "Search plugins" : "Search skills"}
+                aria-label={selectedTab === "plugins" ? "Search plugins" : "Search skills"}
                 className="text-ui leading-snug"
               />
             </InputGroup>
@@ -660,8 +662,16 @@ export function PluginLibrary() {
                   </div>
                 ) : filteredPluginEntries.length === 0 ? (
                   <EmptyPanel
-                    title="No installed plugins found"
-                    description="This view only shows plugins already available in your Codex setup."
+                    title={
+                      pluginSearchQuery
+                        ? "No plugins match your search"
+                        : "No installed plugins found"
+                    }
+                    description={
+                      pluginSearchQuery
+                        ? "Try a different search."
+                        : `This view only shows plugins already available in your ${providerLabel} setup.`
+                    }
                   />
                 ) : (
                   <div className="space-y-6">
@@ -694,7 +704,14 @@ export function PluginLibrary() {
                     ))}
                   </div>
                 ) : filteredSkills.length === 0 ? (
-                  <EmptyPanel title="No skills found" description="No skills match this search." />
+                  <EmptyPanel
+                    title={skillSearchQuery ? "No skills match your search" : "No skills found"}
+                    description={
+                      skillSearchQuery
+                        ? "Try a different search."
+                        : `Skills discovered in your ${providerLabel} setup appear here.`
+                    }
+                  />
                 ) : (
                   <div>
                     <SectionHeader title="Skills" />

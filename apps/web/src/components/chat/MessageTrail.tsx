@@ -562,7 +562,7 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
               aria-describedby={tooltipId}
               aria-current={index === anchorIndex ? "location" : undefined}
               onFocus={() => handleTickFocus(index)}
-              className="absolute rounded-full transition-[width,opacity] duration-[90ms] ease-out outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--color-border)] motion-reduce:transition-none"
+              className="absolute rounded-full transition-[width,opacity] duration-[90ms] ease-out outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
               style={{
                 left: TICK_LEFT_PAD_PX,
                 height: TICK_HEIGHT_PX,

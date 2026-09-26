@@ -163,7 +163,7 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
             ? [
                 {
                   id: "copy-path",
-                  label: "Copy Path",
+                  label: "Copy path",
                   icon: THREAD_CONTEXT_MENU_ICONS.copy,
                   separatorBefore: true,
                 },
@@ -173,7 +173,7 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
             ? [
                 {
                   id: "copy-thread-id",
-                  label: "Copy Thread ID",
+                  label: "Copy thread ID",
                   icon: THREAD_CONTEXT_MENU_ICONS.copy,
                 },
               ]

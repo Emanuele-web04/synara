@@ -34,6 +34,7 @@ import {
   SIDEBAR_ROW_FOCUS_CLASS_NAME,
   SIDEBAR_ROW_HOVER_CLASS_NAME,
   SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
+  SIDEBAR_ROW_RADIUS_CLASS_NAME,
   SIDEBAR_SECTION_LABEL_CLASS_NAME,
   sidebarHoverRevealHideClassName,
 } from "../sidebarRowStyles";
@@ -147,7 +148,7 @@ function ActivityThreadRow({
     scope: "activity",
     threadId: thread.id,
   });
-  const actionToneClassName = "text-muted-foreground/42";
+  const actionToneClassName = "text-muted-foreground/80";
   // One trailing slot, top-right, shared by every status: the accent dot for an
   // unread completion and the running spinner (or state dot) for everything
   // else — same rule and same glyphs the classic thread/project rows use.
@@ -185,10 +186,11 @@ function ActivityThreadRow({
           onDragEnd={endThreadDrag}
           data-testid={`activity-thread-${thread.id}`}
           className={cn(
-            "flex w-full min-w-0 cursor-pointer flex-col gap-1 rounded-lg px-2.5 py-2 text-left select-none",
+            "flex w-full min-w-0 cursor-pointer flex-col gap-1 px-2.5 py-2 text-left select-none",
+            SIDEBAR_ROW_RADIUS_CLASS_NAME,
             SIDEBAR_ROW_FOCUS_CLASS_NAME,
             isActive ? SIDEBAR_ROW_ACTIVE_CLASS_NAME : SIDEBAR_ROW_HOVER_CLASS_NAME,
-            isSettled && "opacity-55 transition-opacity hover:opacity-85",
+            isSettled && "opacity-70 transition-opacity hover:opacity-85",
           )}
         >
           <span
@@ -231,7 +233,7 @@ function ActivityThreadRow({
                 />
               ) : null}
               {branch ? (
-                <span className="flex min-w-0 items-center gap-1 text-ui-sm text-muted-foreground/70">
+                <span className="flex min-w-0 items-center gap-1 text-ui-sm text-muted-foreground/80">
                   <GitBranchIcon className={sidebarGlyphClass("meta")} aria-hidden />
                   <span className="max-w-36 truncate">{branch}</span>
                 </span>
@@ -407,7 +409,7 @@ function ActivityScopeMenu({
       </MenuTrigger>
       <ComposerPickerMenuPopup align="start" side="bottom" className="min-w-44">
         <MenuGroup>
-          <div className="px-2 py-1 sm:text-ui leading-snug font-medium text-muted-foreground">
+          <div className="px-2 py-1 text-ui leading-snug font-medium text-muted-foreground">
             Activity scope
           </div>
           <MenuRadioGroup
@@ -418,21 +420,21 @@ function ActivityScopeMenu({
               );
             }}
           >
-            <MenuRadioItem value="all" className="min-h-7 py-1 sm:text-ui leading-snug">
+            <MenuRadioItem value="all" className="min-h-7 py-1 text-ui leading-snug">
               All activity
             </MenuRadioItem>
             {options.map((option) => (
               <MenuRadioItem
                 key={option.kind === "project" ? option.projectId : "chats"}
                 value={option.kind === "project" ? option.projectId : "chats"}
-                className="min-h-7 py-1 sm:text-ui leading-snug"
+                className="min-h-7 py-1 text-ui leading-snug"
               >
                 <span className="min-w-0 flex-1 truncate">
                   {option.kind === "project"
                     ? resolveThreadProjectLabel(projectById.get(option.projectId))
                     : "Synara"}
                 </span>
-                <span className="ml-2 shrink-0 tabular-nums text-muted-foreground/60">
+                <span className="ml-2 shrink-0 tabular-nums text-muted-foreground/80">
                   {option.threadCount}
                 </span>
               </MenuRadioItem>
@@ -470,24 +472,24 @@ function ActivityFilterMenu({
       />
       <ComposerPickerMenuPopup align="end" side="bottom" className="min-w-44">
         <MenuGroup>
-          <div className="px-2 py-1 sm:text-ui leading-snug font-medium text-muted-foreground">
+          <div className="px-2 py-1 text-ui leading-snug font-medium text-muted-foreground">
             Group by
           </div>
           <MenuRadioGroup
             value={groupMode}
             onValueChange={(value) => onChangeGroupMode(value as ActivityGroupMode)}
           >
-            <MenuRadioItem value="time" className="min-h-7 py-1 sm:text-ui leading-snug">
+            <MenuRadioItem value="time" className="min-h-7 py-1 text-ui leading-snug">
               Time
             </MenuRadioItem>
-            <MenuRadioItem value="project" className="min-h-7 py-1 sm:text-ui leading-snug">
+            <MenuRadioItem value="project" className="min-h-7 py-1 text-ui leading-snug">
               Project
             </MenuRadioItem>
           </MenuRadioGroup>
         </MenuGroup>
         <MenuSeparator />
         <MenuItem
-          className="min-h-7 py-1 sm:text-ui leading-snug"
+          className="min-h-7 py-1 text-ui leading-snug"
           disabled={markAllReadDisabled}
           onClick={onMarkAllRead}
         >
@@ -510,8 +512,7 @@ function ActivityShowMoreRow({
   onShowLess: () => void;
 }) {
   if (!canShowMore && !canShowLess) return null;
-  const buttonClassName =
-    "h-7 cursor-pointer rounded-lg px-2.5 text-left text-ui text-muted-foreground/79 hover:text-foreground";
+  const buttonClassName = `h-7 cursor-pointer px-2.5 text-left text-ui text-muted-foreground/80 hover:text-foreground ${SIDEBAR_ROW_RADIUS_CLASS_NAME}`;
   return (
     <div className="flex w-full items-center gap-1">
       {canShowMore ? (
@@ -831,8 +832,8 @@ export function SidebarActivityView({
       </div>
 
       {isEmpty ? (
-        <div className="px-2 pt-4 text-center text-ui text-muted-foreground/58">
-          {threadsHydrated ? emptyLabel : "Loading activity..."}
+        <div className="px-2 pt-4 text-center text-ui text-muted-foreground/80">
+          {threadsHydrated ? emptyLabel : "Loading activity…"}
         </div>
       ) : groupMode === "project" ? (
         pagedProjectGroups.map(({ group, paging, threads: visibleThreads }) => (

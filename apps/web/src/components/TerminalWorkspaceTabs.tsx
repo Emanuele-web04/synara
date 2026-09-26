@@ -9,6 +9,7 @@
 
 import { cn } from "~/lib/utils";
 
+import { CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME } from "./chat/chatHeaderControls";
 import TerminalActivityIndicator from "./terminal/TerminalActivityIndicator";
 import { type ThreadTerminalWorkspaceLayout, type ThreadTerminalWorkspaceTab } from "../types";
 
@@ -36,13 +37,16 @@ export default function TerminalWorkspaceTabs({
   }
 
   const tabClassName =
-    "group relative -mb-px inline-flex h-7 shrink-0 items-center rounded-t-[10px] border border-b-0 px-3 text-ui leading-snug transition-colors";
+    "group relative -mb-px inline-flex h-7 shrink-0 items-center rounded-t-[10px] border border-b-0 px-3 text-ui-sm leading-snug transition-colors";
 
   return (
-    <div className="relative border-b border-border/70 bg-muted/10 px-3 sm:px-5">
+    <div
+      className={cn("relative bg-muted/10 px-3 sm:px-5", CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME)}
+    >
       <div className="flex min-w-0 items-end gap-1.5 overflow-x-auto pt-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <button
           type="button"
+          aria-pressed={activeTab === "terminal"}
           className={cn(
             tabClassName,
             activeTab === "terminal"
@@ -53,7 +57,7 @@ export default function TerminalWorkspaceTabs({
             onSelectTab("terminal");
           }}
         >
-          <span className="font-mono tracking-wide">Terminal</span>
+          <span>Terminal</span>
           <span className="ml-1.5 font-mono text-ui-xs text-muted-foreground">{terminalCount}</span>
           {terminalHasRunningActivity ? (
             <TerminalActivityIndicator className="ml-1.5 text-foreground/75" />
@@ -61,6 +65,7 @@ export default function TerminalWorkspaceTabs({
         </button>
         <button
           type="button"
+          aria-pressed={activeTab === "chat"}
           className={cn(
             tabClassName,
             activeTab === "chat"
@@ -71,9 +76,9 @@ export default function TerminalWorkspaceTabs({
             onSelectTab("chat");
           }}
         >
-          <span className="font-mono tracking-wide">Chat</span>
+          <span>Chat</span>
           {isWorking ? (
-            <span className="ml-1.5 inline-flex size-1.5 rounded-full bg-emerald-500/80" />
+            <TerminalActivityIndicator state="running" className="ml-1.5 text-foreground/75" />
           ) : null}
         </button>
       </div>

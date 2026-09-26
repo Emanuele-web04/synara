@@ -6,7 +6,7 @@
 // Note: raw <button>s for autocomplete-suggestion rows and tab-title activate
 // regions are intentional — list-row and tab semantics, not shadcn Buttons.
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
@@ -83,6 +83,7 @@ import {
   type BrowserAddressSuggestion,
 } from "./BrowserPanel.logic";
 import { BrowserTabStrip } from "./BrowserTabStrip";
+import { PanelStateMessage } from "./chat/PanelStateMessage";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import {
   useBrowserAnnotations,
@@ -505,7 +506,7 @@ function BrowserLocalServersHome({
     <div className="absolute inset-0 z-20 flex flex-col overflow-hidden bg-[#0d0d0d] text-white">
       <div className="mx-auto flex h-full w-full max-w-[52rem] flex-col px-8 py-9">
         <div className="flex shrink-0 items-center justify-between">
-          <p className="text-[15px] font-medium text-white/35">Local</p>
+          <p className="text-ui-sm font-medium text-white/35">Local</p>
           <Button
             type="button"
             variant="ghost"
@@ -524,14 +525,14 @@ function BrowserLocalServersHome({
           <div className="flex min-h-0 flex-1 flex-col items-center justify-center text-center">
             {loading ? (
               <>
-                <RefreshCwIcon className="mb-4 size-12 animate-spin text-white/20" />
-                <p className="text-base font-semibold text-white">Scanning local servers</p>
+                <LoaderCircleIcon className="mb-4 size-10 animate-spin text-white/60" />
+                <p className="text-ui-lg font-semibold text-white">Scanning local servers</p>
                 <p className="mt-2 text-ui leading-snug text-white/35">Checking localhost ports</p>
               </>
             ) : (
               <>
                 <GlobeIcon className="mb-4 size-16 stroke-[1.5] text-white/30" />
-                <p className="text-base font-semibold text-white">No local servers</p>
+                <p className="text-ui-lg font-semibold text-white">No local servers</p>
                 <p className="mt-2 text-ui leading-snug text-white/35">Try another browser URL</p>
               </>
             )}
@@ -642,6 +643,10 @@ export function BrowserPanel({
   // Programmatic focus (e.g. right after "New tab") should not pop the suggestion list
   // over the tab strip; the user has to type or click into the field first.
   const [addressSuggestionsSuppressed, setAddressSuggestionsSuppressed] = useState(false);
+  // aria-activedescendant index for the address listbox; -1 means the typed value.
+  const [activeAddressSuggestionIndex, setActiveAddressSuggestionIndex] = useState(-1);
+  const addressSuggestionsId = useId();
+  const addressSuggestionListRef = useRef<HTMLDivElement>(null);
   const [workspaceReady, setWorkspaceReady] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
   const [browserRendererGeneration, setBrowserRendererGeneration] = useState(0);
@@ -1363,6 +1368,7 @@ export function BrowserPanel({
     }
     isAddressEditingRef.current = false;
     setIsAddressFocused(false);
+    setActiveAddressSuggestionIndex(-1);
     const normalizedAddress = normalizeBrowserAddressInput(addressValue);
     addressDraftsByTabIdRef.current.set(activeTab.id, normalizedAddress);
     setAddressValue(normalizedAddress);
@@ -1426,6 +1432,7 @@ export function BrowserPanel({
 
       isAddressEditingRef.current = false;
       setIsAddressFocused(false);
+      setActiveAddressSuggestionIndex(-1);
       setAddressValue(suggestion.url);
 
       const tabId = suggestion.tabId;
@@ -1696,6 +1703,70 @@ export function BrowserPanel({
     [api, ensureLiveRuntime, onClosePanel, runBrowserAction, threadId, upsertThreadState],
   );
 
+  // Blur only closes the suggestion list when focus leaves both the input and
+  // the listbox (combobox containment) — moving into the list keeps it open.
+  const handleAddressBlur = (event: React.FocusEvent<HTMLElement>) => {
+    const nextFocus = event.relatedTarget;
+    if (
+      nextFocus instanceof Node &&
+      (nextFocus === addressInputRef.current ||
+        (addressSuggestionListRef.current?.contains(nextFocus) ?? false))
+    ) {
+      return;
+    }
+    isAddressEditingRef.current = false;
+    setIsAddressFocused(false);
+    setAddressSuggestionsSuppressed(false);
+    setActiveAddressSuggestionIndex(-1);
+  };
+
+  // Combobox keyboard path: arrows move the activedescendant highlight, Enter
+  // picks the highlighted suggestion (otherwise the form submit runs the typed
+  // value), Escape collapses the list while keeping focus in the field.
+  const handleAddressKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!showBrowserAddressSuggestions) {
+      if (event.key === "ArrowDown") {
+        setAddressSuggestionsSuppressed(false);
+      }
+      return;
+    }
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveAddressSuggestionIndex((index) =>
+        Math.min(index + 1, browserAddressSuggestions.length - 1),
+      );
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveAddressSuggestionIndex((index) => Math.max(index - 1, -1));
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      setAddressSuggestionsSuppressed(true);
+      setActiveAddressSuggestionIndex(-1);
+    } else if (event.key === "Enter" && activeAddressSuggestionIndex >= 0) {
+      const suggestion = browserAddressSuggestions[activeAddressSuggestionIndex];
+      if (suggestion) {
+        event.preventDefault();
+        onChooseSuggestion(suggestion);
+      }
+    }
+  };
+
+  const activeAddressSuggestionId =
+    showBrowserAddressSuggestions &&
+    activeAddressSuggestionIndex >= 0 &&
+    activeAddressSuggestionIndex < browserAddressSuggestions.length
+      ? `${addressSuggestionsId}-option-${activeAddressSuggestionIndex}`
+      : undefined;
+
+  // The listbox is max-h-64 with up to 6 two-line rows — keep the
+  // aria-activedescendant row scrolled into view while arrowing.
+  useEffect(() => {
+    if (activeAddressSuggestionIndex < 0) return;
+    addressSuggestionListRef.current
+      ?.querySelector('[aria-selected="true"]')
+      ?.scrollIntoView({ block: "nearest" });
+  }, [activeAddressSuggestionIndex]);
+
   const header = (
     <div
       className={cn("flex min-w-0 flex-1 items-center gap-2", mode === "floating" && "cursor-grab")}
@@ -1782,6 +1853,13 @@ export function BrowserPanel({
           <Input
             ref={addressInputRef}
             value={addressValue}
+            role="combobox"
+            aria-autocomplete="list"
+            aria-expanded={showBrowserAddressSuggestions}
+            aria-controls={
+              showBrowserAddressSuggestions ? `${addressSuggestionsId}-list` : undefined
+            }
+            aria-activedescendant={activeAddressSuggestionId}
             onChange={(event) => {
               if (!isLiveRuntime) {
                 requestLiveRuntime();
@@ -1789,6 +1867,7 @@ export function BrowserPanel({
               const nextValue = event.target.value;
               isAddressEditingRef.current = true;
               setAddressSuggestionsSuppressed(false);
+              setActiveAddressSuggestionIndex(-1);
               setAddressValue(nextValue);
               if (activeTab) {
                 addressDraftsByTabIdRef.current.set(activeTab.id, nextValue);
@@ -1801,19 +1880,12 @@ export function BrowserPanel({
               isAddressEditingRef.current = true;
               setIsAddressFocused(true);
             }}
-            onBlur={() => {
-              isAddressEditingRef.current = false;
-              setIsAddressFocused(false);
-              setAddressSuggestionsSuppressed(false);
-            }}
+            onBlur={handleAddressBlur}
             onMouseDown={() => {
               setAddressSuggestionsSuppressed(false);
+              setActiveAddressSuggestionIndex(-1);
             }}
-            onKeyDown={(event) => {
-              if (event.key === "ArrowDown") {
-                setAddressSuggestionsSuppressed(false);
-              }
-            }}
+            onKeyDown={handleAddressKeyDown}
             placeholder="Search or enter a URL"
             className={cn(
               "min-w-0 [-webkit-app-region:no-drag]",
@@ -1823,13 +1895,30 @@ export function BrowserPanel({
           />
         </form>
         {showBrowserAddressSuggestions ? (
-          <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-30 overflow-hidden rounded-lg border border-border bg-popover shadow-lg [-webkit-app-region:no-drag]">
-            <div className="max-h-64 overflow-auto p-1">
-              {browserAddressSuggestions.map((suggestion) => (
+          <div
+            ref={addressSuggestionListRef}
+            onBlur={handleAddressBlur}
+            className="absolute left-0 right-0 top-[calc(100%+6px)] z-30 overflow-hidden rounded-lg border border-border bg-popover shadow-lg [-webkit-app-region:no-drag]"
+          >
+            <div
+              role="listbox"
+              id={`${addressSuggestionsId}-list`}
+              aria-label="Address suggestions"
+              className="max-h-64 overflow-auto p-1"
+            >
+              {browserAddressSuggestions.map((suggestion, index) => (
                 <button
                   key={suggestion.id}
+                  id={`${addressSuggestionsId}-option-${index}`}
                   type="button"
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui leading-snug text-foreground transition-colors hover:bg-[var(--sidebar-accent)] hover:text-foreground"
+                  role="option"
+                  aria-selected={index === activeAddressSuggestionIndex}
+                  tabIndex={-1}
+                  className={cn(
+                    "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-ui leading-snug text-foreground transition-colors hover:bg-[var(--sidebar-accent)] hover:text-foreground",
+                    index === activeAddressSuggestionIndex &&
+                      "bg-[var(--sidebar-accent)] text-foreground",
+                  )}
                   onMouseDown={(event) => {
                     event.preventDefault();
                     onChooseSuggestion(suggestion);
@@ -1964,7 +2053,9 @@ export function BrowserPanel({
     return (
       <div className="contents" data-browser-panel="true">
         <DiffPanelShell mode={mode} header={isFloatingMode ? null : header}>
-          <DiffPanelLoadingState label="Browser is unavailable." />
+          <PanelStateMessage density="comfortable" fill="flex">
+            <p>Browser is unavailable.</p>
+          </PanelStateMessage>
         </DiffPanelShell>
       </div>
     );
@@ -1993,7 +2084,7 @@ export function BrowserPanel({
               />
             ) : !workspaceReady ? (
               <div className="absolute inset-0 z-10">
-                <DiffPanelLoadingState label="Starting browser..." />
+                <DiffPanelLoadingState label="Starting browser…" />
               </div>
             ) : null}
             {isLiveRuntime ? (

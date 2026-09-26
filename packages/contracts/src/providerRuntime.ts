@@ -761,6 +761,9 @@ export type VcsStateChangedPayload = typeof VcsStateChangedPayload.Type;
 const RuntimeWarningPayload = Schema.Struct({
   message: TrimmedNonEmptyStringSchema,
   detail: Schema.optional(Schema.Unknown),
+  // The provider is retrying on its own (e.g. Codex "Reconnecting... n/5");
+  // consecutive retryable warnings of a turn collapse to the latest attempt.
+  willRetry: Schema.optional(Schema.Boolean),
 });
 export type RuntimeWarningPayload = typeof RuntimeWarningPayload.Type;
 

@@ -19,7 +19,7 @@ export function KanbanStatusIcon({
     return (
       <svg
         viewBox="0 0 14 14"
-        className={cn("size-3.5 shrink-0 text-[#5e6ad2]", className)}
+        className={cn("size-3.5 shrink-0 text-status-merged", className)}
         aria-hidden
       >
         <circle cx="7" cy="7" r="7" fill="currentColor" />
@@ -38,7 +38,7 @@ export function KanbanStatusIcon({
     return (
       <svg
         viewBox="0 0 14 14"
-        className={cn("size-3.5 shrink-0 text-[#f2c94c]", className)}
+        className={cn("size-3.5 shrink-0 text-warning", className)}
         aria-hidden
       >
         <circle cx="7" cy="7" r="6" fill="none" stroke="currentColor" strokeWidth="1.7" />

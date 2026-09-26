@@ -42,7 +42,7 @@ function ProviderAvatarWithTerminal({
     terminalCount > 1
       ? `${terminalCount} ${pluralize(terminalCount, "terminal")} open`
       : (terminalStatus?.label ?? "Terminal open");
-  const badgeColorClass = terminalStatus?.colorClass ?? "text-muted-foreground/55";
+  const badgeColorClass = terminalStatus?.colorClass ?? "text-muted-foreground/80";
 
   const hasHandoff = Boolean(handoffSourceProvider);
   const containerClass = hasHandoff
@@ -135,7 +135,7 @@ function renderSubagentLabel(input: {
         {presentation.nickname ?? presentation.primaryLabel}
       </span>
       {supportingLabel ? (
-        <span className={cn("ml-1 text-muted-foreground/48", input.roleClassName)}>
+        <span className={cn("ml-1 text-muted-foreground/80", input.roleClassName)}>
           {presentation.role ? `(${presentation.role})` : supportingLabel}
         </span>
       ) : null}
@@ -244,7 +244,7 @@ export function SidebarThreadRowContent({
           {isSubagentThread ? (
             <SidebarSubagentLabel
               thread={thread}
-              roleClassName={variant === "standard" ? "text-muted-foreground/42" : undefined}
+              roleClassName={variant === "standard" ? "text-muted-foreground/80" : undefined}
             />
           ) : (
             thread.title

@@ -51,7 +51,11 @@ import { isLocalImageMarkdownSrc } from "../lib/localImageUrls";
 import { repairMarkdownTableDelimiters } from "../lib/markdownTableRepair";
 import { showFileReferenceContextMenu } from "../lib/fileReferenceContextMenu";
 import { useTheme } from "../hooks/useTheme";
-import { useSmoothStreamedText } from "../hooks/useSmoothStreamedText";
+import {
+  revealWordEnd,
+  useSmoothStreamedText,
+  useStreamingFadeLinger,
+} from "../hooks/useSmoothStreamedText";
 import { useThrottledStreamingValue } from "../hooks/useThrottledStreamingValue";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../lib/workspaceFileOpener";
 import { useQuery } from "@tanstack/react-query";
@@ -162,6 +166,15 @@ interface ChatMarkdownProps {
    * inline-code chip uses one of these when the match is unique.
    */
   knownAbsoluteFilePaths?: ReadonlyArray<string> | undefined;
+  /**
+   * Is the transcript following the live tail? The timeline passes its
+   * `followLiveOutput`; standalone usages default on. When false (reader
+   * scrolled into history) the per-word opacity animation is suspended —
+   * running compositor animations on an off-screen row inside the virtualized
+   * list perturbs scroll anchoring. Text arriving meanwhile renders instant;
+   * on re-follow the accumulated words are pinned instant in one commit.
+   */
+  followLiveOutput?: boolean | undefined;
 }
 
 // Source line of the enclosing task-list item, provided by the `li` override.
@@ -1056,6 +1069,7 @@ interface MarkdownRenderContextValue {
   resolvedTheme: ReturnType<typeof useTheme>["resolvedTheme"];
   terminalContexts: ChatMarkdownProps["terminalContexts"];
   sourceText: string;
+  wordFade: { enabled: boolean; instantBelow: number };
 }
 
 const MarkdownRenderContext = createContext<MarkdownRenderContextValue | null>(null);
@@ -1284,6 +1298,7 @@ const MARKDOWN_COMPONENTS: Components = {
       children?: ReactNode;
       [CHAT_FIND_TEXT_START_ATTRIBUTE]?: string | undefined;
     }) {
+      const { wordFade } = useContext(MarkdownRenderContext)!;
       const rawSourceOffset = props[CHAT_FIND_TEXT_START_ATTRIBUTE];
       const sourceOffset =
         rawSourceOffset === undefined ? Number.NaN : Number.parseInt(rawSourceOffset, 10);
@@ -1291,7 +1306,13 @@ const MARKDOWN_COMPONENTS: Components = {
       if (!Number.isFinite(sourceOffset) || text.length === 0) {
         return <>{props.children}</>;
       }
-      return <FindAwareMarkdownText text={text} sourceOffset={sourceOffset} />;
+      return (
+        <FindAwareMarkdownText
+          text={text}
+          sourceOffset={sourceOffset}
+          fade={wordFade.enabled ? wordFade : undefined}
+        />
+      );
     },
   } as unknown as Components),
 };
@@ -1311,12 +1332,14 @@ function ChatMarkdown({
   variant: variantProp,
   mentionReferences,
   terminalContexts,
+  followLiveOutput: followLiveOutputProp,
 }: ChatMarkdownProps) {
   // Defaults applied with ?? in the body, not in the destructuring: default
   // values in parameter destructuring make React Compiler 1.0.0 bail on the
   // whole component (BuildHIR AssignmentPattern), losing its auto-memoization.
   const isStreaming = isStreamingProp ?? false;
   const className = classNameProp ?? "text-sm leading-relaxed";
+  const followLiveOutput = followLiveOutputProp ?? true;
   const variant = variantProp ?? "assistant";
   const findQuery = findQueryProp ?? "";
   const findActiveRange = findActiveRangeProp ?? null;
@@ -1336,8 +1359,46 @@ function ChatMarkdown({
   // Reveal streamed text at a steady, adaptive cadence so tokens appear fluidly instead of
   // in the ~100ms network clumps that land in the store. No-ops (returns `text`) when not
   // streaming or under reduced motion. Governs cadence only; the deferred value below still
-  // bounds the markdown re-parse cost.
-  const smoothedText = useSmoothStreamedText(text, isStreaming);
+  // bounds the markdown re-parse cost. The reveal keeps pacing while the transcript is
+  // detached — pausing it would snap the row to full height and shift the reader's anchor.
+  const smoothedText = useSmoothStreamedText(text, isStreaming, followLiveOutput);
+  // Once a message has streamed it keeps per-word fade spans for its life —
+  // dropping them at settle would swap every element and replay all fades.
+  // Initialized from isStreaming so a message mounted mid-stream is born with
+  // its spans: a second commit that re-wraps the whole body would burst
+  // childList mutations into the virtualized list's measurement pass.
+  // State+effect (not a render-time ref): refs in render are a React Compiler
+  // bailout and this file must compile clean.
+  const [wordFadeEnabled, setWordFadeEnabled] = useState(isStreaming);
+  useEffect(() => {
+    if (isStreaming) setWordFadeEnabled(true);
+  }, [isStreaming]);
+  // Words present at mount render marked "instant": kills the first-render
+  // bloom when a stream starts with initial text and the re-fade a
+  // virtualization remount would otherwise replay for already-arrived words.
+  const [wordFadeInstantBelow, setWordFadeInstantBelow] = useState(() =>
+    revealWordEnd(text, text.length, true),
+  );
+  // While the transcript is detached (reader scrolled up into history), the
+  // per-word opacity animation is suspended — running compositor animations
+  // inside the virtualized list perturbs scroll anchoring. Words emitted
+  // meanwhile render instant via effectiveInstantBelow below; the ref tracks
+  // how far that ran so a single commit on re-follow can pin them instant
+  // instead of re-rendering once per emit.
+  const detachedWatermarkRef = useRef(0);
+  useEffect(() => {
+    if (!followLiveOutput) {
+      detachedWatermarkRef.current = smoothedText.length;
+      return;
+    }
+    if (wordFadeEnabled && detachedWatermarkRef.current > wordFadeInstantBelow) {
+      setWordFadeInstantBelow(detachedWatermarkRef.current);
+    }
+    detachedWatermarkRef.current = 0;
+  }, [followLiveOutput, wordFadeEnabled, smoothedText.length, wordFadeInstantBelow]);
+  const effectiveInstantBelow = followLiveOutput ? wordFadeInstantBelow : smoothedText.length;
+  const revealing = isStreaming && smoothedText !== text;
+  const wordFading = useStreamingFadeLinger(isStreaming || revealing) && followLiveOutput;
   // The dollar rewrite exists to disambiguate math from currency; the user
   // variant has no math, so its text must stay byte-for-byte what was typed.
   // Table repair runs first so find offsets use the same normalized text.
@@ -1399,6 +1460,7 @@ function ChatMarkdown({
       resolvedTheme,
       terminalContexts,
       sourceText,
+      wordFade: { enabled: wordFadeEnabled, instantBelow: effectiveInstantBelow },
     }),
     [
       cwd,
@@ -1412,13 +1474,15 @@ function ChatMarkdown({
       resolvedTheme,
       terminalContexts,
       sourceText,
+      wordFadeEnabled,
+      effectiveInstantBelow,
     ],
   );
 
   return (
     <div
       ref={rootRef}
-      className={`chat-markdown ${isUserVariant ? "chat-markdown--user " : ""}w-full min-w-0 ${className} text-foreground`}
+      className={`chat-markdown ${isUserVariant ? "chat-markdown--user " : ""}${wordFading ? "chat-markdown--word-fading " : ""}w-full min-w-0 ${className} text-foreground`}
       style={style}
     >
       <ChatFindRenderProvider

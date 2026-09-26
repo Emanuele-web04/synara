@@ -29,7 +29,7 @@ function DiffLoadingFallback(props: { mode: DiffPanelMode; hideHeader?: boolean 
       mode={props.mode}
       header={props.hideHeader ? null : <DiffPanelHeaderSkeleton />}
     >
-      <DiffPanelLoadingState label="Loading diff viewer..." />
+      <DiffPanelLoadingState label="Loading diff viewer…" />
     </DiffPanelShell>
   );
 }

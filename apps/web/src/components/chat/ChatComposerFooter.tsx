@@ -38,6 +38,10 @@ interface ChatComposerFooterProps {
     phase: SessionPhase;
     busy: boolean;
     connecting: boolean;
+    /** The Stop control's visibility rule: live turn, or a pending turn still connecting. */
+    interruptible: boolean;
+    /** Interrupt dispatched, waiting for the turn to settle. */
+    stopping: boolean;
     expired: boolean;
     hasPendingCacheReview?: boolean;
     preparingImages: boolean;
@@ -160,20 +164,25 @@ export function ChatComposerFooter({
             }
           >
             {pendingInput.responding
-              ? "Submitting..."
+              ? "Submitting…"
               : pendingInput.progress.isLastQuestion
                 ? "Submit answers"
                 : "Next question"}
           </Button>
-        ) : submission.phase === "running" || submission.connecting ? (
+        ) : submission.interruptible ? (
           <Button
             type="button"
             variant="prominent"
             size="icon-xs"
-            className="sm:size-[26px]"
+            className="sm:size-7"
             onClick={submission.onInterrupt}
-            aria-label="Stop generation"
-            title="Stop the current response. On Mac, press Ctrl+C to interrupt."
+            disabled={submission.stopping}
+            aria-label={submission.stopping ? "Stopping" : "Stop generation"}
+            title={
+              submission.stopping
+                ? "Stopping…"
+                : "Stop the current response (Esc). On Mac, press Ctrl+C to interrupt."
+            }
           >
             <span aria-hidden="true" className="block size-2 rounded-[1px] bg-current" />
           </Button>
@@ -191,7 +200,7 @@ export function ChatComposerFooter({
                   submission.hasPendingCacheReview
                 }
               >
-                {submission.connecting || submission.busy ? "Sending..." : "Refine"}
+                {submission.connecting || submission.busy ? "Sending…" : "Refine"}
               </Button>
             ) : (
               <div className="flex items-center">
@@ -206,7 +215,7 @@ export function ChatComposerFooter({
                     submission.hasPendingCacheReview
                   }
                 >
-                  {submission.connecting || submission.busy ? "Sending..." : "Implement"}
+                  {submission.connecting || submission.busy ? "Sending…" : "Implement"}
                 </Button>
                 <Menu>
                   <MenuTrigger

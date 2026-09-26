@@ -259,7 +259,7 @@ export function BrowserCookieImport({
               }}
             >
               {busy
-                ? "Working..."
+                ? "Working…"
                 : scope === "profile"
                   ? "Import all sites"
                   : "Import for this site"}

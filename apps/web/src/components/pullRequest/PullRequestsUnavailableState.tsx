@@ -90,7 +90,7 @@ function CommandLine({ command }: { command: string }) {
         className={cn(
           PR_FINE_TEXT_CLASS_NAME,
           "flex shrink-0 items-center gap-1 text-muted-foreground transition-colors group-hover:text-foreground",
-          copied && "text-emerald-600 dark:text-emerald-400",
+          copied && "text-status-success",
         )}
       >
         {copied ? (

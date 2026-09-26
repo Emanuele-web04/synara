@@ -40,7 +40,7 @@ export function ThreadPrStatusBadge({
             type="button"
             aria-label={tooltip}
             className={cn(
-              "inline-flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-sm outline-hidden transition-colors focus-visible:ring-1 focus-visible:ring-ring",
+              "inline-flex size-6 shrink-0 -m-1 cursor-pointer items-center justify-center rounded-sm outline-hidden transition-colors focus-visible:ring-1 focus-visible:ring-ring",
               presentation.colorClass,
               className,
             )}

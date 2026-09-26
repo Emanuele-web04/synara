@@ -76,6 +76,78 @@ it.each(["info", "warning"])("projects Pi %s notifications as notices", (type) =
   expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
 });
 
+describe("runtime.warning willRetry passthrough", () => {
+  it("forwards an explicit willRetry flag (Codex reconnect warnings)", () => {
+    const [activity] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "runtime.warning",
+        eventId: "codex-reconnect-warning",
+        turnId: TURN_ID,
+        payload: { message: "Reconnecting... 2/5", willRetry: true },
+      }),
+    );
+    expect(activity?.payload).toMatchObject({ willRetry: true });
+    expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
+  });
+
+  it("omits willRetry for warnings that are not provider retries", () => {
+    const [activity] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "runtime.warning",
+        eventId: "plain-warning",
+        turnId: TURN_ID,
+        payload: { message: "Something unusual happened" },
+      }),
+    );
+    expect(Object.keys(activity?.payload as Record<string, unknown>)).not.toContain("willRetry");
+  });
+
+  it("marks OpenCode session.next.retried warnings as retries", () => {
+    const [activity] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        provider: "opencode",
+        type: "runtime.warning",
+        eventId: "opencode-retried",
+        turnId: TURN_ID,
+        payload: { message: "model overloaded", detail: {} },
+        raw: { source: "opencode.event", payload: { type: "session.next.retried" } },
+      }),
+    );
+    expect(activity).toMatchObject({ summary: "OpenCode retrying" });
+    expect(activity?.payload).toMatchObject({ willRetry: true });
+  });
+
+  it("marks OpenCode session.status warnings as retries", () => {
+    // The adapter only emits a warning from session.status when
+    // status.type === "retry".
+    const [activity] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        provider: "opencode",
+        type: "runtime.warning",
+        eventId: "opencode-status-retry",
+        turnId: TURN_ID,
+        payload: { message: "rate limited, retrying", detail: {} },
+        raw: { source: "opencode.event", payload: { type: "session.status" } },
+      }),
+    );
+    expect(activity?.payload).toMatchObject({ willRetry: true });
+  });
+
+  it("does not mark OpenCode warnings with other native types as retries", () => {
+    const [activity] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        provider: "opencode",
+        type: "runtime.warning",
+        eventId: "opencode-other",
+        turnId: TURN_ID,
+        payload: { message: "something else", detail: {} },
+        raw: { source: "opencode.event", payload: { type: "session.idle" } },
+      }),
+    );
+    expect(Object.keys(activity?.payload as Record<string, unknown>)).not.toContain("willRetry");
+  });
+});
+
 describe("projected activities satisfy the orchestration command schema", () => {
   it("omits an absent approval request id instead of emitting an explicit undefined", () => {
     expectSchemaValidActivities(

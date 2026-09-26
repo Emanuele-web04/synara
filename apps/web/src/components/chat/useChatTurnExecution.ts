@@ -34,6 +34,7 @@ import {
 } from "../../composerDraftStore";
 import {
   cloneComposerImageAttachment,
+  composerDraftIsEmpty,
   stageUploadComposerAttachments,
 } from "../../lib/composerSend";
 import { armQueuedComposerSteerGate } from "../../lib/queuedComposerDrain";
@@ -137,6 +138,8 @@ type ChatTurnExecutionInput = Pick<
   | "composerTerminalContextsRef"
   | "composerPastedTextsRef"
   | "composerPullRequestContextsRef"
+  | "selectedComposerSkillsRef"
+  | "selectedComposerMentionsRef"
   | "setPrompt"
   | "setComposerCursor"
   | "addComposerImagesToDraft"
@@ -188,6 +191,8 @@ export function useChatTurnExecution({
   composerTerminalContextsRef,
   composerPastedTextsRef,
   composerPullRequestContextsRef,
+  selectedComposerSkillsRef,
+  selectedComposerMentionsRef,
   setPrompt,
   setComposerCursor,
   addComposerImagesToDraft,
@@ -770,15 +775,19 @@ export function useChatTurnExecution({
         if (
           queuedChatTurn === null &&
           !turnStartSucceeded &&
-          promptRef.current.length === 0 &&
-          composerImagesRef.current.length === 0 &&
-          composerFilesRef.current.length === 0 &&
-          composerAssistantSelectionsRef.current.length === 0 &&
-          composerBrowserAnnotationsRef.current.length === 0 &&
-          composerFileCommentsRef.current.length === 0 &&
-          composerTerminalContextsRef.current.length === 0 &&
-          composerPastedTextsRef.current.length === 0 &&
-          composerPullRequestContextsRef.current.length === 0
+          composerDraftIsEmpty([
+            promptRef,
+            composerImagesRef,
+            composerFilesRef,
+            composerAssistantSelectionsRef,
+            composerBrowserAnnotationsRef,
+            composerFileCommentsRef,
+            composerTerminalContextsRef,
+            composerPastedTextsRef,
+            composerPullRequestContextsRef,
+            selectedComposerSkillsRef,
+            selectedComposerMentionsRef,
+          ])
         ) {
           setOptimisticUserMessages((existing) => {
             const removed = existing.filter((message) => message.id === messageIdForSend);
@@ -863,6 +872,8 @@ export function useChatTurnExecution({
       composerTerminalContextsRef,
       composerPastedTextsRef,
       composerPullRequestContextsRef,
+      selectedComposerSkillsRef,
+      selectedComposerMentionsRef,
       setPrompt,
       setComposerCursor,
       addComposerImagesToDraft,

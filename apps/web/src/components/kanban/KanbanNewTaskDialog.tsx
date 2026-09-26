@@ -287,6 +287,18 @@ export function KanbanNewTaskDialog({
   const handleCreateRequest = useCallback(() => {
     void handleCreate();
   }, [handleCreate]);
+  // The busy labels already explain a disabled state mid-flight; when the button
+  // is blocked on input, name the missing piece on hover/AT.
+  const createDisabledReason =
+    isCreating || isPreparingImages
+      ? undefined
+      : !hasSendableContent
+        ? "Describe the task to create it"
+        : selectedProjectId === null
+          ? "Choose a project first"
+          : selectedModel === null
+            ? "Choose a model first"
+            : undefined;
   const {
     composerCursor,
     composerTrigger,
@@ -469,7 +481,10 @@ export function KanbanNewTaskDialog({
               onProjectIdChange={setSelectedProjectId}
             />
             <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground/50" aria-hidden />
-            <DialogTitle className="font-system-ui truncate font-medium text-ui leading-none">
+            <DialogTitle
+              className="font-system-ui truncate font-medium text-ui leading-none"
+              title="New task"
+            >
               New task
             </DialogTitle>
           </div>
@@ -489,7 +504,7 @@ export function KanbanNewTaskDialog({
           <div
             className={cn(
               "relative min-h-28 rounded-lg border border-transparent px-0 py-1 transition-colors",
-              isDragOverComposer && "border-sky-400/40 bg-sky-500/5",
+              isDragOverComposer && "border-info/40 bg-info/5",
             )}
           >
             {composerTrigger ? (
@@ -671,8 +686,13 @@ export function KanbanNewTaskDialog({
                 />
                 Send as draft
               </label>
-              <Button size="sm" onClick={handleCreateRequest} disabled={!canCreate}>
-                {isCreating ? "Creating..." : isPreparingImages ? "Optimizing..." : "Create task"}
+              <Button
+                size="sm"
+                onClick={handleCreateRequest}
+                disabled={!canCreate}
+                title={createDisabledReason}
+              >
+                {isCreating ? "Creating…" : isPreparingImages ? "Optimizing…" : "Create task"}
               </Button>
             </div>
           </div>

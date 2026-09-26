@@ -3,20 +3,17 @@ import { type TimestampFormat } from "../appSettings";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { ScrollArea } from "./ui/scroll-area";
+import { DisclosureChevron } from "./ui/DisclosureChevron";
 import ChatMarkdown from "./ChatMarkdown";
-import {
-  CheckIcon,
-  ChevronDownIcon,
-  ChevronRightIcon,
-  LoaderIcon,
-  PanelRightCloseIcon,
-} from "~/lib/icons";
+import { CheckIcon, LoaderIcon, PanelRightCloseIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import type { ActiveTaskListState } from "../session-logic";
 import type { LatestProposedPlanState } from "../session-logic";
 import { formatTimestamp } from "../timestampFormat";
 import { proposedPlanTitle, stripDisplayedPlanMarkdown } from "../proposedPlan";
 import { ProposedPlanActions } from "./chat/ProposedPlanActions";
+import { CHAT_SURFACE_HEADER_ROW_CLASS_NAME } from "./chat/chatHeaderControls";
+import { TRANSCRIPT_TEXT_BUTTON_CLASS_NAME } from "./chat/MessageActionButton";
 
 function stepStatusIcon(status: string): React.ReactNode {
   if (status === "completed") {
@@ -63,9 +60,9 @@ const PlanSidebar = function PlanSidebar({
   const planTitle = planMarkdown ? proposedPlanTitle(planMarkdown) : null;
 
   return (
-    <div className="flex h-full w-[340px] shrink-0 flex-col border-l border-border/70 bg-card/50">
+    <div className="flex h-full w-[340px] shrink-0 flex-col border-l border-[var(--app-surface-divider)] bg-card/50">
       {/* Header */}
-      <div className="flex h-12 shrink-0 items-center justify-between border-b border-border/60 px-3">
+      <div className={cn(CHAT_SURFACE_HEADER_ROW_CLASS_NAME, "justify-between px-3")}>
         <div className="flex items-center gap-2">
           <Badge
             variant="secondary"
@@ -74,7 +71,7 @@ const PlanSidebar = function PlanSidebar({
             Plan
           </Badge>
           {activeTaskList ? (
-            <span className="text-ui-sm text-muted-foreground/60">
+            <span className="text-ui-sm text-muted-foreground/80">
               {formatTimestamp(activeTaskList.createdAt, timestampFormat)}
             </span>
           ) : null}
@@ -85,7 +82,7 @@ const PlanSidebar = function PlanSidebar({
               planMarkdown={planMarkdown}
               workspaceRoot={workspaceRoot}
               variant="ghost"
-              buttonClassName="text-muted-foreground/50 hover:text-foreground/70"
+              buttonClassName="text-muted-foreground hover:text-foreground"
             />
           ) : null}
           <Button
@@ -93,7 +90,7 @@ const PlanSidebar = function PlanSidebar({
             variant="ghost"
             onClick={onClose}
             aria-label="Close plan sidebar"
-            className="text-muted-foreground/50 hover:text-foreground/70"
+            className="text-muted-foreground hover:text-foreground"
           >
             <PanelRightCloseIcon className="size-3.5" />
           </Button>
@@ -113,7 +110,7 @@ const PlanSidebar = function PlanSidebar({
           {/* Tasks */}
           {activeTaskList && activeTaskList.tasks.length > 0 ? (
             <div className="space-y-1">
-              <p className="mb-2 text-ui-xs font-semibold text-muted-foreground/40">Steps</p>
+              <p className="mb-2 text-ui-xs font-semibold text-muted-foreground">Steps</p>
               {activeTaskList.tasks.map((task) => (
                 <div
                   key={`${task.status}:${task.task}`}
@@ -130,10 +127,10 @@ const PlanSidebar = function PlanSidebar({
                     className={cn(
                       "text-ui-lg leading-snug",
                       task.status === "completed"
-                        ? "text-muted-foreground/50 line-through decoration-muted-foreground/20"
+                        ? "text-muted-foreground/80 line-through decoration-muted-foreground/30"
                         : task.status === "inProgress"
                           ? "text-foreground/90"
-                          : "text-muted-foreground/70",
+                          : "text-muted-foreground/80",
                     )}
                   >
                     {task.task}
@@ -148,15 +145,18 @@ const PlanSidebar = function PlanSidebar({
             <div className="space-y-2">
               <button
                 type="button"
-                className="group flex w-full items-center gap-1.5 text-left"
+                className={cn(
+                  "group flex w-full items-center gap-1.5 rounded-sm text-left",
+                  TRANSCRIPT_TEXT_BUTTON_CLASS_NAME,
+                )}
+                aria-expanded={proposedPlanExpanded}
                 onClick={() => setProposedPlanExpanded((v) => !v)}
               >
-                {proposedPlanExpanded ? (
-                  <ChevronDownIcon className="size-3 shrink-0 text-muted-foreground/40 transition-transform" />
-                ) : (
-                  <ChevronRightIcon className="size-3 shrink-0 text-muted-foreground/40 transition-transform" />
-                )}
-                <span className="text-ui-xs font-semibold text-muted-foreground/40 group-hover:text-muted-foreground/60">
+                <DisclosureChevron
+                  open={proposedPlanExpanded}
+                  className="shrink-0 text-muted-foreground"
+                />
+                <span className="text-ui-xs font-semibold text-muted-foreground group-hover:text-foreground">
                   {planTitle ?? "Full Plan"}
                 </span>
               </button>
@@ -175,8 +175,8 @@ const PlanSidebar = function PlanSidebar({
           {/* Empty state */}
           {!activeTaskList && !planMarkdown ? (
             <div className="flex flex-col items-center justify-center py-12 text-center">
-              <p className="text-ui-lg text-muted-foreground/40">No active plan yet.</p>
-              <p className="mt-1 text-ui-sm text-muted-foreground/30">
+              <p className="text-ui-lg text-muted-foreground">No active plan yet.</p>
+              <p className="mt-1 text-ui-sm text-muted-foreground/80">
                 Plans will appear here when generated.
               </p>
             </div>

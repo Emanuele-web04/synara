@@ -142,13 +142,11 @@ export function SpaceProjectPickerDialog(props: {
           />
           <div className="max-h-72 space-y-3 overflow-y-auto">
             {candidates.length === 0 ? (
-              <p className="px-2 py-8 text-center text-ui text-muted-foreground/60">
-                {emptyMessage}
-              </p>
+              <p className="px-2 py-8 text-center text-ui text-muted-foreground">{emptyMessage}</p>
             ) : (
               candidateGroups.map((group) => (
                 <section key={group.key}>
-                  <p className="mb-1 flex items-center gap-1.5 px-2 text-ui-xs font-medium text-muted-foreground/55">
+                  <p className="mb-1 flex items-center gap-1.5 px-2 text-ui-xs font-medium text-muted-foreground">
                     <SpaceIcon icon={group.icon} className="size-3" />
                     <span className="min-w-0 truncate">{group.label}</span>
                   </p>

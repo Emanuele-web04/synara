@@ -344,7 +344,7 @@ function ToastCloseButton({
         // pointer-events-auto keeps the X clickable even when a stacked/collapsed
         // toast still gates its content with pointer-events-none.
         "pointer-events-auto z-10 inline-flex shrink-0 items-center justify-center rounded-full text-[var(--notification-fg)]/65 transition-colors hover:bg-[var(--notification-fg)]/10 hover:text-[var(--notification-fg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--notification-fg)]/35",
-        compact ? "size-5" : "absolute top-2 right-2 size-6",
+        compact ? "size-6" : "absolute top-2 right-2 size-6",
       )}
       data-slot="toast-close"
       disabled={disabled}
@@ -621,7 +621,7 @@ function Toasts({ position: positionProp }: { position: ToastPosition }) {
           return (
             <Toast.Root
               className={cn(
-                "absolute z-[calc(9999-var(--toast-index))] h-(--toast-calc-height) select-none [transition:transform_.5s_cubic-bezier(.22,1,.36,1),opacity_.5s,height_.15s]",
+                "absolute z-[calc(9999-var(--toast-index))] h-(--toast-calc-height) select-none [transition:transform_.4s_cubic-bezier(.22,1,.36,1),opacity_.35s_ease-out,height_.15s] motion-reduce:[transition:opacity_.2s,height_.15s]",
                 archiveUndoToast
                   ? cn(
                       ARCHIVE_UNDO_TOAST_SURFACE_CLASS_NAME,

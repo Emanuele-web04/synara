@@ -47,7 +47,12 @@ import {
   turnStartDispatchFields,
   type TurnDispatchSettings,
   hasLiveTurnTakenOver,
+  localDispatchSessionStartReached,
+  isUnsettledTurnWork,
   hasServerAcknowledgedLocalDispatch,
+  nextLatchedActiveWorkStart,
+  shouldHoldLocalDispatchAcrossTurnStart,
+  type LatchedWorkStart,
   isVoiceAuthExpiredMessage,
   LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS,
   resolveActiveThreadTitle,
@@ -2148,7 +2153,7 @@ describe("hasLiveTurnTakenOver", () => {
     ).toBe(false);
   });
 
-  it("takes over once the session phase is running or connecting", () => {
+  it("takes over once the session phase is running, but not while merely connecting", () => {
     expect(
       hasLiveTurnTakenOver({
         localDispatch,
@@ -2160,12 +2165,46 @@ describe("hasLiveTurnTakenOver", () => {
         threadError: null,
       }),
     ).toBe(true);
+    // connecting → ready → running: the ready gap must not release the bridge,
+    // or the indicator blanks mid-start.
     expect(
       hasLiveTurnTakenOver({
         localDispatch,
         phase: "connecting",
         latestTurn: null,
         session: null,
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        threadError: null,
+      }),
+    ).toBe(false);
+    expect(
+      hasLiveTurnTakenOver({
+        localDispatch,
+        phase: "ready",
+        latestTurn: null,
+        session: null,
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        threadError: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("takes over when the session lands in an error status during startup", () => {
+    expect(
+      hasLiveTurnTakenOver({
+        localDispatch,
+        phase: "ready",
+        latestTurn: null,
+        session: {
+          provider: "codex",
+          status: "error",
+          orchestrationStatus: "error",
+          lastError: "provider failed to start",
+          createdAt: "2026-04-13T00:00:00.000Z",
+          updatedAt: "2026-04-13T00:00:01.000Z",
+        },
         hasPendingApproval: false,
         hasPendingUserInput: false,
         threadError: null,
@@ -2301,46 +2340,373 @@ describe("hasLiveTurnTakenOver", () => {
       }),
     ).toBe(false);
   });
+
+  it("takes over when the session lands in stopped after dispatch", () => {
+    // Stop during startup retires the whole session server-side without a
+    // live turn, so the terminal session is the only settle evidence.
+    expect(
+      hasLiveTurnTakenOver({
+        localDispatch,
+        phase: "disconnected",
+        latestTurn: null,
+        session: {
+          provider: "codex",
+          status: "closed",
+          orchestrationStatus: "stopped",
+          createdAt: "2026-04-13T00:00:00.000Z",
+          updatedAt: "2026-04-13T00:00:01.000Z",
+        },
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        threadError: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not take over when the session was already stopped at dispatch", () => {
+    // The send still owns its connecting bridge — a fresh session may be
+    // starting while the read model still shows the previous stopped one.
+    expect(
+      hasLiveTurnTakenOver({
+        localDispatch: {
+          ...localDispatch,
+          sessionOrchestrationStatus: "stopped",
+        },
+        phase: "connecting",
+        latestTurn: null,
+        session: {
+          provider: "codex",
+          status: "closed",
+          orchestrationStatus: "stopped",
+          createdAt: "2026-04-13T00:00:00.000Z",
+          updatedAt: "2026-04-13T00:00:01.000Z",
+        },
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        threadError: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("takes over on stopped even with a worktree dispatch in flight", () => {
+    // Only the time-based bound is worktree-exempt — a terminal session must
+    // still release the bridge.
+    expect(
+      hasLiveTurnTakenOver({
+        localDispatch: {
+          ...localDispatch,
+          worktreeSetup: createWorktreeSetupSnapshot("create-worktree"),
+        },
+        phase: "disconnected",
+        latestTurn: null,
+        session: {
+          provider: "codex",
+          status: "closed",
+          orchestrationStatus: "stopped",
+          createdAt: "2026-04-13T00:00:00.000Z",
+          updatedAt: "2026-04-13T00:00:01.000Z",
+        },
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        threadError: null,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("localDispatchSessionStartReached", () => {
+  it("is false without a dispatch and true for a plain dispatch", () => {
+    expect(localDispatchSessionStartReached(null)).toBe(false);
+    const plain = createLocalDispatchSnapshot(undefined);
+    expect(localDispatchSessionStartReached(plain)).toBe(true);
+  });
+
+  it("is false while worktree setup runs its pre-session steps", () => {
+    const snapshot = createLocalDispatchSnapshot(undefined, {
+      worktreeSetupStepId: "create-worktree",
+    });
+    expect(localDispatchSessionStartReached(snapshot)).toBe(false);
+    const withScript = createLocalDispatchSnapshot(undefined, {
+      worktreeSetupStepId: "run-setup-action",
+      setupScriptName: "setup.sh",
+    });
+    expect(localDispatchSessionStartReached(withScript)).toBe(false);
+  });
+
+  it("is true once the start-session step is active or done", () => {
+    const snapshot = createLocalDispatchSnapshot(undefined, {
+      worktreeSetupStepId: "start-session",
+    });
+    expect(localDispatchSessionStartReached(snapshot)).toBe(true);
+    const steps = snapshot.worktreeSetup!.steps.slice();
+    for (const step of steps) {
+      step.status = "done";
+    }
+    const done = {
+      ...snapshot,
+      worktreeSetup: { ...snapshot.worktreeSetup!, steps },
+    };
+    expect(localDispatchSessionStartReached(done)).toBe(true);
+  });
+});
+
+describe("isUnsettledTurnWork", () => {
+  const runningTurn = {
+    turnId: "turn-1" as never,
+    state: "running" as const,
+    requestedAt: "2026-04-13T00:00:01.000Z",
+    startedAt: "2026-04-13T00:00:02.000Z",
+    completedAt: null,
+    assistantMessageId: null,
+    sourceProposedPlan: undefined,
+  };
+
+  it("counts a running unsettled turn on a live session as work", () => {
+    expect(
+      isUnsettledTurnWork({
+        latestTurn: runningTurn,
+        latestTurnSettled: false,
+        phase: "ready",
+        sessionStatus: "ready",
+      }),
+    ).toBe(true);
+    expect(
+      isUnsettledTurnWork({
+        latestTurn: runningTurn,
+        latestTurnSettled: false,
+        phase: "connecting",
+        sessionStatus: "connecting",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not count a running turn whose session is closed or errored", () => {
+    expect(
+      isUnsettledTurnWork({
+        latestTurn: runningTurn,
+        latestTurnSettled: false,
+        phase: "disconnected",
+        sessionStatus: "closed",
+      }),
+    ).toBe(false);
+    expect(
+      isUnsettledTurnWork({
+        latestTurn: runningTurn,
+        latestTurnSettled: false,
+        phase: "disconnected",
+        sessionStatus: undefined,
+      }),
+    ).toBe(false);
+    expect(
+      isUnsettledTurnWork({
+        latestTurn: runningTurn,
+        latestTurnSettled: false,
+        phase: "ready",
+        sessionStatus: "error",
+      }),
+    ).toBe(false);
+  });
+
+  it("ignores settled or missing turns", () => {
+    expect(
+      isUnsettledTurnWork({
+        latestTurn: runningTurn,
+        latestTurnSettled: true,
+        phase: "running",
+        sessionStatus: "running",
+      }),
+    ).toBe(false);
+    expect(
+      isUnsettledTurnWork({
+        latestTurn: null,
+        latestTurnSettled: false,
+        phase: "ready",
+        sessionStatus: "ready",
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("resolveWorkingLabel", () => {
-  it("shows Loading only while an unacknowledged send is still local", () => {
-    expect(resolveWorkingLabel({ isSendBusy: true, turnTakenOver: false })).toBe("Loading");
-    expect(resolveWorkingLabel({ isSendBusy: true, turnTakenOver: true })).toBe("Thinking");
-    expect(resolveWorkingLabel({ isSendBusy: false, turnTakenOver: false })).toBe("Thinking");
+  it("shows Thinking by default and Starting provider… only when the caller supplies one", () => {
+    expect(resolveWorkingLabel({})).toBe("Thinking");
+    expect(resolveWorkingLabel({ startingProviderName: "Pi" })).toBe("Starting Pi…");
   });
 
-  it("shows Starting provider… during the connecting phase", () => {
-    expect(
-      resolveWorkingLabel({
-        isSendBusy: false,
-        turnTakenOver: false,
-        isConnecting: true,
-        providerName: "Pi",
-      }),
-    ).toBe("Starting Pi…");
+  it("prefers Stopping… over every other label", () => {
+    expect(resolveWorkingLabel({ stoppingTurn: true })).toBe("Stopping…");
+    expect(resolveWorkingLabel({ stoppingTurn: true, startingProviderName: "Codex" })).toBe(
+      "Stopping…",
+    );
+  });
+});
 
-    expect(
-      resolveWorkingLabel({
-        isSendBusy: true,
-        turnTakenOver: false,
-        isConnecting: true,
-        providerName: "Pi",
-      }),
-    ).toBe("Loading");
+describe("shouldHoldLocalDispatchAcrossTurnStart", () => {
+  const readySession = {
+    provider: "codex" as const,
+    status: "ready" as const,
+    orchestrationStatus: "ready" as const,
+    createdAt: "2026-04-13T00:00:00.000Z",
+    updatedAt: "2026-04-13T00:00:01.000Z",
+  };
+  const runningTurn = {
+    turnId: "turn-1" as never,
+    state: "running" as const,
+    requestedAt: "2026-04-13T00:00:00.500Z",
+    startedAt: "2026-04-13T00:00:01.000Z",
+    completedAt: null,
+    assistantMessageId: null,
+  };
 
+  it("holds while the turn is live but the session still reports ready", () => {
+    // The promotion seam: takeover fired via activeTurnId/startedAt while the
+    // phase has not caught up to running.
     expect(
-      resolveWorkingLabel({
-        isSendBusy: true,
-        turnTakenOver: true,
-        isConnecting: true,
-        providerName: "Pi",
+      shouldHoldLocalDispatchAcrossTurnStart({
+        phase: "ready",
+        latestTurn: runningTurn,
+        session: { ...readySession, activeTurnId: "turn-1" as never },
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        threadError: null,
       }),
-    ).toBe("Starting Pi…");
-
+    ).toBe(true);
+    // The turn-start signal can also arrive via session.activeTurnId before the
+    // latestTurn snapshot updates.
     expect(
-      resolveWorkingLabel({ isSendBusy: false, turnTakenOver: false, isConnecting: true }),
-    ).toBe("Thinking");
+      shouldHoldLocalDispatchAcrossTurnStart({
+        phase: "ready",
+        latestTurn: null,
+        session: { ...readySession, activeTurnId: "turn-1" as never },
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        threadError: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not hold outside the ready gap or once the start ended", () => {
+    const base = {
+      latestTurn: runningTurn,
+      session: { ...readySession, activeTurnId: "turn-1" as never },
+      hasPendingApproval: false,
+      hasPendingUserInput: false,
+      threadError: null,
+    };
+    // connecting holds too — takeover can fire from activeTurnId while the
+    // session is still starting (the observed promotion seam).
+    expect(shouldHoldLocalDispatchAcrossTurnStart({ ...base, phase: "connecting" })).toBe(true);
+    // running means live; disconnected must release.
+    for (const phase of ["running", "disconnected"] as const) {
+      expect(shouldHoldLocalDispatchAcrossTurnStart({ ...base, phase })).toBe(false);
+    }
+    // A settled turn in a ready session is done, not mid-start.
+    expect(
+      shouldHoldLocalDispatchAcrossTurnStart({
+        ...base,
+        phase: "ready",
+        latestTurn: { ...runningTurn, state: "completed" as const },
+      }),
+    ).toBe(false);
+    // Errors and user-facing blockers must release immediately.
+    expect(
+      shouldHoldLocalDispatchAcrossTurnStart({
+        ...base,
+        phase: "ready",
+        hasPendingApproval: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldHoldLocalDispatchAcrossTurnStart({
+        ...base,
+        phase: "ready",
+        session: { ...readySession, status: "error" as const },
+      }),
+    ).toBe(false);
+    expect(
+      shouldHoldLocalDispatchAcrossTurnStart({
+        ...base,
+        phase: "ready",
+        threadError: "dispatch failed",
+      }),
+    ).toBe(false);
+    // No turn evidence at all in a resting ready session.
+    expect(
+      shouldHoldLocalDispatchAcrossTurnStart({
+        phase: "ready",
+        latestTurn: null,
+        session: readySession,
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        threadError: null,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("nextLatchedActiveWorkStart", () => {
+  const threadA = ThreadId.makeUnsafe("11111111-1111-4111-8111-111111111111");
+  const threadB = ThreadId.makeUnsafe("22222222-2222-4222-8222-222222222222");
+  const idle: LatchedWorkStart = { threadId: null, startedAt: null };
+
+  it("adopts the first non-null start and holds it for the whole working span", () => {
+    const dispatched = nextLatchedActiveWorkStart({
+      previous: idle,
+      isWorking: true,
+      threadId: threadA,
+      candidate: "2026-04-13T00:00:00.000Z",
+    });
+    expect(dispatched).toEqual({ threadId: threadA, startedAt: "2026-04-13T00:00:00.000Z" });
+    // The real turn start arriving later must not reset the counter.
+    const running = nextLatchedActiveWorkStart({
+      previous: dispatched,
+      isWorking: true,
+      threadId: threadA,
+      candidate: "2026-04-13T00:00:05.000Z",
+    });
+    expect(running.startedAt).toBe("2026-04-13T00:00:00.000Z");
+  });
+
+  it("stays null while working with no candidate, then adopts a late start", () => {
+    const pending = nextLatchedActiveWorkStart({
+      previous: idle,
+      isWorking: true,
+      threadId: threadA,
+      candidate: null,
+    });
+    expect(pending).toEqual({ threadId: threadA, startedAt: null });
+    const late = nextLatchedActiveWorkStart({
+      previous: pending,
+      isWorking: true,
+      threadId: threadA,
+      candidate: "2026-04-13T00:00:03.000Z",
+    });
+    expect(late.startedAt).toBe("2026-04-13T00:00:03.000Z");
+  });
+
+  it("resets when the thread goes idle or changes", () => {
+    const active = nextLatchedActiveWorkStart({
+      previous: idle,
+      isWorking: true,
+      threadId: threadA,
+      candidate: "2026-04-13T00:00:00.000Z",
+    });
+    expect(
+      nextLatchedActiveWorkStart({
+        previous: active,
+        isWorking: false,
+        threadId: threadA,
+        candidate: "2026-04-13T00:00:00.000Z",
+      }).startedAt,
+    ).toBeNull();
+    expect(
+      nextLatchedActiveWorkStart({
+        previous: active,
+        isWorking: true,
+        threadId: threadB,
+        candidate: "2026-04-13T00:00:09.000Z",
+      }),
+    ).toEqual({ threadId: threadB, startedAt: "2026-04-13T00:00:09.000Z" });
   });
 });
 

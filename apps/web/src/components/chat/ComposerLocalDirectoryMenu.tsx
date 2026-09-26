@@ -42,7 +42,7 @@ const LOCAL_SEARCH_MIN_QUERY_LENGTH = 2;
  *  keyboard highlight and pointer hover land on the same surface. */
 function directoryMenuRowClassName(isHighlighted: boolean): string {
   return cn(
-    "cursor-pointer select-none gap-2 rounded-lg px-2 py-1",
+    "cursor-pointer select-none gap-2 rounded-xl px-2 py-1",
     ELEVATED_HOVER_SURFACE_CLASS_NAME,
     isHighlighted &&
       "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]",
@@ -51,7 +51,7 @@ function directoryMenuRowClassName(isHighlighted: boolean): string {
 
 /** Compact icon/text affordance in the menu header (go up, use this folder). */
 const DIRECTORY_MENU_HEADER_ACTION_CLASS_NAME = cn(
-  "shrink-0 rounded-md text-muted-foreground/70",
+  "shrink-0 rounded-md text-muted-foreground/80",
   ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME,
 );
 
@@ -489,7 +489,7 @@ export function ComposerLocalDirectoryMenu(props: {
                   <CommandSeparator className="my-0.5" />
                 ) : null}
                 <CommandGroup>
-                  <CommandGroupLabel className="px-2 pt-1.5 pb-1 text-ui-xs font-semibold text-muted-foreground/55">
+                  <CommandGroupLabel className="px-2 pt-1.5 pb-1 text-ui-xs font-semibold text-muted-foreground/80">
                     Matches deeper
                   </CommandGroupLabel>
                   {searchRows.map((entry, searchIndex) => {
@@ -512,21 +512,21 @@ export function ComposerLocalDirectoryMenu(props: {
           </CommandList>
         </div>
         {isAwaitingHomeDir ? (
-          <p className="px-2 py-1.5 text-muted-foreground/50 text-ui-sm">
+          <p className="px-2 py-1.5 text-muted-foreground/80 text-ui-sm">
             Waiting for home directory from server…
           </p>
         ) : isLoading && visibleCount === 0 ? (
-          <p className="px-2 py-1.5 text-muted-foreground/50 text-ui-sm">Loading local files…</p>
+          <p className="px-2 py-1.5 text-muted-foreground/80 text-ui-sm">Loading local files…</p>
         ) : errorMessage ? (
           <p className="px-2 py-1.5 text-destructive/80 text-ui-sm">{errorMessage}</p>
         ) : isSearchPending ? (
-          <p className="px-2 py-1.5 text-muted-foreground/50 text-ui-sm">Searching nested files…</p>
+          <p className="px-2 py-1.5 text-muted-foreground/80 text-ui-sm">Searching nested files…</p>
         ) : visibleCount === 0 ? (
-          <p className="px-2 py-1.5 text-muted-foreground/50 text-ui-sm">
+          <p className="px-2 py-1.5 text-muted-foreground/80 text-ui-sm">
             {filter.trim().length > 0 ? "No matches." : "No files or folders here."}
           </p>
         ) : searchQuery.data?.truncated ? (
-          <p className="px-2 py-1 text-muted-foreground/40 text-ui-xs">
+          <p className="px-2 py-1 text-muted-foreground/80 text-ui-xs">
             Showing top matches. Keep typing to narrow.
           </p>
         ) : null}
@@ -559,7 +559,7 @@ function UseCurrentFolderRow(props: {
       <FolderClosed className="size-3.5 text-muted-foreground/60" />
       <div className="min-w-0 flex flex-1 items-center gap-1.5 overflow-hidden">
         <span className="shrink-0 text-ui-sm font-medium text-foreground/80">Use this folder</span>
-        <span className="truncate text-ui-sm text-muted-foreground/55">{directoryLabel}</span>
+        <span className="truncate text-ui-sm text-muted-foreground/80">{directoryLabel}</span>
       </div>
     </CommandItem>
   );
@@ -614,7 +614,7 @@ function LocalSearchRow(props: {
           {entry.name}
         </span>
         {subtitle ? (
-          <span className="shrink-0 max-w-[60%] truncate pl-2 text-right text-ui-xs text-muted-foreground/42">
+          <span className="shrink-0 max-w-[60%] truncate pl-2 text-right text-ui-xs text-muted-foreground/80">
             {subtitle}
           </span>
         ) : null}

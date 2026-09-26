@@ -306,7 +306,7 @@ export default function GitActionsControl({
   const hasOriginRemote = branchList?.hasOriginRemote ?? false;
   const currentBranch = branchList?.branches.find((branch) => branch.current)?.name ?? null;
   // Only poll status after branch discovery confirms a repo — avoids non-repo
-  // cwds feeding a permanent "Refreshing git status..." invalidation loop.
+  // cwds feeding a permanent "Refreshing git status…" invalidation loop.
   const {
     data: gitStatusData,
     error: gitStatusError,
@@ -499,7 +499,7 @@ export default function GitActionsControl({
           progress.lastOutputLine = null;
           break;
         case "hook_started":
-          progress.title = `Running ${event.hookName}...`;
+          progress.title = `Running ${event.hookName}…`;
           progress.hookName = event.hookName;
           progress.hookStartedAtMs = now;
           progress.lastOutputLine = null;
@@ -508,7 +508,7 @@ export default function GitActionsControl({
           progress.lastOutputLine = event.text;
           break;
         case "hook_finished":
-          progress.title = progress.currentPhaseLabel ?? "Committing...";
+          progress.title = progress.currentPhaseLabel ?? "Committing…";
           progress.hookName = null;
           progress.hookStartedAtMs = null;
           progress.lastOutputLine = null;
@@ -658,7 +658,7 @@ export default function GitActionsControl({
   const runSyncWithRemote = useCallback(() => {
     const promise = pullMutation.mutateAsync();
     toastManager.promise(promise, {
-      loading: { title: "Syncing with remote...", data: threadToastData },
+      loading: { title: "Syncing with remote…", data: threadToastData },
       success: (result) => ({
         title: result.status === "pulled" ? "Remote synced" : "Already up to date",
         description:
@@ -757,8 +757,8 @@ export default function GitActionsControl({
         progressToastId ??
         toastManager.add({
           type: "loading",
-          title: progressStages[0] ?? "Running git action...",
-          description: "Waiting for Git...",
+          title: progressStages[0] ?? "Running git action…",
+          description: "Waiting for Git…",
           timeout: 0,
           data: threadToastData,
         });
@@ -766,19 +766,19 @@ export default function GitActionsControl({
       activeGitActionProgressRef.current = {
         toastId: resolvedProgressToastId,
         actionId,
-        title: progressStages[0] ?? "Running git action...",
+        title: progressStages[0] ?? "Running git action…",
         phaseStartedAtMs: null,
         hookStartedAtMs: null,
         hookName: null,
         lastOutputLine: null,
-        currentPhaseLabel: progressStages[0] ?? "Running git action...",
+        currentPhaseLabel: progressStages[0] ?? "Running git action…",
       };
 
       if (progressToastId) {
         toastManager.update(progressToastId, {
           type: "loading",
-          title: progressStages[0] ?? "Running git action...",
-          description: "Waiting for Git...",
+          title: progressStages[0] ?? "Running git action…",
+          description: "Waiting for Git…",
           timeout: 0,
           data: threadToastData,
         });
@@ -1199,7 +1199,7 @@ export default function GitActionsControl({
 
       const toastId = toastManager.add({
         type: "loading",
-        title: "Creating branch...",
+        title: "Creating branch…",
         timeout: 0,
         data: threadToastData,
       });
@@ -1509,7 +1509,7 @@ export default function GitActionsControl({
         gitStatusError) && <MenuSeparator className="mx-3 mt-2" />}
       {gitStatusForActions?.branch === null && (
         <p className="px-3 py-1.5 text-ui leading-snug text-warning">
-          Detached HEAD: create and checkout a branch to enable push and PR actions.
+          Detached HEAD: create and check out a branch to enable push and PR actions.
         </p>
       )}
       {gitStatusForActions &&
@@ -1523,12 +1523,12 @@ export default function GitActionsControl({
         )}
       {isGitStatusOutOfSync && (
         <p className="px-3 py-1.5 text-ui leading-snug text-muted-foreground">
-          Refreshing git status...
+          Refreshing git status…
         </p>
       )}
       {isGitStatusRefreshDelayed && !isGitStatusOutOfSync && (
         <p className="px-3 py-1.5 text-ui leading-snug text-muted-foreground">
-          {isGitStatusFetching ? "Refreshing git status..." : "Git status refresh delayed."}
+          {isGitStatusFetching ? "Refreshing git status…" : "Git status refresh delayed."}
         </p>
       )}
       {gitStatusError && !isGitStatusRefreshDelayed && (
@@ -1733,7 +1733,7 @@ export default function GitActionsControl({
         {!isRepo ? (
           <EnvironmentRow
             icon={<GitActionGlyph name="branch" className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
-            label={initMutation.isPending ? "Initializing..." : "Initialize Git"}
+            label={initMutation.isPending ? "Initializing…" : "Initialize Git"}
             disabled={initMutation.isPending}
             onClick={() => initMutation.mutate()}
           />
@@ -1775,7 +1775,7 @@ export default function GitActionsControl({
           disabled={initMutation.isPending}
           onClick={() => initMutation.mutate()}
         >
-          {initMutation.isPending ? "Initializing..." : "Initialize Git"}
+          {initMutation.isPending ? "Initializing…" : "Initialize Git"}
         </Button>
       ) : (
         <ChatHeaderSplitGroup label="Git actions">

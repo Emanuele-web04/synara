@@ -297,12 +297,12 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
       />
 
       {props.truncated ? (
-        <span className="hidden shrink-0 text-ui-xs text-muted-foreground/70 @sm/header-actions:inline">
+        <span className="hidden shrink-0 text-ui-xs text-muted-foreground/80 @sm/header-actions:inline">
           Shown partially
         </span>
       ) : props.readOnlyReason ? (
         <span
-          className="hidden max-w-32 shrink-0 truncate text-ui-xs text-muted-foreground/70 @sm/header-actions:inline"
+          className="hidden max-w-32 shrink-0 truncate text-ui-xs text-muted-foreground/80 @sm/header-actions:inline"
           title={props.readOnlyReason}
         >
           Read-only
@@ -319,7 +319,7 @@ export const WorkspaceFilePreviewHeader = function WorkspaceFilePreviewHeader(
           <button
             type="button"
             onClick={props.onSave}
-            disabled={!props.dirty || props.saveState === "Saving..."}
+            disabled={!props.dirty || props.saveState === "Saving…"}
             className="rounded-md px-2 py-1 text-ui-sm disabled:opacity-50"
           >
             Save

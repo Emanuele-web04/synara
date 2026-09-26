@@ -4,6 +4,7 @@
 // Layer: UI component (pure; drag wiring lives in KanbanColumn)
 // Exports: KanbanCardView
 
+import type { useSortable } from "@dnd-kit/sortable";
 import type { ThreadId } from "@synara/contracts";
 import { GoRepoForked } from "react-icons/go";
 
@@ -34,11 +35,23 @@ import { KANBAN_COLUMN_LABELS, kanbanThreadCardId, type KanbanCard } from "./kan
 /** Resolved PR badge per thread from the board root's useThreadPullRequests call. */
 export type KanbanCardPrLookup = ReadonlyMap<ThreadId, ThreadPullRequest>;
 
+/**
+ * dnd-kit sortable wiring for the card's own `<button>`: the button is the drag
+ * activator (keyboard: Space lifts, arrows move, Space drops) so each card stays
+ * a single interactive element.
+ */
+type KanbanCardDragHandleProps = Pick<
+  ReturnType<typeof useSortable>,
+  "attributes" | "listeners" | "setActivatorNodeRef"
+>;
+
 export interface KanbanCardViewProps {
   card: KanbanCard;
   onOpen?: (card: KanbanCard) => void;
   /** Right-click handler — opens the sidebar-style thread/draft context menu. */
   onContextMenu?: (card: KanbanCard, event: React.MouseEvent) => void;
+  /** Present on sortable draft cards; spread onto the card button. */
+  dragHandleProps?: KanbanCardDragHandleProps;
   prByThreadId: KanbanCardPrLookup;
   /** Rendered inside the DragOverlay — lifted styling, no interactions. */
   isOverlay?: boolean;
@@ -93,6 +106,7 @@ function KanbanCardViewComponent({
   card,
   onOpen,
   onContextMenu,
+  dragHandleProps,
   prByThreadId,
   isOverlay: isOverlayProp,
   isDragSource: isDragSourceProp,
@@ -129,10 +143,25 @@ function KanbanCardViewComponent({
       ? formatElapsed(card.activeWorkStartedAt, new Date(nowMs).toISOString())
       : null;
 
+  // The card's visible text concatenates into a jumbled accessible name
+  // ("Heymain18mDone"), so name the button explicitly with the same fields.
+  const accessibleLabel = [
+    card.title,
+    card.branch ?? "No branch",
+    card.timestamp !== null ? formatRelativeTime(card.timestamp) : null,
+    card.isTerminal ? "Terminal" : KANBAN_COLUMN_LABELS[card.column],
+  ]
+    .filter((part) => part !== null)
+    .join(", ");
+
   return (
     <button
+      ref={dragHandleProps?.setActivatorNodeRef}
+      {...(dragHandleProps ? dragHandleProps.attributes : {})}
+      {...(dragHandleProps ? dragHandleProps.listeners : {})}
       type="button"
       tabIndex={isOverlay ? -1 : 0}
+      aria-label={accessibleLabel}
       onClick={onOpen ? () => onOpen(card) : undefined}
       onContextMenu={onContextMenu ? (event) => onContextMenu(card, event) : undefined}
       className={cn(
@@ -173,9 +202,11 @@ function KanbanCardViewComponent({
           />
         )}
         {card.branch ? (
-          <span className="flex min-w-0 items-center gap-1 text-ui-sm leading-snug text-muted-foreground/70">
+          <span className="flex min-w-0 items-center gap-1 text-ui-sm leading-snug text-muted-foreground">
             <GitBranchIcon className="size-3 shrink-0" aria-hidden />
-            <span className="max-w-32 truncate">{card.branch}</span>
+            <span className="max-w-32 truncate" title={card.branch}>
+              {card.branch}
+            </span>
           </span>
         ) : null}
         {worktreeBadgeLabel ? (
@@ -200,12 +231,12 @@ function KanbanCardViewComponent({
             // Optimistically In Progress — the thread's real status (Draft/Completed)
             // would contradict the column until the first runtime signal arrives.
             <>
-              <span className="flex shrink-0 items-center gap-1.5 text-ui-sm leading-snug text-sky-600 dark:text-sky-300/90">
+              <span className="flex shrink-0 items-center gap-1.5 text-ui-sm leading-snug text-info">
                 <LoaderIcon className="size-3 shrink-0 animate-spin" aria-hidden />
                 Starting…
               </span>
               {activeWorkElapsed ? (
-                <span className="shrink-0 text-ui-sm leading-snug text-muted-foreground/70">
+                <span className="shrink-0 text-ui-sm leading-snug text-muted-foreground">
                   Worked for {activeWorkElapsed}
                 </span>
               ) : null}
@@ -214,11 +245,11 @@ function KanbanCardViewComponent({
             <>
               <KanbanCardStatusPill card={card} />
               {activeWorkElapsed ? (
-                <span className="shrink-0 text-ui-sm leading-snug text-muted-foreground/70">
+                <span className="shrink-0 text-ui-sm leading-snug text-muted-foreground">
                   Worked for {activeWorkElapsed}
                 </span>
               ) : card.timestamp ? (
-                <span className="shrink-0 text-ui-sm leading-snug text-muted-foreground/70">
+                <span className="shrink-0 text-ui-sm leading-snug text-muted-foreground">
                   {formatRelativeTime(card.timestamp)}
                 </span>
               ) : null}

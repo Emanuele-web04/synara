@@ -149,7 +149,7 @@ export function AdvancedSettingsPanel(props: {
                 disabled={isLoggingOut}
                 onClick={() => void logoutCurrentSession()}
               >
-                {isLoggingOut ? "Signing out..." : "Sign out"}
+                {isLoggingOut ? "Signing out…" : "Sign out"}
               </Button>
             }
           />
@@ -159,11 +159,11 @@ export function AdvancedSettingsPanel(props: {
       <SettingsSection title="Developer tools">
         <SettingsRow
           title="Keybindings"
-          description="Open the persisted `keybindings.json` file to edit advanced bindings directly."
+          description="Open the persisted keybindings.json file to edit advanced bindings directly."
           status={
             <>
               <span className="block break-all font-mono text-ui-sm text-foreground">
-                {keybindingsConfigPath ?? "Resolving keybindings path..."}
+                {keybindingsConfigPath ?? "Resolving keybindings path…"}
               </span>
               {openKeybindingsError ? (
                 <span className="mt-1 block text-destructive">{openKeybindingsError}</span>
@@ -179,7 +179,7 @@ export function AdvancedSettingsPanel(props: {
               disabled={!keybindingsConfigPath || isOpeningKeybindings}
               onClick={openKeybindingsFile}
             >
-              {isOpeningKeybindings ? "Opening..." : "Open file"}
+              {isOpeningKeybindings ? "Opening…" : "Open file"}
             </Button>
           }
         />
@@ -199,7 +199,7 @@ export function AdvancedSettingsPanel(props: {
               disabled={!shouldOfferRecoveryTools || isRepairingLocalState}
               onClick={() => void repairLocalState()}
             >
-              {isRepairingLocalState ? "Repairing..." : "Repair state"}
+              {isRepairingLocalState ? "Repairing…" : "Repair state"}
             </Button>
           }
         >
@@ -250,7 +250,7 @@ export function AdvancedSettingsPanel(props: {
           title="Release history"
           description="A running log of every update, newest first. Same notes the post-update dialog shows, kept here so you can revisit them any time."
           control={
-            <Button size="sm" variant="outline" onClick={props.onOpenReleaseHistory}>
+            <Button size="xs" variant="outline" onClick={props.onOpenReleaseHistory}>
               View release history
             </Button>
           }

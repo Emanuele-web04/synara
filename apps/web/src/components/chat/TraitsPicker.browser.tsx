@@ -161,7 +161,7 @@ describe("TraitsPicker (Claude)", () => {
   it("flips the fast mode toggle in place without closing the menu", async () => {
     await using _ = await mountClaudePicker();
 
-    await page.getByRole("button").click();
+    await page.getByRole("button", { name: "Change effort, context, and speed" }).click();
     await page.getByRole("button", { name: "Fast mode" }).click();
 
     await vi.waitFor(() => {
@@ -175,7 +175,7 @@ describe("TraitsPicker (Claude)", () => {
   it("hides fast mode controls for non-Opus models", async () => {
     await using _ = await mountClaudePicker({ model: "claude-sonnet-4-6" });
 
-    await page.getByRole("button").click();
+    await page.getByRole("button", { name: "Change effort, context, and speed" }).click();
 
     await vi.waitFor(() => {
       expect(document.body.textContent ?? "").toContain("Effort");
@@ -188,7 +188,7 @@ describe("TraitsPicker (Claude)", () => {
       model: "claude-sonnet-4-6",
     });
 
-    await page.getByRole("button").click();
+    await page.getByRole("button", { name: "Change effort, context, and speed" }).click();
 
     await vi.waitFor(() => {
       const text = document.body.textContent ?? "";
@@ -209,7 +209,7 @@ describe("TraitsPicker (Claude)", () => {
     await vi.waitFor(() => {
       expect(document.body.textContent ?? "").toContain("Thinking On");
     });
-    await page.getByRole("button").click();
+    await page.getByRole("button", { name: "Change effort, context, and speed" }).click();
 
     await vi.waitFor(() => {
       const text = document.body.textContent ?? "";
@@ -230,7 +230,7 @@ describe("TraitsPicker (Claude)", () => {
       expect(document.body.textContent ?? "").toContain("Ultrathink");
       expect(document.body.textContent ?? "").not.toContain("Ultrathink · Prompt");
     });
-    await page.getByRole("button").click();
+    await page.getByRole("button", { name: "Change effort, context, and speed" }).click();
 
     await vi.waitFor(() => {
       const text = document.body.textContent ?? "";
@@ -246,7 +246,7 @@ describe("TraitsPicker (Claude)", () => {
       options: { effort: "medium", fastMode: false },
     });
 
-    await page.getByRole("button").click();
+    await page.getByRole("button", { name: "Change effort, context, and speed" }).click();
     await page.getByRole("menuitemradio", { name: "Max" }).click();
 
     expect(
@@ -263,22 +263,22 @@ describe("TraitsPicker (Claude)", () => {
     "selects Auto and preserves explicit budgets for %s",
     async (model) => {
       await using _ = await mountClaudePicker({ model });
-      await page.getByRole("button").click();
+      await page.getByRole("button", { name: "Change effort, context, and speed" }).click();
       await expect
         .element(page.getByRole("menuitemradio", { name: "Auto (Claude Code)" }))
         .toHaveAttribute("aria-checked", "true");
       await page.getByRole("menuitemradio", { name: "200k" }).click();
-      await page.getByRole("button").click();
+      await page.getByRole("button", { name: "Change effort, context, and speed" }).click();
       await expect
         .element(page.getByRole("menuitemradio", { name: "200k" }))
         .toHaveAttribute("aria-checked", "true");
       await page.getByRole("menuitemradio", { name: "1M" }).click();
-      await page.getByRole("button").click();
+      await page.getByRole("button", { name: "Change effort, context, and speed" }).click();
       await expect
         .element(page.getByRole("menuitemradio", { name: "1M" }))
         .toHaveAttribute("aria-checked", "true");
       await page.getByRole("menuitemradio", { name: "Auto (Claude Code)" }).click();
-      await page.getByRole("button").click();
+      await page.getByRole("button", { name: "Change effort, context, and speed" }).click();
       await expect
         .element(page.getByRole("menuitemradio", { name: "Auto (Claude Code)" }))
         .toHaveAttribute("aria-checked", "true");
@@ -291,7 +291,7 @@ describe("TraitsPicker (Claude)", () => {
       options: { autoCompactWindow: "200k" },
     });
 
-    await page.getByRole("button").click();
+    await page.getByRole("button", { name: "Change effort, context, and speed" }).click();
     await page.getByRole("menuitemradio", { name: "1M" }).click();
 
     // A 1M thread can grow far beyond the normal compaction point: keep the explicit
@@ -397,7 +397,7 @@ describe("TraitsPicker (Codex)", () => {
       options: { reasoningEffort: "medium", fastMode: false },
     });
 
-    await page.getByRole("button").click();
+    await page.getByRole("button", { name: "Change effort, context, and speed" }).click();
 
     await vi.waitFor(() => {
       expect(document.body.textContent ?? "").toContain("Effort");
@@ -415,7 +415,7 @@ describe("TraitsPicker (Codex)", () => {
       options: { fastMode: false },
     });
 
-    await page.getByRole("button").click();
+    await page.getByRole("button", { name: "Change effort, context, and speed" }).click();
     await page.getByRole("button", { name: "Fast mode" }).click();
 
     expect(useComposerDraftStore.getState().stickyModelSelectionByProvider.codex).toMatchObject({
@@ -493,7 +493,7 @@ describe("TraitsPicker (Cursor)", () => {
       options: { fastMode: false },
     });
 
-    await page.getByRole("button").click();
+    await page.getByRole("button", { name: "Change effort, context, and speed" }).click();
 
     await vi.waitFor(() => {
       const text = document.body.textContent ?? "";
@@ -528,7 +528,7 @@ describe("TraitsPicker (Cursor)", () => {
       options: { thinking: true, reasoningEffort: "high", contextWindow: "300k" },
     });
 
-    await page.getByRole("button").click();
+    await page.getByRole("button", { name: "Change effort, context, and speed" }).click();
 
     await vi.waitFor(() => {
       const text = document.body.textContent ?? "";
@@ -728,7 +728,7 @@ describe("TraitsPicker (OpenCode)", () => {
       runtimeModel: OPENCODE_RUNTIME_MODEL_WITH_REASONING,
     });
 
-    await page.getByRole("button").click();
+    await page.getByRole("button", { name: "Change effort, context, and speed" }).click();
 
     await vi.waitFor(() => {
       const text = document.body.textContent ?? "";

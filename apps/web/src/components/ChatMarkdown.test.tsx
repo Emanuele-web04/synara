@@ -546,3 +546,10 @@ it("keeps dollar filenames separate from math and rejects escaped delimiters", a
   expect(markup).not.toContain("alias.md");
   expect(markup.match(/href=/g)).toHaveLength(1);
 });
+
+it("emits no word-fade spans for non-streamed text", async () => {
+  // History-instant regression guard: messages that never streamed render
+  // plain text — zero word spans, so nothing re-animates on scroll or find.
+  const markup = await renderMarkdown("Hello brave new world of words.");
+  expect(markup).not.toContain("data-chat-word-fade");
+});

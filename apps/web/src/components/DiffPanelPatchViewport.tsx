@@ -37,7 +37,7 @@ export const DiffPanelPatchViewport = memo(
   }) {
     const viewportClassName = "flex h-full min-h-0 w-full flex-1 flex-col";
     const refreshStatus = props.refreshStatus ? (
-      <p role="status" className="shrink-0 px-3 py-2 text-ui-xs text-muted-foreground/75">
+      <p role="status" className="shrink-0 px-3 py-2 text-ui-xs text-muted-foreground">
         {props.refreshStatus}
       </p>
     ) : null;
@@ -50,7 +50,7 @@ export const DiffPanelPatchViewport = memo(
             fill="flex"
             className="items-start justify-start px-3 pt-3"
           >
-            <p className="text-left text-ui-sm text-red-500/80">{props.error}</p>
+            <p className="text-left text-ui-sm text-destructive">{props.error}</p>
           </PanelStateMessage>
         </div>
       );
@@ -111,7 +111,7 @@ export const DiffPanelPatchViewport = memo(
       <div className={cn(viewportClassName, "overflow-auto p-2")}>
         {refreshStatus}
         <div className="space-y-2">
-          <p className="text-ui-sm text-muted-foreground/75">{props.renderablePatch.reason}</p>
+          <p className="text-ui-sm text-muted-foreground">{props.renderablePatch.reason}</p>
           <pre
             className={cn(
               "max-h-[72vh] rounded-md border border-border/70 bg-background/70 p-3 font-mono text-ui-sm leading-relaxed text-muted-foreground/90",

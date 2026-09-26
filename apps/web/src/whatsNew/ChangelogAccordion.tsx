@@ -80,7 +80,7 @@ function ChangelogAccordionRow({
             <span className="text-ui-lg font-semibold text-foreground">
               Version {entry.version}
             </span>
-            <span className="text-ui leading-snug text-muted-foreground/70">({featureLabel})</span>
+            <span className="text-ui leading-snug text-muted-foreground">({featureLabel})</span>
           </span>
         </CollapsibleTrigger>
         <CollapsiblePanel>

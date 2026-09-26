@@ -138,7 +138,7 @@ export const ComposerSubagentStrip = function ComposerSubagentStrip({
                   title={item.label}
                   onClick={() => onOpenThread(item.threadId)}
                 >
-                  <BackToParentIcon className="size-3 shrink-0 text-muted-foreground/55" />
+                  <BackToParentIcon className="size-3 shrink-0 text-muted-foreground/70" />
                   <span className="min-w-0 flex-1 truncate text-ui font-medium text-foreground/85">
                     {item.label}
                   </span>
@@ -169,17 +169,17 @@ export const ComposerSubagentStrip = function ComposerSubagentStrip({
                   <span className="min-w-0 flex-1 truncate text-ui font-medium text-foreground/85">
                     <span>{item.primaryLabel}</span>
                     {item.role ? (
-                      <span className="ml-1 text-ui-sm font-normal text-muted-foreground/55">
+                      <span className="ml-1 text-ui-sm font-normal text-muted-foreground/80">
                         ({item.role})
                       </span>
                     ) : null}
                     {item.modelLabel ? (
-                      <span className="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">
+                      <span className="ml-1.5 text-ui-sm font-normal text-muted-foreground/80">
                         {item.modelLabel}
                       </span>
                     ) : null}
                     {item.isBackground ? (
-                      <span className="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">
+                      <span className="ml-1.5 text-ui-sm font-normal text-muted-foreground/80">
                         background
                       </span>
                     ) : null}
@@ -201,7 +201,7 @@ export const ComposerSubagentStrip = function ComposerSubagentStrip({
                     variant="ghost"
                     size="icon-xs"
                     className={cn(
-                      "shrink-0 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100",
+                      "shrink-0 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100",
                       COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME,
                     )}
                     onClick={() => onBackgroundItem(item)}
@@ -217,7 +217,7 @@ export const ComposerSubagentStrip = function ComposerSubagentStrip({
                     variant="ghost"
                     size="icon-xs"
                     className={cn(
-                      "shrink-0 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100",
+                      "shrink-0 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100",
                       COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME,
                     )}
                     onClick={() => onStopItem(item)}

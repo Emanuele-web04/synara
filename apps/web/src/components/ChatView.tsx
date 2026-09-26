@@ -45,6 +45,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import { useCopyThreadIdToClipboard } from "~/hooks/useCopyToClipboard";
 import {
   useDesktopTopBarTrafficLightGutterClassName,
@@ -129,6 +130,14 @@ import {
 } from "../computerStateStore";
 import { formatShortcutLabel, shortcutLabelForCommand } from "../keybindings";
 import { isHomeChatContainerProject } from "../lib/chatProjects";
+import {
+  FIRST_SEND_BUBBLE_FADE_MS,
+  FIRST_SEND_HERO_EXIT_MS,
+  FIRST_SEND_MOTION_DURATION_MS,
+  FIRST_SEND_MOTION_EASING,
+  FIRST_SEND_WORKING_REVEAL_DELAY_MS,
+  FIRST_SEND_WORKING_REVEAL_MS,
+} from "../lib/firstSendMotion";
 import { appendComposerPromptText } from "../lib/chatReferences";
 import { createPastedTextDraft } from "../lib/composerPastedText";
 import {
@@ -222,6 +231,8 @@ import {
   commitAfterRuntimeModePersistence,
   derivePromptHistoryFromMessages,
   hasFileUndoSettled,
+  isUnsettledTurnWork,
+  localDispatchSessionStartReached,
   resolveActiveThreadTitle,
   type TurnDispatchSettings,
   resolveActiveTurnLiveDiffState,
@@ -322,7 +333,7 @@ import {
   CHAT_SURFACE_HEADER_PADDING_X_CLASS,
   CHAT_SURFACE_HEADER_ROW_CLASS_NAME,
 } from "./chat/chatHeaderControls";
-import type { LateComposerSendHandlers } from "./chat/chatSendTypes";
+import type { FirstSendLandingHandoff, LateComposerSendHandlers } from "./chat/chatSendTypes";
 import { composerTranscriptBottomInsetPx, useComposerOverlayHeight } from "./chat/composerOverlay";
 import {
   CHAT_BACKGROUND_CLASS_NAME,
@@ -383,6 +394,7 @@ import { useComposerReferences } from "./chat/useComposerReferences";
 import { useComposerVoiceController } from "./chat/useComposerVoiceController";
 import { useThreadErrorToast } from "./chat/useThreadErrorToast";
 import { useTranscriptAssistantSelectionAction } from "./chat/useTranscriptAssistantSelectionAction";
+import { useLatchedActiveWorkStartedAt, useStartingProviderName } from "./chat/useWorkingIndicator";
 import {
   composerFooterPlanForTier,
   resolveNextComposerFooterTier,
@@ -445,6 +457,17 @@ function getRateLimitBannerDismissalKey(
 
 const VOICE_RECORDER_ACTION_ARM_DELAY_MS = 250;
 
+// First-send composer dock slide: FLIP from the centered landing slot to the
+// transcript's bottom dock. Duration/easing live in lib/firstSendMotion.ts so
+// the bubble rise, working-row reveal, and hero exit share one clock + curve.
+// The launch window mirrors the same staleness bound as the handoff itself —
+// a delayed dock (worktree setup) skips the slide.
+const COMPOSER_DOCK_MOTION_LAUNCH_WINDOW_MS = 1_500;
+
+// Fail-open bound for the "Stopping…" state: a settle event that never arrives
+// must not leave the indicator and disabled Stop control stuck.
+const STOPPING_TURN_TIMEOUT_MS = 15_000;
+
 function warnVoiceGuard(event: string, details?: Record<string, unknown>) {
   if (!import.meta.env.DEV) {
     return;
@@ -481,6 +504,29 @@ function ComposerModelLoadingControl(props: { widthClassName: string }) {
     >
       <RefreshCwIcon aria-hidden="true" className="size-3.5 animate-spin" />
       <span className="truncate text-ui-xs">Loading models</span>
+    </div>
+  );
+}
+
+// Shared by the centered landing and the brief exit overlay on first send. The
+// overlay passes exitOverlay to skip the enter animation and the test id.
+function EmptyLandingHero(props: { heading: ReactNode; exitOverlay?: boolean }) {
+  return (
+    <div
+      data-empty-landing-hero={props.exitOverlay ? undefined : "true"}
+      className={cn(
+        props.exitOverlay ? null : "empty-landing-hero-motion",
+        "flex flex-col items-center gap-3 px-6 pb-5 text-center select-none",
+        CHAT_COLUMN_FRAME_CLASS_NAME,
+      )}
+    >
+      <SynaraLogo aria-label="Synara logo" className="size-8" />
+      <h2
+        data-testid={props.exitOverlay ? undefined : "empty-landing-heading"}
+        className="max-w-[32rem] text-[22px] font-normal leading-[1.2] tracking-[-0.01em] text-foreground/90 sm:text-[24px]"
+      >
+        {props.heading}
+      </h2>
     </div>
   );
 }
@@ -763,6 +809,50 @@ export default function ChatView({
   // slash/mention command menu, so only one of the two is ever open.
   const [isComposerExtrasPanelOpen, setIsComposerExtrasPanelOpen] = useState(false);
   const [secondaryChromePlaceholderHeight, setSecondaryChromePlaceholderHeight] = useState(88);
+  const firstSendLandingHandoffRef = useRef<FirstSendLandingHandoff | null>(null);
+  // Render-visible companion to the ref: the docked composer's deferral skip
+  // reads state during render (refs are forbidden there); the FLIP measurement
+  // itself reads the ref inside a layout effect.
+  const [pendingDockSlideThreadId, setPendingDockSlideThreadId] = useState<ThreadId | null>(null);
+  // Landing hero exit overlay: a snapshot of the hero keeps rendering for a
+  // beat after the landing unmounts so it can fade instead of popping.
+  const [landingHeroExit, setLandingHeroExit] = useState<
+    (NonNullable<FirstSendLandingHandoff["hero"]> & { threadId: ThreadId }) | null
+  >(null);
+  const setFirstSendLandingHandoff = useCallback(
+    (handoff: FirstSendLandingHandoff | null, options?: { preserveHeroExit?: boolean }) => {
+      firstSendLandingHandoffRef.current = handoff;
+      setPendingDockSlideThreadId(handoff?.targetThreadId ?? null);
+      // The hero overlay outlives the handoff itself — the dock commit consumes
+      // and clears the handoff while the overlay is still fading out. Its own
+      // effect tears it down after FIRST_SEND_HERO_EXIT_MS or on thread switch.
+      if (handoff?.hero) {
+        setLandingHeroExit(
+          window.matchMedia("(prefers-reduced-motion: reduce)").matches
+            ? null
+            : { ...handoff.hero, threadId: handoff.targetThreadId },
+        );
+      } else if (handoff === null && !options?.preserveHeroExit) {
+        // Rollback/unwind clears (failed dispatch, stale handoff, thread switch)
+        // drop the overlay immediately — it would otherwise hang over the still
+        // mounted landing.
+        setLandingHeroExit(null);
+      }
+    },
+    [],
+  );
+  const emptyLandingComposerBlockRef = useRef<HTMLDivElement | null>(null);
+  const dockedComposerRef = useRef<HTMLDivElement | null>(null);
+  // The dock slide is kept in a ref (not the layout effect's cleanup) so a
+  // draft→server thread id swap mid-animation doesn't cut the motion short.
+  const dockedComposerAnimationRef = useRef<Animation | null>(null);
+  const dockedComposerAnimationThreadRef = useRef<ThreadId | null>(null);
+  // The rest of the first-send choreography (bubble rise, working-row reveal)
+  // travels with the slide — same cancellation rules.
+  const landingChoreoAnimationsRef = useRef<Animation[]>([]);
+  const landingChoreoRetryRef = useRef<number | null>(null);
+  const landingHeroExitRef = useRef<HTMLDivElement | null>(null);
+  const mainContentRef = useRef<HTMLDivElement | null>(null);
   // Tracks whether the user explicitly dismissed the sidebar for the active turn.
   const planSidebarDismissedForTurnRef = useRef<string | null>(null);
   // When set, the thread-change reset effect will open the sidebar instead of closing it.
@@ -1495,7 +1585,6 @@ export default function ChatView({
     worktreeSetupResolutionRef,
     worktreeSetupPendingAction,
     setWorktreeSetupPendingAction,
-    turnTakenOver,
     isSendBusy,
     isAwaitingTurnStart,
     activeWorktreeSetup,
@@ -1576,10 +1665,38 @@ export default function ChatView({
     promptRef,
     setComposerDraftPrompt,
   });
+  // A bare session (re)connect is not work on its own — it only counts while a
+  // turn is actually pending: a local dispatch in flight, or a live unsettled
+  // turn (mid-turn reconnect). This is also the Stop button's visibility rule.
+  // The reconciler settles dead-session turns eventually; a closed/errored
+  // session must not pin the Working row + Stop button in the meantime.
+  const hasUnsettledTurnWork = isUnsettledTurnWork({
+    latestTurn: activeLatestTurn,
+    latestTurnSettled,
+    phase,
+    sessionStatus: activeThread?.session?.status,
+  });
+  const isConnectingForPendingTurn =
+    isConnecting && (localDispatch !== null || hasUnsettledTurnWork);
+  // The server honors interrupt during startup too: on a starting/running
+  // session with no live turn it retires the session (processThreadSessionStop
+  // in ProviderCommandReactor). Stop therefore stays up for the whole working
+  // span — dispatch bridge and ready gap included — never swapping back to
+  // Send. The one exception: pre-"start-session" worktree setup, where no
+  // session exists yet and the interrupt would only append a failure row.
+  const isTurnInterruptible =
+    hasLiveTurn || localDispatchSessionStartReached(localDispatch) || hasUnsettledTurnWork;
   // Keep Thinking through the post-ack gap where the server has the message /
   // turn request but the provider session is not live yet (common on first send).
   const isWorking =
-    hasLiveTurn || isSendBusy || isConnecting || isRevertingCheckpoint || isAwaitingTurnStart;
+    hasLiveTurn ||
+    isSendBusy ||
+    isConnectingForPendingTurn ||
+    // Mid-turn session churn (provider retry) flaps the phase through
+    // ready/idle while the turn stays running — keep working through it.
+    hasUnsettledTurnWork ||
+    isRevertingCheckpoint ||
+    isAwaitingTurnStart;
   const hasStreamingAssistantText =
     activeThread?.messages.some((message) => message.role === "assistant" && message.streaming) ??
     false;
@@ -1592,6 +1709,23 @@ export default function ChatView({
     : hasLiveTurn
       ? deriveActiveWorkStartedAt(activeLatestTurn, activeThread?.session ?? null, null)
       : null;
+  // The "Working for Xs" header is part of the indicator from the moment a send
+  // is dispatched: fall back to the local dispatch time before the real turn
+  // start exists, then latch so the counter never jumps back to 0s mid-span.
+  const activeTurnStartedAt = useLatchedActiveWorkStartedAt({
+    isWorking,
+    threadId: activeThreadId,
+    candidate: activeWorkStartedAt ?? localDispatch?.startedAt ?? null,
+  });
+  // "Starting <provider>…" only earns the label after a visibly long connect;
+  // the hook holds it through the connecting → ready gap until the turn runs.
+  const startingProviderName = useStartingProviderName({
+    isWorking,
+    isConnecting,
+    isRunning: hasLiveTurn,
+    providerName: providerDisplayName,
+    threadId: activeThreadId,
+  });
   const activeTurnLayoutKey =
     activeThreadId === null ? null : `${activeThreadId}:${activeLatestTurn?.turnId ?? "idle"}`;
   const activeTurnInProgress = activeTurnLayoutLive || keepSettledActiveTurnLayout;
@@ -1684,10 +1818,16 @@ export default function ChatView({
       ),
     [activeThread?.proposedPlans, agentActivityTimelineState.timelineWorkEntries, timelineMessages],
   );
-  const enteringUserMessageIds = useMemo<ReadonlySet<MessageId>>(
-    () => new Set(optimisticUserMessages.map((message) => message.id)),
-    [optimisticUserMessages],
-  );
+  const expectedDispatchUserMessageId = localDispatch?.expectedUserMessageId ?? null;
+  const enteringUserMessageIds = useMemo<ReadonlySet<MessageId>>(() => {
+    const ids = new Set(optimisticUserMessages.map((message) => message.id));
+    // The landing first send rises its bubble with WAAPI in the dock commit —
+    // exclude it here so it doesn't also play the generic send-enter.
+    if (pendingDockSlideThreadId === threadId && expectedDispatchUserMessageId !== null) {
+      ids.delete(expectedDispatchUserMessageId);
+    }
+    return ids;
+  }, [expectedDispatchUserMessageId, optimisticUserMessages, pendingDockSlideThreadId, threadId]);
   // The user message a local send anchored at the top of the transcript viewport.
   // Set at the send sites and kept after the turn settles — collapsing the tail
   // spacer when a turn ends would visibly yank the settled transcript. The next
@@ -1816,6 +1956,21 @@ export default function ChatView({
     threadDetailHydration === "ready";
   const isEmptyChatLanding =
     isCenteredEmptyLanding && Boolean(homeDir) && isContainerLandingProject;
+  useEffect(
+    () => () => {
+      dockedComposerAnimationRef.current?.cancel();
+      dockedComposerAnimationThreadRef.current = null;
+      for (const animation of landingChoreoAnimationsRef.current) {
+        animation.cancel();
+      }
+      landingChoreoAnimationsRef.current = [];
+      if (landingChoreoRetryRef.current !== null) {
+        cancelAnimationFrame(landingChoreoRetryRef.current);
+        landingChoreoRetryRef.current = null;
+      }
+    },
+    [],
+  );
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
     useTurnDiffSummaries(activeThread);
   const turnDiffSummaryByAssistantMessageId = useMemo(() => {
@@ -1940,7 +2095,7 @@ export default function ChatView({
     );
   const claudeCompactDisabledReason = !canRequestNativeClaudeCompaction
     ? isNativeCommandDiscoveryPending
-      ? "Checking Claude's available commands..."
+      ? "Checking Claude's available commands…"
       : "Compaction is unavailable for this Claude session."
     : hasLiveTurn || isConnecting || (activeBackgroundTasks?.activeCount ?? 0) > 0
       ? "Wait for Claude and its background tasks to finish."
@@ -2410,12 +2565,23 @@ export default function ChatView({
     threadId: secondaryChromeThreadId,
     ready: true,
   }));
+  // A pending first-send handoff skips the deferred placeholder entirely: the
+  // docked card must be measured and sliding in the same commit the landing
+  // unmounts, or the slide start lags the send by an extra frame.
+  const landingHandoffPending = pendingDockSlideThreadId === secondaryChromeThreadId;
   const secondaryChromeReady =
+    landingHandoffPending ||
     !shouldDeferSecondaryChrome ||
     (secondaryChromeState.threadId === secondaryChromeThreadId && secondaryChromeState.ready);
 
   useEffect(() => {
-    if (!shouldDeferSecondaryChrome) {
+    if (
+      !shouldDeferSecondaryChrome ||
+      // Chrome already rendered for this thread once — toggling the defer gate
+      // (e.g. landing → docked mid-slide) must not swap it back to the
+      // placeholder for a frame.
+      (secondaryChromeState.threadId === secondaryChromeThreadId && secondaryChromeState.ready)
+    ) {
       setSecondaryChromeState((current) =>
         current.threadId === secondaryChromeThreadId && current.ready
           ? current
@@ -2437,7 +2603,222 @@ export default function ChatView({
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [setSecondaryChromeState, secondaryChromeThreadId, shouldDeferSecondaryChrome]);
+  }, [
+    secondaryChromeState.ready,
+    secondaryChromeState.threadId,
+    setSecondaryChromeState,
+    secondaryChromeThreadId,
+    shouldDeferSecondaryChrome,
+  ]);
+  // Consume the first-send handoff before paint: the docked composer slides up
+  // from the landing slot (FLIP) instead of popping in at the bottom. The
+  // secondaryChromeReady gate still matters off-handoff — the docked slot can
+  // render a deferred placeholder for one frame, and measuring it would start
+  // the slide off by the placeholder's extra height.
+  useLayoutEffect(() => {
+    // React reuses the docked node across thread switches, so a slide still in
+    // flight would surface on the new thread — cancel once the thread it was
+    // started for is no longer active. Runs before the handoff checks: the
+    // handoff ref is already null after consumption.
+    if (
+      dockedComposerAnimationThreadRef.current !== null &&
+      dockedComposerAnimationThreadRef.current !== activeThreadId
+    ) {
+      dockedComposerAnimationRef.current?.cancel();
+      dockedComposerAnimationRef.current = null;
+      dockedComposerAnimationThreadRef.current = null;
+      for (const animation of landingChoreoAnimationsRef.current) {
+        animation.cancel();
+      }
+      landingChoreoAnimationsRef.current = [];
+      if (landingChoreoRetryRef.current !== null) {
+        cancelAnimationFrame(landingChoreoRetryRef.current);
+        landingChoreoRetryRef.current = null;
+      }
+    }
+    if (isCenteredEmptyLanding) {
+      return;
+    }
+    const handoff = firstSendLandingHandoffRef.current;
+    if (handoff === null || activeThreadId === null) {
+      return;
+    }
+    if (activeThreadId !== handoff.sourceThreadId && activeThreadId !== handoff.targetThreadId) {
+      setFirstSendLandingHandoff(null);
+      dockedComposerAnimationRef.current?.cancel();
+      dockedComposerAnimationRef.current = null;
+      return;
+    }
+    if (!secondaryChromeReady) {
+      return;
+    }
+
+    const element = dockedComposerRef.current;
+    const from = handoff.from;
+    if (!element || !from) {
+      setFirstSendLandingHandoff(null);
+      return;
+    }
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      setFirstSendLandingHandoff(null);
+      return;
+    }
+    // A delayed dock (e.g. worktree setup) means the landing is long gone.
+    if (performance.now() - from.at > COMPOSER_DOCK_MOTION_LAUNCH_WINDOW_MS) {
+      setFirstSendLandingHandoff(null);
+      return;
+    }
+    // Measure the same visible element on both ends: the rounded composer card,
+    // not the full-width wrapper.
+    const toCard = element.querySelector<HTMLElement>("[data-composer-card]") ?? element;
+    const to = toCard.getBoundingClientRect();
+    const dx = from.centerX - (to.left + to.width / 2);
+    const dy = from.top - to.top;
+    // The dock commit consumes the handoff while the hero overlay keeps fading —
+    // clearing here must not drop it.
+    setFirstSendLandingHandoff(null, { preserveHeroExit: true });
+    if (Math.abs(dx) < 1 && Math.abs(dy) < 1) {
+      return;
+    }
+    dockedComposerAnimationRef.current?.cancel();
+    dockedComposerAnimationRef.current = element.animate(
+      [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "translate(0, 0)" }],
+      {
+        duration: FIRST_SEND_MOTION_DURATION_MS,
+        easing: FIRST_SEND_MOTION_EASING,
+      },
+    );
+    dockedComposerAnimationThreadRef.current = activeThreadId;
+
+    // The rest of the first-send choreography: the sent text visibly leaves
+    // the card and floats up to its transcript row, then the working rows
+    // arrive after a short delay. Transforms/opacity only. The virtualized
+    // timeline mounts its rows a commit after the dock swap, so the row-level
+    // pieces retry on frames — every animation is pinned to the slide's
+    // startTime, so the shared clock is exact regardless of when the row lands.
+    for (const animation of landingChoreoAnimationsRef.current) {
+      animation.cancel();
+    }
+    landingChoreoAnimationsRef.current = [];
+    if (landingChoreoRetryRef.current !== null) {
+      cancelAnimationFrame(landingChoreoRetryRef.current);
+      landingChoreoRetryRef.current = null;
+    }
+    const slideStartTime = dockedComposerAnimationRef.current.startTime;
+    const choreoSentAt = from.at;
+    let bubbleStarted = handoff.userMessageId === null;
+    let workingStarted = false;
+    const tryStartChoreo = (): boolean => {
+      const pane = mainContentRef.current;
+      if (!pane) {
+        return false;
+      }
+      if (!bubbleStarted) {
+        const bubbleEl = pane.querySelector<HTMLElement>(
+          `[data-message-id="${CSS.escape(handoff.userMessageId ?? "")}"][data-message-role="user"]`,
+        );
+        if (bubbleEl) {
+          const riseDy = from.top - bubbleEl.getBoundingClientRect().top;
+          bubbleStarted = true;
+          if (riseDy > 1) {
+            const rise = bubbleEl.animate(
+              [{ transform: `translateY(${riseDy}px)` }, { transform: "translateY(0)" }],
+              {
+                duration: FIRST_SEND_MOTION_DURATION_MS,
+                easing: FIRST_SEND_MOTION_EASING,
+              },
+            );
+            const fade = bubbleEl.animate([{ opacity: 0 }, { opacity: 1 }], {
+              duration: FIRST_SEND_BUBBLE_FADE_MS,
+              easing: "ease-out",
+            });
+            if (typeof slideStartTime === "number") {
+              rise.startTime = slideStartTime;
+              fade.startTime = slideStartTime;
+            }
+            landingChoreoAnimationsRef.current.push(rise, fade);
+          }
+        }
+      }
+      if (!workingStarted) {
+        const workingEls = pane.querySelectorAll<HTMLElement>(
+          '[data-timeline-row-kind="working-header"], [data-timeline-row-kind="working"]',
+        );
+        if (workingEls.length > 0) {
+          workingStarted = true;
+          for (const workingEl of workingEls) {
+            const reveal = workingEl.animate(
+              [
+                { opacity: 0, transform: "translateY(8px)" },
+                { opacity: 1, transform: "translateY(0)" },
+              ],
+              {
+                duration: FIRST_SEND_WORKING_REVEAL_MS,
+                easing: "ease-out",
+                delay: FIRST_SEND_WORKING_REVEAL_DELAY_MS,
+                fill: "backwards",
+              },
+            );
+            if (typeof slideStartTime === "number") {
+              reveal.startTime = slideStartTime;
+            }
+            landingChoreoAnimationsRef.current.push(reveal);
+          }
+        }
+      }
+      return bubbleStarted && workingStarted;
+    };
+    if (!tryStartChoreo()) {
+      const retryChoreo = () => {
+        landingChoreoRetryRef.current = null;
+        if (tryStartChoreo()) {
+          return;
+        }
+        // Rows only lag the dock commit by a frame or two; past the launch
+        // window the choreography would just look late — drop it.
+        if (performance.now() - choreoSentAt < COMPOSER_DOCK_MOTION_LAUNCH_WINDOW_MS) {
+          landingChoreoRetryRef.current = requestAnimationFrame(retryChoreo);
+        }
+      };
+      landingChoreoRetryRef.current = requestAnimationFrame(retryChoreo);
+    }
+  }, [activeThreadId, isCenteredEmptyLanding, secondaryChromeReady, setFirstSendLandingHandoff]);
+  // The landing hero unmounts with the landing; its snapshot overlay fades and
+  // drifts up so the top of the pane doesn't pop empty mid-slide.
+  useLayoutEffect(() => {
+    if (landingHeroExit === null) {
+      return;
+    }
+    if (landingHeroExit.threadId !== threadId) {
+      setLandingHeroExit(null);
+      return;
+    }
+    const element = landingHeroExitRef.current;
+    if (element === null) {
+      setLandingHeroExit(null);
+      return;
+    }
+    const animation = element.animate(
+      [
+        { opacity: 1, transform: "translateY(0)" },
+        { opacity: 0, transform: "translateY(-12px)" },
+      ],
+      { duration: FIRST_SEND_HERO_EXIT_MS, easing: "ease-out" },
+    );
+    let cleared = false;
+    const clear = () => {
+      if (cleared) return;
+      cleared = true;
+      setLandingHeroExit(null);
+    };
+    void animation.finished.then(clear, () => undefined);
+    const timeout = window.setTimeout(clear, FIRST_SEND_HERO_EXIT_MS + 100);
+    return () => {
+      cleared = true;
+      animation.cancel();
+      window.clearTimeout(timeout);
+    };
+  }, [landingHeroExit, threadId]);
   const setThreadError = useCallback(
     (targetThreadId: ThreadId | null, error: string | null) => {
       if (!targetThreadId) return;
@@ -3364,10 +3745,82 @@ export default function ChatView({
     });
   }, [activeThread]);
 
+  // Local "stopping" marker keyed to the thread + turn: the indicator reads
+  // "Stopping…" and the Stop control disables until the turn settles, the
+  // interrupt rejects, the thread changes, or the fail-open bound hits.
+  const [stoppingTurn, setStoppingTurn] = useState<{
+    threadId: ThreadId;
+    turnId: TurnId | null;
+    at: number;
+  } | null>(null);
+  const isStoppingTurn = stoppingTurn !== null && stoppingTurn.threadId === activeThreadId;
+  useEffect(() => {
+    if (stoppingTurn === null) {
+      return;
+    }
+    if (stoppingTurn.threadId !== activeThreadId) {
+      setStoppingTurn(null);
+      return;
+    }
+    // Settled once the tracked turn reports a terminal state, or a NEWER turn
+    // lands terminal — a stale completed latestTurn on an existing thread must
+    // not clear "Stopping…" while the real turn is still starting. A missing
+    // latestTurn is NOT settle evidence — the detail snapshot lags live turns.
+    const latestTurn = activeLatestTurn;
+    const latestTurnTerminal = latestTurn !== null && latestTurn.state !== "running";
+    const trackedTurnSettled =
+      stoppingTurn.turnId !== null &&
+      latestTurnTerminal &&
+      latestTurn.turnId === stoppingTurn.turnId;
+    const newerTerminalTurnSettled =
+      latestTurnTerminal &&
+      latestTurn.turnId !== stoppingTurn.turnId &&
+      (Date.parse(latestTurn.requestedAt) > stoppingTurn.at ||
+        Date.parse(latestTurn.completedAt ?? "") > stoppingTurn.at);
+    const turnSettled = trackedTurnSettled || newerTerminalTurnSettled;
+    // The interrupt races session startup: phase flaps connecting → ready
+    // while the dispatch bridge is still held, and that gap must not clear
+    // "Stopping…" before the interrupt lands.
+    const dispatchBridgeHeld = isAwaitingTurnStart || localDispatch !== null;
+    if (turnSettled || (!isTurnInterruptible && !hasUnsettledTurnWork && !dispatchBridgeHeld)) {
+      setStoppingTurn(null);
+    }
+  }, [
+    activeLatestTurn,
+    activeThreadId,
+    hasUnsettledTurnWork,
+    isAwaitingTurnStart,
+    isTurnInterruptible,
+    localDispatch,
+    stoppingTurn,
+  ]);
+  // Fail-open: a settle event that never arrives must not stick "Stopping…".
+  useEffect(() => {
+    if (stoppingTurn === null) {
+      return;
+    }
+    const remainingMs = STOPPING_TURN_TIMEOUT_MS - (Date.now() - stoppingTurn.at);
+    const timer = window.setTimeout(() => setStoppingTurn(null), Math.max(remainingMs, 0));
+    return () => window.clearTimeout(timer);
+  }, [stoppingTurn]);
+
   // A rejected interrupt (orchestration dispatch timeout, dead runtime) leaves the
   // UI spinning with no explanation, so the stop affordances report it.
   const onInterruptFromStopControl = useCallback(() => {
+    if (activeThreadId) {
+      setStoppingTurn({
+        threadId: activeThreadId,
+        // Only a live turn is a valid stop target: during startup there may be
+        // none yet, and a stale completed latestTurn must not be captured —
+        // its terminal state would settle "Stopping…" in one frame.
+        turnId:
+          activeThread?.session?.activeTurnId ??
+          (activeLatestTurn?.state === "running" ? activeLatestTurn.turnId : null),
+        at: Date.now(),
+      });
+    }
     void onInterrupt().catch((error: unknown) => {
+      setStoppingTurn(null);
       toastManager.add({
         type: "error",
         title: "Could not stop the current response",
@@ -3377,7 +3830,7 @@ export default function ChatView({
             : "The interrupt request failed. Try again in a moment.",
       });
     });
-  }, [onInterrupt]);
+  }, [activeLatestTurn, activeThread?.session?.activeTurnId, activeThreadId, onInterrupt]);
 
   const onStopWorkflowRun = useCallback(async () => {
     const api = readNativeApi();
@@ -3536,6 +3989,10 @@ export default function ChatView({
     isFocusedPane,
     activeThreadId,
     hasLiveTurn,
+    canInterruptTurn: isTurnInterruptible,
+    isStoppingTurn,
+    composerOverlayOpen,
+    expandedImageOpen: expandedImage !== null,
     composerFormRef,
     onInterruptFromStopControl,
     composerSubagentStripItems,
@@ -4000,6 +4457,8 @@ export default function ChatView({
     setStoreThreadError,
     queryClient,
     isCenteredEmptyLanding,
+    setFirstSendLandingHandoff,
+    emptyLandingComposerBlockRef,
     setEnvironmentPanelPreferenceOpen,
     environmentPanelPreferenceOpen,
     setTailAnchor,
@@ -4710,7 +5169,6 @@ export default function ChatView({
   }, [setDismissedRateLimitBannerKey, activeRateLimitBannerDismissalKey]);
   const previewSession = useComputerPreviewStore(selectThreadComputerPreviewSession(threadId));
   const previewLayout = useComputerPreviewStore(selectThreadComputerPreviewLayout(threadId));
-  const mainContentRef = useRef<HTMLDivElement | null>(null);
   const [mainContentWidth, setMainContentWidth] = useState(1600);
   useEffect(() => {
     const element = mainContentRef.current;
@@ -4780,7 +5238,7 @@ export default function ChatView({
             )}
           >
             <SidebarHeaderNavigationControls />
-            <span className="text-ui leading-snug text-muted-foreground/50">No active thread</span>
+            <span className="text-ui leading-snug text-muted-foreground/80">No active thread</span>
           </div>
         )}
         <div className="flex flex-1 items-center justify-center">
@@ -4924,6 +5382,38 @@ export default function ChatView({
       showEmptyLandingProjectPicker ||
       emptyLandingProjectChip !== null ||
       showEmptyLandingBranchToolbar);
+  const emptyLandingHeading = isEmptyChatLanding ? (
+    "What should we work on?"
+  ) : (
+    <>
+      What should we do in{" "}
+      {showEmptyLandingProjectPicker ? (
+        <ProjectPicker
+          align="center"
+          side="bottom"
+          selectionMode="project"
+          selectedProjectId={activeProject.id}
+          selectedWorkspaceRoot={activeProject.cwd}
+          showResetToHome
+          onSelectProject={handleSelectProjectForEmptyDraft}
+          onCreateProjectFromPath={handleCreateProjectFromPickerPath}
+          onResetToHome={handleResetWorkspaceToHome}
+          renderTrigger={
+            <button
+              type="button"
+              data-testid="empty-landing-heading-project-trigger"
+              className="cursor-pointer rounded-sm text-inherit underline decoration-dotted decoration-[1.5px] underline-offset-[6px] transition-colors duration-150 ease-out hover:text-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transition-none"
+            >
+              {activeProjectDisplayName ?? "this folder"}
+            </button>
+          }
+        />
+      ) : (
+        <span className="text-inherit">{activeProjectDisplayName ?? "this folder"}</span>
+      )}
+      ?
+    </>
+  );
   const emptyLandingControls = showEmptyLandingControls ? (
     <div
       data-empty-landing-controls="true"
@@ -4932,7 +5422,7 @@ export default function ChatView({
       // both themes (chips float over the page), rounded on top only and flush against
       // the input shell below. No overlap/underlay tricks — in dark mode a slice tucked
       // behind the composer's translucent corners reads as a visible cut along the seam.
-      className="chat-composer-shell mx-auto flex min-h-8 w-full min-w-0 flex-nowrap items-center gap-x-1.5 overflow-hidden !rounded-b-none !rounded-t-[var(--composer-radius)] px-1.5 py-1 transition-colors duration-150 ease-out motion-reduce:transition-none sm:min-h-7"
+      className="chat-composer-shell mx-auto flex min-h-8 w-full min-w-0 flex-nowrap items-center gap-x-1.5 overflow-x-auto !rounded-b-none !rounded-t-[var(--composer-radius)] px-1.5 py-1 transition-colors duration-150 ease-out motion-reduce:transition-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:min-h-7"
     >
       {showContainerChatWorkspacePicker ? (
         <ProjectPicker
@@ -5180,7 +5670,12 @@ export default function ChatView({
   const composerSection =
     secondaryChromeReady && shouldRenderChatPaneContent ? (
       <div
-        className={cn(isCenteredEmptyLanding ? "w-full overflow-visible" : "contents")}
+        ref={emptyLandingComposerBlockRef}
+        className={cn(
+          isCenteredEmptyLanding
+            ? "empty-landing-composer-motion w-full overflow-visible"
+            : "contents",
+        )}
         data-empty-landing-composer-block={isCenteredEmptyLanding ? "true" : undefined}
       >
         <form
@@ -5366,6 +5861,7 @@ export default function ChatView({
               {...threadMentionDropzoneProps}
             >
               <div
+                data-composer-card="true"
                 className={cn(
                   COMPOSER_INPUT_SURFACE_CLASS_NAME,
                   composerProviderState.composerSurfaceClassName,
@@ -5520,11 +6016,13 @@ export default function ChatView({
                             ? "Add feedback to refine the plan, or leave this blank to implement it"
                             : activeThread?.parentThreadId
                               ? "Message this subagent while it works"
-                              : hasLiveTurn
-                                ? "Ask for follow-up changes"
-                                : phase === "disconnected"
-                                  ? "Ask for follow-up changes or attach images"
-                                  : "Ask anything, @tag files/folders, or use / to show available commands"
+                              : isCenteredEmptyLanding
+                                ? "Ask anything, @tag files/folders, or use / to show available commands"
+                                : isWorking
+                                  ? "Ask for follow-up changes"
+                                  : phase === "disconnected"
+                                    ? "Ask for follow-up changes or attach images"
+                                    : "Ask anything, @tag files/folders, or use / to show available commands"
                     }
                     disabled={isComposerEditorDisabled}
                   />
@@ -5612,6 +6110,8 @@ export default function ChatView({
                       phase,
                       busy: isSendBusy,
                       connecting: isConnecting,
+                      interruptible: isTurnInterruptible,
+                      stopping: isStoppingTurn,
                       expired: isSidechatExpired,
                       hasPendingCacheReview: activeThread?.claudeCacheReview != null,
                       preparingImages: isPreparingComposerImages,
@@ -5846,70 +6346,22 @@ export default function ChatView({
           >
             {shouldRenderChatPaneContent && isCenteredEmptyLanding ? (
               <div
+                data-empty-landing-pane="true"
                 className={cn(
-                  "chat-pane-enter flex min-h-0 flex-1 flex-col",
+                  "chat-pane-enter relative flex min-h-0 flex-1 items-center justify-center",
                   CHAT_COLUMN_GUTTER_CLASS_NAME,
                 )}
               >
-                {/* The heading floats centered in the space above the composer, which is
-                    anchored to the bottom of the pane (with its workspace-tools rail
-                    stacked on top of the input) so starting a chat keeps the composer
-                    where it lives for the rest of the conversation. */}
-                <div className="relative flex min-h-0 flex-1 items-center justify-center">
-                  {/* Pinned to the top so the heading stays optically centered; hidden on
-                      short panes where it would crowd the heading. */}
-                  <div className="absolute inset-x-0 top-4 flex justify-center px-6 [@media(max-height:620px)]:hidden">
-                    <ProjectImportLandingBanner className="w-full max-w-[520px]" />
-                  </div>
-                  <div
-                    className={cn(
-                      "flex flex-col items-center gap-4 px-6 text-center select-none",
-                      CHAT_COLUMN_FRAME_CLASS_NAME,
-                    )}
-                  >
-                    <SynaraLogo aria-label="Synara logo" className="size-10" />
-                    <h2
-                      data-testid="empty-landing-heading"
-                      className="text-[26px] font-normal leading-[1.15] tracking-[-0.015em] text-foreground/95 sm:text-[30px]"
-                    >
-                      {isEmptyChatLanding ? (
-                        "What should we work on?"
-                      ) : (
-                        <>
-                          What should we do in{" "}
-                          {showEmptyLandingProjectPicker ? (
-                            <ProjectPicker
-                              align="center"
-                              side="bottom"
-                              selectionMode="project"
-                              selectedProjectId={activeProject.id}
-                              selectedWorkspaceRoot={activeProject.cwd}
-                              showResetToHome
-                              onSelectProject={handleSelectProjectForEmptyDraft}
-                              onCreateProjectFromPath={handleCreateProjectFromPickerPath}
-                              onResetToHome={handleResetWorkspaceToHome}
-                              renderTrigger={
-                                <button
-                                  type="button"
-                                  data-testid="empty-landing-heading-project-trigger"
-                                  className="cursor-pointer rounded-sm text-inherit underline decoration-dotted decoration-[1.5px] underline-offset-[6px] transition-colors duration-150 ease-out hover:text-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transition-none"
-                                >
-                                  {activeProjectDisplayName ?? "this folder"}
-                                </button>
-                              }
-                            />
-                          ) : (
-                            <span className="text-inherit">
-                              {activeProjectDisplayName ?? "this folder"}
-                            </span>
-                          )}
-                          ?
-                        </>
-                      )}
-                    </h2>
-                  </div>
+                {/* Keep the import banner out of the centered stack so it never changes
+                    the optical position of the heading as it appears or disappears. */}
+                <div className="absolute inset-x-0 top-4 flex justify-center px-6 [@media(max-height:620px)]:hidden">
+                  <ProjectImportLandingBanner className="w-full max-w-[520px]" />
                 </div>
-                <div className="w-full shrink-0 pb-3 sm:pb-4">
+                <div
+                  data-empty-landing-stack="true"
+                  className="empty-landing-stack flex w-full flex-col items-center"
+                >
+                  <EmptyLandingHero heading={emptyLandingHeading} />
                   {composerSection}
                   {relocateComposerLeadingControls ? (
                     <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
@@ -5924,26 +6376,49 @@ export default function ChatView({
               </div>
             ) : null}
 
+            {landingHeroExit !== null && landingHeroExit.threadId === threadId
+              ? // Portaled to document.body so `position: fixed` resolves against the
+                // viewport — split panes use `contain: paint` and the right dock sets
+                // a will-change transform, both of which trap fixed descendants.
+                createPortal(
+                  <div
+                    ref={landingHeroExitRef}
+                    aria-hidden="true"
+                    data-first-send-hero-exit="true"
+                    className="pointer-events-none fixed z-10"
+                    style={{
+                      top: landingHeroExit.top,
+                      left: landingHeroExit.left,
+                      width: landingHeroExit.width,
+                    }}
+                  >
+                    <EmptyLandingHero heading={landingHeroExit.heading} exitOverlay />
+                  </div>,
+                  document.body,
+                )
+              : null}
+
             {shouldRenderChatPaneContent && !isCenteredEmptyLanding ? (
               <div className="flex min-h-0 flex-1 flex-col">
                 <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
                   <ChatTranscriptPane
                     activeThreadId={activeThread.id}
                     activeTurnId={activeTurnIdForTranscript}
+                    interruptedTurnId={
+                      activeLatestTurn?.state === "interrupted" ? activeLatestTurn.turnId : null
+                    }
                     agentActivityDetail={openAgentActivityDetail}
                     hasMessages={timelineEntries.length > 0}
                     isWorking={isWorking}
                     workingLabel={resolveWorkingLabel({
-                      isSendBusy,
-                      turnTakenOver,
-                      isConnecting,
-                      providerName: providerDisplayName,
+                      stoppingTurn: isStoppingTurn,
+                      startingProviderName,
                     })}
                     worktreeSetup={activeWorktreeSetup}
                     worktreeSetupPendingAction={worktreeSetupPendingAction}
                     onResolveWorktreeSetup={onResolveWorktreeSetup}
                     activeTurnInProgress={activeTurnInProgress}
-                    activeTurnStartedAt={activeWorkStartedAt}
+                    activeTurnStartedAt={activeTurnStartedAt}
                     listRef={legendListRef}
                     timelineControllerRef={timelineControllerRef}
                     findHighlightStore={threadFindHighlightStore}
@@ -6027,7 +6502,13 @@ export default function ChatView({
                     // content (and clear of the docked Environment overlay and preview rail).
                     style={contentInsetRightPx ? { paddingRight: contentInsetRightPx } : undefined}
                   >
-                    <div className="pointer-events-auto">{composerSection}</div>
+                    <div
+                      ref={dockedComposerRef}
+                      className="pointer-events-auto"
+                      data-docked-composer="true"
+                    >
+                      {composerSection}
+                    </div>
                   </div>
                   {/* A trailing BranchToolbar only renders for legacy git threads; otherwise the
                       composer is the last element, so give it a comfortable bottom margin. */}
@@ -6075,7 +6556,7 @@ export default function ChatView({
             <div
               aria-hidden={!terminalWorkspaceTerminalTabActive}
               className={cn(
-                "absolute inset-0 min-h-0 min-w-0 transition-all duration-200 ease-out",
+                "absolute inset-0 min-h-0 min-w-0 transition-[opacity,transform] duration-200 ease-out",
                 terminalWorkspaceTerminalTabActive
                   ? "translate-y-0 opacity-100"
                   : "pointer-events-none translate-y-1 opacity-0",

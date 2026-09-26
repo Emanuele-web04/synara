@@ -57,12 +57,21 @@ import { isMacNavigatorPlatform } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { setThreadDetailResumeCursor } from "../threadDetailResumeCursors";
 import { resetHomeChatProjectPrewarmStateForTests } from "../lib/chatProjects";
+import {
+  FIRST_SEND_BUBBLE_FADE_MS,
+  FIRST_SEND_HERO_EXIT_MS,
+  FIRST_SEND_MOTION_DURATION_MS,
+  FIRST_SEND_MOTION_EASING,
+  FIRST_SEND_WORKING_REVEAL_DELAY_MS,
+  FIRST_SEND_WORKING_REVEAL_MS,
+} from "../lib/firstSendMotion";
 import { resetStudioProjectPrewarmStateForTests } from "../lib/studioProjects";
 import { hasReconciledServerProviderStatuses } from "../lib/serverReactQuery";
 import { getRouter } from "../router";
 import { useSplitViewStore } from "../splitViewStore";
 import { useSpacesUiStore } from "../spacesUiStore";
 import { useStore } from "../store";
+import { getThreadFromState } from "../threadDerivation";
 import {
   createShellSnapshotFromReadModel,
   flattenEffectRpcRequestPayload,
@@ -86,6 +95,7 @@ import { resetWsNativeApiForTest } from "../wsNativeApi";
 // Pre-transform the compiler-heavy component outside the first case's timeout.
 // The router's auto-split route otherwise requests this module on first mount.
 import "./ChatView";
+import { waitForTransientPopups } from "../lib/browserPopupCleanup";
 
 const THREAD_ID = "thread-browser-test" as ThreadId;
 const OTHER_THREAD_ID = "thread-browser-test-other" as ThreadId;
@@ -1279,7 +1289,13 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
   return {};
 }
 
-function installDeterministicSendNativeApi(options?: { rejectTurnStart?: boolean }): () => void {
+function installDeterministicSendNativeApi(options?: {
+  rejectTurnStart?: boolean;
+  /** Gates workspace prep's settled-resume branch read: hold, then fail. */
+  gitStatusGate?: { hold: Promise<void> | null; fail: boolean; invocations?: number };
+  /** Parks worktree creation so a send stays on a pre-session setup step. */
+  createWorktreeGate?: { hold: Promise<void> | null };
+}): () => void {
   const previousNativeApi = window.nativeApi;
   const wsNativeApi = readNativeApi();
   if (!wsNativeApi) {
@@ -1292,6 +1308,19 @@ function installDeterministicSendNativeApi(options?: { rejectTurnStart?: boolean
       ...wsNativeApi,
       git: {
         ...wsNativeApi.git,
+        status: async (input: Parameters<typeof wsNativeApi.git.status>[0]) => {
+          const gate = options?.gitStatusGate;
+          if (gate) {
+            gate.invocations = (gate.invocations ?? 0) + 1;
+          }
+          if (gate?.hold) {
+            await gate.hold;
+          }
+          if (gate?.fail) {
+            throw new Error("Git status failed for test.");
+          }
+          return wsNativeApi.git.status(input);
+        },
         createDetachedWorktree: async (
           input: Parameters<typeof wsNativeApi.git.createDetachedWorktree>[0],
         ) => {
@@ -1300,6 +1329,9 @@ function installDeterministicSendNativeApi(options?: { rejectTurnStart?: boolean
             ...input,
           };
           wsRequests.push(request);
+          if (options?.createWorktreeGate?.hold) {
+            await options.createWorktreeGate.hold;
+          }
           return resolveWsRpc(request) as Awaited<
             ReturnType<typeof wsNativeApi.git.createDetachedWorktree>
           >;
@@ -2153,6 +2185,7 @@ describe("ChatView transcript geometry (full app)", () => {
     await resetHomeChatProjectPrewarmStateForTests();
     await resetStudioProjectPrewarmStateForTests();
     resetRetainedThreadDetailSubscriptionsForTests();
+    await waitForTransientPopups();
     document.body.innerHTML = "";
   });
 
@@ -2344,7 +2377,13 @@ describe("ChatView transcript geometry (full app)", () => {
         for (const id of [1, 2, 3]) {
           await page.getByRole("button", { name: new RegExp(`Choice ${id}`) }).click();
           if (id < 3)
-            await page.getByRole("button", { name: "Next question", exact: true }).first().click();
+            // Manual Next and the 200ms auto-advance race under load; either
+            // path lands on the next question, so a timed-out click is fine.
+            await page
+              .getByRole("button", { name: "Next question", exact: true })
+              .first()
+              .click({ timeout: 2_000 })
+              .catch(() => {});
         }
         if (navigation === "custom") {
           await userEvent.click(await waitForComposerEditor());
@@ -2556,8 +2595,20 @@ describe("ChatView transcript geometry (full app)", () => {
       value: { ...api, orchestration: { ...api.orchestration, dispatchCommand } },
     });
     try {
-      await page.getByRole("button", { name: /Choice 1/ }).click();
-      await page.getByRole("button", { name: "Cancel", exact: true }).click();
+      // Synchronous DOM clicks: the 200ms single-select auto-advance must not
+      // fire between answering and cancelling, or "Choose option 2?" renders and
+      // the pending interaction (never resolved by the mocked dispatch) keeps it
+      // mounted.
+      const choiceButton = Array.from(document.querySelectorAll("button")).find((button) =>
+        button.textContent?.includes("Choice 1"),
+      );
+      expect(choiceButton, "Choice 1 button not found").toBeDefined();
+      choiceButton!.click();
+      const cancelButton = Array.from(document.querySelectorAll("button")).find(
+        (button) => button.textContent?.trim() === "Cancel",
+      );
+      expect(cancelButton, "Cancel button not found").toBeDefined();
+      cancelButton!.click();
       await vi.waitFor(() => expect(dispatchCommand).toHaveBeenCalledTimes(1));
       expect(dispatchCommand).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -3402,7 +3453,7 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("shows Loading until ack, then keeps Thinking through the post-ack gap", async () => {
+  it("shows Thinking with the working timer from dispatch through the post-ack gap", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
     let currentSnapshot = createSnapshotForTargetUser({
       targetMessageId: "msg-user-thinking-bridge" as MessageId,
@@ -3440,8 +3491,11 @@ describe("ChatView transcript geometry (full app)", () => {
       await vi.waitFor(
         () => {
           expect(document.body.textContent).toContain(prompt);
-          expect(document.body.textContent).toContain("Loading");
-          expect(document.body.textContent).not.toContain("Thinking");
+          expect(document.body.textContent).toContain("Thinking");
+          // The header is part of the indicator from dispatch: it counts from
+          // the local send time until the real turn start takes over.
+          expect(document.body.textContent).toContain("Working for");
+          expect(document.body.textContent).not.toContain("Loading");
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -3509,7 +3563,7 @@ describe("ChatView transcript geometry (full app)", () => {
           expect(document.body.textContent).toContain(prompt);
           expect(document.body.textContent).toContain("Thinking");
           expect(document.body.textContent).not.toContain("Loading");
-          expect(document.body.textContent).not.toContain("Working for");
+          expect(document.body.textContent).toContain("Working for");
         },
         { timeout: 4_000, interval: 16 },
       );
@@ -3521,7 +3575,7 @@ describe("ChatView transcript geometry (full app)", () => {
       });
       expect(document.body.textContent).toContain("Thinking");
       expect(document.body.textContent).not.toContain("Loading");
-      expect(document.body.textContent).not.toContain("Working for");
+      expect(document.body.textContent).toContain("Working for");
 
       syncActiveThread((thread) => ({
         ...thread,
@@ -3688,12 +3742,16 @@ describe("ChatView transcript geometry (full app)", () => {
       // Rows above the anchor settle to their real height mid-slide (late image
       // loads, markdown remeasure, estimated virtualized rows mounting). Visible
       // content preservation is off while an anchor is set, so this is exactly
-      // what shifts the anchored row under the in-flight slide.
+      // what shifts the anchored row under the in-flight slide. Record each
+      // shock's fire time so the approach check can tell an injected layout
+      // shift apart from a genuine bounce in the slide itself.
+      const growthShockTimes: number[] = [];
       const earlierMessageId = currentSnapshot.threads
         .find((thread) => thread.id === THREAD_ID)!
         .messages.at(-2)!.id;
       for (const [index, delayMs] of [260, 340, 430].entries()) {
         at(delayMs, () => {
+          growthShockTimes.push(performance.now() - startedAt);
           syncActiveThread((thread) => ({
             ...thread,
             messages: thread.messages.map((message) =>
@@ -3777,6 +3835,13 @@ describe("ChatView transcript geometry (full app)", () => {
       // browser frame sampling cannot prove the intermediate path because a
       // loaded runner may present no frames between the first move and arrival.
       const approach = firstArrivalIndex >= 0 ? visible.slice(0, firstArrivalIndex + 1) : visible;
+      // A growth shock shifts the row's viewport offset instantly, while the
+      // slide only re-targets on the next frame — the pair reads as down-then-up.
+      // Skip deltas measured across a recorded shock so only a bounce the slide
+      // itself produced can count. The shock's row shift stays fully visible to
+      // the post-arrival assertions below, which expect zero residual motion.
+      const withinShock = (t: number) =>
+        growthShockTimes.some((shockAt) => t >= shockAt - 5 && t <= shockAt + 110);
       let approachReversals = 0;
       let approachDirection = 0;
       for (let index = 1; index < approach.length; index += 1) {
@@ -3784,7 +3849,7 @@ describe("ChatView transcript geometry (full app)", () => {
         // Chromium can report a one-pixel layout/compositor rounding shift before
         // the anchor animation starts. Match the arrival tolerance so that noise
         // does not count as an extra change of direction.
-        if (Math.abs(delta) <= 2) continue;
+        if (Math.abs(delta) <= 2 || withinShock(approach[index]!.t)) continue;
         const direction = Math.sign(delta);
         if (approachDirection !== 0 && direction !== approachDirection) approachReversals += 1;
         approachDirection = direction;
@@ -4060,20 +4125,6 @@ describe("ChatView transcript geometry (full app)", () => {
           expect(getScrollContainerDistanceFromBottom(container)).toBeGreaterThanOrEqual(10),
         );
         await waitForLayout();
-        // Native wheel and key scrolling may continue after the input command
-        // resolves. Record the reader position only once the viewport is quiet.
-        let lastTop = container.scrollTop;
-        let stableSince = performance.now();
-        await vi.waitFor(
-          () => {
-            if (container.scrollTop !== lastTop) {
-              lastTop = container.scrollTop;
-              stableSince = performance.now();
-            }
-            expect(performance.now() - stableSince).toBeGreaterThanOrEqual(150);
-          },
-          { timeout: 3_000, interval: 20 },
-        );
         const viewport = container.getBoundingClientRect();
         const readingAnchor = Array.from(
           container.querySelectorAll<HTMLElement>("[data-message-id] p, [data-message-id] li"),
@@ -4092,6 +4143,34 @@ describe("ChatView transcript geometry (full app)", () => {
             .querySelector(anchorSelector)!
             .querySelectorAll("p, li")
             [anchorIndex]!.getBoundingClientRect().top;
+        // Settle on the anchor's viewport position, not scrollTop: while
+        // detached the list keeps adjusting scrollTop on every streamed emit to
+        // hold the reader's place, so scrollTop alone never goes quiet.
+        const waitForAnchorQuiet = async () => {
+          let lastAnchorTop = readAnchorTop();
+          let stableSince = performance.now();
+          const deltas: number[] = [];
+          try {
+            await vi.waitFor(
+              () => {
+                const top = readAnchorTop();
+                if (top !== lastAnchorTop) {
+                  deltas.push(Math.round((top - lastAnchorTop) * 10) / 10);
+                  lastAnchorTop = top;
+                  stableSince = performance.now();
+                }
+                expect(performance.now() - stableSince).toBeGreaterThanOrEqual(150);
+              },
+              { timeout: 3_000, interval: 20 },
+            );
+          } catch (error) {
+            throw new Error(
+              `anchor never quieted; deltas=${deltas.slice(-20).join(",")} last=${lastAnchorTop.toFixed(1)} scrollTop=${Math.round(container.scrollTop)} max=${Math.round(container.scrollHeight - container.clientHeight)}`,
+              { cause: error },
+            );
+          }
+        };
+        await waitForAnchorQuiet();
         const detachedTop = readAnchorTop();
         for (let index = 0; index < 3; index += 1) {
           grow();
@@ -4116,8 +4195,10 @@ describe("ChatView transcript geometry (full app)", () => {
           }));
           await waitForLayout();
         }
-        // The list may compensate scrollTop as estimated rows settle. The text
-        // the reader is looking at must remain at the same viewport position.
+        // The list may compensate scrollTop a frame after streamed growth
+        // lands. The text the reader is looking at must settle back at the
+        // same viewport position.
+        await waitForAnchorQuiet();
         expect(readAnchorTop()).toBeCloseTo(detachedTop, 0);
         if (action === "thread switch") {
           await mounted.router.navigate({
@@ -4214,9 +4295,20 @@ describe("ChatView transcript geometry (full app)", () => {
       scrollSpy.calls.length = 0;
 
       // Buffering/connecting state changes generic turn chrome, but does not add a
-      // transcript message and therefore must not re-stick the transcript.
+      // transcript message and therefore must not re-stick the transcript. The
+      // turn is live (mid-turn reconnect): a bare "starting" with no pending
+      // turn shows no indicator at all.
+      const reconnectingTurnId = TurnId.makeUnsafe("turn-auto-follow-wiring");
       syncActiveThread((thread) => ({
         ...thread,
+        latestTurn: {
+          turnId: reconnectingTurnId,
+          state: "running",
+          requestedAt: isoAt(1_200),
+          startedAt: isoAt(1_200),
+          completedAt: null,
+          assistantMessageId: null,
+        },
         session: thread.session
           ? {
               ...thread.session,
@@ -4227,7 +4319,20 @@ describe("ChatView transcript geometry (full app)", () => {
         updatedAt: isoAt(1_201),
       }));
       await waitForLayout();
-      await expect.element(page.getByText("Starting Codex…", { exact: true })).toBeInTheDocument();
+      // The "Starting <provider>…" label only earns the slot after a sustained
+      // connect (STARTING_PROVIDER_LABEL_DELAY_MS); before that the shimmer
+      // reads "Thinking".
+      await expect.element(page.getByText("Thinking", { exact: true })).toBeInTheDocument();
+      await expect
+        .element(page.getByText("Starting Codex…", { exact: true }))
+        .not.toBeInTheDocument();
+      expect(scrollSpy.calls).toHaveLength(0);
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain("Starting Codex…");
+        },
+        { timeout: 3_000, interval: 16 },
+      );
       expect(scrollSpy.calls).toHaveLength(0);
 
       for (const status of ["error", "starting", "ready"] as const) {
@@ -4721,10 +4826,10 @@ describe("ChatView transcript geometry (full app)", () => {
       branchTrigger.click();
 
       const branchSearch = await waitForElement(
-        () => document.querySelector<HTMLInputElement>('input[placeholder="Search branches..."]'),
+        () => document.querySelector<HTMLInputElement>('input[placeholder="Search branches…"]'),
         "Unable to find branch selector search input.",
       );
-      await page.getByPlaceholder("Search branches...").fill("stale-query");
+      await page.getByPlaceholder("Search branches…").fill("stale-query");
       expect(branchSearch.value).toBe("stale-query");
 
       await mounted.router.navigate({
@@ -4741,7 +4846,7 @@ describe("ChatView transcript geometry (full app)", () => {
       await vi.waitFor(
         () => {
           expect(
-            document.querySelector('input[placeholder="Search branches..."]'),
+            document.querySelector('input[placeholder="Search branches…"]'),
             "Branch selector state remained open after switching threads.",
           ).toBeNull();
         },
@@ -4754,7 +4859,7 @@ describe("ChatView transcript geometry (full app)", () => {
       );
       nextBranchTrigger.click();
       const resetSearch = await waitForElement(
-        () => document.querySelector<HTMLInputElement>('input[placeholder="Search branches..."]'),
+        () => document.querySelector<HTMLInputElement>('input[placeholder="Search branches…"]'),
         "Unable to reopen branch selector after switching threads.",
       );
       expect(resetSearch.value).toBe("");
@@ -7431,6 +7536,27 @@ describe("ChatView transcript geometry (full app)", () => {
         return command!;
       });
       const message = startCommand.message as { messageId: MessageId; text: string };
+      // First send docks the composer with a FLIP slide (WAAPI) from the
+      // landing slot instead of a fade.
+      await vi.waitFor(
+        () => {
+          const docked = document.querySelector<HTMLElement>('[data-docked-composer="true"]');
+          expect(docked).not.toBeNull();
+          expect(
+            docked!.getAnimations().filter((animation) => animation.playState !== "finished")
+              .length,
+          ).toBeGreaterThan(0);
+        },
+        { timeout: 1_000, interval: 16 },
+      );
+      {
+        const docked = document.querySelector<HTMLElement>('[data-docked-composer="true"]');
+        const slideTiming = (
+          docked!.getAnimations()[0]?.effect as KeyframeEffect | null
+        )?.getComputedTiming();
+        expect(slideTiming?.duration).toBe(FIRST_SEND_MOTION_DURATION_MS);
+        expect(slideTiming?.easing).toBe(FIRST_SEND_MOTION_EASING);
+      }
       const messageSelector = `[data-message-id="${message.messageId}"][data-message-role="user"]`;
       const expectTranscript = async () => {
         await waitForLayout();
@@ -7473,6 +7599,1460 @@ describe("ChatView transcript geometry (full app)", () => {
       // A creation snapshot can finish after the first message echo.
       useStore.getState().syncServerThreadDetailHotPath(createdThread);
       await expectTranscript();
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("does not carry the first-send handoff into another thread", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, THREAD_ID);
+
+    const populatedSnapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-handoff-target" as MessageId,
+      targetText: "handoff target",
+    });
+    const sourceThread = { ...populatedSnapshot.threads[0]!, messages: [] };
+    const snapshotWithOther = addThreadToSnapshot(populatedSnapshot, OTHER_THREAD_ID);
+    const otherThread = snapshotWithOther.threads.find((thread) => thread.id === OTHER_THREAD_ID);
+    if (otherThread === undefined) {
+      throw new Error("Expected the other thread fixture.");
+    }
+    const snapshot = {
+      ...snapshotWithOther,
+      threads: [
+        sourceThread,
+        {
+          ...otherThread,
+          messages: populatedSnapshot.threads[0]!.messages,
+          session: otherThread.session
+            ? { ...otherThread.session, threadId: OTHER_THREAD_ID }
+            : null,
+        },
+      ],
+    };
+    const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+
+    try {
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "Send then switch threads");
+      const sendButton = await waitForSendButton();
+      sendButton.click();
+      await vi.waitFor(
+        () => {
+          const docked = document.querySelector<HTMLElement>('[data-docked-composer="true"]');
+          expect(docked).not.toBeNull();
+          expect(docked!.getAnimations().length).toBeGreaterThan(0);
+        },
+        { timeout: 1_000, interval: 16 },
+      );
+
+      await mounted.router.navigate({
+        to: "/$threadId",
+        params: { threadId: OTHER_THREAD_ID },
+      });
+      await waitForURL(
+        mounted.router,
+        (path) => path === `/${OTHER_THREAD_ID}`,
+        "The handoff test should switch to the other thread.",
+      );
+      await waitForLayout();
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 50));
+      // The dock slide is cancelled when the handoff's thread is left behind.
+      const docked = document.querySelector<HTMLElement>('[data-docked-composer="true"]');
+      expect(docked?.getAnimations() ?? []).toHaveLength(0);
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("does not reuse a first-send handoff after a rejected send", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi({ rejectTurnStart: true });
+    useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, THREAD_ID);
+    const snapshot = addThreadToSnapshot(createDraftOnlySnapshot(), THREAD_ID);
+    const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+
+    try {
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "This send will fail");
+      const sendButton = await waitForSendButton();
+      sendButton.click();
+      await vi.waitFor(
+        () => {
+          expect(
+            wsRequests.some(
+              (request) => readDispatchedCommand(request)?.type === "thread.turn.start",
+            ),
+          ).toBe(true);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      await vi.waitFor(
+        () => {
+          expect(document.querySelector('[data-testid="empty-landing-heading"]')).not.toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const sourceThread = fixture.snapshot.threads.find((thread) => thread.id === THREAD_ID);
+      if (sourceThread === undefined) {
+        throw new Error("Expected the source thread fixture.");
+      }
+      const recoveredThread = {
+        ...sourceThread,
+        messages: [
+          createUserMessage({
+            id: "msg-user-after-failed-send" as MessageId,
+            text: "Recovered after failed send",
+            offsetSeconds: 1,
+          }),
+        ],
+      };
+      fixture.snapshot = { ...fixture.snapshot, threads: [recoveredThread] };
+      useStore
+        .getState()
+        .syncServerShellSnapshot(createShellSnapshotFromReadModel(fixture.snapshot));
+      useStore.getState().syncServerThreadDetailHotPath(recoveredThread);
+      await waitForLayout();
+      await vi.waitFor(() => expect(mounted.router.state.status).toBe("idle"), {
+        timeout: 8_000,
+        interval: 16,
+      });
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 50));
+      // A rejected send leaves no stale handoff: docking happens silently.
+      const docked = document.querySelector<HTMLElement>('[data-docked-composer="true"]');
+      expect(docked?.getAnimations() ?? []).toHaveLength(0);
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("keeps the working indicator live across draft→server promotion", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, THREAD_ID);
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createDraftOnlySnapshot(),
+    });
+
+    const workingGaps: number[] = [];
+    const observer = new MutationObserver(() => {
+      if (!document.querySelector(".shimmer")) {
+        workingGaps.push(performance.now());
+      }
+    });
+
+    try {
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "promotion seam check");
+      (await waitForSendButton()).click();
+      const startCommand = await vi.waitFor(() => {
+        const command = wsRequests
+          .map(readDispatchedCommand)
+          .find((candidate) => candidate?.type === "thread.turn.start");
+        expect(command).toBeDefined();
+        return command!;
+      });
+      const message = startCommand.message as { messageId: MessageId; text: string };
+      // Header + Thinking are up from dispatch, and the counter must advance
+      // past 0s before promotion so a reset would be visible.
+      await vi.waitFor(() => {
+        expect(document.querySelector(".shimmer")?.textContent).toBe("Thinking");
+      });
+      await vi.waitFor(() => expect(document.body.textContent).toMatch(/Working for [1-9]/), {
+        timeout: 6_000,
+        interval: 16,
+      });
+      const headerSeconds = () => {
+        const match = document.body.textContent?.match(/Working for (\d+)s/);
+        return match ? Number(match[1]) : null;
+      };
+      const prePromotionSeconds = headerSeconds();
+      expect(prePromotionSeconds).not.toBeNull();
+      observer.observe(document.body, { subtree: true, childList: true, characterData: true });
+
+      const turnId = TurnId.makeUnsafe("turn-promotion-test");
+      const promotedSession = {
+        threadId: THREAD_ID,
+        status: "starting" as const,
+        providerName: "codex" as const,
+        runtimeMode: "full-access" as const,
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: isoAt(1_400),
+      };
+      const syncThread = (
+        thread: typeof promotedThread,
+        status: "starting" | "ready" | "running",
+        withTurn: boolean,
+      ) => {
+        useStore.getState().syncServerThreadDetailHotPath({
+          ...thread,
+          session: thread.session
+            ? { ...thread.session, status, activeTurnId: withTurn ? turnId : null }
+            : null,
+          latestTurn: withTurn
+            ? {
+                turnId,
+                state: "running" as const,
+                requestedAt: isoAt(1_401),
+                startedAt: isoAt(1_402),
+                completedAt: null,
+                assistantMessageId: null,
+              }
+            : null,
+        });
+      };
+
+      // Promotion lands mid-start: the server thread appears in the shell
+      // snapshot while the session is still connecting, then ready with the
+      // turn already started (the takeover gap that used to blank the
+      // indicator), then running.
+      const promotedSnapshot = addThreadToSnapshot(fixture.snapshot, THREAD_ID);
+      const promotedThread = {
+        ...promotedSnapshot.threads[0]!,
+        messages: [
+          {
+            ...createUserMessage({
+              id: message.messageId,
+              text: message.text,
+              offsetSeconds: 1,
+            }),
+            createdAt: startCommand.createdAt as string,
+            updatedAt: startCommand.createdAt as string,
+          },
+        ],
+        session: { ...promotedSession, status: "starting" as const },
+        latestTurn: null,
+      };
+      fixture.snapshot = {
+        ...promotedSnapshot,
+        threads: [promotedThread],
+      };
+      useStore
+        .getState()
+        .syncServerShellSnapshot(createShellSnapshotFromReadModel(fixture.snapshot));
+      useComposerDraftStore.getState().finalizePromotedDraftThread(THREAD_ID);
+      useStore.getState().syncServerThreadDetailHotPath(promotedThread);
+      await waitForLayout();
+      syncThread(promotedThread, "ready", true);
+      await waitForLayout();
+      syncThread(promotedThread, "running", true);
+      await waitForLayout();
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 400));
+
+      // The working row never unmounted and the counter never restarted.
+      expect(workingGaps).toHaveLength(0);
+      expect(headerSeconds()).toBeGreaterThanOrEqual(prePromotionSeconds!);
+      expect(document.querySelector(".shimmer")?.textContent).toBe("Thinking");
+    } finally {
+      observer.disconnect();
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("interrupts a live turn with Escape in the composer and shows Stopping…", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-escape-interrupt" as MessageId,
+        targetText: "escape interrupt target",
+        sessionStatus: "running",
+      }),
+    });
+
+    try {
+      const editor = await waitForComposerEditor();
+      await userEvent.click(editor);
+      await expect.element(page.getByRole("button", { name: "Stop generation" })).toBeVisible();
+      // A lingering pointer can leave a hover preview card mid-open from an
+      // earlier interaction — the card owns Escape while it is open, so let it
+      // settle before dispatching the interrupt.
+      await vi.waitFor(() =>
+        expect(document.querySelector("[data-slot='preview-card-popup']")).toBeNull(),
+      );
+      await userEvent.keyboard("{Escape}");
+      await vi.waitFor(() => {
+        expect(
+          wsRequests.some(
+            (request) => readDispatchedCommand(request)?.type === "thread.turn.interrupt",
+          ),
+        ).toBe(true);
+      });
+      // The interrupt is acknowledged locally: shimmer reads Stopping… and the
+      // Stop control is disabled against repeat interrupts.
+      await vi.waitFor(() => {
+        expect(document.querySelector(".shimmer")?.textContent).toBe("Stopping…");
+        const stop = document.querySelector<HTMLButtonElement>('button[aria-label="Stopping"]');
+        expect(stop).not.toBeNull();
+        expect(stop!.disabled).toBe(true);
+      });
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("does not interrupt on Escape from other inputs, menus, or when idle", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-escape-guard" as MessageId,
+        targetText: "escape guard target",
+        sessionStatus: "running",
+      }),
+    });
+    const interruptDispatched = () =>
+      wsRequests.some(
+        (request) => readDispatchedCommand(request)?.type === "thread.turn.interrupt",
+      );
+
+    try {
+      // Composer command menu owns its own Escape (closes the menu).
+      const editor = await waitForComposerEditor();
+      await userEvent.click(editor);
+      await userEvent.keyboard("/");
+      await vi.waitFor(() => {
+        expect(
+          document.querySelector('[data-slot="command-item"]') !== null ||
+            document.body.textContent?.includes("Loading commands"),
+        ).toBe(true);
+      });
+      await userEvent.keyboard("{Escape}");
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 150));
+      expect(interruptDispatched()).toBe(false);
+
+      // Escape inside a non-composer input (the thread find bar) stays there.
+      await userEvent.keyboard("{Meta>}f{/Meta}");
+      const findInput = await waitForElement(
+        () => document.querySelector<HTMLElement>("input[type='text'], input:not([type])"),
+        "Thread find input did not open.",
+      );
+      expect(document.activeElement).toBe(findInput);
+      await userEvent.keyboard("{Escape}");
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 150));
+      expect(interruptDispatched()).toBe(false);
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+
+    // Idle: no live turn means Escape is a no-op.
+    const idleMounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-escape-idle" as MessageId,
+        targetText: "escape idle target",
+      }),
+    });
+    try {
+      const editor = await waitForComposerEditor();
+      await userEvent.click(editor);
+      await userEvent.keyboard("{Escape}");
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 150));
+      expect(interruptDispatched()).toBe(false);
+    } finally {
+      await idleMounted.cleanup();
+    }
+  });
+
+  it("settles a stopped turn as 'Stopped after Xs'", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    const turnId = TurnId.makeUnsafe("turn-browser-fixture-active");
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-stop-settle" as MessageId,
+        targetText: "stop settle target",
+        sessionStatus: "running",
+      }),
+    });
+
+    try {
+      const stop = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Stop generation"]'),
+        "Stop button did not appear.",
+      );
+      stop.click();
+      await vi.waitFor(() => {
+        expect(
+          wsRequests.some(
+            (request) => readDispatchedCommand(request)?.type === "thread.turn.interrupt",
+          ),
+        ).toBe(true);
+      });
+      await vi.waitFor(() => {
+        expect(document.querySelector(".shimmer")?.textContent).toBe("Stopping…");
+      });
+
+      // The server settles the turn as interrupted.
+      const thread = fixture.snapshot.threads.find((t) => t.id === THREAD_ID)!;
+      const settledThread = {
+        ...thread,
+        messages: [
+          ...thread.messages,
+          {
+            ...createAssistantMessage({
+              id: "msg-assistant-stopped-preamble" as MessageId,
+              text: "Preamble before the stop.",
+              offsetSeconds: 1_500,
+            }),
+            turnId,
+          },
+          {
+            ...createAssistantMessage({
+              id: "msg-assistant-stopped-final" as MessageId,
+              text: "Partial answer before it was stopped.",
+              offsetSeconds: 1_501,
+            }),
+            turnId,
+            completedAt: isoAt(1_502),
+          },
+        ],
+        session: thread.session
+          ? {
+              ...thread.session,
+              status: "interrupted" as const,
+              activeTurnId: null,
+              updatedAt: isoAt(1_502),
+            }
+          : null,
+        latestTurn: {
+          turnId,
+          state: "interrupted" as const,
+          requestedAt: isoAt(1_400),
+          startedAt: isoAt(1_401),
+          completedAt: isoAt(1_502),
+          assistantMessageId: "msg-assistant-stopped-final" as MessageId,
+        },
+      };
+      fixture.snapshot = {
+        ...fixture.snapshot,
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+        threads: fixture.snapshot.threads.map((t) => (t.id === THREAD_ID ? settledThread : t)),
+      };
+      useStore.getState().syncServerReadModel(fixture.snapshot);
+      useStore.getState().syncServerThreadDetailHotPath(settledThread);
+      await vi.waitFor(
+        () => {
+          expect(document.body.textContent).toContain("Stopped after");
+          expect(document.querySelector(".shimmer")).toBeNull();
+        },
+        { timeout: 6_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("marks a stopped plain reply 'Stopped' in the meta row (no collapsed header)", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    const turnId = TurnId.makeUnsafe("turn-browser-fixture-plain-stop");
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-stop-plain" as MessageId,
+        targetText: "stop plain target",
+        sessionStatus: "running",
+      }),
+    });
+
+    try {
+      const stop = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Stop generation"]'),
+        "Stop button did not appear.",
+      );
+      stop.click();
+      await vi.waitFor(() => {
+        expect(
+          wsRequests.some(
+            (request) => readDispatchedCommand(request)?.type === "thread.turn.interrupt",
+          ),
+        ).toBe(true);
+      });
+
+      // Settle the turn as interrupted with a single plain assistant reply —
+      // nothing folds, so no "Stopped after" header can render.
+      const thread = fixture.snapshot.threads.find((t) => t.id === THREAD_ID)!;
+      const settledThread = {
+        ...thread,
+        messages: [
+          ...thread.messages,
+          createUserMessage({
+            id: "msg-user-stop-plain-send" as MessageId,
+            text: "tell me a story",
+            offsetSeconds: 1_499,
+          }),
+          {
+            ...createAssistantMessage({
+              id: "msg-assistant-stopped-plain" as MessageId,
+              text: "Partial answer before it was stopped.",
+              offsetSeconds: 1_500,
+            }),
+            turnId,
+            completedAt: isoAt(1_501),
+          },
+        ],
+        session: thread.session
+          ? {
+              ...thread.session,
+              status: "interrupted" as const,
+              activeTurnId: null,
+              updatedAt: isoAt(1_501),
+            }
+          : null,
+        latestTurn: {
+          turnId,
+          state: "interrupted" as const,
+          requestedAt: isoAt(1_400),
+          startedAt: isoAt(1_401),
+          completedAt: isoAt(1_501),
+          assistantMessageId: "msg-assistant-stopped-plain" as MessageId,
+        },
+      };
+      fixture.snapshot = {
+        ...fixture.snapshot,
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+        threads: fixture.snapshot.threads.map((t) => (t.id === THREAD_ID ? settledThread : t)),
+      };
+      useStore.getState().syncServerReadModel(fixture.snapshot);
+      useStore.getState().syncServerThreadDetailHotPath(settledThread);
+      await vi.waitFor(
+        () => {
+          const metaRow = [...document.querySelectorAll("p.tabular-nums")].find((el) =>
+            el.textContent?.includes("Stopped"),
+          );
+          expect(metaRow?.textContent).toContain("Stopped");
+          expect(document.body.textContent ?? "").not.toContain("Stopped after");
+          expect(document.querySelector(".shimmer")).toBeNull();
+        },
+        { timeout: 6_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("does not interrupt on Escape while the composer extras panel is open", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-escape-extras" as MessageId,
+        targetText: "escape extras target",
+        sessionStatus: "running",
+      }),
+    });
+    const interruptDispatched = () =>
+      wsRequests.some(
+        (request) => readDispatchedCommand(request)?.type === "thread.turn.interrupt",
+      );
+
+    try {
+      const editor = await waitForComposerEditor();
+      await userEvent.click(editor);
+      await expect.element(page.getByRole("button", { name: "Stop generation" })).toBeVisible();
+      await page.getByRole("button", { name: "Composer extras" }).click();
+      await expect.element(page.getByTestId("composer-extras-panel")).toBeInTheDocument();
+      await userEvent.keyboard("{Escape}");
+      // The panel owns Escape: it closes and the turn is not interrupted.
+      await expect.element(page.getByTestId("composer-extras-panel")).not.toBeInTheDocument();
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 150));
+      expect(interruptDispatched()).toBe(false);
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("does not interrupt on Escape while a non-modal dialog is open", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-escape-dialog" as MessageId,
+        targetText: "escape dialog target",
+        sessionStatus: "running",
+      }),
+    });
+    const interruptDispatched = () =>
+      wsRequests.some(
+        (request) => readDispatchedCommand(request)?.type === "thread.turn.interrupt",
+      );
+
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    dialog.textContent = "fixture dialog";
+    document.body.appendChild(dialog);
+    try {
+      const editor = await waitForComposerEditor();
+      await userEvent.click(editor);
+      await userEvent.keyboard("{Escape}");
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 150));
+      expect(interruptDispatched()).toBe(false);
+
+      // Removing the layer hands Escape back to the interrupt shortcut.
+      dialog.remove();
+      await userEvent.keyboard("{Escape}");
+      await vi.waitFor(() => expect(interruptDispatched()).toBe(true));
+    } finally {
+      dialog.remove();
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("keeps Stopping… visible through the connecting → ready gap", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-stop-gap" as MessageId,
+        targetText: "stop gap target",
+        sessionStatus: "ready",
+      }),
+    });
+    const syncThread = (
+      update: (
+        thread: OrchestrationReadModel["threads"][number],
+      ) => OrchestrationReadModel["threads"][number],
+    ) => {
+      fixture.snapshot = {
+        ...fixture.snapshot,
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+        threads: fixture.snapshot.threads.map((thread) =>
+          thread.id === THREAD_ID ? update(thread) : thread,
+        ),
+      };
+      useStore.getState().syncServerReadModel(fixture.snapshot);
+    };
+
+    try {
+      // The send dispatches on a ready session; provider startup then flaps the
+      // session to connecting while the dispatch bridge is still held.
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "send then connect");
+      const sendButton = await waitForSendButton();
+      await vi.waitFor(() => expect(sendButton.disabled).toBe(false), {
+        timeout: 8_000,
+        interval: 16,
+      });
+      sendButton.click();
+      syncThread((thread) => ({
+        ...thread,
+        session: thread.session
+          ? { ...thread.session, status: "starting" as const, activeTurnId: null }
+          : null,
+      }));
+      const stop = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Stop generation"]'),
+        "Stop button did not appear.",
+      );
+      stop.click();
+      await vi.waitFor(() => {
+        expect(document.querySelector(".shimmer")?.textContent).toBe("Stopping…");
+      });
+
+      // Session startup flaps back through ready before the turn starts; the
+      // bridge is still held, so the marker must survive the gap.
+      syncThread((thread) => ({
+        ...thread,
+        session: thread.session
+          ? {
+              ...thread.session,
+              status: "ready" as const,
+              activeTurnId: null,
+              updatedAt: isoAt(1_500),
+            }
+          : null,
+      }));
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 250));
+      expect(document.querySelector(".shimmer")?.textContent).toBe("Stopping…");
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("restores the composer draft when send workspace preparation fails", async () => {
+    const gitStatusGate = { hold: null, fail: true };
+    const restoreNativeApi = installDeterministicSendNativeApi({ gitStatusGate });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withSettledThreadBranch(
+        createSnapshotForTargetUser({
+          targetMessageId: "msg-user-prep-fail" as MessageId,
+          targetText: "prep fail target",
+        }),
+        "feature/finished",
+      ),
+    });
+
+    try {
+      const sentText = "draft that must come back";
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, sentText);
+      const sendButton = await waitForSendButton();
+      await vi.waitFor(() => expect(sendButton.disabled).toBe(false), {
+        timeout: 8_000,
+        interval: 16,
+      });
+      sendButton.click();
+      // The settled-resume branch read fails inside workspace prep — wait for
+      // that failure signal first so the test cannot pass before the send has
+      // actually unwound (the prompt equals sentText pre-send too).
+      await vi.waitFor(
+        () => {
+          expect(getThreadFromState(useStore.getState(), THREAD_ID)?.error ?? "").toContain(
+            "current branch",
+          );
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      await vi.waitFor(
+        () => {
+          expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(
+            sentText,
+          );
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      const transcriptText = [...document.querySelectorAll("[data-message-id]")]
+        .map((el) => el.textContent ?? "")
+        .join("\n");
+      expect(transcriptText).not.toContain(sentText);
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("keeps text typed during workspace preparation when the send fails", async () => {
+    let releaseGitStatus!: () => void;
+    const gitStatusGate = {
+      hold: new Promise<void>((resolve) => {
+        releaseGitStatus = resolve;
+      }) as Promise<void> | null,
+      fail: true,
+      invocations: 0,
+    };
+    const restoreNativeApi = installDeterministicSendNativeApi({ gitStatusGate });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withSettledThreadBranch(
+        createSnapshotForTargetUser({
+          targetMessageId: "msg-user-prep-typed" as MessageId,
+          targetText: "prep typed target",
+        }),
+        "feature/finished",
+      ),
+    });
+
+    try {
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "the sent draft");
+      const sendButton = await waitForSendButton();
+      await vi.waitFor(() => expect(sendButton.disabled).toBe(false), {
+        timeout: 8_000,
+        interval: 16,
+      });
+      sendButton.click();
+      await vi.waitFor(() => expect(gitStatusGate.invocations).toBeGreaterThan(0), {
+        timeout: 8_000,
+        interval: 16,
+      });
+
+      // Workspace prep is still awaiting the branch read; the user keeps typing.
+      const typedDuringPrep = "typed while the send was in flight";
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, typedDuringPrep);
+      // The composer refs sync from the draft store on the next render commit —
+      // give it a beat so the rollback's empty-composer check sees the text.
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 150));
+      releaseGitStatus();
+
+      await vi.waitFor(
+        () => {
+          // The send failed, but the mid-flight draft must not be clobbered by
+          // the rollback restore.
+          expect(getThreadFromState(useStore.getState(), THREAD_ID)?.error ?? "").toContain(
+            "current branch",
+          );
+          expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(
+            typedDuringPrep,
+          );
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      releaseGitStatus?.();
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("keeps a skill chip added during workspace preparation when the send fails", async () => {
+    let releaseGitStatus!: () => void;
+    const gitStatusGate = {
+      hold: new Promise<void>((resolve) => {
+        releaseGitStatus = resolve;
+      }) as Promise<void> | null,
+      fail: true,
+      invocations: 0,
+    };
+    const restoreNativeApi = installDeterministicSendNativeApi({ gitStatusGate });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withSettledThreadBranch(
+        createSnapshotForTargetUser({
+          targetMessageId: "msg-user-prep-chip" as MessageId,
+          targetText: "prep chip target",
+        }),
+        "feature/finished",
+      ),
+    });
+
+    try {
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "the sent draft");
+      const sendButton = await waitForSendButton();
+      await vi.waitFor(() => expect(sendButton.disabled).toBe(false), {
+        timeout: 8_000,
+        interval: 16,
+      });
+      sendButton.click();
+      await vi.waitFor(() => expect(gitStatusGate.invocations).toBeGreaterThan(0), {
+        timeout: 8_000,
+        interval: 16,
+      });
+
+      // The user types a $skill reference and attaches the chip mid-flight;
+      // the failed-send rollback's empty-composer check must see the chip and
+      // skip the restore. (The $token in the prompt keeps the chip from the
+      // prompt-reference pruning effect.)
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "check with $skill-chip");
+      useComposerDraftStore
+        .getState()
+        .setSkills(THREAD_ID, [{ name: "skill-chip", path: "/skills/skill-chip" }]);
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 150));
+      releaseGitStatus();
+
+      await vi.waitFor(
+        () => {
+          expect(getThreadFromState(useStore.getState(), THREAD_ID)?.error ?? "").toContain(
+            "current branch",
+          );
+          expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.skills).toEqual([
+            { name: "skill-chip", path: "/skills/skill-chip" },
+          ]);
+          expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(
+            "check with $skill-chip",
+          );
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      releaseGitStatus?.();
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("leaves the live composer untouched when a queued turn's workspace prep fails", async () => {
+    const gitStatusGate = { hold: null, fail: true, invocations: 0 };
+    const restoreNativeApi = installDeterministicSendNativeApi({ gitStatusGate });
+    const liveDraft = "live draft the queued failure must not clobber";
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withSettledThreadBranch(
+        createSnapshotForTargetUser({
+          targetMessageId: "msg-user-queued-prep-fail" as MessageId,
+          targetText: "queued prep fail target",
+          sessionStatus: "ready",
+        }),
+        "feature/finished",
+      ),
+    });
+
+    try {
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, liveDraft);
+      useComposerDraftStore.getState().enqueueQueuedTurn(THREAD_ID, {
+        id: "queued-turn-prep-fail",
+        kind: "chat",
+        createdAt: NOW_ISO,
+        previewText: "queued text",
+        prompt: "queued text",
+        images: [],
+        files: [],
+        assistantSelections: [],
+        browserAnnotations: [],
+        terminalContexts: [],
+        fileComments: [],
+        pastedTexts: [],
+        pullRequestContexts: [],
+        skills: [],
+        mentions: [],
+        selectedProvider: "codex",
+        selectedModel: "gpt-5",
+        selectedPromptEffort: null,
+        modelSelection: { provider: "codex", model: "gpt-5" },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        envMode: "local",
+      });
+
+      // The queue drains into a send whose workspace prep fails — the queued
+      // rollback must not restore the queued content over the live draft.
+      await vi.waitFor(() => expect(gitStatusGate.invocations).toBeGreaterThan(0), {
+        timeout: 8_000,
+        interval: 16,
+      });
+      await vi.waitFor(
+        () =>
+          expect(getThreadFromState(useStore.getState(), THREAD_ID)?.error ?? "").toContain(
+            "current branch",
+          ),
+        { timeout: 8_000, interval: 16 },
+      );
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 250));
+      expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(liveDraft);
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("interrupts a pending turn with Escape during the connecting gap", async () => {
+    // Regression for the live finding: Escape was a no-op while the session
+    // flapped through startup — the Stop affordance dropped out of
+    // isTurnInterruptible even though the dispatch bridge was held.
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-escape-gap" as MessageId,
+        targetText: "escape gap target",
+        sessionStatus: "ready",
+      }),
+    });
+    const syncSessionStatus = (status: "starting" | "ready" | "running") => {
+      fixture.snapshot = {
+        ...fixture.snapshot,
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+        threads: fixture.snapshot.threads.map((thread) =>
+          thread.id === THREAD_ID
+            ? {
+                ...thread,
+                session: thread.session ? { ...thread.session, status, activeTurnId: null } : null,
+              }
+            : thread,
+        ),
+      };
+      useStore.getState().syncServerReadModel(fixture.snapshot);
+    };
+
+    try {
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "send then connect");
+      const sendButton = await waitForSendButton();
+      await vi.waitFor(() => expect(sendButton.disabled).toBe(false), {
+        timeout: 8_000,
+        interval: 16,
+      });
+      sendButton.click();
+      // Focus while the session is still ready — the editor goes read-only once
+      // the session flaps to connecting.
+      await userEvent.click(await waitForComposerEditor());
+      syncSessionStatus("starting");
+      await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Stop generation"]'),
+        "Stop button did not appear.",
+      );
+      // The provider is still starting — a hover preview card cannot be open in
+      // a fresh mount, but guard the press anyway like the sibling test.
+      await vi.waitFor(() =>
+        expect(document.querySelector("[data-slot='preview-card-popup']")).toBeNull(),
+      );
+      await userEvent.keyboard("{Escape}");
+      await vi.waitFor(() => {
+        expect(
+          wsRequests.some(
+            (request) => readDispatchedCommand(request)?.type === "thread.turn.interrupt",
+          ),
+        ).toBe(true);
+      });
+      await vi.waitFor(() => {
+        expect(document.querySelector(".shimmer")?.textContent).toBe("Stopping…");
+      });
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("keeps Stop mounted continuously from dispatch through the ready gap", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-stop-continuous" as MessageId,
+        targetText: "stop continuous target",
+        sessionStatus: "ready",
+      }),
+    });
+    const syncSessionStatus = (status: "starting" | "ready" | "running") => {
+      fixture.snapshot = {
+        ...fixture.snapshot,
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+        threads: fixture.snapshot.threads.map((thread) =>
+          thread.id === THREAD_ID
+            ? {
+                ...thread,
+                session: thread.session ? { ...thread.session, status } : null,
+              }
+            : thread,
+        ),
+      };
+      useStore.getState().syncServerReadModel(fixture.snapshot);
+    };
+
+    try {
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "send then flap");
+      const sendButton = await waitForSendButton();
+      await vi.waitFor(() => expect(sendButton.disabled).toBe(false), {
+        timeout: 8_000,
+        interval: 16,
+      });
+      sendButton.click();
+      // Poll synchronously across the phase flap: the action button must stay
+      // Stop (mounted and enabled) through connecting and the ready gap.
+      for (const status of ["starting", "ready", "running"] as const) {
+        syncSessionStatus(status);
+        await vi.waitFor(() => {
+          expect(
+            document.querySelector(
+              'button[aria-label="Stop generation"], button[aria-label="Stopping"]',
+            ),
+          ).not.toBeNull();
+        });
+        const stop = document.querySelector<HTMLButtonElement>(
+          'button[aria-label="Stop generation"]',
+        );
+        expect(stop?.disabled ?? false).toBe(false);
+      }
+      // And the idle control is never the Send button mid-span.
+      expect(
+        document.querySelector('[data-chat-composer-form] button[aria-label="Send message"]'),
+      ).toBeNull();
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("clears Stopping promptly when a startup interrupt stops the session", async () => {
+    // The server retires a starting session on interrupt without a live turn —
+    // the terminal session status must release the dispatch bridge so the
+    // working row, Stop, and "Stopping…" clear now, not at the fail-open bound.
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-stop-startup" as MessageId,
+        targetText: "startup stop target",
+        sessionStatus: "ready",
+      }),
+    });
+    const syncSessionStatus = (status: "starting" | "stopped") => {
+      fixture.snapshot = {
+        ...fixture.snapshot,
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+        threads: fixture.snapshot.threads.map((thread) =>
+          thread.id === THREAD_ID
+            ? {
+                ...thread,
+                session: thread.session ? { ...thread.session, status, activeTurnId: null } : null,
+              }
+            : thread,
+        ),
+      };
+      useStore.getState().syncServerReadModel(fixture.snapshot);
+    };
+
+    try {
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "stop me at startup");
+      const sendButton = await waitForSendButton();
+      await vi.waitFor(() => expect(sendButton.disabled).toBe(false), {
+        timeout: 8_000,
+        interval: 16,
+      });
+      sendButton.click();
+      syncSessionStatus("starting");
+      const stop = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Stop generation"]'),
+        "Stop button did not appear.",
+      );
+      stop.click();
+      await vi.waitFor(() => {
+        expect(document.querySelector(".shimmer")?.textContent).toBe("Stopping…");
+      });
+      // The interrupt retires the session before a turn exists.
+      syncSessionStatus("stopped");
+      await vi.waitFor(
+        () => {
+          expect(document.querySelector(".shimmer")).toBeNull();
+          expect(
+            document.querySelector(
+              'button[aria-label="Stop generation"], button[aria-label="Stopping"]',
+            ),
+          ).toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("keeps Stopping… through startup when a prior turn already completed", async () => {
+    // A stale completed latestTurn must not settle the stop request — only the
+    // tracked turn going terminal (or a genuinely newer turn) may.
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-stop-stale-turn" as MessageId,
+        targetText: "stale turn stop target",
+        sessionStatus: "ready",
+      }),
+    });
+    const syncActiveThread = (
+      update: (
+        thread: OrchestrationReadModel["threads"][number],
+      ) => OrchestrationReadModel["threads"][number],
+    ) => {
+      fixture.snapshot = {
+        ...fixture.snapshot,
+        snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+        threads: fixture.snapshot.threads.map((thread) =>
+          thread.id === THREAD_ID ? update(thread) : thread,
+        ),
+      };
+      useStore.getState().syncServerReadModel(fixture.snapshot);
+    };
+
+    try {
+      // Give the thread a completed turn in the past before the send.
+      syncActiveThread((thread) => ({
+        ...thread,
+        latestTurn: {
+          turnId: "turn-old" as never,
+          state: "completed",
+          requestedAt: isoAt(500),
+          startedAt: isoAt(600),
+          completedAt: isoAt(1_400),
+          assistantMessageId: null,
+        },
+      }));
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "stop the new turn");
+      const sendButton = await waitForSendButton();
+      await vi.waitFor(() => expect(sendButton.disabled).toBe(false), {
+        timeout: 8_000,
+        interval: 16,
+      });
+      sendButton.click();
+      syncActiveThread((thread) => ({
+        ...thread,
+        session: thread.session
+          ? { ...thread.session, status: "starting", activeTurnId: null }
+          : null,
+      }));
+      const stop = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Stop generation"]'),
+        "Stop button did not appear.",
+      );
+      stop.click();
+      await vi.waitFor(() => {
+        expect(document.querySelector(".shimmer")?.textContent).toBe("Stopping…");
+      });
+      // The stale completed turn must not settle it — give it a beat to prove
+      // no one-frame flash.
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 400));
+      expect(document.querySelector(".shimmer")?.textContent).toBe("Stopping…");
+      // The interrupt retires the starting session; that settles the stop.
+      syncActiveThread((thread) => ({
+        ...thread,
+        session: thread.session
+          ? { ...thread.session, status: "stopped", activeTurnId: null }
+          : null,
+      }));
+      await vi.waitFor(
+        () => {
+          expect(document.querySelector(".shimmer")).toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("hides Stop during pre-session worktree setup and shows it at start-session", async () => {
+    let releaseWorktree!: () => void;
+    const createWorktreeGate = {
+      hold: new Promise<void>((resolve) => {
+        releaseWorktree = resolve;
+      }) as Promise<void> | null,
+    };
+    const restoreNativeApi = installDeterministicSendNativeApi({ createWorktreeGate });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-worktree-stop" as MessageId,
+        targetText: "worktree stop target",
+      }),
+    });
+
+    try {
+      await page.getByTestId("new-thread-button").click();
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should have changed to a new draft thread UUID.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+
+      const envPickerTrigger = await waitForEnvironmentModeButton("Local");
+      envPickerTrigger.click();
+      await page.getByText("New worktree").click();
+      useComposerDraftStore.getState().setPrompt(newThreadId, "worktree stop coverage");
+
+      const composerForm = document.querySelector<HTMLFormElement>(
+        'form[data-chat-composer-form="true"]',
+      );
+      expect(composerForm).not.toBeNull();
+      composerForm!.requestSubmit();
+
+      // The worktree creation RPC is held: the send is parked on a pre-session
+      // step, and there is nothing server-side for an interrupt to cancel.
+      await vi.waitFor(
+        () => {
+          expect(
+            document.querySelector('[data-timeline-row-kind="worktree-setup"]'),
+          ).not.toBeNull();
+        },
+        { timeout: 10_000, interval: 16 },
+      );
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 300));
+      expect(document.querySelector('button[aria-label="Stop generation"]')).toBeNull();
+
+      // Once the setup reaches start-session the provider session is real —
+      // Stop must appear.
+      createWorktreeGate.hold = null;
+      releaseWorktree();
+      await vi.waitFor(
+        () => {
+          expect(document.querySelector('button[aria-label="Stop generation"]')).not.toBeNull();
+        },
+        { timeout: 10_000, interval: 16 },
+      );
+    } finally {
+      createWorktreeGate.hold = null;
+      releaseWorktree?.();
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("skips the composer dock slide under prefers-reduced-motion", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    const realMatchMedia = window.matchMedia;
+    const matchMediaSpy = vi
+      .spyOn(window, "matchMedia")
+      .mockImplementation((query: string): MediaQueryList => {
+        if (query === "(prefers-reduced-motion: reduce)") {
+          return {
+            matches: true,
+            media: query,
+            onchange: null,
+            addEventListener: () => {},
+            removeEventListener: () => {},
+            addListener: () => {},
+            removeListener: () => {},
+            dispatchEvent: () => false,
+          } as MediaQueryList;
+        }
+        return realMatchMedia.call(window, query);
+      });
+    useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, THREAD_ID);
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createDraftOnlySnapshot(),
+    });
+
+    try {
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "Dock without motion");
+      const sendButton = await waitForSendButton();
+      sendButton.click();
+      const startCommand = await vi.waitFor(() => {
+        const command = wsRequests
+          .map(readDispatchedCommand)
+          .find((candidate) => candidate?.type === "thread.turn.start");
+        expect(command).toBeDefined();
+        return command!;
+      });
+      const messageId = (startCommand.message as { messageId: MessageId }).messageId;
+      await vi.waitFor(
+        () => {
+          const docked = document.querySelector<HTMLElement>('[data-docked-composer="true"]');
+          expect(docked).not.toBeNull();
+          expect(docked!.getAnimations()).toHaveLength(0);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      // No piece of the landing choreography runs under reduced motion.
+      const bubbleRow = document.querySelector<HTMLElement>(
+        `[data-message-id="${messageId}"][data-message-role="user"]`,
+      );
+      expect(bubbleRow?.getAnimations() ?? []).toHaveLength(0);
+      const workingEl = document.querySelector<HTMLElement>(
+        '[data-timeline-row-kind="working-header"], [data-timeline-row-kind="working"]',
+      );
+      expect(workingEl?.getAnimations() ?? []).toHaveLength(0);
+      expect(document.querySelector("[data-first-send-hero-exit]")).toBeNull();
+    } finally {
+      await mounted.cleanup();
+      matchMediaSpy.mockRestore();
+      restoreNativeApi();
+    }
+  });
+
+  it("choreographs the landing first send: bubble rise, working reveal, hero exit", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, THREAD_ID);
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createDraftOnlySnapshot(),
+    });
+
+    try {
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "Choreograph me");
+      const sendButton = await waitForSendButton();
+      sendButton.click();
+
+      // The choreography is short — capture the animation timings on the first
+      // poll after the dock commit, before the WAAPI animations finish and are
+      // removed from getAnimations().
+      const bubbleRow = await vi.waitFor(() => {
+        const el = document.querySelector<HTMLElement>('[data-message-role="user"]');
+        expect(el).not.toBeNull();
+        expect(el!.getAnimations().length).toBeGreaterThan(0);
+        return el!;
+      });
+      const bubbleTimings = bubbleRow
+        .getAnimations()
+        .map(
+          (animation) => (animation.effect as KeyframeEffect | null)?.getComputedTiming() ?? null,
+        )
+        .filter((timing) => timing !== null);
+      // The sent message rises out of the card's old position: one transform
+      // rise on the shared clock plus the shorter opacity fade — and NOT the
+      // generic send-enter class on top of it.
+      expect(bubbleRow.classList.contains("chat-message-send-enter")).toBe(false);
+      const rise = bubbleTimings.find(
+        (timing) => Number(timing.duration) === FIRST_SEND_MOTION_DURATION_MS,
+      );
+      const fade = bubbleTimings.find(
+        (timing) => Number(timing.duration) === FIRST_SEND_BUBBLE_FADE_MS,
+      );
+      expect(rise?.easing).toBe(FIRST_SEND_MOTION_EASING);
+      expect(fade).toBeDefined();
+
+      // The hero leaves through a fading overlay instead of popping.
+      const heroExit = document.querySelector<HTMLElement>("[data-first-send-hero-exit]");
+      expect(heroExit).not.toBeNull();
+      expect(heroExit!.getAttribute("aria-hidden")).toBe("true");
+
+      // The working rows arrive on the delayed reveal.
+      const workingEl = document.querySelector<HTMLElement>(
+        '[data-timeline-row-kind="working-header"], [data-timeline-row-kind="working"]',
+      );
+      expect(workingEl).not.toBeNull();
+      const revealTiming = workingEl!
+        .getAnimations()
+        .map(
+          (animation) => (animation.effect as KeyframeEffect | null)?.getComputedTiming() ?? null,
+        )
+        .find(
+          (timing) =>
+            timing !== null &&
+            Number(timing.duration) === FIRST_SEND_WORKING_REVEAL_MS &&
+            Number(timing.delay) === FIRST_SEND_WORKING_REVEAL_DELAY_MS,
+        );
+      expect(revealTiming).toBeDefined();
+
+      // The hero overlay is removed once its exit animation ends.
+      await vi.waitFor(
+        () => {
+          expect(document.querySelector("[data-first-send-hero-exit]")).toBeNull();
+        },
+        { timeout: FIRST_SEND_HERO_EXIT_MS + 2_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("keeps the generic send-enter on a follow-up send", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-followup-enter" as MessageId,
+        targetText: "follow-up enter target",
+        sessionStatus: "ready",
+      }),
+    });
+
+    try {
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "follow-up");
+      const sendButton = await waitForSendButton();
+      await vi.waitFor(() => expect(sendButton.disabled).toBe(false), {
+        timeout: 8_000,
+        interval: 16,
+      });
+      sendButton.click();
+      const startCommand = await vi.waitFor(() => {
+        const command = wsRequests
+          .map(readDispatchedCommand)
+          .find((candidate) => candidate?.type === "thread.turn.start");
+        expect(command).toBeDefined();
+        return command!;
+      });
+      const messageId = (startCommand.message as { messageId: MessageId }).messageId;
+      const row = await vi.waitFor(() => {
+        const el = document.querySelector<HTMLElement>(
+          `[data-message-id="${messageId}"][data-message-role="user"]`,
+        );
+        expect(el).not.toBeNull();
+        return el!;
+      });
+      // Ordinary sends keep the class-based enter — no landing rise.
+      await vi.waitFor(() => {
+        expect(row.classList.contains("chat-message-send-enter")).toBe(true);
+      });
+      const rise = row
+        .getAnimations()
+        .map(
+          (animation) => (animation.effect as KeyframeEffect | null)?.getComputedTiming() ?? null,
+        )
+        .find(
+          (timing) => timing !== null && Number(timing.duration) === FIRST_SEND_MOTION_DURATION_MS,
+        );
+      expect(rise).toBeUndefined();
+      expect(document.querySelector("[data-first-send-hero-exit]")).toBeNull();
     } finally {
       await mounted.cleanup();
       restoreNativeApi();
@@ -7566,12 +9146,69 @@ describe("ChatView transcript geometry (full app)", () => {
 
       try {
         expect(document.querySelector('[data-testid="empty-landing-heading"]')).not.toBeNull();
-        expect(document.querySelector('[data-empty-landing-composer-block="true"]')).not.toBeNull();
+        const landingStack = document.querySelector('[data-empty-landing-stack="true"]');
+        expect(landingStack).not.toBeNull();
+        expect(
+          landingStack?.querySelector('[data-empty-landing-composer-block="true"]'),
+        ).not.toBeNull();
       } finally {
         await mounted.cleanup();
       }
     },
   );
+
+  it("centers the home landing stack with the composer directly below the heading", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withActiveHomeChatThread(addThreadToSnapshot(createDraftOnlySnapshot(), THREAD_ID)),
+      configureFixture: (nextFixture) => {
+        nextFixture.welcome = {
+          ...nextFixture.welcome,
+          homeDir: "/Users/tester",
+          chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+        };
+      },
+    });
+
+    try {
+      const landingPane = await waitForElement(
+        () => document.querySelector<HTMLElement>('[data-empty-landing-pane="true"]'),
+        "Unable to find the empty home landing pane.",
+      );
+      const landingStack = await waitForElement(
+        () => document.querySelector<HTMLElement>('[data-empty-landing-stack="true"]'),
+        "Unable to find the empty home landing stack.",
+      );
+      const heading = await waitForElement(
+        () => document.querySelector<HTMLElement>('[data-testid="empty-landing-heading"]'),
+        "Unable to find the empty home heading.",
+      );
+      const composer = await waitForElement(
+        () => landingStack.querySelector<HTMLElement>('[data-empty-landing-composer-block="true"]'),
+        "Unable to find the empty home composer.",
+      );
+
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 500));
+      await waitForLayout();
+
+      const paneRect = landingPane.getBoundingClientRect();
+      const stackRect = landingStack.getBoundingClientRect();
+      const headingRect = heading.getBoundingClientRect();
+      const composerRect = composer.getBoundingClientRect();
+      const paneCenterX = paneRect.left + paneRect.width / 2;
+      const paneCenterY = paneRect.top + paneRect.height / 2;
+      const stackCenterX = stackRect.left + stackRect.width / 2;
+      const stackCenterY = stackRect.top + stackRect.height / 2;
+
+      expect(paneRect.height).toBeGreaterThan(0);
+      expect(Math.abs(stackCenterX - paneCenterX)).toBeLessThanOrEqual(2);
+      expect(Math.abs(stackCenterY - paneCenterY)).toBeLessThanOrEqual(2);
+      expect(composerRect.top).toBeGreaterThanOrEqual(headingRect.bottom - 1);
+      expect(composerRect.top - headingRect.bottom).toBeLessThanOrEqual(48);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
 
   it("creates a detached worktree on first send in New worktree mode", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
@@ -8274,6 +9911,11 @@ describe("ChatView transcript geometry (full app)", () => {
         },
         { timeout: 8_000, interval: 16 },
       );
+
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 50));
+      // No stale first-send slide leaks into an unrelated thread.
+      const dockedComposer = document.querySelector<HTMLElement>('[data-docked-composer="true"]');
+      expect(dockedComposer?.getAnimations() ?? []).toHaveLength(0);
 
       // Come back via "New chat" — must return to the SAME draft thread with the draft intact
       const newChatButtonAgain = page.getByLabelText("Open new chat home");

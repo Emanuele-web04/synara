@@ -56,23 +56,22 @@ const POPUP_CLASS = "max-w-lg border-transparent before:shadow-none dark:before:
 // paddings to fight — the h-11 row IS the header. `font-system-ui` counters
 // the global `input { font-family: mono }` rule.
 const INPUT_CLASS =
-  "font-system-ui h-11 w-full min-w-0 bg-transparent px-3.5 text-ui-lg text-zinc-800 outline-none placeholder:text-zinc-400 dark:text-zinc-200 dark:placeholder:text-zinc-500";
+  "font-system-ui h-11 w-full min-w-0 bg-transparent px-3.5 text-ui-lg text-foreground outline-none placeholder:text-muted-foreground/70";
 
 // The list keeps AutocompleteList's built-in 4px frame; combined with the 10px
 // paddings below, every piece of text lands on the same 14px column.
 const LIST_CLASS = "max-h-[min(30rem,60vh)]";
 
-const GROUP_LABEL_CLASS =
-  "px-2.5 pt-1.5 pb-1 font-normal text-ui-sm text-zinc-400 dark:text-zinc-500";
+const GROUP_LABEL_CLASS = "px-2.5 pt-1.5 pb-1 font-normal text-ui-sm text-muted-foreground";
 
 // Row text sizes live on the inner spans (the item base carries a sm:text-sm
 // that would win over an item-level override).
 const ITEM_CLASS =
-  "cursor-pointer gap-2 rounded-lg px-2.5 py-1 text-zinc-800 data-highlighted:bg-zinc-500/8 data-highlighted:text-zinc-900 dark:text-zinc-200 dark:data-highlighted:bg-zinc-400/10 dark:data-highlighted:text-zinc-100";
+  "cursor-pointer gap-2 rounded-lg px-2.5 py-1 text-foreground data-highlighted:bg-zinc-500/8 data-highlighted:text-foreground dark:data-highlighted:bg-zinc-400/10";
 
-const ICON_CLASS = "size-3.5 text-zinc-500 dark:text-zinc-400";
+const ICON_CLASS = "size-3.5 text-muted-foreground";
 
-const MUTED_TEXT_CLASS = "text-zinc-400 dark:text-zinc-500";
+const MUTED_TEXT_CLASS = "text-muted-foreground/80";
 
 // Stable empty results: keeps the entries identity (and everything memoized
 // from it) unchanged across renders while a mode has no data.
@@ -129,13 +128,13 @@ function splitPath(path: string): { base: string; dir: string } {
 function FileNameText(props: { text: string; query: string }) {
   const segments = buildMatchSegments(props.text, props.query);
   if (!segments) {
-    return <span className="text-zinc-700 dark:text-zinc-300">{props.text}</span>;
+    return <span className="text-foreground">{props.text}</span>;
   }
   return (
     <span className={MUTED_TEXT_CLASS}>
       {segments.map((segment) =>
         segment.matched ? (
-          <span className="font-medium text-zinc-900 dark:text-zinc-50" key={segment.start}>
+          <span className="font-medium text-foreground" key={segment.start}>
             {segment.text}
           </span>
         ) : (
@@ -153,7 +152,7 @@ function SnippetLineText(props: { text: string; query: string }) {
     <>
       {segments.map((segment) =>
         segment.matched ? (
-          <span className="font-medium text-zinc-700 dark:text-zinc-200" key={segment.start}>
+          <span className="font-medium text-foreground" key={segment.start}>
             {segment.text}
           </span>
         ) : (
@@ -384,12 +383,7 @@ function WorkspaceSearchPaletteContent(props: WorkspaceSearchPaletteProps) {
     <Command items={itemValues} mode="none">
       {/* Hairline only while rows are showing, as a scroll boundary; the
           empty state reads as one uninterrupted surface. */}
-      <div
-        className={cn(
-          "border-b",
-          hasRows ? "border-zinc-950/5 dark:border-white/5" : "border-transparent",
-        )}
-      >
+      <div className={cn("border-b", hasRows ? "border-foreground/5" : "border-transparent")}>
         <AutocompletePrimitive.Input
           autoFocus
           className={INPUT_CLASS}
@@ -406,7 +400,7 @@ function WorkspaceSearchPaletteContent(props: WorkspaceSearchPaletteProps) {
         {statusMessage ? (
           <div className="text-start">
             <div className={GROUP_LABEL_CLASS}>{copy.groupLabel}</div>
-            <div className="px-2.5 pt-0.5 pb-2 text-ui-lg text-zinc-700 dark:text-zinc-300">
+            <div className="px-2.5 pt-0.5 pb-2 text-ui-lg text-muted-foreground">
               {statusMessage}
             </div>
           </div>

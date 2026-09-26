@@ -147,7 +147,7 @@ function RenameDialogForm({
           Cancel
         </Button>
         <Button size="sm" onClick={() => void handleSubmit()} disabled={!canSave}>
-          {isSaving ? "Saving..." : saveLabel}
+          {isSaving ? "Saving…" : saveLabel}
         </Button>
       </DialogFooter>
     </>

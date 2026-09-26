@@ -108,6 +108,11 @@ export function KeyboardShortcutsSettingsPanel() {
   const captureKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
     event.preventDefault();
     event.stopPropagation();
+    // Bare Escape aborts the capture instead of becoming an "esc" binding.
+    if (event.nativeEvent.key === "Escape") {
+      cancelCapture();
+      return;
+    }
     const next = keybindingFromKeyboardEvent(event.nativeEvent);
     if (!next) {
       setCaptureError("Use up to two modifiers and one key.");
@@ -150,19 +155,13 @@ export function KeyboardShortcutsSettingsPanel() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <div className="rounded-lg bg-muted/45 px-3 py-2.5 text-ui leading-relaxed text-muted-foreground">
         Capture up to two modifiers and one key. Changes are saved directly to{" "}
         <code>keybindings.json</code>.
       </div>
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <h3 className="text-ui-lg font-medium text-foreground">Keybindings</h3>
-          <p className="mt-0.5 text-ui-sm text-muted-foreground">
-            Customize built-in commands and their context conditions.
-          </p>
-        </div>
-        <Button size="sm" variant="outline" onClick={beginAdding} disabled={isAdding || isSaving}>
+      <div className="flex items-center justify-end gap-3">
+        <Button size="xs" variant="outline" onClick={beginAdding} disabled={isAdding || isSaving}>
           Set keybinding
         </Button>
       </div>
@@ -191,7 +190,7 @@ export function KeyboardShortcutsSettingsPanel() {
                 nativeInput
                 autoFocus
                 readOnly
-                placeholder="Press a key..."
+                placeholder="Press a key…"
                 aria-label="Press a key or combination"
                 value={keyValue}
                 onKeyDown={captureKeyDown}
@@ -214,11 +213,11 @@ export function KeyboardShortcutsSettingsPanel() {
               {captureError ?? "Use up to two modifiers and one key."}
             </p>
             <div className="flex gap-2">
-              <Button size="sm" disabled={!keyValue || isSaving} onClick={() => void saveBinding()}>
-                {isSaving ? "Saving..." : "Save keybinding"}
-              </Button>
               <Button size="sm" variant="outline" disabled={isSaving} onClick={cancelCapture}>
                 Cancel
+              </Button>
+              <Button size="sm" disabled={!keyValue || isSaving} onClick={() => void saveBinding()}>
+                {isSaving ? "Saving…" : "Save keybinding"}
               </Button>
             </div>
           </div>
@@ -230,7 +229,7 @@ export function KeyboardShortcutsSettingsPanel() {
           size="sm"
           variant="soft"
           nativeInput
-          placeholder="Search shortcuts..."
+          placeholder="Search shortcuts…"
           value={query}
           aria-label="Search shortcuts"
           onChange={(event) => setQuery(event.target.value)}
@@ -290,7 +289,7 @@ export function KeyboardShortcutsSettingsPanel() {
                         nativeInput
                         autoFocus
                         readOnly
-                        placeholder="Press a key..."
+                        placeholder="Press a key…"
                         aria-label={`Shortcut for ${entry.label}`}
                         value={keyValue}
                         onKeyDown={captureKeyDown}
@@ -306,18 +305,18 @@ export function KeyboardShortcutsSettingsPanel() {
                       <div className="flex gap-2">
                         <Button
                           size="sm"
-                          disabled={!keyValue.trim() || isSaving}
-                          onClick={() => void saveBinding()}
-                        >
-                          {isSaving ? "Saving..." : "Save"}
-                        </Button>
-                        <Button
-                          size="sm"
                           variant="outline"
                           disabled={isSaving}
                           onClick={cancelCapture}
                         >
                           Cancel
+                        </Button>
+                        <Button
+                          size="sm"
+                          disabled={!keyValue.trim() || isSaving}
+                          onClick={() => void saveBinding()}
+                        >
+                          {isSaving ? "Saving…" : "Save"}
                         </Button>
                       </div>
                     </div>

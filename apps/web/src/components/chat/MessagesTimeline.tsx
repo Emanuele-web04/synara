@@ -82,7 +82,11 @@ import { InlineSkillChip } from "./InlineSkillChip";
 import { InlineSlashCommandChip } from "./InlineSlashCommandChip";
 import { InlineAgentChip } from "./InlineAgentChip";
 import { EditedFileRow } from "./EditedFileRow";
-import { MessageActionButton, MESSAGE_ACTION_ICON_CLASS_NAME } from "./MessageActionButton";
+import {
+  MessageActionButton,
+  MESSAGE_ACTION_ICON_CLASS_NAME,
+  TRANSCRIPT_TEXT_BUTTON_CLASS_NAME,
+} from "./MessageActionButton";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { AssistantSelectionsSummaryChip } from "./AssistantSelectionsSummaryChip";
 import { FileAttachmentChip } from "./FileAttachmentChip";
@@ -270,7 +274,7 @@ function UserDispatchModeChip({
   return (
     <div
       className={cn(
-        "inline-flex items-center gap-1.5 self-end px-0 text-ui-sm font-normal tracking-[0.01em] text-muted-foreground/78",
+        "inline-flex items-center gap-1.5 self-end px-0 text-ui-sm font-normal tracking-[0.01em] text-muted-foreground/80",
         hasLeadingMedia ? "mb-3" : "mb-1.5",
       )}
     >
@@ -335,7 +339,7 @@ function WorktreeSetupCard({
           ref={syncAnimationsToTimelineOrigin}
           className="shimmer text-ui-lg font-medium text-[var(--color-text-foreground-secondary)]"
         >
-          Preparing worktree...
+          Preparing worktree…
         </span>
       </div>
       <ol className="mt-2 flex flex-col">
@@ -382,7 +386,7 @@ function WorktreeSetupCard({
             disabled={pendingAction != null}
             onClick={() => onResolve("work-locally")}
           >
-            {pendingAction === "work-locally" ? "Switching to local..." : "Work locally"}
+            {pendingAction === "work-locally" ? "Switching to local…" : "Work locally"}
           </Button>
           <Button
             size="xs"
@@ -390,7 +394,7 @@ function WorktreeSetupCard({
             disabled={pendingAction != null}
             onClick={() => onResolve("cancel")}
           >
-            {pendingAction === "cancel" ? "Cancelling..." : "Cancel"}
+            {pendingAction === "cancel" ? "Cancelling…" : "Cancel"}
           </Button>
         </div>
       ) : null}
@@ -474,6 +478,8 @@ interface MessagesTimelineProps {
    */
   editableUserMessageId?: MessageId | null;
   activeTurnId?: TurnId | null;
+  /** Turn that ended via user interrupt — its settled header reads "Stopped after Xs". */
+  interruptedTurnId?: TurnId | null;
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onIsAtEndChange?: (isAtEnd: boolean) => void;
@@ -558,6 +564,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onRespondToAsyncUserInput,
   editableUserMessageId,
   activeTurnId,
+  interruptedTurnId,
   isRevertingCheckpoint,
   onImageExpand,
   onIsAtEndChange,
@@ -768,6 +775,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         activeTurnInProgress,
         activeTurnId,
         activeTurnStartedAt,
+        interruptedTurnId,
         turnDiffSummaryByAssistantMessageId,
         revertTurnCountByUserMessageId,
       }),
@@ -778,6 +786,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       activeTurnInProgress,
       activeTurnId,
       activeTurnStartedAt,
+      interruptedTurnId,
       turnDiffSummaryByAssistantMessageId,
       revertTurnCountByUserMessageId,
     ],
@@ -914,6 +923,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       settledTurnCollapseTransitions,
       submittingEditedUserMessageId,
       toolGroupSummaryOverrides,
+      // The "working" shimmer row caches its render; a bare label change
+      // (Thinking → "Starting <provider>…") must still re-render it.
+      workingLabel,
     }),
     [
       crossTaskOrigin,
@@ -932,6 +944,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       settledTurnCollapseTransitions,
       submittingEditedUserMessageId,
       toolGroupSummaryOverrides,
+      workingLabel,
     ],
   );
   // Latest rows kept in a ref so the imperative scroll controller can look up a message's
@@ -1027,6 +1040,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     ) => {
       cancelPendingFindFineScroll();
       const deadlineMs = getMonotonicTimeMs() + FIND_FINE_SCROLL_RETRY_TIMEOUT_MS;
+      const scrollBehavior: ScrollBehavior = window.matchMedia("(prefers-reduced-motion: reduce)")
+        .matches
+        ? "instant"
+        : "smooth";
       let attempts = 0;
       const tick = () => {
         findFineScrollFrameRef.current = null;
@@ -1044,7 +1061,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               ) ?? root);
         const activeMatch = scope.querySelector('[data-chat-find-match="active"]');
         if (activeMatch instanceof HTMLElement) {
-          activeMatch.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
+          activeMatch.scrollIntoView({
+            block: "center",
+            inline: "nearest",
+            behavior: scrollBehavior,
+          });
           return;
         }
         if (narrationId !== undefined) {
@@ -1052,7 +1073,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             `[data-chat-find-narration-id="${cssAttributeSelectorValue(narrationId)}"]`,
           );
           if (narration instanceof HTMLElement) {
-            narration.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
+            narration.scrollIntoView({
+              block: "center",
+              inline: "nearest",
+              behavior: scrollBehavior,
+            });
             return;
           }
         }
@@ -1451,7 +1476,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       style={{ fontSize: `${appTypographyScale.uiSmPx}px` }}
                       onClick={() => handleToggleWorkGroup(groupId)}
                     >
-                      {isExpanded ? "Show less" : `Show ${cappedRenderPlan.hiddenEntryCount} more`}
+                      {isExpanded
+                        ? "Show less"
+                        : `Show ${cappedRenderPlan.hiddenEntryCount} more tool calls`}
                     </button>
                   </div>
                 )}
@@ -1581,6 +1608,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             pullRequestContextCount: renderedPullRequestContexts.length,
           });
           const isTailContentRow = row.id === tailContentRowId;
+          // The timestamp is only hover/focus-revealed when the footer renders actions;
+          // with no buttons in the group nothing focusable could reveal it for keyboard
+          // users, so it stays visible.
+          const hasUserFooterActions =
+            Boolean(displayedUserMessage.copyText) || showEditUserMessage || canRevertAgentWork;
           const showCrossTaskOrigin =
             crossTaskOrigin !== null && row.message.id === firstUserMessageId;
           return (
@@ -1730,10 +1762,15 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   ) : null}
                   {!isEditingThisMessage && (
                     <div
-                      className="flex items-center justify-end gap-2 pr-0.5 font-system-ui font-normal text-muted-foreground/45"
+                      className="flex items-center justify-end gap-2 pr-0.5 font-system-ui font-normal text-muted-foreground"
                       style={chatMessageFooterStyle}
                     >
-                      <p className={cn("tabular-nums", MESSAGE_HOVER_REVEAL_CLASS_NAME)}>
+                      <p
+                        className={cn(
+                          "tabular-nums",
+                          hasUserFooterActions && MESSAGE_HOVER_REVEAL_CLASS_NAME,
+                        )}
+                      >
                         {formatDayAwareTimestamp(row.message.createdAt, timestampFormat)}
                       </p>
                       <div className="flex items-center gap-2">
@@ -1874,6 +1911,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               ? (goalAchievementByTurnId.get(row.message.turnId) ?? null)
               : null;
           const assistantMeta = [
+            row.assistantTurnInterrupted ? "Stopped" : null,
             isTerminalAssistantMessage
               ? formatDayAwareTimestamp(row.message.createdAt, timestampFormat)
               : null,
@@ -2020,7 +2058,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           >
                             {display.toolExpanded
                               ? "Show less"
-                              : `+${cappedRenderPlan.hiddenEntryCount} more tool calls`}
+                              : `Show ${cappedRenderPlan.hiddenEntryCount} more tool calls`}
                           </button>
                         </div>
                       )}
@@ -2047,7 +2085,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                             >
                               {display.toolExpanded
                                 ? "Show less"
-                                : `+${display.hiddenToolCount} more tool calls`}
+                                : `Show ${display.hiddenToolCount} more tool calls`}
                             </button>
                           </div>
                         )}
@@ -2193,8 +2231,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     >
                       <span>
                         {row.collapsedWorkElapsed
-                          ? `Worked for ${row.collapsedWorkElapsed}`
-                          : "Details"}
+                          ? row.collapsedTurnInterrupted
+                            ? `Stopped after ${row.collapsedWorkElapsed}`
+                            : `Worked for ${row.collapsedWorkElapsed}`
+                          : row.collapsedTurnInterrupted
+                            ? "Stopped"
+                            : "Details"}
                       </span>
                       <DisclosureChevron
                         open={isCollapsedWorkExpanded}
@@ -2235,6 +2277,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       text={messageText}
                       cwd={markdownCwd}
                       isStreaming={Boolean(row.message.streaming)}
+                      followLiveOutput={followLiveOutput}
                       style={chatTypographyStyle}
                       onImageExpand={onImageExpand}
                       knownAbsoluteFilePaths={knownAbsoluteFilePaths}
@@ -2409,7 +2452,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           />
                           <button
                             type="button"
-                            className="inline-flex items-center justify-center rounded-md p-1 text-muted-foreground/70 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground/80"
+                            className={cn(
+                              "inline-flex items-center justify-center rounded-md p-1 text-muted-foreground/70 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground/80",
+                              TRANSCRIPT_TEXT_BUTTON_CLASS_NAME,
+                            )}
                             aria-expanded={fileChangesExpanded}
                             aria-label={
                               fileChangesExpanded
@@ -2549,7 +2595,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               tone, size, and full-width divider, but counting up live. -ml-0.5
               optically aligns the leading "W" with the reply text below. */}
           <div
-            className={cn("-ml-0.5 pb-2", MUTED_LABEL_TEXT_CLASS_NAME)}
+            className={cn("-ml-0.5 pb-2 tabular-nums", MUTED_LABEL_TEXT_CLASS_NAME)}
             style={{ fontSize: chatTypographyStyle.fontSize }}
           >
             Working for{" "}
@@ -2597,7 +2643,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     }
     return (
       <div className="flex h-full items-center justify-center">
-        <p className="text-ui leading-snug text-muted-foreground/30">
+        <p className="text-ui leading-snug text-muted-foreground">
           Send a message to start the conversation.
         </p>
       </div>
@@ -2624,11 +2670,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
         maintainScrollAtEnd={followLiveOutput && !tailAnchorSlideInFlight}
         maintainScrollAtEndThreshold={0.1}
-        {...(tailAnchorMessageId !== null
-          ? { maintainVisibleContentPosition: false }
-          : !followLiveOutput
-            ? { maintainVisibleContentPosition: true }
-            : {})}
+        {...(tailAnchorMessageId !== null ? { maintainVisibleContentPosition: false } : {})}
         onClickCapture={onMessagesClickCapture}
         onMouseUp={onMessagesMouseUp}
         onPointerCancel={handleMessagesPointerCancel}
@@ -3449,7 +3491,10 @@ const UserMessageCollapsibleText = memo(function UserMessageCollapsibleText(prop
         <button
           type="button"
           data-scroll-anchor-ignore
-          className="mt-1 block text-muted-foreground/55 transition-colors duration-150 hover:text-foreground/72"
+          className={cn(
+            "mt-1 block text-muted-foreground transition-colors duration-150 hover:text-foreground",
+            TRANSCRIPT_TEXT_BUTTON_CLASS_NAME,
+          )}
           style={{ fontSize: `${props.chatFontSizePx}px` }}
           aria-expanded={props.expanded}
           aria-controls={contentId}

@@ -215,7 +215,7 @@ describe("desktop update button state", () => {
     expect(resolveDesktopUpdateButtonAction(state)).toBe("check");
     expect(isDesktopUpdateButtonDisabled(state)).toBe(true);
     expect(getDesktopUpdateButtonTooltip(state)).toContain("Checking for updates");
-    expect(getDesktopUpdateButtonPresentation(state).label).toBe("Checking...");
+    expect(getDesktopUpdateButtonPresentation(state).label).toBe("Checking…");
   });
 
   it("shows failure labels while keeping retryable updater states actionable", () => {

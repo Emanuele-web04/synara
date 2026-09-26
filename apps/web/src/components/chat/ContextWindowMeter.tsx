@@ -46,7 +46,7 @@ export function ContextWindowMeter(props: {
         render={
           <button
             type="button"
-            className="group inline-flex shrink-0 items-center justify-center rounded-full p-0.5 transition-opacity hover:opacity-80"
+            className="group inline-flex shrink-0 items-center justify-center rounded-full p-1 transition-opacity outline-none hover:opacity-80 focus-visible:ring-1 focus-visible:ring-ring/60"
             aria-label={display.ariaLabel}
           >
             <span className="relative flex h-4 w-4 items-center justify-center">
@@ -159,7 +159,7 @@ export function ContextWindowMeter(props: {
                   void props.compactAction?.onCompact();
                 }}
               >
-                {props.compactAction.isSubmitting ? "Starting compaction..." : "Compact now"}
+                {props.compactAction.isSubmitting ? "Starting compaction…" : "Compact now"}
               </Button>
               <p className="text-ui leading-relaxed text-muted-foreground">
                 {props.compactAction.disabledReason ??

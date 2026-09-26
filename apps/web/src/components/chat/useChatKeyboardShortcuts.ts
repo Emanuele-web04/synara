@@ -33,6 +33,48 @@ function eventTargetsComposer(
   return target instanceof Node ? composerForm.contains(target) : false;
 }
 
+// Escape-as-interrupt must stay out of open layers: dialogs, sheets, menus,
+// and popovers all own their own Escape. Their popups unmount when closed, so
+// presence in the DOM is enough.
+const INTERRUPT_BLOCKING_OVERLAY_SELECTOR = [
+  "[data-slot='dialog-popup']",
+  "[data-slot='alert-dialog-popup']",
+  "[data-slot='command-dialog-popup']",
+  "[data-slot='sheet-popup']",
+  "[data-slot='menu-popup']",
+  "[data-slot='popover-popup']",
+  "[data-slot='preview-card-popup']",
+  "[data-slot='select-popup']",
+  "[data-slot='combobox-popup']",
+  "[data-slot='autocomplete-popup']",
+  "[data-slot='context-menu-popup']",
+  // Non-modal dialogs (DiffLineBlamePopover, SelectionNewChatComposer) own
+  // their Escape too — the modal qualifier would let interrupt steal it.
+  "[role='dialog']",
+].join(", ");
+
+function hasInterruptBlockingOverlayOpen(): boolean {
+  return document.querySelector(INTERRUPT_BLOCKING_OVERLAY_SELECTOR) !== null;
+}
+
+// Composer focus is covered separately (the editor is contenteditable, which
+// isEditableEventTarget would reject); everywhere else the event must land on
+// a non-editable surface — body, the document root, or the transcript pane.
+function eventTargetsInterruptibleChatSurface(
+  event: globalThis.KeyboardEvent,
+  composerForm: HTMLFormElement | null,
+): boolean {
+  if (eventTargetsComposer(event, composerForm)) return true;
+  if (isEditableEventTarget(event)) return false;
+  const target = event.target;
+  if (!(target instanceof Element)) return false;
+  return (
+    target === document.body ||
+    target === document.documentElement ||
+    target.closest("[data-chat-scroll-container]") !== null
+  );
+}
+
 function canHandleComposerPickerShortcut(
   event: globalThis.KeyboardEvent,
   composerForm: HTMLFormElement | null,
@@ -54,6 +96,12 @@ interface ChatKeyboardShortcutsInput {
   isFocusedPane: boolean;
   activeThreadId: ThreadId | null;
   hasLiveTurn: boolean;
+  /** The Stop control's visibility rule — Escape mirrors exactly that affordance. */
+  canInterruptTurn: boolean;
+  /** Interrupt already dispatched; Escape must not fire repeat interrupts. */
+  isStoppingTurn: boolean;
+  composerOverlayOpen: boolean;
+  expandedImageOpen: boolean;
   composerFormRef: RefObject<HTMLFormElement | null>;
   onInterruptFromStopControl: () => void;
   composerSubagentStripItems: ReturnType<typeof useChatWorkLog>["composerSubagentStripItems"];
@@ -118,6 +166,10 @@ export function useChatKeyboardShortcuts({
   isFocusedPane,
   activeThreadId,
   hasLiveTurn,
+  canInterruptTurn,
+  isStoppingTurn,
+  composerOverlayOpen,
+  expandedImageOpen,
   composerFormRef,
   onInterruptFromStopControl,
   composerSubagentStripItems,
@@ -172,6 +224,7 @@ export function useChatKeyboardShortcuts({
       // Mirror terminal interrupt semantics without stealing regular copy shortcuts.
       if (
         hasLiveTurn &&
+        !isStoppingTurn &&
         isMacNavigatorPlatform() &&
         event.ctrlKey &&
         !event.metaKey &&
@@ -179,6 +232,30 @@ export function useChatKeyboardShortcuts({
         !event.shiftKey &&
         event.key.toLowerCase() === "c" &&
         eventTargetsComposer(event, composerFormRef.current)
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        onInterruptFromStopControl();
+        return;
+      }
+      // Escape mirrors the Stop control: same visibility rule, no repeats while
+      // a stop is in flight, and it stays out of overlays, the terminal, and
+      // non-composer text inputs.
+      if (
+        event.key === "Escape" &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        !event.shiftKey &&
+        !event.isComposing &&
+        canInterruptTurn &&
+        !isStoppingTurn &&
+        !isComposerApprovalState &&
+        !composerOverlayOpen &&
+        !expandedImageOpen &&
+        !isTerminalFocused() &&
+        !hasInterruptBlockingOverlayOpen() &&
+        eventTargetsInterruptibleChatSurface(event, composerFormRef.current)
       ) {
         event.preventDefault();
         event.stopPropagation();
@@ -480,6 +557,10 @@ export function useChatKeyboardShortcuts({
     onToggleDevicePanel,
     onToggleDiff,
     onInterruptFromStopControl,
+    canInterruptTurn,
+    isStoppingTurn,
+    composerOverlayOpen,
+    expandedImageOpen,
     onSplitSurface,
     showGitActions,
     isGitRepo,

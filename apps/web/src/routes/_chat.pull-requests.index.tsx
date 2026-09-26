@@ -550,7 +550,7 @@ function PullRequestsRouteView() {
         }}
         onAddPane={() => {}}
         renderPane={(pane, context) => (
-          <Suspense fallback={<PanelStateMessage>Loading pull request...</PanelStateMessage>}>
+          <Suspense fallback={<PanelStateMessage>Loading pull request…</PanelStateMessage>}>
             <PullRequestDockPane
               pane={pane}
               pollingEnabled={context.isVisible}

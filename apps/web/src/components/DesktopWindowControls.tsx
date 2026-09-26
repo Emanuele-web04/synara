@@ -27,7 +27,7 @@ const GLYPH_CLOSE = "\uE8BB";
 // intercepts the click — so the chrome stays pixel-native and onClick routes
 // straight to the window-control IPC.
 const CAPTION_BUTTON_CLASS =
-  "flex h-full w-[46px] shrink-0 items-center justify-center text-foreground/90 outline-none transition-colors duration-75 select-none hover:bg-foreground/[0.09] active:bg-foreground/[0.05] [-webkit-app-region:no-drag]";
+  "flex h-full w-[46px] shrink-0 items-center justify-center text-foreground/90 outline-none transition-colors duration-75 select-none hover:bg-foreground/[0.09] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring active:bg-foreground/[0.05] [-webkit-app-region:no-drag]";
 
 // Windows close-button accent: red fill on hover with a white glyph.
 const CLOSE_BUTTON_CLASS = "hover:bg-[#c42b1c] hover:text-white active:bg-[#b9281b]";

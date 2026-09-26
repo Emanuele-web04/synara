@@ -16,6 +16,7 @@ import { PullRequestProjectFilterPopover } from "./PullRequestListFilters";
 import { PullRequestRow } from "./PullRequestRow";
 import { groupPullRequestEntriesByInvolvement } from "./pullRequestList.logic";
 import { focusPullRequestRow, isFocusInsideRightDock } from "./pullRequestFocus";
+import { waitForTransientPopups } from "../../lib/browserPopupCleanup";
 
 function makeEntry(isPinned: boolean): PullRequestListEntry {
   return {
@@ -90,7 +91,8 @@ function FocusRestoreHarness() {
 }
 
 describe("PullRequestRow pin control", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await waitForTransientPopups();
     document.body.innerHTML = "";
   });
 
@@ -197,7 +199,8 @@ describe("PullRequestRow pin control", () => {
 });
 
 describe("PullRequestProjectFilterPopover", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await waitForTransientPopups();
     document.body.innerHTML = "";
   });
 
@@ -236,7 +239,8 @@ describe("PullRequestProjectFilterPopover", () => {
 });
 
 describe("PullRequestAvatar", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await waitForTransientPopups();
     document.body.innerHTML = "";
   });
 

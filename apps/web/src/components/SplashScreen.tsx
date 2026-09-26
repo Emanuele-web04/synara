@@ -20,7 +20,7 @@ export function SplashScreen({
 
         {errorMessage ? (
           <div className="flex max-w-sm flex-col items-center gap-3 px-6 text-center">
-            <span className="text-sm text-muted-foreground/75">{errorMessage}</span>
+            <span className="text-sm text-muted-foreground">{errorMessage}</span>
             {showRetry ? (
               <button
                 type="button"

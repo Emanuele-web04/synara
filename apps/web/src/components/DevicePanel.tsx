@@ -56,7 +56,9 @@ import {
 import { useDeviceVideoStream } from "./device/useDeviceVideoStream";
 import { DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
+import { DOCK_HEADER_ICON_BUTTON_CLASS } from "./chat/chatHeaderControls";
 import { Button } from "./ui/button";
+import { IconButton } from "./ui/icon-button";
 import { Menu, MenuItem, MenuTrigger } from "./ui/menu";
 import {
   AlertDialog,
@@ -665,15 +667,17 @@ export default function DevicePanel(props: {
       {/* Screenshot moved to the control rail, where it sits with the other
           device actions; the header keeps only picker and close. */}
       <div className="ml-auto flex shrink-0 items-center gap-0.5">
-        <Button
-          variant="ghost"
-          size="icon-sm"
+        <IconButton
+          variant="chrome"
+          size="icon-xs"
+          label="Close simulator panel"
+          tooltip="Close"
+          tooltipSide="bottom"
+          className={DOCK_HEADER_ICON_BUTTON_CLASS}
           onClick={props.onClosePanel}
-          title="Close"
-          aria-label="Close simulator panel"
         >
           <XIcon />
-        </Button>
+        </IconButton>
       </div>
     </div>
   );
@@ -820,6 +824,7 @@ export default function DevicePanel(props: {
       */}
       <p
         role="status"
+        title={threadState?.lastError ?? undefined}
         className={cn(
           "line-clamp-2 flex shrink-0 items-center px-3 text-destructive text-ui leading-snug transition-opacity duration-220 motion-reduce:transition-none",
           threadState?.lastError

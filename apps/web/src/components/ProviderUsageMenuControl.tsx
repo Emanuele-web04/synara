@@ -161,7 +161,7 @@ export function ProviderUsageMenuControl({ provider }: { provider: ProviderKind 
                   type="button"
                   tone="plain"
                   className="gap-1.5 px-2"
-                  aria-label={model.menuTitle}
+                  aria-label={`${model.menuTitle}: ${model.primaryRow.remainingLabel}`}
                 />
               }
             >

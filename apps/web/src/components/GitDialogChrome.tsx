@@ -115,13 +115,16 @@ export function GitDialogActionRow({
   const row = (
     <button
       type="button"
-      disabled={disabled}
-      onClick={onClick}
+      aria-disabled={disabled || undefined}
+      onClick={() => {
+        if (disabled) return;
+        onClick();
+      }}
       className={cn(
         "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-ui leading-snug outline-none transition-colors",
         "hover:bg-[var(--color-background-button-secondary-hover)] focus-visible:bg-[var(--color-background-button-secondary-hover)]",
         highlighted && "bg-[var(--color-background-button-secondary-hover)]",
-        disabled && "pointer-events-none opacity-50",
+        disabled && "cursor-not-allowed opacity-50",
       )}
     >
       <span className="shrink-0 text-muted-foreground [&_svg]:size-4">{icon}</span>
@@ -134,16 +137,11 @@ export function GitDialogActionRow({
     return row;
   }
 
-  // The disabled button drops pointer events, so the trigger span owns the hover.
+  // aria-disabled keeps the row in the tab order, so the trigger itself can be
+  // the button — the reason opens on focus and hover, not just pointer hover.
   return (
     <Popover>
-      <PopoverTrigger
-        openOnHover
-        nativeButton={false}
-        render={<span className="block cursor-not-allowed" />}
-      >
-        {row}
-      </PopoverTrigger>
+      <PopoverTrigger openOnHover render={row} />
       <PopoverPopup tooltipStyle side="top" align="center">
         {disabledReason}
       </PopoverPopup>

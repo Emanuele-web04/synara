@@ -386,6 +386,7 @@ export default function ProjectScriptsControl({
                             <button
                               key={entry.id}
                               type="button"
+                              aria-pressed={isSelected}
                               className={`relative flex flex-col items-center gap-2 rounded-md border px-2 py-2 text-ui leading-snug ${
                                 isSelected
                                   ? "border-[color:var(--color-border)] bg-[var(--sidebar-accent)]"

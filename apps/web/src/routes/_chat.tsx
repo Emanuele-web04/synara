@@ -93,7 +93,7 @@ function ThreadRetentionMaintenanceToast() {
       if (state === "started") {
         toastIdRef.current = toastManager.add({
           type: "loading",
-          title: "Archiving old chats...",
+          title: "Archiving old chats…",
           description: "Preparing background maintenance.",
           timeout: 0,
           data: { allowCrossThreadVisibility: true },
@@ -106,14 +106,14 @@ function ThreadRetentionMaintenanceToast() {
           toastIdRef.current ??
           toastManager.add({
             type: "loading",
-            title: "Archiving old chats...",
+            title: "Archiving old chats…",
             timeout: 0,
             data: { allowCrossThreadVisibility: true },
           });
         toastIdRef.current = toastId;
         toastManager.update(toastId, {
           type: "loading",
-          title: "Archiving old chats...",
+          title: "Archiving old chats…",
           description:
             totalCount && totalCount > 0
               ? `${archivedCount ?? 0} of ${totalCount} chats archived.`

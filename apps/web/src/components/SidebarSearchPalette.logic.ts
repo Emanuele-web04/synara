@@ -61,6 +61,8 @@ export interface SidebarSearchThread {
   projectRemoteName: string;
   spaceName: string;
   provider: ProviderKind;
+  /** Display branch from the workspace, used to disambiguate the result meta. */
+  branch: string | null;
   createdAt: string;
   updatedAt?: string | undefined;
   messages: readonly {
@@ -86,6 +88,7 @@ export function areSidebarSearchThreadListsEqual(
       left.projectRemoteName !== right.projectRemoteName ||
       left.spaceName !== right.spaceName ||
       left.provider !== right.provider ||
+      left.branch !== right.branch ||
       left.createdAt !== right.createdAt ||
       left.updatedAt !== right.updatedAt ||
       left.messages !== right.messages
@@ -108,7 +111,7 @@ function normalizeText(value: string): string {
   return value.trim().replaceAll(/\s+/g, " ").toLowerCase();
 }
 
-function normalizeDisplayText(value: string): string {
+export function normalizeDisplayText(value: string): string {
   return value.trim().replaceAll(/\s+/g, " ");
 }
 
@@ -133,8 +136,8 @@ function truncateSnippet(value: string, startIndex: number, queryLength: number)
   );
   const boundedStart = Math.min(desiredStart, Math.max(0, value.length - SNIPPET_MAX_LENGTH));
   const boundedEnd = Math.min(value.length, boundedStart + SNIPPET_MAX_LENGTH);
-  const prefix = boundedStart > 0 ? "..." : "";
-  const suffix = boundedEnd < value.length ? "..." : "";
+  const prefix = boundedStart > 0 ? "…" : "";
+  const suffix = boundedEnd < value.length ? "…" : "";
   return `${prefix}${value.slice(boundedStart, boundedEnd).trim()}${suffix}`;
 }
 

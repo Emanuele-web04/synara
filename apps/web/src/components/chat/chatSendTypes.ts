@@ -32,6 +32,17 @@ export interface PlanFollowUpSubmission {
   queuedTurn?: QueuedComposerPlanFollowUp;
 }
 
+export interface FirstSendLandingHandoff {
+  sourceThreadId: ThreadId;
+  targetThreadId: ThreadId;
+  /** Landing composer block geometry at send time, for the FLIP slide into the dock. */
+  from: { top: number; centerX: number; at: number } | null;
+  /** The optimistic user row that rises out of the landing card. */
+  userMessageId: MessageId | null;
+  /** Landing hero rect + plain heading text for the brief exit overlay. */
+  hero: { top: number; left: number; width: number; heading: string } | null;
+}
+
 /**
  * Send-path handlers that are declared *after* `onSend` in the component body (they depend on
  * state and callbacks that are set up later) yet have to be reachable from it — and, for
@@ -89,6 +100,17 @@ export interface ChatTurnSubmissionInput {
   setStoreThreadError: (threadId: ThreadId, error: string | null) => void;
   queryClient: QueryClient;
   isCenteredEmptyLanding: boolean;
+  // Writes the ref AND the render-visible pending flag — the docked composer's
+  // deferral skip is driven by render state (React Compiler forbids ref reads
+  // during render), while the FLIP measurement itself still reads the ref.
+  // `preserveHeroExit` is for the dock commit only — it consumes the handoff while
+  // the hero overlay is still fading. Every other clear is a rollback/unwind and
+  // drops the overlay with the handoff.
+  setFirstSendLandingHandoff: (
+    handoff: FirstSendLandingHandoff | null,
+    options?: { preserveHeroExit?: boolean },
+  ) => void;
+  emptyLandingComposerBlockRef: RefObject<HTMLDivElement | null>;
   setEnvironmentPanelPreferenceOpen: Dispatch<SetStateAction<boolean | null>>;
   environmentPanelPreferenceOpen: boolean | null;
   setTailAnchor: Dispatch<SetStateAction<{ threadId: ThreadId; messageId: MessageId } | null>>;

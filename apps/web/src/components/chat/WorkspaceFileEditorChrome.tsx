@@ -139,10 +139,10 @@ export function WorkspaceFileEditorHeader(props: WorkspaceFileEditorHeaderProps)
         ) : null}
       </nav>
 
-      <span className="shrink-0 text-ui-sm text-muted-foreground/70">{props.title}</span>
+      <span className="shrink-0 text-ui-sm text-muted-foreground/80">{props.title}</span>
 
       <span role="status" className="shrink-0 text-ui-sm text-muted-foreground">
-        {props.saving ? "Saving..." : props.dirty ? "Unsaved changes" : "Saved"}
+        {props.saving ? "Saving…" : props.dirty ? "Unsaved changes" : "Saved"}
       </span>
       <div className="flex shrink-0 items-center gap-1.5">
         {props.actions}
@@ -154,7 +154,7 @@ export function WorkspaceFileEditorHeader(props: WorkspaceFileEditorHeaderProps)
           disabled={!props.canSave || props.saving}
           onClick={props.onSave}
         >
-          {props.saving ? "Saving..." : "Save"}
+          {props.saving ? "Saving…" : "Save"}
         </Button>
         <ChatHeaderIconButton
           type="button"

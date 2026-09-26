@@ -3,6 +3,11 @@
 @custom-variant dark (&:is(.dark, .dark *));
 
 @theme inline {
+  /* Shared surface-motion curves: `ease-smooth-out` for anchored popups/dialogs,
+     `ease-drawer` for panel/drawer slides. Durations stay in the class constants
+     (lib/disclosureMotion.ts), not here. */
+  --ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
   --animate-skeleton: skeleton 2s -1s infinite linear;
   /* Status spinners and shimmer labels share 50ms steps (20 fps), aligned by
      animationTimelineSync. Matching both cadence and phase lets their redraws
@@ -113,7 +118,7 @@
 
 @layer components {
   .sidebar-icon-button {
-    @apply items-center justify-center rounded-sm p-0.5 text-muted-foreground/60 transition-colors hover:text-foreground/82 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring;
+    @apply items-center justify-center rounded-sm p-0.5 text-muted-foreground/80 transition-colors hover:text-foreground/82 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring;
     background: transparent;
   }
 
@@ -176,7 +181,7 @@
     border-radius: 0;
     /* Fade the seam divider with the slide (collapsed rule sets opacity:0) — `display`
        can't transition, so opacity is what keeps this in step with the animation. */
-    transition: opacity 300ms cubic-bezier(0.32, 0.72, 0, 1);
+    transition: opacity 300ms var(--ease-drawer);
   }
 
   /* A single inset stroke produces the straight content edge without adding
@@ -254,13 +259,56 @@
 }
 
 .chat-pane-enter {
-  animation: chat-pane-enter 140ms ease-out;
+  animation: chat-pane-enter 150ms var(--ease-smooth-out);
   will-change: opacity;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .chat-pane-enter {
     animation: none;
+  }
+}
+
+/* Empty home arrival: the heading settles first, then the composer fades into the
+   same centered stack. The composer uses opacity only because transformed ancestors
+   can change the containing block used by its anchored pickers. */
+@keyframes empty-landing-hero-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes empty-landing-composer-enter {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+.empty-landing-hero-motion {
+  animation: empty-landing-hero-enter 360ms var(--ease-smooth-out) backwards;
+  will-change: opacity, transform;
+}
+
+.empty-landing-composer-motion {
+  animation: empty-landing-composer-enter 240ms 60ms var(--ease-smooth-out) backwards;
+  will-change: opacity;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .empty-landing-hero-motion,
+  .empty-landing-composer-motion {
+    animation: none;
+    will-change: auto;
   }
 }
 
@@ -281,7 +329,7 @@
 }
 
 .composer-trigger-label-enter {
-  animation: composer-trigger-label-enter 240ms cubic-bezier(0.22, 1, 0.36, 1);
+  animation: composer-trigger-label-enter 240ms var(--ease-smooth-out);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -307,7 +355,7 @@
 }
 
 .sidebar-surface-enter {
-  animation: sidebar-surface-enter 160ms ease-out both;
+  animation: sidebar-surface-enter 150ms var(--ease-smooth-out) both;
   will-change: opacity, transform;
 }
 
@@ -332,7 +380,7 @@
 }
 
 .chat-message-send-enter {
-  animation: chat-message-send-enter 180ms ease-out both;
+  animation: chat-message-send-enter 150ms var(--ease-smooth-out) both;
   will-change: opacity, transform;
 }
 
@@ -498,7 +546,9 @@
   --sidebar-primary-foreground: var(--primary-foreground);
   --sidebar-accent: var(--secondary);
   --sidebar-accent-active: var(--secondary);
-  --sidebar-selected: var(--secondary);
+  /* Selected row reads one step stronger than hover (--sidebar-accent stays the
+     lighter wash). Keep both monochrome alpha steps. */
+  --sidebar-selected: --alpha(var(--color-black) / 6%);
   --sidebar-accent-foreground: var(--color-text-foreground, var(--foreground));
   --sidebar-border: var(--border);
   --sidebar-ring: var(--ring);
@@ -561,7 +611,7 @@
     --sidebar-primary-foreground: var(--primary-foreground);
     --sidebar-accent: var(--secondary);
     --sidebar-accent-active: var(--secondary);
-    --sidebar-selected: var(--secondary);
+    --sidebar-selected: --alpha(var(--color-white) / 8%);
     --sidebar-accent-foreground: var(--color-text-foreground, var(--foreground));
     --sidebar-border: var(--border);
     --sidebar-ring: var(--ring);
@@ -1017,7 +1067,7 @@ label:has(> select#reasoning-effort) select {
   min-width: 0;
   overflow: hidden;
   font-family: var(--font-chat-code-family);
-  font-size: 0.72rem;
+  font-size: var(--app-font-size-ui-xs);
   line-height: 1.4;
   letter-spacing: 0.01em;
   color: var(--muted-foreground);
@@ -1031,7 +1081,7 @@ label:has(> select#reasoning-effort) select {
   min-width: 0;
   align-items: center;
   gap: 0.375rem;
-  font-size: 0.72rem;
+  font-size: var(--app-font-size-ui-xs);
   line-height: 1.4;
   user-select: none;
 }
@@ -1109,6 +1159,26 @@ label:has(> select#reasoning-effort) select {
 
 .chat-markdown .chat-markdown-shiki .shiki * {
   font-family: inherit !important;
+}
+
+/* Streaming word reveal: each word let out by the paced emit fades in. Words
+   already present at mount carry data-chat-word-fade="instant" so history
+   renders and virtualization remounts never replay the fade. Opacity only —
+   a word that moved would jostle the line. */
+@keyframes chat-word-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.chat-markdown--word-fading [data-chat-word-fade]:not([data-chat-word-fade="instant"]) {
+  animation: chat-word-fade-in 300ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-markdown--word-fading [data-chat-word-fade] {
+    animation: none;
+  }
 }
 
 .editor-file-viewer__plain,
@@ -1568,7 +1638,8 @@ label:has(> select#reasoning-effort) select {
   transition:
     background-color 120ms ease,
     color 120ms ease,
-    border-color 120ms ease;
+    border-color 120ms ease,
+    opacity 120ms ease;
 }
 
 .local-image-preview__download:hover,
@@ -1796,9 +1867,7 @@ label:has(> select#reasoning-effort) select {
   background: color-mix(in srgb, var(--muted) 55%, transparent);
   cursor: zoom-in;
   outline: none;
-  transition:
-    box-shadow 140ms ease,
-    transform 140ms ease;
+  transition: box-shadow 140ms ease;
 }
 
 .chat-generated-image__frame:focus-visible {
@@ -3083,6 +3152,31 @@ diffs-container {
   background-clip: text;
   -webkit-background-clip: text;
   animation: ultrathink-rainbow 10s linear infinite;
+}
+
+/* One gate for every looping/decorative animation: utility spinners, skeleton
+   shimmer, the terminal run dot, ultrathink rainbow loops, and the generated
+   image placeholder. Elements keep their resting state — the dot stays lit at a
+   static opacity instead of pulsing. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-spin,
+  .animate-spin-stepped,
+  .animate-pulse,
+  .animate-skeleton,
+  .terminal-running-indicator__dot,
+  .chat-generated-image__skeleton,
+  .ultrathink-frame,
+  .ultrathink-chroma,
+  .ultrathink-pill,
+  .ultrathink-word {
+    animation: none;
+  }
+
+  .terminal-running-indicator__dot {
+    opacity: 0.7;
+    transform: none;
+    will-change: auto;
+  }
 }
 
 /* Expanded document panes retain a readable line length while using more space. */

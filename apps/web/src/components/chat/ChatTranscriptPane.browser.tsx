@@ -151,8 +151,31 @@ describe("ChatTranscriptPane", () => {
         expect(transcriptCommitCount).toBeGreaterThan(0);
       });
 
+      // Post-mount commits (virtualizer measurement, async highlighter) can
+      // land after the first profiler callback under load. A warm-up fill first
+      // flushes any straggler into the pre-baseline window; the real fill is
+      // then asserted strictly — typing-driven churn commits every keystroke,
+      // a one-off straggler does not repeat.
+      const composerInput = page.getByPlaceholder("Type composer text");
+      await composerInput.fill("warm up");
+      await vi.waitFor(() => {
+        expect(screen.container.querySelector("#composer-input")).toHaveValue("warm up");
+      });
+      let settledAt = performance.now();
+      let settledCount = -1;
+      await vi.waitFor(
+        () => {
+          if (transcriptCommitCount !== settledCount) {
+            settledCount = transcriptCommitCount;
+            settledAt = performance.now();
+          }
+          expect(performance.now() - settledAt).toBeGreaterThanOrEqual(100);
+        },
+        { timeout: 5_000, interval: 20 },
+      );
+
       const baselineCommitCount = transcriptCommitCount;
-      await page.getByPlaceholder("Type composer text").fill("reply follow up");
+      await composerInput.fill("reply follow up");
 
       await vi.waitFor(() => {
         expect(screen.container.querySelector("#composer-input")).toHaveValue("reply follow up");

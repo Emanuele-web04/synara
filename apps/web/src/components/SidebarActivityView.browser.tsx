@@ -13,6 +13,7 @@ import { render } from "vitest-browser-react";
 import type { Project, SidebarThreadSummary } from "../types";
 import type { ThreadStatusPill } from "./Sidebar.logic";
 import { SidebarActivityView } from "./SidebarActivityView";
+import { waitForTransientPopups } from "../lib/browserPopupCleanup";
 
 const PROJECT_A = ProjectId.makeUnsafe("activity-project-a");
 const PROJECT_B = ProjectId.makeUnsafe("activity-project-b");
@@ -117,8 +118,9 @@ describe("SidebarActivityView", () => {
   beforeEach(() => {
     vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-08-02T12:00:00.000Z"));
   });
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
+    await waitForTransientPopups();
     document.body.innerHTML = "";
   });
 

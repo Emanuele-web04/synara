@@ -200,7 +200,7 @@ function ExplorerLoadingRows(props: { depth: number }) {
       className="space-y-1.5 py-1.5 pr-2"
       style={fileRowIndentStyle(props.depth)}
       role="status"
-      aria-label="Loading directory..."
+      aria-label="Loading directory…"
     >
       {EXPLORER_SKELETON_ROW_WIDTHS.map((width) => (
         <div key={width} className="flex h-5 items-center gap-1.5">
@@ -420,7 +420,7 @@ function WorkspaceSearchResultRow(props: {
       <div className="flex min-w-0 flex-1 items-baseline gap-1.5 overflow-hidden">
         <span className="shrink-0 truncate font-medium">{name}</span>
         {dir ? (
-          <span className="min-w-0 truncate text-ui-sm text-muted-foreground/55">{dir}</span>
+          <span className="min-w-0 truncate text-ui-sm text-muted-foreground/80">{dir}</span>
         ) : null}
       </div>
     </button>
@@ -512,7 +512,7 @@ function WorkspaceSearchInputHeader(props: {
         spellCheck={false}
         autoCorrect="off"
         autoCapitalize="off"
-        placeholder="Search files..."
+        placeholder="Search files…"
         aria-label="Search files"
         onChange={(event) => onQueryChange(event.target.value)}
         onKeyDown={handleInputKeyDown}
@@ -574,7 +574,7 @@ function WorkspaceSearchResultsBody(props: {
         )}
       </div>
       {fileMatches.length > 0 && props.search.truncated ? (
-        <p className="shrink-0 border-t border-border/45 px-3 py-1.5 text-ui-xs text-muted-foreground/70">
+        <p className="shrink-0 border-t border-border/45 px-3 py-1.5 text-ui-xs text-muted-foreground/80">
           Showing the top matches. Refine the search to narrow them down.
         </p>
       ) : null}
@@ -693,7 +693,7 @@ export function ExplorerActivityBarButton(props: {
     <button
       type="button"
       className={cn(
-        "relative flex h-12 w-full cursor-pointer items-center justify-center text-muted-foreground/72 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground",
+        "relative flex h-12 w-full cursor-pointer items-center justify-center text-muted-foreground/80 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground",
         props.active && "bg-[var(--color-background-button-secondary)] text-foreground",
       )}
       aria-label={props.label}

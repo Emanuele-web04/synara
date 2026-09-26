@@ -820,7 +820,7 @@ export function describeAddProjectError(message: string): string | null {
     message.startsWith("Failed to create project directory: /") ||
     message.startsWith("Project directory does not exist: /")
   ) {
-    return "This is an absolute path from the filesystem root. If the folder is in your home directory, use ~/Developer/... or the full /Users/<name>/Developer/... path.";
+    return "This is an absolute path from the filesystem root. If the folder is in your home directory, use ~/Developer/… or the full /Users/<name>/Developer/… path.";
   }
 
   return null;

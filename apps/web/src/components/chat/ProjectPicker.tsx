@@ -367,7 +367,7 @@ export const ProjectPicker = memo(function ProjectPicker({
         {selectedFolderOption.primaryLabel}
       </span>
       {selectedFolderOption.secondaryLabel ? (
-        <span className="min-w-0 truncate text-muted-foreground/60 text-ui leading-snug">
+        <span className="min-w-0 truncate text-muted-foreground/80 text-ui leading-snug">
           {selectedFolderOption.secondaryLabel}
         </span>
       ) : null}
@@ -527,8 +527,8 @@ export const ProjectPicker = memo(function ProjectPicker({
   const addProjectLabel =
     addActionLabel ?? (isProjectSelectionMode ? "New project" : "Add new project");
   const loadingAddProjectLabel = isProjectSelectionMode
-    ? "Adding project..."
-    : "Opening folder picker...";
+    ? "Adding project…"
+    : "Opening folder picker…";
 
   const renderActiveFolderOption = (folder: ActiveFolderOption, index: number) => {
     const selected = isProjectSelectionMode
@@ -549,7 +549,7 @@ export const ProjectPicker = memo(function ProjectPicker({
           <FolderClosed className={PICKER_PANEL_ROW_ICON_CLASS_NAME} />
           <span className="min-w-0 truncate">{folder.primaryLabel}</span>
           {folder.secondaryLabel ? (
-            <span className="min-w-0 truncate text-muted-foreground/60 text-ui leading-snug">
+            <span className="min-w-0 truncate text-muted-foreground/80 text-ui leading-snug">
               {folder.secondaryLabel}
             </span>
           ) : null}
@@ -619,7 +619,7 @@ export const ProjectPicker = memo(function ProjectPicker({
               aria-label={resetActionLabel}
               title={resetActionLabel}
               className={cn(
-                "group/reset-project pointer-events-none absolute top-1/2 left-1.5 z-10 inline-flex size-5 -translate-y-1/2 cursor-pointer items-center justify-center sm:left-2",
+                "group/reset-project pointer-events-none absolute top-1/2 left-1.5 z-10 inline-flex size-5 -translate-y-1/2 cursor-pointer items-center justify-center sm:left-2 after:absolute after:-inset-0.5 after:content-['']",
                 "opacity-0 transition-opacity duration-150 ease-out",
                 "focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70",
                 "group-hover/project-picker-trigger:pointer-events-auto group-hover/project-picker-trigger:opacity-100",

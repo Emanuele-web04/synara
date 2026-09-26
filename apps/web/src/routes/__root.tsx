@@ -56,6 +56,7 @@ import { WhatsNewPopoutCard } from "../whatsNew/WhatsNewPopoutCard";
 import { shouldRenderTerminalWorkspace } from "../components/ChatView.logic";
 import { Button, dialogActionButtonClassName } from "../components/ui/button";
 import { AnchoredToastProvider, ToastProvider, toastManager } from "../components/ui/toast";
+import { TooltipProvider } from "../components/ui/tooltip";
 import { useGitProgressToastPreview } from "../components/useGitProgressToastPreview";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { useFeatureFlags } from "../featureFlags";
@@ -327,27 +328,31 @@ function RootRouteView() {
     <>
       <ToastProvider position="top-center">
         <AnchoredToastProvider>
-          <GitProgressToastPreviewDev />
-          <EventRouter />
-          <EditorDirtyRouteGuard />
-          <ProviderStatusRefreshCoordinator />
-          <ProviderModelDiscoveryWarmer />
-          <GlobalShortcutsDialog />
-          <BrowserVaultDialog />
-          <GlobalFeedbackDialog />
-          <GlobalWhatsNewSurface />
-          <TaskCompletionNotifications />
-          <QueuedComposerDrainCoordinator />
-          <SafariAccessOnboarding>
-            <AppSnapWelcomeDialog />
-            <BetaWelcomeDialog />
-          </SafariAccessOnboarding>
-          <GlobalOnboardingDialog />
-          <ProjectImportAnnouncementDialog />
-          <GlobalProjectImportDialog />
-          <AppSnapCoordinator />
-          <DesktopProjectBootstrap />
-          <Outlet />
+          {/* One shared tooltip delay group for the whole app: 400ms first hover,
+              instant re-hover while moving across adjacent triggers. */}
+          <TooltipProvider delay={400} closeDelay={0}>
+            <GitProgressToastPreviewDev />
+            <EventRouter />
+            <EditorDirtyRouteGuard />
+            <ProviderStatusRefreshCoordinator />
+            <ProviderModelDiscoveryWarmer />
+            <GlobalShortcutsDialog />
+            <BrowserVaultDialog />
+            <GlobalFeedbackDialog />
+            <GlobalWhatsNewSurface />
+            <TaskCompletionNotifications />
+            <QueuedComposerDrainCoordinator />
+            <SafariAccessOnboarding>
+              <AppSnapWelcomeDialog />
+              <BetaWelcomeDialog />
+            </SafariAccessOnboarding>
+            <GlobalOnboardingDialog />
+            <ProjectImportAnnouncementDialog />
+            <GlobalProjectImportDialog />
+            <AppSnapCoordinator />
+            <DesktopProjectBootstrap />
+            <Outlet />
+          </TooltipProvider>
         </AnchoredToastProvider>
       </ToastProvider>
       {desktopChrome}
@@ -524,7 +529,7 @@ async function runProviderUpdateAll(params: {
     trackedToast?.toastId ??
     toastManager.add({
       type: "loading",
-      title: "Updating providers...",
+      title: "Updating providers…",
       description:
         providers.length === 1
           ? `Updating ${PROVIDER_DISPLAY_NAMES[providers[0]!.provider]}.`
@@ -542,7 +547,7 @@ async function runProviderUpdateAll(params: {
 
   toastManager.update(toastId, {
     type: "loading",
-    title: "Updating providers...",
+    title: "Updating providers…",
     description:
       providers.length === 1
         ? `Updating ${PROVIDER_DISPLAY_NAMES[providers[0]!.provider]}.`

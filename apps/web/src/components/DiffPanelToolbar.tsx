@@ -26,10 +26,7 @@ import {
   XIcon,
 } from "~/lib/icons";
 import { cn } from "~/lib/utils";
-import {
-  ELEVATED_HOVER_SURFACE_CLASS_NAME,
-  ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME,
-} from "~/surfaceStyles";
+import { ELEVATED_HOVER_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 import type { TimestampFormat } from "~/appSettings";
 import type { TurnDiffSummary } from "~/types";
 import type { RepoDiffScope } from "~/repoDiffScopeStore";
@@ -80,7 +77,10 @@ const DIFF_PANEL_MENU_ICON_CLASS_NAME = "size-3.5 shrink-0 text-muted-foreground
 const INITIAL_VISIBLE_TURN_COUNT = 5;
 const TURN_SHOW_MORE_INCREMENT = 20;
 
-const DIFF_PANEL_TOOLBAR_ICON_BUTTON_CLASS_NAME = "text-muted-foreground hover:text-foreground";
+const DIFF_PANEL_TOOLBAR_ICON_BUTTON_CLASS_NAME = cn(
+  DOCK_HEADER_ICON_BUTTON_CLASS,
+  "text-muted-foreground hover:text-foreground",
+);
 
 function DiffPanelToolbarDivider() {
   return <div aria-hidden className="mx-1 h-4 w-px shrink-0 bg-border/60" />;
@@ -319,7 +319,7 @@ export const DiffPanelToolbar = function DiffPanelToolbar(props: DiffPanelToolba
             size="icon-xs"
             className={DIFF_PANEL_TOOLBAR_ICON_BUTTON_CLASS_NAME}
             label="Reload diff"
-            title="Reload diff"
+            tooltip="Reload diff"
             onClick={props.onReload}
           >
             <RefreshCwIcon className={cn("size-3.5", props.reloading && "animate-spin")} />
@@ -439,7 +439,7 @@ export const DiffPanelToolbar = function DiffPanelToolbar(props: DiffPanelToolba
             )}
             aria-pressed={props.fileTreeOpen}
             label={props.fileTreeOpen ? "Hide file tree" : "Show file tree"}
-            title={props.fileTreeOpen ? "Hide file tree" : "Show file tree"}
+            tooltip={props.fileTreeOpen ? "Hide file tree" : "Show file tree"}
             onClick={props.onToggleFileTree}
           >
             <FoldersIcon className="size-3.5" />
@@ -508,17 +508,13 @@ export const DiffPanelToolbar = function DiffPanelToolbar(props: DiffPanelToolba
                 ))}
               </MenuRadioGroup>
               {hiddenTurnCount > 0 ? (
-                <button
-                  type="button"
-                  className={cn(
-                    "mx-1 mt-1 flex h-8 w-[calc(100%-0.5rem)] cursor-pointer items-center justify-center rounded-md px-2 text-ui-sm",
-                    "text-muted-foreground",
-                    ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME,
-                  )}
+                <MenuItem
+                  closeOnClick={false}
+                  className="mx-1 mt-1 h-8 w-[calc(100%-0.5rem)] justify-center px-2 text-ui-sm text-muted-foreground"
                   onClick={() => setVisibleTurnCount(nextVisibleTurnCount)}
                 >
                   Show {Math.min(TURN_SHOW_MORE_INCREMENT, hiddenTurnCount)} more
-                </button>
+                </MenuItem>
               ) : null}
             </MenuGroup>
           </ComposerPickerMenuPopup>

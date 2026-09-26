@@ -124,10 +124,10 @@ export function ActiveTaskListCard({
                     className={cn(
                       "mt-[3px] flex min-w-0 shrink-0 items-center gap-1.5 text-ui",
                       task.status === "completed"
-                        ? "text-muted-foreground/45"
+                        ? "text-muted-foreground/80"
                         : task.status === "inProgress"
                           ? "text-foreground/80"
-                          : "text-muted-foreground/60",
+                          : "text-muted-foreground/80",
                     )}
                   >
                     <span className="flex size-3.5 items-center justify-center">
@@ -138,7 +138,7 @@ export function ActiveTaskListCard({
                   <p
                     className={cn(
                       "min-w-0 flex-1 text-ui-lg leading-5 text-foreground/85",
-                      task.status === "completed" && "text-muted-foreground/50 line-through",
+                      task.status === "completed" && "text-muted-foreground/80 line-through",
                     )}
                   >
                     {task.task}
