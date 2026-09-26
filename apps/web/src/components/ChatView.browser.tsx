@@ -5203,6 +5203,43 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it("protects typed drafts while preserving history browsing from an empty composer", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("msg-prompt-history"),
+        targetText: "Earlier submitted prompt",
+      }),
+    });
+    try {
+      const editor = await waitForComposerEditor();
+      await userEvent.click(editor);
+      const draft = "Keep this unsent draft while moving the caret. ".repeat(8);
+      await userEvent.keyboard(draft);
+      await userEvent.keyboard("{Shift>}{Enter}{/Shift}Second line");
+      const prompt = useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt;
+      await userEvent.keyboard("{ArrowUp>10/}");
+      expect(editor.textContent).toContain(draft);
+      expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(prompt);
+
+      await userEvent.clear(editor);
+      await userEvent.keyboard("{ArrowUp}");
+      await vi.waitFor(() => expect(editor.textContent).toBe("filler user message 21"));
+      await userEvent.keyboard("{ArrowUp}");
+      await vi.waitFor(() => expect(editor.textContent).toBe("filler user message 20"));
+      await userEvent.keyboard("{ArrowDown}{ArrowDown}");
+      await vi.waitFor(() => expect(editor.textContent).toBe(""));
+
+      await userEvent.keyboard("{ArrowUp}");
+      await vi.waitFor(() => expect(editor.textContent).toBe("filler user message 21"));
+      await userEvent.keyboard(" edited");
+      await userEvent.keyboard("{ArrowUp>3/}{ArrowDown}");
+      expect(editor.textContent).toBe("filler user message 21 edited");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("toggles composer focus with Cmd+L", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
