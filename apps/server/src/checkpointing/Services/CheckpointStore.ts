@@ -16,6 +16,20 @@ import type { Effect } from "effect";
 import type { CheckpointStoreError } from "../Errors.ts";
 import { CheckpointRef } from "@synara/contracts";
 
+/**
+ * Optional resource limits for advisory captures on latency-sensitive paths.
+ *
+ * Authoritative checkpoint flows omit this policy and retain the store's
+ * existing aggregate timeout. A policy bounds queueing plus capture work and
+ * may suppress repeated attempts briefly after a resource-budget failure.
+ */
+export interface CaptureCheckpointPolicy {
+  readonly timeoutMs: number;
+  readonly maxOutputBytes: number;
+  readonly unseededScanMaxOutputBytes?: number;
+  readonly failureCooldownMs?: number;
+}
+
 export interface CaptureCheckpointInput {
   readonly cwd: string;
   readonly checkpointRef: CheckpointRef;
@@ -27,6 +41,7 @@ export interface CaptureCheckpointInput {
    * working tree the agent may already have modified.
    */
   readonly skipIfExists?: boolean;
+  readonly policy?: CaptureCheckpointPolicy;
 }
 
 export interface CopyCheckpointRefInput {
