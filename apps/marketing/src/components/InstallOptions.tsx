@@ -12,7 +12,7 @@ import { FaApple, FaWindows, FaLinux } from "react-icons/fa";
 import { LuArrowDownToLine, LuCheck } from "react-icons/lu";
 import InstallerCount from "@/components/InstallerCount";
 import { detectCurrentOS, detectMacArch, type MacArch, type OS } from "@/lib/platform";
-import type { ReleaseDownloads } from "@/lib/releases";
+import type { LinuxPackageFormat, ReleaseDownloads } from "@/lib/releases";
 
 const OS_LABEL: Record<Exclude<OS, "unknown">, string> = {
   mac: "macOS",
@@ -52,6 +52,11 @@ export default function InstallOptions({
   const [archOverride, setArchOverride] = useState<MacArch | null>(null);
   const arch = archOverride ?? detectedArch;
 
+  // AppImage is the only Linux build with in-app updates, so it is the
+  // default; deb/rpm are installed and updated by the distribution.
+  const [linuxFormatOverride, setLinuxFormatOverride] = useState<LinuxPackageFormat | null>(null);
+  const linuxFormat = linuxFormatOverride ?? "appImage";
+
   const macHref = arch === "arm64" ? downloads.mac.arm64 : downloads.mac.x64;
 
   return (
@@ -76,7 +81,12 @@ export default function InstallOptions({
           href={macHref}
           recommended={os === "mac"}
         >
-          <ArchToggle arch={arch} onChange={setArchOverride} />
+          <SegmentToggle
+            options={ARCH_OPTIONS}
+            activeValue={arch}
+            onChange={setArchOverride}
+            groupLabel="macOS chip"
+          />
         </PlatformCard>
 
         <PlatformCard
@@ -92,10 +102,17 @@ export default function InstallOptions({
           index={2}
           icon={<FaLinux className="size-6" aria-hidden="true" />}
           name="Linux"
-          subtitle=".AppImage · x86_64"
-          href={downloads.linux}
+          subtitle={LINUX_FORMAT_LABEL[linuxFormat]}
+          href={downloads.linux[linuxFormat]}
           recommended={os === "linux"}
-        />
+        >
+          <SegmentToggle
+            options={LINUX_FORMAT_OPTIONS}
+            activeValue={linuxFormat}
+            onChange={setLinuxFormatOverride}
+            groupLabel="Linux package format"
+          />
+        </PlatformCard>
       </div>
 
       <p className="mt-8 text-[12px] text-[var(--text-tertiary)]">
@@ -181,26 +198,55 @@ const ARCH_OPTIONS = [
   { value: "x64", label: "Intel" },
 ] as const;
 
-function ArchToggle({ arch, onChange }: { arch: MacArch; onChange: (arch: MacArch) => void }) {
-  const activeIndex = arch === "arm64" ? 0 : 1;
+const LINUX_FORMAT_OPTIONS = [
+  { value: "appImage", label: "AppImage" },
+  { value: "deb", label: ".deb" },
+  { value: "rpm", label: ".rpm" },
+] as const satisfies ReadonlyArray<{ value: LinuxPackageFormat; label: string }>;
+
+const LINUX_FORMAT_LABEL: Record<LinuxPackageFormat, string> = {
+  appImage: ".AppImage · x86_64 · in-app updates",
+  deb: ".deb · x86_64 · Debian/Ubuntu",
+  rpm: ".rpm · x86_64 · Fedora/RHEL",
+};
+
+type SegmentOption<T extends string> = { readonly value: T; readonly label: string };
+
+/**
+ * Shared segmented control. The sliding indicator is a fraction of the
+ * container, so the same component fits 2 or 3 segments.
+ */
+function SegmentToggle<T extends string>({
+  options,
+  activeValue,
+  onChange,
+  groupLabel,
+}: {
+  options: ReadonlyArray<SegmentOption<T>>;
+  activeValue: T;
+  onChange: (value: T) => void;
+  groupLabel: string;
+}) {
+  const activeIndex = options.findIndex((option) => option.value === activeValue);
 
   return (
     <div
-      className="relative inline-grid grid-cols-2 rounded-full border border-[var(--divide)] p-0.5 text-[12px]"
+      className="relative inline-grid rounded-full border border-[var(--divide)] p-0.5 text-[12px]"
+      style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}
       role="group"
-      aria-label="macOS chip"
+      aria-label={groupLabel}
     >
       {/* Dark indicator that slides to the selected segment. */}
       <span
         aria-hidden="true"
         className="pointer-events-none absolute inset-y-0.5 left-0.5 rounded-full bg-[var(--btn-primary-bg)] transition-transform duration-300 ease-out"
         style={{
-          width: "calc((100% - 0.25rem) / 2)",
+          width: `calc((100% - 0.25rem) / ${options.length})`,
           transform: `translateX(${activeIndex * 100}%)`,
         }}
       />
-      {ARCH_OPTIONS.map((option) => {
-        const active = arch === option.value;
+      {options.map((option) => {
+        const active = option.value === activeValue;
         return (
           <button
             key={option.value}

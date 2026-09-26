@@ -195,7 +195,12 @@ export function createDesktopPlatformBuildConfig(
       ],
       extraResources: [{ from: "apps/desktop/resources/cua-driver", to: "cua-driver" }],
       linux: {
-        target: [input.target],
+        // A single electron-builder pass emits every requested Linux package
+        // from one staged payload, so "AppImage,deb,rpm" costs no extra build.
+        target: input.target
+          .split(",")
+          .map((entry) => entry.trim())
+          .filter((entry) => entry.length > 0),
         executableName: "synara",
         icon: "icon.png",
         category: "Development",
