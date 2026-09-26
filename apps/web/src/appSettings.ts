@@ -29,7 +29,8 @@ import {
 import {
   APP_SNAP_SHORTCUT_KEYS,
   APP_SNAP_SHORTCUT_MODIFIERS,
-  DEFAULT_APP_SNAP_SHORTCUT,
+  DEFAULT_APP_SNAP_SHORTCUT_WINDOWS,
+  defaultAppSnapShortcut,
 } from "@synara/shared/appSnapShortcut";
 import { useLocalStorage } from "./hooks/useLocalStorage";
 import { EnvMode } from "./components/BranchToolbar.logic";
@@ -64,6 +65,7 @@ import {
   CHAT_WIDTH_MODES,
   normalizeChatWidthMode as normalizeChatWidthModeValue,
 } from "./lib/chatWidth";
+import { getNavigatorPlatform, isWindowsPlatform } from "./lib/utils";
 
 const APP_SETTINGS_STORAGE_KEY = "synara:app-settings:v1";
 const SERVER_SETTINGS_MIGRATION_STORAGE_KEY = "synara:server-settings-migrated:v1";
@@ -368,7 +370,7 @@ export const AppSettingsSchema = Schema.Struct({
   // AppSnap is opt-in because enabling its Settings toggle requests macOS
   // Input Monitoring and Screen Recording permissions.
   enableAppSnap: Schema.Boolean.pipe(withDefaults(() => false)),
-  appSnapShortcut: AppSnapShortcut.pipe(withDefaults(() => DEFAULT_APP_SNAP_SHORTCUT)),
+  appSnapShortcut: AppSnapShortcut.pipe(withDefaults(() => defaultAppSnapShortcut())),
   // Local desktop preference: play the shutter cue when an AppSnap lands in a composer.
   appSnapPlaySound: Schema.Boolean.pipe(withDefaults(() => true)),
   // Deprecated rename bridge. Normalization migrates this value and then omits the key.
@@ -692,8 +694,16 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     customGeminiModels: legacyCustomGeminiModels,
     ...currentSettings
   } = settings;
+  // Migrate the macOS-only both-option-keys default persisted on Windows so the
+  // settings row and native registration both see a reserveable chord.
+  const appSnapShortcut =
+    settings.appSnapShortcut.kind === "both-option-keys" &&
+    isWindowsPlatform(getNavigatorPlatform())
+      ? DEFAULT_APP_SNAP_SHORTCUT_WINDOWS
+      : settings.appSnapShortcut;
   return {
     ...currentSettings,
+    appSnapShortcut,
     enableAppSnap: settings.enableAppSnap || legacyEnableAppshots === true,
     computerControlEnabled:
       settings.computerControlEnabled || legacyAllowComputerControlInNewChats === true,

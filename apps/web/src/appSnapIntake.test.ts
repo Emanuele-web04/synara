@@ -114,6 +114,35 @@ describe("insertAppSnapCaptureIntoDraft", () => {
     expect(deleteComposerImageBlob).toHaveBeenCalledWith("blob-key-1");
   });
 
+  it("retries a rejected metadata sync once before reporting success", async () => {
+    syncPersistedAttachments.mockResolvedValueOnce("rejected").mockResolvedValue("persisted");
+    await expect(insertAppSnapCaptureIntoDraft(threadId, captureFixture())).resolves.toBe(
+      "persisted",
+    );
+    expect(syncPersistedAttachments).toHaveBeenCalledTimes(2);
+    expect(removeImage).not.toHaveBeenCalled();
+    expect(deleteComposerImageBlob).not.toHaveBeenCalled();
+    expect(setPromptHistorySavedDraft).toHaveBeenCalledWith(threadId, null);
+  });
+
+  it("keeps a visible capture as unverified instead of rolling back a transient metadata race", async () => {
+    syncPersistedAttachments.mockResolvedValue("rejected");
+    vi.spyOn(useComposerDraftStore, "getState").mockReturnValue({
+      draftsByThreadId: { [threadId]: { images: [{ id: "image-1" }], persistedAttachments: [] } },
+      setPromptHistorySavedDraft,
+      addImage,
+      syncPersistedAttachments,
+      removeImage,
+    } as never);
+    await expect(insertAppSnapCaptureIntoDraft(threadId, captureFixture())).resolves.toBe(
+      "unverified",
+    );
+    expect(syncPersistedAttachments).toHaveBeenCalledTimes(2);
+    expect(removeImage).not.toHaveBeenCalled();
+    expect(deleteComposerImageBlob).not.toHaveBeenCalled();
+    expect(setPromptHistorySavedDraft).toHaveBeenCalledWith(threadId, null);
+  });
+
   it("rolls back the prepared image when the draft is already full", async () => {
     addImage.mockReturnValue(false);
     const revokeObjectUrl = vi.fn();

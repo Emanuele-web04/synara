@@ -952,6 +952,68 @@ describe("composerDraftStore syncPersistedAttachments", () => {
     ).toEqual([firstImage.id, secondImage.id]);
   });
 
+  it("reports a superseded sync as unverified when storage only reflects the newer list", async () => {
+    const firstImage = makeImage({
+      id: "appsnap-superseded-first",
+      previewUrl: "blob:appsnap-superseded-first",
+      name: "appsnap-superseded-first.png",
+    });
+    const secondImage = makeImage({
+      id: "appsnap-superseded-second",
+      previewUrl: "blob:appsnap-superseded-second",
+      name: "appsnap-superseded-second.png",
+    });
+    const attachmentFor = (image: ComposerImageAttachment) => ({
+      id: image.id,
+      name: image.name,
+      mimeType: image.mimeType,
+      sizeBytes: image.sizeBytes,
+      dataUrl: "data:image/png;base64,aGk=",
+    });
+    const store = useComposerDraftStore.getState();
+    store.addImages(threadId, [firstImage, secondImage]);
+    setLocalStorageItem(
+      COMPOSER_DRAFT_STORAGE_KEY,
+      {
+        version: COMPOSER_DRAFT_STORAGE_VERSION,
+        state: {
+          draftsByThreadId: {
+            [threadId]: {
+              prompt: "",
+              attachments: [attachmentFor(secondImage)],
+            },
+          },
+          draftThreadsByThreadId: {},
+          projectDraftThreadIdByProjectId: {},
+        },
+      },
+      Schema.Unknown,
+    );
+
+    // A warmup sync leaves the per-thread queue busy so the next sync's
+    // verification is deferred until a newer sync has already bumped its
+    // generation (the superseded path a concurrent composer effect hits).
+    const warmupSync = store.syncPersistedAttachments(threadId, [attachmentFor(secondImage)]);
+    const firstSync = store.syncPersistedAttachments(threadId, [attachmentFor(firstImage)]);
+    const secondSync = store.syncPersistedAttachments(threadId, [attachmentFor(secondImage)]);
+
+    // The older sync's chip is still in the draft, so a newer list that no
+    // longer contains its id must not fail (or tear down) the visible capture.
+    await expect(Promise.all([warmupSync, firstSync, secondSync])).resolves.toEqual([
+      "persisted",
+      "unverified",
+      "persisted",
+    ]);
+    expect(
+      useComposerDraftStore.getState().draftsByThreadId[threadId]?.images.map((image) => image.id),
+    ).toEqual([firstImage.id, secondImage.id]);
+    expect(
+      useComposerDraftStore
+        .getState()
+        .draftsByThreadId[threadId]?.persistedAttachments.map((attachment) => attachment.id),
+    ).toEqual([secondImage.id]);
+  });
+
   it("retires the sync generation entry once the newest sync for a slot settles", async () => {
     const image = makeImage({
       id: "appsnap-sync-generation",
