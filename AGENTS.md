@@ -39,8 +39,6 @@ Synara ships two desktop apps from the same `main`: **Synara** (Stable) and **Sy
 
 ## Local instance isolation
 
-An orb declares this instance in `.amp/services.yaml`: run `amp orb services ensure` and the `dev` service starts the web UI on `http://localhost:5733` with the server on `3773`, supervised so it survives Amp CLI updates and orb pause/resume. Drive it with the in-orb browser. The service has no portal on purpose: the server rejects non-loopback browser origins on the WebSocket handshake, so a portaled UI loads without data.
-
 Use a separate home directory and unused server/web ports when another Synara instance is running. Check the dev runner's dry-run output before starting an isolated instance; do not reset the user's database or reuse production state to make a test pass.
 
 For browser development, an inherited `SYNARA_AUTH_TOKEN` must match the client configuration; remove it only from the isolated test process when appropriate, never from production policy. Check both IPv4 and IPv6 listeners. An empty UI with a healthy `orchestration.getSnapshot` is a connection/hydration lead, not permission to alter SQLite data.
