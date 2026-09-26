@@ -34,6 +34,12 @@ export const SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME = "text-foreground/89";
  */
 export const SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME = "text-foreground/95";
 
+/** A project's display name in sidebar project rows and headers. */
+export const SIDEBAR_PROJECT_NAME_CLASS_NAME = [
+  "min-w-0 flex-1 truncate font-system-ui text-ui font-normal",
+  SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
+].join(" ");
+
 /** Section label ("Threads"/"Pinned" and settings "App"/"Synara"). */
 export const SIDEBAR_SECTION_LABEL_CLASS_NAME = "text-ui font-normal text-muted-foreground/58";
 

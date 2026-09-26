@@ -12,6 +12,7 @@ import { useLayoutEffect } from "react";
 import { isElectron } from "~/env";
 import { useSidebar } from "~/components/ui/sidebar";
 import { useDesktopCustomTitleBarActive } from "~/hooks/useDesktopCustomTitleBar";
+import { useSidebarLayout } from "~/hooks/useSidebarLayout";
 import { readDesktopZoomFactor, subscribeDesktopZoomFactor } from "~/lib/desktopZoom";
 import { isMacNavigatorPlatform } from "~/lib/utils";
 
@@ -20,6 +21,23 @@ import { isMacNavigatorPlatform } from "~/lib/utils";
  * retuning via {@link DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CSS_VAR}.
  */
 export const DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS = "desktop-top-bar-traffic-light-gutter";
+
+/**
+ * Marks a route's top bar in the rail layout, where route headers sit on the shell band
+ * above the inset content block (`index.css` paints them in the shell tone). Every top bar
+ * already takes one of the gutter class names below, so the gutter hooks carry the marker.
+ */
+export const RAIL_LAYOUT_TOP_BAR_CLASS = "app-top-bar";
+
+function withRailLayoutTopBarClass(
+  gutterClassName: string | null,
+  isRailLayout: boolean,
+): string | null {
+  if (!isRailLayout) return gutterClassName;
+  return gutterClassName
+    ? `${RAIL_LAYOUT_TOP_BAR_CLASS} ${gutterClassName}`
+    : RAIL_LAYOUT_TOP_BAR_CLASS;
+}
 
 /**
  * Pure helper: should a top bar at the left edge of the desktop window reserve
@@ -92,8 +110,9 @@ export function useSyncDesktopTopBarTrafficLightGutterZoom(): void {
  */
 export function useDesktopTopBarTrafficLightGutterClassName(): string | null {
   const { isMobile, open } = useSidebar();
+  const isRailLayout = useSidebarLayout() === "rail";
   const isMacDesktop = isMacNavigatorPlatform();
-  return shouldReserveDesktopTopBarTrafficLightGutter({
+  const gutterClassName = shouldReserveDesktopTopBarTrafficLightGutter({
     isElectron,
     isMacDesktop,
     sidebarOpen: open,
@@ -101,6 +120,7 @@ export function useDesktopTopBarTrafficLightGutterClassName(): string | null {
   })
     ? DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS
     : null;
+  return withRailLayoutTopBarClass(gutterClassName, isRailLayout);
 }
 
 /**
@@ -147,10 +167,12 @@ export function shouldReserveDesktopTopBarWindowControlsGutter(input: {
  */
 export function useDesktopTopBarWindowControlsGutterClassName(): string | null {
   const customTitleBarActive = useDesktopCustomTitleBarActive();
-  return shouldReserveDesktopTopBarWindowControlsGutter({
+  const isRailLayout = useSidebarLayout() === "rail";
+  const gutterClassName = shouldReserveDesktopTopBarWindowControlsGutter({
     isElectron,
     customTitleBarActive,
   })
     ? DESKTOP_TOP_BAR_WINDOW_CONTROLS_GUTTER_CLASS
     : null;
+  return withRailLayoutTopBarClass(gutterClassName, isRailLayout);
 }
