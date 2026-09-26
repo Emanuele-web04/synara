@@ -2367,8 +2367,9 @@ async function syncMacAppBundleIcon(
     lastPersistedMacAppIcon === icon &&
     bundleMtime !== null &&
     lastPersistedMacAppIconBundleMtime === bundleMtime
-  )
+  ) {
     return;
+  }
   await persistMacAppIcon({
     bundlePath,
     cacheDirectory: Path.join(STATE_DIR, "mac-app-icons"),
@@ -5373,11 +5374,9 @@ function createWindow(): BrowserWindow {
     (process.platform === "linux" || process.platform === "win32") &&
     readDesktopAppIcon() !== "default"
   ) {
-    void applyPersistedDesktopAppIcon(window, { reregisterTaskbarButton: false }).catch(
-      (error) => {
-        console.warn(`[desktop] Failed to apply startup app icon: ${formatErrorMessage(error)}`);
-      },
-    );
+    void applyPersistedDesktopAppIcon(window, { reregisterTaskbarButton: false }).catch((error) => {
+      console.warn(`[desktop] Failed to apply startup app icon: ${formatErrorMessage(error)}`);
+    });
   }
 
   window.on("closed", () => {
