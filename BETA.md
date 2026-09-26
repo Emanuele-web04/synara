@@ -270,8 +270,8 @@ To put a feature behind the list:
 
 Promote a feature to Stable by deleting its entry; every gate resolves itself.
 
-The list currently contains `omp` (Oh My Pi). It is available in Beta and gated
-off in Stable.
+The list currently contains `omp` (Oh My Pi) and `sidebarV2` (the rail sidebar
+layout setting). Both are available in Beta and gated off in Stable.
 
 ## Diagnostics
 

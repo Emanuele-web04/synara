@@ -330,6 +330,13 @@ describe("isGitTextGenerationSettingsDirty", () => {
   });
 });
 
+describe("sidebar layout", () => {
+  it("decodes settings saved before the layout existed as classic", () => {
+    const decoded = Schema.decodeUnknownSync(AppSettingsSchema)({ showChatsSection: false });
+    expect(normalizeStoredAppSettings(decoded).sidebarLayout).toBe("classic");
+  });
+});
+
 describe("environment panel defaults", () => {
   it("starts optional text sections disabled without overriding explicit preferences", () => {
     const defaults = AppSettingsSchema.makeUnsafe({});

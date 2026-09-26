@@ -197,6 +197,56 @@
     opacity: 0;
   }
 
+  /* Rail layout, modeled on Codex. Three tones: the shell (top band + rail) is the lightest
+     in dark and a soft grey in light, the thread panel sits a step toward the surface, and
+     the route body is the surface itself. Panel, route body, and right dock form one inset
+     block under the top band: 1px border lighter than every tone, rounded corners, and a
+     small shell gap to the window's right and bottom edges. Route headers keep rendering
+     their titles and actions, now on the shell band above the block. */
+  [data-sidebar-layout="rail"] {
+    --app-rail-shell-tone: color-mix(in srgb, var(--color-background-surface) 96%, black);
+    --app-rail-panel-background: var(--color-background-surface);
+    --app-rail-shell-background: color-mix(
+      in srgb,
+      var(--app-rail-shell-tone) var(--app-rail-shell-opacity, 100%),
+      transparent
+    );
+    --app-rail-inset-border: color-mix(in srgb, black 4%, transparent);
+    /* Soft falloff around the block (Codex's edge is a shadow, not a hard cut); kept barely
+       visible so the block reads as a surface, not a raised card. */
+    --app-rail-inset-shadow:
+      0 1px 2px color-mix(in srgb, black 4%, transparent),
+      0 0 0.5px color-mix(in srgb, black 6%, transparent);
+    --app-rail-inset-radius: calc(var(--radius) * 1.6);
+    --app-rail-inset-gap: 3px;
+  }
+
+  .dark [data-sidebar-layout="rail"] {
+    --app-rail-shell-tone: color-mix(in srgb, var(--color-background-surface) 95%, white);
+    --app-rail-panel-background: color-mix(in srgb, var(--color-background-surface) 98.3%, white);
+    --app-rail-inset-border: color-mix(in srgb, white 4%, transparent);
+    --app-rail-inset-shadow:
+      0 1px 2px color-mix(in srgb, black 22%, transparent),
+      0 0 0.5px color-mix(in srgb, black 30%, transparent);
+  }
+
+  /* The panel is the block's left end: border on its outer three sides only. */
+  .app-rail-panel {
+    margin-bottom: var(--app-rail-inset-gap);
+    background: var(--app-rail-panel-background);
+    border-radius: var(--app-rail-inset-radius) 0 0 var(--app-rail-inset-radius);
+    box-shadow:
+      inset 1px 0 0 var(--app-rail-inset-border),
+      inset 0 1px 0 var(--app-rail-inset-border),
+      inset 0 -1px 0 var(--app-rail-inset-border),
+      var(--app-rail-inset-shadow);
+  }
+
+  /* No sidebar material sits behind the rail layout's rows, so chips take the panel tone. */
+  [data-sidebar-layout="rail"] .sidebar-icon-chip {
+    background: var(--app-rail-panel-background);
+  }
+
   /* ─── Chat-surface header hairline (horizontal counterpart of the seam) ───────────
      Bottom divider for every chat-surface chrome bar (chat/dock/diff headers),
      same color as the vertical seam via --app-surface-divider. Painted as a 1px
@@ -445,6 +495,8 @@
   --font-chat-code-family: var(--theme-font-code-family, var(--font-mono-family));
   --terminal-font-family: "JetBrainsMono NFM", "JetBrainsMono NF", "JetBrains Mono", monospace;
   --app-shell-background: transparent;
+  /* Width of the rail layout's fixed icon column (see AppRail). */
+  --app-rail-width: 3.25rem;
   --app-sidebar-backdrop-filter: blur(4px) saturate(130%);
   --app-sidebar-surface: color-mix(in srgb, var(--card) 38%, transparent);
   --background: #fcfcfc;
@@ -2631,6 +2683,115 @@ diffs-container {
    Value is driven by --desktop-top-bar-traffic-light-gutter (inverse-scaled on View zoom). */
 :root[data-runtime="electron"] .desktop-top-bar-traffic-light-gutter {
   padding-left: var(--desktop-top-bar-traffic-light-gutter, 90px) !important;
+}
+
+/* Rail layout route body (unlayered: it overrides the card's background and height
+   utilities and the seam rules). The card element still spans the header band, so it turns
+   transparent and draws the body from pseudo-elements: ::before is the surface behind the
+   route's content, ::after the hairline above it. Margins leave the right and bottom shell
+   gaps, and the card's own bottom radius with its overflow clip rounds whatever the route
+   paints there (fixed overlays are unaffected). The block's top corners sit under the band,
+   inside the card, so the route wrappers that hold a top bar go transparent (below) and the
+   rounded ::before shows through. The soft outer shadow is a separate layer behind the card
+   (.app-rail-content-shadow), since the card clips its own ink. */
+[data-sidebar-layout="rail"] {
+  /* Route body corners: square only where the panel joins it. */
+  --app-rail-block-radii: 0 var(--app-rail-inset-radius) var(--app-rail-inset-radius) 0;
+  /* The card's own corners: its top edge is the band, so only the bottom ones round. */
+  --app-rail-card-radii: 0 0 var(--app-rail-inset-radius) 0;
+}
+
+/* Panel collapsed: the route body is the whole block, so its left corners round too. */
+[data-sidebar-layout="rail"]:has([data-slot="sidebar"][data-side="left"][data-state="collapsed"]) {
+  --app-rail-block-radii: var(--app-rail-inset-radius);
+  --app-rail-card-radii: 0 0 var(--app-rail-inset-radius) var(--app-rail-inset-radius);
+}
+
+[data-sidebar-layout="rail"] .chat-content-card {
+  margin-right: var(--app-rail-inset-gap);
+  margin-bottom: var(--app-rail-inset-gap);
+  background: transparent;
+  border-radius: var(--app-rail-card-radii);
+}
+
+[data-sidebar-layout="rail"] .chat-content-card.h-dvh {
+  height: calc(100dvh - var(--app-rail-inset-gap));
+}
+
+/* Full-route wrappers (the ones holding the route's top bar, including the dock's surface)
+   repaint the surface as a plain rectangle over the block's rounded top corners; the card
+   body already paints that surface, so they go transparent. */
+[data-sidebar-layout="rail"]
+  .chat-content-card
+  :is(.bg-\[var\(--color-background-surface\)\], .app-settings-surface):has(.app-top-bar) {
+  background: transparent;
+}
+
+/* The dock's bottom-right corner is the block's corner. */
+[data-sidebar-layout="rail"] [data-slot="sidebar"][data-side="right"] [data-slot="sidebar-inner"] {
+  overflow: hidden;
+  border-bottom-right-radius: var(--app-rail-inset-radius);
+}
+
+[data-sidebar-layout="rail"] .chat-content-card::before,
+[data-sidebar-layout="rail"] .chat-content-card::after {
+  content: "";
+  position: absolute;
+  inset: var(--app-top-strip-height) 0 0 0;
+  pointer-events: none;
+  opacity: 1;
+  border-radius: var(--app-rail-block-radii);
+}
+
+[data-sidebar-layout="rail"] .chat-content-card::before {
+  z-index: -1;
+  background: var(--color-background-surface);
+  box-shadow: none;
+}
+
+[data-sidebar-layout="rail"] .chat-content-card::after {
+  z-index: 30;
+  box-shadow: inset 0 0 0 1px var(--app-rail-inset-border);
+}
+
+[data-sidebar-layout="rail"] .app-rail-content-shadow {
+  position: absolute;
+  inset: var(--app-top-strip-height) var(--app-rail-inset-gap) var(--app-rail-inset-gap) 0;
+  pointer-events: none;
+  border-radius: var(--app-rail-block-radii);
+  box-shadow: var(--app-rail-inset-shadow);
+}
+
+/* Settings floats its top bar over the scrolling page; on the opaque band the page must
+   start below it instead. */
+[data-sidebar-layout="rail"] [data-slot="sidebar-inset-surface"].app-settings-surface {
+  padding-top: var(--app-top-strip-height);
+}
+
+/* Route top bars sit on the shell band; the block's top border replaces their hairline. */
+[data-sidebar-layout="rail"] .app-top-bar {
+  background-color: var(--app-rail-shell-background);
+  background-image: none;
+}
+
+/* Right dock: its fixed container keeps the block's gap, and its surface is the card body
+   drawn above, so the dock header sits on the shell band like the route header. */
+[data-sidebar-layout="rail"]
+  [data-slot="sidebar"][data-side="right"]
+  > [data-slot="sidebar-container"] {
+  right: var(--app-rail-inset-gap);
+  bottom: var(--app-rail-inset-gap);
+  height: auto;
+}
+
+/* Headers right of a collapsed panel clear the traffic lights from the rail's edge, not
+   the window's (the strip over rail + panel keeps the full inset). */
+:root[data-runtime="electron"]
+  [data-sidebar-layout="rail"]
+  .desktop-top-bar-traffic-light-gutter:not(.app-shell-top-strip) {
+  padding-left: calc(
+    var(--desktop-top-bar-traffic-light-gutter, 90px) - var(--app-rail-width)
+  ) !important;
 }
 
 /* Composer and user bubbles share continuous corners; their radii remain the fallback.

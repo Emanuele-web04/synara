@@ -14,10 +14,11 @@ import {
 /**
  * Features that ship only in non-Stable builds. Keep a feature out of Stable
  * by adding its key here; promote it by deleting the entry. A provider's key
- * is its ProviderKind: today that is "omp" only.
+ * is its ProviderKind: today that is "omp" only. "sidebarV2" is the rail
+ * sidebar layout (a web-only setting, resolved to classic on Stable).
  */
 export type BetaOnlyFeature = string;
-export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = ["omp"];
+export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = ["omp", "sidebarV2"];
 
 /**
  * Whether a Beta-only feature is on for this host. Only the Stable

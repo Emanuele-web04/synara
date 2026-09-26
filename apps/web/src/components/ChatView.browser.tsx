@@ -62,6 +62,7 @@ import { hasReconciledServerProviderStatuses } from "../lib/serverReactQuery";
 import { getRouter } from "../router";
 import { useSplitViewStore } from "../splitViewStore";
 import { useSpacesUiStore } from "../spacesUiStore";
+import { useRailShellStore } from "../railShellStore";
 import { useStore } from "../store";
 import {
   createShellSnapshotFromReadModel,
@@ -2154,6 +2155,134 @@ describe("ChatView transcript geometry (full app)", () => {
     await resetStudioProjectPrewarmStateForTests();
     resetRetainedThreadDetailSubscriptionsForTests();
     document.body.innerHTML = "";
+  });
+
+  it("preserves absent project pins when toggling a rail Space shortcut", async () => {
+    localStorage.setItem(
+      "synara:app-settings:v1",
+      JSON.stringify({
+        sidebarLayout: "rail",
+        railShortcuts: ["project:temporarily-absent"],
+      }),
+    );
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("rail-pins"),
+        targetText: "Rail pins",
+      }),
+    });
+    try {
+      await mounted.router.navigate({ to: "/settings" });
+      await waitForLayout();
+      await page
+        .getByRole("navigation", { name: "Primary" })
+        .getByRole("button", { name: "More", exact: true })
+        .click();
+      await page.getByRole("menuitemcheckbox", { name: "Void", exact: true }).click();
+      await expect
+        .poll(
+          () => JSON.parse(localStorage.getItem("synara:app-settings:v1") ?? "{}").railShortcuts,
+        )
+        .toEqual(["project:temporarily-absent", "space:void"]);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it.each(["Home", "Spaces", "Project", "Void"])(
+    "leaves Activity when selecting rail %s",
+    async (destination) => {
+      localStorage.setItem(
+        "synara:app-settings:v1",
+        JSON.stringify({
+          sidebarLayout: "rail",
+          railShortcuts: ["project:project-1", "space:void"],
+        }),
+      );
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: MessageId.makeUnsafe("rail-activity"),
+          targetText: "Rail activity",
+        }),
+      });
+      try {
+        await page.getByRole("button", { name: "Switch to activity view", exact: true }).click();
+        await expect.element(page.getByRole("button", { name: "Activity options" })).toBeVisible();
+        await page
+          .getByRole("navigation", { name: "Primary" })
+          .getByRole("button", { name: destination, exact: true })
+          .click();
+        await expect
+          .element(page.getByRole("button", { name: "Switch to activity view", exact: true }))
+          .toBeVisible();
+        await expect
+          .element(page.getByRole("button", { name: "Activity options" }))
+          .not.toBeInTheDocument();
+      } finally {
+        await mounted.cleanup();
+        useRailShellStore.getState().closeSpacesProject();
+        useRailShellStore.getState().selectPanelItem("home");
+      }
+    },
+  );
+
+  it("creates a project in the rail Space whose Add project button was clicked", async () => {
+    const currentSpaceId = SpaceId.makeUnsafe("rail-current");
+    const destinationSpaceId = SpaceId.makeUnsafe("rail-destination");
+    const snapshot = createSnapshotForTargetUser({
+      targetMessageId: MessageId.makeUnsafe("rail-create"),
+      targetText: "Rail create",
+    });
+    localStorage.setItem("synara:app-settings:v1", JSON.stringify({ sidebarLayout: "rail" }));
+    useSpacesUiStore.getState().setActiveSpaceId(currentSpaceId);
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: {
+        ...snapshot,
+        spaces: [currentSpaceId, destinationSpaceId].map((id, index) => ({
+          id,
+          name: index === 0 ? "Current" : "Destination",
+          icon: "bag",
+          sortOrder: index,
+          createdAt: NOW_ISO,
+          updatedAt: NOW_ISO,
+          deletedAt: null,
+        })),
+        projects: snapshot.projects.map((project) => ({ ...project, spaceId: currentSpaceId })),
+      },
+    });
+    try {
+      await page
+        .getByRole("navigation", { name: "Primary" })
+        .getByRole("button", { name: "Spaces", exact: true })
+        .click();
+      const header = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll<HTMLElement>(".group\\/project-header")).find(
+            (element) => element.textContent?.includes("Destination"),
+          ) ?? null,
+        "Destination Space header missing",
+      );
+      header.querySelector<HTMLButtonElement>('button[aria-label="Add project"]')!.click();
+      await page.getByLabelText("Project folder path").fill("/repo/rail-created");
+      await page.getByRole("button", { name: "Create project", exact: true }).click();
+      await vi.waitFor(() => {
+        const request = wsRequests.find(
+          (request) =>
+            request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+            "command" in request &&
+            (request.command as { workspaceRoot?: string })?.workspaceRoot === "/repo/rail-created",
+        );
+        expect((request?.command as { spaceId?: string })?.spaceId).toBe(destinationSpaceId);
+      });
+    } finally {
+      await mounted.cleanup();
+      useSpacesUiStore.getState().setActiveSpaceId(null);
+      useRailShellStore.getState().closeSpacesProject();
+      useRailShellStore.getState().selectPanelItem("home");
+    }
   });
 
   it("refreshes the full conversation when an approval was already answered", async () => {

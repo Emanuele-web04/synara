@@ -729,6 +729,9 @@ export function buildThemeCssVariables(
       material === "translucent"
         ? "transparent"
         : readCodexVariable("--color-background-surface-under"),
+    // Rail layout shell (top strip + rail): a solid tone on opaque windows, a sheer tint
+    // over macOS vibrancy so the glass still shows through (see index.css rail rules).
+    "--app-rail-shell-opacity": material === "translucent" ? "72%" : "100%",
     "--app-composer-focus-border": composerFocusBorder,
     // Frosted blur only when the shell is translucent (macOS). On an opaque
     // shell this promotes the surface to a GPU layer that Chromium rasterizes at
