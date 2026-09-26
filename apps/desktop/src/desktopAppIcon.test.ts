@@ -12,6 +12,7 @@ describe("desktop app icons", () => {
     expect(isDesktopAppIcon("default")).toBe(true);
     expect(isDesktopAppIcon("icon")).toBe(true);
     expect(isDesktopAppIcon("dark")).toBe(true);
+    expect(isDesktopAppIcon("beta")).toBe(true);
     expect(isDesktopAppIcon("unknown")).toBe(false);
   });
 
@@ -45,6 +46,21 @@ describe("desktop app icons", () => {
     ).toBe("dock-icon-dark.png");
   });
 
+  it("selects beta artwork on every desktop platform", () => {
+    expect(
+      desktopAppIconResourceName({ icon: "beta", platform: "darwin", isDarkAppearance: false }),
+    ).toBe("dock-icon-beta.png");
+    expect(
+      desktopAppIconResourceName({ icon: "beta", platform: "darwin", isDarkAppearance: true }),
+    ).toBe("dock-icon-beta.png");
+    expect(
+      desktopAppIconResourceName({ icon: "beta", platform: "linux", isDarkAppearance: false }),
+    ).toBe("app-icon-beta-linux.png");
+    expect(
+      desktopAppIconResourceName({ icon: "beta", platform: "win32", isDarkAppearance: false }),
+    ).toBe("app-icon-beta-windows.ico");
+  });
+
   it("falls back to the default icon for the dark preference off macOS", () => {
     expect(
       desktopAppIconResourceName({ icon: "dark", platform: "linux", isDarkAppearance: false }),
@@ -62,22 +78,95 @@ describe("desktop app icons", () => {
 
   it("leaves the Liquid Glass bundle icon alone for the macOS default preference", () => {
     expect(
-      usesMacBundleAppIcon({ icon: "default", platform: "darwin", usesLegacyDockIcon: false }),
+      usesMacBundleAppIcon({
+        icon: "default",
+        platform: "darwin",
+        usesLegacyDockIcon: false,
+        isBetaFlavor: false,
+      }),
     ).toBe(true);
     expect(
-      usesMacBundleAppIcon({ icon: "default", platform: "darwin", usesLegacyDockIcon: true }),
+      usesMacBundleAppIcon({
+        icon: "default",
+        platform: "darwin",
+        usesLegacyDockIcon: true,
+        isBetaFlavor: false,
+      }),
     ).toBe(false);
     expect(
-      usesMacBundleAppIcon({ icon: "icon", platform: "darwin", usesLegacyDockIcon: false }),
+      usesMacBundleAppIcon({
+        icon: "icon",
+        platform: "darwin",
+        usesLegacyDockIcon: false,
+        isBetaFlavor: false,
+      }),
     ).toBe(false);
     expect(
-      usesMacBundleAppIcon({ icon: "dark", platform: "darwin", usesLegacyDockIcon: false }),
+      usesMacBundleAppIcon({
+        icon: "dark",
+        platform: "darwin",
+        usesLegacyDockIcon: false,
+        isBetaFlavor: false,
+      }),
     ).toBe(false);
     expect(
-      usesMacBundleAppIcon({ icon: "default", platform: "linux", usesLegacyDockIcon: false }),
+      usesMacBundleAppIcon({
+        icon: "default",
+        platform: "linux",
+        usesLegacyDockIcon: false,
+        isBetaFlavor: false,
+      }),
     ).toBe(false);
     expect(
-      usesMacBundleAppIcon({ icon: "default", platform: "win32", usesLegacyDockIcon: false }),
+      usesMacBundleAppIcon({
+        icon: "default",
+        platform: "win32",
+        usesLegacyDockIcon: false,
+        isBetaFlavor: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("leaves the beta bundle icon alone only on the beta flavor", () => {
+    expect(
+      usesMacBundleAppIcon({
+        icon: "beta",
+        platform: "darwin",
+        usesLegacyDockIcon: false,
+        isBetaFlavor: true,
+      }),
+    ).toBe(true);
+    expect(
+      usesMacBundleAppIcon({
+        icon: "beta",
+        platform: "darwin",
+        usesLegacyDockIcon: false,
+        isBetaFlavor: false,
+      }),
+    ).toBe(false);
+    expect(
+      usesMacBundleAppIcon({
+        icon: "beta",
+        platform: "darwin",
+        usesLegacyDockIcon: true,
+        isBetaFlavor: true,
+      }),
+    ).toBe(false);
+    expect(
+      usesMacBundleAppIcon({
+        icon: "beta",
+        platform: "linux",
+        usesLegacyDockIcon: false,
+        isBetaFlavor: true,
+      }),
+    ).toBe(false);
+    expect(
+      usesMacBundleAppIcon({
+        icon: "beta",
+        platform: "win32",
+        usesLegacyDockIcon: false,
+        isBetaFlavor: true,
+      }),
     ).toBe(false);
   });
 

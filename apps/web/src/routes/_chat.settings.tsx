@@ -6,6 +6,7 @@
 import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@synara/contracts";
 import { VISIBLE_PROVIDER_DESCRIPTORS } from "../betaFeatures";
 import { sameAppSnapShortcut } from "@synara/shared/appSnapShortcut";
+import { desktopFlavorFromProtocol } from "@synara/shared/betaFeatures";
 import { SafariAccessSetupButton } from "../components/SafariAccessOnboarding";
 import { createFileRoute, useSearch } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
@@ -20,6 +21,7 @@ import {
   MAX_TERMINAL_FONT_SIZE_PX,
   MIN_CHAT_FONT_SIZE_PX,
   MIN_TERMINAL_FONT_SIZE_PX,
+  defaultDesktopAppIconForFlavor,
   normalizeChatFontSizePx,
   normalizeTerminalFontFamily,
   normalizeTerminalFontSizePx,
@@ -220,6 +222,15 @@ function SettingsRouteView() {
   const [releaseHistoryOpen, setReleaseHistoryOpen] = useState(false);
   const [resetEpoch, setResetEpoch] = useState(0);
   const platform = getNavigatorPlatform();
+  const desktopFlavor = useMemo(
+    () =>
+      desktopFlavorFromProtocol(
+        typeof window === "undefined" ? undefined : window.location?.protocol,
+        import.meta.env.DEV,
+      ),
+    [],
+  );
+  const defaultDesktopAppIcon = defaultDesktopAppIconForFlavor(desktopFlavor);
   const shouldShowFontSmoothing = isMacPlatform(platform);
   const supportsCustomTitleBarSetting =
     isElectron && (isWindowsPlatform(platform) || isLinuxPlatform(platform));
@@ -329,7 +340,7 @@ function SettingsRouteView() {
       : []),
     ...(settings.uiDensity !== defaults.uiDensity ? ["UI density"] : []),
     ...(settings.chatWidth !== defaults.chatWidth ? ["Chat width"] : []),
-    ...(settings.desktopAppIcon !== defaults.desktopAppIcon ? ["App icon"] : []),
+    ...(settings.desktopAppIcon !== defaultDesktopAppIcon ? ["App icon"] : []),
     ...(customTitleBarPreferenceDirty ? ["Custom title bar"] : []),
     ...(settings.chatFontSizePx !== defaults.chatFontSizePx ? ["Base font size"] : []),
     ...(settings.terminalFontSizePx !== defaults.terminalFontSizePx ? ["Terminal font size"] : []),
@@ -799,10 +810,10 @@ function SettingsRouteView() {
             title="App icon"
             description="Choose the icon Synara uses in the dock or taskbar."
             resetAction={
-              settings.desktopAppIcon !== defaults.desktopAppIcon ? (
+              settings.desktopAppIcon !== defaultDesktopAppIcon ? (
                 <SettingResetButton
                   label="app icon"
-                  onClick={() => updateSettings({ desktopAppIcon: defaults.desktopAppIcon })}
+                  onClick={() => updateSettings({ desktopAppIcon: defaultDesktopAppIcon })}
                 />
               ) : null
             }

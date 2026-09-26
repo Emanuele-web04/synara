@@ -15,7 +15,10 @@ it.layer(NodeServices.layer)("stageDesktopRuntimeResources", (it) => {
       const runtimeFiles = [
         "icon.icns",
         "icon.ico",
+        "app-icon-macos.png",
         "app-icon-linux.png",
+        "app-icon-windows.ico",
+        "synara.png",
         "entitlements.mac.plist",
         "nested/runtime.dat",
       ];
