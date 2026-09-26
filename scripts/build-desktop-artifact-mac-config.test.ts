@@ -32,9 +32,9 @@ describe("createDesktopPlatformBuildConfig", () => {
 
   it("points beta picker icons at the staged beta brand files", () => {
     assert.equal(BETA_ASSET_PATHS.betaMacIconComposer, "assets/beta/Synara.icon");
-    assert.equal(BETA_ASSET_PATHS.betaDockIconBetaPng, "assets/beta/beta-macos-legacy-1024.png");
-    assert.equal(BETA_ASSET_PATHS.betaLinuxPickerIconPng, "assets/beta/beta-universal-1024.png");
-    assert.equal(BETA_ASSET_PATHS.betaWindowsPickerIconIco, "assets/beta/beta-windows.ico");
+    assert.equal(BETA_ASSET_PATHS.betaMacLegacyIconPng, "assets/beta/beta-macos-legacy-1024.png");
+    assert.equal(BETA_ASSET_PATHS.betaLinuxIconPng, "assets/beta/beta-universal-1024.png");
+    assert.equal(BETA_ASSET_PATHS.betaWindowsIconIco, "assets/beta/beta-windows.ico");
   });
 
   it("adds explicit microphone entitlements to macOS builds", () => {

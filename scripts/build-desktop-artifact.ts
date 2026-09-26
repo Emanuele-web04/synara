@@ -519,7 +519,7 @@ function stageMacIcons(
     // flavor only. Other flavors must never see this file (Stable inertness:
     // a missing resource early-returns in the runtime resolver).
     if (flavor === "beta") {
-      const betaDockIconSource = yield* iconSourceFor(BETA_ASSET_PATHS.betaDockIconBetaPng);
+      const betaDockIconSource = yield* iconSourceFor(BETA_ASSET_PATHS.betaMacLegacyIconPng);
       if (!(yield* fs.exists(betaDockIconSource))) {
         return yield* new BuildScriptError({
           message: `${flavor} beta dock icon source is missing at ${betaDockIconSource}`,
@@ -576,7 +576,7 @@ function stageLinuxIcons(stageResourcesDir: string, flavor: typeof BuildFlavor.T
     // beta flavor only. Other flavors must never see this file (Stable
     // inertness: a missing resource early-returns in the runtime resolver).
     if (flavor === "beta") {
-      const betaIconSource = yield* iconSourceFor(BETA_ASSET_PATHS.betaLinuxPickerIconPng);
+      const betaIconSource = yield* iconSourceFor(BETA_ASSET_PATHS.betaLinuxIconPng);
       if (!(yield* fs.exists(betaIconSource))) {
         return yield* new BuildScriptError({
           message: `${flavor} beta Linux icon source is missing at ${betaIconSource}`,
@@ -657,7 +657,7 @@ function stageWindowsIcons(stageResourcesDir: string, flavor: typeof BuildFlavor
     // beta flavor only. Other flavors must never see this file (Stable
     // inertness: a missing resource early-returns in the runtime resolver).
     if (flavor === "beta") {
-      const betaIconSource = yield* iconSourceFor(BETA_ASSET_PATHS.betaWindowsPickerIconIco);
+      const betaIconSource = yield* iconSourceFor(BETA_ASSET_PATHS.betaWindowsIconIco);
       if (!(yield* fs.exists(betaIconSource))) {
         return yield* new BuildScriptError({
           message: `${flavor} beta Windows icon source is missing at ${betaIconSource}`,

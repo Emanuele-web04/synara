@@ -29,11 +29,7 @@ export const BETA_ASSET_PATHS = {
   betaMacLegacyDarkIconPng: "assets/beta/beta-macos-legacy-1024.png",
   betaLinuxIconPng: "assets/beta/beta-universal-1024.png",
   betaWindowsIconIco: "assets/beta/beta-windows.ico",
-  // Picker-specific aliases for the beta app-icon preference: same bytes as the
-  // canonical beta brand files above, named for the runtime resource they stage.
-  betaDockIconBetaPng: "assets/beta/beta-macos-legacy-1024.png",
-  betaLinuxPickerIconPng: "assets/beta/beta-universal-1024.png",
-  betaWindowsPickerIconIco: "assets/beta/beta-windows.ico",
+  betaWebFaviconIco: "assets/beta/beta-web-favicon.ico",
   betaWebFavicon16Png: "assets/beta/beta-web-favicon-16x16.png",
   betaWebFavicon32Png: "assets/beta/beta-web-favicon-32x32.png",
   betaWebAppleTouchIconPng: "assets/beta/beta-web-apple-touch-180.png",

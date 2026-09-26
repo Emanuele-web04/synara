@@ -340,7 +340,7 @@ function SettingsRouteView() {
       : []),
     ...(settings.uiDensity !== defaults.uiDensity ? ["UI density"] : []),
     ...(settings.chatWidth !== defaults.chatWidth ? ["Chat width"] : []),
-    ...(settings.desktopAppIcon !== defaults.desktopAppIcon ? ["App icon"] : []),
+    ...(settings.desktopAppIcon !== defaultDesktopAppIcon ? ["App icon"] : []),
     ...(customTitleBarPreferenceDirty ? ["Custom title bar"] : []),
     ...(settings.chatFontSizePx !== defaults.chatFontSizePx ? ["Base font size"] : []),
     ...(settings.terminalFontSizePx !== defaults.terminalFontSizePx ? ["Terminal font size"] : []),
