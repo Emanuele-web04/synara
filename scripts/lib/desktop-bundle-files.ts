@@ -39,19 +39,25 @@ export function createDesktopBundleFilePatterns(
   );
 
   // All icon preferences for the target OS and the menu fallback remain intact.
-  // Build resources (signing entitlements / installer icons) are left untouched;
-  // only their otherwise redundant runtime copies are filtered here.
+  // The dock-icon glob also covers the beta dock file, so mac keeps
+  // dock-icon-beta.png while other platforms drop it; the beta linux/windows
+  // picker files follow their flavor-neutral siblings below.
   const resources = "!apps/desktop/prod-resources/";
   files.push(`${resources}entitlements.mac*.plist`);
   if (platform !== "mac") {
     files.push(
       `${resources}app-icon-macos.png`,
       `${resources}dock-icon*.png`,
+      `${resources}dock-icon-beta.png`,
       `${resources}icon.icns`,
     );
   }
-  if (platform !== "linux") files.push(`${resources}app-icon-linux.png`);
-  if (platform !== "win") files.push(`${resources}app-icon-windows.ico`, `${resources}icon.ico`);
+  if (platform !== "win")
+    files.push(
+      `${resources}app-icon-windows.ico`,
+      `${resources}app-icon-beta-windows.ico`,
+      `${resources}icon.ico`,
+    );
 
   // The SDK selects the glibc executable first on a glibc host. The musl
   // executable needs a different loader and cannot be its working fallback.

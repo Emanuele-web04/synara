@@ -31,6 +31,7 @@ import {
   APP_SNAP_SHORTCUT_MODIFIERS,
   DEFAULT_APP_SNAP_SHORTCUT,
 } from "@synara/shared/appSnapShortcut";
+import type { SynaraDesktopFlavor } from "@synara/shared/desktopIdentity";
 import { useLocalStorage } from "./hooks/useLocalStorage";
 import { EnvMode } from "./components/BranchToolbar.logic";
 import { normalizeCursorModelVariantBaseId } from "./cursorModelVariants";
@@ -419,6 +420,17 @@ export const AppSettingsSchema = Schema.Struct({
   hiddenModels: PersistedHiddenModels.pipe(withDefaults(() => [])),
 });
 export type AppSettings = typeof AppSettingsSchema.Type;
+
+/**
+ * First-launch icon default per desktop flavor. The schema keeps "default" so
+ * persisted renderer state stays stable; the native side owns first-launch
+ * defaulting via getAppIcon, and the Appearance reset uses this for its target.
+ */
+export function defaultDesktopAppIconForFlavor(
+  flavor: SynaraDesktopFlavor | "unknown",
+): DesktopAppIcon {
+  return flavor === "beta" ? "beta" : "default";
+}
 
 /** The settings values and mutation used by a mounted settings panel.
  * The route owns the subscription so extracted workflow panels do not create

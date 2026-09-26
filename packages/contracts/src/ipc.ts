@@ -688,7 +688,7 @@ export interface DesktopCustomTitleBarState {
   restartRequired: boolean;
 }
 
-export const DesktopAppIcon = Schema.Literals(["default", "icon", "dark"]);
+export const DesktopAppIcon = Schema.Literals(["default", "icon", "dark", "beta"]);
 export type DesktopAppIcon = typeof DesktopAppIcon.Type;
 
 export interface SynaraStorageSnapshot {

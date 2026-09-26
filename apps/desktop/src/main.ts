@@ -2255,11 +2255,12 @@ function usesLegacyMacDockIcon(): boolean {
 }
 
 function readDesktopAppIcon(): DesktopAppIcon {
+  const fallbackIcon: DesktopAppIcon = desktopFlavor === "beta" ? "beta" : "default";
   try {
     const storedIcon = FS.readFileSync(DESKTOP_APP_ICON_PATH, "utf8").trim();
-    return isDesktopAppIcon(storedIcon) ? storedIcon : "default";
+    return isDesktopAppIcon(storedIcon) ? storedIcon : fallbackIcon;
   } catch {
-    return "default";
+    return fallbackIcon;
   }
 }
 
@@ -2415,7 +2416,10 @@ async function syncMacAppBundleIcon(
   await persistMacAppIcon({
     bundlePath,
     cacheDirectory: Path.join(STATE_DIR, "mac-app-icons"),
-    png: icon === "default" ? null : (image?.toPNG() ?? null),
+    png:
+      icon === "default" || (icon === "beta" && desktopFlavor === "beta")
+        ? null
+        : (image?.toPNG() ?? null),
   });
   lastPersistedMacAppIcon = icon;
 }
@@ -2510,6 +2514,7 @@ async function applyDesktopAppIconUnlocked(
       icon,
       platform: process.platform,
       usesLegacyDockIcon: usesLegacyMacDockIcon(),
+      isBetaFlavor: desktopFlavor === "beta",
     })
   ) {
     // Remove the persistent override before asking AppKit to reload the bundle

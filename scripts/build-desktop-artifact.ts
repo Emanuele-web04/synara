@@ -16,7 +16,11 @@ import serverPackageJson from "../apps/server/package.json" with { type: "json" 
 
 import { startBuildStage } from "./lib/build-timing.ts";
 import { verifyPortableBuild } from "./lib/portable-build.ts";
-import { desktopIconAssetPaths, publishIconOverrides } from "./lib/brand-assets.ts";
+import {
+  BETA_ASSET_PATHS,
+  desktopIconAssetPaths,
+  publishIconOverrides,
+} from "./lib/brand-assets.ts";
 import {
   createDesktopPlatformBuildConfig,
   MAC_APPSNAP_HELPER_STAGE_PATH,
@@ -511,6 +515,22 @@ function stageMacIcons(
         })`sips -z 1024 1024 ${darkIconSource} --out ${dockIconDarkPngPath}`,
       );
     }
+    // The beta appearance preference resolves its own dock artwork on the beta
+    // flavor only. Other flavors must never see this file (Stable inertness:
+    // a missing resource early-returns in the runtime resolver).
+    if (flavor === "beta") {
+      const betaDockIconSource = yield* iconSourceFor(BETA_ASSET_PATHS.betaDockIconBetaPng);
+      if (!(yield* fs.exists(betaDockIconSource))) {
+        return yield* new BuildScriptError({
+          message: `${flavor} beta dock icon source is missing at ${betaDockIconSource}`,
+        });
+      }
+      yield* runCommand(
+        ChildProcess.make({
+          ...commandOutputOptions(verbose),
+        })`sips -z 1024 1024 ${betaDockIconSource} --out ${path.join(stageResourcesDir, "dock-icon-beta.png")}`,
+      );
+    }
 
     yield* generateMacIconSet(legacyIconSource, iconIcnsPath, tmpRoot, path, verbose);
 
@@ -552,6 +572,18 @@ function stageLinuxIcons(stageResourcesDir: string, flavor: typeof BuildFlavor.T
 
     const iconPath = path.join(stageResourcesDir, "icon.png");
     yield* fs.copyFile(iconSource, iconPath);
+    // The beta appearance preference resolves its own picker artwork on the
+    // beta flavor only. Other flavors must never see this file (Stable
+    // inertness: a missing resource early-returns in the runtime resolver).
+    if (flavor === "beta") {
+      const betaIconSource = yield* iconSourceFor(BETA_ASSET_PATHS.betaLinuxPickerIconPng);
+      if (!(yield* fs.exists(betaIconSource))) {
+        return yield* new BuildScriptError({
+          message: `${flavor} beta Linux icon source is missing at ${betaIconSource}`,
+        });
+      }
+      yield* fs.copyFile(betaIconSource, path.join(stageResourcesDir, "app-icon-beta-linux.png"));
+    }
   });
 }
 
@@ -579,6 +611,35 @@ function stageClientFavicons(stageAppDir: string, flavor: typeof BuildFlavor.Typ
   });
 }
 
+// The `icon` preference and the notification fallback resolve flavor-neutral
+// artwork that ships byte-identical in every flavor. The staged resource tree
+// normally carries these over from apps/desktop/resources; restore any the
+// pipeline omitted so the preference never resolves missing or stale art.
+const FLAVOR_NEUTRAL_ICON_RESOURCES = [
+  "app-icon-macos.png",
+  "app-icon-linux.png",
+  "app-icon-windows.ico",
+  "synara.png",
+] as const;
+
+function assertFlavorNeutralIconResources(stageResourcesDir: string) {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    for (const fileName of FLAVOR_NEUTRAL_ICON_RESOURCES) {
+      const stagedPath = path.join(stageResourcesDir, fileName);
+      if (yield* fs.exists(stagedPath)) continue;
+      const sourcePath = yield* iconSourceFor(path.join("apps/desktop/resources", fileName));
+      if (!(yield* fs.exists(sourcePath))) {
+        return yield* new BuildScriptError({
+          message: `Flavor-neutral icon resource is missing at ${sourcePath}`,
+        });
+      }
+      yield* fs.copyFile(sourcePath, stagedPath);
+    }
+  });
+}
+
 function stageWindowsIcons(stageResourcesDir: string, flavor: typeof BuildFlavor.Type) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -592,6 +653,18 @@ function stageWindowsIcons(stageResourcesDir: string, flavor: typeof BuildFlavor
 
     const iconPath = path.join(stageResourcesDir, "icon.ico");
     yield* fs.copyFile(iconSource, iconPath);
+    // The beta appearance preference resolves its own picker artwork on the
+    // beta flavor only. Other flavors must never see this file (Stable
+    // inertness: a missing resource early-returns in the runtime resolver).
+    if (flavor === "beta") {
+      const betaIconSource = yield* iconSourceFor(BETA_ASSET_PATHS.betaWindowsPickerIconIco);
+      if (!(yield* fs.exists(betaIconSource))) {
+        return yield* new BuildScriptError({
+          message: `${flavor} beta Windows icon source is missing at ${betaIconSource}`,
+        });
+      }
+      yield* fs.copyFile(betaIconSource, path.join(stageResourcesDir, "app-icon-beta-windows.ico"));
+    }
   });
 }
 
@@ -912,16 +985,19 @@ const assertPlatformBuildResources = Effect.fn("assertPlatformBuildResources")(f
 ) {
   if (platform === "mac") {
     yield* stageMacIcons(stageResourcesDir, verbose, flavor);
+    yield* assertFlavorNeutralIconResources(stageResourcesDir);
     return;
   }
 
   if (platform === "linux") {
     yield* stageLinuxIcons(stageResourcesDir, flavor);
+    yield* assertFlavorNeutralIconResources(stageResourcesDir);
     return;
   }
 
   if (platform === "win") {
     yield* stageWindowsIcons(stageResourcesDir, flavor);
+    yield* assertFlavorNeutralIconResources(stageResourcesDir);
     return;
   }
 });
