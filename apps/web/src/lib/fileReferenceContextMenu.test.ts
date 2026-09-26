@@ -27,7 +27,7 @@ vi.mock("~/components/ui/toast", () => ({
   toastManager: { add: harness.toast },
 }));
 
-import { getRevealInFolderLabel, showFileReferenceContextMenu } from "./fileReferenceContextMenu";
+import { showFileReferenceContextMenu } from "./fileReferenceContextMenu";
 
 beforeEach(() => {
   vi.stubGlobal("window", { desktopBridge: {} });
@@ -44,14 +44,6 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
-});
-
-describe("getRevealInFolderLabel", () => {
-  it("uses the native file-manager name on supported desktop platforms", () => {
-    expect(getRevealInFolderLabel("Win32")).toBe("Open in Explorer");
-    expect(getRevealInFolderLabel("MacIntel")).toBe("Reveal in Finder");
-    expect(getRevealInFolderLabel("Linux x86_64")).toBe("Show in folder");
-  });
 });
 
 describe("showFileReferenceContextMenu", () => {

@@ -65,6 +65,7 @@ const MODEL_OPTIONS_BY_PROVIDER = {
       upstreamProviderName: "Anthropic",
     },
   ],
+  omp: [],
   antigravity: [
     {
       slug: "Gemini 3.5 Flash",
@@ -110,43 +111,6 @@ const OPENCODE_DUPLICATE_NAME_MODELS = [
   },
 ] satisfies ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>;
 
-const MANY_CURSOR_MODELS = Array.from({ length: 16 }, (_, index) => ({
-  slug: `cursor-model-${index + 1}` as ModelSlug,
-  name: `${index % 2 === 0 ? "GPT" : "Claude"} Cursor ${index + 1}`,
-  upstreamProviderId: index % 2 === 0 ? "openai" : "anthropic",
-  upstreamProviderName: index % 2 === 0 ? "OpenAI" : "Anthropic",
-})) satisfies ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>;
-
-const CURSOR_FAVORITE_SORT_MODELS = [
-  {
-    slug: "cursor-claude-favorite-sort" as ModelSlug,
-    name: "Claude Cursor Favorite Sort",
-    upstreamProviderId: "anthropic",
-    upstreamProviderName: "Anthropic",
-  },
-  {
-    slug: "cursor-gpt-favorite-sort" as ModelSlug,
-    name: "GPT Cursor Favorite Sort",
-    upstreamProviderId: "openai",
-    upstreamProviderName: "OpenAI",
-  },
-] satisfies ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>;
-
-const PI_FAVORITE_SORT_MODELS = [
-  {
-    slug: "anthropic/claude-pi-favorite-sort" as ModelSlug,
-    name: "Claude Pi Favorite Sort",
-    upstreamProviderId: "anthropic",
-    upstreamProviderName: "Anthropic",
-  },
-  {
-    slug: "openai/gpt-pi-favorite-sort" as ModelSlug,
-    name: "GPT Pi Favorite Sort",
-    upstreamProviderId: "openai",
-    upstreamProviderName: "OpenAI",
-  },
-] satisfies ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>;
-
 const PI_BRANDED_MODELS = mergeDynamicModelOptions({
   provider: "pi",
   staticOptions: [],
@@ -173,6 +137,7 @@ async function mountPicker(props: {
   providers?: ReadonlyArray<ServerProviderStatus>;
   loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
   onSelectionCommitted?: () => void;
+  withRoleSelect?: boolean;
   modelOptionsByProvider?: Record<
     ProviderKind,
     ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>
@@ -181,6 +146,7 @@ async function mountPicker(props: {
   const host = document.createElement("div");
   document.body.append(host);
   const onProviderModelChange = vi.fn();
+  const onProviderModelRoleSelect = vi.fn();
   const screen = await render(
     <ProviderModelPicker
       provider={props.provider}
@@ -192,6 +158,7 @@ async function mountPicker(props: {
         : {})}
       {...(props.providers ? { providers: props.providers } : {})}
       {...(props.onSelectionCommitted ? { onSelectionCommitted: props.onSelectionCommitted } : {})}
+      {...(props.withRoleSelect ? { onProviderModelRoleSelect } : undefined)}
       onProviderModelChange={onProviderModelChange}
     />,
     { container: host },
@@ -199,6 +166,7 @@ async function mountPicker(props: {
 
   return {
     onProviderModelChange,
+    onProviderModelRoleSelect,
     cleanup: async () => {
       await screen.unmount();
       host.remove();
@@ -291,6 +259,91 @@ describe("ProviderModelPicker", () => {
     }
   });
 
+  it("dispatches the role model and thinking level through onProviderModelRoleSelect", async () => {
+    const mounted = await mountPicker({
+      provider: "omp",
+      model: "deepseek/deepseek-v4-flash",
+      lockedProvider: "omp",
+      withRoleSelect: true,
+      modelOptionsByProvider: {
+        ...MODEL_OPTIONS_BY_PROVIDER,
+        omp: [
+          {
+            slug: "role:dreaming-proposer",
+            name: "Dreaming Proposer",
+            upstreamProviderId: "roles",
+            upstreamProviderName: "Roles",
+            role: {
+              name: "Dreaming Proposer",
+              model: "anthropic/claude-opus-4-6",
+              thinkingLevel: "high",
+            },
+          },
+          {
+            slug: "deepseek/deepseek-v4-flash",
+            name: "DeepSeek V4 Flash",
+            upstreamProviderId: "deepseek",
+            upstreamProviderName: "DeepSeek",
+          },
+        ],
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+      await page.getByRole("menuitemradio", { name: "Dreaming Proposer" }).click();
+
+      expect(mounted.onProviderModelRoleSelect).toHaveBeenCalledWith("anthropic/claude-opus-4-6", {
+        thinkingLevel: "high",
+      });
+      expect(mounted.onProviderModelChange).not.toHaveBeenCalled();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("commits the role's model via onProviderModelChange when no role callback exists", async () => {
+    const mounted = await mountPicker({
+      provider: "omp",
+      model: "deepseek/deepseek-v4-flash",
+      lockedProvider: "omp",
+      modelOptionsByProvider: {
+        ...MODEL_OPTIONS_BY_PROVIDER,
+        omp: [
+          {
+            slug: "role:dreaming-proposer",
+            name: "Dreaming Proposer",
+            upstreamProviderId: "roles",
+            upstreamProviderName: "Roles",
+            role: {
+              name: "Dreaming Proposer",
+              model: "anthropic/claude-opus-4-6",
+              thinkingLevel: "high",
+            },
+          },
+          {
+            slug: "deepseek/deepseek-v4-flash",
+            name: "DeepSeek V4 Flash",
+            upstreamProviderId: "deepseek",
+            upstreamProviderName: "DeepSeek",
+          },
+        ],
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+      await page.getByRole("menuitemradio", { name: "Dreaming Proposer" }).click();
+
+      expect(mounted.onProviderModelChange).toHaveBeenCalledWith(
+        "omp",
+        "anthropic/claude-opus-4-6",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("keeps branded Pi model labels stable after selection", async () => {
     const host = document.createElement("div");
     document.body.append(host);
@@ -370,48 +423,6 @@ describe("ProviderModelPicker", () => {
       await vi.waitFor(() => {
         expect(onSelectionCommitted).toHaveBeenCalledTimes(1);
       });
-    } finally {
-      await mounted.cleanup();
-    }
-  });
-
-  it("groups upstream OpenCode models by provider label", async () => {
-    const mounted = await mountPicker({
-      provider: "opencode",
-      model: "openai/gpt-5",
-      lockedProvider: "opencode",
-    });
-
-    try {
-      await page.getByRole("button").click();
-
-      await vi.waitFor(() => {
-        const text = document.body.textContent ?? "";
-        expect(text).toContain("OpenCode");
-        expect(text).toContain("Nemotron 3 Super Free");
-        expect(text).toContain("OpenAI");
-        expect(text).toContain("GPT-5");
-      });
-    } finally {
-      await mounted.cleanup();
-    }
-  });
-
-  it("shows OpenCode search when the provider has at least fifteen models", async () => {
-    const mounted = await mountPicker({
-      provider: "opencode",
-      model: MANY_OPENCODE_MODELS[0]!.slug,
-      lockedProvider: "opencode",
-      modelOptionsByProvider: {
-        ...MODEL_OPTIONS_BY_PROVIDER,
-        opencode: MANY_OPENCODE_MODELS,
-      },
-    });
-
-    try {
-      await page.getByRole("button").click();
-
-      await expect.element(page.getByPlaceholder("Search models or providers")).toBeInTheDocument();
     } finally {
       await mounted.cleanup();
     }
@@ -530,120 +541,6 @@ describe("ProviderModelPicker", () => {
           (element) => element.textContent,
         ),
       ).toEqual(["DeepSeek V4 FlashDeepSeek", "DeepSeek V4 FlashOpenCode Go"]);
-    } finally {
-      await mounted.cleanup();
-    }
-  });
-
-  it("filters Cursor models by upstream provider name", async () => {
-    const mounted = await mountPicker({
-      provider: "cursor",
-      model: MANY_CURSOR_MODELS[0]!.slug,
-      lockedProvider: "cursor",
-      modelOptionsByProvider: {
-        ...MODEL_OPTIONS_BY_PROVIDER,
-        cursor: MANY_CURSOR_MODELS,
-      },
-    });
-
-    try {
-      await page.getByRole("button").click();
-      await page.getByPlaceholder("Search models or providers").fill("Anthropic");
-
-      await vi.waitFor(() => {
-        expect(document.body.textContent ?? "").toContain("Claude Cursor 2");
-      });
-
-      await expect
-        .element(page.getByRole("menuitemradio", { name: "Claude Cursor 2" }))
-        .toBeInTheDocument();
-      await expect
-        .element(page.getByRole("menuitemradio", { name: "GPT Cursor 1" }))
-        .not.toBeInTheDocument();
-    } finally {
-      await mounted.cleanup();
-    }
-  });
-
-  it("shows favourited Cursor models in their own top category", async () => {
-    const mounted = await mountPicker({
-      provider: "cursor",
-      model: "cursor-claude-favorite-sort",
-      lockedProvider: "cursor",
-      modelOptionsByProvider: {
-        ...MODEL_OPTIONS_BY_PROVIDER,
-        cursor: CURSOR_FAVORITE_SORT_MODELS,
-      },
-    });
-
-    try {
-      await page.getByRole("button").click();
-
-      await vi.waitFor(() => {
-        const text = document.body.textContent ?? "";
-        expect(text.indexOf("Anthropic")).toBeLessThan(text.indexOf("OpenAI"));
-      });
-
-      await page
-        .getByRole("button", { name: "Add GPT Cursor Favorite Sort to favourites" })
-        .click();
-
-      await vi.waitFor(() => {
-        const text = document.body.textContent ?? "";
-        expect(text.indexOf("Favourites")).toBeLessThan(text.indexOf("Anthropic"));
-        expect(text.indexOf("GPT Cursor Favorite Sort")).toBeGreaterThan(
-          text.indexOf("Favourites"),
-        );
-        expect(text.indexOf("GPT Cursor Favorite Sort")).toBeLessThan(text.indexOf("Anthropic"));
-      });
-      await expect
-        .element(page.getByRole("menuitemradio", { name: "GPT Cursor Favorite Sort — OpenAI" }))
-        .toBeInTheDocument();
-      expect(
-        Array.from(document.querySelectorAll('[role="menuitemradio"]')).filter((element) =>
-          element.textContent?.includes("GPT Cursor Favorite Sort"),
-        ),
-      ).toHaveLength(1);
-    } finally {
-      await mounted.cleanup();
-    }
-  });
-
-  it("shows favourited Pi models in their own top category", async () => {
-    const mounted = await mountPicker({
-      provider: "pi",
-      model: "anthropic/claude-pi-favorite-sort",
-      lockedProvider: "pi",
-      modelOptionsByProvider: {
-        ...MODEL_OPTIONS_BY_PROVIDER,
-        pi: PI_FAVORITE_SORT_MODELS,
-      },
-    });
-
-    try {
-      await page.getByRole("button").click();
-
-      await vi.waitFor(() => {
-        const text = document.body.textContent ?? "";
-        expect(text.indexOf("Anthropic")).toBeLessThan(text.indexOf("OpenAI"));
-      });
-
-      await page.getByRole("button", { name: "Add GPT Pi Favorite Sort to favourites" }).click();
-
-      await vi.waitFor(() => {
-        const text = document.body.textContent ?? "";
-        expect(text.indexOf("Favourites")).toBeLessThan(text.indexOf("Anthropic"));
-        expect(text.indexOf("GPT Pi Favorite Sort")).toBeGreaterThan(text.indexOf("Favourites"));
-        expect(text.indexOf("GPT Pi Favorite Sort")).toBeLessThan(text.indexOf("Anthropic"));
-      });
-      await expect
-        .element(page.getByRole("menuitemradio", { name: "GPT Pi Favorite Sort — OpenAI" }))
-        .toBeInTheDocument();
-      expect(
-        Array.from(document.querySelectorAll('[role="menuitemradio"]')).filter((element) =>
-          element.textContent?.includes("GPT Pi Favorite Sort"),
-        ),
-      ).toHaveLength(1);
     } finally {
       await mounted.cleanup();
     }

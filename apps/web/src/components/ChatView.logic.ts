@@ -7,7 +7,6 @@ import {
   ProjectId,
   ThreadId,
   type AssistantDeliveryMode,
-  type ComputerAvailability,
   type GitWorktreeSetupPhase,
   type GitWorktreeSetupProgressEvent,
   type ModelSelection,
@@ -22,6 +21,7 @@ import {
   type ThreadId as ThreadIdType,
 } from "@synara/contracts";
 import { getDefaultModel, normalizeModelSlug } from "@synara/shared/model";
+import { approvalSessionGrantWidensSessionPolicy } from "@synara/shared/approvalSessionGrant";
 import { buildSynaraBranchName } from "@synara/shared/git";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
 import { isGenericTerminalThreadTitle } from "@synara/shared/terminalThreads";
@@ -146,13 +146,11 @@ export function resolveRuntimeModeAfterApprovalDecision(
   decision: ProviderApprovalDecision,
   requestKind?: ProviderRequestKind,
 ): RuntimeMode | null {
-  // Permission-profile grants are narrower than a runtime-mode override.
-  // Their acceptForSession decision is persisted by the provider for only
-  // that permission set and must not silently broaden the whole thread.
-  // Tool approvals keep their own, properly scoped channel too (the provider
-  // remembers the specific tool); widening them here would un-supervise
-  // commands and file changes the user never saw.
-  if (requestKind === "permissions" || requestKind === "tool") {
+  // Permission-profile and tool grants are narrower than a runtime-mode
+  // override: the provider remembers that exact permission set or tool, and
+  // widening them here would un-supervise commands and file changes the user
+  // never saw.
+  if (!approvalSessionGrantWidensSessionPolicy(requestKind)) {
     return null;
   }
   if (decision === "acceptForSession" && currentRuntimeMode === "approval-required") {
@@ -427,14 +425,14 @@ export function shouldHandlePromptHistoryNavigationKey(input: {
 }
 
 // `expandedCursor` is a raw index into `prompt` (see PromptHistoryNavigationResult).
-export function isComposerCursorOnFirstLine(prompt: string, expandedCursor: number): boolean {
+function isComposerCursorOnFirstLine(prompt: string, expandedCursor: number): boolean {
   const boundedCursor = Math.max(0, Math.min(prompt.length, expandedCursor));
   const firstLineEnd = prompt.indexOf("\n");
   return firstLineEnd < 0 || boundedCursor <= firstLineEnd;
 }
 
 // `expandedCursor` is a raw index into `prompt` (see PromptHistoryNavigationResult).
-export function isComposerCursorOnLastLine(prompt: string, expandedCursor: number): boolean {
+function isComposerCursorOnLastLine(prompt: string, expandedCursor: number): boolean {
   const boundedCursor = Math.max(0, Math.min(prompt.length, expandedCursor));
   const lastLineStart = prompt.lastIndexOf("\n") + 1;
   return boundedCursor >= lastLineStart;
@@ -770,16 +768,18 @@ export function resolveThreadDetailHydration(input: {
 /**
  * Fallback model selection for a draft thread before the first server turn exists.
  * An explicit project default wins; otherwise the user's default provider is used
- * (pi has no default model, so it is skipped), then codex. The model comes from the
- * project default only when it matches the chosen provider, otherwise the provider's
- * own default.
+ * (pi and omp have no default model, so they are skipped), then codex. The model
+ * comes from the project default only when it matches the chosen provider,
+ * otherwise the provider's own default.
  */
 export function resolveDraftFallbackModelSelection(input: {
   projectDefault: ModelSelection | null | undefined;
   settingsDefaultProvider: ProviderKind;
 }): ModelSelection {
   const settingsProvider =
-    input.settingsDefaultProvider === "pi" ? null : input.settingsDefaultProvider;
+    input.settingsDefaultProvider === "pi" || input.settingsDefaultProvider === "omp"
+      ? null
+      : input.settingsDefaultProvider;
   const provider = input.projectDefault?.provider ?? settingsProvider ?? "codex";
   const model =
     (provider === input.projectDefault?.provider ? input.projectDefault.model : null) ??
@@ -1800,29 +1800,6 @@ export function deriveComposerSendState(options: {
       sendablePastedTexts.length > 0 ||
       sendablePullRequestContexts.length > 0,
   };
-}
-
-/**
- * The effective per-chat computer-control flag.
- *
- * Tool access follows the user's choice, independently of backend readiness.
- * Waiting for a healthy snapshot would disable tools on the first turn or
- * when macOS permissions need setup, preventing the agent from asking for it.
- * The server exposes tools only on supported backends and enforces permissions
- * and approvals when they are called. A chat override never changes the default.
- */
-export function resolveEffectiveComputerControl(input: {
-  readonly draftOverride: boolean | undefined;
-  readonly mode?: ComposerComputerControlMode | undefined;
-  readonly availability: ComputerAvailability | undefined;
-  readonly computerControlEnabled: boolean;
-  /** True once the chat has any turn; the new-chat default no longer applies. */
-  readonly chatHasTurns: boolean;
-}): boolean {
-  if (input.availability?.kind === "unsupported-platform") return false;
-  return input.mode !== undefined
-    ? input.mode !== "off"
-    : (input.draftOverride ?? (!input.chatHasTurns && input.computerControlEnabled));
 }
 
 /**

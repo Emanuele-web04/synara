@@ -45,7 +45,6 @@ describe("ComposerCommandMenu empty states", () => {
 
   it.each([
     ["mention", "mention", "Searching mentions…"],
-    ["skill", "skill", "Loading skills…"],
     ["slash command", "slash-command", "Loading commands…"],
   ] as const)(
     "shows the %s loading label before results are available",

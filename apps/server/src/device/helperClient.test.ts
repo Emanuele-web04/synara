@@ -313,6 +313,39 @@ describe("helper stdio control channel", () => {
     }
   });
 
+  it("stays disposed instead of spawning a new helper on the next request", async () => {
+    const client = makeControlClient((child, request) => {
+      child.stdout.emit("data", Buffer.from(`${JSON.stringify({ id: request.id, result: 1 })}\n`));
+    });
+    await expect(client.request("ping")).resolves.toBe(1);
+    await client.dispose();
+
+    await expect(client.request("ping")).rejects.toMatchObject({ code: "helper_disposed" });
+    expect(client.running).toBe(false);
+    expect(() => client.start()).toThrow(DeviceHelperError);
+  });
+
+  it("does not report the exit of a helper it disposed", async () => {
+    const exits: string[] = [];
+    nextResponseHandler = (child, request) => {
+      child.stdout.emit(
+        "data",
+        Buffer.from(`${JSON.stringify({ id: request.id, result: "ok" })}\n`),
+      );
+    };
+    const client = new HelperClient({
+      binaryPath: "fake-helper",
+      requestTimeoutMs: 100,
+      onExit: (reason) => exits.push(reason),
+    });
+
+    await expect(client.request("ping")).resolves.toBe("ok");
+    // The fake reports the SIGTERM that dispose sends as an exit right away.
+    await client.dispose();
+
+    expect(exits).toEqual([]);
+  });
+
   it("rejects a pending request when the helper exits", async () => {
     const client = makeControlClient((child) => {
       child.emit("exit", 7, null);

@@ -154,7 +154,7 @@ jobs:
         uses: ./.github/actions/setup-workspace
 
       - name: Verify Linux terminal PTY native dependency
-        if: matrix.filters == '--filter=@synara/cli'
+        if: matrix.filters == '--filter=@synara/cli' && matrix.test-args == '--shard=1/3'
         run: node scripts/node-pty-smoke.mjs
 
       - name: Test (${{ matrix.pkg }})
@@ -333,7 +333,7 @@ jobs:
       - name: Verify Windows terminal PTY native dependency under Bun
         run: bun scripts/node-pty-smoke.mjs
 
-      - name: Test Windows process runtime
+      - name: Test Windows shared runtime and migration recovery
         run: >-
           bun run --cwd packages/shared test
           src/windowsProcess.test.ts
@@ -341,8 +341,9 @@ jobs:
           src/processRuntime.test.ts
           src/filesystemPlatform.test.ts
           src/platformEnvironment.test.ts
+          src/migrationRecovery.test.ts
 
-      - name: Test Windows lifecycle and process trees
+      - name: Test Windows server lifecycle and migration recovery
         run: >-
           bun run --cwd apps/server test
           src/platform/processTreeController.test.ts
@@ -350,6 +351,11 @@ jobs:
           src/provider/supervisedProcessTeardown.test.ts
           src/provider/providerStartupLifecycle.test.ts
           src/processRunner.test.ts
+          src/orchestration/projectImportPaths.test.ts
+          src/orchestration/projectImportCatalog.test.ts
+          src/windowsProcessEffect.test.ts
+          src/persistence/MigrationBackup.test.ts
+          src/persistence/Migrations/MigrationReplay.test.ts
 
       - name: Verify Windows credential reader compilation without credentials
         run: >-
@@ -357,27 +363,15 @@ jobs:
           src/providerUsage/providers/droidSecureStorage.test.ts
           -t "compiles the Windows bridge"
 
-      - name: Test Effect Windows process spawn
-        run: bun run --cwd apps/server test src/windowsProcessEffect.test.ts
-
-      - name: Test Windows desktop backend shutdown
-        run: bun run --cwd apps/desktop test src/backendShutdown.windows.integration.test.ts
-
       # The 0.6.0 wedge hit Windows hardest, and the repair path is built out of
       # exactly what Windows treats differently: unlinking a marker, reclaiming
       # stranded partials, and renaming a database file that may still be held
       # open. Linux-only coverage cannot speak for any of that.
-      - name: Test migration recovery marker
-        run: bun run --cwd packages/shared test src/migrationRecovery.test.ts
-
-      - name: Test desktop migration recovery
-        run: bun run --cwd apps/desktop test src/desktopMigrationRecovery.test.ts
-
-      - name: Test migration backup and restore
-        run: bun run --cwd apps/server test src/persistence/MigrationBackup.test.ts
-
-      - name: Test migration replay
-        run: bun run --cwd apps/server test src/persistence/Migrations/MigrationReplay.test.ts
+      - name: Test Windows desktop shutdown and migration recovery
+        run: >-
+          bun run --cwd apps/desktop test
+          src/backendShutdown.windows.integration.test.ts
+          src/desktopMigrationRecovery.test.ts
 
   # Released (id, name) migration pairs are recorded in every user's
   # effect_sql_migrations table, so renumbering or renaming one corrupts existing

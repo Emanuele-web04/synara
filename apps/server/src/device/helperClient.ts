@@ -104,6 +104,10 @@ export interface HelperClientOptions {
   readonly launch?: HelperSandboxCommand | undefined;
 }
 
+function disposedError(): DeviceHelperError {
+  return new DeviceHelperError("helper_disposed", "Device helper was shut down");
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }
@@ -179,6 +183,7 @@ export class HelperClient {
   private readonly requestTimeoutMs: number;
   private stderrTail = "";
   private exited = false;
+  private disposed = false;
 
   private attachment: DeviceHelperAttachment | null = null;
   private frameServer: Server | null = null;
@@ -199,6 +204,9 @@ export class HelperClient {
   }
 
   start(): void {
+    // A disposed client stays disposed: restarting here would resurrect a
+    // helper its owner already tore down, and nothing would ever stop it.
+    if (this.disposed) throw disposedError();
     if (this.process) return;
     const launch = this.options.launch;
     const [command, args] = launch
@@ -232,17 +240,26 @@ export class HelperClient {
     });
     this.requestRegistry.processStarted();
 
-    child.stdout.on("data", (chunk: Buffer) => this.consumeStdout(chunk));
+    // Every listener is bound to the process it was installed for. A child
+    // that has been disposed keeps flushing stdout and still reports its exit,
+    // and neither may reach the transport or the owner after it is retired.
+    child.stdout.on("data", (chunk: Buffer) => {
+      if (this.process !== child) return;
+      this.consumeStdout(chunk);
+    });
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
+      if (this.process !== child) return;
       // Keep only a tail: helper diagnostics belong in the failure message but
       // must never grow without bound over a long-lived session.
       this.stderrTail = `${this.stderrTail}${chunk}`.slice(-4_096);
     });
-    child.on("error", (error) =>
-      this.fail(new DeviceHelperError("helper_spawn_failed", error.message)),
-    );
+    child.on("error", (error) => {
+      if (this.process !== child) return;
+      this.fail(new DeviceHelperError("helper_spawn_failed", error.message));
+    });
     child.on("exit", (code, signal) => {
+      if (this.process !== child) return;
       this.exited = true;
       this.attachment = null;
       const reason = `device helper exited (code=${code ?? "null"}, signal=${signal ?? "null"})${
@@ -427,8 +444,9 @@ export class HelperClient {
   }
 
   async dispose(): Promise<void> {
+    this.disposed = true;
     await this.stopStream().catch(() => undefined);
-    this.fail(new DeviceHelperError("helper_disposed", "Device helper was shut down"));
+    this.fail(disposedError());
     const child = this.process;
     this.process = null;
     this.attachment = null;

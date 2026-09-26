@@ -302,8 +302,20 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
   };
 
   const selectRow = (row: PickerRow) => {
+    if (props.disabled) return;
+    // OMP role rows resolve to a concrete model + options, committed through the
+    // same patch path as a starred preset.
+    if (row.role) {
+      commitRow(
+        row,
+        row.role.model as ModelSlug,
+        row.role.thinkingLevel ? { thinkingLevel: row.role.thinkingLevel } : {},
+      );
+      return;
+    }
     const model = row.selectableModel;
-    if (props.disabled || model === null) return;
+    if (model === null) return;
+
     const selection = traitSelectionFor(row.provider, model);
     // Slider mode: switching to a model with an effort ladder keeps the panel open so the
     // footer slider can set its effort. Presets already carry their effort, and picking

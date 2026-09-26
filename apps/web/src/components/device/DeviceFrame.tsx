@@ -345,7 +345,7 @@ export const DeviceSilhouette = memo(function DeviceSilhouette({
  * lands. Apple puts volume up and down on two separate buttons, so both
  * chassis draw two nubs.
  */
-export const NUB_ACTIONS: Record<
+const NUB_ACTIONS: Record<
   string,
   { readonly label: string; readonly button?: DeviceHardwareButton; readonly hint?: string }
 > = {

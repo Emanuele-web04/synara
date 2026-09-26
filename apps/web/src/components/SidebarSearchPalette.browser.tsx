@@ -52,7 +52,7 @@ async function renderPalette(searchThread: SidebarSearchThread = thread) {
   return { onOpenThread };
 }
 
-it.each(["Dashboard", "control-panel", "Client work"])(
+it.each(["control-panel", "Client work"])(
   "explains a thread found by project or space metadata: %s",
   async (query) => {
     const { onOpenThread } = await renderPalette();

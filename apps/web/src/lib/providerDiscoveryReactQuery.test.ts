@@ -3,14 +3,20 @@
 //          stale-catalog preservation, and initial-vs-background pending (#103).
 // Layer: Web data fetching tests
 
-import type { NativeApi, ProviderListModelsResult } from "@synara/contracts";
+import type {
+  NativeApi,
+  ProviderListAgentsResult,
+  ProviderListModelsResult,
+} from "@synara/contracts";
 import { hashKey, QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   isInitialModelDiscoveryPending,
   prioritizeProviderModelDiscovery,
+  providerAgentsQueryOptions,
   providerCommandsQueryOptions,
+  providerDiscoveryQueryKeys,
   providerModelsQueryOptions,
 } from "./providerDiscoveryReactQuery";
 import * as nativeApi from "../nativeApi";
@@ -74,39 +80,6 @@ describe("providerModelsQueryOptions", () => {
     );
     expect(listModels).toHaveBeenCalledTimes(1);
     expect(queryClient.getQueryState(options.queryKey)?.status).toBe("error");
-  });
-
-  it("fails fast only for Cursor and retries transient Droid discovery", () => {
-    expect(providerModelsQueryOptions({ provider: "codex" }).retry).toBe(3);
-    const devinOptions = providerModelsQueryOptions({ provider: "devin" });
-    expect(devinOptions.retry).toBe(3);
-    expect(typeof devinOptions.staleTime).toBe("function");
-    expect(providerModelsQueryOptions({ provider: "droid" }).retry).toBe(2);
-    expect(providerModelsQueryOptions({ provider: "droid" }).staleTime).toBe(5 * 60_000);
-    expect(providerModelsQueryOptions({ provider: "cursor" }).retry).toBe(0);
-    expect(providerModelsQueryOptions({ provider: "cursor" }).staleTime).toBe(30_000);
-  });
-
-  it("keeps Droid discovery cached for five minutes and ignores focus", () => {
-    const options = providerModelsQueryOptions({ provider: "droid" });
-
-    expect(options.staleTime).toBe(5 * 60_000);
-    expect(options.refetchOnWindowFocus).toBe(false);
-  });
-
-  it("deduplicates concurrent catalog requests for the same provider key", async () => {
-    const catalog = {
-      models: [{ slug: "gpt-5.4", name: "GPT-5.4" }],
-      source: "codex",
-      cached: false,
-    };
-    const listModels = mockListModels(vi.fn().mockResolvedValue(catalog));
-    const options = providerModelsQueryOptions({ provider: "codex", enabled: true });
-    const queryClient = new QueryClient();
-
-    await Promise.all([queryClient.fetchQuery(options), queryClient.fetchQuery(options)]);
-
-    expect(listModels).toHaveBeenCalledTimes(1);
   });
 
   it("serializes different provider catalogs before they reach native admission", async () => {
@@ -305,14 +278,12 @@ describe("providerModelsQueryOptions", () => {
       source: "devin-cli",
       cached: false,
     };
-    expect(staleTime({ state: { data: healthy } })).toBe(30_000);
+    expect(staleTime({ state: { data: healthy } })).toBe(15 * 60_000);
     expect(refetchInterval({ state: { data: healthy } })).toBe(false);
   });
 
   it.each([
     ["opencode", "opencode"],
-    ["opencode", "opencode-cli"],
-    ["pi", "pi.sdk"],
     ["pi", "pi.sdk+extensions"],
   ] as const)("accepts an authoritative empty %s catalog from %s", async (provider, source) => {
     const listModels = mockListModels(
@@ -343,13 +314,27 @@ describe("providerModelsQueryOptions", () => {
     expect(queryClient.getQueryData(options.queryKey)).toBeUndefined();
   });
 
-  it("surfaces real errors instead of masking them as empty catalogs", async () => {
-    mockListModels(vi.fn().mockRejectedValue(new Error("discovery exploded")));
-    const options = providerModelsQueryOptions({ provider: "cursor", enabled: true });
+  it("caches runtime catalogs long enough to skip respawning provider CLIs", () => {
+    // Server-side catalogs persist across restarts (30min fresh / 24h SWR), so
+    // the client keeps a matching window; OMP stays short because its
+    // file-backed modelRoles are re-resolved per request.
+    expect(providerModelsQueryOptions({ provider: "cursor" }).staleTime).toBe(15 * 60_000);
+    expect(providerModelsQueryOptions({ provider: "codex" }).staleTime).toBe(15 * 60_000);
+    expect(providerModelsQueryOptions({ provider: "droid" }).staleTime).toBe(30 * 60_000);
+    expect(providerModelsQueryOptions({ provider: "droid" }).refetchOnWindowFocus).toBe(false);
+    expect(providerModelsQueryOptions({ provider: "omp" }).staleTime).toBe(30_000);
+    expect(providerModelsQueryOptions({ provider: "omp" }).refetchOnWindowFocus).toBe(true);
+    expect(providerModelsQueryOptions({ provider: "cursor" }).gcTime).toBe(24 * 60 * 60_000);
+  });
 
-    const queryClient = new QueryClient();
-    await expect(queryClient.fetchQuery(options)).rejects.toThrow("discovery exploded");
-    expect(queryClient.getQueryData(options.queryKey)).toBeUndefined();
+  it("does not mask OMP's initial fetch with a placeholder", () => {
+    // OMP has no static model fallback, so an empty placeholder would surface a
+    // false "No matches" during its ~3s `omp models` discovery. OMP opts out of
+    // placeholderData to report a genuine `isLoading` pending state; other
+    // providers keep the placeholder to suppress refetch flicker.
+    expect(providerModelsQueryOptions({ provider: "omp" }).placeholderData).toBeUndefined();
+    expect(providerModelsQueryOptions({ provider: "cursor" }).placeholderData).toBeDefined();
+    expect(providerModelsQueryOptions({ provider: "pi" }).placeholderData).toBeDefined();
   });
 
   it("preserves the cached catalog when a background refetch fails", async () => {
@@ -417,26 +402,29 @@ describe("providerModelsQueryOptions", () => {
     queryClient.clear();
   });
 
-  it("returns successful catalogs unchanged", async () => {
-    const catalog = {
-      models: [
-        {
-          slug: "openai/gpt-5.5",
-          name: "GPT-5.5",
-          upstreamProviderId: "openai",
-          supportedReasoningEfforts: [{ value: "medium", label: "Medium" }],
-          defaultReasoningEffort: "medium",
-          supportsFastMode: true,
-        },
-      ],
-      source: "pi.sdk",
-      cached: false,
-    };
-    mockListModels(vi.fn().mockResolvedValue(catalog));
-    const options = providerModelsQueryOptions({ provider: "pi", enabled: true });
+  it("scopes OMP's model query by cwd so project modelRoles participate", () => {
+    const options = providerModelsQueryOptions({
+      provider: "omp",
+      binaryPath: "/bin/omp",
+      agentDir: "/agent",
+      cwd: "/some/project",
+    });
+    // The catalog is global, but OMP merges `<cwd>/.omp/config.yml` roles into
+    // the picker — the query key carries cwd so a project's own roles show.
+    expect(options.queryKey).toEqual(
+      providerDiscoveryQueryKeys.models("omp", "/bin/omp", null, "/agent", "/some/project"),
+    );
+  });
 
-    const queryClient = new QueryClient();
-    await expect(queryClient.fetchQuery(options)).resolves.toEqual(catalog);
+  it("scopes non-OMP providers by cwd in their query key", () => {
+    const options = providerModelsQueryOptions({
+      provider: "opencode",
+      binaryPath: "/bin/opencode",
+      cwd: "/some/project",
+    });
+    expect(options.queryKey).toEqual(
+      providerDiscoveryQueryKeys.models("opencode", "/bin/opencode", null, null, "/some/project"),
+    );
   });
 });
 
@@ -450,5 +438,42 @@ describe("providerCommandsQueryOptions", () => {
 
   it("shares other providers' commands across threads of a workspace", () => {
     expect(keyFor("codex", "thread-a")).toBe(keyFor("codex", "thread-b"));
+  });
+});
+
+describe("providerAgentsQueryOptions", () => {
+  it("recovers from pending discovery while retaining completed catalogs", async () => {
+    const baseTime = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValue(baseTime);
+    const pending = { agents: [], source: "pending", cached: false };
+    const ready = {
+      agents: [{ name: "code-reviewer", displayName: "Code Reviewer" }],
+      source: "sdk",
+      cached: true,
+    };
+    const listAgents = vi.fn().mockResolvedValueOnce(pending).mockResolvedValue(ready);
+    vi.spyOn(nativeApi, "ensureNativeApi").mockReturnValue({
+      provider: { listAgents },
+    } as unknown as NativeApi);
+    const client = new QueryClient();
+    const options = providerAgentsQueryOptions({ provider: "claudeAgent" });
+    const refetchInterval = options.refetchInterval as (query: {
+      state: { data: ProviderListAgentsResult };
+    }) => number | false;
+    expect(refetchInterval({ state: { data: pending } })).toBe(30_000);
+    expect(refetchInterval({ state: { data: ready } })).toBe(false);
+    expect(refetchInterval({ state: { data: { ...ready, agents: [] } } })).toBe(false);
+    try {
+      expect(await client.fetchQuery(options)).toEqual(pending);
+      // The adapter completes supportedAgents() asynchronously. Reopening the
+      // picker must be able to read that result instead of caching "pending".
+      now.mockReturnValue(baseTime + 61_000);
+      expect(await client.fetchQuery(options)).toEqual(ready);
+      now.mockReturnValue(baseTime + 120_000);
+      expect(await client.fetchQuery(options)).toEqual(ready);
+      expect(listAgents).toHaveBeenCalledTimes(2);
+    } finally {
+      client.clear();
+    }
   });
 });

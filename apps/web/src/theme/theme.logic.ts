@@ -561,10 +561,7 @@ export function getCodeThemeSeed(codeThemeId: string, variant: ThemeVariant): Ch
   return themeSeed ? normalizeChromeTheme(themeSeed, variant) : fallback;
 }
 
-export function getCodeThemeSeedPatch(
-  codeThemeId: string,
-  variant: ThemeVariant,
-): ChromeThemeSeedPatch {
+function getCodeThemeSeedPatch(codeThemeId: string, variant: ThemeVariant): ChromeThemeSeedPatch {
   const themeSeed = THEME_SEED_CATALOG[codeThemeId]?.[variant];
   if (!themeSeed) {
     return {};

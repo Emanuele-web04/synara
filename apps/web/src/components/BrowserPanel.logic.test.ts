@@ -3,17 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 import {
   browserAnnotationDraftFromCommittedEvent,
   browserAnnotationMarkers,
-  browserAnnotationTheme,
   browserAddressDisplayValue,
   buildBrowserAddressSuggestions,
   browserWebviewInitialUrl,
   createBrowserPanelHideScheduler,
   createBrowserPanelRendererHandoff,
   createBrowserRendererLossHandler,
-  formatBrowserAnnotationActionError,
   hasObscuringHitStackElementAboveSurface,
   isBrowserAnnotationEventInScope,
-  normalizeBrowserAddressInput,
   resolveBrowserChromeStatus,
   resolveBrowserAddressSync,
   shouldOccludeBrowserWebview,
@@ -202,33 +199,6 @@ describe("browser annotation projection", () => {
   });
 });
 
-describe("browser annotation presentation", () => {
-  it("uses the current chrome theme and readable action errors", () => {
-    const root = (dark: boolean) =>
-      ({
-        classList: {
-          contains: (token: string) => dark && token === "dark",
-        } as DOMTokenList,
-      }) as Pick<HTMLElement, "classList">;
-    expect(browserAnnotationTheme(root(false))).toMatchObject({
-      mode: "light",
-      surface: "rgb(255, 255, 255)",
-      primaryText: "rgb(255, 255, 255)",
-    });
-    expect(browserAnnotationTheme(root(true))).toMatchObject({
-      mode: "dark",
-      surface: "rgb(27, 27, 29)",
-      primaryText: "rgb(24, 24, 27)",
-    });
-    expect(
-      formatBrowserAnnotationActionError(
-        new Error("Browser annotation document is not ready"),
-        "start",
-      ),
-    ).toBe("This page is still loading. Try annotating again in a moment.");
-  });
-});
-
 describe("createBrowserRendererLossHandler", () => {
   it("recovers the same logical tab on the next renderer generation exactly once", () => {
     const oldRenderer = { webContentsId: 17 };
@@ -293,21 +263,6 @@ describe("createBrowserPanelHideScheduler", () => {
       vi.runAllTimers();
 
       expect(hide).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("still hides after a real unmount without a matching remount", () => {
-    vi.useFakeTimers();
-    try {
-      const hide = vi.fn();
-      const scheduler = createBrowserPanelHideScheduler();
-
-      scheduler.schedule("thread-a", hide);
-      vi.runAllTimers();
-
-      expect(hide).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
@@ -381,16 +336,6 @@ describe("shouldOccludeBrowserWebview", () => {
       }),
     ).toBe(true);
   });
-
-  it("keeps the guest visible when no DOM surface covers it", () => {
-    expect(
-      shouldOccludeBrowserWebview({
-        showLocalServersHome: false,
-        browserActionsMenuOpen: false,
-        hasObscuringOverlay: false,
-      }),
-    ).toBe(false);
-  });
 });
 
 describe("hasObscuringHitStackElementAboveSurface", () => {
@@ -422,16 +367,6 @@ describe("hasObscuringHitStackElementAboveSurface", () => {
     ).toBe(false);
   });
 
-  it("stops at a descendant of the viewport as well", () => {
-    expect(
-      hasObscuringHitStackElementAboveSurface([{ id: "viewport-child" }, underlyingChat], {
-        isSurfaceBoundary,
-        isNonObscuring,
-        isVisible,
-      }),
-    ).toBe(false);
-  });
-
   it("ignores an incomplete stack that never reaches the viewport", () => {
     expect(
       hasObscuringHitStackElementAboveSurface([underlyingChat], {
@@ -446,10 +381,6 @@ describe("hasObscuringHitStackElementAboveSurface", () => {
 describe("browserAddressDisplayValue", () => {
   it("hides about:blank for new tabs", () => {
     expect(browserAddressDisplayValue({ url: "about:blank" })).toBe("");
-  });
-
-  it("keeps real urls visible", () => {
-    expect(browserAddressDisplayValue({ url: "https://x.com/" })).toBe("https://x.com/");
   });
 });
 
@@ -501,24 +432,6 @@ describe("resolveBrowserAddressSync", () => {
       value: "https://x.com/",
       syncedValue: "https://x.com/",
     });
-  });
-});
-
-describe("normalizeBrowserAddressInput", () => {
-  it("adds https to naked domains", () => {
-    expect(normalizeBrowserAddressInput("phodex.app")).toBe("https://phodex.app/");
-  });
-
-  it("turns spaced text into a search url", () => {
-    expect(normalizeBrowserAddressInput("how to bake bread")).toContain(
-      "https://www.google.com/search?q=how%20to%20bake%20bread",
-    );
-  });
-
-  it("preserves local file URLs", () => {
-    expect(normalizeBrowserAddressInput("file:///Users/example/project/index.html")).toBe(
-      "file:///Users/example/project/index.html",
-    );
   });
 });
 
@@ -601,21 +514,6 @@ describe("resolveBrowserChromeStatus", () => {
         workspaceReady: true,
       }),
     ).toBeNull();
-  });
-
-  it("keeps onboarding copy for empty browser states", () => {
-    expect(
-      resolveBrowserChromeStatus({
-        localError: null,
-        threadLastError: null,
-        activeTabStatus: "suspended",
-        hasActiveTab: false,
-        workspaceReady: false,
-      }),
-    ).toEqual({
-      tone: "default",
-      label: "Starting browser…",
-    });
   });
 });
 

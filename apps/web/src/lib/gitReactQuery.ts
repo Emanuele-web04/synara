@@ -2,6 +2,7 @@ import { DEFAULT_GIT_RECENT_COMMIT_LIMIT } from "@synara/contracts";
 import type {
   GitHandoffThreadInput,
   GitReadWorkingTreeDiffInput,
+  GitRemoveWorktreeInput,
   GitStackedAction,
   ModelSelection,
   NativeApi,
@@ -913,12 +914,18 @@ export function gitCreateDetachedWorktreeMutationOptions(input: { queryClient: Q
 
 export function gitRemoveWorktreeMutationOptions(input: { queryClient: QueryClient }) {
   return mutationOptions({
-    mutationFn: async ({ cwd, path, force }: { cwd: string; path: string; force?: boolean }) => {
+    mutationFn: async ({
+      cwd,
+      path,
+      force,
+      archiveCleanup,
+      reclaimTemporaryBranch = true,
+    }: GitRemoveWorktreeInput) => {
       const api = ensureNativeApi();
       if (!cwd) throw new Error("Git worktree removal is unavailable.");
       // Every UI removal retires a thread-scoped managed worktree, so its
       // temporary synara/* branch (if any) is reclaimed with it.
-      return api.git.removeWorktree({ cwd, path, force, reclaimTemporaryBranch: true });
+      return api.git.removeWorktree({ cwd, path, force, reclaimTemporaryBranch, archiveCleanup });
     },
     mutationKey: ["git", "mutation", "remove-worktree"] as const,
     onSettled: async () => {

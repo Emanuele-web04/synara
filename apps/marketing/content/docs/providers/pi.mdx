@@ -5,6 +5,8 @@ description: Install, authenticate, verify, and run the Pi coding agent through 
 
 Synara integrates the Pi coding-agent runtime and its model registry. Pi owns provider credentials, models, extensions, skills, commands, and session behavior; Synara supplies the durable task, working environment, transcript, review surfaces, Agent Gateway connection, and Git lifecycle around it.
 
+Synara runs its bundled Pi SDK for tasks. The standalone `pi --version` reports the CLI version, which can differ from the SDK in Synara. Extensions must be compatible with the SDK version shipped with Synara.
+
 ## Install
 
 Install Pi from its official npm package:

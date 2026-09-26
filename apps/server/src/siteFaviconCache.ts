@@ -27,7 +27,7 @@ const cache = new Map<string, CachedFavicon>();
 const inFlight = new Map<string, Promise<CachedFavicon>>();
 
 /** Lower-cases the host and drops a leading `www.` so `www.x.com` and `x.com` share a cache slot. */
-export function normalizeFaviconHost(host: string): string {
+function normalizeFaviconHost(host: string): string {
   return host
     .trim()
     .toLowerCase()

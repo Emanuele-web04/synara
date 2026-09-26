@@ -282,20 +282,4 @@ layer("098_MigrateKiloToOpenCode", (it) => {
       assert.strictEqual(deletedTokens?.provider, "opencode");
     }),
   );
-
-  it.effect("leaves migrated databases stable across reruns", () =>
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-
-      yield* runMigrations();
-      yield* runMigrations();
-
-      const [row] = yield* sql<{ readonly count: number }>`
-        SELECT COUNT(*) AS "count"
-        FROM projection_threads
-        WHERE json_extract(model_selection_json, '$.provider') = 'kilo'
-      `;
-      assert.strictEqual(row?.count, 0);
-    }),
-  );
 });

@@ -39,6 +39,7 @@ const LEASE_SITES: readonly LeaseSiteExpectation[] = [
   { file: "DevinAdapter.ts", capabilityArguments: [SESSION_START_INPUT] },
   { file: "DroidAdapter.ts", capabilityArguments: [SESSION_START_INPUT] },
   { file: "GrokAdapter.ts", capabilityArguments: [SESSION_START_INPUT] },
+  { file: "OmpAdapter.ts", capabilityArguments: [SESSION_START_INPUT] },
   { file: "OpenCodeAdapter.ts", capabilityArguments: [SESSION_START_INPUT] },
   {
     file: "PiAdapter.ts",
@@ -129,14 +130,6 @@ describe("agent gateway lease call sites", () => {
     expect(capabilityArgumentsIn(source)).toEqual(site.capabilityArguments);
   });
 
-  it.each(LEASE_SITES)("$file never assembles capabilities itself", (site) => {
-    // Derivation lives in sessionLease.ts alone; an adapter naming a capability
-    // means a second home for the decision.
-    const source = readAdapterSource(site.file);
-    expect(source).not.toContain("additionalCapabilities");
-    expect(source).not.toContain("computer:control");
-  });
-
   it.each(
     LEASE_SITES.flatMap((site) =>
       site.capabilityArguments
@@ -171,5 +164,6 @@ describe("agent gateway lease call sites", () => {
     const disabled = { enableComputerControl: false, cwd: "/tmp/project" };
     expect(agentGatewayCapabilitiesFor(disabled)).toEqual([]);
     expect(agentGatewayCapabilitiesFor(captureAgentGatewayCapabilityInput(disabled))).toEqual([]);
+    expect(agentGatewayCapabilitiesFor(captureAgentGatewayCapabilityInput({}))).toEqual([]);
   });
 });

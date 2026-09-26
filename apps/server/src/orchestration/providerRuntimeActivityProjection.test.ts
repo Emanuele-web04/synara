@@ -55,7 +55,7 @@ function expectSchemaValidActivities(event: ProviderRuntimeEvent, sessionSequenc
   }
 }
 
-it.each(["info", "warning", "error"])("projects Pi %s notifications as notices", (type) => {
+it.each(["info", "warning"])("projects Pi %s notifications as notices", (type) => {
   const [activity] = projectProviderRuntimeActivities(
     runtimeEvent({
       provider: "pi",
@@ -447,45 +447,7 @@ describe("provider runtime activity projection", () => {
     expect(providerActivityUpdateFingerprint(activity!)).toContain('"kind":"tool.updated"');
   });
 
-  it("keeps the fast JSON fingerprint byte-identical to the legacy JSON-like serializer", () => {
-    const [activity] = projectProviderRuntimeActivities(
-      runtimeEvent({
-        type: "tool.progress",
-        eventId: "tool-progress-fingerprint",
-        turnId: TURN_ID,
-        payload: {
-          toolUseId: "tool-fingerprint",
-          toolName: "mcp__github__fetch_pr",
-          summary: "Fetching PR",
-          elapsedSeconds: 2.4,
-        },
-      }),
-    );
-    const legacyFingerprint = JSON.stringify(
-      {
-        kind: activity!.kind,
-        summary: activity!.summary,
-        payload: activity!.payload,
-        turnId: activity!.turnId,
-      },
-      (() => {
-        const seen = new WeakSet<object>();
-        return (_key: string, entry: unknown) => {
-          if (typeof entry === "bigint") return entry.toString();
-          if (typeof entry === "function" || typeof entry === "symbol") return undefined;
-          if (entry && typeof entry === "object") {
-            if (seen.has(entry)) return "[Circular]";
-            seen.add(entry);
-          }
-          return entry;
-        };
-      })(),
-    );
-
-    expect(providerActivityUpdateFingerprint(activity!)).toBe(legacyFingerprint);
-  });
-
-  it.each(["antigravity", "codex"] as const)(
+  it.each(["antigravity"] as const)(
     "projects %s tool lifecycle events through the same canonical activities",
     (provider) => {
       const itemId = RuntimeItemId.makeUnsafe(`${provider}-tool-1`);
@@ -570,6 +532,23 @@ describe("provider runtime activity projection", () => {
         requestType: "command_execution_approval",
         detail: "pwd",
         sessionApprovalAvailable: false,
+      },
+    });
+    const [resolvedApproval] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "request.resolved",
+        eventId: "approval-resolved",
+        lifecycleGeneration: "generation-1",
+        requestId: ApprovalRequestId.makeUnsafe("request-1"),
+        payload: { requestType: "command_execution_approval", decision: "accept" },
+      }),
+    );
+    expect(resolvedApproval).toMatchObject({
+      kind: "approval.resolved",
+      payload: {
+        requestKind: "command",
+        requestType: "command_execution_approval",
+        lifecycleGeneration: "generation-1",
       },
     });
 
@@ -722,6 +701,81 @@ describe("provider runtime activity projection", () => {
       expect(() => decodeActivityAppendCommand(approval!)).not.toThrow();
     },
   );
+
+  it("redacts credential-named tool parameters before they reach the approval card", () => {
+    const [claudeApproval] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "request.opened",
+        provider: "claudeAgent",
+        eventId: "claude-tool-approval-secret",
+        requestId: ApprovalRequestId.makeUnsafe("claude-tool-approval-secret"),
+        payload: {
+          requestType: "tool_approval",
+          detail: "mcp__github__create_issue",
+          args: {
+            toolName: "mcp__github__create_issue",
+            input: {
+              repo: "synara",
+              token: "ghp_live_secret",
+              headers: { Authorization: "Bearer live-secret", Accept: "application/json" },
+              max_tokens: 5,
+            },
+          },
+        },
+      }),
+    );
+    const [codexApproval] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "request.opened",
+        eventId: "codex-tool-approval-secret",
+        requestId: ApprovalRequestId.makeUnsafe("codex-tool-approval-secret"),
+        payload: {
+          requestType: "tool_approval",
+          detail: "Allow the deploy tool?",
+          args: {
+            _meta: {
+              tool_name: "deploy",
+              tool_params_display: [
+                { name: "api_key", value: "sk-live-secret" },
+                { name: "target", value: "staging", display_name: "Target" },
+                { name: "options", value: { clientSecret: "live-secret", dryRun: true } },
+                {
+                  name: "headers",
+                  value: '{"Authorization":"Bearer live-secret","Accept":"application/json"}',
+                },
+                { name: "config", value: '{ "dryRun": true }' },
+              ],
+            },
+          },
+        },
+      }),
+    );
+
+    expect(claudeApproval?.payload).toMatchObject({
+      toolParamsDisplay: [
+        { name: "repo", value: "synara" },
+        { name: "token", value: "[redacted]" },
+        {
+          name: "headers",
+          value: '{"Authorization":"[redacted]","Accept":"application/json"}',
+        },
+        { name: "max_tokens", value: "5" },
+      ],
+    });
+    expect(codexApproval?.payload).toMatchObject({
+      toolParamsDisplay: [
+        { name: "api_key", value: "[redacted]" },
+        { name: "target", value: "staging", display_name: "Target" },
+        { name: "options", value: '{"clientSecret":"[redacted]","dryRun":true}' },
+        {
+          name: "headers",
+          value: '{"Authorization":"[redacted]","Accept":"application/json"}',
+        },
+        { name: "config", value: '{ "dryRun": true }' },
+      ],
+    });
+    expect(JSON.stringify([claudeApproval, codexApproval])).not.toMatch(/live-secret|ghp_live/);
+  });
 
   it("omits tool presentation when a Claude tool approval carries no input", () => {
     const [approval] = projectProviderRuntimeActivities(

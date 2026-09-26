@@ -21,14 +21,9 @@ import { ensureNativeApi, readNativeApi } from "~/nativeApi";
 import { SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME } from "~/settingsPanelStyles";
 import { useStore } from "~/store";
 import { createThreadShellsSelector } from "~/storeSelectors";
-import { formatWorktreePathForDisplay } from "~/worktreeCleanup";
+import { formatWorktreePathForDisplay, isThreadAssociatedWithWorktree } from "~/worktreeCleanup";
 import { toastManager } from "../ui/toast";
 import { SettingsEmptyState, SettingsListRow, SettingsSection } from "./SettingsPanelPrimitives";
-
-type WorktreeAssociation = {
-  worktreePath?: string | null | undefined;
-  associatedWorktreePath?: string | null | undefined;
-};
 
 type ArchivedSortableThread = {
   id: string;
@@ -36,16 +31,6 @@ type ArchivedSortableThread = {
   updatedAt?: string | null | undefined;
   createdAt: string;
 };
-
-function isThreadAssociatedWithWorktree(
-  thread: WorktreeAssociation,
-  worktreePath: string,
-): boolean {
-  return [thread.worktreePath, thread.associatedWorktreePath].some((candidate) => {
-    const normalized = candidate?.trim();
-    return Boolean(normalized) && normalized === worktreePath;
-  });
-}
 
 function compareArchivedThreads(left: ArchivedSortableThread, right: ArchivedSortableThread) {
   const leftKey = left.archivedAt ?? left.updatedAt ?? left.createdAt;

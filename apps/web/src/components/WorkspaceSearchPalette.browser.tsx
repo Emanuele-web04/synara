@@ -120,32 +120,10 @@ it("renders file and directory rows and routes clicks to the right handler", asy
     expect(handlers.onOpenFile).toHaveBeenCalledWith("apps/web/src/components/Composer.tsx");
     expect(handlers.onOpenChange).toHaveBeenCalledWith(false);
     expect(handlers.onOpenDirectory).not.toHaveBeenCalled();
-  } finally {
-    restoreNativeApi();
-  }
-});
 
-it("opens directories in the explorer handler", async () => {
-  const searchEntries = vi.fn().mockResolvedValue({
-    entries: [{ path: "apps/web/src/components", kind: "directory" }],
-    truncated: false,
-  });
-  const restoreNativeApi = installNativeApi({
-    projects: {
-      prewarmSearchIndex: vi.fn().mockResolvedValue({ started: true }),
-      searchEntries,
-    },
-  } as unknown as NativeApi);
-
-  try {
-    const handlers = await renderPalette("files");
-    await page.getByPlaceholder("Search files").fill("comp");
-
-    await expect.element(page.getByText("components")).toBeVisible();
-    await page.getByText("components").click();
+    await page.getByText("components", { exact: true }).click();
     expect(handlers.onOpenDirectory).toHaveBeenCalledWith("apps/web/src/components");
-    expect(handlers.onOpenFile).not.toHaveBeenCalled();
-    expect(handlers.onOpenChange).toHaveBeenCalledWith(false);
+    expect(handlers.onOpenFile).toHaveBeenCalledTimes(1);
   } finally {
     restoreNativeApi();
   }

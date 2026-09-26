@@ -551,6 +551,20 @@ export function useChatTranscriptScroll({
     scrollToEnd,
     setTranscriptScrollDetached,
   ]);
+  // A thread switch hands scroll ownership back to follow. This must be a
+  // layout effect declared before the auto-follow effect below: that effect
+  // reads the detached ref in the same commit, and a passive reset would run
+  // after it had already skipped the new thread, without re-triggering it.
+  useLayoutEffect(() => {
+    isAtEndRef.current = true;
+    settledScrollRequestRef.current += 1;
+    settledScrollInFlightRef.current = false;
+    programmaticScrollUntilRef.current = 0;
+    setTranscriptScrollDetached(false);
+    showScrollDebouncer.current.cancel();
+    const settle = window.setTimeout(() => setShowScrollToBottom(false), 0);
+    return () => window.clearTimeout(settle);
+  }, [activeThreadId, setTranscriptScrollDetached]);
   useLayoutEffect(() => {
     const shouldFollowPendingTurn =
       activeThreadId !== null && autoFollowThreadIdRef.current === activeThreadId;
@@ -660,16 +674,6 @@ export function useChatTranscriptScroll({
         }
       });
   }, [legendListRef, cancelPendingScrollGesture, setTranscriptScrollDetached]);
-  useEffect(() => {
-    isAtEndRef.current = true;
-    settledScrollRequestRef.current += 1;
-    settledScrollInFlightRef.current = false;
-    programmaticScrollUntilRef.current = 0;
-    setTranscriptScrollDetached(false);
-    showScrollDebouncer.current.cancel();
-    const settle = window.setTimeout(() => setShowScrollToBottom(false), 0);
-    return () => window.clearTimeout(settle);
-  }, [activeThreadId, setTranscriptScrollDetached]);
 
   const previousThreadIdRef = useRef(activeThreadId);
   const pendingStreamingThreadRef = useRef<ThreadId | null>(null);

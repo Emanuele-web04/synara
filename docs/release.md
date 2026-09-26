@@ -8,7 +8,8 @@ This document covers build-only native validation and publishing desktop release
   - Manual dispatch defaults to build-only validation and uploads workflow artifacts without publishing anything.
   - A pushed tag matching `v*.*.*` publishes after successful builds.
   - Manual publication requires the explicit `publish_release=true` input.
-- Runs quality gates first: lint, typecheck, test. Narrow `native`, `icon`, and
+- Runs lint, typecheck and tests alongside unsigned native, JavaScript and icon
+  preparation. Packaging/signing waits for all quality gates. Narrow `native`, `icon`, and
   `js` validation stages cannot publish and omit these full-suite gates.
 - Builds portable JavaScript once, verifies its source/lockfile/settings and
   output checksums on each consumer, and stages native dependencies per platform.
@@ -19,6 +20,7 @@ This document covers build-only native validation and publishing desktop release
   - Windows `x64` NSIS installer
 - Publishes one versioned GitHub Release with all produced files.
   - Versions with a suffix after `X.Y.Z` (for example `1.2.3-alpha.1`) are published as GitHub prereleases.
+  - A `beta` prerelease identifier (`vX.Y.Z-beta.N`) selects the beta lane: the desktop artifact builds with `--flavor beta`, updater manifests publish under the `beta` channel, and the release never becomes Latest, never bumps `main` versions, and never touches the npm `latest` dist-tag. See [Beta channel](../BETA.md).
   - Stable clean-lane releases are GitHub Latest; the 0.4.x compatibility release remains historical.
 - Publishes default `latest*.yml` metadata plus byte-identical `synara*.yml` aliases on every stable release so existing packaged binaries keep working.
 - Keeps the historical 0.4.x compatibility release unchanged; current stable payloads stay on their own GitHub Latest release.
@@ -38,7 +40,7 @@ This document covers build-only native validation and publishing desktop release
   - The desktop UI shows a rocket update button while preparing and switches to an install action once the update is ready.
 - Provider: GitHub Releases (`provider: github`) configured at build time.
 - Repository visibility: public. The authenticated private-repository provider does not honor custom channel filenames.
-- Runtime channel: `synara`. Stable clean-lane releases publish both `latest` and `synara` metadata; the 0.4.x compatibility release remains available for historical migration.
+- Runtime channel: `synara` for stable builds, `beta` for beta builds (resolved by `desktopUpdateChannel` in `packages/shared/src/desktopIdentity.ts`). Stable clean-lane releases publish both `latest` and `synara` metadata; beta releases publish `beta` channel aliases of the same default `latest` manifests, and beta builds run with `allowPrerelease=true` so they follow their own prerelease feed.
 - Repository slug source:
   - `SYNARA_DESKTOP_UPDATE_REPOSITORY` (format `owner/repo`), if set.
   - otherwise `GITHUB_REPOSITORY` from GitHub Actions.
@@ -92,6 +94,7 @@ Checklist:
 - Optional jobs stay disabled unless repository variables enable them:
   - `SYNARA_PUBLISH_CLI=1`
   - `SYNARA_FINALIZE_RELEASE=1`
+  - `SYNARA_AUTO_BETA=1` — tag the next `vX.Y.(Z+1)-beta.1` on the stable commit after each stable publish (see [BETA.md](../BETA.md)).
 
 ## 1) Build-only native CI validation
 
@@ -105,6 +108,8 @@ Use this before publication to validate the real native macOS, Linux, and Window
 5. Download the workflow artifacts and sanity-check installation on each OS.
 
 To publish from a manual dispatch instead of a tag push, pass `publish_release=true`. This is intentionally opt-in.
+The public updater repository lookup runs only when publication is enabled;
+build-only validation does not need that GitHub API check.
 
 For one-platform qualification, add `-f platform=mac-arm64`, `mac-x64`,
 `linux-x64`, or `win-x64`. `-f stage=artifact` (the default) still runs quality
@@ -153,8 +158,11 @@ baseline, signed Intel CI comparison, local measurements, remaining validation,
 and timing interpretation.
 
 `.github/workflows/cua-release-cache.yml` builds a credential-free Cua cache on
-relevant changes to `main`, with a default-branch guard. To warm an evicted cache
-or validate a runner-image update, dispatch it on the default branch:
+relevant changes to `main` and daily, with a default-branch guard. Each successful
+producer also retains the verified unsigned directory as a workflow artifact for
+30 days, outside the Actions cache quota. Daily preparation detects runner image,
+SDK and library drift even when source files are unchanged. To warm new inputs
+before a release, dispatch it on the default branch:
 
 ```bash
 gh workflow run cua-release-cache.yml --ref main
@@ -162,7 +170,12 @@ gh workflow run cua-release-cache.yml --ref main
 
 Release tags restore only exact keys. GitHub scopes caches by ref: a cache made
 on one release tag cannot seed the next tag, whereas the default-branch cache is
-visible to release jobs. PR workflows do not populate this cache. Keys cover the
+visible to release jobs. On an exact cache miss, consumers look for the exact
+fingerprint in retained artifacts from a successful run of this producer on the
+default branch in the same repository. Forks, PR events, other workflows, expired
+artifacts and partial keys cannot supply binaries. Missing/stale artifacts compile
+pinned source; unavailable trust metadata and corrupt selected artifacts fail
+closed. PR workflows do not populate this cache. Keys cover the
 pinned release manifest, all patches, provisioning/validation/cache logic, actual
 Rust/compiler/OS/architecture/Xcode/SDK identity, Linux development packages, and
 build flags. Arbitrary compiler overrides/wrappers are rejected. Signing keys,
@@ -171,10 +184,25 @@ certificates, signed release bundles and user state are never cached.
 Each restore checks the build key, existing executable provenance/checksum and
 Mach-O/ELF identity, plus all Linux sidecar checksums. Non-exact matches are
 discarded before a source build. A corrupt exact hit fails instead of silently
-substituting a different binary. Delete that cache entry in GitHub Actions and
+substituting a different binary. Delete that cache entry (and any corrupt retained
+artifact with the same key) in GitHub Actions and
 rerun the producer, or intentionally bump the `cua-v1` key schema when invalidating
 the whole cache. Never edit provenance to make a hit pass. Packaging re-signs a
 separate staged copy, preserving cached bytes.
+
+Release native preparation starts after exact-source preflight alongside quality
+checks, portable JavaScript and icon compilation. The packaging jobs download
+only their platform's prepared artifact from the same run, recompute the build
+environment key, and repeat executable/provenance verification. Missing artifacts
+or runner drift fail instead of falling back to unrelated binaries. These temporary
+handoff artifacts expire after one day; signing credentials are passed only to the
+packaging step after quality gates. A failed candidate can spend extra parallel
+compute on unsigned preparation. No tests or release acceptance gates are skipped.
+
+When deploying changes to the cache/provenance logic, run the producer on `main`
+after merge and before the next release: the exact fingerprint changes with that
+logic, so an unmerged candidate cannot reuse the old producer's artifacts. Native
+preparation within its own run still works and can be validated before merge.
 
 Portable outputs are same-run artifacts, never cross-release caches. Import
 rejects archive links and unexpected paths before extraction into an isolated

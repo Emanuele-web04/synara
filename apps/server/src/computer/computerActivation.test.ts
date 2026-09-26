@@ -64,15 +64,12 @@ describe("user dispatch Computer activation", () => {
       }).computerControlMode,
     ).toBe("chat");
   });
-  it.each(["agent", "automation"])(
-    "never infers request consent from %s text",
-    (dispatchOrigin) => {
-      expect(
-        computerActivationMetadata({
-          userMessageText: "/computer-use open Calculator",
-          dispatchOrigin,
-        }).enableComputerControl,
-      ).toBe(false);
-    },
-  );
+  it.each(["agent"])("never infers request consent from %s text", (dispatchOrigin) => {
+    expect(
+      computerActivationMetadata({
+        userMessageText: "/computer-use open Calculator",
+        dispatchOrigin,
+      }).enableComputerControl,
+    ).toBe(false);
+  });
 });

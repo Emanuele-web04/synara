@@ -4,11 +4,19 @@ import {
   DEFAULT_DROID_GIT_TEXT_GENERATION_MODEL,
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
   DEFAULT_MODEL_BY_PROVIDER,
+  DEFAULT_SERVER_SETTINGS,
+  type ServerSettings,
 } from "@synara/contracts";
 import { Effect, FileSystem, Layer } from "effect";
 import { describe, expect, it } from "vitest";
+import { providerDisabledSettingsMessage } from "./provider/enabledProviderAdapter";
 import { ServerConfig } from "./config";
-import { ServerSettingsLive, ServerSettingsService } from "./serverSettings";
+import {
+  gateBetaOnlyProviders,
+  resolveTextGenerationProvider,
+  ServerSettingsLive,
+  ServerSettingsService,
+} from "./serverSettings";
 
 const serverConfigLayer = ServerConfig.layerTest(process.cwd(), {
   prefix: "synara-settings-test-",
@@ -21,21 +29,6 @@ const runWithSettings = <A, E>(
 ) => Effect.runPromise(effect.pipe(Effect.provide(testLayer)) as Effect.Effect<A, E, never>);
 
 describe("ServerSettingsService", () => {
-  it("loads defaults when settings file does not exist", async () => {
-    const settings = await runWithSettings(
-      Effect.gen(function* () {
-        const service = yield* ServerSettingsService;
-        yield* service.start;
-        return yield* service.getSettings;
-      }),
-    );
-
-    expect(settings.providers.codex.binaryPath).toBe("codex");
-    expect(settings.providers.grok.binaryPath).toBe("grok");
-    expect(settings.defaultThreadEnvMode).toBe("local");
-    expect(settings.enableProviderUpdateChecks).toBe(true);
-  });
-
   it("persists updates and reloads them", async () => {
     const result = await runWithSettings(
       Effect.gen(function* () {
@@ -271,6 +264,65 @@ describe("ServerSettingsService", () => {
       expectedProvider === "droid"
         ? DEFAULT_DROID_GIT_TEXT_GENERATION_MODEL
         : DEFAULT_MODEL_BY_PROVIDER[expectedProvider],
+    );
+  });
+});
+
+const ompGatedOff = (feature: string) => feature !== "omp";
+
+describe("gateBetaOnlyProviders", () => {
+  const withOmpEnabled: ServerSettings = {
+    ...DEFAULT_SERVER_SETTINGS,
+    providers: {
+      ...DEFAULT_SERVER_SETTINGS.providers,
+      omp: { ...DEFAULT_SERVER_SETTINGS.providers.omp, enabled: true },
+    },
+  };
+
+  it("reads a gated-off provider as disabled without touching the others", () => {
+    const gated = gateBetaOnlyProviders(withOmpEnabled, ompGatedOff);
+    expect(gated.providers.omp.enabled).toBe(false);
+    expect(gated.providers.codex.enabled).toBe(true);
+    // The input object is untouched — the persisted value survives.
+    expect(withOmpEnabled.providers.omp.enabled).toBe(true);
+  });
+
+  it("returns the same object when nothing is gated", () => {
+    expect(gateBetaOnlyProviders(withOmpEnabled, () => true)).toBe(withOmpEnabled);
+  });
+
+  it("leaves an already-disabled provider unchanged", () => {
+    const settings: ServerSettings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providers: {
+        ...DEFAULT_SERVER_SETTINGS.providers,
+        omp: { ...DEFAULT_SERVER_SETTINGS.providers.omp, enabled: false },
+      },
+    };
+    expect(gateBetaOnlyProviders(settings, ompGatedOff)).toBe(settings);
+  });
+
+  it("falls back to a non-gated provider for text generation", () => {
+    const settings: ServerSettings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      textGenerationModelSelection: { provider: "omp", model: "omp-auto" },
+      providers: {
+        ...DEFAULT_SERVER_SETTINGS.providers,
+        omp: { ...DEFAULT_SERVER_SETTINGS.providers.omp, enabled: true },
+      },
+    };
+    const projected = resolveTextGenerationProvider(gateBetaOnlyProviders(settings, ompGatedOff));
+    expect(projected.textGenerationModelSelection.provider).not.toBe("omp");
+  });
+});
+
+describe("providerDisabledSettingsMessage", () => {
+  it("points Beta-only providers at Synara Beta instead of Settings", () => {
+    expect(providerDisabledSettingsMessage("omp", () => false)).toBe(
+      "Oh My Pi is available in Synara Beta.",
+    );
+    expect(providerDisabledSettingsMessage("codex", (f) => f !== "omp")).toBe(
+      "Codex is disabled in Settings > Providers.",
     );
   });
 });

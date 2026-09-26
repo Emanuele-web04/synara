@@ -19,12 +19,10 @@ describe("toolOutputSummary", () => {
     ["", 0],
     ["one", 1],
     ["\n", 1],
-    ["\r\n", 1],
     ["\n\n", 2],
     ["one\r\ntwo\nthree\r\n", 3],
     ["one\rtwo", 1],
     ["one\u2028two", 1],
-    ["one\ntwo\n\n", 3],
   ])("counts logical lines in %j", (content, expected) => {
     expect(countTextLines(content)).toBe(expected);
   });

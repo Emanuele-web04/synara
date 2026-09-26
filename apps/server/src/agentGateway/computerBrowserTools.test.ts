@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { Effect } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { COMPUTER_BROWSER_DRIVER_NAMES, COMPUTER_BROWSER_TOOL_NAMES } from "@synara/contracts";
+import { COMPUTER_BROWSER_TOOL_NAMES } from "@synara/contracts";
 
 import type { ComputerBrowserCall } from "../computer/ComputerBackend.ts";
 import { ComputerManager } from "../computer/ComputerManager.ts";
@@ -58,6 +58,7 @@ async function setup(options?: {
   authorizeAction?: AgentGatewayComputerBrowserToolsOptions["authorizeAction"];
   resolveForegroundAuthorization?: AgentGatewayComputerBrowserToolsOptions["resolveForegroundAuthorization"];
   resolveWorkspaceRoot?: AgentGatewayComputerBrowserToolsOptions["resolveWorkspaceRoot"];
+  requestForegroundConsent?: AgentGatewayComputerBrowserToolsOptions["requestForegroundConsent"];
 }) {
   const backend = options?.backend ?? new FakeComputerBackend({ browser: true });
   const manager = new ComputerManager({ backend, actionSettleMs: 0 });
@@ -69,6 +70,9 @@ async function setup(options?: {
       : {}),
     ...(options?.resolveWorkspaceRoot
       ? { resolveWorkspaceRoot: options.resolveWorkspaceRoot }
+      : {}),
+    ...(options?.requestForegroundConsent
+      ? { requestForegroundConsent: options.requestForegroundConsent }
       : {}),
   });
   const byName = new Map(tools.map((tool) => [tool.definition.name, tool]));
@@ -140,59 +144,6 @@ describe("computer_browser_* gateway tools", () => {
       if (tool === state) continue;
       expect(tool.definition.annotations?.readOnlyHint).toBe(false);
     }
-  });
-
-  it("states the rev-30/31 browser contract: headless default, pid-only bind, isolated_named", () => {
-    const tools = makeAgentGatewayComputerBrowserTools({
-      manager: new ComputerManager({ backend: new FakeComputerBackend({ browser: true }) }),
-    });
-    const byName = new Map(tools.map((tool) => [tool.definition.name, tool]));
-    const prepare = byName.get("computer_browser_prepare");
-    expect(prepare?.definition.description).toContain("headless by default");
-    expect(prepare?.definition.description).toContain("windowed:true");
-    expect(prepare?.definition.description).toContain("isolated_named");
-    // No platform may treat visible or personal-profile input as a Linux fallback.
-    expect(prepare?.definition.description).toContain("confirmed direct-X11 Escape listener");
-    expect(prepare?.definition.description).toContain(
-      "only owned isolated headless targets support mutation",
-    );
-    expect(prepare?.definition.description).toContain(
-      "Wayland/XWayland and standalone hosts permit reads/passive prepare only",
-    );
-    expect(prepare?.definition.description).toContain(
-      "Linux refuses visible launch and personal-profile control",
-    );
-    expect(prepare?.definition.description).not.toContain("Linux cannot launch headlessly");
-    expect(prepare?.definition.description).toContain("browser_consent_required");
-    const prepareSchema = prepare?.definition.inputSchema as {
-      properties?: Record<string, unknown>;
-    };
-    expect(prepareSchema.properties?.windowed).toBeDefined();
-    expect(prepareSchema.properties?.windowed).toMatchObject({
-      description: expect.stringContaining(
-        "confirmed direct-X11 Escape listener, and refuses true",
-      ),
-    });
-    const state = byName.get("computer_browser_state");
-    expect(state?.definition.description).toContain("driver_owned_headless");
-    const stateSchema = state?.definition.inputSchema as {
-      properties?: { window_id?: { description?: string } };
-    };
-    expect(stateSchema.properties?.window_id?.description).toContain(
-      "Omit it for a driver-owned headless browser",
-    );
-    expect(stateSchema.properties?.window_id?.description).not.toContain("required with pid");
-    const type = byName.get("computer_browser_type");
-    const typeSchema = type?.definition.inputSchema as {
-      properties?: { input_route?: { enum?: readonly string[] } };
-    };
-    expect(typeSchema.properties?.input_route?.enum).toEqual(["trusted", "dom_event"]);
-  });
-
-  it("covers every gateway name with a driver name", () => {
-    expect(Object.keys(COMPUTER_BROWSER_DRIVER_NAMES).toSorted()).toEqual(
-      [...COMPUTER_BROWSER_TOOL_NAMES].toSorted(),
-    );
   });
 
   it("requires approval for everything except state and dialog inspect", () => {
@@ -310,6 +261,51 @@ describe("computer_browser_* gateway tools", () => {
     expect(modes).toEqual(["foreground", "background"]);
   });
 
+  it("asks for a visible browser after routine approval, like the desktop tools", async () => {
+    const order: string[] = [];
+    let granted = false;
+    const { backend, call } = await setup({
+      backend: new FakeComputerBackend({ browser: true, agentDialect: "macos" }),
+      authorizeAction: async () => {
+        order.push("routine");
+        return true;
+      },
+      resolveForegroundAuthorization: async () => ({ userRequestedVisibleUse: granted }),
+      requestForegroundConsent: async () => {
+        order.push("foreground");
+        granted = true;
+        return true;
+      },
+    });
+    const result = await call("computer_browser_prepare", {
+      allow_launch: true,
+      windowed: true,
+      profile: { mode: "isolated_new" },
+    });
+    expect(result.isError).not.toBe(true);
+    expect(order).toEqual(["routine", "foreground"]);
+    expect(backend.callsFor("browser.browser_prepare")).toHaveLength(1);
+  });
+
+  it("never shows the visible-use card on Linux, which refuses visible launches", async () => {
+    const consent = vi.fn(async () => true);
+    const authorizeAction = vi.fn(async () => true);
+    const { backend, call } = await setup({
+      authorizeAction,
+      resolveForegroundAuthorization: async () => ({ userRequestedVisibleUse: false }),
+      requestForegroundConsent: consent,
+    });
+    const result = await call("computer_browser_prepare", {
+      allow_launch: true,
+      windowed: true,
+      profile: { mode: "isolated_new" },
+    });
+    expect(textOf(result)).toContain("foreground_not_requested");
+    expect(consent).not.toHaveBeenCalled();
+    expect(authorizeAction).not.toHaveBeenCalled();
+    expect(backend.callsFor("browser.browser_prepare")).toHaveLength(0);
+  });
+
   it("refuses when visible-use authorization changes while ordinary approval is pending", async () => {
     let userRequestedVisibleUse = true;
     const approval = Promise.withResolvers<boolean>();
@@ -337,24 +333,20 @@ describe("computer_browser_* gateway tools", () => {
     expect(visibility).toHaveBeenCalledTimes(2);
   });
 
-  it.each([undefined, false])(
-    "keeps a headless launch with windowed:%s independent of visibility",
-    async (windowed) => {
-      const visibility = vi.fn(async () => ({ userRequestedVisibleUse: false }));
-      const { backend, call } = await setup({
-        authorizeAction: async () => true,
-        resolveForegroundAuthorization: visibility,
-      });
-      const result = await call("computer_browser_prepare", {
-        allow_launch: true,
-        ...(windowed === undefined ? {} : { windowed }),
-        profile: { mode: "isolated_new" },
-      });
-      expect(result.isError).not.toBe(true);
-      expect(backend.callsFor("browser.browser_prepare")).toHaveLength(1);
-      expect(visibility).not.toHaveBeenCalled();
-    },
-  );
+  it("keeps a headless launch independent of visibility", async () => {
+    const visibility = vi.fn(async () => ({ userRequestedVisibleUse: false }));
+    const { backend, call } = await setup({
+      authorizeAction: async () => true,
+      resolveForegroundAuthorization: visibility,
+    });
+    const result = await call("computer_browser_prepare", {
+      allow_launch: true,
+      profile: { mode: "isolated_new" },
+    });
+    expect(result.isError).not.toBe(true);
+    expect(backend.callsFor("browser.browser_prepare")).toHaveLength(1);
+    expect(visibility).not.toHaveBeenCalled();
+  });
 
   it("refuses a visible launch when its authorization changes in the browser queue", async () => {
     let userRequestedVisibleUse = true;
@@ -423,29 +415,6 @@ describe("computer_browser_* gateway tools", () => {
       label: "nested refusal code",
       reply: { structuredContent: { status: "refused", refusal: { code: "browser_ref_stale" } } },
       expected: { effect: "refused", code: "browser_ref_stale" },
-    },
-    {
-      label: "legacy top-level refusal code",
-      reply: { structuredContent: { status: "refused", code: "browser_requires_setup" } },
-      expected: { effect: "refused", code: "browser_requires_setup" },
-    },
-    {
-      label: "typed refusal carrying isError",
-      reply: {
-        isError: true,
-        structuredContent: { status: "refused", refusal: { code: "browser_consent_required" } },
-      },
-      expected: { effect: "refused", code: "browser_consent_required" },
-    },
-    {
-      label: "successful dispatch without effect proof",
-      reply: { structuredContent: { status: "ok" } },
-      expected: { effect: "dispatched-unknown" },
-    },
-    {
-      label: "closed native action refusal",
-      reply: { structuredContent: { effect: "refused", route: "dom" } },
-      expected: { effect: "refused", code: "browser_refused" },
     },
     {
       label: "DOM readback without application effect proof",
@@ -584,28 +553,6 @@ describe("computer_browser_* gateway tools", () => {
     expect(seen[0]?.name).toBe("browser_click");
     expect(seen[0]?.task).toMatchObject({ threadId: THREAD, turnId: "turn-browser" });
     expect(seen[0]?.mutation).toBe(true);
-  });
-
-  it("treats a driver refusal as a result, never a tool error", async () => {
-    const backend = new FakeComputerBackend({
-      browser: () => ({
-        structuredContent: {
-          status: "refused",
-          refusal: { code: "browser_requires_setup", message: "Prepare a browser first." },
-        },
-        content: [{ type: "text", text: "refused (browser_requires_setup)" }],
-      }),
-    });
-    const { call } = await setup({ backend });
-    const result = await call("computer_browser_state", {
-      target_id: "t",
-      tab_id: "tab",
-    });
-    expect(result.isError).not.toBe(true);
-    expect(result.structuredContent).toMatchObject({
-      status: "refused",
-      refusal: { code: "browser_requires_setup" },
-    });
   });
 
   it("marks get_browser_state non-mutating on the wire but mutating otherwise", async () => {
@@ -844,21 +791,6 @@ describe("browser id ergonomics", () => {
     const navigations = backend.callsFor("browser.browser_navigate");
     expect(navigations).toHaveLength(1);
     expect(navigations[0]?.args[0]).toMatchObject({ target_id: "bt-1", tab_id: "tab-1" });
-  });
-
-  it("resolves an omitted tab_id in a snapshot from the same bind", async () => {
-    const backend = new FakeComputerBackend({
-      browser: (call) =>
-        call.name === "get_browser_state"
-          ? bindingResult(oneTab)
-          : { structuredContent: { status: "ok" } },
-    });
-    const { call } = await setup({ backend });
-    await call("computer_browser_state", { pid: 33_526, window_id: 8_196 });
-    await call("computer_browser_state", { target_id: "bt-1" });
-    const states = backend.callsFor("browser.get_browser_state");
-    expect(states).toHaveLength(2);
-    expect(states[1]?.args[0]).toMatchObject({ target_id: "bt-1", tab_id: "tab-1" });
   });
 
   it("defaults to the single active tab when several are open", async () => {

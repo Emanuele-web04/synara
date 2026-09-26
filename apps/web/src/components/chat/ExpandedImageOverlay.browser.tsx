@@ -14,20 +14,6 @@ describe("ExpandedImageOverlay", () => {
     document.body.innerHTML = "";
   });
 
-  it("renders nothing without an expanded image", async () => {
-    const screen = await render(
-      <ExpandedImageOverlay expandedImage={null} onClose={vi.fn()} onNavigate={vi.fn()} />,
-    );
-
-    try {
-      await expect
-        .element(page.getByRole("dialog", { name: "Expanded image preview" }))
-        .not.toBeInTheDocument();
-    } finally {
-      await screen.unmount();
-    }
-  });
-
   it("renders the selected image and dispatches previous, next, and close", async () => {
     const onClose = vi.fn();
     const onNavigate = vi.fn();
@@ -73,6 +59,9 @@ describe("ExpandedImageOverlay", () => {
 
     try {
       expect(onOcclusionChange).not.toHaveBeenCalled();
+      await expect
+        .element(page.getByRole("dialog", { name: "Expanded image preview" }))
+        .not.toBeInTheDocument();
 
       await screen.rerender(
         <ExpandedImageOverlay

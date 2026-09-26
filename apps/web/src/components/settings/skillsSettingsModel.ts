@@ -47,6 +47,7 @@ export const ORIGIN_SECTION_ORDER = [
   "opencode",
   "pi",
   "devin",
+  "omp",
   "agents",
   "project",
 ] as const;
@@ -72,6 +73,8 @@ export function skillOriginInfo(scope: string | undefined): SkillOriginInfo {
       return { label: PROVIDER_DISPLAY_NAMES.opencode, provider: "opencode" };
     case "pi":
       return { label: PROVIDER_DISPLAY_NAMES.pi, provider: "pi" };
+    case "omp":
+      return { label: PROVIDER_DISPLAY_NAMES.omp, provider: "omp" };
     case "agents":
       return { label: "Shared (.agents)", provider: null };
     case "project":
@@ -177,12 +180,6 @@ export function buildSettingsSkillGroups(
     })
     .filter((group): group is SettingsSkillGroup => group !== null)
     .sort((left, right) => left.displayName.localeCompare(right.displayName));
-}
-
-export function buildSettingsSkillSections(
-  skills: ReadonlyArray<ProviderSkillDescriptor>,
-): SettingsSkillSection[] {
-  return buildSettingsSkillSectionsFromGroups(buildSettingsSkillGroups(skills));
 }
 
 /** Sections from already-built groups, so callers that need both do not run the grouping twice. */

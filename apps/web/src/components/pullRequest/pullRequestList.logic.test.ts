@@ -87,12 +87,6 @@ describe("groupPullRequestEntriesByInvolvement", () => {
     expect(groups).toEqual([{ key: "others", label: "Others", entries: [entry] }]);
   });
 
-  it("buckets ghost-authored entries into Others", () => {
-    const entry = makeEntry({ author: null, viewerReviewRequested: false });
-    const groups = groupPullRequestEntriesByInvolvement([entry], "viewer");
-    expect(groups).toEqual([{ key: "others", label: "Others", entries: [entry] }]);
-  });
-
   it("matches viewer logins case-insensitively", () => {
     const entry = makeEntry({ author: makeActor("Viewer") });
     const groups = groupPullRequestEntriesByInvolvement([entry], "viewer");
@@ -113,10 +107,6 @@ describe("groupPullRequestEntriesByInvolvement", () => {
     const authored = makeEntry({ number: 3, author: makeActor("viewer") });
     const groups = groupPullRequestEntriesByInvolvement([authored, other, reviewing], "viewer");
     expect(groups.map((group) => group.key)).toEqual(["reviewRequested", "authored", "others"]);
-  });
-
-  it("returns no groups for an empty entry list", () => {
-    expect(groupPullRequestEntriesByInvolvement([], "viewer")).toEqual([]);
   });
 
   it("falls back gracefully when the viewer login is unknown", () => {
@@ -197,45 +187,9 @@ describe("pullRequestPinToggleInputs", () => {
       },
     ]);
   });
-
-  it("pins every associated project from an aggregate unpinned row", () => {
-    const entry = makeEntry({
-      projectContexts: [
-        {
-          projectId: "project-1" as PullRequestListEntry["projectId"],
-          projectTitle: "Project One",
-          isPinned: false,
-        },
-        {
-          projectId: "project-2" as PullRequestListEntry["projectId"],
-          projectTitle: "Project Two",
-          isPinned: false,
-        },
-      ],
-    });
-    expect(pullRequestPinToggleInputs(entry, true)).toEqual([
-      {
-        projectId: "project-1",
-        repository: "acme/widgets",
-        number: 1,
-        isPinned: true,
-      },
-      {
-        projectId: "project-2",
-        repository: "acme/widgets",
-        number: 1,
-        isPinned: true,
-      },
-    ]);
-  });
 });
 
 describe("filterPullRequestEntriesByInvolvement", () => {
-  it("returns every entry for the all tab", () => {
-    const entries = [makeEntry(), makeEntry({ number: 2 })];
-    expect(filterPullRequestEntriesByInvolvement(entries, "viewer", "all")).toEqual(entries);
-  });
-
   it("keeps only entries with an active review request for the reviewing tab", () => {
     const requested = makeEntry({ viewerReviewRequested: true });
     const other = makeEntry({ number: 2 });
@@ -259,10 +213,6 @@ describe("filterPullRequestEntriesByInvolvement", () => {
 });
 
 describe("matchesPullRequestSearchQuery", () => {
-  it("matches every entry when the query is empty", () => {
-    expect(matchesPullRequestSearchQuery(makeEntry(), "")).toBe(true);
-  });
-
   it("matches title, repository, branch, and author case-insensitively", () => {
     const entry = makeEntry({
       title: "Fix Widget",

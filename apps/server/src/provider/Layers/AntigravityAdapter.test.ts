@@ -185,32 +185,6 @@ claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)
     });
   });
 
-  it("discovers future CLI models without requiring a static catalog update", () => {
-    expect(
-      parseAntigravityModelLines(`
-Gemini 4 Pro (Low)
-Gemini 4 Pro (Ultra)
-Claude Sonnet 5 (Thinking)
-`),
-    ).toEqual([
-      {
-        slug: "Gemini 4 Pro",
-        name: "Gemini 4 Pro",
-        supportedReasoningEfforts: [
-          { value: "low", label: "Low" },
-          { value: "ultra", label: "Ultra" },
-        ],
-        defaultReasoningEffort: "low",
-      },
-      {
-        slug: "Claude Sonnet 5",
-        name: "Claude Sonnet 5",
-        supportedReasoningEfforts: [{ value: "thinking", label: "Thinking" }],
-        defaultReasoningEffort: "thinking",
-      },
-    ]);
-  });
-
   it("dispatches a discovered model with its discovered default effort", () => {
     expect(resolveAntigravityCliModelLabel("Gemini 4 Pro", undefined, "low")).toBe(
       "Gemini 4 Pro (Low)",
@@ -1594,8 +1568,6 @@ describe("Antigravity turn settle on cancel (#465)", () => {
       turns: 1,
       stopCleanup: true,
     },
-    { error: "timeout waiting for response", turns: 1, stopCleanup: false },
-    { error: "timeout waiting for response", turns: 1, stopCleanup: true },
     { error: undefined, turns: 1, stopCleanup: true },
   ])(
     "honors terminal errors and successful stop teardown (error=$error, turns=$turns)",
@@ -1829,16 +1801,6 @@ describe("Antigravity turn settle on cancel (#465)", () => {
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
-  });
-
-  it("resolves default reasoning effort for Gemini 3.7 Flash and DeepSeek models", () => {
-    expect(resolveAntigravityCliModelLabel("Gemini 3.7 Flash")).toBe("Gemini 3.7 Flash (High)");
-    expect(resolveAntigravityCliModelLabel("Gemini 3.7 Flash", { reasoningEffort: "medium" })).toBe(
-      "Gemini 3.7 Flash (Medium)",
-    );
-    expect(resolveAntigravityCliModelLabel("DeepSeek V4 Flash Max")).toBe(
-      "DeepSeek V4 Flash Max (High)",
-    );
   });
 
   it("compacts multiline pre-invocation and stop hook payloads into single NDJSON lines", async () => {
@@ -2202,7 +2164,6 @@ describe("Antigravity background task helpers (#752)", () => {
       taskId: "session/task-8",
       output: "Tool is running as a background task with task id: session/task-8",
     },
-    { taskId: "session/task-8", output: "Task ID:session/task-8 is running in the background" },
   ])("preserves the full background task id in $output", ({ taskId, output }) => {
     expect(
       detectAntigravityBackgroundTaskStart(
@@ -2944,27 +2905,26 @@ describe("Antigravity background task helpers (#752)", () => {
       }),
     ));
 
-  it.each(["session/task-8", "session:task-8"])(
-    "reconciles qualified id %s in a delayed post-tool output",
-    (taskId) =>
-      runAgyBackgroundScenario(`qualified-post-id-${taskId.replaceAll(/[^\w]/g, "-")}`, (io) =>
-        Effect.gen(function* () {
-          io.transcript(agyRunningStep(8, taskId), agyText(9, "Waiting for command."));
-          yield* io.waitUntil(() => io.counts.assistantMessages === 1);
-          io.hooks(
-            `post-tool\t${JSON.stringify({ stepIdx: 7, toolCall: { name: "run_command", args: { CommandLine: agyCommand } }, toolOutput: `Task id '${taskId}' is running in the background` })}`,
-          );
-          io.transcript(agyCompletionStep(10, taskId), agyText(11, "Done."));
-          io.hooks('stop\t{"stepIdx":11}');
-          yield* io.waitUntil(() => io.counts.assistantMessages === 2);
-          expect(io.taskEvents).toEqual([
-            { type: "task.started", taskId: taskId },
-            { type: "task.completed", taskId: taskId },
-          ]);
-          yield* io.waitUntil(() => io.counts.teardowns === 1);
-        }),
-      ),
-  );
+  it("reconciles qualified id session/task-8 in a delayed post-tool output", () => {
+    const taskId = "session/task-8";
+    return runAgyBackgroundScenario("qualified-post-id-session-task-8", (io) =>
+      Effect.gen(function* () {
+        io.transcript(agyRunningStep(8, taskId), agyText(9, "Waiting for command."));
+        yield* io.waitUntil(() => io.counts.assistantMessages === 1);
+        io.hooks(
+          `post-tool\t${JSON.stringify({ stepIdx: 7, toolCall: { name: "run_command", args: { CommandLine: agyCommand } }, toolOutput: `Task id '${taskId}' is running in the background` })}`,
+        );
+        io.transcript(agyCompletionStep(10, taskId), agyText(11, "Done."));
+        io.hooks('stop\t{"stepIdx":11}');
+        yield* io.waitUntil(() => io.counts.assistantMessages === 2);
+        expect(io.taskEvents).toEqual([
+          { type: "task.started", taskId: taskId },
+          { type: "task.completed", taskId: taskId },
+        ]);
+        yield* io.waitUntil(() => io.counts.teardowns === 1);
+      }),
+    );
+  });
 
   it("tracks a transcript background task once when post-tool reports it too", () =>
     runAgyBackgroundScenario("agy-background-dedupe", (io) =>

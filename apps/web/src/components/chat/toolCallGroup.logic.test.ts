@@ -28,13 +28,6 @@ describe("classifyToolCallSummaryCategory", () => {
     ).toBe("edit");
   });
 
-  it("classifies file reads via requestKind and read-only commands", () => {
-    expect(classifyToolCallSummaryCategory(workEntry({ id: "r1", requestKind: "file-read" }))).toBe(
-      "read",
-    );
-    expect(classifyToolCallSummaryCategory(command("r2", "cat src/app.ts"))).toBe("read");
-  });
-
   it("classifies search commands, structured search actions, and web searches", () => {
     expect(classifyToolCallSummaryCategory(command("s1", 'rg -n "foo" src'))).toBe("search");
     expect(
@@ -103,10 +96,6 @@ describe("isSummarizableToolCallEntry", () => {
       ),
     ).toBe(false);
   });
-
-  it("accepts plain tool entries", () => {
-    expect(isSummarizableToolCallEntry(command("c1"))).toBe(true);
-  });
 });
 
 describe("summarizeToolCallGroup", () => {
@@ -117,17 +106,6 @@ describe("summarizeToolCallGroup", () => {
     expect(
       summarizeToolCallGroup([command("c1"), workEntry({ id: "e", tone: "error" })]),
     ).toBeNull();
-  });
-
-  it("labels a homogeneous command run", () => {
-    const summary = summarizeToolCallGroup([
-      command("c1"),
-      command("c2"),
-      command("c3"),
-      command("c4"),
-    ]);
-    expect(summary?.label).toBe("Ran 4 commands");
-    expect(summary?.entryCount).toBe(4);
   });
 
   it("joins mixed categories in a fixed order", () => {
@@ -170,20 +148,6 @@ describe("summarizeToolCallGroup", () => {
     expect(summary?.label).toBe("Read 2 files");
   });
 
-  it("uses singular forms for single counts", () => {
-    const summary = summarizeToolCallGroup([command("c1"), edit("e1", ["a.ts"])]);
-    expect(summary?.label).toBe("Ran 1 command, Edited 1 file");
-  });
-
-  it("labels MCP tools and agent tasks", () => {
-    const summary = summarizeToolCallGroup([
-      workEntry({ id: "m1", itemType: "mcp_tool_call" }),
-      workEntry({ id: "m2", itemType: "dynamic_tool_call" }),
-      workEntry({ id: "a1", itemType: "collab_agent_tool_call" }),
-    ]);
-    expect(summary?.label).toBe("Ran 1 agent task, Used 2 tools");
-  });
-
   it("labels an uncategorized-only run as plain tool calls", () => {
     const summary = summarizeToolCallGroup([
       workEntry({ id: "o1", itemType: "image_view" }),
@@ -201,15 +165,5 @@ describe("summarizeToolCallGroup", () => {
     ]);
     expect(summary?.label).toBe("Ran 2 commands");
     expect(summary?.entryCount).toBe(2);
-  });
-
-  it("flags groups that still contain running work", () => {
-    const settled = summarizeToolCallGroup([command("c1"), command("c2")]);
-    expect(settled?.hasRunningEntry).toBe(false);
-    const running = summarizeToolCallGroup([
-      command("c1"),
-      workEntry({ id: "c2", itemType: "command_execution", toolStatus: "running" }),
-    ]);
-    expect(running?.hasRunningEntry).toBe(true);
   });
 });

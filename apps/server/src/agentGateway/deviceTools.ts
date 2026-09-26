@@ -6,19 +6,19 @@
  * requiring a live turn so a detached provider cell cannot drive a simulator
  * after its turn ended.
  *
- * Consent rides the existing per-provider approval flows rather than a new
- * subsystem. Two things are enforced here rather than left to the provider:
- *
- * - `device_open_url` always requires approval. It is an exfiltration vector
- *   (an arbitrary URL opened in the device's browser), so it is refused
- *   in-tool for any session whose provider has no approval gate, following the
- *   `BrowserDownloadApprovalRequired` precedent of cancelling before the effect
- *   and telling the agent that explicit user approval is required.
- * - Every input tool is refused the same way for gateless providers
- *   (`PROVIDERS_WITHOUT_APPROVAL_GATE`). Antigravity runs with
- *   `--dangerously-skip-permissions` and Pi executes gateway tools with no
- *   approval bridge, so without this a prompt-injected agent could drive the
- *   device with no user in the loop.
+ * Consent rides the Synara-owned approval flow (`authorizeAction`) for every
+ * approval-required tool, mirroring the computer family: provider-native
+ * permission bridges cannot see MCP calls, so a gated provider like OMP still
+ * cannot ask about a device action unless Synara asks on its behalf — and a
+ * gateless provider (`PROVIDERS_WITHOUT_APPROVAL_GATE`; Antigravity runs with
+ * `--dangerously-skip-permissions`, Pi executes gateway tools with no approval
+ * bridge) needs the same card or a prompt-injected agent could drive the
+ * device with no user in the loop. `device_open_url` is always in that set:
+ * it is an exfiltration vector (an arbitrary URL opened in the device's
+ * browser), so it cancels before the effect, following the
+ * `BrowserDownloadApprovalRequired` precedent. When no Synara authorize
+ * surface was supplied at all, mutating tools refuse with the
+ * approval-unavailable error rather than running unasked.
  *
  * @module agentGateway/deviceTools
  */
@@ -49,7 +49,6 @@ import {
   type ToolContext,
   type ToolEntry,
 } from "./toolRuntime.ts";
-import { PROVIDERS_WITHOUT_APPROVAL_GATE } from "./approvalGate.ts";
 
 export const DEVICE_CONTROL_CAPABILITY = "device:control" as const;
 
@@ -115,6 +114,11 @@ const DEVICE_HARDWARE_BUTTONS: readonly DeviceHardwareButton[] = [
   "volume-up",
   "volume-down",
 ];
+
+// Screenshots ride MCP tool-result and provider session frames as base64;
+// 4 MB of PNG stays well under the shared 16 MB JSON-RPC frame cap after
+// encoding, for every provider transport.
+const DEVICE_SCREENSHOT_MAX_INLINE_BYTES = 4 * 1024 * 1024;
 
 const UDID_PROPERTY = {
   type: "string",
@@ -192,6 +196,13 @@ function readBoundedIntegerArg(
 
 export interface AgentGatewayDeviceToolsOptions {
   readonly manager: DeviceManager;
+  /** Synara-owned consent for approval-required calls; see computerTools.ts. */
+  readonly authorizeAction?: (
+    name: string,
+    args: Record<string, unknown>,
+    context: ToolContext,
+    signal: AbortSignal,
+  ) => Promise<boolean>;
 }
 
 export function makeAgentGatewayDeviceTools(
@@ -210,14 +221,20 @@ export function makeAgentGatewayDeviceTools(
   ) => {
     return (args: Record<string, unknown>, context: ToolContext) =>
       Effect.gen(function* () {
-        if (
-          deviceToolRequiresApproval(name) &&
-          PROVIDERS_WITHOUT_APPROVAL_GATE.has(context.callerProvider)
-        ) {
+        if (deviceToolRequiresApproval(name) && options.authorizeAction === undefined) {
           return approvalUnavailableResult(name);
         }
+        const authorize = options.authorizeAction;
         return yield* Effect.tryPromise({
-          try: async () => {
+          try: async (signal) => {
+            if (deviceToolRequiresApproval(name) && authorize) {
+              const approved = await authorize(name, args, context, signal);
+              if (!approved) {
+                return mcpToolResultError(
+                  "Device action was denied or cancelled; no input was sent.",
+                );
+              }
+            }
             const value = await manager.withAgentActivity(context.callerThreadId, () =>
               run(args, context),
             );
@@ -595,7 +612,9 @@ export function makeAgentGatewayDeviceTools(
           return yield* Effect.tryPromise({
             try: async () => {
               const result = await manager.withAgentActivity(context.callerThreadId, () =>
-                manager.screenshot(readUdid(args)),
+                manager.screenshot(readUdid(args), {
+                  maxInlineBytes: DEVICE_SCREENSHOT_MAX_INLINE_BYTES,
+                }),
               );
               await surfaceDevice(context, readUdid(args), "agent-tool");
               // Image content beside the JSON so the model sees the screen
