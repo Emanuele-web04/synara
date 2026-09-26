@@ -408,14 +408,18 @@ describe("useProviderModelCatalog", () => {
   it("never surfaces role: slugs in the OMP picker, even when discovery carries roles", () => {
     // #1340: OMP modelRoles are internal sub-agent routing, not selectable
     // models. A discovery payload that still carries a legacy `roles` array
-    // must not produce role: entries in the picker.
+    // must not produce role: entries in the picker. `legacyDiscoveryData`
+    // lives outside the `modelQueries.set` literal so the excess `roles` key
+    // survives the typecheck (fresh literals reject unknown keys) while the
+    // runtime payload still carries it.
+    const legacyDiscoveryData = {
+      models: [{ slug: "anthropic/claude-sonnet-4", name: "Claude Sonnet 4" }],
+      roles: [{ name: "smol", model: "anthropic/claude-sonnet-4" }],
+      source: "omp-cli",
+      cached: false,
+    };
     modelQueries.set("omp", {
-      data: {
-        models: [{ slug: "anthropic/claude-sonnet-4", name: "Claude Sonnet 4" }],
-        roles: [{ name: "smol", model: "anthropic/claude-sonnet-4" }],
-        source: "omp-cli",
-        cached: false,
-      },
+      data: legacyDiscoveryData,
       isFetching: false,
       isLoading: false,
       isPlaceholderData: false,
