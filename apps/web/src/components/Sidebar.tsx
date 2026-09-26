@@ -1582,6 +1582,7 @@ export default function Sidebar() {
   const { activeProjectId: focusedProjectId } = useFocusedChatContext();
   const latestProjectId = useLatestProjectStore((state) => state.latestProjectId);
   const [createProjectDialogOpen, setCreateProjectDialogOpen] = useState(false);
+  const [createProjectSpaceId, setCreateProjectSpaceId] = useState<SpaceId | null | undefined>();
   const [searchPaletteOpen, setSearchPaletteOpen] = useState(false);
   const openFeedbackDialog = useFeedbackDialogStore((state) => state.openDialog);
   const [searchPaletteMode, setSearchPaletteMode] = useState<SidebarSearchPaletteMode>("search");
@@ -5372,7 +5373,10 @@ export default function Sidebar() {
                   <SidebarIconButton
                     icon={AddPlusIcon}
                     label="Add project"
-                    onClick={handleStartAddProject}
+                    onClick={() => {
+                      setCreateProjectSpaceId(section.spaceId);
+                      setCreateProjectDialogOpen(true);
+                    }}
                     tooltip="Add project"
                     tooltipSide="right"
                   />,
@@ -6187,6 +6191,7 @@ export default function Sidebar() {
         badge: null,
         active: railActiveItem === id && activeRailShortcutKey === null,
         onSelect: () => {
+          setActivityViewEnabledSmoothly(false);
           selectRailPanelItem(id);
           // Projects live next to the threads only: from another section, Home and
           // Spaces go back to the thread view instead of opening over that section.
@@ -6221,6 +6226,7 @@ export default function Sidebar() {
           badge: null,
           active: activeRailShortcutKey === shortcut.key,
           onSelect: () => {
+            setActivityViewEnabledSmoothly(false);
             selectRailPanelItem("home");
             // Switching Space already lands on its last thread; the same Space only needs
             // the thread view back when another section is open.
@@ -6240,6 +6246,7 @@ export default function Sidebar() {
         badge: null,
         active: activeRailShortcutKey === shortcut.key,
         onSelect: () => {
+          setActivityViewEnabledSmoothly(false);
           selectRailPanelItem("spaces");
           openRailSpacesProject(project.id);
           if (!isOnThreadsSection) handleSidebarViewChange("threads");
@@ -6260,10 +6267,7 @@ export default function Sidebar() {
       pinnedKeys={new Set(railShortcuts.map((shortcut) => shortcut.key))}
       onToggleShortcut={(key) =>
         updateSettings({
-          railShortcuts: toggleRailShortcutKey(
-            railShortcuts.map((shortcut) => shortcut.key),
-            key,
-          ),
+          railShortcuts: toggleRailShortcutKey(appSettings.railShortcuts, key),
         })
       }
       onOpenStudio={
@@ -6960,9 +6964,12 @@ export default function Sidebar() {
         open={createProjectDialogOpen}
         githubProvisioningAvailable={githubProvisioningAvailable}
         spaces={spaces}
-        activeSpaceId={activeSpaceId}
+        activeSpaceId={createProjectSpaceId === undefined ? activeSpaceId : createProjectSpaceId}
         defaultCloneParent={homeDir ?? "~"}
-        onOpenChange={setCreateProjectDialogOpen}
+        onOpenChange={(open) => {
+          setCreateProjectDialogOpen(open);
+          if (!open) setCreateProjectSpaceId(undefined);
+        }}
         onSubmit={handleCreateProjectSubmit}
       />
 
