@@ -1,8 +1,0 @@
-# Development stack for orb agents. `amp orb services ensure` runs it supervised, so a
-# dev instance survives Amp CLI updates and orb pause/resume instead of dying with the
-# shell that started it. No portal: the server rejects non-loopback browser origins on
-# the WebSocket handshake, so a portaled UI would load with no data. Drive it with the
-# in-orb browser at http://localhost:5733 instead.
-services:
-  dev:
-    command: env -u SYNARA_AUTH_TOKEN SYNARA_PORT_OFFSET=0 SYNARA_NO_BROWSER=1 bun run dev -- --home-dir ./.synara-dev --port 3773
