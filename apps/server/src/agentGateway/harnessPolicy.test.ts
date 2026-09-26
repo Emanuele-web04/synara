@@ -47,6 +47,8 @@ describe("Synara harness policy", () => {
     assert.include(policy, "one exact synara_create_threads plan");
     assert.include(policy, "before returning an operationId");
     assert.include(policy, "synara_wait_for_threads");
+    assert.include(policy, "synara_get_usage");
+    assert.include(policy, "only fresh, available quotaWindows count");
     assert.include(policy, "synara_set_thread_pull_request");
     assert.include(policy, "current thread's own deliverable");
     assert.include(policy, "only reviews, references, or discusses");
@@ -138,7 +140,9 @@ describe("Synara harness policy", () => {
   });
 
   it("keeps the gateway policy below its prompt budget", () => {
-    assert.isAtMost(renderSynaraHarnessPolicy({ gatewayControlAvailable: true }).length, 6_030);
+    // Budget raised for the one-line usage-budgets affordance
+    // above (84 chars); it still guards against accidental bloat.
+    assert.isAtMost(renderSynaraHarnessPolicy({ gatewayControlAvailable: true }).length, 6_120);
   });
 
   it("withholds device guidance from sessions with no gateway control", () => {
