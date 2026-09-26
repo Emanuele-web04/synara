@@ -2342,7 +2342,7 @@ let windowsShellStampTimer: ReturnType<typeof setImmediate> | null = null;
 let windowsShellStampResolve: (() => void) | null = null;
 let desktopAppIconApplyTail: Promise<void> = Promise.resolve();
 let lastPersistedMacAppIcon: DesktopAppIcon | null = null;
-let lastPersistedMacAppIconBundle: string | null = null;
+let lastPersistedMacAppIconBundleMtime: number | null = null;
 
 async function syncMacAppBundleIcon(
   icon: DesktopAppIcon,
@@ -2352,18 +2352,30 @@ async function syncMacAppBundleIcon(
   if (!app.isPackaged) return;
   const bundlePath = resolveMacAppBundlePath(process.execPath, process.platform);
   if (!bundlePath) return;
-  // An in-session auto-update replaces the bundle on disk. The remembered icon
-  // alone would skip re-persisting onto the fresh bundle, so bypass the guard
-  // when the bundle path changed. State latches only after a successful
-  // persist, so a failed NSWorkspace write retries on the next apply.
-  if (lastPersistedMacAppIcon === icon && lastPersistedMacAppIconBundle === bundlePath) return;
+  // An in-place auto-update swaps the bundle without changing its path. The
+  // remembered icon alone would skip re-persisting onto the fresh bundle, so
+  // bypass the guard when the bundle directory mtime changed. State latches
+  // only after a successful persist, so a failed NSWorkspace write retries on
+  // the next apply. A stat failure re-persists (fail open).
+  let bundleMtime: number | null = null;
+  try {
+    bundleMtime = FS.statSync(bundlePath).mtimeMs;
+  } catch {
+    bundleMtime = null;
+  }
+  if (
+    lastPersistedMacAppIcon === icon &&
+    bundleMtime !== null &&
+    lastPersistedMacAppIconBundleMtime === bundleMtime
+  )
+    return;
   await persistMacAppIcon({
     bundlePath,
     cacheDirectory: Path.join(STATE_DIR, "mac-app-icons"),
     png: icon === "default" ? null : (image?.toPNG() ?? null),
   });
   lastPersistedMacAppIcon = icon;
-  lastPersistedMacAppIconBundle = bundlePath;
+  lastPersistedMacAppIconBundleMtime = bundleMtime;
 }
 
 function cancelDeferredWindowsShellStamp(): void {
