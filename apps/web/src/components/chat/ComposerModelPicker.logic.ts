@@ -132,8 +132,6 @@ export type ComposerModelPickerRow = {
   groupLabel: string | null;
   /** Present on starred rows: the preset to restore and to un-star. */
   preset: StarredModel | null;
-  /** Present on OMP role rows: the model + options the role resolves to. */
-  role?: ProviderModelOption["role"];
 };
 
 export function buildProviderTabRows(input: {
@@ -164,7 +162,6 @@ export function buildProviderTabRows(input: {
       selected: option.slug === input.selectedModel,
       groupLabel: group.label,
       preset: null,
-      role: option.role,
     })),
   );
 }

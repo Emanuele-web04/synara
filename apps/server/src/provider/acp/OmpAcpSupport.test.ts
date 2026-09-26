@@ -6,14 +6,12 @@ import { Effect } from "effect";
 import * as AcpErrors from "./AcpErrors.ts";
 import type * as Acp from "@agentclientprotocol/sdk";
 import { describe, expect, it } from "vitest";
-import { OMP_THINKING_LEVEL_OPTIONS } from "@synara/contracts";
 
 import {
   applyOmpAcpInteractionMode,
   applyOmpAcpModelSelection,
   buildOmpAcpSpawnInput,
   parseOmpCliModelList,
-  parseOmpModelRoles,
   resolveOmpAcpAuthMethodId,
   resolveOmpCliBinaryPath,
 } from "./OmpAcpSupport.ts";
@@ -390,173 +388,5 @@ describe("resolveOmpAcpAuthMethodId", () => {
       resolveOmpAcpAuthMethodId(initializeWithAuthMethods([])).pipe(Effect.flip),
     );
     expect(error).toBeInstanceOf(AcpErrors.AcpRequestError);
-  });
-});
-
-describe("parseOmpModelRoles", () => {
-  it("splits a trailing known thinking level from the model slug", () => {
-    expect(
-      parseOmpModelRoles({ "Dreaming-Proposer": "alibaba-token-plan/qwen3.8-max-preview:low" }),
-    ).toEqual([
-      {
-        name: "Dreaming-Proposer",
-        model: "alibaba-token-plan/qwen3.8-max-preview",
-        thinkingLevel: "low",
-      },
-    ]);
-  });
-
-  it("omits thinkingLevel when the value has no known suffix", () => {
-    const [role] = parseOmpModelRoles({ smol: "zai/glm-4.7" });
-    expect(role).toEqual({ name: "smol", model: "zai/glm-4.7" });
-    expect(role).not.toHaveProperty("thinkingLevel");
-  });
-
-  it("keeps an unknown suffix as part of the model slug", () => {
-    expect(parseOmpModelRoles({ weird: "foo:bar" })).toEqual([{ name: "weird", model: "foo:bar" }]);
-  });
-
-  it("skips non-string and blank values", () => {
-    expect(parseOmpModelRoles({ a: "", b: "   ", c: 123, d: null, e: "zai/glm-5.2" })).toEqual([
-      { name: "e", model: "zai/glm-5.2" },
-    ]);
-  });
-
-  it("preserves config insertion order", () => {
-    const roles = parseOmpModelRoles({ z: "m1", a: "m2", m: "m3" });
-    expect(roles.map((role) => role.name)).toEqual(["z", "a", "m"]);
-  });
-
-  it("recognizes every known thinking level", () => {
-    for (const level of OMP_THINKING_LEVEL_OPTIONS) {
-      const [role] = parseOmpModelRoles({ x: `p/m:${level}` });
-      expect(role).toEqual({ name: "x", model: "p/m", thinkingLevel: level });
-    }
-  });
-
-  it("splits only the trailing level, keeping earlier colons in the model slug", () => {
-    expect(parseOmpModelRoles({ x: "provider/sub:id:low" })).toEqual([
-      { name: "x", model: "provider/sub:id", thinkingLevel: "low" },
-    ]);
-  });
-
-  it("returns an empty array for non-record input", () => {
-    expect(parseOmpModelRoles(null)).toEqual([]);
-    expect(parseOmpModelRoles("not-a-map")).toEqual([]);
-    expect(parseOmpModelRoles([["x", "p/m"]])).toEqual([]);
-  });
-
-  it("returns an empty array for an empty map", () => {
-    expect(parseOmpModelRoles({})).toEqual([]);
-  });
-
-  const catalog = [
-    { slug: "zai/glm-4.7", name: "GLM 4.7" },
-    { slug: "zai/glm-4.7:max", name: "GLM 4.7 Max" },
-    { slug: "anthropic/claude-sonnet-4.6", name: "Claude Sonnet" },
-    { slug: "openai/gpt-5.5", name: "GPT 5.5" },
-  ];
-
-  it("resolves the first catalog match of a comma fallback chain", () => {
-    expect(parseOmpModelRoles({ smol: "unknown/x, zai/glm-4.7:low" }, catalog)).toEqual([
-      { name: "smol", model: "zai/glm-4.7", thinkingLevel: "low" },
-    ]);
-  });
-
-  it("resolves array-valued roles as fallback chains like OMP", () => {
-    expect(parseOmpModelRoles({ main: ["nope/x", "openai/gpt-5.5"] }, catalog)).toEqual([
-      { name: "main", model: "openai/gpt-5.5" },
-    ]);
-    // Arrays with non-string entries are invalid in OMP — the role is skipped.
-    expect(parseOmpModelRoles({ bad: ["p/m", 42] }, catalog)).toEqual([]);
-  });
-
-  it("prefers a literal catalog id over a thinking-suffix split", () => {
-    // `zai/glm-4.7:max` is itself a catalog model: the `:max` is part of the id,
-    // not a thinking suffix — OMP guards the split behind literal-id matching.
-    expect(parseOmpModelRoles({ r: "zai/glm-4.7:max" }, catalog)).toEqual([
-      { name: "r", model: "zai/glm-4.7:max" },
-    ]);
-    // With no literal match, `:max` is a thinking suffix like any other level.
-    expect(parseOmpModelRoles({ r: "openai/gpt-5.5:max" }, catalog)).toEqual([
-      { name: "r", model: "openai/gpt-5.5", thinkingLevel: "max" },
-    ]);
-  });
-
-  it("resolves bare ids case-insensitively and keeps catalog order for ties", () => {
-    expect(parseOmpModelRoles({ r: "claude-sonnet-4.6" }, catalog)).toEqual([
-      { name: "r", model: "anthropic/claude-sonnet-4.6" },
-    ]);
-    expect(parseOmpModelRoles({ r: "CLAUDE-SONNET-4.6" }, catalog)).toEqual([
-      { name: "r", model: "anthropic/claude-sonnet-4.6" },
-    ]);
-    // A bare id hitting multiple providers resolves like OMP's
-    // pickPreferredModel — first in catalog order when nothing is preferred.
-    expect(
-      parseOmpModelRoles({ r: "dup" }, [
-        { slug: "a/dup", name: "A Dup" },
-        { slug: "b/dup", name: "B Dup" },
-      ]),
-    ).toEqual([{ name: "r", model: "a/dup" }]);
-  });
-
-  it("substring-matches ids like OMP's generic fallback", () => {
-    expect(parseOmpModelRoles({ r: "sonnet" }, catalog)).toEqual([
-      { name: "r", model: "anthropic/claude-sonnet-4.6" },
-    ]);
-  });
-
-  it("keeps `provider/` patterns locked to that provider", () => {
-    expect(parseOmpModelRoles({ r: "zai/sonnet" }, catalog)).toEqual([
-      { name: "r", model: "zai/sonnet" },
-    ]);
-  });
-
-  it("expands `@`- and `pi/`-role aliases to the configured role's chain", () => {
-    expect(parseOmpModelRoles({ main: "@smol", smol: "openai/gpt-5.5" }, catalog)).toEqual([
-      { name: "main", model: "openai/gpt-5.5" },
-      { name: "smol", model: "openai/gpt-5.5" },
-    ]);
-    expect(parseOmpModelRoles({ main: "pi/slow", slow: "zai/glm-4.7" }, catalog)).toEqual([
-      { name: "main", model: "zai/glm-4.7" },
-      { name: "slow", model: "zai/glm-4.7" },
-    ]);
-    // The alias's own `:level` rides onto every expanded pattern.
-    expect(parseOmpModelRoles({ main: "@smol:high", smol: "openai/gpt-5.5" }, catalog)).toEqual([
-      { name: "main", model: "openai/gpt-5.5", thinkingLevel: "high" },
-      { name: "smol", model: "openai/gpt-5.5" },
-    ]);
-  });
-
-  it("breaks alias cycles and keeps unconfigured aliases as raw selectors", () => {
-    expect(parseOmpModelRoles({ a: "@b", b: "@a" }, catalog)).toEqual([
-      { name: "a", model: "@b" },
-      { name: "b", model: "@a" },
-    ]);
-    // `@smol` with no configured `smol` expands to nothing here (OMP's built-in
-    // priority defaults live in the agent); the alias stays a valid OMP selector.
-    expect(parseOmpModelRoles({ main: "@smol" }, catalog)).toEqual([
-      { name: "main", model: "@smol" },
-    ]);
-  });
-
-  it("resolves the model past an invalid `:suffix` like OMP's warning path", () => {
-    // `bogus` is not a thinking level: OMP drops it, resolves the prefix, and
-    // warns — the role surfaces the model without a thinking level.
-    expect(parseOmpModelRoles({ x: "zai/glm-4.7:bogus" }, catalog)).toEqual([
-      { name: "x", model: "zai/glm-4.7" },
-    ]);
-  });
-
-  it("maps the `:auto` suffix to OMP's auto thinking sentinel", () => {
-    expect(parseOmpModelRoles({ r: "zai/glm-4.7:auto" }, catalog)).toEqual([
-      { name: "r", model: "zai/glm-4.7", thinkingLevel: "auto" },
-    ]);
-  });
-
-  it("falls back to the first chain entry when nothing resolves", () => {
-    expect(parseOmpModelRoles({ r: "nope/x:high, also/no" }, catalog)).toEqual([
-      { name: "r", model: "nope/x", thinkingLevel: "high" },
-    ]);
   });
 });

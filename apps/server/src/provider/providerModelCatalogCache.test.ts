@@ -87,6 +87,35 @@ describe("providerModelCatalogCache", () => {
     expect(await run(readProviderModelCatalogCache(filePath()))).toEqual([]);
   });
 
+  it("strips legacy omp roles from a persisted catalog instead of failing", async () => {
+    mkdirSync(path.dirname(filePath()), { recursive: true });
+    writeFileSync(
+      filePath(),
+      JSON.stringify({
+        version: 1,
+        entries: [
+          {
+            key: "k",
+            result: {
+              models: [{ slug: "p/a", name: "A" }],
+              roles: [{ name: "smol", model: "p/a" }],
+              source: "omp-cli",
+              cached: false,
+            },
+            storedAt: 1,
+          },
+        ],
+      }),
+    );
+    expect(await run(readProviderModelCatalogCache(filePath()))).toEqual([
+      {
+        key: "k",
+        result: { models: [{ slug: "p/a", name: "A" }], source: "omp-cli", cached: false },
+        storedAt: 1,
+      },
+    ]);
+  });
+
   it("writes the snapshot as private-mode JSON", async () => {
     await run(
       writeProviderModelCatalogCache({

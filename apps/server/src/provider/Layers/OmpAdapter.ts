@@ -113,8 +113,6 @@ import {
   applyOmpAcpInteractionMode,
   applyOmpAcpModelSelection,
   makeOmpAcpRuntime,
-  ompModelRolesMapFromConfig,
-  parseOmpModelRoles,
   parseOmpCliModelList,
   resolveOmpCliBinaryPath,
   type OmpAcpRuntimeSettings,
@@ -2163,9 +2161,6 @@ export function makeOmpAdapter(
           // override when unset so omp uses its own default/ambient env.
           const agentDir = input.agentDir?.trim() || ompSettings.agentDir?.trim() || undefined;
           const cacheKey = [binaryPath, agentDir ?? ""].join("\u0000");
-          // The catalog is global (keyed by binary path + agent dir), but role
-          // values live in layered config files — resolve roles per request so
-          // project-scoped `modelRoles` participate when a cwd is provided.
           const cached = modelDiscoveryCache.get(cacheKey);
           const catalogFromCache = cached !== undefined && cached.expiresAt > Date.now();
           if (catalogFromCache) {
@@ -2227,56 +2222,7 @@ export function makeOmpAdapter(
               result: catalog,
             });
           }
-          // OMP roles are file-backed `modelRoles`, not part of the CLI catalog.
-          // OMP merges the global layer (`<agentDir>/config.yml`, or
-          // `~/.omp/agent` when no override is configured) with the project
-          // layer (`<cwd>/.omp/config.yml`), project winning per role name;
-          // `config.yaml` is a valid alternate filename in both spots.
-          // Mirror OMP's getAgentDir() precedence: the configured override
-          // (spawned as PI_CODING_AGENT_DIR), then the ambient env the child
-          // inherits anyway, then <PI_CONFIG_DIR|".omp">/agent under home.
-          const rolesAgentDir =
-            agentDir ||
-            process.env.PI_CODING_AGENT_DIR?.trim() ||
-            nodePath.join(nodeOs.homedir(), process.env.PI_CONFIG_DIR?.trim() || ".omp", "agent");
-          const readOmpRolesMap = (dir: string): Effect.Effect<Record<string, unknown>> =>
-            Effect.gen(function* () {
-              // `config.yml` then `config.yaml` — OMP's MAIN_CONFIG_FILENAMES
-              // order; the first file that loads wins even when it parses to
-              // empty settings, and a read/parse failure stops the fallback.
-              for (const filename of ["config.yml", "config.yaml"]) {
-                const configPath = nodePath.join(dir, filename);
-                if (!(yield* fileSystem.exists(configPath).pipe(Effect.orElseSucceed(() => false))))
-                  continue;
-                const text = yield* fileSystem.readFileString(configPath).pipe(
-                  Effect.catch((error) => {
-                    log.warn("model/list roles read failed", {
-                      agentDir: dir,
-                      detail: error instanceof Error ? error.message : String(error),
-                    });
-                    return Effect.succeed(null);
-                  }),
-                );
-                if (text === null) return {};
-                try {
-                  return ompModelRolesMapFromConfig(text);
-                } catch (error) {
-                  log.warn("model/list roles parse failed", {
-                    agentDir: dir,
-                    detail: error instanceof Error ? error.message : String(error),
-                  });
-                  return {};
-                }
-              }
-              return {};
-            });
-          const globalRoles = yield* readOmpRolesMap(rolesAgentDir);
-          const rolesCwd = input.cwd?.trim();
-          const projectRoles = rolesCwd
-            ? yield* readOmpRolesMap(nodePath.join(rolesCwd, ".omp"))
-            : {};
-          const roles = parseOmpModelRoles({ ...globalRoles, ...projectRoles }, catalog.models);
-          return { ...catalog, roles, ...(catalogFromCache ? { cached: true as const } : {}) };
+          return { ...catalog, ...(catalogFromCache ? { cached: true as const } : {}) };
         }),
       );
 
