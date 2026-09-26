@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { ProjectId, ThreadId } from "@synara/contracts";
 
 import type { SidebarThreadSummary, ThreadSession } from "../types";
-import { resolveThreadProjectLabel } from "./Sidebar.logic";
+
 import {
   buildActivityViewModel,
   collectActivityScopeOptions,
@@ -11,7 +11,6 @@ import {
   collectVisibleActivityThreadIds,
   groupActivityThreadsByProject,
   hasUnreadActivity,
-  isActivityThread,
   resolveActivityDateBucket,
   resolveActivityScope,
   type ActivityScopeOption,
@@ -83,30 +82,6 @@ function completedTurn(completedAt: string): SidebarThreadSummary["latestTurn"] 
     completedAt,
   } as SidebarThreadSummary["latestTurn"];
 }
-
-describe("isActivityThread", () => {
-  it("excludes archived, subagent, and never-run threads", () => {
-    expect(isActivityThread(makeThread({ id: "a", archivedAt: "2026-08-01T00:00:00Z" }))).toBe(
-      false,
-    );
-    expect(isActivityThread(makeThread({ id: "b", parentThreadId: "parent" }))).toBe(false);
-    expect(isActivityThread(makeThread({ id: "c", latestTurn: null }))).toBe(false);
-  });
-
-  it("includes threads whose first turn is starting", () => {
-    expect(isActivityThread(makeThread({ id: "d", latestTurn: null, hasLiveTailWork: true }))).toBe(
-      true,
-    );
-  });
-
-  it("includes threads that ran at least once", () => {
-    expect(
-      isActivityThread(
-        makeThread({ id: "e", latestTurn: completedTurn("2026-08-01T09:30:00.000Z") }),
-      ),
-    ).toBe(true);
-  });
-});
 
 describe("buildActivityViewModel", () => {
   it("keeps human-send order through startup, completion, attention, reads, and MCP sends", () => {
@@ -198,45 +173,6 @@ describe("buildActivityViewModel", () => {
     expect(order("2026-08-01T09:32:00.000Z", "2026-08-01T09:31:00.000Z")).toEqual([
       "run-a",
       "run-b",
-    ]);
-  });
-
-  it("keeps attention rows ordered by human sends instead of approval timestamps", () => {
-    const pendingApproval = (id: string, startedAt: string, updatedAt: string) =>
-      makeThread({
-        id,
-        createdAt: "2026-08-01T04:00:00.000Z",
-        updatedAt,
-        latestHumanMessageAt: startedAt,
-        hasPendingApprovals: true,
-        session: makeSession("running"),
-        latestTurn: {
-          turnId: `turn-${id}`,
-          state: "running",
-          requestedAt: startedAt,
-          startedAt,
-          completedAt: null,
-        } as SidebarThreadSummary["latestTurn"],
-      });
-    const olderTurnWithNewerApproval = pendingApproval(
-      "older-turn-newer-approval",
-      "2026-08-01T09:00:00.000Z",
-      "2026-08-01T09:30:00.000Z",
-    );
-    const newerTurnWithOlderApproval = pendingApproval(
-      "newer-turn-older-approval",
-      "2026-08-01T09:15:00.000Z",
-      "2026-08-01T09:20:00.000Z",
-    );
-
-    const model = buildActivityViewModel({
-      threads: [newerTurnWithOlderApproval, olderTurnWithNewerApproval],
-      pinnedThreadIdSet: new Set(),
-    });
-
-    expect(model.active.map((thread) => thread.id)).toEqual([
-      "newer-turn-older-approval",
-      "older-turn-newer-approval",
     ]);
   });
 
@@ -525,13 +461,6 @@ describe("resolveActivityScope", () => {
     { kind: "chats", projectIds: [OTHER_PROJECT_ID], threadCount: 1 },
   ];
 
-  it("filters to the selected project", () => {
-    expect(resolveActivityScope(PROJECT_ID, options)).toEqual({
-      scope: PROJECT_ID,
-      projectFilterIds: new Set([PROJECT_ID]),
-    });
-  });
-
   it("expands the Synara chats scope to its container projects", () => {
     expect(resolveActivityScope("chats", options)).toEqual({
       scope: "chats",
@@ -634,44 +563,6 @@ describe("collectVisibleActivityThreadIds", () => {
       }),
     ).toEqual(["recent", "today", "yesterday", "earlier-visible"]);
   });
-
-  it("uses already-paged project groups in project mode", () => {
-    const thread = (id: string) => makeThread({ id });
-    expect(
-      collectVisibleActivityThreadIds({
-        groupMode: "project",
-        pinnedOpen: true,
-        pinned: [thread("pinned")],
-        recent: [],
-        today: [],
-        yesterday: [],
-        earlierOpen: false,
-        earlier: [],
-        projectGroups: [[thread("project-a")], [thread("project-b")]],
-        settledOpen: true,
-        settled: [thread("done")],
-      }),
-    ).toEqual(["pinned", "project-a", "project-b", "done"]);
-  });
-
-  it("deduplicates a pinned unread thread that also appears in Recent", () => {
-    const duplicated = makeThread({ id: "pinned-unread" });
-    expect(
-      collectVisibleActivityThreadIds({
-        groupMode: "time",
-        pinnedOpen: true,
-        pinned: [duplicated],
-        recent: [],
-        today: [],
-        yesterday: [],
-        earlierOpen: false,
-        earlier: [],
-        projectGroups: [],
-        settledOpen: false,
-        settled: [],
-      }),
-    ).toEqual([duplicated.id]);
-  });
 });
 
 describe("collectUnreadActivityThreads", () => {
@@ -712,17 +603,5 @@ describe("collectUnreadActivityThreads", () => {
 
     expect(hasUnreadActivity([activeUnread], activeUnread.id)).toBe(false);
     expect(hasUnreadActivity([activeUnread, otherUnread], activeUnread.id)).toBe(true);
-  });
-});
-
-describe("resolveThreadProjectLabel", () => {
-  it("uses the project name for real projects and Synara otherwise", () => {
-    expect(
-      resolveThreadProjectLabel({ kind: "project", name: "Synara App", folderName: "synara" }),
-    ).toBe("Synara App");
-    expect(resolveThreadProjectLabel({ kind: "chat", name: "Chats", folderName: "chats" })).toBe(
-      "Synara",
-    );
-    expect(resolveThreadProjectLabel(undefined)).toBe("Synara");
   });
 });

@@ -72,6 +72,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Pick the default workspace mode for newly created draft threads. local worktree environment",
   },
   {
+    id: "general:delete-worktree-on-archive",
+    section: "general",
+    title: "Delete worktree on archive",
+    keywords:
+      "After Archive's Undo period, remove a clean worktree only when its task has stopped and no other task uses it. Keep its branch for recovery. worktree archive cleanup disk space remove delete",
+  },
+  {
     id: "general:welcome-tour",
     section: "general",
     title: "Welcome tour",

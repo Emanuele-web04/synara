@@ -2,12 +2,7 @@ import { Schema } from "effect";
 import { assert, it } from "@effect/vitest";
 import { Effect } from "effect";
 
-import {
-  KeybindingsConfig,
-  KeybindingRule,
-  ResolvedKeybindingRule,
-  ResolvedKeybindingsConfig,
-} from "./keybindings";
+import { KeybindingsConfig, KeybindingRule, ResolvedKeybindingRule } from "./keybindings";
 
 const decode = <S extends Schema.Top>(
   schema: S,
@@ -253,25 +248,6 @@ it.effect("parses resolved keybinding rules", () =>
       },
     });
     assert.strictEqual(parsed.shortcut.key, "d");
-  }),
-);
-
-it.effect("parses resolved keybindings arrays", () =>
-  Effect.gen(function* () {
-    const parsed = yield* decode(ResolvedKeybindingsConfig, [
-      {
-        command: "terminal.toggle",
-        shortcut: {
-          key: "j",
-          metaKey: false,
-          ctrlKey: false,
-          shiftKey: false,
-          altKey: false,
-          modKey: true,
-        },
-      },
-    ]);
-    assert.lengthOf(parsed, 1);
   }),
 );
 

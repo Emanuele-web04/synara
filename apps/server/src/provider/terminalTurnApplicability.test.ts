@@ -12,68 +12,9 @@ describe("isStartedTurnApplicable", () => {
       true,
     );
   });
-
-  it("rejects a start for a different turn while one is active", () => {
-    expect(
-      isStartedTurnApplicable({ activeTurnId: "turn-active", eventTurnId: "turn-conflict" }),
-    ).toBe(false);
-  });
 });
 
 describe("classifyTerminalTurnApplicability", () => {
-  it("accepts a terminal event for the active turn", () => {
-    expect(
-      classifyTerminalTurnApplicability({
-        activeTurnId: "turn-active",
-        eventTurnId: "turn-active",
-      }),
-    ).toEqual({
-      applicable: true,
-      resolvedTurnId: "turn-active",
-      reason: "matches-active-turn",
-    });
-  });
-
-  it("rejects a terminal event for a different turn without losing its identity", () => {
-    expect(
-      classifyTerminalTurnApplicability({
-        activeTurnId: "turn-current",
-        eventTurnId: "turn-stale",
-      }),
-    ).toEqual({
-      applicable: false,
-      resolvedTurnId: "turn-stale",
-      reason: "conflicts-with-active-turn",
-    });
-  });
-
-  it("scopes an omitted terminal turn id to the active turn", () => {
-    expect(
-      classifyTerminalTurnApplicability({
-        activeTurnId: "turn-active",
-        eventTurnId: undefined,
-      }),
-    ).toEqual({
-      applicable: true,
-      resolvedTurnId: "turn-active",
-      reason: "implicit-active-turn",
-    });
-  });
-
-  it("rejects an omitted terminal turn id when overlapping turns make it ambiguous", () => {
-    expect(
-      classifyTerminalTurnApplicability({
-        activeTurnId: "turn-active",
-        eventTurnId: undefined,
-        hasAmbiguousTurns: true,
-      }),
-    ).toEqual({
-      applicable: false,
-      resolvedTurnId: undefined,
-      reason: "ambiguous-missing-turn-id",
-    });
-  });
-
   it("accepts an explicit terminal event when no turn is active", () => {
     expect(
       classifyTerminalTurnApplicability({

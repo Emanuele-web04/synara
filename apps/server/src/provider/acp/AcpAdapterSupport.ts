@@ -81,7 +81,7 @@ export function mapAcpToAdapterError(
   return new ProviderAdapterRequestError({
     provider,
     method,
-    detail: error.message,
+    detail: error.message.trim() || "ACP request failed without an error message.",
     cause: error,
   });
 }

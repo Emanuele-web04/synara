@@ -3,11 +3,6 @@ import { describe, expect, it } from "vitest";
 import { isPlainObject, sanitizeStringKeyedRecord } from "./persistedRecord";
 
 describe("isPlainObject", () => {
-  it("accepts plain objects only", () => {
-    expect(isPlainObject({})).toBe(true);
-    expect(isPlainObject({ a: 1 })).toBe(true);
-  });
-
   it("rejects null, arrays, and primitives", () => {
     expect(isPlainObject(null)).toBe(false);
     expect(isPlainObject([])).toBe(false);

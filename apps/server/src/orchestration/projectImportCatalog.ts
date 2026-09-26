@@ -69,6 +69,19 @@ function cachedLookup<T>(lookup: (value: string) => Promise<T>): (value: string)
   };
 }
 
+// A stale or inaccessible native cwd must not hide other providers' projects.
+// Keep unexpected filesystem failures visible instead of treating them as missing paths.
+async function availableImportEntry<T>(lookup: () => Promise<T>): Promise<T | undefined> {
+  try {
+    return await lookup();
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EACCES" || code === "EPERM" || code === "EISDIR" || code === "ENOTDIR")
+      return undefined;
+    throw error;
+  }
+}
+
 export async function buildProjectImportCatalog(
   sources: ReadonlyArray<{ provider: ProjectImportProvider; catalog: NativeProjectImportCatalog }>,
   existingProjects: ReadonlyArray<ExistingProject>,
@@ -84,7 +97,8 @@ export async function buildProjectImportCatalog(
       !isAbsoluteDirectory(project.workspaceRoot)
     )
       continue;
-    const root = await canonical(project.workspaceRoot);
+    const root = await availableImportEntry(() => canonical(project.workspaceRoot));
+    if (!root) continue;
     // Keep a deterministic existing destination even if an older database contains duplicate roots.
     const identity = importPathIdentity(root);
     if (!existingByRoot.has(identity))
@@ -96,7 +110,8 @@ export async function buildProjectImportCatalog(
     for (const project of catalog.projects) {
       for (const value of project.roots) {
         if (!isAbsoluteDirectory(value)) continue;
-        const root = await canonical(value);
+        const root = await availableImportEntry(() => canonical(value));
+        if (!root) continue;
         const identity = importPathIdentity(root);
         if (!declaredRoots.has(identity))
           declaredRoots.set(identity, { root, title: project.title });
@@ -148,27 +163,48 @@ export async function buildProjectImportCatalog(
   for (const { provider, catalog } of sources) {
     if (!isAbsoluteDirectory(catalog.sourceHome)) continue;
     const sourceHome = await canonical(catalog.sourceHome);
-    const sourceProjects = new Map<string, { title: string; roots: string[] }>();
+    const sourceProjects = new Map<
+      string,
+      { title: string; roots: string[]; hasUnavailableRoot: boolean }
+    >();
     for (const sourceProject of catalog.projects) {
       const roots = new Map<string, string>();
+      let hasUnavailableRoot = false;
       for (const sourceRoot of sourceProject.roots) {
         if (!isAbsoluteDirectory(sourceRoot)) continue;
-        const physicalRoot = await canonical(sourceRoot);
+        const physicalRoot = await availableImportEntry(() => canonical(sourceRoot));
+        if (!physicalRoot) {
+          hasUnavailableRoot = true;
+          continue;
+        }
         // Claude has no native project IDs: its discovery groups are cwd hints.
         const root =
-          provider === "claudeAgent" ? await derivedWorkspace(physicalRoot) : physicalRoot;
-        roots.set(importPathIdentity(root), root);
-        await ensureProject(
-          root,
           provider === "claudeAgent"
-            ? path.basename(root) || sourceProject.title
-            : sourceProject.title,
-          provider,
+            ? await availableImportEntry(() => derivedWorkspace(physicalRoot))
+            : physicalRoot;
+        if (!root) {
+          hasUnavailableRoot = true;
+          continue;
+        }
+        const project = await availableImportEntry(() =>
+          ensureProject(
+            root,
+            provider === "claudeAgent"
+              ? path.basename(root) || sourceProject.title
+              : sourceProject.title,
+            provider,
+          ),
         );
+        if (!project) {
+          hasUnavailableRoot = true;
+          continue;
+        }
+        roots.set(importPathIdentity(root), root);
       }
       sourceProjects.set(sourceProject.id, {
         title: sourceProject.title,
         roots: [...roots.values()],
+        hasUnavailableRoot,
       });
     }
 
@@ -177,19 +213,21 @@ export async function buildProjectImportCatalog(
       if (!session.id.trim() || !isAbsoluteDirectory(session.cwd)) continue;
       const key = projectImportKey(provider, sourceHome, session.id);
       if (importedSessionKeys.has(key)) continue;
-      const cwd = await canonical(session.cwd);
+      const cwd = await availableImportEntry(() => canonical(session.cwd));
+      if (!cwd) continue;
       const sourceProject =
         provider === "codex" && session.projectId
           ? sourceProjects.get(session.projectId)
           : undefined;
       let root: string | undefined;
-      if (sourceProject?.roots.length === 1) {
+      if (sourceProject?.roots.length === 1 && !sourceProject.hasUnavailableRoot) {
         // Explicit assignment survives even after a temporary worktree has been deleted.
         root = sourceProject.roots[0];
-      } else if (sourceProject && sourceProject.roots.length > 1) {
+      } else if (sourceProject?.roots.length) {
         root = mostSpecificRoot(sourceProject.roots, cwd);
         if (!root) {
-          const git = await gitWorkspace(cwd);
+          const git = await availableImportEntry(() => gitWorkspace(cwd));
+          if (git === undefined) continue;
           if (git?.worktree) {
             const originalCwd = path.join(git.root, path.relative(git.worktree, cwd));
             root = mostSpecificRoot(sourceProject.roots, originalCwd);
@@ -197,9 +235,11 @@ export async function buildProjectImportCatalog(
         }
       }
       const assigned = root !== undefined;
-      root ??= await derivedWorkspace(cwd);
+      if (!root) root = await availableImportEntry(() => derivedWorkspace(cwd));
+      if (!root) continue;
       const title = assigned ? sourceProject!.title : path.basename(root) || root;
-      const project = await ensureProject(root, title, provider);
+      const project = await availableImportEntry(() => ensureProject(root, title, provider));
+      if (!project) continue;
       project.threads.push({ ...session, key, provider, sourceHome });
       importedSessionKeys.add(key);
     }

@@ -50,7 +50,11 @@ const CONFIG_OPTION_UPDATE_TIMEOUT = "5 seconds";
 const ACP_INCOMING_CHUNK_QUEUE_CAPACITY = 64;
 const ACP_LOAD_REPLAY_QUIET_MS = 350;
 const ACP_LOAD_REPLAY_HARD_TIMEOUT_MS = 30_000;
-export const ACP_MAX_INCOMING_FRAME_BYTES = 8 * 1024 * 1024;
+// Matches JSONRPC_STDIO_MAX_FRAME_BYTES (16 MB): agents echo inline tool
+// results (e.g. screenshots) back through session/update frames, and 8 MB
+// rejected legitimate captures while the shared stdio transport already
+// tolerates twice that.
+export const ACP_MAX_INCOMING_FRAME_BYTES = 16 * 1024 * 1024;
 
 const ACP_MAX_PENDING_NOTIFICATIONS_TOTAL = 2_048;
 const ACP_MAX_PENDING_NOTIFICATIONS_PER_SESSION = 512;
@@ -2500,11 +2504,8 @@ function shouldEmitToolCallUpdate(
   return previous.detail !== next.detail;
 }
 
-export const assistantItemId = (
-  sessionId: string,
-  runtimeInstanceId: string,
-  segmentIndex: number,
-) => `assistant:${sessionId}:${runtimeInstanceId}:segment:${segmentIndex}`;
+const assistantItemId = (sessionId: string, runtimeInstanceId: string, segmentIndex: number) =>
+  `assistant:${sessionId}:${runtimeInstanceId}:segment:${segmentIndex}`;
 
 const ensureActiveAssistantSegment = ({
   getSessionEpoch,

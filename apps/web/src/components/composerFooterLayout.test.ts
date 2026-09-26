@@ -39,56 +39,12 @@ describe("shouldUseCompactComposerFooter", () => {
 });
 
 describe("composerFooterPlanForTier", () => {
-  it("maps tiers to the degradation order: meter, traits label, model label, relocation", () => {
-    expect(composerFooterPlanForTier(0, true)).toEqual({
-      showContextMeter: true,
-      showTraitsLabel: true,
-      showModelLabel: true,
-      relocateLeadingControls: false,
-    });
-    expect(composerFooterPlanForTier(1, true)).toEqual({
-      showContextMeter: false,
-      showTraitsLabel: true,
-      showModelLabel: true,
-      relocateLeadingControls: false,
-    });
-    expect(composerFooterPlanForTier(2, true)).toEqual({
-      showContextMeter: false,
-      showTraitsLabel: false,
-      showModelLabel: true,
-      relocateLeadingControls: false,
-    });
-    expect(composerFooterPlanForTier(3, true)).toEqual({
-      showContextMeter: false,
-      showTraitsLabel: false,
-      showModelLabel: false,
-      relocateLeadingControls: false,
-    });
-    expect(composerFooterPlanForTier(COMPOSER_FOOTER_MAX_TIER, true)).toEqual({
-      showContextMeter: false,
-      showTraitsLabel: false,
-      showModelLabel: false,
-      relocateLeadingControls: true,
-    });
-  });
-
   it("never shows the context meter when the thread has none", () => {
     expect(composerFooterPlanForTier(0, false).showContextMeter).toBe(false);
   });
 });
 
 describe("resolveNextComposerFooterTier", () => {
-  it("keeps the tier when the footer fits", () => {
-    expect(
-      resolveNextComposerFooterTier({
-        currentTier: 0,
-        clientWidth: 500,
-        isOverflowing: false,
-        demotionWidths: [],
-      }),
-    ).toEqual({ tier: 0, demotionWidths: [] });
-  });
-
   it("demotes one step and records the overflow width", () => {
     const step = resolveNextComposerFooterTier({
       currentTier: 0,

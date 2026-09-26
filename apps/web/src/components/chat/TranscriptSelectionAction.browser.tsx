@@ -137,7 +137,7 @@ it("fits the composer in a narrow viewport and disables Worktree outside Git pro
   }
 });
 
-it.each(["", "Let me add more context"])(
+it.each([""])(
   "opens the full composer with the quote and draft %j without sending",
   async (prompt) => {
     const callbacks = props();

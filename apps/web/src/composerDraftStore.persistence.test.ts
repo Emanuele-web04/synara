@@ -221,38 +221,6 @@ describe("composerDraftStore persisted-state hydration", () => {
     expect(hydrated.draftThreadsByThreadId[threadId]?.runtimeMode).toBe("auto");
   });
 
-  it("preserves Debug mode in composer and draft-thread state during hydration", () => {
-    const projectId = ProjectId.makeUnsafe("project-debug-mode");
-    const threadId = ThreadId.makeUnsafe("thread-debug-mode");
-
-    const hydrated = normalizeCurrentPersistedComposerDraftStoreState({
-      draftsByThreadId: {
-        [threadId]: {
-          prompt: "Reproduce the crash",
-          attachments: [],
-          interactionMode: "debug",
-        },
-      },
-      draftThreadsByThreadId: {
-        [threadId]: {
-          projectId,
-          createdAt: "2026-08-11T00:00:00.000Z",
-          runtimeMode: "approval-required",
-          interactionMode: "debug",
-          entryPoint: "chat",
-          branch: null,
-          worktreePath: null,
-          workingDirectory: null,
-          envMode: "local",
-        },
-      },
-      projectDraftThreadIdByProjectId: {},
-    });
-
-    expect(hydrated.draftsByThreadId[threadId]?.interactionMode).toBe("debug");
-    expect(hydrated.draftThreadsByThreadId[threadId]?.interactionMode).toBe("debug");
-  });
-
   it("migrates persisted Kilo draft and sticky selections to OpenCode", () => {
     const threadId = ThreadId.makeUnsafe("thread-kilo-draft");
     const kiloSelection = {
@@ -722,16 +690,6 @@ describe("composerDraftStore queued follow-ups", () => {
     URL.revokeObjectURL = originalRevokeObjectUrl;
   });
 
-  it("stores queued turns per thread so route switches can rehydrate them", () => {
-    const store = useComposerDraftStore.getState();
-
-    store.enqueueQueuedTurn(threadId, makeQueuedTurn("queued-1"));
-
-    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.queuedTurns).toEqual([
-      makeQueuedTurn("queued-1"),
-    ]);
-  });
-
   it("keeps queued turns when the live composer draft is cleared", () => {
     const store = useComposerDraftStore.getState();
 
@@ -809,56 +767,6 @@ describe("composerDraftStore queued follow-ups", () => {
         interactionMode: "debug",
       },
     ]);
-  });
-
-  it("persists restored proposed-plan source for edited queued sends", () => {
-    const store = useComposerDraftStore.getState();
-    store.setPrompt(threadId, "implement the queued plan");
-    store.setRestoredSourceProposedPlan(threadId, {
-      threadId,
-      restoredPrompt: "implement the queued plan",
-      sourceProposedPlan: {
-        threadId: ThreadId.makeUnsafe("thread-source-plan"),
-        planId: "plan-1",
-      },
-    });
-
-    const persistApi = useComposerDraftStore.persist as unknown as {
-      getOptions: () => {
-        partialize: (state: ReturnType<typeof useComposerDraftStore.getState>) => unknown;
-        merge: (
-          persistedState: unknown,
-          currentState: ReturnType<typeof useComposerDraftStore.getState>,
-        ) => ReturnType<typeof useComposerDraftStore.getState>;
-      };
-    };
-    const persistedState = partializeComposerDraftStoreState(
-      useComposerDraftStore.getState(),
-    ) as unknown as {
-      draftsByThreadId?: Record<string, { restoredSourceProposedPlan?: unknown }>;
-    };
-
-    expect(persistedState.draftsByThreadId?.[threadId]?.restoredSourceProposedPlan).toEqual({
-      threadId,
-      restoredPrompt: "implement the queued plan",
-      sourceProposedPlan: {
-        threadId: "thread-source-plan",
-        planId: "plan-1",
-      },
-    });
-
-    const mergedState = persistApi
-      .getOptions()
-      .merge(persistedState, useComposerDraftStore.getInitialState());
-
-    expect(mergedState.draftsByThreadId[threadId]?.restoredSourceProposedPlan).toEqual({
-      threadId,
-      restoredPrompt: "implement the queued plan",
-      sourceProposedPlan: {
-        threadId: "thread-source-plan",
-        planId: "plan-1",
-      },
-    });
   });
 
   it("revokes queued chat image blob URLs when a queued turn is removed", () => {

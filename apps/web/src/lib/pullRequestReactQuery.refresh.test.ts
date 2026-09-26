@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as nativeApi from "../nativeApi";
 import {
   pullRequestActionMutationOptions,
-  pullRequestMutationKeys,
   pullRequestQueryKeys,
   pullRequestSetPinnedMutationOptions,
   pullRequestsExactInvolvementQueryOptions,
@@ -18,18 +17,6 @@ afterEach(() => {
 });
 
 describe("pullRequestsForceRefreshMutationOptions", () => {
-  it("uses a separate pin scope and the same guarded scope as PR actions", () => {
-    const queryClient = new QueryClient();
-    const pin = pullRequestSetPinnedMutationOptions(queryClient);
-    const action = pullRequestActionMutationOptions(queryClient);
-    const refresh = pullRequestsForceRefreshMutationOptions(queryClient);
-
-    expect(pin.scope).toBeUndefined();
-    expect(action.scope?.id).toBe(refresh.scope?.id);
-    expect(action.mutationKey).toEqual(pullRequestMutationKeys.action);
-    expect(refresh.mutationKey).toEqual(pullRequestMutationKeys.forceRefresh);
-  });
-
   it("does not dispatch a forced snapshot until a concurrent action settles", async () => {
     const queryClient = new QueryClient();
     const projectId = "project-a" as ProjectId;

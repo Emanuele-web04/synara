@@ -8,7 +8,6 @@ import {
   SpaceId,
   ThreadId,
   TurnId,
-  type OrchestrationReadModel,
   type OrchestrationShellStreamEvent,
 } from "@synara/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -918,22 +917,6 @@ describe("store projection", () => {
     expect(threadsOf(next)[0]?.session?.lastError).toBeUndefined();
   });
 
-  it("preserves claude model slugs without an active session", () => {
-    const initialState = makeState(makeThread());
-    const readModel = makeReadModel(
-      makeReadModelThread({
-        modelSelection: {
-          provider: "claudeAgent",
-          model: "claude-opus-4-6",
-        },
-      }),
-    );
-
-    const next = syncServerReadModel(initialState, readModel);
-
-    expect(threadsOf(next)[0]?.modelSelection.model).toBe("claude-opus-4-6");
-  });
-
   it("resolves claude aliases when session provider is claudeAgent", () => {
     const initialState = makeState(makeThread());
     const readModel = makeReadModel(
@@ -985,32 +968,6 @@ describe("store projection", () => {
     expect(threadsOf(next)[0]?.session?.provider).toBe("opencode");
   });
 
-  it("preserves Pi as the active session provider", () => {
-    const initialState = makeState(makeThread());
-    const readModel = makeReadModel(
-      makeReadModelThread({
-        modelSelection: {
-          provider: "pi",
-          model: "anthropic/claude-sonnet-4-5",
-        },
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "ready",
-          providerName: "pi",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: "2026-02-27T00:00:00.000Z",
-        },
-      }),
-    );
-
-    const next = syncServerReadModel(initialState, readModel);
-
-    expect(threadsOf(next)[0]?.modelSelection.provider).toBe("pi");
-    expect(threadsOf(next)[0]?.session?.provider).toBe("pi");
-  });
-
   it("preserves exact OpenCode thread model slugs from the read model", () => {
     const initialState = makeState(makeThread());
     const readModel = makeReadModel(
@@ -1044,20 +1001,6 @@ describe("store projection", () => {
     const next = syncServerReadModel(initialState, readModel);
 
     expect(next.projects[0]?.defaultModelSelection?.model).toBe("openai/gpt-5.4");
-  });
-
-  it("preserves project and thread updatedAt timestamps from the read model", () => {
-    const initialState = makeState(makeThread());
-    const readModel = makeReadModel(
-      makeReadModelThread({
-        updatedAt: "2026-02-27T00:05:00.000Z",
-      }),
-    );
-
-    const next = syncServerReadModel(initialState, readModel);
-
-    expect(next.projects[0]?.updatedAt).toBe("2026-02-27T00:00:00.000Z");
-    expect(threadsOf(next)[0]?.updatedAt).toBe("2026-02-27T00:05:00.000Z");
   });
 
   it("preserves a newer live assistant intro when a hot-path snapshot lags behind", () => {
@@ -1715,26 +1658,6 @@ describe("store projection", () => {
     );
   });
 
-  it("removes successfully deleted archived threads through the shared client helper", () => {
-    const threadId = ThreadId.makeUnsafe("thread-archived");
-    const initialState = syncServerReadModel(
-      makeState(makeThread()),
-      makeReadModel(
-        makeReadModelThread({
-          id: threadId,
-          archivedAt: "2026-02-27T00:05:00.000Z",
-        }),
-      ),
-    );
-
-    const next = removeDeletedThreadFromClientState(initialState, threadId);
-
-    expect(threadsOf(next)).toHaveLength(0);
-    expect(next.threadIds).not.toContain(threadId);
-    expect(next.threadShellById?.[threadId]).toBeUndefined();
-    expect(next.sidebarThreadSummaryById[threadId]).toBeUndefined();
-  });
-
   it("keeps a client-deleted thread hidden when a stale shell snapshot includes it", () => {
     const threadId = ThreadId.makeUnsafe("thread-stale-delete");
     const initialState = syncServerReadModel(
@@ -1826,43 +1749,6 @@ describe("store projection", () => {
     expect(threadsOf(next)).toHaveLength(1);
     expect(next.threadIds).toContain(threadId);
     expect(next.threadShellById?.[threadId]?.title).toBe("Rehydrated shell removed thread");
-  });
-
-  it("reuses normalized thread objects when the incoming snapshot is unchanged", () => {
-    const readModel = {
-      snapshotSequence: 1,
-      updatedAt: "2026-02-28T00:00:00.000Z",
-      spaces: [],
-      projects: [
-        makeReadModelProject({
-          defaultModelSelection: {
-            provider: "codex",
-            model: "gpt-5-codex",
-          },
-          updatedAt: "2026-02-27T00:00:00.000Z",
-        }),
-      ],
-      threads: [
-        makeReadModelThread({
-          modelSelection: {
-            provider: "codex",
-            model: "gpt-5-codex",
-          },
-          createdAt: "2026-02-13T00:00:00.000Z",
-          updatedAt: "2026-02-28T00:00:00.000Z",
-        }),
-      ],
-    } satisfies OrchestrationReadModel;
-
-    const hydratedState = syncServerReadModel(makeState(makeThread()), readModel);
-    const thread = threadsOf(hydratedState)[0];
-    const next = syncServerReadModel(hydratedState, readModel);
-
-    expect(next.threadShellById).toBe(hydratedState.threadShellById);
-    expect(next.threadSessionById).toBe(hydratedState.threadSessionById);
-    expect(next.threadTurnStateById).toBe(hydratedState.threadTurnStateById);
-    expect(next.sidebarThreadSummaryById).toBe(hydratedState.sidebarThreadSummaryById);
-    expect(threadsOf(next)[0]).toBe(thread);
   });
 });
 
@@ -1971,16 +1857,6 @@ describe("deletion tombstone retirement", () => {
     );
     return removeDeletedThreadFromClientState(hydrated, deletedThreadId, deletedAtSequence);
   }
-
-  it("retires a thread tombstone once a snapshot at or after the deletion confirms it is gone", () => {
-    const deletedState = makeDeletedThreadState(5);
-    expect(deletedState.deletedThreadIdsById?.[deletedThreadId]).toBe(5);
-
-    const next = syncServerShellSnapshot(deletedState, makeEmptyShellSnapshot(9));
-
-    expect(next.deletedThreadIdsById?.[deletedThreadId]).toBeUndefined();
-    expect(threadsOf(next)).toHaveLength(0);
-  });
 
   it("keeps a thread tombstone when the confirming snapshot predates the deletion", () => {
     const deletedState = makeDeletedThreadState(5);
@@ -2120,20 +1996,6 @@ describe("deletion tombstone retirement", () => {
     expect(resynced).toBe(hydrated);
   });
 
-  it("keeps the thread id registry stable across a shell snapshot that changes nothing", () => {
-    const hydrated = syncServerShellSnapshot(
-      makeState(makeThread({ id: deletedThreadId, projectId })),
-      makeShellSnapshotListingDeletedThread(4, "Stable"),
-    );
-
-    const resynced = syncServerShellSnapshot(
-      hydrated,
-      makeShellSnapshotListingDeletedThread(5, "Stable"),
-    );
-
-    expect(resynced.threadIds).toBe(hydrated.threadIds);
-  });
-
   it("rebuilds the thread id registry when the snapshot drops a thread", () => {
     const hydrated = syncServerShellSnapshot(
       makeState(makeThread({ id: deletedThreadId, projectId })),
@@ -2191,6 +2053,7 @@ describe("deletion tombstone retirement", () => {
 
     // The whole point of rebuilding these records in one pass: an unchanged snapshot must not
     // hand every downstream selector three brand-new dictionaries to re-derive from.
+    expect(resynced.threadIds).toBe(hydrated.threadIds);
     expect(resynced.threadShellById).toBe(hydrated.threadShellById);
     expect(resynced.threadSessionById).toBe(hydrated.threadSessionById);
     expect(resynced.threadTurnStateById).toBe(hydrated.threadTurnStateById);

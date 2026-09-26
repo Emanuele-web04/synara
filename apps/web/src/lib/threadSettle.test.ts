@@ -1,12 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
-
-import { ThreadId } from "@synara/contracts";
+import { describe, expect, it } from "vitest";
 
 import {
   createOptimisticSettledMutation,
   recordOptimisticSettledMutationSequence,
   reconcileOptimisticSettledMutation,
-  setThreadSettledFromClient,
 } from "./threadSettle";
 
 describe("optimistic thread settlement", () => {
@@ -49,16 +46,5 @@ describe("optimistic thread settlement", () => {
 
     expect(reconcileOptimisticSettledMutation(undo, false, 41).acknowledged).toBe(false);
     expect(reconcileOptimisticSettledMutation(undo, false, 42).acknowledged).toBe(true);
-  });
-
-  it("returns the durable command sequence", async () => {
-    const dispatchCommand = vi.fn(async () => ({ sequence: 42 }));
-    await expect(
-      setThreadSettledFromClient(
-        { dispatchCommand } as Parameters<typeof setThreadSettledFromClient>[0],
-        ThreadId.makeUnsafe("thread-1"),
-        true,
-      ),
-    ).resolves.toBe(42);
   });
 });

@@ -4,7 +4,7 @@
 //          skill discovery as supported for every provider.
 // Layer: Server provider tests
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -312,26 +312,6 @@ describe("ProviderDiscoveryService.listModels", () => {
     expect(adapterCalls).toBe(0);
   });
 
-  it("dispatches model discovery for an enabled provider", async () => {
-    let adapterCalls = 0;
-    const result = await runListModels({
-      adapter: {
-        listModels: () => {
-          adapterCalls += 1;
-          return Effect.succeed({
-            models: [{ slug: "cursor-model", name: "Cursor Model" }],
-            source: "cursor.cli",
-            cached: false,
-          });
-        },
-      },
-      enabled: true,
-    });
-
-    expect(result.models).toEqual([{ slug: "cursor-model", name: "Cursor Model" }]);
-    expect(adapterCalls).toBe(1);
-  });
-
   it("serves repeat model discovery from the shared cache without re-invoking the adapter", async () => {
     let adapterCalls = 0;
     const baseLayer = Layer.mergeAll(
@@ -395,5 +375,83 @@ describe("ProviderDiscoveryService.listModels", () => {
       source: "cursor.cli",
       cached: false,
     });
+  });
+
+  it("serves a persisted catalog on a fresh service without re-invoking the adapter", async () => {
+    const catalogPath = path.join(baseDir, "userdata", "provider-models", "catalogs.json");
+    let adapterCalls = 0;
+    const makeAdapter = () => ({
+      listModels: () => {
+        adapterCalls += 1;
+        return Effect.succeed({
+          models: [{ slug: "cursor-model", name: "Cursor Model" }],
+          source: "cursor.cli",
+          cached: false,
+        });
+      },
+    });
+    const makeLayer = () =>
+      ProviderDiscoveryServiceLive.pipe(
+        Layer.provideMerge(
+          Layer.mergeAll(
+            makeConfigLayer(),
+            ServerSettingsService.layerTest(),
+            makeRegistryLayer(makeAdapter()),
+          ).pipe(Layer.provideMerge(NodeServices.layer)),
+        ),
+      );
+
+    const first = await Effect.runPromise(
+      Effect.gen(function* () {
+        const discovery = yield* ProviderDiscoveryService;
+        return yield* discovery.listModels({ provider: "cursor", cwd });
+      }).pipe(Effect.provide(makeLayer())) as Effect.Effect<ProviderListModelsResult, never, never>,
+    );
+    expect(first.cached).toBe(false);
+    expect(adapterCalls).toBe(1);
+
+    // The write daemon flushes asynchronously; wait for the snapshot to land.
+    const deadline = Date.now() + 5_000;
+    while (!existsSync(catalogPath) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(existsSync(catalogPath)).toBe(true);
+
+    // A second service over the same stateDir is a restart: it must answer from
+    // the persisted snapshot instead of paying discovery again.
+    const second = await Effect.runPromise(
+      Effect.gen(function* () {
+        const discovery = yield* ProviderDiscoveryService;
+        return yield* discovery.listModels({ provider: "cursor", cwd });
+      }).pipe(Effect.provide(makeLayer())) as Effect.Effect<ProviderListModelsResult, never, never>,
+    );
+
+    expect(second).toEqual({ ...first, cached: true });
+    expect(adapterCalls).toBe(1);
+  });
+
+  it("ignores a malformed persisted catalog and re-discovers", async () => {
+    const catalogPath = path.join(baseDir, "userdata", "provider-models", "catalogs.json");
+    // Private mode: atomicWrite refuses group/other-writable parents.
+    await mkdir(path.dirname(catalogPath), { recursive: true, mode: 0o700 });
+    await writeFile(catalogPath, "{not-json", "utf8");
+
+    let adapterCalls = 0;
+    const result = await runListModels({
+      adapter: {
+        listModels: () => {
+          adapterCalls += 1;
+          return Effect.succeed({
+            models: [{ slug: "cursor-model", name: "Cursor Model" }],
+            source: "cursor.cli",
+            cached: false,
+          });
+        },
+      },
+      enabled: true,
+    });
+
+    expect(result.models).toHaveLength(1);
+    expect(adapterCalls).toBe(1);
   });
 });

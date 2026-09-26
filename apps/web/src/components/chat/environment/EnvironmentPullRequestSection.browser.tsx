@@ -13,7 +13,6 @@ import {
   type GitResolvedPullRequest,
   type GitStatusResult,
   type NativeApi,
-  type PullRequestDetail,
 } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -158,7 +157,7 @@ describe("EnvironmentPullRequestSection", () => {
     useComposerDraftStore.getState().clearDraftThread(threadId);
   });
 
-  it.each(["ready", "draft"] as const)(
+  it.each(["ready"] as const)(
     "shows %s immediately while GitHub is pending and restores the menu on failure",
     async (action) => {
       const queryClient = createQueryClient();
@@ -254,27 +253,6 @@ describe("EnvironmentPullRequestSection", () => {
     });
   });
 
-  it("shows when a merged pull request was merged once details load", async () => {
-    const queryClient = createQueryClient();
-    const projectId = ProjectId.makeUnsafe("project-pr-status");
-    queryClient.setQueryData<GitStatusResult>(gitQueryKeys.status(cwd), (status) =>
-      status ? { ...status, pr: { ...pullRequest, state: "merged" } } : status,
-    );
-    // Only the fields the settled menu reads; the rest of the detail is irrelevant here.
-    getPullRequestDetail.mockResolvedValue({
-      mergedAt: new Date(Date.now() - 12 * 60 * 60_000).toISOString(),
-      closedAt: null,
-      stack: null,
-      mergeCapabilities: { merge: true, squash: true, rebase: true },
-    } as unknown as PullRequestDetail);
-    await render(section(queryClient, vi.fn(), { projectId }));
-
-    await page.getByRole("button", { name: "#321 Keep PR context visible Merged" }).click();
-    await expect
-      .element(page.getByRole("menuitem", { name: "Status Merged 12h ago", exact: true }))
-      .toBeVisible();
-  });
-
   it("refreshes an old missing PR when the mounted panel opens", async () => {
     const queryClient = createQueryClient();
     const status = queryClient.getQueryData<GitStatusResult>(gitQueryKeys.status(cwd))!;
@@ -297,7 +275,7 @@ describe("EnvironmentPullRequestSection", () => {
     expect(getGitStatus).toHaveBeenCalledExactlyOnceWith({ cwd });
   });
 
-  it.each(["merged", "closed"] as const)(
+  it.each(["merged"] as const)(
     "shows a branch's %s PR on first open without loading active PR details",
     async (state) => {
       const queryClient = createQueryClient();

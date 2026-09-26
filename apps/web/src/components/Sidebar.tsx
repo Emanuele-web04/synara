@@ -149,6 +149,7 @@ import { derivePendingApprovals, derivePendingUserInputs } from "../session-logi
 import { useThreadPullRequests } from "../hooks/useThreadPullRequests";
 import {
   providerComposerCapabilitiesQueryOptions,
+  providerModelsQueryOptions,
   supportsThreadImport,
 } from "../lib/providerDiscoveryReactQuery";
 import {
@@ -229,6 +230,7 @@ import { RenameDialog } from "./RenameDialog";
 import { RelocateProjectDialog } from "./RelocateProjectDialog";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import ReleaseHistoryDialog from "./ReleaseHistoryDialog";
+import { isBetaFeatureOn } from "../betaFeatures";
 import { WHATS_NEW_ENTRIES } from "../whatsNew/entries";
 import { sortEntriesByVersionDesc } from "../whatsNew/logic";
 import {
@@ -260,6 +262,7 @@ import {
   getDesktopUpdateDownloadPercent,
   getDesktopUpdateErrorSignature,
   isDesktopUpdateButtonDisabled,
+  isDesktopUpdateInstallInFlight,
   resolveDesktopUpdateButtonAction,
   shouldRecommendManualDesktopDownload,
   shouldShowArm64IntelBuildWarning,
@@ -2764,7 +2767,7 @@ export default function Sidebar() {
       }
 
       const providerDefaultModel = getDefaultModel(provider);
-      const modelSelection =
+      let modelSelection =
         activeProject.defaultModelSelection?.provider === provider
           ? activeProject.defaultModelSelection
           : providerDefaultModel
@@ -2773,8 +2776,32 @@ export default function Sidebar() {
                 model: providerDefaultModel,
               }
             : null;
+      if (!modelSelection && provider === "omp") {
+        // OMP has no static default model; the imported session's own last-used
+        // model wins server-side during import. The thread record still needs a
+        // catalog-valid placeholder selection.
+        const catalog = await queryClient
+          .fetchQuery(
+            providerModelsQueryOptions({
+              provider: "omp",
+              cwd: activeProject.cwd,
+            }),
+          )
+          .catch(() => null);
+        const fallbackModel = catalog?.models[0]?.slug;
+        modelSelection = fallbackModel
+          ? {
+              provider: "omp",
+              model: fallbackModel,
+            }
+          : null;
+      }
       if (!modelSelection) {
-        throw new Error("Select a Pi model before importing a Pi thread.");
+        throw new Error(
+          provider === "omp"
+            ? "No Oh My Pi models are discovered yet; configure an OMP provider before importing."
+            : "Select a Pi model before importing a Pi thread.",
+        );
       }
       const threadId = newThreadId();
       const createdAt = new Date().toISOString();
@@ -2787,7 +2814,9 @@ export default function Sidebar() {
             ? `Imported Cursor session${suffix ? ` ${suffix}` : ""}`
             : provider === "opencode"
               ? `Imported OpenCode session${suffix ? ` ${suffix}` : ""}`
-              : `Imported Codex thread${suffix ? ` ${suffix}` : ""}`;
+              : provider === "omp"
+                ? `Imported Oh My Pi session${suffix ? ` ${suffix}` : ""}`
+                : `Imported Codex thread${suffix ? ` ${suffix}` : ""}`;
       let createdThread = false;
 
       try {
@@ -2831,7 +2860,13 @@ export default function Sidebar() {
         throw error;
       }
     },
-    [appSettings.defaultThreadEnvMode, currentProjectShortcutTargetId, navigate, projects],
+    [
+      appSettings.defaultThreadEnvMode,
+      currentProjectShortcutTargetId,
+      navigate,
+      projects,
+      queryClient,
+    ],
   );
 
   const commitRename = useCallback(
@@ -5528,7 +5563,19 @@ export default function Sidebar() {
     });
   }, [desktopUpdateState, surfaceDesktopUpdateError]);
 
+  // Install failures deliberately preserve "downloaded" so the same artifact
+  // can be retried. Watch the error as well as the status to release the latch.
+  useEffect(() => {
+    if (
+      desktopUpdateState?.status !== "downloaded" ||
+      desktopUpdateState.errorContext === "install"
+    ) {
+      setInstallingDesktopUpdate(false);
+    }
+  }, [desktopUpdateState?.status, desktopUpdateState?.errorContext]);
+
   const showDesktopUpdateButton = isElectron && shouldShowDesktopUpdateButton(desktopUpdateState);
+  const isBetaDesktopFlavor = desktopUpdateState?.flavor === "beta";
 
   const desktopUpdateTooltip = desktopUpdateState
     ? getDesktopUpdateButtonTooltip(desktopUpdateState, {
@@ -5557,7 +5604,8 @@ export default function Sidebar() {
     desktopUpdateButtonPresentation.secondaryLabel !== null;
   const desktopUpdateDownloadPercent = getDesktopUpdateDownloadPercent(desktopUpdateState);
   const desktopUpdateRowButtonClasses = cn(
-    "inline-flex h-6 shrink-0 items-center justify-center gap-1.5 rounded-full bg-[var(--info)] px-2.5 font-system-ui text-ui-xs font-medium leading-none text-white transition-colors",
+    "inline-flex h-6 shrink-0 items-center justify-center gap-1.5 rounded-full px-2.5 font-system-ui text-ui-xs font-medium leading-none text-white transition-colors",
+    isBetaDesktopFlavor ? "bg-[image:var(--beta-gradient)]" : "bg-[var(--info)]",
     desktopUpdateButtonHasSecondaryLabel && "min-h-6 py-0.5",
     desktopUpdateButtonInteractivityClasses,
   );
@@ -5818,7 +5866,9 @@ export default function Sidebar() {
         .installUpdate()
         .then((result) => {
           setDesktopUpdateState(result.state);
-          setInstallingDesktopUpdate(false);
+          if (!isDesktopUpdateInstallInFlight(result)) {
+            setInstallingDesktopUpdate(false);
+          }
           const alreadyCurrentNotice = getDesktopUpdateAlreadyCurrentNotice(result);
           if (alreadyCurrentNotice) {
             toastManager.add({
@@ -5908,6 +5958,15 @@ export default function Sidebar() {
   const titlebarControls = <SidebarLeadingControls className="hidden md:flex" />;
 
   const headerControls = <SidebarLeadingControls className="ml-auto hidden md:flex" />;
+
+  const betaBadge = isBetaDesktopFlavor ? (
+    <span
+      aria-label="Synara Beta"
+      className="inline-flex shrink-0 items-center rounded-full bg-[var(--beta-pill)] px-1.5 py-0.5 text-ui-xs font-semibold uppercase leading-none tracking-wide text-[var(--beta-pill-ink)]"
+    >
+      Beta
+    </span>
+  ) : null;
 
   const wordmark = (
     <div className="flex w-full items-center gap-1.5">
@@ -6002,6 +6061,9 @@ export default function Sidebar() {
         ) : null}
         {isOnSettings ? (
           <SidebarGroup className="p-0">
+            {isBetaDesktopFlavor ? (
+              <div className="flex items-center justify-end pb-1 pr-2.5">{betaBadge}</div>
+            ) : null}
             <SettingsSidebarNav
               activeSection={activeSettingsSection}
               onBack={handleBackToAppFromSettings}
@@ -6046,6 +6108,7 @@ export default function Sidebar() {
                     onClick={() => setActivityViewEnabledSmoothly(!activityViewEnabled)}
                   />
                 ) : null}
+                {betaBadge}
               </div>
             </div>
             {/* The keyed content remounts with a short enter animation while the picker
@@ -7021,15 +7084,19 @@ function SidebarSearchPaletteController(props: {
   // structurally nested side chats stay out of standalone thread results.
   const selectSidebarDisplayThreads = useMemo(() => createSidebarDisplayThreadsSelector(), []);
   const importProviderCapabilityQueries = useQueries({
-    queries: (["codex", "claudeAgent", "cursor", "opencode"] as const).map((provider) =>
+    queries: (["codex", "claudeAgent", "cursor", "opencode", "omp"] as const).map((provider) =>
       providerComposerCapabilitiesQueryOptions(provider),
     ),
   });
   const threads = useStore(selectAllThreads);
   const sidebarDisplayThreads = useStore(selectSidebarDisplayThreads);
   const importProviders: ReadonlyArray<ImportProviderKind> = (
-    ["codex", "claudeAgent", "cursor", "opencode"] as const
-  ).filter((provider, index) => supportsThreadImport(importProviderCapabilityQueries[index]?.data));
+    ["codex", "claudeAgent", "cursor", "opencode", "omp"] as const
+  ).filter(
+    (provider, index) =>
+      isBetaFeatureOn(provider) &&
+      supportsThreadImport(importProviderCapabilityQueries[index]?.data),
+  );
   // `threads` is rebuilt on every streamed store flush, so this projection is
   // cheap by construction (message text is cached per thread-messages array
   // below) and its result keeps the previous identity while nothing the
