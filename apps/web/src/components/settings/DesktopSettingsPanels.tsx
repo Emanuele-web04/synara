@@ -640,7 +640,7 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
           <p className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>You're on Synara Beta</p>
           <p className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>
             To help us fix things quickly, Beta sends crash reports and anonymous usage counts —
-            never your chats, code, files, or keys.
+            never your chats, code, files, or keys by design.
           </p>
           <button
             type="button"
@@ -677,7 +677,8 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
                 </ul>
               </div>
               <p className="m-0 text-ui-xs text-muted-foreground">
-                Crash details are deleted after 90 days; other reports are kept for a year.
+                A crash also sends a raw memory dump that can't be redacted; dumps are deleted after
+                90 days. Other reports are kept for a year.
               </p>
             </div>
           </DisclosureRegion>
