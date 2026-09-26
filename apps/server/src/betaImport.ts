@@ -29,7 +29,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 
 import {
   BETA_IMPORT_REQUEST_FILE_NAME,
@@ -44,6 +44,11 @@ const EXCLUDED_STATE_ENTRIES = new Set([
   "diagnostics",
   "server-runtime.json",
   "quit-resume.json",
+  // Beta regenerates its own environment identity on first start (see
+  // ServerEnvironment.ts persisted-id reader) and its own boot-ownership
+  // claims (see DeviceService.ts ownership path); both tolerate absence.
+  "environment-id",
+  "device-boot-ownership.json",
   BETA_IMPORT_REQUEST_FILE_NAME,
   BETA_IMPORT_RESULT_FILE_NAME,
 ]);
@@ -101,6 +106,68 @@ function rejectLinkedEntry(path: string): boolean {
   return true;
 }
 
+/**
+ * Overlay-merge a source directory over beta's existing one: beta-only files
+ * survive, stable files win on collision. A link on either side fails the
+ * import — it could point the beta home at stable's live files.
+ */
+function overlayCopyDir(sourcePath: string, stagedPath: string, existingPath: string): void {
+  const existing = lstatSync(existingPath, { throwIfNoEntry: false });
+  if (existing?.isDirectory()) {
+    cpSync(existingPath, stagedPath, {
+      recursive: true,
+      force: true,
+      filter: rejectLinkedEntry,
+    });
+  } else if (existing?.isSymbolicLink()) {
+    throw new Error(`Cannot replace a linked Beta state entry: ${existingPath}`);
+  }
+  cpSync(sourcePath, stagedPath, {
+    recursive: true,
+    force: true,
+    filter: rejectLinkedEntry,
+  });
+}
+
+/**
+ * Portable home-level directories copied alongside `userdata`. User skills and
+ * MCP client credentials move with the user; single-use pairing secrets under
+ * `mcp/pending-pairing/` stay behind — they are bound to stable's runtime.
+ */
+const HOME_LEVEL_COPY_SPECS = [
+  { relativeDir: "skills" },
+  { relativeDir: join("mcp", "credentials") },
+] as const;
+
+/** A staged home-level dir and the beta-home path it commits to. */
+interface HomeDirCommitPair {
+  readonly stagedPath: string;
+  readonly targetPath: string;
+}
+
+/** Staged/target pairs for the home-level dirs; a missing source is skipped. */
+function copyHomeLevelDirs(
+  sourceHomeDir: string,
+  stagedHomeDir: string,
+  betaHomeDir: string,
+): HomeDirCommitPair[] {
+  const pairs: HomeDirCommitPair[] = [];
+  for (const { relativeDir } of HOME_LEVEL_COPY_SPECS) {
+    const sourcePath = join(sourceHomeDir, relativeDir);
+    const source = lstatSync(sourcePath, { throwIfNoEntry: false });
+    if (source === undefined) continue;
+    if (source.isSymbolicLink()) {
+      throw new Error(`Cannot import a linked state entry: ${sourcePath}`);
+    }
+    if (!source.isDirectory()) continue;
+    const stagedPath = join(stagedHomeDir, relativeDir);
+    mkdirSync(resolve(stagedPath, ".."), { recursive: true });
+    overlayCopyDir(sourcePath, stagedPath, join(betaHomeDir, relativeDir));
+    pairs.push({ stagedPath, targetPath: join(betaHomeDir, relativeDir) });
+  }
+  return pairs;
+}
+
 function copyStateEntries(
   sourceStateDir: string,
   stagedStateDir: string,
@@ -119,24 +186,9 @@ function copyStateEntries(
       throw new Error(`Cannot import a linked state entry: ${sourcePath}`);
     }
     if (stats.isDirectory()) {
-      const existingPath = join(existingStateDir, entry);
-      const existing = lstatSync(existingPath, { throwIfNoEntry: false });
-      if (existing?.isDirectory()) {
-        // The old overlay semantics keep Beta-only files inside a shared
-        // directory, such as provider secrets absent from Stable.
-        cpSync(existingPath, stagedPath, {
-          recursive: true,
-          force: true,
-          filter: rejectLinkedEntry,
-        });
-      } else if (existing?.isSymbolicLink()) {
-        throw new Error(`Cannot replace a linked Beta state entry: ${existingPath}`);
-      }
-      cpSync(sourcePath, stagedPath, {
-        recursive: true,
-        force: true,
-        filter: rejectLinkedEntry,
-      });
+      // Overlay semantics keep beta-only files inside a shared directory,
+      // such as provider secrets absent from stable.
+      overlayCopyDir(sourcePath, stagedPath, join(existingStateDir, entry));
     } else if (stats.isFile()) {
       cpSync(sourcePath, stagedPath, { force: true });
     } else {
@@ -275,40 +327,108 @@ async function snapshotStableDatabase(
   }
 }
 
+/**
+ * Drops worktree pointers that would aim beta at stable's home. Only the two
+ * path columns are nulled — branch/ref columns stay so history survives. The
+ * projection table mirrors the same fields, so fix it too when both tables
+ * (or older/newer shapes) are present. Missing tables or columns mean an
+ * older database shape: leave it alone instead of failing the import.
+ * Failure here fails the import before anything commits.
+ */
+async function clearSourceHomeWorktreePaths(
+  stagedDbPath: string,
+  sourceHomeDir: string,
+): Promise<void> {
+  // Same lazy load as readMigrationHighWaterMark: node:sqlite is only needed
+  // on the import path, not for every server start.
+  const { DatabaseSync } = await import("node:sqlite");
+  const database = new DatabaseSync(stagedDbPath);
+  try {
+    const tables = new Set(
+      (
+        database.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{
+          name: string;
+        }>
+      ).map((row) => row.name),
+    );
+    // A path inside the source home is the resolved home plus a separator
+    // (or the home itself); a sibling like `<home>-backup` must not match.
+    const prefix = sourceHomeDir.endsWith(sep) ? sourceHomeDir : `${sourceHomeDir}${sep}`;
+    const likePrefix = `${prefix.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_")}%`;
+    for (const table of ["threads", "projection_threads"] as const) {
+      if (!tables.has(table)) continue;
+      const columns = new Set(
+        (
+          database.prepare(`SELECT name FROM pragma_table_info('${table}')`).all() as Array<{
+            name: string;
+          }>
+        ).map((row) => row.name),
+      );
+      const nullables = ["worktree_path", "associated_worktree_path"].filter((column) =>
+        columns.has(column),
+      );
+      if (nullables.length === 0) continue;
+      // One UPDATE per column: a combined `SET a = NULL, b = NULL WHERE a … OR
+      // b …` would null b on rows where only a matched (and vice versa).
+      for (const column of nullables) {
+        database
+          .prepare(
+            `UPDATE ${table} SET ${column} = NULL WHERE ${column} = ? OR ${column} LIKE ? ESCAPE '\\'`,
+          )
+          .run(sourceHomeDir, likePrefix);
+      }
+    }
+  } finally {
+    database.close();
+  }
+}
+
 function commitStagedImport(
   stagedStateDir: string,
   targetStateDir: string,
   copiedEntries: readonly string[],
+  homeDirPairs: readonly HomeDirCommitPair[] = [],
 ): void {
   mkdirSync(targetStateDir, { recursive: true });
   const backupDir = mkdtempSync(join(resolve(targetStateDir, ".."), ".beta-import-backup-"));
-  const committed: Array<{ name: string; hadPrevious: boolean }> = [];
-  const entries = [
-    ...copiedEntries,
-    ...LIVE_SIDECAR_SUFFIXES.map((suffix) => `state.sqlite${suffix}`),
-    "state.sqlite",
-  ];
+  const committed: Array<{ readonly targetPath: string; readonly hadPrevious: boolean }> = [];
+  const commitPath = (targetPath: string, stagedPath: string): void => {
+    const backupPath = join(backupDir, String(committed.length));
+    const hadPrevious = lstatSync(targetPath, { throwIfNoEntry: false }) !== undefined;
+    if (hadPrevious) renameSync(targetPath, backupPath);
+    committed.push({ targetPath, hadPrevious });
+    if (lstatSync(stagedPath, { throwIfNoEntry: false }) !== undefined) {
+      mkdirSync(resolve(targetPath, ".."), { recursive: true });
+      renameSync(stagedPath, targetPath);
+    }
+  };
 
   try {
-    for (const name of entries) {
-      const targetPath = join(targetStateDir, name);
-      const previousPath = join(backupDir, name);
-      const stagedPath = join(stagedStateDir, name);
-      const hadPrevious = lstatSync(targetPath, { throwIfNoEntry: false }) !== undefined;
-      if (hadPrevious) renameSync(targetPath, previousPath);
-      committed.push({ name, hadPrevious });
-      if (lstatSync(stagedPath, { throwIfNoEntry: false }) !== undefined) {
-        renameSync(stagedPath, targetPath);
-      }
+    for (const name of [
+      ...copiedEntries,
+      ...LIVE_SIDECAR_SUFFIXES.map((suffix) => `state.sqlite${suffix}`),
+      "state.sqlite",
+    ]) {
+      commitPath(join(targetStateDir, name), join(stagedStateDir, name));
+    }
+    // Home-level dirs commit in the same unit: a failed rename rolls every
+    // state entry back too, never a half-imported beta home.
+    for (const { stagedPath, targetPath } of homeDirPairs) {
+      commitPath(targetPath, stagedPath);
     }
   } catch (error) {
     const rollbackErrors: string[] = [];
-    for (const { name, hadPrevious } of committed.reverse()) {
+    for (let index = committed.length - 1; index >= 0; index -= 1) {
+      const record = committed[index];
+      if (record === undefined) continue;
       try {
-        rmSync(join(targetStateDir, name), { recursive: true, force: true });
-        if (hadPrevious) renameSync(join(backupDir, name), join(targetStateDir, name));
+        rmSync(record.targetPath, { recursive: true, force: true });
+        if (record.hadPrevious) {
+          mkdirSync(resolve(record.targetPath, ".."), { recursive: true });
+          renameSync(join(backupDir, String(index)), record.targetPath);
+        }
       } catch (rollbackError) {
-        rollbackErrors.push(`${name}: ${String(rollbackError)}`);
+        rollbackErrors.push(`${record.targetPath}: ${String(rollbackError)}`);
       }
     }
     if (rollbackErrors.length > 0) {
@@ -418,8 +538,13 @@ export async function runBetaImportIfRequested(input: {
         join(stagedStateDir, "state.sqlite"),
         input.latestMigrationId,
       );
+      // De-point before commit: a failure here fails the import while beta's
+      // live database is still untouched.
+      await clearSourceHomeWorktreePaths(join(stagedStateDir, "state.sqlite"), sourceHomeDir);
       const copiedEntries = copyStateEntries(sourceStateDir, stagedStateDir, input.stateDir);
-      commitStagedImport(stagedStateDir, input.stateDir, copiedEntries);
+      const stagedHomeDir = join(stagedRoot, "home");
+      const homeDirPairs = copyHomeLevelDirs(sourceHomeDir, stagedHomeDir, input.betaHomeDir);
+      commitStagedImport(stagedStateDir, input.stateDir, copiedEntries, homeDirPairs);
     } finally {
       rmSync(stagedRoot, { recursive: true, force: true });
     }

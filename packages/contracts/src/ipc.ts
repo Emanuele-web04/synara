@@ -812,9 +812,12 @@ export interface DesktopBridge {
     install: () => Promise<DesktopBetaActionResult>;
     /**
      * Installs Synara Beta when missing (macOS), writes the import marker, and
-     * launches it to consume the import.
+     * launches it to consume the import. The optional storage snapshot seeds
+     * beta's browser-profile settings via the storage-migration channel.
      */
-    importAndLaunch: () => Promise<DesktopBetaActionResult>;
+    importAndLaunch: (input?: {
+      readonly storageSnapshot?: SynaraStorageSnapshot;
+    }) => Promise<DesktopBetaActionResult>;
     launch: () => Promise<DesktopBetaActionResult>;
     /**
      * Beta only: opens stable Synara, optionally moves the beta app to the
