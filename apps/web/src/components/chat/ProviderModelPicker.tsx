@@ -3,12 +3,7 @@
 // Layer: Chat composer presentation
 // Depends on: provider availability metadata, shared menu primitives, and picker trigger styling.
 
-import {
-  type ModelSlug,
-  type OmpModelOptions,
-  type ProviderKind,
-  type ServerProviderStatus,
-} from "@synara/contracts";
+import { type ModelSlug, type ProviderKind, type ServerProviderStatus } from "@synara/contracts";
 import { resolveSelectableModel } from "@synara/shared/model";
 import * as Schema from "effect/Schema";
 import { useDeferredValue, useEffect, useRef, useState } from "react";
@@ -217,7 +212,6 @@ type ProviderModelMenuItemsProps = {
   providerOrder?: ReadonlyArray<ProviderKind>;
   disabled?: boolean;
   onProviderModelChange: (provider: ProviderKind, model: ModelSlug) => void;
-  onProviderModelRoleSelect?: (model: ModelSlug, options: OmpModelOptions) => void;
   // Invoked after a model selection commits so callers can close ancestor
   // menus and refocus the composer.
   onAfterSelection?: () => void;
@@ -266,25 +260,6 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
   const handleModelChange = (provider: ProviderKind, value: string) => {
     if (props.disabled) return;
     if (!value) return;
-    const selectedOption = props.modelOptionsByProvider[provider].find(
-      (option) => option.slug === value,
-    );
-    if (selectedOption?.role) {
-      if (props.onProviderModelRoleSelect) {
-        props.onProviderModelRoleSelect(
-          selectedOption.role.model,
-          selectedOption.role.thinkingLevel
-            ? { thinkingLevel: selectedOption.role.thinkingLevel }
-            : {},
-        );
-      } else {
-        // Surfaces without the role callback still commit the role's model so
-        // picking a role can never close the menu with a silent no-op.
-        props.onProviderModelChange(provider, selectedOption.role.model);
-      }
-      onAfterSelection?.();
-      return;
-    }
     const resolvedModel = resolveSelectableModel(
       provider,
       value,
@@ -533,7 +508,6 @@ type ProviderModelPickerProps = {
   onSelectionCommitted?: () => void;
   shortcutLabel?: string | null;
   onProviderModelChange: (provider: ProviderKind, model: ModelSlug) => void;
-  onProviderModelRoleSelect?: (model: ModelSlug, options: OmpModelOptions) => void;
 };
 
 export const ProviderModelPicker = function ProviderModelPicker(props: ProviderModelPickerProps) {
@@ -651,9 +625,6 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
           {...(props.providerOrder ? { providerOrder: props.providerOrder } : {})}
           {...(props.disabled !== undefined ? { disabled: props.disabled } : {})}
           onProviderModelChange={props.onProviderModelChange}
-          {...(props.onProviderModelRoleSelect
-            ? { onProviderModelRoleSelect: props.onProviderModelRoleSelect }
-            : {})}
           onAfterSelection={handleAfterSelection}
         />
       </ComposerPickerMenuPopup>

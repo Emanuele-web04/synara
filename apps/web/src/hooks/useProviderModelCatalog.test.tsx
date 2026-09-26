@@ -405,6 +405,33 @@ describe("useProviderModelCatalog", () => {
     ]);
   });
 
+  it("never surfaces role: slugs in the OMP picker, even when discovery carries roles", () => {
+    // #1340: OMP modelRoles are internal sub-agent routing, not selectable
+    // models. A discovery payload that still carries a legacy `roles` array
+    // must not produce role: entries in the picker.
+    modelQueries.set("omp", {
+      data: {
+        models: [{ slug: "anthropic/claude-sonnet-4", name: "Claude Sonnet 4" }],
+        roles: [{ name: "smol", model: "anthropic/claude-sonnet-4" }],
+        source: "omp-cli",
+        cached: false,
+      },
+      isFetching: false,
+      isLoading: false,
+      isPlaceholderData: false,
+      isError: false,
+    });
+
+    const catalog = readCatalogRenders({
+      selectedProvider: "omp",
+      discoveryEnabled: true,
+    }).at(-1);
+
+    expect(catalog?.modelOptionsByProvider.omp.map((m) => m.slug)).toEqual([
+      "anthropic/claude-sonnet-4",
+    ]);
+  });
+
   it("clears OMP loading and options on terminal discovery failure", () => {
     // OMP has no static model fallback. A terminal discovery failure (retries
     // exhausted) must NOT park the picker on the skeleton (the documented

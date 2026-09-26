@@ -316,8 +316,8 @@ describe("providerModelsQueryOptions", () => {
 
   it("caches runtime catalogs long enough to skip respawning provider CLIs", () => {
     // Server-side catalogs persist across restarts (30min fresh / 24h SWR), so
-    // the client keeps a matching window; OMP stays short because its
-    // file-backed modelRoles are re-resolved per request.
+    // the client keeps a matching window; OMP stays short at 30s because its
+    // catalog is refetched on focus/interval while observed.
     expect(providerModelsQueryOptions({ provider: "cursor" }).staleTime).toBe(15 * 60_000);
     expect(providerModelsQueryOptions({ provider: "codex" }).staleTime).toBe(15 * 60_000);
     expect(providerModelsQueryOptions({ provider: "droid" }).staleTime).toBe(30 * 60_000);
@@ -402,17 +402,17 @@ describe("providerModelsQueryOptions", () => {
     queryClient.clear();
   });
 
-  it("scopes OMP's model query by cwd so project modelRoles participate", () => {
+  it("keeps OMP's model query cwd-agnostic because the catalog is global", () => {
     const options = providerModelsQueryOptions({
       provider: "omp",
       binaryPath: "/bin/omp",
       agentDir: "/agent",
       cwd: "/some/project",
     });
-    // The catalog is global, but OMP merges `<cwd>/.omp/config.yml` roles into
-    // the picker — the query key carries cwd so a project's own roles show.
+    // `omp models --json` reads no project layer, so cwd is forced to null and
+    // every caller shares the same binary+agent-dir key.
     expect(options.queryKey).toEqual(
-      providerDiscoveryQueryKeys.models("omp", "/bin/omp", null, "/agent", "/some/project"),
+      providerDiscoveryQueryKeys.models("omp", "/bin/omp", null, "/agent", null),
     );
   });
 
