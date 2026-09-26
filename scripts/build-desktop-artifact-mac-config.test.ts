@@ -30,6 +30,25 @@ describe("createDesktopPlatformBuildConfig", () => {
     }
   });
 
+  it("emits every requested Linux package from one builder pass", () => {
+    const linux = createDesktopPlatformBuildConfig({
+      platform: "linux",
+      target: "AppImage, deb ,rpm",
+    }).linux as Record<string, unknown>;
+    assert.deepStrictEqual(linux.target, ["AppImage", "deb", "rpm"]);
+    // A single AppImage still resolves to one target, so the existing path
+    // cannot silently regress into a list-shaped config.
+    assert.deepStrictEqual(
+      (
+        createDesktopPlatformBuildConfig({ platform: "linux", target: "AppImage" }).linux as Record<
+          string,
+          unknown
+        >
+      ).target,
+      ["AppImage"],
+    );
+  });
+
   it("adds explicit microphone entitlements to macOS builds", () => {
     const config = createDesktopPlatformBuildConfig({
       platform: "mac",

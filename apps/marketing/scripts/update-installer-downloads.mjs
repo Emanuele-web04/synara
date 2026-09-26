@@ -13,7 +13,7 @@ const downloadsOutputPath = resolve(projectRoot, "src/data/installer-downloads.j
 const latestOutputPath = resolve(projectRoot, "src/data/latest-release-downloads.json");
 const releasesApiUrl = "https://api.github.com/repos/Emanuele-web04/synara/releases";
 const latestReleaseApiUrl = `${releasesApiUrl}/latest`;
-const installerFilePattern = /\.(dmg|exe|AppImage)$/i;
+const installerFilePattern = /\.(dmg|exe|AppImage|deb|rpm)$/i;
 
 function createGitHubHeaders() {
   const headers = {
@@ -109,17 +109,23 @@ function getReleaseDownloads(release, source) {
       x64: urlFor(/x64\.dmg$/i),
     },
     windows: urlFor(/\.exe$/i),
-    linux: urlFor(/\.AppImage$/i),
+    linux: {
+      appImage: urlFor(/\.AppImage$/i),
+      deb: urlFor(/\.deb$/i),
+      rpm: urlFor(/\.rpm$/i),
+    },
     updatedAt: new Date().toISOString(),
     source,
   };
 
+  // deb/rpm are absent on releases cut before they shipped, so only the
+  // long-standing AppImage asset is required for a usable snapshot.
   if (
     !downloads.version ||
     downloads.mac.arm64 === releasesUrl ||
     downloads.mac.x64 === releasesUrl ||
     downloads.windows === releasesUrl ||
-    downloads.linux === releasesUrl
+    downloads.linux.appImage === releasesUrl
   ) {
     throw new Error(
       `Latest release ${release.tag_name ?? "unknown"} is missing an installer asset.`,

@@ -20,7 +20,10 @@ const platforms = [
     label: "Linux x64",
     runner: "ubuntu-24.04",
     platform: "linux",
-    target: "AppImage",
+    // AppImage stays the updater payload; deb/rpm are package-manager
+    // updates built from the same staged payload in the same electron-builder
+    // pass, so a second runner or a second smoke would prove nothing new.
+    target: "AppImage,deb,rpm",
     arch: "x64",
   },
   {
