@@ -24,6 +24,12 @@ export function applyTodoPatch(todo: Todo, patch: TodoUpdateInput, updatedAt: st
     ...(patch.projectId !== undefined ? { projectId: patch.projectId } : {}),
     ...(patch.dueDate !== undefined ? { dueDate: patch.dueDate } : {}),
     ...(patch.threadId !== undefined ? { threadId: patch.threadId } : {}),
+    // A new link without its own base turn has none: the old one described another chat.
+    ...(patch.delegationBaseTurnId !== undefined
+      ? { delegationBaseTurnId: patch.delegationBaseTurnId }
+      : patch.threadId !== undefined && patch.threadId !== todo.threadId
+        ? { delegationBaseTurnId: null }
+        : {}),
     completedAt,
     updatedAt,
   };

@@ -11,13 +11,10 @@ import type {
   TodoId,
   TodoListResult,
   TodoUpdateInput,
-  TurnId,
 } from "@synara/contracts";
 import { applyTodoPatch } from "@synara/shared/todo";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
-import { create } from "zustand";
-import { createJSONStorage, persist } from "zustand/middleware";
 
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { ensureNativeApi } from "../../nativeApi";
@@ -54,31 +51,6 @@ const trackPendingUpdate = (id: TodoId, delta: 1 | -1) => {
   if (count > 0) pendingUpdateCountById.set(id, count);
   else pendingUpdateCountById.delete(id);
 };
-
-// To-dos just handed to an existing chat, with the turn that chat showed at that moment:
-// until a newer turn appears, the old one says nothing about the delegated work. Kept in
-// local storage so a reload during that window doesn't show the old turn as Review.
-const useDelegationBaselineStore = create<{
-  turnIdByTodoId: Readonly<Record<string, TurnId | null>>;
-}>()(
-  persist(() => ({ turnIdByTodoId: {} }), {
-    name: "synara:tasks-delegation-baselines:v1",
-    storage: createJSONStorage(() => localStorage),
-  }),
-);
-
-export function markDelegationBaseline(todoId: TodoId, turnId: TurnId | null): void {
-  useDelegationBaselineStore.setState((state) => ({
-    turnIdByTodoId: { ...state.turnIdByTodoId, [todoId]: turnId },
-  }));
-}
-
-export function clearDelegationBaseline(todoId: TodoId): void {
-  useDelegationBaselineStore.setState((state) => {
-    const { [todoId]: _removed, ...rest } = state.turnIdByTodoId;
-    return { turnIdByTodoId: rest };
-  });
-}
 
 /** `enabled` is false where Tasks is a Beta-only feature, so Stable never asks the server. */
 export function useTodoList(enabled = true) {
@@ -159,6 +131,7 @@ export function useTodoMutations() {
         projectId: input.projectId ?? null,
         dueDate: input.dueDate ?? null,
         threadId: null,
+        delegationBaseTurnId: null,
         completedAt: null,
         createdAt: now,
         updatedAt: UNSAVED_UPDATED_AT,
@@ -250,47 +223,22 @@ export function useTodoMutations() {
 /** Every to-do joined with its linked chat and the status that chat implies. */
 export function useTaskRows(todos: readonly Todo[]): TaskRowModel[] {
   const threadSummaryById = useStore((state) => state.sidebarThreadSummaryById);
-  const draftThreadsByThreadId = useComposerDraftStore((state) => state.draftThreadsByThreadId);
-  const baselineTurnIdByTodoId = useDelegationBaselineStore((state) => state.turnIdByTodoId);
   const threadsHydrated = useStore((state) => state.threadsHydrated);
-  const rows = useMemo(
+  const draftThreadsByThreadId = useComposerDraftStore((state) => state.draftThreadsByThreadId);
+  return useMemo(
     () =>
       todos.map((todo) => {
         const thread = todo.threadId ? (threadSummaryById[todo.threadId] ?? null) : null;
         const hasDraftThread =
           todo.threadId !== null && draftThreadsByThreadId[todo.threadId] !== undefined;
-        const awaitingNewTurn =
-          thread !== null &&
-          todo.id in baselineTurnIdByTodoId &&
-          (thread.latestTurn?.turnId ?? null) === baselineTurnIdByTodoId[todo.id];
         return {
           todo,
           thread,
-          status: deriveTaskStatus({
-            todo,
-            thread,
-            hasDraftThread,
-            awaitingNewTurn,
-            threadsHydrated,
-          }),
+          status: deriveTaskStatus({ todo, thread, hasDraftThread, threadsHydrated }),
         };
       }),
-    [baselineTurnIdByTodoId, draftThreadsByThreadId, threadSummaryById, threadsHydrated, todos],
+    [draftThreadsByThreadId, threadSummaryById, threadsHydrated, todos],
   );
-  // Drop baselines whose chat already shows a newer turn, or whose to-do lost the link.
-  useEffect(() => {
-    for (const todo of todos) {
-      if (!(todo.id in baselineTurnIdByTodoId)) continue;
-      const thread = todo.threadId ? threadSummaryById[todo.threadId] : undefined;
-      if (
-        todo.threadId === null ||
-        (thread && (thread.latestTurn?.turnId ?? null) !== baselineTurnIdByTodoId[todo.id])
-      ) {
-        clearDelegationBaseline(todo.id);
-      }
-    }
-  }, [baselineTurnIdByTodoId, threadSummaryById, todos]);
-  return rows;
 }
 
 /** How many to-dos sit in "Needs you" — the Tasks nav badge. */

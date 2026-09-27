@@ -60,7 +60,11 @@ export type DraftThreadDispatchResult =
   /** This surface cannot dispatch the draft faithfully — open the chat instead. */
   | { kind: "open-thread"; reason: DraftThreadOpenReason }
   | { kind: "unavailable" }
-  | { kind: "error"; message: string };
+  /**
+   * `outcomeUnknown`: the request died with the connection (timeout, reconnect), so the
+   * server may still have started the turn; callers must not treat it as refused.
+   */
+  | { kind: "error"; message: string; outcomeUnknown?: boolean };
 
 /** Surface-specific side effects around a dispatch, such as Kanban's optimistic card move. */
 export interface DraftThreadDispatchHooks {
@@ -87,6 +91,19 @@ interface DraftThreadDispatchInput {
   assistantDeliveryMode: AssistantDeliveryMode;
   providerOptions?: ProviderStartOptions | undefined;
   hooks?: DraftThreadDispatchHooks | undefined;
+}
+
+// wsTransport's WsTransportRequestInterruptedError for a timeout or reconnect: the command
+// may have reached the server before the connection went. A cancel is the caller's own.
+function isDispatchOutcomeUnknown(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "_tag" in error &&
+    error._tag === "WsTransportRequestInterruptedError" &&
+    "code" in error &&
+    error.code !== "WS_REQUEST_ABORTED"
+  );
 }
 
 // Racing callers (a double click on Start, a retry while the first send is still
@@ -322,6 +339,7 @@ async function dispatchDraftThreadOnce(
     return {
       kind: "error",
       message: error instanceof Error ? error.message : "Could not send the drafted prompt.",
+      ...(isDispatchOutcomeUnknown(error) ? { outcomeUnknown: true } : {}),
     };
   }
 

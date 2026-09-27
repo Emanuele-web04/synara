@@ -52,12 +52,10 @@ const TODO_STATUS: TaskStatus = {
 };
 
 export function deriveTaskStatus(input: {
-  todo: Pick<Todo, "completedAt" | "threadId">;
+  todo: Pick<Todo, "completedAt" | "threadId" | "delegationBaseTurnId">;
   thread: SidebarThreadSummary | null;
   /** The linked chat is still a local draft that has not reached the server yet. */
   hasDraftThread: boolean;
-  /** The to-do was just handed to an existing chat whose new turn has not appeared yet. */
-  awaitingNewTurn?: boolean;
   /** False until the chat list has loaded; a link can't be called missing before that. */
   threadsHydrated?: boolean;
 }): TaskStatus {
@@ -75,7 +73,12 @@ export function deriveTaskStatus(input: {
     }
     return { ...TODO_STATUS, chatMissing: true };
   }
-  if (input.awaitingNewTurn) {
+  // Handed to an existing chat whose delegated turn hasn't appeared yet: the chat's
+  // current state belongs to earlier work.
+  if (
+    todo.delegationBaseTurnId !== null &&
+    (thread.latestTurn?.turnId ?? null) === todo.delegationBaseTurnId
+  ) {
     return { ...TODO_STATUS, kind: "starting", label: "Starting" };
   }
 

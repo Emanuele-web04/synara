@@ -50,6 +50,7 @@ export const TodoServiceLive = Layer.effect(
           projectId: input.projectId ?? null,
           dueDate: input.dueDate ?? null,
           threadId: null,
+          delegationBaseTurnId: null,
           completedAt: null,
           createdAt: now,
           updatedAt: now,
@@ -87,6 +88,26 @@ export const TodoServiceLive = Layer.effect(
             return yield* new TodoServiceError({
               message: "This task was delegated somewhere else in the meantime.",
             });
+          }
+          // One chat works on one open to-do: both would read the same turns as theirs.
+          if (
+            input.threadId !== undefined &&
+            input.threadId !== null &&
+            input.threadId !== current.value.threadId
+          ) {
+            const owners = yield* repository.list();
+            if (
+              owners.some(
+                (todo) =>
+                  todo.id !== input.id &&
+                  todo.threadId === input.threadId &&
+                  todo.completedAt === null,
+              )
+            ) {
+              return yield* new TodoServiceError({
+                message: "That chat is already working on another task.",
+              });
+            }
           }
           const next = applyTodoPatch(
             current.value,

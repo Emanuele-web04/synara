@@ -84,6 +84,27 @@ layer("TodoService", (it) => {
     }),
   );
 
+  it.effect("lets one chat work on only one open to-do", () =>
+    Effect.gen(function* () {
+      const todos = yield* TodoService;
+      const chat = ThreadId.makeUnsafe("thread-shared-chat");
+      const first = TodoId.makeUnsafe("todo-owner-first");
+      const second = TodoId.makeUnsafe("todo-owner-second");
+      yield* todos.create({ id: first, title: "Draft the changelog" });
+      yield* todos.create({ id: second, title: "Tag the release" });
+      yield* todos.update({ id: first, threadId: chat });
+
+      const refused = yield* Effect.exit(todos.update({ id: second, threadId: chat }));
+      assert.isTrue(Exit.isFailure(refused));
+
+      // Once the first is done, the chat is free again.
+      yield* todos.update({ id: first, completed: true });
+      const linked = yield* todos.update({ id: second, threadId: chat });
+      assert.strictEqual(linked.threadId, chat);
+      assert.strictEqual(linked.delegationBaseTurnId, null);
+    }),
+  );
+
   it.effect("fails to update a missing to-do and publishes deletes", () =>
     Effect.gen(function* () {
       const todos = yield* TodoService;

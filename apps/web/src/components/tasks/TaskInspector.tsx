@@ -229,14 +229,21 @@ function TaskTextFields({
 
   // Escape blurs the field too; the blur must not save what Escape discarded.
   const discardTitleOnBlurRef = useRef(false);
+  // The value each field held when focused: a blur saves only what the user changed since,
+  // so an untouched field never writes back over another window's edit.
+  const focusedValueRef = useRef("");
+  const focusField = (field: "title" | "notes") => {
+    focusedValueRef.current = field === "title" ? title : notes;
+    setFocusedField(field);
+  };
   const commitTitle = () => {
     setFocusedField(null);
-    if (discardTitleOnBlurRef.current) {
+    const next = title.trim();
+    if (discardTitleOnBlurRef.current || next === focusedValueRef.current.trim()) {
       discardTitleOnBlurRef.current = false;
       setTitle(todo.title);
       return;
     }
-    const next = title.trim();
     if (next.length === 0) {
       setTitle(todo.title);
     } else if (next !== todo.title) {
@@ -245,6 +252,10 @@ function TaskTextFields({
   };
   const commitNotes = () => {
     setFocusedField(null);
+    if (notes === focusedValueRef.current) {
+      setNotes(todo.notes);
+      return;
+    }
     if (notes !== todo.notes) onUpdate({ id: todo.id, notes });
   };
   const handleTitleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -264,7 +275,7 @@ function TaskTextFields({
         aria-label="Task title"
         rows={1}
         value={title}
-        onFocus={() => setFocusedField("title")}
+        onFocus={() => focusField("title")}
         onChange={(event) => setTitle(event.target.value)}
         onBlur={commitTitle}
         onKeyDown={handleTitleKeyDown}
@@ -275,7 +286,7 @@ function TaskTextFields({
         rows={2}
         value={notes}
         placeholder="Add notes…"
-        onFocus={() => setFocusedField("notes")}
+        onFocus={() => focusField("notes")}
         onChange={(event) => setNotes(event.target.value)}
         onBlur={commitNotes}
         className="font-system-ui field-sizing-content min-h-10 w-full resize-none bg-transparent text-ui leading-relaxed text-muted-foreground outline-none placeholder:text-muted-foreground/60 focus:text-foreground"
@@ -330,7 +341,8 @@ function TaskAgentSection({
     [canAnswer, latestTurnId, thread],
   );
   const recentActivity = useMemo(() => {
-    if (!thread || !latestTurnId) return [];
+    // Starting on a reused chat: the latest turn there is still earlier, unrelated work.
+    if (!thread || !latestTurnId || status.kind === "starting") return [];
     return (
       deriveWorkLogEntries(thread.activities, latestTurnId, {
         visibleTurnIds: new Set([latestTurnId]),

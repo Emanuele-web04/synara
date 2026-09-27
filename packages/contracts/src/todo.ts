@@ -1,6 +1,13 @@
 import { Schema } from "effect";
 
-import { IsoDateTime, ProjectId, ThreadId, TodoId, TrimmedNonEmptyString } from "./baseSchemas";
+import {
+  IsoDateTime,
+  ProjectId,
+  ThreadId,
+  TodoId,
+  TrimmedNonEmptyString,
+  TurnId,
+} from "./baseSchemas";
 
 // Personal to-dos shown in the Tasks view. A to-do can stand alone, carry a project
 // label, or be delegated to an agent chat — in which case `threadId` links the chat
@@ -47,6 +54,11 @@ export const Todo = Schema.Struct({
   projectId: Schema.NullOr(ProjectId),
   dueDate: Schema.NullOr(TodoDueDate),
   threadId: Schema.NullOr(ThreadId),
+  /**
+   * The linked chat's latest turn when the to-do was handed to it. Until a newer turn
+   * appears, that chat's state (an earlier reply, approval, or run) is not this to-do's.
+   */
+  delegationBaseTurnId: Schema.NullOr(TurnId),
   completedAt: Schema.NullOr(TodoIsoDateTime),
   createdAt: TodoIsoDateTime,
   updatedAt: TodoIsoDateTime,
@@ -72,6 +84,8 @@ export const TodoUpdateInput = Schema.Struct({
   projectId: Schema.optional(Schema.NullOr(ProjectId)),
   dueDate: Schema.optional(Schema.NullOr(TodoDueDate)),
   threadId: Schema.optional(Schema.NullOr(ThreadId)),
+  /** Set with threadId when linking an existing chat; a threadId change alone clears it. */
+  delegationBaseTurnId: Schema.optional(Schema.NullOr(TurnId)),
   completed: Schema.optional(Schema.Boolean),
   /**
    * Applies the patch only while the to-do is still linked to this chat (null: to none),

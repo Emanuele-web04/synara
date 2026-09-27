@@ -76,14 +76,18 @@ export function TaskRow({
   const openChat = () => {
     if (todo.threadId) void navigate({ to: "/$threadId", params: { threadId: todo.threadId } });
   };
+  // The title the rename started from: saving an unchanged draft must not write it back
+  // over a rename another window made meanwhile.
+  const [editStartTitle, setEditStartTitle] = useState(todo.title);
   const startEditing = () => {
     setDraftTitle(todo.title);
+    setEditStartTitle(todo.title);
     setIsEditing(true);
   };
   const commitTitle = () => {
     setIsEditing(false);
     const nextTitle = draftTitle.trim();
-    if (nextTitle.length > 0 && nextTitle !== todo.title) {
+    if (nextTitle.length > 0 && nextTitle !== editStartTitle && nextTitle !== todo.title) {
       onUpdate({ id: todo.id, title: nextTitle });
     }
   };

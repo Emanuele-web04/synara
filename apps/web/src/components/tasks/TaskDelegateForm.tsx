@@ -56,7 +56,7 @@ import { useStore } from "../../store";
 import { DEFAULT_INTERACTION_MODE } from "../../types";
 import { useWorkspacePathsStore } from "../../workspacePathsStore";
 import { buildDelegationPrompt, folderLabel } from "./tasks.logic";
-import { clearDelegationBaseline, markDelegationBaseline } from "./useTodos";
+import { useTodoList } from "./useTodos";
 
 const RECENT_CHAT_LIMIT = 12;
 
@@ -118,18 +118,35 @@ export function TaskDelegateForm({
       ? (userProjects.find((project) => project.id === target.projectId) ?? null)
       : null;
 
+  const { todos } = useTodoList();
+  // A chat already working on another open to-do can't take this one too (the server
+  // refuses it as well): both would read that chat's turns as theirs.
+  const chatIdsOwnedElsewhere = useMemo(
+    () =>
+      new Set(
+        todos.flatMap((other) =>
+          other.id !== todo.id && other.threadId !== null && other.completedAt === null
+            ? [other.threadId]
+            : [],
+        ),
+      ),
+    [todo.id, todos],
+  );
   const recentChats = useMemo(
     () =>
       Object.values(threadSummaryById)
         .filter(
           (thread) =>
-            !thread.archivedAt && !thread.parentThreadId && !thread.sidechatSourceThreadId,
+            !thread.archivedAt &&
+            !thread.parentThreadId &&
+            !thread.sidechatSourceThreadId &&
+            !chatIdsOwnedElsewhere.has(thread.id),
         )
         .toSorted((left, right) =>
           (right.updatedAt ?? right.createdAt).localeCompare(left.updatedAt ?? left.createdAt),
         )
         .slice(0, RECENT_CHAT_LIMIT),
-    [threadSummaryById],
+    [chatIdsOwnedElsewhere, threadSummaryById],
   );
   const projectNameById = useMemo(
     () => new Map(projects.map((project) => [project.id, project.name] as const)),
@@ -195,6 +212,16 @@ export function TaskDelegateForm({
     threadId: ThreadId,
     agentLabel: string,
   ): boolean => {
+    if (result.kind === "error" && result.outcomeUnknown) {
+      // The server may have started the agent: keep the link and the chat rather than
+      // orphan live work. If nothing arrives, the task's menu can unlink it.
+      toastManager.add({
+        type: "warning",
+        title: "Couldn't confirm the agent started",
+        description: "The connection dropped while sending. Check the chat.",
+      });
+      return true;
+    }
     if (result.kind === "dispatched") {
       toastManager.add({
         type: "success",
@@ -234,15 +261,13 @@ export function TaskDelegateForm({
   // Awaited so Start stays busy until the to-do is back to "To do"; if the server can't
   // store that either, the mutation's toast says so and the row's menu can unlink later.
   const unlinkChat = async (linkedChatId: ThreadId, clearProject: boolean) => {
-    const unlinked = await linkChat({
+    await linkChat({
       id: todo.id,
       threadId: null,
       // Only undo our own link, never one another window made meanwhile.
       expectedThreadId: linkedChatId,
       ...(clearProject ? { projectId: null } : {}),
     });
-    // Still linked when the unlink failed: keep the chat's old turn from reading as Review.
-    if (unlinked) clearDelegationBaseline(todo.id);
   };
 
   const startInExistingChat = async (chatId: ThreadId) => {
@@ -260,13 +285,16 @@ export function TaskDelegateForm({
       });
       return false;
     }
-    // Until the delegated turn appears, the chat's previous turn must not read as Review.
-    markDelegationBaseline(todo.id, thread.latestTurn?.turnId ?? null);
     // expectedThreadId makes the link a claim: it fails if another window delegated first.
-    if (!(await linkChat({ id: todo.id, threadId: chatId, expectedThreadId: todo.threadId }))) {
-      clearDelegationBaseline(todo.id);
-      return false;
-    }
+    // The base turn keeps the chat's earlier work from reading as this to-do's until the
+    // delegated turn appears, in every window.
+    const linked = await linkChat({
+      id: todo.id,
+      threadId: chatId,
+      delegationBaseTurnId: thread.latestTurn?.turnId ?? null,
+      expectedThreadId: todo.threadId,
+    });
+    if (!linked) return false;
     composerStore.setPrompt(chatId, prompt);
     const result = await dispatchDraftThread({
       threadId: chatId,

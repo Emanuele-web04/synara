@@ -20,6 +20,7 @@ function todo(overrides: Omit<Partial<Todo>, "id"> & { id: string }): Todo {
     projectId: null,
     dueDate: null,
     threadId: null,
+    delegationBaseTurnId: null,
     completedAt: null,
     createdAt: "2026-09-27T10:00:00.000Z",
     updatedAt: "2026-09-27T10:00:00.000Z",
@@ -128,14 +129,18 @@ describe("deriveTaskStatus", () => {
   });
 
   it("keeps a reused chat starting until its delegated turn appears", () => {
+    const handedOff = { ...delegated, delegationBaseTurnId: turnId };
+    expect(
+      deriveTaskStatus({ todo: handedOff, thread: thread(), hasDraftThread: false }).kind,
+    ).toBe("starting");
+    const nextTurn = { ...thread().latestTurn!, turnId: TurnId.makeUnsafe("turn-2") };
     expect(
       deriveTaskStatus({
-        todo: delegated,
-        thread: thread(),
+        todo: handedOff,
+        thread: thread({ latestTurn: nextTurn }),
         hasDraftThread: false,
-        awaitingNewTurn: true,
       }).kind,
-    ).toBe("starting");
+    ).toBe("review");
   });
 
   it("maps a live turn to running and a finished one to review", () => {

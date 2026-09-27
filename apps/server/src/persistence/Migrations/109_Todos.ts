@@ -15,6 +15,7 @@ export default Effect.gen(function* () {
     project_id TEXT,
     due_date TEXT,
     thread_id TEXT,
+    delegation_base_turn_id TEXT,
     completed_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
