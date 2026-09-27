@@ -253,7 +253,7 @@ export function useTaskRows(todos: readonly Todo[]): TaskRowModel[] {
   const draftThreadsByThreadId = useComposerDraftStore((state) => state.draftThreadsByThreadId);
   const baselineTurnIdByTodoId = useDelegationBaselineStore((state) => state.turnIdByTodoId);
   const threadsHydrated = useStore((state) => state.threadsHydrated);
-  return useMemo(
+  const rows = useMemo(
     () =>
       todos.map((todo) => {
         const thread = todo.threadId ? (threadSummaryById[todo.threadId] ?? null) : null;
@@ -290,6 +290,7 @@ export function useTaskRows(todos: readonly Todo[]): TaskRowModel[] {
       }
     }
   }, [baselineTurnIdByTodoId, threadSummaryById, todos]);
+  return rows;
 }
 
 /** How many to-dos sit in "Needs you" — the Tasks nav badge. */
