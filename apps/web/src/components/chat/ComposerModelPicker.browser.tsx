@@ -144,7 +144,7 @@ describe("ComposerModelPicker", () => {
         .element(page.getByRole("tab", { name: "Codex" }))
         .toHaveAttribute("aria-selected", "true");
       await page.getByRole("menuitem", { name: /GPT-5\.4/u }).click();
-      expect(onProviderModelChange).toHaveBeenCalledWith("codex", GPT_5_4);
+      expect(onProviderModelChange).toHaveBeenCalledWith("codex", GPT_5_4, { instanceId: "codex" });
     } finally {
       await screen.unmount();
     }
@@ -173,7 +173,7 @@ describe("ComposerModelPicker", () => {
     try {
       await expect.element(page.getByRole("menuitem", { name: /GPT-5\.4/u })).toBeVisible();
       await userEvent.keyboard("{Control>}2{/Control}");
-      expect(onProviderModelChange).toHaveBeenCalledWith("codex", GPT_5_4);
+      expect(onProviderModelChange).toHaveBeenCalledWith("codex", GPT_5_4, { instanceId: "codex" });
     } finally {
       await screen.unmount();
     }
@@ -187,6 +187,7 @@ describe("ComposerModelPicker", () => {
       await page.getByRole("menuitemradio", { name: /^High/u }).click();
       expect(onProviderModelChange).toHaveBeenCalledWith("codex", GPT_5_4, {
         modelOptions: { reasoningEffort: "high" },
+        instanceId: "codex",
       });
     } finally {
       await screen.unmount();
@@ -225,6 +226,7 @@ describe("ComposerModelPicker", () => {
       await page.getByRole("menuitem", { name: /GPT-5\.4.*Low · Fast/u }).click();
       expect(onProviderModelChange).toHaveBeenCalledWith("codex", GPT_5_4, {
         modelOptions: { reasoningEffort: "low", fastMode: true },
+        instanceId: "codex",
       });
     } finally {
       await screen.unmount();
@@ -312,7 +314,7 @@ describe("ComposerModelPicker", () => {
       const available = page.getByRole("menuitem", { name: /Private Model/u });
       await expect.element(available).not.toHaveAttribute("aria-disabled", "true");
       await available.click();
-      expect(onProviderModelChange).toHaveBeenCalledWith("codex", model);
+      expect(onProviderModelChange).toHaveBeenCalledWith("codex", model, { instanceId: "codex" });
     } finally {
       await screen.unmount();
     }
@@ -360,7 +362,7 @@ describe("ComposerModelPicker", () => {
       expect(page.getByRole("menuitemradio").elements()).toHaveLength(0);
 
       await otherModel.click();
-      expect(onProviderModelChange).toHaveBeenCalledWith("codex", GPT_5_4);
+      expect(onProviderModelChange).toHaveBeenCalledWith("codex", GPT_5_4, { instanceId: "codex" });
       const slider = page.getByRole("slider", { name: "Reasoning effort" });
       await expect.element(slider).toBeVisible();
       await expect.element(otherModel).toHaveAttribute("aria-current", "true");
