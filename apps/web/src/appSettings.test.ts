@@ -317,7 +317,6 @@ describe("getGitTextGenerationModelOptions", () => {
     expect(options.some((option) => option.slug === "openrouter/custom-model")).toBe(true);
   });
 
-
   it("includes Git text-generation providers and omits chat-only providers", () => {
     const options = getGitTextGenerationModelOptions({
       customCodexModels: [],
@@ -404,6 +403,7 @@ describe("environment panel defaults", () => {
         customDevinModels: [],
         customOpenCodeModels: [],
         customPiModels: [],
+        customOmpModels: [],
         codexAccounts: [],
         codexHomePath: "",
         selectedCodexAccountId: "default",
@@ -704,6 +704,8 @@ describe("normalizeStoredAppSettings", () => {
       droidBinaryPath: "",
       openCodeBinaryPath: "",
       piBinaryPath: "",
+      ompBinaryPath: "",
+      ompAgentDir: "",
     });
     expect(getCustomBinaryPathForProvider(normalized, "opencode")).toBe("");
   });
@@ -1004,6 +1006,8 @@ describe("getProviderStartOptions", () => {
         openCodeServerUrl: "",
         piAgentDir: "",
         piBinaryPath: "",
+        ompBinaryPath: "",
+        ompAgentDir: "",
         providerInstances: {
           codex_work: {
             driver: "codex",
@@ -1037,6 +1041,8 @@ describe("getProviderStartOptions", () => {
         openCodeServerUrl: "",
         piAgentDir: "",
         piBinaryPath: "",
+        ompBinaryPath: "",
+        ompAgentDir: "",
         providerInstances: {
           claudeAgent: {
             driver: "claudeAgent",
@@ -1311,6 +1317,8 @@ describe("provider instance configuration", () => {
           openCodeExperimentalWebSockets: false,
           openCodeServerUrl: "",
           piBinaryPath: "",
+          ompBinaryPath: "",
+          ompAgentDir: "",
           piAgentDir: "",
           providerInstances: {
             claude_work: { driver: "claudeAgent", enabled: true, config: {} },
@@ -1790,6 +1798,7 @@ describe("AppSettingsSchema", () => {
       customDroidModels: [],
       customOpenCodeModels: [],
       customPiModels: [],
+      customOmpModels: [],
     });
   });
 

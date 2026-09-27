@@ -4,6 +4,8 @@ import { providerSetupStatusLabel } from "./providerSetupStatus";
 
 const connected: ServerProviderStatus = {
   provider: "opencode",
+  instanceId: "opencode",
+  driver: "opencode",
   available: true,
   status: "ready",
   authStatus: "authenticated",

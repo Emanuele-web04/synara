@@ -29,6 +29,8 @@ import {
   makePiStoragePaths,
   makePiUserInputOptions,
   toPiProviderModelDescriptor,
+  resolvePiStartInstanceId,
+  resolvePiExtensionMode,
 } from "./PiAdapter";
 
 describe("makePiStoragePaths", () => {

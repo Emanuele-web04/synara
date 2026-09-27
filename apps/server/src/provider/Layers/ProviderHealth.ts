@@ -892,6 +892,7 @@ export const makeProviderUpdateEnv = (
     case "droid":
     case "opencode":
     case "pi":
+    case "omp":
       return makeProviderProbeEnv(instance.driver, environment, instance.instanceId, paths);
   }
 };
@@ -1986,6 +1987,8 @@ export const checkOmpProviderStatus = (
       const error = versionProbe.cause;
       return {
         provider: OMP_PROVIDER,
+        instanceId: OMP_PROVIDER,
+        driver: OMP_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -2000,6 +2003,8 @@ export const checkOmpProviderStatus = (
     if (versionProbe.outcome === "timeout") {
       return {
         provider: OMP_PROVIDER,
+        instanceId: OMP_PROVIDER,
+        driver: OMP_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -2013,6 +2018,8 @@ export const checkOmpProviderStatus = (
       const detail = detailFromResult(version);
       return {
         provider: OMP_PROVIDER,
+        instanceId: OMP_PROVIDER,
+        driver: OMP_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -2026,6 +2033,8 @@ export const checkOmpProviderStatus = (
     const configuredAgentDir = nonEmptyTrimmed(agentDir);
     return {
       provider: OMP_PROVIDER,
+      instanceId: OMP_PROVIDER,
+      driver: OMP_PROVIDER,
       status: "ready" as const,
       available: true,
       authStatus: "unknown" as const,

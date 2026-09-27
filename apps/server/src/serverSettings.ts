@@ -208,7 +208,24 @@ export function gateBetaOnlyProviders(
     providers[provider] = { ...current, enabled: false };
     changed = true;
   }
-  return changed ? { ...settings, providers: providers as ServerSettings["providers"] } : settings;
+  // Custom provider instances carry their own enabled flag, so a Beta-only
+  // driver must be gated on every instance, not just its built-in entry.
+  let instancesChanged = false;
+  const providerInstances = Object.fromEntries(
+    Object.entries(settings.providerInstances).map(([instanceId, instance]) => {
+      if (instance.enabled === false || isEnabled(instance.driver)) {
+        return [instanceId, instance] as const;
+      }
+      instancesChanged = true;
+      return [instanceId, { ...instance, enabled: false }] as const;
+    }),
+  );
+  if (!changed && !instancesChanged) return settings;
+  return {
+    ...settings,
+    ...(changed ? { providers: providers as ServerSettings["providers"] } : {}),
+    ...(instancesChanged ? { providerInstances } : {}),
+  };
 }
 
 export function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings {

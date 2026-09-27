@@ -35,6 +35,8 @@ describe("createProviderInstallResetPatch", () => {
         "antigravityBinaryPath",
         "claudeBinaryPath",
         "claudeEnableArtifacts",
+        "claudeHomePath",
+        "codexAccounts",
         "codexBinaryPath",
         "codexHomePath",
         "cursorApiEndpoint",

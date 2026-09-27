@@ -30,7 +30,6 @@ function derive(currentSession: OrchestrationSession | null) {
 }
 
 describe("deriveTurnStartSession", () => {
-
   it("ignores imported history when deciding first-turn provider adoption", () => {
     expect(
       canAdoptFirstTurnProvider({

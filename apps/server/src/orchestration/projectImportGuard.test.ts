@@ -11,6 +11,7 @@ import { OrchestrationEngineLive } from "./Layers/OrchestrationEngine";
 import { OrchestrationProjectionPipelineLive } from "./Layers/ProjectionPipeline";
 import { OrchestrationProjectionSnapshotQueryLive } from "./Layers/ProjectionSnapshotQuery";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine";
+import { ServerSettingsService } from "../serverSettings.ts";
 
 it("preserves an empty existing project and refuses turns until the native import is complete", async () => {
   const runtime = ManagedRuntime.make(
@@ -19,6 +20,7 @@ it("preserves an empty existing project and refuses turns until the native impor
       Layer.provide(OrchestrationProjectionSnapshotQueryLive),
       Layer.provide(OrchestrationEventStoreLive),
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
+      Layer.provide(ServerSettingsService.layerTest()),
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(
         ServerConfig.layerTest(process.cwd(), { prefix: "synara-project-import-guard-" }),

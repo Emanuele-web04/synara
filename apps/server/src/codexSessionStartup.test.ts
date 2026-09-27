@@ -91,7 +91,14 @@ function createStartupHarness(
     threadId: ThreadId.makeUnsafe("thread-startup-failed"),
     cwd: process.cwd(),
     runtimeMode: "full-access" as const,
-    ...(resumeExistingThread ? { resumeCursor: { threadId: "codex-existing-thread" } } : {}),
+    ...(resumeExistingThread
+      ? {
+          resumeCursor: { threadId: "codex-existing-thread" },
+          // Process-env construction is stubbed, so a pinned generation is accepted
+          // without the overlay files a real launch would verify.
+          expectedCodexContinuationGeneration: "00000000-0000-4000-8000-000000000002",
+        }
+      : {}),
     agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
   };
   const expectedErrorMessage =

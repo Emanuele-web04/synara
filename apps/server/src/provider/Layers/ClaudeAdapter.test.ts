@@ -49,6 +49,7 @@ import {
   type ClaudeAdapterLiveOptions,
   type ClaudeOwnedProcess,
 } from "./ClaudeAdapter.ts";
+import { claudeIsolatedHomePath } from "../claudeEnvironment.ts";
 
 vi.mock("effect", async (importOriginal) => {
   const actual = await importOriginal<typeof import("effect")>();

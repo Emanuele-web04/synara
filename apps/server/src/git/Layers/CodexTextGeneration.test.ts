@@ -973,7 +973,6 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
     ),
   );
 
-
   it.effect("does not pass persisted attachment paths to the text-only Codex child", () =>
     withFakeCodexEnv(
       {
@@ -1021,7 +1020,6 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
       }),
     ),
   );
-
 
   it.effect("does not resolve missing attachment ids for the text-only Codex child", () =>
     withFakeCodexEnv(

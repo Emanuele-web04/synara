@@ -28,6 +28,8 @@ const GENERIC_DRIVER_BY_PROVIDER = {
   droid: "kilo",
   opencode: "opencode",
   pi: "pi",
+  // Oh My Pi is a Pi fork that reads the same agent-dir and credential variables.
+  omp: "pi",
 } as const;
 
 const PROFILE_ENVIRONMENT_KEYS = new Set([

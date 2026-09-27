@@ -49,6 +49,8 @@ beforeEach(() => {
   harness.refresh.mockReset();
   harness.statuses = PROVIDER_DESCRIPTORS.map(({ kind }) => ({
     provider: kind,
+    instanceId: kind,
+    driver: kind,
     status: kind === "opencode" ? "error" : "ready",
     available: kind !== "opencode",
     authStatus: kind === "claudeAgent" ? "unauthenticated" : "authenticated",

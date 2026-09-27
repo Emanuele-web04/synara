@@ -705,6 +705,9 @@ export function resolveAgentGatewayTarget(input: {
       input.target.provider === "claudeAgent"
         ? {
             provider: input.target.provider,
+            ...(input.target.instanceId !== undefined
+              ? { instanceId: input.target.instanceId }
+              : {}),
             model: input.target.model,
             ...(input.target.options !== undefined ? { options: input.target.options } : {}),
             ...(descriptor?.supportsAutoMode !== undefined

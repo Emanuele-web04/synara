@@ -63,6 +63,7 @@ import {
   readCodexConfigModelProviderForEnv,
   runProviderHealthProbes,
   stabilizeProviderStatusesAgainstTransientTimeouts,
+  makeProviderUpdateEnv,
 } from "./ProviderHealth";
 import { resolvePackageManagedProviderMaintenance } from "../providerMaintenance";
 

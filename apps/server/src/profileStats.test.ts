@@ -489,7 +489,6 @@ describe("ProfileStatsQuery", () => {
     );
   });
 
-
   it("attributes provider-less custom instance selections to their session provider", async () => {
     await runProfileStatsTest(
       Effect.gen(function* () {

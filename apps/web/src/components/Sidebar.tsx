@@ -2810,11 +2810,11 @@ export default function Sidebar() {
             ? `Imported Cursor session${suffix ? ` ${suffix}` : ""}`
             : provider === "droid"
               ? `Imported Droid session${suffix ? ` ${suffix}` : ""}`
-            : provider === "opencode"
-              ? `Imported OpenCode session${suffix ? ` ${suffix}` : ""}`
-              : provider === "omp"
-                ? `Imported Oh My Pi session${suffix ? ` ${suffix}` : ""}`
-                : `Imported Codex thread${suffix ? ` ${suffix}` : ""}`;
+              : provider === "opencode"
+                ? `Imported OpenCode session${suffix ? ` ${suffix}` : ""}`
+                : provider === "omp"
+                  ? `Imported Oh My Pi session${suffix ? ` ${suffix}` : ""}`
+                  : `Imported Codex thread${suffix ? ` ${suffix}` : ""}`;
       let createdThread = false;
 
       try {

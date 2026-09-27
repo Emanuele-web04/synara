@@ -34,6 +34,9 @@ import {
   scopeGrokRuntimeItemIdForTurn,
   scopeGrokToolCallStateForTurn,
 } from "./GrokAdapter.ts";
+import { mkdtempSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 describe("GrokAdapter runtime event scoping", () => {
   it("resolves modelSelection-only account identity before Grok launch", () => {

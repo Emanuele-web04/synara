@@ -3121,7 +3121,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           ),
         ),
         Effect.flatMap((option) =>
-          decodeProjectionThreadOptionForCurrentSettings(option, `${tracePrefix}:getThread:decodeModelSelection`),
+          decodeProjectionThreadOptionForCurrentSettings(
+            option,
+            `${tracePrefix}:getThread:decodeModelSelection`,
+          ),
         ),
       );
       if (Option.isNone(threadRow)) {
@@ -3437,7 +3440,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               ),
             ),
             Effect.flatMap((option) =>
-              decodeProjectionThreadOptionForCurrentSettings(option, `${tracePrefix}:getThread:decodeModelSelection`),
+              decodeProjectionThreadOptionForCurrentSettings(
+                option,
+                `${tracePrefix}:getThread:decodeModelSelection`,
+              ),
             ),
           );
           if (Option.isNone(threadRow)) {

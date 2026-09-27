@@ -1,7 +1,6 @@
 import {
   ThreadId,
   type ModelSlug,
-  type ProviderInstanceId,
   type ProviderKind,
   type ProviderSkillReference,
 } from "@synara/contracts";

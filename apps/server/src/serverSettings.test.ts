@@ -756,6 +756,20 @@ describe("gateBetaOnlyProviders", () => {
     expect(gateBetaOnlyProviders(withOmpEnabled, () => true)).toBe(withOmpEnabled);
   });
 
+  it("gates custom instances of a Beta-only driver", () => {
+    const settings: ServerSettings = {
+      ...withOmpEnabled,
+      providerInstances: {
+        omp_work: { driver: "omp", enabled: true, config: {} },
+        codex_work: { driver: "codex", enabled: true, config: {} },
+      },
+    };
+    const gated = gateBetaOnlyProviders(settings, ompGatedOff);
+    expect(gated.providerInstances.omp_work?.enabled).toBe(false);
+    expect(gated.providerInstances.codex_work?.enabled).toBe(true);
+    expect(settings.providerInstances.omp_work?.enabled).toBe(true);
+  });
+
   it("leaves an already-disabled provider unchanged", () => {
     const settings: ServerSettings = {
       ...DEFAULT_SERVER_SETTINGS,

@@ -97,7 +97,7 @@ export const ProviderInstancePicker = memo(function ProviderInstancePicker(
         <span className="sr-only">{triggerLabel}</span>
       </MenuTrigger>
       <ComposerPickerMenuPopup align="start" fixedWidth>
-        <div className="px-2.5 pb-1 pt-1 text-[11px] font-medium text-muted-foreground uppercase tracking-[0.08em]">
+        <div className="px-2.5 pb-1 pt-1 text-ui-xs font-medium text-muted-foreground uppercase tracking-[0.08em]">
           {pickerSectionLabel(props.provider)}
         </div>
         <MenuRadioGroup
@@ -107,7 +107,7 @@ export const ProviderInstancePicker = memo(function ProviderInstancePicker(
           {!selectedInstance ? (
             <MenuRadioItem value={props.selectedProviderInstanceId} disabled>
               <span className="truncate">{MISSING_PROVIDER_INSTANCE_LABEL}</span>
-              <span className="ms-auto text-[11px] text-muted-foreground/80 uppercase tracking-[0.08em]">
+              <span className="ms-auto text-ui-xs text-muted-foreground/80 uppercase tracking-[0.08em]">
                 Unavailable
               </span>
             </MenuRadioItem>
@@ -135,7 +135,7 @@ export const ProviderInstancePicker = memo(function ProviderInstancePicker(
                 {statusLabel ? (
                   <span
                     className={cn(
-                      "ms-auto text-[11px] text-muted-foreground/80",
+                      "ms-auto text-ui-xs text-muted-foreground/80",
                       statusLabel !== "Checking" && "uppercase tracking-[0.08em]",
                     )}
                   >

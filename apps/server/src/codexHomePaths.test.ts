@@ -7,6 +7,7 @@ import {
   resolveBaseCodexHomePath,
   resolveCodexHomeAllowlistCandidates,
   resolveSynaraCodexHomeOverlayPath,
+  resolveActiveCodexHomeWritePath,
 } from "./codexHomePaths.ts";
 
 describe("Codex home paths", () => {

@@ -14,6 +14,7 @@ export const PROVIDER_CLI_COMMAND_BY_KIND = {
   droid: "droid",
   opencode: "opencode",
   pi: "pi",
+  omp: "omp",
 } as const satisfies Record<ProviderKind, string>;
 
 const CLI_COMMAND_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;

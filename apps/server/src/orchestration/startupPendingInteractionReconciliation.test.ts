@@ -27,6 +27,7 @@ import { OrchestrationProjectionSnapshotQueryLive } from "./Layers/ProjectionSna
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 import { reconcileRestartStuckTurns } from "./startupTurnReconciliation.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 
 const PROJECT_ID = ProjectId.makeUnsafe("project-1");
 const THREAD_ID = ThreadId.makeUnsafe("thread-1");
@@ -78,6 +79,7 @@ describe("boot-time pending interaction reconciliation", () => {
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
       Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
       Layer.provideMerge(ProjectionPendingInteractionRepositoryLive),
+      Layer.provide(ServerSettingsService.layerTest()),
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
       Layer.provideMerge(NodeServices.layer),

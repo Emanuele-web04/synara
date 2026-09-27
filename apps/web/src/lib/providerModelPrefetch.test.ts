@@ -554,7 +554,9 @@ describe("prefetchModelsForNewThread — warm-option invariants", () => {
     expect(droidKeys).toContainEqual(
       providerDiscoveryQueryKeys.models("droid", "/bin/droid", null, null, "/tmp/project"),
     );
-    expect(droidKeys).toContainEqual(providerDiscoveryQueryKeys.composerCapabilities("droid", null));
+    expect(droidKeys).toContainEqual(
+      providerDiscoveryQueryKeys.composerCapabilities("droid", null),
+    );
     expect(
       droidCalls.find(
         (options) => options.queryKey[1] === "models" && options.queryKey[2] === "droid",

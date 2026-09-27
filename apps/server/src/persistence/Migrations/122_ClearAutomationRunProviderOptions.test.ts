@@ -11,7 +11,7 @@ import { AutomationRepositoryLive } from "../Layers/AutomationRepository.ts";
 import { AutomationRepository } from "../Services/AutomationRepository.ts";
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
-import ClearAutomationRunProviderOptions from "./108_ClearAutomationRunProviderOptions.ts";
+import ClearAutomationRunProviderOptions from "./122_ClearAutomationRunProviderOptions.ts";
 
 const layer = it.layer(
   AutomationRepositoryLive.pipe(Layer.provideMerge(NodeSqliteClient.layerMemory())),
@@ -19,98 +19,6 @@ const layer = it.layer(
 
 layer("122_ClearAutomationRunProviderOptions", (it) => {
   it.effect("tombstones a legacy queued Codex account before removing launch options", () =>
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-
-      yield* runMigrations({ toMigrationInclusive: 121 });
-      yield* sql`
-        INSERT INTO automation_definitions (
-          automation_id,
-          project_id,
-          name,
-          prompt,
-          schedule_json,
-          enabled,
-          model_selection_json,
-          runtime_mode,
-          interaction_mode,
-          worktree_mode,
-          mode,
-          stop_on_error,
-          minimum_interval_seconds,
-          retry_policy_json,
-          misfire_policy,
-          acknowledged_risks_json,
-          iteration_count,
-          created_at,
-          updated_at
-        )
-        VALUES (
-          'automation-legacy-run',
-          'project-legacy-run',
-          'Legacy run',
-          'Run safely',
-          '{"type":"manual"}',
-          1,
-          '{"instanceId":"codex_work","model":"gpt-5-codex"}',
-          'approval-required',
-          'default',
-          'auto',
-          'standalone',
-          1,
-          60,
-          '{"type":"none"}',
-          'coalesce',
-          '[]',
-          1,
-          '2026-07-08T10:00:00.000Z',
-          '2026-07-08T10:00:00.000Z'
-        )
-      `;
-      yield* sql`
-        INSERT INTO automation_runs (
-          run_id,
-          automation_id,
-          project_id,
-          trigger_type,
-          status,
-          scheduled_for,
-          permission_snapshot_json,
-          created_at,
-          updated_at
-        )
-        VALUES (
-          'run-legacy-options',
-          'automation-legacy-run',
-          'project-legacy-run',
-          'manual',
-          'succeeded',
-          '2026-07-08T10:00:00.000Z',
-          '{"provider":"codex","modelSelection":{"provider":"codex","model":"gpt-5-codex"},"providerOptions":{"codex":{"accountId":"work","environment":{"CODEX_SECRET":"must-be-removed"}}},"runtimeMode":"approval-required","interactionMode":"default","worktreeMode":"auto","allowedCapabilities":["send-turn"],"createdAt":"2026-07-08T10:00:00.000Z"}',
-          '2026-07-08T10:00:00.000Z',
-          '2026-07-08T10:00:00.000Z'
-        )
-      `;
-
-      yield* runMigrations();
-
-      const rows = yield* sql<{
-        readonly instanceId: string;
-        readonly providerOptions: string | null;
-      }>`
-        SELECT
-          json_extract(permission_snapshot_json, '$.modelSelection.instanceId') AS instanceId,
-          json_extract(permission_snapshot_json, '$.providerOptions') AS providerOptions
-        FROM automation_runs
-        WHERE run_id = 'run-legacy-options'
-      `;
-      assert.deepStrictEqual(rows, [
-        { instanceId: "synara_unresolved_automation_codex", providerOptions: null },
-      ]);
-    }),
-  );
-
-  it.effect("maps a legacy queued Codex account before removing launch options", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 

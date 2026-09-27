@@ -3514,8 +3514,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           promptQueue: context.promptQueue,
           query: context.query,
           artifactsEnabled: context.artifactsEnabled,
-          commandDiscoveryKey: context.commandDiscoveryKey,
-          accountDiscoveryKey: context.accountDiscoveryKey,
           processOwner: context.processOwner,
           stoppedSignal: context.stoppedSignal,
           pendingCompactionPreparations: new Set(),
@@ -5506,12 +5504,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         const startedAt = yield* nowIso;
         const resumeState = readClaudeResumeState(input.resumeCursor);
         const threadId = input.threadId;
-        const existingContext = sessions.get(threadId);
-        if (existingContext) {
-          yield* stopSessionInternal(existingContext, {
-            emitExitEvent: true,
-          });
-        }
         const existingResumeSessionId = resumeState?.resume;
         const newSessionId =
           existingResumeSessionId === undefined ? yield* Random.nextUUIDv4 : undefined;
@@ -7486,11 +7478,16 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         // A thread's own session is the truth for that thread. Without one, only
         // borrow a session spawned with the same Artifact opt-in a new session
         // would get, or its command list would misreport `/design` and `/slides`.
+        // The thread's own session only answers for the same account; its cwd may
+        // legitimately differ from the discovery request's.
         const ownContext = input.threadId
           ? sessions.get(ThreadId.makeUnsafe(input.threadId))
           : undefined;
+        const accountDiscoveryKey = claudeDiscoveryKey({ ...input, includeCwd: false });
         const context =
-          ownContext && !ownContext.stopped
+          ownContext &&
+          !ownContext.stopped &&
+          ownContext.accountDiscoveryKey === accountDiscoveryKey
             ? ownContext
             : input.threadId
               ? undefined
@@ -7501,7 +7498,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                     s.artifactsEnabled === enableArtifacts,
                 );
 
-        if (context && !context.stopped && context.commandDiscoveryKey === discoveryKey) {
+        if (context && !context.stopped) {
           const commands = yield* Effect.tryPromise({
             try: () => context.query.supportedCommands(),
             catch: (cause) => toRequestError(context.session.threadId, "listCommands", cause),

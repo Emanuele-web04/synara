@@ -118,6 +118,7 @@ describe("providerStartOptionsFromServerSettings", () => {
     expect(providerOptions.claudeAgent).toEqual({
       binaryPath: "/custom/bin/claude",
       homePath: "/custom/claude-home",
+      enableArtifacts: false,
     });
     expect(providerOptions.opencode).toEqual({
       binaryPath: "/custom/bin/opencode",

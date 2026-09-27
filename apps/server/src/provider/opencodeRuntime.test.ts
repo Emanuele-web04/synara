@@ -28,6 +28,8 @@ import {
   parseOpenCodeCredentialProviderIDs,
   supportsVerboseModelsCommandFailure,
   toOpenCodeFileParts,
+  KILO_CLI_SPEC,
+  buildOpenCodeServerProcessEnv as buildIsolatedOpenCodeServerProcessEnv,
 } from "./opencodeRuntime.ts";
 import {
   buildOpenCodeServerProcessEnv,
@@ -282,9 +284,8 @@ describe("buildOpenCodeServerProcessEnv", () => {
     expect(env.SYNARA_BROWSER_USE_PIPE_PATH).toBeUndefined();
   });
 
-
   it("scrubs ambient account config before applying a selected instance environment", () => {
-    const env = buildOpenCodeServerProcessEnv({
+    const env = buildIsolatedOpenCodeServerProcessEnv({
       instanceId: "opencode_work",
       baseEnv: {
         PATH: "/usr/bin",

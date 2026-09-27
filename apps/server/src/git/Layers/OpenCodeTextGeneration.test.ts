@@ -510,48 +510,48 @@ it.layer(OpenCodeTextGenerationTestLayer)("OpenCodeTextGenerationServiceLive", (
     }),
   );
 
-    it.effect("does not lend the default server password to a custom instance", () =>
-      Effect.gen(function* () {
-        const textGeneration = yield* OpenCodeTextGeneration;
+  it.effect("does not lend the default server password to a custom instance", () =>
+    Effect.gen(function* () {
+      const textGeneration = yield* OpenCodeTextGeneration;
 
-        yield* textGeneration.generateCommitMessage({
-          cwd: process.cwd(),
-          branch: "feature/opencode-work",
-          stagedSummary: "M README.md",
-          stagedPatch: "diff --git a/README.md b/README.md",
-          modelSelection: {
-            provider: "opencode",
-            instanceId: "opencode_work",
-            model: "openai/gpt-5",
+      yield* textGeneration.generateCommitMessage({
+        cwd: process.cwd(),
+        branch: "feature/opencode-work",
+        stagedSummary: "M README.md",
+        stagedPatch: "diff --git a/README.md b/README.md",
+        modelSelection: {
+          provider: "opencode",
+          instanceId: "opencode_work",
+          model: "openai/gpt-5",
+        },
+        providerOptions: {
+          opencode: { serverUrl: "http://127.0.0.1:9999" },
+        },
+      });
+      yield* textGeneration.generateCommitMessage({
+        cwd: process.cwd(),
+        branch: "feature/opencode-work-explicit",
+        stagedSummary: "M README.md",
+        stagedPatch: "diff --git a/README.md b/README.md",
+        modelSelection: {
+          provider: "opencode",
+          instanceId: "opencode_work",
+          model: "openai/gpt-5",
+        },
+        providerOptions: {
+          opencode: {
+            serverUrl: "http://127.0.0.1:9999",
+            serverPassword: "work-password",
           },
-          providerOptions: {
-            opencode: { serverUrl: "http://127.0.0.1:9999" },
-          },
-        });
-        yield* textGeneration.generateCommitMessage({
-          cwd: process.cwd(),
-          branch: "feature/opencode-work-explicit",
-          stagedSummary: "M README.md",
-          stagedPatch: "diff --git a/README.md b/README.md",
-          modelSelection: {
-            provider: "opencode",
-            instanceId: "opencode_work",
-            model: "openai/gpt-5",
-          },
-          providerOptions: {
-            opencode: {
-              serverUrl: "http://127.0.0.1:9999",
-              serverPassword: "work-password",
-            },
-          },
-        });
+        },
+      });
 
-        expect(runtimeMock.state.authHeaders).toEqual([
-          null,
-          `Basic ${btoa("opencode:work-password")}`,
-        ]);
-      }),
-    );
+      expect(runtimeMock.state.authHeaders).toEqual([
+        null,
+        `Basic ${btoa("opencode:work-password")}`,
+      ]);
+    }),
+  );
 });
 
 it.layer(OpenCodeTextGenerationExistingServerTestLayer)(

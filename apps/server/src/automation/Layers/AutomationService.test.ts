@@ -3622,7 +3622,6 @@ layer("AutomationService", (it) => {
     }),
   );
 
-
   it.effect(
     "replaces stale heartbeat completion provider options with selected instance options",
     () =>
@@ -3693,7 +3692,6 @@ layer("AutomationService", (it) => {
         });
       }),
   );
-
 
   it.effect(
     "drops stale heartbeat completion provider options when the selected instance is removed",
@@ -3774,8 +3772,6 @@ layer("AutomationService", (it) => {
         assert.isUndefined(completionEvaluationInputs.at(-1)?.providerOptions);
       }),
   );
-
-
 
   it.effect(
     "drops stale heartbeat completion provider options when the selected instance is disabled",

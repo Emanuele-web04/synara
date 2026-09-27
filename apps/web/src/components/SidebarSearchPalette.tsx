@@ -25,7 +25,6 @@ import {
   type ProjectImportProvider,
   PROVIDER_DISPLAY_NAMES,
   type ProviderInstanceId,
-  type ProviderKind,
 } from "@synara/contracts";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
 import { Autocomplete as AutocompletePrimitive } from "@base-ui/react/autocomplete";
@@ -765,11 +764,11 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                       ? "Cursor resumes a persisted session by session id."
                       : importProvider === "droid"
                         ? "Droid resumes a persisted session by session id."
-                      : importProvider === "opencode"
-                        ? "OpenCode resumes a persisted session by session id."
-                        : importProvider === "omp"
-                          ? "Oh My Pi resumes a persisted session by session id."
-                          : "Codex resumes a persisted thread by thread id."}
+                        : importProvider === "opencode"
+                          ? "OpenCode resumes a persisted session by session id."
+                          : importProvider === "omp"
+                            ? "Oh My Pi resumes a persisted session by session id."
+                            : "Codex resumes a persisted thread by thread id."}
                 </p>
               </div>
               {importError ? (

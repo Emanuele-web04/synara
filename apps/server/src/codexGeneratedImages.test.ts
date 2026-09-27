@@ -8,7 +8,6 @@ import {
   CODEX_GENERATED_IMAGE_ARTIFACT_KIND,
   codexConfiguredHomePathsFromSettings,
   enabledCodexProviderInstanceIdsFromSettings,
-  extractCodexGeneratedImageReference,
   generatedImagePathFromRuntimeEvent,
   resolveCodexGeneratedImagesRoot,
   resolveCodexGeneratedImagesRoots,
@@ -124,7 +123,6 @@ describe("resolveCodexGeneratedImagesRoot(s)", () => {
       path.join("/synara-test/runtime", "codex-home-overlay", "generated_images"),
     ]);
   });
-
 
   it("keeps account overlay roots for the full instance context", () => {
     process.env.SYNARA_HOME = "/synara-test/runtime";

@@ -2866,7 +2866,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           (lease) =>
             Effect.gen(function* () {
               const persistedBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
-              const { resolved, persistedProviderInstanceId, persistedProviderOptions } =
+              const { resolved, persistedProviderInstanceId } =
                 yield* resolveStartInstance(persistedBinding);
               if (
                 resolved.instance.instanceId !== initialResolved.instance.instanceId ||
@@ -2877,21 +2877,21 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   `Provider instance '${resolved.instance.instanceId}' changed while its session was starting.`,
                 );
               }
-            const hasExplicitResumeCursor = input.resumeCursor !== undefined;
+              const hasExplicitResumeCursor = input.resumeCursor !== undefined;
               const currentContinuationIdentity =
-              (hasExplicitResumeCursor && resolved.instance.driver === "codex") ||
-              (persistedBinding !== undefined &&
-                persistedBinding.provider === resolved.instance.driver)
+                (hasExplicitResumeCursor && resolved.instance.driver === "codex") ||
+                (persistedBinding !== undefined &&
+                  persistedBinding.provider === resolved.instance.driver)
                   ? yield* prepareContinuationIdentityForCompatibility({
                       operation: "ProviderService.startSession",
                       provider: resolved.instance.driver,
                       providerOptions: resolved.providerOptions,
                       persistedIdentity: readPersistedContinuationIdentity(
-                      persistedBinding?.runtimePayload,
+                        persistedBinding?.runtimePayload,
                       ),
-                    ...(hasExplicitResumeCursor && resolved.instance.driver === "codex"
-                      ? { explicitResume: true }
-                      : {}),
+                      ...(hasExplicitResumeCursor && resolved.instance.driver === "codex"
+                        ? { explicitResume: true }
+                        : {}),
                     })
                   : undefined;
               const bindingMatchesResolvedInstance =
@@ -2914,7 +2914,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   providerInstanceId: resolved.instance.instanceId,
                   providerOptions: resolved.providerOptions,
                   credentialsFingerprintKey,
-                currentIdentity: currentContinuationIdentity,
+                  currentIdentity: currentContinuationIdentity,
                 });
               const hasAvailableResumeCursor =
                 input.resumeCursor !== undefined ||
@@ -2957,21 +2957,21 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                     (persistedBinding && canReusePersistedResumeCursor
                       ? persistedBinding.resumeCursor
                       : undefined));
-            const expectedCodexContinuationGeneration =
-              hasResumeCursor(effectiveResumeCursor) && resolved.instance.driver === "codex"
-                ? codexSharedContinuationGeneration(currentContinuationIdentity)
-                : undefined;
-            if (
-              hasResumeCursor(effectiveResumeCursor) &&
-              resolved.instance.driver === "codex" &&
-              expectedCodexContinuationGeneration === undefined
-            ) {
-              yield* Effect.sync(() => scheduleRuntimeIdleStop(threadId));
-              return yield* toValidationError(
-                "ProviderService.startSession",
-                "Cannot resume a Codex native thread because the selected continuation source has no verified generation.",
-              );
-            }
+              const expectedCodexContinuationGeneration =
+                hasResumeCursor(effectiveResumeCursor) && resolved.instance.driver === "codex"
+                  ? codexSharedContinuationGeneration(currentContinuationIdentity)
+                  : undefined;
+              if (
+                hasResumeCursor(effectiveResumeCursor) &&
+                resolved.instance.driver === "codex" &&
+                expectedCodexContinuationGeneration === undefined
+              ) {
+                yield* Effect.sync(() => scheduleRuntimeIdleStop(threadId));
+                return yield* toValidationError(
+                  "ProviderService.startSession",
+                  "Cannot resume a Codex native thread because the selected continuation source has no verified generation.",
+                );
+              }
               const persistedPriorTranscriptBootstrapPending =
                 persistedBinding !== undefined &&
                 bindingMatchesResolvedInstance &&
@@ -3018,9 +3018,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   ...(hasResumeCursor(effectiveResumeCursor)
                     ? { resumeCursor: effectiveResumeCursor }
                     : {}),
-                ...(expectedCodexContinuationGeneration
-                  ? { expectedCodexContinuationGeneration }
-                  : {}),
+                  ...(expectedCodexContinuationGeneration
+                    ? { expectedCodexContinuationGeneration }
+                    : {}),
                 };
                 // A provider start that never returns holds this thread's
                 // lifecycle lock and the caller's command slot forever. Bound it,

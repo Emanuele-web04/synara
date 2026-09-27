@@ -2217,8 +2217,10 @@ const make = Effect.gen(function* () {
       // restart here would tear down each legacy-started session on its first
       // web turn.
       const previousComputerControl =
-        Option.isSome(gatewaySessions) && gatewaySessions.value.computerControlProvisioned
-          ? gatewaySessions.value.computerControlProvisioned(threadId, reusableSession.provider)
+        Option.isSome(gatewaySessions) &&
+        gatewaySessions.value.computerControlProvisioned &&
+        currentProvider !== undefined
+          ? gatewaySessions.value.computerControlProvisioned(threadId, currentProvider)
           : (threadSessionComputerControl.get(threadId) ?? false);
       const computerControlChanged =
         requestedComputerControl !== undefined &&

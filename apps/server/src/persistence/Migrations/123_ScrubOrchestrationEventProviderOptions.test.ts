@@ -10,7 +10,7 @@ import { OrchestrationEventStoreLive } from "../Layers/OrchestrationEventStore.t
 import { OrchestrationEventStore } from "../Services/OrchestrationEventStore.ts";
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
-import ScrubOrchestrationEventProviderOptions from "./109_ScrubOrchestrationEventProviderOptions.ts";
+import ScrubOrchestrationEventProviderOptions from "./123_ScrubOrchestrationEventProviderOptions.ts";
 
 const layer = it.layer(
   OrchestrationEventStoreLive.pipe(Layer.provideMerge(NodeSqliteClient.layerMemory())),

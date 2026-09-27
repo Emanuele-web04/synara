@@ -56,6 +56,8 @@ const MODEL_OPTIONS_BY_PROVIDER: Record<ProviderKind, ReadonlyArray<ProviderMode
 function readyProvider(provider: ProviderKind): ServerProviderStatus {
   return {
     provider,
+    instanceId: provider,
+    driver: provider,
     status: "ready",
     available: true,
     authStatus: "authenticated",

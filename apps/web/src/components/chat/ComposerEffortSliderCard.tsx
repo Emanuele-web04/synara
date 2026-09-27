@@ -11,7 +11,6 @@ import type {
   ProviderModelDescriptor,
   ThreadId,
 } from "@synara/contracts";
-import { type ReactNode, useState } from "react";
 
 import { ResetIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";

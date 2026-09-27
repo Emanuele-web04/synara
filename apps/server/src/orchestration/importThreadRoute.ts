@@ -658,9 +658,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
             providerInstanceId: resolvedProvider.instance.instanceId,
             projectWorkspaceRoot: project.workspaceRoot,
             ...(cwd ? { fallbackCwd: cwd } : {}),
-            ...(provider === "omp"
-              ? { prefetchedSnapshot: ompImportSnapshot }
-              : {}),
+            ...(provider === "omp" ? { prefetchedSnapshot: ompImportSnapshot } : {}),
             ...(providerOptions ? { providerOptions } : {}),
           })
         : null;

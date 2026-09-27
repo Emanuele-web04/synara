@@ -173,36 +173,37 @@ const IMPORT_TARGET_VIEWPORTS = [
 ] as const;
 
 describe("SidebarSearchPalette import targets", () => {
-  it("keeps many account identities usable in a narrow viewport", async () => {
-    await page.viewport(320, 700);
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
-    const screen = await render(
-      <QueryClientProvider client={queryClient}>
-        <SidebarSearchPalette
-          open
-          mode="import"
-          onModeChange={vi.fn()}
-          onOpenChange={vi.fn()}
-          actions={[]}
-          projects={[]}
-          threads={[]}
-          onCreateChat={vi.fn()}
-          onCreateThread={vi.fn()}
-          onAddProjectPath={async () => {}}
-          homeDir={null}
-          onOpenSettings={vi.fn()}
-          onOpenFeedback={vi.fn()}
-          onOpenUsageSettings={vi.fn()}
-          onOpenProject={vi.fn()}
-          onOpenThread={vi.fn()}
-          importTargets={MANY_IMPORT_TARGETS}
-          onImportThread={vi.fn()}
-          onImportProjects={vi.fn()}
-        />
-      </QueryClientProvider>,
-    );
+  for (const viewport of IMPORT_TARGET_VIEWPORTS) {
+    it(`keeps many account identities usable at ${viewport.width}px`, async () => {
+      await page.viewport(viewport.width, viewport.height);
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      });
+      const screen = await render(
+        <QueryClientProvider client={queryClient}>
+          <SidebarSearchPalette
+            open
+            mode="import"
+            onModeChange={vi.fn()}
+            onOpenChange={vi.fn()}
+            actions={[]}
+            projects={[]}
+            threads={[]}
+            onCreateChat={vi.fn()}
+            onCreateThread={vi.fn()}
+            onAddProjectPath={async () => {}}
+            homeDir={null}
+            onOpenSettings={vi.fn()}
+            onOpenFeedback={vi.fn()}
+            onOpenUsageSettings={vi.fn()}
+            onOpenProject={vi.fn()}
+            onOpenThread={vi.fn()}
+            importTargets={MANY_IMPORT_TARGETS}
+            onImportThread={vi.fn()}
+            onImportProjects={vi.fn()}
+          />
+        </QueryClientProvider>,
+      );
 
       try {
         const targetGroup = page.getByRole("radiogroup", { name: "Provider account" });

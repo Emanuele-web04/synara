@@ -105,8 +105,8 @@ export function ProviderInstanceEnvironmentEditor({
 
   return (
     <div className="space-y-2 sm:col-span-2">
-      <span className="block text-xs font-medium text-foreground">Environment variables</span>
-      <span className="block text-xs text-muted-foreground">
+      <span className="block text-ui-sm font-medium text-foreground">Environment variables</span>
+      <span className="block text-ui-sm text-muted-foreground">
         Applied only to this instance&apos;s processes. Mark credentials as secret to store them
         redacted on the server.
       </span>

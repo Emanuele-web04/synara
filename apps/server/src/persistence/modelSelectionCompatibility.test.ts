@@ -23,8 +23,6 @@ it("preserves explicit provider instance ids during compatibility normalization"
   );
 });
 
-
-
 it("uses settings to resolve opaque provider instance ids", () => {
   assert.deepEqual(
     normalizePersistedModelSelection(

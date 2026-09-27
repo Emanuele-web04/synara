@@ -11,7 +11,6 @@ import { createHash } from "node:crypto";
 import type {
   ModelSelection,
   ProviderApprovalDecision,
-  ProviderForkThreadInput,
   ProviderForkThreadResult,
   ProviderRuntimeEvent,
   ProviderSendTurnInput,
@@ -420,7 +419,7 @@ function makeFakeCodexAdapter(
 
   const forkThread = vi.fn(
     (
-      input: ProviderForkThreadInput,
+      input: ProviderAdapterForkThreadInput,
     ): Effect.Effect<ProviderForkThreadResult, ProviderAdapterError> =>
       Effect.succeed({
         threadId: input.threadId,

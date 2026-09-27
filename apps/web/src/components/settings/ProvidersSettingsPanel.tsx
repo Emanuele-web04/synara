@@ -874,8 +874,8 @@ function CodexAccountsControl(props: {
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
-          <span className="block text-xs font-medium text-foreground">Codex account</span>
-          <span className="mt-1 block text-xs text-muted-foreground">
+          <span className="block text-ui-sm font-medium text-foreground">Codex account</span>
+          <span className="mt-1 block text-ui-sm text-muted-foreground">
             Select the account used for new Codex turns.
           </span>
         </div>
@@ -912,10 +912,10 @@ function CodexAccountsControl(props: {
             >
               <div className="mb-2 flex items-center justify-between gap-2">
                 <div className="min-w-0">
-                  <div className="truncate text-xs font-medium text-foreground">
+                  <div className="truncate text-ui-sm font-medium text-foreground">
                     {account.label || account.id}
                   </div>
-                  <div className="truncate text-[11px] text-muted-foreground">{account.id}</div>
+                  <div className="truncate text-ui-xs text-muted-foreground">{account.id}</div>
                 </div>
                 <Button
                   type="button"
@@ -929,7 +929,7 @@ function CodexAccountsControl(props: {
               </div>
               <div className="grid gap-2 sm:grid-cols-2">
                 <label className="block">
-                  <span className="block text-xs font-medium text-foreground">Label</span>
+                  <span className="block text-ui-sm font-medium text-foreground">Label</span>
                   <DebouncedSettingTextInput
                     id={`codex-account-${account.id}-label`}
                     size="sm"
@@ -942,7 +942,7 @@ function CodexAccountsControl(props: {
                   />
                 </label>
                 <label className="block">
-                  <span className="block text-xs font-medium text-foreground">
+                  <span className="block text-ui-sm font-medium text-foreground">
                     Shared CODEX_HOME
                   </span>
                   <DebouncedSettingTextInput
@@ -957,7 +957,7 @@ function CodexAccountsControl(props: {
                   />
                 </label>
                 <label className="block sm:col-span-2">
-                  <span className="block text-xs font-medium text-foreground">
+                  <span className="block text-ui-sm font-medium text-foreground">
                     Shadow auth home
                   </span>
                   <DebouncedSettingTextInput
@@ -1159,8 +1159,10 @@ function ProviderInstancesControl(props: {
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
-          <span className="block text-xs font-medium text-foreground">{instanceSectionLabel}</span>
-          <span className="mt-1 block text-xs text-muted-foreground">
+          <span className="block text-ui-sm font-medium text-foreground">
+            {instanceSectionLabel}
+          </span>
+          <span className="mt-1 block text-ui-sm text-muted-foreground">
             {provider === "codex"
               ? "Add a separately routed Codex instance with its own home or shadow auth home."
               : provider === "claudeAgent"
@@ -1225,12 +1227,12 @@ function ProviderInstancesControl(props: {
           >
             <div className="mb-2 flex items-center justify-between gap-2">
               <div className="min-w-0">
-                <div className="truncate text-xs font-medium text-foreground">
+                <div className="truncate text-ui-sm font-medium text-foreground">
                   {instance.displayName || instanceId}
                 </div>
-                <div className="truncate text-[11px] text-muted-foreground">{instanceId}</div>
+                <div className="truncate text-ui-xs text-muted-foreground">{instanceId}</div>
                 {instance.enabled !== false ? (
-                  <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground">
                     <span
                       className={cn("size-1.5 shrink-0 rounded-full", instanceStatus.dotClassName)}
                     />
@@ -1261,7 +1263,7 @@ function ProviderInstancesControl(props: {
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
               <label className="block">
-                <span className="block text-xs font-medium text-foreground">Label</span>
+                <span className="block text-ui-sm font-medium text-foreground">Label</span>
                 <DebouncedSettingTextInput
                   id={`provider-instance-${instanceId}-label`}
                   size="sm"
@@ -1274,9 +1276,11 @@ function ProviderInstancesControl(props: {
                 />
               </label>
               <label className="block">
-                <span className="block text-xs font-medium text-foreground">Terminal command</span>
+                <span className="block text-ui-sm font-medium text-foreground">
+                  Terminal command
+                </span>
                 <div className="mt-1 flex items-center gap-2">
-                  <code className="min-w-0 flex-1 truncate rounded-md border border-border/70 bg-background/60 px-2.5 py-1.5 text-xs">
+                  <code className="min-w-0 flex-1 truncate rounded-md border border-border/70 bg-background/60 px-2.5 py-1.5 text-ui-sm">
                     {cliCommand}
                   </code>
                   <Button
@@ -1291,7 +1295,9 @@ function ProviderInstancesControl(props: {
                 </div>
               </label>
               <label className="block sm:col-span-2">
-                <span className="block text-xs font-medium text-foreground">Command override</span>
+                <span className="block text-ui-sm font-medium text-foreground">
+                  Command override
+                </span>
                 <DebouncedSettingTextInput
                   id={`provider-instance-${instanceId}-cli-alias`}
                   size="sm"
@@ -1304,7 +1310,7 @@ function ProviderInstancesControl(props: {
                 />
                 <span
                   className={cn(
-                    "mt-1 block text-xs",
+                    "mt-1 block text-ui-sm",
                     cliAliasInvalid || cliCommandConflicts
                       ? "text-destructive"
                       : "text-muted-foreground",
@@ -1325,7 +1331,7 @@ function ProviderInstancesControl(props: {
                       key={field.settingsKey}
                       className="flex items-center justify-between gap-3 sm:col-span-2"
                     >
-                      <span className="text-xs font-medium text-foreground">{field.label}</span>
+                      <span className="text-ui-sm font-medium text-foreground">{field.label}</span>
                       <Switch
                         checked={readConfigBoolean(instance.config, configKey)}
                         onCheckedChange={(checked) =>
@@ -1345,7 +1351,10 @@ function ProviderInstancesControl(props: {
                 const inputId = `provider-instance-${instanceId}-${configKey}`;
                 return (
                   <div className="block" key={field.settingsKey}>
-                    <label htmlFor={inputId} className="block text-xs font-medium text-foreground">
+                    <label
+                      htmlFor={inputId}
+                      className="block text-ui-sm font-medium text-foreground"
+                    >
                       {field.label}
                     </label>
                     <div className="mt-1 flex items-center gap-2">
@@ -1386,7 +1395,7 @@ function ProviderInstancesControl(props: {
               })}
               {provider === "codex" ? (
                 <label className="block sm:col-span-2">
-                  <span className="block text-xs font-medium text-foreground">
+                  <span className="block text-ui-sm font-medium text-foreground">
                     Shadow auth home
                   </span>
                   <DebouncedSettingTextInput
@@ -1406,7 +1415,7 @@ function ProviderInstancesControl(props: {
               {provider === "claudeAgent" ? (
                 <>
                   <label className="block">
-                    <span className="block text-xs font-medium text-foreground">
+                    <span className="block text-ui-sm font-medium text-foreground">
                       Claude config directory
                     </span>
                     <DebouncedSettingTextInput
@@ -1423,7 +1432,7 @@ function ProviderInstancesControl(props: {
                     />
                   </label>
                   <label className="block">
-                    <span className="block text-xs font-medium text-foreground">
+                    <span className="block text-ui-sm font-medium text-foreground">
                       Claude credential directory
                     </span>
                     <DebouncedSettingTextInput
@@ -1438,7 +1447,7 @@ function ProviderInstancesControl(props: {
                       placeholder="Optional shared credential directory"
                       spellCheck={false}
                     />
-                    <span className="mt-1 block text-xs text-muted-foreground">
+                    <span className="mt-1 block text-ui-sm text-muted-foreground">
                       Advanced Claude CLI compatibility setting. Leave blank unless your setup
                       already uses a separate secure-storage directory.
                     </span>
@@ -1447,7 +1456,7 @@ function ProviderInstancesControl(props: {
               ) : null}
               {provider !== "codex" && provider !== "claudeAgent" && provider !== "pi" ? (
                 <label className="block sm:col-span-2">
-                  <span className="block text-xs font-medium text-foreground">
+                  <span className="block text-ui-sm font-medium text-foreground">
                     Profile directory
                   </span>
                   <DebouncedSettingTextInput
@@ -1462,7 +1471,7 @@ function ProviderInstancesControl(props: {
                     placeholder="Provider account directory"
                     spellCheck={false}
                   />
-                  <span className="mt-1 block text-xs text-muted-foreground">
+                  <span className="mt-1 block text-ui-sm text-muted-foreground">
                     Used as this profile's provider config root without changing your shell files.
                   </span>
                 </label>

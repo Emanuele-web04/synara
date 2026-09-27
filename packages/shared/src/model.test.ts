@@ -962,7 +962,6 @@ describe("claudeSelectionRequiresRestart", () => {
     ).toBe(false);
   });
 
-
   it("treats an unknown effort as a no-op", () => {
     expect(
       claudeSelectionRequiresRestart(

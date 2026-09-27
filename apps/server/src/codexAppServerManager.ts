@@ -1586,7 +1586,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       if (context) {
         if (
           !context.terminalFailure &&
-          !context.stopping &&
+          // A stop the failure itself started still reports the failed start;
+          // only an unrelated stop or replacement silences it.
+          (!context.stopping || context.failureStopping === true) &&
           this.sessions.get(threadId) === context
         ) {
           this.updateSession(context, {
@@ -2418,7 +2420,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       if (context) {
         if (
           !context.terminalFailure &&
-          !context.stopping &&
+          // A stop the failure itself started still reports the failed start;
+          // only an unrelated stop or replacement silences it.
+          (!context.stopping || context.failureStopping === true) &&
           this.sessions.get(threadId) === context
         ) {
           this.updateSession(context, {

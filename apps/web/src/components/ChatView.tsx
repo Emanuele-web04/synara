@@ -71,7 +71,6 @@ import { getLocalFolderBrowseRootPath } from "~/lib/localFolderMentions";
 import { findProviderStatus, resolveVoiceTranscriptionTarget } from "~/lib/providerAvailability";
 import { resolveProviderInstanceLabel } from "~/lib/providerInstancePresentation";
 import { resolveAuxiliaryTextGenerationSelection } from "~/lib/textGenerationCapabilities";
-import { serverSettingsQueryOptions } from "~/lib/serverReactQuery";
 import { cn, isMacNavigatorPlatform, newCommandId, newThreadId, randomUUID } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import {
@@ -1372,7 +1371,6 @@ export default function ChatView({
   const enableComputerControl = computerControlMode !== "off";
   const featureFlags = useFeatureFlags();
   const showDebugTaskBanner = import.meta.env.DEV && featureFlags["show-debug-task-banner"];
-  const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
 
   const phase = derivePhase(activeThread?.session ?? null);
   const isConnecting = phase === "connecting";
@@ -4491,7 +4489,6 @@ export default function ChatView({
       providerOrder={settings.providerOrder}
       providerInstances={providerInstances}
       selectedProviderInstanceId={selectedProviderInstanceId}
-      showProviderInstanceChoices={false}
       threadId={threadId}
       runtimeModel={selectedRuntimeModel}
       runtimeModelsByProvider={runtimeModelsByProvider}

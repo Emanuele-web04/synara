@@ -153,8 +153,7 @@ export function resolveVisibleProviderOptions(input: {
       compareProvidersByOrder(input.providerOrder ?? [], left.value, right.value),
     ).filter((option) =>
       input.providers?.some(
-        (provider) =>
-          (provider.driver ?? provider.provider) === option.value && provider.available,
+        (provider) => (provider.driver ?? provider.provider) === option.value && provider.available,
       ),
     ),
     new Set<ProviderKind>(input.hiddenProviders ?? []),
@@ -522,7 +521,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
       provider === "codex" || provider === "claudeAgent" ? "Accounts" : "Profiles";
     return (
       <>
-        <div className="px-2.5 pb-1 pt-1.5 text-[11px] font-medium text-muted-foreground uppercase tracking-[0.08em]">
+        <div className="px-2.5 pb-1 pt-1.5 text-ui-xs font-medium text-muted-foreground uppercase tracking-[0.08em]">
           {sectionLabel}
         </div>
         <MenuRadioGroup
@@ -536,7 +535,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
           {selectedInstanceIsMissing ? (
             <MenuRadioItem value={selectedInstanceId} disabled>
               <span className="truncate">{MISSING_PROVIDER_INSTANCE_LABEL}</span>
-              <span className="ms-auto text-[11px] text-muted-foreground/80 uppercase tracking-[0.08em]">
+              <span className="ms-auto text-ui-xs text-muted-foreground/80 uppercase tracking-[0.08em]">
                 Unavailable
               </span>
             </MenuRadioItem>
@@ -551,7 +550,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
               >
                 <span className="truncate">{instance.label}</span>
                 {availability.label ? (
-                  <span className="ms-auto text-[11px] text-muted-foreground/80 uppercase tracking-[0.08em]">
+                  <span className="ms-auto text-ui-xs text-muted-foreground/80 uppercase tracking-[0.08em]">
                     {availability.label}
                   </span>
                 ) : null}
@@ -783,7 +782,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
               providerStatus.driver ??
               providerStatus.provider}
           </span>
-          <span className="ms-auto text-[11px] text-muted-foreground/80 uppercase tracking-[0.08em]">
+          <span className="ms-auto text-ui-xs text-muted-foreground/80 uppercase tracking-[0.08em]">
             Missing driver
           </span>
         </MenuItem>

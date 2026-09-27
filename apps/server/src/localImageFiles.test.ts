@@ -22,7 +22,6 @@ afterEach(() => {
 });
 
 describe("resolveAllowedLocalPreviewFile", () => {
-
   it("does not fall back to ambient Codex homes when the allowlist is intentionally empty", async () => {
     const fakeRoot = path.join(
       process.cwd(),

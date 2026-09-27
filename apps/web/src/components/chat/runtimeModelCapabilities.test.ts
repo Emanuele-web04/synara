@@ -48,6 +48,8 @@ describe("resolveRuntimeModelDescriptor", () => {
     expect(
       providerModelSupportsAutoRuntimeMode("claudeAgent", descriptor, {
         provider: "claudeAgent",
+        instanceId: "claudeAgent",
+        driver: "claudeAgent",
         status: "ready",
         available: true,
         authStatus: "authenticated",
