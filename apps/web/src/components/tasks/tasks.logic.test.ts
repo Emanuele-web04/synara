@@ -116,6 +116,17 @@ describe("deriveTaskStatus", () => {
     });
   });
 
+  it("doesn't call a linked chat missing before the chat list has loaded", () => {
+    expect(
+      deriveTaskStatus({
+        todo: delegated,
+        thread: null,
+        hasDraftThread: false,
+        threadsHydrated: false,
+      }),
+    ).toMatchObject({ kind: "starting", chatMissing: false });
+  });
+
   it("keeps a reused chat starting until its delegated turn appears", () => {
     expect(
       deriveTaskStatus({

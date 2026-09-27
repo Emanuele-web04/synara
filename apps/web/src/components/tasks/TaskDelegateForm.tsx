@@ -233,10 +233,12 @@ export function TaskDelegateForm({
     );
   // Awaited so Start stays busy until the to-do is back to "To do"; if the server can't
   // store that either, the mutation's toast says so and the row's menu can unlink later.
-  const unlinkChat = async (clearProject: boolean) => {
+  const unlinkChat = async (linkedChatId: ThreadId, clearProject: boolean) => {
     const unlinked = await linkChat({
       id: todo.id,
       threadId: null,
+      // Only undo our own link, never one another window made meanwhile.
+      expectedThreadId: linkedChatId,
       ...(clearProject ? { projectId: null } : {}),
     });
     // Still linked when the unlink failed: keep the chat's old turn from reading as Review.
@@ -260,7 +262,8 @@ export function TaskDelegateForm({
     }
     // Until the delegated turn appears, the chat's previous turn must not read as Review.
     markDelegationBaseline(todo.id, thread.latestTurn?.turnId ?? null);
-    if (!(await linkChat({ id: todo.id, threadId: chatId }))) {
+    // expectedThreadId makes the link a claim: it fails if another window delegated first.
+    if (!(await linkChat({ id: todo.id, threadId: chatId, expectedThreadId: todo.threadId }))) {
       clearDelegationBaseline(todo.id);
       return false;
     }
@@ -277,7 +280,7 @@ export function TaskDelegateForm({
     if (!started) {
       // The chat's composer was empty before; don't leave the delegation prompt in it.
       useComposerDraftStore.getState().setPrompt(chatId, "");
-      await unlinkChat(false);
+      await unlinkChat(chatId, false);
     }
     return started;
   };
@@ -336,6 +339,7 @@ export function TaskDelegateForm({
           linked = await linkChat({
             id: todo.id,
             threadId: newThreadId,
+            expectedThreadId: todo.threadId,
             ...(adoptsProject ? { projectId } : {}),
           });
           // Throwing makes createAndDispatchDraftThread drop the draft unsent.
@@ -353,7 +357,7 @@ export function TaskDelegateForm({
     const started = reportResult(result, threadId, agentLabel);
     if (!started) {
       useComposerDraftStore.getState().clearDraftThread(threadId);
-      await unlinkChat(adoptsProject);
+      await unlinkChat(threadId, adoptsProject);
     }
     return started;
   };

@@ -169,7 +169,9 @@ export function TaskInspector({
         ) : todo.threadId !== null && !status.chatMissing ? (
           // Linked, but the chat has not reached the server yet: no second Start meanwhile.
           <div className="flex items-center gap-2">
-            <p className="flex-1 text-ui-sm text-muted-foreground">Starting the agent…</p>
+            <p className="flex-1 text-ui-sm text-muted-foreground">
+              {status.detail ?? "Starting the agent…"}
+            </p>
             <Button
               size="sm"
               variant="outline"
@@ -482,7 +484,9 @@ function TaskAgentSection({
         <p className="text-ui-sm text-muted-foreground">{activity}</p>
       ) : null}
 
-      {approval ? (
+      {/* Only the delegated turn's own approvals: while a reused chat is still on its
+          earlier turn (Starting), those belong to other work. */}
+      {approval && status.kind === "needs" ? (
         <ComposerPendingApprovalPanel
           approval={approval}
           pendingCount={pendingApprovals.length}
@@ -491,7 +495,7 @@ function TaskAgentSection({
         />
       ) : null}
 
-      {!approval && hasPendingUserInput ? (
+      {!approval && hasPendingUserInput && status.kind === "needs" ? (
         <div className="flex items-center gap-3 rounded-xl border border-warning/30 bg-warning/8 px-3 py-2.5">
           <span className="flex-1 text-ui-sm text-foreground">The agent asked you a question.</span>
           <Button size="xs" onClick={openChat}>

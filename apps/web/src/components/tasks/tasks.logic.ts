@@ -58,6 +58,8 @@ export function deriveTaskStatus(input: {
   hasDraftThread: boolean;
   /** The to-do was just handed to an existing chat whose new turn has not appeared yet. */
   awaitingNewTurn?: boolean;
+  /** False until the chat list has loaded; a link can't be called missing before that. */
+  threadsHydrated?: boolean;
 }): TaskStatus {
   const { todo, thread } = input;
   if (todo.completedAt !== null) {
@@ -67,9 +69,11 @@ export function deriveTaskStatus(input: {
     return TODO_STATUS;
   }
   if (thread === null) {
-    return input.hasDraftThread
-      ? { ...TODO_STATUS, kind: "starting", label: "Starting" }
-      : { ...TODO_STATUS, chatMissing: true };
+    if (input.hasDraftThread) return { ...TODO_STATUS, kind: "starting", label: "Starting" };
+    if (input.threadsHydrated === false) {
+      return { ...TODO_STATUS, kind: "starting", label: "Loading", detail: "Loading the chat…" };
+    }
+    return { ...TODO_STATUS, chatMissing: true };
   }
   if (input.awaitingNewTurn) {
     return { ...TODO_STATUS, kind: "starting", label: "Starting" };

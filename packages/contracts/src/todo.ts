@@ -73,6 +73,11 @@ export const TodoUpdateInput = Schema.Struct({
   dueDate: Schema.optional(Schema.NullOr(TodoDueDate)),
   threadId: Schema.optional(Schema.NullOr(ThreadId)),
   completed: Schema.optional(Schema.Boolean),
+  /**
+   * Applies the patch only while the to-do is still linked to this chat (null: to none),
+   * so two windows delegating the same to-do can't both claim it.
+   */
+  expectedThreadId: Schema.optional(Schema.NullOr(ThreadId)),
 });
 export type TodoUpdateInput = typeof TodoUpdateInput.Type;
 

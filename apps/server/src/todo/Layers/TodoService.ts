@@ -80,6 +80,14 @@ export const TodoServiceLive = Layer.effect(
           if (Option.isNone(current)) {
             return yield* new TodoServiceError({ message: "This task no longer exists." });
           }
+          if (
+            input.expectedThreadId !== undefined &&
+            current.value.threadId !== input.expectedThreadId
+          ) {
+            return yield* new TodoServiceError({
+              message: "This task was delegated somewhere else in the meantime.",
+            });
+          }
           const next = applyTodoPatch(
             current.value,
             input,

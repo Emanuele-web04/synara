@@ -17,6 +17,7 @@ import { applyTodoPatch } from "@synara/shared/todo";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
 import { create } from "zustand";
+import { createJSONStorage, persist } from "zustand/middleware";
 
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { ensureNativeApi } from "../../nativeApi";
@@ -55,10 +56,16 @@ const trackPendingUpdate = (id: TodoId, delta: 1 | -1) => {
 };
 
 // To-dos just handed to an existing chat, with the turn that chat showed at that moment:
-// until a newer turn appears, the old one says nothing about the delegated work.
+// until a newer turn appears, the old one says nothing about the delegated work. Kept in
+// local storage so a reload during that window doesn't show the old turn as Review.
 const useDelegationBaselineStore = create<{
   turnIdByTodoId: Readonly<Record<string, TurnId | null>>;
-}>(() => ({ turnIdByTodoId: {} }));
+}>()(
+  persist(() => ({ turnIdByTodoId: {} }), {
+    name: "synara:tasks-delegation-baselines:v1",
+    storage: createJSONStorage(() => localStorage),
+  }),
+);
 
 export function markDelegationBaseline(todoId: TodoId, turnId: TurnId | null): void {
   useDelegationBaselineStore.setState((state) => ({
@@ -245,6 +252,7 @@ export function useTaskRows(todos: readonly Todo[]): TaskRowModel[] {
   const threadSummaryById = useStore((state) => state.sidebarThreadSummaryById);
   const draftThreadsByThreadId = useComposerDraftStore((state) => state.draftThreadsByThreadId);
   const baselineTurnIdByTodoId = useDelegationBaselineStore((state) => state.turnIdByTodoId);
+  const threadsHydrated = useStore((state) => state.threadsHydrated);
   return useMemo(
     () =>
       todos.map((todo) => {
@@ -258,11 +266,30 @@ export function useTaskRows(todos: readonly Todo[]): TaskRowModel[] {
         return {
           todo,
           thread,
-          status: deriveTaskStatus({ todo, thread, hasDraftThread, awaitingNewTurn }),
+          status: deriveTaskStatus({
+            todo,
+            thread,
+            hasDraftThread,
+            awaitingNewTurn,
+            threadsHydrated,
+          }),
         };
       }),
-    [baselineTurnIdByTodoId, draftThreadsByThreadId, threadSummaryById, todos],
+    [baselineTurnIdByTodoId, draftThreadsByThreadId, threadSummaryById, threadsHydrated, todos],
   );
+  // Drop baselines whose chat already shows a newer turn, or whose to-do lost the link.
+  useEffect(() => {
+    for (const todo of todos) {
+      if (!(todo.id in baselineTurnIdByTodoId)) continue;
+      const thread = todo.threadId ? threadSummaryById[todo.threadId] : undefined;
+      if (
+        todo.threadId === null ||
+        (thread && (thread.latestTurn?.turnId ?? null) !== baselineTurnIdByTodoId[todo.id])
+      ) {
+        clearDelegationBaseline(todo.id);
+      }
+    }
+  }, [baselineTurnIdByTodoId, threadSummaryById, todos]);
 }
 
 /** How many to-dos sit in "Needs you" — the Tasks nav badge. */

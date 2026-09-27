@@ -64,6 +64,26 @@ layer("TodoService", (it) => {
     }),
   );
 
+  it.effect("claims a to-do for a chat only while it is still unlinked", () =>
+    Effect.gen(function* () {
+      const todos = yield* TodoService;
+      const id = TodoId.makeUnsafe("todo-claim");
+      yield* todos.create({ id, title: "Review the release notes" });
+      const first = ThreadId.makeUnsafe("thread-claim-first");
+      const second = ThreadId.makeUnsafe("thread-claim-second");
+
+      const claimed = yield* todos.update({ id, threadId: first, expectedThreadId: null });
+      assert.strictEqual(claimed.threadId, first);
+
+      const lost = yield* Effect.exit(
+        todos.update({ id, threadId: second, expectedThreadId: null }),
+      );
+      assert.isTrue(Exit.isFailure(lost));
+      const { todos: listed } = yield* todos.list();
+      assert.strictEqual(listed.find((todo) => todo.id === id)?.threadId, first);
+    }),
+  );
+
   it.effect("fails to update a missing to-do and publishes deletes", () =>
     Effect.gen(function* () {
       const todos = yield* TodoService;
