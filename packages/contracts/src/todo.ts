@@ -20,8 +20,20 @@ const TodoIsoDateTime = IsoDateTime.check(
   Schema.isPattern(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/),
 );
 
+function isCalendarDay(value: string): boolean {
+  const [year, month, day] = value.split("-").map(Number) as [number, number, number];
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return (
+    date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+  );
+}
+
 /** A calendar day in the user's local time (`YYYY-MM-DD`), not an instant. */
-export const TodoDueDate = Schema.String.check(Schema.isPattern(/^\d{4}-\d{2}-\d{2}$/));
+export const TodoDueDate = Schema.String.check(
+  Schema.isPattern(/^\d{4}-\d{2}-\d{2}$/),
+  // The pattern alone accepts 2026-02-31 or 2026-13-01, which sort and display apart.
+  Schema.makeFilter(isCalendarDay),
+);
 export type TodoDueDate = typeof TodoDueDate.Type;
 
 const TodoTitle = TrimmedNonEmptyString.check(Schema.isMaxLength(TODO_TITLE_MAX_LENGTH));

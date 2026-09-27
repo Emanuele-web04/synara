@@ -55,8 +55,8 @@ import {
 } from "@synara/contracts";
 import { VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH } from "@synara/shared/binaryTransfer";
 
-import { isBetaFeatureOn } from "./betaFeatures";
 import { showConfirmDialogFallback } from "./confirmDialogFallback";
+import { TASKS_OFFERED_BY_BUILD } from "./tasksSurface";
 import { showContextMenuFallback } from "./contextMenuFallback";
 import { requireHttpExternalUrl } from "./lib/externalUrl";
 import { withNativeMenuIcons } from "./lib/nativeMenuIcons";
@@ -482,7 +482,7 @@ export function createWsNativeApi(): NativeApi {
     automationEventListeners.emit(message.data);
   });
   // Tasks is Beta-only: Stable's server refuses the stream, so don't open it there.
-  if (isBetaFeatureOn("tasks")) {
+  if (TASKS_OFFERED_BY_BUILD) {
     transport.subscribe(WS_CHANNELS.todoEvent, (message) => {
       todoEventListeners.emit(message.data);
     });

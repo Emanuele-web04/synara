@@ -116,6 +116,17 @@ describe("deriveTaskStatus", () => {
     });
   });
 
+  it("keeps a reused chat starting until its delegated turn appears", () => {
+    expect(
+      deriveTaskStatus({
+        todo: delegated,
+        thread: thread(),
+        hasDraftThread: false,
+        awaitingNewTurn: true,
+      }).kind,
+    ).toBe("starting");
+  });
+
   it("maps a live turn to running and a finished one to review", () => {
     const running = thread({
       session: {

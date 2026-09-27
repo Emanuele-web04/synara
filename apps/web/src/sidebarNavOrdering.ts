@@ -4,7 +4,6 @@
 // Layer: Web settings utility
 // Exports: nav item ids, default order, normalization helpers, and the Kanban/Tasks slot.
 
-import { isBetaFeatureOn } from "./betaFeatures";
 import { normalizeIdOrder, normalizeKnownIds } from "./lib/orderedIds";
 
 export const SIDEBAR_NAV_ITEM_IDS = [
@@ -36,13 +35,8 @@ export function normalizeSidebarNavOrder(order: ReadonlyArray<string>): SidebarN
 }
 
 /**
- * Tasks replaces Kanban where the Beta-only "tasks" feature is on; Stable keeps Kanban until
- * Tasks is promoted. Both ids stay valid in persisted settings so neither app loses its layout.
- */
-export const TASKS_SURFACE_ENABLED = isBetaFeatureOn("tasks");
-
-/**
- * Kanban and Tasks share one slot in the nav and rail: the enabled surface takes the position
+ * Kanban and Tasks share one slot in the nav and rail (see tasksSurface.ts for which one
+ * shows). Both ids stay valid in persisted settings so neither app loses its layout: the enabled surface takes the position
  * of whichever of the two comes first in the stored order, and the other is left out.
  */
 export function resolveTasksSurfaceSlot<Id extends string>(

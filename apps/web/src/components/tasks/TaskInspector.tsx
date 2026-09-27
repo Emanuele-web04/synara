@@ -76,6 +76,7 @@ export function TaskInspector({
   onClose,
 }: TaskInspectorProps) {
   const { todo, status, thread } = row;
+  const navigate = useNavigate();
   const due = todo.dueDate ? formatDueLabel(todo.dueDate, now) : null;
   const projectName = todo.projectId ? (projectNameById.get(todo.projectId) ?? null) : null;
   const isDone = status.kind === "done";
@@ -165,6 +166,22 @@ export function TaskInspector({
           />
         ) : isDone ? (
           <p className="text-ui-sm text-muted-foreground">Done. Reopen it to delegate it again.</p>
+        ) : todo.threadId !== null && !status.chatMissing ? (
+          // Linked, but the chat has not reached the server yet: no second Start meanwhile.
+          <div className="flex items-center gap-2">
+            <p className="flex-1 text-ui-sm text-muted-foreground">Starting the agent…</p>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                if (todo.threadId) {
+                  void navigate({ to: "/$threadId", params: { threadId: todo.threadId } });
+                }
+              }}
+            >
+              Open chat
+            </Button>
+          </div>
         ) : (
           <div className="flex flex-col gap-3">
             {status.chatMissing ? (

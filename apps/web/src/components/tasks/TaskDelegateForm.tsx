@@ -47,6 +47,7 @@ import { resolveProviderSendAvailabilityWithRefresh } from "~/lib/providerAvaila
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
+import { composerDraftHasAttachments } from "../../composerDraftDomain";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { useLatestProjectStore } from "../../latestProjectStore";
 import { readNativeApi } from "../../nativeApi";
@@ -55,6 +56,7 @@ import { useStore } from "../../store";
 import { DEFAULT_INTERACTION_MODE } from "../../types";
 import { useWorkspacePathsStore } from "../../workspacePathsStore";
 import { buildDelegationPrompt, folderLabel } from "./tasks.logic";
+import { clearDelegationBaseline, markDelegationBaseline } from "./useTodos";
 
 const RECENT_CHAT_LIMIT = 12;
 
@@ -229,15 +231,23 @@ export function TaskDelegateForm({
       () => true,
       () => false,
     );
-  const unlinkChat = (clearProject: boolean) => {
-    void linkChat({ id: todo.id, threadId: null, ...(clearProject ? { projectId: null } : {}) });
+  // Awaited so Start stays busy until the to-do is back to "To do"; if the server can't
+  // store that either, the mutation's toast says so and the row's menu can unlink later.
+  const unlinkChat = async (clearProject: boolean) => {
+    clearDelegationBaseline(todo.id);
+    await linkChat({ id: todo.id, threadId: null, ...(clearProject ? { projectId: null } : {}) });
   };
 
   const startInExistingChat = async (chatId: ThreadId) => {
     const thread = threadSummaryById[chatId];
     if (!thread) return false;
     const composerStore = useComposerDraftStore.getState();
-    if ((composerStore.draftsByThreadId[chatId]?.prompt.trim() ?? "").length > 0) {
+    const chatDraft = composerStore.draftsByThreadId[chatId];
+    // The dispatch sends the chat's whole composer, so anything unsent would ride along.
+    if (
+      chatDraft &&
+      (chatDraft.prompt.trim().length > 0 || composerDraftHasAttachments(chatDraft))
+    ) {
       toastManager.add({
         type: "error",
         title: "That chat has an unsent message",
@@ -245,7 +255,12 @@ export function TaskDelegateForm({
       });
       return false;
     }
-    if (!(await linkChat({ id: todo.id, threadId: chatId }))) return false;
+    // Until the delegated turn appears, the chat's previous turn must not read as Review.
+    markDelegationBaseline(todo.id, thread.latestTurn?.turnId ?? null);
+    if (!(await linkChat({ id: todo.id, threadId: chatId }))) {
+      clearDelegationBaseline(todo.id);
+      return false;
+    }
     composerStore.setPrompt(chatId, prompt);
     const result = await dispatchDraftThread({
       threadId: chatId,
@@ -259,7 +274,7 @@ export function TaskDelegateForm({
     if (!started) {
       // The chat's composer was empty before; don't leave the delegation prompt in it.
       useComposerDraftStore.getState().setPrompt(chatId, "");
-      unlinkChat(false);
+      await unlinkChat(false);
     }
     return started;
   };
@@ -335,7 +350,7 @@ export function TaskDelegateForm({
     const started = reportResult(result, threadId, agentLabel);
     if (!started) {
       useComposerDraftStore.getState().clearDraftThread(threadId);
-      unlinkChat(adoptsProject);
+      await unlinkChat(adoptsProject);
     }
     return started;
   };

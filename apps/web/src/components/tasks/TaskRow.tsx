@@ -63,6 +63,8 @@ export function TaskRow({
   const [isEditing, setIsEditing] = useState(false);
   const [draftTitle, setDraftTitle] = useState(todo.title);
   const isDone = status.kind === "done";
+  // Linked to a chat that still exists, even before its summary loads ("Starting").
+  const isDelegated = todo.threadId !== null && !status.chatMissing;
   const showsAgent = thread !== null && !isDone;
   const projectName = todo.projectId ? (projectNameById.get(todo.projectId) ?? null) : null;
   // The agent line already names the chat's project; don't repeat it on the right.
@@ -72,7 +74,7 @@ export function TaskRow({
   const agentActivity = formatAgentActivity(status, thread);
 
   const openChat = () => {
-    if (thread) void navigate({ to: "/$threadId", params: { threadId: thread.id } });
+    if (todo.threadId) void navigate({ to: "/$threadId", params: { threadId: todo.threadId } });
   };
   const startEditing = () => {
     setDraftTitle(todo.title);
@@ -106,7 +108,7 @@ export function TaskRow({
       const clicked = await api.contextMenu.show(
         [
           { id: "rename", label: "Rename", icon: THREAD_CONTEXT_MENU_ICONS.rename },
-          ...(thread
+          ...(isDelegated
             ? [
                 { id: "open-chat" as const, label: "Open chat", separatorBefore: true },
                 { id: "unlink-chat" as const, label: "Unlink chat" },
@@ -314,7 +316,7 @@ export function TaskRow({
         ) : null}
         {showsAgent ? <TaskStatusChip kind={status.kind} label={status.label} /> : null}
 
-        {thread === null && !isDone ? (
+        {!isDelegated && !isDone ? (
           <Button
             size="xs"
             variant="outline"

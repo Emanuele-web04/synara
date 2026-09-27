@@ -11,14 +11,17 @@ import type {
   TodoId,
   TodoListResult,
   TodoUpdateInput,
+  TurnId,
 } from "@synara/contracts";
 import { applyTodoPatch } from "@synara/shared/todo";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
+import { create } from "zustand";
 
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { ensureNativeApi } from "../../nativeApi";
 import { useStore } from "../../store";
+import { isTasksRefusal, noteTasksRefusal } from "../../tasksSurface";
 import { toastManager } from "../ui/toast";
 import {
   applyTodoEvent,
@@ -32,9 +35,29 @@ import {
   upsertTodo,
 } from "./tasks.logic";
 
-// Creates still on their way to the server. A delete of the same to-do waits for its
-// create, so the server can't store the create after the delete.
+// Creates still on their way to the server. An update or delete of the same to-do waits
+// for its create, so the server sees them in the order the user made them.
 const pendingCreateById = new Map<TodoId, Promise<unknown>>();
+const afterPendingCreate = (id: TodoId) => pendingCreateById.get(id)?.catch(() => undefined);
+
+// To-dos just handed to an existing chat, with the turn that chat showed at that moment:
+// until a newer turn appears, the old one says nothing about the delegated work.
+const useDelegationBaselineStore = create<{
+  turnIdByTodoId: Readonly<Record<string, TurnId | null>>;
+}>(() => ({ turnIdByTodoId: {} }));
+
+export function markDelegationBaseline(todoId: TodoId, turnId: TurnId | null): void {
+  useDelegationBaselineStore.setState((state) => ({
+    turnIdByTodoId: { ...state.turnIdByTodoId, [todoId]: turnId },
+  }));
+}
+
+export function clearDelegationBaseline(todoId: TodoId): void {
+  useDelegationBaselineStore.setState((state) => {
+    const { [todoId]: _removed, ...rest } = state.turnIdByTodoId;
+    return { turnIdByTodoId: rest };
+  });
+}
 
 /** `enabled` is false where Tasks is a Beta-only feature, so Stable never asks the server. */
 export function useTodoList(enabled = true) {
@@ -44,12 +67,19 @@ export function useTodoList(enabled = true) {
     // Merged like a stream snapshot, so a refetch can't undo newer live copies or bring
     // back a to-do that was just deleted.
     queryFn: async () => {
-      const { todos } = await ensureNativeApi().todo.list();
-      return applyTodoEvent(queryClient.getQueryData<TodoListResult>(todoQueryKey), {
-        type: "snapshot",
-        todos,
-      });
+      try {
+        const { todos } = await ensureNativeApi().todo.list();
+        return applyTodoEvent(queryClient.getQueryData<TodoListResult>(todoQueryKey), {
+          type: "snapshot",
+          todos,
+        });
+      } catch (error) {
+        // A server without Tasks (Stable, reached from a browser) turns Kanban back on.
+        noteTasksRefusal(error);
+        throw error;
+      }
     },
+    retry: (failureCount, error) => !isTasksRefusal(error) && failureCount < 3,
     enabled,
   });
   return {
@@ -74,6 +104,7 @@ export function useTodoEventSubscription(enabled = true) {
 
 function showMutationError(title: string) {
   return (error: Error) => {
+    if (noteTasksRefusal(error)) return;
     toastManager.add({ type: "error", title, description: error.message });
   };
 }
@@ -121,7 +152,10 @@ export function useTodoMutations() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: (input: TodoUpdateInput) => ensureNativeApi().todo.update(input),
+    mutationFn: async (input: TodoUpdateInput) => {
+      await afterPendingCreate(input.id);
+      return ensureNativeApi().todo.update(input);
+    },
     onMutate: async (input) => {
       await cancelListFetch();
       const previous = readTodo(input.id);
@@ -144,13 +178,16 @@ export function useTodoMutations() {
           ),
         );
       }
+      // Overlapping edits share one updatedAt, so the rollback alone can't tell whose
+      // change is showing; the server's copy settles it.
+      void queryClient.invalidateQueries({ queryKey: todoQueryKey });
       showMutationError("Couldn't update the task")(error);
     },
   });
 
   const deleteMutation = useMutation({
     mutationFn: async (id: TodoId) => {
-      await pendingCreateById.get(id)?.catch(() => undefined);
+      await afterPendingCreate(id);
       return ensureNativeApi().todo.delete({ id });
     },
     onMutate: async (id) => {
@@ -184,15 +221,24 @@ export function useTodoMutations() {
 export function useTaskRows(todos: readonly Todo[]): TaskRowModel[] {
   const threadSummaryById = useStore((state) => state.sidebarThreadSummaryById);
   const draftThreadsByThreadId = useComposerDraftStore((state) => state.draftThreadsByThreadId);
+  const baselineTurnIdByTodoId = useDelegationBaselineStore((state) => state.turnIdByTodoId);
   return useMemo(
     () =>
       todos.map((todo) => {
         const thread = todo.threadId ? (threadSummaryById[todo.threadId] ?? null) : null;
         const hasDraftThread =
           todo.threadId !== null && draftThreadsByThreadId[todo.threadId] !== undefined;
-        return { todo, thread, status: deriveTaskStatus({ todo, thread, hasDraftThread }) };
+        const awaitingNewTurn =
+          thread !== null &&
+          todo.id in baselineTurnIdByTodoId &&
+          (thread.latestTurn?.turnId ?? null) === baselineTurnIdByTodoId[todo.id];
+        return {
+          todo,
+          thread,
+          status: deriveTaskStatus({ todo, thread, hasDraftThread, awaitingNewTurn }),
+        };
       }),
-    [draftThreadsByThreadId, threadSummaryById, todos],
+    [baselineTurnIdByTodoId, draftThreadsByThreadId, threadSummaryById, todos],
   );
 }
 

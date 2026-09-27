@@ -7,6 +7,7 @@
 // Exports: TasksView (default)
 
 import { TodoId } from "@synara/contracts";
+import { useNavigate } from "@tanstack/react-router";
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { FilterPillGroup } from "~/components/FilterPillGroup";
@@ -25,6 +26,7 @@ import { PlusIcon } from "~/lib/icons";
 import { isNewTaskShortcut, NEW_TASK_SHORTCUT_PARTS } from "~/lib/newTaskShortcut";
 import { cn } from "~/lib/utils";
 import { useStore } from "../../store";
+import { useTasksSurfaceEnabled } from "../../tasksSurface";
 import {
   CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
   CHAT_SURFACE_HEADER_HEIGHT_CLASS,
@@ -58,6 +60,12 @@ function newTodoId(): TodoId {
 }
 
 export default function TasksView() {
+  const navigate = useNavigate();
+  // The connected server may not offer Tasks (a browser on a Stable server): back to Kanban.
+  const tasksSurfaceEnabled = useTasksSurfaceEnabled();
+  useEffect(() => {
+    if (!tasksSurfaceEnabled) void navigate({ to: "/kanban", replace: true });
+  }, [navigate, tasksSurfaceEnabled]);
   const { todos, isLoading, isError, refetch } = useTodoList();
   const { createTodo, updateTodo, updateTodoAsync, deleteTodo } = useTodoMutations();
   const rows = useTaskRows(todos);

@@ -112,8 +112,8 @@ import {
   normalizeSidebarNavOrder,
   resolveTasksSurfaceSlot,
   type SidebarNavItemId,
-  TASKS_SURFACE_ENABLED,
 } from "../sidebarNavOrdering";
+import { useTasksSurfaceEnabled } from "../tasksSurface";
 import {
   buildRailItemOrder,
   buildRailSpacesSections,
@@ -1370,8 +1370,9 @@ export default function Sidebar() {
       : null;
   }, [automationListQuery.data]);
   // Tasks is Beta-only: Stable never subscribes to or reads to-dos (the server refuses them).
-  useTodoEventSubscription(TASKS_SURFACE_ENABLED);
-  const tasksNeedingAttentionCount = useTasksNeedingAttentionCount(TASKS_SURFACE_ENABLED);
+  const tasksSurfaceEnabled = useTasksSurfaceEnabled();
+  useTodoEventSubscription(tasksSurfaceEnabled);
+  const tasksNeedingAttentionCount = useTasksNeedingAttentionCount(tasksSurfaceEnabled);
   const tasksAttentionBadge = useMemo(
     () =>
       tasksNeedingAttentionCount > 0
@@ -3742,9 +3743,9 @@ export default function Sidebar() {
     () =>
       resolveTasksSurfaceSlot(
         normalizeSidebarNavOrder(appSettings.sidebarNavOrder),
-        TASKS_SURFACE_ENABLED,
+        tasksSurfaceEnabled,
       ),
-    [appSettings.sidebarNavOrder],
+    [appSettings.sidebarNavOrder, tasksSurfaceEnabled],
   );
   const hiddenSidebarNavItems = useMemo(
     () => new Set(normalizeHiddenSidebarNavItems(appSettings.hiddenSidebarNavItems)),
@@ -6183,7 +6184,7 @@ export default function Sidebar() {
   // The rail's top items, in the user's Customize order (hidden ones drop out unless active).
   const railItemOrder = resolveTasksSurfaceSlot(
     normalizeRailItemOrder(appSettings.railItemOrder),
-    TASKS_SURFACE_ENABLED,
+    tasksSurfaceEnabled,
   );
   const hiddenRailItems = new Set(normalizeHiddenRailItems(appSettings.hiddenRailItems));
   const railItemLabel = (id: RailOrderableItemId): string =>
@@ -7096,7 +7097,7 @@ export default function Sidebar() {
                 <ProjectContextMenuIcon icon={FolderOpenIcon} />
                 <span>Open in Finder</span>
               </MenuItem>
-              {TASKS_SURFACE_ENABLED ? null : (
+              {tasksSurfaceEnabled ? null : (
                 <MenuItem
                   className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
                   onClick={() =>

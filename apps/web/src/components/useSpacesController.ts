@@ -27,7 +27,7 @@ import { useSpacesUiStore } from "../spacesUiStore";
 import { useStore } from "../store";
 import type { Project, SidebarThreadSummary, Space } from "../types";
 import { useVoidSpaceStore } from "../voidSpaceStore";
-import { TASKS_SURFACE_ENABLED } from "../sidebarNavOrdering";
+import { isTasksSurfaceEnabled } from "../tasksSurface";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { sortThreadsForSidebar } from "./Sidebar.logic";
 import type { SpaceEditorMode, SpaceEditorValue } from "./SpaceEditorDialog";
@@ -220,7 +220,7 @@ export function useSpacesController(input: {
 
       // Beta has no per-project board (Tasks replaced Kanban), so there a Space with
       // projects but no chats lands like an empty one.
-      if (target.kind === "project" && !TASKS_SURFACE_ENABLED) {
+      if (target.kind === "project" && !isTasksSurfaceEnabled()) {
         startTransition(() => {
           void navigate({
             to: "/kanban/$projectId",

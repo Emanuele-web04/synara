@@ -56,6 +56,8 @@ export function deriveTaskStatus(input: {
   thread: SidebarThreadSummary | null;
   /** The linked chat is still a local draft that has not reached the server yet. */
   hasDraftThread: boolean;
+  /** The to-do was just handed to an existing chat whose new turn has not appeared yet. */
+  awaitingNewTurn?: boolean;
 }): TaskStatus {
   const { todo, thread } = input;
   if (todo.completedAt !== null) {
@@ -68,6 +70,9 @@ export function deriveTaskStatus(input: {
     return input.hasDraftThread
       ? { ...TODO_STATUS, kind: "starting", label: "Starting" }
       : { ...TODO_STATUS, chatMissing: true };
+  }
+  if (input.awaitingNewTurn) {
+    return { ...TODO_STATUS, kind: "starting", label: "Starting" };
   }
 
   const session = thread.session;
