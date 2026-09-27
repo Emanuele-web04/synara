@@ -20,6 +20,7 @@ import {
   Stream,
 } from "effect";
 import { Command, Flag } from "effect/unstable/cli";
+import type { ServerSettings } from "@synara/contracts";
 import { NetService } from "@synara/shared/Net";
 import {
   MIGRATION_DIVERGENCE_CONSENT_ENV,
@@ -57,7 +58,10 @@ import * as SqlitePersistence from "./persistence/Layers/Sqlite";
 import { ProviderRuntimeEventRepositoryLive } from "./persistence/Layers/ProviderRuntimeEvents";
 import { makeServerApplicationLayers } from "./serverLayers";
 import { startServerMemoryDiagnostics } from "./memoryDiagnostics";
-import { createClaudeCredentialKeepaliveController } from "./provider/claudeCredentialKeepalive";
+import {
+  claudeCredentialKeepaliveTargets,
+  createClaudeCredentialKeepaliveController,
+} from "./provider/claudeCredentialKeepalive";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { ProviderSessionReaperLive } from "./provider/Layers/ProviderSessionReaper";
 import { ProviderRuntimeReconcilerLive } from "./provider/Layers/ProviderRuntimeReconciler";
@@ -479,18 +483,14 @@ const makeServerProgram = (input: CliInput) =>
       homeDir: config.homeDir,
       log: (message) => Effect.runFork(Effect.logInfo(message)),
     });
-    const reconcileClaudeKeepalive = (settings: {
-      readonly providers: {
-        readonly claudeAgent: { readonly enabled: boolean; readonly binaryPath?: string };
-      };
-    }) =>
+    const reconcileClaudeKeepalive = (settings: ServerSettings) =>
       Effect.promise(() =>
-        claudeKeepalive.reconcile({
-          enabled: settings.providers.claudeAgent.enabled,
-          ...(settings.providers.claudeAgent.binaryPath !== undefined
-            ? { binaryPath: settings.providers.claudeAgent.binaryPath }
-            : {}),
-        }),
+        claudeKeepalive.reconcile(
+          claudeCredentialKeepaliveTargets(settings, {
+            homeDir: config.homeDir,
+            stateDir: config.stateDir,
+          }),
+        ),
       );
     // Attach before reading the initial snapshot. The settings PubSub does not
     // replay, so reading first could miss a disable/path update in the small

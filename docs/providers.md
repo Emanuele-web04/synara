@@ -258,6 +258,10 @@ Synara state directory and does not inherit ambient provider credentials, like P
 directory** (or the profile directory) sets `PI_CODING_AGENT_DIR`. Sessions, forks, model and command
 discovery, imported history, and the instance's terminal command all use that account.
 
+With `SYNARA_CLAUDE_KEEPALIVE=1` on macOS, the Claude OAuth keepalive runs `claude auth status` for
+every enabled Claude account in that account's own environment, so each account's Keychain token
+stays fresh.
+
 Sensitive environment values are never serialized into terminal shim files. Directory-backed
 authentication works directly. A profile that depends only on a secret environment credential
 still works for managed Synara runs, but its named terminal command requires that credential to be
