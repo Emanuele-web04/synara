@@ -140,7 +140,13 @@ export function providerProfileDirectoryEnvironment(
   provider: ProviderKind,
   profileDir: string,
 ): Readonly<Record<string, string>> {
-  if (!profileDir || provider === "codex" || provider === "claudeAgent" || provider === "pi") {
+  if (
+    !profileDir ||
+    provider === "codex" ||
+    provider === "claudeAgent" ||
+    provider === "pi" ||
+    provider === "omp"
+  ) {
     return {};
   }
   if (provider === "cursor") return { CURSOR_CONFIG_DIR: profileDir };
@@ -154,7 +160,7 @@ export function providerImportedDirectoryConfig(
 ): Readonly<Record<string, string>> {
   if (provider === "codex") return { homePath: directory };
   if (provider === "claudeAgent") return { configDir: directory };
-  if (provider === "pi") return { agentDir: directory };
+  if (provider === "pi" || provider === "omp") return { agentDir: directory };
   return { profileDir: directory };
 }
 
@@ -636,9 +642,15 @@ export function providerStartOptionsFromInstance(
         : undefined;
     }
     case "omp": {
-      const agentDir = trimString(config.agentDir);
-      return binaryPath || agentDir
-        ? { omp: { ...(binaryPath ? { binaryPath } : {}), ...(agentDir ? { agentDir } : {}) } }
+      const agentDir = trimString(config.agentDir) || profileDir;
+      return binaryPath || agentDir || environment.environment
+        ? {
+            omp: {
+              ...environment,
+              ...(binaryPath ? { binaryPath } : {}),
+              ...(agentDir ? { agentDir } : {}),
+            },
+          }
         : undefined;
     }
   }

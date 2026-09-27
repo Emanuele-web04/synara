@@ -3,6 +3,7 @@
  *
  * @module OmpAcpSupport
  */
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import * as nodeOs from "node:os";
 import * as nodePath from "node:path";
@@ -22,7 +23,9 @@ import * as AcpErrors from "./AcpErrors.ts";
 import type * as Acp from "@agentclientprotocol/sdk";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
+import { expandProviderAccountHomePath } from "../../providerAccountHomePath.ts";
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
+import { buildProviderProcessEnv } from "../providerProcessEnv.ts";
 import {
   AcpSessionRuntime,
   type AcpSessionRuntimeOptions,
@@ -35,9 +38,90 @@ import {
   flattenConfigOptions,
 } from "./AcpConfigOptions.ts";
 
-export interface OmpAcpRuntimeSettings {
+export interface OmpAcpRuntimeSettings extends OmpAccountBoundary {
   readonly binaryPath?: string;
   readonly agentDir?: string;
+}
+
+/**
+ * The account an `omp` child runs as. A selected environment or a non-default
+ * provider instance gets a private synthetic HOME (and therefore its own
+ * `~/.omp/agent` credentials and sessions); the default instance keeps the
+ * user's ambient environment exactly.
+ */
+export interface OmpAccountBoundary {
+  readonly environment?: Readonly<Record<string, string>> | undefined;
+  readonly instanceId?: string | undefined;
+  readonly homeDir?: string | undefined;
+  readonly isolationRootDir?: string | undefined;
+}
+
+export function ompIsolatesAccount(boundary: OmpAccountBoundary): boolean {
+  const instanceId = boundary.instanceId?.trim();
+  return boundary.environment !== undefined || (instanceId !== undefined && instanceId !== "omp");
+}
+
+function ompAccountProcessEnv(boundary: OmpAccountBoundary): NodeJS.ProcessEnv {
+  return buildProviderProcessEnv({
+    driver: "omp",
+    env: process.env,
+    ...(boundary.environment !== undefined ? { environment: boundary.environment } : {}),
+    ...(boundary.instanceId !== undefined ? { instanceId: boundary.instanceId } : {}),
+    ...(boundary.homeDir !== undefined ? { homeDir: boundary.homeDir } : {}),
+    ...(boundary.isolationRootDir !== undefined
+      ? { isolationRootDir: boundary.isolationRootDir }
+      : {}),
+  });
+}
+
+function expandOmpAgentDir(agentDir: string | undefined, boundary: OmpAccountBoundary) {
+  const trimmed = agentDir?.trim();
+  return trimmed ? expandProviderAccountHomePath(trimmed, boundary.homeDir) : undefined;
+}
+
+/** Environment for every `omp` child (ACP runtime and CLI) of one account. */
+export function buildOmpProcessEnv(
+  settings: Pick<OmpAcpRuntimeSettings, "agentDir"> & OmpAccountBoundary,
+): NodeJS.ProcessEnv {
+  const agentDir = expandOmpAgentDir(settings.agentDir, settings);
+  return buildProviderChildEnvironment({
+    provider: "omp",
+    baseEnv: ompAccountProcessEnv(settings),
+    // omp is pi-lineage: PI_CODING_AGENT_DIR selects the profile directory
+    // (auth, sessions, skills, models) for every child invocation.
+    ...(agentDir ? { overrides: { PI_CODING_AGENT_DIR: agentDir } } : undefined),
+  });
+}
+
+/**
+ * Mirrors OMP's getAgentDir() for one account: the configured override, then
+ * the account environment, then `<HOME>/<PI_CONFIG_DIR|.omp>/agent`.
+ */
+export function resolveOmpAgentDir(
+  settings: Pick<OmpAcpRuntimeSettings, "agentDir"> & OmpAccountBoundary,
+): string {
+  const configured = expandOmpAgentDir(settings.agentDir, settings);
+  if (configured) return configured;
+  const env = ompAccountProcessEnv(settings);
+  const home = ompIsolatesAccount(settings)
+    ? env.HOME?.trim() || env.USERPROFILE?.trim() || nodeOs.homedir()
+    : nodeOs.homedir();
+  return (
+    env.PI_CODING_AGENT_DIR?.trim() ||
+    nodePath.join(home, env.PI_CONFIG_DIR?.trim() || ".omp", "agent")
+  );
+}
+
+/** Stable discovery-cache scope for one OMP account. */
+export function ompAccountCacheScope(boundary: OmpAccountBoundary): string {
+  if (!ompIsolatesAccount(boundary)) return "";
+  const environment = Object.entries(boundary.environment ?? {}).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  );
+  // Hashed: selected environments can carry credentials and cache keys are logged.
+  return createHash("sha256")
+    .update(JSON.stringify([boundary.instanceId?.trim() ?? "omp", environment]))
+    .digest("hex");
 }
 
 export interface OmpAcpRuntimeInput extends Omit<
@@ -106,14 +190,7 @@ export function buildOmpAcpSpawnInput(
     command: resolveOmpCliBinaryPath(ompSettings?.binaryPath),
     args: ["acp"],
     cwd,
-    env: buildProviderChildEnvironment({
-      provider: "omp",
-      // omp is pi-lineage: PI_CODING_AGENT_DIR selects the profile directory
-      // (auth, sessions, skills, models) for every child invocation.
-      ...(ompSettings?.agentDir?.trim()
-        ? { overrides: { PI_CODING_AGENT_DIR: ompSettings.agentDir.trim() } }
-        : undefined),
-    }),
+    env: buildOmpProcessEnv(ompSettings ?? {}),
   };
 }
 

@@ -28,8 +28,7 @@ const GENERIC_DRIVER_BY_PROVIDER = {
   droid: "kilo",
   opencode: "opencode",
   pi: "pi",
-  // Oh My Pi is a Pi fork that reads the same agent-dir and credential variables.
-  omp: "pi",
+  omp: "omp",
 } as const;
 
 const PROFILE_ENVIRONMENT_KEYS = new Set([
@@ -197,7 +196,7 @@ export async function deriveManagedTerminalProfiles(input: {
         isolationRootDir: input.stateDir,
       });
       environment = selectedProfileEnvironment(generated, configuredEnvironment);
-      if (instance.driver === "pi") {
+      if (instance.driver === "pi" || instance.driver === "omp") {
         const agentDir = readConfigString(instance.config, "agentDir") ?? profileDir;
         if (agentDir) {
           environment.PI_CODING_AGENT_DIR = expandProviderAccountHomePath(agentDir, input.homeDir);

@@ -251,6 +251,11 @@ directory); other providers use the profile-directory mapping shown in settings.
 sessions can create the same profile manually because a browser cannot safely pick a directory on
 the server machine.
 
+A non-default Oh My Pi instance, or one with its own environment, runs under a private home in the
+Synara state directory and does not inherit ambient provider credentials, like Pi. **Agent
+directory** (or the profile directory) sets `PI_CODING_AGENT_DIR`. Sessions, forks, model and command
+discovery, imported history, and the instance's terminal command all use that account.
+
 Sensitive environment values are never serialized into terminal shim files. Directory-backed
 authentication works directly. A profile that depends only on a secret environment credential
 still works for managed Synara runs, but its named terminal command requires that credential to be

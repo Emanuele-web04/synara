@@ -424,6 +424,7 @@ export const PiProviderStartOptions = Schema.Struct({
 export const OmpProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   agentDir: Schema.optional(TrimmedNonEmptyString),
+  environment: Schema.optional(ProcessEnvRecord),
 });
 
 export const DevinProviderStartOptions = Schema.Struct({

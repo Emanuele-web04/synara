@@ -113,7 +113,7 @@ const PROVIDER_DISCOVERY_OPTION_KEYS = {
   droid: ["binaryPath", "environment"],
   opencode: ["binaryPath", "serverUrl", "serverPassword", "experimentalWebSockets", "environment"],
   pi: ["binaryPath", "agentDir", "environment"],
-  omp: ["binaryPath", "agentDir"],
+  omp: ["binaryPath", "agentDir", "environment"],
 } as const satisfies Record<ProviderKind, readonly string[]>;
 
 const make = Effect.gen(function* () {

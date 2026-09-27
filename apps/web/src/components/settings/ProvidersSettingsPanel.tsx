@@ -994,10 +994,20 @@ function providerInstanceConfigKey(field: ProviderInstallField): string {
     case "openCodeExperimentalWebSockets":
       return "experimentalWebSockets";
     case "piAgentDir":
+    case "ompAgentDir":
       return "agentDir";
     default:
       return "binaryPath";
   }
+}
+
+/** Launch config a new instance inherits from the provider's current install fields. */
+export function providerInstanceLaunchConfigFor(
+  provider: ProviderKind,
+  settings: AppSettings,
+): Record<string, unknown> {
+  const config = PROVIDER_INSTALL_SETTINGS.find((entry) => entry.provider === provider);
+  return config ? providerInstanceLaunchConfig(config, settings) : {};
 }
 
 function providerInstanceLaunchConfig(
@@ -1454,7 +1464,10 @@ function ProviderInstancesControl(props: {
                   </label>
                 </>
               ) : null}
-              {provider !== "codex" && provider !== "claudeAgent" && provider !== "pi" ? (
+              {provider !== "codex" &&
+              provider !== "claudeAgent" &&
+              provider !== "pi" &&
+              provider !== "omp" ? (
                 <label className="block sm:col-span-2">
                   <span className="block text-ui-sm font-medium text-foreground">
                     Profile directory

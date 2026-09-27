@@ -5,6 +5,7 @@ import { AppSettingsSchema } from "~/appSettings";
 import {
   createProviderInstallResetPatch,
   isProviderInstallSettingsDirty,
+  providerInstanceLaunchConfigFor,
 } from "./ProvidersSettingsPanel";
 
 const defaults = AppSettingsSchema.makeUnsafe({});
@@ -57,5 +58,20 @@ describe("createProviderInstallResetPatch", () => {
       ].sort(),
     );
     expect(patch.openCodeServerPassword).toBe("");
+  });
+});
+
+describe("providerInstanceLaunchConfigFor", () => {
+  it("maps Pi-family agent directories to agentDir, not binaryPath", () => {
+    expect(
+      providerInstanceLaunchConfigFor("omp", {
+        ...defaults,
+        ompBinaryPath: "/usr/local/bin/omp",
+        ompAgentDir: "~/.omp-work/agent",
+      }),
+    ).toEqual({ binaryPath: "/usr/local/bin/omp", agentDir: "~/.omp-work/agent" });
+    expect(
+      providerInstanceLaunchConfigFor("pi", { ...defaults, piAgentDir: "~/.pi-work/agent" }),
+    ).toEqual({ agentDir: "~/.pi-work/agent" });
   });
 });

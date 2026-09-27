@@ -417,19 +417,41 @@ describe("providerStartOptionsFromInstance profile directories", () => {
     });
   });
 
-  it("uses profileDir as Pi's agent directory", () => {
-    const instanceId = providerInstanceId("pi_work");
+  it.each(["pi", "omp"] as const)("uses profileDir as %s's agent directory", (provider) => {
+    const instanceId = providerInstanceId(`${provider}_work`);
     const resolved = resolveProviderInstance(
       {
         ...DEFAULT_SERVER_SETTINGS,
         providerInstances: {
-          [instanceId]: { driver: "pi", config: { profileDir: "/profiles/pi-work" } },
+          [instanceId]: { driver: provider, config: { profileDir: "/profiles/work" } },
         },
       },
-      { provider: "pi", instanceId },
+      { provider, instanceId },
     );
 
-    expect(providerStartOptionsFromInstance(resolved!)?.pi?.agentDir).toBe("/profiles/pi-work");
+    const options = providerStartOptionsFromInstance(resolved!)?.[provider];
+    expect(options?.agentDir).toBe("/profiles/work");
+    expect(options?.environment?.HOME).toBeUndefined();
+  });
+
+  it("passes an Oh My Pi account environment to its runtime", () => {
+    const instanceId = providerInstanceId("omp_work");
+    const resolved = resolveProviderInstance(
+      {
+        ...DEFAULT_SERVER_SETTINGS,
+        providerInstances: {
+          [instanceId]: {
+            driver: "omp",
+            environment: [{ name: "OPENAI_API_KEY", value: "work-key", sensitive: true }],
+          },
+        },
+      },
+      { provider: "omp", instanceId },
+    );
+
+    expect(providerStartOptionsFromInstance(resolved!)?.omp?.environment).toEqual({
+      OPENAI_API_KEY: "work-key",
+    });
   });
 });
 
@@ -438,6 +460,7 @@ describe("providerImportedDirectoryConfig", () => {
     ["codex", "homePath"],
     ["claudeAgent", "configDir"],
     ["pi", "agentDir"],
+    ["omp", "agentDir"],
     ["cursor", "profileDir"],
     ["devin", "profileDir"],
   ] as const)("maps a %s import to %s", (provider, configKey) => {

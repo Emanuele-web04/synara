@@ -8,7 +8,14 @@ import { chmodSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import NodePath from "node:path";
 
-export type ProviderProcessEnvDriver = "cursor" | "gemini" | "grok" | "kilo" | "opencode" | "pi";
+export type ProviderProcessEnvDriver =
+  | "cursor"
+  | "gemini"
+  | "grok"
+  | "kilo"
+  | "opencode"
+  | "pi"
+  | "omp";
 
 export const MODEL_PROVIDER_API_KEY_ENV_MAPPINGS: ReadonlyArray<{
   readonly provider: string;
@@ -366,6 +373,9 @@ function isProviderAccountEnvKey(driver: ProviderProcessEnvDriver, rawKey: strin
       return isModelProviderAccountEnvKey(key) || key.startsWith("KILO_");
     case "pi":
       return isModelProviderAccountEnvKey(key) || key.startsWith("PI_");
+    case "omp":
+      // Oh My Pi is a Pi fork: PI_CODING_AGENT_DIR/PI_CONFIG_DIR select its profile.
+      return isModelProviderAccountEnvKey(key) || key.startsWith("PI_") || key.startsWith("OMP_");
   }
 }
 
