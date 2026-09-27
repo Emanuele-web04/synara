@@ -95,8 +95,10 @@ refresh keeps the last successful catalog. The shared discovery cache refreshes 
 background after its thirty-minute fresh window.
 
 The composer model picker has one tab per connected provider and a Starred tab. Starring a model
-saves it together with its current effort and speed, so one click (or `mod+1`…`mod+9` while the
-picker is open) restores the whole combination. A task that has started stays on its provider: only
+saves it together with its current effort, speed, and provider account, so one click (or
+`mod+1`…`mod+9` while the picker is open) restores the whole combination, including the account.
+Presets of a non-default account show the account name; presets of a removed or disabled account
+are hidden. Model cycling prefers the active account's stars. A task that has started stays on its provider: only
 that provider's tab and starred entries are offered. Supported provider executables can be pointed
 at custom binary locations.
 

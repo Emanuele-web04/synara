@@ -284,7 +284,7 @@ export function useChatKeyboardShortcuts({
         const nextSlug = resolveCycledModelSlug({
           currentModel: selectedModel,
           options: providerOptions,
-          favoriteSlugs: readStarredModelSlugs(selectedProvider),
+          favoriteSlugs: readStarredModelSlugs(selectedProvider, selectedProviderInstanceId),
           direction,
         });
         if (!nextSlug) return;

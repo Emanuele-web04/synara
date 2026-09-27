@@ -33,7 +33,7 @@ import {
   type ProviderOptions,
 } from "../../providerModelOptions";
 import { SearchIcon } from "~/lib/icons";
-import { starredModelSlotKey } from "~/lib/starredModels";
+import { starredModelInstanceId, starredModelSlotKey } from "~/lib/starredModels";
 import { cn, isMacNavigatorPlatform } from "~/lib/utils";
 import { Input } from "../ui/input";
 import { Menu, MenuGroup, MenuGroupLabel } from "../ui/menu";
@@ -169,11 +169,20 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
   const usesEffortSlider = effortControl === "slider";
 
   const { starredModels, toggleStarredModel, unstarModel } = useStarredModels();
-  // A locked thread can only ever run its own provider's presets.
-  const usableStarredModels =
-    lockedProvider === null
-      ? starredModels
-      : starredModels.filter((entry) => entry.provider === lockedProvider);
+  // A locked thread can only ever run its own provider's presets, and a preset of a
+  // removed or disabled account cannot run at all.
+  const knownInstances = props.providerInstances;
+  const usableStarredModels = starredModels.filter((entry) => {
+    if (lockedProvider !== null && entry.provider !== lockedProvider) return false;
+    const instanceId = starredModelInstanceId(entry);
+    return (
+      instanceId === entry.provider ||
+      knownInstances === undefined ||
+      knownInstances.some(
+        (instance) => instance.instanceId === instanceId && instance.enabled !== false,
+      )
+    );
+  });
 
   const [tab, setTab] = useState<ComposerModelPickerTab>(activeProvider);
   const [query, setQuery] = useState("");
@@ -286,14 +295,23 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     props.modelOptionsByProviderInstance?.[selectedInstanceIdFor(provider)] ??
     props.modelOptionsByProvider[provider];
 
+  const accountLabelFor = (instanceId: string) =>
+    (props.providerInstances ?? []).find(
+      (instance) => instance.instanceId === instanceId && !instance.isDefault,
+    )?.label;
+
   const rows =
     tab === STARRED_TAB
       ? buildStarredTabRows({
           starredModels: usableStarredModels,
-          modelOptionsByProvider: props.modelOptionsByProvider,
+          modelOptionsFor: (provider, instanceId) =>
+            props.modelOptionsByProviderInstance?.[instanceId as ProviderInstanceId] ??
+            props.modelOptionsByProvider[provider],
+          accountLabelFor,
           query: normalizedQuery,
           current: {
             provider: activeProvider,
+            instanceId: selectedInstanceIdFor(activeProvider),
             model: props.model,
             ...resolveStarredTraits(currentTraitSelection),
           },
@@ -301,6 +319,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
         })
       : buildProviderTabRows({
           provider: tab,
+          instanceId: selectedInstanceIdFor(tab),
           options: modelOptionsFor(tab),
           query: normalizedQuery,
           selectedModel: tab === activeProvider ? props.model : null,
@@ -315,7 +334,10 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     patch: Record<string, unknown>,
     keepOpen = false,
   ) => {
-    const instanceId = selectedInstanceIdFor(row.provider);
+    // A starred preset restores its own account; other rows use the tab's account.
+    const instanceId = row.preset
+      ? (starredModelInstanceId(row.preset) as ProviderInstanceId)
+      : selectedInstanceIdFor(row.provider);
     if (Object.keys(patch).length > 0) {
       props.onProviderModelChange(row.provider, model, {
         modelOptions: buildNextProviderOptions(

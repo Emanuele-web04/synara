@@ -9,6 +9,7 @@ import {
 } from "~/lib/starredModels";
 import {
   buildStarredModelOptionsPatch,
+  buildStarredTabRows,
   modelPickerShortcutRowIndex,
 } from "./ComposerModelPicker.logic";
 import { getComposerTraitSelection } from "./composerTraits";
@@ -59,6 +60,52 @@ describe("starred model presets", () => {
         { ...CODEX_HIGH_FAST, provider: "retired-provider" },
       ]),
     ).toEqual([CODEX_HIGH_FAST]);
+  });
+});
+
+describe("account-scoped starred presets", () => {
+  const WORK_HIGH_FAST: StarredModel = { ...CODEX_HIGH_FAST, instanceId: "codex_work" };
+
+  it("stars the same model and traits separately per account", () => {
+    const both = toggleStarredModel(toggleStarredModel([], CODEX_HIGH_FAST), WORK_HIGH_FAST);
+    expect(both).toEqual([CODEX_HIGH_FAST, WORK_HIGH_FAST]);
+    expect(unstarModel(both, WORK_HIGH_FAST)).toEqual([CODEX_HIGH_FAST]);
+  });
+
+  it("stores the default account implicitly so older presets keep their meaning", () => {
+    expect(normalizeStarredModels([{ ...CODEX_HIGH_FAST, instanceId: "codex" }])).toEqual([
+      CODEX_HIGH_FAST,
+    ]);
+    expect(starredModelKey({ ...CODEX_HIGH_FAST, instanceId: "codex" })).toBe(
+      starredModelKey(CODEX_HIGH_FAST),
+    );
+  });
+
+  it("builds starred rows from each account's catalog and labels non-default accounts", () => {
+    const rows = buildStarredTabRows({
+      starredModels: [CODEX_HIGH_FAST, WORK_HIGH_FAST],
+      modelOptionsFor: (_provider, instanceId) =>
+        instanceId === "codex_work"
+          ? [{ slug: "gpt-5.5", name: "GPT-5.5 (work)" }]
+          : [{ slug: "gpt-5.5", name: "GPT-5.5" }],
+      accountLabelFor: (instanceId) => (instanceId === "codex_work" ? "Work" : undefined),
+      query: "",
+      current: {
+        provider: "codex",
+        instanceId: "codex_work",
+        model: "gpt-5.5",
+        effort: "high",
+        fastMode: true,
+        thinking: null,
+      },
+      effortLevelsFor: () => [],
+    });
+
+    expect(rows.map((row) => [row.instanceId, row.name, row.selected])).toEqual([
+      [undefined, "GPT-5.5", false],
+      ["codex_work", "GPT-5.5 (work)", true],
+    ]);
+    expect(rows[1]?.detail?.startsWith("Work")).toBe(true);
   });
 });
 
