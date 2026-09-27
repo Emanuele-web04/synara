@@ -814,6 +814,8 @@ const makeWsRpcHandlersLayer = () =>
         providerService,
         providerAdapterRegistry,
         serverSettings,
+        homeDir: config.homeDir,
+        stateDir: config.stateDir,
       });
 
       const dispatchOrchestrationCommand = (command: OrchestrationCommand) =>

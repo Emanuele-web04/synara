@@ -1,13 +1,14 @@
 import type {
   ProjectImportProvider,
+  ProviderInstanceId,
   ProviderStartOptions,
   ThreadHandoffImportedMessage,
   ThreadId,
 } from "@synara/contracts";
 import { Data, Effect } from "effect";
-import { loadClaudeAgentSdk } from "../provider/claudeAgentSdk";
 import { readClaudeImportMessageDates } from "../provider/claudeProjectImport";
 import type { ProviderAdapterRegistryShape } from "../provider/Services/ProviderAdapterRegistry";
+import { readClaudeSessionMessagesInEnvironment } from "./importThreadRoute";
 import { mapClaudeSessionMessages, mapCodexSnapshotMessages } from "./importedThreadMessages";
 
 export class ProjectImportError extends Data.TaggedError("ProjectImportError")<{
@@ -38,6 +39,9 @@ export interface ReadProjectImportHistoryInput {
   readonly sourceCwd: string;
   readonly sourceCreatedAt: string;
   readonly providerOptions?: ProviderStartOptions;
+  readonly providerInstanceId?: ProviderInstanceId;
+  /** Claude account environment when its config dir is not the server's own. */
+  readonly claudeEnvironment?: NodeJS.ProcessEnv;
   readonly cwd?: string;
 }
 
@@ -47,10 +51,13 @@ export function makeProjectImportHistoryReader(registry: ProviderAdapterRegistry
   ): Effect.fn.Return<ReadonlyArray<ThreadHandoffImportedMessage>, unknown> {
     if (input.provider === "claudeAgent") {
       const messages = yield* projectImportPromise(async () => {
-        const sdk = await loadClaudeAgentSdk();
         // The fork has a new identity. Read that frozen copy, never the mutable original.
         const [history, dates] = await Promise.all([
-          sdk.getSessionMessages(input.nativeId, { dir: input.sourceCwd }),
+          readClaudeSessionMessagesInEnvironment({
+            sessionId: input.nativeId,
+            dir: input.sourceCwd,
+            environment: input.claudeEnvironment,
+          }),
           readClaudeImportMessageDates({ sessionId: input.nativeId, configDir: input.sourceHome }),
         ]);
         return history.map((message) => ({ ...message, timestamp: dates.get(message.uuid) }));
@@ -67,6 +74,7 @@ export function makeProjectImportHistoryReader(registry: ProviderAdapterRegistry
       : adapter.readExternalThread
         ? yield* adapter.readExternalThread({
             externalThreadId: input.nativeId,
+            ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
             ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
             ...(input.cwd ? { cwd: input.cwd } : {}),
           })

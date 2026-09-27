@@ -1,5 +1,6 @@
 import { Schema } from "effect";
 import { IsoDateTime, ProjectId, SpaceId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas";
+import { ProviderInstanceId } from "./providerInstance";
 
 export const ProjectImportProvider = Schema.Literals(["codex", "claudeAgent"]);
 export type ProjectImportProvider = typeof ProjectImportProvider.Type;
@@ -7,6 +8,10 @@ export type ProjectImportProvider = typeof ProjectImportProvider.Type;
 export const ProjectImportThread = Schema.Struct({
   key: TrimmedNonEmptyString,
   provider: ProjectImportProvider,
+  /** Account the conversation was found in and will be copied into. */
+  providerInstanceId: Schema.optional(ProviderInstanceId),
+  /** Display name of a non-default account; absent for the default account. */
+  accountLabel: Schema.optional(Schema.String),
   title: Schema.String,
   cwd: Schema.String,
   createdAt: IsoDateTime,
@@ -37,6 +42,8 @@ export const ListProjectImportsResult = Schema.Struct({
   sources: Schema.Array(
     Schema.Struct({
       provider: ProjectImportProvider,
+      providerInstanceId: Schema.optional(ProviderInstanceId),
+      accountLabel: Schema.optional(Schema.String),
       error: Schema.NullOr(Schema.String),
     }),
   ),

@@ -16,6 +16,12 @@ Discovery reads local archives on the machine running the Synara server. A brows
 remote server sees that server's archives. Codex's configured home and `CODEX_SQLITE_HOME`, and
 Claude Code's `CLAUDE_CONFIG_DIR`, are respected. Cloud-only conversations are outside this flow.
 
+Every enabled Codex and Claude Code account (provider instance) is scanned with the same home and
+environment it runs with. Conversations from a non-default account show the account name, and an
+imported copy is created in, and continues with, the account it was found in. Accounts that share one
+history store list each conversation once, under the default account. A disabled non-default
+account is not scanned.
+
 ## Projects use their existing folders
 
 Importing links the original project folder. It does not clone a repository, copy project files, or

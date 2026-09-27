@@ -2,7 +2,7 @@
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 
-import type { ProjectId, ProjectImportProvider } from "@synara/contracts";
+import type { ProjectId, ProjectImportProvider, ProviderInstanceId } from "@synara/contracts";
 import { isWorkspaceRootWithin } from "@synara/shared/threadWorkspace";
 
 import type {
@@ -20,6 +20,8 @@ import {
 export interface ResolvedImportSession extends NativeImportSession {
   key: string;
   provider: ProjectImportProvider;
+  /** The account the session was discovered through; undefined means the default. */
+  providerInstanceId?: ProviderInstanceId;
   sourceHome: string;
 }
 
@@ -83,7 +85,11 @@ async function availableImportEntry<T>(lookup: () => Promise<T>): Promise<T | un
 }
 
 export async function buildProjectImportCatalog(
-  sources: ReadonlyArray<{ provider: ProjectImportProvider; catalog: NativeProjectImportCatalog }>,
+  sources: ReadonlyArray<{
+    provider: ProjectImportProvider;
+    catalog: NativeProjectImportCatalog;
+    providerInstanceId?: ProviderInstanceId;
+  }>,
   existingProjects: ReadonlyArray<ExistingProject>,
 ): Promise<ResolvedImportProject[]> {
   const canonical = cachedLookup(canonicalImportPath);
@@ -160,7 +166,7 @@ export async function buildProjectImportCatalog(
   };
 
   let sessionCount = 0;
-  for (const { provider, catalog } of sources) {
+  for (const { provider, catalog, providerInstanceId } of sources) {
     if (!isAbsoluteDirectory(catalog.sourceHome)) continue;
     const sourceHome = await canonical(catalog.sourceHome);
     const sourceProjects = new Map<
@@ -240,7 +246,13 @@ export async function buildProjectImportCatalog(
       const title = assigned ? sourceProject!.title : path.basename(root) || root;
       const project = await availableImportEntry(() => ensureProject(root, title, provider));
       if (!project) continue;
-      project.threads.push({ ...session, key, provider, sourceHome });
+      project.threads.push({
+        ...session,
+        key,
+        provider,
+        ...(providerInstanceId !== undefined ? { providerInstanceId } : {}),
+        sourceHome,
+      });
       importedSessionKeys.add(key);
     }
   }

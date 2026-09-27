@@ -9,21 +9,18 @@ import {
   type ImportProjectResult,
   type ListProjectImportsInput,
   type ListProjectImportsResult,
+  type ModelSelection,
   type ProjectImportProvider,
   type ProviderStartOptions,
 } from "@synara/contracts";
 import { isWorkspaceRootWithin, workspaceRootsEqual } from "@synara/shared/threadWorkspace";
-import { providerStartOptionsFromServerSettings } from "@synara/shared/serverSettings";
 import { Effect } from "effect";
 import type {
   ProjectImportRepository,
   ProjectImportOrigin,
 } from "../persistence/projectImportRepository";
 import { discoverClaudeProjects } from "../provider/claudeProjectImport";
-import {
-  discoverCodexProjects,
-  resolveCodexProjectImportHome,
-} from "../provider/codexProjectImport";
+import { discoverCodexProjects } from "../provider/codexProjectImport";
 import { ensureProviderEnabled } from "../provider/enabledProviderAdapter";
 import { makeKeyedLock } from "../provider/keyedLock";
 import type { NativeProjectImportCatalog } from "../provider/projectImportTypes";
@@ -48,6 +45,12 @@ import {
 } from "./projectImportHistory";
 import type { OrchestrationEngineShape } from "./Services/OrchestrationEngine";
 import { makeProjectImportDestinations } from "./projectImportDestinations";
+import { listClaudeSessionsInEnvironment } from "./importThreadRoute";
+import {
+  type ProjectImportSource,
+  resolveProjectImportSourceHome,
+  resolveProjectImportSources,
+} from "./projectImportSources";
 
 interface ProjectImportRouteOptions {
   readonly repository: ProjectImportRepository;
@@ -57,9 +60,12 @@ interface ProjectImportRouteOptions {
   readonly serverSettings: ServerSettingsShape;
   readonly discover?: (
     provider: ProjectImportProvider,
-    homePath?: string,
+    source: ProjectImportSource,
   ) => Promise<NativeProjectImportCatalog>;
   readonly readHistory?: ReturnType<typeof makeProjectImportHistoryReader>;
+  /** Server paths used to derive isolated account homes, matching the runtime. */
+  readonly homeDir?: string;
+  readonly stateDir?: string;
 }
 
 const CATALOG_TTL_MS = 30 * 60 * 1000;
@@ -77,10 +83,22 @@ export function makeProjectImportHandlers(options: ProjectImportRouteOptions) {
     options.readHistory ?? makeProjectImportHistoryReader(options.providerAdapterRegistry);
   const discover =
     options.discover ??
-    ((provider, homePath) =>
-      provider === "codex"
-        ? discoverCodexProjects(homePath ? { homePath } : undefined)
-        : discoverClaudeProjects());
+    ((provider, source) => {
+      if (provider === "codex") {
+        return discoverCodexProjects({
+          env: source.environment,
+          ...(source.codexHomePath ? { homePath: source.codexHomePath } : {}),
+        });
+      }
+      const claudeEnvironment = source.claudeEnvironment;
+      return discoverClaudeProjects({
+        ...(source.claudeConfigDir ? { configDir: source.claudeConfigDir } : {}),
+        ...(claudeEnvironment
+          ? { listSessions: () => listClaudeSessionsInEnvironment(claudeEnvironment) }
+          : {}),
+      });
+    });
+  const sourcePaths = { homeDir: options.homeDir, stateDir: options.stateDir };
 
   const readKnownBindings = Effect.fn(function* (
     destinations: ReturnType<typeof makeProjectImportDestinations>,
@@ -106,22 +124,26 @@ export function makeProjectImportHandlers(options: ProjectImportRouteOptions) {
   const listProjectImports = Effect.fn(function* (input: ListProjectImportsInput) {
     const settings = yield* options.serverSettings.getSettings;
     const providers = [...new Set(input.providers)];
+    // Every enabled account is scanned; accounts sharing one store dedupe by
+    // source key, keeping the default account's attribution.
+    const importSources = resolveProjectImportSources(settings, providers, sourcePaths);
     const results = yield* Effect.forEach(
-      providers,
-      (provider) =>
+      importSources,
+      (source) =>
         projectImportPromise(async () => {
           try {
             return {
-              provider,
-              catalog: await discover(
-                provider,
-                provider === "codex" ? settings.providers.codex.homePath : undefined,
-              ),
+              provider: source.provider,
+              providerInstanceId: source.instanceId,
+              accountLabel: source.accountLabel,
+              catalog: await discover(source.provider, source),
               error: null,
             };
           } catch (error) {
             return {
-              provider,
+              provider: source.provider,
+              providerInstanceId: source.instanceId,
+              accountLabel: source.accountLabel,
               catalog: null,
               error: error instanceof Error ? error.message : String(error),
             };
@@ -129,12 +151,27 @@ export function makeProjectImportHandlers(options: ProjectImportRouteOptions) {
         }),
       { concurrency: 2 },
     );
+    const accountLabels = new Map(
+      importSources.flatMap((source) =>
+        source.accountLabel !== undefined
+          ? [[source.instanceId, source.accountLabel] as const]
+          : [],
+      ),
+    );
     const readModel = yield* options.orchestrationEngine.getReadModel();
     const destinations = makeProjectImportDestinations(readModel);
     const candidates = yield* projectImportPromise(() =>
       buildProjectImportCatalog(
         results.flatMap((result) =>
-          result.catalog ? [{ provider: result.provider, catalog: result.catalog }] : [],
+          result.catalog
+            ? [
+                {
+                  provider: result.provider,
+                  providerInstanceId: result.providerInstanceId,
+                  catalog: result.catalog,
+                },
+              ]
+            : [],
         ),
         readModel.projects,
       ),
@@ -169,6 +206,13 @@ export function makeProjectImportHandlers(options: ProjectImportRouteOptions) {
         threads: project.threads.map((session) => ({
           key: session.key,
           provider: session.provider,
+          ...(session.providerInstanceId !== undefined
+            ? { providerInstanceId: session.providerInstanceId }
+            : {}),
+          ...(session.providerInstanceId !== undefined &&
+          accountLabels.has(session.providerInstanceId)
+            ? { accountLabel: accountLabels.get(session.providerInstanceId) }
+            : {}),
           title: session.title,
           cwd: session.cwd,
           createdAt: session.createdAt,
@@ -179,7 +223,12 @@ export function makeProjectImportHandlers(options: ProjectImportRouteOptions) {
             (!origins.has(session.key) && known.has(`${session.provider}:${session.id}`)),
         })),
       })),
-      sources: results.map(({ provider, error }) => ({ provider, error })),
+      sources: results.map(({ provider, providerInstanceId, accountLabel, error }) => ({
+        provider,
+        providerInstanceId,
+        ...(accountLabel !== undefined ? { accountLabel } : {}),
+        error,
+      })),
     } satisfies ListProjectImportsResult;
   });
 
@@ -218,15 +267,22 @@ export function makeProjectImportHandlers(options: ProjectImportRouteOptions) {
           );
           if (known) return { ...known, status: "already-present" } satisfies ImportProjectResult;
         }
+        let importSource: ProjectImportSource | undefined;
         if (source) {
           yield* ensureProviderEnabled(source.provider, options.serverSettings);
           const settings = yield* options.serverSettings.getSettings;
+          const sourceInstanceId = source.providerInstanceId ?? source.provider;
+          importSource = resolveProjectImportSources(settings, [source.provider], sourcePaths).find(
+            (candidate) => candidate.instanceId === sourceInstanceId,
+          );
+          if (!importSource)
+            return yield* new ProjectImportError({
+              message:
+                "The account this conversation was found in is unavailable. Refresh the list.",
+            });
+          const resolvedSource = importSource;
           const currentHome = yield* projectImportPromise(() =>
-            source.provider === "codex"
-              ? resolveCodexProjectImportHome({ homePath: settings.providers.codex.homePath })
-              : canonicalImportPath(
-                  process.env.CLAUDE_CONFIG_DIR?.trim() || nodePath.join(homedir(), ".claude"),
-                ),
+            resolveProjectImportSourceHome(resolvedSource),
           );
           if (
             !workspaceRootsEqual(currentHome, source.sourceHome, { platform: process.platform }) &&
@@ -348,10 +404,21 @@ export function makeProjectImportHandlers(options: ProjectImportRouteOptions) {
           return yield* new ProjectImportError({
             message: "The import destination was removed. Retry to create a new conversation copy.",
           });
-        const modelSelection =
-          project.defaultModelSelection?.provider === source.provider
-            ? project.defaultModelSelection
-            : { provider: source.provider, model: DEFAULT_MODEL_BY_PROVIDER[source.provider] };
+        const sourceAccount = importSource!;
+        const accountInstance = sourceAccount.isDefault
+          ? {}
+          : { instanceId: sourceAccount.instanceId };
+        const projectDefault = project.defaultModelSelection;
+        // The copy lives in the source account, so only that account's default applies.
+        const modelSelection: ModelSelection =
+          projectDefault?.provider === source.provider &&
+          (projectDefault.instanceId ?? projectDefault.provider) === sourceAccount.instanceId
+            ? projectDefault
+            : ({
+                provider: source.provider,
+                ...accountInstance,
+                model: DEFAULT_MODEL_BY_PROVIDER[source.provider],
+              } as ModelSelection);
         const sourceDirectoryExists = yield* projectImportPromise(() =>
           importDirectoryExists(source.cwd),
         );
@@ -410,13 +477,12 @@ export function makeProjectImportHandlers(options: ProjectImportRouteOptions) {
             createdAt: source.createdAt,
           });
         }
-        const settings = yield* options.serverSettings.getSettings;
-        const configuredOptions = providerStartOptionsFromServerSettings(settings);
-        const claudeBinaryPath = configuredOptions.claudeAgent?.binaryPath;
+        // Always name the provider: an explicit (possibly empty) entry marks the
+        // launch options as authoritative for the copied continuation.
         const providerOptions: ProviderStartOptions =
           source.provider === "codex"
-            ? { codex: configuredOptions.codex }
-            : { claudeAgent: { ...(claudeBinaryPath ? { binaryPath: claudeBinaryPath } : {}) } };
+            ? { codex: sourceAccount.providerOptions?.codex ?? {} }
+            : { claudeAgent: sourceAccount.providerOptions?.claudeAgent ?? {} };
         const runtimeCwd = workingDirectory ?? (directoryExists ? workspaceRoot : undefined);
         // The ledger and native binding survive failures. Retrying the same origin
         // resumes this frozen copy, while deterministic command IDs prevent replay.
@@ -444,6 +510,10 @@ export function makeProjectImportHandlers(options: ProjectImportRouteOptions) {
             sourceCwd: source.cwd,
             sourceCreatedAt: source.createdAt,
             providerOptions,
+            providerInstanceId: sourceAccount.instanceId,
+            ...(sourceAccount.claudeEnvironment
+              ? { claudeEnvironment: sourceAccount.claudeEnvironment }
+              : {}),
             ...(runtimeCwd ? { cwd: runtimeCwd } : {}),
           });
           for (let offset = 0; offset < messages.length; offset += 100) {
@@ -472,6 +542,7 @@ export function makeProjectImportHandlers(options: ProjectImportRouteOptions) {
           session: {
             threadId,
             providerName: source.provider,
+            providerInstanceId: sourceAccount.instanceId,
             status: "stopped",
             runtimeMode: "approval-required",
             activeTurnId: null,

@@ -100,6 +100,14 @@ function harness(input: {
     codexHomePath?: string;
     claudeBinaryPath?: string;
   };
+  /** Extra provider accounts and the native catalog each one exposes. */
+  accounts?: ReadonlyArray<{
+    instanceId: string;
+    provider: ProjectImportProvider;
+    config?: Record<string, unknown>;
+    enabled?: boolean;
+    catalog: NativeProjectImportCatalog;
+  }>;
 }) {
   const providers = input.providers ?? ["codex"];
   const projects = [...(input.projects ?? [])];
@@ -195,8 +203,21 @@ function harness(input: {
         return { sequence: commands.length };
       }),
   } as unknown as OrchestrationEngineShape;
+  const accountCatalogs = new Map(
+    (input.accounts ?? []).map((account) => [account.instanceId, account.catalog]),
+  );
   const settings = {
     ...DEFAULT_SERVER_SETTINGS,
+    providerInstances: Object.fromEntries(
+      (input.accounts ?? []).map((account) => [
+        account.instanceId,
+        {
+          driver: account.provider,
+          ...(account.enabled === false ? { enabled: false } : {}),
+          config: account.config ?? {},
+        },
+      ]),
+    ),
     providers: {
       ...DEFAULT_SERVER_SETTINGS.providers,
       codex: {
@@ -223,7 +244,8 @@ function harness(input: {
     } as unknown as ProviderServiceShape,
     providerAdapterRegistry: {} as ProviderAdapterRegistryShape,
     serverSettings: { getSettings: Effect.succeed(settings) } as unknown as ServerSettingsShape,
-    discover: async (provider) => catalogs.get(provider)!,
+    discover: async (provider, source) =>
+      accountCatalogs.get(source.instanceId) ?? catalogs.get(provider)!,
     readHistory,
   });
   const preview = () => Effect.runPromise(handlers.listProjectImports({ providers }));
@@ -267,6 +289,100 @@ afterEach(async () => {
 });
 
 describe("project import routes", () => {
+  it("scans each account and copies a work-account conversation into that account", async () => {
+    const { root } = await workspace();
+    const workCatalog = {
+      ...nativeCatalog(root, "codex"),
+      sourceHome: path.join(path.dirname(root), "codex-work-home"),
+      sessions: [{ ...nativeCatalog(root, "codex").sessions[0]!, id: "codex-work-original" }],
+    };
+    const test = harness({
+      root,
+      accounts: [
+        {
+          instanceId: "codex_work",
+          provider: "codex",
+          config: { homePath: "/accounts/codex-work" },
+          catalog: workCatalog,
+        },
+      ],
+    });
+
+    const preview = await test.preview();
+    const threads = preview.projects.flatMap((project) => project.threads);
+    expect(threads.map((thread) => [thread.providerInstanceId, thread.title])).toEqual(
+      expect.arrayContaining([
+        ["codex", "codex conversation"],
+        ["codex_work", "codex conversation"],
+      ]),
+    );
+    expect(preview.sources).toEqual([
+      { provider: "codex", providerInstanceId: "codex", error: null },
+      {
+        provider: "codex",
+        providerInstanceId: "codex_work",
+        accountLabel: expect.any(String),
+        error: null,
+      },
+    ]);
+    expect(threads.find((thread) => thread.providerInstanceId === "codex")?.accountLabel).toBe(
+      undefined,
+    );
+    expect(
+      threads.find((thread) => thread.providerInstanceId === "codex_work")?.accountLabel,
+    ).toEqual(expect.any(String));
+
+    const project = preview.projects[0]!;
+    const workThread = project.threads.find(
+      (thread) => thread.providerInstanceId === "codex_work",
+    )!;
+    const result = await Effect.runPromise(
+      test.importProject({ projectKey: project.key, threadKey: workThread.key }),
+    );
+
+    expect(result.status).toBe("imported");
+    const copy = test.importExternalThread.mock.calls[0]![0];
+    expect(copy.externalThreadId).toBe("codex-work-original");
+    expect(copy.modelSelection).toMatchObject({ provider: "codex", instanceId: "codex_work" });
+    expect(copy.providerOptions?.codex).toMatchObject({
+      homePath: "/accounts/codex-work",
+      accountId: "codex_work",
+    });
+    expect(test.readHistory.mock.calls[0]![0].providerInstanceId).toBe("codex_work");
+    const sessionSet = test.commands.find((command) => command.type === "thread.session.set");
+    expect(sessionSet?.type === "thread.session.set" && sessionSet.session.providerInstanceId).toBe(
+      "codex_work",
+    );
+  });
+
+  it("lists a conversation shared by several accounts once, under the default account", async () => {
+    const { root } = await workspace();
+    const test = harness({
+      root,
+      accounts: [
+        {
+          instanceId: "codex_work",
+          provider: "codex",
+          catalog: nativeCatalog(root, "codex"),
+        },
+        {
+          instanceId: "codex_off",
+          provider: "codex",
+          enabled: false,
+          catalog: { ...nativeCatalog(root, "codex"), sourceHome: "/unused" },
+        },
+      ],
+    });
+
+    const preview = await test.preview();
+    const threads = preview.projects.flatMap((project) => project.threads);
+    expect(threads.map((thread) => thread.providerInstanceId)).toEqual(["codex"]);
+    expect(preview.sources.map((source) => source.providerInstanceId)).toEqual([
+      "codex",
+      "codex_work",
+    ]);
+  });
+
   it.each([
     {
       name: "empty Codex overrides",
@@ -284,7 +400,8 @@ describe("project import routes", () => {
       name: "configured Codex executable with default home",
       provider: "codex" as const,
       paths: { codexBinaryPath: "codex" },
-      expected: { codex: { binaryPath: "codex" } },
+      // Account options drop an override equal to the default command, like every launch.
+      expected: { codex: {} },
     },
     {
       name: "trimmed Codex overrides",

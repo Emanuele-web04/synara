@@ -90,11 +90,14 @@ function providerResumeCursorForImport(provider: ProviderKind, externalId: strin
 const CLAUDE_SESSION_QUERY_SCRIPT = `const [moduleUrl, method, sessionId, optionsJson] = process.argv.slice(2);
 const sdk = await import(moduleUrl);
 const options = JSON.parse(optionsJson);
-const result = await sdk[method](sessionId, options ?? undefined);
+const result =
+  method === "listSessions"
+    ? await sdk.listSessions(options ?? undefined)
+    : await sdk[method](sessionId, options ?? undefined);
 process.stdout.write(JSON.stringify(result ?? null));
 `;
 
-type ClaudeSessionQueryMethod = "getSessionInfo" | "getSessionMessages";
+type ClaudeSessionQueryMethod = "getSessionInfo" | "getSessionMessages" | "listSessions";
 
 export function claudeHistoricalSessionChildEnvironment(
   environment: NodeJS.ProcessEnv,
@@ -145,6 +148,30 @@ async function runClaudeSessionQueryInChildProcess<T>(input: {
   }
 }
 
+/** Lists one Claude account's sessions without touching the server's process.env. */
+export function listClaudeSessionsInEnvironment(
+  environment: NodeJS.ProcessEnv,
+): Promise<ReadonlyArray<SDKSessionInfo>> {
+  return runClaudeSessionQueryInChildProcess<ReadonlyArray<SDKSessionInfo>>({
+    method: "listSessions",
+    sessionId: "",
+    dir: undefined,
+    environment,
+  });
+}
+
+/** Reads one Claude account's session messages, in a child process when needed. */
+export function readClaudeSessionMessagesInEnvironment(input: {
+  readonly sessionId: string;
+  readonly dir: string | undefined;
+  readonly environment: NodeJS.ProcessEnv | undefined;
+}): Promise<ReadonlyArray<SessionMessage>> {
+  return queryClaudeHistoricalSession<ReadonlyArray<SessionMessage>>({
+    method: "getSessionMessages",
+    ...input,
+  });
+}
+
 async function queryClaudeHistoricalSession<T>(input: {
   readonly method: ClaudeSessionQueryMethod;
   readonly sessionId: string;
@@ -162,9 +189,11 @@ async function queryClaudeHistoricalSession<T>(input: {
   const options = input.dir ? { dir: input.dir } : undefined;
   const sdk = await loadClaudeAgentSdk();
   return (
-    input.method === "getSessionInfo"
-      ? sdk.getSessionInfo(input.sessionId, options)
-      : sdk.getSessionMessages(input.sessionId, options)
+    input.method === "listSessions"
+      ? sdk.listSessions(options)
+      : input.method === "getSessionInfo"
+        ? sdk.getSessionInfo(input.sessionId, options)
+        : sdk.getSessionMessages(input.sessionId, options)
   ) as Promise<T>;
 }
 
