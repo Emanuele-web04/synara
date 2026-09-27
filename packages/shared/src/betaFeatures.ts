@@ -14,10 +14,11 @@ import {
 /**
  * Features that ship only in non-Stable builds. Keep a feature out of Stable
  * by adding its key here; promote it by deleting the entry. A provider's key
- * is its ProviderKind: today that is "omp" only.
+ * is its ProviderKind: today that is "omp". "tasks" is the Tasks to-do list,
+ * which replaces Kanban in Beta while Stable keeps Kanban.
  */
 export type BetaOnlyFeature = string;
-export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = ["omp"];
+export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = ["omp", "tasks"];
 
 /**
  * Whether a Beta-only feature is on for this host. Only the Stable

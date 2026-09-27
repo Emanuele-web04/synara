@@ -38,6 +38,7 @@ export const RAIL_ORDERABLE_ITEM_IDS = [
   "home",
   "spaces",
   "kanban",
+  "tasks",
   "pullRequests",
   "automations",
   "studio",
@@ -164,11 +165,11 @@ export function resolveActiveRailShortcutKey(input: {
 /**
  * Whether the panel column shows next to the rail for the active item. Every section either
  * owns a panel (Home/Spaces: projects and threads; Automations, Studio, Settings: their own
- * lists) or takes the full width: Kanban is one board, Pull requests has its own list and
- * detail panes.
+ * lists) or takes the full width: Kanban is one board, Tasks has its own list and detail
+ * pane, Pull requests has its own list and detail panes.
  */
 export function railItemShowsPanel(id: RailItemId): boolean {
-  return id !== "kanban" && id !== "pullRequests";
+  return id !== "kanban" && id !== "tasks" && id !== "pullRequests";
 }
 
 function matchesRoute(pathname: string, route: string): boolean {
@@ -178,6 +179,7 @@ function matchesRoute(pathname: string, route: string): boolean {
 /** The route rail item that owns a pathname, or null for thread and chat-index routes. */
 export function railItemForPathname(pathname: string): RailRouteItemId | null {
   if (matchesRoute(pathname, "/kanban")) return "kanban";
+  if (matchesRoute(pathname, "/tasks")) return "tasks";
   if (matchesRoute(pathname, "/pull-requests")) return "pullRequests";
   if (matchesRoute(pathname, "/automations")) return "automations";
   if (matchesRoute(pathname, "/studio")) return "studio";

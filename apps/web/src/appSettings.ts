@@ -118,6 +118,30 @@ export const DEFAULT_AGENT_CURSOR_COLOR_MODE: AgentCursorColorMode = "stock";
 
 const SidebarNavItemId = Schema.Literals([...SIDEBAR_NAV_ITEM_IDS]);
 const RailOrderableItemId = Schema.Literals([...RAIL_ORDERABLE_ITEM_IDS]);
+
+// Stored nav and rail lists are decoded leniently: an id this build doesn't know (a retired
+// item, or one from a newer build) is dropped instead of failing the whole settings decode,
+// which would reset every local preference.
+function persistedNavIdList<const Ids extends ReadonlyArray<string>>(
+  idSchema: Schema.Codec<Ids[number], Ids[number]>,
+) {
+  return Schema.Array(Schema.String).pipe(
+    Schema.decodeTo(
+      Schema.Array(idSchema),
+      SchemaTransformation.transform({
+        decode: (ids): ReadonlyArray<Ids[number]> =>
+          ids.flatMap((id) => (Schema.is(idSchema)(id) ? [id] : [])),
+        encode: (ids) => ids as ReadonlyArray<string>,
+      }),
+    ),
+  );
+}
+
+const PersistedSidebarNavItemIdList =
+  persistedNavIdList<typeof SIDEBAR_NAV_ITEM_IDS>(SidebarNavItemId);
+const PersistedRailOrderableItemIdList =
+  persistedNavIdList<typeof RAIL_ORDERABLE_ITEM_IDS>(RailOrderableItemId);
+
 /** Classic: one sidebar column. Rail: fixed icon tabs plus a panel (Beta-only, see useSidebarLayout). */
 export const SidebarLayout = Schema.Literals(["classic", "rail"]);
 export type SidebarLayout = typeof SidebarLayout.Type;
@@ -322,14 +346,14 @@ export const AppSettingsSchema = Schema.Struct({
   // optional Studio tab in the section switcher.
   showChatsSection: Schema.Boolean.pipe(withDefaults(() => true)),
   showStudioSection: Schema.Boolean.pipe(withDefaults(() => true)),
-  // Local-only UI preferences for the primary sidebar nav block (New thread, Kanban,
+  // Local-only UI preferences for the primary sidebar nav block (New thread, Kanban or Tasks,
   // Pull requests, Automations): drag-to-reorder order plus explicitly hidden items.
   // An item whose route is currently active stays visible regardless (mirrors
   // `hiddenProviders`), so hiding a surface never strands the user mid-route.
-  sidebarNavOrder: Schema.Array(SidebarNavItemId).pipe(
+  sidebarNavOrder: PersistedSidebarNavItemIdList.pipe(
     withDefaults(() => [...DEFAULT_SIDEBAR_NAV_ORDER]),
   ),
-  hiddenSidebarNavItems: Schema.Array(SidebarNavItemId).pipe(withDefaults(() => [])),
+  hiddenSidebarNavItems: PersistedSidebarNavItemIdList.pipe(withDefaults(() => [])),
   // Local-only shell layout, available in Stable and Beta. useSidebarLayout keeps
   // mobile on classic even when the stored preference is "rail".
   sidebarLayout: SidebarLayout.pipe(withDefaults(() => DEFAULT_SIDEBAR_LAYOUT)),
@@ -341,10 +365,10 @@ export const AppSettingsSchema = Schema.Struct({
   // Rail layout's own Customize state (the classic nav block keeps `sidebarNavOrder`):
   // the order of the rail's top items and the ones the user hid. Home never hides, and an
   // active hidden item stays visible (see appRail.logic).
-  railItemOrder: Schema.Array(RailOrderableItemId).pipe(
+  railItemOrder: PersistedRailOrderableItemIdList.pipe(
     withDefaults(() => [...RAIL_ORDERABLE_ITEM_IDS]),
   ),
-  hiddenRailItems: Schema.Array(RailOrderableItemId).pipe(
+  hiddenRailItems: PersistedRailOrderableItemIdList.pipe(
     withDefaults(() => [...DEFAULT_HIDDEN_RAIL_ITEMS]),
   ),
   // Whether the per-run threads standalone automations create appear in the sidebar
@@ -1439,7 +1463,7 @@ export function getProviderStartOptions(
 
 /**
  * Single source of truth for mapping the streaming preference onto the orchestration
- * delivery mode used when dispatching turns (composer, chat, and kanban share this).
+ * delivery mode used when dispatching turns (composer, chat, Kanban, and Tasks share this).
  */
 export function resolveAssistantDeliveryMode(
   settings: Pick<AppSettings, "enableAssistantStreaming">,

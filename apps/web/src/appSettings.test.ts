@@ -630,6 +630,28 @@ describe("provider-indexed custom model settings", () => {
 });
 
 describe("AppSettingsSchema", () => {
+  it("keeps Kanban and Tasks nav items and drops unknown ones without resetting settings", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+    const decoded = decode(
+      JSON.stringify({
+        defaultProvider: "claudeAgent",
+        sidebarNavOrder: ["kanban", "newThread", "tasks", "retired-item"],
+        hiddenSidebarNavItems: ["kanban"],
+        railItemOrder: ["home", "kanban", "spaces", "retired-item"],
+        hiddenRailItems: ["tasks", "studio"],
+      }),
+    );
+
+    expect(decoded).toMatchObject({
+      // One unknown id must not reset every other preference.
+      defaultProvider: "claudeAgent",
+      sidebarNavOrder: ["kanban", "newThread", "tasks"],
+      hiddenSidebarNavItems: ["kanban"],
+      railItemOrder: ["home", "kanban", "spaces"],
+      hiddenRailItems: ["tasks", "studio"],
+    });
+  });
+
   it("migrates persisted Gemini provider settings to Antigravity", () => {
     const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
     const decoded = decode(

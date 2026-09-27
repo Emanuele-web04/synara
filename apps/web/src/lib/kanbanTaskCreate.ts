@@ -6,29 +6,15 @@
 
 import type {
   AssistantDeliveryMode,
-  ModelSelection,
-  ProjectId,
-  ProviderInteractionMode,
   ProviderKind,
   ProviderStartOptions,
-  RuntimeMode,
   ThreadId,
 } from "@synara/contracts";
 
-import { useComposerDraftStore, type DraftThreadEnvMode } from "../composerDraftStore";
+import { createDraftThread, type DraftThreadInput } from "./draftThreadCreate";
 import { dispatchKanbanDraftThread, type KanbanDraftDispatchResult } from "./kanbanDispatch";
-import { newThreadId } from "./utils";
 
-export interface KanbanDraftTaskInput {
-  projectId: ProjectId;
-  prompt: string;
-  /** Optional scratch composer whose full transferable content seeds the new task. */
-  sourceComposerThreadId?: ThreadId;
-  modelSelection: ModelSelection;
-  runtimeMode: RuntimeMode;
-  interactionMode: ProviderInteractionMode;
-  envMode: DraftThreadEnvMode;
-}
+export type KanbanDraftTaskInput = Omit<DraftThreadInput, "workingDirectory">;
 
 /**
  * Registers a new mapping-less draft thread and seeds its composer content. The
@@ -36,23 +22,7 @@ export interface KanbanDraftTaskInput {
  * created back to back.
  */
 export function createKanbanDraftTask(input: KanbanDraftTaskInput): ThreadId {
-  const store = useComposerDraftStore.getState();
-  const threadId = newThreadId();
-  store.registerDraftThread(threadId, {
-    projectId: input.projectId,
-    envMode: input.envMode,
-    runtimeMode: input.runtimeMode,
-    interactionMode: input.interactionMode,
-  });
-  if (input.sourceComposerThreadId) {
-    store.copyTransferableComposerState(input.sourceComposerThreadId, threadId);
-  } else {
-    store.setPrompt(threadId, input.prompt);
-  }
-  store.setModelSelection(threadId, input.modelSelection);
-  store.setRuntimeMode(threadId, input.runtimeMode);
-  store.setInteractionMode(threadId, input.interactionMode);
-  return threadId;
+  return createDraftThread(input);
 }
 
 /**

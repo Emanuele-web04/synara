@@ -7,6 +7,7 @@
 import type { ProjectId, ProviderKind, ThreadEnvironmentMode, ThreadId } from "@synara/contracts";
 import { buildPromptThreadTitleFallback } from "@synara/shared/chatThreads";
 import { isPendingThreadWorktree } from "@synara/shared/threadEnvironment";
+import { composerDraftHasAttachments } from "../../composerDraftDomain";
 import type { ComposerThreadDraftState } from "../../composerDraftStore";
 import {
   canSessionAnswerPendingRequests,
@@ -55,14 +56,7 @@ export function buildKanbanComposerDraftSnapshot(
   }
   return {
     prompt: draft.prompt,
-    hasAttachments:
-      draft.images.length > 0 ||
-      draft.files.length > 0 ||
-      draft.persistedAttachments.length > 0 ||
-      draft.terminalContexts.some((context) => context.text.trim().length > 0) ||
-      draft.assistantSelections.length > 0 ||
-      (draft.browserAnnotations?.length ?? 0) > 0 ||
-      draft.fileComments.length > 0,
+    hasAttachments: composerDraftHasAttachments(draft),
     provider: draft.activeProvider,
   };
 }

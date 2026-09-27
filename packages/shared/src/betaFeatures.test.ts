@@ -23,6 +23,11 @@ describe("isBetaFeatureEnabled", () => {
     expect(isBetaFeatureEnabled("omp", "production")).toBe(false);
   });
 
+  it("keeps Tasks in Beta while Stable keeps Kanban", () => {
+    expect(isBetaFeatureEnabled("tasks", "beta")).toBe(true);
+    expect(isBetaFeatureEnabled("tasks", "production")).toBe(false);
+  });
+
   it("enables the rail sidebar layout in both Beta and Stable", () => {
     expect(isBetaFeatureEnabled("sidebarV2", "beta")).toBe(true);
     expect(isBetaFeatureEnabled("sidebarV2", "production")).toBe(true);

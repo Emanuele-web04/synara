@@ -1,0 +1,94 @@
+import { ProjectId, ThreadId, TodoId, type TodoStreamEvent } from "@synara/contracts";
+import { assert, it } from "@effect/vitest";
+import { Effect, Exit, Layer, Queue, Stream } from "effect";
+
+import { TodoRepositoryLive } from "../../persistence/Layers/TodoRepository.ts";
+import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+import { TodoService } from "../Services/TodoService.ts";
+import { TodoServiceLive } from "./TodoService.ts";
+
+const layer = it.layer(
+  TodoServiceLive.pipe(
+    Layer.provideMerge(TodoRepositoryLive),
+    Layer.provideMerge(SqlitePersistenceMemory),
+  ),
+);
+
+layer("TodoService", (it) => {
+  it.effect("creates a to-do once per id and lists it", () =>
+    Effect.gen(function* () {
+      const todos = yield* TodoService;
+      const id = TodoId.makeUnsafe("todo-create");
+
+      const created = yield* todos.create({ id, title: "Clean up Downloads", priority: "high" });
+      const retried = yield* todos.create({ id, title: "A different title" });
+
+      assert.strictEqual(retried.title, "Clean up Downloads");
+      assert.strictEqual(created.priority, "high");
+      assert.strictEqual(created.notes, "");
+      assert.strictEqual(created.threadId, null);
+      const { todos: listed } = yield* todos.list();
+      assert.deepStrictEqual(
+        listed.filter((todo) => todo.id === id),
+        [created],
+      );
+    }),
+  );
+
+  it.effect("patches fields, links a chat, and toggles completion", () =>
+    Effect.gen(function* () {
+      const todos = yield* TodoService;
+      const id = TodoId.makeUnsafe("todo-update");
+      const created = yield* todos.create({ id, title: "Write release notes" });
+
+      const linked = yield* todos.update({
+        id,
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        projectId: ProjectId.makeUnsafe("project-1"),
+        dueDate: "2026-10-03",
+      });
+      assert.strictEqual(linked.threadId, "thread-1");
+      assert.strictEqual(linked.projectId, "project-1");
+      assert.strictEqual(linked.dueDate, "2026-10-03");
+      assert.strictEqual(linked.title, "Write release notes");
+      assert.isTrue(linked.updatedAt > created.updatedAt);
+
+      const completed = yield* todos.update({ id, completed: true });
+      assert.isNotNull(completed.completedAt);
+      const completedAgain = yield* todos.update({ id, completed: true });
+      assert.strictEqual(completedAgain.completedAt, completed.completedAt);
+
+      const reopened = yield* todos.update({ id, completed: false, projectId: null });
+      assert.strictEqual(reopened.completedAt, null);
+      assert.strictEqual(reopened.projectId, null);
+    }),
+  );
+
+  it.effect("fails to update a missing to-do and publishes deletes", () =>
+    Effect.gen(function* () {
+      const todos = yield* TodoService;
+      const missing = yield* Effect.exit(
+        todos.update({ id: TodoId.makeUnsafe("todo-missing"), title: "Nope" }),
+      );
+      assert.isTrue(Exit.isFailure(missing));
+
+      const id = TodoId.makeUnsafe("todo-delete");
+      const created = yield* todos.create({ id, title: "Call the accountant" });
+      const received = yield* Queue.unbounded<TodoStreamEvent>();
+      yield* todos.streamChanges.pipe(
+        Stream.runForEach((event) => Queue.offer(received, event)),
+        Effect.forkChild,
+      );
+      // The snapshot comes first and only after the stream subscribed, so the
+      // delete below cannot slip in before the live feed.
+      const snapshot = yield* Queue.take(received);
+      assert.isTrue(
+        snapshot.type === "snapshot" && snapshot.todos.some((todo) => todo.id === created.id),
+      );
+      yield* todos.delete({ id });
+      assert.deepStrictEqual(yield* Queue.take(received), { type: "todo-deleted", todoId: id });
+      const { todos: listed } = yield* todos.list();
+      assert.isFalse(listed.some((todo) => todo.id === id));
+    }),
+  );
+});

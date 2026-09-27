@@ -48,6 +48,14 @@ import type {
   AutomationUpdateInput,
 } from "./automation";
 import type {
+  Todo,
+  TodoCreateInput,
+  TodoDeleteInput,
+  TodoListResult,
+  TodoStreamEvent,
+  TodoUpdateInput,
+} from "./todo";
+import type {
   GitCheckoutInput,
   GitActionProgressEvent,
   GitWorktreeSetupProgressEvent,
@@ -1150,6 +1158,13 @@ export interface NativeApi {
       input: AutomationResolveProposalInput,
     ) => Promise<AutomationResolveProposalResult>;
     onEvent: (callback: (event: AutomationStreamEvent) => void) => () => void;
+  };
+  todo: {
+    list: () => Promise<TodoListResult>;
+    create: (input: TodoCreateInput) => Promise<Todo>;
+    update: (input: TodoUpdateInput) => Promise<Todo>;
+    delete: (input: TodoDeleteInput) => Promise<void>;
+    onEvent: (callback: (event: TodoStreamEvent) => void) => () => void;
   };
   browser: BrowserControlMethods & {
     annotations: BrowserAnnotationMethods;

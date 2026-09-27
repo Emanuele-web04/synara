@@ -16,6 +16,7 @@ import {
   FolderOpenIcon,
   GiftIcon,
   KanbanIcon,
+  TasksIcon,
   KeyboardIcon,
   BellIcon,
   type LucideIcon,
@@ -36,6 +37,7 @@ import {
 import { createCentralIconComponent } from "~/lib/central-icons";
 import { ThreadPrStatusBadge } from "~/components/pullRequest/ThreadPrStatusBadge";
 import { PinStatusIcon, pinActionLabel } from "~/lib/pin";
+import { useTasksNeedingAttentionCount, useTodoEventSubscription } from "./tasks/useTodos";
 import { THREAD_CONTEXT_MENU_ICONS } from "~/lib/contextMenuIcons";
 import { ensureNativeApi } from "~/nativeApi";
 import { autoAnimate } from "@formkit/auto-animate";
@@ -108,7 +110,9 @@ import {
 import {
   normalizeHiddenSidebarNavItems,
   normalizeSidebarNavOrder,
+  resolveTasksSurfaceSlot,
   type SidebarNavItemId,
+  TASKS_SURFACE_ENABLED,
 } from "../sidebarNavOrdering";
 import {
   buildRailItemOrder,
@@ -1337,6 +1341,7 @@ export default function Sidebar() {
   });
   const isOnStudioRoute = pathname.startsWith("/studio");
   const isOnKanban = pathname.startsWith("/kanban");
+  const isOnTasks = pathname.startsWith("/tasks");
   const isOnAutomations = pathname.startsWith("/automations");
   const isOnPullRequests = pathname.startsWith("/pull-requests");
   // Lightweight read of automations to drive the sidebar attention badge. Shares the
@@ -1364,6 +1369,19 @@ export default function Sidebar() {
         }
       : null;
   }, [automationListQuery.data]);
+  // Tasks is Beta-only: Stable never subscribes to or reads to-dos (the server refuses them).
+  useTodoEventSubscription(TASKS_SURFACE_ENABLED);
+  const tasksNeedingAttentionCount = useTasksNeedingAttentionCount(TASKS_SURFACE_ENABLED);
+  const tasksAttentionBadge = useMemo(
+    () =>
+      tasksNeedingAttentionCount > 0
+        ? {
+            text: String(tasksNeedingAttentionCount),
+            accessibleLabel: `${tasksNeedingAttentionCount} ${pluralize(tasksNeedingAttentionCount, "task needs", "tasks need")} you`,
+          }
+        : null,
+    [tasksNeedingAttentionCount],
+  );
   const pullRequestRepositoryConfig = useMemo(
     () => pullRequestRepositoryConfigFingerprint(projects),
     [projects],
@@ -3721,7 +3739,11 @@ export default function Sidebar() {
 
   // --- Primary nav customization: persisted order + visibility, edited in a card. ---
   const sidebarNavOrder = useMemo(
-    () => normalizeSidebarNavOrder(appSettings.sidebarNavOrder),
+    () =>
+      resolveTasksSurfaceSlot(
+        normalizeSidebarNavOrder(appSettings.sidebarNavOrder),
+        TASKS_SURFACE_ENABLED,
+      ),
     [appSettings.sidebarNavOrder],
   );
   const hiddenSidebarNavItems = useMemo(
@@ -3760,6 +3782,15 @@ export default function Sidebar() {
           void navigate({ to: "/kanban" });
         },
       },
+      tasks: {
+        icon: TasksIcon,
+        label: "Tasks",
+        active: isOnTasks,
+        badge: tasksAttentionBadge,
+        onClick: () => {
+          void navigate({ to: "/tasks" });
+        },
+      },
       pullRequests: {
         icon: IoIosGitCompare,
         label: "Pull requests",
@@ -3788,9 +3819,11 @@ export default function Sidebar() {
       isOnAutomations,
       isOnKanban,
       isOnPullRequests,
+      isOnTasks,
       navigate,
       prefetchModelsForPrimaryNewThread,
       pullRequestsReviewBadge,
+      tasksAttentionBadge,
     ],
   );
   // A hidden item whose route is currently active stays visible so the current
@@ -3804,13 +3837,14 @@ export default function Sidebar() {
   );
   const handleNavOrderReorder = useCallback(
     (activeId: string, overId: string) => {
-      const order = normalizeSidebarNavOrder(appSettings.sidebarNavOrder);
+      // The rows show the Kanban/Tasks slot resolved, so reorder that same list.
+      const order = sidebarNavOrder;
       const fromIndex = order.indexOf(activeId as SidebarNavItemId);
       const toIndex = order.indexOf(overId as SidebarNavItemId);
       if (fromIndex < 0 || toIndex < 0) return;
       updateSettings({ sidebarNavOrder: arrayMove(order, fromIndex, toIndex) });
     },
-    [appSettings.sidebarNavOrder, updateSettings],
+    [sidebarNavOrder, updateSettings],
   );
   const handleNavItemVisibleChange = useCallback(
     (id: string, visible: boolean) => {
@@ -6113,7 +6147,12 @@ export default function Sidebar() {
   // Rail layout: Home and Spaces switch the panel; route items navigate exactly like their
   // classic nav rows (prewarm included). The store's active item keeps one item selected.
   const isOnThreadsSection =
-    !isOnSettings && !isOnStudio && !isOnKanban && !isOnPullRequests && !isOnAutomations;
+    !isOnSettings &&
+    !isOnStudio &&
+    !isOnKanban &&
+    !isOnTasks &&
+    !isOnPullRequests &&
+    !isOnAutomations;
   // One Help menu wiring for both homes: the classic footer and the rail's bottom cluster.
   const sidebarHelpMenuProps = {
     onOpenShortcuts: () => void navigate({ to: "/settings", search: { section: "shortcuts" } }),
@@ -6142,7 +6181,10 @@ export default function Sidebar() {
       }
     : null;
   // The rail's top items, in the user's Customize order (hidden ones drop out unless active).
-  const railItemOrder = normalizeRailItemOrder(appSettings.railItemOrder);
+  const railItemOrder = resolveTasksSurfaceSlot(
+    normalizeRailItemOrder(appSettings.railItemOrder),
+    TASKS_SURFACE_ENABLED,
+  );
   const hiddenRailItems = new Set(normalizeHiddenRailItems(appSettings.hiddenRailItems));
   const railItemLabel = (id: RailOrderableItemId): string =>
     id === "home" || id === "spaces"
@@ -7054,18 +7096,20 @@ export default function Sidebar() {
                 <ProjectContextMenuIcon icon={FolderOpenIcon} />
                 <span>Open in Finder</span>
               </MenuItem>
-              <MenuItem
-                className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
-                onClick={() =>
-                  void handleProjectContextMenuAction(
-                    projectContextMenuState.projectId,
-                    "open-in-kanban",
-                  )
-                }
-              >
-                <ProjectContextMenuIcon icon={KanbanIcon} />
-                <span>Open in Kanban</span>
-              </MenuItem>
+              {TASKS_SURFACE_ENABLED ? null : (
+                <MenuItem
+                  className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
+                  onClick={() =>
+                    void handleProjectContextMenuAction(
+                      projectContextMenuState.projectId,
+                      "open-in-kanban",
+                    )
+                  }
+                >
+                  <ProjectContextMenuIcon icon={KanbanIcon} />
+                  <span>Open in Kanban</span>
+                </MenuItem>
+              )}
               <MenuItem
                 className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
                 onClick={() =>

@@ -1,23 +1,17 @@
 // FILE: PullRequestListFilters.tsx
-// Purpose: The pull requests list's filter controls — the plain text pill group used for the
-//          involvement and state tabs (chip background on the active option only), and the
-//          project filter popover behind the header's filter icon.
+// Purpose: The pull requests list's project filter popover behind the header's filter icon.
+//          The involvement and state tabs use the shared FilterPillGroup.
 // Layer: Pull request presentation
-// Exports: PullRequestFilterPillGroup, PullRequestProjectFilterPopover
+// Exports: PullRequestProjectFilterPopover
 
 import type { ProjectId } from "@synara/contracts";
 import { useState } from "react";
 
-import { CHAT_SURFACE_CONTROL_ACTIVE_CLASS_NAME } from "~/components/chat/chatHeaderControls";
 import { IconButton } from "~/components/ui/icon-button";
 import { Popover, PopoverPopup, PopoverTrigger } from "~/components/ui/popover";
 import { CheckIcon, FilterIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
-import {
-  PR_BODY_TEXT_CLASS_NAME,
-  PR_FINE_TEXT_CLASS_NAME,
-  PR_META_TEXT_CLASS_NAME,
-} from "./pullRequestText";
+import { PR_BODY_TEXT_CLASS_NAME, PR_FINE_TEXT_CLASS_NAME } from "./pullRequestText";
 import { ELEVATED_HOVER_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 
 /** One selectable project in the filter popover — full-width row with a trailing check. */
@@ -26,45 +20,6 @@ const PROJECT_FILTER_OPTION_CLASS_NAME = cn(
   "flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left",
   ELEVATED_HOVER_SURFACE_CLASS_NAME,
 );
-
-export function PullRequestFilterPillGroup<T extends string>({
-  value,
-  options,
-  onChange,
-  onIntent,
-}: {
-  value: T;
-  options: ReadonlyArray<{ value: T; label: string }>;
-  onChange: (value: T) => void;
-  onIntent?: (value: T) => void;
-}) {
-  return (
-    // Sized off the shared UI font var so the pills track the user's font-size setting like
-    // every Button-based control.
-    <div className={cn(PR_META_TEXT_CLASS_NAME, "flex items-center gap-1")}>
-      {options.map((option) => (
-        <button
-          key={option.value}
-          type="button"
-          aria-pressed={option.value === value}
-          onFocus={() => onIntent?.(option.value)}
-          onPointerEnter={() => onIntent?.(option.value)}
-          onClick={() => onChange(option.value)}
-          // Active uses the shared control-active token (real contrast in both modes) — the
-          // elevated-secondary tint is a 2–4% hover wash and disappears on dark surfaces.
-          className={cn(
-            "rounded-md px-2.5 py-1 transition-colors",
-            option.value === value
-              ? CHAT_SURFACE_CONTROL_ACTIVE_CLASS_NAME
-              : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
-  );
-}
 
 export function PullRequestProjectFilterPopover({
   projects,
