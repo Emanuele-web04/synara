@@ -392,6 +392,7 @@ function redactProviderOptionsForPersistence(value: unknown): unknown {
       ? { opencode: withoutServerPassword(redactRuntimeEnvironment(value.opencode)) }
       : {}),
     ...(value.pi ? { pi: redactRuntimeEnvironment(value.pi) } : {}),
+    ...(value.omp ? { omp: redactRuntimeEnvironment(value.omp) } : {}),
   } satisfies ProviderStartOptions;
 }
 

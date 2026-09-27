@@ -15,7 +15,8 @@ const PROVIDER_OPTION_KEYS = [
   "droid",
   "opencode",
   "pi",
-] as const;
+  "omp",
+] as const satisfies ReadonlyArray<keyof ProviderStartOptions>;
 
 const PROVIDER_OPTIONS_EVENT_TYPES = new Set([
   "thread.turn-queued",
