@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_VOID_SPACE } from "./lib/spaceGrouping";
 import type { Space } from "./types";
 import {
-  buildRailRouteItemOrder,
+  buildRailItemOrder,
   buildRailSpacesSections,
   railItemShowsPanel,
   railProjectShortcutKey,
@@ -14,27 +14,39 @@ import {
   toggleRailShortcutKey,
   railItemForPathname,
   reconcileActiveRailItem,
+  normalizeHiddenRailItems,
+  normalizeRailItemOrder,
 } from "./appRail.logic";
 
-describe("buildRailRouteItemOrder", () => {
-  it("follows the persisted nav order without New thread", () => {
-    expect(
-      buildRailRouteItemOrder({
-        navOrder: ["automations", "newThread", "kanban", "pullRequests"],
-        hidden: new Set(),
-        activeNavId: null,
-      }),
-    ).toEqual(["automations", "kanban", "pullRequests"]);
+describe("rail item order", () => {
+  it("completes a saved order with new items and drops unknown or duplicate ids", () => {
+    expect(normalizeRailItemOrder(["automations", "gone", "home", "automations"])).toEqual([
+      "automations",
+      "home",
+      "spaces",
+      "kanban",
+      "pullRequests",
+      "studio",
+    ]);
   });
 
-  it("drops hidden items unless their route is active", () => {
+  it("never keeps Home hidden", () => {
+    expect(normalizeHiddenRailItems(["home", "kanban", "gone", "kanban"])).toEqual(["kanban"]);
+  });
+
+  it("drops hidden items unless active, and Studio unless its section is available", () => {
+    const order = normalizeRailItemOrder([]);
     expect(
-      buildRailRouteItemOrder({
-        navOrder: ["newThread", "kanban", "pullRequests", "automations"],
-        hidden: new Set(["kanban", "automations"]),
-        activeNavId: "automations",
+      buildRailItemOrder({
+        order,
+        hidden: new Set(["spaces", "automations"]),
+        activeItem: "automations",
+        studioAvailable: false,
       }),
-    ).toEqual(["pullRequests", "automations"]);
+    ).toEqual(["home", "kanban", "pullRequests", "automations"]);
+    expect(
+      buildRailItemOrder({ order, hidden: new Set(), activeItem: "home", studioAvailable: true }),
+    ).toEqual(order);
   });
 });
 

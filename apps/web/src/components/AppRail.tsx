@@ -19,11 +19,7 @@ import type { RailItemId } from "~/appRail.logic";
 import { createCentralIconComponent } from "~/lib/central-icons";
 import { projectAppearanceKey, type ProjectAppearance } from "~/lib/projectAppearance";
 import { cn } from "~/lib/utils";
-import {
-  SIDEBAR_ROW_ACTIVE_CLASS_NAME,
-  SIDEBAR_ROW_HOVER_CLASS_NAME,
-  SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
-} from "~/sidebarRowStyles";
+import { SIDEBAR_ROW_ACTIVE_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME } from "~/sidebarRowStyles";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import type { SidebarActionBadge } from "./Sidebar.logic";
 import { SidebarIconButton } from "./SidebarIconButton";
@@ -114,16 +110,19 @@ type AppRailProps = {
   onContextMenu?: ((event: MouseEvent) => void) | undefined;
 };
 
+const APP_RAIL_IDLE_TEXT_CLASS_NAME = "text-[var(--color-text-foreground-secondary)]";
+
 /** Rail glyph size, shared with controls rendered into the rail slot (the Help menu). */
 export const APP_RAIL_GLYPH_CLASS_NAME = "size-5";
 
-/** Rail button box and active/idle tone, shared with controls rendered into the rail slot. */
+/** Rail button box and active/idle tone, shared with controls rendered into the rail slot.
+ *  Idle glyphs rest on the secondary text grey (as in Codex); the active one is full ink. */
 export function appRailButtonClassName(active: boolean): string {
   return cn(
     "size-9 rounded-lg",
     active
       ? SIDEBAR_ROW_ACTIVE_CLASS_NAME
-      : cn(SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME),
+      : cn(APP_RAIL_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME),
   );
 }
 

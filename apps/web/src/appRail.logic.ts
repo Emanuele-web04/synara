@@ -2,7 +2,7 @@
 // Purpose: Pure rules for the rail layout's tab strip: item ids, route item order, and
 //          which item is active for a pathname, plus the Spaces panel's section list.
 // Layer: Web shell logic
-// Exports: rail item ids/types, buildRailRouteItemOrder, railItemForPathname,
+// Exports: rail item ids/types, rail item order and visibility, railItemForPathname,
 //          reconcileActiveRailItem, buildRailSpacesSections
 
 import type { ProjectId, SpaceId } from "@synara/contracts";
@@ -15,6 +15,7 @@ import {
   VOID_SPACE_KEY,
   type VoidSpacePresentation,
 } from "./lib/spaceGrouping";
+import { normalizeIdOrder, normalizeKnownIds } from "./lib/orderedIds";
 import type { SidebarNavItemId } from "./sidebarNavOrdering";
 import type { Space } from "./types";
 
@@ -30,22 +31,55 @@ export type RailRouteItemId = Exclude<SidebarNavItemId, "newThread"> | "studio" 
 export type RailItemId = RailPanelItemId | RailRouteItemId;
 
 /**
- * Route items for the top of the rail, in the user's persisted nav order. Hidden items
- * drop out unless their route is active (the same rule the classic nav rows use). Studio
- * lives in the rail's "…" menu and Settings is a bottom item, so neither is listed here.
+ * Rail items the user orders and hides from Customize. Settings stays pinned at the bottom;
+ * Studio is also reachable from the "…" menu, so it starts hidden.
  */
-export function buildRailRouteItemOrder(input: {
-  navOrder: readonly SidebarNavItemId[];
-  hidden: ReadonlySet<SidebarNavItemId>;
-  activeNavId: SidebarNavItemId | null;
-}): Exclude<RailRouteItemId, "settings" | "studio">[] {
-  const items: Exclude<RailRouteItemId, "settings" | "studio">[] = [];
-  for (const id of input.navOrder) {
-    if (id === "newThread") continue;
-    if (input.hidden.has(id) && id !== input.activeNavId) continue;
-    items.push(id);
-  }
-  return items;
+export const RAIL_ORDERABLE_ITEM_IDS = [
+  "home",
+  "spaces",
+  "kanban",
+  "pullRequests",
+  "automations",
+  "studio",
+] as const;
+export type RailOrderableItemId = (typeof RAIL_ORDERABLE_ITEM_IDS)[number];
+export const DEFAULT_HIDDEN_RAIL_ITEMS: readonly RailOrderableItemId[] = ["studio"];
+
+const RAIL_ORDERABLE_ITEM_ID_SET: ReadonlySet<string> = new Set(RAIL_ORDERABLE_ITEM_IDS);
+
+export function isRailOrderableItemId(value: string): value is RailOrderableItemId {
+  return RAIL_ORDERABLE_ITEM_ID_SET.has(value);
+}
+
+/** Home is the rail's anchor for the panel: it can move but never be hidden. */
+export function railItemCanHide(id: RailOrderableItemId): boolean {
+  return id !== "home";
+}
+
+export function normalizeRailItemOrder(order: readonly string[]): RailOrderableItemId[] {
+  return normalizeIdOrder(order, RAIL_ORDERABLE_ITEM_IDS, isRailOrderableItemId);
+}
+
+export function normalizeHiddenRailItems(hidden: readonly string[]): RailOrderableItemId[] {
+  return normalizeKnownIds(hidden, isRailOrderableItemId).filter(railItemCanHide);
+}
+
+/**
+ * The rail's top items in the user's order. Hidden items drop out unless they are the
+ * active item, so hiding a section never strands the user in it; Studio needs its section
+ * enabled in Settings.
+ */
+export function buildRailItemOrder(input: {
+  order: readonly RailOrderableItemId[];
+  hidden: ReadonlySet<RailOrderableItemId>;
+  activeItem: RailItemId;
+  studioAvailable: boolean;
+}): RailOrderableItemId[] {
+  return input.order.filter(
+    (id) =>
+      (id !== "studio" || input.studioAvailable) &&
+      (!input.hidden.has(id) || id === input.activeItem),
+  );
 }
 
 /** A Space or a single project the user added to the rail from its "…" menu. */

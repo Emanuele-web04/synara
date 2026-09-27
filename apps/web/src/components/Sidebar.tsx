@@ -111,10 +111,13 @@ import {
   type SidebarNavItemId,
 } from "../sidebarNavOrdering";
 import {
-  buildRailRouteItemOrder,
+  buildRailItemOrder,
   buildRailSpacesSections,
-  RAIL_PANEL_ITEM_IDS,
+  normalizeHiddenRailItems,
+  normalizeRailItemOrder,
   RAIL_PANEL_ITEM_LABELS,
+  railItemCanHide,
+  type RailOrderableItemId,
   railProjectShortcutKey,
   railSpaceShortcutKey,
   resolveActiveRailShortcutKey,
@@ -3799,17 +3802,6 @@ export default function Sidebar() {
       ),
     [hiddenSidebarNavItems, sidebarNavDescriptors, sidebarNavOrder],
   );
-  // Rail layout: the same persisted order and hidden set drive the rail's route items, so
-  // the Customize card applies to both layouts. "New thread" stays in the panel.
-  const railRouteItemIds = useMemo(
-    () =>
-      buildRailRouteItemOrder({
-        navOrder: sidebarNavOrder,
-        hidden: hiddenSidebarNavItems,
-        activeNavId: sidebarNavOrder.find((id) => sidebarNavDescriptors[id].active) ?? null,
-      }),
-    [hiddenSidebarNavItems, sidebarNavDescriptors, sidebarNavOrder],
-  );
   const handleNavOrderReorder = useCallback(
     (activeId: string, overId: string) => {
       const order = normalizeSidebarNavOrder(appSettings.sidebarNavOrder);
@@ -6126,10 +6118,10 @@ export default function Sidebar() {
   const sidebarHelpMenuProps = {
     onOpenShortcuts: () => void navigate({ to: "/settings", search: { section: "shortcuts" } }),
     onOpenFeedback: openFeedbackDialog,
-    // The rail's editor is a popover, so it opens from any section; the classic card lives
-    // in the thread view's nav block.
+    // The rail customizes from its "…" menu; the classic card lives in the thread view's
+    // nav block.
     onCustomizeSidebar:
-      !isRailLayout && (isOnStudio || isOnSettings)
+      isRailLayout || isOnStudio || isOnSettings
         ? null
         : () => {
             setIsCustomizingNav(true);
@@ -6142,12 +6134,27 @@ export default function Sidebar() {
     spacesProjectId: railSpacesProjectId,
     shortcuts: railShortcuts,
   });
-  const railItems: AppRailItem[] = [
-    ...RAIL_PANEL_ITEM_IDS.map(
-      (id): AppRailItem => ({
-        id,
-        glyphs: railItemGlyphs(id),
-        label: RAIL_PANEL_ITEM_LABELS[id],
+  // Studio sits in the "…" menu and, when the user adds it from Customize, in the rail too.
+  const openRailStudio = studioSectionVisible
+    ? () => {
+        selectRailRouteItem("studio");
+        handleSidebarViewChange("studio");
+      }
+    : null;
+  // The rail's top items, in the user's Customize order (hidden ones drop out unless active).
+  const railItemOrder = normalizeRailItemOrder(appSettings.railItemOrder);
+  const hiddenRailItems = new Set(normalizeHiddenRailItems(appSettings.hiddenRailItems));
+  const railItemLabel = (id: RailOrderableItemId): string =>
+    id === "home" || id === "spaces"
+      ? RAIL_PANEL_ITEM_LABELS[id]
+      : id === "studio"
+        ? "Studio"
+        : sidebarNavDescriptors[id].label;
+  const railItemFor = (id: RailOrderableItemId): AppRailItem => {
+    const base = { id, glyphs: railItemGlyphs(id), label: railItemLabel(id) };
+    if (id === "home" || id === "spaces") {
+      return {
+        ...base,
         badge: null,
         active: railActiveItem === id && activeRailShortcutKey === null,
         onSelect: () => {
@@ -6157,25 +6164,36 @@ export default function Sidebar() {
           // Spaces go back to the thread view instead of opening over that section.
           if (!isOnThreadsSection) handleSidebarViewChange("threads");
         },
-      }),
-    ),
-    ...railRouteItemIds.map((id): AppRailItem => {
-      const item = sidebarNavDescriptors[id];
-      return {
-        id,
-        glyphs: railItemGlyphs(id),
-        label: item.label,
-        badge: item.badge,
-        active: railActiveItem === id,
-        onSelect: () => {
-          selectRailRouteItem(id);
-          item.onClick();
-        },
-        onMouseEnter: item.onMouseEnter,
-        onFocus: item.onFocus,
       };
-    }),
-  ];
+    }
+    if (id === "studio") {
+      return {
+        ...base,
+        badge: null,
+        active: railActiveItem === "studio",
+        onSelect: () => openRailStudio?.(),
+      };
+    }
+    const item = sidebarNavDescriptors[id];
+    return {
+      ...base,
+      badge: item.badge,
+      active: railActiveItem === id,
+      onSelect: () => {
+        selectRailRouteItem(id);
+        item.onClick();
+      },
+      onMouseEnter: item.onMouseEnter,
+      onFocus: item.onFocus,
+    };
+  };
+  const railVisibleItemIds = buildRailItemOrder({
+    order: railItemOrder,
+    hidden: hiddenRailItems,
+    activeItem: railActiveItem,
+    studioAvailable: openRailStudio !== null,
+  });
+  const railItems: AppRailItem[] = railVisibleItemIds.map(railItemFor);
   const railShortcutItems: AppRailItem[] = railShortcuts.flatMap((shortcut): AppRailItem[] => {
     if (shortcut.kind === "space") {
       return [
@@ -6230,30 +6248,45 @@ export default function Sidebar() {
           railShortcuts: toggleRailShortcutKey(appSettings.railShortcuts, key),
         })
       }
-      onOpenStudio={
-        studioSectionVisible
-          ? () => {
-              selectRailRouteItem("studio");
-              handleSidebarViewChange("studio");
-            }
-          : null
-      }
-      active={railActiveItem === "studio"}
+      onOpenStudio={openRailStudio}
+      onCustomize={() => setIsCustomizingNav(true)}
+      // "…" stands for Studio while it is open, unless Studio has its own rail button.
+      active={railActiveItem === "studio" && !railVisibleItemIds.includes("studio")}
     />
   );
-  // Customize rows: the classic card lists the nav block; the rail popover shows the same
-  // items with their rail glyphs, then the rail's Space and project shortcuts.
+  // Customize rows: the classic card lists the nav block; the rail popover lists the rail's
+  // own items (Studio only while its section is enabled), then its Space/project shortcuts.
   const sidebarNavCustomizeItems: SidebarCustomizeItem[] = sidebarNavOrder.map((id) => {
     const item = sidebarNavDescriptors[id];
-    const railGlyph = isRailLayout && id !== "newThread" ? railItemGlyphs(id).idle : null;
     return {
       id,
-      icon: railGlyph ?? item.icon,
-      iconClassName: railGlyph === null ? item.iconClassName : undefined,
+      icon: item.icon,
+      iconClassName: item.iconClassName,
       label: item.label,
       visible: !hiddenSidebarNavItems.has(id),
     };
   });
+  const railCustomizeItems: SidebarCustomizeItem[] = railItemOrder
+    .filter((id) => id !== "studio" || openRailStudio !== null)
+    .map((id) => ({
+      id,
+      icon: railItemGlyphs(id).idle,
+      label: railItemLabel(id),
+      visible: !hiddenRailItems.has(id),
+      locked: !railItemCanHide(id),
+    }));
+  const handleRailItemReorder = (activeId: string, overId: string) => {
+    const fromIndex = railItemOrder.indexOf(activeId as RailOrderableItemId);
+    const toIndex = railItemOrder.indexOf(overId as RailOrderableItemId);
+    if (fromIndex < 0 || toIndex < 0) return;
+    updateSettings({ railItemOrder: arrayMove(railItemOrder, fromIndex, toIndex) });
+  };
+  const handleRailItemVisibleChange = (id: string, visible: boolean) => {
+    // Ids come from the rail customize rows, which list RailOrderableItemIds only.
+    const railId = id as RailOrderableItemId;
+    const hidden = [...hiddenRailItems].filter((entry) => entry !== railId);
+    updateSettings({ hiddenRailItems: visible ? hidden : [...hidden, railId] });
+  };
   const railShortcutCustomizeItems: SidebarCustomizeItem[] = railShortcutItems.map((item) => ({
     id: item.id,
     icon: item.glyphs.idle,
@@ -6285,9 +6318,10 @@ export default function Sidebar() {
       },
     },
   ];
-  // The rail owns the route destinations, so the panel keeps only "New thread".
-  const panelSidebarNavIds = isRailLayout
-    ? visibleSidebarNavIds.filter((id) => id === "newThread")
+  // The rail owns the route destinations, so the panel keeps only "New thread": always
+  // there, since the rail's Customize has no New thread row to bring it back.
+  const panelSidebarNavIds: readonly SidebarNavItemId[] = isRailLayout
+    ? ["newThread"]
     : visibleSidebarNavIds;
   // Rail layout: Automations owns its panel (its list), like Settings and Studio do.
   const showRailAutomationsPanel = isRailLayout && isOnAutomations;
@@ -6373,9 +6407,9 @@ export default function Sidebar() {
           >
             <SidebarCustomizeHeader onDone={() => setIsCustomizingNav(false)} />
             <SidebarCustomizeList
-              items={sidebarNavCustomizeItems}
-              onReorder={handleNavOrderReorder}
-              onVisibleChange={handleNavItemVisibleChange}
+              items={railCustomizeItems}
+              onReorder={handleRailItemReorder}
+              onVisibleChange={handleRailItemVisibleChange}
             />
             {railShortcutCustomizeItems.length > 0 ? (
               <>

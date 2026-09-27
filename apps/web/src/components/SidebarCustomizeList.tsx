@@ -35,6 +35,8 @@ export type SidebarCustomizeItem = {
   readonly iconClassName?: string | undefined;
   readonly label: string;
   readonly visible: boolean;
+  /** Always shown: the checkbox stays checked and disabled (the item can still move). */
+  readonly locked?: boolean | undefined;
 };
 
 export function SidebarCustomizeHeader({ onDone }: { onDone: () => void }) {
@@ -61,7 +63,7 @@ function SidebarCustomizeRow({
   item: SidebarCustomizeItem;
   onVisibleChange: (visible: boolean) => void;
 }) {
-  const { icon: Icon, iconClassName, label, visible } = item;
+  const { icon: Icon, iconClassName, label, visible, locked } = item;
   const {
     attributes,
     listeners,
@@ -86,8 +88,15 @@ function SidebarCustomizeRow({
       >
         <Checkbox
           checked={visible}
+          disabled={locked}
           onCheckedChange={(checked) => onVisibleChange(Boolean(checked))}
-          aria-label={visible ? `Hide ${label} from the sidebar` : `Show ${label} in the sidebar`}
+          aria-label={
+            locked
+              ? `${label} is always shown`
+              : visible
+                ? `Hide ${label} from the sidebar`
+                : `Show ${label} in the sidebar`
+          }
         />
         <SidebarLeadingIcon size="sm" tone="text-inherit">
           <SidebarGlyph
