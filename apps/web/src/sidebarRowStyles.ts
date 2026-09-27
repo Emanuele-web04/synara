@@ -41,7 +41,10 @@ export const SIDEBAR_PROJECT_NAME_CLASS_NAME = [
 ].join(" ");
 
 /** Section label ("Threads"/"Pinned" and settings "App"/"Synara"). */
-export const SIDEBAR_SECTION_LABEL_CLASS_NAME = "text-ui font-normal text-muted-foreground/58";
+/** Soft grey of section labels ("Projects", "Chats"); also the rail's resting glyph tone. */
+export const SIDEBAR_SECTION_LABEL_TONE_CLASS_NAME = "text-muted-foreground/58";
+
+export const SIDEBAR_SECTION_LABEL_CLASS_NAME = `text-ui font-normal ${SIDEBAR_SECTION_LABEL_TONE_CLASS_NAME}`;
 
 /** Project/chat/settings header rows and settings sidebar nav items. */
 export const SIDEBAR_HEADER_ROW_CLASS_NAME = [
