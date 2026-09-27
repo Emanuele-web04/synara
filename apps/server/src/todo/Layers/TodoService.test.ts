@@ -102,6 +102,11 @@ layer("TodoService", (it) => {
       const linked = yield* todos.update({ id: second, threadId: chat });
       assert.strictEqual(linked.threadId, chat);
       assert.strictEqual(linked.delegationBaseTurnId, null);
+
+      // Reopening the first keeps it, but not the chat the second now works in.
+      const reopened = yield* todos.update({ id: first, completed: false });
+      assert.strictEqual(reopened.completedAt, null);
+      assert.strictEqual(reopened.threadId, null);
     }),
   );
 

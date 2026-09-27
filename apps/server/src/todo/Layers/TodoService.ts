@@ -89,31 +89,38 @@ export const TodoServiceLive = Layer.effect(
               message: "This task was delegated somewhere else in the meantime.",
             });
           }
-          // One chat works on one open to-do: both would read the same turns as theirs.
-          if (
-            input.threadId !== undefined &&
-            input.threadId !== null &&
-            input.threadId !== current.value.threadId
-          ) {
-            const owners = yield* repository.list();
-            if (
-              owners.some(
-                (todo) =>
-                  todo.id !== input.id &&
-                  todo.threadId === input.threadId &&
-                  todo.completedAt === null,
-              )
-            ) {
-              return yield* new TodoServiceError({
-                message: "That chat is already working on another task.",
-              });
-            }
-          }
-          const next = applyTodoPatch(
+          const patched = applyTodoPatch(
             current.value,
             input,
             nextTodoUpdatedAt(current.value.updatedAt),
           );
+          // One chat works on one open to-do: both would read the same turns as theirs.
+          // Checked on the result, so reopening a done to-do counts as well as linking.
+          const linksNewly = patched.threadId !== current.value.threadId;
+          const reopens = current.value.completedAt !== null && patched.completedAt === null;
+          let next = patched;
+          if (
+            patched.threadId !== null &&
+            patched.completedAt === null &&
+            (linksNewly || reopens)
+          ) {
+            const owners = yield* repository.list();
+            const ownedElsewhere = owners.some(
+              (todo) =>
+                todo.id !== input.id &&
+                todo.threadId === patched.threadId &&
+                todo.completedAt === null,
+            );
+            if (ownedElsewhere && linksNewly) {
+              return yield* new TodoServiceError({
+                message: "That chat is already working on another task.",
+              });
+            }
+            // Reopening keeps the to-do but gives up a chat another to-do now works in.
+            if (ownedElsewhere) {
+              next = { ...patched, threadId: null, delegationBaseTurnId: null };
+            }
+          }
           const saved = yield* repository.save({
             todo: next,
             expectedUpdatedAt: current.value.updatedAt,
