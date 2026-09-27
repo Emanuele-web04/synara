@@ -175,6 +175,7 @@ import {
   deriveActiveBackgroundTasksState,
   deriveActiveTaskListState,
   deriveActiveWorkStartedAt,
+  derivePendingBackgroundWork,
   derivePhase,
   deriveTimelineEntries,
   findLatestProposedPlan,
@@ -276,6 +277,7 @@ import {
   type ComposerModelSelectionOptions,
 } from "./chat/ComposerModelPicker";
 import { ComposerPendingApprovalPanel } from "./chat/ComposerPendingApprovalPanel";
+import { ComposerPendingBackgroundWorkRow } from "./chat/ComposerPendingBackgroundWorkRow";
 import {
   ComposerClaudeCacheReviewPanel,
   isClaudeCacheReviewPanelVisible,
@@ -1482,6 +1484,20 @@ export default function ChatView({
         : deriveActiveBackgroundTasksState(threadActivities, activeLatestTurn?.turnId ?? undefined),
     [activeLatestTurn?.turnId, latestTurnSettled, threadActivities],
   );
+  // Once the turn settles, still-running isBackgrounded tasks keep the thread
+  // visibly "waiting on background work" instead of going quiet.
+  const pendingBackgroundWork = useMemo(
+    () =>
+      latestTurnSettled
+        ? derivePendingBackgroundWork({
+            activities: threadActivities,
+            latestTurn: activeLatestTurn,
+            session: activeThread?.session ?? null,
+          })
+        : null,
+    [activeLatestTurn, activeThread?.session, latestTurnSettled, threadActivities],
+  );
+  const pendingBackgroundWorkCount = pendingBackgroundWork?.count ?? 0;
 
   const showPlanFollowUpPrompt =
     pendingUserInputs.length === 0 &&
@@ -5283,6 +5299,20 @@ export default function ChatView({
                     showComposerSubagentStrip ||
                     queuedComposerTurns.length > 0 ||
                     showComposerGoalHeader
+                  }
+                />
+              ) : null}
+              {pendingBackgroundWorkCount > 0 ? (
+                <ComposerPendingBackgroundWorkRow
+                  count={pendingBackgroundWorkCount}
+                  attachedToPrevious={
+                    showComposerLiveChangesHeader ||
+                    showComposerActiveTaskListCard ||
+                    showComposerWorkflowRunCard ||
+                    showComposerSubagentStrip ||
+                    queuedComposerTurns.length > 0 ||
+                    showComposerGoalHeader ||
+                    showComposerComputerControlEffortHint
                   }
                 />
               ) : null}

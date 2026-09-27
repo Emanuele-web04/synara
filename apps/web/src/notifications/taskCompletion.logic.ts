@@ -12,6 +12,7 @@ import { pendingRequestInstanceKey } from "@synara/shared/threadSummary";
 import type { Thread, ThreadSession } from "../types";
 import {
   derivePendingApprovals,
+  derivePendingBackgroundWork,
   derivePendingUserInputs,
   hasLiveLatestTurn,
 } from "../session-logic";
@@ -543,6 +544,17 @@ export function collectCompletedThreadCandidates(
       continue;
     }
     if (!isCompletionNotificationSettled(thread)) {
+      continue;
+    }
+    // Background subagents can keep running after the turn settles; "Finished
+    // working." would be premature while tracked background tasks are live.
+    if (
+      (derivePendingBackgroundWork({
+        activities: thread.activities,
+        latestTurn: thread.latestTurn,
+        session: thread.session,
+      })?.count ?? 0) > 0
+    ) {
       continue;
     }
     if (!previousThread.session && !previousThread.latestTurn?.completedAt) {

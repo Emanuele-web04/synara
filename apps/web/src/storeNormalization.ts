@@ -20,7 +20,7 @@ import { deriveThreadSummaryMetadata } from "@synara/shared/threadSummary";
 
 import { isStalePendingRequestFailureDetail } from "./lib/pendingInteraction";
 import { toAttachmentPreviewUrl } from "./lib/wsHttpUrl";
-import { hasLiveTurnTailWork } from "./session-logic";
+import { derivePendingBackgroundWork, hasLiveTurnTailWork } from "./session-logic";
 import { getRememberedProjectUiState, projectCwdKey } from "./storePersistence";
 import type {
   ChatAttachment,
@@ -2062,6 +2062,7 @@ export function resolveThreadSidebarMetadata(
   | "hasPendingUserInput"
   | "hasActionableProposedPlan"
   | "hasLiveTailWork"
+  | "pendingBackgroundWorkCount"
 > {
   const needsDerivedMetadata =
     thread.latestUserMessageAt === undefined ||
@@ -2098,5 +2099,11 @@ export function resolveThreadSidebarMetadata(
         session: thread.session,
       }),
     ),
+    pendingBackgroundWorkCount:
+      derivePendingBackgroundWork({
+        activities: thread.activities,
+        latestTurn: thread.latestTurn,
+        session: thread.session,
+      })?.count ?? 0,
   };
 }

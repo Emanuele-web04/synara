@@ -273,13 +273,19 @@ export function deriveActiveTaskListState(
     : null;
 }
 
-// Counts still-running background work for the active turn so compact UI can surface agent activity.
-export function deriveActiveBackgroundTasksState(
+interface FoldedActiveTask {
+  taskType?: string | undefined;
+  isBackgrounded: boolean;
+}
+
+// Folds task.* activities into the set of still-running tasks. Pass a turnId to
+// scope task creation to that turn (terminal events always apply across turns).
+function foldActiveTasks(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
   latestTurnId: TurnId | undefined,
-): ActiveBackgroundTasksState | null {
+): Map<string, FoldedActiveTask> {
   const ordered = orderedActivities(activities);
-  const activeTasks = new Map<string, { taskType?: string | undefined }>();
+  const activeTasks = new Map<string, FoldedActiveTask>();
 
   for (const activity of ordered) {
     if (
@@ -326,6 +332,16 @@ export function deriveActiveBackgroundTasksState(
         status === "paused"
       ) {
         activeTasks.delete(taskId);
+        continue;
+      }
+      const previous = activeTasks.get(taskId);
+      const isBackgrounded =
+        payload && typeof payload.isBackgrounded === "boolean"
+          ? payload.isBackgrounded
+          : (previous?.isBackgrounded ?? false);
+      const inTurn = !latestTurnId || !activity.turnId || activity.turnId === latestTurnId;
+      if (previous !== undefined || (isBackgrounded && inTurn)) {
+        activeTasks.set(taskId, { taskType: previous?.taskType, isBackgrounded });
       }
       continue;
     }
@@ -334,15 +350,50 @@ export function deriveActiveBackgroundTasksState(
     const taskType = payload && typeof payload.taskType === "string" ? payload.taskType : undefined;
     activeTasks.set(taskId, {
       taskType: taskType ?? previous?.taskType,
+      isBackgrounded: previous?.isBackgrounded ?? false,
     });
   }
 
-  const activeTaskIds = [...activeTasks.entries()]
+  return activeTasks;
+}
+
+// Counts still-running background work for the active turn so compact UI can surface agent activity.
+export function deriveActiveBackgroundTasksState(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+  latestTurnId: TurnId | undefined,
+): ActiveBackgroundTasksState | null {
+  const activeTaskIds = [...foldActiveTasks(activities, latestTurnId).entries()]
     .filter(([, task]) => task.taskType !== "plan")
     .map(([taskId]) => taskId);
   return activeTaskIds.length > 0
     ? { activeCount: activeTaskIds.length, taskIds: activeTaskIds }
     : null;
+}
+
+/**
+ * Background tasks (task.updated with isBackgrounded) started by the latest
+ * turn that have not reached a terminal state. Used after the latest turn
+ * settles to keep the thread visibly "waiting on background work". Returns
+ * null without a latest turn or a live session: stale isBackgrounded rows from
+ * older turns or a dead session must not pin the thread forever.
+ */
+export function derivePendingBackgroundWork(input: {
+  activities: ReadonlyArray<OrchestrationThreadActivity>;
+  latestTurn: Pick<OrchestrationLatestTurn, "turnId"> | null | undefined;
+  session: Pick<ThreadSession, "orchestrationStatus"> | null | undefined;
+}): { count: number; taskIds: string[] } | null {
+  const latestTurnId = input.latestTurn?.turnId;
+  if (!latestTurnId) {
+    return null;
+  }
+  const sessionStatus = input.session?.orchestrationStatus;
+  if (sessionStatus === undefined || sessionStatus === "stopped" || sessionStatus === "error") {
+    return null;
+  }
+  const taskIds = [...foldActiveTasks(input.activities, latestTurnId).entries()]
+    .filter(([, task]) => task.isBackgrounded)
+    .map(([taskId]) => taskId);
+  return taskIds.length > 0 ? { count: taskIds.length, taskIds } : null;
 }
 
 // Keeps the UI "working" while the provider still has visible assistant text or

@@ -4070,7 +4070,9 @@ export default function Sidebar() {
       );
       if (!status) continue;
       const tone: SpaceActivityTone =
-        status.label === "Working" || status.label === "Connecting"
+        status.label === "Working" ||
+        status.label === "Connecting" ||
+        status.label === "In Background"
           ? "running"
           : status.label === "Completed"
             ? "completed"
