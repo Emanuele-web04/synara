@@ -914,6 +914,23 @@ export function composerDraftHasAttachments(
   );
 }
 
+/**
+ * Whether a draft holds anything the user has not sent: text, attachments, collapsed
+ * pasted text, or pull-request context cards. The draft dispatch path does not carry the
+ * last two, so a surface that sends into an existing chat must refuse while they exist.
+ */
+export function composerDraftHasUnsentContent(
+  draft: Parameters<typeof composerDraftHasAttachments>[0] &
+    Pick<ComposerThreadDraftState, "prompt" | "pastedTexts" | "pullRequestContexts">,
+): boolean {
+  return (
+    draft.prompt.trim().length > 0 ||
+    composerDraftHasAttachments(draft) ||
+    draft.pastedTexts.length > 0 ||
+    draft.pullRequestContexts.length > 0
+  );
+}
+
 export function normalizeDraftThreadEntryPoint(
   value: unknown,
   fallback: ThreadPrimarySurface = "chat",

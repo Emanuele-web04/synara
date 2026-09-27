@@ -185,9 +185,18 @@ export function TaskInspector({
         ) : (
           <div className="flex flex-col gap-3">
             {status.chatMissing ? (
-              <p className="text-ui-sm text-muted-foreground">
-                The chat this task was delegated to no longer exists.
-              </p>
+              <div className="flex items-center gap-2">
+                <p className="flex-1 text-ui-sm text-muted-foreground">
+                  The chat this task was delegated to no longer exists.
+                </p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => onUpdate({ id: todo.id, threadId: null })}
+                >
+                  Unlink
+                </Button>
+              </div>
             ) : null}
             <TaskDelegateForm key={todo.id} todo={todo} onLinkChat={onUpdateAsync} />
           </div>
@@ -341,11 +350,15 @@ function TaskAgentSection({
   }, [latestTurnId, status.kind, thread]);
   const latestReply = useMemo(() => {
     if (!thread || status.kind !== "review") return null;
+    // Only the delegated (latest) turn's answer; an older one in a reused chat isn't it.
     const reply = thread.messages.findLast(
-      (message) => message.role === "assistant" && message.text.trim().length > 0,
+      (message) =>
+        message.role === "assistant" &&
+        message.turnId === latestTurnId &&
+        message.text.trim().length > 0,
     );
     return reply?.text.trim() ?? null;
-  }, [status.kind, thread]);
+  }, [latestTurnId, status.kind, thread]);
 
   if (!summary) return null;
   const provider = summary.modelSelection.provider;
@@ -507,7 +520,9 @@ function TaskAgentSection({
       ) : null}
 
       <div className="flex justify-end gap-2">
-        {status.kind === "running" || status.kind === "starting" ? (
+        {/* Not while Starting: a reused chat may still be on its earlier turn, and Stop
+            interrupts whatever turn is active. */}
+        {status.kind === "running" ? (
           <Button size="sm" variant="outline" disabled={isStopping} onClick={() => void stop()}>
             Stop
           </Button>

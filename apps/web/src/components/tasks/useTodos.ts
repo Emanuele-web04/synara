@@ -35,6 +35,9 @@ import {
   upsertTodo,
 } from "./tasks.logic";
 
+// Seeds an optimistic create, so the server's authoritative row always replaces it.
+const UNSAVED_UPDATED_AT = "1970-01-01T00:00:00.000Z";
+
 // Creates still on their way to the server. An update or delete of the same to-do waits
 // for its create, so the server sees them in the order the user made them.
 const pendingCreateById = new Map<TodoId, Promise<unknown>>();
@@ -148,7 +151,7 @@ export function useTodoMutations() {
         threadId: null,
         completedAt: null,
         createdAt: now,
-        updatedAt: "1970-01-01T00:00:00.000Z",
+        updatedAt: UNSAVED_UPDATED_AT,
       };
       setList((todos) => upsertTodo(todos, optimistic));
     },
@@ -214,9 +217,12 @@ export function useTodoMutations() {
     onError: (error, id, context) => {
       unmarkTodoDeleted(id);
       const previous = context?.previous;
-      if (previous) {
+      // A row the server never confirmed may have failed to create too; the refetch below
+      // brings it back only if it exists.
+      if (previous && previous.updatedAt !== UNSAVED_UPDATED_AT) {
         setList((todos) => upsertTodo(todos, previous));
       }
+      void queryClient.invalidateQueries({ queryKey: todoQueryKey });
       showMutationError("Couldn't delete the task")(error);
     },
   });

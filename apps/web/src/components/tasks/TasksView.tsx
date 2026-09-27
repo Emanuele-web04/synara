@@ -114,8 +114,12 @@ export default function TasksView() {
   const addTask = () => {
     const title = draftTitle.trim();
     if (title.length === 0) return;
-    createTodo({ id: newTodoId(), title });
     setDraftTitle("");
+    createTodo(
+      { id: newTodoId(), title },
+      // Give the typed title back if the server didn't take it and nothing new was typed.
+      { onError: () => setDraftTitle((current) => (current.length === 0 ? title : current)) },
+    );
   };
   const handleQuickAddKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Enter" && !event.nativeEvent.isComposing) {

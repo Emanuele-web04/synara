@@ -113,9 +113,15 @@ export function TaskRow({
                 { id: "open-chat" as const, label: "Open chat", separatorBefore: true },
                 { id: "unlink-chat" as const, label: "Unlink chat" },
               ]
-            : isDone
-              ? []
-              : [{ id: "delegate" as const, label: "Delegate…", separatorBefore: true }]),
+            : [
+                ...(isDone
+                  ? []
+                  : [{ id: "delegate" as const, label: "Delegate…", separatorBefore: true }]),
+                // A link to a chat that was deleted can still be cleared.
+                ...(todo.threadId !== null
+                  ? [{ id: "unlink-chat" as const, label: "Unlink chat", separatorBefore: isDone }]
+                  : []),
+              ]),
           {
             id: "toggle-done",
             label: isDone ? "Mark as not done" : "Mark as done",

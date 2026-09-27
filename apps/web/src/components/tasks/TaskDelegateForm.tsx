@@ -47,7 +47,7 @@ import { resolveProviderSendAvailabilityWithRefresh } from "~/lib/providerAvaila
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
-import { composerDraftHasAttachments } from "../../composerDraftDomain";
+import { composerDraftHasUnsentContent } from "../../composerDraftDomain";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { useLatestProjectStore } from "../../latestProjectStore";
 import { readNativeApi } from "../../nativeApi";
@@ -248,11 +248,9 @@ export function TaskDelegateForm({
     if (!thread) return false;
     const composerStore = useComposerDraftStore.getState();
     const chatDraft = composerStore.draftsByThreadId[chatId];
-    // The dispatch sends the chat's whole composer, so anything unsent would ride along.
-    if (
-      chatDraft &&
-      (chatDraft.prompt.trim().length > 0 || composerDraftHasAttachments(chatDraft))
-    ) {
+    // The dispatch sends the chat's composer and clears it, so anything unsent would ride
+    // along or be lost.
+    if (chatDraft && composerDraftHasUnsentContent(chatDraft)) {
       toastManager.add({
         type: "error",
         title: "That chat has an unsent message",
