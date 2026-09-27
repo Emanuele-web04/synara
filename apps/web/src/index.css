@@ -204,7 +204,7 @@
      small shell gap to the window's right and bottom edges. Route headers keep rendering
      their titles and actions, now on the shell band above the block. */
   [data-sidebar-layout="rail"] {
-    --app-rail-shell-tone: color-mix(in srgb, var(--color-background-surface) 96%, black);
+    --app-rail-shell-tone: color-mix(in srgb, var(--color-background-surface) 98%, black);
     --app-rail-panel-background: var(--color-background-surface);
     --app-rail-shell-background: color-mix(
       in srgb,
@@ -212,11 +212,6 @@
       transparent
     );
     --app-rail-inset-border: color-mix(in srgb, black 4%, transparent);
-    /* Soft falloff around the block (Codex's edge is a shadow, not a hard cut); kept barely
-       visible so the block reads as a surface, not a raised card. */
-    --app-rail-inset-shadow:
-      0 1px 2px color-mix(in srgb, black 4%, transparent),
-      0 0 0.5px color-mix(in srgb, black 6%, transparent);
     --app-rail-inset-radius: calc(var(--radius) * 1.3);
     --app-rail-inset-gap: 3px;
   }
@@ -225,9 +220,6 @@
     --app-rail-shell-tone: color-mix(in srgb, var(--color-background-surface) 95%, white);
     --app-rail-panel-background: color-mix(in srgb, var(--color-background-surface) 98.3%, white);
     --app-rail-inset-border: color-mix(in srgb, white 4%, transparent);
-    --app-rail-inset-shadow:
-      0 1px 2px color-mix(in srgb, black 22%, transparent),
-      0 0 0.5px color-mix(in srgb, black 30%, transparent);
   }
 
   /* The panel is the block's left end: border on its outer three sides only. */
@@ -238,10 +230,7 @@
     box-shadow:
       inset 1px 0 0 var(--app-rail-inset-border),
       inset 0 1px 0 var(--app-rail-inset-border),
-      inset 0 -1px 0 var(--app-rail-inset-border),
-      var(--app-rail-inset-shadow);
-    /* The seam with the route body is a flat line: no shadow cast across it. */
-    clip-path: inset(-8px 0 -8px -8px);
+      inset 0 -1px 0 var(--app-rail-inset-border);
   }
 
   /* No sidebar material sits behind the rail layout's rows, so chips take the panel tone. */
@@ -2710,8 +2699,7 @@ diffs-container {
    gaps, and the card's own bottom radius with its overflow clip rounds whatever the route
    paints there (fixed overlays are unaffected). The block's top corners sit under the band,
    inside the card, so the route wrappers that hold a top bar go transparent (below) and the
-   rounded ::before shows through. The soft outer shadow is a separate layer behind the card
-   (.app-rail-content-shadow), since the card clips its own ink. */
+   rounded ::before shows through. The block has no shadow: its edge is the 1px border. */
 [data-sidebar-layout="rail"] {
   /* Route body corners: square only where the panel joins it. */
   --app-rail-block-radii: 0 var(--app-rail-inset-radius) var(--app-rail-inset-radius) 0;
@@ -2781,22 +2769,6 @@ diffs-container {
 [data-sidebar-layout="rail"]:has([data-slot="sidebar"][data-side="left"][data-state="collapsed"])
   .chat-content-card::after {
   box-shadow: inset 0 0 0 1px var(--app-rail-inset-border);
-}
-
-/* The block's outer shadow; with the panel open it is clipped at the seam so it does not
-   spill onto the panel and thicken the seam line. */
-[data-sidebar-layout="rail"] .app-rail-content-shadow {
-  position: absolute;
-  inset: var(--app-top-strip-height) var(--app-rail-inset-gap) var(--app-rail-inset-gap) 0;
-  pointer-events: none;
-  border-radius: var(--app-rail-block-radii);
-  box-shadow: var(--app-rail-inset-shadow);
-  clip-path: inset(-8px -8px -8px 0);
-}
-
-[data-sidebar-layout="rail"]:has([data-slot="sidebar"][data-side="left"][data-state="collapsed"])
-  .app-rail-content-shadow {
-  clip-path: none;
 }
 
 /* Short divider on the shell band above the seam, detached from the band's edges, marking

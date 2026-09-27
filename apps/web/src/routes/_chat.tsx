@@ -612,12 +612,7 @@ function ChatRouteLayout() {
   // `data-sidebar-side` on the provider selects the seam geometry.
   const mainContentShell = (
     <div className="relative flex h-svh min-h-0 min-w-0 flex-1">
-      {isRailLayout ? (
-        <>
-          <div aria-hidden className="app-rail-content-shadow" />
-          <div aria-hidden className="app-rail-header-divider" />
-        </>
-      ) : null}
+      {isRailLayout ? <div aria-hidden className="app-rail-header-divider" /> : null}
       {isEditorView ? null : (
         <SidebarInstanceProvider side="left" resizable={THREAD_SIDEBAR_RESIZABLE}>
           <SidebarRail placement="content-seam" />
