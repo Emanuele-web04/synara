@@ -3612,7 +3612,14 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               provider: input.provider,
               providerInstanceId: resolveModelSelectionInstanceId(input.modelSelection),
               modelSelection: input.modelSelection,
+              ...(input.providerOptions !== undefined
+                ? { providerOptions: input.providerOptions }
+                : {}),
             });
+            // The account's settings-derived options win over the caller's, so the
+            // native copy is made (and later resumed) inside the selected account.
+            const importModelSelection = resolved.modelSelection ?? input.modelSelection;
+            const importProviderOptions = resolved.providerOptions;
             const adapter = yield* getAdapterForInstance(resolved.instance);
             if (!adapter.forkThread) {
               return yield* toValidationError(
@@ -3633,11 +3640,12 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                     : { resume: input.externalThreadId },
                 sourceCwd: input.sourceCwd,
                 ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
-                modelSelection: input.modelSelection,
+                modelSelection: importModelSelection,
                 runtimeMode: input.runtimeMode,
-                ...(input.providerOptions !== undefined
-                  ? { providerOptions: input.providerOptions }
+                ...(importProviderOptions !== undefined
+                  ? { providerOptions: importProviderOptions }
                   : {}),
+                providerInstanceId: resolved.instance.instanceId,
                 lifecycleGeneration: lease.generation,
                 requireCompletedSource: true,
               }).pipe(Effect.timeoutOption(PROVIDER_START_SESSION_TIMEOUT));
@@ -3675,11 +3683,23 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 importExternalThreadId: input.externalThreadId,
                 importSourceCwd: input.sourceCwd,
                 cwd: input.cwd ?? input.sourceCwd,
-                modelSelection: input.modelSelection,
-                model: input.modelSelection.model,
-                ...(input.providerOptions !== undefined
-                  ? { providerOptions: input.providerOptions }
-                  : {}),
+                modelSelection: importModelSelection,
+                model: importModelSelection.model,
+                providerInstanceId: resolved.instance.instanceId,
+                // Same launch identity a normal start persists, so the first real
+                // start can prove the copy belongs to this account and resume it.
+                providerOptions:
+                  importProviderOptions !== undefined
+                    ? redactProviderOptionsForPersistence(importProviderOptions)
+                    : null,
+                providerOptionsCredentialsFingerprint:
+                  credentialsFingerprintForProvider(
+                    input.provider,
+                    importProviderOptions,
+                    credentialsFingerprintKey,
+                  ) ?? null,
+                continuationIdentity:
+                  providerContinuationIdentity(input.provider, importProviderOptions) ?? null,
                 activeTurnId: null,
                 lastError: null,
                 lastRuntimeEvent: "provider.thread.imported",

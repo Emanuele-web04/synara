@@ -1971,8 +1971,10 @@ routing.layer("ProviderServiceLive routing", (it) => {
         sourceResumeCursor: { threadId: "external-original" },
         sourceCwd: input.sourceCwd,
         cwd: input.cwd,
-        modelSelection: input.modelSelection,
+        // The copy is made in the resolved account.
+        modelSelection: { ...input.modelSelection, instanceId: "codex" },
         providerOptions: input.providerOptions,
+        providerInstanceId: "codex",
         runtimeMode: input.runtimeMode,
         lifecycleGeneration: firstBinding.lifecycleGeneration,
         requireCompletedSource: true,
@@ -1989,6 +1991,12 @@ routing.layer("ProviderServiceLive routing", (it) => {
       assert.deepEqual(
         asRuntimePayloadRecord(stopped.runtimePayload).providerOptions,
         input.providerOptions,
+      );
+      // The copy records the launch identity a normal start would, so it can resume.
+      assert.equal(asRuntimePayloadRecord(stopped.runtimePayload).providerInstanceId, "codex");
+      assert.equal(
+        typeof asRuntimePayloadRecord(stopped.runtimePayload).continuationIdentity,
+        "string",
       );
       const mismatch = yield* Effect.result(
         provider.importExternalThread!({ ...input, externalThreadId: "different-source" }),
