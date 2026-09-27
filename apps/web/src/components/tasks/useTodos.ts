@@ -42,6 +42,9 @@ const UNSAVED_UPDATED_AT = "1970-01-01T00:00:00.000Z";
 // for its create, so the server sees them in the order the user made them.
 const pendingCreateById = new Map<TodoId, Promise<unknown>>();
 const afterPendingCreate = (id: TodoId) => pendingCreateById.get(id)?.catch(() => undefined);
+// Creates the server rejected: such a row never existed there, so a failed delete of it
+// must not bring it back.
+const failedCreateIds = new Set<TodoId>();
 // Edits queued behind a create. Their reply carries the whole stored row, so the create's
 // own reply (which predates them) must not overwrite the optimistic edits meanwhile.
 const pendingUpdateCountById = new Map<TodoId, number>();
@@ -160,6 +163,7 @@ export function useTodoMutations() {
       setList((todos) => upsertTodo(todos, todo));
     },
     onError: (error, input) => {
+      failedCreateIds.add(input.id);
       setList((todos) => todos.filter((todo) => todo.id !== input.id));
       showMutationError("Couldn't add the task")(error);
     },
@@ -217,9 +221,9 @@ export function useTodoMutations() {
     onError: (error, id, context) => {
       unmarkTodoDeleted(id);
       const previous = context?.previous;
-      // A row the server never confirmed may have failed to create too; the refetch below
-      // brings it back only if it exists.
-      if (previous && previous.updatedAt !== UNSAVED_UPDATED_AT) {
+      // Restore unless its create failed. A created row can still carry the optimistic
+      // stamp (the delete mark blocked the create's reply); any newer copy replaces it.
+      if (previous && !failedCreateIds.has(id)) {
         setList((todos) => upsertTodo(todos, previous));
       }
       void queryClient.invalidateQueries({ queryKey: todoQueryKey });
