@@ -39,6 +39,14 @@ import {
 // for its create, so the server sees them in the order the user made them.
 const pendingCreateById = new Map<TodoId, Promise<unknown>>();
 const afterPendingCreate = (id: TodoId) => pendingCreateById.get(id)?.catch(() => undefined);
+// Edits queued behind a create. Their reply carries the whole stored row, so the create's
+// own reply (which predates them) must not overwrite the optimistic edits meanwhile.
+const pendingUpdateCountById = new Map<TodoId, number>();
+const trackPendingUpdate = (id: TodoId, delta: 1 | -1) => {
+  const count = (pendingUpdateCountById.get(id) ?? 0) + delta;
+  if (count > 0) pendingUpdateCountById.set(id, count);
+  else pendingUpdateCountById.delete(id);
+};
 
 // To-dos just handed to an existing chat, with the turn that chat showed at that moment:
 // until a newer turn appears, the old one says nothing about the delegated work.
@@ -144,7 +152,10 @@ export function useTodoMutations() {
       };
       setList((todos) => upsertTodo(todos, optimistic));
     },
-    onSuccess: (todo) => setList((todos) => upsertTodo(todos, todo)),
+    onSuccess: (todo) => {
+      if (pendingUpdateCountById.has(todo.id)) return;
+      setList((todos) => upsertTodo(todos, todo));
+    },
     onError: (error, input) => {
       setList((todos) => todos.filter((todo) => todo.id !== input.id));
       showMutationError("Couldn't add the task")(error);
@@ -157,6 +168,7 @@ export function useTodoMutations() {
       return ensureNativeApi().todo.update(input);
     },
     onMutate: async (input) => {
+      trackPendingUpdate(input.id, 1);
       await cancelListFetch();
       const previous = readTodo(input.id);
       if (previous) {
@@ -183,6 +195,7 @@ export function useTodoMutations() {
       void queryClient.invalidateQueries({ queryKey: todoQueryKey });
       showMutationError("Couldn't update the task")(error);
     },
+    onSettled: (_todo, _error, input) => trackPendingUpdate(input.id, -1),
   });
 
   const deleteMutation = useMutation({

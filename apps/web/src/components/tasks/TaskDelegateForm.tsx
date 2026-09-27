@@ -234,8 +234,13 @@ export function TaskDelegateForm({
   // Awaited so Start stays busy until the to-do is back to "To do"; if the server can't
   // store that either, the mutation's toast says so and the row's menu can unlink later.
   const unlinkChat = async (clearProject: boolean) => {
-    clearDelegationBaseline(todo.id);
-    await linkChat({ id: todo.id, threadId: null, ...(clearProject ? { projectId: null } : {}) });
+    const unlinked = await linkChat({
+      id: todo.id,
+      threadId: null,
+      ...(clearProject ? { projectId: null } : {}),
+    });
+    // Still linked when the unlink failed: keep the chat's old turn from reading as Review.
+    if (unlinked) clearDelegationBaseline(todo.id);
   };
 
   const startInExistingChat = async (chatId: ThreadId) => {

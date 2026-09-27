@@ -187,6 +187,10 @@ function resolveWsRpc(tag: string): unknown {
   if (tag === WS_METHODS.automationList) {
     return { definitions: [], runs: [] };
   }
+  // The sidebar reads to-dos on Beta hosts; the `{}` fallback would fail to decode.
+  if (tag === WS_METHODS.todoList) {
+    return { todos: [] };
+  }
   if (tag === WS_METHODS.gitListBranches) {
     return {
       isRepo: true,
