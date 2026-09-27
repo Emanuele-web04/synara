@@ -12,7 +12,6 @@ import {
   ClockIcon,
   CopyIcon,
   CustomizeIcon,
-  DragHandleIcon,
   ExternalLinkIcon,
   FolderOpenIcon,
   GiftIcon,
@@ -65,7 +64,6 @@ import {
   type CollisionDetection,
   PointerSensor,
   type DragStartEvent,
-  closestCenter,
   closestCorners,
   pointerWithin,
   useSensor,
@@ -218,7 +216,13 @@ import {
   railItemGlyphs,
   railProjectGlyphs,
   type AppRailItem,
+  useAppRailSlot,
 } from "./AppRail";
+import {
+  type SidebarCustomizeItem,
+  SidebarCustomizeHeader,
+  SidebarCustomizeList,
+} from "./SidebarCustomizeList";
 import { AppRailMoreMenu } from "./AppRailMoreMenu";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ThreadHoverCardContent } from "./ThreadHoverCardContent";
@@ -297,7 +301,7 @@ import {
 } from "./desktopUpdate.logic";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
-import { Checkbox } from "./ui/checkbox";
+import { Popover, PopoverPopup } from "./ui/popover";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
 import { Input } from "./ui/input";
 import {
@@ -1031,72 +1035,6 @@ type SidebarNavItemDescriptor = {
   readonly onMouseEnter?: () => void;
   readonly onFocus?: () => void;
 };
-
-/** One row of the nav customize card: visibility checkbox + label + drag handle. */
-function SidebarNavCustomizeRow({
-  id,
-  icon: Icon,
-  iconClassName,
-  label,
-  visible,
-  onVisibleChange,
-}: {
-  id: SidebarNavItemId;
-  icon: ComponentType<{ className?: string }>;
-  iconClassName?: string;
-  label: string;
-  visible: boolean;
-  onVisibleChange: (visible: boolean) => void;
-}) {
-  const {
-    attributes,
-    listeners,
-    setActivatorNodeRef,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id });
-  return (
-    <li
-      ref={setNodeRef}
-      style={{ transform: CSS.Translate.toString(transform), transition }}
-      className={cn("relative list-none", isDragging && "z-20 opacity-80")}
-    >
-      <div
-        className={cn(
-          SIDEBAR_HEADER_ROW_CLASS_NAME,
-          SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
-          "cursor-default",
-        )}
-      >
-        <Checkbox
-          checked={visible}
-          onCheckedChange={(checked) => onVisibleChange(Boolean(checked))}
-          aria-label={visible ? `Hide ${label} from the sidebar` : `Show ${label} in the sidebar`}
-        />
-        <SidebarLeadingIcon size="sm" tone="text-inherit">
-          <SidebarGlyph
-            icon={Icon}
-            variant="leading"
-            {...(iconClassName ? { className: iconClassName } : {})}
-          />
-        </SidebarLeadingIcon>
-        <span className="truncate">{label}</span>
-        <button
-          type="button"
-          ref={setActivatorNodeRef}
-          className="ml-auto inline-flex size-6 shrink-0 cursor-grab touch-none items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground active:cursor-grabbing"
-          aria-label={`Reorder ${label}`}
-          {...attributes}
-          {...listeners}
-        >
-          <DragHandleIcon className="size-3.5" />
-        </button>
-      </div>
-    </li>
-  );
-}
 
 function SortableProjectItem({
   projectId,
@@ -3788,6 +3726,8 @@ export default function Sidebar() {
     [appSettings.hiddenSidebarNavItems],
   );
   const [isCustomizingNav, setIsCustomizingNav] = useState(false);
+  // Rail layout: the customize editor opens as a popover beside the rail.
+  const railSlot = useAppRailSlot();
   const [navCustomizeMenuPosition, setNavCustomizeMenuPosition] = useState<{
     x: number;
     y: number;
@@ -3870,24 +3810,24 @@ export default function Sidebar() {
       }),
     [hiddenSidebarNavItems, sidebarNavDescriptors, sidebarNavOrder],
   );
-  const handleNavOrderDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      const { active, over } = event;
-      if (!over || active.id === over.id) return;
+  const handleNavOrderReorder = useCallback(
+    (activeId: string, overId: string) => {
       const order = normalizeSidebarNavOrder(appSettings.sidebarNavOrder);
-      const fromIndex = order.indexOf(active.id as SidebarNavItemId);
-      const toIndex = order.indexOf(over.id as SidebarNavItemId);
+      const fromIndex = order.indexOf(activeId as SidebarNavItemId);
+      const toIndex = order.indexOf(overId as SidebarNavItemId);
       if (fromIndex < 0 || toIndex < 0) return;
       updateSettings({ sidebarNavOrder: arrayMove(order, fromIndex, toIndex) });
     },
     [appSettings.sidebarNavOrder, updateSettings],
   );
   const handleNavItemVisibleChange = useCallback(
-    (id: SidebarNavItemId, visible: boolean) => {
+    (id: string, visible: boolean) => {
+      // Ids come from the customize rows, which list SidebarNavItemIds only.
+      const navId = id as SidebarNavItemId;
       const hidden = normalizeHiddenSidebarNavItems(appSettings.hiddenSidebarNavItems).filter(
-        (entry) => entry !== id,
+        (entry) => entry !== navId,
       );
-      updateSettings({ hiddenSidebarNavItems: visible ? hidden : [...hidden, id] });
+      updateSettings({ hiddenSidebarNavItems: visible ? hidden : [...hidden, navId] });
     },
     [appSettings.hiddenSidebarNavItems, updateSettings],
   );
@@ -6186,8 +6126,10 @@ export default function Sidebar() {
   const sidebarHelpMenuProps = {
     onOpenShortcuts: () => void navigate({ to: "/settings", search: { section: "shortcuts" } }),
     onOpenFeedback: openFeedbackDialog,
+    // The rail's editor is a popover, so it opens from any section; the classic card lives
+    // in the thread view's nav block.
     onCustomizeSidebar:
-      isOnStudio || isOnSettings
+      !isRailLayout && (isOnStudio || isOnSettings)
         ? null
         : () => {
             setIsCustomizingNav(true);
@@ -6299,6 +6241,37 @@ export default function Sidebar() {
       active={railActiveItem === "studio"}
     />
   );
+  // Customize rows: the classic card lists the nav block; the rail popover shows the same
+  // items with their rail glyphs, then the rail's Space and project shortcuts.
+  const sidebarNavCustomizeItems: SidebarCustomizeItem[] = sidebarNavOrder.map((id) => {
+    const item = sidebarNavDescriptors[id];
+    const railGlyph = isRailLayout && id !== "newThread" ? railItemGlyphs(id).idle : null;
+    return {
+      id,
+      icon: railGlyph ?? item.icon,
+      iconClassName: railGlyph === null ? item.iconClassName : undefined,
+      label: item.label,
+      visible: !hiddenSidebarNavItems.has(id),
+    };
+  });
+  const railShortcutCustomizeItems: SidebarCustomizeItem[] = railShortcutItems.map((item) => ({
+    id: item.id,
+    icon: item.glyphs.idle,
+    label: item.label,
+    visible: true,
+  }));
+  const handleRailShortcutReorder = (activeKey: string, overKey: string) => {
+    const keys = [...appSettings.railShortcuts];
+    const fromIndex = keys.indexOf(activeKey);
+    const toIndex = keys.indexOf(overKey);
+    if (fromIndex < 0 || toIndex < 0) return;
+    updateSettings({ railShortcuts: arrayMove(keys, fromIndex, toIndex) });
+  };
+  // Unchecking a shortcut removes it from the rail; the "…" menu adds it back.
+  const handleRailShortcutVisibleChange = (key: string, visible: boolean) => {
+    if (visible) return;
+    updateSettings({ railShortcuts: toggleRailShortcutKey(appSettings.railShortcuts, key) });
+  };
   const railBottomItems: AppRailItem[] = [
     {
       id: "settings",
@@ -6380,7 +6353,44 @@ export default function Sidebar() {
           moreSlot={railMoreMenu}
           bottomItems={railBottomItems}
           bottomSlot={<SidebarHelpMenu inRail {...sidebarHelpMenuProps} />}
+          onContextMenu={handleNavContextMenu}
         />
+      ) : null}
+      {isRailLayout && railSlot ? (
+        <Popover
+          open={isCustomizingNav}
+          onOpenChange={(open) => {
+            if (!open) setIsCustomizingNav(false);
+          }}
+        >
+          <PopoverPopup
+            anchor={railSlot}
+            side="right"
+            align="start"
+            sideOffset={8}
+            alignOffset={8}
+            className="w-64 [&_[data-slot=popover-viewport]]:p-1.5"
+          >
+            <SidebarCustomizeHeader onDone={() => setIsCustomizingNav(false)} />
+            <SidebarCustomizeList
+              items={sidebarNavCustomizeItems}
+              onReorder={handleNavOrderReorder}
+              onVisibleChange={handleNavItemVisibleChange}
+            />
+            {railShortcutCustomizeItems.length > 0 ? (
+              <>
+                <div className={cn(SIDEBAR_SECTION_LABEL_CLASS_NAME, "ps-2 pt-2.5 pb-1")}>
+                  Shortcuts
+                </div>
+                <SidebarCustomizeList
+                  items={railShortcutCustomizeItems}
+                  onReorder={handleRailShortcutReorder}
+                  onVisibleChange={handleRailShortcutVisibleChange}
+                />
+              </>
+            ) : null}
+          </PopoverPopup>
+        </Popover>
       ) : null}
       {isRailLayout ? null : isElectron ? (
         <>
@@ -6495,54 +6505,17 @@ export default function Sidebar() {
                 stays mounted so its thumb can glide between Projects and Studio. */}
             <div key={sidebarSurfaceKey} className="sidebar-surface-enter">
               {/* Primary sidebar actions stay limited to features we currently ship. */}
-              {!isOnStudio && isCustomizingNav ? (
+              {!isOnStudio && isCustomizingNav && !isRailLayout ? (
                 <SidebarGroup className="px-1.5 pt-1 pb-1.5">
                   {/* Customize mode: the nav block lifts into a raised card (same chrome as
                       the Environment panel/composer) with per-item visibility + reorder. */}
                   <div className={cn(ENVIRONMENT_PANEL_SURFACE_CLASS_NAME, "p-1.5")}>
-                    <div className="flex items-center justify-between ps-2 pe-1 pt-0.5 pb-1">
-                      <span className={SIDEBAR_SECTION_LABEL_CLASS_NAME}>Customize</span>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-6 px-2 text-ui text-primary hover:text-primary"
-                        onClick={() => setIsCustomizingNav(false)}
-                      >
-                        Done
-                      </Button>
-                    </div>
-                    <DndContext
-                      sensors={projectDnDSensors}
-                      collisionDetection={closestCenter}
-                      modifiers={[restrictToVerticalAxis, restrictToFirstScrollableAncestor]}
-                      onDragEnd={handleNavOrderDragEnd}
-                    >
-                      <SortableContext
-                        items={sidebarNavOrder}
-                        strategy={verticalListSortingStrategy}
-                      >
-                        <ul className="flex w-full min-w-0 flex-col gap-0.5">
-                          {sidebarNavOrder.map((id) => {
-                            const item = sidebarNavDescriptors[id];
-                            return (
-                              <SidebarNavCustomizeRow
-                                key={id}
-                                id={id}
-                                icon={item.icon}
-                                {...(item.iconClassName
-                                  ? { iconClassName: item.iconClassName }
-                                  : {})}
-                                label={item.label}
-                                visible={!hiddenSidebarNavItems.has(id)}
-                                onVisibleChange={(visible) =>
-                                  handleNavItemVisibleChange(id, visible)
-                                }
-                              />
-                            );
-                          })}
-                        </ul>
-                      </SortableContext>
-                    </DndContext>
+                    <SidebarCustomizeHeader onDone={() => setIsCustomizingNav(false)} />
+                    <SidebarCustomizeList
+                      items={sidebarNavCustomizeItems}
+                      onReorder={handleNavOrderReorder}
+                      onVisibleChange={handleNavItemVisibleChange}
+                    />
                   </div>
                 </SidebarGroup>
               ) : (

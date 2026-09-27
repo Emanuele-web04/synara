@@ -6,7 +6,13 @@
 //             items and their handlers and portals the rail into the slot the route shell
 //             places left of the panel, so no handler moves out of ThreadSidebar.
 
-import { type ComponentType, createContext, type ReactNode, useContext } from "react";
+import {
+  type ComponentType,
+  createContext,
+  type MouseEvent,
+  type ReactNode,
+  useContext,
+} from "react";
 import { createPortal } from "react-dom";
 
 import type { RailItemId } from "~/appRail.logic";
@@ -104,6 +110,8 @@ type AppRailProps = {
   bottomItems: ReadonlyArray<AppRailItem>;
   /** Rendered above the bottom items (the Help menu, like Codex's rail). */
   bottomSlot?: ReactNode;
+  /** Right-click on the rail (offers "Customize", like the classic nav block). */
+  onContextMenu?: ((event: MouseEvent) => void) | undefined;
 };
 
 /** Rail glyph size, shared with controls rendered into the rail slot (the Help menu). */
@@ -148,10 +156,18 @@ function AppRailButton({ item }: { item: AppRailItem }) {
   );
 }
 
-export function AppRail({ items, shortcuts, moreSlot, bottomItems, bottomSlot }: AppRailProps) {
+export function AppRail({
+  items,
+  shortcuts,
+  moreSlot,
+  bottomItems,
+  bottomSlot,
+  onContextMenu,
+}: AppRailProps) {
   return (
     <nav
       aria-label="Primary"
+      onContextMenu={onContextMenu}
       className="flex w-(--app-rail-width) shrink-0 flex-col items-center gap-1.5 pt-2.5 pb-2.5 font-system-ui"
     >
       {items.map((item) => (
@@ -180,6 +196,11 @@ const AppRailSlotContext = createContext<HTMLElement | null>(null);
 
 /** Provided by the route shell with the element the rail renders into. */
 export const AppRailSlotProvider = AppRailSlotContext.Provider;
+
+/** The element the rail renders into (null in the classic layout); anchors rail popovers. */
+export function useAppRailSlot(): HTMLElement | null {
+  return useContext(AppRailSlotContext);
+}
 
 /** Renders the rail into the shell's slot; nothing when no slot is mounted (classic layout). */
 export function AppRailPortal(props: AppRailProps) {
