@@ -6474,9 +6474,7 @@ export default function Sidebar() {
           <SidebarGroup className="p-0">
             {isRailLayout ? (
               // The rail is the way back, so the panel opens on its title like every section.
-              <SidebarPanelTitle title="Settings">{betaBadge}</SidebarPanelTitle>
-            ) : isBetaDesktopFlavor ? (
-              <div className="flex items-center justify-end pb-1 pr-2.5">{betaBadge}</div>
+              <SidebarPanelTitle title="Settings" />
             ) : null}
             <SettingsSidebarNav
               activeSection={activeSettingsSection}
