@@ -390,6 +390,20 @@ export function verifyBetaAppBundle(appPath: string): void {
   }
 }
 
+function verifyBetaInstallBundle(
+  appPath: string,
+  expectedTeamId: ExpectedTeamId,
+  readCommand: ReadCommand,
+): void {
+  // A symlinked bundle must never leave the temp dir or replace an installed app.
+  const appStat = lstatSync(appPath, { throwIfNoEntry: false });
+  if (appStat !== undefined && (!appStat.isDirectory() || appStat.isSymbolicLink())) {
+    throw new Error(UNSIGNED_BETA_MESSAGE);
+  }
+  verifyBetaAppBundle(appPath);
+  verifyBetaCodeSignature(appPath, expectedTeamId, readCommand);
+}
+
 export interface BetaInstallDeps {
   readonly arch: string;
   readonly installDir: string;
@@ -404,10 +418,11 @@ export interface BetaInstallDeps {
 }
 
 /**
- * Downloads the newest beta build, verifies its sha512 and bundle identity,
- * and moves `Synara Beta.app` into `installDir`. Throws on any mismatch; an
- * interrupted run leaves no partial app behind, and a failed move keeps the
- * previously installed app.
+ * Downloads the newest beta build and verifies its sha512 and bundle identity.
+ * Copying into staging on the install volume keeps the installed target complete;
+ * local renames commit the bundle and roll back handled commit failures.
+ * The next attempt checks and recovers a backup left by an interrupted commit.
+ * Handled failures clean staging; a stopped process may leave its staging directory.
  */
 export async function installBetaFromFeed(
   deps: BetaInstallDeps,
@@ -416,6 +431,27 @@ export async function installBetaFromFeed(
   const fetchText = deps.fetchText ?? httpsFetchText;
   const downloadFile = deps.downloadFile ?? httpsDownloadFile;
   const run = deps.run ?? execFile;
+  const readCommand = deps.readCommand ?? readCommandDefault;
+  const expectedTeamId = deps.expectedTeamId ?? null;
+  const targetPath = join(deps.installDir, BETA_MAC_APP_NAME);
+  const previousPath = `${targetPath}.previous`;
+  // A stopped process can leave the old app aside between the two local
+  // renames. Recover it before the network can fail on the next attempt.
+  if (lstatSync(previousPath, { throwIfNoEntry: false }) !== undefined) {
+    let targetIsValid = false;
+    try {
+      verifyBetaInstallBundle(targetPath, expectedTeamId, readCommand);
+      targetIsValid = true;
+    } catch {
+      // A partial target from an older installer must not displace its backup.
+    }
+    if (!targetIsValid) {
+      verifyBetaInstallBundle(previousPath, expectedTeamId, readCommand);
+      rmSync(targetPath, { recursive: true, force: true });
+      renameSync(previousPath, targetPath);
+    }
+    rmSync(previousPath, { recursive: true, force: true });
+  }
   const workDir = mkdtempSync(join(deps.tempBaseDir ?? tmpdir(), "synara-beta-install-"));
   try {
     const location = await resolveBetaFeedLocation({
@@ -440,38 +476,29 @@ export async function installBetaFromFeed(
     mkdirSync(extractDir, { recursive: true });
     run("ditto", ["-x", "-k", zipPath, extractDir]);
     const appPath = join(extractDir, BETA_MAC_APP_NAME);
-    // A symlinked bundle must never leave the temp dir: `mv` would write the
-    // symlink target outside installDir or plant a link pointing elsewhere.
-    const appStat = lstatSync(appPath, { throwIfNoEntry: false });
-    if (appStat !== undefined && (!appStat.isDirectory() || appStat.isSymbolicLink())) {
-      throw new Error(UNSIGNED_BETA_MESSAGE);
-    }
-    verifyBetaAppBundle(appPath);
-    verifyBetaCodeSignature(
-      appPath,
-      deps.expectedTeamId ?? null,
-      deps.readCommand ?? readCommandDefault,
-    );
+    verifyBetaInstallBundle(appPath, expectedTeamId, readCommand);
     mkdirSync(deps.installDir, { recursive: true });
-    const targetPath = join(deps.installDir, BETA_MAC_APP_NAME);
-    // Set the installed app aside instead of deleting it: `mv` from the temp
-    // dir can fail (full disk, another volume, permissions), and the user
-    // should keep the old beta rather than end up with none.
-    const previousPath = `${targetPath}.previous`;
-    rmSync(previousPath, { recursive: true, force: true });
-    const hadPrevious = lstatSync(targetPath, { throwIfNoEntry: false }) !== undefined;
-    if (hadPrevious) renameSync(targetPath, previousPath);
+    const stagingDir = mkdtempSync(join(deps.installDir, ".synara-beta-install-"));
+    const stagedAppPath = join(stagingDir, BETA_MAC_APP_NAME);
     try {
-      run("mv", [appPath, targetPath]);
-    } catch (error) {
-      if (hadPrevious) {
-        rmSync(targetPath, { recursive: true, force: true });
-        renameSync(previousPath, targetPath);
+      // Cross-volume mv can copy only part of the bundle before failing. Keep
+      // the current app in place until that copy finishes in a sibling staging dir.
+      run("mv", [appPath, stagedAppPath]);
+      const hadPrevious = lstatSync(targetPath, { throwIfNoEntry: false }) !== undefined;
+      if (hadPrevious) renameSync(targetPath, previousPath);
+      try {
+        // Both paths are now on the install volume, so the commit cannot expose
+        // a partly copied target. An interrupted commit is recovered above.
+        renameSync(stagedAppPath, targetPath);
+      } catch (error) {
+        if (hadPrevious) renameSync(previousPath, targetPath);
+        throw error;
       }
-      throw error;
+      rmSync(previousPath, { recursive: true, force: true });
+      return targetPath;
+    } finally {
+      rmSync(stagingDir, { recursive: true, force: true });
     }
-    rmSync(previousPath, { recursive: true, force: true });
-    return targetPath;
   } finally {
     rmSync(workDir, { recursive: true, force: true });
   }
