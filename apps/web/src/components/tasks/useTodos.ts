@@ -37,10 +37,22 @@ import {
 // Seeds an optimistic create, so the server's authoritative row always replaces it.
 const UNSAVED_UPDATED_AT = "1970-01-01T00:00:00.000Z";
 
-// Creates still on their way to the server. An update or delete of the same to-do waits
-// for its create, so the server sees them in the order the user made them.
-const pendingCreateById = new Map<TodoId, Promise<unknown>>();
-const afterPendingCreate = (id: TodoId) => pendingCreateById.get(id)?.catch(() => undefined);
+// Creates still on their way to the server, retries included. An update or delete of the
+// same to-do waits for the whole create, so the server sees them in the order the user
+// made them (a retried insert after a delete would bring the to-do back).
+const pendingCreateById = new Map<TodoId, { settled: Promise<void>; settle: () => void }>();
+const afterPendingCreate = (id: TodoId) => pendingCreateById.get(id)?.settled;
+const beginPendingCreate = (id: TodoId) => {
+  let settle = () => {};
+  const settled = new Promise<void>((resolve) => {
+    settle = resolve;
+  });
+  pendingCreateById.set(id, { settled, settle });
+};
+const endPendingCreate = (id: TodoId) => {
+  pendingCreateById.get(id)?.settle();
+  pendingCreateById.delete(id);
+};
 // Creates the server rejected: such a row never existed there, so a failed delete of it
 // must not bring it back.
 const failedCreateIds = new Set<TodoId>();
@@ -119,12 +131,9 @@ export function useTodoMutations() {
     // the same id instead of dropping a row the server may already hold.
     retry: (failureCount, error) => isRequestOutcomeUnknown(error) && failureCount < 3,
     retryDelay: (attempt) => 1_000 * 2 ** attempt,
-    mutationFn: (input: TodoCreateInput) => {
-      const request = ensureNativeApi().todo.create(input);
-      pendingCreateById.set(input.id, request);
-      return request.finally(() => pendingCreateById.delete(input.id));
-    },
+    mutationFn: (input: TodoCreateInput) => ensureNativeApi().todo.create(input),
     onMutate: async (input) => {
+      beginPendingCreate(input.id);
       await cancelListFetch();
       const now = new Date().toISOString();
       // Seeded with the epoch so the server's authoritative row always replaces it.
@@ -156,6 +165,7 @@ export function useTodoMutations() {
       }
       showMutationError("Couldn't add the task")(error);
     },
+    onSettled: (_todo, _error, input) => endPendingCreate(input.id),
   });
 
   const updateMutation = useMutation({
@@ -176,6 +186,13 @@ export function useTodoMutations() {
     },
     onSuccess: (todo) => setList((todos) => upsertTodo(todos, todo)),
     onError: (error, input, context) => {
+      // The edit may have been stored before the connection went: keep it showing and
+      // let the server's copy settle it, instead of rolling back and reporting a failure.
+      // (Linking a chat re-reads the to-do in this case before deciding.)
+      if (isRequestOutcomeUnknown(error)) {
+        void queryClient.invalidateQueries({ queryKey: todoQueryKey });
+        return;
+      }
       const previous = context?.previous;
       if (previous) {
         // Optimistic copies keep the stored updatedAt, so a changed one means the server
