@@ -21,4 +21,8 @@ export default Effect.gen(function* () {
     updated_at TEXT NOT NULL
   )`;
   yield* sql`CREATE INDEX IF NOT EXISTS idx_todos_created_at ON todos(created_at)`;
+  // One chat works on one open to-do; the service's check reports it nicely, this makes
+  // concurrent claims of the same chat unable to both succeed.
+  yield* sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_todos_open_thread
+    ON todos(thread_id) WHERE thread_id IS NOT NULL AND completed_at IS NULL`;
 });

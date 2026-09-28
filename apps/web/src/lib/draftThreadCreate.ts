@@ -48,7 +48,9 @@ export function createDraftThread(input: DraftThreadInput): ThreadId {
     interactionMode: input.interactionMode,
     ...(input.workingDirectory ? { workingDirectory: input.workingDirectory } : {}),
   });
-  if (input.sourceComposerThreadId) {
+  // The source can be gone by now (its form unmounted while the create was pending);
+  // copying from it would leave the new chat empty, so fall back to the prompt.
+  if (input.sourceComposerThreadId && store.draftsByThreadId[input.sourceComposerThreadId]) {
     store.copyTransferableComposerState(input.sourceComposerThreadId, threadId);
   } else {
     store.setPrompt(threadId, input.prompt);

@@ -20,6 +20,7 @@ import { useComposerDraftStore } from "../../composerDraftStore";
 import { ensureNativeApi } from "../../nativeApi";
 import { useStore } from "../../store";
 import { isTasksRefusal, noteTasksRefusal } from "../../tasksSurface";
+import { isRequestOutcomeUnknown } from "~/lib/requestOutcome";
 import { toastManager } from "../ui/toast";
 import {
   applyTodoEvent,
@@ -114,6 +115,10 @@ export function useTodoMutations() {
   const cancelListFetch = () => queryClient.cancelQueries({ queryKey: todoQueryKey });
 
   const createMutation = useMutation({
+    // Creates are idempotent per id, so one that died with the connection is retried with
+    // the same id instead of dropping a row the server may already hold.
+    retry: (failureCount, error) => isRequestOutcomeUnknown(error) && failureCount < 3,
+    retryDelay: (attempt) => 1_000 * 2 ** attempt,
     mutationFn: (input: TodoCreateInput) => {
       const request = ensureNativeApi().todo.create(input);
       pendingCreateById.set(input.id, request);
@@ -145,6 +150,10 @@ export function useTodoMutations() {
     onError: (error, input) => {
       failedCreateIds.add(input.id);
       setList((todos) => todos.filter((todo) => todo.id !== input.id));
+      // If a lost reply hid a stored create, the server's list brings the row back.
+      if (isRequestOutcomeUnknown(error)) {
+        void queryClient.invalidateQueries({ queryKey: todoQueryKey });
+      }
       showMutationError("Couldn't add the task")(error);
     },
   });

@@ -110,6 +110,28 @@ layer("TodoService", (it) => {
     }),
   );
 
+  it.effect("lets only one of two concurrent claims of a chat succeed", () =>
+    Effect.gen(function* () {
+      const todos = yield* TodoService;
+      const chat = ThreadId.makeUnsafe("thread-race");
+      const left = TodoId.makeUnsafe("todo-race-left");
+      const right = TodoId.makeUnsafe("todo-race-right");
+      yield* todos.create({ id: left, title: "Left" });
+      yield* todos.create({ id: right, title: "Right" });
+
+      const results = yield* Effect.all(
+        [
+          Effect.exit(todos.update({ id: left, threadId: chat })),
+          Effect.exit(todos.update({ id: right, threadId: chat })),
+        ],
+        { concurrency: "unbounded" },
+      );
+      assert.strictEqual(results.filter(Exit.isSuccess).length, 1);
+      const { todos: listed } = yield* todos.list();
+      assert.strictEqual(listed.filter((todo) => todo.threadId === chat).length, 1);
+    }),
+  );
+
   it.effect("fails to update a missing to-do and publishes deletes", () =>
     Effect.gen(function* () {
       const todos = yield* TodoService;

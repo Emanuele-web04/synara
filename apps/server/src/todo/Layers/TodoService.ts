@@ -22,6 +22,23 @@ export function nextTodoUpdatedAt(previousUpdatedAt: string): string {
     : candidate;
 }
 
+const CHAT_OWNED_ELSEWHERE_MESSAGE = "That chat is already working on another task.";
+
+// The unique index on open to-dos' thread_id rejected a save: a concurrent claim won.
+function isChatOwnershipConflict(cause: unknown): boolean {
+  for (let current = cause, depth = 0; current && depth < 6; depth += 1) {
+    if (current instanceof Error && current.message.includes("idx_todos_open_thread")) {
+      return true;
+    }
+    if (current instanceof Error && current.message.includes("todos.thread_id")) return true;
+    current =
+      typeof current === "object" && "cause" in current
+        ? (current as { cause?: unknown }).cause
+        : undefined;
+  }
+  return false;
+}
+
 function toServiceError(message: string) {
   return (cause: unknown) => new TodoServiceError({ message, cause });
 }
@@ -112,9 +129,7 @@ export const TodoServiceLive = Layer.effect(
                 todo.completedAt === null,
             );
             if (ownedElsewhere && linksNewly) {
-              return yield* new TodoServiceError({
-                message: "That chat is already working on another task.",
-              });
+              return yield* new TodoServiceError({ message: CHAT_OWNED_ELSEWHERE_MESSAGE });
             }
             // Reopening keeps the to-do but gives up a chat another to-do now works in.
             if (ownedElsewhere) {
@@ -137,7 +152,9 @@ export const TodoServiceLive = Layer.effect(
         Effect.mapError((cause) =>
           cause instanceof TodoServiceError
             ? cause
-            : new TodoServiceError({ message: "Failed to update the task.", cause }),
+            : isChatOwnershipConflict(cause)
+              ? new TodoServiceError({ message: CHAT_OWNED_ELSEWHERE_MESSAGE, cause })
+              : new TodoServiceError({ message: "Failed to update the task.", cause }),
         ),
       );
 

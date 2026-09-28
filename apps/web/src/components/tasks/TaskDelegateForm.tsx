@@ -45,12 +45,13 @@ import { dispatchDraftThread, type DraftThreadDispatchResult } from "~/lib/draft
 import { ChevronDownIcon, DelegateIcon, FolderIcon, LoaderCircleIcon } from "~/lib/icons";
 import { resolveProviderSendAvailabilityWithRefresh } from "~/lib/providerAvailability";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
+import { isRequestOutcomeUnknown } from "~/lib/requestOutcome";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
 import { composerDraftHasUnsentContent } from "../../composerDraftDomain";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { useLatestProjectStore } from "../../latestProjectStore";
-import { readNativeApi } from "../../nativeApi";
+import { ensureNativeApi, readNativeApi } from "../../nativeApi";
 import { buildModelSelection } from "../../providerModelOptions";
 import { useStore } from "../../store";
 import { DEFAULT_INTERACTION_MODE } from "../../types";
@@ -252,11 +253,21 @@ export function TaskDelegateForm({
 
   // The link is written before anything is sent, so a send that fails must undo it:
   // otherwise the to-do stays on "Starting" for a chat that never got its prompt.
-  // Returns false when linking failed; the mutation already told the user why.
+  // Returns false when linking failed; the mutation already told the user why. A link
+  // whose reply was lost with the connection may still have been stored, so re-read the
+  // to-do before deciding.
   const linkChat = (input: TodoUpdateInput) =>
     onLinkChat(input).then(
       () => true,
-      () => false,
+      async (error: unknown) => {
+        if (!isRequestOutcomeUnknown(error) || input.threadId === undefined) return false;
+        try {
+          const { todos } = await ensureNativeApi().todo.list();
+          return todos.find((stored) => stored.id === input.id)?.threadId === input.threadId;
+        } catch {
+          return false;
+        }
+      },
     );
   // Awaited so Start stays busy until the to-do is back to "To do"; if the server can't
   // store that either, the mutation's toast says so and the row's menu can unlink later.

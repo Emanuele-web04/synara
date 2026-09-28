@@ -49,6 +49,7 @@ import {
 } from "./terminalContext";
 import { resolveTerminalThreadCreationState } from "./threadBootstrap";
 import { promoteThreadCreate } from "./threadCreatePromotion";
+import { isRequestOutcomeUnknown } from "./requestOutcome";
 import { newCommandId, newMessageId } from "./utils";
 
 /** Why a draft must fall back to the canonical chat composer instead of dispatching here. */
@@ -91,19 +92,6 @@ interface DraftThreadDispatchInput {
   assistantDeliveryMode: AssistantDeliveryMode;
   providerOptions?: ProviderStartOptions | undefined;
   hooks?: DraftThreadDispatchHooks | undefined;
-}
-
-// wsTransport's WsTransportRequestInterruptedError for a timeout or reconnect: the command
-// may have reached the server before the connection went. A cancel is the caller's own.
-function isDispatchOutcomeUnknown(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "_tag" in error &&
-    error._tag === "WsTransportRequestInterruptedError" &&
-    "code" in error &&
-    error.code !== "WS_REQUEST_ABORTED"
-  );
 }
 
 // Racing callers (a double click on Start, a retry while the first send is still
@@ -339,7 +327,7 @@ async function dispatchDraftThreadOnce(
     return {
       kind: "error",
       message: error instanceof Error ? error.message : "Could not send the drafted prompt.",
-      ...(isDispatchOutcomeUnknown(error) ? { outcomeUnknown: true } : {}),
+      ...(isRequestOutcomeUnknown(error) ? { outcomeUnknown: true } : {}),
     };
   }
 
