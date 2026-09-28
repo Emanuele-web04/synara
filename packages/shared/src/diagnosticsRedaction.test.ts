@@ -51,6 +51,24 @@ describe("redactDiagnosticText", () => {
       "s3cret",
     ],
     [
+      "loopback IPv4 URL keeps a recognizable local host and port",
+      "fetch http://127.0.0.1:43123/api failed",
+      "http://localhost:43123/…",
+      "127.0.0.1",
+    ],
+    [
+      "loopback IPv6 WebSocket URL keeps a recognizable local host and port",
+      "connect ws://[::1]:43123/api failed",
+      "ws://localhost:43123/…",
+      "::1",
+    ],
+    [
+      "external IP URL remains redacted with its port",
+      "connect wss://192.168.1.20:43123/api failed",
+      "wss://<ip>:43123/…",
+      "192.168.1.20",
+    ],
+    [
       "https git remote keeps only the host",
       "clone https://github.com/acme/private-repo.git failed",
       "https://github.com/…",

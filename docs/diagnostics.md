@@ -22,13 +22,33 @@ the same allowlist server-side.
 | `app.start`, `app.exit`                                                                     | `kind: "lifecycle"`; `app.start` also carries `osVersion` (major.minor) and `locale` (language only, e.g. `en`)                                                                                                                        |
 | `app.renderer-crash`, `app.child-process-crash`                                             | `kind: "crash"`, `processType` (Electron enum like `renderer`/`gpu`/`backend`), `reason`, `logTail` (redacted last ~200 lines/16 KiB of the relevant log)                                                                              |
 | `app.error`                                                                                 | `kind: "error"`, `source` (`main`/`renderer`), `message` (redacted, 1 KiB), `stack` (redacted, 8 KiB), `fingerprint` (hash of the redacted text)                                                                                       |
-| `update.check`, `update.available`, `update.downloaded`, `update.installed`, `update.error` | `kind: "update"`, `outcome` (`ok`/`error`), `durationMs`, `errorContext` (`check`/`download`/`install`), `targetVersion` (strict semver)                                                                                               |
+| `update.check`, `update.available`, `update.downloaded`, `update.installed`, `update.error` | `kind: "update"`, `outcome` (`ok`/`error`), `durationMs`, `errorContext` (`check`/`download`/`install`), `targetVersion` (strict semver); `update.error` also carries `message` (redacted, 1 KiB)                                      |
 | `usage.daily`                                                                               | `kind: "usage"`, `providers` (provider name + `threads`/`turns`/`turnsFailed` counts for the last 24h; `turnsFailed` counts turns that ended in `error` — cancelled turns are not failures), `projects`, `activeThreads` — counts only |
 | `beta.installed`, `beta.left`                                                               | `kind: "beta"`, `outcome` (`imported`/`import-failed`/`fresh`, or `trash`/`keep`)                                                                                                                                                      |
 
-`app.error` fires when the main process throws an uncaught exception or a
-renderer logs a console error. The same fingerprint is sent at most once per
-10 minutes and at most 30 errors per hour per session.
+`app.error` fires when the main process throws an uncaught exception, the
+renderer throws an uncaught exception or rejects a promise, or the renderer
+logs a console error. Renderer exceptions retain their original stacks through
+a fixed, bounded IPC payload. The bridge is exposed only when the Beta main
+process enables it, and reports from other windows or subframes are rejected.
+Malformed exception fields produce a generic report without serializing objects.
+Console errors remain a fallback during startup and for browser errors such as
+CORS failures. Once the renderer listeners are ready, their uncaught exceptions
+are not also counted through that fallback. The same fingerprint is sent at
+most once per 10 minutes and at most 30 errors per hour per session. Loopback
+HTTP and WebSocket URL ports are normalized only for fingerprinting; the redacted
+message keeps the original port so it can still help diagnosis.
+
+Crash events exclude clean process exits and known app shutdowns, including
+backend processes deliberately stopped for an updater handoff. An unexpected
+`killed` process remains reportable; a signal alone does not prove shutdown.
+
+`update.check` records the start of a check, not a successful result. Its
+`outcome: "ok"` means the attempt started. Failures emit `update.error` with the
+check/download/install context and a redacted updater message.
+Download and install failures emit this event even when the UI keeps the
+`available` or `downloaded` status so the user can retry. Repeated broadcasts of
+the same failure do not emit another event; a new failed attempt does.
 
 `usage.daily` works differently from the other events: the main process cannot
 read the projection database, so the server writes
@@ -74,6 +94,14 @@ standard base64). Paths are reduced to the last segment: `/Users/you/code/my-rep
 folder and repository names are not sent. Redaction is best-effort — error
 text can still include fragments of whatever was on screen. The worker runs
 the same redaction again before storing.
+
+Renderer error fields use the same shared redactor before crossing the bounded
+IPC bridge. PEM blocks are removed whole before the field length limit is
+applied, so truncation cannot leave a key fragment for the main process to
+misclassify. The main process redacts these fields again before queueing them.
+Loopback HTTP/WebSocket URL hosts become `localhost`, keeping their ports
+readable and recognizable for fingerprint grouping across both redaction passes.
+External IP addresses remain redacted and external ports remain distinct.
 
 ## Transport and storage
 

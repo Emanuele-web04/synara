@@ -112,6 +112,7 @@ import {
   resolveBetaDiagnosticsEndpoint,
   type BetaDiagnosticsEventName,
 } from "./betaDiagnostics";
+import { attachBetaRendererDiagnostics } from "./betaRendererDiagnostics";
 import { showDesktopConfirmDialog } from "./confirmDialog";
 import {
   desktopAppIconResourceName,
@@ -2858,33 +2859,10 @@ function emitUpdateState(): void {
 }
 
 function setUpdateState(patch: Partial<DesktopUpdateState>): void {
-  const previousStatus = updateState.status;
+  const previous = updateState;
   updateState = { ...updateState, ...patch };
   emitUpdateState();
-  if (betaDiagnostics && updateState.status !== previousStatus) {
-    const status = updateState.status;
-    if (status === "checking") {
-      trackBetaDiagnostics("update.check", { kind: "update", outcome: "ok" });
-    } else if (status === "available") {
-      trackBetaDiagnostics("update.available", {
-        kind: "update",
-        outcome: "ok",
-        ...(updateState.availableVersion ? { targetVersion: updateState.availableVersion } : {}),
-      });
-    } else if (status === "downloaded") {
-      trackBetaDiagnostics("update.downloaded", {
-        kind: "update",
-        outcome: "ok",
-        ...(updateState.downloadedVersion ? { targetVersion: updateState.downloadedVersion } : {}),
-      });
-    } else if (status === "error") {
-      trackBetaDiagnostics("update.error", {
-        kind: "update",
-        outcome: "error",
-        ...(updateState.errorContext ? { errorContext: updateState.errorContext } : {}),
-      });
-    }
-  }
+  betaDiagnostics?.trackUpdateStateChange(previous, updateState);
 }
 
 function shouldEnableAutoUpdates(): boolean {
@@ -4584,6 +4562,8 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
   });
 
   child.on("exit", (code, signal) => {
+    // Output can drain after a failed stop has restored the app's running state.
+    const expectedExit = isQuitting;
     if (backendListeningDetector === listeningDetector) {
       listeningDetector.fail(
         new Error(
@@ -4607,16 +4587,17 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
       }
       const reason = `code=${code ?? "null"} signal=${signal ?? "null"}`;
       lastBackendFailureDetail = outputTailDetector.read();
-      trackBetaDiagnostics("app.child-process-crash", {
-        kind: "crash",
-        processType: "backend",
-        reason,
-        // Guarded explicitly: on stable builds betaDiagnostics is null and the
-        // log file must not be touched at all.
-        logTail: betaDiagnostics
-          ? readLogTail(Path.join(LOG_DIR, BACKEND_LOG_FILE_NAME))
-          : undefined,
-      });
+      if (!expectedExit)
+        trackBetaDiagnostics("app.child-process-crash", {
+          kind: "crash",
+          processType: "backend",
+          reason,
+          // Guarded explicitly: on stable builds betaDiagnostics is null and the
+          // log file must not be touched at all.
+          logTail: betaDiagnostics
+            ? readLogTail(Path.join(LOG_DIR, BACKEND_LOG_FILE_NAME))
+            : undefined,
+        });
       scheduleBackendRestart(reason);
     });
   });
@@ -4864,6 +4845,15 @@ function requestGracefulAppQuit(reason: string): void {
 
 function registerIpcHandlers(): void {
   const storageSnapshotPath = resolveSynaraStorageSnapshotPath(app.getPath("userData"));
+
+  ipcMain.removeAllListeners(IPC.betaDiagnostics.enabled);
+  ipcMain.on(IPC.betaDiagnostics.enabled, (event: IpcMainEvent) => {
+    event.returnValue = Boolean(
+      betaDiagnostics &&
+      event.sender === mainWindow?.webContents &&
+      event.senderFrame === event.sender.mainFrame,
+    );
+  });
 
   ipcMain.removeAllListeners(IPC.browser.webMcpCompatibilityPolicy);
   ipcMain.on(IPC.browser.webMcpCompatibilityPolicy, (event: IpcMainEvent) => {
@@ -5481,13 +5471,7 @@ function createWindow(): BrowserWindow {
   attachRendererCrashRecovery(window);
   attachDesktopPhysicalZoomShortcuts(window);
   if (betaDiagnostics) {
-    // Renderer console errors become app.error events (throttled inside
-    // trackError); messages are redacted before they touch the queue.
-    window.webContents.on("console-message", (details) => {
-      if (details.level === "error" && typeof details.message === "string") {
-        betaDiagnostics.trackError("renderer", details.message);
-      }
-    });
+    attachBetaRendererDiagnostics(window.webContents, betaDiagnostics);
   }
 
   window.webContents.on("will-attach-webview", (event, webPreferences, params) => {
@@ -5656,14 +5640,19 @@ function attachRendererCrashRecovery(window: BrowserWindow): void {
     // the pending ask and count it as quitting for the crash policy.
     const quitAskPending = runningChatsQuitGuard.hasPendingAsk();
     runningChatsQuitGuard.allowPending();
-    trackBetaDiagnostics("app.renderer-crash", {
-      kind: "crash",
-      processType: "renderer",
-      reason: details.reason,
-      // Guarded explicitly: on stable builds betaDiagnostics is null and the
-      // log file must not be touched at all.
-      logTail: betaDiagnostics ? readLogTail(Path.join(LOG_DIR, DESKTOP_LOG_FILE_NAME)) : undefined,
-    });
+    // A pending quit ask has not started shutdown: an unexpected crash while
+    // that ask is open still belongs in diagnostics, even though recovery quits.
+    if (!isQuitting && details.reason !== "clean-exit")
+      trackBetaDiagnostics("app.renderer-crash", {
+        kind: "crash",
+        processType: "renderer",
+        reason: details.reason,
+        // Guarded explicitly: on stable builds betaDiagnostics is null and the
+        // log file must not be touched at all.
+        logTail: betaDiagnostics
+          ? readLogTail(Path.join(LOG_DIR, DESKTOP_LOG_FILE_NAME))
+          : undefined,
+      });
     const description = `reason=${details.reason} exitCode=${details.exitCode}`;
     writeDesktopLogHeader(`renderer process gone ${description}`);
     safeConsoleError(`[desktop] renderer process gone (${description})`);
@@ -6067,6 +6056,7 @@ if (hasSingleInstanceLock) {
       if (betaDiagnostics) {
         app.on("child-process-gone", (_event, details) => {
           // GPU/utility process crashes; details.reason is a fixed Electron enum.
+          if (isQuitting || details.reason === "clean-exit") return;
           trackBetaDiagnostics("app.child-process-crash", {
             kind: "crash",
             processType: details.type,

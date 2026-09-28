@@ -724,7 +724,21 @@ export interface DesktopAgentCursorStyle {
   readonly shadow?: string;
 }
 
+export const DESKTOP_RENDERER_ERROR_MESSAGE_MAX_LENGTH = 1024;
+export const DESKTOP_RENDERER_ERROR_STACK_MAX_LENGTH = 8 * 1024;
+
+/** Fixed, bounded exception fields accepted by Beta's diagnostics IPC. */
+export interface DesktopRendererError {
+  readonly message: string;
+  readonly stack?: string | undefined;
+}
+
 export interface DesktopBridge {
+  /** Present only when the desktop main process enables baked-in Beta diagnostics. */
+  betaDiagnostics?: {
+    rendererReady: () => void;
+    reportError: (error: DesktopRendererError) => void;
+  };
   safariAccess?: {
     getInfo: () => Promise<DesktopSafariAccessInfo>;
     openSettings: () => Promise<boolean>;
