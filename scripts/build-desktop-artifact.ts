@@ -515,23 +515,6 @@ function stageMacIcons(
         })`sips -z 1024 1024 ${darkIconSource} --out ${dockIconDarkPngPath}`,
       );
     }
-    // The beta appearance preference resolves its own dock artwork on the beta
-    // flavor only. Other flavors must never see this file (Stable inertness:
-    // a missing resource early-returns in the runtime resolver).
-    if (flavor === "beta") {
-      const betaDockIconSource = yield* iconSourceFor(BETA_ASSET_PATHS.betaMacLegacyIconPng);
-      if (!(yield* fs.exists(betaDockIconSource))) {
-        return yield* new BuildScriptError({
-          message: `${flavor} beta dock icon source is missing at ${betaDockIconSource}`,
-        });
-      }
-      yield* runCommand(
-        ChildProcess.make({
-          ...commandOutputOptions(verbose),
-        })`sips -z 1024 1024 ${betaDockIconSource} --out ${path.join(stageResourcesDir, "dock-icon-beta.png")}`,
-      );
-    }
-
     yield* generateMacIconSet(legacyIconSource, iconIcnsPath, tmpRoot, path, verbose);
 
     // macOS 26 renders the Liquid Glass material only from a layered Icon
@@ -1296,6 +1279,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* stageDesktopRuntimeResources(
     stageResourcesDir,
     path.join(stageAppDir, "apps/desktop/prod-resources"),
+    { flavor: options.flavor, repositoryRoot: repoRoot },
   );
 
   const resolvedBuildConfig = yield* createBuildConfig(

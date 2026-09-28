@@ -2258,7 +2258,9 @@ function readDesktopAppIcon(): DesktopAppIcon {
   const fallbackIcon: DesktopAppIcon = desktopFlavor === "beta" ? "beta" : "default";
   try {
     const storedIcon = FS.readFileSync(DESKTOP_APP_ICON_PATH, "utf8").trim();
-    return isDesktopAppIcon(storedIcon) ? storedIcon : fallbackIcon;
+    return isDesktopAppIcon(storedIcon) && (storedIcon !== "beta" || desktopFlavor === "beta")
+      ? storedIcon
+      : fallbackIcon;
   } catch {
     return fallbackIcon;
   }
@@ -2416,10 +2418,7 @@ async function syncMacAppBundleIcon(
   await persistMacAppIcon({
     bundlePath,
     cacheDirectory: Path.join(STATE_DIR, "mac-app-icons"),
-    png:
-      icon === "default" || (icon === "beta" && desktopFlavor === "beta")
-        ? null
-        : (image?.toPNG() ?? null),
+    png: image?.toPNG() ?? null,
   });
   lastPersistedMacAppIcon = icon;
 }
@@ -2528,6 +2527,7 @@ async function applyDesktopAppIconUnlocked(
     icon,
     platform: process.platform,
     isDarkAppearance: process.platform === "darwin" && nativeTheme.shouldUseDarkColors,
+    isBetaFlavor: desktopFlavor === "beta",
   });
   const iconPath = resolveResourcePath(resourceName);
   if (!iconPath) return;
@@ -4967,7 +4967,7 @@ function registerIpcHandlers(): void {
     await applyDesktopAppIcon(icon, mainWindow, { flushShellIconCache: true });
   });
   ipcMain.handle(IPC.setAppIcon, async (_event, rawIcon: unknown) => {
-    if (!isDesktopAppIcon(rawIcon)) return;
+    if (!isDesktopAppIcon(rawIcon) || (rawIcon === "beta" && desktopFlavor !== "beta")) return;
     await enqueueDesktopAppIconApply(rawIcon);
   });
 
@@ -5372,6 +5372,7 @@ function getIconOption(): { icon: string } | Record<string, never> {
     icon,
     platform: process.platform,
     isDarkAppearance: false,
+    isBetaFlavor: desktopFlavor === "beta",
   });
   const iconPath = resolveResourcePath(resourceName);
   if (!iconPath) return {};

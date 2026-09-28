@@ -11,6 +11,7 @@ interface DesktopAppIconResourceInput {
   readonly icon: DesktopAppIcon;
   readonly platform: DesktopPlatform;
   readonly isDarkAppearance: boolean;
+  readonly isBetaFlavor?: boolean;
 }
 
 const APP_ICON_RESOURCE_NAMES = {
@@ -47,12 +48,15 @@ interface MacBundleAppIconInput {
 
 // macOS 26 renders the bundled Icon Composer asset with the Liquid Glass
 // material, which reacts to appearance and pointer on its own. Any runtime dock
-// image replaces that live icon with a flat bitmap, so the default preference
-// (and the beta preference on the beta flavor, whose bundle already ships beta
-// artwork) must leave the bundle icon alone instead of picking artwork here.
+// image replaces that live icon with a flat bitmap. Stable Default and Beta
+// Beta use their bundled artwork; Beta Default explicitly selects the white
+// bitmap, distinct from its blue bundled icon.
 export function usesMacBundleAppIcon(input: MacBundleAppIconInput): boolean {
   if (input.platform !== "darwin" || input.usesLegacyDockIcon) return false;
-  return input.icon === "default" || (input.icon === "beta" && input.isBetaFlavor);
+  return (
+    (input.icon === "default" && !input.isBetaFlavor) ||
+    (input.icon === "beta" && input.isBetaFlavor)
+  );
 }
 
 export function shouldUpdateDesktopAppIcon(
@@ -63,6 +67,15 @@ export function shouldUpdateDesktopAppIcon(
 }
 
 export function desktopAppIconResourceName(input: DesktopAppIconResourceInput): string {
+  if (
+    input.isBetaFlavor &&
+    (input.icon === "default" || (input.icon === "dark" && input.platform !== "darwin"))
+  ) {
+    if (input.platform === "darwin") return "dock-icon.png";
+    return input.platform === "linux"
+      ? "app-icon-default-linux.png"
+      : "app-icon-default-windows.ico";
+  }
   if (input.platform === "darwin" && input.icon === "default") {
     return input.isDarkAppearance ? "dock-icon-dark.png" : "dock-icon.png";
   }

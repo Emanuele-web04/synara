@@ -37,6 +37,43 @@ describe("desktop app icons", () => {
     ).toBe("dock-icon-dark.png");
   });
 
+  it("keeps Beta's explicit default choice distinct from its blue bundle artwork", () => {
+    for (const isDarkAppearance of [false, true]) {
+      expect(
+        desktopAppIconResourceName({
+          icon: "default",
+          platform: "darwin",
+          isDarkAppearance,
+          isBetaFlavor: true,
+        }),
+      ).toBe("dock-icon.png");
+    }
+    expect(
+      desktopAppIconResourceName({
+        icon: "default",
+        platform: "linux",
+        isDarkAppearance: false,
+        isBetaFlavor: true,
+      }),
+    ).toBe("app-icon-default-linux.png");
+    expect(
+      desktopAppIconResourceName({
+        icon: "default",
+        platform: "win32",
+        isDarkAppearance: false,
+        isBetaFlavor: true,
+      }),
+    ).toBe("app-icon-default-windows.ico");
+    expect(
+      usesMacBundleAppIcon({
+        icon: "default",
+        platform: "darwin",
+        usesLegacyDockIcon: false,
+        isBetaFlavor: true,
+      }),
+    ).toBe(false);
+  });
+
   it("always uses the dark artwork when the dark preference is selected", () => {
     expect(
       desktopAppIconResourceName({ icon: "dark", platform: "darwin", isDarkAppearance: false }),

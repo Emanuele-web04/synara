@@ -52,11 +52,16 @@ export function createDesktopBundleFilePatterns(
     );
   }
   if (platform !== "linux")
-    files.push(`${resources}app-icon-linux.png`, `${resources}app-icon-beta-linux.png`);
+    files.push(
+      `${resources}app-icon-linux.png`,
+      `${resources}app-icon-beta-linux.png`,
+      `${resources}app-icon-default-linux.png`,
+    );
   if (platform !== "win")
     files.push(
       `${resources}app-icon-windows.ico`,
       `${resources}app-icon-beta-windows.ico`,
+      `${resources}app-icon-default-windows.ico`,
       `${resources}icon.ico`,
     );
 
