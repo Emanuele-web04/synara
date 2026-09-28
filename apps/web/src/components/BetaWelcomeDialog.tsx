@@ -32,7 +32,7 @@ const WELCOME_POINTS = [
   { icon: "shield-check", text: "Synara stays separate and untouched." },
   {
     icon: "heart",
-    text: "Beta sends crash reports, app errors, and anonymous usage counts. Crash reports can contain fragments of what's in app memory.",
+    text: "Beta shares crash reports, app errors, and anonymous usage counts. Crash reports may include private information.",
   },
   { icon: "arrow-left-circle", text: "Switch back to Synara any time in Settings." },
 ] as const;
