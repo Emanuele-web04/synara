@@ -2250,7 +2250,7 @@ function configureAppIdentity(): void {
 }
 
 // Older macOS needs pre-rounded artwork as a runtime Dock override. macOS 26+
-// renders the appearance-aware Icon Composer asset when Default is selected.
+// renders the Icon Composer asset for Stable Default and Beta Beta choices.
 function usesLegacyMacDockIcon(): boolean {
   if (process.platform !== "darwin") return false;
   const darwinMajor = Number.parseInt(OS.release().split(".")[0] ?? "", 10);
@@ -2258,11 +2258,14 @@ function usesLegacyMacDockIcon(): boolean {
 }
 
 function readDesktopAppIcon(): DesktopAppIcon {
+  const fallbackIcon: DesktopAppIcon = desktopFlavor === "beta" ? "beta" : "default";
   try {
     const storedIcon = FS.readFileSync(DESKTOP_APP_ICON_PATH, "utf8").trim();
-    return isDesktopAppIcon(storedIcon) ? storedIcon : "default";
+    return isDesktopAppIcon(storedIcon) && (storedIcon !== "beta" || desktopFlavor === "beta")
+      ? storedIcon
+      : fallbackIcon;
   } catch {
-    return "default";
+    return fallbackIcon;
   }
 }
 
@@ -2418,7 +2421,7 @@ async function syncMacAppBundleIcon(
   await persistMacAppIcon({
     bundlePath,
     cacheDirectory: Path.join(STATE_DIR, "mac-app-icons"),
-    png: icon === "default" ? null : (image?.toPNG() ?? null),
+    png: image?.toPNG() ?? null,
   });
   lastPersistedMacAppIcon = icon;
 }
@@ -2513,6 +2516,7 @@ async function applyDesktopAppIconUnlocked(
       icon,
       platform: process.platform,
       usesLegacyDockIcon: usesLegacyMacDockIcon(),
+      isBetaFlavor: desktopFlavor === "beta",
     })
   ) {
     // Remove the persistent override before asking AppKit to reload the bundle
@@ -2526,6 +2530,7 @@ async function applyDesktopAppIconUnlocked(
     icon,
     platform: process.platform,
     isDarkAppearance: process.platform === "darwin" && nativeTheme.shouldUseDarkColors,
+    isBetaFlavor: desktopFlavor === "beta",
   });
   const iconPath = resolveResourcePath(resourceName);
   if (!iconPath) return;
@@ -2619,8 +2624,8 @@ function registerMacAppearanceIconSync(): void {
     return;
   }
   // macOS does not swap a runtime dock image when the system appearance
-  // changes, so re-apply the persisted preference. On macOS 26 the default
-  // preference short-circuits to the bundle icon, which adapts on its own.
+  // changes, so re-apply the persisted preference. On macOS 26, Stable's
+  // Default and Beta's Beta choices use the bundle icon, which adapts on its own.
   nativeTheme.on("updated", () => {
     void applyPersistedDesktopAppIcon().catch((error) => {
       console.warn("[desktop] Failed to persist the macOS app icon", error);
@@ -4965,7 +4970,7 @@ function registerIpcHandlers(): void {
     await applyDesktopAppIcon(icon, mainWindow, { flushShellIconCache: true });
   });
   ipcMain.handle(IPC.setAppIcon, async (_event, rawIcon: unknown) => {
-    if (!isDesktopAppIcon(rawIcon)) return;
+    if (!isDesktopAppIcon(rawIcon) || (rawIcon === "beta" && desktopFlavor !== "beta")) return;
     await enqueueDesktopAppIconApply(rawIcon);
   });
 
@@ -5370,6 +5375,7 @@ function getIconOption(): { icon: string } | Record<string, never> {
     icon,
     platform: process.platform,
     isDarkAppearance: false,
+    isBetaFlavor: desktopFlavor === "beta",
   });
   const iconPath = resolveResourcePath(resourceName);
   if (!iconPath) return {};

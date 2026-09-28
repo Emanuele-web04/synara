@@ -6,6 +6,9 @@ import "../../index.css";
 
 import { expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
+import { desktopFlavorFromProtocol } from "@synara/shared/betaFeatures";
+
+vi.mock("@synara/shared/betaFeatures", { spy: true });
 
 import { AppIconPicker } from "./AppIconPicker";
 
@@ -80,4 +83,28 @@ it("hides the unsupported dark icon off macOS", async () => {
   );
 
   await expect.element(mounted.getByRole("button", { name: "Dark icon" })).not.toBeInTheDocument();
+});
+
+it("applies the separate Beta choice without exposing it on Stable", async () => {
+  vi.mocked(desktopFlavorFromProtocol).mockReturnValue("production");
+  const onValueChange = vi.fn();
+  const stable = await render(
+    <AppIconPicker platform="MacIntel" value="default" onValueChange={onValueChange} />,
+  );
+  await expect.element(stable.getByRole("button", { name: "Beta icon" })).not.toBeInTheDocument();
+  await stable.unmount();
+  vi.mocked(desktopFlavorFromProtocol).mockReturnValue("beta");
+  try {
+    const beta = await render(
+      <AppIconPicker platform="MacIntel" value="default" onValueChange={onValueChange} />,
+    );
+    const betaButton = beta.getByRole("button", { name: "Beta icon" });
+    await expect.element(betaButton).toBeVisible();
+    await expect.element(beta.getByRole("button", { name: "Default icon" })).toBeVisible();
+    await expect.element(beta.getByRole("button", { name: "Dark icon" })).toBeVisible();
+    await betaButton.click();
+    expect(onValueChange).toHaveBeenCalledExactlyOnceWith("beta");
+  } finally {
+    vi.mocked(desktopFlavorFromProtocol).mockReturnValue("production");
+  }
 });
