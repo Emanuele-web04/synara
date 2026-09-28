@@ -6183,6 +6183,10 @@ export default function Sidebar() {
         handleSidebarViewChange("studio");
       }
     : null;
+  // Where Tasks takes Kanban's slot it also stands for the board it switches to, so the
+  // Kanban route selects (and keeps visible, even if hidden) the Tasks item.
+  const railSlotActiveItem =
+    tasksSurfaceEnabled && railActiveItem === "kanban" ? "tasks" : railActiveItem;
   // The rail's top items, in the user's Customize order (hidden ones drop out unless active).
   const railItemOrder = resolveTasksSurfaceSlot(
     normalizeRailItemOrder(appSettings.railItemOrder),
@@ -6223,8 +6227,7 @@ export default function Sidebar() {
     return {
       ...base,
       badge: item.badge,
-      // Tasks also stands for the Kanban board it can switch to.
-      active: railActiveItem === id || (id === "tasks" && railActiveItem === "kanban"),
+      active: railSlotActiveItem === id,
       onSelect: () => {
         selectRailRouteItem(id);
         item.onClick();
@@ -6236,7 +6239,7 @@ export default function Sidebar() {
   const railVisibleItemIds = buildRailItemOrder({
     order: railItemOrder,
     hidden: hiddenRailItems,
-    activeItem: railActiveItem,
+    activeItem: railSlotActiveItem,
     studioAvailable: openRailStudio !== null,
   });
   const railItems: AppRailItem[] = railVisibleItemIds.map(railItemFor);
