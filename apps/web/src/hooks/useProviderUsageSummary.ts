@@ -105,11 +105,15 @@ export function useProviderUsageSummary(input: {
   threadRateLimits?: ReadonlyArray<ProviderRateLimit> | undefined;
   codexHomePath?: string | null;
   providerSnapshot?: ServerGetProviderUsageSnapshotResult | undefined;
+  // The caller knows a shared batch that may supply this snapshot is still in flight. Defer the
+  // provider-scoped fallback until it settles, so rows do not fan out one RPC each on first paint.
+  providerSnapshotPending?: boolean | undefined;
   fetchOpenUsageData?: boolean | undefined;
 }) {
   const provider = input.provider ?? null;
   const shouldFetchLiveProviderUsage = provider !== null && input.providerSnapshot === undefined;
-  const shouldFetchLocalProviderUsage = shouldFetchLiveProviderUsage;
+  const shouldFetchLocalProviderUsage =
+    shouldFetchLiveProviderUsage && input.providerSnapshotPending !== true;
   const allProviderUsageQuery = useQuery(
     serverAllProviderUsageQueryOptions({
       enabled: shouldFetchLiveProviderUsage,
