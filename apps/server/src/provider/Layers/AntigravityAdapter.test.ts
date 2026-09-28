@@ -614,8 +614,10 @@ describe("Antigravity CLI integration helpers", () => {
       // The Antigravity CLI runs hook commands through cmd.exe with JSON
       // escapes intact, so `"` arrives as `\"` and quoted paths fail to
       // execute ("not recognized as an internal or external command"). The
-      // win32 command must stay free of double quotes.
-      String.raw`if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & echo {"decision":"ask"}) else (set ELECTRON_RUN_AS_NODE=1&& C:\Users\test\AppData\Local\Programs\Synara\Synara.exe C:\Users\test\.gemini\capture.cjs pre-tool)`,
+      // win32 command must stay free of double quotes, including the
+      // inactive fallback: PowerShell rebuilds the decision JSON from
+      // `[char]34` so cmd echoes clean JSON.
+      String.raw`if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & powershell -NoProfile -Command Write-Output ^('{'+[char]34+'decision'+[char]34+':'+[char]34+'ask'+[char]34+'}'^)) else (set ELECTRON_RUN_AS_NODE=1&& C:\Users\test\AppData\Local\Programs\Synara\Synara.exe C:\Users\test\.gemini\capture.cjs pre-tool)`,
     );
     // PreInvocation gates the LLM invocation: answer allow so subagent
     // launches are not denied (which would make the parent CLI exit 1).
@@ -627,7 +629,7 @@ describe("Antigravity CLI integration helpers", () => {
         "win32",
       ),
     ).toBe(
-      String.raw`if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & echo {"decision":"allow"}) else (set ELECTRON_RUN_AS_NODE=1&& C:\Users\test\AppData\Local\Programs\Synara\Synara.exe C:\Users\test\.gemini\capture.cjs pre-invocation)`,
+      String.raw`if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & powershell -NoProfile -Command Write-Output ^('{'+[char]34+'decision'+[char]34+':'+[char]34+'allow'+[char]34+'}'^)) else (set ELECTRON_RUN_AS_NODE=1&& C:\Users\test\AppData\Local\Programs\Synara\Synara.exe C:\Users\test\.gemini\capture.cjs pre-invocation)`,
     );
     expect(
       buildAntigravityCaptureCommand(
@@ -639,6 +641,19 @@ describe("Antigravity CLI integration helpers", () => {
     ).toBe(
       `if [ -z "\${SYNARA_ANTIGRAVITY_EVENTS:-}" ]; then cat >/dev/null 2>&1 || :; printf '%s\\n' '{"decision":"allow"}'; else ELECTRON_RUN_AS_NODE=1 '/Applications/Synara.app/Contents/MacOS/Synara' '/tmp/synara-capture/capture.cjs' 'pre-invocation'; fi`,
     );
+  });
+
+  it("keeps win32 hook commands free of double quotes", () => {
+    for (const event of ["pre-tool", "post-tool", "pre-invocation", "post-invocation", "stop"]) {
+      const command = buildAntigravityCaptureCommand(
+        String.raw`C:\Synara\Synara.exe`,
+        String.raw`C:\cap\capture.cjs`,
+        event,
+        "win32",
+      );
+      expect(command).not.toContain('"');
+      expect(JSON.parse(JSON.stringify({ command })).command).not.toContain('\\"');
+    }
   });
 
   it("guards Windows command-line limits before spawning the CLI", () => {

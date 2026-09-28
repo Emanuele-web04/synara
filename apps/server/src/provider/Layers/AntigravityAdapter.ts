@@ -284,6 +284,20 @@ function inactiveHookOutput(event: string): string {
   return "{}";
 }
 
+/**
+ * Inactive-fallback payload with no `"` characters. agy forwards win32 hook
+ * commands to cmd.exe without decoding JSON escapes, so `echo {"decision":..}`
+ * would arrive as `echo {\"decision\":..}` and echo the backslashes verbatim
+ * (protojson `syntax error (line 1:2)`), blocking every tool call. PowerShell
+ * single-quoted segments joined with `[char]34` rebuild the exact decision
+ * JSON at runtime; `^(...)` stops cmd parsing the parens (caret needs no JSON
+ * escape). Fallback payloads must stay `'`-free (true for all current values).
+ */
+function win32FallbackHookJson(event: string): string {
+  const body = inactiveHookOutput(event).split('"').join(`'+[char]34+'`);
+  return `Write-Output ^('${body}'^)`;
+}
+
 export function buildAntigravityCaptureCommand(
   executablePath: string,
   scriptPath: string,
@@ -300,7 +314,7 @@ export function buildAntigravityCaptureCommand(
     // paths are space-free in every supported install layout (dev bun/electron
     // binaries and packaged apps under %LOCALAPPDATA%\Programs).
     const invocation = `${executablePath} ${scriptPath} ${event}`;
-    return `if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & echo ${fallback}) else (set ELECTRON_RUN_AS_NODE=1&& ${invocation})`;
+    return `if not defined SYNARA_ANTIGRAVITY_EVENTS (more >nul 2>nul & powershell -NoProfile -Command ${win32FallbackHookJson(event)}) else (set ELECTRON_RUN_AS_NODE=1&& ${invocation})`;
   }
   const invocation = `${shellQuote(executablePath, platform)} ${shellQuote(scriptPath, platform)} ${shellQuote(event, platform)}`;
   return `if [ -z "\${SYNARA_ANTIGRAVITY_EVENTS:-}" ]; then cat >/dev/null 2>&1 || :; printf '%s\\n' '${fallback}'; else ELECTRON_RUN_AS_NODE=1 ${invocation}; fi`;
