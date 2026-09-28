@@ -168,7 +168,8 @@ export async function readGrokCachedLogin(
 ): Promise<GrokSession | null> {
   const session = parseGrokAuthRecord(await readJsonFile(grokAuthPath({ env, homeDir })));
   if (!session) return null;
-  return grokSessionNeedsRefresh(session, nowMs) && !session.refreshToken ? null : session;
+  const expiresAtMs = grokSessionExpiresAtMs(session);
+  return expiresAtMs !== null && expiresAtMs <= nowMs && !session.refreshToken ? null : session;
 }
 
 function sessionFromOauthToken(env: NodeJS.ProcessEnv): GrokSession | null {
@@ -176,12 +177,17 @@ function sessionFromOauthToken(env: NodeJS.ProcessEnv): GrokSession | null {
   return token ? { accessToken: token, plan: "SuperGrok" } : null;
 }
 
-function grokSessionNeedsRefresh(session: GrokSession, nowMs: number): boolean {
+function grokSessionExpiresAtMs(session: GrokSession): number | null {
   const jwtExpMs = decodeJwtExpMs(session.accessToken);
-  if (jwtExpMs !== null) return jwtExpMs <= nowMs + REFRESH_BUFFER_MS;
-  if (!session.expiresAt) return false;
+  if (jwtExpMs !== null) return jwtExpMs;
+  if (!session.expiresAt) return null;
   const expiresAtMs = Date.parse(session.expiresAt);
-  return Number.isFinite(expiresAtMs) && expiresAtMs <= nowMs + REFRESH_BUFFER_MS;
+  return Number.isFinite(expiresAtMs) ? expiresAtMs : null;
+}
+
+function grokSessionNeedsRefresh(session: GrokSession, nowMs: number): boolean {
+  const expiresAtMs = grokSessionExpiresAtMs(session);
+  return expiresAtMs !== null && expiresAtMs <= nowMs + REFRESH_BUFFER_MS;
 }
 
 async function persistRotatedGrokSession(
