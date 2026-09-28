@@ -43,11 +43,11 @@ const UNSAVED_UPDATED_AT = "1970-01-01T00:00:00.000Z";
 const pendingCreateById = new Map<TodoId, { settled: Promise<void>; settle: () => void }>();
 const afterPendingCreate = (id: TodoId) => pendingCreateById.get(id)?.settled;
 const beginPendingCreate = (id: TodoId) => {
-  let settle = () => {};
-  const settled = new Promise<void>((resolve) => {
-    settle = resolve;
+  const entry = { settled: Promise.resolve(), settle: () => {} };
+  entry.settled = new Promise<void>((resolve) => {
+    entry.settle = resolve;
   });
-  pendingCreateById.set(id, { settled, settle });
+  pendingCreateById.set(id, entry);
 };
 const endPendingCreate = (id: TodoId) => {
   pendingCreateById.get(id)?.settle();
