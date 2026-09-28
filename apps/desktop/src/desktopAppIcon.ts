@@ -38,44 +38,36 @@ const APP_ICON_RESOURCE_NAMES = {
 
 export const isDesktopAppIcon = Schema.is(DesktopAppIcon);
 
-export function normalizeStoredDesktopAppIcon(stored: string): {
-  readonly icon: DesktopAppIcon;
-  readonly needsReset: boolean;
-} {
-  const trimmed = stored.trim();
-  if (trimmed.length === 0) return { icon: "default", needsReset: false };
-  if (isDesktopAppIcon(trimmed)) return { icon: trimmed, needsReset: false };
-  // Forward-compat true reset: a newer build may have written a value this
-  // build doesn't recognize. Callers write back "default" so the stale value
-  // can't linger and confuse a later upgrade.
-  return { icon: "default", needsReset: true };
-}
-
 export function writeDesktopAppIconPreference(filePath: string, icon: DesktopAppIcon): void {
   FS.mkdirSync(Path.dirname(filePath), { recursive: true });
   FS.writeFileSync(filePath, icon, "utf8");
 }
 
-// Best-effort persisted read: unrecognized values reset to "default" on disk,
-// while missing or blank files read as "default" without writing. Never throws.
+// Missing or blank files use the caller's fallback without writing. Unknown
+// values reset on disk; known but inactive choices stay saved for another flavor.
 export function readDesktopAppIconPreference(
   filePath: string,
-  onResetError?: (error: unknown) => void,
+  options: {
+    readonly fallbackIcon?: DesktopAppIcon;
+    readonly inactiveIcons?: readonly string[];
+    readonly onResetError?: (error: unknown) => void;
+  } = {},
 ): DesktopAppIcon {
+  const fallbackIcon = options.fallbackIcon ?? "default";
   let stored: string;
   try {
-    stored = FS.readFileSync(filePath, "utf8");
+    stored = FS.readFileSync(filePath, "utf8").trim();
   } catch {
-    return "default";
+    return fallbackIcon;
   }
-  const normalized = normalizeStoredDesktopAppIcon(stored);
-  if (!normalized.needsReset) return normalized.icon;
+  if (stored.length === 0 || options.inactiveIcons?.includes(stored)) return fallbackIcon;
+  if (isDesktopAppIcon(stored)) return stored;
   try {
-    writeDesktopAppIconPreference(filePath, "default");
+    writeDesktopAppIconPreference(filePath, fallbackIcon);
   } catch (error) {
-    onResetError?.(error);
+    options.onResetError?.(error);
   }
-  return "default";
+  return fallbackIcon;
 }
 
 interface MacBundleAppIconInput {

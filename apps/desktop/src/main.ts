@@ -2260,12 +2260,16 @@ function usesLegacyMacDockIcon(): boolean {
 }
 
 function readDesktopAppIcon(): DesktopAppIcon {
-  // Forward-compat true reset lives in readDesktopAppIconPreference: a newer
-  // build's unrecognized value reads back as "default" and is written back so
-  // the stale value can't linger and confuse a later upgrade. Best-effort:
-  // the read never throws.
-  return readDesktopAppIconPreference(DESKTOP_APP_ICON_PATH, (error) => {
-    safeConsoleError("[desktop] Failed to reset unrecognized app icon preference", error);
+  const requestedFallback = desktopFlavor === "beta" ? "beta" : "default";
+  const fallbackIcon = isDesktopAppIcon(requestedFallback) ? requestedFallback : "default";
+  return readDesktopAppIconPreference(DESKTOP_APP_ICON_PATH, {
+    fallbackIcon,
+    // Stable leaves a Beta choice inert. Builds without the Beta icon retain
+    // the token too, so returning to a build that supports it restores it.
+    inactiveIcons: desktopFlavor === "beta" && isDesktopAppIcon("beta") ? [] : ["beta"],
+    onResetError: (error) => {
+      safeConsoleError("[desktop] Failed to reset unrecognized app icon preference", error);
+    },
   });
 }
 
@@ -2407,8 +2411,6 @@ function toWindowsTaskbarIcoBytes(sourcePath: string): Buffer {
 let windowsShellStampTimer: ReturnType<typeof setImmediate> | null = null;
 let windowsShellStampResolve: (() => void) | null = null;
 let desktopAppIconApplyTail: Promise<void> = Promise.resolve();
-let lastPersistedMacAppIcon: DesktopAppIcon | null = null;
-let lastPersistedMacAppIconBundleMtime: number | null = null;
 
 async function syncMacAppBundleIcon(
   icon: DesktopAppIcon,
@@ -2418,31 +2420,11 @@ async function syncMacAppBundleIcon(
   if (!app.isPackaged) return;
   const bundlePath = resolveMacAppBundlePath(process.execPath, process.platform);
   if (!bundlePath) return;
-  // An in-place auto-update swaps the bundle without changing its path. The
-  // remembered icon alone would skip re-persisting onto the fresh bundle, so
-  // bypass the guard when the bundle directory mtime changed. State latches
-  // only after a successful persist, so a failed NSWorkspace write retries on
-  // the next apply. A stat failure re-persists (fail open).
-  let bundleMtime: number | null = null;
-  try {
-    bundleMtime = FS.statSync(bundlePath).mtimeMs;
-  } catch {
-    bundleMtime = null;
-  }
-  if (
-    lastPersistedMacAppIcon === icon &&
-    bundleMtime !== null &&
-    lastPersistedMacAppIconBundleMtime === bundleMtime
-  ) {
-    return;
-  }
   await persistMacAppIcon({
     bundlePath,
     cacheDirectory: Path.join(STATE_DIR, "mac-app-icons"),
     png: icon === "default" ? null : (image?.toPNG() ?? null),
   });
-  lastPersistedMacAppIcon = icon;
-  lastPersistedMacAppIconBundleMtime = bundleMtime;
 }
 
 function cancelDeferredWindowsShellStamp(): void {
@@ -5583,8 +5565,9 @@ function createWindow(): BrowserWindow {
       window.maximize();
     }
     window.show();
-    // Startup icon coverage lives in the single post-loadURL apply below, so
-    // this handler intentionally does not re-apply (avoids double-enqueue).
+    if (process.platform === "win32") {
+      void applyPersistedDesktopAppIcon(window);
+    }
     emitDesktopWindowState(window);
   });
 
@@ -5632,16 +5615,12 @@ function createWindow(): BrowserWindow {
     void window.loadURL(desktopIdentity.entryUrl);
   }
 
-  // Re-apply the persisted icon once the window exists: an NSIS update recreates
-  // Windows shortcuts and reverts the shell stamp, and Linux needs the new window
-  // for setIcon. Best-effort and non-blocking. `default` adds no extra work.
-  if (
-    (process.platform === "linux" || process.platform === "win32") &&
-    readDesktopAppIcon() !== "default"
-  ) {
-    void applyPersistedDesktopAppIcon(window, { reregisterTaskbarButton: false }).catch((error) => {
+  if (process.platform === "linux" || process.platform === "win32") {
+    try {
+      void applyPersistedDesktopAppIcon(window, { reregisterTaskbarButton: false });
+    } catch (error) {
       console.warn(`[desktop] Failed to apply startup app icon: ${formatErrorMessage(error)}`);
-    });
+    }
   }
 
   window.on("closed", () => {

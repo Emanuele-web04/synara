@@ -7,7 +7,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   desktopAppIconResourceName,
   isDesktopAppIcon,
-  normalizeStoredDesktopAppIcon,
   readDesktopAppIconPreference,
   shouldUpdateDesktopAppIcon,
   usesMacBundleAppIcon,
@@ -111,56 +110,55 @@ describe("desktop app icons", () => {
   });
 });
 
-describe("desktop app icon preference reset", () => {
-  it("resets unrecognized persisted values to default and writes the reset back", () => {
+describe("desktop app icon preference persistence", () => {
+  it.each(["default", "dark"] as const)(
+    "resets an unknown value to the configured %s fallback on disk",
+    (fallbackIcon) => {
+      const filePath = temporaryIconPath();
+      FS.writeFileSync(filePath, "future-icon", "utf8");
+
+      expect(readDesktopAppIconPreference(filePath, { fallbackIcon })).toBe(fallbackIcon);
+      expect(FS.readFileSync(filePath, "utf8")).toBe(fallbackIcon);
+    },
+  );
+
+  it.each([undefined, "   \n"])(
+    "uses the configured fallback for a missing or blank preference without writing (%j)",
+    (stored) => {
+      const filePath = temporaryIconPath();
+      if (stored !== undefined) FS.writeFileSync(filePath, stored, "utf8");
+
+      expect(readDesktopAppIconPreference(filePath, { fallbackIcon: "dark" })).toBe("dark");
+      if (stored === undefined) {
+        expect(FS.existsSync(filePath)).toBe(false);
+      } else {
+        expect(FS.readFileSync(filePath, "utf8")).toBe(stored);
+      }
+    },
+  );
+
+  it("keeps a supported selection and its stored bytes despite a different fallback", () => {
+    const filePath = temporaryIconPath();
+    FS.writeFileSync(filePath, " icon\n", "utf8");
+
+    expect(readDesktopAppIconPreference(filePath, { fallbackIcon: "dark" })).toBe("icon");
+    expect(FS.readFileSync(filePath, "utf8")).toBe(" icon\n");
+  });
+
+  it("keeps an inactive preference on disk for a flavor that can use it later", () => {
+    const filePath = temporaryIconPath();
+    writeDesktopAppIconPreference(filePath, "dark");
+
+    expect(readDesktopAppIconPreference(filePath, { inactiveIcons: ["dark"] })).toBe("default");
+    expect(FS.readFileSync(filePath, "utf8")).toBe("dark");
+    expect(readDesktopAppIconPreference(filePath)).toBe("dark");
+  });
+
+  it("preserves a known future flavor token when it is inactive in this build", () => {
     const filePath = temporaryIconPath();
     FS.writeFileSync(filePath, "beta", "utf8");
 
-    expect(normalizeStoredDesktopAppIcon("beta")).toEqual({ icon: "default", needsReset: true });
-    expect(readDesktopAppIconPreference(filePath)).toBe("default");
-    expect(FS.readFileSync(filePath, "utf8")).toBe("default");
-  });
-
-  it("reads a missing preference as default without creating the file", () => {
-    const filePath = temporaryIconPath();
-
-    expect(readDesktopAppIconPreference(filePath)).toBe("default");
-    expect(FS.existsSync(filePath)).toBe(false);
-  });
-
-  it("treats a blank persisted value as missing without writing", () => {
-    const filePath = temporaryIconPath();
-    FS.writeFileSync(filePath, "   \n", "utf8");
-
-    expect(normalizeStoredDesktopAppIcon("   \n")).toEqual({ icon: "default", needsReset: false });
-    expect(readDesktopAppIconPreference(filePath)).toBe("default");
-    expect(FS.readFileSync(filePath, "utf8")).toBe("   \n");
-  });
-
-  it("keeps valid persisted values untouched", () => {
-    for (const icon of ["default", "icon", "dark"] as const) {
-      const filePath = temporaryIconPath();
-      writeDesktopAppIconPreference(filePath, icon);
-
-      expect(normalizeStoredDesktopAppIcon(` ${icon}\n`)).toEqual({ icon, needsReset: false });
-      expect(readDesktopAppIconPreference(filePath)).toBe(icon);
-      expect(FS.readFileSync(filePath, "utf8")).toBe(icon);
-    }
-  });
-
-  it("reports no reset error for valid or missing values", () => {
-    const missingPath = temporaryIconPath();
-    let reported: unknown;
-    const onResetError = (error: unknown): void => {
-      reported = error;
-    };
-
-    expect(readDesktopAppIconPreference(missingPath, onResetError)).toBe("default");
-    expect(reported).toBeUndefined();
-
-    const validPath = temporaryIconPath();
-    writeDesktopAppIconPreference(validPath, "dark");
-    expect(readDesktopAppIconPreference(validPath, onResetError)).toBe("dark");
-    expect(reported).toBeUndefined();
+    expect(readDesktopAppIconPreference(filePath, { inactiveIcons: ["beta"] })).toBe("default");
+    expect(FS.readFileSync(filePath, "utf8")).toBe("beta");
   });
 });
