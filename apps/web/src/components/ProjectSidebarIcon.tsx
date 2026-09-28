@@ -1,6 +1,6 @@
 // FILE: ProjectSidebarIcon.tsx
 // Purpose: Render a project's glyph: its chosen emoji or icon, or the standard folder with an
-//          optional favicon badge overlay.
+//          optional favicon badge overlay or a primary favicon in compact rows.
 // Layer: Sidebar UI component
 // Exports: ProjectSidebarIcon, ProjectEmojiGlyph
 
@@ -47,11 +47,13 @@ export function ProjectSidebarIcon({
   expanded,
   appearance,
   glyphClassName: glyphClassNameProp,
+  presentation = "badge",
 }: {
   cwd: string;
   expanded: boolean;
   appearance?: ProjectAppearance | null | undefined;
   glyphClassName?: string;
+  presentation?: "badge" | "favicon";
 }) {
   const glyphClassName = glyphClassNameProp ?? "size-4";
   if (appearance?.kind === "emoji") {
@@ -66,12 +68,17 @@ export function ProjectSidebarIcon({
       />
     );
   }
+  if (presentation === "favicon" && appearance?.kind === "icon" && appearance.color) {
+    const FolderGlyph = expanded ? FolderOpen : FolderClosed;
+    return <FolderGlyph className={glyphClassName} style={colorStyle(appearance.color)} />;
+  }
   return (
     <ProjectFolderIcon
       cwd={cwd}
       expanded={expanded}
       color={appearance?.color ?? null}
       glyphClassName={glyphClassName}
+      presentation={presentation}
     />
   );
 }
@@ -81,11 +88,13 @@ function ProjectFolderIcon({
   expanded,
   color,
   glyphClassName,
+  presentation,
 }: {
   cwd: string;
   expanded: boolean;
   color: ProjectColor | null;
   glyphClassName: string;
+  presentation: "badge" | "favicon";
 }) {
   const faviconSrc = resolveProjectFaviconUrl(cwd);
   // Keyed by src: a cwd change derives back to the cache-seeded default in the
@@ -128,6 +137,25 @@ function ProjectFolderIcon({
     };
   }, [faviconSrc]);
 
+  const handleImageError = () => {
+    projectFaviconPresence.set(faviconSrc, false);
+    setProbe({ src: faviconSrc, present: false });
+  };
+
+  if (presentation === "favicon") {
+    return hasFavicon ? (
+      <img
+        src={faviconSrc}
+        alt=""
+        aria-hidden="true"
+        className={`${glyphClassName} rounded-[2px] object-contain`}
+        onError={handleImageError}
+      />
+    ) : (
+      <FolderGlyph className={glyphClassName} style={colorStyle(color)} />
+    );
+  }
+
   return (
     <>
       <FolderGlyph className={glyphClassName} style={colorStyle(color)} />
@@ -137,10 +165,7 @@ function ProjectFolderIcon({
           alt=""
           aria-hidden="true"
           className="absolute -right-1 -bottom-1 size-3 rounded-[4px] object-contain shadow-sm"
-          onError={() => {
-            projectFaviconPresence.set(faviconSrc, false);
-            setProbe({ src: faviconSrc, present: false });
-          }}
+          onError={handleImageError}
         />
       ) : null}
     </>
