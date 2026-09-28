@@ -3,6 +3,7 @@ import { createLinuxCuaDriverHost } from "./linuxCuaDriverHost";
 import { LinuxEscapeKillSwitchMonitor, linuxEscapeSession } from "./linuxEscapeKillSwitchMonitor";
 import { ComputerFrameTap } from "./computerFrameTap";
 import { ComputerShield } from "./computerShield";
+import { createDesktopNotificationRetainer } from "./notificationRetention";
 import { registerComputerDesktopLifecycle } from "./computerDesktopLifecycle";
 import { COMPUTER_PERMISSION_KINDS } from "@synara/shared/computerGrants";
 import { CUA_HOST_SOCKET_ENV } from "@synara/shared/cuaDriverProtocol";
@@ -526,6 +527,7 @@ let desktopLogSink: RotatingFileSink | null = null;
 let backendLogSink: RotatingFileSink | null = null;
 let restoreStdIoCapture: (() => void) | null = null;
 let unreadBackgroundNotificationCount = 0;
+const desktopNotificationRetainer = createDesktopNotificationRetainer<Notification>();
 let browserPerfInterval: ReturnType<typeof setInterval> | null = null;
 const annotationGuestPreload = Path.join(__dirname, "guestPreload.js");
 const browserOsKeyStore = {
@@ -2190,6 +2192,7 @@ function showDesktopNotification(input: {
     }
   });
 
+  desktopNotificationRetainer.retain(notification);
   notification.show();
   return true;
 }
