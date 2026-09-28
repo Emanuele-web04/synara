@@ -52,6 +52,20 @@ The rest of this file is the detailed reference.
 - Windows installer GUID: `a8e63b48-d4f3-4db5-9e12-368107afe65d` (separate Add/Remove
   Programs entry; the stable GUID is unchanged)
 
+## App icon choices
+
+**Settings → Appearance → App icon** offers Default, Icon, Dark, and Beta on
+macOS. Windows and Linux offer Default, Icon, and Beta; Dark is macOS-only.
+Default is the white Synara artwork, Dark is black, Icon is the landscape artwork,
+and Beta is the blue Beta artwork. A fresh Beta profile and Reset to defaults use
+Beta; a saved choice is preserved.
+
+On macOS 26, Beta uses the app's appearance-aware bundle icon. Earlier macOS
+versions use its PNG artwork. Explicit Default and the other bitmap choices are
+also written to the macOS app bundle so they survive quitting the app.
+Stable keeps its existing picker choices. It does not offer Beta, and a stored
+Beta preference remains inactive without being erased.
+
 ## How it differs from Canary
 
 Canary is a local source build managed by `bun run canary:*` scripts and updates only
