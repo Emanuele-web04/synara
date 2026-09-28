@@ -12,12 +12,6 @@ const FAVICON_CANDIDATES = [
   "public/favicon.svg",
   "public/favicon.ico",
   "public/favicon.png",
-  "apps/web/public/favicon.svg",
-  "apps/web/public/favicon.ico",
-  "apps/web/public/favicon.png",
-  "web/public/favicon.svg",
-  "web/public/favicon.ico",
-  "web/public/favicon.png",
   "app/favicon.ico",
   "app/favicon.png",
   "app/icon.svg",
@@ -32,6 +26,15 @@ const FAVICON_CANDIDATES = [
   "assets/icon.png",
   "assets/logo.svg",
   "assets/logo.png",
+] as const;
+
+const NESTED_FAVICON_CANDIDATES = [
+  "apps/web/public/favicon.svg",
+  "apps/web/public/favicon.ico",
+  "apps/web/public/favicon.png",
+  "web/public/favicon.svg",
+  "web/public/favicon.ico",
+  "web/public/favicon.png",
 ] as const;
 
 const ICON_SOURCE_FILES = [
@@ -100,6 +103,32 @@ export const makeProjectFaviconResolver = Effect.gen(function* () {
       }
     }
 
+    for (const sourceFile of ICON_SOURCE_FILES) {
+      const sourcePath = path.join(cwd, sourceFile);
+      const source = yield* fileSystem
+        .readFileString(sourcePath)
+        .pipe(Effect.catch(() => Effect.succeed(null)));
+      if (!source) {
+        continue;
+      }
+      const href = extractIconHref(source);
+      if (!href) {
+        continue;
+      }
+      const existing = yield* findExistingFile(cwd, resolveIconHref(cwd, href));
+      if (existing) {
+        return existing;
+      }
+    }
+
+    // Nested app discovery is a fallback to the project's own icon and declaration.
+    for (const candidate of NESTED_FAVICON_CANDIDATES) {
+      const existing = yield* findExistingFile(cwd, [path.join(cwd, candidate)]);
+      if (existing) {
+        return existing;
+      }
+    }
+
     // Some repositories keep the web app one directory below the project root.
     // Limit discovery to app-like first-level folders so a sidebar refresh does
     // not scan unrelated source trees or dependency directories.
@@ -118,24 +147,6 @@ export const makeProjectFaviconResolver = Effect.gen(function* () {
         ),
       );
       if (existing) return existing;
-    }
-
-    for (const sourceFile of ICON_SOURCE_FILES) {
-      const sourcePath = path.join(cwd, sourceFile);
-      const source = yield* fileSystem
-        .readFileString(sourcePath)
-        .pipe(Effect.catch(() => Effect.succeed(null)));
-      if (!source) {
-        continue;
-      }
-      const href = extractIconHref(source);
-      if (!href) {
-        continue;
-      }
-      const existing = yield* findExistingFile(cwd, resolveIconHref(cwd, href));
-      if (existing) {
-        return existing;
-      }
     }
 
     return null;

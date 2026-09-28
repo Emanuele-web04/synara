@@ -1,10 +1,10 @@
 // FILE: ProjectSidebarIcon.tsx
 // Purpose: Render a project's glyph: its chosen emoji or icon, or the standard folder with an
-//          optional favicon badge overlay.
+//          optional favicon badge overlay or a primary favicon in compact rows.
 // Layer: Sidebar UI component
 // Exports: ProjectSidebarIcon, ProjectEmojiGlyph
 
-import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 
 import { CentralIcon } from "~/lib/central-icons";
 import {
@@ -48,14 +48,12 @@ export function ProjectSidebarIcon({
   appearance,
   glyphClassName: glyphClassNameProp,
   presentation = "badge",
-  fallbackIcon,
 }: {
   cwd: string;
   expanded: boolean;
   appearance?: ProjectAppearance | null | undefined;
   glyphClassName?: string;
   presentation?: "badge" | "favicon";
-  fallbackIcon?: ReactNode;
 }) {
   const glyphClassName = glyphClassNameProp ?? "size-4";
   if (appearance?.kind === "emoji") {
@@ -70,6 +68,10 @@ export function ProjectSidebarIcon({
       />
     );
   }
+  if (presentation === "favicon" && appearance?.kind === "icon" && appearance.color) {
+    const FolderGlyph = expanded ? FolderOpen : FolderClosed;
+    return <FolderGlyph className={glyphClassName} style={colorStyle(appearance.color)} />;
+  }
   return (
     <ProjectFolderIcon
       cwd={cwd}
@@ -77,7 +79,6 @@ export function ProjectSidebarIcon({
       color={appearance?.color ?? null}
       glyphClassName={glyphClassName}
       presentation={presentation}
-      fallbackIcon={fallbackIcon}
     />
   );
 }
@@ -88,14 +89,12 @@ function ProjectFolderIcon({
   color,
   glyphClassName,
   presentation,
-  fallbackIcon,
 }: {
   cwd: string;
   expanded: boolean;
   color: ProjectColor | null;
   glyphClassName: string;
   presentation: "badge" | "favicon";
-  fallbackIcon?: ReactNode;
 }) {
   const faviconSrc = resolveProjectFaviconUrl(cwd);
   // Keyed by src: a cwd change derives back to the cache-seeded default in the
@@ -153,7 +152,7 @@ function ProjectFolderIcon({
         onError={handleImageError}
       />
     ) : (
-      (fallbackIcon ?? <FolderGlyph className={glyphClassName} style={colorStyle(color)} />)
+      <FolderGlyph className={glyphClassName} style={colorStyle(color)} />
     );
   }
 

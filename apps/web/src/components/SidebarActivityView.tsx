@@ -143,7 +143,6 @@ function ActivityThreadRow({
       envMode: thread.envMode,
       worktreePath: thread.worktreePath,
     }) === "worktree";
-  const ProjectGlyph = isWorktree ? WorktreeIcon : FolderClosed;
   const hoverAnchorId = createSidebarThreadHoverAnchorId({
     scope: "activity",
     threadId: thread.id,
@@ -220,19 +219,12 @@ function ActivityThreadRow({
               <ProjectSidebarIcon
                 cwd={project.cwd}
                 expanded={false}
+                appearance={project.appearance}
                 glyphClassName={sidebarGlyphClass("meta", "text-muted-foreground/70")}
                 presentation="favicon"
-                fallbackIcon={
-                  isWorktree ? (
-                    <WorktreeIcon
-                      className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
-                      aria-hidden
-                    />
-                  ) : undefined
-                }
               />
             ) : (
-              <ProjectGlyph
+              <FolderClosed
                 className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
                 aria-hidden
               />
@@ -240,6 +232,12 @@ function ActivityThreadRow({
             <span className="min-w-0 truncate text-ui-sm text-muted-foreground/80">
               {resolveThreadProjectLabel(project)}
             </span>
+            {isWorktree ? (
+              <WorktreeIcon
+                className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
+                aria-label="Worktree"
+              />
+            ) : null}
             <span className="ml-auto flex min-w-0 shrink-0 items-center gap-1.5">
               {pr ? (
                 <PrStateChip

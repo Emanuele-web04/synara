@@ -75,6 +75,37 @@ it.layer(TestLayer)("ProjectFaviconResolverLive", (it) => {
       }),
     );
 
+    const nestedIcons = [
+      "apps/web/public/favicon.png",
+      "web/public/favicon.png",
+      "project-dashboard/public/favicon.png",
+    ];
+
+    it.effect.each(nestedIcons)("prefers the declared project icon over $0", (nestedIcon) =>
+      Effect.gen(function* () {
+        const resolver = yield* ProjectFaviconResolver;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "index.html", '<link rel="icon" href="/brand/logo.svg">');
+        yield* writeTextFile(cwd, "public/brand/logo.svg", "<svg>project brand</svg>");
+        yield* writeTextFile(cwd, nestedIcon, "nested icon");
+
+        expect(yield* resolver.resolvePath(cwd)).toBe(path.join(cwd, "public/brand/logo.svg"));
+      }),
+    );
+
+    it.effect.each(nestedIcons)("prefers the root app icon over $0", (nestedIcon) =>
+      Effect.gen(function* () {
+        const resolver = yield* ProjectFaviconResolver;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "app/icon.svg", "<svg>project icon</svg>");
+        yield* writeTextFile(cwd, nestedIcon, "nested icon");
+
+        expect(yield* resolver.resolvePath(cwd)).toBe(path.join(cwd, "app/icon.svg"));
+      }),
+    );
+
     it.effect("resolves icon hrefs below dot-prefixed child directories", () =>
       Effect.gen(function* () {
         const resolver = yield* ProjectFaviconResolver;
