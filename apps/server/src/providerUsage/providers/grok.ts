@@ -4,6 +4,7 @@
 // the same way Codex does. An xAI API key still proves a connected account when no
 // SuperGrok session is present.
 
+import os from "node:os";
 import nodePath from "node:path";
 
 import type { ServerProviderUsageLine, ServerProviderUsageLimit } from "@synara/contracts";
@@ -73,7 +74,7 @@ function withRefreshLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
-function grokAuthPath(ctx: ProviderUsageContext): string {
+function grokAuthPath(ctx: Pick<ProviderUsageContext, "env" | "homeDir">): string {
   const grokHome = ctx.env.GROK_HOME?.trim() || nodePath.join(ctx.homeDir, ".grok");
   return nodePath.join(grokHome, "auth.json");
 }
@@ -155,17 +156,38 @@ export function parseGrokAuthRecord(value: unknown, path?: string): GrokSession 
   return null;
 }
 
+/**
+ * Read the `grok login` session that Grok offers ACP clients as `cached_token`, without
+ * refreshing or rewriting it. An expired access token only counts when Grok can renew it
+ * with the stored refresh token.
+ */
+export async function readGrokCachedLogin(
+  env: NodeJS.ProcessEnv = process.env,
+  homeDir: string = os.homedir(),
+  nowMs: number = Date.now(),
+): Promise<GrokSession | null> {
+  const session = parseGrokAuthRecord(await readJsonFile(grokAuthPath({ env, homeDir })));
+  if (!session) return null;
+  const expiresAtMs = grokSessionExpiresAtMs(session);
+  return expiresAtMs !== null && expiresAtMs <= nowMs && !session.refreshToken ? null : session;
+}
+
 function sessionFromOauthToken(env: NodeJS.ProcessEnv): GrokSession | null {
   const token = env.GROK_OAUTH_TOKEN?.trim();
   return token ? { accessToken: token, plan: "SuperGrok" } : null;
 }
 
-function grokSessionNeedsRefresh(session: GrokSession, nowMs: number): boolean {
+function grokSessionExpiresAtMs(session: GrokSession): number | null {
   const jwtExpMs = decodeJwtExpMs(session.accessToken);
-  if (jwtExpMs !== null) return jwtExpMs <= nowMs + REFRESH_BUFFER_MS;
-  if (!session.expiresAt) return false;
+  if (jwtExpMs !== null) return jwtExpMs;
+  if (!session.expiresAt) return null;
   const expiresAtMs = Date.parse(session.expiresAt);
-  return Number.isFinite(expiresAtMs) && expiresAtMs <= nowMs + REFRESH_BUFFER_MS;
+  return Number.isFinite(expiresAtMs) ? expiresAtMs : null;
+}
+
+function grokSessionNeedsRefresh(session: GrokSession, nowMs: number): boolean {
+  const expiresAtMs = grokSessionExpiresAtMs(session);
+  return expiresAtMs !== null && expiresAtMs <= nowMs + REFRESH_BUFFER_MS;
 }
 
 async function persistRotatedGrokSession(

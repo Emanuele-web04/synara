@@ -34,7 +34,14 @@ import {
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 
-import { LEGACY_PROVIDER_MIGRATIONS, ProviderKind } from "@synara/contracts";
+import {
+  DESKTOP_RENDERER_ERROR_MESSAGE_MAX_LENGTH,
+  DESKTOP_RENDERER_ERROR_STACK_MAX_LENGTH,
+  type DesktopRendererError,
+  type DesktopUpdateState,
+  LEGACY_PROVIDER_MIGRATIONS,
+  ProviderKind,
+} from "@synara/contracts";
 import { redactDiagnosticText } from "@synara/shared/diagnosticsRedaction";
 
 /** Override point for self-hosted / dev ingestion; production default ships in the binary. */
@@ -55,8 +62,8 @@ const USAGE_SNAPSHOT_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const USAGE_SNAPSHOT_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 const USAGE_COUNT_MAX = 100_000;
 
-export const DIAGNOSTICS_MESSAGE_MAX_LENGTH = 1024;
-export const DIAGNOSTICS_STACK_MAX_LENGTH = 8 * 1024;
+export const DIAGNOSTICS_MESSAGE_MAX_LENGTH = DESKTOP_RENDERER_ERROR_MESSAGE_MAX_LENGTH;
+export const DIAGNOSTICS_STACK_MAX_LENGTH = DESKTOP_RENDERER_ERROR_STACK_MAX_LENGTH;
 export const DIAGNOSTICS_LOG_TAIL_MAX_LENGTH = 16 * 1024;
 export const DIAGNOSTICS_LOG_TAIL_MAX_LINES = 200;
 const ERROR_FINGERPRINT_WINDOW_MS = 10 * 60 * 1000;
@@ -118,6 +125,8 @@ export type BetaDiagnosticsPayload =
       readonly durationMs?: number;
       readonly targetVersion?: string;
       readonly errorContext?: "check" | "download" | "install";
+      /** Redacted updater failure detail; accepted only for update.error. */
+      readonly message?: string;
     }
   | {
       readonly kind: "usage";
@@ -234,6 +243,12 @@ export function sanitizeBetaDiagnosticsPayload(
       payload.errorContext === "install"
         ? { errorContext: payload.errorContext }
         : {}),
+      ...(event === "update.error" &&
+      payload.outcome === "error" &&
+      typeof payload.message === "string" &&
+      payload.message.length > 0
+        ? { message: redact(payload.message, DIAGNOSTICS_MESSAGE_MAX_LENGTH) }
+        : {}),
     };
   }
   if (payload.kind === "usage") {
@@ -314,9 +329,21 @@ function topStackFrame(stack: string | undefined): string {
   return stack.split("\n")[0]?.trim() ?? "";
 }
 
-function errorFingerprint(message: string, stack: string | undefined): string {
+function errorFingerprint(message: string, stack: string | undefined, homeDir: string): string {
+  // Local backend ports change on each launch. Normalize only loopback origins
+  // before redaction so unrelated external services keep their port identity.
+  const normalize = (text: string, maxLength: number): string =>
+    redactDiagnosticText(
+      text.replace(
+        /\b((?:https?|wss?):\/\/(?:localhost|127\.0\.0\.1|\[::1\])):\d{1,5}(?=[/\s'"?#]|$)/gi,
+        "$1:0",
+      ),
+      { homeDir, maxLength },
+    );
   return createHash("sha256")
-    .update(`${message}\n${topStackFrame(stack)}`)
+    .update(
+      `${normalize(message, DIAGNOSTICS_MESSAGE_MAX_LENGTH)}\n${topStackFrame(stack === undefined ? undefined : normalize(stack, DIAGNOSTICS_STACK_MAX_LENGTH))}`,
+    )
     .digest("hex")
     .slice(0, 16);
 }
@@ -452,6 +479,7 @@ export class BetaDiagnostics {
 
   track(event: BetaDiagnosticsEventName, payload: BetaDiagnosticsPayload): void {
     if (this.disposed) return;
+    if (payload.kind === "crash" && payload.reason === "clean-exit") return;
     const sanitized = sanitizeBetaDiagnosticsPayload(payload, this.homeDir, event);
     // A beta lifecycle event without a valid outcome is meaningless — drop it.
     if (sanitized.kind === "beta" && !("outcome" in sanitized)) return;
@@ -479,6 +507,42 @@ export class BetaDiagnostics {
     }
   }
 
+  /** Records update transitions using only the diagnostics payload allowlist. */
+  trackUpdateStateChange(previous: DesktopUpdateState, next: DesktopUpdateState): void {
+    // Retryable failures retain available/downloaded instead of becoming error.
+    if (next.status === "error" || next.errorContext !== null) {
+      if (
+        next.status !== previous.status ||
+        next.errorContext !== previous.errorContext ||
+        next.message !== previous.message
+      )
+        this.track("update.error", {
+          kind: "update",
+          outcome: "error",
+          ...(next.errorContext ? { errorContext: next.errorContext } : {}),
+          ...(next.message ? { message: next.message } : {}),
+        });
+      return;
+    }
+    if (next.status === previous.status) return;
+    const status = next.status;
+    if (status === "checking") {
+      this.track("update.check", { kind: "update", outcome: "ok" });
+    } else if (status === "available") {
+      this.track("update.available", {
+        kind: "update",
+        outcome: "ok",
+        ...(next.availableVersion ? { targetVersion: next.availableVersion } : {}),
+      });
+    } else if (status === "downloaded") {
+      this.track("update.downloaded", {
+        kind: "update",
+        outcome: "ok",
+        ...(next.downloadedVersion ? { targetVersion: next.downloadedVersion } : {}),
+      });
+    }
+  }
+
   /**
    * Records an app.error event. The message and stack are redacted before the
    * fingerprint is computed; identical fingerprints are throttled to one event
@@ -487,8 +551,22 @@ export class BetaDiagnostics {
   trackError(source: "main" | "renderer", error: unknown): void {
     if (this.disposed) return;
     try {
-      const message = error instanceof Error ? error.message : String(error);
-      const stack = error instanceof Error ? error.stack : undefined;
+      const rendererError =
+        source === "renderer" && error !== null && typeof error === "object"
+          ? (error as Partial<DesktopRendererError>)
+          : undefined;
+      const message =
+        error instanceof Error
+          ? error.message
+          : typeof rendererError?.message === "string"
+            ? rendererError.message
+            : String(error);
+      const stack =
+        error instanceof Error
+          ? error.stack
+          : typeof rendererError?.stack === "string"
+            ? rendererError.stack
+            : undefined;
       const redactedMessage = redactDiagnosticText(message, {
         homeDir: this.homeDir,
         maxLength: DIAGNOSTICS_MESSAGE_MAX_LENGTH,
@@ -500,7 +578,7 @@ export class BetaDiagnostics {
               homeDir: this.homeDir,
               maxLength: DIAGNOSTICS_STACK_MAX_LENGTH,
             });
-      const fingerprint = errorFingerprint(redactedMessage, redactedStack);
+      const fingerprint = errorFingerprint(message, stack, this.homeDir);
       if (!this.allowError(fingerprint)) return;
       this.track("app.error", {
         kind: "error",

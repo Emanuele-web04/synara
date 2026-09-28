@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type {
+  ModelSelection,
   ProviderApprovalDecision,
   ProviderForkThreadInput,
   ProviderForkThreadResult,
@@ -2377,6 +2378,55 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  for (const mode of ["send", "steer"] as const) {
+    for (const cancelled of [false, true]) {
+      it.effect(
+        `routes ${mode} compaction's local cancellation signal (cancelled=${cancelled})`,
+        () =>
+          Effect.gen(function* () {
+            const provider = yield* ProviderService;
+            const threadId = asThreadId(`thread-direct-compact-${mode}-${cancelled}`);
+            yield* provider.startSession(threadId, {
+              provider: "claudeAgent",
+              threadId,
+              runtimeMode: "full-access",
+              modelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
+            });
+            const cancellation = yield* Deferred.make<void>();
+            if (cancelled) yield* Deferred.succeed(cancellation, undefined);
+            const dispatch = vi
+              .spyOn(routing.claude.adapter, mode === "send" ? "sendTurn" : "steerTurn")
+              .mockClear();
+            const result = yield* provider[mode === "send" ? "sendTurn" : "steerTurn"](
+              {
+                threadId,
+                input: "/compact Preserve project decisions",
+                attachments: [],
+                modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+              },
+              { claudeCompactionCancellation: cancellation },
+            ).pipe(Effect.result);
+            assert.equal(result._tag, cancelled ? "Failure" : "Success");
+            if (cancelled) assert.equal(dispatch.mock.calls.length, 0);
+            else {
+              assert.strictEqual(
+                dispatch.mock.calls[0]?.[1]?.claudeCompactionCancellation,
+                cancellation,
+              );
+              assert.notProperty(dispatch.mock.calls[0]?.[0], "claudeCompactionCancellation");
+              const directory = yield* ProviderSessionDirectory;
+              assert.deepEqual(
+                asRuntimePayloadRecord(
+                  Option.getOrUndefined(yield* directory.getBinding(threadId))?.runtimePayload,
+                ).modelSelection,
+                { provider: "claudeAgent", model: "claude-opus-4-6" },
+              );
+            }
+          }),
+      );
+    }
+  }
+
   it.effect("uses the authoritative active turn when an interrupt carries stale UI state", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
@@ -4535,6 +4585,11 @@ routing.layer("ProviderServiceLive routing", (it) => {
           permissionMode: "acceptEdits",
         },
       };
+      const savedSelection: ModelSelection = {
+        provider: "claudeAgent",
+        model: "claude-opus-4-6",
+        options: { effort: "high" },
+      };
 
       const firstClaude = makeFakeCodexAdapter("claudeAgent");
       const firstRegistry: typeof ProviderAdapterRegistry.Service = {
@@ -4559,6 +4614,8 @@ routing.layer("ProviderServiceLive routing", (it) => {
           threadId: asThreadId("thread-stop-runtime"),
           cwd: "/tmp/project-stop-runtime",
           providerOptions,
+          modelSelection: savedSelection,
+          enableComputerControl: true,
           runtimeMode: "full-access",
         });
         assert.equal(typeof provider.stopRuntimeSession, "function");
@@ -4585,6 +4642,17 @@ routing.layer("ProviderServiceLive routing", (it) => {
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, secondRegistry)),
         Layer.provide(secondDirectoryLayer),
       );
+
+      const savedProfile = yield* Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        return yield* provider.getPersistedSessionProfile(initial.threadId);
+      }).pipe(Effect.provide(secondProviderLayer));
+      assert.deepEqual(savedProfile, {
+        provider: "claudeAgent",
+        modelSelection: savedSelection,
+        runtimeMode: "full-access",
+        enableComputerControl: true,
+      });
 
       yield* Effect.gen(function* () {
         const provider = yield* ProviderService;

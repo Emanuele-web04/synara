@@ -3,11 +3,21 @@
 //          checksum/bundle-identity gates in the macOS auto-install flow.
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -22,6 +32,19 @@ import {
   type BetaFeedFile,
 } from "./betaInstaller";
 
+const renameFailure = vi.hoisted(() => ({ source: null as string | null }));
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    renameSync: (source: string, destination: string) => {
+      if (source === renameFailure.source) throw new Error("rename: EACCES");
+      actual.renameSync(source, destination);
+    },
+  };
+});
+
 const roots: string[] = [];
 
 function makeRoot(): string {
@@ -31,6 +54,7 @@ function makeRoot(): string {
 }
 
 afterEach(() => {
+  renameFailure.source = null;
   while (roots.length > 0) {
     rmSync(roots.pop()!, { recursive: true, force: true });
   }
@@ -191,7 +215,7 @@ describe("installBetaFromFeed", () => {
             return;
           }
           if (command === "mv") {
-            mkdirSync(args[args.length - 1]!, { recursive: true });
+            renameSync(args[0]!, args[args.length - 1]!);
             return;
           }
           throw new Error(`unexpected command ${command}`);
@@ -240,6 +264,35 @@ describe("installBetaFromFeed", () => {
     expect(existsSync(join(installDir, "Synara Beta.app"))).toBe(false);
   });
 
+  it("replaces an existing install without leaving the old app behind", async () => {
+    const root = makeRoot();
+    const { deps, installDir } = feedDeps(root);
+    fakeApp(installDir);
+    await installBetaFromFeed(deps, () => {});
+    expect(() => verifyBetaAppBundle(join(installDir, "Synara Beta.app"))).not.toThrow();
+    expect(readdirSync(installDir)).toEqual(["Synara Beta.app"]);
+  });
+
+  it("keeps the installed app when moving the new one into place fails", async () => {
+    const root = makeRoot();
+    const { deps, installDir } = feedDeps(root);
+    const installed = fakeApp(installDir);
+    const failingMove = {
+      ...deps,
+      run: (command: string, args: readonly string[]) => {
+        if (command === "mv") {
+          // A cross-device `mv` that dies mid-copy leaves a partial target behind.
+          mkdirSync(args[args.length - 1]!, { recursive: true });
+          throw new Error("mv: No space left on device");
+        }
+        deps.run(command, args);
+      },
+    };
+    await expect(installBetaFromFeed(failingMove, () => {})).rejects.toThrow(/No space left/);
+    expect(() => verifyBetaAppBundle(installed)).not.toThrow();
+    expect(readdirSync(installDir)).toEqual(["Synara Beta.app"]);
+  });
+
   const codesignStub = (teamId: string | null, verifyOk = true) => {
     const calls: string[][] = [];
     return {
@@ -259,6 +312,121 @@ describe("installBetaFromFeed", () => {
       },
     };
   };
+
+  it("keeps the current install in place while a new copy fails", async () => {
+    const root = makeRoot();
+    const { deps, installDir } = feedDeps(root);
+    const installed = fakeApp(installDir);
+    const revisionPath = join(installed, "Contents", "revision");
+    writeFileSync(revisionPath, "current");
+    let revisionDuringCopy: string | null = null;
+    const failingCopy = {
+      ...deps,
+      run: (command: string, args: readonly string[]) => {
+        if (command === "mv") {
+          mkdirSync(args[args.length - 1]!, { recursive: true });
+          revisionDuringCopy = existsSync(revisionPath) ? readFileSync(revisionPath, "utf8") : null;
+          throw new Error("mv: No space left on device");
+        }
+        deps.run(command, args);
+      },
+    };
+    await expect(installBetaFromFeed(failingCopy, () => {})).rejects.toThrow(/No space left/);
+    expect(revisionDuringCopy).toBe("current");
+    expect(readFileSync(revisionPath, "utf8")).toBe("current");
+    expect(readdirSync(installDir)).toEqual(["Synara Beta.app"]);
+  });
+
+  it.each(["missing", "partial"] as const)(
+    "recovers an interrupted install with a %s target before the next download fails",
+    async (targetState) => {
+      const root = makeRoot();
+      const { deps, installDir } = feedDeps(root);
+      const targetPath = join(installDir, "Synara Beta.app");
+      const previousPath = `${targetPath}.previous`;
+      const previous = fakeApp(join(root, "previous"));
+      writeFileSync(join(previous, "Contents", "revision"), "previous");
+      mkdirSync(installDir, { recursive: true });
+      renameSync(previous, previousPath);
+      if (targetState === "partial") {
+        fakeApp(installDir);
+        writeFileSync(join(targetPath, "Contents", "revision"), "partial");
+      }
+      const { readCommand } = codesignStub("TEAM1234AB");
+      const revisionPath = join(targetPath, "Contents", "revision");
+      let revisionAtFetch: string | null = null;
+      const failedDownload = {
+        ...deps,
+        expectedTeamId: "TEAM1234AB",
+        readCommand: (command: string, args: readonly string[]) => {
+          if (targetState === "partial" && args[0] === "--verify" && args.at(-1) === targetPath) {
+            return { status: 1, stdout: "", stderr: "incomplete signature" };
+          }
+          return readCommand(command, args);
+        },
+        fetchText: async (url: string) => {
+          revisionAtFetch = existsSync(revisionPath) ? readFileSync(revisionPath, "utf8") : null;
+          return deps.fetchText(url);
+        },
+        downloadFile: async () => {
+          throw new Error("download interrupted");
+        },
+      };
+      await expect(installBetaFromFeed(failedDownload, () => {})).rejects.toThrow(
+        "download interrupted",
+      );
+      expect(revisionAtFetch).toBe("previous");
+      expect(readFileSync(revisionPath, "utf8")).toBe("previous");
+      expect(readdirSync(installDir)).toEqual(["Synara Beta.app"]);
+    },
+  );
+
+  it("keeps a completed target when a stale backup exists and the next download fails", async () => {
+    const root = makeRoot();
+    const { deps, installDir } = feedDeps(root);
+    const installed = fakeApp(installDir);
+    writeFileSync(join(installed, "Contents", "revision"), "current");
+    const previous = fakeApp(join(root, "previous"));
+    writeFileSync(join(previous, "Contents", "revision"), "previous");
+    renameSync(previous, `${installed}.previous`);
+    const { readCommand } = codesignStub("TEAM1234AB");
+    await expect(
+      installBetaFromFeed(
+        {
+          ...deps,
+          expectedTeamId: "TEAM1234AB",
+          readCommand,
+          downloadFile: async () => {
+            throw new Error("download interrupted");
+          },
+        },
+        () => {},
+      ),
+    ).rejects.toThrow("download interrupted");
+    expect(readFileSync(join(installed, "Contents", "revision"), "utf8")).toBe("current");
+    expect(readdirSync(installDir)).toEqual(["Synara Beta.app"]);
+  });
+
+  it("restores the current install if committing the staged bundle fails", async () => {
+    const root = makeRoot();
+    const { deps, installDir } = feedDeps(root);
+    const installed = fakeApp(installDir);
+    writeFileSync(join(installed, "Contents", "revision"), "current");
+    await expect(
+      installBetaFromFeed(
+        {
+          ...deps,
+          run: (command: string, args: readonly string[]) => {
+            deps.run(command, args);
+            if (command === "mv") renameFailure.source = args.at(-1)!;
+          },
+        },
+        () => {},
+      ),
+    ).rejects.toThrow("rename: EACCES");
+    expect(readFileSync(join(installed, "Contents", "revision"), "utf8")).toBe("current");
+    expect(readdirSync(installDir)).toEqual(["Synara Beta.app"]);
+  });
 
   it("installs when the download is signed by the expected team", async () => {
     const root = makeRoot();

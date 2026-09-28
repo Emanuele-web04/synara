@@ -23,7 +23,7 @@ import {
 } from "@synara/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import { assessClaudeCache } from "@synara/shared/claudeCache";
-import { Deferred, Effect, Exit, Fiber, Layer, Queue, Random, Stream } from "effect";
+import { Deferred, Effect, Exit, Fiber, Layer, Option, Queue, Random, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { afterEach, beforeEach, vi } from "vitest";
 
@@ -11946,6 +11946,308 @@ describe("Claude explicit native compaction", () => {
     );
   });
 
+  for (const discoveryOutcome of [
+    "ready",
+    "stop",
+    "cancel",
+    "cancel-before-discovery",
+    "direct-cancel-before-discovery",
+    "steer-cancel-before-discovery",
+    "cancel-after-discovery",
+    "cancel-during-progress",
+    "cancel-with-followup",
+    "cancel-with-followup-stop",
+    "interrupt-publication",
+  ] as const) {
+    it.effect(
+      discoveryOutcome === "stop"
+        ? "does not dispatch compaction after a session stops during command discovery"
+        : discoveryOutcome === "cancel"
+          ? "cancels only compaction discovery and allows a retry in the same session"
+          : discoveryOutcome === "steer-cancel-before-discovery"
+            ? "honors steered compaction cancellation before adapter preparation registers"
+            : discoveryOutcome === "direct-cancel-before-discovery"
+              ? "honors direct compaction cancellation before adapter preparation registers"
+              : discoveryOutcome === "cancel-before-discovery"
+                ? "honors cancellation supplied before compaction discovery starts"
+                : discoveryOutcome === "cancel-after-discovery"
+                  ? "cancels compaction before enqueue while turn-start publication is delayed"
+                  : discoveryOutcome === "cancel-during-progress"
+                    ? "cancels compaction while its progress publication is stalled"
+                    : discoveryOutcome === "cancel-with-followup"
+                      ? "delivers the follow-up after cancelled compaction publication drains"
+                      : discoveryOutcome === "cancel-with-followup-stop"
+                        ? "cancels the follow-up publication wait when its session stops"
+                        : discoveryOutcome === "interrupt-publication"
+                          ? "settles a reserved compaction when its dispatch fiber is interrupted"
+                          : "waits for cold Claude initialization before native compaction",
+      () => {
+        const harness = makeHarness();
+        return Effect.gen(function* () {
+          const adapter = yield* ClaudeAdapter;
+          const discovery = yield* Deferred.make<ReturnType<typeof fakeSlashCommand>[]>();
+          const publicationEntered = yield* Deferred.make<void>();
+          const publicationReleased = yield* Deferred.make<void>();
+          const delayedPublication =
+            discoveryOutcome === "cancel-after-discovery" ||
+            discoveryOutcome === "cancel-during-progress" ||
+            discoveryOutcome === "cancel-with-followup" ||
+            discoveryOutcome === "cancel-with-followup-stop" ||
+            discoveryOutcome === "interrupt-publication";
+          if (delayedPublication) {
+            const offer = Queue.offer;
+            const publication = vi.spyOn(Queue, "offer").mockImplementation((queue, event) => {
+              const offered = offer(queue, event);
+              if (
+                typeof event === "object" &&
+                event !== null &&
+                "type" in event &&
+                event.type ===
+                  (discoveryOutcome === "cancel-during-progress" ||
+                  discoveryOutcome === "cancel-with-followup" ||
+                  discoveryOutcome === "cancel-with-followup-stop"
+                    ? "item.updated"
+                    : "turn.started")
+              ) {
+                return Deferred.succeed(publicationEntered, undefined).pipe(
+                  Effect.andThen(Deferred.await(publicationReleased)),
+                  Effect.andThen(offered),
+                );
+              }
+              return offered;
+            });
+            yield* Effect.addFinalizer(() => Effect.sync(() => publication.mockRestore()));
+          }
+          vi.spyOn(harness.query, "supportedCommands").mockImplementation(() =>
+            Effect.runPromise(Deferred.await(discovery)),
+          );
+          yield* adapter.startSession({
+            threadId: THREAD_ID,
+            runtimeMode: "full-access",
+            resumeCursor: { resume: nativeSessionId },
+          });
+          const cancellationTerminal = delayedPublication
+            ? yield* adapter.streamEvents.pipe(
+                Stream.filter(
+                  (event) => event.type === "turn.completed" && event.turnId === compactionTurnId,
+                ),
+                Stream.take(1),
+                Stream.runHead,
+                Effect.forkChild,
+              )
+            : undefined;
+          const cancellation = yield* Deferred.make<void>();
+          const cancelledBeforeDiscovery =
+            discoveryOutcome === "cancel-before-discovery" ||
+            discoveryOutcome === "direct-cancel-before-discovery" ||
+            discoveryOutcome === "steer-cancel-before-discovery";
+          if (cancelledBeforeDiscovery) {
+            yield* Deferred.succeed(cancellation, undefined);
+          }
+          const input = {
+            threadId: THREAD_ID,
+            turnId: compactionTurnId,
+            cancellation,
+          };
+          const operation = yield* (
+            discoveryOutcome === "steer-cancel-before-discovery"
+              ? adapter.steerTurn!(
+                  {
+                    threadId: THREAD_ID,
+                    input: "/compact Preserve project decisions",
+                    attachments: [],
+                  },
+                  { claudeCompactionCancellation: cancellation },
+                )
+              : discoveryOutcome === "direct-cancel-before-discovery"
+                ? adapter.sendTurn(
+                    {
+                      threadId: THREAD_ID,
+                      input: "/compact Preserve project decisions",
+                      attachments: [],
+                    },
+                    { claudeCompactionCancellation: cancellation },
+                  )
+                : adapter.startClaudeCompaction!(input)
+          ).pipe(Effect.result, Effect.forkChild);
+          yield* TestClock.adjust("2 seconds");
+          if (discoveryOutcome !== "ready") {
+            if (delayedPublication) {
+              yield* Deferred.succeed(discovery, [fakeSlashCommand("compact")]);
+              yield* Deferred.await(publicationEntered);
+            }
+            if (discoveryOutcome === "stop") {
+              yield* adapter.stopSession(THREAD_ID);
+            } else if (discoveryOutcome === "interrupt-publication") {
+              yield* Fiber.interrupt(operation);
+            } else if (!cancelledBeforeDiscovery) {
+              yield* adapter.cancelClaudeCompactionDiscovery?.(THREAD_ID) ?? Effect.void;
+            }
+            const stoppedOperation = yield* (
+              discoveryOutcome === "interrupt-publication"
+                ? Fiber.await(operation).pipe(Effect.asVoid)
+                : Fiber.join(operation).pipe(Effect.asVoid)
+            ).pipe(Effect.timeoutOption("1 second"), Effect.forkChild);
+            yield* TestClock.adjust("1 second");
+            const stoppedResult = yield* Fiber.join(stoppedOperation);
+            if (delayedPublication && Option.isSome(stoppedResult)) {
+              const pendingRetry = yield* adapter.startClaudeCompaction!({
+                threadId: THREAD_ID,
+                turnId: compactionTurnId,
+              }).pipe(Effect.result);
+              assert.equal(pendingRetry._tag, "Failure");
+            }
+            const followup =
+              discoveryOutcome === "cancel-with-followup" ||
+              discoveryOutcome === "cancel-with-followup-stop"
+                ? yield* adapter
+                    .sendTurn({
+                      threadId: THREAD_ID,
+                      input: "Continue the active task",
+                      attachments: [],
+                    })
+                    .pipe(Effect.result, Effect.forkChild)
+                : undefined;
+            yield* TestClock.adjust(10);
+            const settledBeforePublication = followup?.pollUnsafe();
+            if (discoveryOutcome === "cancel-with-followup-stop") {
+              yield* adapter.stopSession(THREAD_ID);
+              const stoppedFollowup = yield* Fiber.join(followup!);
+              assert.equal(stoppedFollowup._tag, "Failure");
+              assert.lengthOf(yield* adapter.listSessions(), 0);
+            }
+            yield* Deferred.succeed(publicationReleased, undefined);
+            yield* Deferred.succeed(discovery, [fakeSlashCommand("compact")]);
+            assert.isTrue(Option.isSome(stoppedResult), "Compaction must settle without discovery");
+            if (followup) {
+              const result = yield* Fiber.join(followup);
+              assert.isUndefined(settledBeforePublication);
+              if (discoveryOutcome === "cancel-with-followup-stop") return;
+              assert.equal(result._tag, "Success");
+              assert.equal((yield* Fiber.join(operation))._tag, "Failure");
+              if (cancellationTerminal) yield* Fiber.join(cancellationTerminal);
+              const prompt = yield* Effect.promise(() =>
+                harness.getLastCreateQueryInput()!.prompt[Symbol.asyncIterator]().next(),
+              );
+              assert.deepEqual(prompt.value?.message.content, [
+                { type: "text", text: "Continue the active task" },
+              ]);
+              return;
+            }
+          } else {
+            yield* Deferred.succeed(discovery, [fakeSlashCommand("compact")]);
+          }
+          const result =
+            discoveryOutcome === "interrupt-publication" ? undefined : yield* Fiber.join(operation);
+          if (discoveryOutcome === "interrupt-publication") {
+            assert.isTrue(Exit.isFailure(yield* Fiber.await(operation)));
+            assert.isUndefined((yield* adapter.listSessions())[0]?.activeTurnId);
+          }
+          if (cancellationTerminal) {
+            const terminal = yield* Fiber.join(cancellationTerminal);
+            assert.isTrue(Option.isSome(terminal));
+            assert.deepInclude(Option.getOrUndefined(terminal), {
+              type: "turn.completed",
+              turnId: compactionTurnId,
+            });
+            if (Option.isSome(terminal) && terminal.value.type === "turn.completed") {
+              assert.deepInclude(terminal.value.payload, {
+                state: "interrupted",
+                contextCompacted: false,
+              });
+            }
+          }
+          if (discoveryOutcome !== "ready") {
+            if (result) assert.equal(result._tag, "Failure");
+            if (result?._tag === "Failure") {
+              assert.include(
+                providerValidationIssue(result.failure),
+                discoveryOutcome === "stop" ? "session changed" : "cancelled",
+              );
+            }
+            if (discoveryOutcome === "stop") {
+              assert.lengthOf(yield* adapter.listSessions(), 0);
+              return;
+            }
+            const [session] = yield* adapter.listSessions();
+            assert.equal(
+              (session?.resumeCursor as { resume?: string } | undefined)?.resume,
+              nativeSessionId,
+            );
+            assert.isUndefined(session?.activeTurnId);
+            const retry = yield* adapter.startClaudeCompaction!({
+              threadId: THREAD_ID,
+              turnId: compactionTurnId,
+            });
+            assert.equal(retry.turnId, compactionTurnId);
+          }
+          if (discoveryOutcome === "ready") {
+            assert.isDefined(result);
+            assert.equal(
+              result!._tag,
+              "Success",
+              result!._tag === "Failure" ? providerValidationIssue(result!.failure) : undefined,
+            );
+            if (result!._tag === "Success") assert.equal(result!.success.turnId, compactionTurnId);
+          }
+          const prompt = yield* Effect.promise(() =>
+            harness.getLastCreateQueryInput()!.prompt[Symbol.asyncIterator]().next(),
+          );
+          assert.deepEqual(prompt.value?.message.content, [{ type: "text", text: "/compact" }]);
+        }).pipe(
+          Effect.provideService(Random.Random, makeDeterministicRandomService()),
+          Effect.provide(harness.layer),
+        );
+      },
+    );
+  }
+
+  it.effect("dispatches compaction using the first command discovery result", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        runtimeMode: "full-access",
+        resumeCursor: { resume: nativeSessionId },
+      });
+      const repeatedLookup = yield* Deferred.make<ReturnType<typeof fakeSlashCommand>[]>();
+      vi.spyOn(harness.query, "supportedCommands")
+        .mockResolvedValueOnce([fakeSlashCommand("compact")])
+        .mockImplementation(() => Effect.runPromise(Deferred.await(repeatedLookup)));
+      const progress = yield* adapter.streamEvents.pipe(
+        Stream.filter(
+          (event) =>
+            event.type === "item.updated" && event.payload.itemType === "context_compaction",
+        ),
+        Stream.take(1),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+      const operation = yield* adapter.startClaudeCompaction!({
+        threadId: THREAD_ID,
+        turnId: compactionTurnId,
+      }).pipe(Effect.forkChild);
+      yield* Fiber.join(progress);
+      const bounded = yield* Fiber.join(operation).pipe(
+        Effect.timeoutOption("1 second"),
+        Effect.forkChild,
+      );
+      yield* TestClock.adjust("1 second");
+      const result = yield* Fiber.join(bounded);
+      yield* Deferred.succeed(repeatedLookup, [fakeSlashCommand("compact")]);
+      yield* Fiber.join(operation);
+      assert.isTrue(Option.isSome(result), "Validated compaction must not wait on a second lookup");
+      const prompt = yield* Effect.promise(() =>
+        harness.getLastCreateQueryInput()!.prompt[Symbol.asyncIterator]().next(),
+      );
+      assert.deepEqual(prompt.value?.message.content, [{ type: "text", text: "/compact" }]);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("bounds native command discovery without queueing a prompt", () => {
     const harness = makeHarness();
     harness.query.supportedCommandsNeverResolves = true;
@@ -11956,8 +12258,11 @@ describe("Claude explicit native compaction", () => {
         threadId: THREAD_ID,
         turnId: compactionTurnId,
       }).pipe(Effect.result, Effect.forkChild);
-      yield* TestClock.adjust("1 second");
-      assert.equal((yield* Fiber.join(operation))._tag, "Failure");
+      yield* TestClock.adjust("5 seconds");
+      const result = yield* Fiber.join(operation);
+      assert.equal(result._tag, "Failure");
+      if (result._tag === "Failure")
+        assert.include(providerValidationIssue(result.failure), "command discovery timed out");
       assert.isUndefined((yield* adapter.listSessions())[0]?.activeTurnId);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -11965,44 +12270,82 @@ describe("Claude explicit native compaction", () => {
     );
   });
 
-  it.effect("preserves the selected model and permission mode while compacting", () => {
-    const harness = makeHarness();
-    harness.query.supportedCommandList = [
-      { name: "compact", description: "Compact context", argumentHint: "" },
-    ];
-    return Effect.gen(function* () {
-      const adapter = yield* ClaudeAdapter;
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        runtimeMode: "full-access",
-        resumeCursor: { resume: nativeSessionId },
-      });
-      const completed = yield* adapter.streamEvents.pipe(
-        Stream.filter((event) => event.type === "turn.completed"),
-        Stream.take(1),
-        Stream.runCollect,
-        Effect.forkChild,
+  for (const entryPoint of ["cache-review", "direct", "steer"] as const) {
+    it.effect(`preserves established settings during ${entryPoint} compaction`, () => {
+      const harness = makeHarness();
+      harness.query.supportedCommandList = [
+        { name: "compact", description: "Compact context", argumentHint: "" },
+      ];
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          runtimeMode: "full-access",
+          resumeCursor: { resume: nativeSessionId },
+          modelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
+        });
+        const completed = yield* adapter.streamEvents.pipe(
+          Stream.filter((event) => event.type === "turn.completed"),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        yield* adapter.sendTurn({
+          threadId: THREAD_ID,
+          input: "Plan",
+          attachments: [],
+          interactionMode: "plan",
+        });
+        const prompts = harness.getLastCreateQueryInput()!.prompt[Symbol.asyncIterator]();
+        yield* Effect.promise(() => prompts.next());
+        emitSuccessResult(harness.query, nativeSessionId, "planned", {});
+        yield* Fiber.join(completed);
+        const permissionsBefore = [...harness.query.setPermissionModeCalls];
+        const settingsBefore = [...harness.query.applyFlagSettingsCalls];
+        const modelsBefore = [...harness.query.setModelCalls];
+        const setModel = vi
+          .spyOn(harness.query, "setModel")
+          .mockRejectedValue(new Error("Native compaction must preserve the model"));
+        const applySettings = vi
+          .spyOn(harness.query, "applyFlagSettings")
+          .mockRejectedValue(new Error("Native compaction must preserve settings"));
+        const input = {
+          threadId: THREAD_ID,
+          input: "/compact Keep the active task",
+          attachments: [],
+          modelSelection: {
+            provider: "claudeAgent" as const,
+            model: "claude-sonnet-4-6",
+            options: { thinking: true, effort: "max" as const, autoCompactWindow: "200k" },
+          },
+        };
+        const result = yield* (
+          entryPoint === "cache-review"
+            ? adapter.startClaudeCompaction!({ threadId: THREAD_ID, turnId: compactionTurnId })
+            : entryPoint === "direct"
+              ? adapter.sendTurn(input)
+              : adapter.steerTurn!(input)
+        ).pipe(Effect.result);
+        assert.equal(result._tag, "Success");
+        assert.equal(setModel.mock.calls.length, 0);
+        assert.equal(applySettings.mock.calls.length, 0);
+        const prompt = yield* Effect.promise(() => prompts.next());
+        assert.deepEqual(prompt.value?.message.content, [
+          {
+            type: "text",
+            text: entryPoint === "cache-review" ? "/compact" : "/compact Keep the active task",
+          },
+        ]);
+        assert.equal(harness.query.setModelCalls.length, modelsBefore.length);
+        assert.deepEqual(harness.query.setPermissionModeCalls, permissionsBefore);
+        assert.deepEqual(harness.query.applyFlagSettingsCalls, settingsBefore);
+        assert.deepEqual(harness.query.setModelCalls, modelsBefore);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
       );
-      yield* adapter.sendTurn({
-        threadId: THREAD_ID,
-        input: "Plan",
-        attachments: [],
-        interactionMode: "plan",
-      });
-      emitSuccessResult(harness.query, nativeSessionId, "planned", {});
-      yield* Fiber.join(completed);
-      const permissionsBefore = [...harness.query.setPermissionModeCalls];
-      const settingsBefore = [...harness.query.applyFlagSettingsCalls];
-      const modelsBefore = [...harness.query.setModelCalls];
-      yield* adapter.startClaudeCompaction!({ threadId: THREAD_ID, turnId: compactionTurnId });
-      assert.deepEqual(harness.query.setPermissionModeCalls, permissionsBefore);
-      assert.deepEqual(harness.query.applyFlagSettingsCalls, settingsBefore);
-      assert.deepEqual(harness.query.setModelCalls, modelsBefore);
-    }).pipe(
-      Effect.provideService(Random.Random, makeDeterministicRandomService()),
-      Effect.provide(harness.layer),
-    );
-  });
+    });
+  }
 
   it.effect(
     "rejects attachments on native compaction before creating a turn or reading files",

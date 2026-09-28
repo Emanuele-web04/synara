@@ -1,17 +1,38 @@
-import { describe, expect, it } from "vitest";
+import * as FS from "node:fs";
+import * as OS from "node:os";
+import * as Path from "node:path";
+
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   desktopAppIconResourceName,
   isDesktopAppIcon,
+  readDesktopAppIconPreference,
   shouldUpdateDesktopAppIcon,
   usesMacBundleAppIcon,
+  writeDesktopAppIconPreference,
 } from "./desktopAppIcon";
+
+const temporaryDirectories: string[] = [];
+
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) {
+    FS.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+function temporaryIconPath(): string {
+  const directory = FS.mkdtempSync(Path.join(OS.tmpdir(), "synara-app-icon-"));
+  temporaryDirectories.push(directory);
+  return Path.join(directory, "desktop-app-icon");
+}
 
 describe("desktop app icons", () => {
   it("accepts only supported preferences", () => {
     expect(isDesktopAppIcon("default")).toBe(true);
     expect(isDesktopAppIcon("icon")).toBe(true);
     expect(isDesktopAppIcon("dark")).toBe(true);
+    expect(isDesktopAppIcon("beta")).toBe(true);
     expect(isDesktopAppIcon("unknown")).toBe(false);
   });
 
@@ -36,6 +57,43 @@ describe("desktop app icons", () => {
     ).toBe("dock-icon-dark.png");
   });
 
+  it("keeps Beta's explicit default choice distinct from its blue bundle artwork", () => {
+    for (const isDarkAppearance of [false, true]) {
+      expect(
+        desktopAppIconResourceName({
+          icon: "default",
+          platform: "darwin",
+          isDarkAppearance,
+          isBetaFlavor: true,
+        }),
+      ).toBe("dock-icon.png");
+    }
+    expect(
+      desktopAppIconResourceName({
+        icon: "default",
+        platform: "linux",
+        isDarkAppearance: false,
+        isBetaFlavor: true,
+      }),
+    ).toBe("app-icon-default-linux.png");
+    expect(
+      desktopAppIconResourceName({
+        icon: "default",
+        platform: "win32",
+        isDarkAppearance: false,
+        isBetaFlavor: true,
+      }),
+    ).toBe("app-icon-default-windows.ico");
+    expect(
+      usesMacBundleAppIcon({
+        icon: "default",
+        platform: "darwin",
+        usesLegacyDockIcon: false,
+        isBetaFlavor: true,
+      }),
+    ).toBe(false);
+  });
+
   it("always uses the dark artwork when the dark preference is selected", () => {
     expect(
       desktopAppIconResourceName({ icon: "dark", platform: "darwin", isDarkAppearance: false }),
@@ -43,6 +101,21 @@ describe("desktop app icons", () => {
     expect(
       desktopAppIconResourceName({ icon: "dark", platform: "darwin", isDarkAppearance: true }),
     ).toBe("dock-icon-dark.png");
+  });
+
+  it("selects beta artwork on every desktop platform", () => {
+    expect(
+      desktopAppIconResourceName({ icon: "beta", platform: "darwin", isDarkAppearance: false }),
+    ).toBe("dock-icon-beta.png");
+    expect(
+      desktopAppIconResourceName({ icon: "beta", platform: "darwin", isDarkAppearance: true }),
+    ).toBe("dock-icon-beta.png");
+    expect(
+      desktopAppIconResourceName({ icon: "beta", platform: "linux", isDarkAppearance: false }),
+    ).toBe("app-icon-beta-linux.png");
+    expect(
+      desktopAppIconResourceName({ icon: "beta", platform: "win32", isDarkAppearance: false }),
+    ).toBe("app-icon-beta-windows.ico");
   });
 
   it("falls back to the default icon for the dark preference off macOS", () => {
@@ -62,22 +135,95 @@ describe("desktop app icons", () => {
 
   it("leaves the Liquid Glass bundle icon alone for the macOS default preference", () => {
     expect(
-      usesMacBundleAppIcon({ icon: "default", platform: "darwin", usesLegacyDockIcon: false }),
+      usesMacBundleAppIcon({
+        icon: "default",
+        platform: "darwin",
+        usesLegacyDockIcon: false,
+        isBetaFlavor: false,
+      }),
     ).toBe(true);
     expect(
-      usesMacBundleAppIcon({ icon: "default", platform: "darwin", usesLegacyDockIcon: true }),
+      usesMacBundleAppIcon({
+        icon: "default",
+        platform: "darwin",
+        usesLegacyDockIcon: true,
+        isBetaFlavor: false,
+      }),
     ).toBe(false);
     expect(
-      usesMacBundleAppIcon({ icon: "icon", platform: "darwin", usesLegacyDockIcon: false }),
+      usesMacBundleAppIcon({
+        icon: "icon",
+        platform: "darwin",
+        usesLegacyDockIcon: false,
+        isBetaFlavor: false,
+      }),
     ).toBe(false);
     expect(
-      usesMacBundleAppIcon({ icon: "dark", platform: "darwin", usesLegacyDockIcon: false }),
+      usesMacBundleAppIcon({
+        icon: "dark",
+        platform: "darwin",
+        usesLegacyDockIcon: false,
+        isBetaFlavor: false,
+      }),
     ).toBe(false);
     expect(
-      usesMacBundleAppIcon({ icon: "default", platform: "linux", usesLegacyDockIcon: false }),
+      usesMacBundleAppIcon({
+        icon: "default",
+        platform: "linux",
+        usesLegacyDockIcon: false,
+        isBetaFlavor: false,
+      }),
     ).toBe(false);
     expect(
-      usesMacBundleAppIcon({ icon: "default", platform: "win32", usesLegacyDockIcon: false }),
+      usesMacBundleAppIcon({
+        icon: "default",
+        platform: "win32",
+        usesLegacyDockIcon: false,
+        isBetaFlavor: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("leaves the beta bundle icon alone only on the beta flavor", () => {
+    expect(
+      usesMacBundleAppIcon({
+        icon: "beta",
+        platform: "darwin",
+        usesLegacyDockIcon: false,
+        isBetaFlavor: true,
+      }),
+    ).toBe(true);
+    expect(
+      usesMacBundleAppIcon({
+        icon: "beta",
+        platform: "darwin",
+        usesLegacyDockIcon: false,
+        isBetaFlavor: false,
+      }),
+    ).toBe(false);
+    expect(
+      usesMacBundleAppIcon({
+        icon: "beta",
+        platform: "darwin",
+        usesLegacyDockIcon: true,
+        isBetaFlavor: true,
+      }),
+    ).toBe(false);
+    expect(
+      usesMacBundleAppIcon({
+        icon: "beta",
+        platform: "linux",
+        usesLegacyDockIcon: false,
+        isBetaFlavor: true,
+      }),
+    ).toBe(false);
+    expect(
+      usesMacBundleAppIcon({
+        icon: "beta",
+        platform: "win32",
+        usesLegacyDockIcon: false,
+        isBetaFlavor: true,
+      }),
     ).toBe(false);
   });
 
@@ -87,5 +233,58 @@ describe("desktop app icons", () => {
     expect(shouldUpdateDesktopAppIcon("dark", "dark")).toBe(false);
     expect(shouldUpdateDesktopAppIcon("default", "dark")).toBe(true);
     expect(shouldUpdateDesktopAppIcon("dark", "icon")).toBe(true);
+  });
+});
+
+describe("desktop app icon preference persistence", () => {
+  it.each(["default", "dark"] as const)(
+    "resets an unknown value to the configured %s fallback on disk",
+    (fallbackIcon) => {
+      const filePath = temporaryIconPath();
+      FS.writeFileSync(filePath, "future-icon", "utf8");
+
+      expect(readDesktopAppIconPreference(filePath, { fallbackIcon })).toBe(fallbackIcon);
+      expect(FS.readFileSync(filePath, "utf8")).toBe(fallbackIcon);
+    },
+  );
+
+  it.each([undefined, "   \n"])(
+    "uses the configured fallback for a missing or blank preference without writing (%j)",
+    (stored) => {
+      const filePath = temporaryIconPath();
+      if (stored !== undefined) FS.writeFileSync(filePath, stored, "utf8");
+
+      expect(readDesktopAppIconPreference(filePath, { fallbackIcon: "dark" })).toBe("dark");
+      if (stored === undefined) {
+        expect(FS.existsSync(filePath)).toBe(false);
+      } else {
+        expect(FS.readFileSync(filePath, "utf8")).toBe(stored);
+      }
+    },
+  );
+
+  it("keeps a supported selection and its stored bytes despite a different fallback", () => {
+    const filePath = temporaryIconPath();
+    FS.writeFileSync(filePath, " icon\n", "utf8");
+
+    expect(readDesktopAppIconPreference(filePath, { fallbackIcon: "dark" })).toBe("icon");
+    expect(FS.readFileSync(filePath, "utf8")).toBe(" icon\n");
+  });
+
+  it("keeps an inactive preference on disk for a flavor that can use it later", () => {
+    const filePath = temporaryIconPath();
+    writeDesktopAppIconPreference(filePath, "dark");
+
+    expect(readDesktopAppIconPreference(filePath, { inactiveIcons: ["dark"] })).toBe("default");
+    expect(FS.readFileSync(filePath, "utf8")).toBe("dark");
+    expect(readDesktopAppIconPreference(filePath)).toBe("dark");
+  });
+
+  it("preserves a known future flavor token when it is inactive in this build", () => {
+    const filePath = temporaryIconPath();
+    FS.writeFileSync(filePath, "beta", "utf8");
+
+    expect(readDesktopAppIconPreference(filePath, { inactiveIcons: ["beta"] })).toBe("default");
+    expect(FS.readFileSync(filePath, "utf8")).toBe("beta");
   });
 });

@@ -6133,7 +6133,7 @@ export default function Sidebar() {
   const betaBadge = isBetaDesktopFlavor ? (
     <span
       aria-label="Synara Beta"
-      className="inline-flex shrink-0 items-center rounded-full bg-[var(--beta-pill)] px-1.5 py-0.5 text-ui-xs font-semibold uppercase leading-none tracking-wide text-[var(--beta-pill-ink)]"
+      className="inline-flex shrink-0 items-center rounded-full bg-[var(--beta-pill)] px-1.5 py-0.5 text-ui-xs font-semibold leading-none text-[var(--beta-pill-ink)]"
     >
       Beta
     </span>
@@ -6517,9 +6517,7 @@ export default function Sidebar() {
           <SidebarGroup className="p-0">
             {isRailLayout ? (
               // The rail is the way back, so the panel opens on its title like every section.
-              <SidebarPanelTitle title="Settings">{betaBadge}</SidebarPanelTitle>
-            ) : isBetaDesktopFlavor ? (
-              <div className="flex items-center justify-end pb-1 pr-2.5">{betaBadge}</div>
+              <SidebarPanelTitle title="Settings" />
             ) : null}
             <SettingsSidebarNav
               activeSection={activeSettingsSection}

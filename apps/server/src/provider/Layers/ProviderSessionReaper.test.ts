@@ -91,6 +91,7 @@ function makeProviderServiceStub(input: {
     stopSession: input.stopSession,
     ...(input.stopRuntimeSession ? { stopRuntimeSession: input.stopRuntimeSession } : {}),
     listSessions: () => Effect.succeed([]),
+    getPersistedSessionProfile: () => Effect.succeed(undefined),
     getCapabilities: () => unsupported(),
     rollbackConversation: () => unsupported(),
     compactThread: () => unsupported(),

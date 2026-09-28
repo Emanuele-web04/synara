@@ -17,6 +17,17 @@ import {
   sanitizeBetaDiagnosticsPayload,
   BETA_DIAGNOSTICS_ENDPOINT,
 } from "./betaDiagnostics";
+import {
+  createInitialDesktopUpdateState,
+  reduceDesktopUpdateStateOnCheckFailure,
+  reduceDesktopUpdateStateOnCheckStart,
+  reduceDesktopUpdateStateOnDownloadComplete,
+  reduceDesktopUpdateStateOnDownloadFailure,
+  reduceDesktopUpdateStateOnDownloadStart,
+  reduceDesktopUpdateStateOnInstallFailure,
+  reduceDesktopUpdateStateOnInstallStart,
+  reduceDesktopUpdateStateOnUpdateAvailable,
+} from "./updateMachine";
 
 const roots: string[] = [];
 const servers: Server[] = [];
@@ -238,10 +249,103 @@ describe("readLogTail", () => {
 
 describe("BetaDiagnostics error tracking", () => {
   const readQueue = (root: string) =>
-    readFileSync(join(root, "diagnostics", "events.jsonl"), "utf8")
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
+    (existsSync(join(root, "diagnostics", "events.jsonl"))
+      ? readFileSync(join(root, "diagnostics", "events.jsonl"), "utf8")
+          .trim()
+          .split("\n")
+      : []
+    ).map((line) => JSON.parse(line));
+
+  it.each(["check", "download", "install"] as const)(
+    "reports %s failures once per attempt even when the updater keeps a retryable status",
+    (context) => {
+      const root = makeRoot();
+      const diag = makeDiagnostics(root);
+      const initial = createInitialDesktopUpdateState(
+        "9.9.9-beta.1",
+        { hostArch: "arm64", appArch: "arm64", runningUnderArm64Translation: false },
+        "beta",
+      );
+      const checkedAt = "2026-09-28T00:00:00Z";
+      const available = reduceDesktopUpdateStateOnUpdateAvailable(
+        initial,
+        "9.9.9-beta.2",
+        checkedAt,
+      );
+      const begin =
+        context === "check"
+          ? (state: typeof initial) => reduceDesktopUpdateStateOnCheckStart(state, checkedAt)
+          : context === "download"
+            ? reduceDesktopUpdateStateOnDownloadStart
+            : reduceDesktopUpdateStateOnInstallStart;
+      const fail =
+        context === "check"
+          ? (state: typeof initial, message: string) =>
+              reduceDesktopUpdateStateOnCheckFailure(state, message, checkedAt)
+          : context === "download"
+            ? reduceDesktopUpdateStateOnDownloadFailure
+            : reduceDesktopUpdateStateOnInstallFailure;
+      const previous = begin(
+        context === "install"
+          ? reduceDesktopUpdateStateOnDownloadComplete(available, "9.9.9-beta.2")
+          : available,
+      );
+      const failed = fail(previous, "Updater failure for user@example.com");
+      diag.trackUpdateStateChange(previous, failed);
+      diag.trackUpdateStateChange(failed, { ...failed, installFailureCount: 1 });
+      expect(readQueue(root)).toMatchObject([
+        {
+          event: "update.error",
+          payload: {
+            kind: "update",
+            outcome: "error",
+            errorContext: context,
+            message: "Updater failure for <email>",
+          },
+        },
+      ]);
+      const retry = begin(failed);
+      diag.trackUpdateStateChange(failed, retry);
+      diag.trackUpdateStateChange(retry, fail(retry, "Updater failure for user@example.com"));
+      expect(readQueue(root).filter((event) => event.event === "update.error")).toHaveLength(2);
+    },
+  );
+
+  it("preserves a renderer exception stack without accepting extra IPC fields", () => {
+    const root = makeRoot();
+    const diag = makeDiagnostics(root);
+    diag.trackError("renderer", {
+      message: "Cannot read properties of undefined (reading '_nonReactive')",
+      stack: "TypeError: _nonReactive\n    at render (/Users/alice/private-project/View.tsx:12:3)",
+      prompt: "private chat content",
+    });
+    const [event] = readQueue(root);
+    expect(event.payload.message).toContain("_nonReactive");
+    expect(event.payload.stack).toContain("View.tsx:12:3");
+    expect(JSON.stringify(event)).not.toMatch(/alice|private-project|private chat content/);
+  });
+
+  it.each(["http://127.0.0.1", "https://localhost", "ws://127.0.0.1", "wss://[::1]"])(
+    "groups %s failures across loopback ports without grouping external ports",
+    (origin) => {
+      const root = makeRoot();
+      const diag = makeDiagnostics(root);
+      for (const port of [56268, 57314]) {
+        diag.trackError("renderer", `Connection to '${origin}:${port}/private-route' failed`);
+      }
+      expect(readQueue(root)).toHaveLength(1);
+      for (const port of [8443, 9443]) {
+        diag.trackError(
+          "renderer",
+          `Connection to '${origin.split(":")[0]}://example.com:${port}/private-route' failed`,
+        );
+      }
+      const events = readQueue(root);
+      expect(events).toHaveLength(3);
+      expect(events[0].payload.message).toContain(":56268/");
+      expect(JSON.stringify(events)).not.toContain("private-route");
+    },
+  );
 
   it("records redacted app.error events with a fingerprint", () => {
     const root = makeRoot();
@@ -307,6 +411,49 @@ describe("BetaDiagnostics error tracking", () => {
 });
 
 describe("BetaDiagnostics", () => {
+  it("retains a redacted updater failure message only on update.error", () => {
+    const root = makeRoot();
+    const diag = makeDiagnostics(root);
+    const payload = {
+      kind: "update" as const,
+      outcome: "error" as const,
+      errorContext: "check" as const,
+      message:
+        "Cannot find beta-mac.yml at https://user:secret@example.com/private/feed?token=secret for user@example.com",
+    };
+    diag.track("update.error", payload);
+    diag.track("update.check", payload);
+    const events = readFileSync(join(root, "diagnostics", "events.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(events[0].payload.message).toContain("Cannot find beta-mac.yml");
+    expect(events[1].payload.message).toBeUndefined();
+    expect(JSON.stringify(events)).not.toMatch(/secret|private\/feed|user@example/);
+  });
+
+  it("excludes clean exits while retaining an unexpected killed process", () => {
+    const root = makeRoot();
+    const diag = makeDiagnostics(root);
+    diag.track("app.child-process-crash", {
+      kind: "crash",
+      processType: "GPU",
+      reason: "clean-exit",
+    });
+    diag.track("app.renderer-crash", {
+      kind: "crash",
+      processType: "renderer",
+      reason: "clean-exit",
+    });
+    diag.track("app.renderer-crash", { kind: "crash", processType: "renderer", reason: "killed" });
+    const events = readFileSync(join(root, "diagnostics", "events.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(events).toHaveLength(1);
+    expect(events[0].payload.reason).toBe("killed");
+  });
+
   it("queues allowlisted events with a stable install id", () => {
     const root = makeRoot();
     const diag = makeDiagnostics(root);

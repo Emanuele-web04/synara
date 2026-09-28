@@ -42,6 +42,7 @@ import type { Project, SidebarThreadSummary } from "../types";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { FolderClosed } from "./FolderClosed";
 import { ProviderIcon } from "./ProviderIcon";
+import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { PrStateChip } from "./pullRequest/PrStateChip";
 import {
   createSidebarThreadHoverAnchorId,
@@ -142,7 +143,6 @@ function ActivityThreadRow({
       envMode: thread.envMode,
       worktreePath: thread.worktreePath,
     }) === "worktree";
-  const ProjectGlyph = isWorktree ? WorktreeIcon : FolderClosed;
   const hoverAnchorId = createSidebarThreadHoverAnchorId({
     scope: "activity",
     threadId: thread.id,
@@ -215,13 +215,29 @@ function ActivityThreadRow({
             </span>
           </span>
           <span className="flex min-w-0 items-center gap-1.5">
-            <ProjectGlyph
-              className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
-              aria-hidden
-            />
+            {project?.cwd ? (
+              <ProjectSidebarIcon
+                cwd={project.cwd}
+                expanded={false}
+                appearance={project.appearance}
+                glyphClassName={sidebarGlyphClass("meta", "text-muted-foreground/70")}
+                presentation="favicon"
+              />
+            ) : (
+              <FolderClosed
+                className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
+                aria-hidden
+              />
+            )}
             <span className="min-w-0 truncate text-ui-sm text-muted-foreground/80">
               {resolveThreadProjectLabel(project)}
             </span>
+            {isWorktree ? (
+              <WorktreeIcon
+                className={sidebarGlyphClass("meta", "text-muted-foreground/70")}
+                aria-label="Worktree"
+              />
+            ) : null}
             <span className="ml-auto flex min-w-0 shrink-0 items-center gap-1.5">
               {pr ? (
                 <PrStateChip

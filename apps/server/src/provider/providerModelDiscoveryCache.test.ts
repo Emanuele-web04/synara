@@ -270,21 +270,23 @@ describe("makeProviderModelDiscoveryCache", () => {
     });
     const empty = { ...CATALOG, models: [] };
     let calls = 0;
-    const discover = Effect.sync(() => {
+    const discover = Effect.gen(function* () {
       calls += 1;
-      return calls === 2 ? empty : CATALOG;
+      if (calls !== 2) return CATALOG;
+      yield* Effect.sleep(20);
+      return empty;
     });
     await Effect.runPromise(cache.lookup(KEY, discover));
     clock.advance(5_000);
     await Effect.runPromise(cache.lookup(KEY, discover));
-    await flush();
+    // A timer turn does not prove detached revalidation has finished.
+    await expect.poll(() => cache.size()).toBe(0);
     const results = await Effect.runPromise(
       Effect.all([cache.lookup(KEY, discover), cache.lookup(KEY, discover)], {
         concurrency: "unbounded",
       }),
     );
     expect(results).toEqual([empty, empty]);
-    expect(cache.size()).toBe(0);
     expect(calls).toBe(2);
 
     clock.advance(10_001);

@@ -40,6 +40,7 @@ import {
   parseAuthStatusFromOutput,
   parseClaudeAuthStatusFromOutput,
   PACKAGE_MANAGED_PROVIDER_UPDATES,
+  prependPathEntry,
   providerStatusesEqual,
   ProviderHealthLive,
   projectProviderStatusesForSettings,
@@ -80,6 +81,7 @@ function mockSpawnerLayer(
       | {
           readonly env?: NodeJS.ProcessEnv;
           readonly windowsVerbatimArguments?: boolean;
+          readonly stdin?: "pipe" | "ignore" | "inherit";
         }
       | undefined,
   ) => {
@@ -97,6 +99,7 @@ function mockSpawnerLayer(
         options?: {
           env?: NodeJS.ProcessEnv;
           windowsVerbatimArguments?: boolean;
+          stdin?: "pipe" | "ignore" | "inherit";
         };
       };
       return Effect.succeed(
@@ -344,6 +347,88 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         pathPrepend: "/Users/test/.nvm/versions/node/v24.13.0/bin",
       });
     });
+
+    it("prepends update PATH entries under one Windows path key", () => {
+      assert.deepStrictEqual(
+        prependPathEntry({ Path: "C:\\Windows", HOME: "home" }, "C:\\npm", "win32"),
+        { Path: "C:\\npm;C:\\Windows", HOME: "home" },
+      );
+      // An already duplicated environment collapses to the key Node would keep.
+      assert.deepStrictEqual(
+        prependPathEntry({ Path: "C:\\Windows", PATH: "C:\\short" }, "C:\\npm", "win32"),
+        { PATH: "C:\\npm;C:\\short;C:\\Windows" },
+      );
+      assert.deepStrictEqual(prependPathEntry({ HOME: "home" }, "C:\\npm", "win32"), {
+        HOME: "home",
+        PATH: "C:\\npm",
+      });
+    });
+
+    it("prepends update PATH entries under PATH on POSIX", () => {
+      assert.deepStrictEqual(
+        prependPathEntry({ PATH: "/usr/bin:/opt/bin", path: "ignored" }, "/opt/bin", "linux"),
+        { PATH: "/opt/bin:/usr/bin", path: "ignored" },
+      );
+    });
+
+    it.effect("runs provider updates with one prepended path key and stdin closed", () =>
+      Effect.gen(function* () {
+        let updateOptions: { env?: NodeJS.ProcessEnv; stdin?: string } | undefined;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "provider-update-env-",
+        });
+        const binDir = path.join(baseDir, "bin");
+        yield* fileSystem.makeDirectory(binDir, { recursive: true });
+        yield* fileSystem.writeFileString(
+          path.join(binDir, OS.platform() === "win32" ? "agy.exe" : "agy"),
+          "",
+        );
+        const delimiter = OS.platform() === "win32" ? ";" : ":";
+        // Packaged Windows servers inherit the native "Path" casing; reproduce it here.
+        const inheritedPath = process.env.PATH;
+        const pathKey = OS.platform() === "win32" ? "Path" : "PATH";
+        delete process.env.PATH;
+        process.env[pathKey] = [binDir, inheritedPath].filter(Boolean).join(delimiter);
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            delete process.env[pathKey];
+            process.env.PATH = inheritedPath;
+          }),
+        );
+        const settings = {
+          ...allProvidersDisabledServerSettings,
+          providers: {
+            ...allProvidersDisabledServerSettings.providers,
+            antigravity: { ...DEFAULT_SERVER_SETTINGS.providers.antigravity, enabled: true },
+          },
+        } satisfies typeof DEFAULT_SERVER_SETTINGS;
+        const layer = makeProviderHealthLive().pipe(
+          Layer.provideMerge(ServerSettingsService.layerTest(settings)),
+          Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
+          Layer.provideMerge(
+            mockSpawnerLayer((args, command, _env, options) => {
+              if (path.basename(command).toLowerCase().startsWith("agy") && args[0] === "update") {
+                updateOptions = options;
+              }
+              return { stdout: "", stderr: "", code: 0 };
+            }),
+          ),
+        );
+
+        yield* Effect.gen(function* () {
+          const providerHealth = yield* ProviderHealth;
+          return yield* providerHealth.updateProvider({ provider: "antigravity" });
+        }).pipe(Effect.provide(layer));
+
+        assert.strictEqual(updateOptions?.stdin, "ignore");
+        const env = updateOptions?.env ?? {};
+        const pathKeys = Object.keys(env).filter((key) => key.toUpperCase() === "PATH");
+        assert.strictEqual(pathKeys.length, 1);
+        assert.strictEqual(env[pathKeys[0]!]?.split(delimiter)[0], binDir);
+      }).pipe(Effect.scoped),
+    );
 
     it.effect("stops a hung provider process and persists a failed update state", () =>
       Effect.gen(function* () {
@@ -2087,7 +2172,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       delete process.env.XAI_API_KEY;
       delete process.env.GROK_CODE_XAI_API_KEY;
       return Effect.gen(function* () {
-        const status = yield* checkGrokProviderStatus;
+        const status = yield* makeCheckGrokProviderStatus(undefined, async () => null);
         assert.strictEqual(status.provider, "grok");
         assert.strictEqual(status.status, "ready");
         assert.strictEqual(status.available, true);
@@ -2128,6 +2213,45 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.strictEqual(status.authStatus, "authenticated");
         assert.strictEqual(status.authType, "apiKey");
         assert.strictEqual(status.authLabel, "xAI API Key");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "grok 0.1.0\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (previousXaiApiKey === undefined) {
+              delete process.env.XAI_API_KEY;
+            } else {
+              process.env.XAI_API_KEY = previousXaiApiKey;
+            }
+            if (previousApiKey === undefined) {
+              delete process.env.GROK_CODE_XAI_API_KEY;
+            } else {
+              process.env.GROK_CODE_XAI_API_KEY = previousApiKey;
+            }
+          }),
+        ),
+      );
+    });
+
+    it.effect("marks Grok authenticated from a cached grok login", () => {
+      const previousXaiApiKey = process.env.XAI_API_KEY;
+      const previousApiKey = process.env.GROK_CODE_XAI_API_KEY;
+      delete process.env.XAI_API_KEY;
+      delete process.env.GROK_CODE_XAI_API_KEY;
+      return Effect.gen(function* () {
+        const status = yield* makeCheckGrokProviderStatus(undefined, async () => ({
+          accessToken: "cached-token",
+        }));
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.authStatus, "authenticated");
+        assert.strictEqual(status.authType, "grokLogin");
+        assert.strictEqual(status.authLabel, "Grok Account");
+        assert.strictEqual(status.message, undefined);
       }).pipe(
         Effect.provide(
           mockSpawnerLayer((args) => {

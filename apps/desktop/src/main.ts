@@ -3,6 +3,7 @@ import { createLinuxCuaDriverHost } from "./linuxCuaDriverHost";
 import { LinuxEscapeKillSwitchMonitor, linuxEscapeSession } from "./linuxEscapeKillSwitchMonitor";
 import { ComputerFrameTap } from "./computerFrameTap";
 import { ComputerShield } from "./computerShield";
+import { createDesktopNotificationRetainer } from "./notificationRetention";
 import { registerComputerDesktopLifecycle } from "./computerDesktopLifecycle";
 import { COMPUTER_PERMISSION_KINDS } from "@synara/shared/computerGrants";
 import { CUA_HOST_SOCKET_ENV } from "@synara/shared/cuaDriverProtocol";
@@ -111,12 +112,15 @@ import {
   resolveBetaDiagnosticsEndpoint,
   type BetaDiagnosticsEventName,
 } from "./betaDiagnostics";
+import { attachBetaRendererDiagnostics } from "./betaRendererDiagnostics";
 import { showDesktopConfirmDialog } from "./confirmDialog";
 import {
   desktopAppIconResourceName,
   isDesktopAppIcon,
+  readDesktopAppIconPreference,
   shouldUpdateDesktopAppIcon,
   usesMacBundleAppIcon,
+  writeDesktopAppIconPreference,
 } from "./desktopAppIcon";
 import {
   applyWindowsTaskbarIcon,
@@ -526,6 +530,7 @@ let desktopLogSink: RotatingFileSink | null = null;
 let backendLogSink: RotatingFileSink | null = null;
 let restoreStdIoCapture: (() => void) | null = null;
 let unreadBackgroundNotificationCount = 0;
+const desktopNotificationRetainer = createDesktopNotificationRetainer<Notification>();
 let browserPerfInterval: ReturnType<typeof setInterval> | null = null;
 const annotationGuestPreload = Path.join(__dirname, "guestPreload.js");
 const browserOsKeyStore = {
@@ -2190,6 +2195,7 @@ function showDesktopNotification(input: {
     }
   });
 
+  desktopNotificationRetainer.retain(notification);
   notification.show();
   return true;
 }
@@ -2247,7 +2253,7 @@ function configureAppIdentity(): void {
 }
 
 // Older macOS needs pre-rounded artwork as a runtime Dock override. macOS 26+
-// renders the appearance-aware Icon Composer asset when Default is selected.
+// renders the Icon Composer asset for Stable Default and Beta Beta choices.
 function usesLegacyMacDockIcon(): boolean {
   if (process.platform !== "darwin") return false;
   const darwinMajor = Number.parseInt(OS.release().split(".")[0] ?? "", 10);
@@ -2255,17 +2261,21 @@ function usesLegacyMacDockIcon(): boolean {
 }
 
 function readDesktopAppIcon(): DesktopAppIcon {
-  try {
-    const storedIcon = FS.readFileSync(DESKTOP_APP_ICON_PATH, "utf8").trim();
-    return isDesktopAppIcon(storedIcon) ? storedIcon : "default";
-  } catch {
-    return "default";
-  }
+  const requestedFallback = desktopFlavor === "beta" ? "beta" : "default";
+  const fallbackIcon = isDesktopAppIcon(requestedFallback) ? requestedFallback : "default";
+  return readDesktopAppIconPreference(DESKTOP_APP_ICON_PATH, {
+    fallbackIcon,
+    // Stable leaves a Beta choice inert. Builds without the Beta icon retain
+    // the token too, so returning to a build that supports it restores it.
+    inactiveIcons: desktopFlavor === "beta" && isDesktopAppIcon("beta") ? [] : ["beta"],
+    onResetError: (error) => {
+      safeConsoleError("[desktop] Failed to reset unrecognized app icon preference", error);
+    },
+  });
 }
 
 function persistDesktopAppIcon(icon: DesktopAppIcon): void {
-  FS.mkdirSync(Path.dirname(DESKTOP_APP_ICON_PATH), { recursive: true });
-  FS.writeFileSync(DESKTOP_APP_ICON_PATH, icon, "utf8");
+  writeDesktopAppIconPreference(DESKTOP_APP_ICON_PATH, icon);
 }
 
 function windowsShortcutSearchDirectories(): string[] {
@@ -2402,22 +2412,17 @@ function toWindowsTaskbarIcoBytes(sourcePath: string): Buffer {
 let windowsShellStampTimer: ReturnType<typeof setImmediate> | null = null;
 let windowsShellStampResolve: (() => void) | null = null;
 let desktopAppIconApplyTail: Promise<void> = Promise.resolve();
-let lastPersistedMacAppIcon: DesktopAppIcon | null = null;
 
-async function syncMacAppBundleIcon(
-  icon: DesktopAppIcon,
-  image: Electron.NativeImage | null,
-): Promise<void> {
+async function syncMacAppBundleIcon(image: Electron.NativeImage | null): Promise<void> {
   // Do not customize the shared Electron executable used by development runs.
-  if (!app.isPackaged || lastPersistedMacAppIcon === icon) return;
+  if (!app.isPackaged) return;
   const bundlePath = resolveMacAppBundlePath(process.execPath, process.platform);
   if (!bundlePath) return;
   await persistMacAppIcon({
     bundlePath,
     cacheDirectory: Path.join(STATE_DIR, "mac-app-icons"),
-    png: icon === "default" ? null : (image?.toPNG() ?? null),
+    png: image?.toPNG() ?? null,
   });
-  lastPersistedMacAppIcon = icon;
 }
 
 function cancelDeferredWindowsShellStamp(): void {
@@ -2510,11 +2515,12 @@ async function applyDesktopAppIconUnlocked(
       icon,
       platform: process.platform,
       usesLegacyDockIcon: usesLegacyMacDockIcon(),
+      isBetaFlavor: desktopFlavor === "beta",
     })
   ) {
     // Remove the persistent override before asking AppKit to reload the bundle
     // icon, otherwise it can read the previous custom artwork again.
-    await syncMacAppBundleIcon(icon, null);
+    await syncMacAppBundleIcon(null);
     app.dock?.setIcon(null as unknown as Electron.NativeImage);
     return;
   }
@@ -2523,6 +2529,7 @@ async function applyDesktopAppIconUnlocked(
     icon,
     platform: process.platform,
     isDarkAppearance: process.platform === "darwin" && nativeTheme.shouldUseDarkColors,
+    isBetaFlavor: desktopFlavor === "beta",
   });
   const iconPath = resolveResourcePath(resourceName);
   if (!iconPath) return;
@@ -2532,7 +2539,7 @@ async function applyDesktopAppIconUnlocked(
 
   if (process.platform === "darwin") {
     app.dock?.setIcon(image);
-    await syncMacAppBundleIcon(icon, image);
+    await syncMacAppBundleIcon(image);
     return;
   }
   if (process.platform === "win32") {
@@ -2607,7 +2614,7 @@ function applyInitialMacDockIcon(): void {
     return;
   }
   void applyPersistedDesktopAppIcon().catch((error) => {
-    console.warn("[desktop] Failed to persist the macOS app icon", error);
+    safeConsoleError("[desktop] Failed to persist the macOS app icon", error);
   });
 }
 
@@ -2616,11 +2623,11 @@ function registerMacAppearanceIconSync(): void {
     return;
   }
   // macOS does not swap a runtime dock image when the system appearance
-  // changes, so re-apply the persisted preference. On macOS 26 the default
-  // preference short-circuits to the bundle icon, which adapts on its own.
+  // changes, so re-apply the persisted preference. On macOS 26, Stable's
+  // Default and Beta's Beta choices use the bundle icon, which adapts on its own.
   nativeTheme.on("updated", () => {
     void applyPersistedDesktopAppIcon().catch((error) => {
-      console.warn("[desktop] Failed to persist the macOS app icon", error);
+      safeConsoleError("[desktop] Failed to persist the macOS app icon", error);
     });
   });
 }
@@ -2852,33 +2859,10 @@ function emitUpdateState(): void {
 }
 
 function setUpdateState(patch: Partial<DesktopUpdateState>): void {
-  const previousStatus = updateState.status;
+  const previous = updateState;
   updateState = { ...updateState, ...patch };
   emitUpdateState();
-  if (betaDiagnostics && updateState.status !== previousStatus) {
-    const status = updateState.status;
-    if (status === "checking") {
-      trackBetaDiagnostics("update.check", { kind: "update", outcome: "ok" });
-    } else if (status === "available") {
-      trackBetaDiagnostics("update.available", {
-        kind: "update",
-        outcome: "ok",
-        ...(updateState.availableVersion ? { targetVersion: updateState.availableVersion } : {}),
-      });
-    } else if (status === "downloaded") {
-      trackBetaDiagnostics("update.downloaded", {
-        kind: "update",
-        outcome: "ok",
-        ...(updateState.downloadedVersion ? { targetVersion: updateState.downloadedVersion } : {}),
-      });
-    } else if (status === "error") {
-      trackBetaDiagnostics("update.error", {
-        kind: "update",
-        outcome: "error",
-        ...(updateState.errorContext ? { errorContext: updateState.errorContext } : {}),
-      });
-    }
-  }
+  betaDiagnostics?.trackUpdateStateChange(previous, updateState);
 }
 
 function shouldEnableAutoUpdates(): boolean {
@@ -4578,6 +4562,8 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
   });
 
   child.on("exit", (code, signal) => {
+    // Output can drain after a failed stop has restored the app's running state.
+    const expectedExit = isQuitting;
     if (backendListeningDetector === listeningDetector) {
       listeningDetector.fail(
         new Error(
@@ -4601,16 +4587,17 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
       }
       const reason = `code=${code ?? "null"} signal=${signal ?? "null"}`;
       lastBackendFailureDetail = outputTailDetector.read();
-      trackBetaDiagnostics("app.child-process-crash", {
-        kind: "crash",
-        processType: "backend",
-        reason,
-        // Guarded explicitly: on stable builds betaDiagnostics is null and the
-        // log file must not be touched at all.
-        logTail: betaDiagnostics
-          ? readLogTail(Path.join(LOG_DIR, BACKEND_LOG_FILE_NAME))
-          : undefined,
-      });
+      if (!expectedExit)
+        trackBetaDiagnostics("app.child-process-crash", {
+          kind: "crash",
+          processType: "backend",
+          reason,
+          // Guarded explicitly: on stable builds betaDiagnostics is null and the
+          // log file must not be touched at all.
+          logTail: betaDiagnostics
+            ? readLogTail(Path.join(LOG_DIR, BACKEND_LOG_FILE_NAME))
+            : undefined,
+        });
       scheduleBackendRestart(reason);
     });
   });
@@ -4859,6 +4846,15 @@ function requestGracefulAppQuit(reason: string): void {
 function registerIpcHandlers(): void {
   const storageSnapshotPath = resolveSynaraStorageSnapshotPath(app.getPath("userData"));
 
+  ipcMain.removeAllListeners(IPC.betaDiagnostics.enabled);
+  ipcMain.on(IPC.betaDiagnostics.enabled, (event: IpcMainEvent) => {
+    event.returnValue = Boolean(
+      betaDiagnostics &&
+      event.sender === mainWindow?.webContents &&
+      event.senderFrame === event.sender.mainFrame,
+    );
+  });
+
   ipcMain.removeAllListeners(IPC.browser.webMcpCompatibilityPolicy);
   ipcMain.on(IPC.browser.webMcpCompatibilityPolicy, (event: IpcMainEvent) => {
     event.returnValue = browserManager.isWebMcpCompatibilityAllowed(event.sender.id);
@@ -4962,7 +4958,7 @@ function registerIpcHandlers(): void {
     await applyDesktopAppIcon(icon, mainWindow, { flushShellIconCache: true });
   });
   ipcMain.handle(IPC.setAppIcon, async (_event, rawIcon: unknown) => {
-    if (!isDesktopAppIcon(rawIcon)) return;
+    if (!isDesktopAppIcon(rawIcon) || (rawIcon === "beta" && desktopFlavor !== "beta")) return;
     await enqueueDesktopAppIconApply(rawIcon);
   });
 
@@ -5367,6 +5363,7 @@ function getIconOption(): { icon: string } | Record<string, never> {
     icon,
     platform: process.platform,
     isDarkAppearance: false,
+    isBetaFlavor: desktopFlavor === "beta",
   });
   const iconPath = resolveResourcePath(resourceName);
   if (!iconPath) return {};
@@ -5474,13 +5471,7 @@ function createWindow(): BrowserWindow {
   attachRendererCrashRecovery(window);
   attachDesktopPhysicalZoomShortcuts(window);
   if (betaDiagnostics) {
-    // Renderer console errors become app.error events (throttled inside
-    // trackError); messages are redacted before they touch the queue.
-    window.webContents.on("console-message", (details) => {
-      if (details.level === "error" && typeof details.message === "string") {
-        betaDiagnostics.trackError("renderer", details.message);
-      }
-    });
+    attachBetaRendererDiagnostics(window.webContents, betaDiagnostics);
   }
 
   window.webContents.on("will-attach-webview", (event, webPreferences, params) => {
@@ -5649,14 +5640,19 @@ function attachRendererCrashRecovery(window: BrowserWindow): void {
     // the pending ask and count it as quitting for the crash policy.
     const quitAskPending = runningChatsQuitGuard.hasPendingAsk();
     runningChatsQuitGuard.allowPending();
-    trackBetaDiagnostics("app.renderer-crash", {
-      kind: "crash",
-      processType: "renderer",
-      reason: details.reason,
-      // Guarded explicitly: on stable builds betaDiagnostics is null and the
-      // log file must not be touched at all.
-      logTail: betaDiagnostics ? readLogTail(Path.join(LOG_DIR, DESKTOP_LOG_FILE_NAME)) : undefined,
-    });
+    // A pending quit ask has not started shutdown: an unexpected crash while
+    // that ask is open still belongs in diagnostics, even though recovery quits.
+    if (!isQuitting && details.reason !== "clean-exit")
+      trackBetaDiagnostics("app.renderer-crash", {
+        kind: "crash",
+        processType: "renderer",
+        reason: details.reason,
+        // Guarded explicitly: on stable builds betaDiagnostics is null and the
+        // log file must not be touched at all.
+        logTail: betaDiagnostics
+          ? readLogTail(Path.join(LOG_DIR, DESKTOP_LOG_FILE_NAME))
+          : undefined,
+      });
     const description = `reason=${details.reason} exitCode=${details.exitCode}`;
     writeDesktopLogHeader(`renderer process gone ${description}`);
     safeConsoleError(`[desktop] renderer process gone (${description})`);
@@ -6060,6 +6056,7 @@ if (hasSingleInstanceLock) {
       if (betaDiagnostics) {
         app.on("child-process-gone", (_event, details) => {
           // GPU/utility process crashes; details.reason is a fixed Electron enum.
+          if (isQuitting || details.reason === "clean-exit") return;
           trackBetaDiagnostics("app.child-process-crash", {
             kind: "crash",
             processType: details.type,

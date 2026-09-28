@@ -123,6 +123,7 @@ function createProviderServiceHarness(
     respondToUserInput: () => unsupported(),
     stopSession: () => unsupported(),
     listSessions,
+    getPersistedSessionProfile: () => Effect.succeed(undefined),
     getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
     rollbackConversation,
     compactThread: () => unsupported(),
