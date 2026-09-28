@@ -24,6 +24,7 @@ import { isNewTaskShortcut, NEW_TASK_SHORTCUT_PARTS } from "~/lib/newTaskShortcu
 import { cn } from "~/lib/utils";
 
 import { useStore } from "../../store";
+import { TasksViewSwitch } from "../tasks/TasksViewSwitch";
 import {
   CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
   CHAT_SURFACE_HEADER_HEIGHT_CLASS,
@@ -185,6 +186,7 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
               <span className="shrink-0 text-ui leading-snug text-muted-foreground/70">
                 {projectBoard ? projectBoard.totalCount : board.totalCount} tasks
               </span>
+              {projectBoard ? null : <TasksViewSwitch current="kanban" />}
               <Tooltip>
                 <TooltipTrigger
                   render={

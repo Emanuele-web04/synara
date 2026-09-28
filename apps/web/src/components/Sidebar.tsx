@@ -3786,10 +3786,11 @@ export default function Sidebar() {
       tasks: {
         icon: TasksIcon,
         label: "Tasks",
-        active: isOnTasks,
+        // Beta's Tasks entry stands for both views: the list and the Kanban board.
+        active: isOnTasks || isOnKanban,
         badge: tasksAttentionBadge,
         onClick: () => {
-          void navigate({ to: "/tasks" });
+          void navigate({ to: appSettings.tasksViewMode === "kanban" ? "/kanban" : "/tasks" });
         },
       },
       pullRequests: {
@@ -3821,6 +3822,7 @@ export default function Sidebar() {
       isOnKanban,
       isOnPullRequests,
       isOnTasks,
+      appSettings.tasksViewMode,
       navigate,
       prefetchModelsForPrimaryNewThread,
       pullRequestsReviewBadge,
@@ -6221,7 +6223,8 @@ export default function Sidebar() {
     return {
       ...base,
       badge: item.badge,
-      active: railActiveItem === id,
+      // Tasks also stands for the Kanban board it can switch to.
+      active: railActiveItem === id || (id === "tasks" && railActiveItem === "kanban"),
       onSelect: () => {
         selectRailRouteItem(id);
         item.onClick();
@@ -7095,20 +7098,18 @@ export default function Sidebar() {
                 <ProjectContextMenuIcon icon={FolderOpenIcon} />
                 <span>Open in Finder</span>
               </MenuItem>
-              {tasksSurfaceEnabled ? null : (
-                <MenuItem
-                  className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
-                  onClick={() =>
-                    void handleProjectContextMenuAction(
-                      projectContextMenuState.projectId,
-                      "open-in-kanban",
-                    )
-                  }
-                >
-                  <ProjectContextMenuIcon icon={KanbanIcon} />
-                  <span>Open in Kanban</span>
-                </MenuItem>
-              )}
+              <MenuItem
+                className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
+                onClick={() =>
+                  void handleProjectContextMenuAction(
+                    projectContextMenuState.projectId,
+                    "open-in-kanban",
+                  )
+                }
+              >
+                <ProjectContextMenuIcon icon={KanbanIcon} />
+                <span>Open in Kanban</span>
+              </MenuItem>
               <MenuItem
                 className={PROJECT_CONTEXT_MENU_ITEM_CLASS_NAME}
                 onClick={() =>

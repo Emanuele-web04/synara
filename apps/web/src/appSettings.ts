@@ -144,6 +144,11 @@ const PersistedRailOrderableItemIdList =
   persistedNavIdList<typeof RAIL_ORDERABLE_ITEM_IDS>(RailOrderableItemId);
 
 /** Classic: one sidebar column. Rail: fixed icon tabs plus a panel (Beta-only, see useSidebarLayout). */
+/** Where Beta's Tasks entry opens: the to-do list or the Kanban board of chats. */
+export const TasksViewMode = Schema.Literals(["list", "kanban"]);
+export type TasksViewMode = typeof TasksViewMode.Type;
+export const DEFAULT_TASKS_VIEW_MODE: TasksViewMode = "list";
+
 export const SidebarLayout = Schema.Literals(["classic", "rail"]);
 export type SidebarLayout = typeof SidebarLayout.Type;
 export const DEFAULT_SIDEBAR_LAYOUT: SidebarLayout = "classic";
@@ -358,6 +363,9 @@ export const AppSettingsSchema = Schema.Struct({
   // Local-only shell layout, available in Stable and Beta. useSidebarLayout keeps
   // mobile on classic even when the stored preference is "rail".
   sidebarLayout: SidebarLayout.pipe(withDefaults(() => DEFAULT_SIDEBAR_LAYOUT)),
+  // Beta-only: the view the Tasks entry opens, last picked in its List/Kanban switch.
+  // Stable never reads it (Kanban is its only view).
+  tasksViewMode: TasksViewMode.pipe(withDefaults(() => DEFAULT_TASKS_VIEW_MODE)),
   // Rail layout shortcuts the user added from the rail's "…" menu, in rail order:
   // "space:<id>" (the Void key for unfiled) or "project:<id>" (see appRail.logic).
   railShortcuts: Schema.Array(Schema.String.check(Schema.isMaxLength(512))).pipe(

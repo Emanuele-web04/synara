@@ -36,6 +36,7 @@ import { CHAT_BACKGROUND_CLASS_NAME } from "../chat/composerPickerStyles";
 import { RouteInsetSurface } from "../RouteInsetSurface";
 import { TaskStatusGlyph } from "./TaskGlyphs";
 import { TaskRow } from "./TaskRow";
+import { TasksViewSwitch } from "./TasksViewSwitch";
 import { TaskInspector } from "./TaskInspector";
 import {
   buildTaskSections,
@@ -175,6 +176,7 @@ export default function TasksView() {
               <span className="shrink-0 text-ui leading-snug text-muted-foreground/70">
                 {openCount} open
               </span>
+              <TasksViewSwitch current="list" />
               <div className="ml-2 hidden sm:block">
                 <FilterPillGroup
                   ariaLabel="Show tasks"

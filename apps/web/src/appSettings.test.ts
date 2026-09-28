@@ -630,6 +630,12 @@ describe("provider-indexed custom model settings", () => {
 });
 
 describe("AppSettingsSchema", () => {
+  it("opens Tasks as the list until the user picks the Kanban view", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+    expect(decode(JSON.stringify({})).tasksViewMode).toBe("list");
+    expect(decode(JSON.stringify({ tasksViewMode: "kanban" })).tasksViewMode).toBe("kanban");
+  });
+
   it("keeps Kanban and Tasks nav items and drops unknown ones without resetting settings", () => {
     const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
     const decoded = decode(
