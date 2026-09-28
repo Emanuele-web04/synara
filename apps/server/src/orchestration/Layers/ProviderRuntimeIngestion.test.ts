@@ -101,6 +101,7 @@ function createProviderServiceHarness(options?: { readonly persistedStream?: boo
     respondToUserInput: () => unsupported(),
     stopSession: () => unsupported(),
     listSessions: () => Effect.succeed([...runtimeSessions]),
+    getPersistedSessionProfile: () => Effect.succeed(undefined),
     getCapabilities: (provider) =>
       Effect.succeed({
         sessionModelSwitch: "in-session",
