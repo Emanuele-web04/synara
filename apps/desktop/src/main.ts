@@ -2252,7 +2252,7 @@ function configureAppIdentity(): void {
 }
 
 // Older macOS needs pre-rounded artwork as a runtime Dock override. macOS 26+
-// renders the appearance-aware Icon Composer asset when Default is selected.
+// renders the Icon Composer asset for Stable Default and Beta Beta choices.
 function usesLegacyMacDockIcon(): boolean {
   if (process.platform !== "darwin") return false;
   const darwinMajor = Number.parseInt(OS.release().split(".")[0] ?? "", 10);
