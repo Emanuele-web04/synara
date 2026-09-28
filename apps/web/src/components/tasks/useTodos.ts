@@ -144,6 +144,7 @@ export function useTodoMutations() {
         dueDate: input.dueDate ?? null,
         threadId: null,
         delegationBaseTurnId: null,
+        linkedAt: null,
         completedAt: null,
         createdAt: now,
         updatedAt: UNSAVED_TODO_UPDATED_AT,
@@ -245,7 +246,8 @@ export function useTodoMutations() {
 }
 
 /** Every to-do joined with its linked chat and the status that chat implies. */
-export function useTaskRows(todos: readonly Todo[]): TaskRowModel[] {
+/** `now` lets a just-linked chat read as Starting until its link settles; omit it where only attention counts. */
+export function useTaskRows(todos: readonly Todo[], now?: Date): TaskRowModel[] {
   const threadSummaryById = useStore((state) => state.sidebarThreadSummaryById);
   const threadsHydrated = useStore((state) => state.threadsHydrated);
   const draftThreadsByThreadId = useComposerDraftStore((state) => state.draftThreadsByThreadId);
@@ -258,10 +260,10 @@ export function useTaskRows(todos: readonly Todo[]): TaskRowModel[] {
         return {
           todo,
           thread,
-          status: deriveTaskStatus({ todo, thread, hasDraftThread, threadsHydrated }),
+          status: deriveTaskStatus({ todo, thread, hasDraftThread, threadsHydrated, now }),
         };
       }),
-    [draftThreadsByThreadId, threadSummaryById, threadsHydrated, todos],
+    [draftThreadsByThreadId, now, threadSummaryById, threadsHydrated, todos],
   );
 }
 

@@ -27,6 +27,7 @@ const makeTodoRepository = Effect.gen(function* () {
         due_date AS "dueDate",
         thread_id AS "threadId",
         delegation_base_turn_id AS "delegationBaseTurnId",
+        linked_at AS "linkedAt",
         completed_at AS "completedAt",
         created_at AS "createdAt",
         updated_at AS "updatedAt"
@@ -48,6 +49,7 @@ const makeTodoRepository = Effect.gen(function* () {
         due_date AS "dueDate",
         thread_id AS "threadId",
         delegation_base_turn_id AS "delegationBaseTurnId",
+        linked_at AS "linkedAt",
         completed_at AS "completedAt",
         created_at AS "createdAt",
         updated_at AS "updatedAt"
@@ -69,6 +71,7 @@ const makeTodoRepository = Effect.gen(function* () {
         due_date,
         thread_id,
         delegation_base_turn_id,
+        linked_at,
         completed_at,
         created_at,
         updated_at
@@ -82,6 +85,7 @@ const makeTodoRepository = Effect.gen(function* () {
         ${todo.dueDate},
         ${todo.threadId},
         ${todo.delegationBaseTurnId},
+        ${todo.linkedAt},
         ${todo.completedAt},
         ${todo.createdAt},
         ${todo.updatedAt}
@@ -96,6 +100,7 @@ const makeTodoRepository = Effect.gen(function* () {
         due_date AS "dueDate",
         thread_id AS "threadId",
         delegation_base_turn_id AS "delegationBaseTurnId",
+        linked_at AS "linkedAt",
         completed_at AS "completedAt",
         created_at AS "createdAt",
         updated_at AS "updatedAt"
@@ -114,6 +119,7 @@ const makeTodoRepository = Effect.gen(function* () {
         due_date = ${todo.dueDate},
         thread_id = ${todo.threadId},
         delegation_base_turn_id = ${todo.delegationBaseTurnId},
+        linked_at = ${todo.linkedAt},
         completed_at = ${todo.completedAt},
         updated_at = ${todo.updatedAt}
       WHERE todo_id = ${todo.id}
@@ -127,6 +133,7 @@ const makeTodoRepository = Effect.gen(function* () {
         due_date AS "dueDate",
         thread_id AS "threadId",
         delegation_base_turn_id AS "delegationBaseTurnId",
+        linked_at AS "linkedAt",
         completed_at AS "completedAt",
         created_at AS "createdAt",
         updated_at AS "updatedAt"

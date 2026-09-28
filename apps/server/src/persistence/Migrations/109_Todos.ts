@@ -16,6 +16,7 @@ export default Effect.gen(function* () {
     due_date TEXT,
     thread_id TEXT,
     delegation_base_turn_id TEXT,
+    linked_at TEXT,
     completed_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL

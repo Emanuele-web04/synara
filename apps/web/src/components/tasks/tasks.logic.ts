@@ -51,13 +51,18 @@ const TODO_STATUS: TaskStatus = {
   chatMissing: false,
 };
 
+/** How long a new link's chat may take to reach every window before it counts as missing. */
+const LINK_SETTLE_MS = 60_000;
+
 export function deriveTaskStatus(input: {
-  todo: Pick<Todo, "completedAt" | "threadId" | "delegationBaseTurnId">;
+  todo: Pick<Todo, "completedAt" | "threadId" | "delegationBaseTurnId" | "linkedAt">;
   thread: SidebarThreadSummary | null;
   /** The linked chat is still a local draft that has not reached the server yet. */
   hasDraftThread: boolean;
   /** False until the chat list has loaded; a link can't be called missing before that. */
   threadsHydrated?: boolean;
+  /** With it, a link younger than LINK_SETTLE_MS whose chat isn't known yet is Starting. */
+  now?: Date | undefined;
 }): TaskStatus {
   const { todo, thread } = input;
   if (todo.completedAt !== null) {
@@ -70,6 +75,14 @@ export function deriveTaskStatus(input: {
     if (input.hasDraftThread) return { ...TODO_STATUS, kind: "starting", label: "Starting" };
     if (input.threadsHydrated === false) {
       return { ...TODO_STATUS, kind: "starting", label: "Loading", detail: "Loading the chat…" };
+    }
+    // Another window (or this one after a reload) may still be creating the chat.
+    if (
+      input.now &&
+      todo.linkedAt !== null &&
+      input.now.getTime() - Date.parse(todo.linkedAt) < LINK_SETTLE_MS
+    ) {
+      return { ...TODO_STATUS, kind: "starting", label: "Starting" };
     }
     return { ...TODO_STATUS, chatMissing: true };
   }
@@ -210,17 +223,6 @@ const SECTION_BY_STATUS: Record<Exclude<TaskStatusKind, "done">, TaskSectionKey>
 };
 
 /** Whether the to-do waits on the user: an approval, a finished run, or a failure. */
-/**
- * A chat linked this recently may not have reached this window yet (another window, or
- * this one after a reload, is still creating it), so it isn't called missing, and can't
- * be unlinked or re-delegated, until the link has settled.
- */
-const LINK_SETTLE_MS = 60_000;
-
-export function isChatMissingSettled(todo: Pick<Todo, "updatedAt">, now: Date): boolean {
-  return now.getTime() - Date.parse(todo.updatedAt) >= LINK_SETTLE_MS;
-}
-
 export function isTaskNeedingAttention(status: TaskStatus): boolean {
   return status.kind !== "done" && SECTION_BY_STATUS[status.kind] === "needs";
 }

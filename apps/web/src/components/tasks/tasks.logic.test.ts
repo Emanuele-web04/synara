@@ -8,7 +8,6 @@ import {
   deriveTaskStatus,
   filterTaskRows,
   formatDueLabel,
-  isChatMissingSettled,
   resolveDuePreset,
   UNSAVED_TODO_UPDATED_AT,
   type TaskRowModel,
@@ -23,6 +22,7 @@ function todo(overrides: Omit<Partial<Todo>, "id"> & { id: string }): Todo {
     dueDate: null,
     threadId: null,
     delegationBaseTurnId: null,
+    linkedAt: null,
     completedAt: null,
     createdAt: "2026-09-27T10:00:00.000Z",
     updatedAt: "2026-09-27T10:00:00.000Z",
@@ -241,11 +241,13 @@ describe("due dates", () => {
   });
 });
 
-describe("isChatMissingSettled", () => {
-  it("gives a fresh link a minute before calling its chat missing", () => {
-    const linked = todo({ id: "linked", threadId, updatedAt: "2026-09-27T10:00:00.000Z" });
-    expect(isChatMissingSettled(linked, new Date("2026-09-27T10:00:30.000Z"))).toBe(false);
-    expect(isChatMissingSettled(linked, new Date("2026-09-27T10:01:00.000Z"))).toBe(true);
+describe("a fresh link to a chat this window doesn't know yet", () => {
+  it("reads as Starting for a minute, then as missing", () => {
+    const linked = todo({ id: "linked", threadId, linkedAt: "2026-09-27T10:00:00.000Z" });
+    const at = (iso: string) =>
+      deriveTaskStatus({ todo: linked, thread: null, hasDraftThread: false, now: new Date(iso) });
+    expect(at("2026-09-27T10:00:30.000Z")).toMatchObject({ kind: "starting", chatMissing: false });
+    expect(at("2026-09-27T10:01:00.000Z")).toMatchObject({ kind: "todo", chatMissing: true });
   });
 });
 

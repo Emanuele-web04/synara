@@ -59,6 +59,8 @@ export const Todo = Schema.Struct({
    * appears, that chat's state (an earlier reply, approval, or run) is not this to-do's.
    */
   delegationBaseTurnId: Schema.NullOr(TurnId),
+  /** When threadId was last set; a fresh link's chat may not have reached every window yet. */
+  linkedAt: Schema.NullOr(TodoIsoDateTime),
   completedAt: Schema.NullOr(TodoIsoDateTime),
   createdAt: TodoIsoDateTime,
   updatedAt: TodoIsoDateTime,

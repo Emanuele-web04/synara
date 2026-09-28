@@ -68,15 +68,15 @@ export default function TasksView() {
   }, [navigate, tasksSurfaceEnabled]);
   const { todos, isLoading, isError, refetch } = useTodoList();
   const { createTodo, updateTodo, updateTodoAsync, deleteTodo } = useTodoMutations();
-  const rows = useTaskRows(todos);
+  // Ticks relative times, and lets a just-linked chat settle from Starting to missing.
+  const nowMs = useNowMs(true, 15_000);
+  const now = useMemo(() => new Date(nowMs), [nowMs]);
+  const rows = useTaskRows(todos, now);
   const [filter, setFilter] = useState<TaskFilter>("all");
   const visibleRows = useMemo(() => filterTaskRows(rows, filter), [filter, rows]);
   const { sections, completed } = useMemo(() => buildTaskSections(visibleRows), [visibleRows]);
   const [selectedTodoId, setSelectedTodoId] = useState<TodoId | null>(null);
   const selectedRow = rows.find((row) => row.todo.id === selectedTodoId) ?? null;
-  const hasRunningWork = rows.some((row) => row.status.kind === "running");
-  const nowMs = useNowMs(true, hasRunningWork ? 15_000 : 60_000);
-  const now = useMemo(() => new Date(nowMs), [nowMs]);
   const projects = useStore((state) => state.projects);
   const projectNameById = useMemo(
     () => new Map<string, string>(projects.map((project) => [project.id, project.name])),

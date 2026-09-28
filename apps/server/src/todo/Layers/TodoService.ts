@@ -68,6 +68,7 @@ export const TodoServiceLive = Layer.effect(
           dueDate: input.dueDate ?? null,
           threadId: null,
           delegationBaseTurnId: null,
+          linkedAt: null,
           completedAt: null,
           createdAt: now,
           updatedAt: now,
@@ -133,7 +134,7 @@ export const TodoServiceLive = Layer.effect(
             }
             // Reopening keeps the to-do but gives up a chat another to-do now works in.
             if (ownedElsewhere) {
-              next = { ...patched, threadId: null, delegationBaseTurnId: null };
+              next = { ...patched, threadId: null, delegationBaseTurnId: null, linkedAt: null };
             }
           }
           const saved = yield* repository

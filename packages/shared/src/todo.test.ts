@@ -12,6 +12,7 @@ const base: Todo = {
   dueDate: null,
   threadId: ThreadId.makeUnsafe("thread-a"),
   delegationBaseTurnId: TurnId.makeUnsafe("turn-a"),
+  linkedAt: "2026-09-27T10:00:00.000Z",
   completedAt: null,
   createdAt: "2026-09-27T10:00:00.000Z",
   updatedAt: "2026-09-27T10:00:00.000Z",
@@ -36,6 +37,8 @@ describe("applyTodoPatch", () => {
       later,
     );
     expect(relinked.delegationBaseTurnId).toBe("turn-b");
+    expect(relinked.linkedAt).toBe(later);
+    expect(applyTodoPatch(base, { id: base.id, notes: "x" }, later).linkedAt).toBe(base.linkedAt);
   });
 
   it("stamps completion once and clears it on reopen", () => {
