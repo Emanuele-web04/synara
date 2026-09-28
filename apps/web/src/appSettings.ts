@@ -46,6 +46,12 @@ import {
   normalizeSidebarNavOrder,
   SIDEBAR_NAV_ITEM_IDS,
 } from "./sidebarNavOrdering";
+import {
+  DEFAULT_HIDDEN_RAIL_ITEMS,
+  normalizeHiddenRailItems,
+  normalizeRailItemOrder,
+  RAIL_ORDERABLE_ITEM_IDS,
+} from "./appRail.logic";
 import { ensureNativeApi } from "./nativeApi";
 import { providerDiscoveryQueryKeys } from "./lib/providerDiscoveryReactQuery";
 import {
@@ -111,6 +117,11 @@ export type AgentCursorColorMode = typeof AgentCursorColorMode.Type;
 export const DEFAULT_AGENT_CURSOR_COLOR_MODE: AgentCursorColorMode = "stock";
 
 const SidebarNavItemId = Schema.Literals([...SIDEBAR_NAV_ITEM_IDS]);
+const RailOrderableItemId = Schema.Literals([...RAIL_ORDERABLE_ITEM_IDS]);
+/** Classic: one sidebar column. Rail: fixed icon tabs plus a panel (Beta-only, see useSidebarLayout). */
+export const SidebarLayout = Schema.Literals(["classic", "rail"]);
+export type SidebarLayout = typeof SidebarLayout.Type;
+export const DEFAULT_SIDEBAR_LAYOUT: SidebarLayout = "classic";
 export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
 export const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
 export const FollowUpBehavior = Schema.Literals(["queue", "steer"]);
@@ -319,6 +330,23 @@ export const AppSettingsSchema = Schema.Struct({
     withDefaults(() => [...DEFAULT_SIDEBAR_NAV_ORDER]),
   ),
   hiddenSidebarNavItems: Schema.Array(SidebarNavItemId).pipe(withDefaults(() => [])),
+  // Local-only shell layout, available in Stable and Beta. useSidebarLayout keeps
+  // mobile on classic even when the stored preference is "rail".
+  sidebarLayout: SidebarLayout.pipe(withDefaults(() => DEFAULT_SIDEBAR_LAYOUT)),
+  // Rail layout shortcuts the user added from the rail's "…" menu, in rail order:
+  // "space:<id>" (the Void key for unfiled) or "project:<id>" (see appRail.logic).
+  railShortcuts: Schema.Array(Schema.String.check(Schema.isMaxLength(512))).pipe(
+    withDefaults(() => []),
+  ),
+  // Rail layout's own Customize state (the classic nav block keeps `sidebarNavOrder`):
+  // the order of the rail's top items and the ones the user hid. Home never hides, and an
+  // active hidden item stays visible (see appRail.logic).
+  railItemOrder: Schema.Array(RailOrderableItemId).pipe(
+    withDefaults(() => [...RAIL_ORDERABLE_ITEM_IDS]),
+  ),
+  hiddenRailItems: Schema.Array(RailOrderableItemId).pipe(
+    withDefaults(() => [...DEFAULT_HIDDEN_RAIL_ITEMS]),
+  ),
   // Whether the per-run threads standalone automations create appear in the sidebar
   // (and the surfaces derived from it: Kanban, Activity, project picker). Runs stay
   // listed on the automation's page and findable via search either way.
@@ -729,6 +757,8 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     providerOrder: normalizeProviderOrder(settings.providerOrder),
     sidebarNavOrder: normalizeSidebarNavOrder(settings.sidebarNavOrder),
     hiddenSidebarNavItems: normalizeHiddenSidebarNavItems(settings.hiddenSidebarNavItems),
+    railItemOrder: normalizeRailItemOrder(settings.railItemOrder),
+    hiddenRailItems: normalizeHiddenRailItems(settings.hiddenRailItems),
     hiddenModels: [],
   };
 }
