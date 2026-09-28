@@ -33,6 +33,7 @@ const api = vi.hoisted(() => ({
     onCopyLink: vi.fn(() => () => {}),
     detachWebview: vi.fn(async () => {}),
     attachWebview: vi.fn(async () => {}),
+    navigate: vi.fn<() => Promise<ThreadBrowserState>>(),
   },
 }));
 
@@ -155,6 +156,7 @@ function FloatingFixture({ showMenu = true }: { showMenu?: boolean }) {
 beforeEach(() => {
   vi.clearAllMocks();
   api.browser.open.mockResolvedValue(state);
+  api.browser.navigate.mockResolvedValue(state);
   useBrowserStateStore.setState({
     threadStatesByThreadId: { [threadId]: state },
     recentHistoryByThreadId: {},
@@ -166,6 +168,47 @@ afterEach(() => {
 });
 
 describe("native browser menu occlusion", () => {
+  it("restores the same docked native tab after address suggestions close", async () => {
+    await page.viewport(1280, 900);
+    const mounted = await render(
+      <QueryClientProvider client={new QueryClient()}>
+        <div style={{ width: 640, height: 600 }}>
+          <BrowserPanel mode="sidebar" threadId={threadId} onClosePanel={() => {}} />
+        </div>
+        <button type="button">Outside suggestions</button>
+      </QueryClientProvider>,
+    );
+    await vi.waitFor(() => expect(lastBounds()?.width).toBeGreaterThan(0));
+    const original = lastBounds();
+    const address = page.getByPlaceholder("Search or enter a URL");
+    const suggestion = page.getByRole("button", { name: /Open https:\/\/example.test\/next/ });
+
+    for (const dismissal of ["blur", "selection", "submit"]) {
+      await address.fill("https://example.test/next");
+      await expect.element(suggestion).toBeVisible();
+      await vi.waitFor(() => expect(lastBounds()).toBeNull());
+      expect(api.browser.setPanelBounds.mock.lastCall?.[0].occluded).toBe(true);
+      if (dismissal === "blur")
+        await page.getByRole("button", { name: "Outside suggestions" }).click();
+      if (dismissal === "selection") await suggestion.click();
+      if (dismissal === "submit") await userEvent.keyboard("{Enter}");
+      await expect.element(suggestion).not.toBeInTheDocument();
+      await vi.waitFor(() => expect(lastBounds()).toEqual(original));
+      expect(api.browser.setPanelBounds.mock.lastCall?.[0].occluded).toBe(false);
+      await page.getByRole("button", { name: "Outside suggestions" }).click();
+    }
+    expect(api.browser.navigate).toHaveBeenCalledTimes(2);
+    expect(api.browser.navigate).toHaveBeenLastCalledWith({
+      threadId,
+      tabId: state.activeTabId,
+      url: "https://example.test/next",
+    });
+    expect(api.browser.open).toHaveBeenCalledOnce();
+    expect(api.browser.hide).not.toHaveBeenCalled();
+    expect(api.browser.detachWebview).not.toHaveBeenCalled();
+    await mounted.unmount();
+  });
+
   it("retains a renderer opener while its native popup is active and restores the same webview", async () => {
     await page.viewport(1280, 900);
     const openerState: ThreadBrowserState = {

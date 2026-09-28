@@ -77,9 +77,19 @@ export function BrowserTabStrip(props: BrowserTabStripProps) {
             <div
               key={tab.id}
               data-browser-tab-active={isActive ? "true" : undefined}
+              onMouseDown={(event) => {
+                // Suppress middle-button autoscroll/paste before auxclick closes the tab.
+                if (event.button === 1) event.preventDefault();
+              }}
+              onAuxClick={(event) => {
+                if (event.button !== 1) return;
+                event.preventDefault();
+                event.stopPropagation();
+                onCloseTab(tab.id);
+              }}
               className={cn(
                 BROWSER_CHROME_CONTROL_CLASS_NAME,
-                "group flex h-7 min-w-0 max-w-[12rem] shrink-0 items-center pr-0.5 text-left text-ui transition-colors",
+                "group flex h-7 min-w-0 max-w-[12rem] shrink-0 items-center pr-0.5 text-left text-ui transition-colors [-webkit-app-region:no-drag]",
                 isActive
                   ? cn(BROWSER_CHROME_CONTROL_FILLED_CLASS_NAME, "text-foreground")
                   : "border-transparent text-muted-foreground hover:border-border/60 hover:bg-background/40 hover:text-foreground",
