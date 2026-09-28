@@ -136,10 +136,16 @@ export const TodoServiceLive = Layer.effect(
               next = { ...patched, threadId: null, delegationBaseTurnId: null };
             }
           }
-          const saved = yield* repository.save({
-            todo: next,
-            expectedUpdatedAt: current.value.updatedAt,
-          });
+          const saved = yield* repository
+            .save({ todo: next, expectedUpdatedAt: current.value.updatedAt })
+            .pipe(
+              // A claim of the same chat landed after the ownership read. A reopen keeps
+              // the to-do: retry, and the next read drops the link. A new link fails.
+              Effect.catchIf(
+                (cause) => !linksNewly && isChatOwnershipConflict(cause),
+                () => Effect.succeed(Option.none()),
+              ),
+            );
           if (Option.isSome(saved)) {
             yield* publish({ type: "todo-upserted", todo: saved.value });
             return saved.value;

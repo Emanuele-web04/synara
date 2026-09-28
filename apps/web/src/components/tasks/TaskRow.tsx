@@ -23,6 +23,7 @@ import {
   describeAgentLocation,
   formatAgentActivity,
   formatDueLabel,
+  isChatMissingSettled,
   type TaskRowModel,
   todoPriorityLabel,
 } from "./tasks.logic";
@@ -64,7 +65,8 @@ export function TaskRow({
   const [draftTitle, setDraftTitle] = useState(todo.title);
   const isDone = status.kind === "done";
   // Linked to a chat that still exists, even before its summary loads ("Starting").
-  const isDelegated = todo.threadId !== null && !status.chatMissing;
+  const isDelegated =
+    todo.threadId !== null && !(status.chatMissing && isChatMissingSettled(todo, now));
   const showsAgent = thread !== null && !isDone;
   const projectName = todo.projectId ? (projectNameById.get(todo.projectId) ?? null) : null;
   // The agent line already names the chat's project; don't repeat it on the right.

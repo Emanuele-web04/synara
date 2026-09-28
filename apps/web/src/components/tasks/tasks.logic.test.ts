@@ -8,7 +8,9 @@ import {
   deriveTaskStatus,
   filterTaskRows,
   formatDueLabel,
+  isChatMissingSettled,
   resolveDuePreset,
+  UNSAVED_TODO_UPDATED_AT,
   type TaskRowModel,
 } from "./tasks.logic";
 
@@ -239,7 +241,22 @@ describe("due dates", () => {
   });
 });
 
+describe("isChatMissingSettled", () => {
+  it("gives a fresh link a minute before calling its chat missing", () => {
+    const linked = todo({ id: "linked", threadId, updatedAt: "2026-09-27T10:00:00.000Z" });
+    expect(isChatMissingSettled(linked, new Date("2026-09-27T10:00:30.000Z"))).toBe(false);
+    expect(isChatMissingSettled(linked, new Date("2026-09-27T10:01:00.000Z"))).toBe(true);
+  });
+});
+
 describe("applyTodoEvent", () => {
+  it("keeps a create the server hasn't confirmed when a snapshot arrives", () => {
+    const pending = todo({ id: "todo-pending", updatedAt: UNSAVED_TODO_UPDATED_AT });
+    const stored = todo({ id: "todo-stored" });
+    const list = applyTodoEvent({ todos: [pending] }, { type: "snapshot", todos: [stored] });
+    expect(list.todos.map((item) => item.id)).toEqual(["todo-stored", "todo-pending"]);
+  });
+
   it("keeps the newest copy of each to-do and drops deleted ones for good", () => {
     const older = todo({ id: "todo-event", title: "Old", updatedAt: "2026-09-27T10:00:00.000Z" });
     const newer = { ...older, title: "New", updatedAt: "2026-09-27T10:01:00.000Z" };

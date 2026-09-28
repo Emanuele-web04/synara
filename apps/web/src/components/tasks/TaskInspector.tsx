@@ -46,6 +46,7 @@ import {
   describeAgentLocation,
   formatAgentActivity,
   formatDueLabel,
+  isChatMissingSettled,
   type TaskRowModel,
   todoPriorityLabel,
 } from "./tasks.logic";
@@ -166,7 +167,7 @@ export function TaskInspector({
           />
         ) : isDone ? (
           <p className="text-ui-sm text-muted-foreground">Done. Reopen it to delegate it again.</p>
-        ) : todo.threadId !== null && !status.chatMissing ? (
+        ) : todo.threadId !== null && !(status.chatMissing && isChatMissingSettled(todo, now)) ? (
           // Linked, but the chat has not reached the server yet: no second Start meanwhile.
           <div className="flex items-center gap-2">
             <p className="flex-1 text-ui-sm text-muted-foreground">

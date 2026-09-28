@@ -30,12 +30,10 @@ import {
   markTodoDeleted,
   type TaskRowModel,
   todoQueryKey,
+  UNSAVED_TODO_UPDATED_AT,
   unmarkTodoDeleted,
   upsertTodo,
 } from "./tasks.logic";
-
-// Seeds an optimistic create, so the server's authoritative row always replaces it.
-const UNSAVED_UPDATED_AT = "1970-01-01T00:00:00.000Z";
 
 // Creates still on their way to the server, retries included. An update or delete of the
 // same to-do waits for the whole create, so the server sees them in the order the user
@@ -148,7 +146,7 @@ export function useTodoMutations() {
         delegationBaseTurnId: null,
         completedAt: null,
         createdAt: now,
-        updatedAt: UNSAVED_UPDATED_AT,
+        updatedAt: UNSAVED_TODO_UPDATED_AT,
       };
       setList((todos) => upsertTodo(todos, optimistic));
     },

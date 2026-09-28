@@ -210,6 +210,17 @@ const SECTION_BY_STATUS: Record<Exclude<TaskStatusKind, "done">, TaskSectionKey>
 };
 
 /** Whether the to-do waits on the user: an approval, a finished run, or a failure. */
+/**
+ * A chat linked this recently may not have reached this window yet (another window, or
+ * this one after a reload, is still creating it), so it isn't called missing, and can't
+ * be unlinked or re-delegated, until the link has settled.
+ */
+const LINK_SETTLE_MS = 60_000;
+
+export function isChatMissingSettled(todo: Pick<Todo, "updatedAt">, now: Date): boolean {
+  return now.getTime() - Date.parse(todo.updatedAt) >= LINK_SETTLE_MS;
+}
+
 export function isTaskNeedingAttention(status: TaskStatus): boolean {
   return status.kind !== "done" && SECTION_BY_STATUS[status.kind] === "needs";
 }
@@ -361,6 +372,9 @@ export const EMPTY_TODO_LIST: TodoListResult = { todos: [] };
  * Ids deleted during this session. A late upsert (an update that raced the delete)
  * must not resurrect the row; ids are client-generated and never reused.
  */
+/** Stamps an optimistic create until the server confirms it; any stored row is newer. */
+export const UNSAVED_TODO_UPDATED_AT = "1970-01-01T00:00:00.000Z";
+
 const deletedTodoIds = new Set<TodoId>();
 
 export function markTodoDeleted(todoId: TodoId): void {
@@ -398,13 +412,23 @@ export function applyTodoEvent(
   switch (event.type) {
     case "snapshot": {
       const previousById = new Map(base.todos.map((todo) => [todo.id, todo]));
+      const snapshotIds = new Set(event.todos.map((todo) => todo.id));
       return {
-        todos: event.todos.flatMap((todo) => {
-          if (deletedTodoIds.has(todo.id)) return [];
-          const previous = previousById.get(todo.id);
-          // Snapshots are reconciliation data: a newer live copy keeps winning.
-          return [previous && !isSameOrNewer(todo.updatedAt, previous.updatedAt) ? previous : todo];
-        }),
+        todos: [
+          ...event.todos.flatMap((todo) => {
+            if (deletedTodoIds.has(todo.id)) return [];
+            const previous = previousById.get(todo.id);
+            // Snapshots are reconciliation data: a newer live copy keeps winning.
+            return [
+              previous && !isSameOrNewer(todo.updatedAt, previous.updatedAt) ? previous : todo,
+            ];
+          }),
+          // A create still on its way isn't in the server's list yet; keep it. Its reply
+          // (or its failure) settles it.
+          ...base.todos.filter(
+            (todo) => todo.updatedAt === UNSAVED_TODO_UPDATED_AT && !snapshotIds.has(todo.id),
+          ),
+        ],
       };
     }
     case "todo-upserted":
