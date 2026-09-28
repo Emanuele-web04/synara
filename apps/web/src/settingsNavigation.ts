@@ -43,6 +43,12 @@ export type SettingsNavItem = {
   /** Basename of a SVG under `/central-icons-reversed`. */
   icon: string;
   eyebrow: string;
+  /**
+   * Maturity label shown beside the section name, in the sidebar and on the
+   * panel's own heading. Absent for a settled feature; one source so the two
+   * places can never disagree about what is still in beta.
+   */
+  badge?: string;
 };
 
 export const SETTINGS_NAV_GROUPS: ReadonlyArray<{
@@ -128,6 +134,7 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     description: "Let agents see and control this computer's desktop, and check backend status.",
     icon: "computer-use",
     eyebrow: "Desktop control",
+    badge: "Beta",
   },
   {
     id: "integrations",
