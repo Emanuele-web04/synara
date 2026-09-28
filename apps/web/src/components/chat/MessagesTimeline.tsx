@@ -68,7 +68,7 @@ import {
 import { pinActionLabel } from "~/lib/pin";
 import { syncAnimationsToTimelineOrigin } from "~/lib/animationTimelineSync";
 import { Button } from "../ui/button";
-import { composerOverlayScrollMaskImage } from "./composerOverlay";
+import { composerOverlayScrollFadeVars } from "./composerOverlay";
 import { CrossTaskOriginLabel, type CrossTaskOrigin } from "./CrossTaskOriginLabel";
 import { ForkSourceDivider, type ForkSourceReference } from "./ForkSourceDivider";
 import { SynaraThreadCreationCard } from "./SynaraThreadCreationCard";
@@ -629,9 +629,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   // any right-edge overlay. Kept stable so LegendList isn't re-rendered on unrelated updates.
   // The bottom inset clears the floating composer the transcript scrolls under; it is
   // padding on the scroll viewport (not a taller footer) so the list's own footer-layout
-  // and initial-scroll machinery is never resized from outside. The mask dissolves rows
-  // as they pass behind the composer's glass so nothing remains visible behind its
-  // footer controls (see composerOverlayScrollMaskImage).
+  // and initial-scroll machinery is never resized from outside. The fade variables move
+  // the list's bottom edge fade up to the composer's top edge and add the dissolve that
+  // keeps content clear of its footer controls (see composerOverlayScrollFadeVars).
   const listScrollStyle = useMemo(() => {
     if (!contentInsetRightPx && !contentInsetBottomPx) {
       return undefined;
@@ -642,14 +642,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     }
     if (contentInsetBottomPx) {
       style.paddingBottom = contentInsetBottomPx;
-      const maskImage = composerOverlayScrollMaskImage(
-        contentInsetBottomPx,
-        contentInsetBottomClearancePx,
+      Object.assign(
+        style,
+        composerOverlayScrollFadeVars(contentInsetBottomPx, contentInsetBottomClearancePx),
       );
-      if (maskImage) {
-        style.maskImage = maskImage;
-        style.WebkitMaskImage = maskImage;
-      }
     }
     return style;
   }, [contentInsetBottomClearancePx, contentInsetBottomPx, contentInsetRightPx]);
@@ -2647,17 +2643,15 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         onWheel={handleMessagesWheel}
         data-chat-scroll-container="true"
         ListFooterComponent={listFooter}
-        // `scroll-fade-b` (vendored shadcn 4.12.0 util in index.css) masks the bottom
-        // edge so streamed content dissolves toward the composer. It is scroll-aware
-        // via `animation-timeline: scroll()`, so the fade clears at the live edge and a
-        // pinned or non-scrollable transcript stays crisp (no permanent shadow).
-        // With the floating composer the viewport bottom sits *behind* the frosted
-        // surface, so the scroll-aware fade is replaced by the fixed composer mask in
-        // `listScrollStyle`: rows dissolve through the glass over the editor region and
-        // are fully cut before the composer's footer controls.
+        // `scroll-edge-fade` (index.css) dissolves rows under the chat header and toward
+        // the composer instead of cutting them. It is scroll-aware via
+        // `animation-timeline: scroll()` and paint-only, so each edge clears once nothing
+        // is scrolled past it (a pinned or non-scrollable transcript stays crisp) without
+        // feeding back into auto-follow or list measurement. With the floating composer,
+        // `listScrollStyle` moves the bottom fade up to the composer's top edge and
+        // intersects the footer-controls dissolve.
         className={cn(
-          "h-full overflow-x-hidden overscroll-y-contain py-3 [scrollbar-gutter:stable] sm:py-4",
-          contentInsetBottomPx ? null : "scroll-fade-b",
+          "scroll-edge-fade h-full overflow-x-hidden overscroll-y-contain py-3 [scrollbar-gutter:stable] sm:py-4",
           ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
           CHAT_COLUMN_GUTTER_CLASS_NAME,
         )}
