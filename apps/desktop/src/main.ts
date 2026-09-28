@@ -116,8 +116,10 @@ import { showDesktopConfirmDialog } from "./confirmDialog";
 import {
   desktopAppIconResourceName,
   isDesktopAppIcon,
+  readDesktopAppIconPreference,
   shouldUpdateDesktopAppIcon,
   usesMacBundleAppIcon,
+  writeDesktopAppIconPreference,
 } from "./desktopAppIcon";
 import {
   applyWindowsTaskbarIcon,
@@ -2258,20 +2260,21 @@ function usesLegacyMacDockIcon(): boolean {
 }
 
 function readDesktopAppIcon(): DesktopAppIcon {
-  const fallbackIcon: DesktopAppIcon = desktopFlavor === "beta" ? "beta" : "default";
-  try {
-    const storedIcon = FS.readFileSync(DESKTOP_APP_ICON_PATH, "utf8").trim();
-    return isDesktopAppIcon(storedIcon) && (storedIcon !== "beta" || desktopFlavor === "beta")
-      ? storedIcon
-      : fallbackIcon;
-  } catch {
-    return fallbackIcon;
-  }
+  const requestedFallback = desktopFlavor === "beta" ? "beta" : "default";
+  const fallbackIcon = isDesktopAppIcon(requestedFallback) ? requestedFallback : "default";
+  return readDesktopAppIconPreference(DESKTOP_APP_ICON_PATH, {
+    fallbackIcon,
+    // Stable leaves a Beta choice inert. Builds without the Beta icon retain
+    // the token too, so returning to a build that supports it restores it.
+    inactiveIcons: desktopFlavor === "beta" && isDesktopAppIcon("beta") ? [] : ["beta"],
+    onResetError: (error) => {
+      safeConsoleError("[desktop] Failed to reset unrecognized app icon preference", error);
+    },
+  });
 }
 
 function persistDesktopAppIcon(icon: DesktopAppIcon): void {
-  FS.mkdirSync(Path.dirname(DESKTOP_APP_ICON_PATH), { recursive: true });
-  FS.writeFileSync(DESKTOP_APP_ICON_PATH, icon, "utf8");
+  writeDesktopAppIconPreference(DESKTOP_APP_ICON_PATH, icon);
 }
 
 function windowsShortcutSearchDirectories(): string[] {
@@ -2408,14 +2411,10 @@ function toWindowsTaskbarIcoBytes(sourcePath: string): Buffer {
 let windowsShellStampTimer: ReturnType<typeof setImmediate> | null = null;
 let windowsShellStampResolve: (() => void) | null = null;
 let desktopAppIconApplyTail: Promise<void> = Promise.resolve();
-let lastPersistedMacAppIcon: DesktopAppIcon | null = null;
 
-async function syncMacAppBundleIcon(
-  icon: DesktopAppIcon,
-  image: Electron.NativeImage | null,
-): Promise<void> {
+async function syncMacAppBundleIcon(image: Electron.NativeImage | null): Promise<void> {
   // Do not customize the shared Electron executable used by development runs.
-  if (!app.isPackaged || lastPersistedMacAppIcon === icon) return;
+  if (!app.isPackaged) return;
   const bundlePath = resolveMacAppBundlePath(process.execPath, process.platform);
   if (!bundlePath) return;
   await persistMacAppIcon({
@@ -2423,7 +2422,6 @@ async function syncMacAppBundleIcon(
     cacheDirectory: Path.join(STATE_DIR, "mac-app-icons"),
     png: image?.toPNG() ?? null,
   });
-  lastPersistedMacAppIcon = icon;
 }
 
 function cancelDeferredWindowsShellStamp(): void {
@@ -2521,7 +2519,7 @@ async function applyDesktopAppIconUnlocked(
   ) {
     // Remove the persistent override before asking AppKit to reload the bundle
     // icon, otherwise it can read the previous custom artwork again.
-    await syncMacAppBundleIcon(icon, null);
+    await syncMacAppBundleIcon(null);
     app.dock?.setIcon(null as unknown as Electron.NativeImage);
     return;
   }
@@ -2540,7 +2538,7 @@ async function applyDesktopAppIconUnlocked(
 
   if (process.platform === "darwin") {
     app.dock?.setIcon(image);
-    await syncMacAppBundleIcon(icon, image);
+    await syncMacAppBundleIcon(image);
     return;
   }
   if (process.platform === "win32") {
@@ -2615,7 +2613,7 @@ function applyInitialMacDockIcon(): void {
     return;
   }
   void applyPersistedDesktopAppIcon().catch((error) => {
-    console.warn("[desktop] Failed to persist the macOS app icon", error);
+    safeConsoleError("[desktop] Failed to persist the macOS app icon", error);
   });
 }
 
@@ -2628,7 +2626,7 @@ function registerMacAppearanceIconSync(): void {
   // Default and Beta's Beta choices use the bundle icon, which adapts on its own.
   nativeTheme.on("updated", () => {
     void applyPersistedDesktopAppIcon().catch((error) => {
-      console.warn("[desktop] Failed to persist the macOS app icon", error);
+      safeConsoleError("[desktop] Failed to persist the macOS app icon", error);
     });
   });
 }

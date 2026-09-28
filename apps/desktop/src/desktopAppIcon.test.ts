@@ -1,11 +1,31 @@
-import { describe, expect, it } from "vitest";
+import * as FS from "node:fs";
+import * as OS from "node:os";
+import * as Path from "node:path";
+
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   desktopAppIconResourceName,
   isDesktopAppIcon,
+  readDesktopAppIconPreference,
   shouldUpdateDesktopAppIcon,
   usesMacBundleAppIcon,
+  writeDesktopAppIconPreference,
 } from "./desktopAppIcon";
+
+const temporaryDirectories: string[] = [];
+
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) {
+    FS.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+function temporaryIconPath(): string {
+  const directory = FS.mkdtempSync(Path.join(OS.tmpdir(), "synara-app-icon-"));
+  temporaryDirectories.push(directory);
+  return Path.join(directory, "desktop-app-icon");
+}
 
 describe("desktop app icons", () => {
   it("accepts only supported preferences", () => {
@@ -213,5 +233,58 @@ describe("desktop app icons", () => {
     expect(shouldUpdateDesktopAppIcon("dark", "dark")).toBe(false);
     expect(shouldUpdateDesktopAppIcon("default", "dark")).toBe(true);
     expect(shouldUpdateDesktopAppIcon("dark", "icon")).toBe(true);
+  });
+});
+
+describe("desktop app icon preference persistence", () => {
+  it.each(["default", "dark"] as const)(
+    "resets an unknown value to the configured %s fallback on disk",
+    (fallbackIcon) => {
+      const filePath = temporaryIconPath();
+      FS.writeFileSync(filePath, "future-icon", "utf8");
+
+      expect(readDesktopAppIconPreference(filePath, { fallbackIcon })).toBe(fallbackIcon);
+      expect(FS.readFileSync(filePath, "utf8")).toBe(fallbackIcon);
+    },
+  );
+
+  it.each([undefined, "   \n"])(
+    "uses the configured fallback for a missing or blank preference without writing (%j)",
+    (stored) => {
+      const filePath = temporaryIconPath();
+      if (stored !== undefined) FS.writeFileSync(filePath, stored, "utf8");
+
+      expect(readDesktopAppIconPreference(filePath, { fallbackIcon: "dark" })).toBe("dark");
+      if (stored === undefined) {
+        expect(FS.existsSync(filePath)).toBe(false);
+      } else {
+        expect(FS.readFileSync(filePath, "utf8")).toBe(stored);
+      }
+    },
+  );
+
+  it("keeps a supported selection and its stored bytes despite a different fallback", () => {
+    const filePath = temporaryIconPath();
+    FS.writeFileSync(filePath, " icon\n", "utf8");
+
+    expect(readDesktopAppIconPreference(filePath, { fallbackIcon: "dark" })).toBe("icon");
+    expect(FS.readFileSync(filePath, "utf8")).toBe(" icon\n");
+  });
+
+  it("keeps an inactive preference on disk for a flavor that can use it later", () => {
+    const filePath = temporaryIconPath();
+    writeDesktopAppIconPreference(filePath, "dark");
+
+    expect(readDesktopAppIconPreference(filePath, { inactiveIcons: ["dark"] })).toBe("default");
+    expect(FS.readFileSync(filePath, "utf8")).toBe("dark");
+    expect(readDesktopAppIconPreference(filePath)).toBe("dark");
+  });
+
+  it("preserves a known future flavor token when it is inactive in this build", () => {
+    const filePath = temporaryIconPath();
+    FS.writeFileSync(filePath, "beta", "utf8");
+
+    expect(readDesktopAppIconPreference(filePath, { inactiveIcons: ["beta"] })).toBe("default");
+    expect(FS.readFileSync(filePath, "utf8")).toBe("beta");
   });
 });

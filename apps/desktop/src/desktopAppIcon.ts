@@ -1,6 +1,9 @@
 // FILE: desktopAppIcon.ts
-// Purpose: Validate app-icon preferences and map them to platform resources.
+// Purpose: Validate and persist the app-icon preference and map it to platform resources.
 // Layer: Desktop-native preference logic
+
+import * as FS from "node:fs";
+import * as Path from "node:path";
 
 import { DesktopAppIcon } from "@synara/contracts";
 import { Schema } from "effect";
@@ -38,6 +41,38 @@ const APP_ICON_RESOURCE_NAMES = {
 } as const;
 
 export const isDesktopAppIcon = Schema.is(DesktopAppIcon);
+
+export function writeDesktopAppIconPreference(filePath: string, icon: DesktopAppIcon): void {
+  FS.mkdirSync(Path.dirname(filePath), { recursive: true });
+  FS.writeFileSync(filePath, icon, "utf8");
+}
+
+// Missing or blank files use the caller's fallback without writing. Unknown
+// values reset on disk; known but inactive choices stay saved for another flavor.
+export function readDesktopAppIconPreference(
+  filePath: string,
+  options: {
+    readonly fallbackIcon?: DesktopAppIcon;
+    readonly inactiveIcons?: readonly string[];
+    readonly onResetError?: (error: unknown) => void;
+  } = {},
+): DesktopAppIcon {
+  const fallbackIcon = options.fallbackIcon ?? "default";
+  let stored: string;
+  try {
+    stored = FS.readFileSync(filePath, "utf8").trim();
+  } catch {
+    return fallbackIcon;
+  }
+  if (stored.length === 0 || options.inactiveIcons?.includes(stored)) return fallbackIcon;
+  if (isDesktopAppIcon(stored)) return stored;
+  try {
+    writeDesktopAppIconPreference(filePath, fallbackIcon);
+  } catch (error) {
+    options.onResetError?.(error);
+  }
+  return fallbackIcon;
+}
 
 interface MacBundleAppIconInput {
   readonly icon: DesktopAppIcon;
