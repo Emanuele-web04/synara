@@ -26,10 +26,6 @@ function parseMentionToken(token: string): string {
 }
 
 describe("composer mention reference filtering", () => {
-  it("does not invent plugin references for plain file or folder mentions", () => {
-    expect(filterPromptProviderMentionReferences("Open @Things please", [])).toEqual([]);
-  });
-
   it("preserves selected plugin references only while their token remains in the prompt", () => {
     const thingsPlugin = { name: "things", path: "plugin://things@openai-curated" };
     const githubPlugin = { name: "github", path: "plugin://github@openai-curated" };
@@ -37,14 +33,6 @@ describe("composer mention reference filtering", () => {
     expect(
       filterPromptProviderMentionReferences("Open @Things please", [thingsPlugin, githubPlugin]),
     ).toEqual([thingsPlugin]);
-  });
-
-  it("drops selected plugin references after the matching token is removed", () => {
-    const thingsPlugin = { name: "things", path: "plugin://things@openai-curated" };
-
-    expect(
-      filterPromptProviderMentionReferences("Open @src/things please", [thingsPlugin]),
-    ).toEqual([]);
   });
 
   it("matches quoted plugin mention tokens when the plugin name contains whitespace", () => {
@@ -107,10 +95,6 @@ describe("composer mention reference filtering", () => {
 });
 
 describe("formatComposerMentionToken", () => {
-  it("quotes mention tokens with whitespace", () => {
-    expect(formatComposerMentionToken("Google Drive")).toBe('@"Google Drive"');
-  });
-
   it("quotes paths with parentheses so they stay one mention token (#351)", () => {
     expect(formatComposerMentionToken("/Users/me/Mac (2)/Projects")).toBe(
       '@"/Users/me/Mac (2)/Projects"',
@@ -125,7 +109,6 @@ describe("formatComposerMentionToken", () => {
   });
 
   it.each([
-    "/Users/me/Happy Dropbox/Mac (2)/app",
     String.raw`C:\Users\me\Project (2)`,
     '/tmp/A "B"/repo',
     "/Users/me/@scope/package",

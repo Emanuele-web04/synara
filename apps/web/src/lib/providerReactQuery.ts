@@ -107,7 +107,7 @@ function normalizeCheckpointErrorMessage(error: unknown): string {
   return message;
 }
 
-export function isCheckpointTemporarilyUnavailable(error: unknown): boolean {
+function isCheckpointTemporarilyUnavailable(error: unknown): boolean {
   const message = asCheckpointErrorMessage(error).toLowerCase();
   return (
     message.includes("exceeds current turn count") ||

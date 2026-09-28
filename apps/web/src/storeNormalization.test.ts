@@ -1,19 +1,21 @@
 // FILE: storeNormalization.test.ts
-// Purpose: Pins the incremental activity accumulator to the `normalizeActivities` fold it replaces.
+// Purpose: pins the incremental activity accumulator to the `normalizeActivities` fold it
+// replaces, and locks the legacy session provider-name → ProviderKind mapping.
 
 import { MessageId, TurnId, type PendingClaudeCacheReview } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
+import type { ProviderKind } from "@synara/contracts";
+
 import {
   createThreadActivityAccumulator,
-  dedupeActivitiesById,
-  dedupeActivitiesByIdAfterAppend,
   mergeReadModelThreadDetailWithLiveHotPath,
   normalizeActivities,
   normalizeChatMessage,
   normalizeThreadFromReadModel,
   normalizeThreadShellSnapshot,
   threadShellsEqual,
+  toLegacyProvider,
   type ThreadActivityAccumulator,
 } from "./storeNormalization";
 import { makeActivity, makeReadModelThread, makeThread } from "./storeTestFixtures";
@@ -143,6 +145,19 @@ const richPayload = {
   data: { item: { type: "commandExecution", command: "echo hello" } },
 };
 
+const KNOWN_PROVIDERS: ReadonlyArray<ProviderKind> = [
+  "codex",
+  "claudeAgent",
+  "cursor",
+  "antigravity",
+  "grok",
+  "droid",
+  "devin",
+  "opencode",
+  "pi",
+  "omp",
+];
+
 describe("createThreadActivityAccumulator", () => {
   it("matches the normalizeActivities fold for appends, in-place merges and exact duplicates", () => {
     const existing = makeActivity({
@@ -173,16 +188,6 @@ describe("createThreadActivityAccumulator", () => {
     ];
 
     expectEquivalent(previous, batch);
-  });
-
-  it("matches the fold when the previous list still contains duplicate ids", () => {
-    const duplicated = makeActivity({ id: "activity-dup", sequence: 1 });
-    const previous = [duplicated, makeActivity({ id: "activity-other", sequence: 2 }), duplicated];
-
-    // The very first append has to report "changed" because dedupe of `previous` alone rewrote
-    // the list, exactly like `normalizeActivities` did on its first call.
-    expectEquivalent(previous, [{ ...duplicated }]);
-    expectEquivalent(previous, [makeActivity({ id: "activity-new", sequence: 3 })]);
   });
 
   it("matches the fold across the activity cap, including pending-request retention", () => {
@@ -255,62 +260,6 @@ describe("createThreadActivityAccumulator", () => {
 describe("dedupeActivitiesByIdAfterAppend", () => {
   const byIdOf = (activities: readonly ThreadActivity[]) =>
     Object.fromEntries(activities.map((activity) => [activity.id, activity]));
-
-  it("returns the input by reference when unique activities are appended to a deduped prefix", () => {
-    const previous = [
-      makeActivity({ id: "activity-a", sequence: 0 }),
-      makeActivity({ id: "activity-b", sequence: 1 }),
-    ];
-    const next = [...previous, makeActivity({ id: "activity-c", sequence: 2 })];
-
-    expect(dedupeActivitiesByIdAfterAppend(next, previous, byIdOf(previous))).toBe(next);
-  });
-
-  it("matches the full dedupe when an appended activity repeats a previous id", () => {
-    const previous = [makeActivity({ id: "activity-a", sequence: 0 })];
-    const next = [
-      ...previous,
-      makeActivity({ id: "activity-a", payload: richPayload, sequence: 0 }),
-    ];
-
-    const result = dedupeActivitiesByIdAfterAppend(next, previous, byIdOf(previous));
-    expect(result).toEqual(dedupeActivitiesById(next));
-    expect(result.map((activity) => activity.id)).toEqual(["activity-a"]);
-  });
-
-  it("matches the full dedupe when the appended tail repeats its own ids", () => {
-    const previous = [makeActivity({ id: "activity-a", sequence: 0 })];
-    const duplicate = makeActivity({ id: "activity-b", sequence: 1 });
-    const next = [...previous, duplicate, { ...duplicate, payload: richPayload }];
-
-    const result = dedupeActivitiesByIdAfterAppend(next, previous, byIdOf(previous));
-    expect(result).toEqual(dedupeActivitiesById(next));
-    expect(result.map((activity) => activity.id)).toEqual(["activity-a", "activity-b"]);
-  });
-
-  it("falls back to the full dedupe when a previous slot was replaced", () => {
-    const previous = [
-      makeActivity({ id: "activity-a", sequence: 0 }),
-      makeActivity({ id: "activity-b", sequence: 1 }),
-    ];
-    const next = [
-      previous[0]!,
-      makeActivity({ id: "activity-b", payload: richPayload, sequence: 1 }),
-    ];
-
-    expect(dedupeActivitiesByIdAfterAppend(next, previous, byIdOf(previous))).toEqual(
-      dedupeActivitiesById(next),
-    );
-  });
-
-  it("falls back to the full dedupe without a previous slice", () => {
-    const duplicate = makeActivity({ id: "activity-a", sequence: 0 });
-    const next = [duplicate, { ...duplicate, payload: richPayload }];
-
-    expect(dedupeActivitiesByIdAfterAppend(next, undefined, undefined)).toEqual(
-      dedupeActivitiesById(next),
-    );
-  });
 });
 
 describe("mergeReadModelThreadDetailWithLiveHotPath", () => {
@@ -532,5 +481,28 @@ describe("asynchronous question hydration", () => {
     const restored = normalizeChatMessage(pending, answered);
     expect(restored.asyncUserInput?.response).toEqual(response);
     expect(restored.completedAt).toBe(createdAt);
+  });
+});
+
+describe("toLegacyProvider", () => {
+  it("maps each known provider name to itself", () => {
+    for (const provider of KNOWN_PROVIDERS) {
+      expect(toLegacyProvider(provider)).toBe(provider);
+    }
+  });
+
+  it("maps omp to omp (regression: omp threads were coerced to codex)", () => {
+    // The server stamps providerName "omp" for OMP threads; before the fix this
+    // fell through to "codex", mislabeling every OMP thread across the UI
+    // (ChatHeader, Sidebar, ChatView activeProvider, kanban, threadDisplay).
+    expect(toLegacyProvider("omp")).toBe("omp");
+  });
+
+  it("falls back to codex for an unknown provider name", () => {
+    expect(toLegacyProvider("unknown-provider")).toBe("codex");
+  });
+
+  it("falls back to codex for null", () => {
+    expect(toLegacyProvider(null)).toBe("codex");
   });
 });

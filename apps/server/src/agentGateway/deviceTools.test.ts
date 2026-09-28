@@ -34,11 +34,24 @@ function makeContext(provider: ProviderKind = "claudeAgent"): ToolContext {
   };
 }
 
-async function setup() {
+async function setup(options?: {
+  readonly authorizeAction?:
+    | ((
+        name: string,
+        args: Record<string, unknown>,
+        context: ToolContext,
+        signal: AbortSignal,
+      ) => Promise<boolean>)
+    | undefined;
+}) {
   const backend = new FakeDeviceBackend();
   const manager = new DeviceManager({ backend });
   await manager.boot(DEVICE);
-  const tools = makeAgentGatewayDeviceTools({ manager });
+  const authorizeAction =
+    options && "authorizeAction" in options ? options.authorizeAction : async () => true;
+  const tools = authorizeAction
+    ? makeAgentGatewayDeviceTools({ manager, authorizeAction })
+    : makeAgentGatewayDeviceTools({ manager });
   const byName = new Map(tools.map((tool) => [tool.definition.name, tool]));
   const call = async (
     name: string,
@@ -99,23 +112,12 @@ describe("agent gateway device tools surface", () => {
       "device_scroll_to_element",
     ]);
     expect(tools.every((tool) => tool.requiredCapability === "device:control")).toBe(true);
-  });
-
-  it("requires an active turn for every tool, including the read-only ones", async () => {
-    const { tools } = await setup();
-
+    // Every tool, the read-only ones included, needs a live caller turn.
     expect(tools.every((tool) => tool.requiresActiveTurn === true)).toBe(true);
   });
+});
 
-  it("marks read tools read-only and input tools as writes", async () => {
-    const { byName } = await setup();
-
-    expect(byName.get("device_describe_ui")?.definition.annotations?.readOnlyHint).toBe(true);
-    expect(byName.get("device_screenshot")?.definition.annotations?.readOnlyHint).toBe(true);
-    expect(byName.get("device_tap")?.definition.annotations?.readOnlyHint).toBe(false);
-    expect(byName.get("device_open_url")?.definition.annotations?.openWorldHint).toBe(true);
-  });
-
+describe("agent gateway device tool handlers", () => {
   it("publishes the operational rules on the tools that need them", async () => {
     const { byName } = await setup();
     const description = (name: string) => byName.get(name)?.definition.description ?? "";
@@ -157,9 +159,7 @@ describe("agent gateway device tools surface", () => {
       expect(description(name)).toContain("do not retry");
     }
   });
-});
 
-describe("agent gateway device tool handlers", () => {
   it("lists devices with their availability", async () => {
     const { structured } = await setup();
 
@@ -170,14 +170,6 @@ describe("agent gateway device tool handlers", () => {
 
     expect(result.availability).toEqual({ kind: "available" });
     expect(result.devices.find((device) => device.udid === DEVICE)?.bootSource).toBe("synara");
-  });
-
-  it("taps through to the backend with the requested device points", async () => {
-    const { backend, structured } = await setup();
-
-    await structured("device_tap", { udid: DEVICE, x: 100, y: 220 });
-
-    expect(backend.callsOfKind("tap")[0]).toMatchObject({ udid: DEVICE, x: 100, y: 220 });
   });
 
   it("taps a label at the control's own point and reports its prior state", async () => {
@@ -325,32 +317,26 @@ describe("agent gateway device tool handlers", () => {
     expect(excessiveScrolls.isError).toBe(true);
     expect(backend.callsOfKind("swipe")).toHaveLength(0);
   });
-
-  it("marks the thread agent-active only while a tool runs", async () => {
-    const { manager, structured } = await setup();
-
-    await structured("device_describe_ui", { udid: DEVICE });
-
-    expect((await manager.getThreadState(THREAD)).agentActive).toBe(false);
-  });
 });
 
-describe("agent gateway device tools without an approval gate", () => {
-  it.each([...PROVIDERS_WITHOUT_APPROVAL_GATE])(
-    "refuses input and open_url for %s before the action runs",
-    async (provider) => {
-      const { backend, call } = await setup();
+describe("agent gateway device tools approval surface", () => {
+  const MUTATING_CALLS = [
+    ["device_tap", { udid: DEVICE, x: 1, y: 1 }],
+    ["device_swipe", { udid: DEVICE, fromX: 0, fromY: 0, toX: 10, toY: 10 }],
+    ["device_type", { udid: DEVICE, text: "hello" }],
+    ["device_press_button", { udid: DEVICE, button: "home" }],
+    ["device_open_url", { udid: DEVICE, url: "https://example.com" }],
+    ["device_install", { udid: DEVICE, appPath: "/tmp/Demo.app" }],
+    ["device_launch", { udid: DEVICE, bundleId: "com.example.Demo" }],
+    ["device_boot", { udid: "FAKE-0002" }],
+  ] as const;
 
-      for (const [name, args] of [
-        ["device_tap", { udid: DEVICE, x: 1, y: 1 }],
-        ["device_swipe", { udid: DEVICE, fromX: 0, fromY: 0, toX: 10, toY: 10 }],
-        ["device_type", { udid: DEVICE, text: "hello" }],
-        ["device_press_button", { udid: DEVICE, button: "home" }],
-        ["device_open_url", { udid: DEVICE, url: "https://example.com" }],
-        ["device_install", { udid: DEVICE, appPath: "/tmp/Demo.app" }],
-        ["device_launch", { udid: DEVICE, bundleId: "com.example.Demo" }],
-        ["device_boot", { udid: "FAKE-0002" }],
-      ] as const) {
+  it.each(["codex", "omp", ...PROVIDERS_WITHOUT_APPROVAL_GATE] as const)(
+    "refuses input and open_url for %s when no authorize surface exists",
+    async (provider) => {
+      const { backend, call } = await setup({ authorizeAction: undefined });
+
+      for (const [name, args] of MUTATING_CALLS) {
         const result = await call(name, args, provider);
         expect(result.isError, `${name} should be refused`).toBe(true);
         const text = result.content.find((entry) => entry.type === "text");
@@ -363,24 +349,51 @@ describe("agent gateway device tools without an approval gate", () => {
     },
   );
 
-  it("still allows the read tools for Antigravity", async () => {
-    const { call } = await setup();
+  it("asks authorizeAction before running a mutating tool, for every provider kind", async () => {
+    const asked: string[] = [];
+    const { call } = await setup({
+      authorizeAction: async (name) => {
+        asked.push(name);
+        return true;
+      },
+    });
 
-    const list = await call("device_list", {}, "antigravity");
-    const describe = await call("device_describe_ui", { udid: DEVICE }, "antigravity");
-    const screenshot = await call("device_screenshot", { udid: DEVICE }, "antigravity");
+    for (const provider of ["codex", "omp", "antigravity"] as const) {
+      const result = await call("device_tap", { udid: DEVICE, x: 5, y: 5 }, provider);
+      expect(result.isError).toBeUndefined();
+    }
 
-    expect(list.isError).toBeUndefined();
-    expect(describe.isError).toBeUndefined();
-    expect(screenshot.isError).toBeUndefined();
+    expect(asked).toEqual(["device_tap", "device_tap", "device_tap"]);
   });
 
-  it("allows every tool for providers that do gate approvals", async () => {
-    const { call } = await setup();
+  it("does not ask authorizeAction for the read-only tools", async () => {
+    let asked = 0;
+    const { call } = await setup({
+      authorizeAction: async () => {
+        asked += 1;
+        return true;
+      },
+    });
 
-    const result = await call("device_tap", { udid: DEVICE, x: 5, y: 5 }, "codex");
+    for (const name of ["device_list", "device_describe_ui", "device_screenshot"] as const) {
+      const result = await call(name, { udid: DEVICE }, "omp");
+      expect(result.isError).toBeUndefined();
+    }
 
-    expect(result.isError).toBeUndefined();
+    expect(asked).toBe(0);
+  });
+
+  it("denies the action without touching the device when authorizeAction refuses", async () => {
+    const { backend, call } = await setup({ authorizeAction: async () => false });
+
+    const result = await call("device_tap", { udid: DEVICE, x: 5, y: 5 }, "omp");
+
+    expect(result.isError).toBe(true);
+    const text = result.content.find((entry) => entry.type === "text");
+    expect(text && text.type === "text" ? text.text : "").toContain("denied or cancelled");
+    expect(backend.calls.filter((entry) => entry.kind !== "attachStream")).toEqual([
+      { kind: "boot", udid: DEVICE },
+    ]);
   });
 });
 
@@ -459,34 +472,38 @@ describe("agent gateway device tools surface the pane on any interaction", () =>
         },
       ]);
     });
-
-    it(`asks the pane to open only once across repeated ${name} calls`, async () => {
-      const { manager, call } = await setup();
-      const opened = collectOpenPaneRequests(manager);
-
-      await call(name, { ...args });
-      await call(name, { ...args });
-      await call(name, { ...args });
-
-      // An agent taps every few seconds; re-requesting per call would spam the
-      // UI and could yank back a user who navigated away.
-      expect(opened).toHaveLength(1);
-    });
-
-    it(`never steals a thread already watching another device on ${name}`, async () => {
-      const { backend, manager, call } = await setup();
-      await backend.boot("FAKE-0002");
-      await manager.attach(THREAD, "FAKE-0002");
-      const opened = collectOpenPaneRequests(manager);
-
-      await call(name, { ...args });
-
-      expect((await manager.getThreadState(THREAD)).attachedDeviceUdid).toBe("FAKE-0002");
-      // The attachment the user chose survives; the request names the agent's
-      // device, which stays reachable from the picker.
-      expect(opened.map((event) => event.udid)).toEqual([DEVICE]);
-    });
   }
+
+  // Idempotency and non-stealing live in the one shared surfacing wrapper
+  // (handleInteraction -> manager.surfaceDeviceForAgent), so one tool proves them.
+  const [tapName, tapArgs] = INTERACTION_CALLS[0];
+
+  it("asks the pane to open only once across repeated device_tap calls", async () => {
+    const { manager, call } = await setup();
+    const opened = collectOpenPaneRequests(manager);
+
+    await call(tapName, { ...tapArgs });
+    await call(tapName, { ...tapArgs });
+    await call(tapName, { ...tapArgs });
+
+    // An agent taps every few seconds; re-requesting per call would spam the
+    // UI and could yank back a user who navigated away.
+    expect(opened).toHaveLength(1);
+  });
+
+  it("never steals a thread already watching another device on device_tap", async () => {
+    const { backend, manager, call } = await setup();
+    await backend.boot("FAKE-0002");
+    await manager.attach(THREAD, "FAKE-0002");
+    const opened = collectOpenPaneRequests(manager);
+
+    await call(tapName, { ...tapArgs });
+
+    expect((await manager.getThreadState(THREAD)).attachedDeviceUdid).toBe("FAKE-0002");
+    // The attachment the user chose survives; the request names the agent's
+    // device, which stays reachable from the picker.
+    expect(opened.map((event) => event.udid)).toEqual([DEVICE]);
+  });
 
   it("does not surface the pane for device_list", async () => {
     const { manager, structured } = await setup();

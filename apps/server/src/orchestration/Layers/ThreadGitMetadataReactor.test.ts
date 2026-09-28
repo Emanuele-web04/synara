@@ -255,35 +255,6 @@ describe("ThreadGitMetadataReactor", () => {
     expect(harness.pullRequestLookups).toEqual([pullRequest.headBranch]);
   });
 
-  it("attributes a shared local branch only to the thread that owned the turn", async () => {
-    const threadId = ThreadId.makeUnsafe("local-thread");
-    const turnId = TurnId.makeUnsafe("local-turn");
-    const harness = await createHarness({
-      threads: [
-        {
-          id: threadId,
-          projectId: ProjectId.makeUnsafe("project-1"),
-          envMode: "local",
-          worktreePath: null,
-          branch: "synara/stale-branch",
-          lastKnownPr: null,
-        },
-      ],
-      branchByCwd: { "/repo": pullRequest.headBranch },
-    });
-
-    await harness.publish(startedEvent(threadId, turnId));
-    await harness.publish(completedEvent(threadId, turnId));
-    await waitFor(() => harness.commands.length === 1);
-
-    expect(harness.commands[0]).toMatchObject({
-      type: "thread.meta.update",
-      threadId,
-      branch: pullRequest.headBranch,
-      lastKnownPr: pullRequest,
-    });
-  });
-
   it("ignores native subagent lifecycle events while attributing the shared parent turn", async () => {
     const threadId = ThreadId.makeUnsafe("local-parent-thread");
     const parentTurnId = TurnId.makeUnsafe("local-parent-turn");

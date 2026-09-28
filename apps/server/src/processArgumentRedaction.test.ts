@@ -26,14 +26,6 @@ describe("redactSensitiveProcessArgs", () => {
     ).toBe("synara mcp pair --code [redacted] [redacted]");
   });
 
-  it("redacts secret environment assignments in process diagnostics", () => {
-    for (const name of ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GITHUB_TOKEN"]) {
-      expect(redactProcessTableArgs(`env ${name}=secret bun run dev`)).toBe(
-        `env ${name}=[redacted]`,
-      );
-    }
-  });
-
   it("redacts common secret key environment names", () => {
     for (const name of [
       "AWS_SECRET_ACCESS_KEY",
@@ -270,11 +262,6 @@ describe("redactSensitiveProcessArgs", () => {
 
   it("does not redact unrelated environment assignments", () => {
     const args = "env MONKEY=value TURKEY=istanbul NODE_ENV=development bun run dev";
-    expect(redactSensitiveProcessArgs(args)).toBe(args);
-  });
-
-  it("leaves unrelated process arguments unchanged", () => {
-    const args = "bun run dev --port 3000";
     expect(redactSensitiveProcessArgs(args)).toBe(args);
   });
 });

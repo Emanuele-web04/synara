@@ -8,10 +8,22 @@ export function projectImportKey(...parts: ReadonlyArray<string>): string {
   return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
 }
 
+// Codex on Windows can store extended-length paths. Resolve their ordinary
+// drive/UNC equivalents so a missing child's parent remains a valid root.
+export function normalizeWindowsImportPath(value: string): string {
+  if (!value.startsWith("\\\\?\\")) return value;
+  const rest = value.slice(4);
+  if (/^UNC\\/i.test(rest)) return `\\\\${rest.slice(4)}`;
+  return /^[a-z]:\\/i.test(rest) ? rest : value;
+}
+
 export async function canonicalImportPath(value: string): Promise<string> {
-  const absolute = path.resolve(value);
+  const absolute = path.resolve(
+    process.platform === "win32" ? normalizeWindowsImportPath(value) : value,
+  );
   try {
-    return await realpath(absolute);
+    const physical = await realpath(absolute);
+    return process.platform === "win32" ? normalizeWindowsImportPath(physical) : physical;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     const parent = path.dirname(absolute);

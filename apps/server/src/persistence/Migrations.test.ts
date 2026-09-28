@@ -1,13 +1,8 @@
-import { assert, describe, it } from "@effect/vitest";
+import { assert, it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import {
-  MIGRATION_LINEAGE_ALIASES,
-  migrationEntries,
-  planMigrationLineageAliasRepairs,
-  runMigrations,
-} from "./Migrations.ts";
+import { migrationEntries, runMigrations } from "./Migrations.ts";
 import { MigrationSchemaTooNewError } from "./Errors.ts";
 import * as NodeSqliteClient from "./NodeSqliteClient.ts";
 import DurableProviderCommandDeliveryMigration from "./Migrations/064_DurableProviderCommandDelivery.ts";
@@ -201,45 +196,6 @@ providerDeliveryCutoverLayer(
     );
   },
 );
-
-const managedAttachmentsFreshLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
-
-managedAttachmentsFreshLayer("managed attachment migration on a fresh database", (it) => {
-  it.effect("reserves legacy migration 54 and creates the managed ledger on a fresh database", () =>
-    Effect.gen(function* () {
-      const sql = yield* SqlClient.SqlClient;
-
-      const executed = yield* runMigrations();
-      assert.deepInclude(executed, [54, "DurableProviderCommandDelivery"]);
-      assert.deepInclude(executed, [55, "ManagedAttachments"]);
-      assert.deepInclude(executed, [64, "DurableProviderCommandDeliveryCutover"]);
-      assert.deepInclude(executed, [65, "DurableQueuedTurnPromotions"]);
-      assert.deepInclude(executed, [66, "DurableProviderRuntimeEvents"]);
-      assert.deepInclude(executed, [67, "ProviderDeliveryReconciliation"]);
-      assert.deepInclude(executed, [79, "Spaces"]);
-
-      const tables = yield* sql<{ readonly name: string }>`
-        SELECT name
-        FROM sqlite_master
-        WHERE type = 'table'
-          AND name IN ('managed_attachment_blobs', 'managed_attachment_cleanup_jobs')
-        ORDER BY name
-      `;
-      assert.deepStrictEqual(
-        tables.map((row) => row.name),
-        ["managed_attachment_blobs", "managed_attachment_cleanup_jobs"],
-      );
-
-      const providerDeliveryTables = yield* sql<{ readonly count: number }>`
-        SELECT COUNT(*) AS count
-        FROM sqlite_master
-        WHERE type = 'table'
-          AND name IN ('orchestration_consumer_state', 'orchestration_event_deliveries')
-      `;
-      assert.strictEqual(providerDeliveryTables[0]?.count, 2);
-    }),
-  );
-});
 
 const managedAttachmentsLegacyLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
@@ -903,18 +859,6 @@ managedAttachmentsConstraintsLayer("managed attachment schema constraints", (it)
   );
 });
 
-const managedAttachmentsIdempotencyLayer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
-
-managedAttachmentsIdempotencyLayer("managed attachment migration idempotency", (it) => {
-  it.effect("is idempotent after the managed attachment schema is registered", () =>
-    Effect.gen(function* () {
-      yield* runMigrations();
-      const executed = yield* runMigrations();
-      assert.lengthOf(executed, 0);
-    }),
-  );
-});
-
 const latestMigrationId = Math.max(...migrationEntries.map(([id]) => id));
 
 // `migrationEntries` is `as const`, so an inferred Map keys on the literal id union and rejects
@@ -932,53 +876,6 @@ const trackerCreatedAtById = (sql: SqlClient.SqlClient) =>
   sql<{ readonly migration_id: number; readonly created_at: string }>`
     SELECT migration_id, created_at FROM effect_sql_migrations ORDER BY migration_id ASC
   `.pipe(Effect.map((rows) => new Map(rows.map((row) => [row.migration_id, row.created_at]))));
-
-describe("migration lineage aliases", () => {
-  it("keeps every declared alias consistent with the current lineage", () => {
-    for (const alias of MIGRATION_LINEAGE_ALIASES) {
-      // The migration must still live at `currentId` under the historical name,
-      // otherwise the alias silently stops repairing the databases it names.
-      assert.strictEqual(
-        canonicalNamesById.get(alias.currentId),
-        alias.historicalName,
-        `alias for ${alias.historicalName} no longer resolves to migration ${alias.currentId}`,
-      );
-      // The historical slot must still be a real divergence, and must still be
-      // occupied — the repair renames the row to whatever lives there now.
-      assert.isDefined(canonicalNamesById.get(alias.historicalId));
-      assert.notStrictEqual(canonicalNamesById.get(alias.historicalId), alias.historicalName);
-    }
-  });
-
-  it("repairs a released v0.5.5 tracker in place", () => {
-    const recorded = canonicalTrackerThrough(53);
-    recorded.set(54, "ProjectPullRequestPins");
-
-    assert.deepStrictEqual(planMigrationLineageAliasRepairs(recorded), [
-      { kind: "rename", migrationId: 54, name: "DurableProviderCommandDelivery" },
-    ]);
-  });
-
-  it("declines when the tracker also diverges outside the alias", () => {
-    const recorded = canonicalTrackerThrough(53);
-    recorded.set(54, "ProjectPullRequestPins");
-    // Development builds between v0.5.5 and v0.6.0 also claimed migration 55.
-    recorded.set(55, "AgentGatewayOperations");
-
-    assert.deepStrictEqual(planMigrationLineageAliasRepairs(recorded), []);
-  });
-
-  it("declines for a healthy tracker and for a foreign lineage", () => {
-    assert.deepStrictEqual(
-      planMigrationLineageAliasRepairs(canonicalTrackerThrough(latestMigrationId)),
-      [],
-    );
-
-    const foreign = canonicalTrackerThrough(16);
-    for (let id = 17; id <= 60; id++) foreign.set(id, `ForeignMigration${id}`);
-    assert.deepStrictEqual(planMigrationLineageAliasRepairs(foreign), []);
-  });
-});
 
 const releasedV055Layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 

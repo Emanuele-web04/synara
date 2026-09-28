@@ -11,7 +11,9 @@ import { describe, expect, it } from "vitest";
 import { ProviderAdapterRequestError } from "./Errors.ts";
 import {
   makeProviderModelDiscoveryCache,
+  type PersistedModelCatalogEntryInput,
   type ProviderModelDiscoveryCacheKey,
+  serializeProviderModelDiscoveryCacheKey,
 } from "./providerModelDiscoveryCache.ts";
 
 const KEY: ProviderModelDiscoveryCacheKey = {
@@ -339,5 +341,119 @@ describe("makeProviderModelDiscoveryCache", () => {
     await flush();
 
     expect(cache.size()).toBe(2);
+  });
+
+  it("serves a hydrated catalog without running discovery", async () => {
+    const clock = makeClock();
+    const cache = makeProviderModelDiscoveryCache<ProviderAdapterRequestError>({
+      now: clock.now,
+      persistedCatalogs: [
+        {
+          key: serializeProviderModelDiscoveryCacheKey(KEY),
+          result: CATALOG,
+          storedAt: clock.now() - 60_000,
+        },
+      ],
+    });
+    let calls = 0;
+    const discover = Effect.sync(() => {
+      calls += 1;
+      return CATALOG;
+    });
+
+    const result = await Effect.runPromise(cache.lookup(KEY, discover));
+
+    expect(result).toEqual({ ...CATALOG, cached: true });
+    expect(calls).toBe(0);
+  });
+
+  it("drops hydrated entries already past the stale TTL and emits the cleanup", async () => {
+    const clock = makeClock();
+    const snapshots: Array<ReadonlyArray<PersistedModelCatalogEntryInput>> = [];
+    const cache = makeProviderModelDiscoveryCache<ProviderAdapterRequestError>({
+      now: clock.now,
+      staleTtlMs: 1_000,
+      persistedCatalogs: [
+        {
+          key: serializeProviderModelDiscoveryCacheKey(KEY),
+          result: CATALOG,
+          storedAt: clock.now() - 5_000,
+        },
+      ],
+      onCatalogsChanged: (entries) => snapshots.push(entries),
+    });
+
+    // Dead entries are dropped at hydration and the file is rewritten empty.
+    expect(snapshots).toEqual([[]]);
+    let calls = 0;
+    const discover = Effect.sync(() => {
+      calls += 1;
+      return CATALOG;
+    });
+
+    const result = await Effect.runPromise(cache.lookup(KEY, discover));
+
+    expect(result.cached).toBe(false);
+    expect(calls).toBe(1);
+    expect(cache.size()).toBe(1);
+  });
+
+  it("emits the full snapshot on store, authoritative empty removal, and clear()", async () => {
+    const clock = makeClock();
+    const snapshots: Array<ReadonlyArray<PersistedModelCatalogEntryInput>> = [];
+    const cache = makeProviderModelDiscoveryCache<ProviderAdapterRequestError>({
+      now: clock.now,
+      onCatalogsChanged: (entries) => snapshots.push(entries),
+    });
+    const discover = Effect.succeed(CATALOG);
+
+    await Effect.runPromise(cache.lookup(KEY, discover));
+    await flush();
+
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]).toEqual([
+      {
+        key: serializeProviderModelDiscoveryCacheKey(KEY),
+        result: { ...CATALOG, cached: false },
+        storedAt: clock.now(),
+      },
+    ]);
+
+    // An authoritative empty result removes the stored catalog and emits.
+    clock.advance(60 * 60_000);
+    const empty = Effect.succeed({ ...CATALOG, models: [] });
+    await Effect.runPromise(cache.lookup(KEY, empty));
+    await flush();
+
+    expect(cache.size()).toBe(0);
+    expect(snapshots.at(-1)).toEqual([]);
+
+    // The empty result replays as a short-lived failure entry; wait it out,
+    // re-store, then clear() emits the emptied snapshot.
+    clock.advance(31_000);
+    await Effect.runPromise(cache.lookup(KEY, discover));
+    await flush();
+    cache.clear();
+    expect(snapshots.at(-1)).toEqual([]);
+  });
+
+  it("does not persist failure or degraded-catalog mutations", async () => {
+    const snapshots: Array<ReadonlyArray<PersistedModelCatalogEntryInput>> = [];
+    const cache = makeProviderModelDiscoveryCache<ProviderAdapterRequestError>({
+      onCatalogsChanged: (entries) => snapshots.push(entries),
+    });
+    const degraded: ProviderListModelsResult = {
+      ...CATALOG,
+      source: "devin.static",
+      error: "live discovery failed; serving the static catalog",
+    };
+
+    const failureDiscover = Effect.fail(failure("boom"));
+    await Effect.runPromiseExit(cache.lookup(KEY, failureDiscover));
+    await flush();
+    await Effect.runPromise(cache.lookup({ ...KEY, cwd: "/b" }, Effect.succeed(degraded)));
+    await flush();
+
+    expect(snapshots).toEqual([]);
   });
 });

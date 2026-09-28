@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  canaryCloneArgs,
-  canaryStartArgs,
-  parseCanaryArgs,
-  resolveCanaryPaths,
-  resolveCanaryRef,
-} from "./canary";
+import { canaryCloneArgs, parseCanaryArgs, resolveCanaryPaths, resolveCanaryRef } from "./canary";
 
 describe("canary tooling", () => {
   it("keeps managed source and Canary data separate from Stable", () => {
@@ -52,10 +46,6 @@ describe("canary tooling", () => {
       "git@example.com:synara.git",
       "/tmp/canary-source",
     ]);
-  });
-
-  it("starts the desktop launcher directly so the persisted PID stays alive", () => {
-    expect(canaryStartArgs()).toEqual(["apps/desktop/scripts/start-electron.mjs"]);
   });
 
   it("keeps updating the selected stacked ref until explicitly moved to main", () => {

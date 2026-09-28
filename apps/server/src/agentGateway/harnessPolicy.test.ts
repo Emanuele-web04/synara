@@ -21,6 +21,7 @@ describe("Synara harness policy", () => {
     assert.include(deferred, "synara_view_automation");
     assert.include(deferred, "synara_report_automation_result");
   });
+
   it("includes honest completion evidence and opt-in delegated E2E testing", () => {
     const policy = renderSynaraHarnessPolicy({ gatewayControlAvailable: true });
     for (const text of [
@@ -38,6 +39,7 @@ describe("Synara harness policy", () => {
       "browser_screenshot({kind:'proof'})",
     );
   });
+
   it("identifies Synara and explains exact batch coordination when MCP is available", () => {
     const policy = renderSynaraHarnessPolicy({ gatewayControlAvailable: true });
     assert.include(policy, SYNARA_HARNESS_POLICY_MARKER);
@@ -100,28 +102,15 @@ describe("Synara harness policy", () => {
       "<synara_host_context>",
     );
     assert.isNull(takeSynaraHarnessPolicyForSession(state, { gatewayControlAvailable: true }));
-  });
 
-  it("delivers once on fresh/load/fork sessions for every scoped MCP provider", () => {
-    for (const provider of ["antigravity", "cursor", "grok", "droid", "opencode", "pi"] as const) {
-      for (const lifecycle of ["fresh", "load", "fork"] as const) {
-        const state: { harnessPolicyDelivered?: boolean } = {};
-        const first =
-          takeSynaraHarnessPolicyTextPartForProviderSession(state, {
-            provider,
-            scopedGatewayConnectionAvailable: true,
-          })?.text ?? "";
-        assert.include(first, SYNARA_HARNESS_POLICY_MARKER, `${provider}/${lifecycle}`);
-        assert.include(first, "Use the synara_* tools", `${provider}/${lifecycle}`);
-        assert.isNull(
-          takeSynaraHarnessPolicyForProviderSession(state, {
-            provider,
-            scopedGatewayConnectionAvailable: true,
-          }),
-          `${provider}/${lifecycle}`,
-        );
-      }
-    }
+    // The text-part form ACP adapters inject obeys the same once-per-session latch.
+    const partState: { harnessPolicyDelivered?: boolean } = {};
+    const input = { provider: "cursor", scopedGatewayConnectionAvailable: true } as const;
+    assert.include(
+      takeSynaraHarnessPolicyTextPartForProviderSession(partState, input)?.text ?? "",
+      SYNARA_HARNESS_POLICY_MARKER,
+    );
+    assert.isNull(takeSynaraHarnessPolicyTextPartForProviderSession(partState, input));
   });
 
   it("keeps OpenCode and Pi identity-only until scoped setup succeeds", () => {

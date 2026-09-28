@@ -67,6 +67,7 @@ interface UseKanbanTaskComposerDiscoveryInput {
   readonly hiddenProviders: readonly ProviderKind[];
   readonly providerOrder: readonly ProviderKind[];
   readonly piAgentDir: string | null;
+  readonly ompAgentDir: string | null;
 }
 
 export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDiscoveryInput): {
@@ -89,6 +90,7 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
     hiddenProviders,
     providerOrder,
     piAgentDir,
+    ompAgentDir,
   } = input;
 
   const localFolderBrowseRootPath = getLocalFolderBrowseRootPath(
@@ -133,7 +135,8 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
         selectedProvider === "opencode"
           ? providerOptionsForDispatch?.opencode?.experimentalWebSockets
           : undefined,
-      agentDir: selectedProvider === "pi" ? piAgentDir : null,
+      agentDir:
+        selectedProvider === "pi" ? piAgentDir : selectedProvider === "omp" ? ompAgentDir : null,
       enabled:
         (composerTriggerKind === "slash-command" || composerTriggerKind === "slash-model") &&
         supportsNativeSlashCommandDiscovery(providerComposerCapabilitiesQuery.data) &&
@@ -141,15 +144,21 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
     }),
   );
   const canDiscoverProviderSkills =
-    selectedProvider === "pi" || supportsSkillDiscovery(providerComposerCapabilitiesQuery.data);
+    selectedProvider === "pi" ||
+    selectedProvider === "omp" ||
+    supportsSkillDiscovery(providerComposerCapabilitiesQuery.data);
   const providerSkillsQuery = useQuery(
     providerSkillsQueryOptions({
       provider: selectedProvider,
       cwd: composerSkillCwd,
       threadId: scratchThreadId,
-      agentDir: selectedProvider === "pi" ? piAgentDir : null,
+      agentDir:
+        selectedProvider === "pi" ? piAgentDir : selectedProvider === "omp" ? ompAgentDir : null,
       enabled:
-        (isSkillTrigger || composerTriggerKind === "slash-command" || selectedProvider === "pi") &&
+        (isSkillTrigger ||
+          composerTriggerKind === "slash-command" ||
+          selectedProvider === "pi" ||
+          selectedProvider === "omp") &&
         canDiscoverProviderSkills &&
         composerSkillCwd !== null,
     }),

@@ -3,7 +3,7 @@
 // Layer: Shared platform runtime
 // Depends on: node:fs and node:path only.
 
-import { accessSync, constants, statSync } from "node:fs";
+import { accessSync, constants, readdirSync, statSync } from "node:fs";
 import { extname, join, posix, win32 } from "node:path";
 
 export interface ExecutableLookupOptions {
@@ -232,6 +232,80 @@ export function resolveExecutable(
     }
   }
   return null;
+}
+
+/**
+ * Lowercased entry names of a PATH directory, or null when the directory cannot
+ * be listed but may still be searchable (e.g. execute-only POSIX directories).
+ */
+function listDirectoryNames(directory: string): ReadonlySet<string> | null {
+  try {
+    return new Set(readdirSync(directory).map((name) => name.toLowerCase()));
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT" || code === "ENOTDIR" ? new Set() : null;
+  }
+}
+
+/**
+ * Whether a directory listing can rule `name` out. The listing is folded with
+ * `toLowerCase`, which matches filesystem case-insensitivity only for plain ASCII;
+ * non-ASCII names (Unicode folding/normalization) and `~` (Windows 8.3 short names,
+ * which readdir never lists) always go to stat.
+ */
+function isListingFilterable(name: string): boolean {
+  return /^[\x20-\x7d]*$/.test(name);
+}
+
+/**
+ * Resolves many commands against one PATH snapshot with the same result as
+ * `resolveExecutable`. Each PATH directory is listed once and only candidates
+ * present in the listing are stat-ed. Probing every command × PATHEXT name costs
+ * seconds of synchronous IO on Windows (100+ PATH entries × 14 extensions), which
+ * stalls the server event loop when done per request.
+ */
+export function createBatchExecutableResolver(
+  options: ExecutableLookupOptions = {},
+): (command: string) => string | null {
+  const context = resolveLookupContext(options);
+  const allowExtensionless = options.allowExtensionlessOnWindows ?? false;
+  const listings = new Map<string, ReadonlySet<string> | null>();
+  const listingFor = (directory: string) => {
+    const statPath = candidateStatPath(directory, context);
+    let listing = listings.get(statPath);
+    if (listing === undefined) {
+      listing = listDirectoryNames(statPath);
+      listings.set(statPath, listing);
+    }
+    return listing;
+  };
+
+  return (command) => {
+    if (hasPathSeparator(command)) {
+      return resolveExecutable(command, options);
+    }
+    const names = executableNameCandidates(
+      command,
+      context.platform,
+      context.env,
+      allowExtensionless,
+    );
+    // Same order as candidatesIn. The listing is a case-folded superset
+    // pre-filter; the stat in isExecutableFileIn stays authoritative.
+    for (const directory of pathEntries(context.env, context.platform)) {
+      const listing = listingFor(directory);
+      for (const name of names) {
+        if (listing !== null && isListingFilterable(name) && !listing.has(name.toLowerCase())) {
+          continue;
+        }
+        const candidatePath = join(directory, name);
+        if (isExecutableFileIn(candidatePath, context)) {
+          return candidatePath;
+        }
+      }
+    }
+    return null;
+  };
 }
 
 /** Cheap file identity used to invalidate per-executable caches. */

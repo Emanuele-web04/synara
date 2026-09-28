@@ -9,7 +9,7 @@ import { isPlainObject, sanitizeStringKeyedRecord } from "./persistedRecord";
 // Single source of truth for the dock pane kinds. The union type, the runtime
 // validator, the per-kind metadata map, and the add-menu order are all derived
 // from this list so they can never drift apart.
-export const RIGHT_DOCK_PANE_KINDS = [
+const RIGHT_DOCK_PANE_KINDS = [
   "browser",
   "device",
   "diff",
@@ -54,7 +54,7 @@ const MULTI_INSTANCE_PANE_KINDS: ReadonlySet<RightDockPaneKind> = new Set(["file
 
 // Kinds that can only ever have one instance per host thread, derived as
 // "every kind that is not multi-instance" so the two sets can never drift.
-export const SINGLETON_PANE_KINDS: ReadonlySet<RightDockPaneKind> = new Set(
+const SINGLETON_PANE_KINDS: ReadonlySet<RightDockPaneKind> = new Set(
   RIGHT_DOCK_PANE_KINDS.filter((kind) => !MULTI_INSTANCE_PANE_KINDS.has(kind)),
 );
 

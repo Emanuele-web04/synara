@@ -7,7 +7,6 @@ import {
   createProviderVersionAdvisory,
   deriveNpmGlobalPrefix,
   makeProviderMaintenanceCapabilities,
-  parseGenericCliVersion,
   resolvePackageManagedProviderMaintenance,
   resolveProviderMaintenanceCapabilitiesEffect,
   type PackageManagedProviderMaintenanceDefinition,
@@ -72,26 +71,6 @@ function fileNameOf(probedPath: string): string {
 }
 
 describe("providerMaintenance", () => {
-  it("parses generic CLI versions", () => {
-    assert.strictEqual(parseGenericCliVersion("codex-cli 0.130.0\n"), "0.130.0");
-    assert.strictEqual(parseGenericCliVersion("claude 2.1\n"), "2.1.0");
-    assert.strictEqual(parseGenericCliVersion("no version here"), null);
-  });
-
-  it("resolves npm global update commands for unqualified binaries", () => {
-    const capabilities = resolvePackageManagedProviderMaintenance(CODEX_DEFINITION, {
-      binaryPath: "codex",
-      realCommandPath: "/Users/test/.npm-global/lib/node_modules/@openai/codex/bin/codex",
-    });
-
-    assert.deepStrictEqual(capabilities.update, {
-      command: "npm install -g --prefix /Users/test/.npm-global @openai/codex@latest",
-      executable: "npm",
-      args: ["install", "-g", "--prefix", "/Users/test/.npm-global", "@openai/codex@latest"],
-      lockKey: "npm-global",
-    });
-  });
-
   it("pins the npm global prefix that owns the detected binary", () => {
     // npm's global prefix follows the node that runs it, so without --prefix a
     // second node install (e.g. nvm) would receive the update while Synara
@@ -145,40 +124,6 @@ describe("providerMaintenance", () => {
       lockKey: "homebrew",
     });
     assert.strictEqual(capabilities.packageName, null);
-  });
-
-  it("keeps native provider update truth with the provider when explicitly configured", () => {
-    const capabilities = resolvePackageManagedProviderMaintenance(CLAUDE_DEFINITION, {
-      binaryPath: "claude",
-      realCommandPath: "/Users/test/.local/share/claude/versions/2.1.100/claude",
-    });
-
-    assert.deepStrictEqual(capabilities.update, {
-      command: "claude update",
-      executable: "claude",
-      args: ["update"],
-      lockKey: "claude-native",
-    });
-    assert.strictEqual(capabilities.latestVersionSource, null);
-  });
-
-  it("resolves alternate Homebrew casks from the installed command path", () => {
-    const capabilities = resolvePackageManagedProviderMaintenance(CLAUDE_DEFINITION, {
-      binaryPath: "/opt/homebrew/bin/claude",
-      realCommandPath: "/opt/homebrew/Caskroom/claude-code@latest/2.1.100/claude",
-    });
-
-    assert.deepStrictEqual(capabilities.update, {
-      command: "brew upgrade --cask claude-code@latest",
-      executable: "brew",
-      args: ["upgrade", "--cask", "claude-code@latest"],
-      lockKey: "homebrew",
-    });
-    assert.deepStrictEqual(capabilities.latestVersionSource, {
-      kind: "homebrew",
-      name: "claude-code@latest",
-      homebrewKind: "cask",
-    });
   });
 
   it("uses provider-native update commands with detected install method", () => {

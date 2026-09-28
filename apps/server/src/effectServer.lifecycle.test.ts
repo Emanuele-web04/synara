@@ -1,7 +1,7 @@
 import { Effect, Scope } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { closeServerRuntimePipeline } from "./effectServer.ts";
+import { closeServerRuntimePipeline, startServerRuntimePipeline } from "./effectServer.ts";
 
 describe("server runtime pipeline shutdown", () => {
   it("persists accepted provider terminal work before the engine stops", async () => {
@@ -56,6 +56,36 @@ describe("server runtime pipeline shutdown", () => {
       "reactors-drained-and-persisted",
       "managed-attachments-drained",
       "engine-stopped",
+    ]);
+  });
+});
+
+describe("server runtime pipeline startup", () => {
+  it("settles restart-orphaned turns before background reactors start", async () => {
+    const order: string[] = [];
+    const reactor = (name: string) => ({
+      start: () => Effect.sync(() => void order.push(`${name}-started`)),
+    });
+    const subscriptionsScope = await Effect.runPromise(Scope.make("sequential"));
+
+    await Effect.runPromise(
+      startServerRuntimePipeline({
+        orchestrationReactor: {
+          start: Effect.sync(() => void order.push("runtime-journal-replayed")),
+          reconcileSettledOpenTurns: Effect.sync(() => void order.push("open-turn-ledger-pruned")),
+        },
+        reconcileRestartStuckTurns: Effect.sync(() => void order.push("restart-turns-settled")),
+        reactors: [reactor("automation-scheduler"), reactor("provider-runtime-reconciler")],
+        subscriptionsScope,
+      }),
+    );
+
+    expect(order).toEqual([
+      "runtime-journal-replayed",
+      "restart-turns-settled",
+      "open-turn-ledger-pruned",
+      "automation-scheduler-started",
+      "provider-runtime-reconciler-started",
     ]);
   });
 });

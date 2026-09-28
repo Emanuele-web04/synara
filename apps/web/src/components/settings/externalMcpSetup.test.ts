@@ -5,7 +5,6 @@ import {
   buildExternalMcpExamplePrompt,
   buildExternalMcpSetupPrompt,
   describeExternalMcpPermissions,
-  describeExternalMcpProjects,
   externalMcpSetupAction,
 } from "./externalMcpSetup";
 
@@ -93,18 +92,6 @@ describe("external MCP guided setup", () => {
 
     expect(prompt).toContain("synara_overview");
     expect(prompt).toContain("managed worktree");
-  });
-
-  it("describes project access for both scopes", () => {
-    expect(
-      describeExternalMcpProjects({ projectScope: "all", allowedProjects: [{ title: "One" }] }),
-    ).toBe("All projects, including future ones");
-    expect(
-      describeExternalMcpProjects({
-        projectScope: "selected",
-        allowedProjects: [{ title: "One" }, { title: "Two" }],
-      }),
-    ).toBe("One, Two");
   });
 
   it("describes scopes without exposing capability identifiers", () => {

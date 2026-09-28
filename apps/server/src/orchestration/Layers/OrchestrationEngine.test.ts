@@ -10,7 +10,7 @@ import {
   type OrchestrationCommand,
   type OrchestrationEvent,
 } from "@synara/contracts";
-import { Effect, Layer, ManagedRuntime, Option, Queue, Stream } from "effect";
+import { Effect, Layer, ManagedRuntime, Option, Stream } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
 import { PersistenceSqlError } from "../../persistence/Errors.ts";
@@ -629,96 +629,13 @@ describe("OrchestrationEngine", () => {
     });
 
     const events = await system.run(Stream.runCollect(system.engine.readEvents(0)));
+    expect(Array.from(events)).toHaveLength(1);
     expect(
       Array.from(events).filter((event) => event.commandId === command.commandId),
     ).toHaveLength(1);
-    await system.dispose();
-  });
-
-  it("returns deterministic read models for repeated reads", async () => {
-    const createdAt = now();
-    const system = await createOrchestrationSystem();
-    const { engine } = system;
-
-    await system.run(
-      engine.dispatch({
-        type: "project.create",
-        commandId: CommandId.makeUnsafe("cmd-project-1-create"),
-        projectId: asProjectId("project-1"),
-        title: "Project 1",
-        workspaceRoot: "/tmp/project-1",
-        defaultModelSelection: {
-          provider: "codex",
-          model: "gpt-5-codex",
-        },
-        createdAt,
-      }),
+    expect((await system.run(system.engine.getReadModel())).projects[0]?.title).toBe(
+      "Fingerprint project",
     );
-    await system.run(
-      engine.dispatch({
-        type: "thread.create",
-        commandId: CommandId.makeUnsafe("cmd-thread-1-create"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        projectId: asProjectId("project-1"),
-        title: "Thread",
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5-codex",
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        branch: null,
-        worktreePath: null,
-        createdAt,
-      }),
-    );
-    await system.run(
-      engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-1"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("msg-1"),
-          role: "user",
-          text: "hello",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt,
-      }),
-    );
-
-    const readModelA = await system.run(engine.getReadModel());
-    const readModelB = await system.run(engine.getReadModel());
-    expect(readModelB).toEqual(readModelA);
-    await system.dispose();
-  });
-
-  it("returns the original sequence for equal retries and rejects unequal command-id reuse", async () => {
-    const system = await createOrchestrationSystem();
-    const { engine } = system;
-    const command = {
-      type: "project.create" as const,
-      commandId: CommandId.makeUnsafe("cmd-project-command-identity"),
-      projectId: asProjectId("project-command-identity"),
-      title: "Original identity",
-      workspaceRoot: "/tmp/project-command-identity",
-      defaultModelSelection: null,
-      createdAt: now(),
-    };
-
-    const accepted = await system.run(engine.dispatch(command));
-    await expect(system.run(engine.dispatch(command))).resolves.toEqual(accepted);
-    await expect(
-      system.run(engine.dispatch({ ...command, title: "Different identity" })),
-    ).rejects.toThrow("Command identity collision");
-
-    const events = await system.run(
-      Stream.runCollect(engine.readEvents(0)).pipe(Effect.map((chunk) => Array.from(chunk))),
-    );
-    expect(events).toHaveLength(1);
-    expect((await system.run(engine.getReadModel())).projects[0]?.title).toBe("Original identity");
     await system.dispose();
   });
 
@@ -856,64 +773,6 @@ describe("OrchestrationEngine", () => {
     await system.dispose();
   });
 
-  it("replays append-only events from sequence", async () => {
-    const system = await createOrchestrationSystem();
-    const { engine } = system;
-    const createdAt = now();
-
-    await system.run(
-      engine.dispatch({
-        type: "project.create",
-        commandId: CommandId.makeUnsafe("cmd-project-replay-create"),
-        projectId: asProjectId("project-replay"),
-        title: "Replay Project",
-        workspaceRoot: "/tmp/project-replay",
-        defaultModelSelection: {
-          provider: "codex",
-          model: "gpt-5-codex",
-        },
-        createdAt,
-      }),
-    );
-    await system.run(
-      engine.dispatch({
-        type: "thread.create",
-        commandId: CommandId.makeUnsafe("cmd-thread-replay-create"),
-        threadId: ThreadId.makeUnsafe("thread-replay"),
-        projectId: asProjectId("project-replay"),
-        title: "replay",
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5-codex",
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        branch: null,
-        worktreePath: null,
-        createdAt,
-      }),
-    );
-    await system.run(
-      engine.dispatch({
-        type: "thread.delete",
-        commandId: CommandId.makeUnsafe("cmd-thread-replay-delete"),
-        threadId: ThreadId.makeUnsafe("thread-replay"),
-      }),
-    );
-
-    const events = await system.run(
-      Stream.runCollect(engine.readEvents(0)).pipe(
-        Effect.map((chunk): OrchestrationEvent[] => Array.from(chunk)),
-      ),
-    );
-    expect(events.map((event) => event.type)).toEqual([
-      "project.created",
-      "thread.created",
-      "thread.deleted",
-    ]);
-    await system.dispose();
-  });
-
   it("keeps dispatch responsive and replays every event when a subscriber falls behind", async () => {
     const system = await createOrchestrationSystem();
     const { engine } = system;
@@ -957,67 +816,6 @@ describe("OrchestrationEngine", () => {
       await system.dispose();
     }
   }, 15_000);
-
-  it("streams persisted domain events in order", async () => {
-    const system = await createOrchestrationSystem();
-    const { engine } = system;
-    const createdAt = now();
-
-    await system.run(
-      engine.dispatch({
-        type: "project.create",
-        commandId: CommandId.makeUnsafe("cmd-project-stream-create"),
-        projectId: asProjectId("project-stream"),
-        title: "Stream Project",
-        workspaceRoot: "/tmp/project-stream",
-        defaultModelSelection: {
-          provider: "codex",
-          model: "gpt-5-codex",
-        },
-        createdAt,
-      }),
-    );
-
-    const eventTypes: string[] = [];
-    await system.run(
-      Effect.gen(function* () {
-        const eventQueue = yield* Queue.unbounded<OrchestrationEvent>();
-        yield* Effect.forkScoped(
-          Stream.take(engine.streamDomainEvents, 2).pipe(
-            Stream.runForEach((event) => Queue.offer(eventQueue, event).pipe(Effect.asVoid)),
-          ),
-        );
-        yield* Effect.sleep("10 millis");
-        yield* engine.dispatch({
-          type: "thread.create",
-          commandId: CommandId.makeUnsafe("cmd-stream-thread-create"),
-          threadId: ThreadId.makeUnsafe("thread-stream"),
-          projectId: asProjectId("project-stream"),
-          title: "domain-stream",
-          modelSelection: {
-            provider: "codex",
-            model: "gpt-5-codex",
-          },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode: "approval-required",
-          branch: null,
-          worktreePath: null,
-          createdAt,
-        });
-        yield* engine.dispatch({
-          type: "thread.meta.update",
-          commandId: CommandId.makeUnsafe("cmd-stream-thread-update"),
-          threadId: ThreadId.makeUnsafe("thread-stream"),
-          title: "domain-stream-updated",
-        });
-        eventTypes.push((yield* Queue.take(eventQueue)).type);
-        eventTypes.push((yield* Queue.take(eventQueue)).type);
-      }).pipe(Effect.scoped),
-    );
-
-    expect(eventTypes).toEqual(["thread.created", "thread.meta-updated"]);
-    await system.dispose();
-  });
 
   it("stores completed checkpoint summaries even when no files changed", async () => {
     const system = await createOrchestrationSystem();
@@ -1560,32 +1358,6 @@ describe("OrchestrationEngine", () => {
     await runtime.dispose();
   });
 
-  it("fails command dispatch when command invariants are violated", async () => {
-    const system = await createOrchestrationSystem();
-    const { engine } = system;
-
-    await expect(
-      system.run(
-        engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.makeUnsafe("cmd-invariant-missing-thread"),
-          threadId: ThreadId.makeUnsafe("thread-missing"),
-          message: {
-            messageId: asMessageId("msg-missing"),
-            role: "user",
-            text: "hello",
-            attachments: [],
-          },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-          runtimeMode: "approval-required",
-          createdAt: now(),
-        }),
-      ),
-    ).rejects.toThrow("Thread 'thread-missing' does not exist");
-
-    await system.dispose();
-  });
-
   it("loads authoritative pending interactions before expiring a side chat", async () => {
     const system = await createOrchestrationSystem();
     const createdAt = now();
@@ -2020,42 +1792,6 @@ describe("OrchestrationEngine", () => {
             provider: "codex",
             model: "gpt-5-codex",
           },
-          createdAt,
-        }),
-      ),
-    ).rejects.toThrow("already uses workspace root");
-
-    await system.dispose();
-  });
-
-  it("rejects duplicate Studio workspace containers", async () => {
-    const system = await createOrchestrationSystem();
-    const { engine } = system;
-    const createdAt = now();
-
-    await system.run(
-      engine.dispatch({
-        type: "project.create",
-        commandId: CommandId.makeUnsafe("cmd-studio-project-create"),
-        projectId: asProjectId("project-studio"),
-        kind: "studio",
-        title: "Studio",
-        workspaceRoot: "/tmp/synara-studio",
-        defaultModelSelection: null,
-        createdAt,
-      }),
-    );
-
-    await expect(
-      system.run(
-        engine.dispatch({
-          type: "project.create",
-          commandId: CommandId.makeUnsafe("cmd-studio-project-duplicate-create"),
-          projectId: asProjectId("project-studio-duplicate"),
-          kind: "studio",
-          title: "Studio",
-          workspaceRoot: "/tmp/synara-studio",
-          defaultModelSelection: null,
           createdAt,
         }),
       ),

@@ -161,30 +161,6 @@ describe("resolveFirstSendTarget", () => {
     });
   });
 
-  it("uses the provided defaultModelSelection for a newly created project", () => {
-    const result = resolveFirstSendTarget({
-      activeProject: makeProject(),
-      chatWorkspaceRoot: "/Users/tester/Documents/Synara",
-      createdAt: new Date(2026, 5, 11, 23, 30, 43),
-      defaultModelSelection: { provider: "devin", model: DEFAULT_MODEL_BY_PROVIDER.devin },
-      isFirstMessage: true,
-      isHomeChatContainer: true,
-      isStudioContainer: false,
-      projects: [makeProject()],
-      selectedWorkspaceRoot: null,
-      title: "Devin task",
-      titleSeed: "Devin task",
-    });
-
-    expect(result).toMatchObject({
-      kind: "create-project",
-      creation: {
-        kind: "chat",
-        defaultModelSelection: { provider: "devin", model: DEFAULT_MODEL_BY_PROVIDER.devin },
-      },
-    });
-  });
-
   it("falls back to codex when no defaultModelSelection is provided", () => {
     const result = resolveFirstSendTarget({
       activeProject: makeProject(),

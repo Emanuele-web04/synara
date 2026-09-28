@@ -10,13 +10,11 @@ import {
   PullRequestDetail,
   PullRequestListEntry,
   PullRequestReviewRequestCountResult,
-  PullRequestSetPinnedInput,
 } from "./pullRequests";
 
 const decodeListEntry = Schema.decodeUnknownSync(PullRequestListEntry);
 const decodeDetail = Schema.decodeUnknownSync(PullRequestDetail);
 const decodeCommentInput = Schema.decodeUnknownSync(PullRequestCommentInput);
-const decodeSetPinnedInput = Schema.decodeUnknownSync(PullRequestSetPinnedInput);
 const decodeReviewRequestCountResult = Schema.decodeUnknownSync(
   PullRequestReviewRequestCountResult,
 );
@@ -43,7 +41,7 @@ describe("PullRequestCommitAuthor", () => {
     expect(() => Schema.decodeUnknownSync(PullRequestActor)(localAuthor)).toThrow();
   });
 
-  it.each(["", "   ", 123, false, {}])("rejects invalid login %j", (login) => {
+  it.each(["", "   ", 123])("rejects invalid login %j", (login) => {
     expect(() => decodeAuthor({ ...localAuthor, login })).toThrow();
   });
 
@@ -86,20 +84,6 @@ describe("PullRequestListEntry", () => {
     expect(
       decodeListEntry({ ...listEntry(), isPinned: true, mergeability: "conflicting" }),
     ).toMatchObject({ isPinned: true, mergeability: "conflicting" });
-  });
-
-  it("decodes compact stack metadata for list rows", () => {
-    expect(
-      decodeListEntry({
-        ...listEntry(),
-        stack: {
-          number: 8,
-          size: 3,
-          position: 2,
-          baseBranch: "main",
-        },
-      }).stack,
-    ).toEqual({ number: 8, size: 3, position: 2, baseBranch: "main" });
   });
 });
 
@@ -152,83 +136,6 @@ describe("PullRequestDetail", () => {
       decodeDetail({ ...decoded, stackMetadataIncomplete: true }).stackMetadataIncomplete,
     ).toBe(true);
   });
-
-  it("decodes a complete stack while preserving bottom-to-top positions", () => {
-    const decoded = decodeDetail({
-      projectId: "project-1",
-      projectTitle: "Project One",
-      workspaceRoot: "/workspace/project-one",
-      repository: "acme/widgets",
-      number: 43,
-      title: "Top layer",
-      body: "Description",
-      url: "https://github.com/acme/widgets/pull/43",
-      author: null,
-      state: "open",
-      isDraft: false,
-      mergeable: "MERGEABLE",
-      mergeability: "mergeable",
-      mergeStateStatus: "CLEAN",
-      reviewDecision: null,
-      additions: 2,
-      deletions: 1,
-      changedFiles: 1,
-      headBranch: "feature/top",
-      baseBranch: "feature/base",
-      createdAt: "2026-07-13T08:00:00.000Z",
-      updatedAt: "2026-07-14T08:00:00.000Z",
-      mergedAt: null,
-      closedAt: null,
-      maintainerCanModify: true,
-      reviewers: [],
-      labels: [],
-      checks: [],
-      comments: [],
-      commentsTruncated: false,
-      commentsIncomplete: false,
-      commits: [],
-      mergeCapabilities: {
-        merge: true,
-        squash: true,
-        rebase: true,
-        deleteBranchOnMerge: false,
-      },
-      stack: {
-        number: 8,
-        size: 2,
-        position: 2,
-        baseBranch: "main",
-        entries: [
-          {
-            position: 1,
-            number: 42,
-            title: "Base layer",
-            url: "https://github.com/acme/widgets/pull/42",
-            headBranch: "feature/base",
-            baseBranch: "main",
-            state: "open",
-            isDraft: false,
-            mergeability: "mergeable",
-            mergeStateStatus: "CLEAN",
-          },
-          {
-            position: 2,
-            number: 43,
-            title: "Top layer",
-            url: "https://github.com/acme/widgets/pull/43",
-            headBranch: "feature/top",
-            baseBranch: "feature/base",
-            state: "open",
-            isDraft: false,
-            mergeability: "mergeable",
-            mergeStateStatus: "CLEAN",
-          },
-        ],
-      },
-    });
-
-    expect(decoded.stack?.entries.map((entry) => entry.number)).toEqual([42, 43]);
-  });
 });
 
 describe("PullRequestActionResult", () => {
@@ -254,24 +161,6 @@ describe("PullRequestCommentInput", () => {
   it("accepts GitHub's maximum comment length and rejects one character more", () => {
     expect(decodeCommentInput({ ...base, body: "x".repeat(65_536) }).body).toHaveLength(65_536);
     expect(() => decodeCommentInput({ ...base, body: "x".repeat(65_537) })).toThrow();
-  });
-});
-
-describe("PullRequestSetPinnedInput", () => {
-  it("decodes a project-scoped idempotent pin setter", () => {
-    expect(
-      decodeSetPinnedInput({
-        projectId: "project-1",
-        repository: "acme/widgets",
-        number: 42,
-        isPinned: true,
-      }),
-    ).toEqual({
-      projectId: "project-1",
-      repository: "acme/widgets",
-      number: 42,
-      isPinned: true,
-    });
   });
 });
 

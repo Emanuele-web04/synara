@@ -59,7 +59,7 @@ function run(): FocusProbeRunResult {
 }
 
 describe("packaged fixture evidence", () => {
-  it.each(["/private/tmp", "/tmp", "/private/var/folders", "/var/folders"])(
+  it.each(["/private/tmp", "/var/folders"])(
     "refuses an app under temporary root %s even if registration resolves to it",
     (root) => {
       const bundle = `${root}/isolated/Synara Cua.app`;

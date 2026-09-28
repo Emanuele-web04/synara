@@ -64,7 +64,9 @@ export async function createOrRecoverProjectFromPath(input: {
   const createdAt = new Date().toISOString();
   const title = buildProjectTitleFromWorkspaceRoot(workspaceRoot);
   const seedProvider =
-    input.defaultProvider === "pi" ? "codex" : (input.defaultProvider ?? "codex");
+    input.defaultProvider === "pi" || input.defaultProvider === "omp"
+      ? "codex"
+      : (input.defaultProvider ?? "codex");
 
   try {
     await input.api.orchestration.dispatchCommand({

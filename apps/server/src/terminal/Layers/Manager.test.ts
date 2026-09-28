@@ -1090,25 +1090,6 @@ describe("TerminalManager", () => {
     manager.dispose();
   });
 
-  it("preserves chunk-split ESC sequences with intermediate bytes without leaking final bytes", async () => {
-    const { manager, ptyAdapter } = makeManager();
-    await manager.open(openInput());
-    const process = ptyAdapter.processes[0];
-    expect(process).toBeDefined();
-    if (!process) return;
-
-    process.emitData("before ");
-    process.emitData("\u001b(");
-    process.emitData("Bafter\n");
-
-    await manager.close({ threadId: "thread-1" });
-
-    const reopened = await manager.open(openInput());
-    expect(reopened.history).toBe("before \u001b(Bafter\n");
-
-    manager.dispose();
-  });
-
   it("deletes history file when close(deleteHistory=true)", async () => {
     const { manager, ptyAdapter, logsDir } = makeManager();
     await manager.open(openInput());

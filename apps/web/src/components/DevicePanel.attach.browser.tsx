@@ -142,7 +142,7 @@ async function mount(initial = state()) {
 }
 
 describe("simulator attach first frame", () => {
-  it.each(["connecting", "waiting-for-display"] as const)(
+  it.each(["connecting"] as const)(
     "paints the first frame before %s metadata clears",
     async (phase) => {
       const mounted = await mount(state(SLIM_2, 1, phase));

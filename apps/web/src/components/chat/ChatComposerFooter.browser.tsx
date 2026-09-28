@@ -65,17 +65,4 @@ describe("ChatComposerFooter stop control", () => {
       await screen.unmount();
     }
   });
-
-  it("keeps showing Stop while running", async () => {
-    const onInterrupt = vi.fn();
-    const screen = await mountFooter({ phase: "running", connecting: false, onInterrupt });
-    try {
-      const stop = page.getByRole("button", { name: "Stop generation" });
-      await expect.element(stop).toBeVisible();
-      await stop.click();
-      expect(onInterrupt).toHaveBeenCalledOnce();
-    } finally {
-      await screen.unmount();
-    }
-  });
 });

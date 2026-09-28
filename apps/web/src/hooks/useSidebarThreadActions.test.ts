@@ -83,6 +83,7 @@ const harness = vi.hoisted(() => ({
   dispatchCommand: vi.fn(),
   confirm: vi.fn(),
   archiveThread: vi.fn(),
+  releaseArchivedWorktree: vi.fn(),
   unarchiveThread: vi.fn(),
   alreadyUnarchived: false,
   activeThreadDelete: vi.fn(),
@@ -162,6 +163,9 @@ vi.mock("../lib/threadArchive", () => ({
   unarchiveThreadFromClient: harness.unarchiveThread,
   isThreadAlreadyUnarchivedError: () => harness.alreadyUnarchived,
 }));
+vi.mock("../lib/archiveThreadWorktreeCleanup", () => ({
+  releaseOrphanedWorktreeAfterArchive: harness.releaseArchivedWorktree,
+}));
 vi.mock("../lib/activeThreadDelete", () => ({
   deleteActiveThreadFromClient: harness.activeThreadDelete,
 }));
@@ -231,12 +235,14 @@ function render(
     routeSplitViewId?: string | null;
     routeThreadId?: ThreadId | null;
     threadsHydrated?: boolean;
+    archiveDeletesOrphanedWorktree?: boolean;
   } = {},
 ) {
   reactHarness.beginRender();
   return useSidebarThreadActions({
     activeSplitView: overrides.activeSplitView ?? null,
     appSettings: {
+      archiveDeletesOrphanedWorktree: overrides.archiveDeletesOrphanedWorktree ?? false,
       confirmThreadArchive: false,
       confirmThreadDelete: false,
       sidebarThreadSortOrder: "updated_at",
@@ -269,6 +275,7 @@ beforeEach(() => {
     harness.dispatchCommand,
     harness.confirm,
     harness.archiveThread,
+    harness.releaseArchivedWorktree,
     harness.unarchiveThread,
     harness.activeThreadDelete,
     harness.navigate,
@@ -293,7 +300,8 @@ beforeEach(() => {
     harness.pinnedThreadIds = harness.pinnedThreadIds.filter((id) => id !== threadId);
   });
   harness.dispatchCommand.mockResolvedValue({ sequence: 1 });
-  harness.archiveThread.mockResolvedValue(undefined);
+  harness.archiveThread.mockResolvedValue(1);
+  harness.releaseArchivedWorktree.mockResolvedValue("removed");
   harness.unarchiveThread.mockResolvedValue(undefined);
   harness.confirm.mockResolvedValue(true);
   harness.handleNewChat.mockResolvedValue({ ok: true });
@@ -386,12 +394,6 @@ describe("useSidebarThreadActions", () => {
     resolveMigration();
   });
 
-  it("keeps archive available while server-side runtime cleanup is pending", async () => {
-    await expect(render().archiveThread(THREAD_ID)).resolves.toBe(true);
-
-    expect(harness.archiveThread).toHaveBeenCalledWith(expect.anything(), THREAD_ID);
-  });
-
   it("serializes archives and navigates the active thread to its fallback", async () => {
     let releaseArchive!: () => void;
     harness.archiveThread.mockImplementation(
@@ -418,6 +420,20 @@ describe("useSidebarThreadActions", () => {
 
     expect(harness.navigate).not.toHaveBeenCalled();
     expect(harness.handleNewChat).toHaveBeenCalledWith();
+  });
+
+  it("waits for the Undo decision before requesting worktree cleanup", async () => {
+    const controller = render({ archiveDeletesOrphanedWorktree: true });
+    await controller.archiveThreadWithUndo(THREAD_ID);
+    expect(harness.releaseArchivedWorktree).not.toHaveBeenCalled();
+
+    const toast = harness.toast.mock.calls.at(-1)?.[0] as {
+      data: { archiveUndo: { onNoUndo: () => void } };
+    };
+    toast.data.archiveUndo.onNoUndo();
+    expect(harness.releaseArchivedWorktree).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: THREAD_ID, archiveSequence: 1 }),
+    );
   });
 
   it("treats an already-restored invariant as successful Undo", async () => {

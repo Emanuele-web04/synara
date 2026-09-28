@@ -7,6 +7,13 @@ interface PendingApproval {
   readonly settle: (decision: ProviderApprovalDecision) => void;
 }
 
+interface TaskApprovalInput {
+  readonly threadId: string;
+  readonly turnId: string;
+  readonly signal: AbortSignal;
+  readonly publish: (requestId: string, decision?: ProviderApprovalDecision) => Promise<void>;
+}
+
 interface TaskApproval {
   readonly turnId: string;
   granted?: boolean;
@@ -38,10 +45,15 @@ export class ComputerApprovalQueueFullError extends Error {
 export class ComputerApprovalGate {
   private readonly pending = new Map<string, PendingApproval>();
   private readonly tasks = new Map<string, TaskApproval>();
+  /** Visible-use consent is separate from routine Computer consent: allowing
+   * background input never lets a task take the user's screen. */
+  private readonly foregroundTasks = new Map<string, TaskApproval>();
 
   cancelThread(threadId: string, turnId?: string): void {
-    const task = this.tasks.get(threadId);
-    if (turnId === undefined || task?.turnId === turnId) this.tasks.delete(threadId);
+    for (const tasks of [this.tasks, this.foregroundTasks]) {
+      const task = tasks.get(threadId);
+      if (turnId === undefined || task?.turnId === turnId) tasks.delete(threadId);
+    }
     for (const [id, pending] of this.pending) {
       if (pending.threadId !== threadId || (turnId !== undefined && pending.turnId !== turnId))
         continue;
@@ -65,30 +77,48 @@ export class ComputerApprovalGate {
    * the re-auth, and cancelling it would just ask the same question twice.
    */
   revokeTaskGrants(): void {
-    for (const task of this.tasks.values()) {
+    for (const task of [...this.tasks.values(), ...this.foregroundTasks.values()]) {
       if (task.granted === true) delete task.granted;
     }
   }
 
   /** One consent for routine actions in the exact active turn, never a provider-wide grant. */
-  async requestTask(input: {
-    threadId: string;
-    turnId: string;
-    signal: AbortSignal;
-    publish: (requestId: string, decision?: ProviderApprovalDecision) => Promise<void>;
-  }): Promise<boolean> {
+  requestTask(input: TaskApprovalInput): Promise<boolean> {
+    return this.requestTaskIn(this.tasks, input);
+  }
+
+  /**
+   * One consent to bring windows in front of the user for the exact active
+   * turn. A decline also sticks for the turn, so the task is not re-prompted.
+   */
+  requestForegroundTask(input: TaskApprovalInput): Promise<boolean> {
+    return this.requestTaskIn(this.foregroundTasks, input);
+  }
+
+  /** Whether the user approved visible use for this exact turn. Never prompts. */
+  hasForegroundGrant(threadId: string, turnId: string): boolean {
+    const task = this.foregroundTasks.get(threadId);
+    return task?.turnId === turnId && task.granted === true;
+  }
+
+  private async requestTaskIn(
+    tasks: Map<string, TaskApproval>,
+    input: TaskApprovalInput,
+  ): Promise<boolean> {
     input.signal.throwIfAborted();
-    let task = this.tasks.get(input.threadId);
+    let task = tasks.get(input.threadId);
     if (task?.turnId !== input.turnId) {
-      this.cancelThread(input.threadId);
+      // A new turn ends every earlier turn's consent and prompts. The other
+      // consent kind may already belong to this turn, so it is kept.
+      this.cancelStaleTurns(input.threadId, input.turnId);
       task = { turnId: input.turnId };
-      this.tasks.set(input.threadId, task);
+      tasks.set(input.threadId, task);
     }
     if (task.granted !== undefined) return task.granted;
     const current = task;
     current.pending ??= this.request(input)
       .then((accepted) => {
-        if (this.tasks.get(input.threadId) !== current || input.signal.aborted) return false;
+        if (tasks.get(input.threadId) !== current || input.signal.aborted) return false;
         current.granted = accepted;
         return accepted;
       })
@@ -110,7 +140,18 @@ export class ComputerApprovalGate {
       if (cancel) input.signal.removeEventListener("abort", cancel);
     }
     input.signal.throwIfAborted();
-    return accepted && this.tasks.get(input.threadId) === current;
+    return accepted && tasks.get(input.threadId) === current;
+  }
+
+  private cancelStaleTurns(threadId: string, turnId: string): void {
+    for (const tasks of [this.tasks, this.foregroundTasks]) {
+      if (tasks.get(threadId)?.turnId !== turnId) tasks.delete(threadId);
+    }
+    for (const [id, pending] of this.pending) {
+      if (pending.threadId !== threadId || pending.turnId === turnId) continue;
+      this.pending.delete(id);
+      pending.settle("cancel");
+    }
   }
 
   respond(threadId: string, requestId: string, decision: ProviderApprovalDecision): boolean {

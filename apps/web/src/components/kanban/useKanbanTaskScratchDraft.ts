@@ -21,7 +21,7 @@ import {
   useComposerDraftStore,
   useComposerThreadDraft,
 } from "../../composerDraftStore";
-import { buildModelSelection } from "../../providerModelOptions";
+import { buildModelSelection, type ProviderOptions } from "../../providerModelOptions";
 import { toastManager } from "../ui/toast";
 
 export function useKanbanTaskScratchDraft(input: { readonly defaultProvider: ProviderKind }) {
@@ -106,9 +106,10 @@ export function useKanbanTaskScratchDraft(input: { readonly defaultProvider: Pro
     provider: ProviderKind,
     model: ModelSlug,
     supportsAutoMode?: boolean,
+    options?: ProviderOptions,
   ) => {
     const store = useComposerDraftStore.getState();
-    const nextSelection = buildModelSelection(provider, model, undefined, supportsAutoMode);
+    const nextSelection = buildModelSelection(provider, model, options, supportsAutoMode);
     // Mirrors the composer: update the scratch draft and persist the sticky selection.
     store.setModelSelectionAndSticky(scratchThreadId, nextSelection);
   };

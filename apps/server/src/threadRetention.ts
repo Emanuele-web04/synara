@@ -285,15 +285,14 @@ export const runThreadRetentionSweep = Effect.fn("runThreadRetentionSweep")(func
     { concurrency: 1 },
   ).pipe(Effect.asVoid);
 
-  if (archivedCount > 0) {
-    yield* pruneArchivedManagedWorktrees.pipe(
-      Effect.catch((error) =>
-        Effect.logWarning("managed worktree retention failed after thread retention sweep", {
-          error: error instanceof Error ? error.message : String(error),
-        }),
-      ),
-    );
-  }
+  // Snapshot expiry must advance even on days with no newly archived threads.
+  yield* pruneArchivedManagedWorktrees.pipe(
+    Effect.catch((error) =>
+      Effect.logWarning("managed worktree retention failed after thread retention sweep", {
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    ),
+  );
 
   if (totalCandidateCount > 0) {
     yield* publishRetentionMaintenance("completed", {

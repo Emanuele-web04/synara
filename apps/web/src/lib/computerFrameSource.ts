@@ -20,7 +20,7 @@ export interface ComputerFrameSourceHandlers {
 
 export type ComputerFrameSourceResetReason = FrameSourceResetReason;
 
-export const COMPUTER_FRAME_RESYNC_COOLDOWN_MS = 1_000;
+const COMPUTER_FRAME_RESYNC_COOLDOWN_MS = 1_000;
 
 export interface ComputerFrameSource {
   readonly requestResync: () => boolean;
@@ -32,7 +32,6 @@ export interface ComputerFrameSourceOptions {
   readonly handlers: ComputerFrameSourceHandlers;
   readonly createSocket?: (url: string) => WebSocketLike;
   readonly explicitUrl?: string | null;
-  readonly now?: () => number;
   readonly resyncCooldownMs?: number;
 }
 
@@ -50,7 +49,6 @@ export function createComputerFrameSource(
     decode: decodeComputerFrame,
     ...(options.createSocket !== undefined ? { createSocket: options.createSocket } : {}),
     ...(options.explicitUrl !== undefined ? { explicitUrl: options.explicitUrl } : {}),
-    ...(options.now !== undefined ? { now: options.now } : {}),
     resyncCooldownMs: options.resyncCooldownMs ?? COMPUTER_FRAME_RESYNC_COOLDOWN_MS,
   });
 }

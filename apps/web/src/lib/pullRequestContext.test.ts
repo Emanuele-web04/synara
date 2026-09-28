@@ -3,9 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   appendPullRequestContextsToPrompt,
   extractTrailingPullRequestContexts,
-  formatPullRequestContextTitleSeed,
   normalizePullRequestContexts,
-  pullRequestContextDedupKey,
   type PullRequestContextDraft,
 } from "./pullRequestContext";
 
@@ -35,17 +33,6 @@ describe("normalizePullRequestContexts", () => {
     ]);
     expect(cards.map((card) => card.id)).toEqual(["card-1", "card-5"]);
     expect(cards[1]).toMatchObject({ title: "Merge conflicts", text: "resolve" });
-  });
-});
-
-describe("pullRequestContextDedupKey", () => {
-  it("keys on scope and pull request, not on the card id", () => {
-    expect(pullRequestContextDedupKey(makeCard({ id: "a" }))).toBe(
-      pullRequestContextDedupKey(makeCard({ id: "b" })),
-    );
-    expect(pullRequestContextDedupKey(makeCard({ scope: "comments" }))).not.toBe(
-      pullRequestContextDedupKey(makeCard({ scope: "checks" })),
-    );
   });
 });
 
@@ -103,13 +90,5 @@ describe("appendPullRequestContextsToPrompt / extractTrailingPullRequestContexts
       promptText: "hello",
       pullRequestContexts: [],
     });
-  });
-});
-
-describe("formatPullRequestContextTitleSeed", () => {
-  it("names the single card and falls back to the PR for several", () => {
-    expect(formatPullRequestContextTitleSeed([])).toBeNull();
-    expect(formatPullRequestContextTitleSeed([makeCard()])).toBe("1 failing check on PR #321");
-    expect(formatPullRequestContextTitleSeed([makeCard(), makeCard({ id: "2" })])).toBe("PR #321");
   });
 });

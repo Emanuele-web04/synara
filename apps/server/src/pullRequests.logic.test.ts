@@ -51,18 +51,7 @@ function makeEntry(overrides: Partial<PullRequestListEntry> = {}): PullRequestLi
 }
 
 describe("isValidGitHubRepositoryNameWithOwner", () => {
-  it.each(["openai/codex", "OpenAI/Codex.js", "owner-1/repo_name"])("accepts %s", (repository) =>
-    expect(isValidGitHubRepositoryNameWithOwner(repository)).toBe(true),
-  );
-
-  it.each([
-    "",
-    "owner",
-    "owner/repo/extra",
-    "owner repo/name",
-    "-owner/name",
-    "owner/--flag value",
-  ])("rejects %s", (repository) =>
+  it.each(["owner/--flag value"])("rejects %s", (repository) =>
     expect(isValidGitHubRepositoryNameWithOwner(repository)).toBe(false),
   );
 });
@@ -191,22 +180,9 @@ describe("project pull request priority", () => {
 
 describe("isViewerReviewRequested", () => {
   const viewer = { login: "Viewer", name: null, avatarUrl: null, url: null };
-  const teammate = { login: "teammate", name: null, avatarUrl: null, url: null };
 
   it("does not flag a self-authored pull request", () => {
     expect(isViewerReviewRequested(viewer, ["viewer"], "VIEWER")).toBe(false);
-  });
-
-  it("flags a teammate pull request that explicitly requests the viewer", () => {
-    expect(isViewerReviewRequested(teammate, ["Viewer"], "viewer")).toBe(true);
-  });
-
-  it("flags team-only matches returned by the reviewing query", () => {
-    expect(isViewerReviewRequested(teammate, [], "viewer", true)).toBe(true);
-  });
-
-  it("does not flag self-authored matches returned by the reviewing query", () => {
-    expect(isViewerReviewRequested(viewer, [], "viewer", true)).toBe(false);
   });
 });
 

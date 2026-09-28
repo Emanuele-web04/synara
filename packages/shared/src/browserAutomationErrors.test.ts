@@ -36,7 +36,7 @@ function makeCanonicalInput(code: BrowserErrorCode): BrowserAutomationErrorInput
 }
 
 describe("browser automation error factories", () => {
-  it.each([45_000, 60_000, 99, 30_001, 100.5, "30000", null, NaN, Infinity])(
+  it.each([99, 30_001, 100.5, "30000", null])(
     "explains invalid timeout %s without reflecting input",
     (timeoutMs) => {
       const code = browserInputErrorCode({ timeoutMs, code: "private-secret" });

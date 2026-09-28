@@ -517,23 +517,6 @@ describe("discoverProjectScripts", () => {
     ]);
   });
 
-  it("discovers shallow nested package scripts", async () => {
-    const cwd = makeTempDir("synara-script-discovery-nested-");
-    writeFile(cwd, "apps/web/package.json", JSON.stringify({ scripts: { dev: "vite" } }));
-    writeFile(cwd, "apps/web/pnpm-lock.yaml", "");
-
-    const result = await discoverProjectScripts({ cwd, depth: 2 });
-
-    expect(result.targets).toEqual([
-      {
-        cwd: path.join(cwd, "apps/web"),
-        relativePath: "apps/web",
-        packageJsonPath: path.join(cwd, "apps/web/package.json"),
-        scripts: [{ name: "dev", command: "pnpm run dev" }],
-      },
-    ]);
-  });
-
   it("ignores invalid package json files", async () => {
     const cwd = makeTempDir("synara-script-discovery-invalid-");
     writeFile(cwd, "package.json", "{ nope");

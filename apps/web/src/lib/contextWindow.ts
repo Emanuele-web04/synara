@@ -270,7 +270,7 @@ export function deriveCumulativeCostUsd(
   return foundTurnDelta ? turnDeltaTotal : null;
 }
 
-export function formatContextWindowSelectionLabel(value: string | null | undefined): string | null {
+function formatContextWindowSelectionLabel(value: string | null | undefined): string | null {
   if (typeof value !== "string") {
     return null;
   }

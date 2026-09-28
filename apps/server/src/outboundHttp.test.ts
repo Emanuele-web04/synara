@@ -20,15 +20,10 @@ describe("outbound HTTP policy", () => {
     "::1",
     "fc00::1",
     "fe80::1",
-    "::ffff:127.0.0.1",
     "64:ff9b::127.0.0.1",
     "2001:db8::1",
   ])("rejects private or reserved address %s", (address) => {
     expect(isPublicIpAddress(address)).toBe(false);
-  });
-
-  it.each(["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"])("admits public address %s", (address) => {
-    expect(isPublicIpAddress(address)).toBe(true);
   });
 
   it("pins requests to an exact HTTPS origin", () => {

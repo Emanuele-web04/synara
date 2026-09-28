@@ -14,7 +14,8 @@ type ModelProviderKind =
   | "droid"
   | "opencode"
   | "pi"
-  | "devin";
+  | "devin"
+  | "omp";
 
 const NON_DROID_MODEL_SLUGS = new Set(
   Object.entries(MODEL_OPTIONS_BY_PROVIDER).flatMap(([provider, models]) =>
@@ -48,6 +49,15 @@ function readTrimmedString(record: Record<string, unknown>, key: string): string
 // Imported instance ids may be runtime names rather than Synara provider literals.
 function inferProviderFromLabel(label: string): ModelProviderKind | undefined {
   const lowerLabel = label.toLowerCase();
+  // OMP must win over the `pi` token check: "Oh My Pi" and "OMP" labels would
+  // otherwise attribute to Pi.
+  if (
+    /(^|[^a-z0-9])omp([^a-z0-9]|$)/u.test(lowerLabel) ||
+    lowerLabel.includes("oh-my-pi") ||
+    lowerLabel.includes("oh my pi")
+  ) {
+    return "omp";
+  }
   if (/(^|[^a-z0-9])pi([^a-z0-9]|$)/u.test(lowerLabel)) {
     return "pi";
   }
@@ -103,7 +113,8 @@ function inferLegacyModelProvider(provider: unknown, model: string): ModelProvid
     provider === "droid" ||
     provider === "opencode" ||
     provider === "pi" ||
-    provider === "devin"
+    provider === "devin" ||
+    provider === "omp"
   ) {
     return provider;
   }

@@ -41,6 +41,7 @@ import {
   BROWSER_SCRIPT_BATCH_GUIDANCE,
 } from "@synara/shared/browserAutomationCatalogue";
 import { normalizeModelSlug } from "@synara/shared/model";
+import { approvalSessionGrantWidensSessionPolicy } from "@synara/shared/approvalSessionGrant";
 import {
   JsonRpcStdioRequestRegistry,
   type JsonRpcPendingRequest,
@@ -826,7 +827,7 @@ export function normalizeCodexModelSlug(
   return normalized;
 }
 
-export function buildCodexInitializeParams() {
+function buildCodexInitializeParams() {
   return {
     clientInfo: {
       name: "synara_desktop",
@@ -2400,8 +2401,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private async resolveRemainingSessionApprovalRequests(
     context: CodexSessionContext,
   ): Promise<void> {
-    const remainingRequests = Array.from(context.pendingApprovals.values()).filter(
-      (request) => !isPermissionApprovalRequest(request) && request.requestKind !== "tool",
+    const remainingRequests = Array.from(context.pendingApprovals.values()).filter((request) =>
+      approvalSessionGrantWidensSessionPolicy(request.requestKind),
     );
     for (const pendingRequest of remainingRequests) {
       context.pendingApprovals.delete(pendingRequest.requestId);
@@ -2429,8 +2430,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     // the persistence Codex itself advertised, not a blanket grant.
     const overridesSessionPolicy =
       decision === "acceptForSession" &&
-      !isPermissionRequest &&
-      pendingRequest.requestKind !== "tool";
+      approvalSessionGrantWidensSessionPolicy(pendingRequest.requestKind);
     if (overridesSessionPolicy) {
       context.sessionApprovalOverride = CODEX_ALWAYS_ALLOW_SESSION_TURN_OVERRIDES;
     }
@@ -3761,8 +3761,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       // they neither set the override nor get swept up by it.
       if (
         context.sessionApprovalOverride &&
-        !isPermissionApprovalRequest(pendingRequest) &&
-        requestKind !== "tool"
+        approvalSessionGrantWidensSessionPolicy(pendingRequest.requestKind)
       ) {
         await this.resolveApprovalRequest(context, pendingRequest, "acceptForSession");
         return;

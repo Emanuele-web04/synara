@@ -6,6 +6,12 @@
 import { fileURLToPath } from "node:url";
 
 import {
+  SYNARA_BETA_WINDOWS_INSTALLER_GUID,
+  SYNARA_STABLE_WINDOWS_INSTALLER_GUID,
+} from "@synara/shared/betaChannel";
+import type { SynaraPackagedDesktopFlavor } from "@synara/shared/desktopIdentity";
+
+import {
   createDesktopBundleFilePatterns,
   preserveDependencyDiagnostics,
 } from "./desktop-bundle-files.ts";
@@ -21,7 +27,7 @@ export const MAC_APPSNAP_HELPER_ASAR_EXCLUSION = "!apps/desktop/native/appsnap/b
 export const MAC_APPSNAP_HELPER_BUNDLE_PATH = "Contents/Helpers/synara-appsnap-helper";
 export const MAC_DEVICE_HELPER_STAGE_PATH = "apps/server/dist/device-helper";
 export const MAC_DEVICE_HELPER_RESOURCE_PATH = "Resources/device-helper";
-export const WINDOWS_INSTALLER_GUID = "368107a8-afe6-5db5-ab3b-d4f331684868";
+export const WINDOWS_INSTALLER_GUID = SYNARA_STABLE_WINDOWS_INSTALLER_GUID;
 // Asset catalog name of the compiled Icon Composer icon. macOS 26 reads
 // CFBundleIconName out of Assets.car and renders that layered icon with the
 // Liquid Glass material; older releases ignore it and keep using the ICNS.
@@ -29,8 +35,9 @@ export const MAC_ICON_ASSET_NAME = "Synara";
 export const MAC_ICON_COMPOSER_DEPLOYMENT_TARGET = "26.0";
 export const MAC_ICON_ASSETS_CAR_STAGE_PATH = "apps/desktop/resources/Assets.car";
 export const MAC_ICON_ASSETS_CAR_BUNDLE_PATH = "Resources/Assets.car";
+export { SYNARA_BETA_WINDOWS_INSTALLER_GUID };
 const MAC_DMG_ICON_PATH = "icon.icns";
-export const NODE_PTY_ASAR_UNPACK_GLOBS = ["node_modules/node-pty/**"] as const;
+const NODE_PTY_ASAR_UNPACK_GLOBS = ["node_modules/node-pty/**"] as const;
 
 export interface DesktopPlatformBuildConfig {
   readonly afterSign?: string;
@@ -53,6 +60,7 @@ export interface CreateDesktopPlatformBuildConfigInput {
   /** Seal isolated local bundles without selecting a release certificate. */
   readonly adHocSign?: boolean;
   readonly windowsAzureSignOptions?: Record<string, string>;
+  readonly flavor?: SynaraPackagedDesktopFlavor | undefined;
 }
 
 export interface DesktopNativeBuildHostInput {
@@ -205,7 +213,7 @@ export function createDesktopPlatformBuildConfig(
     // Keep the Windows product registration stable while the public app ID changes.
     // This lets NSIS updates replace the existing installation and own its uninstaller.
     nsis: {
-      guid: WINDOWS_INSTALLER_GUID,
+      guid: input.flavor === "beta" ? SYNARA_BETA_WINDOWS_INSTALLER_GUID : WINDOWS_INSTALLER_GUID,
     },
     win: {
       target: [input.target],

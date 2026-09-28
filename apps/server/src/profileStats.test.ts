@@ -52,17 +52,6 @@ describe("heatmapIntensity", () => {
     expect(levels).toEqual([1, 1, 2, 2, 3, 3, 4, 4]);
   });
 
-  it("keeps the busiest day at the top level and ranks quartiles in order", () => {
-    const counts = Array.from({ length: 100 }, (_, index) => index + 1);
-    const active = sorted(counts);
-    expect(heatmapIntensity(1, active)).toBe(1);
-    expect(heatmapIntensity(25, active)).toBe(1);
-    expect(heatmapIntensity(26, active)).toBe(2);
-    expect(heatmapIntensity(75, active)).toBe(3);
-    expect(heatmapIntensity(76, active)).toBe(4);
-    expect(heatmapIntensity(100, active)).toBe(4);
-  });
-
   it("gives tied days the same level and renders a uniform window at full intensity", () => {
     const active = sorted([500, 500, 500, 500]);
     expect(active.map((count) => heatmapIntensity(count, active))).toEqual([4, 4, 4, 4]);

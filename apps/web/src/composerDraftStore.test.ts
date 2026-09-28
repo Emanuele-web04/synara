@@ -69,17 +69,6 @@ describe("composerDraftStore clearComposerContent", () => {
     expect(draft).toBeUndefined();
     expect(revokeSpy).not.toHaveBeenCalledWith("blob:optimistic");
   });
-
-  it("clears selected provider references with composer content", () => {
-    const store = useComposerDraftStore.getState();
-
-    store.setPrompt(threadId, "Use @linear and /check-code");
-    store.setSkills(threadId, [{ name: "check-code", path: "/skills/check-code" }]);
-    store.setMentions(threadId, [{ name: "linear", path: "plugin://linear" }]);
-    store.clearComposerContent(threadId);
-
-    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
-  });
 });
 
 describe("composerDraftStore project draft thread mapping", () => {
@@ -273,22 +262,6 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
   });
 
-  it("releases queued preview blobs when clearing a project draft by project id", () => {
-    const store = useComposerDraftStore.getState();
-    store.setProjectDraftThreadId(projectId, threadId);
-    store.enqueueQueuedTurn(
-      threadId,
-      makeQueuedChatTurn(
-        "queued-project-clear",
-        makeImage({ id: "queued-image-clear", previewUrl: "blob:queued-project-clear" }),
-      ),
-    );
-
-    store.clearProjectDraftThreadId(projectId);
-
-    expect(revokeSpy).toHaveBeenCalledWith("blob:queued-project-clear");
-  });
-
   it("clears orphaned composer drafts when remapping a project to a new draft thread", () => {
     const store = useComposerDraftStore.getState();
     store.setProjectDraftThreadId(projectId, threadId);
@@ -301,22 +274,6 @@ describe("composerDraftStore project draft thread mapping", () => {
     );
     expect(useComposerDraftStore.getState().getDraftThread(threadId)).toBeNull();
     expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
-  });
-
-  it("releases queued preview blobs when remapping a project to a new draft thread", () => {
-    const store = useComposerDraftStore.getState();
-    store.setProjectDraftThreadId(projectId, threadId);
-    store.enqueueQueuedTurn(
-      threadId,
-      makeQueuedChatTurn(
-        "queued-remap",
-        makeImage({ id: "queued-image-remap", previewUrl: "blob:queued-remap" }),
-      ),
-    );
-
-    store.setProjectDraftThreadId(projectId, otherThreadId);
-
-    expect(revokeSpy).toHaveBeenCalledWith("blob:queued-remap");
   });
 
   it("keeps composer drafts when the thread is still mapped by another project", () => {
@@ -372,22 +329,6 @@ describe("composerDraftStore project draft thread mapping", () => {
 
     expect(useComposerDraftStore.getState().getDraftThread(threadId)).toBeNull();
     expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
-  });
-
-  it("finalizes every promoted draft exposed by the facade batch helper", () => {
-    const store = useComposerDraftStore.getState();
-    store.setProjectDraftThreadId(projectId, threadId);
-    store.setProjectDraftThreadId(otherProjectId, otherThreadId);
-    store.setPrompt(threadId, "first promoted draft");
-    store.setPrompt(otherThreadId, "second promoted draft");
-    markPromotedDraftThreads(new Set([threadId, otherThreadId]));
-
-    finalizePromotedDraftThreads(new Set([threadId, otherThreadId]));
-
-    expect(useComposerDraftStore.getState().getDraftThread(threadId)).toBeNull();
-    expect(useComposerDraftStore.getState().getDraftThread(otherThreadId)).toBeNull();
-    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
-    expect(useComposerDraftStore.getState().draftsByThreadId[otherThreadId]).toBeUndefined();
   });
 
   it.each([true, false])(
@@ -565,16 +506,6 @@ describe("composerDraftStore runtime and interaction settings", () => {
 
   beforeEach(() => {
     resetComposerDraftStore();
-  });
-
-  it("stores runtime mode overrides in the composer draft", () => {
-    const store = useComposerDraftStore.getState();
-
-    store.setRuntimeMode(threadId, "approval-required");
-
-    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.runtimeMode).toBe(
-      "approval-required",
-    );
   });
 
   it("stores AI-reviewed auto mode in the composer draft", () => {

@@ -235,6 +235,18 @@ export function shouldToastDesktopUpdateActionResult(result: DesktopUpdateAction
   return result.accepted && !result.completed;
 }
 
+// installUpdate resolves as soon as the quit-and-install handoff starts, while
+// the updater still reports "downloaded". That state means the install is in
+// flight, so callers must not treat the accepted-but-incomplete result as done.
+export function isDesktopUpdateInstallInFlight(result: DesktopUpdateActionResult): boolean {
+  return (
+    result.accepted &&
+    !result.completed &&
+    result.state.status === "downloaded" &&
+    result.state.errorContext !== "install"
+  );
+}
+
 // A download/install request can resolve to "up-to-date" when the offered version
 // turned out not to be newer (stale updater state). That is not an error, so the UI
 // should show an informational notice instead of silently resetting the button.

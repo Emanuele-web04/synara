@@ -4,7 +4,7 @@
 // Exports: Settings route component for `/settings`
 
 import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@synara/contracts";
-import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
+import { isBetaFeatureOn, VISIBLE_PROVIDER_DESCRIPTORS } from "../betaFeatures";
 import { sameAppSnapShortcut } from "@synara/shared/appSnapShortcut";
 import { SafariAccessSetupButton } from "../components/SafariAccessOnboarding";
 import { createFileRoute, useSearch } from "@tanstack/react-router";
@@ -16,6 +16,7 @@ import {
   DEFAULT_UI_DENSITY,
   DEFAULT_CHAT_WIDTH,
   type UiDensity,
+  type SidebarLayout,
   MAX_CHAT_FONT_SIZE_PX,
   MAX_TERMINAL_FONT_SIZE_PX,
   MIN_CHAT_FONT_SIZE_PX,
@@ -36,6 +37,7 @@ import {
 } from "~/components/settings/ConversationStorageSettingsPanels";
 import {
   AppSnapSettingsPanel,
+  BetaChannelSettingsPanel,
   NotificationsSettingsPanel,
 } from "~/components/settings/DesktopSettingsPanels";
 import { ComputerSettingsPanel } from "~/components/settings/ComputerSettingsPanel";
@@ -53,6 +55,7 @@ import { ExternalMcpSettingsPanel } from "../components/settings/ExternalMcpSett
 import {
   SettingResetButton,
   SettingsSegmentedControl,
+  type SettingsSegmentedOption,
   SettingsSelectControl,
 } from "../components/settings/SettingControls";
 import {
@@ -114,6 +117,11 @@ import { SETTINGS_PAGE_BACKGROUND_CLASS_NAME } from "../settingsPanelStyles";
 
 // ── Settings taxonomy ──────────────────────────────────────────────────────
 
+const SIDEBAR_LAYOUT_OPTIONS = [
+  { value: "classic", label: "Classic" },
+  { value: "rail", label: "Rail" },
+] as const satisfies readonly SettingsSegmentedOption<SidebarLayout>[];
+
 const UI_DENSITY_OPTIONS = [
   {
     value: "compact",
@@ -158,7 +166,7 @@ const CHAT_WIDTH_OPTIONS = [
   description: string;
 }>;
 
-const PROVIDER_SELECT_OPTIONS = PROVIDER_DESCRIPTORS.map((descriptor) => descriptor.kind);
+const PROVIDER_SELECT_OPTIONS = VISIBLE_PROVIDER_DESCRIPTORS.map((descriptor) => descriptor.kind);
 
 const TIMESTAMP_FORMAT_LABELS = {
   locale: "System default",
@@ -312,6 +320,12 @@ function SettingsRouteView() {
     ...(!isDefaultActiveTheme ? [`${resolvedTheme === "dark" ? "Dark" : "Light"} theme pack`] : []),
     ...(settings.defaultProvider !== defaults.defaultProvider ? ["Default provider"] : []),
     ...(settings.defaultThreadEnvMode !== defaults.defaultThreadEnvMode ? ["New thread mode"] : []),
+    ...(settings.archiveDeletesOrphanedWorktree !== defaults.archiveDeletesOrphanedWorktree
+      ? ["Delete worktree on archive"]
+      : []),
+    ...(isBetaFeatureOn("sidebarV2") && settings.sidebarLayout !== defaults.sidebarLayout
+      ? ["Sidebar layout"]
+      : []),
     ...(settings.sidebarProjectSortOrder !== defaults.sidebarProjectSortOrder
       ? ["Project sort order"]
       : []),
@@ -463,6 +477,7 @@ function SettingsRouteView() {
   const renderGeneralPanel = () => (
     <div className="space-y-6">
       <SafariAccessSetupButton />
+      <BetaChannelSettingsPanel active={true} />
       <SettingsSection title="Core defaults">
         <SettingsRow
           title="Default provider"
@@ -539,6 +554,15 @@ function SettingsRouteView() {
           }
         />
 
+        {renderBooleanSettingRow({
+          settingKey: "archiveDeletesOrphanedWorktree",
+          title: "Delete worktree on archive",
+          description:
+            "After Archive's Undo period, remove a clean worktree only if the task has stopped and no other task uses it. Its branch remains available for recovery.",
+          resetLabel: "delete worktree on archive",
+          ariaLabel: "Delete worktree on archive",
+        })}
+
         <SettingsRow
           title="Welcome tour"
           description="Replay the first-run setup: feature tour, provider selection, appearance, and first project."
@@ -554,6 +578,29 @@ function SettingsRouteView() {
       </SettingsSection>
 
       <SettingsSection title="Sidebar organization">
+        {isBetaFeatureOn("sidebarV2") ? (
+          <SettingsRow
+            title="Sidebar layout"
+            description="Classic keeps the single sidebar. Rail adds fixed icon tabs on the left, with projects and threads in a panel beside them."
+            resetAction={
+              settings.sidebarLayout !== defaults.sidebarLayout ? (
+                <SettingResetButton
+                  label="sidebar layout"
+                  onClick={() => updateSettings({ sidebarLayout: defaults.sidebarLayout })}
+                />
+              ) : null
+            }
+            control={
+              <SettingsSegmentedControl
+                value={settings.sidebarLayout}
+                onValueChange={(value) => updateSettings({ sidebarLayout: value })}
+                ariaLabel="Sidebar layout"
+                options={SIDEBAR_LAYOUT_OPTIONS}
+              />
+            }
+          />
+        ) : null}
+
         <SettingsRow
           title="Project order"
           description="Controls how projects are arranged in the main sidebar."

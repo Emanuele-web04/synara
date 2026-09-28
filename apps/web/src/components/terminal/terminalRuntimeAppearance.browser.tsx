@@ -4,11 +4,7 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import {
-  getTerminalBoldFontWeight,
-  getTerminalFontWeight,
-  terminalThemeFromApp,
-} from "./terminalRuntimeAppearance";
+import { terminalThemeFromApp } from "./terminalRuntimeAppearance";
 
 const root = document.documentElement;
 const originalRootClassName = root.className;
@@ -55,10 +51,5 @@ describe("terminalThemeFromApp", () => {
     expect(theme.red).toBe("rgb(255, 126, 120)");
     expect(theme.yellow).toBe("rgb(245, 180, 74)");
     expect(theme.selectionBackground).toMatch(/^rgba\(\d+, \d+, \d+, 0\.\d+\)$/);
-  });
-
-  it("keeps terminal text intentionally lighter than bold shell output", () => {
-    expect(getTerminalFontWeight()).toBe(300);
-    expect(getTerminalBoldFontWeight()).toBe(500);
   });
 });

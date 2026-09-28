@@ -219,7 +219,7 @@ export function resolveDevinOptionalTimeoutMs(input: {
   return parsed;
 }
 
-export function resolveDevinWedgeRecoveryOptions(
+function resolveDevinWedgeRecoveryOptions(
   env: NodeJS.ProcessEnv = process.env,
 ): DevinWedgeRecoveryOptions {
   return {

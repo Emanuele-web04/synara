@@ -197,6 +197,48 @@
     opacity: 0;
   }
 
+  /* Rail layout, modeled on Codex. Three tones: the shell (top band + rail) is the lightest
+     in dark and a soft grey in light, the thread panel sits a step toward the surface, and
+     the route body is the surface itself. Panel, route body, and right dock form one inset
+     block under the top band: a hairline border, rounded corners, and a
+     small shell gap to the window's right and bottom edges. Route headers keep rendering
+     their titles and actions, now on the shell band above the block. */
+  [data-sidebar-layout="rail"] {
+    --app-rail-shell-tone: color-mix(in srgb, var(--color-background-surface) 97%, black);
+    --app-rail-panel-background: var(--color-background-surface);
+    --app-rail-shell-background: color-mix(
+      in srgb,
+      var(--app-rail-shell-tone) var(--app-rail-shell-opacity, 100%),
+      transparent
+    );
+    /* Real CSS borders at 0.5px (one device pixel on Retina): per-side inset shadows would
+       overlap on the rounded corners and draw them thicker than the straight edges. */
+    --app-rail-inset-border-width: 0.5px;
+    --app-rail-inset-border: color-mix(in srgb, black 10%, transparent);
+    --app-rail-inset-radius: calc(var(--radius) * 1.3);
+    --app-rail-inset-gap: 3px;
+  }
+
+  .dark [data-sidebar-layout="rail"] {
+    --app-rail-shell-tone: color-mix(in srgb, var(--color-background-surface) 95%, white);
+    --app-rail-panel-background: color-mix(in srgb, var(--color-background-surface) 98.3%, white);
+    --app-rail-inset-border: color-mix(in srgb, white 9%, transparent);
+  }
+
+  /* The panel is the block's left end: border on its outer three sides only. */
+  .app-rail-panel {
+    margin-bottom: var(--app-rail-inset-gap);
+    background: var(--app-rail-panel-background);
+    border: var(--app-rail-inset-border-width) solid var(--app-rail-inset-border);
+    border-right-width: 0;
+    border-radius: var(--app-rail-inset-radius) 0 0 var(--app-rail-inset-radius);
+  }
+
+  /* No sidebar material sits behind the rail layout's rows, so chips take the panel tone. */
+  [data-sidebar-layout="rail"] .sidebar-icon-chip {
+    background: var(--app-rail-panel-background);
+  }
+
   /* ─── Chat-surface header hairline (horizontal counterpart of the seam) ───────────
      Bottom divider for every chat-surface chrome bar (chat/dock/diff headers),
      same color as the vertical seam via --app-surface-divider. Painted as a 1px
@@ -419,6 +461,9 @@
 :root {
   color-scheme: light;
   --radius: 0.625rem;
+  /* Depth of the fade where scrolling content meets an edge (transcript, sidebar
+     panel, ScrollArea `scrollFade`). */
+  --scroll-edge-fade-size: 1.5rem;
   --radius-user-message: 1rem;
   --font-ui-family: var(
     --theme-font-ui-family,
@@ -445,6 +490,8 @@
   --font-chat-code-family: var(--theme-font-code-family, var(--font-mono-family));
   --terminal-font-family: "JetBrainsMono NFM", "JetBrainsMono NF", "JetBrains Mono", monospace;
   --app-shell-background: transparent;
+  /* Width of the rail layout's fixed icon column (see AppRail). */
+  --app-rail-width: 3.25rem;
   --app-sidebar-backdrop-filter: blur(4px) saturate(130%);
   --app-sidebar-surface: color-mix(in srgb, var(--card) 38%, transparent);
   --background: #fcfcfc;
@@ -492,6 +539,15 @@
   --status-open: var(--color-decoration-added, var(--success));
   --status-merged: var(--color-indigo-500);
   --status-neutral: var(--color-zinc-500);
+  /* Project palette (Edit project → Icons). Same recipe as the status tints: the plain
+     color in light, a step toward white in dark. */
+  --project-red: var(--color-red-500);
+  --project-orange: var(--color-orange-500);
+  --project-yellow: var(--color-yellow-500);
+  --project-green: var(--color-green-500);
+  --project-blue: var(--color-blue-500);
+  --project-purple: var(--color-violet-500);
+  --project-pink: var(--color-pink-500);
   --sidebar: var(--card);
   --sidebar-foreground: var(--foreground);
   --sidebar-primary: var(--primary);
@@ -507,6 +563,14 @@
   --warning: var(--color-amber-500);
   --warning-foreground: var(--color-amber-700);
   --claude: #d97757;
+  /* Beta brand: vivid Xcode-blue tile, black Synara mark, white BETA pill.
+     The update pill uses the gradient with white text; the Beta badge
+     uses the white pill with blue ink, mirroring the pill baked into
+     the desktop icon. Stable uses only the pill tokens, on its Beta card. */
+  --beta-gradient: linear-gradient(135deg, #63b3ff 0%, #2e7ff2 55%, #0f5cd6 100%);
+  --beta-accent: #2e7ff2;
+  --beta-pill: #ffffff;
+  --beta-pill-ink: #2e7ff2;
 
   @variant dark {
     color-scheme: dark;
@@ -547,6 +611,13 @@
     );
     --status-merged: color-mix(in srgb, var(--color-indigo-500) 72%, var(--color-white));
     --status-neutral: color-mix(in srgb, var(--color-zinc-500) 72%, var(--color-white));
+    --project-red: color-mix(in srgb, var(--color-red-500) 72%, var(--color-white));
+    --project-orange: color-mix(in srgb, var(--color-orange-500) 72%, var(--color-white));
+    --project-yellow: color-mix(in srgb, var(--color-yellow-400) 80%, var(--color-white));
+    --project-green: color-mix(in srgb, var(--color-green-500) 72%, var(--color-white));
+    --project-blue: color-mix(in srgb, var(--color-blue-500) 72%, var(--color-white));
+    --project-purple: color-mix(in srgb, var(--color-violet-500) 72%, var(--color-white));
+    --project-pink: color-mix(in srgb, var(--color-pink-500) 72%, var(--color-white));
     --sidebar: var(--card);
     --sidebar-foreground: var(--foreground);
     --sidebar-primary: var(--primary);
@@ -1850,8 +1921,7 @@ label:has(> select#reasoning-effort) select {
    (dist/tailwind.css `@utility scroll-fade`). Same rationale as the shimmer
    block below — importing the full `shadcn` stylesheet would clash with this
    project's custom theme, so the self-contained scroll-fade block lives here.
-   Applied to the transcript scroll container via `scroll-fade-b` so streamed
-   content dissolves toward the composer and the fade clears at the live edge.
+   The transcript's `scroll-edge-fade` (below) builds on these primitives.
    Scroll-aware through `animation-timeline: scroll()`; the `@property`
    initial-values keep it fade-free when the container is not scrollable, and a
    static-fade `@supports` fallback covers browsers without scroll timelines.
@@ -2285,6 +2355,74 @@ label:has(> select#reasoning-effort) select {
   --scroll-fade-mask: none;
 }
 
+/* Scroll edge fade for app chrome scroll areas (the chat transcript), built on the
+   vendored scroll-fade primitives above. Content dissolves to transparent over
+   `--scroll-edge-fade-size` at the top edge and at the bottom edge — or, when
+   `--scroll-edge-fade-inset-b` is set, at that distance above the bottom edge (the
+   floating composer's top) — so the frosted window material shows through instead
+   of a hard cut. Each edge only fades while content is scrolled past it.
+
+   Top: reuses the vendored `--scroll-fade-t` reveal. Bottom: a 0→1 progress slides
+   the whole fade band down past the viewport as the scroll reaches its end, instead
+   of shrinking it in place, so an inset edge never collapses into a hard step over
+   content still passing under the composer. `--scroll-edge-fade-layer` intersects an
+   extra mask (the composer's footer dissolve) with the edges. It is paint-only (no
+   layout or scroll feedback), so it cannot disturb auto-follow or list measurement.
+   ScrollArea's `scrollFade` reads the same `--scroll-edge-fade-size` token. */
+@property --scroll-edge-fade-b-progress {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 0;
+}
+
+@keyframes scroll-edge-fade-reveal-b {
+  from {
+    --scroll-edge-fade-b-progress: 1;
+  }
+  to {
+    --scroll-edge-fade-b-progress: 0;
+  }
+}
+
+@utility scroll-edge-fade {
+  --_scroll-fade-size-t: var(--scroll-edge-fade-size);
+  --_scroll-edge-fade-b-start: calc(
+    100% - (var(--scroll-edge-fade-inset-b, 0px) + var(--scroll-edge-fade-size)) *
+      var(--scroll-edge-fade-b-progress, 0)
+  );
+  --scroll-edge-fade-edges: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--scroll-fade-t, 0px),
+    #000 var(--_scroll-edge-fade-b-start),
+    transparent calc(var(--_scroll-edge-fade-b-start) + var(--scroll-edge-fade-size))
+  );
+  -webkit-mask-image:
+    var(--scroll-edge-fade-edges), var(--scroll-edge-fade-layer, linear-gradient(#000, #000));
+  mask-image:
+    var(--scroll-edge-fade-edges), var(--scroll-edge-fade-layer, linear-gradient(#000, #000));
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation:
+      scroll-fade-reveal-t 1ms ease-in-out,
+      scroll-edge-fade-reveal-b 1ms ease-in-out;
+    animation-timeline: scroll(self y), scroll(self y);
+    animation-range:
+      0 var(--scroll-fade-reveal, calc(var(--spacing) * 24)),
+      calc(100% - var(--scroll-fade-reveal, calc(var(--spacing) * 24))) 100%;
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-t: var(--scroll-edge-fade-size);
+    --scroll-edge-fade-b-progress: 1;
+  }
+}
+
 /* Static end-of-line fade for single-line truncation. Unlike the scroll-fade-*
    family — which reveal/hide the fade based on scroll position and therefore
    need a scrollable container — this is a plain overflow:hidden clip whose
@@ -2623,6 +2761,143 @@ diffs-container {
    Value is driven by --desktop-top-bar-traffic-light-gutter (inverse-scaled on View zoom). */
 :root[data-runtime="electron"] .desktop-top-bar-traffic-light-gutter {
   padding-left: var(--desktop-top-bar-traffic-light-gutter, 90px) !important;
+}
+
+/* Rail layout route body (unlayered: it overrides the card's background and height
+   utilities and the seam rules). The card element still spans the header band, so it turns
+   transparent and draws the body from pseudo-elements: ::before is the surface behind the
+   route's content, ::after the hairline above it. Margins leave the right and bottom shell
+   gaps, and the card's own bottom radius with its overflow clip rounds whatever the route
+   paints there (fixed overlays are unaffected). The block's top corners sit under the band,
+   inside the card, so the route wrappers that hold a top bar go transparent (below) and the
+   rounded ::before shows through. The block has no shadow: its edge is the 1px border. */
+[data-sidebar-layout="rail"] {
+  /* Route body corners: square only where the panel joins it. */
+  --app-rail-block-radii: 0 var(--app-rail-inset-radius) var(--app-rail-inset-radius) 0;
+  /* The card's own corners: its top edge is the band, so only the bottom ones round. */
+  --app-rail-card-radii: 0 0 var(--app-rail-inset-radius) 0;
+}
+
+/* Panel collapsed: the route body is the whole block, so its left corners round too. */
+[data-sidebar-layout="rail"]:has([data-slot="sidebar"][data-side="left"][data-state="collapsed"]) {
+  --app-rail-block-radii: var(--app-rail-inset-radius);
+  --app-rail-card-radii: 0 0 var(--app-rail-inset-radius) var(--app-rail-inset-radius);
+}
+
+[data-sidebar-layout="rail"] .chat-content-card {
+  margin-right: var(--app-rail-inset-gap);
+  margin-bottom: var(--app-rail-inset-gap);
+  background: transparent;
+  border-radius: var(--app-rail-card-radii);
+}
+
+[data-sidebar-layout="rail"] .chat-content-card.h-dvh {
+  height: calc(100dvh - var(--app-rail-inset-gap));
+}
+
+/* Full-route wrappers (the ones holding the route's top bar, including the dock's surface)
+   repaint the surface as a plain rectangle over the block's rounded top corners; the card
+   body already paints that surface, so they go transparent. */
+[data-sidebar-layout="rail"]
+  .chat-content-card
+  :is(.bg-\[var\(--color-background-surface\)\], .app-settings-surface):has(.app-top-bar) {
+  background: transparent;
+}
+
+/* The dock's bottom-right corner is the block's corner. */
+[data-sidebar-layout="rail"] [data-slot="sidebar"][data-side="right"] [data-slot="sidebar-inner"] {
+  overflow: hidden;
+  border-bottom-right-radius: var(--app-rail-inset-radius);
+}
+
+[data-sidebar-layout="rail"] .chat-content-card::before,
+[data-sidebar-layout="rail"] .chat-content-card::after {
+  content: "";
+  position: absolute;
+  inset: var(--app-top-strip-height) 0 0 0;
+  pointer-events: none;
+  opacity: 1;
+  border-radius: var(--app-rail-block-radii);
+}
+
+[data-sidebar-layout="rail"] .chat-content-card::before {
+  z-index: -1;
+  background: var(--color-background-surface);
+  box-shadow: none;
+}
+
+/* The block's hairline border; with the panel open its left edge is the seam with the panel,
+   which draws no right border of its own. */
+[data-sidebar-layout="rail"] .chat-content-card::after {
+  z-index: 30;
+  border: var(--app-rail-inset-border-width) solid var(--app-rail-inset-border);
+}
+
+/* Panel collapsed: its zero-width box must not leave a border line next to the rail. */
+[data-sidebar-layout="rail"]:has([data-slot="sidebar"][data-side="left"][data-state="collapsed"])
+  .app-rail-panel {
+  border-width: 0;
+}
+
+/* Short divider on the shell band above the seam, detached from the band's edges, marking
+   where the route header starts next to the panel. Hidden with the panel. */
+[data-sidebar-layout="rail"] .app-rail-header-divider {
+  position: absolute;
+  top: calc((var(--app-top-strip-height) - 1.25rem) / 2);
+  left: 0;
+  z-index: 30;
+  width: 1px;
+  height: 1.25rem;
+  pointer-events: none;
+  background: var(--color-border);
+  transition: opacity 300ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+[data-sidebar-layout="rail"]:has([data-slot="sidebar"][data-side="left"][data-state="collapsed"])
+  .app-rail-header-divider {
+  opacity: 0;
+}
+
+/* Settings floats its top bar over the scrolling page; on the opaque band the page must
+   start below it instead. */
+[data-sidebar-layout="rail"] [data-slot="sidebar-inset-surface"].app-settings-surface {
+  padding-top: var(--app-top-strip-height);
+}
+
+/* Route top bars sit on the shell band; the block's top border replaces their hairline.
+   The shell root already paints the band, so they stay clear: a second coat of the
+   translucent shell tone would read nearly opaque next to the rail. */
+[data-sidebar-layout="rail"] .app-top-bar {
+  background-color: transparent;
+  background-image: none;
+}
+
+/* Right dock: its fixed container keeps the block's gap, and its surface is the card body
+   drawn above, so the dock header sits on the shell band like the route header. */
+[data-sidebar-layout="rail"]
+  [data-slot="sidebar"][data-side="right"]
+  > [data-slot="sidebar-container"] {
+  right: var(--app-rail-inset-gap);
+  bottom: var(--app-rail-inset-gap);
+  height: auto;
+}
+
+/* Collapsed, the dock slides its own width off-screen; the gap above would leave its
+   left border and a sliver of content peeking at the window edge, so it slides the gap too. */
+[data-sidebar-layout="rail"]
+  [data-slot="sidebar"][data-side="right"][data-collapsible="offcanvas"]
+  > [data-slot="sidebar-container"] {
+  translate: calc(100% + var(--app-rail-inset-gap)) 0;
+}
+
+/* Headers right of a collapsed panel clear the traffic lights from the rail's edge, not
+   the window's (the strip over rail + panel keeps the full inset). */
+:root[data-runtime="electron"]
+  [data-sidebar-layout="rail"]
+  .desktop-top-bar-traffic-light-gutter:not(.app-shell-top-strip) {
+  padding-left: calc(
+    var(--desktop-top-bar-traffic-light-gutter, 90px) - var(--app-rail-width)
+  ) !important;
 }
 
 /* Composer and user bubbles share continuous corners; their radii remain the fallback.

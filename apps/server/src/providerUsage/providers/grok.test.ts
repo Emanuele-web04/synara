@@ -1,7 +1,7 @@
 // FILE: providerUsage/providers/grok.test.ts
 // Purpose: Covers Grok SuperGrok CLI-proxy billing, auth.json identity, and API-key fallback.
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import nodePath from "node:path";
 
@@ -14,6 +14,7 @@ import {
   parseGrokApiKeyIdentity,
   parseGrokAuthRecord,
   parseGrokBilling,
+  readGrokCachedLogin,
 } from "./grok";
 
 const NOW_MS = 1_780_000_000_000;
@@ -78,6 +79,79 @@ describe("parseGrokAuthRecord", () => {
       plan: "SuperGrok",
       principalType: "User",
     });
+  });
+});
+
+describe("readGrokCachedLogin", () => {
+  const scope = "https://auth.x.ai::openid";
+  const future = new Date(NOW_MS + 60 * 60 * 1000).toISOString();
+  const past = new Date(NOW_MS - 60 * 60 * 1000).toISOString();
+
+  it("returns the cached grok login session", async () => {
+    const homeDir = makeGrokHome({ [scope]: { key: "token", expires_at: future } });
+    await expect(readGrokCachedLogin({}, homeDir, NOW_MS)).resolves.toMatchObject({
+      accessToken: "token",
+    });
+  });
+
+  it.each([
+    {
+      source: "cache expiry",
+      entry: { key: "token", expires_at: new Date(NOW_MS + 120_000).toISOString() },
+    },
+    {
+      source: "JWT expiry",
+      entry: {
+        key: `header.${Buffer.from(JSON.stringify({ exp: (NOW_MS + 120_000) / 1000 })).toString("base64url")}.signature`,
+        expires_at: past,
+      },
+    },
+  ])("keeps a valid token near $source without a refresh token", async ({ entry }) => {
+    const homeDir = makeGrokHome({ [scope]: entry });
+    await expect(readGrokCachedLogin({}, homeDir, NOW_MS)).resolves.toMatchObject({
+      accessToken: entry.key,
+    });
+  });
+
+  it("honors GROK_HOME", async () => {
+    const homeDir = makeGrokHome({ [scope]: { key: "token", expires_at: future } });
+    const emptyHome = mkdtempSync(nodePath.join(os.tmpdir(), "synara-grok-usage-"));
+    tempDirs.push(emptyHome);
+    await expect(
+      readGrokCachedLogin({ GROK_HOME: nodePath.join(homeDir, ".grok") }, emptyHome, NOW_MS),
+    ).resolves.toMatchObject({ accessToken: "token" });
+  });
+
+  it("keeps a refreshable expired session without fetching or rewriting it", async () => {
+    const homeDir = makeGrokHome({
+      [scope]: { key: "token", expires_at: past, refresh_token: "refresh" },
+    });
+    const authPath = nodePath.join(homeDir, ".grok", "auth.json");
+    const cachedAuth = readFileSync(authPath, "utf8");
+    const request = vi.spyOn(outboundHttp, "request").mockRejectedValue(new Error("No network"));
+    await expect(readGrokCachedLogin({}, homeDir, NOW_MS)).resolves.toMatchObject({
+      accessToken: "token",
+    });
+    expect(request).not.toHaveBeenCalled();
+    expect(readFileSync(authPath, "utf8")).toBe(cachedAuth);
+  });
+
+  it.each([
+    { key: "token", expires_at: past },
+    { key: "token", expires_at: new Date(NOW_MS).toISOString() },
+    {
+      key: `header.${Buffer.from(JSON.stringify({ exp: NOW_MS / 1000 })).toString("base64url")}.signature`,
+      expires_at: future,
+    },
+  ])("returns null for an expired session without a refresh token %#", async (entry) => {
+    const homeDir = makeGrokHome({ [scope]: entry });
+    await expect(readGrokCachedLogin({}, homeDir, NOW_MS)).resolves.toBeNull();
+  });
+
+  it("returns null when grok has no cached login", async () => {
+    const homeDir = mkdtempSync(nodePath.join(os.tmpdir(), "synara-grok-usage-"));
+    tempDirs.push(homeDir);
+    await expect(readGrokCachedLogin({}, homeDir, NOW_MS)).resolves.toBeNull();
   });
 });
 

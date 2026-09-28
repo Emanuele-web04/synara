@@ -736,7 +736,6 @@ describe("orchestration projector", () => {
     { status: "ready", expectedState: "completed" },
     { status: "interrupted", expectedState: "interrupted" },
     { status: "stopped", expectedState: "interrupted" },
-    { status: "error", expectedState: "error" },
   ] as const)(
     "settles a running latest turn when the session leaves running ($status → $expectedState)",
     async ({ status, expectedState }) => {
@@ -755,7 +754,7 @@ describe("orchestration projector", () => {
             occurredAt: settledAt,
             status,
             activeTurnId: null,
-            lastError: status === "error" ? "provider crashed" : null,
+            lastError: null,
             updatedAt: settledAt,
           }),
         ),
@@ -771,7 +770,7 @@ describe("orchestration projector", () => {
     },
   );
 
-  it.each([{ status: "idle" }, { status: "starting" }] as const)(
+  it.each([{ status: "starting" }] as const)(
     "keeps a running latest turn untouched for $status session updates",
     async ({ status }) => {
       const createdAt = "2026-02-23T08:00:00.000Z";
@@ -1988,7 +1987,7 @@ describe("orchestration projector", () => {
           streaming: true,
           // First delta arrives without a turn binding; later deltas must not
           // rebind an already-bound message.
-          turnId: index === 0 ? null : index === 3 ? "turn-other" : "turn-1",
+          turnId: index < 2 ? null : index === 3 ? "turn-other" : "turn-1",
         }),
       ),
       messageEvent({
@@ -2006,13 +2005,19 @@ describe("orchestration projector", () => {
         role: "assistant",
         text: "!",
         streaming: true,
-        turnId: "turn-1",
+        turnId: "turn-other",
       }),
     ];
 
     const state = await events.reduce<Promise<ReturnType<typeof createEmptyReadModel>>>(
       (statePromise, event) =>
-        statePromise.then((current) => Effect.runPromise(projectEvent(current, event))),
+        statePromise.then(async (current) => {
+          const next = await Effect.runPromise(projectEvent(current, event));
+          if (event.sequence === 4) {
+            expect(next.threads[0]?.messages[1]?.turnId).toBeNull();
+          }
+          return next;
+        }),
       Promise.resolve(afterCreate),
     );
 

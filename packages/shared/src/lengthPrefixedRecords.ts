@@ -9,6 +9,8 @@
  * duplicate the codec that owns that job.
  */
 
+import { ByteAccumulator } from "./byteAccumulator";
+
 export const LENGTH_PREFIX_BYTES = 4;
 /** Default ceiling on one record, past which the stream is treated as desynced. */
 export const DEFAULT_MAX_RECORD_BYTES = 8 * 1024 * 1024;
@@ -34,30 +36,23 @@ export class LengthPrefixedRecordError extends Error {
  * cannot resynchronize. The caller drops the connection.
  */
 export class LengthPrefixedRecordParser {
-  private buffer: Buffer = Buffer.alloc(0);
+  private readonly pending = new ByteAccumulator();
 
   constructor(private readonly maxRecordBytes: number = DEFAULT_MAX_RECORD_BYTES) {}
 
   /** Every complete payload now available, in order. */
   push(chunk: Uint8Array): readonly Uint8Array[] {
-    this.buffer =
-      this.buffer.byteLength === 0
-        ? Buffer.from(chunk)
-        : Buffer.concat([this.buffer, Buffer.from(chunk)]);
+    this.pending.append(chunk);
 
     const payloads: Uint8Array[] = [];
-    while (this.buffer.byteLength >= LENGTH_PREFIX_BYTES) {
-      const length = this.buffer.readUInt32LE(0);
+    while (this.pending.byteLength >= LENGTH_PREFIX_BYTES) {
+      const length = this.pending.readUInt32LE(0);
       if (length > this.maxRecordBytes) {
         throw new LengthPrefixedRecordError(length, this.maxRecordBytes);
       }
-      const total = LENGTH_PREFIX_BYTES + length;
-      if (this.buffer.byteLength < total) break;
-      // Copied: the payload outlives this parse and `this.buffer` is reassigned.
-      payloads.push(
-        Uint8Array.prototype.slice.call(this.buffer, LENGTH_PREFIX_BYTES, total) as Uint8Array,
-      );
-      this.buffer = this.buffer.subarray(total);
+      if (this.pending.byteLength < LENGTH_PREFIX_BYTES + length) break;
+      this.pending.skip(LENGTH_PREFIX_BYTES);
+      payloads.push(this.pending.take(length));
     }
     return payloads;
   }

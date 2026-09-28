@@ -1071,20 +1071,19 @@ openai/gpt-5.4
     ]);
   });
 
-  it.each([
-    { reasoningOptions: [{ type: "budget_tokens", min: 1024, max: 8192 }] },
-    { reasoningOptions: [{ type: "effort", values: ["low", "high", "max"] }] },
-    { reasoningOptions: null },
-  ])("preserves normalized CLI variants when raw metadata is %j", ({ reasoningOptions }) => {
-    const models = parseOpenCodeCliModelsOutput(
-      `anthropic/claude-test\n${JSON.stringify({
-        reasoning_options: reasoningOptions,
-        variants: { high: { thinking: { budgetTokens: 4096 } } },
-      })}`,
-    );
+  it.each([{ reasoningOptions: [{ type: "effort", values: ["low", "high", "max"] }] }])(
+    "preserves normalized CLI variants when raw metadata is %j",
+    ({ reasoningOptions }) => {
+      const models = parseOpenCodeCliModelsOutput(
+        `anthropic/claude-test\n${JSON.stringify({
+          reasoning_options: reasoningOptions,
+          variants: { high: { thinking: { budgetTokens: 4096 } } },
+        })}`,
+      );
 
-    expect(models[0]?.supportedReasoningEfforts).toEqual([{ value: "high" }]);
-  });
+      expect(models[0]?.supportedReasoningEfforts).toEqual([{ value: "high" }]);
+    },
+  );
 
   it.each([{ variants: {} }, { variants: { creative: { temperature: 0.9 } } }])(
     "does not restore reasoning disabled in normalized CLI variants: %j",

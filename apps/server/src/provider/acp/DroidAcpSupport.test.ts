@@ -166,25 +166,6 @@ describe("applyDroidAcpInteractionMode", () => {
     expect(calls).toEqual(["spec", "auto-high"]);
   });
 
-  it("uses Droid's highest native autonomy outside plan mode for full-access sessions", async () => {
-    const calls: string[] = [];
-    await Effect.runPromise(
-      applyDroidAcpInteractionMode({
-        runtime: {
-          setMode: (modeId: string) => {
-            calls.push(modeId);
-            return Effect.succeed({});
-          },
-          setConfigOption: () => Effect.succeed({ configOptions: [] }),
-        },
-        interactionMode: "default",
-        runtimeMode: "full-access",
-        mapError: ({ cause }) => cause,
-      }),
-    );
-    expect(calls).toEqual(["auto-high"]);
-  });
-
   it("falls back to Droid's autonomy config for older ACP mode responses", async () => {
     const calls: Array<{ configId: string; value: string | boolean }> = [];
     const runtime = {

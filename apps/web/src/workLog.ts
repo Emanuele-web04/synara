@@ -2173,16 +2173,32 @@ function deriveComputerToolDescription(input: {
   toolName: string | null;
   title: string | null;
 }) {
-  if (input.payload?.approvalScope === "computer-task") {
+  if (input.payload?.approvalScope === "computer-foreground") {
     return {
       summary:
         input.activity.kind === "approval.requested"
-          ? "Computer task approval requested"
+          ? "Asked to show Computer on screen"
           : input.payload.decision === "accept"
-            ? "Computer task approved"
+            ? "Computer allowed on screen"
             : input.payload.decision === "decline"
-              ? "Computer task declined"
-              : "Computer task approval cancelled",
+              ? "Computer kept in the background"
+              : "On-screen request cancelled",
+    };
+  }
+  if (
+    input.payload?.approvalScope === "computer-task" ||
+    input.payload?.approvalScope === "device-task"
+  ) {
+    const family = input.payload.approvalScope === "device-task" ? "Device" : "Computer";
+    return {
+      summary:
+        input.activity.kind === "approval.requested"
+          ? `${family} task approval requested`
+          : input.payload.decision === "accept"
+            ? `${family} task approved`
+            : input.payload.decision === "decline"
+              ? `${family} task declined`
+              : `${family} task approval cancelled`,
     };
   }
   if (!computerToolName(input.toolName)) {

@@ -10,7 +10,7 @@ import type { RightDockPaneKind } from "~/rightDockStore.logic";
 export type DockPaneActivationReason = "explicit" | "restore";
 export type DockPaneRuntimeMode = "live" | "preview";
 
-export const DOCK_PANE_DEFERRED_HYDRATION_FRAMES = 2;
+const DOCK_PANE_DEFERRED_HYDRATION_FRAMES = 2;
 // requestAnimationFrame is intentionally suspended by Chromium for hidden or
 // offscreen documents. A route transition can commit a restored dock while its
 // subtree is still offscreen, so frame-only promotion can leave a heavy pane in
@@ -118,11 +118,11 @@ export function dockPaneActivationKey(input: {
   return `${input.threadId}\u0000${input.paneId}\u0000${input.kind}`;
 }
 
-export function isDeferredRuntimePaneKind(kind: RightDockPaneKind): boolean {
+function isDeferredRuntimePaneKind(kind: RightDockPaneKind): boolean {
   return DEFERRED_RUNTIME_PANE_KINDS.has(kind);
 }
 
-export function isKeepMountedPaneKind(kind: RightDockPaneKind): boolean {
+function isKeepMountedPaneKind(kind: RightDockPaneKind): boolean {
   return KEEP_MOUNTED_PANE_KINDS.has(kind);
 }
 

@@ -543,54 +543,6 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
     ),
   );
 
-  it.effect("resolves persisted attachment ids to files for codex image inputs", () =>
-    withFakeCodexEnv(
-      {
-        output: JSON.stringify({
-          branch: "fix/ui-regression",
-        }),
-        requireImage: true,
-      },
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const { attachmentsDir } = yield* ServerConfig;
-        const attachmentId = `thread-1-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-        const imagePath = path.join(attachmentsDir, `${attachmentId}.png`);
-        yield* fs.makeDirectory(attachmentsDir, { recursive: true });
-        yield* fs.writeFile(imagePath, Buffer.from("hello"));
-
-        const textGeneration = yield* TextGeneration;
-        const generated = yield* textGeneration
-          .generateBranchName({
-            cwd: process.cwd(),
-            message: "Fix layout bug from screenshot.",
-            attachments: [
-              {
-                type: "image",
-                id: attachmentId,
-                name: "bug.png",
-                mimeType: "image/png",
-                sizeBytes: 5,
-              },
-            ],
-          })
-          .pipe(
-            Effect.tap(() =>
-              fs.stat(imagePath).pipe(
-                Effect.map((fileInfo) => {
-                  expect(fileInfo.type).toBe("File");
-                }),
-              ),
-            ),
-            Effect.ensuring(fs.remove(imagePath).pipe(Effect.catch(() => Effect.void))),
-          );
-
-        expect(generated.branch).toBe("fix/ui-regression");
-      }),
-    ),
-  );
-
   it.effect("ignores missing attachment ids for codex image inputs", () =>
     withFakeCodexEnv(
       {

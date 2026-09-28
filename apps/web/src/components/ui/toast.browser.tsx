@@ -3,6 +3,8 @@ import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import "../../index.css";
+
 const route = vi.hoisted(() => ({ threadId: "toast-thread" }));
 vi.mock("@tanstack/react-router", () => ({ useParams: () => route.threadId }));
 vi.mock("../../hooks/useDiffRouteSearch", () => ({ useDiffRouteSearch: () => ({}) }));
@@ -103,6 +105,7 @@ describe("toast focus and visible lifetime", () => {
   it("waits for archive undo, then clears focus before closing", async () => {
     let finishUndo!: (restored: boolean) => void;
     const onClose = vi.fn();
+    const onNoUndo = vi.fn();
     flushSync(() =>
       toastManager.add({
         timeout: 0,
@@ -115,6 +118,7 @@ describe("toast focus and visible lifetime", () => {
                 finishUndo = resolve;
               }),
             onViewArchived: () => {},
+            onNoUndo,
           },
         },
       }),
@@ -126,11 +130,57 @@ describe("toast focus and visible lifetime", () => {
       undo.focus();
       undo.click();
     });
+    expect(dismissButton().disabled).toBe(true);
+    dismissButton().click();
+    expect(onNoUndo).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(2_000);
     expect(onClose).not.toHaveBeenCalled();
     finishUndo(true);
     await vi.advanceTimersByTimeAsync(0);
     expect(onClose).toHaveBeenCalledOnce();
+    expect(onNoUndo).not.toHaveBeenCalled();
     expect(document.activeElement).not.toBe(undo);
+  });
+
+  it("shows the dismiss control as disabled while archive undo is pending", () => {
+    flushSync(() =>
+      toastManager.add({
+        timeout: 0,
+        data: {
+          archiveUndo: {
+            onUndo: () => new Promise<boolean>(() => {}),
+            onViewArchived: () => {},
+            onNoUndo: () => {},
+          },
+        },
+      }),
+    );
+    const undo = Array.from(document.querySelectorAll("button")).find(
+      (button) => button.textContent === "Undo",
+    )!;
+    flushSync(() => undo.click());
+    const button = dismissButton();
+    expect(button.disabled).toBe(true);
+    expect(getComputedStyle(button).pointerEvents).toBe("none");
+    expect(getComputedStyle(button).opacity).toBe("0.55");
+  });
+
+  it("starts archive cleanup only after the Undo toast's visible lifetime", async () => {
+    const onNoUndo = vi.fn();
+    flushSync(() =>
+      toastManager.add({
+        timeout: 0,
+        data: {
+          dismissAfterVisibleMs: 1_000,
+          archiveUndo: { onUndo: () => true, onViewArchived: () => {}, onNoUndo },
+        },
+      }),
+    );
+    dismissButton().focus();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(onNoUndo).not.toHaveBeenCalled();
+    host.querySelector<HTMLButtonElement>('button[data-testid="outside"]')!.focus();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(onNoUndo).toHaveBeenCalledOnce();
   });
 });

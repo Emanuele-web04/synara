@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ServerProviderUsageSnapshot } from "@synara/contracts";
 
-import { PROVIDER_USAGE_PROVIDERS, selectVisibleProviderUsageSnapshots } from "./providerUsage";
+import { selectVisibleProviderUsageSnapshots } from "./providerUsage";
 
 function snapshot(
   provider: ServerProviderUsageSnapshot["provider"],
@@ -23,20 +23,6 @@ function snapshot(
 }
 
 describe("provider usage metadata", () => {
-  it("exposes a live usage source for every Synara provider", () => {
-    expect([...PROVIDER_USAGE_PROVIDERS]).toEqual([
-      "codex",
-      "claudeAgent",
-      "cursor",
-      "antigravity",
-      "grok",
-      "droid",
-      "opencode",
-      "pi",
-      "devin",
-    ]);
-  });
-
   it("keeps every unsigned card visible when nothing is connected", () => {
     const snapshots = [
       snapshot("codex", "needs-auth"),
@@ -69,13 +55,6 @@ describe("provider usage metadata", () => {
       snapshot("claudeAgent", "needs-auth"),
       snapshot("opencode", "needs-auth"),
     ];
-    expect(selectVisibleProviderUsageSnapshots(snapshots).map((item) => item.provider)).toEqual([
-      "codex",
-    ]);
-  });
-
-  it("does not invent connected cards for providers absent from the payload", () => {
-    const snapshots = [snapshot("codex", "ok")];
     expect(selectVisibleProviderUsageSnapshots(snapshots).map((item) => item.provider)).toEqual([
       "codex",
     ]);

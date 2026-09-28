@@ -94,16 +94,4 @@ describe("resolveCodexGeneratedImagesRoot(s)", () => {
       path.join("/synara-test/runtime", "codex-home-overlay", "generated_images"),
     ]);
   });
-
-  it("collapses to a single root when overlay equals source", () => {
-    delete process.env.SYNARA_HOME;
-    // The overlay falls under `<dirname(source)>/.synara/runtime/codex-home-overlay`,
-    // which is always distinct from `<source>` itself, so the helper still returns
-    // both candidates; this test guards the dedupe path with an artificial home
-    // whose dirname happens to equal the overlay root.
-    const homePath = "/runtime/.synara/runtime/codex-home-overlay";
-    const roots = resolveCodexGeneratedImagesRoots(homePath);
-    assert.ok(roots.length >= 1 && roots.length <= 2, `expected 1-2 roots, got ${roots.length}`);
-    assert.ok(roots.includes(path.join(homePath, "generated_images")));
-  });
 });

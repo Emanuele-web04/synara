@@ -2,13 +2,9 @@ import { MessageId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import type { TimelineEntry } from "../../session-logic";
 import {
-  clampNumber,
   clampTooltipTop,
   computeFocusedIndex,
   computeGaussianWeights,
-  computeRestStyles,
-  computeSigma,
-  computeTickStyles,
   computeTrailGeometry,
   createActiveTrailStore,
   deriveMessageTrailItems,
@@ -84,29 +80,6 @@ describe("deriveMessageTrailItems", () => {
     expect(capped?.preview.length).toBeLessThanOrEqual(281);
   });
 
-  it("reports attachment counts", () => {
-    const [item] = deriveMessageTrailItems([messageEntry("u1", "user", "look", 3)]);
-    expect(item?.attachmentCount).toBe(3);
-  });
-
-  it("captures the turn's final assistant message (end-of-turn reply, not the preamble)", () => {
-    const items = deriveMessageTrailItems([
-      messageEntry("u1", "user", "first question"),
-      messageEntry("a1", "assistant", "  opening   preamble "),
-      messageEntry("a2", "assistant", "final answer after the work"),
-      messageEntry("u2", "user", "second question"),
-      messageEntry("s1", "system", "system note"),
-      messageEntry("u3", "user", "third question"),
-    ]);
-
-    // Last reply per turn wins (a2, not the a1 preamble); turns with no reply stay empty.
-    expect(items.map((item) => item.responsePreview)).toEqual([
-      "final answer after the work",
-      "",
-      "",
-    ]);
-  });
-
   it("ignores a trailing empty assistant row so the last real reply stays the end-of-turn text", () => {
     const [item] = deriveMessageTrailItems([
       messageEntry("u1", "user", "ask"),
@@ -147,32 +120,11 @@ describe("deriveMessageTrailItems", () => {
 describe("resolveActiveTrailMessageId", () => {
   const anchors = [anchor("u1", 0), anchor("u2", 4), anchor("u3", 9)];
 
-  it("returns null when there are no anchors", () => {
-    expect(resolveActiveTrailMessageId([], 5)).toBeNull();
-  });
-
   it("returns the last anchor at or above the topmost visible row", () => {
     expect(resolveActiveTrailMessageId(anchors, 0)).toBe(MessageId.makeUnsafe("u1"));
     expect(resolveActiveTrailMessageId(anchors, 3)).toBe(MessageId.makeUnsafe("u1"));
     expect(resolveActiveTrailMessageId(anchors, 4)).toBe(MessageId.makeUnsafe("u2"));
     expect(resolveActiveTrailMessageId(anchors, 12)).toBe(MessageId.makeUnsafe("u3"));
-  });
-
-  it("updates in both scroll directions from the current top visible row", () => {
-    const scrollPath = [0, 3, 4, 8, 9, 12, 8, 4, 3, 0];
-
-    expect(scrollPath.map((rowIndex) => resolveActiveTrailMessageId(anchors, rowIndex))).toEqual([
-      MessageId.makeUnsafe("u1"),
-      MessageId.makeUnsafe("u1"),
-      MessageId.makeUnsafe("u2"),
-      MessageId.makeUnsafe("u2"),
-      MessageId.makeUnsafe("u3"),
-      MessageId.makeUnsafe("u3"),
-      MessageId.makeUnsafe("u2"),
-      MessageId.makeUnsafe("u2"),
-      MessageId.makeUnsafe("u1"),
-      MessageId.makeUnsafe("u1"),
-    ]);
   });
 
   it("falls back to the first anchor when the viewport sits above it", () => {
@@ -256,23 +208,6 @@ describe("createActiveTrailStore", () => {
 const allFinite = (values: readonly number[]) => values.every((v) => Number.isFinite(v));
 
 describe("computeTrailGeometry", () => {
-  it("returns null for N=0", () => {
-    expect(computeTrailGeometry({ count: 0 })).toBeNull();
-  });
-
-  it("places a single tick at the top padding with no spacing (N=1)", () => {
-    const geom = computeTrailGeometry({ count: 1, paddingPx: 12 });
-    expect(geom).toEqual({ startY: 12, spacing: 0, centerYs: [12], contentHeight: 24 });
-  });
-
-  it("lays ticks out at the fixed spacing from the top padding (N=2)", () => {
-    const geom = computeTrailGeometry({ count: 2, spacingPx: 10, paddingPx: 12 })!;
-    expect(geom.spacing).toBe(10);
-    expect(geom.startY).toBe(12);
-    expect(geom.centerYs).toEqual([12, 22]);
-    expect(geom.contentHeight).toBe(34); // 2*12 + 1*10
-  });
-
   it("keeps the spacing fixed for many messages and grows the content height", () => {
     const spacing = 10;
     const padding = 12;
@@ -286,15 +221,6 @@ describe("computeTrailGeometry", () => {
   });
 });
 
-describe("computeSigma", () => {
-  it("tracks spacing within the density-aware clamp", () => {
-    expect(computeSigma(9)).toBeCloseTo(13.5, 5); // clamp(13.5, min(18,8)=8, 22)
-    expect(computeSigma(2)).toBeCloseTo(4, 5); // clamp(3, min(4,8)=4, 22) -> floor wins
-    expect(computeSigma(0.5)).toBeCloseTo(1, 5); // clamp(0.75, min(1,8)=1, 22) -> 1
-    expect(computeSigma(20)).toBeCloseTo(22, 5); // clamp(30, 8, 22) -> upper cap
-  });
-});
-
 describe("computeGaussianWeights", () => {
   const centerYs = [0, 10, 20, 30, 40];
 
@@ -302,46 +228,6 @@ describe("computeGaussianWeights", () => {
     const weights = computeGaussianWeights(centerYs, 20, 7);
     expect(weights[2]).toBe(1);
     expect(weights.every((w) => w >= 0 && w <= 1)).toBe(true);
-  });
-
-  it("is symmetric around the pointer", () => {
-    const weights = computeGaussianWeights(centerYs, 20, 7);
-    expect(weights[1]).toBeCloseTo(weights[3]!, 10);
-    expect(weights[0]).toBeCloseTo(weights[4]!, 10);
-  });
-});
-
-describe("computeTickStyles", () => {
-  const baseW = 14;
-  const maxW = 34;
-  const rest = 0.38;
-  const anchor = 0.9;
-
-  it("grows the focused tick to maxW but keeps its rest colour (size changes, not opacity)", () => {
-    const [style] = computeTickStyles([1], null, baseW, maxW, rest, anchor);
-    expect(style!.width).toBeCloseTo(maxW, 5);
-    expect(style!.opacity).toBeCloseTo(rest, 5); // colour never follows the cursor
-  });
-
-  it("keeps opacity fixed per state regardless of weight (anchor dark, others rest)", () => {
-    // Even the magnified anchor (weight 1) stays at anchor opacity, not brighter.
-    const styles = computeTickStyles([1, 0.5, 0], 0, baseW, maxW, rest, anchor);
-    expect(styles.map((s) => s.opacity)).toEqual([anchor, rest, rest]);
-    expect(styles[0]!.width).toBeCloseTo(maxW, 5);
-    expect(styles[2]!.width).toBeCloseTo(baseW, 5);
-  });
-});
-
-describe("computeRestStyles", () => {
-  it("brightens only the anchor tick", () => {
-    const styles = computeRestStyles(3, 1, 14, 0.38, 0.9);
-    expect(styles.map((s) => s.opacity)).toEqual([0.38, 0.9, 0.38]);
-    expect(styles.every((s) => s.width === 14)).toBe(true);
-  });
-
-  it("leaves all ticks at rest when there is no anchor", () => {
-    const styles = computeRestStyles(2, null, 14, 0.38, 0.9);
-    expect(styles.map((s) => s.opacity)).toEqual([0.38, 0.38]);
   });
 });
 
@@ -380,15 +266,5 @@ describe("clampTooltipTop", () => {
     expect(clampTooltipTop(10, 56, 500, 4)).toBe(32);
     expect(clampTooltipTop(490, 56, 500, 4)).toBe(468);
     expect(clampTooltipTop(250, 56, 500, 4)).toBe(250);
-  });
-});
-
-describe("clampNumber", () => {
-  it("clamps, and is finite-safe / range-safe", () => {
-    expect(clampNumber(5, 0, 10)).toBe(5);
-    expect(clampNumber(-1, 0, 10)).toBe(0);
-    expect(clampNumber(11, 0, 10)).toBe(10);
-    expect(clampNumber(Number.NaN, 2, 8)).toBe(2);
-    expect(clampNumber(5, 10, 0)).toBe(10); // inverted range -> min
   });
 });

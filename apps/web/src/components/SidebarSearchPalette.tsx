@@ -31,6 +31,7 @@ import { LuArrowLeft, LuCornerLeftUp } from "react-icons/lu";
 import { type ComponentType, useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { FolderClosed } from "./FolderClosed";
+import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ProviderIcon as SharedProviderIcon } from "./ProviderIcon";
 import { readNativeApi } from "~/nativeApi";
 import { cn, getNavigatorPlatform, isMacPlatform } from "~/lib/utils";
@@ -131,7 +132,7 @@ const IMPORT_PROJECTS_SOURCES: readonly {
 
 export type ImportProviderKind = Extract<
   ProviderKind,
-  "codex" | "claudeAgent" | "cursor" | "opencode"
+  "codex" | "claudeAgent" | "cursor" | "opencode" | "omp"
 >;
 
 function actionHandler(
@@ -724,7 +725,9 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                           ? "Cursor"
                           : provider === "opencode"
                             ? "OpenCode"
-                            : "Codex"}
+                            : provider === "omp"
+                              ? "Oh My Pi"
+                              : "Codex"}
                     </Button>
                   ))}
                 </div>
@@ -759,7 +762,9 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                       ? "Cursor resumes a persisted session by session id."
                       : importProvider === "opencode"
                         ? "OpenCode resumes a persisted session by session id."
-                        : "Codex resumes a persisted thread by thread id."}
+                        : importProvider === "omp"
+                          ? "Oh My Pi resumes a persisted session by session id."
+                          : "Codex resumes a persisted thread by thread id."}
                 </p>
               </div>
               {importError ? (
@@ -1068,7 +1073,18 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                           props.onOpenProject(project.id);
                         }}
                       >
-                        <FolderOpenFrontIcon className={PALETTE_ICON_CLASS} />
+                        {project.appearance ? (
+                          <span className="relative inline-flex size-3.5 shrink-0 items-center justify-center text-muted-foreground">
+                            <ProjectSidebarIcon
+                              cwd={project.cwd}
+                              expanded
+                              appearance={project.appearance}
+                              glyphClassName="size-3.5"
+                            />
+                          </span>
+                        ) : (
+                          <FolderOpenFrontIcon className={PALETTE_ICON_CLASS} />
+                        )}
                         <span className={PALETTE_TEXT_CLASS}>
                           {project.name || "Untitled project"}
                         </span>

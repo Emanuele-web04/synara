@@ -731,31 +731,6 @@ describe("websocket permessage-deflate negotiation", () => {
     }
   });
 
-  it("closes a fragmented compressed message whose decompressed aggregate crosses the ceiling", async () => {
-    const server = await startTestServer();
-    try {
-      const connected = await connectSession(server, undefined, { perMessageDeflate: true });
-      expect(connected.socket.extensions).toContain("permessage-deflate");
-      const frame = makeRpcFrame(MAX_WEBSOCKET_MESSAGE_BYTES + 1, "204");
-      const splitAt = Math.floor(frame.length / 2);
-      const close = waitForCloseInfo(connected.socket);
-
-      await sendFragment(connected.socket, frame.slice(0, splitAt), {
-        fin: false,
-        compress: true,
-      });
-      void sendFragment(connected.socket, frame.slice(splitAt), {
-        fin: true,
-        compress: true,
-      }).catch(() => {});
-
-      await expect(close).resolves.toMatchObject({ code: 1009 });
-      expect(server.observedRpc).toEqual({ decoderCalls: 0, handlerCalls: 0 });
-    } finally {
-      await server.close();
-    }
-  });
-
   it("negotiates compression when the client offers it and serves RPC over the compressed socket", async () => {
     const server = await startTestServer();
     try {
@@ -798,6 +773,31 @@ describe("websocket permessage-deflate negotiation", () => {
         binary: false,
         compress: true,
       });
+
+      await expect(close).resolves.toMatchObject({ code: 1009 });
+      expect(server.observedRpc).toEqual({ decoderCalls: 0, handlerCalls: 0 });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("closes a fragmented compressed message whose decompressed aggregate crosses the ceiling", async () => {
+    const server = await startTestServer();
+    try {
+      const connected = await connectSession(server, undefined, { perMessageDeflate: true });
+      expect(connected.socket.extensions).toContain("permessage-deflate");
+      const frame = makeRpcFrame(MAX_WEBSOCKET_MESSAGE_BYTES + 1, "204");
+      const splitAt = Math.floor(frame.length / 2);
+      const close = waitForCloseInfo(connected.socket);
+
+      await sendFragment(connected.socket, frame.slice(0, splitAt), {
+        fin: false,
+        compress: true,
+      });
+      void sendFragment(connected.socket, frame.slice(splitAt), {
+        fin: true,
+        compress: true,
+      }).catch(() => {});
 
       await expect(close).resolves.toMatchObject({ code: 1009 });
       expect(server.observedRpc).toEqual({ decoderCalls: 0, handlerCalls: 0 });

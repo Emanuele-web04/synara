@@ -6,6 +6,26 @@ changes run typechecking, five unit partitions, six stable browser partitions,
 desktop build, native Windows regression and migration lineage. Docs-only
 detection and nightly geometry ownership are unchanged.
 
+The Linux PTY dependency smoke runs once, on the first server shard; the Windows
+PTY smoke remains a separate native check. The desktop lifecycle smoke exercises
+the real Electron browser integration. The synthetic Energy Cloud A/B benchmark
+runs only through its dedicated workflow, not on every PR build: it measures
+copied baseline/candidate algorithms and adds no application regression assertion.
+This removes twelve ten-second measurement waits from the blocking build lane.
+
+The desktop build lane also runs the composer-focus Electron regression under
+Xvfb. It covers navigation in previews, visible native views and renderer guests,
+plus popup opener/POST/close behavior and deliberate browser input. The test
+disables host focus emulation and checks focus, draft text and selection before
+sending synthetic input. Run it locally with
+`bun run --cwd apps/web test:electron:e2e visibleBrowserMcp.e2e.ts --grep 'preserves composer keyboard ownership'`
+from an unlocked graphical session. It does not certify physical keyboard or IME
+delivery on macOS or Windows.
+
+Windows checks are grouped by package, removing six separate Vitest startups
+while keeping the same runtime, lifecycle and migration test files. The credential
+reader's filtered compilation test and native Bun PTY probe remain separate.
+
 ## Install scopes and caches
 
 The shared setup action defaults to `full`. Typecheck, Linux unit/browser and
@@ -33,8 +53,9 @@ Test and typecheck task results remain uncached.
 
 Release smoke shares the static runner, removing one checkout/install/runner and
 one duplicate identity scan. The platform-independent Windows boundary scanner
-runs there once; native Windows validation is not removed. Release preflight
-still installs the full workspace and runs all tests. Signing, notarization,
+runs there once; native Windows validation is not removed. Release quality lanes
+still install the full workspace and run the audited test suite while unsigned
+preparation proceeds in parallel. Packaging waits for every quality gate. Signing, notarization,
 source provenance, publication and production dependency staging are unchanged.
 
 ## Cross-platform setup measurements: September 14, 2026

@@ -19,6 +19,8 @@ import type {
 } from "@synara/contracts";
 import { ServerProviderUpdateError } from "@synara/contracts";
 import { parseCodexConfigModelProvider } from "@synara/shared/codexConfig";
+import { envPathKeyFor } from "@synara/shared/executable";
+import { isPathName, mergePathEntries } from "@synara/shared/shell";
 import { decodeJsonResult } from "@synara/shared/schemaJson";
 import { expandHomePath } from "@synara/shared/synaraHome";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -67,6 +69,7 @@ import {
 } from "../acp/CursorAcpCommand";
 import { hasDroidApiKeyEnv, resolveDroidCliBinaryPath } from "../acp/DroidAcpSupport";
 import { hasGrokApiKeyEnv } from "../acp/GrokAcpSupport";
+import { resolveOmpCliBinaryPath } from "../acp/OmpAcpSupport";
 import {
   hasDevinApiKeyEnv,
   readDevinStoredCredentials,
@@ -110,6 +113,7 @@ import {
 import { isClaudeAutoModeCliVersionSupported } from "../claudeCliVersion.ts";
 import { collectUint8StreamText } from "../../stream/collectUint8StreamText";
 import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
+import { readGrokCachedLogin } from "../../providerUsage/providers/grok";
 
 export { parseClaudeAuthStatusFromOutput } from "../claudeAuthStatus";
 export type { CommandResult } from "../providerCliOutput";
@@ -127,6 +131,7 @@ const DROID_PROVIDER = "droid" as const;
 const DEVIN_PROVIDER = "devin" as const;
 const OPENCODE_PROVIDER = "opencode" as const;
 const PI_PROVIDER = "pi" as const;
+const OMP_PROVIDER = "omp" as const;
 type ProviderStatuses = ReadonlyArray<ServerProviderStatus>;
 const DISABLED_PROVIDER_STATUS_MESSAGE = "Provider is disabled in Synara settings.";
 const MINIMUM_ANTIGRAVITY_CLI_VERSION = "1.0.12";
@@ -141,6 +146,7 @@ const PROVIDERS = [
   DEVIN_PROVIDER,
   OPENCODE_PROVIDER,
   PI_PROVIDER,
+  OMP_PROVIDER,
 ] as const satisfies ReadonlyArray<ProviderKind>;
 
 const providerChildKind = (provider: ProviderKind): ProviderChildKind =>
@@ -150,6 +156,32 @@ const providerCommandEnv = (provider: ProviderKind): NodeJS.ProcessEnv =>
   provider === OPENCODE_PROVIDER
     ? buildOpenCodeServerProcessEnv({})
     : buildProviderChildEnvironment({ provider: providerChildKind(provider) });
+
+// Windows spreads the inherited environment under its native "Path" key. Writing a
+// literal `PATH` next to it makes Node's spawn keep only one casing, `PATH`, so the
+// child sees just the prepended entry and CLIs such as opencode cannot find their
+// package manager. Keep a single path key that carries the prepended entry followed
+// by the inherited value.
+export const prependPathEntry = (
+  env: NodeJS.ProcessEnv,
+  entry: string,
+  platform: NodeJS.Platform = OS.platform(),
+): NodeJS.ProcessEnv => {
+  // Read own keys: `in` on Windows' process.env reports every casing as present.
+  const pathKeys = Object.keys(env).filter((key) =>
+    platform === "win32" ? isPathName(key) : key === "PATH",
+  );
+  const envPathKey = envPathKeyFor(Object.fromEntries(pathKeys.map((key) => [key, ""])), platform);
+  const orderedKeys = [envPathKey, ...pathKeys.filter((key) => key !== envPathKey)];
+  const inheritedPath = orderedKeys.reduce<string | undefined>(
+    (merged, key) => mergePathEntries(merged, env[key], platform),
+    undefined,
+  );
+  const nextEnv: NodeJS.ProcessEnv = { ...env };
+  for (const key of pathKeys) delete nextEnv[key];
+  nextEnv[envPathKey] = mergePathEntries(entry, inheritedPath, platform) ?? entry;
+  return nextEnv;
+};
 
 const UPDATE_OUTPUT_MAX_BYTES = 10_000;
 const MAX_REFRESH_REVISION_RETRIES = 1;
@@ -281,6 +313,13 @@ export const PACKAGE_MANAGED_PROVIDER_UPDATES: Partial<
       lockKey: "pi-native",
       strategy: "always",
     },
+  },
+  omp: {
+    provider: OMP_PROVIDER,
+    binaryName: "omp",
+    npmPackageName: null,
+    homebrew: null,
+    nativeUpdate: null,
   },
 };
 
@@ -787,6 +826,15 @@ const runPiCommand = (args: ReadonlyArray<string>, executable = "pi") =>
     ),
   );
 
+const runOmpCommand = (args: ReadonlyArray<string>, executable = "omp") =>
+  runProviderCommand(executable, args, providerCommandEnv(OMP_PROVIDER)).pipe(
+    Effect.flatMap((result) =>
+      isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
+        ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
+        : Effect.succeed(result),
+    ),
+  );
+
 const runAntigravityCommand = (args: ReadonlyArray<string>, executable = "agy") =>
   runProviderCommand(executable, args, providerCommandEnv(ANTIGRAVITY_PROVIDER)).pipe(
     Effect.flatMap((result) =>
@@ -1198,6 +1246,7 @@ export const checkClaudeProviderStatus = makeCheckClaudeProviderStatus();
 
 export const makeCheckGrokProviderStatus = (
   binaryPath?: string,
+  readCachedLogin: typeof readGrokCachedLogin = readGrokCachedLogin,
 ): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
@@ -1251,20 +1300,25 @@ export const makeCheckGrokProviderStatus = (
     const version = versionProbe.result;
     const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
     const hasApiKey = hasGrokApiKeyEnv();
+    // Sessions authenticate with the API key when one is set, otherwise with the
+    // cached `grok login` session (ACP `cached_token`), so report the same source.
+    const hasCachedLogin = !hasApiKey && (yield* Effect.promise(() => readCachedLogin())) !== null;
 
     return {
       provider: GROK_PROVIDER,
       status: "ready" as const,
       available: true,
-      authStatus: hasApiKey ? ("authenticated" as const) : ("unknown" as const),
+      authStatus: hasApiKey || hasCachedLogin ? ("authenticated" as const) : ("unknown" as const),
       version: parsedVersion,
       checkedAt,
       ...(hasApiKey
         ? { authType: "apiKey", authLabel: "xAI API Key" }
-        : {
-            message:
-              "Grok CLI is installed. Run `grok` to authenticate locally, or set XAI_API_KEY before starting a session.",
-          }),
+        : hasCachedLogin
+          ? { authType: "grokLogin", authLabel: "Grok Account" }
+          : {
+              message:
+                "Grok CLI is installed. Run `grok` to authenticate locally, or set XAI_API_KEY before starting a session.",
+            }),
     } satisfies ServerProviderStatus;
   });
 
@@ -1490,6 +1544,74 @@ export const checkPiProviderStatus = (
       message: configuredAgentDir
         ? `Pi CLI is installed. Synara will use Pi agent dir ${configuredAgentDir}.`
         : "Pi CLI is installed. Configure provider credentials inside Pi as needed.",
+    } satisfies ServerProviderStatus;
+  });
+
+export const checkOmpProviderStatus = (
+  agentDir?: string,
+  binaryPath?: string,
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const checkedAt = new Date().toISOString();
+    const executable = resolveOmpCliBinaryPath(nonEmptyTrimmed(binaryPath) ?? undefined);
+
+    const versionProbe = yield* probeProviderCliVersion(
+      runOmpCommand(["--version"], executable),
+      DEFAULT_TIMEOUT_MS,
+    );
+
+    if (versionProbe.outcome === "missing" || versionProbe.outcome === "failure") {
+      const error = versionProbe.cause;
+      return {
+        provider: OMP_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message:
+          versionProbe.outcome === "missing"
+            ? "OMP CLI (`omp`) is not on PATH. Install it to use the OMP provider."
+            : `OMP CLI health check failed: ${error instanceof Error ? error.message : String(error)}.`,
+      } satisfies ServerProviderStatus;
+    }
+
+    if (versionProbe.outcome === "timeout") {
+      return {
+        provider: OMP_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: "OMP CLI health check timed out before Synara could verify the installed version.",
+      } satisfies ServerProviderStatus;
+    }
+
+    if (versionProbe.outcome === "nonzero") {
+      const version = versionProbe.result;
+      const detail = detailFromResult(version);
+      return {
+        provider: OMP_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: detail ? `OMP CLI health check failed. ${detail}` : "OMP CLI health check failed.",
+      } satisfies ServerProviderStatus;
+    }
+
+    const version = versionProbe.result;
+    const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
+    const configuredAgentDir = nonEmptyTrimmed(agentDir);
+    return {
+      provider: OMP_PROVIDER,
+      status: "ready" as const,
+      available: true,
+      authStatus: "unknown" as const,
+      version: parsedVersion,
+      checkedAt,
+      message: configuredAgentDir
+        ? `OMP CLI is installed. Synara will use the OMP agent dir ${configuredAgentDir}.`
+        : "OMP CLI is installed. Configure provider credentials inside the OMP app as needed.",
     } satisfies ServerProviderStatus;
   });
 
@@ -2157,6 +2279,8 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
             return settings.providers.pi.binaryPath;
           case "devin":
             return settings.providers.devin.binaryPath;
+          case "omp":
+            return settings.providers.omp.binaryPath;
         }
       };
 
@@ -2370,6 +2494,14 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
                     settings.providers.pi.binaryPath,
                   ),
                 ),
+                checkProviderWhenEnabled(
+                  settings,
+                  OMP_PROVIDER,
+                  checkOmpProviderStatus(
+                    settings.providers.omp.agentDir,
+                    settings.providers.omp.binaryPath,
+                  ),
+                ),
               ],
               {
                 concurrency: "unbounded",
@@ -2547,16 +2679,14 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
       }) {
         const baseEnv = providerCommandEnv(input.provider);
         const updateEnv = input.pathPrepend
-          ? {
-              ...baseEnv,
-              PATH: [input.pathPrepend, baseEnv.PATH]
-                .filter((entry): entry is string => Boolean(entry))
-                .join(OS.platform() === "win32" ? ";" : ":"),
-            }
+          ? prependPathEntry(baseEnv, input.pathPrepend)
           : baseEnv;
         const child = yield* spawner.spawn(
           makeEffectProcessCommand(input.command, input.args, {
             env: updateEnv,
+            // Update commands are non-interactive. An open stdin pipe lets CLIs such as
+            // `opencode upgrade` block on a confirmation prompt until the update timeout.
+            stdin: "ignore",
           }),
         );
         yield* Effect.addFinalizer(() => child.kill().pipe(Effect.ignore));

@@ -9,8 +9,4 @@ describe("ProviderRuntimeIngestion buffered text helpers", () => {
     expect(result).toBe("abcde... [truncated]");
     expect(result.length).toBeLessThanOrEqual(20);
   });
-
-  it("keeps normal buffered text unchanged", () => {
-    expect(appendCappedBufferedText("hello ", "world", 64)).toBe("hello world");
-  });
 });

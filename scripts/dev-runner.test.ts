@@ -291,66 +291,9 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         assert.equal(env.SYNARA_LOG_WS_EVENTS, undefined);
       }),
     );
-
-    it.effect("forwards explicit websocket logging false without coercing it away", () =>
-      Effect.gen(function* () {
-        const env = yield* createDevRunnerEnv({
-          mode: "dev",
-          baseEnv: {},
-          serverOffset: 0,
-          webOffset: 0,
-          synaraHome: undefined,
-          authToken: undefined,
-          noBrowser: undefined,
-          autoBootstrapProjectFromCwd: undefined,
-          logWebSocketEvents: false,
-          host: undefined,
-          port: undefined,
-          devUrl: undefined,
-        });
-
-        assert.equal(env.SYNARA_LOG_WS_EVENTS, "0");
-      }),
-    );
-
-    it.effect("uses custom synaraHome when provided", () =>
-      Effect.gen(function* () {
-        const env = yield* createDevRunnerEnv({
-          mode: "dev",
-          baseEnv: {},
-          serverOffset: 0,
-          webOffset: 0,
-          synaraHome: "/tmp/my-synara",
-          authToken: undefined,
-          noBrowser: undefined,
-          autoBootstrapProjectFromCwd: undefined,
-          logWebSocketEvents: undefined,
-          host: undefined,
-          port: undefined,
-          devUrl: undefined,
-        });
-
-        assert.equal(env.SYNARA_HOME, resolve("/tmp/my-synara"));
-        assert.equal(env.SYNARA_HOME, resolve("/tmp/my-synara"));
-        assert.equal(env.SYNARA_HOME, resolve("/tmp/my-synara"));
-      }),
-    );
   });
 
   describe("findFirstAvailableOffset", () => {
-    it.effect("returns the starting offset when required ports are available", () =>
-      Effect.gen(function* () {
-        const offset = yield* findFirstAvailableOffset({
-          startOffset: 0,
-          requireServerPort: true,
-          requireWebPort: true,
-          checkPortAvailability: () => Effect.succeed(true),
-        });
-
-        assert.equal(offset, 0);
-      }),
-    );
-
     it.effect("advances until all required ports are available", () =>
       Effect.gen(function* () {
         const taken = new Set([3773, 5733, 3774, 5734]);

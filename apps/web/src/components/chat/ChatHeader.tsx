@@ -491,7 +491,7 @@ function EditorRailTabs(props: {
 
 export type ChatHeaderThreadIconKind = "none" | "provider" | "terminal";
 
-export function resolveChatHeaderThreadIconKind(
+function resolveChatHeaderThreadIconKind(
   entryPoint: ThreadPrimarySurface,
   title?: string,
 ): ChatHeaderThreadIconKind {

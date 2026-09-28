@@ -7,14 +7,8 @@ import { ProjectId, ThreadId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
-  canSubdivide,
   canSubdividePane,
   collectLeaves,
-  findLeafPaneById,
-  findPaneById,
-  findPaneDepth,
-  findParentSplitNode,
-  findSplitNodeById,
   isLegacySplitViewLike,
   removeLeafByPaneId,
   removeLeafByThreadId,
@@ -60,71 +54,6 @@ function makeSplit(input: {
   };
 }
 
-describe("findPaneById / findLeafPaneById / findSplitNodeById", () => {
-  it("walks the tree and returns the matching node by id", () => {
-    const leafA = makeLeaf("leaf-a", THREAD_A);
-    const leafB = makeLeaf("leaf-b", THREAD_B);
-    const root = makeSplit({ id: "root", direction: "horizontal", first: leafA, second: leafB });
-
-    expect(findPaneById(root, "leaf-a")).toBe(leafA);
-    expect(findLeafPaneById(root, "leaf-b")).toBe(leafB);
-    expect(findSplitNodeById(root, "root")).toBe(root);
-    expect(findLeafPaneById(root, "root")).toBeNull();
-    expect(findSplitNodeById(root, "leaf-a")).toBeNull();
-    expect(findPaneById(root, "missing")).toBeNull();
-  });
-});
-
-describe("findParentSplitNode", () => {
-  it("returns the SplitNode that directly contains a leaf", () => {
-    const leafA = makeLeaf("leaf-a", THREAD_A);
-    const leafB = makeLeaf("leaf-b", THREAD_B);
-    const innerSplit = makeSplit({
-      id: "inner",
-      direction: "vertical",
-      first: leafA,
-      second: leafB,
-    });
-    const leafC = makeLeaf("leaf-c", THREAD_C);
-    const root = makeSplit({
-      id: "root",
-      direction: "horizontal",
-      first: innerSplit,
-      second: leafC,
-    });
-
-    expect(findParentSplitNode(root, "leaf-a")).toBe(innerSplit);
-    expect(findParentSplitNode(root, "leaf-c")).toBe(root);
-    expect(findParentSplitNode(root, "root")).toBeNull();
-  });
-});
-
-describe("findPaneDepth", () => {
-  it("returns the depth of panes in the tree", () => {
-    const leafA = makeLeaf("leaf-a", THREAD_A);
-    const leafB = makeLeaf("leaf-b", THREAD_B);
-    const innerSplit = makeSplit({
-      id: "inner",
-      direction: "vertical",
-      first: leafA,
-      second: leafB,
-    });
-    const leafC = makeLeaf("leaf-c", THREAD_C);
-    const root = makeSplit({
-      id: "root",
-      direction: "horizontal",
-      first: innerSplit,
-      second: leafC,
-    });
-
-    expect(findPaneDepth(root, "root")).toBe(0);
-    expect(findPaneDepth(root, "inner")).toBe(1);
-    expect(findPaneDepth(root, "leaf-a")).toBe(2);
-    expect(findPaneDepth(root, "leaf-c")).toBe(1);
-    expect(findPaneDepth(root, "missing")).toBeNull();
-  });
-});
-
 describe("collectLeaves", () => {
   it("returns leaves in left-to-right (depth-first) order", () => {
     const leafA = makeLeaf("leaf-a", THREAD_A);
@@ -155,33 +84,9 @@ describe("replacePaneInTree", () => {
     expect((updated as SplitNode).first).toBe(replacement);
     expect((updated as SplitNode).second).toBe(leafB);
   });
-
-  it("returns the same root when the pane is not found", () => {
-    const leafA = makeLeaf("leaf-a", THREAD_A);
-    const leafB = makeLeaf("leaf-b", THREAD_B);
-    const root = makeSplit({ id: "root", direction: "horizontal", first: leafA, second: leafB });
-    expect(replacePaneInTree(root, "missing", makeLeaf("missing", THREAD_C))).toBe(root);
-  });
 });
 
 describe("removeLeafByThreadId", () => {
-  it("collapses a SplitNode to its surviving subtree when one side is removed", () => {
-    const leafA = makeLeaf("leaf-a", THREAD_A);
-    const leafB = makeLeaf("leaf-b", THREAD_B);
-    const root = makeSplit({ id: "root", direction: "horizontal", first: leafA, second: leafB });
-
-    const result = removeLeafByThreadId(root, THREAD_A);
-    expect(result.removedLeafIds).toEqual(["leaf-a"]);
-    expect(result.nextRoot).toBe(leafB);
-  });
-
-  it("returns null when the only remaining leaf is removed", () => {
-    const leafA = makeLeaf("leaf-a", THREAD_A);
-    const result = removeLeafByThreadId(leafA, THREAD_A);
-    expect(result.removedLeafIds).toEqual(["leaf-a"]);
-    expect(result.nextRoot).toBeNull();
-  });
-
   it("removes leaves nested inside a perpendicular subtree", () => {
     const leafA = makeLeaf("leaf-a", THREAD_A);
     const leafB = makeLeaf("leaf-b", THREAD_B);
@@ -202,34 +107,9 @@ describe("removeLeafByThreadId", () => {
       expect(result.nextRoot.second).toBe(leafC);
     }
   });
-
-  it("preserves identity when the threadId is not present", () => {
-    const leafA = makeLeaf("leaf-a", THREAD_A);
-    const leafB = makeLeaf("leaf-b", THREAD_B);
-    const root = makeSplit({ id: "root", direction: "horizontal", first: leafA, second: leafB });
-    expect(removeLeafByThreadId(root, THREAD_C).nextRoot).toBe(root);
-  });
 });
 
 describe("removeLeafByPaneId", () => {
-  it("removes only the target pane and collapses the surviving subtree", () => {
-    const left = makeLeaf("left", THREAD_A);
-    const topRight = makeLeaf("top-right", THREAD_B);
-    const bottomRight = makeLeaf("bottom-right", THREAD_C);
-    const right = makeSplit({
-      id: "right",
-      direction: "vertical",
-      first: topRight,
-      second: bottomRight,
-    });
-    const root = makeSplit({ id: "root", direction: "horizontal", first: left, second: right });
-
-    const result = removeLeafByPaneId(root, "left");
-
-    expect(result.removedLeafIds).toEqual(["left"]);
-    expect(result.nextRoot).toBe(right);
-  });
-
   it("does not remove matching threads in other panes", () => {
     const leafA = makeLeaf("leaf-a", THREAD_A);
     const leafB = makeLeaf("leaf-b", THREAD_A);
@@ -242,44 +122,7 @@ describe("removeLeafByPaneId", () => {
   });
 });
 
-describe("canSubdivide", () => {
-  it("allows any direction when there is no parent split", () => {
-    expect(canSubdivide(null, "horizontal")).toBe(true);
-    expect(canSubdivide(null, "vertical")).toBe(true);
-  });
-
-  it("only allows perpendicular subdivisions", () => {
-    expect(canSubdivide("horizontal", "vertical")).toBe(true);
-    expect(canSubdivide("vertical", "horizontal")).toBe(true);
-    expect(canSubdivide("horizontal", "horizontal")).toBe(false);
-    expect(canSubdivide("vertical", "vertical")).toBe(false);
-  });
-});
-
 describe("canSubdividePane", () => {
-  it("allows root children to split perpendicularly but blocks leaves already at 2x2 depth", () => {
-    const topLeft = makeLeaf("top-left", THREAD_A);
-    const bottomLeft = makeLeaf("bottom-left", THREAD_B);
-    const leftSplit = makeSplit({
-      id: "left-split",
-      direction: "vertical",
-      first: topLeft,
-      second: bottomLeft,
-    });
-    const rightLeaf = makeLeaf("right", THREAD_C);
-    const root = makeSplit({
-      id: "root",
-      direction: "horizontal",
-      first: leftSplit,
-      second: rightLeaf,
-    });
-
-    expect(canSubdividePane(root, "right", "vertical")).toBe(true);
-    expect(canSubdividePane(root, "right", "horizontal")).toBe(false);
-    expect(canSubdividePane(root, "top-left", "horizontal")).toBe(false);
-    expect(canSubdividePane(root, "missing", "vertical")).toBe(false);
-  });
-
   it("allows a root leaf to split in either direction", () => {
     const root = makeLeaf("root-leaf", THREAD_D);
     expect(canSubdividePane(root, "root-leaf", "horizontal")).toBe(true);

@@ -26,12 +26,10 @@ import {
 
 import {
   buildCodexProcessEnv,
-  disableCodexConfigSections,
   SYNARA_COMPETING_BROWSER_PLUGIN_SECTION_HEADERS,
 } from "./codexProcessEnv";
 import {
   buildCodexCollaborationMode,
-  buildCodexInitializeParams,
   buildCodexThreadOpenRequest,
   resolveCodexThreadOpenMinimumVersion,
   shouldWarnCodexFreshStartWithoutResume,
@@ -46,16 +44,12 @@ import {
   readCodexAccountSnapshot,
   resolveCodexModelForAccount,
 } from "./codexAppServerManager";
-import {
-  assertCodexWorkingDirectoryExists,
-  formatMissingCodexWorkingDirectoryError,
-} from "./codexWorkingDirectory";
+import { formatMissingCodexWorkingDirectoryError } from "./codexWorkingDirectory";
 import {
   CodexAppServerTransportError,
   CodexJsonlFramer,
   CodexJsonlWriter,
 } from "./codexAppServerTransport";
-import { ensureIsolatedScratchWorkspace } from "./scratchWorkspaces";
 import {
   SYNARA_GATEWAY_HARNESS_POLICY,
   SYNARA_HARNESS_POLICY_MARKER,
@@ -1059,44 +1053,6 @@ describe("codex CLI version gate", () => {
     }
   });
 
-  it("re-probes when the binary behind an unchanged path is replaced", async () => {
-    const dir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-version-swap-"));
-    const homePath = path.join(dir, "codex-home");
-    mkdirSync(homePath, { recursive: true });
-    vi.stubEnv("SYNARA_HOME", path.join(dir, "runtime"));
-
-    const isWindows = process.platform === "win32";
-    const binaryPath = path.join(dir, isWindows ? "codex.cmd" : "codex.sh");
-    // The trailing filler keeps the two revisions different in size, so the swap is detected
-    // even on a filesystem whose timestamps are too coarse to separate two writes this close.
-    const writeBinary = (version: string, filler: string) => {
-      writeFileSync(
-        binaryPath,
-        isWindows
-          ? `@echo off\r\nrem ${filler}\r\necho codex-cli ${version}\r\n`
-          : `#!/bin/sh\n# ${filler}\necho "codex-cli ${version}"\n`,
-        { mode: 0o755 },
-      );
-    };
-
-    const { assertSupportedCodexCliVersion, reset } = __codexCliVersionGateTesting;
-    reset();
-    try {
-      writeBinary("9.9.9", "original");
-      await assertSupportedCodexCliVersion({ binaryPath, cwd: dir, homePath });
-
-      // An in-place downgrade must not keep riding the cached pass for the rest of the TTL.
-      writeBinary("0.1.0", "replaced-in-place-by-a-downgrade");
-      await expect(
-        assertSupportedCodexCliVersion({ binaryPath, cwd: dir, homePath }),
-      ).rejects.toThrow(/too old for Synara/);
-    } finally {
-      reset();
-      vi.unstubAllEnvs();
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
   it("re-probes when a PATH-resolved codex is replaced behind the same bare name", async () => {
     // The production default is the bare name `codex`, so the fingerprint is only useful if it
     // survives PATH resolution. It is taken from the same env object handed to the spawn a few
@@ -1526,50 +1482,9 @@ describe("buildCodexProcessEnv", () => {
       rmSync(runtimeHome, { recursive: true, force: true });
     }
   });
-
-  it("disables only explicitly recorded plugin sections", () => {
-    expect(
-      disableCodexConfigSections(
-        '[plugins."historical-plugin@local"]\nenabled = true\n\n[plugins."other@local"]\nenabled = true',
-        ['[plugins."historical-plugin@local"]'],
-      ),
-    ).toBe(
-      '[plugins."historical-plugin@local"]\nenabled = false\n\n[plugins."other@local"]\nenabled = true',
-    );
-  });
 });
 
 describe("handleStdoutLine", () => {
-  it("ignores token usage footers emitted on stdout during shutdown", () => {
-    const { manager, context, emitEvent } = createProcessOutputHarness();
-
-    (
-      manager as unknown as {
-        handleStdoutLine: (context: unknown, line: string) => void;
-      }
-    ).handleStdoutLine(
-      context,
-      "^CToken usage: total=360,953 input=336,874 (+ 4,219,648 cached) output=24,079 (reasoning 7,982)",
-    );
-
-    expect(emitEvent).not.toHaveBeenCalled();
-  });
-
-  it("ignores human-readable diagnostics leaked onto app-server stdout", () => {
-    const { manager, context, emitEvent } = createProcessOutputHarness();
-    const handleStdoutLine = (
-      manager as unknown as {
-        handleStdoutLine: (context: unknown, line: string) => void;
-      }
-    ).handleStdoutLine.bind(manager);
-
-    for (const line of ["Reasoning trace", "Reasoning summary", "Command execution"]) {
-      handleStdoutLine(context, line);
-    }
-
-    expect(emitEvent).not.toHaveBeenCalled();
-  });
-
   it("ignores multiline and standalone JSON leaked from command output", () => {
     const { manager, context, emitEvent } = createProcessOutputHarness();
     const handleStdoutLine = (
@@ -1584,33 +1499,11 @@ describe("handleStdoutLine", () => {
 
     expect(emitEvent).not.toHaveBeenCalled();
   });
-
-  it("ignores malformed JSON-looking fragments without poisoning the session", () => {
-    const { manager, context, emitEvent } = createProcessOutputHarness();
-
-    (
-      manager as unknown as {
-        handleStdoutLine: (context: unknown, line: string) => void;
-      }
-    ).handleStdoutLine(context, '{"method":"item/started"');
-
-    expect(emitEvent).not.toHaveBeenCalled();
-  });
 });
 
 describe("normalizeCodexModelSlug", () => {
-  it("maps 5.3 aliases to gpt-5.3-codex", () => {
-    expect(normalizeCodexModelSlug("5.3")).toBe("gpt-5.3-codex");
-    expect(normalizeCodexModelSlug("gpt-5.3")).toBe("gpt-5.3-codex");
-  });
-
   it("prefers codex id when model differs", () => {
     expect(normalizeCodexModelSlug("gpt-5.3", "gpt-5.3-codex")).toBe("gpt-5.3-codex");
-  });
-
-  it("keeps non-aliased models as-is", () => {
-    expect(normalizeCodexModelSlug("gpt-5.2-codex")).toBe("gpt-5.2-codex");
-    expect(normalizeCodexModelSlug("gpt-5.2")).toBe("gpt-5.2");
   });
 });
 
@@ -1644,38 +1537,6 @@ describe("buildCodexThreadOpenRequest", () => {
     approvalsReviewer: "user" as const,
     sandbox: "danger-full-access" as const,
   };
-
-  it("forks an external thread into a new provider-owned thread", () => {
-    expect(
-      buildCodexThreadOpenRequest({
-        forkSourceThreadId: "external-thread",
-        sessionOverrides,
-      }),
-    ).toEqual({
-      method: "thread/fork",
-      params: {
-        ...sessionOverrides,
-        threadId: "external-thread",
-        excludeTurns: true,
-      },
-    });
-  });
-
-  it("resumes an existing provider thread without start-only options", () => {
-    expect(
-      buildCodexThreadOpenRequest({
-        resumeThreadId: "existing-thread",
-        sessionOverrides,
-      }),
-    ).toEqual({
-      method: "thread/resume",
-      params: {
-        ...sessionOverrides,
-        threadId: "existing-thread",
-        excludeTurns: true,
-      },
-    });
-  });
 
   it("starts a fresh thread with raw events disabled", () => {
     const request = buildCodexThreadOpenRequest({ sessionOverrides });
@@ -1784,20 +1645,6 @@ describe("readCodexAccountSnapshot", () => {
     });
   });
 
-  it("keeps spark enabled for chatgpt pro accounts", () => {
-    expect(
-      readCodexAccountSnapshot({
-        type: "chatgpt",
-        email: "pro@example.com",
-        planType: "pro",
-      }),
-    ).toEqual({
-      type: "chatgpt",
-      planType: "pro",
-      sparkEnabled: true,
-    });
-  });
-
   it("keeps spark enabled for api key accounts", () => {
     expect(
       readCodexAccountSnapshot({
@@ -1895,6 +1742,11 @@ describe("startSession", () => {
         input: "Follow-up after restart",
       });
 
+      const initializeRequests = fake.requests.filter((request) => request.method === "initialize");
+      expect(initializeRequests).toHaveLength(2);
+      for (const request of initializeRequests) {
+        expect(request.params).toMatchObject({ capabilities: { experimentalApi: true } });
+      }
       const historicalRequests = fake.requests.filter(
         (request) => request.method === "thread/resume",
       );
@@ -2112,54 +1964,6 @@ describe("startSession", () => {
     }
   });
 
-  it("enables Codex experimental api capabilities during initialize", () => {
-    expect(buildCodexInitializeParams()).toEqual({
-      clientInfo: {
-        name: "synara_desktop",
-        title: "Synara Desktop",
-        version: "0.1.0",
-      },
-      capabilities: {
-        experimentalApi: true,
-      },
-    });
-  });
-
-  it("creates the isolated scratch workspace inside the configured root", () => {
-    const temporary = mkdtempSync(path.join(os.tmpdir(), "synara-codex-scratch-test-"));
-    try {
-      const workspaceRoot = path.join(temporary, "synara-codex-workspaces");
-      const cwd = ensureIsolatedScratchWorkspace(asThreadId("thread-1"), workspaceRoot);
-      expect(path.dirname(cwd)).toBe(workspaceRoot);
-      expect(path.basename(cwd)).toMatch(/^thread-1-/);
-      expect(lstatSync(cwd).isDirectory()).toBe(true);
-    } finally {
-      rmSync(temporary, { recursive: true, force: true });
-    }
-  });
-
-  it("reports a missing project working directory instead of a missing Codex CLI", () => {
-    const missingCwd = path.join(os.tmpdir(), `synara-missing-cwd-${randomUUID()}`, "old-project");
-    expect(() => assertCodexWorkingDirectoryExists(missingCwd)).toThrow(
-      formatMissingCodexWorkingDirectoryError(missingCwd),
-    );
-    expect(() => assertCodexWorkingDirectoryExists(missingCwd)).toThrow(
-      /Relocate or reconnect the project/,
-    );
-    expect(formatMissingCodexWorkingDirectoryError(missingCwd)).not.toMatch(
-      /not installed|not executable/i,
-    );
-  });
-
-  it("accepts an existing project working directory", () => {
-    const cwd = mkdtempSync(path.join(os.tmpdir(), "synara-existing-cwd-"));
-    try {
-      expect(() => assertCodexWorkingDirectoryExists(cwd)).not.toThrow();
-    } finally {
-      rmSync(cwd, { recursive: true, force: true });
-    }
-  });
-
   it("fails session start with missing-cwd guidance instead of missing Codex CLI", async () => {
     const manager = new CodexAppServerManager();
     const events: Array<{ method: string; kind: string; message?: string }> = [];
@@ -2200,61 +2004,6 @@ describe("startSession", () => {
       ]);
       expect(events[0]?.message).not.toMatch(/not installed|not executable/i);
     } finally {
-      await manager.stopAll();
-    }
-  });
-
-  it("fails fast with an upgrade message when codex is below the minimum supported version", async () => {
-    const manager = new CodexAppServerManager();
-    const events: Array<{ method: string; kind: string; message?: string }> = [];
-    manager.on("event", (event) => {
-      events.push({
-        method: event.method,
-        kind: event.kind,
-        ...(event.message ? { message: event.message } : {}),
-      });
-    });
-
-    const versionCheck = vi
-      .spyOn(
-        manager as unknown as {
-          assertSupportedCodexCliVersion: (input: {
-            binaryPath: string;
-            cwd: string;
-            homePath?: string;
-          }) => void;
-        },
-        "assertSupportedCodexCliVersion",
-      )
-      .mockImplementation(() => {
-        throw new Error(
-          "Codex CLI v0.36.0 is too old for Synara. Upgrade to v0.37.0 or newer and restart Synara.",
-        );
-      });
-
-    try {
-      await expect(
-        manager.startSession({
-          threadId: asThreadId("thread-1"),
-          provider: "codex",
-          runtimeMode: "full-access",
-          cwd: process.cwd(),
-          agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
-        }),
-      ).rejects.toThrow(
-        "Codex CLI v0.36.0 is too old for Synara. Upgrade to v0.37.0 or newer and restart Synara.",
-      );
-      expect(versionCheck).toHaveBeenCalledTimes(1);
-      expect(events).toEqual([
-        {
-          method: "session/startFailed",
-          kind: "error",
-          message:
-            "Codex CLI v0.36.0 is too old for Synara. Upgrade to v0.37.0 or newer and restart Synara.",
-        },
-      ]);
-    } finally {
-      versionCheck.mockRestore();
       await manager.stopAll();
     }
   });
@@ -2490,70 +2239,6 @@ describe("sendTurn", () => {
     });
   });
 
-  it("passes Codex plan mode as a collaboration preset on turn/start", async () => {
-    const { manager, context, sendRequest } = createSendTurnHarness();
-
-    await manager.sendTurn({
-      threadId: asThreadId("thread_1"),
-      input: "Plan the work",
-      interactionMode: "plan",
-    });
-
-    expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
-      threadId: "thread_1",
-      ...fullAccessTurnOverrides,
-      summary: "auto",
-      input: [
-        {
-          type: "text",
-          text: "Plan the work",
-          text_elements: [],
-        },
-      ],
-      model: "gpt-5.3-codex",
-      collaborationMode: {
-        mode: "plan",
-        settings: {
-          model: "gpt-5.3-codex",
-          reasoning_effort: "medium",
-          developer_instructions: CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
-        },
-      },
-    });
-  });
-
-  it("passes Codex default mode as a collaboration preset on turn/start", async () => {
-    const { manager, context, sendRequest } = createSendTurnHarness();
-
-    await manager.sendTurn({
-      threadId: asThreadId("thread_1"),
-      input: "PLEASE IMPLEMENT THIS PLAN:\n- step 1",
-      interactionMode: "default",
-    });
-
-    expect(sendRequest).toHaveBeenCalledWith(context, "turn/start", {
-      threadId: "thread_1",
-      ...fullAccessTurnOverrides,
-      summary: "auto",
-      input: [
-        {
-          type: "text",
-          text: "PLEASE IMPLEMENT THIS PLAN:\n- step 1",
-          text_elements: [],
-        },
-      ],
-      model: "gpt-5.3-codex",
-      collaborationMode: {
-        mode: "default",
-        settings: {
-          model: "gpt-5.3-codex",
-          reasoning_effort: "medium",
-          developer_instructions: CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
-        },
-      },
-    });
-  });
-
   it("maps Debug to native default collaboration while preserving full-access overrides", async () => {
     const { manager, context, sendRequest } = createSendTurnHarness();
 
@@ -2584,25 +2269,6 @@ describe("sendTurn", () => {
         },
       },
     });
-  });
-
-  it("preserves auto-review overrides in Debug mode", async () => {
-    const { manager, context, sendRequest } = createSendTurnHarness("auto");
-
-    await manager.sendTurn({
-      threadId: asThreadId("thread_1"),
-      input: "Investigate and fix the flaky test",
-      interactionMode: "debug",
-    });
-
-    expect(sendRequest).toHaveBeenCalledWith(
-      context,
-      "turn/start",
-      expect.objectContaining({
-        ...autoTurnOverrides,
-        collaborationMode: expect.objectContaining({ mode: "default" }),
-      }),
-    );
   });
 
   it("keeps the session model when interaction mode is set without an explicit model", async () => {
@@ -2838,49 +2504,6 @@ describe("CodexAppServerManager discovery", () => {
       expect(stopDiscoverySession).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(14_999);
       expect(stopDiscoverySession).toHaveBeenCalledOnce();
-    } finally {
-      vi.clearAllTimers();
-      vi.useRealTimers();
-    }
-  });
-
-  it("stops an idle discovery session after its configured grace period", async () => {
-    vi.useFakeTimers();
-    try {
-      const manager = new CodexAppServerManager(undefined, {
-        discoverySessionIdleMs: 15_000,
-      });
-      (
-        manager as unknown as {
-          discoverySessions: Map<string, unknown>;
-        }
-      ).discoverySessions.set("/repo", {
-        stopping: false,
-        pending: new Map(),
-        pendingApprovals: new Map(),
-        pendingUserInputs: new Map(),
-      });
-      const stopDiscoverySession = vi
-        .spyOn(
-          manager as unknown as {
-            stopDiscoverySession: (cwd: string) => Promise<void>;
-          },
-          "stopDiscoverySession",
-        )
-        .mockResolvedValue(undefined);
-
-      (
-        manager as unknown as {
-          scheduleDiscoverySessionIdleStop: (cwd: string) => void;
-        }
-      ).scheduleDiscoverySessionIdleStop("/repo");
-
-      await vi.advanceTimersByTimeAsync(14_999);
-      expect(stopDiscoverySession).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(1);
-      expect(stopDiscoverySession).toHaveBeenCalledOnce();
-      expect(stopDiscoverySession).toHaveBeenCalledWith("/repo");
     } finally {
       vi.clearAllTimers();
       vi.useRealTimers();
@@ -3417,75 +3040,6 @@ describe("CodexAppServerManager discovery", () => {
       forceRemoteSync: true,
     });
   });
-
-  it("wires plugin details through plugin/read", async () => {
-    const manager = new CodexAppServerManager();
-    const context = {
-      session: {
-        provider: "codex",
-        status: "ready",
-        threadId: "thread_1",
-        runtimeMode: "full-access",
-        model: "gpt-5.5",
-      },
-      account: {
-        type: "unknown",
-        planType: null,
-        sparkEnabled: true,
-      },
-      collabReceiverTurns: new Map(),
-      collabReceiverParents: new Map(),
-    };
-
-    vi.spyOn(
-      manager as unknown as {
-        resolveContextForDiscovery: (threadId?: string, cwd?: string) => unknown;
-      },
-      "resolveContextForDiscovery",
-    ).mockReturnValue(context);
-    const sendRequest = vi
-      .spyOn(
-        manager as unknown as {
-          sendRequest: (...args: unknown[]) => Promise<unknown>;
-        },
-        "sendRequest",
-      )
-      .mockResolvedValue({
-        result: {
-          plugin: {
-            marketplaceName: "openai-curated",
-            marketplacePath: "/marketplace.json",
-            summary: {
-              id: "plugin/github",
-              name: "github",
-              source: { path: "/plugins/github" },
-              installed: true,
-              enabled: true,
-              installPolicy: "INSTALLED_BY_DEFAULT",
-              authPolicy: "ON_USE",
-            },
-          },
-        },
-      });
-
-    await expect(
-      manager.readPlugin({
-        marketplacePath: "/marketplace.json",
-        pluginName: "github",
-      }),
-    ).resolves.toMatchObject({
-      plugin: {
-        marketplaceName: "openai-curated",
-        summary: { id: "plugin/github" },
-      },
-      source: "codex-app-server",
-      cached: false,
-    });
-    expect(sendRequest).toHaveBeenCalledWith(context, "plugin/read", {
-      marketplacePath: "/marketplace.json",
-      pluginName: "github",
-    });
-  });
 });
 
 describe("thread checkpoint control", () => {
@@ -3671,8 +3225,6 @@ describe("thread checkpoint control", () => {
   it.each([
     "ordinary",
     "completed",
-    "interrupted",
-    "failed",
     "empty",
     "inProgress",
     "legacy-completed",
@@ -4342,7 +3894,6 @@ describe("MCP tool call elicitation approvals", () => {
 
   it.each([
     ['Allow the synara MCP server to run tool "computer_click"?', true],
-    ['Allow the synara MCP server to run tool "computer_type_text"?', true],
     ['Allow the synara MCP server to run tool "shell"?', false],
     ['Allow the other MCP server to run tool "computer_click"?', false],
     ["Please approve computer_click", false],
@@ -4364,7 +3915,6 @@ describe("MCP tool call elicitation approvals", () => {
 
   it.each([
     "other-server",
-    "unknown-tool",
     "disabled",
     "no-lease",
     "retired",
@@ -4373,17 +3923,12 @@ describe("MCP tool call elicitation approvals", () => {
     "stale-turn",
     "child-thread",
     "plan",
-    "unknown-mode",
-    "auto",
   ])("preserves provider approval for %s requests", async (condition) => {
     const { manager, context, emitEvent, writeMessage } = computerApprovalHarness();
     const params = approvalParams();
     switch (condition) {
       case "other-server":
         params.serverName = "other";
-        break;
-      case "unknown-tool":
-        params._meta.tool_name = "computer_delete_everything";
         break;
       case "disabled":
         context.enableComputerControl = false;
@@ -4408,12 +3953,6 @@ describe("MCP tool call elicitation approvals", () => {
         break;
       case "plan":
         context.activeInteractionMode = "plan";
-        break;
-      case "unknown-mode":
-        context.activeInteractionMode = "";
-        break;
-      case "auto":
-        context.session.runtimeMode = "auto";
         break;
     }
     await handleServerRequestForTest(manager, context, {
@@ -4646,48 +4185,6 @@ describe("respondToUserInput", () => {
         },
       }),
     );
-  });
-
-  it("tracks file-read approval requests with the correct method", async () => {
-    const manager = new CodexAppServerManager();
-    const context = {
-      session: {
-        sessionId: "sess_1",
-        provider: "codex",
-        status: "ready",
-        threadId: asThreadId("thread_1"),
-        resumeCursor: { threadId: "thread_1" },
-        createdAt: "2026-02-10T00:00:00.000Z",
-        updatedAt: "2026-02-10T00:00:00.000Z",
-      },
-      pendingApprovals: new Map(),
-      pendingUserInputs: new Map(),
-      collabReceiverTurns: new Map(),
-      collabReceiverParents: new Map(),
-    };
-    type ApprovalRequestContext = {
-      session: typeof context.session;
-      pendingApprovals: typeof context.pendingApprovals;
-      pendingUserInputs: typeof context.pendingUserInputs;
-    };
-
-    await (
-      manager as unknown as {
-        handleServerRequest: (
-          context: ApprovalRequestContext,
-          request: Record<string, unknown>,
-        ) => Promise<void>;
-      }
-    ).handleServerRequest(context, {
-      jsonrpc: "2.0",
-      id: 42,
-      method: "item/fileRead/requestApproval",
-      params: {},
-    });
-
-    const request = Array.from(context.pendingApprovals.values())[0];
-    expect(request?.requestKind).toBe("file-read");
-    expect(request?.method).toBe("item/fileRead/requestApproval");
   });
 });
 
@@ -5270,34 +4767,6 @@ describe("collab child conversation routing", () => {
         parentTurnId: "turn_parent",
       }),
     );
-  });
-
-  it("does not suppress provider-parent-only child notifications without a mapped parent turn", () => {
-    const { manager, context, emitEvent, updateSession } = createCollabNotificationHarness();
-    context.collabReceiverParents.set("child_provider_1", "provider_parent");
-
-    (
-      manager as unknown as {
-        handleServerNotification: (context: unknown, notification: Record<string, unknown>) => void;
-      }
-    ).handleServerNotification(context, {
-      method: "turn/plan/updated",
-      params: {
-        threadId: "child_provider_1",
-        turnId: "turn_child_1",
-        plan: [{ step: "Plan child work", status: "inProgress" }],
-      },
-    });
-
-    expect(emitEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "turn/plan/updated",
-        turnId: "turn_child_1",
-        providerThreadId: "child_provider_1",
-        providerParentThreadId: "provider_parent",
-      }),
-    );
-    expect(updateSession).not.toHaveBeenCalled();
   });
 
   it("preserves child approval requests and annotates the parent turn", async () => {

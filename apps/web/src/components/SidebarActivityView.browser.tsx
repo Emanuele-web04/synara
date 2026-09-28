@@ -11,8 +11,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import type { Project, SidebarThreadSummary } from "../types";
+import { DEFAULT_PROJECT_ICON, type ProjectAppearance } from "../lib/projectAppearance";
 import type { ThreadStatusPill } from "./Sidebar.logic";
 import { SidebarActivityView } from "./SidebarActivityView";
+
+const projectFavicon = `data:image/svg+xml,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><circle cx="8" cy="8" r="8" fill="red"/></svg>',
+)}`;
+
+vi.mock("~/lib/wsHttpUrl", () => ({
+  resolveWsHttpUrl: () => projectFavicon,
+}));
 
 const PROJECT_A = ProjectId.makeUnsafe("activity-project-a");
 const PROJECT_B = ProjectId.makeUnsafe("activity-project-b");
@@ -121,6 +130,53 @@ describe("SidebarActivityView", () => {
     vi.restoreAllMocks();
     document.body.innerHTML = "";
   });
+
+  it.each([
+    { name: "favicon", appearance: null },
+    { name: "emoji", appearance: { kind: "emoji", emoji: "🚀" } },
+    { name: "icon", appearance: { kind: "icon", icon: "rocket", color: "blue" } },
+    { name: "color", appearance: { kind: "icon", icon: DEFAULT_PROJECT_ICON, color: "red" } },
+  ] satisfies ReadonlyArray<{ name: string; appearance: ProjectAppearance | null }>)(
+    "keeps the $name project identity and worktree indicator in recent rows",
+    async ({ name, appearance }) => {
+      const thread = makeThread(0, {
+        envMode: "worktree",
+        worktreePath: "/tmp/activity-worktree",
+        branch: "feature/sidebar-icons",
+      });
+      const mounted = await render(
+        renderActivity({
+          threads: [thread],
+          projects: [{ ...makeProject(PROJECT_A, "Project A"), appearance }],
+        }),
+      );
+      await vi.waitFor(() => {
+        const row = page.getByTestId(`activity-thread-${thread.id}`).element();
+        if (name === "favicon") {
+          const image = row.querySelector<HTMLImageElement>("img");
+          expect(image?.naturalWidth).toBeGreaterThan(0);
+        } else if (appearance?.kind === "emoji") {
+          expect(row.textContent).toContain(appearance.emoji);
+          expect(row.querySelector("img")).toBeNull();
+        } else if (appearance?.kind === "icon") {
+          const glyphs = [...row.querySelectorAll<HTMLElement>('[data-slot="central-icon"]')];
+          const glyph = glyphs.find((element) =>
+            element.style.maskImage.includes(`/${appearance.icon}.svg`),
+          );
+          expect(glyph).toBeDefined();
+          const reference = document.createElement("span");
+          reference.style.color = `var(--project-${appearance.color})`;
+          document.body.appendChild(reference);
+          const expectedColor = getComputedStyle(reference).color;
+          reference.remove();
+          expect(getComputedStyle(glyph!).color).toBe(expectedColor);
+          expect(row.querySelector("img")).toBeNull();
+        }
+        expect(row.querySelector('[aria-label="Worktree"]')).not.toBeNull();
+      });
+      await mounted.unmount();
+    },
+  );
 
   it("keeps mounted rows and navigation order stable until a human sends a new message", async () => {
     const older = makeThread(500, {
@@ -466,29 +522,6 @@ describe("SidebarActivityView", () => {
         .element()
         .parentElement?.querySelector('[aria-label="Unread completion"]'),
     ).toBeNull();
-    await mounted.unmount();
-  });
-
-  it("gives pulsing status glyphs an accessible name", async () => {
-    const running = makeThread(400, { hasLiveTailWork: true });
-    const mounted = await render(
-      renderActivity({
-        threads: [running],
-        resolveThreadStatus: () => ({
-          label: "Working",
-          colorClass: "text-sky-600",
-          dotClass: "bg-sky-500",
-          pulse: true,
-        }),
-      }),
-    );
-
-    expect(
-      page
-        .getByTestId(`activity-thread-${running.id}`)
-        .element()
-        .parentElement?.querySelector('[role="img"][aria-label="Working"]'),
-    ).not.toBeNull();
     await mounted.unmount();
   });
 });

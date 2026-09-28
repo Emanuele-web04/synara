@@ -61,6 +61,10 @@ export function resolveReleaseBuildScope(
     matrix: {
       include: stage === "native" ? selected.filter((entry) => entry.platform !== "win") : selected,
     },
+    cua_matrix: { include: selected.filter((entry) => entry.platform !== "win") },
+    prepare_cua:
+      (stage === "native" || stage === "artifact") &&
+      selected.some((entry) => entry.platform !== "win"),
     build_icon:
       stage === "icon" ||
       (stage === "artifact" && selected.some((entry) => entry.platform === "mac")),

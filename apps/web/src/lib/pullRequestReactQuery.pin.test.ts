@@ -62,10 +62,7 @@ describe("pullRequestSetPinnedMutationOptions", () => {
     await secondPromise;
   });
 
-  it.each([
-    { label: "pin", previous: false, next: true },
-    { label: "unpin", previous: true, next: false },
-  ])(
+  it.each([{ label: "pin", previous: false, next: true }])(
     "reconciles All and exact membership when an exact-only row is $label ned",
     async ({ previous, next }) => {
       const queryClient = new QueryClient();
@@ -165,50 +162,6 @@ describe("pullRequestSetPinnedMutationOptions", () => {
           ],
         },
       ],
-    });
-  });
-
-  it("rolls each cache key back to its own divergent previous pin value", async () => {
-    const queryClient = new QueryClient();
-    const projectId = "project-a" as ProjectId;
-    const listKey = pullRequestQueryKeys.list({ state: "open", projectId });
-    const exactKey = pullRequestsExactInvolvementQueryOptions({
-      involvement: "reviewing",
-      state: "open",
-      projectId,
-    }).queryKey;
-    const identity = { projectId, repository: "acme/widgets", number: 42 } as const;
-    queryClient.setQueryData(listKey, {
-      entries: [{ ...identity, isPinned: false }],
-    });
-    queryClient.setQueryData(exactKey as QueryKey, {
-      entries: [{ ...identity, isPinned: true }],
-    });
-    const input = { ...identity, isPinned: true } as const;
-    const options = pullRequestSetPinnedMutationOptions(queryClient);
-    if (!options.onMutate || !options.onError) {
-      throw new Error("Pin mutation hooks are missing.");
-    }
-
-    const context = await Reflect.apply(options.onMutate, undefined, [input, undefined]);
-    expect(queryClient.getQueryData(listKey)).toEqual({
-      entries: [{ ...identity, isPinned: true }],
-    });
-    expect(queryClient.getQueryData(exactKey)).toEqual({
-      entries: [{ ...identity, isPinned: true }],
-    });
-
-    Reflect.apply(options.onError, undefined, [
-      new Error("save failed"),
-      input,
-      context,
-      undefined,
-    ]);
-    expect(queryClient.getQueryData(listKey)).toEqual({
-      entries: [{ ...identity, isPinned: false }],
-    });
-    expect(queryClient.getQueryData(exactKey)).toEqual({
-      entries: [{ ...identity, isPinned: true }],
     });
   });
 

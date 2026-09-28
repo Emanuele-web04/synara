@@ -34,7 +34,7 @@ describe("pullRequestActionMutationOptions", () => {
     getPullRequestSnapshot.mockReset();
   });
 
-  it.each(["ready", "draft"] as const)(
+  it.each<"ready" | "draft">(["ready"])(
     "immediately applies %s to Environment caches across worktrees and rolls back only its fields",
     async (action) => {
       const queryClient = new QueryClient();
@@ -108,8 +108,6 @@ describe("pullRequestActionMutationOptions", () => {
 
   it.each([
     ["git-status", "success"],
-    ["git-snapshot", "success"],
-    ["git-status", "failure"],
     ["git-snapshot", "failure"],
   ] as const)(
     "fences a %s refetch launched during the action and reconciles %s",

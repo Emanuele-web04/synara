@@ -2,7 +2,7 @@
 // Purpose: Locks down server React Query polling profiles and cache options.
 // Layer: Web data-fetching unit tests
 
-import { ThreadId, type ServerConfig, type ServerProviderStatus } from "@synara/contracts";
+import { type ServerConfig, type ServerProviderStatus } from "@synara/contracts";
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 
@@ -12,12 +12,9 @@ import {
   LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS,
   reconcileServerProviderStatuses,
   refreshServerConfigAfterTransportOpen,
-  serverAllProviderUsageQueryOptions,
-  serverLocalServersQueryOptions,
   serverProviderUsageSnapshotQueryOptions,
   serverQueryKeys,
   sidebarLocalServersQueryOptions,
-  studioThreadOutputsQueryOptions,
 } from "./serverReactQuery";
 
 const READY_CODEX_STATUS = {
@@ -44,38 +41,6 @@ function makeServerConfig(providers: readonly ServerProviderStatus[]): ServerCon
 }
 
 describe("server provider status reconciliation", () => {
-  it("distinguishes hydrated config from a live provider snapshot", async () => {
-    const queryClient = new QueryClient();
-    queryClient.setQueryData(serverQueryKeys.config(), makeServerConfig([READY_CODEX_STATUS]));
-
-    expect(hasReconciledServerProviderStatuses(queryClient)).toBe(false);
-
-    await reconcileServerProviderStatuses(queryClient, [READY_CODEX_STATUS]);
-
-    expect(hasReconciledServerProviderStatuses(queryClient)).toBe(true);
-  });
-
-  it("applies a missed live snapshot after the config projection hydrates", async () => {
-    const queryClient = new QueryClient();
-    let resolveConfig!: (config: ServerConfig) => void;
-    const configProjection = new Promise<ServerConfig>((resolve) => {
-      resolveConfig = resolve;
-    });
-
-    const reconciliation = reconcileServerProviderStatuses(queryClient, [READY_CODEX_STATUS], {
-      loadConfig: () => configProjection,
-    });
-
-    expect(queryClient.getQueryData(serverQueryKeys.config())).toBeUndefined();
-
-    resolveConfig(makeServerConfig([]));
-    await reconciliation;
-
-    expect(queryClient.getQueryData<ServerConfig>(serverQueryKeys.config())?.providers).toEqual([
-      READY_CODEX_STATUS,
-    ]);
-  });
-
   it("keeps the newest provider snapshot when hydration overlaps multiple events", async () => {
     const queryClient = new QueryClient();
     let resolveConfig!: (config: ServerConfig) => void;
@@ -159,21 +124,7 @@ describe("server provider status reconciliation", () => {
   });
 });
 
-describe("serverLocalServersQueryOptions", () => {
-  it("uses the visible polling interval by default", () => {
-    const options = serverLocalServersQueryOptions(true);
-
-    expect(options.enabled).toBe(true);
-    expect(options.refetchInterval).toBe(LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS);
-  });
-
-  it("disables polling when disabled", () => {
-    const options = serverLocalServersQueryOptions(false);
-
-    expect(options.enabled).toBe(false);
-    expect(options.refetchInterval).toBe(false);
-  });
-
+describe("sidebarLocalServersQueryOptions", () => {
   it("keeps sidebar attribution enabled without idle polling", () => {
     const options = sidebarLocalServersQueryOptions({
       hasActiveProjectRun: false,
@@ -206,19 +157,7 @@ describe("serverLocalServersQueryOptions", () => {
   });
 });
 
-describe("serverAllProviderUsageQueryOptions", () => {
-  it("can be disabled by provider-scoped usage surfaces", () => {
-    const options = serverAllProviderUsageQueryOptions(false);
-
-    expect(options.enabled).toBe(false);
-  });
-
-  it("shares one batch query key across every usage surface", () => {
-    const options = serverAllProviderUsageQueryOptions();
-
-    expect(options.queryKey).toEqual(serverQueryKeys.allProviderUsage());
-  });
-
+describe("invalidateProviderUsageQueries", () => {
   it("invalidates batch and provider-scoped caches after enablement changes", async () => {
     const queryClient = new QueryClient();
     queryClient.setQueryData(serverQueryKeys.allProviderUsage(), []);
@@ -241,26 +180,5 @@ describe("serverProviderUsageSnapshotQueryOptions", () => {
     });
 
     expect(options.enabled).toBe(false);
-  });
-});
-
-describe("studio thread outputs query options", () => {
-  const capacityError = {
-    code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED",
-    retryable: true,
-    retryAfterMs: 375,
-  };
-
-  it("retries generic output failures without stacking capacity retries", () => {
-    const options = studioThreadOutputsQueryOptions({
-      threadId: ThreadId.makeUnsafe("thread-1"),
-    });
-    expect(typeof options.retry).toBe("function");
-    if (typeof options.retry !== "function") {
-      throw new Error("Expected retry on studioThreadOutputsQueryOptions.");
-    }
-    expect(options.retry(0, capacityError as never)).toBe(false);
-    expect(options.retry(0, new Error("network"))).toBe(true);
-    expect(options.retry(3, new Error("network"))).toBe(false);
   });
 });

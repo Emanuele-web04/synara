@@ -13,7 +13,6 @@ import {
   buildThreadHandoffImportedActivities,
   buildThreadHandoffImportedMessages,
   resolveAvailableHandoffTargetProviders,
-  resolveThreadHandoffTitle,
   resolveThreadHandoffModelSelection,
 } from "./threadHandoff";
 import { appendAssistantSelectionsToPrompt } from "./assistantSelections";
@@ -151,7 +150,6 @@ describe("threadHandoff", () => {
         enabled: false,
       },
     };
-
     expect(
       resolveAvailableHandoffTargetProviders({
         sourceProvider: "codex",
@@ -184,13 +182,6 @@ describe("threadHandoff", () => {
         ],
       }),
     ).toEqual([]);
-  });
-
-  it("preserves the source thread title for the created handoff thread", () => {
-    expect(resolveThreadHandoffTitle({ title: "General Greeting" })).toBe("General Greeting");
-    expect(resolveThreadHandoffTitle({ title: "  Debug   Grok handoff  " })).toBe(
-      "Debug Grok handoff",
-    );
   });
 
   it("prefers sticky model selection for the chosen handoff target", () => {

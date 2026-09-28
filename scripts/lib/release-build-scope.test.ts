@@ -13,10 +13,12 @@ describe("release validation scope", () => {
   it("qualifies Linux without an icon job or unrelated platforms", () => {
     const scope = resolveReleaseBuildScope("linux-x64", "native");
     expect(scope.matrix.include.map((entry) => entry.id)).toEqual(["linux-x64"]);
+    expect(scope.cua_matrix.include.map((entry) => entry.id)).toEqual(["linux-x64"]);
     expect(scope).toMatchObject({
       build_icon: false,
       build_js: false,
       build_native: true,
+      prepare_cua: true,
       package_artifacts: false,
       build_server: false,
     });
@@ -25,11 +27,13 @@ describe("release validation scope", () => {
     expect(resolveReleaseBuildScope("all", "icon")).toMatchObject({
       build_icon: true,
       build_native: false,
+      prepare_cua: false,
       build_js: false,
     });
     expect(resolveReleaseBuildScope("all", "js")).toMatchObject({
       build_icon: false,
       build_native: false,
+      prepare_cua: false,
       build_js: true,
     });
   });
@@ -39,6 +43,7 @@ describe("release validation scope", () => {
       build_icon: false,
       build_js: false,
       build_native: false,
+      prepare_cua: false,
       package_artifacts: false,
       build_server: false,
     });
@@ -51,6 +56,24 @@ describe("release validation scope", () => {
     expect(() => resolveReleaseBuildScope("all", "preflight", true)).toThrow(
       "Publication requires",
     );
+  });
+  it("prepares native artifacts only for the selected Cua platforms", () => {
+    const all = resolveReleaseBuildScope("all", "artifact");
+    expect(all.prepare_cua).toBe(true);
+    expect(all.cua_matrix.include.map((entry) => entry.id)).toEqual([
+      "mac-arm64",
+      "mac-x64",
+      "linux-x64",
+    ]);
+    for (const platform of ["mac-arm64", "mac-x64", "linux-x64"]) {
+      const scope = resolveReleaseBuildScope(platform, "artifact");
+      expect(scope.prepare_cua).toBe(true);
+      expect(scope.cua_matrix.include.map((entry) => entry.id)).toEqual([platform]);
+    }
+    const windows = resolveReleaseBuildScope("win-x64", "artifact");
+    expect(windows.prepare_cua).toBe(false);
+    expect(windows.cua_matrix.include).toEqual([]);
+    expect(windows.package_artifacts).toBe(true);
   });
   it("rejects typos and unsupported Windows source compilation", () => {
     expect(() => resolveReleaseBuildScope("linux")).toThrow("Unknown build platform");

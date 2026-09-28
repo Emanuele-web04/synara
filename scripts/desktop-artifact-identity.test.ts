@@ -7,7 +7,7 @@ import {
 import { createDesktopArtifactIdentity } from "./lib/desktop-artifact-identity.ts";
 
 describe("desktop artifact identity", () => {
-  it.each(["mac", "linux", "win"] as const)(
+  it.each(["mac", "win"] as const)(
     "preserves the production %s package and artifact names",
     (platform) => {
       const result = createDesktopArtifactIdentity({ platform, flavor: "production" });

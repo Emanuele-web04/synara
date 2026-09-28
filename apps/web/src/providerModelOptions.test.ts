@@ -10,9 +10,7 @@ import { getAppModelOptions } from "./appSettings";
 import {
   buildModelSelection,
   buildNextProviderOptions,
-  buildProviderOptionPatch,
   formatProviderModelOptionName,
-  groupProviderModelOptions,
   groupProviderModelOptionsWithFavorites,
   mergeDynamicModelOptions,
   providerModelCostMultiplierLabel,
@@ -34,6 +32,36 @@ describe("Antigravity model options", () => {
       model: "Gemini 3.5 Flash",
       options: { reasoningEffort: "high" },
     });
+  });
+});
+describe("OMP model options", () => {
+  it("builds an OMP model selection carrying a max thinking level", () => {
+    expect(
+      buildModelSelection("omp", "anthropic/claude-sonnet-4", { thinkingLevel: "max" }),
+    ).toEqual({
+      provider: "omp",
+      model: "anthropic/claude-sonnet-4",
+      options: { thinkingLevel: "max" },
+    });
+  });
+
+  it("builds an OMP model selection without options when none are provided", () => {
+    expect(buildModelSelection("omp", "anthropic/claude-sonnet-4")).toEqual({
+      provider: "omp",
+      model: "anthropic/claude-sonnet-4",
+    });
+  });
+
+  it("strips the upstream provider prefix from OMP slugs in display names", () => {
+    // omp sits in the slug-prefix condition alongside pi/opencode/kilo, so the
+    // "anthropic/" prefix must be stripped; regressing omp out of that condition
+    // would leave the slash in the display name.
+    const name = formatProviderModelOptionName({
+      provider: "omp",
+      slug: "anthropic/claude-sonnet-4",
+    });
+    expect(name).not.toContain("/");
+    expect(name.length).toBeGreaterThan(0);
   });
 });
 
@@ -92,7 +120,7 @@ describe("formatProviderModelOptionName", () => {
 });
 
 describe("mergeDynamicModelOptions", () => {
-  it.each(["pi", "opencode"] as const)(
+  it.each(["pi"] as const)(
     "preserves %s discovery names when selection adds a placeholder",
     (provider) => {
       const dynamicModels = [
@@ -129,19 +157,6 @@ describe("mergeDynamicModelOptions", () => {
     },
   );
 
-  it("normalizes slug-shaped Pi display names", () => {
-    expect(
-      mergeDynamicModelOptions({
-        provider: "pi",
-        staticOptions: [],
-        dynamicModels: [
-          { slug: "zai/glm-5.3-flash", name: "GLM-5.3-Flash" },
-          { slug: "deepseek/deepseek-v4-flash", name: "Deepseek V4 Flash" },
-        ],
-      }).map((option) => option.name),
-    ).toEqual(["GLM 5.3 Flash", "DeepSeek V4 Flash"]);
-  });
-
   it("does not offer Pi Anthropic models when discovery only returns local models", () => {
     expect(
       mergeDynamicModelOptions({
@@ -157,19 +172,6 @@ describe("mergeDynamicModelOptions", () => {
         ],
       }).map((option) => option.slug),
     ).toEqual(["local/glm-5.2"]);
-  });
-
-  it("offers Pi Fable and Opus when authenticated discovery returns them", () => {
-    expect(
-      mergeDynamicModelOptions({
-        provider: "pi",
-        staticOptions: [],
-        dynamicModels: [
-          { slug: "anthropic/claude-fable-5", name: "Claude Fable 5" },
-          { slug: "anthropic/claude-opus-4-8", name: "Claude Opus 4.8" },
-        ],
-      }).map((option) => option.slug),
-    ).toEqual(["anthropic/claude-fable-5", "anthropic/claude-opus-4-8"]);
   });
 
   it("uses the live Antigravity catalog as authoritative and includes newly discovered models", () => {
@@ -384,23 +386,73 @@ describe("mergeDynamicModelOptions", () => {
     ]);
   });
 
-  it("treats the live Grok CLI catalog as authoritative", () => {
-    expect(
-      mergeDynamicModelOptions({
-        provider: "grok",
-        staticOptions: [
-          { slug: "grok-4.6", name: "Grok 4.6" },
-          { slug: "grok-4.5", name: "Grok 4.5" },
-          { slug: "grok-build", name: "Grok 4.3" },
-          { slug: "custom/grok-fast", name: "custom/grok-fast", isCustom: true },
-        ],
-        dynamicModels: [{ slug: "grok-4.6", name: "Grok 4.6" }],
-      }),
-    ).toEqual([
-      { slug: "grok-4.6", name: "Grok 4.6" },
-      { slug: "custom/grok-fast", name: "custom/grok-fast", isCustom: true },
-    ]);
-  });
+  it.each(["omp", "opencode"] as const)(
+    "drops a bare %s custom slug that uniquely matches a discovered scoped row",
+    (provider) => {
+      expect(
+        mergeDynamicModelOptions({
+          provider,
+          staticOptions: [
+            {
+              slug: "muse-spark-1.3-contributor",
+              name: "muse-spark-1.3-contributor",
+              isCustom: true,
+            },
+          ],
+          dynamicModels: [
+            {
+              slug: "opencode-go/muse-spark-1.3-contributor",
+              name: "Muse Spark 1.3 Contributor",
+              upstreamProviderId: "opencode-go",
+              upstreamProviderName: "OpenCode Go",
+            },
+            {
+              slug: "opencode-go/deepseek-v4-flash",
+              name: "DeepSeek V4 Flash",
+              upstreamProviderId: "opencode-go",
+              upstreamProviderName: "OpenCode Go",
+            },
+          ],
+        }).map((option) => option.slug),
+      ).toEqual(["opencode-go/muse-spark-1.3-contributor", "opencode-go/deepseek-v4-flash"]);
+    },
+  );
+
+  it.each(["omp", "opencode"] as const)(
+    "keeps a bare %s custom slug when multiple discovered rows share its model id",
+    (provider) => {
+      expect(
+        mergeDynamicModelOptions({
+          provider,
+          staticOptions: [{ slug: "shared-model", name: "shared-model", isCustom: true }],
+          dynamicModels: [
+            { slug: "provider-a/shared-model", name: "Shared Model (A)" },
+            { slug: "provider-b/shared-model", name: "Shared Model (B)" },
+          ],
+        }).map((option) => option.slug),
+      ).toEqual(["provider-a/shared-model", "provider-b/shared-model", "shared-model"]);
+    },
+  );
+
+  it.each(["omp", "opencode"] as const)(
+    "keeps scoped %s custom slugs that do not exactly match a discovered row",
+    (provider) => {
+      expect(
+        mergeDynamicModelOptions({
+          provider,
+          staticOptions: [
+            { slug: "other-host/muse-spark-1.3-contributor", name: "custom", isCustom: true },
+          ],
+          dynamicModels: [
+            { slug: "opencode-go/muse-spark-1.3-contributor", name: "Muse Spark 1.3 Contributor" },
+          ],
+        }).map((option) => option.slug),
+      ).toEqual([
+        "opencode-go/muse-spark-1.3-contributor",
+        "other-host/muse-spark-1.3-contributor",
+      ]);
+    },
+  );
 });
 
 describe("providerModelCostMultiplierLabel", () => {
@@ -446,44 +498,6 @@ describe("providerModelOptionProvenanceLabel", () => {
         option: { slug: "auto", name: "Auto" },
       }),
     ).toBe("Cursor");
-  });
-});
-
-describe("buildProviderOptionPatch", () => {
-  it("passes through option ids unchanged", () => {
-    expect(buildProviderOptionPatch("codex", "reasoningEffort", "xhigh")).toEqual({
-      reasoningEffort: "xhigh",
-    });
-    expect(buildProviderOptionPatch("droid", "reasoningEffort", "high")).toEqual({
-      reasoningEffort: "high",
-    });
-    expect(buildProviderOptionPatch("grok", "reasoningEffort", "high")).toEqual({
-      reasoningEffort: "high",
-    });
-    expect(buildProviderOptionPatch("cursor", "fastMode", true)).toEqual({ fastMode: true });
-  });
-});
-
-describe("groupProviderModelOptions", () => {
-  it("groups provider models by upstream provider", () => {
-    const options = [
-      {
-        slug: "anthropic/claude-sonnet",
-        name: "Claude Sonnet",
-        upstreamProviderId: "anthropic",
-        upstreamProviderName: "Anthropic",
-      },
-      {
-        slug: "openai/gpt-5",
-        name: "GPT-5",
-        upstreamProviderId: "openai",
-        upstreamProviderName: "OpenAI",
-      },
-    ] satisfies ProviderModelOption[];
-
-    const groupedOptions = groupProviderModelOptions(options);
-
-    expect(groupedOptions.map((group) => group.label)).toEqual(["Anthropic", "OpenAI"]);
   });
 });
 

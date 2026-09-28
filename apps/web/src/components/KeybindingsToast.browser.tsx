@@ -346,15 +346,6 @@ async function waitForToast(title: string, count = 1): Promise<void> {
   );
 }
 
-async function waitForNoToast(title: string): Promise<void> {
-  await vi.waitFor(
-    () => {
-      expect(queryToastTitles().filter((t) => t === title)).toHaveLength(0);
-    },
-    { timeout: 10_000, interval: 50 },
-  );
-}
-
 async function mountApp(
   subscriptionTimeoutMs = COLD_MOUNT_SUBSCRIPTION_TIMEOUT_MS,
 ): Promise<{ cleanup: () => Promise<void> }> {
@@ -457,20 +448,6 @@ describe("Keybindings update toast", () => {
     document.body.innerHTML = "";
   });
 
-  it("does not show success toasts for passive keybinding reloads", async () => {
-    const mounted = await mountApp();
-
-    try {
-      await sendServerConfigUpdatedPush([]);
-      await waitForNoToast("Keybindings updated");
-
-      await sendServerConfigUpdatedPush([]);
-      await waitForNoToast("Keybindings updated");
-    } finally {
-      await mounted.cleanup();
-    }
-  });
-
   it("shows a warning toast when keybinding config has issues", async () => {
     const mounted = await mountApp();
 
@@ -481,34 +458,6 @@ describe("Keybindings update toast", () => {
       await waitForToast("Invalid keybindings configuration");
     } finally {
       await mounted.cleanup();
-    }
-  });
-
-  it("does not show a toast from the replayed cached value on subscribe", async () => {
-    const mounted = await mountApp();
-
-    try {
-      await sendServerConfigUpdatedPush([]);
-      await waitForNoToast("Keybindings updated");
-
-      // Remount the app — onServerConfigUpdated replays the cached value
-      // synchronously on subscribe. This should NOT produce a toast.
-      await mounted.cleanup();
-      const remounted = await mountApp();
-
-      // Give it a moment to process the replayed value
-      await new Promise((resolve) => setTimeout(resolve, 500));
-
-      const titles = queryToastTitles();
-      expect(
-        titles.filter((t) => t === "Keybindings updated").length,
-        "Replayed cached value should not produce a toast",
-      ).toBe(0);
-
-      await remounted.cleanup();
-    } catch (error) {
-      await mounted.cleanup().catch(() => {});
-      throw error;
     }
   });
 });

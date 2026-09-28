@@ -8,7 +8,6 @@ import { ThreadId } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  describeThreadUnblockResult,
   isProviderDeliveryReconciliationConflict,
   PROVIDER_DELIVERY_RECONCILIATION_CONFLICT_CODE,
   unblockThreadFromClient,
@@ -161,19 +160,5 @@ describe("isProviderDeliveryReconciliationConflict", () => {
     expect(isProviderDeliveryReconciliationConflict(new Error("Socket closed"))).toBe(false);
     expect(isProviderDeliveryReconciliationConflict(null)).toBe(false);
     expect(isProviderDeliveryReconciliationConflict({ code: "WS_REQUEST_TIMEOUT" })).toBe(false);
-  });
-});
-
-describe("describeThreadUnblockResult", () => {
-  it("always tells the user to resend the failed message", () => {
-    for (const result of [
-      { kind: "unblocked", reconciledCount: 1 },
-      { kind: "already-clear" },
-      { kind: "resolved-elsewhere" },
-    ] as const) {
-      const notice = describeThreadUnblockResult(result);
-      expect(notice.title.length).toBeGreaterThan(0);
-      expect(notice.description.toLowerCase()).toContain("resend");
-    }
   });
 });

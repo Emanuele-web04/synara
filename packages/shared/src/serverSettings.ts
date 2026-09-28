@@ -28,6 +28,7 @@ export function applyServerSettingsPatch(
     selectionPatch.model ??
     (selectionPatch.provider &&
     selectionPatch.provider !== "pi" &&
+    selectionPatch.provider !== "omp" &&
     selectionPatch.provider !== current.textGenerationModelSelection.provider
       ? DEFAULT_MODEL_BY_PROVIDER[selectionPatch.provider]
       : current.textGenerationModelSelection.model);
@@ -50,13 +51,16 @@ export function providerStartOptionsFromServerSettings(
   settings: ServerSettings,
 ): ProviderStartOptions {
   const { providers } = settings;
+  const codexBinaryPath = providers.codex.binaryPath.trim();
+  const codexHomePath = providers.codex.homePath.trim();
+  const claudeBinaryPath = providers.claudeAgent.binaryPath.trim();
   return {
     codex: {
-      ...(providers.codex.binaryPath ? { binaryPath: providers.codex.binaryPath } : {}),
-      ...(providers.codex.homePath ? { homePath: providers.codex.homePath } : {}),
+      ...(codexBinaryPath ? { binaryPath: codexBinaryPath } : {}),
+      ...(codexHomePath ? { homePath: codexHomePath } : {}),
     },
     claudeAgent: {
-      ...(providers.claudeAgent.binaryPath ? { binaryPath: providers.claudeAgent.binaryPath } : {}),
+      ...(claudeBinaryPath ? { binaryPath: claudeBinaryPath } : {}),
       enableArtifacts: providers.claudeAgent.enableArtifacts,
     },
     cursor: {
@@ -83,6 +87,10 @@ export function providerStartOptionsFromServerSettings(
     },
     devin: {
       ...(providers.devin.binaryPath ? { binaryPath: providers.devin.binaryPath } : {}),
+    },
+    omp: {
+      ...(providers.omp.binaryPath ? { binaryPath: providers.omp.binaryPath } : {}),
+      ...(providers.omp.agentDir ? { agentDir: providers.omp.agentDir } : {}),
     },
   };
 }
