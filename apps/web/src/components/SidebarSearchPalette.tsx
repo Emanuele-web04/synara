@@ -31,6 +31,7 @@ import { LuArrowLeft, LuCornerLeftUp } from "react-icons/lu";
 import { type ComponentType, useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { FolderClosed } from "./FolderClosed";
+import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ProviderIcon as SharedProviderIcon } from "./ProviderIcon";
 import { readNativeApi } from "~/nativeApi";
 import { cn, getNavigatorPlatform, isMacPlatform } from "~/lib/utils";
@@ -1072,7 +1073,18 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                           props.onOpenProject(project.id);
                         }}
                       >
-                        <FolderOpenFrontIcon className={PALETTE_ICON_CLASS} />
+                        {project.appearance ? (
+                          <span className="relative inline-flex size-3.5 shrink-0 items-center justify-center text-muted-foreground">
+                            <ProjectSidebarIcon
+                              cwd={project.cwd}
+                              expanded
+                              appearance={project.appearance}
+                              glyphClassName="size-3.5"
+                            />
+                          </span>
+                        ) : (
+                          <FolderOpenFrontIcon className={PALETTE_ICON_CLASS} />
+                        )}
                         <span className={PALETTE_TEXT_CLASS}>
                           {project.name || "Untitled project"}
                         </span>

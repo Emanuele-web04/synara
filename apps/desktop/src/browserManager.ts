@@ -2759,11 +2759,8 @@ export class DesktopBrowserManager {
       return;
     }
 
-    try {
-      window.contentView.removeChildView(runtime.view);
-    } catch {
-      // Electron throws when the view is not attached yet; adding it below is the desired state.
-    }
+    // Electron reorders an existing child in place. Removing it first drops
+    // native focus even when the user is already interacting with this page.
     window.contentView.addChildView(runtime.view);
   }
 
@@ -2894,6 +2891,8 @@ export class DesktopBrowserManager {
       ...(popupOptions?.webContents ? { webContents: popupOptions.webContents } : {}),
       webPreferences: {
         ...popupOptions?.webPreferences,
+        // Navigation must preserve shell keyboard focus, including hidden previews.
+        focusOnNavigation: false,
         partition: BROWSER_SESSION_PARTITION,
         contextIsolation: true,
         nodeIntegration: false,

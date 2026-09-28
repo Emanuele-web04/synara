@@ -5,6 +5,7 @@ import type { ComponentType } from "react";
 
 import type { ProviderKind } from "@synara/contracts";
 import { basenameOfPath } from "../file-icons";
+import type { ProjectAppearance } from "../lib/projectAppearance";
 import type { ThemeMode, ThemeVariant } from "../theme/theme.logic";
 
 export interface SidebarSearchAction {
@@ -42,6 +43,7 @@ export interface SidebarSearchProject {
   remoteName: string;
   folderName: string;
   localName: string | null;
+  appearance?: ProjectAppearance | null;
   cwd: string;
   spaceName: string;
   createdAt?: string | undefined;

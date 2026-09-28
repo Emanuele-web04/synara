@@ -1140,7 +1140,8 @@ export function BrowserPanel({
           shouldOccludeBrowserWebview({
             showLocalServersHome,
             browserActionsMenuOpen,
-            hasObscuringOverlay: hasNativeBrowserObscuringOverlay(element),
+            hasObscuringOverlay:
+              showBrowserAddressSuggestions || hasNativeBrowserObscuringOverlay(element),
           }));
       lastOverlayObscuredRef.current = obscuredByOverlay;
       setBrowserWebviewOverlayOcclusion(browserWebviewRef.current, obscuredByOverlay);
@@ -1309,6 +1310,7 @@ export function BrowserPanel({
     browserPageError,
     isLiveRuntime,
     isFloatingMode,
+    showBrowserAddressSuggestions,
     showLocalServersHome,
     threadId,
     usesNativeRuntime,
