@@ -239,6 +239,11 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Jump the diff viewport to the previous changed file.",
   },
   {
+    command: "sidechat.toggle",
+    label: "Toggle side chat",
+    description: "Open or hide a side chat beside the main conversation.",
+  },
+  {
     command: "browser.toggle",
     label: "Toggle browser",
     description: "Reveal the built-in browser panel for the active thread.",

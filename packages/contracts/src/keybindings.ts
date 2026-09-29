@@ -57,6 +57,7 @@ export const STATIC_KEYBINDING_COMMANDS = [
   "chat.newCodex",
   "chat.newCursor",
   "chat.split",
+  "sidechat.toggle",
   "view.recent.next",
   "view.recent.previous",
   "thread.jump.1",

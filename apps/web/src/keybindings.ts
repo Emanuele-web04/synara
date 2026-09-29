@@ -87,6 +87,11 @@ const whenModChordAllowed = whenOr(whenNotTerminalFocus, whenIdentifier("isMac")
 
 export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
   {
+    command: "sidechat.toggle",
+    shortcut: commandShortcut("s", { altKey: true }),
+    whenAst: whenModChordAllowed,
+  },
+  {
     command: "sidebar.activity",
     shortcut: commandShortcut("u", { altKey: true }),
     whenAst: whenModChordAllowed,
