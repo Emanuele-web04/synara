@@ -129,8 +129,38 @@ export const AgentCursorColorMode = Schema.Literals(["stock", "custom"]);
 export type AgentCursorColorMode = typeof AgentCursorColorMode.Type;
 export const DEFAULT_AGENT_CURSOR_COLOR_MODE: AgentCursorColorMode = "stock";
 
-const SidebarNavItemId = Schema.Literals([...SIDEBAR_NAV_ITEM_IDS]);
-const RailOrderableItemId = Schema.Literals([...RAIL_ORDERABLE_ITEM_IDS]);
+/**
+ * A persisted id list that keeps the entries this build can resolve (known ids, or a
+ * renamed id's new name) and drops the rest, so an id written by a newer or older build
+ * never fails the whole settings decode and resets every setting.
+ */
+function persistedIdList<Id extends string>(
+  IdSchema: Schema.Codec<Id>,
+  resolve: (value: string) => Id | undefined,
+) {
+  return Schema.Array(Schema.String).pipe(
+    Schema.decodeTo(
+      Schema.Array(IdSchema),
+      SchemaTransformation.transform<ReadonlyArray<Id>, ReadonlyArray<string>>({
+        decode: (values) =>
+          values.flatMap((value) => {
+            const id = resolve(value);
+            return id === undefined ? [] : [id];
+          }),
+        encode: (values) => values,
+      }),
+    ),
+  );
+}
+
+function persistedKnownIdList<const Ids extends ReadonlyArray<string>>(ids: Ids) {
+  const Id = Schema.Literals([...ids]);
+  const isKnownId = Schema.is(Id);
+  return persistedIdList(Id, (value) => (isKnownId(value) ? value : undefined));
+}
+
+const SidebarNavItemIdList = persistedKnownIdList(SIDEBAR_NAV_ITEM_IDS);
+const RailOrderableItemIdList = persistedKnownIdList(RAIL_ORDERABLE_ITEM_IDS);
 /** Classic: one sidebar column. Rail: fixed icon tabs plus a panel (Beta-only, see useSidebarLayout). */
 export const SidebarLayout = Schema.Literals(["classic", "rail"]);
 export type SidebarLayout = typeof SidebarLayout.Type;
@@ -247,19 +277,7 @@ function resolvePersistedProviderListEntry(provider: string): ProviderKind | und
   return Schema.is(ProviderKind)(renamed) ? renamed : undefined;
 }
 
-const PersistedProviderKindList = Schema.Array(Schema.String).pipe(
-  Schema.decodeTo(
-    Schema.Array(ProviderKind),
-    SchemaTransformation.transform({
-      decode: (providers): ReadonlyArray<ProviderKind> =>
-        providers.flatMap((provider) => {
-          const resolved = resolvePersistedProviderListEntry(provider);
-          return resolved === undefined ? [] : [resolved];
-        }),
-      encode: (providers) => providers as ReadonlyArray<string>,
-    }),
-  ),
-);
+const PersistedProviderKindList = persistedIdList(ProviderKind, resolvePersistedProviderListEntry);
 
 const PersistedHiddenModels = Schema.Array(
   Schema.Struct({
@@ -348,10 +366,8 @@ export const AppSettingsSchema = Schema.Struct({
   // Pull requests, Automations): drag-to-reorder order plus explicitly hidden items.
   // An item whose route is currently active stays visible regardless (mirrors
   // `hiddenProviders`), so hiding a surface never strands the user mid-route.
-  sidebarNavOrder: Schema.Array(SidebarNavItemId).pipe(
-    withDefaults(() => [...DEFAULT_SIDEBAR_NAV_ORDER]),
-  ),
-  hiddenSidebarNavItems: Schema.Array(SidebarNavItemId).pipe(withDefaults(() => [])),
+  sidebarNavOrder: SidebarNavItemIdList.pipe(withDefaults(() => [...DEFAULT_SIDEBAR_NAV_ORDER])),
+  hiddenSidebarNavItems: SidebarNavItemIdList.pipe(withDefaults(() => [])),
   // Local-only shell layout, available in Stable and Beta. useSidebarLayout keeps
   // mobile on classic even when the stored preference is "rail".
   sidebarLayout: SidebarLayout.pipe(withDefaults(() => DEFAULT_SIDEBAR_LAYOUT)),
@@ -363,12 +379,8 @@ export const AppSettingsSchema = Schema.Struct({
   // Rail layout's own Customize state (the classic nav block keeps `sidebarNavOrder`):
   // the order of the rail's top items and the ones the user hid. Home never hides, and an
   // active hidden item stays visible (see appRail.logic).
-  railItemOrder: Schema.Array(RailOrderableItemId).pipe(
-    withDefaults(() => [...RAIL_ORDERABLE_ITEM_IDS]),
-  ),
-  hiddenRailItems: Schema.Array(RailOrderableItemId).pipe(
-    withDefaults(() => [...DEFAULT_HIDDEN_RAIL_ITEMS]),
-  ),
+  railItemOrder: RailOrderableItemIdList.pipe(withDefaults(() => [...RAIL_ORDERABLE_ITEM_IDS])),
+  hiddenRailItems: RailOrderableItemIdList.pipe(withDefaults(() => [...DEFAULT_HIDDEN_RAIL_ITEMS])),
   // Whether the per-run threads standalone automations create appear in the sidebar
   // (and the surfaces derived from it: Kanban, Activity, project picker). Runs stay
   // listed on the automation's page and findable via search either way.
