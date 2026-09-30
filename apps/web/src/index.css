@@ -2900,28 +2900,19 @@ diffs-container {
   ) !important;
 }
 
-/* Composer and user bubbles share continuous corners; their radii remain the fallback.
-   Electron smoothing must not stack with browser corner-shape. */
-:root[data-runtime="electron"] .chat-composer-shell,
-:root[data-runtime="electron"] .chat-composer-surface,
-:root[data-runtime="electron"] .chat-composer-stacked-top,
-:root[data-runtime="electron"] .chat-composer-surface-banner,
-:root[data-runtime="electron"] .chat-user-message-bubble,
-:root[data-runtime="electron"] .palette-surface,
-:root[data-runtime="electron"] .palette-row {
-  -electron-corner-smoothing: system-ui;
-}
-
-/* Browser: squircle via corner-shape when supported. */
-@supports (corner-shape: squircle) {
-  :root:not([data-runtime="electron"]) .chat-composer-shell,
-  :root:not([data-runtime="electron"]) .chat-composer-surface,
-  :root:not([data-runtime="electron"]) .chat-composer-stacked-top,
-  :root:not([data-runtime="electron"]) .chat-composer-surface-banner,
-  :root:not([data-runtime="electron"]) .chat-user-message-bubble,
-  :root:not([data-runtime="electron"]) .palette-surface,
-  :root:not([data-runtime="electron"]) .palette-row {
-    corner-shape: squircle;
+/* Continuous ("squircle") corners, opt-in with the `squircle` class (composer, user
+   bubbles, palettes, open-thread tabs). The element's own border-radius stays the geometry
+   and the fallback: Electron smooths it natively, browsers that support corner-shape switch
+   to it, and everything else keeps plain rounded corners. Electron smoothing must not
+   stack with browser corner-shape. */
+@utility squircle {
+  :root[data-runtime="electron"] & {
+    -electron-corner-smoothing: system-ui;
+  }
+  @supports (corner-shape: squircle) {
+    :root:not([data-runtime="electron"]) & {
+      corner-shape: squircle;
+    }
   }
 }
 

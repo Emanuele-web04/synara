@@ -180,10 +180,10 @@ export const DOCK_TAB_ICON_HOVER_HIDE_CLASS_NAME =
 export const DOCK_TAB_CLOSE_GLYPH_CLASS_NAME =
   "absolute size-3.5 shrink-0 opacity-0 transition-opacity group-hover/dock-tab:opacity-100 group-focus-within/dock-tab:opacity-100";
 
-/** Trailing close button for content tabs: a 20px target overlaid on the chip's end with
+/** Trailing close button for content tabs: a 24px target overlaid on the chip's end with
  *  its own hover disc, so it reads as separate from the (already filled) chip behind it. */
 const SURFACE_TAB_TRAILING_CLOSE_CLASS_NAME =
-  "absolute top-1/2 right-1.5 flex size-5 -translate-y-1/2 cursor-pointer items-center justify-center rounded-sm text-[var(--color-text-foreground-secondary)] outline-none transition-[opacity,background-color,color] hover:bg-[color-mix(in_srgb,var(--foreground)_8%,transparent)] hover:text-[var(--color-text-foreground)] focus-visible:ring-1 focus-visible:ring-ring/60";
+  "absolute top-1/2 right-1 flex size-6 -translate-y-1/2 cursor-pointer items-center justify-center rounded-sm text-[var(--color-text-foreground-secondary)] outline-none transition-[opacity,background-color,color] hover:bg-[color-mix(in_srgb,var(--foreground)_8%,transparent)] hover:text-[var(--color-text-foreground)] focus-visible:ring-1 focus-visible:ring-ring/60";
 
 /** Keyboard focus ring for a chip's select button (the chip itself carries no focus). */
 const SURFACE_TAB_SELECT_FOCUS_CLASS_NAME =
@@ -290,7 +290,7 @@ export function SurfaceTabChip({
         trailingClose
           ? cn(
               CHAT_SURFACE_CHIP_CLASS_NAME,
-              "relative flex !h-8 min-w-0 items-center rounded-sm px-0",
+              "relative flex !h-8 min-w-0 items-center rounded-md px-0 squircle",
             )
           : DOCK_TAB_CHIP_CLASS_NAME,
         active && CHAT_SURFACE_CONTROL_ACTIVE_CLASS_NAME,
@@ -373,7 +373,7 @@ export function SurfaceTabChip({
           title={closeLabel}
           onClick={handleClose}
         >
-          <CentralIcon name="cross-small" className="size-3.5 shrink-0" />
+          <CentralIcon name="cross-small" className="size-4 shrink-0" />
         </button>
       ) : null}
     </div>
