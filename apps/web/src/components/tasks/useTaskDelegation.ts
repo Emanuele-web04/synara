@@ -131,11 +131,25 @@ export function useTaskDelegation(options: {
   // Returns false when linking failed; the mutation already told the user why. A link
   // whose reply was lost with the connection may still have been stored, so re-read the
   // to-do before deciding.
-  const linkChat = (input: TodoUpdateInput) =>
+  const linkChat = (
+    input: TodoUpdateInput,
+    { requireClaimReply = false }: { requireClaimReply?: boolean } = {},
+  ) =>
     onLinkChat(input).then(
       () => true,
       async (error: unknown) => {
         if (!isRequestOutcomeUnknown(error) || input.threadId === undefined) return false;
+        if (requireClaimReply) {
+          // Another window can claim the same existing chat. A matching read cannot
+          // identify the winner, and must not dispatch twice or bypass its settle grace.
+          toastManager.add({
+            type: "warning",
+            title: "Couldn't confirm the task's chat link",
+            description:
+              "No prompt was sent. Another window may have delegated this task. Check the chat before trying again.",
+          });
+          return false;
+        }
         try {
           const { todos } = await ensureNativeApi().todo.list();
           const linked =
@@ -143,8 +157,14 @@ export function useTaskDelegation(options: {
           if (!linked) {
             toastManager.add({
               type: "warning",
-              title: "The task's chat link changed",
-              description: "Delegation was not started. Check the task and try again.",
+              title:
+                input.threadId === null
+                  ? "Couldn't unlink the task"
+                  : "The task's chat link changed",
+              description:
+                input.threadId === null
+                  ? "The task is still linked. Check its chat before using Unlink in the task menu."
+                  : "Delegation was not started. Check the task and try again.",
             });
           }
           return linked;
@@ -186,12 +206,15 @@ export function useTaskDelegation(options: {
     // expectedThreadId makes the link a claim: it fails if another window delegated first.
     // The base turn keeps the chat's earlier work from reading as this to-do's until the
     // delegated turn appears, in every window.
-    const linked = await linkChat({
-      id: todo.id,
-      threadId: chatId,
-      delegationBaseTurnId: thread.latestTurn?.turnId ?? null,
-      expectedThreadId: todo.threadId,
-    });
+    const linked = await linkChat(
+      {
+        id: todo.id,
+        threadId: chatId,
+        delegationBaseTurnId: thread.latestTurn?.turnId ?? null,
+        expectedThreadId: todo.threadId,
+      },
+      { requireClaimReply: true },
+    );
     if (!linked) return false;
     if (!canUseComposer()) {
       await unlinkChat(chatId, false);
