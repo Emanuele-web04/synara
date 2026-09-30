@@ -147,8 +147,14 @@ export function useTaskDelegation(options: {
           if (!linked) {
             toastManager.add({
               type: "warning",
-              title: "The task's chat link changed",
-              description: "Delegation was not started. Check the task and try again.",
+              title:
+                input.threadId === null
+                  ? "Couldn't unlink the task"
+                  : "The task's chat link changed",
+              description:
+                input.threadId === null
+                  ? "The task is still linked. Check its chat before using Unlink in the task menu."
+                  : "Delegation was not started. Check the task and try again.",
             });
           }
           return linked;
