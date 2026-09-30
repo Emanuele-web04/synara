@@ -29,7 +29,10 @@ import {
 } from "~/lib/draftThreadDispatch";
 import { resolveProviderSendAvailabilityWithRefresh } from "~/lib/providerAvailability";
 import { isRequestOutcomeUnknown } from "~/lib/requestOutcome";
-import { composerDraftHasUnsentContent } from "../../composerDraftDomain";
+import {
+  composerDraftHasUnsentContent,
+  type ComposerThreadDraftState,
+} from "../../composerDraftDomain";
 import { providerInstanceModelSelectionKey, useComposerDraftStore } from "../../composerDraftStore";
 import { ensureNativeApi } from "../../nativeApi";
 import { buildModelSelection } from "../../providerModelOptions";
@@ -135,16 +138,28 @@ export function useTaskDelegation(options: {
         if (!isRequestOutcomeUnknown(error) || input.threadId === undefined) return false;
         try {
           const { todos } = await ensureNativeApi().todo.list();
-          return todos.find((stored) => stored.id === input.id)?.threadId === input.threadId;
+          const linked =
+            todos.find((stored) => stored.id === input.id)?.threadId === input.threadId;
+          if (!linked) {
+            toastManager.add({
+              type: "warning",
+              title: "The task's chat link changed",
+              description: "Delegation was not started. Check the task and try again.",
+            });
+          }
+          return linked;
         } catch {
-          return false;
+          // The link may exist. Abort without sending, retain the draft, and allow the
+          // user to recover once this local request has settled.
+          uncertainThreadRef.current = input.threadId ?? input.expectedThreadId ?? null;
+          throw error;
         }
       },
     );
   // Awaited so Start stays busy until the to-do is back to "To do"; if the server can't
   // store that either, the mutation's toast says so and the row's menu can unlink later.
   const unlinkChat = async (linkedChatId: ThreadId, clearProject: boolean) => {
-    await linkChat({
+    return linkChat({
       id: todo.id,
       threadId: null,
       // Only undo our own link, never one another window made meanwhile.
@@ -156,17 +171,18 @@ export function useTaskDelegation(options: {
   const startInExistingChat = async (thread: SidebarThreadSummary, prompt: string) => {
     const chatId = thread.id;
     const composerStore = useComposerDraftStore.getState();
-    const chatDraft = composerStore.draftsByThreadId[chatId];
-    // The dispatch sends the chat's composer and clears it, so anything unsent would ride
-    // along or be lost.
-    if (chatDraft && composerDraftHasUnsentContent(chatDraft)) {
+    const canUseComposer = () => {
+      const chatDraft = useComposerDraftStore.getState().draftsByThreadId[chatId];
+      // Never send or replace an unrelated message in the chosen chat.
+      if (!chatDraft || !composerDraftHasUnsentContent(chatDraft)) return true;
       toastManager.add({
         type: "error",
         title: "That chat has an unsent message",
         description: "Send or clear it first, then delegate again.",
       });
       return false;
-    }
+    };
+    if (!canUseComposer()) return false;
     // expectedThreadId makes the link a claim: it fails if another window delegated first.
     // The base turn keeps the chat's earlier work from reading as this to-do's until the
     // delegated turn appears, in every window.
@@ -177,6 +193,10 @@ export function useTaskDelegation(options: {
       expectedThreadId: todo.threadId,
     });
     if (!linked) return false;
+    if (!canUseComposer()) {
+      await unlinkChat(chatId, false);
+      return false;
+    }
     const providerInstances = getProviderInstanceOptions(settings);
     const dispatchTarget = resolveDraftThreadDispatchTarget({
       threadId: chatId,
@@ -197,8 +217,11 @@ export function useTaskDelegation(options: {
     });
     const started = reportResult(result, chatId, thread.title);
     if (!started) {
-      // The chat's composer was empty before; don't leave the delegation prompt in it.
-      useComposerDraftStore.getState().setPrompt(chatId, "");
+      // Remove only our prompt; the user may have typed a new message while sending.
+      const currentStore = useComposerDraftStore.getState();
+      if (currentStore.draftsByThreadId[chatId]?.prompt === prompt) {
+        currentStore.setPrompt(chatId, "");
+      }
       await unlinkChat(chatId, false);
     }
     return started;
@@ -245,6 +268,7 @@ export function useTaskDelegation(options: {
     // A to-do without a project picks up the one it was delegated into.
     const adoptsProject = todo.projectId === null && target.kind === "project";
     let linked = true;
+    let createdComposerState: ComposerThreadDraftState | undefined;
     let created: Awaited<ReturnType<typeof createAndDispatchDraftThread>>;
     // The new chat copies the scratch draft (traits and all) rather than `prompt`.
     useComposerDraftStore.getState().setPrompt(scratchThreadId, prompt);
@@ -263,13 +287,14 @@ export function useTaskDelegation(options: {
         providerOptions: getProviderStartOptions(settings, selectedProviderInstanceId),
         providerInstances: getProviderInstanceOptions(settings),
         beforeDispatch: async (newThreadId) => {
+          createdComposerState = useComposerDraftStore.getState().draftsByThreadId[newThreadId];
           linked = await linkChat({
             id: todo.id,
             threadId: newThreadId,
             expectedThreadId: todo.threadId,
             ...(adoptsProject ? { projectId } : {}),
           });
-          // Throwing makes createAndDispatchDraftThread drop the draft unsent.
+          // A confirmed rejection drops the draft; an unknown outcome preserves it.
           if (!linked) throw new Error("The task could not be linked to the chat.");
         },
       });
@@ -283,8 +308,12 @@ export function useTaskDelegation(options: {
         ?.name ?? selectedModel;
     const started = reportResult(result, threadId, agentLabel);
     if (!started) {
-      useComposerDraftStore.getState().clearDraftThread(threadId);
-      await unlinkChat(threadId, adoptsProject);
+      const unlinked = await unlinkChat(threadId, adoptsProject);
+      const currentStore = useComposerDraftStore.getState();
+      // Keep uncertain links reachable, and never discard edits made during the request.
+      if (unlinked && currentStore.draftsByThreadId[threadId] === createdComposerState) {
+        currentStore.clearDraftThread(threadId);
+      }
     }
     return started;
   };
@@ -305,6 +334,14 @@ export function useTaskDelegation(options: {
         : await startInNewChat(prompt);
       if (started) onDelegated?.();
     } catch (error) {
+      if (uncertainThreadRef.current !== null && isRequestOutcomeUnknown(error)) {
+        toastManager.add({
+          type: "warning",
+          title: "Couldn't confirm the task's chat link",
+          description: "The agent was not started. Check the chat or unlink the task to try again.",
+        });
+        return;
+      }
       toastManager.add({
         type: "error",
         title: "Couldn't delegate the task",

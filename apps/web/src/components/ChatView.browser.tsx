@@ -1206,6 +1206,10 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
     // which leaks unrelated retry pressure across this file's many mounts.
     return { models: [], source: "unsupported", cached: false };
   }
+  // The sidebar badge reads this on every chat; keep its RPC response contract-valid.
+  if (tag === WS_METHODS.pullRequestsReviewRequestCount) {
+    return { count: 0, incomplete: false };
+  }
   if (tag === WS_METHODS.projectsListDevServers) {
     return { servers: [] };
   }
@@ -5600,8 +5604,14 @@ describe("ChatView transcript geometry (full app)", () => {
     try {
       const editor = await waitForComposerEditor();
       await userEvent.click(editor);
-      const draft = "Keep this unsent draft while moving the caret. ".repeat(8);
-      await userEvent.keyboard(draft);
+      const phrase = "Keep this unsent draft while moving the caret. ";
+      const draft = phrase.repeat(8);
+      // Exercise caret/history behavior while allowing React to finish a frame between
+      // typing bursts, rather than hundreds of automation keys in one update batch.
+      for (let index = 0; index < 8; index += 1) {
+        await userEvent.keyboard(phrase);
+        await nextFrame();
+      }
       await userEvent.keyboard("{Shift>}{Enter}{/Shift}Second line");
       const prompt = useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt;
       await userEvent.keyboard("{ArrowUp>10/}");
