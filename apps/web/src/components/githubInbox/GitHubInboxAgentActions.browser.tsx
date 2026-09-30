@@ -533,8 +533,28 @@ describe("Ask", () => {
     await mount(ISSUE_SEARCH);
     await page.getByRole("button", { name: "Project: Alpha" }).click();
     await page.getByRole("menuitemradio", { name: "Beta" }).click();
-    await openSideChat();
+    let finishCreation: () => void = () => undefined;
+    dispatchCommand.mockImplementationOnce((command) => {
+      if (command.type === "thread.create") createdSidechats.push(command);
+      return new Promise((resolve) => {
+        finishCreation = () => resolve({ sequence: createdSidechats.length });
+      });
+    });
+    await page.getByRole("textbox", { name: "Ask about this issue" }).fill("Why does this crash?");
+    await page.getByRole("button", { name: "Ask in a side chat" }).click();
     await expect.poll(() => createdSidechats.length).toBe(1);
+    try {
+      await expect
+        .poll(
+          () =>
+            document.querySelector<HTMLButtonElement>('[aria-label="Starting side chat"]')
+              ?.disabled,
+          { timeout: 2000 },
+        )
+        .toBe(true);
+    } finally {
+      finishCreation();
+    }
     expect(createdSidechats[0]?.projectId).toBe(projectB);
     const threadId = createdSidechats[0]!.threadId;
     await expect.poll(shownSidechat).toBe(threadId);

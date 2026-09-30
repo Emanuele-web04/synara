@@ -60,7 +60,7 @@ interface GitHubItemKey {
 }
 
 function itemKey(item: GitHubItemKey): string {
-  return `${item.projectId}\u0000${item.repository.toLowerCase()}\u0000${item.number}`;
+  return `${item.repository.toLowerCase()}\u0000${item.number}`;
 }
 
 function liveSidechatId(sidechats: readonly SidebarThreadSummary[]): ThreadId | null {
