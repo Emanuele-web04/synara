@@ -21,9 +21,9 @@ export function buildGroupDeletedNotice(result: {
   }
   if (result.workspaceLeftOnDiskPath) {
     keptParts.push(
-      `The group folder has your files, so it was left on disk at ${result.workspaceLeftOnDiskPath}.`,
+      `The hub folder has your files, so it was left on disk at ${result.workspaceLeftOnDiskPath}.`,
     );
-    copyItems.push({ label: "group folder path", text: result.workspaceLeftOnDiskPath });
+    copyItems.push({ label: "hub folder path", text: result.workspaceLeftOnDiskPath });
   }
 
   if (copyItems.length === 0) return null;

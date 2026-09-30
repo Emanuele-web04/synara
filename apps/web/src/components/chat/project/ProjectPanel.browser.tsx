@@ -191,9 +191,9 @@ describe("ProjectPanel configured state", () => {
       .toBeInTheDocument();
 
     await page.getByRole("button", { name: "Set up coordinator" }).click();
-    await expect.element(page.getByText("Set up your group")).toBeInTheDocument();
+    await expect.element(page.getByText("Set up your hub")).toBeInTheDocument();
 
-    await page.getByRole("button", { name: "Create group" }).click();
+    await page.getByRole("button", { name: "Create hub" }).click();
     await vi.waitFor(() => expect(harness.api.projectAgent.configure).toHaveBeenCalledOnce());
 
     // The panel flips into the configured layout and loads the lists behind it.
@@ -201,13 +201,13 @@ describe("ProjectPanel configured state", () => {
       expect(harness.api.projectAgent.listTasks).toHaveBeenCalled();
       expect(harness.api.projectAgent.listThreadIndex).toHaveBeenCalled();
     });
-    await expect.element(page.getByText("Groups", { exact: true })).toBeInTheDocument();
+    await expect.element(page.getByText("Hubs", { exact: true })).toBeInTheDocument();
     // The coordinator row is a single model line: the group name (default
     // coordinator name resolves to it) opens the coordinator thread.
     await expect.element(page.getByRole("button", { name: "Open alpha" })).toBeInTheDocument();
     // The settings dialog closed on save; the edit-mode affordance is up.
-    await expect.element(page.getByText("Set up your group")).not.toBeInTheDocument();
-    await expect.element(page.getByRole("button", { name: "Group settings" })).toBeInTheDocument();
+    await expect.element(page.getByText("Set up your hub")).not.toBeInTheDocument();
+    await expect.element(page.getByRole("button", { name: "Hub settings" })).toBeInTheDocument();
 
     // The panel's stream outlives the dialog's subscription — a later task
     // upsert still reaches it and re-lists the thread index.
@@ -236,10 +236,10 @@ describe("ProjectPanel configured state", () => {
     );
 
     // Reopening settings is edit mode — the title is the group name, not onboarding.
-    await page.getByRole("button", { name: "Group settings" }).click();
+    await page.getByRole("button", { name: "Hub settings" }).click();
     await vi.waitFor(() => expect(document.body.textContent).toContain("General"));
     expect(document.body.textContent).toContain("alpha");
-    expect(document.body.textContent).not.toContain("Set up your group");
+    expect(document.body.textContent).not.toContain("Set up your hub");
   });
 });
 
@@ -364,7 +364,7 @@ describe("ProjectPanel polished sections", () => {
     expect(contextRow.getAttribute("aria-expanded")).toBe("false");
   });
 
-  it("lists every group thread by state in the Threads section, not an empty state", async () => {
+  it("lists every hub thread by state in the Threads section, not an empty state", async () => {
     const idleOne = makeThreadSummary(ThreadId.makeUnsafe("thread-idle-1"), {
       title: "Idle one",
     });
@@ -431,7 +431,7 @@ describe("ProjectPanel polished sections", () => {
     expect(scrollBody).not.toBeNull();
     expect(scrollBody!.scrollHeight).toBeGreaterThan(scrollBody!.clientHeight);
     const title = Array.from(surface.querySelectorAll("p")).find(
-      (el) => el.textContent === "Groups",
+      (el) => el.textContent === "Hubs",
     )!;
     const titleTopBefore = title.getBoundingClientRect().top;
     expect(titleTopBefore).toBeGreaterThanOrEqual(surfaceRect.top - 0.5);

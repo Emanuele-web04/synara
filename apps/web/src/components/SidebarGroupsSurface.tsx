@@ -165,7 +165,7 @@ export function SidebarGroupsSurface({
     }
   };
 
-  // Adopt the pre-Groups Studio container in place: retitle it "Groups" once so its
+  // Adopt the legacy Studio container in place: retitle it "Hubs" once so its
   // existing chats stay under it. Idempotent — the row stops matching once renamed.
   // threadsHydrated doubles as the connected-api signal: the hydrated snapshot only
   // lands after the API negotiated, so gating on it retries adoption once the
@@ -197,7 +197,7 @@ export function SidebarGroupsSurface({
         type: "project.meta.update",
         commandId: newCommandId(),
         projectId: legacy.id,
-        title: "Groups",
+        title: "Hubs",
       })
       .then(() => {
         studioAdoptionDispatchedIds.add(legacy.id);
@@ -228,7 +228,7 @@ export function SidebarGroupsSurface({
     } catch (error) {
       toastManager.add({
         type: "error",
-        title: "Unable to create group",
+        title: "Unable to create hub",
         description: error instanceof Error ? error.message : "An error occurred.",
       });
       // Re-throw so the dialog stays open for a retry instead of closing silently.
@@ -237,10 +237,10 @@ export function SidebarGroupsSurface({
     if (!projectId) {
       toastManager.add({
         type: "error",
-        title: "Unable to create group",
-        description: "The Groups workspace is not ready yet — try again in a moment.",
+        title: "Unable to create hub",
+        description: "The Hubs workspace is not ready yet — try again in a moment.",
       });
-      throw new Error("Group creation is not ready yet.");
+      throw new Error("Hub creation is not ready yet.");
     }
     // This dialog opening just created the group — Cancel may offer discard.
     onOpenGroupSettings(projectId, "onboarding", { discardable: true });
@@ -258,8 +258,8 @@ export function SidebarGroupsSurface({
           <SidebarPrimaryAction
             icon={NewThreadIcon}
             iconClassName="size-3.5"
-            label="New group"
-            // The /groups route gates on the same root: without it
+            label="New hub"
+            // The /hubs route gates on the same root: without it
             // createGroupProject can only fail, so hold the action off.
             disabled={!groupsWorkspaceRoot}
             onClick={() => {
@@ -271,7 +271,7 @@ export function SidebarGroupsSurface({
       <SidebarGroup className="px-1.5 py-1.5">
         {renderPinnedThreadsSection()}
         {renderListSectionHeader(
-          "Groups",
+          "Hubs",
           <ChatSortMenu
             threadSortOrder={threadSortOrder}
             onThreadSortOrderChange={onThreadSortOrderChange}
@@ -430,7 +430,7 @@ export function SidebarGroupsSurface({
             })
           ) : (
             <div className="px-2 pt-4 text-center text-ui text-muted-foreground/58">
-              {emptyState === "loading" ? "Loading groups…" : "No groups yet"}
+              {emptyState === "loading" ? "Loading hubs…" : "No hubs yet"}
             </div>
           )}
         </SidebarMenu>
@@ -455,7 +455,7 @@ export function SidebarGroupsSurface({
                   SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
                 )}
               >
-                Archived groups
+                Archived hubs
               </span>
             </SidebarMenuButton>
             <DisclosureRegion open={archivedGroupsOpen} className="pt-0.5">
@@ -474,7 +474,7 @@ export function SidebarGroupsSurface({
                       render={<div role="button" tabIndex={0} />}
                       size="sm"
                       className={cn("text-muted-foreground", SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME)}
-                      aria-label={`Archived group ${resolveSidebarProjectRowLabel(project)}`}
+                      aria-label={`Archived hub ${resolveSidebarProjectRowLabel(project)}`}
                       onContextMenu={(event) => {
                         event.preventDefault();
                         onProjectContextMenu(project.id, {
@@ -512,11 +512,11 @@ export function SidebarGroupsSurface({
       </SidebarGroup>
       <RenameDialog
         open={newGroupDialogOpen}
-        title="New group"
-        description="Create a group container for coordinated work."
+        title="New hub"
+        description="Create a hub container for coordinated work."
         initialValue=""
-        placeholder="Group name"
-        saveLabel="Create group"
+        placeholder="Hub name"
+        saveLabel="Create hub"
         onOpenChange={setNewGroupDialogOpen}
         onSave={createGroup}
       />

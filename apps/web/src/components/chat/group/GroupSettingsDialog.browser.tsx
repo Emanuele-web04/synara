@@ -140,10 +140,10 @@ describe("GroupSettingsDialog", () => {
   it("switches between nav sections", async () => {
     await renderDialog();
 
-    await expect.element(page.getByLabelText("Group name")).toBeInTheDocument();
+    await expect.element(page.getByLabelText("Hub name")).toBeInTheDocument();
 
     await page.getByRole("button", { name: "Memory" }).click();
-    await expect.element(page.getByLabelText("Group instructions")).toBeInTheDocument();
+    await expect.element(page.getByLabelText("Hub instructions")).toBeInTheDocument();
 
     await page.getByRole("button", { name: "Environment" }).click();
     expect(document.body.textContent).toContain("Linked repositories");
@@ -154,13 +154,13 @@ describe("GroupSettingsDialog", () => {
 
   it("opens at initialSection when provided", async () => {
     await renderDialog({ initialSection: "memory" });
-    await expect.element(page.getByLabelText("Group instructions")).toBeInTheDocument();
+    await expect.element(page.getByLabelText("Hub instructions")).toBeInTheDocument();
   });
 
   it("saves General edits through projectAgent.configure", async () => {
     await renderDialog();
 
-    await page.getByLabelText("Group goal").fill("grow the library");
+    await page.getByLabelText("Hub goal").fill("grow the library");
     await page.getByRole("button", { name: "Save", exact: true }).click();
 
     await vi.waitFor(() => expect(api.projectAgent.configure).toHaveBeenCalledOnce());
@@ -187,13 +187,13 @@ describe("GroupSettingsDialog", () => {
     api.projectAgent.configure.mockRejectedValue(new Error("invalid remote URL"));
     await renderDialog();
 
-    await page.getByLabelText("Group goal").fill("first attempt");
+    await page.getByLabelText("Hub goal").fill("first attempt");
     await page.getByRole("button", { name: "Save", exact: true }).click();
     await vi.waitFor(() => {
       expect(document.body.textContent).toContain("invalid remote URL");
     });
 
-    await page.getByLabelText("Group goal").fill("corrected value");
+    await page.getByLabelText("Hub goal").fill("corrected value");
     await vi.waitFor(() => {
       expect(document.body.textContent).not.toContain("invalid remote URL");
     });
@@ -202,11 +202,11 @@ describe("GroupSettingsDialog", () => {
   it("saves coordinator icon and color through configure", async () => {
     await renderDialog();
 
-    const brainButton = page.getByRole("button", { name: "Group icon Brain" });
+    const brainButton = page.getByRole("button", { name: "Hub icon Brain" });
     await brainButton.click();
     await expect.element(brainButton).toHaveAttribute("aria-pressed", "true");
 
-    const violetSwatch = page.getByRole("button", { name: "Group icon color Violet" });
+    const violetSwatch = page.getByRole("button", { name: "Hub icon color Violet" });
     await violetSwatch.click();
     await expect.element(violetSwatch).toHaveAttribute("aria-pressed", "true");
 
@@ -230,12 +230,12 @@ describe("GroupSettingsDialog", () => {
     await renderDialog();
 
     await expect
-      .element(page.getByRole("button", { name: "Group icon Brain" }))
+      .element(page.getByRole("button", { name: "Hub icon Brain" }))
       .toHaveAttribute("aria-pressed", "true");
 
-    await page.getByRole("button", { name: "Use the default group icon" }).click();
+    await page.getByRole("button", { name: "Use the default hub icon" }).click();
     await expect
-      .element(page.getByRole("button", { name: "Group icon Brain" }))
+      .element(page.getByRole("button", { name: "Hub icon Brain" }))
       .toHaveAttribute("aria-pressed", "false");
 
     await page.getByRole("button", { name: "Save", exact: true }).click();
@@ -245,10 +245,10 @@ describe("GroupSettingsDialog", () => {
     expect(payload.coordinatorColor).toBeNull();
   });
 
-  it("dispatches project.meta.update when the group is renamed", async () => {
+  it("dispatches project.meta.update when the hub is renamed", async () => {
     await renderDialog();
 
-    await page.getByLabelText("Group name").fill("beta");
+    await page.getByLabelText("Hub name").fill("beta");
     await page.getByRole("button", { name: "Save", exact: true }).click();
 
     await vi.waitFor(() => expect(api.projectAgent.configure).toHaveBeenCalledOnce());
@@ -263,7 +263,7 @@ describe("GroupSettingsDialog", () => {
     await renderDialog();
 
     await page.getByRole("button", { name: "Memory" }).click();
-    const textarea = page.getByLabelText("Group instructions");
+    const textarea = page.getByLabelText("Hub instructions");
     await textarea.fill("Always write tests first.");
     // Flush the debounced autosave by blurring.
     await page.getByRole("button", { name: "General" }).click();
@@ -306,16 +306,16 @@ describe("GroupSettingsDialog", () => {
     );
   });
 
-  it("shows the onboarding copy and Create group button", async () => {
+  it("shows the onboarding copy and Create hub button", async () => {
     api.projectAgent.getOverview.mockResolvedValue(
       overview({ configured: false, config: null, coordinatorStatus: "unconfigured" }),
     );
     await renderDialog({ mode: "onboarding" });
-    expect(document.body.textContent).toContain("Set up your group");
-    await expect.element(page.getByRole("button", { name: "Create group" })).toBeInTheDocument();
+    expect(document.body.textContent).toContain("Set up your hub");
+    await expect.element(page.getByRole("button", { name: "Create hub" })).toBeInTheDocument();
   });
 
-  it("keeps the group and closes onboarding when discard is declined", async () => {
+  it("keeps the hub and closes onboarding when discard is declined", async () => {
     api.projectAgent.getOverview.mockResolvedValue(
       overview({ configured: false, config: null, coordinatorStatus: "unconfigured" }),
     );
@@ -323,16 +323,16 @@ describe("GroupSettingsDialog", () => {
     await renderDialog({ mode: "onboarding", allowDiscard: true, onOpenChange });
 
     await page.getByRole("button", { name: "Cancel" }).click();
-    await expect.element(page.getByRole("button", { name: "Keep group" })).toBeInTheDocument();
+    await expect.element(page.getByRole("button", { name: "Keep hub" })).toBeInTheDocument();
 
-    await page.getByRole("button", { name: "Keep group" }).click();
+    await page.getByRole("button", { name: "Keep hub" }).click();
     await vi.waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
     // The setup dialog itself must close too — a re-open would re-prompt.
-    await vi.waitFor(() => expect(document.body.textContent).not.toContain("Discard this group?"));
+    await vi.waitFor(() => expect(document.body.textContent).not.toContain("Discard this hub?"));
     expect(api.projectAgent.deleteGroup).not.toHaveBeenCalled();
   });
 
-  it("discards a still-empty onboarding group with requireEmpty", async () => {
+  it("discards a still-empty onboarding hub with requireEmpty", async () => {
     api.projectAgent.getOverview.mockResolvedValue(
       overview({ configured: false, config: null, coordinatorStatus: "unconfigured" }),
     );
@@ -340,7 +340,7 @@ describe("GroupSettingsDialog", () => {
     await renderDialog({ mode: "onboarding", allowDiscard: true, onOpenChange });
 
     await page.getByRole("button", { name: "Cancel" }).click();
-    await page.getByRole("button", { name: "Discard group" }).click();
+    await page.getByRole("button", { name: "Discard hub" }).click();
 
     await vi.waitFor(() =>
       expect(api.projectAgent.deleteGroup).toHaveBeenCalledWith(
@@ -354,7 +354,7 @@ describe("GroupSettingsDialog", () => {
     await vi.waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
   });
 
-  it("never offers discard for a group that already has threads", async () => {
+  it("never offers discard for a hub that already has threads", async () => {
     api.projectAgent.getOverview.mockResolvedValue(
       overview({ configured: false, config: null, coordinatorStatus: "unconfigured" }),
     );
@@ -367,7 +367,7 @@ describe("GroupSettingsDialog", () => {
     await page.getByRole("button", { name: "Cancel" }).click();
 
     await vi.waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
-    expect(document.body.textContent).not.toContain("Discard this group?");
+    expect(document.body.textContent).not.toContain("Discard this hub?");
     expect(api.projectAgent.deleteGroup).not.toHaveBeenCalled();
   });
 });

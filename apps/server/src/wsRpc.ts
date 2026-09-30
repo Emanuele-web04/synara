@@ -766,14 +766,14 @@ const makeWsRpcHandlersLayer = () =>
           Effect.mapError(
             (cause) =>
               new WsRpcError({
-                message: `Failed to create group workspace: ${workspaceRoot}`,
+                message: `Failed to create hub workspace: ${workspaceRoot}`,
                 cause,
               }),
           ),
           Effect.andThen(
             ensureGroupWorkspaceInstructionsFiles(workspaceRoot).pipe(
               Effect.catch((cause) =>
-                Effect.logWarning("failed to write group workspace instructions", {
+                Effect.logWarning("failed to write hub workspace instructions", {
                   workspaceRoot,
                   cause,
                 }),
@@ -805,7 +805,7 @@ const makeWsRpcHandlersLayer = () =>
             Effect.mapError(
               (cause) =>
                 new WsRpcError({
-                  message: "Failed to list group workspace roots.",
+                  message: "Failed to list hub workspace roots.",
                   cause,
                 }),
             ),
@@ -1165,7 +1165,7 @@ const makeWsRpcHandlersLayer = () =>
             });
           if (!allowed) {
             return yield* new WsRpcError({
-              message: "The group library is only available on group containers.",
+              message: "The hub library is only available on hub containers.",
             });
           }
           const agentConfig = yield* projectAgentRepository
@@ -2556,7 +2556,7 @@ const makeWsRpcHandlersLayer = () =>
             Effect.andThen(
               rpcEffect(
                 projectAgentService.pauseGroup(input, { kind: "user" }),
-                "Failed to pause group",
+                "Failed to pause hub",
               ),
             ),
           ),
@@ -2565,7 +2565,7 @@ const makeWsRpcHandlersLayer = () =>
             Effect.andThen(
               rpcEffect(
                 projectAgentService.resumeGroup(input, { kind: "user" }),
-                "Failed to resume group",
+                "Failed to resume hub",
               ),
             ),
           ),
@@ -2574,7 +2574,7 @@ const makeWsRpcHandlersLayer = () =>
             Effect.andThen(
               rpcEffect(
                 projectAgentService.archiveGroup(input, { kind: "user" }),
-                "Failed to archive group",
+                "Failed to archive hub",
               ),
             ),
           ),
@@ -2583,7 +2583,7 @@ const makeWsRpcHandlersLayer = () =>
             Effect.andThen(
               rpcEffect(
                 projectAgentService.unarchiveGroup(input, { kind: "user" }),
-                "Failed to unarchive group",
+                "Failed to unarchive hub",
               ),
             ),
           ),
@@ -2601,7 +2601,7 @@ const makeWsRpcHandlersLayer = () =>
             Effect.andThen(
               rpcEffect(
                 projectAgentService.deleteGroup(input, { kind: "user" }),
-                "Failed to delete group",
+                "Failed to delete hub",
               ),
             ),
           ),
@@ -2713,7 +2713,7 @@ const makeWsRpcHandlersLayer = () =>
                 return { root, entries };
               }),
             ),
-            "Failed to list the group library",
+            "Failed to list the hub library",
           ),
         [WS_METHODS.projectAgentLibraryMkdir]: (input) =>
           requireWsOwnerSession.pipe(

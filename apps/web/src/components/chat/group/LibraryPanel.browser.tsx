@@ -120,7 +120,7 @@ describe("LibraryPanel", () => {
   it("shows the empty state when the library has no files", async () => {
     await renderPanel();
     await expect
-      .element(page.getByText("No files yet. Add documents or artifacts for this group."))
+      .element(page.getByText("No files yet. Add documents or artifacts for this hub."))
       .toBeVisible();
   });
 

@@ -593,7 +593,7 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
                 {query || typeFilter !== "all" ? (
                   <p>No files match.</p>
                 ) : (
-                  <p>No files yet. Add documents or artifacts for this group.</p>
+                  <p>No files yet. Add documents or artifacts for this hub.</p>
                 )}
               </PanelStateMessage>
             ) : viewMode === "grid" ? (

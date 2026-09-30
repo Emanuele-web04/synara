@@ -621,6 +621,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [121, "ClearAutomationDefinitionProviderOptions"],
         [122, "ClearAutomationRunProviderOptions"],
         [123, "ScrubOrchestrationEventProviderOptions"],
+        [124, "ProjectionTurnsPendingMessageIndex"],
         [126, "ProjectionThreadsSidechatContext"],
       ]);
 
@@ -697,6 +698,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 121, name: "ClearAutomationDefinitionProviderOptions" },
           { migration_id: 122, name: "ClearAutomationRunProviderOptions" },
           { migration_id: 123, name: "ScrubOrchestrationEventProviderOptions" },
+          { migration_id: 124, name: "ProjectionTurnsPendingMessageIndex" },
           { migration_id: 126, name: "ProjectionThreadsSidechatContext" },
         ],
       );
@@ -853,6 +855,7 @@ agentGatewayRetentionLegacyLayer(
           [121, "ClearAutomationDefinitionProviderOptions"],
           [122, "ClearAutomationRunProviderOptions"],
           [123, "ScrubOrchestrationEventProviderOptions"],
+          [124, "ProjectionTurnsPendingMessageIndex"],
           [126, "ProjectionThreadsSidechatContext"],
         ]);
 
@@ -972,6 +975,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [121, "ClearAutomationDefinitionProviderOptions"],
         [122, "ClearAutomationRunProviderOptions"],
         [123, "ScrubOrchestrationEventProviderOptions"],
+        [124, "ProjectionTurnsPendingMessageIndex"],
         [126, "ProjectionThreadsSidechatContext"],
       ]);
 
@@ -1032,6 +1036,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [121, "ClearAutomationDefinitionProviderOptions"],
           [122, "ClearAutomationRunProviderOptions"],
           [123, "ScrubOrchestrationEventProviderOptions"],
+          [124, "ProjectionTurnsPendingMessageIndex"],
           [126, "ProjectionThreadsSidechatContext"],
         ],
       );
@@ -1146,6 +1151,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [121, "ClearAutomationDefinitionProviderOptions"],
         [122, "ClearAutomationRunProviderOptions"],
         [123, "ScrubOrchestrationEventProviderOptions"],
+        [124, "ProjectionTurnsPendingMessageIndex"],
         [126, "ProjectionThreadsSidechatContext"],
       ]);
 
@@ -1202,6 +1208,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [121, "ClearAutomationDefinitionProviderOptions"],
           [122, "ClearAutomationRunProviderOptions"],
           [123, "ScrubOrchestrationEventProviderOptions"],
+          [124, "ProjectionTurnsPendingMessageIndex"],
           [126, "ProjectionThreadsSidechatContext"],
         ],
       );

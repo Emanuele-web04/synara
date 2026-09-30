@@ -108,8 +108,8 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   {
     id: "general:groups-section",
     section: "general",
-    title: "Groups",
-    keywords: "Show the Groups tab in the sidebar switcher. sidebar section content outbox",
+    title: "Hubs",
+    keywords: "Show the Hubs tab in the sidebar switcher. sidebar section content outbox groups",
   },
   {
     id: "general:automation-run-threads",
