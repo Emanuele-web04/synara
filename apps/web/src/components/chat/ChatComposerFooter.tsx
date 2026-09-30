@@ -180,6 +180,7 @@ export function ChatComposerFooter({
               <ComposerVoiceButton
                 disabled={submission.busy || submission.expired}
                 isRecording={false}
+                isStarting={voice.starting}
                 isTranscribing={false}
                 durationLabel={voice.durationLabel}
                 onClick={voice.onToggle}
