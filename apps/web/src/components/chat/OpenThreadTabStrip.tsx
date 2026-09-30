@@ -33,9 +33,11 @@ const OPEN_THREAD_TAB_FROZEN_SIZE_CLASS_NAME =
   "min-w-0 grow-0 shrink-0 basis-[var(--open-thread-tab-frozen-width)]";
 // The strip sits on the rail's shell band, above the chat card. The active tab takes the
 // card's own surface, so it reads as the open thread rather than as a hovered tab (hover
-// tints with ink; the shared chip's active fill is the same tint in light themes).
+// tints with ink; the shared chip's active fill is the same tint in light themes). Its
+// hairline is inset: the tab fills its scroll strip edge to edge, and the strip's overflow
+// and fade mask would crop an outer outline along the top, bottom, and first tab's left.
 const OPEN_THREAD_TAB_ACTIVE_CLASS_NAME =
-  "bg-[var(--color-background-surface)] hover:bg-[var(--color-background-surface)] shadow-[0_0_0_0.5px_var(--app-rail-inset-border)]";
+  "bg-[var(--color-background-surface)] hover:bg-[var(--color-background-surface)] shadow-[inset_0_0_0_0.5px_var(--app-rail-inset-border)]";
 
 function readRouteThreadId(router: ReturnType<typeof useRouter>): string | null {
   for (const match of router.state.matches) {
