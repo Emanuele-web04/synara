@@ -161,6 +161,11 @@ function persistedKnownIdList<const Ids extends ReadonlyArray<string>>(ids: Ids)
 
 const SidebarNavItemIdList = persistedKnownIdList(SIDEBAR_NAV_ITEM_IDS);
 const RailOrderableItemIdList = persistedKnownIdList(RAIL_ORDERABLE_ITEM_IDS);
+/** Where Beta's Tasks entry opens: the to-do list or the Kanban board of chats. */
+export const TasksViewMode = Schema.Literals(["list", "kanban"]);
+export type TasksViewMode = typeof TasksViewMode.Type;
+export const DEFAULT_TASKS_VIEW_MODE: TasksViewMode = "list";
+
 /** Classic: one sidebar column. Rail: fixed icon tabs plus a panel (see useSidebarLayout). */
 export const SidebarLayout = Schema.Literals(["classic", "rail"]);
 export type SidebarLayout = typeof SidebarLayout.Type;
@@ -367,7 +372,7 @@ export const AppSettingsSchema = Schema.Struct({
   // Deprecated rename bridge from the Studio surface. Normalization migrates this
   // value onto `showGroupsSection` once and then omits the key.
   showStudioSection: Schema.optionalKey(Schema.Boolean),
-  // Local-only UI preferences for the primary sidebar nav block (New thread, Kanban,
+  // Local-only UI preferences for the primary sidebar nav block (New thread, Kanban or Tasks,
   // Pull requests, Automations): drag-to-reorder order plus explicitly hidden items.
   // An item whose route is currently active stays visible regardless (mirrors
   // `hiddenProviders`), so hiding a surface never strands the user mid-route.
@@ -376,6 +381,9 @@ export const AppSettingsSchema = Schema.Struct({
   // Local-only shell layout, available in Stable and Beta. useSidebarLayout keeps
   // mobile on classic even when the stored preference is "rail".
   sidebarLayout: SidebarLayout.pipe(withDefaults(() => DEFAULT_SIDEBAR_LAYOUT)),
+  // Beta-only: the view the Tasks entry opens, last picked in its List/Kanban switch.
+  // Stable never reads it (Kanban is its only view).
+  tasksViewMode: TasksViewMode.pipe(withDefaults(() => DEFAULT_TASKS_VIEW_MODE)),
   // Rail layout shortcuts the user added from the rail's "…" menu, in rail order:
   // "space:<id>" (the Void key for unfiled) or "project:<id>" (see appRail.logic).
   railShortcuts: Schema.Array(Schema.String.check(Schema.isMaxLength(512))).pipe(
@@ -2448,7 +2456,7 @@ export function mergeProviderStartOptions(
 
 /**
  * Single source of truth for mapping the streaming preference onto the orchestration
- * delivery mode used when dispatching turns (composer, chat, and kanban share this).
+ * delivery mode used when dispatching turns (composer, chat, Kanban, and Tasks share this).
  */
 export function resolveAssistantDeliveryMode(
   settings: Pick<AppSettings, "enableAssistantStreaming">,

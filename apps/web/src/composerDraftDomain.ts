@@ -911,6 +911,47 @@ export function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
   );
 }
 
+/** Whether a draft carries anything besides its prompt text that a turn would send. */
+export function composerDraftHasAttachments(
+  draft: Pick<
+    ComposerThreadDraftState,
+    | "files"
+    | "images"
+    | "persistedAttachments"
+    | "terminalContexts"
+    | "assistantSelections"
+    | "fileComments"
+  > &
+    Partial<Pick<ComposerThreadDraftState, "browserAnnotations">>,
+): boolean {
+  return (
+    draft.images.length > 0 ||
+    draft.files.length > 0 ||
+    draft.persistedAttachments.length > 0 ||
+    draft.terminalContexts.some((context) => context.text.trim().length > 0) ||
+    draft.assistantSelections.length > 0 ||
+    (draft.browserAnnotations?.length ?? 0) > 0 ||
+    draft.fileComments.length > 0
+  );
+}
+
+/**
+ * Whether a draft holds anything the user has not sent: text, attachments, collapsed
+ * pasted text, or pull-request context cards. The draft dispatch path does not carry the
+ * last two, so a surface that sends into an existing chat must refuse while they exist.
+ */
+export function composerDraftHasUnsentContent(
+  draft: Parameters<typeof composerDraftHasAttachments>[0] &
+    Pick<ComposerThreadDraftState, "prompt" | "pastedTexts" | "pullRequestContexts">,
+): boolean {
+  return (
+    draft.prompt.trim().length > 0 ||
+    composerDraftHasAttachments(draft) ||
+    draft.pastedTexts.length > 0 ||
+    draft.pullRequestContexts.length > 0
+  );
+}
+
 export function normalizeDraftThreadEntryPoint(
   value: unknown,
   fallback: ThreadPrimarySurface = "chat",

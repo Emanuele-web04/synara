@@ -1,11 +1,12 @@
 // FILE: useKanbanTaskScratchDraft.ts
-// Purpose: Owns the throwaway composer-draft thread used by the kanban new-task dialog.
+// Purpose: The kanban new-task dialog's scratch composer draft — the shared scratch
+//          draft plus image intake and skill/mention upkeep.
 // Layer: Kanban UI hook
 // Exports: useKanbanTaskScratchDraft
 
-import type { ModelSlug, ProviderInstanceId, ProviderKind } from "@synara/contracts";
-import { getDefaultModel } from "@synara/shared/model";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ProviderKind } from "@synara/contracts";
+import type { AppSettings } from "../../appSettings";
+import { useCallback, useEffect, useRef } from "react";
 
 import {
   filterPromptProviderMentionReferences,
@@ -15,23 +16,12 @@ import {
 } from "~/lib/composerMentions";
 import { effectiveComposerAttachmentCount } from "~/lib/composerSend";
 import { useComposerImageIntake } from "~/hooks/useComposerImageIntake";
-import { newThreadId } from "~/lib/utils";
-import {
-  getProviderInstanceOptions,
-  resolveSelectableProviderInstanceId,
-  type AppSettings,
-} from "../../appSettings";
-import {
-  type ComposerImageAttachment,
-  providerInstanceModelSelectionKey,
-  useComposerDraftStore,
-  useComposerThreadDraft,
-} from "../../composerDraftStore";
-import { buildModelSelection, type ProviderOptions } from "../../providerModelOptions";
+import { useScratchComposerDraft } from "~/hooks/useScratchComposerDraft";
+import { type ComposerImageAttachment, useComposerDraftStore } from "../../composerDraftStore";
 import { toastManager } from "../ui/toast";
 
 export function useKanbanTaskScratchDraft(input: {
-  readonly defaultProvider: ProviderKind;
+  readonly defaultProvider: AppSettings["defaultProvider"];
   readonly settings: Pick<
     AppSettings,
     "codexAccounts" | "codexHomePath" | "providerInstances" | "selectedCodexAccountId"
@@ -39,16 +29,18 @@ export function useKanbanTaskScratchDraft(input: {
 }) {
   // Scratch composer draft backing the dialog: model/effort/speed state lives in
   // the composer draft store under this throwaway thread id, exactly like chat.
-  const [scratchThreadId] = useState(() => newThreadId());
-  useEffect(() => {
-    useComposerDraftStore.getState().applyStickyState(scratchThreadId);
-    return () => {
-      useComposerDraftStore.getState().clearDraftThread(scratchThreadId);
-    };
-  }, [scratchThreadId]);
-
-  const scratchDraft = useComposerThreadDraft(scratchThreadId);
-  const prompt = scratchDraft.prompt;
+  const {
+    scratchThreadId,
+    scratchDraft,
+    prompt,
+    setPrompt,
+    selectedProvider,
+    selectedProviderInstanceId,
+    selectedModel,
+    selectedProviderModelOptions,
+    selectedModelSupportsAutoMode,
+    handleProviderModelChange,
+  } = useScratchComposerDraft(input);
   const composerImages = scratchDraft.images;
   const composerAssistantSelections = scratchDraft.assistantSelections;
   const composerFileComments = scratchDraft.fileComments;
@@ -56,52 +48,6 @@ export function useKanbanTaskScratchDraft(input: {
   const composerSkills = scratchDraft.skills;
   const composerMentions = scratchDraft.mentions;
   const nonPersistedComposerImageIdSet = new Set(scratchDraft.nonPersistedImageIds);
-
-  const setPrompt = (nextPrompt: string) => {
-    useComposerDraftStore.getState().setPrompt(scratchThreadId, nextPrompt);
-  };
-
-  const stickyActiveProvider = useComposerDraftStore((state) => state.stickyActiveProvider);
-  const stickyModelSelectionByProvider = useComposerDraftStore(
-    (state) => state.stickyModelSelectionByProvider,
-  );
-  const activeProviderInstanceId = scratchDraft.activeProvider ?? stickyActiveProvider;
-  const providerInstances = useMemo(
-    () => getProviderInstanceOptions(input.settings),
-    [input.settings],
-  );
-  const selectedProvider: ProviderKind =
-    (activeProviderInstanceId
-      ? (scratchDraft.modelSelectionByProvider[activeProviderInstanceId]?.provider ??
-        stickyModelSelectionByProvider[activeProviderInstanceId]?.provider ??
-        providerInstances.find((instance) => instance.instanceId === activeProviderInstanceId)
-          ?.provider)
-      : null) ?? input.defaultProvider;
-  const selectedProviderInstanceId: ProviderInstanceId = resolveSelectableProviderInstanceId(
-    input.settings,
-    selectedProvider,
-    activeProviderInstanceId ??
-      Object.values(scratchDraft.modelSelectionByProvider).find(
-        (selection) => selection?.provider === selectedProvider,
-      )?.instanceId ??
-      Object.values(stickyModelSelectionByProvider).find(
-        (selection) => selection?.provider === selectedProvider,
-      )?.instanceId,
-  );
-  const selectionKey = providerInstanceModelSelectionKey(
-    selectedProvider,
-    selectedProviderInstanceId,
-  );
-  const draftModelSelection =
-    scratchDraft.modelSelectionByProvider[selectionKey] ??
-    stickyModelSelectionByProvider[selectionKey];
-  const selectedModel: ModelSlug | null =
-    draftModelSelection?.model ?? getDefaultModel(selectedProvider);
-  const selectedProviderModelOptions = draftModelSelection?.options;
-  const selectedModelSupportsAutoMode =
-    draftModelSelection?.provider === "claudeAgent"
-      ? draftModelSelection.supportsAutoMode
-      : undefined;
 
   const previousSelectedProviderRef = useRef<{
     threadId: string;
@@ -138,21 +84,6 @@ export function useKanbanTaskScratchDraft(input: {
     useComposerDraftStore.getState().setSkills(scratchThreadId, []);
     useComposerDraftStore.getState().setMentions(scratchThreadId, []);
   }, [scratchThreadId, selectedProvider]);
-
-  const handleProviderModelChange = (
-    provider: ProviderKind,
-    model: ModelSlug,
-    instanceId?: ProviderInstanceId,
-    supportsAutoMode?: boolean,
-    options?: ProviderOptions,
-  ) => {
-    const store = useComposerDraftStore.getState();
-    const nextSelection = buildModelSelection(provider, model, options, supportsAutoMode, {
-      instanceId: instanceId ?? provider,
-    });
-    // Mirrors the composer: update the scratch draft and persist the sticky selection.
-    store.setModelSelectionAndSticky(scratchThreadId, nextSelection);
-  };
 
   const existingAttachmentCount = useCallback(
     () =>
@@ -217,9 +148,9 @@ export function useKanbanTaskScratchDraft(input: {
     pendingImageCount,
     waitForPendingImages,
     selectedProvider,
+    selectedProviderInstanceId,
     selectedModel,
     selectedModelSupportsAutoMode,
-    selectedProviderInstanceId,
     selectedProviderModelOptions,
     setPrompt,
     handleProviderModelChange,

@@ -37,6 +37,7 @@ import { ServerAuthPolicyLive } from "./auth/Layers/ServerAuthPolicy";
 import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore";
 import { SessionCredentialServiceLive } from "./auth/Layers/SessionCredentialService";
 import { ProfileStatsQueryLive } from "./profileStats";
+import { RecapStatsQueryLive } from "./recapStats";
 import { ProfileStatsArchiveLive } from "./profileStatsArchive";
 import { ServerLifecycleEventsLive } from "./serverLifecycleEvents";
 import { ServerRuntimeStartupLive } from "./serverRuntimeStartup";
@@ -48,6 +49,8 @@ import { ExternalMcpServiceLive } from "./externalMcp/Layers/ExternalMcpService"
 import { ExternalMcpGatewayLive } from "./externalMcp/Layers/ExternalMcpGateway";
 import { ServerEnvironmentLive } from "./environment/Layers/ServerEnvironment";
 import { AutomationRepositoryLive } from "./persistence/Layers/AutomationRepository";
+import { TodoRepositoryLive } from "./persistence/Layers/TodoRepository";
+import { TodoServiceLive } from "./todo/Layers/TodoService";
 import { ProjectAgentRepositoryLive } from "./persistence/Layers/ProjectAgentRepository";
 import { ProjectAgentReactorLive } from "./projectAgent/Layers/ProjectAgentReactor";
 import { ProjectAgentServiceLive } from "./projectAgent/Layers/ProjectAgentService";
@@ -194,6 +197,7 @@ export function makeServerRuntimeServicesLayer(
     authControlPlaneLayer,
     serverAuthLayer,
   );
+  const todoServiceLayer = TodoServiceLive.pipe(Layer.provideMerge(TodoRepositoryLive));
   const automationSchedulerLayer = AutomationSchedulerLive.pipe(
     Layer.provideMerge(automationServiceLayer),
     Layer.provideMerge(AutomationRepositoryLive),
@@ -251,6 +255,7 @@ export function makeServerRuntimeServicesLayer(
     automationServiceLayer,
     automationSchedulerLayer,
     automationRunReactorLayer,
+    todoServiceLayer,
     ProjectAgentRepositoryLive,
     projectAgentServiceLayer,
     projectAgentReactorLayer,
@@ -277,6 +282,7 @@ export function makeServerRuntimeServicesLayer(
     KeybindingsLive,
     ServerEnvironmentLive,
     ProfileStatsQueryLive,
+    RecapStatsQueryLive,
     authServicesLayer,
     ServerLifecycleEventsLive,
     ServerRuntimeStartupLive,

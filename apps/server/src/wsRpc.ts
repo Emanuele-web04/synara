@@ -4,6 +4,7 @@ import { execFile } from "node:child_process";
 import {
   CommandId,
   COMPUTER_WS_METHODS,
+  TASKS_UNAVAILABLE_ERROR_CODE,
   DEFAULT_TERMINAL_ID,
   DEVICE_WS_METHODS,
   ORCHESTRATION_WS_METHODS,
@@ -48,6 +49,8 @@ import { Headers, HttpRouter, HttpServerRequest, HttpServerResponse } from "effe
 import { RpcMiddleware, RpcSchema, RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import { AutomationService } from "./automation/Services/AutomationService";
+import { TodoService } from "./todo/Services/TodoService";
+import { isServerBetaFeatureEnabled } from "./betaFeatureGate";
 import { ProjectAgentService } from "./projectAgent/Services/ProjectAgentService";
 import { isGroupCoordinatorHostProject } from "./projectAgent/groupCoordinatorHost";
 import {
@@ -171,6 +174,7 @@ import { ProviderService } from "./provider/Services/ProviderService";
 import { consumeCodexResetCreditEffect, listProviderUsage } from "./providerUsage";
 import { getProviderUsageSnapshot } from "./providerUsageSnapshot";
 import { ProfileStatsQuery } from "./profileStats";
+import { RecapStatsQuery } from "./recapStats";
 import { redactSensitiveProcessArgs } from "./processArgumentRedaction";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment";
 import { ExternalMcpService } from "./externalMcp/Services/ExternalMcpService";
@@ -462,6 +466,7 @@ const makeWsRpcHandlersLayer = () =>
     Effect.gen(function* () {
       const checkpointDiffQuery = yield* CheckpointDiffQuery;
       const automationService = yield* AutomationService;
+      const todoService = yield* TodoService;
       const projectAgentService = yield* ProjectAgentService;
       const projectAgentRepository = yield* ProjectAgentRepository;
       const config = yield* ServerConfig;
@@ -480,6 +485,7 @@ const makeWsRpcHandlersLayer = () =>
       const path = yield* Path.Path;
       const pullRequests = yield* PullRequestService;
       const profileStatsQuery = yield* ProfileStatsQuery;
+      const recapStatsQuery = yield* RecapStatsQuery;
       const projectionReadModelQuery = yield* ProjectionSnapshotQuery;
       const providerAdapterRegistry = yield* ProviderAdapterRegistry;
       const providerDiscoveryService = yield* ProviderDiscoveryService;
@@ -1099,6 +1105,16 @@ const makeWsRpcHandlersLayer = () =>
 
       const rpcEffect = <A, E, R>(effect: Effect.Effect<A, E, R>, fallbackMessage: string) =>
         effect.pipe(Effect.mapError((cause) => toWsRpcError(cause, fallbackMessage)));
+
+      const tasksEnabled = isServerBetaFeatureEnabled("tasks");
+      const tasksUnavailableError = () =>
+        new WsRpcError({
+          message: "Tasks is available in Synara Beta.",
+          code: TASKS_UNAVAILABLE_ERROR_CODE,
+          retryable: false,
+        });
+      const whenTasksEnabled = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        tasksEnabled ? effect : Effect.fail(tasksUnavailableError());
 
       const toProjectProvisionRpcError = (cause: unknown) =>
         cause instanceof GitHubProjectProvisioningError
@@ -2166,6 +2182,8 @@ const makeWsRpcHandlersLayer = () =>
             profileStatsQuery.getProfileTokenStats(input),
             "Failed to load profile token stats",
           ),
+        [WS_METHODS.statsGetRecap]: (input) =>
+          rpcEffect(recapStatsQuery.getRecap(input), "Failed to load the recap"),
         [WS_METHODS.serverGetProviderUsageSnapshot]: (input) =>
           rpcEffect(getProviderUsageSnapshot(input), "Failed to load provider usage"),
         [WS_METHODS.serverListProviderUsage]: (input) =>
@@ -2900,6 +2918,25 @@ const makeWsRpcHandlersLayer = () =>
               Stream.mapError((cause) => toWsRpcError(cause, "Automation event stream failed")),
             ),
           ),
+        // Tasks is Beta-only; Stable refuses it here and keeps Kanban.
+        [WS_METHODS.todoList]: () =>
+          whenTasksEnabled(rpcEffect(todoService.list(), "Failed to list tasks")),
+        [WS_METHODS.todoCreate]: (input) =>
+          whenTasksEnabled(rpcEffect(todoService.create(input), "Failed to create task")),
+        [WS_METHODS.todoUpdate]: (input) =>
+          whenTasksEnabled(rpcEffect(todoService.update(input), "Failed to update task")),
+        [WS_METHODS.todoDelete]: (input) =>
+          whenTasksEnabled(rpcEffect(todoService.delete(input), "Failed to delete task")),
+        [WS_METHODS.subscribeTodoEvents]: (_, { clientId }) =>
+          tasksEnabled
+            ? streamAdmission.guard(
+                clientId,
+                { key: "todo.events" },
+                todoService.streamChanges.pipe(
+                  Stream.mapError((cause) => toWsRpcError(cause, "Task event stream failed")),
+                ),
+              )
+            : Stream.fail(tasksUnavailableError()),
 
         ...makeWsDeviceHandlers(deviceService),
         [DEVICE_WS_METHODS.subscribeEvents]: (_, { clientId }) =>

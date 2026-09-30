@@ -24,6 +24,11 @@ describe("isBetaFeatureEnabled", () => {
     expect(isBetaFeatureEnabled("omp", "production")).toBe(false);
   });
 
+  it("keeps Tasks in Beta while Stable keeps Kanban", () => {
+    expect(isBetaFeatureEnabled("tasks", "beta")).toBe(true);
+    expect(isBetaFeatureEnabled("tasks", "production")).toBe(false);
+  });
+
   it("keeps Groups out of Stable only", () => {
     expect(BETA_ONLY_FEATURES).toContain(GROUPS_BETA_FEATURE);
     for (const flavor of ["development", "canary", "cua", "beta", "unknown"] as const) {

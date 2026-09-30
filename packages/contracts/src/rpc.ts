@@ -23,6 +23,14 @@ import {
   AutomationUpdateInput,
 } from "./automation";
 import {
+  Todo,
+  TodoCreateInput,
+  TodoDeleteInput,
+  TodoListResult,
+  TodoStreamEvent,
+  TodoUpdateInput,
+} from "./todo";
+import {
   ProjectAgentConfigureInput,
   ProjectAgentLinkProjectInput,
   ProjectAgentUnlinkProjectInput,
@@ -336,6 +344,8 @@ import {
   StatsGetProfileStatsResult,
   StatsGetProfileTokenStatsInput,
   StatsGetProfileTokenStatsResult,
+  StatsGetRecapInput,
+  StatsGetRecapResult,
 } from "./stats";
 import { WS_METHODS } from "./ws";
 import {
@@ -1378,6 +1388,12 @@ export const WsStatsGetProfileTokenStatsRpc = Rpc.make(WS_METHODS.statsGetProfil
   error: WsRpcError,
 });
 
+export const WsStatsGetRecapRpc = Rpc.make(WS_METHODS.statsGetRecap, {
+  payload: StatsGetRecapInput,
+  success: StatsGetRecapResult,
+  error: WsRpcError,
+});
+
 export const WsServerGetDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetDiagnostics, {
   payload: Schema.Struct({}),
   success: ServerDiagnosticsResult,
@@ -1574,6 +1590,37 @@ export const WsAutomationResolveProposalRpc = Rpc.make(WS_METHODS.automationReso
 export const WsSubscribeAutomationEventsRpc = Rpc.make(WS_METHODS.subscribeAutomationEvents, {
   payload: Schema.Struct({}),
   success: AutomationStreamEvent,
+  error: WsRpcError,
+  stream: true,
+});
+
+export const WsTodoListRpc = Rpc.make(WS_METHODS.todoList, {
+  payload: Schema.Struct({}),
+  success: TodoListResult,
+  error: WsRpcError,
+});
+
+export const WsTodoCreateRpc = Rpc.make(WS_METHODS.todoCreate, {
+  payload: TodoCreateInput,
+  success: Todo,
+  error: WsRpcError,
+});
+
+export const WsTodoUpdateRpc = Rpc.make(WS_METHODS.todoUpdate, {
+  payload: TodoUpdateInput,
+  success: Todo,
+  error: WsRpcError,
+});
+
+export const WsTodoDeleteRpc = Rpc.make(WS_METHODS.todoDelete, {
+  payload: TodoDeleteInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsSubscribeTodoEventsRpc = Rpc.make(WS_METHODS.subscribeTodoEvents, {
+  payload: Schema.Struct({}),
+  success: TodoStreamEvent,
   error: WsRpcError,
   stream: true,
 });
@@ -1879,6 +1926,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsServerConsumeCodexResetCreditRpc,
   WsStatsGetProfileStatsRpc,
   WsStatsGetProfileTokenStatsRpc,
+  WsStatsGetRecapRpc,
   WsServerGetDiagnosticsRpc,
   WsServerReadThreadDiagnosticsRpc,
   WsServerPrewarmVoiceRpc,
@@ -1910,6 +1958,11 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsAutomationArchiveRunRpc,
   WsAutomationResolveProposalRpc,
   WsSubscribeAutomationEventsRpc,
+  WsTodoListRpc,
+  WsTodoCreateRpc,
+  WsTodoUpdateRpc,
+  WsTodoDeleteRpc,
+  WsSubscribeTodoEventsRpc,
 );
 
 // Project-agent RPCs live in a satellite group: folding them into
