@@ -320,6 +320,17 @@ describe("Pi OpenCode catalog", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it("honors instance-scoped PI_OFFLINE without process mutation", async () => {
+    const modelRuntime = await runtime();
+    vi.stubEnv("PI_OFFLINE", undefined);
+    const fetch = publicFetch();
+    await refreshPiOpenCodeCatalog(modelRuntime, {
+      request: fetch,
+      environment: { PI_OFFLINE: "1" },
+    });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("omits unknown protocols and missing metadata rather than manufacturing defaults", () => {
     expect(
       parsePiOpenCodeCatalog(

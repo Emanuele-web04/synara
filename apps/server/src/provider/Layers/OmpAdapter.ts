@@ -3,7 +3,6 @@
  *
  * @module OmpAdapterLive
  */
-import * as nodeOs from "node:os";
 import * as nodePath from "node:path";
 
 import {
@@ -40,7 +39,6 @@ import {
 } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import type * as Acp from "@agentclientprotocol/sdk";
-import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
 import { makeEffectProcessCommand } from "../../platform/effectProcessRuntime.ts";
 
 import { buildAcpSynaraMcpServers } from "../../agentGateway/mcpInjection.ts";
@@ -49,7 +47,10 @@ import {
   takeSynaraHarnessPolicyTextPartForProviderSession,
 } from "../../agentGateway/harnessPolicy.ts";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
-import { PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY } from "../Services/ProviderAdapter.ts";
+import {
+  PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
+  resolveProviderSessionInstanceId,
+} from "../Services/ProviderAdapter.ts";
 import {
   acquireAgentGatewaySessionLease,
   cancelAgentGatewayTurn,
@@ -112,11 +113,15 @@ import {
 import {
   applyOmpAcpInteractionMode,
   applyOmpAcpModelSelection,
+  buildOmpProcessEnv,
   makeOmpAcpRuntime,
+  ompAccountCacheScope,
   ompModelRolesMapFromConfig,
   parseOmpModelRoles,
   parseOmpCliModelList,
+  resolveOmpAgentDir,
   resolveOmpCliBinaryPath,
+  type OmpAccountBoundary,
   type OmpAcpRuntimeSettings,
 } from "../acp/OmpAcpSupport.ts";
 import { makeSessionTeardownGate } from "../acp/SessionTeardownGate.ts";
@@ -410,6 +415,7 @@ export function makeOmpAdapter(
     const makeOmpDiscoveryRuntime = (input: {
       readonly binaryPath?: string;
       readonly agentDir?: string;
+      readonly account: OmpAccountBoundary;
       readonly cwd: string;
       readonly clientName: string;
     }) =>
@@ -419,11 +425,23 @@ export function makeOmpAdapter(
           ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
           ...(ompSettings.agentDir ? { agentDir: ompSettings.agentDir } : {}),
           ...(input.agentDir ? { agentDir: input.agentDir } : {}),
+          ...input.account,
         },
         childProcessSpawner,
         cwd: input.cwd,
         clientInfo: { name: input.clientName, version: "0.0.0" },
       });
+    // One OMP account per provider instance: a selected environment or a
+    // non-default instance runs under its own synthetic HOME.
+    const ompAccount = (input: {
+      readonly instanceId?: string | undefined;
+      readonly environment?: Readonly<Record<string, string>> | undefined;
+    }): OmpAccountBoundary => ({
+      ...(input.environment !== undefined ? { environment: input.environment } : {}),
+      ...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),
+      homeDir: serverConfig.homeDir,
+      isolationRootDir: serverConfig.stateDir,
+    });
     const collectDiscoveryStreamAsString = <E>(
       stream: Stream.Stream<Uint8Array, E>,
     ): Effect.Effect<string, E> => {
@@ -440,14 +458,15 @@ export function makeOmpAdapter(
     // inline. This is O(1) round-trips and scales to OMP's 300+ model catalogs.
     // The ACP model option exposes only slug/name and would need one
     // session/set_config_option round-trip per model to read per-model thinking.
-    const runOmpCliModelList = (binaryPath: string, agentDir?: string) =>
+    const runOmpCliModelList = (
+      binaryPath: string,
+      agentDir: string | undefined,
+      account: OmpAccountBoundary,
+    ) =>
       Effect.gen(function* () {
         const executable = resolveOmpCliBinaryPath(binaryPath);
         log.info("model/list cli start", { binaryPath, executable });
-        const env = buildProviderChildEnvironment({
-          provider: "omp",
-          ...(agentDir ? { overrides: { PI_CODING_AGENT_DIR: agentDir } } : undefined),
-        });
+        const env = buildOmpProcessEnv({ ...account, ...(agentDir ? { agentDir } : {}) });
         const command = makeEffectProcessCommand(executable, ["models", "--json"], {
           env,
           stdin: "ignore",
@@ -863,6 +882,7 @@ export function makeOmpAdapter(
             shouldMirrorIncomingRaw: () => false,
           });
           const providerOmpOptions = input.providerOptions?.omp;
+          const providerInstanceId = resolveProviderSessionInstanceId(input);
           const effectiveOmpSettings: OmpAcpRuntimeSettings = {
             ...(ompSettings.binaryPath !== undefined ? { binaryPath: ompSettings.binaryPath } : {}),
             ...(providerOmpOptions?.binaryPath !== undefined
@@ -872,6 +892,10 @@ export function makeOmpAdapter(
             ...(providerOmpOptions?.agentDir !== undefined
               ? { agentDir: providerOmpOptions.agentDir }
               : {}),
+            ...ompAccount({
+              environment: providerOmpOptions?.environment,
+              instanceId: providerInstanceId,
+            }),
           };
 
           yield* Effect.logInfo("omp.acp.start", {
@@ -1077,6 +1101,7 @@ export function makeOmpAdapter(
             cwd,
             model: ompModelSelection?.model,
             threadId: input.threadId,
+            ...(providerInstanceId !== undefined ? { providerInstanceId } : {}),
             resumeCursor: {
               schemaVersion: OMP_RESUME_VERSION,
               sessionId: started.sessionId,
@@ -1939,11 +1964,15 @@ export function makeOmpAdapter(
         // Resolve the agent dir with the same precedence OMP uses for its
         // session store: provider override, ambient env, then ~/.omp/agent.
         try: async () => {
-          const agentDir =
-            input.providerOptions?.omp?.agentDir?.trim() ||
-            ompSettings.agentDir?.trim() ||
-            process.env.PI_CODING_AGENT_DIR?.trim() ||
-            nodePath.join(nodeOs.homedir(), process.env.PI_CONFIG_DIR?.trim() || ".omp", "agent");
+          const configuredAgentDir =
+            input.providerOptions?.omp?.agentDir?.trim() || ompSettings.agentDir?.trim();
+          const agentDir = resolveOmpAgentDir({
+            ...ompAccount({
+              environment: input.providerOptions?.omp?.environment,
+              instanceId: input.providerInstanceId,
+            }),
+            ...(configuredAgentDir ? { agentDir: configuredAgentDir } : {}),
+          });
           return await readOmpSessionHistory(agentDir, input.externalThreadId);
         },
         catch: (cause) =>
@@ -2067,6 +2096,10 @@ export function makeOmpAdapter(
                   ...(input.providerOptions?.omp?.agentDir
                     ? { agentDir: input.providerOptions.omp.agentDir }
                     : {}),
+                  ...ompAccount({
+                    environment: input.providerOptions?.omp?.environment,
+                    instanceId: input.providerInstanceId,
+                  }),
                 },
                 childProcessSpawner,
                 cwd: sourceCwd,
@@ -2162,7 +2195,10 @@ export function makeOmpAdapter(
           // Match the session spawn path: honor input > settings, and pass no
           // override when unset so omp uses its own default/ambient env.
           const agentDir = input.agentDir?.trim() || ompSettings.agentDir?.trim() || undefined;
-          const cacheKey = [binaryPath, agentDir ?? ""].join("\u0000");
+          const account = ompAccount(input);
+          const cacheKey = [binaryPath, agentDir ?? "", ompAccountCacheScope(account)].join(
+            "\u0000",
+          );
           // The catalog is global (keyed by binary path + agent dir), but role
           // values live in layered config files — resolve roles per request so
           // project-scoped `modelRoles` participate when a cwd is provided.
@@ -2177,7 +2213,7 @@ export function makeOmpAdapter(
           const catalog: ProviderListModelsResult =
             cached !== undefined && catalogFromCache
               ? cached.result
-              : yield* runOmpCliModelList(binaryPath, agentDir).pipe(
+              : yield* runOmpCliModelList(binaryPath, agentDir, account).pipe(
                   Effect.timeoutOption(OMP_MODEL_DISCOVERY_TIMEOUT_MS),
                   Effect.flatMap(
                     Option.match({
@@ -2235,10 +2271,10 @@ export function makeOmpAdapter(
           // Mirror OMP's getAgentDir() precedence: the configured override
           // (spawned as PI_CODING_AGENT_DIR), then the ambient env the child
           // inherits anyway, then <PI_CONFIG_DIR|".omp">/agent under home.
-          const rolesAgentDir =
-            agentDir ||
-            process.env.PI_CODING_AGENT_DIR?.trim() ||
-            nodePath.join(nodeOs.homedir(), process.env.PI_CONFIG_DIR?.trim() || ".omp", "agent");
+          const rolesAgentDir = resolveOmpAgentDir({
+            ...account,
+            ...(agentDir ? { agentDir } : {}),
+          });
           const readOmpRolesMap = (dir: string): Effect.Effect<Record<string, unknown>> =>
             Effect.gen(function* () {
               // `config.yml` then `config.yaml` — OMP's MAIN_CONFIG_FILENAMES
@@ -2291,7 +2327,8 @@ export function makeOmpAdapter(
               issue: "cwd is required and no server cwd fallback is available.",
             });
           }
-          const cacheKey = `${input.binaryPath?.trim() || ompSettings.binaryPath?.trim() || "omp"}\u0000${input.agentDir?.trim() || ""}\u0000${cwd}`;
+          const account = ompAccount(input);
+          const cacheKey = `${input.binaryPath?.trim() || ompSettings.binaryPath?.trim() || "omp"}\u0000${input.agentDir?.trim() || ""}\u0000${cwd}\u0000${ompAccountCacheScope(account)}`;
           const cached = commandDiscoveryCache.get(cacheKey);
           if (input.forceReload !== true && cached && cached.expiresAt > Date.now()) {
             return { ...cached.result, cached: true };
@@ -2299,6 +2336,7 @@ export function makeOmpAdapter(
           const runtime = yield* makeOmpDiscoveryRuntime({
             ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
             ...(input.agentDir ? { agentDir: input.agentDir } : {}),
+            account,
             cwd,
             clientName: "Synara Command Discovery",
           });

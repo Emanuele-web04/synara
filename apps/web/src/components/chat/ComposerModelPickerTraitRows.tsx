@@ -6,6 +6,7 @@
 
 import {
   type ProviderAgentDescriptor,
+  type ProviderInstanceId,
   type ProviderKind,
   type ProviderModelDescriptor,
   type ThreadId,
@@ -72,6 +73,7 @@ function TraitRow(props: {
 
 export function ComposerModelPickerTraitRows(props: {
   provider: ProviderKind;
+  providerInstanceId?: ProviderInstanceId | null | undefined;
   threadId: ThreadId;
   model: string;
   runtimeModel: ProviderModelDescriptor | undefined;
@@ -91,7 +93,13 @@ export function ComposerModelPickerTraitRows(props: {
     modelOptions,
     props.runtimeModel,
   );
-  const commitTrait = useComposerTraitCommit({ threadId, provider, model, modelOptions });
+  const commitTrait = useComposerTraitCommit({
+    threadId,
+    provider,
+    providerInstanceId: props.providerInstanceId,
+    model,
+    modelOptions,
+  });
   const agentOptions = getAgentOptions(provider, props.runtimeAgents);
   const defaultAgent = defaultAgentForProvider(provider);
   const selectedAgent = getSelectedAgentValue(provider, modelOptions) ?? defaultAgent ?? "";
@@ -204,6 +212,7 @@ export function ComposerModelPickerTraitRows(props: {
       {usesEffortSlider ? (
         <ComposerEffortSliderCard
           provider={provider}
+          providerInstanceId={props.providerInstanceId}
           threadId={threadId}
           model={model}
           runtimeModel={props.runtimeModel}
