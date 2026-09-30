@@ -621,6 +621,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [121, "ClearAutomationDefinitionProviderOptions"],
         [122, "ClearAutomationRunProviderOptions"],
         [123, "ScrubOrchestrationEventProviderOptions"],
+        [124, "ProjectionTurnsPendingMessageIndex"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -696,6 +697,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 121, name: "ClearAutomationDefinitionProviderOptions" },
           { migration_id: 122, name: "ClearAutomationRunProviderOptions" },
           { migration_id: 123, name: "ScrubOrchestrationEventProviderOptions" },
+          { migration_id: 124, name: "ProjectionTurnsPendingMessageIndex" },
         ],
       );
       const groupConfigColumns = yield* sql<{ readonly name: string }>`
@@ -851,6 +853,7 @@ agentGatewayRetentionLegacyLayer(
           [121, "ClearAutomationDefinitionProviderOptions"],
           [122, "ClearAutomationRunProviderOptions"],
           [123, "ScrubOrchestrationEventProviderOptions"],
+          [124, "ProjectionTurnsPendingMessageIndex"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -969,6 +972,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [121, "ClearAutomationDefinitionProviderOptions"],
         [122, "ClearAutomationRunProviderOptions"],
         [123, "ScrubOrchestrationEventProviderOptions"],
+        [124, "ProjectionTurnsPendingMessageIndex"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1028,6 +1032,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [121, "ClearAutomationDefinitionProviderOptions"],
           [122, "ClearAutomationRunProviderOptions"],
           [123, "ScrubOrchestrationEventProviderOptions"],
+          [124, "ProjectionTurnsPendingMessageIndex"],
         ],
       );
 
@@ -1141,6 +1146,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [121, "ClearAutomationDefinitionProviderOptions"],
         [122, "ClearAutomationRunProviderOptions"],
         [123, "ScrubOrchestrationEventProviderOptions"],
+        [124, "ProjectionTurnsPendingMessageIndex"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1196,6 +1202,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [121, "ClearAutomationDefinitionProviderOptions"],
           [122, "ClearAutomationRunProviderOptions"],
           [123, "ScrubOrchestrationEventProviderOptions"],
+          [124, "ProjectionTurnsPendingMessageIndex"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`
