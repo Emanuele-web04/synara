@@ -607,9 +607,6 @@ export function KanbanNewTaskDialog({
                     hiddenProviders={settings.hiddenProviders}
                     providerOrder={settings.providerOrder}
                     onProviderModelChange={handleProviderModelChange}
-                    onProviderModelRoleSelect={(model, options) =>
-                      handleProviderModelChange("omp", model, options)
-                    }
                     open={isModelPickerOpen}
                     onOpenChange={setIsModelPickerOpen}
                   />

@@ -2711,7 +2711,6 @@ export default function Sidebar() {
           .fetchQuery(
             providerModelsQueryOptions({
               provider: "omp",
-              cwd: activeProject.cwd,
             }),
           )
           .catch(() => null);

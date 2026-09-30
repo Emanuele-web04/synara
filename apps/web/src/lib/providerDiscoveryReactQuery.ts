@@ -430,12 +430,10 @@ export function providerModelsQueryOptions(input: {
   enabled?: boolean;
   priority?: ProviderModelDiscoveryPriority | undefined;
 }) {
-  // The OMP catalog is global (`omp models --json` is not project-scoped), but
-  // `modelRoles` merge a project layer (`<cwd>/.omp/config.yml`), so cwd stays
-  // in the query key for roles to reflect the active project. The server still
-  // shares one catalog cache across cwds, so a per-cwd entry only pays for the
-  // role config reads.
-  const cwd = input.cwd ?? null;
+  // The OMP catalog is global: `omp models --json` reads no project layer, so
+  // cwd is forced to null and every caller lands on the same binary+agent-dir
+  // key regardless of the active project.
+  const cwd = input.provider === "omp" ? null : (input.cwd ?? null);
   const queryKey = providerDiscoveryQueryKeys.models(
     input.provider,
     input.binaryPath ?? null,
@@ -473,9 +471,6 @@ export function providerModelsQueryOptions(input: {
     // value in asking more often than the cache can change. Changes to paths,
     // endpoints, or cwd select a new key; CLI/account changes at the same paths
     // become visible on revalidation.
-    // OMP bypasses the server cache entirely: file-backed modelRoles are
-    // re-resolved per request, so role/config edits must reach the adapter on
-    // the ordinary focus/mount refetch cadence.
     staleTime:
       input.provider === "devin"
         ? (query) => (query.state.data?.error ? 0 : 15 * 60_000)
@@ -496,9 +491,9 @@ export function providerModelsQueryOptions(input: {
       : {}),
     // Droid discovery starts a disposable ACP session, so it must not refetch
     // on focus. OMP discovery is a cheap `omp models` subprocess (server-cached
-    // 5min; modelRoles are re-read per request), so it refetches on focus and,
-    // where the renderer's timers allow, on an interval while observed —
-    // otherwise config/role edits only appear after an app restart.
+    // 5min), so it refetches on focus and, where the renderer's timers allow,
+    // on an interval while observed — otherwise catalog edits only appear
+    // after an app restart.
     ...(input.provider === "droid" ? { refetchOnWindowFocus: false } : {}),
     ...(input.provider === "omp"
       ? { refetchOnWindowFocus: true, refetchInterval: 60_000, refetchIntervalInBackground: true }
