@@ -126,6 +126,34 @@ it("does not fetch for absent auth, custom endpoints, or extension-owned catalog
   ).toEqual([]);
 });
 
+it("uses the selected instance environment for offline discovery", async () => {
+  vi.stubEnv("OPENROUTER_API_KEY", undefined);
+  vi.stubEnv("PI_OFFLINE", "1");
+  const request = catalog();
+  const firstDir = directory();
+  const first = await ModelRuntime.create({
+    authPath: path.join(firstDir, "auth.json"),
+    modelsPath: path.join(firstDir, "models.json"),
+  });
+  await first.setRuntimeApiKey("openrouter", "test-only");
+  await refreshPiOpenRouterModels(first, { environment: {}, instanceId: "pi_work" });
+  expect(request).toHaveBeenCalledTimes(1);
+
+  request.mockClear();
+  vi.stubEnv("PI_OFFLINE", undefined);
+  const secondDir = directory();
+  const second = await ModelRuntime.create({
+    authPath: path.join(secondDir, "auth.json"),
+    modelsPath: path.join(secondDir, "models.json"),
+  });
+  await second.setRuntimeApiKey("openrouter", "test-only");
+  await refreshPiOpenRouterModels(second, {
+    environment: { PI_OFFLINE: "1" },
+    instanceId: "pi_work",
+  });
+  expect(request).not.toHaveBeenCalled();
+});
+
 it("preserves models.json overrides over live metadata", async () => {
   vi.stubEnv("OPENROUTER_API_KEY", "test-only");
   vi.stubEnv("PI_OFFLINE", undefined);

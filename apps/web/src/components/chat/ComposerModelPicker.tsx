@@ -8,6 +8,7 @@
 import {
   type ModelSlug,
   type ProviderAgentDescriptor,
+  type ProviderInstanceId,
   type ProviderKind,
   type ProviderModelDescriptor,
   type ProviderModelOptions,
@@ -32,7 +33,7 @@ import {
   type ProviderOptions,
 } from "../../providerModelOptions";
 import { SearchIcon } from "~/lib/icons";
-import { starredModelSlotKey } from "~/lib/starredModels";
+import { starredModelInstanceId, starredModelSlotKey } from "~/lib/starredModels";
 import { cn, isMacNavigatorPlatform } from "~/lib/utils";
 import { Input } from "../ui/input";
 import { Menu, MenuGroup, MenuGroupLabel } from "../ui/menu";
@@ -73,12 +74,19 @@ import {
   PICKER_PANEL_PLAIN_SEARCH_ICON_CLASS_NAME,
   PICKER_PANEL_PLAIN_SEARCH_INPUT_CLASS_NAME,
 } from "./pickerPanelStyles";
-import { resolveProviderModelLabel, resolveVisibleProviderOptions } from "./ProviderModelPicker";
+import {
+  type ProviderModelOptionsByProviderInstance,
+  type ProviderModelPickerInstance,
+  resolveProviderModelLabel,
+  resolveVisibleProviderOptions,
+} from "./ProviderModelPicker";
 import { resolveRuntimeModelDescriptor } from "./runtimeModelCapabilities";
 
 export type ComposerModelSelectionOptions = {
   /** Provider options to commit together with the model (starred presets, row effort). */
   modelOptions?: ProviderOptions;
+  /** Provider instance (account) the model is committed for. */
+  instanceId?: ProviderInstanceId;
 };
 
 type ComposerModelPickerProps = {
@@ -91,6 +99,9 @@ type ComposerModelPickerProps = {
   discoveryErrorsByProvider?: Partial<Record<ProviderKind, string | undefined>>;
   hiddenProviders?: ReadonlyArray<ProviderKind>;
   providerOrder?: ReadonlyArray<ProviderKind>;
+  providerInstances?: ReadonlyArray<ProviderModelPickerInstance>;
+  selectedProviderInstanceId?: ProviderInstanceId;
+  modelOptionsByProviderInstance?: ProviderModelOptionsByProviderInstance;
   // Narrow-composer degradation: drop the model name (provider icon stays)
   // and/or the effort/status label; both remain available to assistive tech.
   hideModelLabel?: boolean;
@@ -158,11 +169,20 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
   const usesEffortSlider = effortControl === "slider";
 
   const { starredModels, toggleStarredModel, unstarModel } = useStarredModels();
-  // A locked thread can only ever run its own provider's presets.
-  const usableStarredModels =
-    lockedProvider === null
-      ? starredModels
-      : starredModels.filter((entry) => entry.provider === lockedProvider);
+  // A locked thread can only ever run its own provider's presets, and a preset of a
+  // removed or disabled account cannot run at all.
+  const knownInstances = props.providerInstances;
+  const usableStarredModels = starredModels.filter((entry) => {
+    if (lockedProvider !== null && entry.provider !== lockedProvider) return false;
+    const instanceId = starredModelInstanceId(entry);
+    return (
+      instanceId === entry.provider ||
+      knownInstances === undefined ||
+      knownInstances.some(
+        (instance) => instance.instanceId === instanceId && instance.enabled !== false,
+      )
+    );
+  });
 
   const [tab, setTab] = useState<ComposerModelPickerTab>(activeProvider);
   const [query, setQuery] = useState("");
@@ -231,6 +251,8 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     lockedProvider,
     model: props.model,
     modelOptionsByProvider: props.modelOptionsByProvider,
+    modelOptionsByProviderInstance: props.modelOptionsByProviderInstance,
+    selectedProviderInstanceId: props.selectedProviderInstanceId,
   });
   const currentTraitSelection = getComposerTraitSelection(
     props.provider,
@@ -251,14 +273,45 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     props.providers,
   );
 
+  const instancesFor = (provider: ProviderKind): ReadonlyArray<ProviderModelPickerInstance> =>
+    (props.providerInstances ?? []).filter((instance) => instance.provider === provider);
+  const selectedInstanceIdFor = (provider: ProviderKind): ProviderInstanceId => {
+    const instances = instancesFor(provider);
+    if (
+      provider === props.provider &&
+      props.selectedProviderInstanceId !== undefined &&
+      instances.some((instance) => instance.instanceId === props.selectedProviderInstanceId)
+    ) {
+      return props.selectedProviderInstanceId;
+    }
+    return (
+      instances.find((instance) => instance.isDefault)?.instanceId ??
+      instances[0]?.instanceId ??
+      provider
+    );
+  };
+
+  const modelOptionsFor = (provider: ProviderKind): ReadonlyArray<ProviderModelOption> =>
+    props.modelOptionsByProviderInstance?.[selectedInstanceIdFor(provider)] ??
+    props.modelOptionsByProvider[provider];
+
+  const accountLabelFor = (instanceId: string) =>
+    (props.providerInstances ?? []).find(
+      (instance) => instance.instanceId === instanceId && !instance.isDefault,
+    )?.label;
+
   const rows =
     tab === STARRED_TAB
       ? buildStarredTabRows({
           starredModels: usableStarredModels,
-          modelOptionsByProvider: props.modelOptionsByProvider,
+          modelOptionsFor: (provider, instanceId) =>
+            props.modelOptionsByProviderInstance?.[instanceId as ProviderInstanceId] ??
+            props.modelOptionsByProvider[provider],
+          accountLabelFor,
           query: normalizedQuery,
           current: {
             provider: activeProvider,
+            instanceId: selectedInstanceIdFor(activeProvider),
             model: props.model,
             ...resolveStarredTraits(currentTraitSelection),
           },
@@ -266,7 +319,8 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
         })
       : buildProviderTabRows({
           provider: tab,
-          options: props.modelOptionsByProvider[tab],
+          instanceId: selectedInstanceIdFor(tab),
+          options: modelOptionsFor(tab),
           query: normalizedQuery,
           selectedModel: tab === activeProvider ? props.model : null,
         });
@@ -280,6 +334,10 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     patch: Record<string, unknown>,
     keepOpen = false,
   ) => {
+    // A starred preset restores its own account; other rows use the tab's account.
+    const instanceId = row.preset
+      ? (starredModelInstanceId(row.preset) as ProviderInstanceId)
+      : selectedInstanceIdFor(row.provider);
     if (Object.keys(patch).length > 0) {
       props.onProviderModelChange(row.provider, model, {
         modelOptions: buildNextProviderOptions(
@@ -287,9 +345,10 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
           providerOptionsFor(row.provider),
           patch,
         ),
+        instanceId,
       });
     } else {
-      props.onProviderModelChange(row.provider, model);
+      props.onProviderModelChange(row.provider, model, { instanceId });
     }
     if (keepOpen) {
       selectionCommittedWhileOpenRef.current = true;
@@ -516,6 +575,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
           </div>
           <ComposerModelPickerTraitRows
             provider={props.provider}
+            providerInstanceId={props.selectedProviderInstanceId}
             threadId={threadId}
             model={props.model}
             runtimeModel={props.runtimeModel}

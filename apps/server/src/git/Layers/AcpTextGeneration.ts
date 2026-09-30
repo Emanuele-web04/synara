@@ -81,7 +81,10 @@ export interface AcpTextGenerationConfig<
       readonly options?: unknown;
     };
   }) => ModelSelection | null;
-  readonly resolveSettings: (providerOptions?: ProviderStartOptions) => RuntimeSettings | undefined;
+  readonly resolveSettings: (
+    providerOptions: ProviderStartOptions | undefined,
+    modelSelection: ModelSelection,
+  ) => RuntimeSettings | undefined;
   readonly makeRuntime: (input: {
     readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
     readonly settings: RuntimeSettings | undefined;
@@ -138,7 +141,7 @@ export function runAcpTextGeneration<
     });
     const runtime = yield* config.makeRuntime({
       childProcessSpawner: input.childProcessSpawner,
-      settings: config.resolveSettings(input.providerOptions),
+      settings: config.resolveSettings(input.providerOptions, modelSelection),
       cwd: input.cwd,
     });
 

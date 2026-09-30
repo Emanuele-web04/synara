@@ -461,8 +461,20 @@ export const makeRecapStatsQuery = (
           pt.state AS state,
           COALESCE(
             tm.provider,
+            CASE
+              WHEN tm.instanceId = s.provider_instance_id THEN s.provider_name
+              ELSE tm.instanceId
+            END,
             CASE WHEN json_valid(th.model_selection_json)
-              THEN json_extract(th.model_selection_json, '$.provider') END
+              THEN json_extract(th.model_selection_json, '$.provider') END,
+            CASE WHEN json_valid(th.model_selection_json) THEN
+              CASE
+                WHEN json_extract(th.model_selection_json, '$.instanceId') = s.provider_instance_id
+                THEN s.provider_name
+                ELSE json_extract(th.model_selection_json, '$.instanceId')
+              END
+            END,
+            s.provider_name
           ) AS provider,
           COALESCE(
             tm.model,
@@ -472,6 +484,7 @@ export const makeRecapStatsQuery = (
         FROM projection_turns pt
         JOIN projection_threads th ON th.thread_id = pt.thread_id
         LEFT JOIN turn_model tm ON tm.thread_id = pt.thread_id AND tm.turn_id = pt.turn_id
+        LEFT JOIN projection_thread_sessions s ON s.thread_id = pt.thread_id
         WHERE ${overlapsWindow("pt")}
           AND COALESCE(th.creation_source, '') != 'provider_native'
       `;

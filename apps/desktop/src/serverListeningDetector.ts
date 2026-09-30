@@ -16,6 +16,10 @@ export class ServerListeningDetector {
       resolvePromise = resolve;
       rejectPromise = reject;
     });
+    // The window readiness watcher is optional once a window already exists. Keep the
+    // detector rejection observable to callers without letting an unobserved startup
+    // failure become a process-level unhandled rejection.
+    void this.promise.catch(() => undefined);
 
     this.resolvePromise = () => {
       if (this.settled) {

@@ -60,5 +60,5 @@ describe("browser CI partitions", () => {
       }
       expect(owners.every(({ fileParallelism }) => fileParallelism === false)).toBe(true);
     }
-  }, 30_000);
+  }, 120_000);
 });

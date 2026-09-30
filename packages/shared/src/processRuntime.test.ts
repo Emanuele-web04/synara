@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { spawnProcess } from "./processRuntime";
+import { execShellCommandSync, spawnProcess } from "./processRuntime";
 
 function run(
   args: readonly string[],
@@ -39,4 +39,16 @@ describe("processRuntime", () => {
       code: 7,
     });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "runs intentional shell snippets with the supplied environment",
+    () => {
+      expect(
+        execShellCommandSync('printf "%s" "$SYNARA_PROCESS_RUNTIME_TEST"', {
+          encoding: "utf8",
+          env: { ...process.env, SYNARA_PROCESS_RUNTIME_TEST: "shell-ok" },
+        }),
+      ).toBe("shell-ok");
+    },
+  );
 });
