@@ -70,6 +70,8 @@ Invalid rules are ignored. Invalid config files are ignored. Warnings are logged
 
 `sidechat.toggle` defaults to ⌘⌥S on macOS and Ctrl+Alt+S elsewhere. In the single-chat view, it reopens an existing side chat (or creates one using `/side`) and focuses its composer. Pressing it again hides the panel and focuses the main composer without interrupting either chat. Escape also hides a visible side chat when no menu or dialog needs dismissal; terminal input keeps Escape. The shortcut can be changed in Settings → Keyboard shortcuts.
 
+Enter while a composer voice note is recording is not a configurable command: a plain Enter (no modifiers) finishes the recording instead of sending the typed draft. Settings → Behavior → Enter while dictating decides whether it only transcribes into the composer (the default) or also sends the message once the transcript is in.
+
 ### Key Syntax
 
 Supported modifiers:
