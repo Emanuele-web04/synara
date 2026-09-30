@@ -45,6 +45,7 @@ import {
   type WsWelcomePayload,
   type WsBootstrapNegotiateResult,
   type AutomationStreamEvent,
+  type TodoStreamEvent,
   DEVICE_WS_CHANNELS,
   DEVICE_WS_METHODS,
   type DeviceEvent,
@@ -56,6 +57,7 @@ import {
 import { VOICE_TRANSCRIPTION_UPLOAD_ROUTE_PATH } from "@synara/shared/binaryTransfer";
 
 import { showConfirmDialogFallback } from "./confirmDialogFallback";
+import { TASKS_OFFERED_BY_BUILD } from "./tasksSurface";
 import { showContextMenuFallback } from "./contextMenuFallback";
 import { requireHttpExternalUrl } from "./lib/externalUrl";
 import { withNativeMenuIcons } from "./lib/nativeMenuIcons";
@@ -162,6 +164,7 @@ function omitNullUserInputAnswers(
 const terminalEventListeners = createListenerRegistry<TerminalEvent>();
 const projectDevServerEventListeners = createListenerRegistry<ProjectDevServerEvent>();
 const automationEventListeners = createListenerRegistry<AutomationStreamEvent>();
+const todoEventListeners = createListenerRegistry<TodoStreamEvent>();
 const deviceEventListeners = createListenerRegistry<DeviceEvent>();
 const projectAgentEventListeners = createListenerRegistry<ProjectAgentStreamEvent>();
 const computerEventListeners = createListenerRegistry<ComputerEvent>();
@@ -184,6 +187,7 @@ function clearWsNativeApiListeners(): void {
   terminalEventListeners.clear();
   projectDevServerEventListeners.clear();
   automationEventListeners.clear();
+  todoEventListeners.clear();
   deviceEventListeners.clear();
   projectAgentEventListeners.clear();
   computerEventListeners.clear();
@@ -485,6 +489,12 @@ export function createWsNativeApi(): NativeApi {
   transport.subscribe(WS_CHANNELS.automationEvent, (message) => {
     automationEventListeners.emit(message.data);
   });
+  // Tasks is Beta-only: Stable's server refuses the stream, so don't open it there.
+  if (TASKS_OFFERED_BY_BUILD) {
+    transport.subscribe(WS_CHANNELS.todoEvent, (message) => {
+      todoEventListeners.emit(message.data);
+    });
+  }
   transport.subscribe(DEVICE_WS_CHANNELS.event, (message) => {
     deviceEventListeners.emit(message.data);
   });
@@ -917,6 +927,13 @@ export function createWsNativeApi(): NativeApi {
       archiveRun: (input) => transport.request(WS_METHODS.automationArchiveRun, input),
       resolveProposal: (input) => transport.request(WS_METHODS.automationResolveProposal, input),
       onEvent: automationEventListeners.subscribe,
+    },
+    todo: {
+      list: () => transport.request(WS_METHODS.todoList, {}),
+      create: (input) => transport.request(WS_METHODS.todoCreate, input),
+      update: (input) => transport.request(WS_METHODS.todoUpdate, input),
+      delete: (input) => transport.request(WS_METHODS.todoDelete, input),
+      onEvent: todoEventListeners.subscribe,
     },
     device: {
       list: (input) => transport.request(DEVICE_WS_METHODS.list, input),

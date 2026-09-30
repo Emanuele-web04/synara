@@ -140,6 +140,7 @@ import Migration0121 from "./Migrations/121_ClearAutomationDefinitionProviderOpt
 import Migration0122 from "./Migrations/122_ClearAutomationRunProviderOptions.ts";
 import Migration0123 from "./Migrations/123_ScrubOrchestrationEventProviderOptions.ts";
 import Migration0124 from "./Migrations/124_ProjectionTurnsPendingMessageIndex.ts";
+import Migration0125 from "./Migrations/125_Todos.ts";
 import Migration0126 from "./Migrations/126_ProjectionThreadsSidechatContext.ts";
 
 /**
@@ -281,6 +282,7 @@ export const migrationEntries = [
   [122, "ClearAutomationRunProviderOptions", Migration0122],
   [123, "ScrubOrchestrationEventProviderOptions", Migration0123],
   [124, "ProjectionTurnsPendingMessageIndex", Migration0124],
+  [125, "Todos", Migration0125],
   [126, "ProjectionThreadsSidechatContext", Migration0126],
 ] as const;
 

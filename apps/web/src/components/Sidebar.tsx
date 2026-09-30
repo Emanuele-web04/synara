@@ -17,6 +17,7 @@ import {
   FolderOpenIcon,
   GiftIcon,
   KanbanIcon,
+  TasksIcon,
   KeyboardIcon,
   BellIcon,
   type LucideIcon,
@@ -37,6 +38,7 @@ import {
 import { createCentralIconComponent } from "~/lib/central-icons";
 import { ThreadPrStatusBadge } from "~/components/pullRequest/ThreadPrStatusBadge";
 import { PinStatusIcon, pinActionLabel } from "~/lib/pin";
+import { useTasksNeedingAttentionCount, useTodoEventSubscription } from "./tasks/useTodos";
 import { THREAD_CONTEXT_MENU_ICONS } from "~/lib/contextMenuIcons";
 import { ensureNativeApi } from "~/nativeApi";
 import { autoAnimate } from "@formkit/auto-animate";
@@ -111,8 +113,10 @@ import {
 import {
   normalizeHiddenSidebarNavItems,
   normalizeSidebarNavOrder,
+  resolveTasksSurfaceSlot,
   type SidebarNavItemId,
 } from "../sidebarNavOrdering";
+import { useTasksSurfaceEnabled } from "../tasksSurface";
 import {
   buildRailItemOrder,
   buildRailSpacesSections,
@@ -319,6 +323,7 @@ import {
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
 import { Popover, PopoverPopup } from "./ui/popover";
+import { StatusDot } from "./ui/status-chip";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
 import { Input } from "./ui/input";
 import {
@@ -657,13 +662,10 @@ function WorktreeBadgeGlyph({ className }: { className?: string }) {
 /** Pulsing green dot shown before a project name while a dev run is live. */
 function ProjectRunIndicatorDot({ className }: { className?: string }) {
   return (
-    <span
+    <StatusDot
       aria-hidden="true"
       title="Dev server running"
-      className={cn(
-        "size-1.5 shrink-0 rounded-full bg-emerald-400 motion-safe:animate-pulse",
-        className,
-      )}
+      className={cn("bg-emerald-400 motion-safe:animate-pulse", className)}
     />
   );
 }
@@ -1372,6 +1374,7 @@ export default function Sidebar() {
   });
   const isOnGroupsRoute = pathname.startsWith("/hubs") || pathname.startsWith("/groups");
   const isOnKanban = pathname.startsWith("/kanban");
+  const isOnTasks = pathname.startsWith("/tasks");
   const isOnAutomations = pathname.startsWith("/automations");
   const isOnPullRequests = pathname.startsWith("/pull-requests");
   // Lightweight read of automations to drive the sidebar attention badge. Shares the
@@ -1399,6 +1402,20 @@ export default function Sidebar() {
         }
       : null;
   }, [automationListQuery.data]);
+  // Tasks is Beta-only: Stable never subscribes to or reads to-dos (the server refuses them).
+  const tasksSurfaceEnabled = useTasksSurfaceEnabled();
+  useTodoEventSubscription(tasksSurfaceEnabled);
+  const tasksNeedingAttentionCount = useTasksNeedingAttentionCount(tasksSurfaceEnabled);
+  const tasksAttentionBadge = useMemo(
+    () =>
+      tasksNeedingAttentionCount > 0
+        ? {
+            text: String(tasksNeedingAttentionCount),
+            accessibleLabel: `${tasksNeedingAttentionCount} ${pluralize(tasksNeedingAttentionCount, "task needs", "tasks need")} you`,
+          }
+        : null,
+    [tasksNeedingAttentionCount],
+  );
   const pullRequestRepositoryConfig = useMemo(
     () => pullRequestRepositoryConfigFingerprint(projects),
     [projects],
@@ -3995,8 +4012,12 @@ export default function Sidebar() {
 
   // --- Primary nav customization: persisted order + visibility, edited in a card. ---
   const sidebarNavOrder = useMemo(
-    () => normalizeSidebarNavOrder(appSettings.sidebarNavOrder),
-    [appSettings.sidebarNavOrder],
+    () =>
+      resolveTasksSurfaceSlot(
+        normalizeSidebarNavOrder(appSettings.sidebarNavOrder),
+        tasksSurfaceEnabled,
+      ),
+    [appSettings.sidebarNavOrder, tasksSurfaceEnabled],
   );
   const hiddenSidebarNavItems = useMemo(
     () => new Set(normalizeHiddenSidebarNavItems(appSettings.hiddenSidebarNavItems)),
@@ -4034,6 +4055,16 @@ export default function Sidebar() {
           void navigate({ to: "/kanban" });
         },
       },
+      tasks: {
+        icon: TasksIcon,
+        label: "Tasks",
+        // Beta's Tasks entry stands for both views: the list and the Kanban board.
+        active: isOnTasks || isOnKanban,
+        badge: tasksAttentionBadge,
+        onClick: () => {
+          void navigate({ to: appSettings.tasksViewMode === "kanban" ? "/kanban" : "/tasks" });
+        },
+      },
       pullRequests: {
         icon: IoIosGitCompare,
         label: "Code review",
@@ -4060,9 +4091,12 @@ export default function Sidebar() {
       isOnAutomations,
       isOnKanban,
       isOnPullRequests,
+      isOnTasks,
+      appSettings.tasksViewMode,
       navigate,
       prefetchModelsForPrimaryNewThread,
       pullRequestsReviewBadge,
+      tasksAttentionBadge,
     ],
   );
   // A hidden item whose route is currently active stays visible so the current
@@ -4076,13 +4110,14 @@ export default function Sidebar() {
   );
   const handleNavOrderReorder = useCallback(
     (activeId: string, overId: string) => {
-      const order = normalizeSidebarNavOrder(appSettings.sidebarNavOrder);
+      // The rows show the Kanban/Tasks slot resolved, so reorder that same list.
+      const order = sidebarNavOrder;
       const fromIndex = order.indexOf(activeId as SidebarNavItemId);
       const toIndex = order.indexOf(overId as SidebarNavItemId);
       if (fromIndex < 0 || toIndex < 0) return;
       updateSettings({ sidebarNavOrder: arrayMove(order, fromIndex, toIndex) });
     },
-    [appSettings.sidebarNavOrder, updateSettings],
+    [sidebarNavOrder, updateSettings],
   );
   const handleNavItemVisibleChange = useCallback(
     (id: string, visible: boolean) => {
@@ -6409,7 +6444,12 @@ export default function Sidebar() {
   // Rail layout: Home and Spaces switch the panel; route items navigate exactly like their
   // classic nav rows (prewarm included). The store's active item keeps one item selected.
   const isOnThreadsSection =
-    !isOnSettings && !isOnGroups && !isOnKanban && !isOnPullRequests && !isOnAutomations;
+    !isOnSettings &&
+    !isOnGroups &&
+    !isOnKanban &&
+    !isOnTasks &&
+    !isOnPullRequests &&
+    !isOnAutomations;
   // One Help menu wiring for both homes: the classic footer and the rail's bottom cluster.
   const sidebarHelpMenuProps = {
     onOpenShortcuts: () => void navigate({ to: "/settings", search: { section: "shortcuts" } }),
@@ -6438,8 +6478,15 @@ export default function Sidebar() {
         handleSidebarViewChange("groups");
       }
     : null;
+  // Where Tasks takes Kanban's slot it also stands for the board it switches to, so the
+  // Kanban route selects (and keeps visible, even if hidden) the Tasks item.
+  const railSlotActiveItem =
+    tasksSurfaceEnabled && railActiveItem === "kanban" ? "tasks" : railActiveItem;
   // The rail's top items, in the user's Customize order (hidden ones drop out unless active).
-  const railItemOrder = normalizeRailItemOrder(appSettings.railItemOrder);
+  const railItemOrder = resolveTasksSurfaceSlot(
+    normalizeRailItemOrder(appSettings.railItemOrder),
+    tasksSurfaceEnabled,
+  );
   const hiddenRailItems = new Set(normalizeHiddenRailItems(appSettings.hiddenRailItems));
   const railItemLabel = (id: RailOrderableItemId): string =>
     id === "home" || id === "spaces"
@@ -6475,7 +6522,7 @@ export default function Sidebar() {
     return {
       ...base,
       badge: item.badge,
-      active: railActiveItem === id,
+      active: railSlotActiveItem === id,
       onSelect: () => {
         selectRailRouteItem(id);
         item.onClick();
@@ -6487,7 +6534,7 @@ export default function Sidebar() {
   const railVisibleItemIds = buildRailItemOrder({
     order: railItemOrder,
     hidden: hiddenRailItems,
-    activeItem: railActiveItem,
+    activeItem: railSlotActiveItem,
     studioAvailable: openRailStudio !== null,
   });
   const railItems: AppRailItem[] = railVisibleItemIds.map(railItemFor);
