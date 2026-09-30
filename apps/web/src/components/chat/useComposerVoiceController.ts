@@ -50,6 +50,10 @@ export interface UseComposerVoiceControllerOptions {
 
 export interface UseComposerVoiceControllerResult {
   isVoiceRecording: boolean;
+  // The microphone is opening; nothing is recording yet.
+  isVoiceStarting: boolean;
+  // Recording, but the device has not delivered real audio yet.
+  isVoiceWaitingForAudio: boolean;
   isVoiceTranscribing: boolean;
   voiceWaveformLevels: readonly number[];
   voiceRecordingDurationLabel: string;
@@ -89,6 +93,8 @@ export function useComposerVoiceController(
   const actionArmDelayMs = actionArmDelayMsProp ?? 0;
   const {
     isRecording: isVoiceRecording,
+    isStarting: isVoiceStarting,
+    hasAudioSignal: hasVoiceAudioSignal,
     durationMs: voiceRecordingDurationMs,
     waveformLevels: voiceWaveformLevels,
     startRecording: startVoiceRecording,
@@ -336,6 +342,8 @@ export function useComposerVoiceController(
 
   return {
     isVoiceRecording,
+    isVoiceStarting,
+    isVoiceWaitingForAudio: isVoiceRecording && !hasVoiceAudioSignal,
     isVoiceTranscribing,
     voiceWaveformLevels,
     voiceRecordingDurationLabel,

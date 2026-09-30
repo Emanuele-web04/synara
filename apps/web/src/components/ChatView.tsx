@@ -2666,6 +2666,8 @@ export default function ChatView({
   );
   const {
     isVoiceRecording,
+    isVoiceStarting,
+    isVoiceWaitingForAudio,
     isVoiceTranscribing,
     voiceWaveformLevels,
     voiceRecordingDurationLabel,
@@ -5812,6 +5814,8 @@ export default function ChatView({
                     voice={{
                       enabled: showVoiceNotesControl,
                       recording: isVoiceRecording,
+                      starting: isVoiceStarting,
+                      waitingForAudio: isVoiceWaitingForAudio,
                       transcribing: isVoiceTranscribing,
                       durationLabel: voiceRecordingDurationLabel,
                       waveformLevels: voiceWaveformLevels,
