@@ -1,16 +1,32 @@
-import { ThreadId, TodoId, type Todo } from "@synara/contracts";
+import { ProjectId, ThreadId, TodoId, type Todo, type TodoUpdateInput } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { renderHook } from "vitest-browser-react";
 
 import type { ScratchModelCatalog } from "../../hooks/useScratchModelCatalog";
 import type { DraftThreadDispatchResult } from "../../lib/draftThreadDispatch";
 import { makeThread } from "../../storeTestFixtures";
+import { useComposerDraftStore } from "../../composerDraftStore";
+import { resetComposerDraftStore } from "../../composerDraftStoreTestFixtures";
 import { useTaskCanUnlink } from "./taskDelegationState";
 import { useTaskDelegation } from "./useTaskDelegation";
 
-const transport = vi.hoisted(() => ({ dispatch: vi.fn() }));
+const transport = vi.hoisted(() => ({ dispatch: vi.fn(), list: vi.fn() }));
+const notifications = vi.hoisted(() => ({ add: vi.fn() }));
+vi.mock("../../nativeApi", () => ({
+  ensureNativeApi: () => ({ todo: { list: transport.list } }),
+  readNativeApi: () => undefined,
+  readNativeApiServerCapability: () => false,
+  onNativeApiServerCapabilitiesChange: () => () => {},
+}));
+vi.mock("../ui/toast", () => ({ toastManager: notifications }));
+beforeEach(() => {
+  transport.dispatch.mockReset();
+  transport.list.mockReset();
+  notifications.add.mockClear();
+  resetComposerDraftStore();
+});
 vi.mock("@tanstack/react-router", async (original) => ({
   ...(await original<typeof import("@tanstack/react-router")>()),
   useNavigate: () => () => Promise.resolve(),
@@ -94,6 +110,8 @@ it("blocks unlink throughout an in-flight start and restores recovery when its r
     pending = hook.result.current.delegation.handleStart();
     await vi.waitFor(() => expect(transport.dispatch).toHaveBeenCalledTimes(1));
     await vi.waitFor(() => expect(hook.result.current.oldCanUnlink).toBe(false));
+    await hook.result.current.delegation.handleStart();
+    expect(transport.dispatch).toHaveBeenCalledTimes(1);
     resolveDispatch({ kind: "error", outcomeUnknown: true, message: "Reply lost" });
     await pending;
     await vi.waitFor(() => expect(hook.result.current.freshCanUnlink).toBe(true));
@@ -104,3 +122,187 @@ it("blocks unlink throughout an in-flight start and restores recovery when its r
     client.clear();
   }
 });
+
+it.each(
+  (["new", "existing"] as const).flatMap((destination) =>
+    (
+      [
+        "unconfirmed",
+        "confirmed",
+        "not-linked",
+        "rejected",
+        "unlink-unconfirmed",
+        "unlink-confirmed",
+        "edited-start-failure",
+        "edited-link",
+      ] as const
+    )
+      .map((outcome) => ({ destination, outcome }))
+      .filter(({ outcome }) => outcome !== "edited-link" || destination === "existing"),
+  ),
+)(
+  "handles $outcome link outcomes for a $destination chat without duplicate dispatch",
+  async ({ destination, outcome }) => {
+    const client = new QueryClient();
+    const now = new Date();
+    const existing = {
+      ...makeThread({ id: ThreadId.makeUnsafe(`link-recovery-${destination}`) }),
+      latestUserMessageAt: null,
+      hasPendingApprovals: false,
+      hasPendingUserInput: false,
+      hasActionableProposedPlan: false,
+      hasLiveTailWork: false,
+    };
+    let todo: Todo = {
+      id: TodoId.makeUnsafe(`unknown-link-${destination}-${outcome}`),
+      title: "Keep my task",
+      notes: "Keep my notes",
+      priority: "none",
+      projectId: null,
+      dueDate: null,
+      threadId: null,
+      delegationBaseTurnId: null,
+      linkedAt: null,
+      completedAt: null,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    };
+    const interrupted = Object.assign(new Error("Reply lost"), {
+      _tag: "WsTransportRequestInterruptedError",
+      code: "WS_REQUEST_RECONNECTED",
+    });
+    let claimedThread: ThreadId | null = null;
+    transport.list.mockImplementation(async () => {
+      if (outcome === "confirmed") return { todos: [todo] };
+      if (outcome === "not-linked") return { todos: [] };
+      throw new Error("Still offline");
+    });
+    const failsStart =
+      outcome === "unlink-unconfirmed" ||
+      outcome === "unlink-confirmed" ||
+      outcome === "edited-start-failure";
+    transport.dispatch.mockImplementation(async () => {
+      if (outcome === "edited-start-failure") {
+        // A user types in the open chat while its dispatch request is pending.
+        useComposerDraftStore.getState().setPrompt(claimedThread!, "My next message");
+      }
+      return failsStart ? { kind: "error", message: "Start refused" } : { kind: "dispatched" };
+    });
+    let releaseLink: (() => void) | undefined;
+    const onLinkChat = vi.fn(async (input: TodoUpdateInput) => {
+      if (input.threadId) claimedThread = input.threadId;
+      if (outcome === "edited-link" && input.threadId) {
+        await new Promise<void>((resolve) => {
+          releaseLink = resolve;
+        });
+      }
+      todo = { ...todo, threadId: input.threadId ?? null, linkedAt: now.toISOString() };
+      if (
+        outcome === "edited-link" ||
+        outcome === "unlink-confirmed" ||
+        outcome === "edited-start-failure" ||
+        (outcome === "unlink-unconfirmed" && input.threadId !== null)
+      )
+        return;
+      if (outcome === "rejected") throw new Error("Link refused");
+      throw interrupted;
+    });
+    const hook = await renderHook(
+      () => ({
+        delegation: useTaskDelegation({
+          todo,
+          onLinkChat,
+          onDelegated: undefined,
+          draft: {
+            scratchThreadId: ThreadId.makeUnsafe(`scratch-${destination}`),
+            prompt: "Keep my task\n\nKeep my notes",
+            setPrompt: () => {},
+            selectedProvider: "codex",
+            selectedProviderInstanceId: "codex",
+            selectedModel: "gpt-5.4",
+            selectedModelSupportsAutoMode: undefined,
+            selectedProviderModelOptions: undefined,
+            handleProviderModelChange: () => {},
+          },
+          catalog: {
+            modelOptionsByProvider: { codex: [] },
+            runtimeMode: "approval-required",
+            runtimeModelForCapabilities: undefined,
+          } as unknown as ScratchModelCatalog,
+          providerStatuses: [
+            {
+              provider: "codex",
+              driver: "codex",
+              instanceId: "codex",
+              status: "ready",
+              available: true,
+              authStatus: "authenticated",
+              checkedAt: now.toISOString(),
+            },
+          ],
+          target: { kind: "project", projectId: ProjectId.makeUnsafe("project-recovery") },
+          existingChat: destination === "existing" ? existing : null,
+        }),
+        canUnlink: useTaskCanUnlink(todo, "starting", now),
+      }),
+      {
+        wrapper: ({ children }: { children?: ReactNode }) => (
+          <QueryClientProvider client={client}>{children}</QueryClientProvider>
+        ),
+      },
+    );
+    try {
+      const pending = hook.result.current.delegation.handleStart();
+      if (outcome === "edited-link") {
+        await vi.waitFor(() => expect(releaseLink).toBeDefined());
+        useComposerDraftStore.getState().setPrompt(claimedThread!, "My next message");
+        releaseLink!();
+      }
+      await pending;
+      await hook.rerender();
+      const dispatched = outcome === "confirmed" || failsStart;
+      expect(transport.dispatch).toHaveBeenCalledTimes(dispatched ? 1 : 0);
+      expect(onLinkChat).toHaveBeenCalledTimes(failsStart || outcome === "edited-link" ? 2 : 1);
+      if (outcome === "unlink-unconfirmed") {
+        // Reconciliation may restore a link whose rollback reply was lost.
+        todo = { ...todo, threadId: claimedThread };
+        await hook.rerender();
+      }
+      const uncertain = outcome === "unconfirmed" || outcome === "unlink-unconfirmed";
+      expect(hook.result.current.canUnlink).toBe(uncertain);
+      if (uncertain || outcome === "not-linked") {
+        expect(notifications.add).toHaveBeenCalledWith(
+          expect.objectContaining({ type: "warning" }),
+        );
+      }
+      if (outcome === "edited-start-failure" || outcome === "edited-link") {
+        expect(useComposerDraftStore.getState().draftsByThreadId[claimedThread!]?.prompt).toBe(
+          "My next message",
+        );
+      }
+      if (destination === "new") {
+        const draft = useComposerDraftStore.getState().getDraftThread(claimedThread!);
+        if (
+          outcome === "unconfirmed" ||
+          outcome === "confirmed" ||
+          outcome === "unlink-unconfirmed" ||
+          outcome === "edited-start-failure"
+        ) {
+          expect(draft).toBeTruthy();
+          expect(useComposerDraftStore.getState().draftsByThreadId[claimedThread!]?.prompt).toBe(
+            outcome === "edited-start-failure"
+              ? "My next message"
+              : "Keep my task\n\nKeep my notes",
+          );
+        } else {
+          expect(draft).toBeNull();
+        }
+      }
+    } finally {
+      releaseLink?.();
+      await hook.unmount();
+      client.clear();
+      resetComposerDraftStore();
+    }
+  },
+);

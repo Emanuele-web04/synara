@@ -52,6 +52,7 @@ describe("draft thread creation", () => {
     });
 
     expect(result).toEqual({ kind: "dispatched" });
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.prompt ?? "").toBe("");
     expect(nativeApiMocks.dispatchCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "thread.turn.start",
@@ -80,6 +81,7 @@ describe("draft thread creation", () => {
     });
 
     expect(result).toEqual({ kind: "dispatched" });
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.prompt ?? "").toBe("");
     expect(linked).toEqual([threadId]);
     const commandTypes = nativeApiMocks.dispatchCommand.mock.calls.map(
       ([command]) => (command as { type: string }).type,
@@ -117,4 +119,39 @@ describe("draft thread creation", () => {
     expect(nativeApiMocks.dispatchCommand).not.toHaveBeenCalled();
     expect(Object.keys(useComposerDraftStore.getState().draftThreadsByThreadId)).toEqual([]);
   });
+  it.each(["dispatch", "link"] as const)(
+    "preserves edits made while %s is pending",
+    async (stage) => {
+      const projectId = ProjectId.makeUnsafe(`project-concurrent-${stage}`);
+      let editedId: import("@synara/contracts").ThreadId | undefined;
+      if (stage === "dispatch") {
+        nativeApiMocks.dispatchCommand.mockImplementationOnce(async () => undefined);
+        nativeApiMocks.dispatchCommand.mockImplementationOnce(async (command) => {
+          editedId = (command as { threadId: import("@synara/contracts").ThreadId }).threadId;
+          useComposerDraftStore.getState().setPrompt(editedId, "My next message");
+        });
+      }
+      const pending = createAndDispatchDraftThread({
+        projectId,
+        prompt: "Original task",
+        modelSelection: { provider: "codex", model: "gpt-5.4" },
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        envMode: "local",
+        defaultProvider: "codex",
+        assistantDeliveryMode: "buffered",
+        beforeDispatch: async (id) => {
+          if (stage !== "link") return;
+          editedId = id;
+          useComposerDraftStore.getState().setPrompt(id, "My next message");
+          throw new Error("Link refused");
+        },
+      });
+      if (stage === "link") await expect(pending).rejects.toThrow("Link refused");
+      else expect((await pending).result).toEqual({ kind: "dispatched" });
+      expect(useComposerDraftStore.getState().draftsByThreadId[editedId!]?.prompt).toBe(
+        "My next message",
+      );
+    },
+  );
 });
