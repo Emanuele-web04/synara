@@ -113,6 +113,9 @@ describe("railItemForPathname", () => {
     expect(railItemForPathname("/automations")).toBe("automations");
     expect(railItemForPathname("/studio/abc")).toBe("studio");
     expect(railItemForPathname("/groups")).toBe("studio");
+    expect(railItemForPathname("/hubs")).toBe("studio");
+    expect(railItemForPathname("/hubs/alpha")).toBe("studio");
+    expect(railItemForPathname("/hubsish")).toBeNull();
     expect(railItemForPathname("/settings")).toBe("settings");
     expect(railItemForPathname("/kanbanish")).toBeNull();
     expect(railItemForPathname("/")).toBeNull();

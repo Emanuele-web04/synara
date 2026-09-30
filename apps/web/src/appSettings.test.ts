@@ -1739,6 +1739,27 @@ describe("AppSettingsSchema", () => {
     });
   });
 
+  it("drops rail and nav ids this build does not know instead of resetting every setting", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+    const decoded = decode(
+      JSON.stringify({
+        sidebarLayout: "rail",
+        railItemOrder: ["some-future-item", "kanban", "home"],
+        hiddenRailItems: ["some-future-item", "studio"],
+        sidebarNavOrder: ["some-future-item", "kanban"],
+        hiddenSidebarNavItems: ["some-future-item"],
+      }),
+    );
+
+    expect(decoded).toMatchObject({
+      sidebarLayout: "rail",
+      railItemOrder: ["kanban", "home"],
+      hiddenRailItems: ["studio"],
+      sidebarNavOrder: ["kanban"],
+      hiddenSidebarNavItems: [],
+    });
+  });
+
   it("defaults the Environment panel closed and preserves an explicit open preference", () => {
     const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
 

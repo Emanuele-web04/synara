@@ -225,7 +225,7 @@ export function buildGroupConfigureInput(input: {
           coordinatorName:
             draft.name.trim().length > 0
               ? draft.name.trim().slice(0, GROUP_NAME_MAX_CHARS)
-              : "Group Coordinator",
+              : "Hub Coordinator",
         }
       : {}),
     ...(config?.coordinatorProviderOptions
@@ -313,7 +313,7 @@ export async function saveGroupSettings(input: {
 }): Promise<SaveGroupSettingsResult> {
   const trimmedName = input.draft.name.trim();
   if (trimmedName.length === 0) {
-    return { ok: false, error: "Give the group a name." };
+    return { ok: false, error: "Give the hub a name." };
   }
   try {
     // Configure first: a revision conflict must abort before the project meta
@@ -340,7 +340,7 @@ export async function saveGroupSettings(input: {
   } catch (error) {
     return {
       ok: false,
-      error: error instanceof Error ? error.message : "Could not save the group settings.",
+      error: error instanceof Error ? error.message : "Could not save the hub settings.",
     };
   }
 }

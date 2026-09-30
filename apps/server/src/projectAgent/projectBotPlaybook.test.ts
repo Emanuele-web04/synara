@@ -12,7 +12,7 @@ describe("project bot playbook", () => {
     expect(PROJECT_BOT_PLAYBOOK_PATH).toBe("docs/project-bot.md");
   });
 
-  it("teaches how to keep the group markdown files", () => {
+  it("teaches how to keep the hub markdown files", () => {
     expect(PROJECT_BOT_PLAYBOOK).toContain("instructions.md");
     expect(PROJECT_BOT_PLAYBOOK).toContain("decisions.md");
     expect(PROJECT_BOT_PLAYBOOK).toContain("overview.md");
@@ -26,7 +26,7 @@ describe("project bot playbook", () => {
     expect(PROJECT_BOT_PLAYBOOK).toContain("The thread does not have to remember a tool");
   });
 
-  it("teaches the group tools and routing rules", () => {
+  it("teaches the hub tools and routing rules", () => {
     expect(PROJECT_BOT_PLAYBOOK).toContain("synara_project_remember");
     expect(PROJECT_BOT_PLAYBOOK).toContain("synara_project_forget");
     expect(PROJECT_BOT_PLAYBOOK).toContain("synara_project_library_add");

@@ -52,7 +52,7 @@ export function GroupLifecycleSection(props: {
     if (result === null) {
       toastManager.add({
         type: "error",
-        title: "Unable to delete group",
+        title: "Unable to delete hub",
         description: agent.error ?? "An error occurred.",
       });
       return;
@@ -61,7 +61,7 @@ export function GroupLifecycleSection(props: {
     if (notice) {
       toastManager.add({
         type: "info",
-        title: "Group deleted",
+        title: "Hub deleted",
         description: notice.description,
         data: { copyItems: notice.copyItems },
       });
@@ -75,7 +75,7 @@ export function GroupLifecycleSection(props: {
         <SettingsCard>
           <div className="flex items-center justify-between gap-3 px-4 py-3">
             <div className="min-w-0">
-              <p className="text-ui font-medium">{paused ? "Resume group" : "Pause group"}</p>
+              <p className="text-ui font-medium">{paused ? "Resume hub" : "Pause hub"}</p>
               <p className="text-ui-sm text-muted-foreground">
                 {paused
                   ? "Threads and automations are stopped until you resume."
@@ -93,7 +93,7 @@ export function GroupLifecycleSection(props: {
                     paused
                       ? agent.resumeGroup(config.projectId)
                       : agent.pauseGroup(config.projectId),
-                  paused ? "Unable to resume group" : "Unable to pause group",
+                  paused ? "Unable to resume hub" : "Unable to pause hub",
                 )
               }
             >
@@ -124,9 +124,9 @@ export function GroupLifecycleSection(props: {
           </div>
           <div className="flex items-center justify-between gap-3 px-4 py-3">
             <div className="min-w-0">
-              <p className="text-ui font-medium">Archive group</p>
+              <p className="text-ui font-medium">Archive hub</p>
               <p className="text-ui-sm text-muted-foreground">
-                Archives every thread and hides the group in the sidebar until unarchived.
+                Archives every thread and hides the hub in the sidebar until unarchived.
               </p>
             </div>
             <Button
@@ -135,7 +135,7 @@ export function GroupLifecycleSection(props: {
               size="sm"
               disabled={busy || archived}
               onClick={() =>
-                void run(() => agent.archiveGroup(config.projectId), "Unable to archive group")
+                void run(() => agent.archiveGroup(config.projectId), "Unable to archive hub")
               }
             >
               Archive
@@ -148,13 +148,12 @@ export function GroupLifecycleSection(props: {
         <SettingsCard>
           <div className="space-y-3 px-4 py-3">
             <div className="min-w-0">
-              <p className="text-ui font-medium text-destructive">Delete group</p>
+              <p className="text-ui font-medium text-destructive">Delete hub</p>
               <p className="text-ui-sm text-muted-foreground">
-                Deletes the group, its coordinator, context, and automations. The Library is moved
-                to the trash when possible. The group folder under ~/Documents/Synara/Groups is
-                removed only when it holds nothing but Synara-generated files; if it has your files
-                it is kept and you get its path. Linked repositories and their threads are
-                untouched.
+                Deletes the hub, its coordinator, context, and automations. The Library is moved to
+                the trash when possible. The hub folder under ~/Documents/Synara/Groups is removed
+                only when it holds nothing but Synara-generated files; if it has your files it is
+                kept and you get its path. Linked repositories and their threads are untouched.
               </p>
             </div>
             {confirmOpen ? (
@@ -163,7 +162,7 @@ export function GroupLifecycleSection(props: {
                   value={confirmName}
                   onChange={(event) => setConfirmName(event.target.value)}
                   placeholder={`Type ${projectName} to confirm`}
-                  aria-label="Type the group name to confirm deletion"
+                  aria-label="Type the hub name to confirm deletion"
                 />
                 <div className="flex items-center gap-2">
                   <Button
@@ -173,7 +172,7 @@ export function GroupLifecycleSection(props: {
                     disabled={!nameMatches || busy}
                     onClick={() => void handleDelete()}
                   >
-                    {deleting ? "Deleting..." : "Delete group"}
+                    {deleting ? "Deleting..." : "Delete hub"}
                   </Button>
                   <Button
                     type="button"
@@ -197,7 +196,7 @@ export function GroupLifecycleSection(props: {
                 disabled={busy}
                 onClick={() => setConfirmOpen(true)}
               >
-                Delete group…
+                Delete hub…
               </Button>
             )}
           </div>

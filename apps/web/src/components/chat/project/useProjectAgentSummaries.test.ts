@@ -73,7 +73,7 @@ describe("useProjectAgentSummaries store", () => {
         goal: {
           id: ProjectGoalId.makeUnsafe("goal-1"),
           projectId: groupId,
-          objective: "Ship groups",
+          objective: "Ship hubs",
           authorizationSource: "user",
           scopeVersion: 1,
           acceptanceCriteria: null,
@@ -96,7 +96,7 @@ describe("useProjectAgentSummaries store", () => {
         goal: {
           id: ProjectGoalId.makeUnsafe("goal-1"),
           projectId: groupId,
-          objective: "Ship groups",
+          objective: "Ship hubs",
           authorizationSource: "user",
           scopeVersion: 1,
           acceptanceCriteria: null,

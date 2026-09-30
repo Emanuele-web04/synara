@@ -426,7 +426,7 @@ export function ensureLibraryRepo(
         return;
       }
       if (marker.owner !== null && marker.owner !== projectId) {
-        return yield* fail(`Library root "${root}" already belongs to another group.`, "forbidden");
+        return yield* fail(`Library root "${root}" already belongs to another hub.`, "forbidden");
       }
       // Backfill ownership on pre-upgrade markers lazily.
       if (marker.owner === null) yield* writeLibraryMarker(root, projectId);
@@ -486,7 +486,7 @@ export function moveLibraryRoot(input: {
         if (marker !== null) {
           if (marker.owner !== null && marker.owner !== input.projectId) {
             return yield* fail(
-              `Library destination "${toRoot}" already belongs to another group.`,
+              `Library destination "${toRoot}" already belongs to another hub.`,
               "conflict",
             );
           }
@@ -589,7 +589,7 @@ export function assertLibraryRootLocation(input: {
           firstSegment !== input.projectId)
       ) {
         return yield* fail(
-          `Library path "${input.root}" is inside another group's managed area.`,
+          `Library path "${input.root}" is inside another hub's managed area.`,
           "forbidden",
         );
       }
@@ -606,7 +606,7 @@ export function assertLibraryRootLocation(input: {
     if (marker !== null) {
       if (marker.owner !== null && marker.owner !== input.projectId) {
         return yield* fail(
-          `Library path "${input.root}" already belongs to another group.`,
+          `Library path "${input.root}" already belongs to another hub.`,
           "forbidden",
         );
       }

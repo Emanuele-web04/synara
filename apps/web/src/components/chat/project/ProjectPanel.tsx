@@ -320,7 +320,7 @@ export function ProjectPanel({
   const content = (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center justify-between gap-2 px-3 pb-0.5 pt-1">
-        <EnvironmentPanelTitle>Groups</EnvironmentPanelTitle>
+        <EnvironmentPanelTitle>Hubs</EnvironmentPanelTitle>
         <div className="flex items-center gap-0.5">
           {configured ? (
             <>
@@ -340,15 +340,15 @@ export function ProjectPanel({
               ) : null}
               <IconButton
                 type="button"
-                label="Group settings"
-                tooltip="Group settings"
+                label="Hub settings"
+                tooltip="Hub settings"
                 onClick={() => setAgentDialogOpen(true)}
               >
                 <SettingsIcon className="size-3.5" />
               </IconButton>
             </>
           ) : null}
-          <IconButton type="button" label="Close group panel" tooltip="Close" onClick={onClose}>
+          <IconButton type="button" label="Close hub panel" tooltip="Close" onClick={onClose}>
             <XIcon className="size-3.5" />
           </IconButton>
         </div>
@@ -520,7 +520,7 @@ export function ProjectPanel({
           </>
         ) : (
           <p className="px-2 py-1 text-ui text-muted-foreground">
-            Threads, context, and memory for the group live in this folder after you set up the
+            Threads, context, and memory for the hub live in this folder after you set up the
             coordinator. Setup does not launch a model.
           </p>
         )}

@@ -235,15 +235,15 @@ describe("SidebarGroupsSurface", () => {
     mountedRoot = null;
   });
 
-  it("shows the Groups empty state before and after hydration", async () => {
+  it("shows the Hubs empty state before and after hydration", async () => {
     await mount({ projects: [], threadsHydrated: false });
-    await waitForText("Loading groups…");
+    await waitForText("Loading hubs…");
 
     await mount({ projects: [], threadsHydrated: true });
-    await waitForText("No groups yet");
+    await waitForText("No hubs yet");
   });
 
-  it("shows the coordinator as the group row and expands its chats from the chevron", async () => {
+  it("shows the coordinator as the hub row and expands its chats from the chevron", async () => {
     const group = makeGroupProject({
       id: GROUP_A_ID,
       kind: "group",
@@ -357,7 +357,7 @@ describe("SidebarGroupsSurface", () => {
     });
   });
 
-  it("shows just the coordinator row for a group with no chats", async () => {
+  it("shows just the coordinator row for a hub with no chats", async () => {
     const group = makeGroupProject({
       id: GROUP_B_ID,
       kind: "group",
@@ -378,16 +378,16 @@ describe("SidebarGroupsSurface", () => {
     // and no empty-list placeholder row below it.
     expect(
       Array.from(document.querySelectorAll<HTMLElement>("*")).find(
-        (el) => el.children.length === 0 && el.textContent?.trim() === "New group chat",
+        (el) => el.children.length === 0 && el.textContent?.trim() === "New hub chat",
       ),
     ).toBeUndefined();
     expect(
       Array.from(document.querySelectorAll<HTMLElement>("*")).find(
-        (el) => el.children.length === 0 && el.textContent?.trim() === "No group chats yet",
+        (el) => el.children.length === 0 && el.textContent?.trim() === "No hub chats yet",
       ),
     ).toBeUndefined();
     expect(
-      document.querySelector<HTMLButtonElement>('button[aria-label*="New group chat"]'),
+      document.querySelector<HTMLButtonElement>('button[aria-label*="New hub chat"]'),
     ).toBeNull();
   });
 
@@ -439,7 +439,7 @@ describe("SidebarGroupsSurface", () => {
     }
   });
 
-  it("adopts the legacy Studio container by retitling it Groups once across remounts", async () => {
+  it("adopts the legacy Studio container by retitling it Hubs once across remounts", async () => {
     const legacyStudio = makeGroupProject({
       id: STUDIO_ID,
       kind: "studio",
@@ -453,7 +453,7 @@ describe("SidebarGroupsSurface", () => {
         expect.objectContaining({
           type: "project.meta.update",
           projectId: STUDIO_ID,
-          title: "Groups",
+          title: "Hubs",
         }),
       );
     });

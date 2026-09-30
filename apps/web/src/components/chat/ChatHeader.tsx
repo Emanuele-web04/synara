@@ -804,8 +804,8 @@ export function ChatHeader({
               <SurfacePanelToggle
                 state={projectPanel}
                 icon={WorkflowIcon}
-                ariaLabel="Toggle group panel"
-                tooltip="Group"
+                ariaLabel="Toggle hub panel"
+                tooltip="Hub"
               />
             ) : null}
             {libraryPanel ? (

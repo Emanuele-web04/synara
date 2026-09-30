@@ -218,7 +218,7 @@ describe("resolveGroupThreadState", () => {
 });
 
 describe("collectGroupThreadSummaries", () => {
-  it("keeps group threads plus member threads in linked repos, minus the coordinator", () => {
+  it("keeps hub threads plus member threads in linked repos, minus the coordinator", () => {
     const groupThread = makeThread({ id: ThreadId.makeUnsafe("t-group") });
     const linkedMember = makeThread({
       id: ThreadId.makeUnsafe("t-linked"),
@@ -253,23 +253,23 @@ describe("buildGroupThreadRows", () => {
       pullRequests: new Map(),
       projectNameById: new Map([[LINKED_ID, "linked-repo"]]),
       groupProjectId: GROUP_ID,
-      groupProjectName: "My group",
+      groupProjectName: "My hub",
     });
     expect(row?.projectName).toBe("linked-repo");
     expect(row?.taskLine).toBe("fix the thing");
     expect(row?.state).toBe("idle");
   });
 
-  it("hides the project name when the thread belongs to the group folder", () => {
+  it("hides the project name when the thread belongs to the hub folder", () => {
     const thread = makeThread();
     const [row] = buildGroupThreadRows({
       threads: [thread],
       taskByThreadId: new Map(),
       indexArchivedThreadIds: new Set(),
       pullRequests: new Map(),
-      projectNameById: new Map([[GROUP_ID, "My group"]]),
+      projectNameById: new Map([[GROUP_ID, "My hub"]]),
       groupProjectId: GROUP_ID,
-      groupProjectName: "My group",
+      groupProjectName: "My hub",
     });
     expect(row?.projectName).toBeNull();
   });
@@ -296,7 +296,7 @@ describe("partitionGroupThreadRows", () => {
       pullRequests: new Map(),
       projectNameById: new Map(),
       groupProjectId: GROUP_ID,
-      groupProjectName: "My group",
+      groupProjectName: "My hub",
     });
     const sections = partitionGroupThreadRows(rows);
     expect(sections.get("idle")?.map((row) => row.thread.id)).toEqual([newer.id, older.id]);
@@ -305,7 +305,7 @@ describe("partitionGroupThreadRows", () => {
 });
 
 describe("collectGroupPullRequestRows", () => {
-  it("lists only group threads with a PR, open first", () => {
+  it("lists only hub threads with a PR, open first", () => {
     const open = makeThread({
       id: ThreadId.makeUnsafe("t-open"),
       updatedAt: "2026-03-08T10:00:00.000Z",
@@ -323,7 +323,7 @@ describe("collectGroupPullRequestRows", () => {
       ]),
       projectNameById: new Map(),
       groupProjectId: GROUP_ID,
-      groupProjectName: "My group",
+      groupProjectName: "My hub",
     });
     expect(rows.map((row) => row.thread.id)).toEqual([open.id, merged.id]);
   });
@@ -359,7 +359,7 @@ describe("collectGroupAutomations", () => {
       ...overrides,
     }) as AutomationDefinition;
 
-  it("matches the group project and member threads, skips archived", () => {
+  it("matches the hub project and member threads, skips archived", () => {
     const member = ThreadId.makeUnsafe("t-member");
     const own = definition({ id: "a-own" as never, projectId: GROUP_ID });
     const targeted = definition({ id: "a-target" as never, targetThreadId: member });
@@ -415,7 +415,7 @@ describe("createGroupNeedsAttentionSelector", () => {
     };
   }
 
-  it("flags the group when a member thread waits, excluding the coordinator", () => {
+  it("flags the hub when a member thread waits, excluding the coordinator", () => {
     const waiting = makeThread({
       id: ThreadId.makeUnsafe("t-waiting"),
       hasPendingApprovals: true,

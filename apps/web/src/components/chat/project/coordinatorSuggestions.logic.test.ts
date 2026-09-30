@@ -37,7 +37,7 @@ describe("shouldShowCoordinatorSuggestions", () => {
 });
 
 describe("visibleCoordinatorSuggestionChips", () => {
-  it("shows every chip while the group's setup is unknown", () => {
+  it("shows every chip while the hub's setup is unknown", () => {
     expect(
       visibleCoordinatorSuggestionChips({
         hasGoal: undefined,
