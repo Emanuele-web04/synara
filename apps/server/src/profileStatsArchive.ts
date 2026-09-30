@@ -56,6 +56,9 @@ interface TokenActivityRow {
   // selection applies as the fallback.
   readonly provider: string | null;
   readonly model: string | null;
+  // Provider whose runtime emitted the counter (payload stamp first). Deltas
+  // are taken per counter provider; NULL falls back to the resolved provider.
+  readonly counterProvider?: string | null;
   readonly dispatchOrigin?: string | null;
   readonly createdAt: string | null;
 }
@@ -278,10 +281,11 @@ function addTokenSnapshotRow(
   }
 }
 
-// Mirrors the LAG-based delta in profileStats.queryTokenActivity: rows must be
-// ordered the same way that query orders them, and the first total counts fully.
-// Cumulative rows stay thread-wide; usedTokens rows are counted only for
-// provider/model groups that never emit cumulative totals.
+// Mirrors the LAG-based delta in profileStats.tokenDeltaCtes: rows must be
+// ordered the same way that query orders them, and the first total of each
+// counter provider counts fully. Deltas are taken per counter provider, and
+// usedTokens rows are counted only for provider/model groups that never emit
+// cumulative totals.
 // Deltas keep the original activity timestamp (raw, unparsed) so read-time
 // DATETIME(created_at, tz) bucketing stays identical to the live query for any
 // client UTC offset, and are keyed by the row's per-turn provider/model (the
@@ -296,6 +300,8 @@ export function aggregateThreadTokenRows(
   const nonClaudeRows = rows.filter(
     (row) => resolveTokenProviderModel(row, fallbackSelection).provider !== "claudeAgent",
   );
+  const counterProviderOf = (row: TokenActivityRow) =>
+    readString(row.counterProvider) ?? resolveTokenProviderModel(row, fallbackSelection).provider;
   const tokensByKey = new Map<string, ThreadTokenSnapshotRow>();
   const cumulativeProviderModels = new Set<string>();
   for (const row of nonClaudeRows) {
@@ -306,17 +312,19 @@ export function aggregateThreadTokenRows(
     cumulativeProviderModels.add(tokenProviderModelKey(provider, model));
   }
 
-  let previousCumulativeTotal: number | null = null;
+  const previousCumulativeTotals = new Map<string | null, number>();
   for (const row of nonClaudeRows) {
     const total = tokenCounterValue(row.totalProcessedTokens);
     if (total === null) {
       continue;
     }
+    const counterProvider = counterProviderOf(row);
+    const previousCumulativeTotal = previousCumulativeTotals.get(counterProvider);
     const delta =
-      previousCumulativeTotal === null || total < previousCumulativeTotal
+      previousCumulativeTotal === undefined || total < previousCumulativeTotal
         ? total
         : Math.max(0, total - previousCumulativeTotal);
-    previousCumulativeTotal = total;
+    previousCumulativeTotals.set(counterProvider, total);
     if (
       delta <= 0 ||
       row.createdAt === null ||
@@ -333,8 +341,10 @@ export function aggregateThreadTokenRows(
     });
   }
 
-  let previousUsedTotal: number | null = null;
-  let previousUsedProviderModelKey: string | null = null;
+  const previousUsedByCounterProvider = new Map<
+    string | null,
+    { readonly total: number; readonly providerModelKey: string }
+  >();
   for (const row of nonClaudeRows) {
     const { provider, model } = resolveTokenProviderModel(row, fallbackSelection);
     const providerModelKey = tokenProviderModelKey(provider, model);
@@ -345,13 +355,14 @@ export function aggregateThreadTokenRows(
     if (total === null) {
       continue;
     }
+    const counterProvider = counterProviderOf(row);
+    const previousUsed = previousUsedByCounterProvider.get(counterProvider);
     const delta =
-      previousUsedTotal === null ||
-      (total < previousUsedTotal && providerModelKey !== previousUsedProviderModelKey)
+      previousUsed === undefined ||
+      (total < previousUsed.total && providerModelKey !== previousUsed.providerModelKey)
         ? total
-        : Math.max(0, total - previousUsedTotal);
-    previousUsedTotal = total;
-    previousUsedProviderModelKey = providerModelKey;
+        : Math.max(0, total - previousUsed.total);
+    previousUsedByCounterProvider.set(counterProvider, { total, providerModelKey });
     if (
       delta <= 0 ||
       row.createdAt === null ||
@@ -625,6 +636,7 @@ const makeProfileStatsArchive = Effect.gen(function* () {
             AS totalProcessedTokens,
           CAST(json_extract(a.payload_json, '$.usedTokens') AS INTEGER) AS usedTokens,
           COALESCE(tm.provider, json_extract(a.payload_json, '$.provider')) AS provider,
+          COALESCE(json_extract(a.payload_json, '$.provider'), tm.provider) AS counterProvider,
           tm.model AS model,
           pm.dispatch_origin AS dispatchOrigin,
           a.created_at AS createdAt
@@ -677,6 +689,7 @@ const makeProfileStatsArchive = Effect.gen(function* () {
           ${claudeTokenActivityCtes(sql, { threadId })}
         SELECT created_at AS createdAt, 'claudeAgent' AS provider, model, tokens
         FROM claude_token_rows
+        WHERE dispatch_origin IS NULL OR dispatch_origin = 'user'
       `;
       tokenRows.push(...claudeTokenRows);
       const skillRows = aggregateProfileSkillUsageRows(skillMessageRows);
