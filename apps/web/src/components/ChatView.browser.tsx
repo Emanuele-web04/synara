@@ -7176,12 +7176,13 @@ describe("ChatView transcript geometry (full app)", () => {
       const projectPickerTrigger = page.getByTestId("project-picker-trigger");
       await expect.element(projectPickerTrigger).toBeInTheDocument();
       const resetProjectButton = page.getByTestId("project-picker-reset-trigger");
-      const folderIcon = projectPickerTrigger
-        .element()
-        .querySelector<HTMLElement>("[class*='transition-opacity']");
-      expect(folderIcon).not.toBeNull();
+      // Re-query on every check: crossing the mobile breakpoint swaps the rail shell for the
+      // classic one, which remounts the composer and detaches any node held from before.
+      const queryFolderIcon = () =>
+        projectPickerTrigger.element().querySelector<HTMLElement>("[class*='transition-opacity']");
+      expect(queryFolderIcon()).not.toBeNull();
       const expectResetAlignedWithFolderIcon = () => {
-        const folderIconRect = folderIcon!.getBoundingClientRect();
+        const folderIconRect = queryFolderIcon()!.getBoundingClientRect();
         const resetButtonRect = resetProjectButton.element().getBoundingClientRect();
         const folderIconCenterX = folderIconRect.left + folderIconRect.width / 2;
         const resetButtonCenterX = resetButtonRect.left + resetButtonRect.width / 2;
@@ -7224,6 +7225,10 @@ describe("ChatView transcript geometry (full app)", () => {
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       expectResetAlignedWithFolderIcon();
       await mounted.setViewport(DEFAULT_VIEWPORT);
+      // The round trip through the mobile breakpoint remounted the composer; the reset below
+      // must keep focus in the one now on screen.
+      const settledComposerEditor = await waitForComposerEditor();
+      settledComposerEditor.focus();
 
       const originalRequestAnimationFrame = window.requestAnimationFrame;
       let frameRequestCount = 0;
@@ -7249,7 +7254,7 @@ describe("ChatView transcript geometry (full app)", () => {
       }
 
       expect(frameRequestCount).toBe(0);
-      expect(document.activeElement).toBe(composerEditor);
+      expect(document.activeElement).toBe(settledComposerEditor);
       await expect.element(page.getByText("Don't work in a project")).not.toBeInTheDocument();
       await expect.element(page.getByTestId("workspace-picker-trigger")).toBeInTheDocument();
     } finally {

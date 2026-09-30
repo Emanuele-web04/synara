@@ -20,10 +20,11 @@ using separate worktrees also have separate working directories and branches.
 
 ## The main surfaces
 
-- **Sidebar** — projects, spaces, tasks, and activity requiring attention. Stable and Beta builds offer a
-  rail layout (Settings → General → Sidebar layout): a fixed column of icon tabs for Home, Spaces,
-  Kanban, Pull requests, Automations, Studio, and Settings, with the thread panel beside it and the
-  route shown as a card inset from the window.
+- **Sidebar** — projects, spaces, tasks, and activity requiring attention. The default rail layout
+  is a fixed column of icon tabs for Home, Spaces, Kanban, Pull requests, Automations, Studio, and
+  Settings, with the thread panel beside it and the route shown as a card inset from the window.
+  Open threads appear as tabs across the top of the chat. The classic single-column sidebar remains
+  available in Settings → General → Sidebar layout.
 - **Conversation** — user messages, agent responses, plans, tools, approvals, and subagent activity
 - **Composer** — objectives, attachments, provider selection, model selection, and task controls
 - **Terminal** — a real shell opened in the task's working directory

@@ -54,6 +54,7 @@ import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useIsMobile } from "~/hooks/useMediaQuery";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { useRepoDiffTotals } from "~/hooks/useRepoDiffTotals";
+import { useSidebarLayout } from "~/hooks/useSidebarLayout";
 import { useThreadRecap } from "~/hooks/useThreadRecap";
 import { SINGLE_CHAT_PANE_SCOPE_ID } from "~/lib/chatPaneScope";
 import { formatComposerMentionToken } from "~/lib/composerMentions";
@@ -254,6 +255,7 @@ import TerminalWorkspaceTabs from "./TerminalWorkspaceTabs";
 import { ThreadWorktreeHandoffDialog } from "./ThreadWorktreeHandoffDialog";
 import { ChatComposerFooter } from "./chat/ChatComposerFooter";
 import { ChatHeader } from "./chat/ChatHeader";
+import { OpenThreadTabStrip } from "./chat/OpenThreadTabStrip";
 import { ChatSurfaceHeader } from "./chat/ChatSurfaceHeader";
 import { useAsyncUserInputResponse } from "./chat/useAsyncUserInputResponse";
 import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
@@ -586,6 +588,7 @@ export default function ChatView({
     gitCreateDetachedWorktreeMutationOptions({ queryClient }),
   );
   const isEditorRail = presentationMode === "editor";
+  const isRailLayout = useSidebarLayout() === "rail";
   const isInactiveSplitPane = surfaceMode === "split" && !isFocusedPane;
   const {
     composerDraft,
@@ -4794,6 +4797,10 @@ export default function ChatView({
     );
   }
 
+  // Open-thread tabs belong to the rail shell's single chat; split panes, the editor rail,
+  // and the classic sidebar keep the plain thread title.
+  const showOpenThreadTabs = isRailLayout && surfaceMode === "single" && !isEditorRail;
+
   const activeThreadDisplayTitle = resolveActiveThreadTitle({
     title: activeThread.title,
     subagentTitle: activeThread.parentThreadId
@@ -5689,6 +5696,16 @@ export default function ChatView({
           threadBreadcrumbs={threadBreadcrumbs}
           {...(isEditorRail
             ? { className: cn(CHAT_SURFACE_HEADER_PADDING_X_CLASS, "h-full") }
+            : {})}
+          {...(showOpenThreadTabs
+            ? {
+                threadTabs: (
+                  <OpenThreadTabStrip
+                    activeThreadId={activeThread.id}
+                    onRenameActiveThread={() => setRenameDialogOpen(true)}
+                  />
+                ),
+              }
             : {})}
           isSidechat={Boolean(activeThread.sidechatSourceThreadId)}
           hideSidebarControls={isEditorRail}

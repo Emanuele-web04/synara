@@ -119,10 +119,10 @@ export const DEFAULT_AGENT_CURSOR_COLOR_MODE: AgentCursorColorMode = "stock";
 
 const SidebarNavItemId = Schema.Literals([...SIDEBAR_NAV_ITEM_IDS]);
 const RailOrderableItemId = Schema.Literals([...RAIL_ORDERABLE_ITEM_IDS]);
-/** Classic: one sidebar column. Rail: fixed icon tabs plus a panel (Beta-only, see useSidebarLayout). */
+/** Classic: one sidebar column. Rail: fixed icon tabs plus a panel (see useSidebarLayout). */
 export const SidebarLayout = Schema.Literals(["classic", "rail"]);
 export type SidebarLayout = typeof SidebarLayout.Type;
-export const DEFAULT_SIDEBAR_LAYOUT: SidebarLayout = "classic";
+export const DEFAULT_SIDEBAR_LAYOUT: SidebarLayout = "rail";
 export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
 export const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
 export const FollowUpBehavior = Schema.Literals(["queue", "steer"]);

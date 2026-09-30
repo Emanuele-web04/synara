@@ -156,6 +156,31 @@ export function resolveAvailableProviderPreference(input: {
   );
 }
 
+/**
+ * Provider an unsent composer sends with: the thread's explicit pick wins (availability
+ * is validated at send time); otherwise the thread/project default, else the app default,
+ * swapped for the first usable provider when that one is unavailable. Shared by the
+ * composer and every surface that labels a draft by provider (e.g. its open-thread tab).
+ */
+export function resolveUnsentComposerProvider(input: {
+  readonly explicitProvider: ProviderKind | null;
+  readonly threadProvider: ProviderKind | null;
+  readonly defaultProvider: ProviderKind;
+  readonly statuses: readonly ServerProviderStatus[];
+  readonly providerOrder?: readonly ProviderKind[];
+  readonly hiddenProviders?: readonly ProviderKind[];
+}): ProviderKind {
+  return (
+    input.explicitProvider ??
+    resolveAvailableProviderPreference({
+      preferredProvider: input.threadProvider ?? input.defaultProvider,
+      statuses: input.statuses,
+      ...(input.providerOrder ? { providerOrder: input.providerOrder } : {}),
+      ...(input.hiddenProviders ? { hiddenProviders: input.hiddenProviders } : {}),
+    })
+  );
+}
+
 // Shared send gate used by chat, Kanban, shortcuts, and handoff flows.
 export function resolveProviderSendAvailability(input: {
   readonly provider: ProviderKind;

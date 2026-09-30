@@ -42,6 +42,7 @@ import {
   CHAT_SURFACE_HEADER_ROW_CLASS_NAME,
   DOCK_HEADER_ICON_BUTTON_CLASS,
   SurfaceTabChip,
+  SurfaceTabStrip,
 } from "./chatHeaderControls";
 import {
   getRightDockPaneMeta,
@@ -331,7 +332,7 @@ export function RightDock(props: RightDockProps) {
               desktopTopBarWindowControlsGutterClassName,
             )}
           >
-            <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+            <SurfaceTabStrip className="flex-1" activeKey={props.state.activePaneId}>
               {props.state.panes.map((pane) => (
                 <RightDockTab
                   key={pane.id}
@@ -343,7 +344,7 @@ export function RightDock(props: RightDockProps) {
                   onClose={() => props.onClosePane(pane.id)}
                 />
               ))}
-            </div>
+            </SurfaceTabStrip>
             {props.state.panes.length > 0 && props.addMenuKinds.length > 0 ? (
               <Menu modal={false}>
                 <MenuTrigger
