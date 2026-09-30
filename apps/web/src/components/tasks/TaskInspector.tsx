@@ -8,6 +8,8 @@
 
 import type { ProjectId, TodoUpdateInput } from "@synara/contracts";
 
+import { Button } from "~/components/ui/button";
+import { useTaskCanUnlink } from "./taskDelegationState";
 import { IconButton } from "~/components/ui/icon-button";
 import { XIcon } from "~/lib/icons";
 import { TaskAgentSection } from "./TaskAgentSection";
@@ -43,6 +45,7 @@ export function TaskInspector({
   const { todo, status, thread } = row;
   const openChat = useOpenChat(todo.threadId);
   const isDone = status.kind === "done";
+  const canUnlink = useTaskCanUnlink(todo, status.kind, now);
 
   return (
     <aside
@@ -85,17 +88,28 @@ export function TaskInspector({
           <TaskNotice>Done. Reopen it to delegate it again.</TaskNotice>
         ) : todo.threadId !== null && !status.chatMissing ? (
           // Linked, but the chat has not reached the server yet: no second Start meanwhile.
-          <TaskNotice action={{ label: "Open chat", onClick: openChat }}>
-            {status.detail ?? "Starting the agent…"}
-          </TaskNotice>
+          <div className="flex flex-col gap-2">
+            <TaskNotice action={{ label: "Open chat", onClick: openChat }}>
+              {status.detail ?? "Starting the agent…"}
+            </TaskNotice>
+            {canUnlink ? (
+              <Button size="sm" variant="outline" onClick={() => onUpdate(unlinkChatInput(todo))}>
+                Unlink
+              </Button>
+            ) : null}
+          </div>
         ) : (
           <div className="flex flex-col gap-3">
             {status.chatMissing ? (
               <TaskNotice
-                action={{
-                  label: "Unlink",
-                  onClick: () => onUpdate(unlinkChatInput(todo)),
-                }}
+                action={
+                  canUnlink
+                    ? {
+                        label: "Unlink",
+                        onClick: () => onUpdate(unlinkChatInput(todo)),
+                      }
+                    : undefined
+                }
               >
                 The chat this task was delegated to no longer exists.
               </TaskNotice>

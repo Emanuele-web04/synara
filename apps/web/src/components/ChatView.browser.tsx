@@ -2443,6 +2443,61 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it.each(["classic", "rail"])(
+    "preserves the hidden board slot when Tasks replaces Kanban in the %s sidebar",
+    async (sidebarLayout) => {
+      localStorage.setItem(
+        "synara:app-settings:v1",
+        JSON.stringify({
+          sidebarLayout,
+          hiddenSidebarNavItems: ["kanban"],
+          hiddenRailItems: ["kanban"],
+        }),
+      );
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: MessageId.makeUnsafe("hidden-tasks-slot"),
+          targetText: "Hidden Tasks slot",
+        }),
+      });
+      try {
+        await waitForLayout();
+        await expect
+          .element(page.getByRole("button", { name: "Tasks", exact: true }))
+          .not.toBeInTheDocument();
+        if (sidebarLayout === "rail") {
+          await page
+            .getByRole("navigation", { name: "Primary" })
+            .getByRole("button", { name: "More", exact: true })
+            .click();
+          await page.getByRole("menuitem", { name: "Customize…", exact: true }).click();
+        } else {
+          page
+            .getByRole("button", { name: "Pull requests", exact: true })
+            .element()
+            .dispatchEvent(
+              new MouseEvent("contextmenu", { bubbles: true, clientX: 120, clientY: 160 }),
+            );
+          await page.getByRole("menuitem", { name: "Customize", exact: true }).click();
+        }
+        await page
+          .getByRole("checkbox", { name: "Show Tasks in the sidebar", exact: true })
+          .click();
+        await page.getByRole("button", { name: "Done", exact: true }).click();
+        await expect
+          .element(page.getByRole("button", { name: "Tasks", exact: true }))
+          .toBeVisible();
+        const preference = sidebarLayout === "rail" ? "hiddenRailItems" : "hiddenSidebarNavItems";
+        expect(
+          JSON.parse(localStorage.getItem("synara:app-settings:v1") ?? "{}")[preference],
+        ).toEqual([]);
+      } finally {
+        await mounted.cleanup();
+      }
+    },
+  );
+
   it("preserves absent project pins when toggling a rail Space shortcut", async () => {
     localStorage.setItem(
       "synara:app-settings:v1",
@@ -2758,7 +2813,8 @@ describe("ChatView transcript geometry (full app)", () => {
       try {
         for (const id of [1, 2, 3]) {
           await page.getByRole("button", { name: new RegExp(`Choice ${id}`) }).click();
-          if (id < 3)
+          // Single-choice answers advance themselves; another Next click races the timer.
+          if (id < 3 && navigation !== "auto-advance")
             await page.getByRole("button", { name: "Next question", exact: true }).first().click();
         }
         if (navigation === "custom") {
