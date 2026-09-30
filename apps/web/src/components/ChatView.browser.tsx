@@ -2898,13 +2898,13 @@ describe("ChatView transcript geometry (full app)", () => {
     }
 
     const medianRatio = ratios.sort((left, right) => left - right)[1]!;
-    // Without owner stacks, main measures about 2.1x on macOS and 2.3-2.6x on
-    // Linux CI. Deriving the work log twice per live activity (the #550
-    // regression) measures 2.6-3.1x on macOS and more on Linux CI.
+    // Without owner stacks and after the warm-up, main measures a 2.1x median on
+    // Linux CI (median-of-3 groups 1.85-2.16x). Deriving the work log twice per
+    // live activity (the #550 regression) measures 2.90-3.09x there.
     expect(
       medianRatio,
       `Issue #550 benchmark: ${JSON.stringify({ reports, ratios })}`,
-    ).toBeLessThan(3);
+    ).toBeLessThan(2.5);
   });
 
   it("cancels a multi-question prompt with choices through the orchestration command", async () => {
@@ -7083,128 +7083,138 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("coalesces repeated group new-chat clicks and stays in Groups after navigation settles", async () => {
-    useComposerDraftStore.setState({
-      draftThreadsByThreadId: {
-        [STUDIO_DRAFT_THREAD_ID]: {
-          projectId: STUDIO_PROJECT_ID,
-          createdAt: NOW_ISO,
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          entryPoint: "chat",
-          branch: null,
-          worktreePath: null,
-          envMode: "local",
-        },
-      },
-      projectDraftThreadIdByProjectId: {
-        [STUDIO_PROJECT_ID]: STUDIO_DRAFT_THREAD_ID,
-      },
-    });
-
-    const mounted = await mountChatView({
-      viewport: DEFAULT_VIEWPORT,
-      // Keep one non-group server thread in the snapshot. This matches the real failure: Groups
-      // has no persisted chats, while the global missing-thread recovery sees known threads and
-      // immediately redirects a transiently-cleared group draft to the home index.
-      snapshot: withStudioProject(
-        withHomeChatProject(
-          createSnapshotForTargetUser({
-            targetMessageId: "msg-user-studio-draft-regression" as MessageId,
-            targetText: "projects-side thread",
-          }),
-        ),
-      ),
-      initialEntry: `/${STUDIO_DRAFT_THREAD_ID}`,
-      configureFixture: (nextFixture) => {
-        nextFixture.welcome = {
-          ...nextFixture.welcome,
-          homeDir: "/Users/tester",
-          chatWorkspaceRoot: "/Users/tester/Documents/Synara",
-          studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
-        };
-      },
-    });
-
-    try {
-      // Fire the surface-aware new-chat chord twice: on the Groups segment it maps to
-      // the group chat create path, and the second fire must coalesce with the first.
-      await dispatchConfiguredShortcutWhenReady(window, { key: "n", altKey: true });
-      await dispatchConfiguredShortcutWhenReady(window, { key: "n", altKey: true });
-
-      const newThreadPath = await waitForURL(
-        mounted.router,
-        (path) => UUID_ROUTE_RE.test(path),
-        "A fresh group chat should navigate to a new draft UUID.",
-      );
-      const newThreadId = newThreadPath.slice(1) as ThreadId;
-
-      await vi.waitFor(
-        () => {
-          expect(useComposerDraftStore.getState().getDraftThread(newThreadId)).toMatchObject({
+  it.each(["/hubs", "/groups", "/studio"])(
+    "restores the saved hub draft from %s and coalesces repeated new-chat clicks",
+    async (initialEntry) => {
+      useComposerDraftStore.setState({
+        draftThreadsByThreadId: {
+          [STUDIO_DRAFT_THREAD_ID]: {
             projectId: STUDIO_PROJECT_ID,
+            createdAt: NOW_ISO,
+            runtimeMode: "full-access",
+            interactionMode: "default",
             entryPoint: "chat",
-            envMode: "local",
             branch: null,
             worktreePath: null,
-            workingDirectory: null,
-          });
-          expect(document.querySelector('[data-testid="workspace-picker-trigger"]')).not.toBeNull();
-          expect(
-            useComposerDraftStore.getState().projectDraftThreadIdByProjectId[HOME_PROJECT_ID],
-          ).toBeUndefined();
-          expect(mounted.router.state.location.pathname).toBe(newThreadPath);
-        },
-        { timeout: 8_000, interval: 16 },
-      );
-
-      await page.getByTestId("workspace-picker-trigger").click();
-      const projectFolderOption = await waitForElement(
-        () =>
-          Array.from(document.querySelectorAll<HTMLElement>('[data-slot="combobox-item"]')).find(
-            (item) => item.textContent?.trim() === "project",
-          ) ?? null,
-        "Unable to find the reference folder option.",
-      );
-      projectFolderOption.click();
-      await vi.waitFor(
-        () => {
-          expect(useComposerDraftStore.getState().getDraftThread(newThreadId)).toMatchObject({
-            projectId: STUDIO_PROJECT_ID,
             envMode: "local",
-            branch: null,
-            worktreePath: null,
-            workingDirectory: "/repo/project",
-          });
+          },
         },
-        { timeout: 8_000, interval: 16 },
-      );
-
-      // A superseded navigation resolves the older navigate() promise before the newer route has
-      // committed. Give route effects enough time to expose a late Home redirect, then assert the
-      // stable final state and cleanup of the displaced group draft.
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 100));
-      await vi.waitFor(
-        () => {
-          const state = useComposerDraftStore.getState();
-          const studioDraftIds = Object.entries(state.draftThreadsByThreadId)
-            .filter(([, draft]) => draft.projectId === STUDIO_PROJECT_ID)
-            .map(([threadId]) => threadId);
-          expect(mounted.router.state.status).toBe("idle");
-          expect(mounted.router.state.location.pathname).toBe(newThreadPath);
-          expect(state.getDraftThread(STUDIO_DRAFT_THREAD_ID)).toBeNull();
-          expect(studioDraftIds).toEqual([newThreadId]);
-          expect(state.projectDraftThreadIdByProjectId[STUDIO_PROJECT_ID]).toBe(newThreadId);
-          expect(state.projectDraftThreadIdByProjectId[HOME_PROJECT_ID]).toBeUndefined();
+        projectDraftThreadIdByProjectId: {
+          [STUDIO_PROJECT_ID]: STUDIO_DRAFT_THREAD_ID,
         },
-        { timeout: 8_000, interval: 16 },
-      );
-    } finally {
-      await mounted.cleanup();
-    }
-  });
+      });
 
-  it("seeds a fresh group chat draft from the group's workerRouting", async () => {
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        // Keep one non-group server thread in the snapshot. This matches the real failure: Groups
+        // has no persisted chats, while the global missing-thread recovery sees known threads and
+        // immediately redirects a transiently-cleared group draft to the home index.
+        snapshot: withStudioProject(
+          withHomeChatProject(
+            createSnapshotForTargetUser({
+              targetMessageId: "msg-user-studio-draft-regression" as MessageId,
+              targetText: "projects-side thread",
+            }),
+          ),
+        ),
+        initialEntry,
+        configureFixture: (nextFixture) => {
+          nextFixture.welcome = {
+            ...nextFixture.welcome,
+            homeDir: "/Users/tester",
+            chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+            studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
+            groupsWorkspaceRoot: "/Users/tester/Documents/Synara/Groups",
+          };
+        },
+      });
+
+      try {
+        expect(mounted.router.state.location.pathname).toBe(`/${STUDIO_DRAFT_THREAD_ID}`);
+        expect(
+          useComposerDraftStore.getState().getDraftThread(STUDIO_DRAFT_THREAD_ID)?.projectId,
+        ).toBe(STUDIO_PROJECT_ID);
+        // Fire the surface-aware new-chat chord twice: on the Groups segment it maps to
+        // the group chat create path, and the second fire must coalesce with the first.
+        await dispatchConfiguredShortcutWhenReady(window, { key: "n", altKey: true });
+        await dispatchConfiguredShortcutWhenReady(window, { key: "n", altKey: true });
+
+        const newThreadPath = await waitForURL(
+          mounted.router,
+          (path) => UUID_ROUTE_RE.test(path),
+          "A fresh hub chat should navigate to a new draft UUID.",
+        );
+        const newThreadId = newThreadPath.slice(1) as ThreadId;
+
+        await vi.waitFor(
+          () => {
+            expect(useComposerDraftStore.getState().getDraftThread(newThreadId)).toMatchObject({
+              projectId: STUDIO_PROJECT_ID,
+              entryPoint: "chat",
+              envMode: "local",
+              branch: null,
+              worktreePath: null,
+              workingDirectory: null,
+            });
+            expect(
+              document.querySelector('[data-testid="workspace-picker-trigger"]'),
+            ).not.toBeNull();
+            expect(
+              useComposerDraftStore.getState().projectDraftThreadIdByProjectId[HOME_PROJECT_ID],
+            ).toBeUndefined();
+            expect(mounted.router.state.location.pathname).toBe(newThreadPath);
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+
+        await page.getByTestId("workspace-picker-trigger").click();
+        const projectFolderOption = await waitForElement(
+          () =>
+            Array.from(document.querySelectorAll<HTMLElement>('[data-slot="combobox-item"]')).find(
+              (item) => item.textContent?.trim() === "project",
+            ) ?? null,
+          "Unable to find the reference folder option.",
+        );
+        projectFolderOption.click();
+        await vi.waitFor(
+          () => {
+            expect(useComposerDraftStore.getState().getDraftThread(newThreadId)).toMatchObject({
+              projectId: STUDIO_PROJECT_ID,
+              envMode: "local",
+              branch: null,
+              worktreePath: null,
+              workingDirectory: "/repo/project",
+            });
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+
+        // A superseded navigation resolves the older navigate() promise before the newer route has
+        // committed. Give route effects enough time to expose a late Home redirect, then assert the
+        // stable final state and cleanup of the displaced group draft.
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 100));
+        await vi.waitFor(
+          () => {
+            const state = useComposerDraftStore.getState();
+            const studioDraftIds = Object.entries(state.draftThreadsByThreadId)
+              .filter(([, draft]) => draft.projectId === STUDIO_PROJECT_ID)
+              .map(([threadId]) => threadId);
+            expect(mounted.router.state.status).toBe("idle");
+            expect(mounted.router.state.location.pathname).toBe(newThreadPath);
+            expect(state.getDraftThread(STUDIO_DRAFT_THREAD_ID)).toBeNull();
+            expect(studioDraftIds).toEqual([newThreadId]);
+            expect(state.projectDraftThreadIdByProjectId[STUDIO_PROJECT_ID]).toBe(newThreadId);
+            expect(state.projectDraftThreadIdByProjectId[HOME_PROJECT_ID]).toBeUndefined();
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+      } finally {
+        await mounted.cleanup();
+      }
+    },
+  );
+
+  it("seeds a fresh hub chat draft from the hub's workerRouting", async () => {
     useComposerDraftStore.setState({
       draftThreadsByThreadId: {
         [STUDIO_DRAFT_THREAD_ID]: {
@@ -7284,7 +7294,7 @@ describe("ChatView transcript geometry (full app)", () => {
       const newThreadPath = await waitForURL(
         mounted.router,
         (path) => UUID_ROUTE_RE.test(path),
-        "A fresh group chat should navigate to a new draft UUID.",
+        "A fresh hub chat should navigate to a new draft UUID.",
       );
       const newThreadId = newThreadPath.slice(1) as ThreadId;
 
@@ -7309,12 +7319,12 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("keeps a group thread open when the Groups section is hidden", async () => {
+  it("keeps a hub thread open when the Hubs section is hidden", async () => {
     localStorage.setItem("synara:app-settings:v1", JSON.stringify({ showGroupsSection: false }));
     const groupProjectId = "project-group-alpha" as ProjectId;
     const snapshot = createSnapshotForTargetUser({
       targetMessageId: "msg-group-thread-hidden-tab" as MessageId,
-      targetText: "group thread",
+      targetText: "hub thread",
     });
     const groupSnapshot: OrchestrationReadModel = {
       ...snapshot,
@@ -7352,7 +7362,7 @@ describe("ChatView transcript geometry (full app)", () => {
       },
     });
     try {
-      // The hidden-section guard belongs to the /groups route alone: a group
+      // The hidden-section guard belongs to the /hubs route alone: a hub
       // thread opened from search, split view, or a link stays on its route.
       await new Promise<void>((resolve) => window.setTimeout(resolve, 400));
       await vi.waitFor(

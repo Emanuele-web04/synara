@@ -25,14 +25,14 @@ export function GroupPausedBanner(props: {
       )}
     >
       <PauseIcon className="size-3.5 shrink-0" aria-hidden />
-      <span className="min-w-0 flex-1">This group is paused.</span>
+      <span className="min-w-0 flex-1">This hub is paused.</span>
       <Button
         type="button"
         variant="ghost"
         size="sm"
         disabled={busy}
         className="h-6 shrink-0 px-2 text-ui"
-        aria-label={`Resume group ${props.projectId}`}
+        aria-label={`Resume hub ${props.projectId}`}
         onClick={() => {
           setBusy(true);
           void props.onResume().finally(() => setBusy(false));

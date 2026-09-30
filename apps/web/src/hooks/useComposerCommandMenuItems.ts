@@ -67,7 +67,7 @@ function threadSuggestionContainerName(project: Project | undefined): string {
   if (project.kind === "chat") return "Chats";
   // Group containers (legacy "studio" included) use their own title in mentions.
   if (isGroupContainerKind(project.kind)) {
-    return project.name.trim() || "Groups";
+    return project.name.trim() || "Hubs";
   }
   return project.name.trim() || project.folderName.trim() || "Untitled project";
 }

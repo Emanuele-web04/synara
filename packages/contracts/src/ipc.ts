@@ -391,6 +391,18 @@ export type DesktopUpdateStatus =
 export type DesktopRuntimeArch = "arm64" | "x64" | "other";
 export type DesktopTheme = "light" | "dark" | "system";
 
+/** Largest desktop blur radius the translucent window shell accepts, in points. */
+export const DESKTOP_WINDOW_BLUR_RADIUS_MAX = 64;
+
+/**
+ * Window backing the renderer asks for. `translucent` removes macOS vibrancy and sets the
+ * desktop blur to `blurRadius` (0 shows the desktop unblurred); `opaque` restores vibrancy.
+ */
+export interface DesktopWindowMaterial {
+  material: "opaque" | "translucent";
+  blurRadius: number;
+}
+
 export interface DesktopRuntimeInfo {
   hostArch: DesktopRuntimeArch;
   appArch: DesktopRuntimeArch;
@@ -819,6 +831,8 @@ export interface DesktopBridge {
   }) => Promise<string | null>;
   confirm: (message: string) => Promise<boolean>;
   setTheme: (theme: DesktopTheme) => Promise<void>;
+  /** macOS only; resolves false when the adjustable blur is unavailable. */
+  setWindowMaterial?: (input: DesktopWindowMaterial) => Promise<boolean>;
   getAppIcon?: () => Promise<DesktopAppIcon>;
   setAppIcon: (icon: DesktopAppIcon) => Promise<void>;
   showContextMenu: <T extends string>(

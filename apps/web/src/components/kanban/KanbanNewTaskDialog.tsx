@@ -490,6 +490,7 @@ export function KanbanNewTaskDialog({
               <ComposerVoiceRecorderBar
                 durationLabel={voice.voiceRecordingDurationLabel}
                 isRecording={voice.isVoiceRecording}
+                isWaitingForAudio={voice.isVoiceWaitingForAudio}
                 isTranscribing={voice.isVoiceTranscribing}
                 waveformLevels={voice.voiceWaveformLevels}
                 onDiscard={voice.cancelComposerVoiceRecording}
@@ -545,6 +546,7 @@ export function KanbanNewTaskDialog({
                 <ComposerVoiceButton
                   disabled={!selectedProject}
                   isRecording={voice.isVoiceRecording}
+                  isStarting={voice.isVoiceStarting}
                   isTranscribing={voice.isVoiceTranscribing}
                   durationLabel={voice.voiceRecordingDurationLabel}
                   onClick={() => void voice.startComposerVoiceRecording()}

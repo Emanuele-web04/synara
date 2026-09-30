@@ -1677,28 +1677,6 @@ describe("AppSettingsSchema", () => {
     expect(decode(JSON.stringify({ tasksViewMode: "kanban" })).tasksViewMode).toBe("kanban");
   });
 
-  it("keeps Kanban and Tasks nav items and drops unknown ones without resetting settings", () => {
-    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
-    const decoded = decode(
-      JSON.stringify({
-        defaultProvider: "claudeAgent",
-        sidebarNavOrder: ["kanban", "newThread", "tasks", "retired-item"],
-        hiddenSidebarNavItems: ["kanban"],
-        railItemOrder: ["home", "kanban", "spaces", "retired-item"],
-        hiddenRailItems: ["tasks", "studio"],
-      }),
-    );
-
-    expect(decoded).toMatchObject({
-      // One unknown id must not reset every other preference.
-      defaultProvider: "claudeAgent",
-      sidebarNavOrder: ["kanban", "newThread", "tasks"],
-      hiddenSidebarNavItems: ["kanban"],
-      railItemOrder: ["home", "kanban", "spaces"],
-      hiddenRailItems: ["tasks", "studio"],
-    });
-  });
-
   it("migrates persisted Gemini provider settings to Antigravity", () => {
     const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
     const decoded = decode(
@@ -1764,6 +1742,27 @@ describe("AppSettingsSchema", () => {
     expect(decoded).toMatchObject({
       hiddenProviders: ["codex"],
       providerOrder: ["antigravity", "codex"],
+    });
+  });
+
+  it("drops rail and nav ids this build does not know instead of resetting every setting", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+    const decoded = decode(
+      JSON.stringify({
+        sidebarLayout: "rail",
+        railItemOrder: ["some-future-item", "kanban", "home"],
+        hiddenRailItems: ["some-future-item", "studio"],
+        sidebarNavOrder: ["some-future-item", "kanban"],
+        hiddenSidebarNavItems: ["some-future-item"],
+      }),
+    );
+
+    expect(decoded).toMatchObject({
+      sidebarLayout: "rail",
+      railItemOrder: ["kanban", "home"],
+      hiddenRailItems: ["studio"],
+      sidebarNavOrder: ["kanban"],
+      hiddenSidebarNavItems: [],
     });
   });
 

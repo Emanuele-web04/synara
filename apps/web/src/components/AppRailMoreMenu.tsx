@@ -63,7 +63,7 @@ export function AppRailMoreMenu({
         {onOpenStudio ? (
           <>
             <MenuGroup>
-              <MenuItem onClick={onOpenStudio}>Groups</MenuItem>
+              <MenuItem onClick={onOpenStudio}>Hubs</MenuItem>
             </MenuGroup>
             <MenuSeparator />
           </>

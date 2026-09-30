@@ -64,13 +64,13 @@ describe("SurfacePanelToggle", () => {
       <SurfacePanelToggle
         state={{ open: false, onOpenChange: () => {}, attention: true }}
         icon={SettingsIcon}
-        ariaLabel="Group panel"
-        tooltip="Group panel"
+        ariaLabel="Hub panel"
+        tooltip="Hub panel"
       />,
     );
 
     await expect
-      .element(page.getByRole("button", { name: "Group panel, needs attention" }))
+      .element(page.getByRole("button", { name: "Hub panel, needs attention" }))
       .toBeInTheDocument();
   });
 
@@ -79,13 +79,13 @@ describe("SurfacePanelToggle", () => {
       <SurfacePanelToggle
         state={{ open: false, onOpenChange: () => {} }}
         icon={SettingsIcon}
-        ariaLabel="Group panel"
-        tooltip="Group panel"
+        ariaLabel="Hub panel"
+        tooltip="Hub panel"
       />,
     );
 
     await expect
-      .element(page.getByRole("button", { name: "Group panel", exact: true }))
+      .element(page.getByRole("button", { name: "Hub panel", exact: true }))
       .toBeInTheDocument();
   });
 });

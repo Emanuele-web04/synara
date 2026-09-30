@@ -71,17 +71,17 @@ mainline UI — run them while checking out or merging those branches.
 - Do not manufacture aged/stale or high-volume cap evidence by mutating a live
   database. Use authorized fixtures or report those coverage gaps explicitly.
 
-## Groups-web testing (group panel, group threads, library)
+## Hubs-web testing (hub panel, hub threads, library)
 
-- There is no UI path to open a chat inside an unconfigured group (the group row
+- There is no UI path to open a chat inside an unconfigured hub (the hub row
   only expands; "New thread" on the threads surface opens Create project). To get
-  a group thread, register a client-side draft in DevTools console:
+  a hub thread, register a client-side draft in DevTools console:
   `(await import('/src/composerDraftStore.ts')).useComposerDraftStore.getState()
 .registerDraftThread('<uuid>', {projectId:'<realProjectId>', entryPoint:'chat',
 createdAt:new Date().toISOString(), envMode:'local'})`.
   Read the real projectId from `useStore.getState().projects` — do not type it
   from notes; a mistyped id resolves to no project, `isGroupContainer` stays
-  false, and the Group/Library header toggles silently disappear. Repoint a wrong
+  false, and the Hub/Library header toggles silently disappear. Repoint a wrong
   id with `setDraftThreadContext(threadId, {projectId})`.
 - For navigation that must keep drafts alive, use
   `(await import('/src/appNavigation.ts')).appHistory.push('/<threadId>')`.
