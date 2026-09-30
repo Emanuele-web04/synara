@@ -17,12 +17,16 @@ export function PullRequestDisclosureSection({
   count,
   children,
   defaultOpen: defaultOpenProp,
+  flush: flushProp,
 }: {
   label: string;
   count?: number;
   children: ReactNode;
   defaultOpen?: boolean;
+  /** No side padding: the host already pads the column (the page layout). */
+  flush?: boolean;
 }) {
+  const flush = flushProp ?? false;
   const defaultOpen = defaultOpenProp ?? true;
   const [open, setOpen] = useState(defaultOpen);
   return (
@@ -32,7 +36,8 @@ export function PullRequestDisclosureSection({
       <CollapsibleTrigger
         className={cn(
           PR_SECTION_TITLE_TEXT_CLASS_NAME,
-          "flex w-full items-center gap-1.5 border-t border-border/60 px-5 py-3 text-left font-medium",
+          "flex w-full items-center gap-1.5 border-t border-border/60 py-3 text-left font-medium",
+          flush ? "px-0" : "px-5",
         )}
       >
         <span>{label}</span>
@@ -44,7 +49,7 @@ export function PullRequestDisclosureSection({
         )}
       </CollapsibleTrigger>
       <CollapsiblePanel>
-        <div className="px-5 pb-4">{children}</div>
+        <div className={cn("pb-4", flush ? "px-0" : "px-5")}>{children}</div>
       </CollapsiblePanel>
     </Collapsible>
   );

@@ -108,23 +108,32 @@ describe("groupPullRequestEntriesByInvolvement", () => {
   });
 
   it("buckets self-authored entries into Authored regardless of review-request state", () => {
-    const entry = makeEntry({ author: makeActor("viewer"), viewerReviewRequested: true });
+    const entry = makeEntry({
+      author: makeActor("viewer"),
+      viewerReviewRequested: true,
+    });
     const groups = groupPullRequestEntriesByInvolvement([entry], "viewer");
     expect(groups).toEqual([{ key: "authored", label: "Authored by me", entries: [entry] }]);
   });
 
   it("buckets entries with an active review request into Review requested", () => {
-    const entry = makeEntry({ author: makeActor("teammate"), viewerReviewRequested: true });
+    const entry = makeEntry({
+      author: makeActor("teammate"),
+      viewerReviewRequested: true,
+    });
     const groups = groupPullRequestEntriesByInvolvement([entry], "viewer");
     expect(groups).toEqual([
-      { key: "reviewRequested", label: "Review requested", entries: [entry] },
+      { key: "reviewRequested", label: "Needs my review", entries: [entry] },
     ]);
   });
 
   it("buckets every other entry into Others without inventing review history", () => {
-    const entry = makeEntry({ author: makeActor("teammate"), viewerReviewRequested: false });
+    const entry = makeEntry({
+      author: makeActor("teammate"),
+      viewerReviewRequested: false,
+    });
     const groups = groupPullRequestEntriesByInvolvement([entry], "viewer");
-    expect(groups).toEqual([{ key: "others", label: "Others", entries: [entry] }]);
+    expect(groups).toEqual([{ key: "others", label: "Everything else", entries: [entry] }]);
   });
 
   it("matches viewer logins case-insensitively", () => {
@@ -133,7 +142,7 @@ describe("groupPullRequestEntriesByInvolvement", () => {
     expect(groups[0]?.key).toBe("authored");
   });
 
-  it("orders groups reviewRequested, authored, others and omits empty buckets", () => {
+  it("orders groups authored, reviewRequested, others and omits empty buckets", () => {
     const reviewing = makeEntry({
       number: 1,
       author: makeActor("teammate"),
@@ -146,13 +155,17 @@ describe("groupPullRequestEntriesByInvolvement", () => {
     });
     const authored = makeEntry({ number: 3, author: makeActor("viewer") });
     const groups = groupPullRequestEntriesByInvolvement([authored, other, reviewing], "viewer");
-    expect(groups.map((group) => group.key)).toEqual(["reviewRequested", "authored", "others"]);
+    expect(groups.map((group) => group.key)).toEqual(["authored", "reviewRequested", "others"]);
   });
 
-  it("groups pull requests and issues together, assignments ahead of authored items", () => {
+  it("groups pull requests and issues together by how they involve the viewer", () => {
     const pinnedIssue = makeIssue({ number: 10, isPinned: true });
     const reviewing = asPullRequestItem(
-      makeEntry({ number: 11, author: makeActor("teammate"), viewerReviewRequested: true }),
+      makeEntry({
+        number: 11,
+        author: makeActor("teammate"),
+        viewerReviewRequested: true,
+      }),
     );
     const assignedIssue = makeIssue({
       number: 12,
@@ -175,16 +188,15 @@ describe("groupPullRequestEntriesByInvolvement", () => {
       groups.map((group) => [group.label, group.entries.map((entry) => entry.number)]),
     ).toEqual([
       ["Pinned", [10]],
-      ["Review requested", [11]],
-      ["Assigned to me", [12]],
-      ["Authored by me", [13]],
-      ["Others", [14]],
+      ["Authored by me", [13, 12]],
+      ["Needs my review", [11]],
+      ["Involving me", [14]],
     ]);
   });
 
   it("uses the assignee list when the server sent no involvement flags", () => {
     const entry = makeEntry({ assignees: [makeActor("Viewer")] });
-    expect(groupPullRequestEntriesByInvolvement([entry], "viewer")[0]?.key).toBe("assigned");
+    expect(groupPullRequestEntriesByInvolvement([entry], "viewer")[0]?.key).toBe("involved");
   });
 
   it("falls back gracefully when the viewer login is unknown", () => {
@@ -270,7 +282,12 @@ describe("pullRequestPinToggleInputs", () => {
     const [scoped] = scopeInboxItemsToProjects([shared], [projectB]);
     expect(scoped).toBeDefined();
     expect(pullRequestPinToggleInputs(scoped!)).toEqual([
-      { projectId: projectB, repository: "acme/widgets", number: 1, isPinned: true },
+      {
+        projectId: projectB,
+        repository: "acme/widgets",
+        number: 1,
+        isPinned: true,
+      },
     ]);
   });
 });
@@ -278,7 +295,10 @@ describe("pullRequestPinToggleInputs", () => {
 describe("filterInboxItemsByInvolvement", () => {
   const requested = asPullRequestItem(makeEntry({ number: 1, viewerReviewRequested: true }));
   const authored = asPullRequestItem(makeEntry({ number: 2, author: makeActor("Viewer") }));
-  const assignedIssue = makeIssue({ number: 3, assignees: [makeActor("viewer")] });
+  const assignedIssue = makeIssue({
+    number: 3,
+    assignees: [makeActor("viewer")],
+  });
   const mentionedIssue = makeIssue({
     number: 4,
     viewerInvolvement: { authored: false, assigned: false, involved: true },
@@ -369,7 +389,11 @@ describe("scopeInboxItemsToProjects", () => {
   it("shows a shared row with the selected project's own pin", () => {
     const [scoped] = scopeInboxItemsToProjects([shared], [projectB]);
 
-    expect(scoped).toMatchObject({ projectId: projectB, projectTitle: "B", isPinned: false });
+    expect(scoped).toMatchObject({
+      projectId: projectB,
+      projectTitle: "B",
+      isPinned: false,
+    });
     expect(scoped?.projectContexts).toEqual([
       { projectId: projectB, projectTitle: "B", isPinned: false },
     ]);

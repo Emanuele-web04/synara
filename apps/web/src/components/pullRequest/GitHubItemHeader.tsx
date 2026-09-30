@@ -1,25 +1,25 @@
 // FILE: GitHubItemHeader.tsx
 // Purpose: The header a GitHub item's detail opens with, the same for pull requests and issues:
-//          state glyph, "PR #n" / "Issue #n", state word and repository; the title; author,
-//          assignees, created and updated; labels; then the action row. Hosts that show the
-//          detail as a page use it (the inbox); the chat dock keeps its compact header.
+//          a state pill (its chevron opens the host's state menu) beside "repo #n"; the large
+//          title; author, time, and (pull requests) head to base; then the labels. The actions
+//          (and, on a narrow window, the back control) live in the page's top bar. Hosts that
+//          show the detail as a page use it (the inbox); the chat dock keeps its compact header.
 // Layer: Pull request presentation
 // Exports: GitHubItemHeader, GitHubItemHeaderItem, GitHubItemBackButton
 
 import type {
   GitHubIssueDetail,
   GitPullRequestMergeability,
-  PullRequestActor,
   PullRequestDetail,
 } from "@synara/contracts";
 import type { ReactNode } from "react";
 
-import { Button } from "~/components/ui/button";
+import { ComposerPickerMenuPopup } from "~/components/chat/ComposerPickerMenuPopup";
 import { IconButton } from "~/components/ui/icon-button";
-import { ArrowLeftIcon, ExternalLinkIcon } from "~/lib/icons";
+import { Menu, MenuTrigger } from "~/components/ui/menu";
+import { ArrowLeftIcon, ArrowRightIcon, ChevronDownIcon } from "~/lib/icons";
 import { formatRelativeTime } from "~/lib/relativeTime";
 import { cn } from "~/lib/utils";
-import { ensureNativeApi } from "~/nativeApi";
 import { GitHubLabelChips } from "./GitHubLabelChips";
 import { PullRequestActorLabel } from "./PullRequestActorLabel";
 import { PullRequestMetaLine } from "./PullRequestMetaLine";
@@ -46,10 +46,10 @@ type HeaderFields =
 
 /** What the header shows, from either detail. Pull request detail carries no assignees. */
 export type GitHubItemHeaderItem =
-  | ({ kind: "pullRequest"; mergeability?: GitPullRequestMergeability | undefined } & Pick<
-      PullRequestDetail,
-      HeaderFields | "state" | "isDraft"
-    >)
+  | ({
+      kind: "pullRequest";
+      mergeability?: GitPullRequestMergeability | undefined;
+    } & Pick<PullRequestDetail, HeaderFields | "state" | "isDraft" | "headBranch" | "baseBranch">)
   | ({ kind: "issue" } & Pick<
       GitHubIssueDetail,
       HeaderFields | "state" | "stateReason" | "assignees"
@@ -60,19 +60,7 @@ function relativeTimeAgo(iso: string): string {
   return relative === "now" ? "just now" : `${relative} ago`;
 }
 
-function AssigneesSegment({ assignees }: { assignees: ReadonlyArray<PullRequestActor> }) {
-  if (assignees.length === 0) return <span>Unassigned</span>;
-  return (
-    <span className="flex min-w-0 items-center gap-1.5">
-      <span className="shrink-0">Assigned to</span>
-      {assignees.map((assignee) => (
-        <PullRequestActorLabel key={assignee.login} actor={assignee} className="max-w-[10rem]" />
-      ))}
-    </span>
-  );
-}
-
-/** Returns a narrow layout from the detail to the list. Also shown while the detail loads. */
+/** Returns a narrow layout from the detail to the list; leads the detail page's top bar. */
 export function GitHubItemBackButton({
   onBack,
   className,
@@ -95,15 +83,12 @@ export function GitHubItemBackButton({
 
 export function GitHubItemHeader({
   item,
-  onBack,
-  agentActions,
+  stateMenu,
   className,
 }: {
   item: GitHubItemHeaderItem;
-  /** Narrow layouts show the detail in place of the list; this returns to it. */
-  onBack?: () => void;
-  /** Agent actions for this item (Send to agent, Ask), placed ahead of Open on GitHub. */
-  agentActions?: ReactNode;
+  /** The entries of the state pill's menu (Draft / Ready for review). Absent: a plain pill. */
+  stateMenu?: ReactNode;
   className?: string;
 }) {
   const state =
@@ -116,61 +101,90 @@ export function GitHubItemHeader({
               state={item.state}
               isDraft={item.isDraft}
               mergeability={item.mergeability}
+              className="size-3.5"
             />
           ),
         }
       : {
           word: resolveIssueStatePresentation(item).shortLabel,
           colorClass: resolveIssueStatePresentation(item).colorClass,
-          glyph: <IssueStateGlyph state={item.state} stateReason={item.stateReason} />,
+          glyph: (
+            <IssueStateGlyph
+              state={item.state}
+              stateReason={item.stateReason}
+              className="size-3.5"
+            />
+          ),
         };
-  const kindLabel = item.kind === "pullRequest" ? "PR" : "Issue";
+  const repositoryName = item.repository.split("/").pop() ?? item.repository;
+  const pillClassName = cn(
+    PR_META_TEXT_CLASS_NAME,
+    "inline-flex h-6 shrink-0 items-center gap-1.5 rounded-full px-2.5 font-medium",
+    "bg-[color-mix(in_srgb,currentColor_12%,transparent)]",
+    state.colorClass,
+  );
+  const pillContent = (
+    <>
+      {state.glyph}
+      <span>{state.word}</span>
+    </>
+  );
   return (
-    <header className={cn("shrink-0 px-5 pt-4 pb-3", className)}>
+    <header className={cn("shrink-0 pb-4", className)}>
       <div className="flex min-w-0 items-center gap-2">
-        {onBack ? <GitHubItemBackButton onBack={onBack} className="-ml-1.5" /> : null}
-        <PullRequestMetaLine className={cn(PR_FINE_TEXT_CLASS_NAME, "text-muted-foreground")}>
-          <span className="flex shrink-0 items-center gap-1.5 text-foreground">
-            {state.glyph}
-            <span className="tabular-nums">
-              {kindLabel} #{item.number}
-            </span>
-          </span>
-          <span className={cn("shrink-0", state.colorClass)}>{state.word}</span>
-          <span className="truncate" title={item.repository}>
-            {item.repository}
-          </span>
-        </PullRequestMetaLine>
+        {stateMenu ? (
+          <Menu>
+            <MenuTrigger
+              aria-label={`State: ${state.word}. Change state`}
+              className={cn(
+                pillClassName,
+                "cursor-pointer pr-1.5 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+              )}
+            >
+              {pillContent}
+              <ChevronDownIcon aria-hidden className="size-3" />
+            </MenuTrigger>
+            <ComposerPickerMenuPopup align="start" side="bottom" className="w-48 min-w-48">
+              {stateMenu}
+            </ComposerPickerMenuPopup>
+          </Menu>
+        ) : (
+          <span className={pillClassName}>{pillContent}</span>
+        )}
+        <span
+          className={cn(PR_META_TEXT_CLASS_NAME, "min-w-0 truncate text-muted-foreground")}
+          title={item.repository}
+        >
+          {repositoryName} #{item.number}
+        </span>
       </div>
       {/* Large heading: one of the two places a fixed size is allowed. */}
-      <h1 className="mt-1.5 text-lg font-semibold leading-snug break-words">{item.title}</h1>
+      <h1 className="mt-3 text-[1.75rem] leading-tight font-semibold tracking-tight break-words">
+        {item.title}
+      </h1>
       <PullRequestMetaLine
-        className={cn(PR_META_TEXT_CLASS_NAME, "mt-1.5 flex-wrap text-muted-foreground")}
+        className={cn(PR_META_TEXT_CLASS_NAME, "mt-3 flex-wrap text-muted-foreground")}
       >
         <PullRequestActorLabel actor={item.author} className="font-medium text-foreground" />
-        {item.kind === "issue" ? <AssigneesSegment assignees={item.assignees} /> : null}
         <span title={new Date(item.createdAt).toLocaleString()}>
-          Created {relativeTimeAgo(item.createdAt)}
+          {relativeTimeAgo(item.createdAt)}
         </span>
-        <span title={new Date(item.updatedAt).toLocaleString()}>
-          Updated {relativeTimeAgo(item.updatedAt)}
-        </span>
+        {item.kind === "pullRequest" ? (
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span
+              className={cn(PR_FINE_TEXT_CLASS_NAME, "min-w-0 truncate")}
+              title={item.headBranch}
+            >
+              {item.headBranch}
+            </span>
+            <ArrowRightIcon aria-hidden className="size-3.5 shrink-0" />
+            <span className={cn(PR_FINE_TEXT_CLASS_NAME, "shrink-0")}>{item.baseBranch}</span>
+          </span>
+        ) : null}
       </PullRequestMetaLine>
-      {item.labels.length > 0 ? (
-        <GitHubLabelChips labels={item.labels} className="mt-2 flex-wrap" />
+      {item.kind === "pullRequest" && item.labels.length > 0 ? (
+        <GitHubLabelChips labels={item.labels} className="mt-3 flex-wrap" />
       ) : null}
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        {agentActions}
-        <Button
-          variant="ghost"
-          size="sm"
-          className={cn(agentActions ? undefined : "-ml-2.5")}
-          onClick={() => void ensureNativeApi().shell.openExternal(item.url)}
-        >
-          <ExternalLinkIcon />
-          Open on GitHub
-        </Button>
-      </div>
     </header>
   );
 }

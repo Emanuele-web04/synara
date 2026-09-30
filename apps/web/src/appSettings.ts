@@ -345,6 +345,10 @@ export const AppSettingsSchema = Schema.Struct({
   githubInboxLabels: Schema.Array(Schema.String.check(Schema.isMaxLength(256))).pipe(
     withDefaults(() => []),
   ),
+  // The list sections the user has expanded; the first two start open, the rest collapsed.
+  githubInboxExpandedSections: Schema.Array(
+    Schema.Literals(["authored", "reviewRequested", "involved", "others"]),
+  ).pipe(withDefaults(() => ["authored", "reviewRequested"] as const)),
   // Server-backed: the inbox also reads each project's other GitHub remotes (fork upstreams).
   githubInboxIncludeUpstreams: Schema.Boolean.pipe(withDefaults(() => false)),
   // Local-only UI preferences for hiding sidebar surfaces a user doesn't want.
@@ -1063,7 +1067,9 @@ export function appSettingsPatchToServerSettingsPatch(
         ? { binaryPath: patch.openCodeBinaryPath ?? "" }
         : {}),
       ...(hasOwn(patch, "openCodeExperimentalWebSockets")
-        ? { experimentalWebSockets: Boolean(patch.openCodeExperimentalWebSockets) }
+        ? {
+            experimentalWebSockets: Boolean(patch.openCodeExperimentalWebSockets),
+          }
         : {}),
       ...(hasOwn(patch, "openCodeServerUrl") ? { serverUrl: patch.openCodeServerUrl ?? "" } : {}),
       ...(hasOwn(patch, "openCodeServerPassword")
@@ -1203,7 +1209,9 @@ export function applyLocalAppSettingsPatch(
     ...settings,
     ...localPatch,
     ...(hasOwn(patch, "openCodeServerPassword")
-      ? { openCodeServerPasswordConfigured: Boolean(patch.openCodeServerPassword?.trim()) }
+      ? {
+          openCodeServerPasswordConfigured: Boolean(patch.openCodeServerPassword?.trim()),
+        }
       : {}),
   });
 }
@@ -1291,7 +1299,10 @@ export function getAppModelOptions(
     options.push({
       provider,
       slug: normalizedSelectedModel,
-      name: formatProviderModelOptionName({ provider, slug: normalizedSelectedModel }),
+      name: formatProviderModelOptionName({
+        provider,
+        slug: normalizedSelectedModel,
+      }),
       isCustom: true,
     });
   }
@@ -1345,7 +1356,10 @@ export function getGitTextGenerationModelOptions(
     deduped.push({
       provider: selectedProvider,
       slug: selectedModel,
-      name: formatProviderModelOptionName({ provider: selectedProvider, slug: selectedModel }),
+      name: formatProviderModelOptionName({
+        provider: selectedProvider,
+        slug: selectedModel,
+      }),
       isCustom: true,
     });
   }
@@ -1658,7 +1672,9 @@ export function useAppSettings() {
         globalThis.localStorage?.setItem(SERVER_SETTINGS_MIGRATION_STORAGE_KEY, "1");
       })
       .catch(() => {
-        void queryClient.invalidateQueries({ queryKey: serverQueryKeys.settings() });
+        void queryClient.invalidateQueries({
+          queryKey: serverQueryKeys.settings(),
+        });
       })
       .finally(() => {
         serverSettingsMigrationInFlight = false;

@@ -1,73 +1,115 @@
 // FILE: GitHubItemAgentActions.tsx
-// Purpose: The agent actions a GitHub item's header offers ahead of Open on GitHub: Send to
-//          agent (a new draft thread with the item attached) and Ask (a side chat about it).
-//          When the item's repository belongs to several projects, Send to agent asks which one.
+// Purpose: Send to agent for a GitHub item (a new draft thread with the item attached), in its
+//          two shapes: the top bar button of the detail page (asking which project when the
+//          item's repository belongs to several) and the menu entries the dock's "…" menu and
+//          the floating composer's "+" menu list, one per project.
 // Layer: Pull request presentation
-// Exports: GitHubItemAgentActions, GitHubItemSendTarget
+// Exports: GitHubItemAgentActions, SendToAgentMenuItems, GitHubItemSendTarget,
+//          TOP_BAR_NARROW_LABEL_CLASS_NAME
 
 import type { ProjectId } from "@synara/contracts";
 
 import { ComposerPickerMenuPopup } from "~/components/chat/ComposerPickerMenuPopup";
+import { MENU_ICON_CLASS_NAME } from "~/components/chat/composerPickerStyles";
 import { Button } from "~/components/ui/button";
 import { Menu, MenuItem, MenuTrigger } from "~/components/ui/menu";
-import { ChatBubbleIcon, ChevronDownIcon, LoaderIcon } from "~/lib/icons";
+import { BotIcon, ChevronDownIcon, LoaderIcon } from "~/lib/icons";
+
+/**
+ * On a top bar control's words: once the page's top bar is narrow (the side chat is open) the
+ * glyph carries the meaning and the words drop, so tabs and actions stay on one row.
+ */
+export const TOP_BAR_NARROW_LABEL_CLASS_NAME = "@max-[46rem]/topbar:sr-only";
 
 export interface GitHubItemSendTarget {
   projectId: ProjectId;
   projectTitle: string;
 }
 
+/** "Send to agent" per project, for a menu; one project keeps the plain label. */
+export function SendToAgentMenuItems({
+  sendTargets,
+  sending,
+  disabled,
+  onSendToAgent,
+}: {
+  sendTargets: ReadonlyArray<GitHubItemSendTarget>;
+  /** Shows "Preparing…" while the thread is being prepared. */
+  sending?: boolean;
+  disabled?: boolean;
+  onSendToAgent: (projectId: ProjectId) => void;
+}) {
+  return sendTargets.map((target) => (
+    <MenuItem
+      key={target.projectId}
+      onClick={() => onSendToAgent(target.projectId)}
+      disabled={disabled === true}
+    >
+      <BotIcon className={MENU_ICON_CLASS_NAME} />
+      <span className="truncate">
+        {sending
+          ? "Preparing…"
+          : sendTargets.length > 1
+            ? `Send to agent in ${target.projectTitle}`
+            : "Send to agent"}
+      </span>
+    </MenuItem>
+  ));
+}
+
+/** The top bar's Send to agent, led by the agent glyph. */
 export function GitHubItemAgentActions({
   sendTargets,
   sending,
   onSendToAgent,
-  onAsk,
-  asking,
 }: {
   /** Projects Send to agent can open the thread in; one skips the picker. */
   sendTargets: ReadonlyArray<GitHubItemSendTarget>;
   sending: boolean;
   onSendToAgent: (projectId: ProjectId) => void;
-  /** Absent where the host cannot show a side chat. */
-  onAsk?: (() => void) | undefined;
-  asking?: boolean;
 }) {
   const sendLabel = sending ? "Preparing…" : "Send to agent";
-  const sendIcon = sending ? <LoaderIcon className="animate-spin" /> : null;
+  const label = <span className={TOP_BAR_NARROW_LABEL_CLASS_NAME}>{sendLabel}</span>;
+  const icon = sending ? <LoaderIcon className="animate-spin" /> : <BotIcon />;
   const [onlyTarget] = sendTargets;
+  if (sendTargets.length > 1) {
+    return (
+      <Menu>
+        <MenuTrigger
+          render={
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={sending}
+              aria-label="Send to agent: choose project"
+            />
+          }
+        >
+          {icon}
+          {label}
+          <ChevronDownIcon />
+        </MenuTrigger>
+        <ComposerPickerMenuPopup align="start" side="bottom" className="w-56 min-w-56">
+          {sendTargets.map((target) => (
+            <MenuItem key={target.projectId} onClick={() => onSendToAgent(target.projectId)}>
+              <span className="truncate">{target.projectTitle}</span>
+            </MenuItem>
+          ))}
+        </ComposerPickerMenuPopup>
+      </Menu>
+    );
+  }
+  if (!onlyTarget) return null;
   return (
-    <>
-      {sendTargets.length > 1 ? (
-        <Menu>
-          <MenuTrigger
-            render={
-              <Button size="sm" disabled={sending} aria-label="Send to agent: choose project" />
-            }
-          >
-            {sendIcon}
-            {sendLabel}
-            <ChevronDownIcon />
-          </MenuTrigger>
-          <ComposerPickerMenuPopup align="start" side="bottom" className="w-56 min-w-56">
-            {sendTargets.map((target) => (
-              <MenuItem key={target.projectId} onClick={() => onSendToAgent(target.projectId)}>
-                <span className="truncate">{target.projectTitle}</span>
-              </MenuItem>
-            ))}
-          </ComposerPickerMenuPopup>
-        </Menu>
-      ) : onlyTarget ? (
-        <Button size="sm" disabled={sending} onClick={() => onSendToAgent(onlyTarget.projectId)}>
-          {sendIcon}
-          {sendLabel}
-        </Button>
-      ) : null}
-      {onAsk ? (
-        <Button variant="outline" size="sm" disabled={asking === true} onClick={onAsk}>
-          {asking ? <LoaderIcon className="animate-spin" /> : <ChatBubbleIcon />}
-          Ask
-        </Button>
-      ) : null}
-    </>
+    <Button
+      variant="outline"
+      size="sm"
+      disabled={sending}
+      onClick={() => onSendToAgent(onlyTarget.projectId)}
+      title={sendLabel}
+    >
+      {icon}
+      {label}
+    </Button>
   );
 }

@@ -57,7 +57,13 @@ function project(id: ProjectId, name: string): Project {
 }
 
 function context(projectId: ProjectId) {
-  return [{ projectId, projectTitle: projectId === projectA ? "Alpha" : "Beta", isPinned: false }];
+  return [
+    {
+      projectId,
+      projectTitle: projectId === projectA ? "Alpha" : "Beta",
+      isPinned: false,
+    },
+  ];
 }
 
 const PULL_REQUEST_41: GitHubInboxItem = {
@@ -224,7 +230,12 @@ const PULL_REQUEST_41_DETAIL: PullRequestDetail = {
   commentsTruncated: false,
   commentsIncomplete: false,
   commits: [],
-  mergeCapabilities: { merge: true, squash: true, rebase: true, deleteBranchOnMerge: false },
+  mergeCapabilities: {
+    merge: true,
+    squash: true,
+    rebase: true,
+    deleteBranchOnMerge: false,
+  },
   stack: null,
   stackMetadataIncomplete: false,
 };
@@ -282,10 +293,11 @@ function mount(initialSearch: GitHubInboxSearch = {}) {
   );
 }
 
+// Rows inside a folded section stay mounted but inert; only open sections count as visible.
 function visibleRowNumbers(): number[] {
-  return Array.from(document.querySelectorAll<HTMLElement>("button[data-pull-request-row]")).map(
-    (row) => Number(row.dataset.pullRequestNumber),
-  );
+  return Array.from(document.querySelectorAll<HTMLElement>("button[data-pull-request-row]"))
+    .filter((row) => row.closest("[inert]") === null)
+    .map((row) => Number(row.dataset.pullRequestNumber));
 }
 
 async function expectRows(numbers: number[]) {
@@ -302,8 +314,14 @@ async function closeMenu() {
     .toBeNull();
 }
 
+const ALL_SECTIONS_OPEN = JSON.stringify({
+  githubInboxExpandedSections: ["authored", "reviewRequested", "involved", "others"],
+});
+
 beforeEach(async () => {
   localStorage.clear();
+  // Sections past the first two start folded; most tests want every row in view.
+  localStorage.setItem("synara:app-settings:v1", ALL_SECTIONS_OPEN);
   latestSearch = {};
   api.list
     .mockReset()
@@ -314,7 +332,9 @@ beforeEach(async () => {
   api.pullRequestDetail.mockReset().mockResolvedValue(PULL_REQUEST_41_DETAIL);
   api.openExternal.mockReset().mockResolvedValue(undefined);
   installNativeApi();
-  useStore.setState({ projects: [project(projectA, "Alpha"), project(projectB, "Beta")] });
+  useStore.setState({
+    projects: [project(projectA, "Alpha"), project(projectB, "Beta")],
+  });
   await page.viewport(1280, 800);
 });
 
@@ -325,23 +345,27 @@ afterEach(() => {
 });
 
 describe("GitHubInbox list", () => {
-  it("lists pull requests and issues in one flat list", async () => {
+  it("lists pull requests and issues in sections by how they involve the viewer", async () => {
     await mount();
 
-    await expectRows([44, 43, 42, 41]);
+    await expectRows([44, 41, 42, 43]);
     const groupHeaders = Array.from(document.querySelectorAll("h2")).map(
       (node) => node.textContent,
     );
-    // No pinned rows, so no group headers at all.
-    expect(groupHeaders).toEqual([]);
+    expect(groupHeaders).toEqual([
+      "Authored by me",
+      "Needs my review",
+      "Involving me",
+      "Everything else",
+    ]);
     await expect.element(page.getByRole("img", { name: "Issue open" }).first()).toBeVisible();
-    await expect.element(page.getByText("Nothing selected")).toBeVisible();
+    await expect.element(page.getByText("Select a pull request or issue")).toBeVisible();
     expect(api.list).toHaveBeenCalledWith({ state: "open" });
   });
 
   it("combines kind, project, involvement, and label filters, then clears them", async () => {
     await mount();
-    await expectRows([44, 43, 42, 41]);
+    await expectRows([44, 41, 42, 43]);
     // Each kind segment counts what it would show under the other filters.
     await expect.element(page.getByRole("radio", { name: "All, 4" })).toBeChecked();
     await expect.element(page.getByRole("radio", { name: "Pull requests, 2" })).toBeVisible();
@@ -349,7 +373,7 @@ describe("GitHubInbox list", () => {
     expect(document.querySelector('[aria-label="Active filters"]')).toBeNull();
 
     await page.getByRole("radio", { name: "Issues, 2" }).click();
-    await expectRows([43, 42]);
+    await expectRows([42, 43]);
 
     // One Filter menu holds every filter; projects and labels are submenus.
     await page.getByRole("button", { name: /^Filter/ }).click();
@@ -359,7 +383,7 @@ describe("GitHubInbox list", () => {
     await expectRows([43]);
     await expect.element(page.getByRole("radio", { name: "Pull requests, 1" })).toBeVisible();
     await page.getByRole("menuitemcheckbox", { name: "Alpha" }).click();
-    await expectRows([43, 42]);
+    await expectRows([42, 43]);
     await closeMenu();
     // Each active filter is a removable chip; two projects in view means rows name theirs.
     await expect.element(page.getByRole("button", { name: "Remove filter: Alpha" })).toBeVisible();
@@ -376,14 +400,14 @@ describe("GitHubInbox list", () => {
 
     // A chip removes just its own filter.
     await page.getByRole("button", { name: "Remove filter: Assigned to me" }).click();
-    await expectRows([43, 42]);
+    await expectRows([42, 43]);
     await page.getByRole("button", { name: "Clear", exact: true }).click();
-    await expectRows([44, 43, 42, 41]);
+    await expectRows([44, 41, 42, 43]);
 
     await page.getByRole("button", { name: /^Filter/ }).click();
     await page.getByRole("menuitem", { name: /^Labels/ }).click();
     await page.getByRole("menuitemcheckbox", { name: /kind:bug/ }).click();
-    await expectRows([42, 41]);
+    await expectRows([41, 42]);
     await closeMenu();
 
     await page.getByRole("radio", { name: /^Pull requests/ }).click();
@@ -393,19 +417,19 @@ describe("GitHubInbox list", () => {
       .fill("nothing matches");
     await expect.element(page.getByText("No pull requests found")).toBeVisible();
     await page.getByRole("button", { name: "Clear filters", exact: true }).click();
-    await expectRows([44, 43, 42, 41]);
+    await expectRows([44, 41, 42, 43]);
     expect(latestSearch.q).toBeUndefined();
   });
 
   it("keeps filters across a remount, while a URL override wins for one visit", async () => {
     const first = await mount();
-    await expectRows([44, 43, 42, 41]);
+    await expectRows([44, 41, 42, 43]);
     await page.getByRole("radio", { name: /^Issues/ }).click();
-    await expectRows([43, 42]);
+    await expectRows([42, 43]);
     await first.unmount();
 
     const second = await mount();
-    await expectRows([43, 42]);
+    await expectRows([42, 43]);
     await expect.element(page.getByRole("radio", { name: /^Issues/ })).toBeChecked();
     await second.unmount();
 
@@ -420,7 +444,7 @@ describe("GitHubInbox list", () => {
 
   it("switches the list to the closed state, which its chip undoes", async () => {
     await mount();
-    await expectRows([44, 43, 42, 41]);
+    await expectRows([44, 41, 42, 43]);
     await page.getByRole("button", { name: /^Filter/ }).click();
     await page.getByRole("menuitemradio", { name: "Closed" }).click();
     await expect.element(page.getByText("No pull requests and issues found")).toBeVisible();
@@ -428,27 +452,27 @@ describe("GitHubInbox list", () => {
     await closeMenu();
 
     await page.getByRole("button", { name: "Remove filter: Closed" }).click();
-    await expectRows([44, 43, 42, 41]);
+    await expectRows([44, 41, 42, 43]);
     expect(document.querySelector('[aria-label="Active filters"]')).toBeNull();
   });
 
   it("moves the kind selection with the arrow keys", async () => {
     await mount();
-    await expectRows([44, 43, 42, 41]);
+    await expectRows([44, 41, 42, 43]);
 
     (document.querySelector('[role="radio"][aria-checked="true"]') as HTMLElement).focus();
     await userEvent.keyboard("{ArrowRight}");
     await expectRows([44, 41]);
     await expect.element(page.getByRole("radio", { name: /^Pull requests/ })).toHaveFocus();
     await userEvent.keyboard("{ArrowLeft}{ArrowLeft}");
-    await expectRows([43, 42]);
+    await expectRows([42, 43]);
   });
 });
 
 describe("GitHubInbox selection", () => {
   it("opens an issue from the list and puts the selection in the URL", async () => {
     await mount();
-    await expectRows([44, 43, 42, 41]);
+    await expectRows([44, 41, 42, 43]);
 
     await page
       .getByRole("button", { name: /Crash on launch/ })
@@ -462,7 +486,7 @@ describe("GitHubInbox selection", () => {
       number: 42,
     });
     await expect.element(page.getByRole("heading", { name: "Crash on launch" })).toBeVisible();
-    await expect.element(page.getByText("Issue #42")).toBeVisible();
+    await expect.element(page.getByText("widgets #42")).toBeVisible();
     await expect.element(page.getByText("Reproduced on the beta build.")).toBeVisible();
     await expect
       .element(document.querySelector<HTMLElement>('[data-pull-request-number="42"]')!)
@@ -470,23 +494,35 @@ describe("GitHubInbox selection", () => {
 
     await page.getByRole("button", { name: "Open on GitHub" }).click();
     expect(api.openExternal).toHaveBeenCalledWith("https://github.com/acme/widgets/issues/42");
+
+    // The same tab row as a pull request: Summary, then the issue's Timeline.
+    await page.getByRole("button", { name: "Timeline" }).click();
+    await expect.element(page.getByText(/opened this issue/)).toBeVisible();
   });
 
   it("opens a pull request deep link from the old page, which carried no kind", async () => {
-    await mount({ selectedProjectId: projectA, selectedRepo: "acme/widgets", number: 41 });
+    await mount({
+      selectedProjectId: projectA,
+      selectedRepo: "acme/widgets",
+      number: 41,
+    });
 
     await expect.element(page.getByRole("heading", { name: "Fix login redirect" })).toBeVisible();
-    await expect.element(page.getByText("PR #41")).toBeVisible();
+    await expect.element(page.getByText("widgets #41")).toBeVisible();
     await expect.element(page.getByRole("button", { name: "Summary" })).toBeVisible();
     expect(api.pullRequestDetail).toHaveBeenCalledWith(
-      expect.objectContaining({ projectId: projectA, repository: "acme/widgets", number: 41 }),
+      expect.objectContaining({
+        projectId: projectA,
+        repository: "acme/widgets",
+        number: 41,
+      }),
     );
   });
 
   it("returns focus to the row after going back on a narrow window", async () => {
     await page.viewport(500, 800);
     await mount();
-    await expectRows([44, 43, 42, 41]);
+    await expectRows([44, 41, 42, 43]);
 
     await page
       .getByRole("button", { name: /Crash on launch/ })
@@ -497,7 +533,7 @@ describe("GitHubInbox selection", () => {
     expect(visibleRowNumbers()).toEqual([]);
 
     await page.getByRole("button", { name: "Back to code review" }).first().click();
-    await expectRows([44, 43, 42, 41]);
+    await expectRows([44, 41, 42, 43]);
     await expect
       .poll(() => (document.activeElement as HTMLElement | null)?.dataset.pullRequestNumber)
       .toBe("42");
@@ -515,7 +551,7 @@ describe("GitHubInbox states", () => {
 
     await expect.element(page.getByLabelText("Loading code review")).toBeInTheDocument();
     resolveList?.(listResult());
-    await expectRows([44, 43, 42, 41]);
+    await expectRows([44, 41, 42, 43]);
   });
 
   it("explains an unavailable GitHub CLI", async () => {
@@ -563,7 +599,7 @@ describe("GitHubInbox states", () => {
     );
     await mount();
 
-    await expectRows([44, 43, 42, 41]);
+    await expectRows([44, 41, 42, 43]);
     await expect
       .element(page.getByText(/GitHub rate limit reached\. Showing the last loaded items\./))
       .toBeVisible();
@@ -574,5 +610,175 @@ describe("GitHubInbox states", () => {
     await mount();
 
     await expect.element(page.getByText("No pull requests and issues found")).toBeVisible();
+  });
+});
+
+describe("GitHubInbox sections", () => {
+  it("folds the sections past the first two until opened, and remembers the choice", async () => {
+    localStorage.clear();
+    const first = await mount();
+    // Authored and Needs my review start open; Involving me and Everything else start folded.
+    await expectRows([44, 41]);
+    await expect
+      .element(page.getByRole("button", { name: "Involving me" }))
+      .toHaveAttribute("aria-expanded", "false");
+
+    await page.getByRole("button", { name: "Involving me" }).click();
+    await expectRows([44, 41, 42]);
+    const saved = JSON.parse(localStorage.getItem("synara:app-settings:v1") ?? "{}");
+    expect(saved.githubInboxExpandedSections).toEqual(["authored", "reviewRequested", "involved"]);
+
+    await page.getByRole("button", { name: "Authored by me" }).click();
+    await expectRows([41, 42]);
+    await first.unmount();
+
+    await mount();
+    await expectRows([41, 42]);
+  });
+
+  it("opens every section while searching, so a match is never hidden", async () => {
+    localStorage.clear();
+    await mount();
+    await expectRows([44, 41]);
+    await page.getByRole("textbox", { name: "Search pull requests and issues" }).fill("docs");
+    await expectRows([43]);
+  });
+
+  it("shows ten rows per section, ten more on each Show more, and ten fewer on Show less", async () => {
+    const many = Array.from({ length: 25 }, (_, index) => ({
+      ...PULL_REQUEST_44,
+      number: 100 + index,
+      title: `Authored change ${index}`,
+      url: `https://github.com/acme/gadgets/pull/${100 + index}`,
+      updatedAt: new Date(Date.parse(NOW) - index * 60_000).toISOString(),
+    }));
+    api.list.mockResolvedValue(listResult({ items: many }));
+    await mount();
+
+    await expect.poll(() => visibleRowNumbers().length).toBe(10);
+    await page.getByRole("button", { name: "Show more" }).click();
+    await expect.poll(() => visibleRowNumbers().length).toBe(20);
+    await page.getByRole("button", { name: "Show more" }).click();
+    await expect.poll(() => visibleRowNumbers().length).toBe(25);
+    expect(document.body.textContent).not.toContain("Show more");
+    // Paged like the sidebar's lists: Show less takes a page back.
+    await page.getByRole("button", { name: "Show less" }).click();
+    await expect.poll(() => visibleRowNumbers().length).toBe(20);
+  });
+});
+
+function paste(text: string) {
+  const input = document.querySelector<HTMLInputElement>(
+    'input[aria-label="Search pull requests and issues"]',
+  )!;
+  const data = new DataTransfer();
+  data.setData("text", text);
+  input.dispatchEvent(
+    new ClipboardEvent("paste", {
+      clipboardData: data,
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+}
+
+describe("GitHubInbox search box", () => {
+  it("selects the loaded item a pasted PR link or #number names", async () => {
+    await mount();
+    await expectRows([44, 41, 42, 43]);
+
+    paste("https://github.com/acme/widgets/pull/41");
+    await expect.poll(() => latestSearch.number).toBe(41);
+    expect(latestSearch).toMatchObject({
+      kind: "pullRequest",
+      selectedRepo: "acme/widgets",
+    });
+    expect(latestSearch.q).toBeUndefined();
+
+    paste("#43");
+    await expect.poll(() => latestSearch.number).toBe(43);
+    expect(latestSearch.kind).toBe("issue");
+  });
+
+  it("leaves a link to a repository outside the list as search text", async () => {
+    await mount();
+    await expectRows([44, 41, 42, 43]);
+    paste("https://github.com/elsewhere/project/pull/9");
+    expect(latestSearch.number).toBeUndefined();
+  });
+});
+
+describe("GitHubInbox detail layout", () => {
+  it("puts the info in a right-hand column when the pane is wide", async () => {
+    await page.viewport(1400, 800);
+    await mount({
+      kind: "pullRequest",
+      selectedProjectId: projectA,
+      selectedRepo: "acme/widgets",
+      number: 41,
+    });
+    await expect.element(page.getByRole("heading", { name: "Fix login redirect" })).toBeVisible();
+
+    await expect.element(page.getByRole("complementary", { name: "Details" })).toBeVisible();
+    await expect.element(page.getByText("Can merge without conflicts")).toBeVisible();
+    expect(document.querySelector('[data-info-variant="rows"]')?.checkVisibility()).toBe(false);
+  });
+
+  it("folds the info into rows under the header when the pane is narrow", async () => {
+    await page.viewport(900, 800);
+    await mount({
+      kind: "pullRequest",
+      selectedProjectId: projectA,
+      selectedRepo: "acme/widgets",
+      number: 41,
+    });
+    await expect.element(page.getByRole("heading", { name: "Fix login redirect" })).toBeVisible();
+
+    await expect
+      .poll(() => document.querySelector('[data-info-variant="rows"]')?.checkVisibility())
+      .toBe(true);
+    expect(document.querySelector("aside[aria-label='Details']")?.checkVisibility()).toBe(false);
+    expect(document.querySelector('[data-info-variant="rows"]')?.textContent).toContain(
+      "No reviews",
+    );
+  });
+
+  it("shows assignees, labels, and comments for an issue, and no merge control", async () => {
+    await page.viewport(1400, 800);
+    await mount({
+      kind: "issue",
+      selectedProjectId: projectA,
+      selectedRepo: "acme/widgets",
+      number: 42,
+    });
+    await expect.element(page.getByRole("heading", { name: "Crash on launch" })).toBeVisible();
+
+    const aside = page.getByRole("complementary", { name: "Details" });
+    await expect.element(aside.getByText("Assignees")).toBeVisible();
+    await expect.element(aside.getByText("Labels")).toBeVisible();
+    await expect.element(aside.getByText("1 comment")).toBeVisible();
+    expect(document.body.textContent).not.toContain("Merge");
+  });
+
+  it("offers the merge options in the split button and opens the request page for reviews", async () => {
+    await page.viewport(1400, 800);
+    await mount({
+      kind: "pullRequest",
+      selectedProjectId: projectA,
+      selectedRepo: "acme/widgets",
+      number: 41,
+    });
+    await expect.element(page.getByRole("button", { name: "Merge", exact: true })).toBeVisible();
+
+    await page.getByRole("button", { name: "More actions" }).click();
+    await expect.element(page.getByRole("menuitemradio", { name: "Squash" })).toBeVisible();
+    await expect.element(page.getByRole("menuitem", { name: "Close pull request" })).toBeVisible();
+    await closeMenu();
+
+    await page
+      .getByRole("complementary", { name: "Details" })
+      .getByRole("button", { name: "Request" })
+      .click();
+    expect(api.openExternal).toHaveBeenCalledWith("https://github.com/acme/widgets/pull/41");
   });
 });

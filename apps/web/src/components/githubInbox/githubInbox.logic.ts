@@ -28,10 +28,13 @@ import type {
 import {
   filterInboxItemsByInvolvement,
   matchesPullRequestSearchQuery,
+  groupPullRequestEntriesByInvolvement,
   orderPullRequestEntriesPinnedFirst,
+  pullRequestListEntryKey,
   safeGitHubLabelColor,
   scopeInboxItemsToProjects,
   type PullRequestListGroup,
+  type PullRequestListGroupKey,
 } from "~/components/pullRequest/pullRequestList.logic";
 
 // ── URL search ─────────────────────────────────────────────────────────────
@@ -210,7 +213,10 @@ export function githubInboxSendTargets(
       byProjectId.set(context.projectId, context.projectTitle);
     }
   }
-  const all = [...byProjectId].map(([projectId, projectTitle]) => ({ projectId, projectTitle }));
+  const all = [...byProjectId].map(([projectId, projectTitle]) => ({
+    projectId,
+    projectTitle,
+  }));
   const filtered =
     filters.projectIds.length > 0
       ? all.filter((target) => filters.projectIds.includes(target.projectId))
@@ -408,20 +414,56 @@ export function countInboxItemsByKind(
   return counts;
 }
 
-/**
- * The list is flat, newest first. Pins are the one group: with any pinned row the list splits
- * into "Pinned" and "Others"; without, there are no headers at all.
- */
+/** The list's sections (Pinned, Authored by me, Needs my review, Involving me, Everything else). */
 export function groupVisibleInboxItems(
   items: ReadonlyArray<GitHubInboxItem>,
-): PullRequestListGroup[] | null {
-  const pinned = items.filter((item) => item.isPinned === true);
-  if (pinned.length === 0) return null;
-  const others = items.filter((item) => item.isPinned !== true);
-  return [
-    { key: "pinned", label: "Pinned", entries: pinned },
-    ...(others.length > 0 ? [{ key: "others" as const, label: "Others", entries: others }] : []),
-  ];
+  viewer: string | null | undefined,
+): PullRequestListGroup[] {
+  return groupPullRequestEntriesByInvolvement(items, viewer);
+}
+
+// ── Section state ──────────────────────────────────────────────────────────
+
+/** Rows a section shows, and how many more each "Show more" reveals. */
+export const INBOX_SECTION_PAGE_SIZE = 10;
+
+/** The sections that start expanded; the rest start collapsed until the user opens them. */
+export const DEFAULT_EXPANDED_INBOX_SECTIONS: ReadonlyArray<PullRequestListGroupKey> = [
+  "authored",
+  "reviewRequested",
+];
+
+/**
+ * What a pasted search text points at, when it is exactly one loaded item: a GitHub pull
+ * request URL (its repository must be in the list) or `#123`. Null when nothing or several
+ * rows match, so the paste falls through to a plain search.
+ */
+export function resolveInboxItemReference(
+  text: string,
+  items: ReadonlyArray<GitHubInboxItem>,
+): GitHubInboxItem | null {
+  const trimmed = text.trim();
+  const url = /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/(pull|issues)\/(\d+)(?:[/?#].*)?$/i.exec(
+    trimmed,
+  );
+  let matches: GitHubInboxItem[];
+  if (url) {
+    const repository = url[1]!.toLowerCase();
+    const kind = url[2]!.toLowerCase() === "issues" ? "issue" : "pullRequest";
+    const number = Number(url[3]);
+    matches = items.filter(
+      (item) =>
+        item.repository.toLowerCase() === repository &&
+        item.number === number &&
+        item.kind === kind,
+    );
+  } else {
+    const number = /^#(\d+)$/.exec(trimmed)?.[1];
+    if (!number) return null;
+    matches = items.filter((item) => item.number === Number(number));
+  }
+  const identities = new Set(matches.map((item) => pullRequestListEntryKey(item) + item.kind));
+  return identities.size === 1 ? (matches[0] ?? null) : null;
 }
 
 export interface GitHubInboxLabelOption {
@@ -446,7 +488,11 @@ export function collectInboxLabelOptions(
       const existing = byName.get(key);
       if (existing) existing.count += 1;
       else
-        byName.set(key, { name: label.name, color: safeGitHubLabelColor(label.color), count: 1 });
+        byName.set(key, {
+          name: label.name,
+          color: safeGitHubLabelColor(label.color),
+          count: 1,
+        });
     }
   }
   for (const name of filters.labels) {

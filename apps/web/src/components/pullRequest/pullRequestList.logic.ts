@@ -25,9 +25,9 @@ import type { GitHubInboxInvolvementFilter } from "~/appSettings";
 
 export type PullRequestListGroupKey =
   | "pinned"
-  | "reviewRequested"
-  | "assigned"
   | "authored"
+  | "reviewRequested"
+  | "involved"
   | "others";
 
 export interface PullRequestListGroup<T = GitHubInboxItem> {
@@ -38,17 +38,17 @@ export interface PullRequestListGroup<T = GitHubInboxItem> {
 
 const GROUP_LABELS: Record<PullRequestListGroupKey, string> = {
   pinned: "Pinned",
-  reviewRequested: "Review requested",
-  assigned: "Assigned to me",
   authored: "Authored by me",
-  others: "Others",
+  reviewRequested: "Needs my review",
+  involved: "Involving me",
+  others: "Everything else",
 };
 
 const GROUP_ORDER: readonly PullRequestListGroupKey[] = [
   "pinned",
-  "reviewRequested",
-  "assigned",
   "authored",
+  "reviewRequested",
+  "involved",
   "others",
 ];
 
@@ -197,9 +197,9 @@ export function orderPullRequestEntriesPinnedFirst<T extends { isPinned?: boolea
 }
 
 /**
- * Buckets rows for the Everything view. Pins lead. A pending review request comes next unless
- * the viewer wrote the item, then assignments (your work), then your own items, then the rest.
- * No "previously reviewed" bucket: the list data has no review-history signal.
+ * Buckets rows into the list's sections. Pins lead. Then the viewer's own items, then items
+ * waiting on the viewer's review (teams included), then the rest that involve the viewer
+ * (assigned or mentioned), then everything else. Empty sections are dropped.
  */
 export function groupPullRequestEntriesByInvolvement<T extends InboxRelationSource>(
   entries: readonly T[],
@@ -207,9 +207,9 @@ export function groupPullRequestEntriesByInvolvement<T extends InboxRelationSour
 ): PullRequestListGroup<T>[] {
   const buckets: Record<PullRequestListGroupKey, T[]> = {
     pinned: [],
-    reviewRequested: [],
-    assigned: [],
     authored: [],
+    reviewRequested: [],
+    involved: [],
     others: [],
   };
 
@@ -219,12 +219,12 @@ export function groupPullRequestEntriesByInvolvement<T extends InboxRelationSour
       continue;
     }
     const relation = inboxItemViewerRelation(entry, viewerLogin);
-    if (relation.reviewRequested && !relation.authored) {
-      buckets.reviewRequested.push(entry);
-    } else if (relation.assigned) {
-      buckets.assigned.push(entry);
-    } else if (relation.authored) {
+    if (relation.authored) {
       buckets.authored.push(entry);
+    } else if (relation.reviewRequested) {
+      buckets.reviewRequested.push(entry);
+    } else if (relation.involved) {
+      buckets.involved.push(entry);
     } else {
       buckets.others.push(entry);
     }

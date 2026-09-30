@@ -1,48 +1,66 @@
 // FILE: GitHubIssueDetailPanel.tsx
-// Purpose: The inbox detail pane for an issue: the shared GitHubItemHeader, then the body and the
-//          comments (with the comment composer) in the same disclosure sections, markdown
-//          renderer, and comment rows the pull request Summary tab uses. The header offers Send to
-//          agent (a new draft thread with the issue attached) and the host's Ask.
+// Purpose: The inbox detail pane for an issue, in the same page shell as a pull request: a top
+//          bar (Summary and Timeline tabs; pin, copy link, open on GitHub, Send to agent), the
+//          shared GitHubItemHeader, the description and comments (with the comment composer) on
+//          the left, and Assignees, Labels, and Comments in the info column (rows under the
+//          header in a narrow pane). The question composer floats over the bottom and feeds the
+//          issue's side chat. There is no close/reopen action: the app has no RPC for changing
+//          an issue's state.
 // Layer: GitHub inbox presentation
 // Exports: GitHubIssueDetailPanel
 
 import type { GitHubIssueDetailInput } from "@synara/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 
 import { createGitHubItemContextDraft } from "~/components/chat/environment/environmentPullRequest.logic";
 import {
   GitHubItemAgentActions,
   type GitHubItemSendTarget,
 } from "~/components/pullRequest/GitHubItemAgentActions";
+import { GitHubItemHeader } from "~/components/pullRequest/GitHubItemHeader";
+import { IssueInfo } from "~/components/pullRequest/GitHubItemInfo";
+import {
+  DETACHED_GITHUB_ITEM_PAGE_HOST,
+  GitHubItemAskComposer,
+  GitHubItemDetailPage,
+  GitHubItemPageBody,
+  GitHubItemPageIconActions,
+  GitHubItemTabBody,
+  GitHubItemTabs,
+  type GitHubItemPageHost,
+} from "~/components/pullRequest/GitHubItemPageLayout";
 import {
   githubItemCardSourceFromIssue,
   type GitHubItemAgentTarget,
 } from "~/components/pullRequest/githubItemAgentContext";
-import { GitHubItemBackButton, GitHubItemHeader } from "~/components/pullRequest/GitHubItemHeader";
-import { PullRequestCommentCard } from "~/components/pullRequest/PullRequestCommentCard";
-import { PullRequestCommentComposer } from "~/components/pullRequest/PullRequestCommentComposer";
-import { PullRequestDetailSkeleton } from "~/components/pullRequest/PullRequestDetailPanel";
-import { PullRequestDisclosureSection } from "~/components/pullRequest/PullRequestDisclosureSection";
-import { PullRequestMarkdown } from "~/components/pullRequest/PullRequestMarkdown";
-import { PullRequestsUnavailableState } from "~/components/pullRequest/PullRequestsUnavailableState";
-import { PR_BODY_TEXT_CLASS_NAME } from "~/components/pullRequest/pullRequestText";
+import { IssueStateGlyph } from "~/components/pullRequest/PullRequestStateGlyph";
+import {
+  GitHubItemComments,
+  GitHubItemPageSummary,
+} from "~/components/pullRequest/PullRequestSummaryTab";
+import { PullRequestTimelineTab } from "~/components/pullRequest/PullRequestTimelineTab";
 import { PullRequestWarningNote } from "~/components/pullRequest/PullRequestWarningNote";
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "~/components/ui/empty";
 import { useStartGitHubItemThread } from "~/hooks/useStartGitHubItemThread";
 import {
   githubIssueCommentMutationOptions,
   githubIssueDetailQueryOptions,
 } from "~/lib/githubInboxQueryOptions";
 import { pullRequestQueryErrorState } from "~/lib/pullRequestReactQuery";
-import { cn } from "~/lib/utils";
+
+type IssueTab = "summary" | "timeline";
+
+const ISSUE_TABS: ReadonlyArray<{ value: IssueTab; label: string }> = [
+  { value: "summary", label: "Summary" },
+  { value: "timeline", label: "Timeline" },
+];
 
 export function GitHubIssueDetailPanel({
   input,
   onBack,
   pollingEnabled: pollingEnabledProp,
   sendTargets: sendTargetsProp,
-  onAsk,
-  askPending,
+  pageHost,
 }: {
   input: GitHubIssueDetailInput;
   /** Narrow windows show the detail in place of the list; this returns to it. */
@@ -50,11 +68,12 @@ export function GitHubIssueDetailPanel({
   pollingEnabled?: boolean;
   /** Projects Send to agent may open the thread in. Defaults to the issue's project. */
   sendTargets?: ReadonlyArray<GitHubItemSendTarget>;
-  /** The host's side chat for this issue. Absent hides Ask. */
-  onAsk?: ((target: GitHubItemAgentTarget) => void) | undefined;
-  askPending?: boolean;
+  /** Pin, side chat threads, and the floating composer, from the code review page. */
+  pageHost?: GitHubItemPageHost;
 }) {
   const pollingEnabled = pollingEnabledProp ?? true;
+  // The page remounts the panel per issue, so the tab starts on Summary for each one.
+  const [tab, setTab] = useState<IssueTab>("summary");
   const queryClient = useQueryClient();
   const detailQuery = useQuery(githubIssueDetailQueryOptions(input, { pollingEnabled }));
   const commentMutation = useMutation(githubIssueCommentMutationOptions(queryClient));
@@ -80,101 +99,104 @@ export function GitHubIssueDetailPanel({
     });
   };
 
+  const host = pageHost ?? DETACHED_GITHUB_ITEM_PAGE_HOST;
+  const target = (projectId: GitHubItemSendTarget["projectId"]): GitHubItemAgentTarget => ({
+    projectId,
+    source: githubItemCardSourceFromIssue(detail!),
+  });
+  const composer = detail ? (
+    <GitHubItemAskComposer
+      noun="issue"
+      defaultProjectId={detail.projectId}
+      sendTargets={sendTargets}
+      buildTarget={target}
+      host={host}
+      onSendToAgent={sendToAgent}
+    />
+  ) : null;
+
   return (
-    <div className="flex h-full min-h-0 w-full flex-col bg-[var(--color-background-surface)] text-foreground">
-      {detail ? (
-        <GitHubItemHeader
-          item={{ kind: "issue", ...detail }}
-          {...(onBack ? { onBack } : {})}
-          agentActions={
+    <GitHubItemDetailPage
+      onBack={onBack}
+      tabs={
+        <GitHubItemTabs label="Issue detail tabs" tabs={ISSUE_TABS} value={tab} onChange={setTab} />
+      }
+      actions={
+        detail ? (
+          <>
+            <GitHubItemPageIconActions
+              url={detail.url}
+              itemLabel={`issue #${detail.number}`}
+              pin={host.pin}
+            />
             <GitHubItemAgentActions
               sendTargets={sendTargets}
               sending={pendingAction === "send"}
               onSendToAgent={sendToAgent}
-              onAsk={
-                onAsk
-                  ? () =>
-                      onAsk({
-                        projectId: input.projectId,
-                        source: githubItemCardSourceFromIssue(detail),
-                      })
-                  : undefined
-              }
-              asking={askPending === true}
             />
-          }
-        />
-      ) : onBack ? (
-        <div className="shrink-0 px-2.5 pt-2.5">
-          <GitHubItemBackButton onBack={onBack} />
-        </div>
-      ) : null}
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {detailQuery.isPending ? (
-          <PullRequestDetailSkeleton />
-        ) : initialError ? (
-          <PullRequestsUnavailableState
-            error={initialError}
-            subject="Issues"
-            onRetry={() => void detailQuery.refetch()}
-          />
-        ) : !detail ? (
-          <Empty>
-            <EmptyHeader>
-              <EmptyTitle>Issue not found</EmptyTitle>
-              <EmptyDescription>The selected issue could not be loaded.</EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        ) : (
-          <>
-            {backgroundError ? (
-              <PullRequestWarningNote shape="banner" role="status">
-                Could not refresh the issue. Showing saved data.
-              </PullRequestWarningNote>
-            ) : null}
-            <PullRequestDisclosureSection label="Description">
-              <PullRequestMarkdown
-                text={detail.body}
-                fallback="_No description provided._"
-                cwd={detail.workspaceRoot}
-              />
-            </PullRequestDisclosureSection>
-            <PullRequestDisclosureSection label="Comments" count={detail.commentCount}>
-              <div className="space-y-2">
-                {detail.commentsTruncated ? (
-                  <PullRequestWarningNote>
-                    Some comments are not shown here. Open the issue on GitHub for the full
-                    discussion.
-                  </PullRequestWarningNote>
-                ) : null}
-                {detail.comments.length === 0 ? (
-                  <p
-                    className={cn(
-                      PR_BODY_TEXT_CLASS_NAME,
-                      "py-4 text-center text-muted-foreground",
-                    )}
-                  >
-                    No comments
-                  </p>
-                ) : (
-                  <div>
-                    {detail.comments.map((comment, index) => (
-                      <PullRequestCommentCard
-                        key={comment.id}
-                        comment={comment}
-                        prUrl={detail.url}
-                        workspaceRoot={detail.workspaceRoot}
-                        defaultOpen={index >= detail.comments.length - 2}
-                      />
-                    ))}
-                  </div>
-                )}
-                <PullRequestCommentComposer target={detail} mutation={commentMutation} />
-              </div>
-            </PullRequestDisclosureSection>
           </>
-        )}
-      </div>
-    </div>
+        ) : null
+      }
+      query={{
+        isPending: detailQuery.isPending,
+        initialError,
+        subject: "Issues",
+        onRetry: () => void detailQuery.refetch(),
+        loaded: detail !== undefined,
+      }}
+      notFound={{
+        title: "Issue not found",
+        description: "The selected issue could not be loaded.",
+      }}
+      banners={
+        backgroundError ? (
+          <PullRequestWarningNote shape="banner" role="status">
+            Could not refresh the issue. Showing saved data.
+          </PullRequestWarningNote>
+        ) : null
+      }
+    >
+      {!detail ? null : tab === "summary" ? (
+        <GitHubItemPageBody
+          header={<GitHubItemHeader item={{ kind: "issue", ...detail }} />}
+          info={(variant) => (
+            <IssueInfo
+              detail={detail}
+              variant={variant}
+              threads={host.threads}
+              onOpenThread={host.onOpenThread}
+            />
+          )}
+          composer={composer}
+        >
+          <GitHubItemPageSummary
+            body={detail.body}
+            workspaceRoot={detail.workspaceRoot}
+            commentCount={detail.commentCount}
+          >
+            <GitHubItemComments
+              comments={detail.comments}
+              itemUrl={detail.url}
+              workspaceRoot={detail.workspaceRoot}
+              warning={
+                detail.commentsTruncated
+                  ? "Some comments are not shown here. Open the issue on GitHub for the full discussion."
+                  : null
+              }
+              target={detail}
+              mutation={commentMutation}
+            />
+          </GitHubItemPageSummary>
+        </GitHubItemPageBody>
+      ) : (
+        <GitHubItemTabBody
+          glyph={<IssueStateGlyph state={detail.state} stateReason={detail.stateReason} />}
+          title={detail.title}
+          composer={composer}
+        >
+          <PullRequestTimelineTab detail={detail} noun="issue" />
+        </GitHubItemTabBody>
+      )}
+    </GitHubItemDetailPage>
   );
 }

@@ -1,15 +1,33 @@
 // FILE: GitHubLabelChips.tsx
 // Purpose: GitHub labels as small outline badges with the label's color as a dot, shared by the
-//          inbox rows (capped, with a "+N" overflow) and the item header (all of them). Label
-//          colors are untrusted text, so only a validated hex ever reaches a style.
+//          inbox rows (capped, with a "+N" overflow) and the item header (all of them); the dot
+//          alone marks a label in the inbox's filter menu and chips. Label colors are untrusted
+//          text, so only a validated hex ever reaches a style.
 // Layer: Pull request presentation
-// Exports: GitHubLabelChips
+// Exports: GitHubLabelChips, GitHubLabelDot
 
 import type { PullRequestLabel } from "@synara/contracts";
 
 import { Badge } from "~/components/ui/badge";
 import { cn } from "~/lib/utils";
 import { safeGitHubLabelColor } from "./pullRequestList.logic";
+
+/** A label's color as a dot; `color` must already be validated (see safeGitHubLabelColor). */
+export function GitHubLabelDot({
+  color,
+  className,
+}: {
+  color: string | null | undefined;
+  className?: string;
+}) {
+  return (
+    <span
+      aria-hidden
+      className={cn("size-1.5 shrink-0 rounded-full bg-muted-foreground/50", className)}
+      style={color ? { backgroundColor: color } : undefined}
+    />
+  );
+}
 
 export function GitHubLabelChips({
   labels,
@@ -36,11 +54,7 @@ export function GitHubLabelChips({
             className="max-w-[9rem] gap-1 font-normal text-muted-foreground"
             title={label.name}
           >
-            <span
-              aria-hidden
-              className="size-1.5 shrink-0 rounded-full bg-muted-foreground/50"
-              style={color ? { backgroundColor: color } : undefined}
-            />
+            <GitHubLabelDot color={color} />
             <span className="truncate">{label.name}</span>
           </Badge>
         );

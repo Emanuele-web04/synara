@@ -15,6 +15,7 @@ import {
   githubInboxSelection,
   githubInboxSendTargets,
   groupVisibleInboxItems,
+  resolveInboxItemReference,
   mergeGitHubInboxSearch,
   parseGitHubInboxSearch,
   resolveGitHubInboxFilters,
@@ -154,7 +155,12 @@ describe("parseGitHubInboxSearch", () => {
       number: 7,
     });
     expect(
-      parseGitHubInboxSearch({ type: "gist", state: "draft", selectedRepo: "../etc", number: -1 }),
+      parseGitHubInboxSearch({
+        type: "gist",
+        state: "draft",
+        selectedRepo: "../etc",
+        number: -1,
+      }),
     ).toEqual({});
   });
 
@@ -193,7 +199,12 @@ describe("githubInboxSelection", () => {
         selectedRepo: "acme/widgets",
         number: 4,
       }),
-    ).toEqual({ kind: "pullRequest", projectId: projectA, repository: "acme/widgets", number: 4 });
+    ).toEqual({
+      kind: "pullRequest",
+      projectId: projectA,
+      repository: "acme/widgets",
+      number: 4,
+    });
   });
 
   it("ignores a selection outside the URL's project override", () => {
@@ -240,7 +251,11 @@ describe("resolveGitHubInboxFilters", () => {
         { ...DEFAULT_SETTINGS, githubInboxProjectIds: [projectA] },
         existing,
       ),
-    ).toMatchObject({ kind: "pullRequest", involvement: "authored", projectIds: [projectB] });
+    ).toMatchObject({
+      kind: "pullRequest",
+      involvement: "authored",
+      projectIds: [projectB],
+    });
   });
 
   it("forgets persisted projects that were removed", () => {
@@ -257,8 +272,14 @@ describe("resolveGitHubInboxFilters", () => {
 describe("selectVisibleInboxItems", () => {
   const viewer = "viewer";
   const items: GitHubInboxItem[] = [
-    pullRequest(1, { viewerReviewRequested: true, labels: [{ name: "kind:bug", color: null }] }),
-    issue(2, { assignees: [actor("viewer")], labels: [{ name: "Kind:Bug", color: "d73a4a" }] }),
+    pullRequest(1, {
+      viewerReviewRequested: true,
+      labels: [{ name: "kind:bug", color: null }],
+    }),
+    issue(2, {
+      assignees: [actor("viewer")],
+      labels: [{ name: "Kind:Bug", color: "d73a4a" }],
+    }),
     issue(3, { projectId: projectB, title: "Crash on launch" }),
     pullRequest(4, { isPinned: true, author: actor("viewer") }),
   ];
@@ -300,18 +321,27 @@ describe("selectVisibleInboxItems", () => {
     const older = items.map((item) =>
       item.number === 1 ? { ...item, updatedAt: "2030-01-01T00:00:00.000Z" } : item,
     );
-    const ordered = selectVisibleInboxItems(older, filters(), { viewer, normalizedQuery: "" });
+    const ordered = selectVisibleInboxItems(older, filters(), {
+      viewer,
+      normalizedQuery: "",
+    });
     // The pinned row still leads; the freshly updated one comes right after it.
     expect(ordered.map((item) => item.number)).toEqual([4, 1, 3, 2]);
   });
 
-  it("splits off pinned rows and otherwise stays one flat list", () => {
-    const visible = selectVisibleInboxItems(items, filters(), { viewer, normalizedQuery: "" });
-    expect(groupVisibleInboxItems(visible)?.map((group) => group.key)).toEqual([
-      "pinned",
-      "others",
-    ]);
-    expect(groupVisibleInboxItems(visible.filter((item) => item.isPinned !== true))).toBeNull();
+  it("sections the rows by involvement, pins first", () => {
+    const visible = selectVisibleInboxItems(items, filters(), {
+      viewer,
+      normalizedQuery: "",
+    });
+    const keys = groupVisibleInboxItems(visible, viewer).map((group) => group.key);
+    expect(keys[0]).toBe("pinned");
+    expect(keys).toEqual(expect.arrayContaining(["pinned"]));
+    const unpinned = groupVisibleInboxItems(
+      visible.filter((item) => item.isPinned !== true),
+      viewer,
+    );
+    expect(unpinned.some((group) => group.key === "pinned")).toBe(false);
   });
 });
 
@@ -325,7 +355,10 @@ describe("collectInboxLabelOptions", () => {
           { name: "area:ui", color: null },
         ],
       }),
-      issue(3, { projectId: projectB, labels: [{ name: "area:server", color: null }] }),
+      issue(3, {
+        projectId: projectB,
+        labels: [{ name: "area:server", color: null }],
+      }),
     ];
     expect(
       collectInboxLabelOptions(items, filters({ projectIds: [projectA], labels: ["stale"] })),
@@ -413,7 +446,10 @@ describe("countInboxItemsByKind", () => {
       issue: 1,
     });
     expect(
-      countInboxItemsByKind(items, filters(), { ...context, normalizedQuery: "pull request 2" }),
+      countInboxItemsByKind(items, filters(), {
+        ...context,
+        normalizedQuery: "pull request 2",
+      }),
     ).toEqual({ all: 1, pullRequest: 1, issue: 0 });
   });
 });
@@ -472,11 +508,35 @@ describe("githubInboxSendTargets", () => {
       { projectId: projectB, projectTitle: "B" },
     ]);
     expect(
-      githubInboxSendTargets([shared], selection, { projectIds: ["project-c" as ProjectId] }),
+      githubInboxSendTargets([shared], selection, {
+        projectIds: ["project-c" as ProjectId],
+      }),
     ).toHaveLength(2);
   });
 
   it("is empty for an item the list has not loaded, leaving the panel its own project", () => {
     expect(githubInboxSendTargets([], selection, { projectIds: [] })).toEqual([]);
+  });
+});
+
+describe("resolveInboxItemReference", () => {
+  const list = [issue(7, { repository: "acme/widgets" }), issue(8, { repository: "acme/gadgets" })];
+
+  it("finds the loaded item a pasted GitHub issue link names", () => {
+    expect(
+      resolveInboxItemReference("https://github.com/acme/gadgets/issues/8?x=1", list)?.number,
+    ).toBe(8);
+  });
+
+  it("ignores links to repositories that are not in the list", () => {
+    expect(resolveInboxItemReference("https://github.com/other/repo/issues/7", list)).toBeNull();
+  });
+
+  it("resolves a #number only when exactly one item carries it", () => {
+    expect(resolveInboxItemReference("#7", list)?.number).toBe(7);
+    expect(
+      resolveInboxItemReference("#7", [...list, issue(7, { repository: "acme/gadgets" })]),
+    ).toBeNull();
+    expect(resolveInboxItemReference("widgets", list)).toBeNull();
   });
 });

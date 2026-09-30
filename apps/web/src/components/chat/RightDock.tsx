@@ -74,6 +74,8 @@ interface RightDockProps {
   paneIconOverrides?: Record<string, ReactNode | undefined>;
   addMenuKinds: readonly RightDockPaneKind[];
   launcherItems?: readonly RightDockLauncherItem[];
+  /** A plain "+" for hosts whose only addable thing is one kind (no menu to choose from). */
+  addAction?: { label: string; onClick: () => void };
   // Single-pane hosts omit selection so their lone tab label is static; multi-pane chat hosts
   // provide the callback and keep the normal selectable-tab behavior.
   onSelectPane?: ((paneId: string) => void) | undefined;
@@ -86,7 +88,11 @@ interface RightDockProps {
   browserRuntimeMode?: DockPaneRuntimeMode;
   renderPane: (
     pane: RightDockPane,
-    context: { runtimeMode: DockPaneRuntimeMode; isActive: boolean; isVisible: boolean },
+    context: {
+      runtimeMode: DockPaneRuntimeMode;
+      isActive: boolean;
+      isVisible: boolean;
+    },
   ) => ReactNode;
 }
 
@@ -371,12 +377,26 @@ export function RightDock(props: RightDockProps) {
                 </ComposerPickerMenuPopup>
               </Menu>
             ) : null}
+            {props.state.panes.length > 0 && props.addMenuKinds.length === 0 && props.addAction ? (
+              <IconButton
+                variant="chrome"
+                size="icon-xs"
+                label={props.addAction.label}
+                tooltip={props.addAction.label}
+                tooltipSide="bottom"
+                className={DOCK_HEADER_ICON_BUTTON_CLASS}
+                onClick={props.addAction.onClick}
+              >
+                <PlusIcon className="size-3.5" />
+              </IconButton>
+            ) : null}
             {!isMobile && (maximized || activePane !== null) ? (
               <IconButton
                 variant="chrome"
                 size="icon-xs"
                 label={maximized ? "Restore panel" : "Maximize panel"}
                 tooltip={maximized ? "Restore panel" : "Maximize panel"}
+                tooltipSide="bottom"
                 aria-pressed={maximized}
                 className={DOCK_HEADER_ICON_BUTTON_CLASS}
                 onClick={() => setExpandedKey(maximized ? null : expansionKey)}

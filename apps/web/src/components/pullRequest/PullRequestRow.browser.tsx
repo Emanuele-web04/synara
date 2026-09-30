@@ -89,8 +89,9 @@ function StatefulGroupedList() {
   const [entry, setEntry] = useState<GitHubInboxItem>(() => makeEntry(false));
   return (
     <PullRequestList
-      entries={[entry]}
-      grouped={groupPullRequestEntriesByInvolvement([entry], null)}
+      groups={groupPullRequestEntriesByInvolvement([entry], null)}
+      isSectionOpen={() => true}
+      onToggleSection={() => {}}
       isSelected={() => false}
       onSelect={() => {}}
       onTogglePinned={(current) => setEntry({ ...current, isPinned: !current.isPinned })}
@@ -172,18 +173,13 @@ describe("PullRequestRow pin control", () => {
 
   it("keeps pin focus when the row moves into the Pinned group", async () => {
     await render(<StatefulGroupedList />);
-    const originalButton = document.querySelector<HTMLButtonElement>(
-      'button[aria-label="Pin pull request #42"]',
-    );
 
     await page.getByRole("button", { name: "Pin pull request #42" }).click();
 
-    const movedButton = document.querySelector<HTMLButtonElement>(
-      'button[aria-label="Unpin pull request #42"]',
-    );
+    await expect
+      .poll(() => document.activeElement?.getAttribute("aria-label"))
+      .toBe("Unpin pull request #42");
     expect(document.body.textContent).toContain("Pinned");
-    expect(movedButton).toBe(originalButton);
-    expect(document.activeElement).toBe(originalButton);
   });
 
   it("shows project identity in all-project rows and their pin labels", async () => {
@@ -234,16 +230,12 @@ describe("PullRequestRow issue rows", () => {
     document.body.innerHTML = "";
   });
 
-  it("shows the issue glyph, a capped set of label chips, and the comment count", async () => {
+  it("shows the issue glyph, the author, the time, and the number muted at the end", async () => {
     await render(
       <PullRequestRow
         entry={makeIssue({
-          commentCount: 3,
-          labels: [
-            { name: "kind:bug", color: "d73a4a" },
-            { name: "area:ui", color: "not-a-color" },
-            { name: "status:triage", color: null },
-          ],
+          author: { login: "octo", name: "Octo Cat", avatarUrl: null, url: null },
+          labels: [{ name: "kind:bug", color: "d73a4a" }],
         })}
         selected={false}
         onClick={vi.fn()}
@@ -253,17 +245,26 @@ describe("PullRequestRow issue rows", () => {
 
     await expect.element(page.getByRole("img", { name: "Issue open" })).toBeVisible();
     await expect.element(page.getByRole("button", { name: "Pin issue #7" })).toBeInTheDocument();
-    expect(document.body.textContent).toContain("kind:bug");
-    expect(document.body.textContent).toContain("area:ui");
-    expect(document.body.textContent).not.toContain("status:triage");
-    expect(document.body.textContent).toContain("+1");
-    expect(document.querySelector('[title="3 comments"]')?.textContent).toBe("3");
-    // Only a validated hex reaches a style; the malformed color falls back to the muted dot.
-    const dots = Array.from(
-      document.querySelectorAll<HTMLElement>("[data-slot=badge] > span[aria-hidden]"),
+    const row = document.querySelector("[data-pull-request-row]");
+    // Display name, not login; the title leads and the number closes the second line.
+    expect(row?.textContent).toContain("Octo Cat");
+    expect(row?.textContent?.startsWith("Widgets wobble")).toBe(true);
+    expect(row?.textContent?.endsWith("#7")).toBe(true);
+    // Labels and counts live in the detail, not the row.
+    expect(row?.textContent).not.toContain("kind:bug");
+  });
+
+  it("lets a long title wrap to two lines instead of truncating after one", async () => {
+    await render(
+      <PullRequestRow
+        entry={makeIssue({ title: "A long issue title ".repeat(8) })}
+        selected={false}
+        onClick={vi.fn()}
+        onTogglePinned={vi.fn()}
+      />,
     );
-    expect(dots[0]?.style.backgroundColor).toBe("rgb(215, 58, 74)");
-    expect(dots[1]?.style.backgroundColor).toBe("");
+    const title = document.querySelector<HTMLElement>("[data-pull-request-row] > span")!;
+    expect(getComputedStyle(title).webkitLineClamp).toBe("2");
   });
 
   it("marks issues closed as not planned with the struck glyph", async () => {
@@ -288,7 +289,12 @@ describe("PullRequestAvatar", () => {
   it("does not derive an image URL from a team slug", async () => {
     await render(
       <PullRequestAvatar
-        actor={{ login: "platform-team", name: null, avatarUrl: null, url: null }}
+        actor={{
+          login: "platform-team",
+          name: null,
+          avatarUrl: null,
+          url: null,
+        }}
       />,
     );
 

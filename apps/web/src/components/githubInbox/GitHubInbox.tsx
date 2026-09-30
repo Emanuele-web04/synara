@@ -1,10 +1,11 @@
 // FILE: GitHubInbox.tsx
 // Purpose: The GitHub inbox body under the route header: a resizable list column (filter bar,
-//          grouped pull request and issue rows, notes) beside an inline detail pane. On a narrow
+//          involvement sections of pull request and issue rows, notes) beside an inline detail pane. On a narrow
 //          window it shows the list or the detail, with a back control. Filters persist in the
 //          local app settings; URL parameters override them for one visit, and the selection
-//          lives in the URL so an open item stays linkable. The detail's Ask is the route's side
-//          chat dock; Send to agent picks among the projects the item's repository belongs to.
+//          lives in the URL so an open item stays linkable. The detail's floating composer feeds
+//          the route's side chat dock; Send to agent picks among the projects the item's
+//          repository belongs to.
 // Layer: GitHub inbox presentation
 // Exports: GitHubInbox
 
@@ -13,6 +14,7 @@ import type {
   GitHubInboxListError,
   GitHubInboxState,
   ProjectId,
+  ThreadId,
 } from "@synara/contracts";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -33,7 +35,10 @@ import {
 } from "~/appSettings";
 import { ProjectSidebarIcon } from "~/components/ProjectSidebarIcon";
 import type { GitHubItemSendTarget } from "~/components/pullRequest/GitHubItemAgentActions";
+import type { GitHubItemInfoThread } from "~/components/pullRequest/GitHubItemInfo";
+import type { GitHubItemPageHost } from "~/components/pullRequest/GitHubItemPageLayout";
 import type { GitHubItemAgentTarget } from "~/components/pullRequest/githubItemAgentContext";
+import type { PullRequestListGroupKey } from "~/components/pullRequest/pullRequestList.logic";
 import { PullRequestDetailPanel } from "~/components/pullRequest/PullRequestDetailPanel";
 import { pullRequestDetailInputKey } from "~/components/pullRequest/pullRequestDetail.logic";
 import { focusPullRequestRow } from "~/components/pullRequest/pullRequestFocus";
@@ -48,13 +53,12 @@ import {
   EmptyContent,
   EmptyDescription,
   EmptyHeader,
-  EmptyMedia,
   EmptyTitle,
 } from "~/components/ui/empty";
 import { Skeleton } from "~/components/ui/skeleton";
 import { toastManager } from "~/components/ui/toast";
 import { useIsMobile } from "~/hooks/useMediaQuery";
-import { GitHubMarkIcon } from "~/lib/icons";
+import { GitPullRequestIcon } from "~/lib/icons";
 import {
   attachPanelPointerOverlaySession,
   createPanelResizeOverlay,
@@ -77,6 +81,7 @@ import {
   CLEARED_GITHUB_INBOX_FILTER_SETTINGS,
   CLEARED_GITHUB_INBOX_SELECTION,
   collectInboxLabelOptions,
+  DEFAULT_EXPANDED_INBOX_SECTIONS,
   countActiveGitHubInboxFilters,
   countInboxItemsByKind,
   countTruncatedInboxRepositories,
@@ -87,6 +92,7 @@ import {
   groupVisibleInboxItems,
   inboxErrorsInScope,
   isGitHubInboxItemSelected,
+  resolveInboxItemReference,
   resolveGitHubInboxFilters,
   selectVisibleInboxItems,
   type GitHubInboxSearch,
@@ -94,17 +100,19 @@ import {
   type GitHubInboxSelection,
 } from "./githubInbox.logic";
 
-// The list is always half of the width it shares with the detail pane; the route's Ask dock
-// takes a third of the whole when open, so list, detail, and chat each get a third, and list and
-// detail each get half without it. When the window is too small for that, the list gives way
-// first (down to where its compact filter bar still works), then the dock (to its own floor),
+// Without the route's Ask dock the list is a slim column and the detail takes the rest; with it
+// open the page is three even columns (list, detail, chat). When the window is too small for
+// that, the list gives way first (down to where its compact filter bar still works), then the dock (to its own floor),
 // and the detail, which is the content, last.
 const LIST_MIN_WIDTH = 16 * 16;
 /** Below this the detail header and tab row get cramped; the list gives way before it does. */
 const DETAIL_PREFERRED_MIN_WIDTH = 22 * 16;
 /** The hard floor a drag of the list handle can leave the detail. */
 const DETAIL_MIN_WIDTH = 18 * 16;
-const LIST_DEFAULT_WIDTH = `clamp(${LIST_MIN_WIDTH}px, 50%, calc(100% - ${DETAIL_PREFERRED_MIN_WIDTH}px))`;
+// With the dock open the page is three even columns (list at half of what the dock leaves);
+// without it the list stays a slim column and the detail gets the room for its info column.
+const LIST_DEFAULT_WIDTH_DOCK_OPEN = `clamp(${LIST_MIN_WIDTH}px, 50%, calc(100% - ${DETAIL_PREFERRED_MIN_WIDTH}px))`;
+const LIST_DEFAULT_WIDTH_DOCK_CLOSED = `clamp(${LIST_MIN_WIDTH}px, 32%, 26rem)`;
 const LIST_KEYBOARD_RESIZE_STEP = 16;
 
 function clampListWidth(width: number, containerWidth: number): number {
@@ -213,16 +221,15 @@ function ListSkeleton() {
 }
 
 function DetailEmptyState() {
+  // Quiet and centered; not a card.
   return (
-    <Empty className="h-full">
-      <EmptyHeader>
-        <EmptyMedia variant="icon">
-          <GitHubMarkIcon />
-        </EmptyMedia>
-        <EmptyTitle>Nothing selected</EmptyTitle>
-        <EmptyDescription>Pick a pull request or an issue to see it here.</EmptyDescription>
-      </EmptyHeader>
-    </Empty>
+    <div className="flex h-full flex-col items-center justify-center gap-1.5 px-6 text-center">
+      <GitPullRequestIcon aria-hidden className="mb-2 size-6 text-muted-foreground/60" />
+      <p className="m-0 text-ui-lg text-foreground">Select a pull request or issue</p>
+      <p className="m-0 text-ui-sm text-muted-foreground">
+        Choose one from the sidebar to review it
+      </p>
+    </div>
   );
 }
 
@@ -231,15 +238,13 @@ function GitHubInboxDetail({
   sendTargets,
   onBack,
   onSelectPullRequest,
-  onAsk,
-  askPending,
+  pageHost,
 }: {
   selection: GitHubInboxSelection;
   sendTargets: ReadonlyArray<GitHubItemSendTarget>;
   onBack: (() => void) | undefined;
   onSelectPullRequest: (number: number) => void;
-  onAsk: ((target: GitHubItemAgentTarget) => void) | undefined;
-  askPending: boolean;
+  pageHost: GitHubItemPageHost;
 }) {
   const input = {
     projectId: selection.projectId,
@@ -253,8 +258,7 @@ function GitHubInboxDetail({
       key={key}
       input={input}
       sendTargets={sendTargets}
-      onAsk={onAsk}
-      askPending={askPending}
+      pageHost={pageHost}
       {...(onBack ? { onBack } : {})}
     />
   ) : (
@@ -264,25 +268,35 @@ function GitHubInboxDetail({
       layout="page"
       onSelectPullRequest={onSelectPullRequest}
       sendTargets={sendTargets}
-      onAsk={onAsk}
-      askPending={askPending}
+      pageHost={pageHost}
       {...(onBack ? { onBack } : {})}
     />
   );
 }
 
+/** The route's side chat, as the page uses it. */
+export interface GitHubInboxSidechatHost {
+  /** Opens the item's side chat dock (reusing its live chat) without sending anything. */
+  ask: (target: GitHubItemAgentTarget) => void;
+  /** Sends a question into the item's side chat, starting one when there is none. */
+  askQuestion: (target: GitHubItemAgentTarget, question: string) => void;
+  askPending: boolean;
+  /** The selected item's side chats, newest first. */
+  sidechats: ReadonlyArray<GitHubItemInfoThread>;
+  /** Shows one of them in the dock, opening the dock when it is closed. */
+  openSidechat: (threadId: ThreadId) => void;
+}
+
 export function GitHubInbox({
   search,
   onSearchChange,
-  onAsk,
-  askPending,
+  sidechat,
   dockOpen: dockOpenProp,
 }: {
   search: GitHubInboxSearch;
   onSearchChange: (patch: GitHubInboxSearchPatch) => void;
-  /** The route's side chat dock. Absent hides Ask. */
-  onAsk?: (target: GitHubItemAgentTarget) => void;
-  askPending?: boolean;
+  /** The route's side chat. Absent hides the floating composer and the Threads row. */
+  sidechat?: GitHubInboxSidechatHost;
   /** Whether the route's Ask dock is open; the column fractions reset when it changes. */
   dockOpen?: boolean;
 }) {
@@ -300,7 +314,11 @@ export function GitHubInbox({
     [projects],
   );
   const projectOptions = useMemo(
-    () => repositoryProjects.map((project) => ({ id: project.id, name: project.name })),
+    () =>
+      repositoryProjects.map((project) => ({
+        id: project.id,
+        name: project.name,
+      })),
     [repositoryProjects],
   );
   const existingProjectIds = useMemo(
@@ -315,7 +333,9 @@ export function GitHubInbox({
   const listQuery = useQuery(githubInboxListQueryOptions(filters.state));
   const refreshMutation = useMutation(pullRequestsForceRefreshMutationOptions(queryClient));
   const pinMutation = useMutation(pullRequestSetPinnedMutationOptions(queryClient));
-  const activeActionCount = useIsMutating({ mutationKey: pullRequestMutationKeys.action });
+  const activeActionCount = useIsMutating({
+    mutationKey: pullRequestMutationKeys.action,
+  });
   const { initialError, backgroundError } = pullRequestQueryErrorState(listQuery);
   const listData = listQuery.data;
 
@@ -328,7 +348,22 @@ export function GitHubInbox({
     normalizedQuery: deferredQuery,
     preferredProjectId: selection?.projectId,
   });
-  const grouped = groupVisibleInboxItems(entries);
+  const groups = groupVisibleInboxItems(entries, listData?.viewer);
+  // While searching, every section opens so a match is never hidden behind a fold.
+  const expandedSections: ReadonlyArray<PullRequestListGroupKey> =
+    settings.githubInboxExpandedSections ?? DEFAULT_EXPANDED_INBOX_SECTIONS;
+  type FoldableSection = Exclude<PullRequestListGroupKey, "pinned">;
+  const isSectionOpen = (key: PullRequestListGroupKey) =>
+    deferredQuery.length > 0 || expandedSections.includes(key);
+  const toggleSection = (key: PullRequestListGroupKey) => {
+    if (key === "pinned") return;
+    const open = expandedSections.filter((entry): entry is FoldableSection => entry !== "pinned");
+    updateSettings({
+      githubInboxExpandedSections: open.includes(key)
+        ? open.filter((entry) => entry !== key)
+        : [...open, key],
+    });
+  };
   const labelOptions = collectInboxLabelOptions(listData?.items ?? [], filters);
   const activeFilterCount = countActiveGitHubInboxFilters(filters, query);
   const truncatedRepositoryCount = countTruncatedInboxRepositories(
@@ -367,6 +402,14 @@ export function GitHubInbox({
 
   // ── Rows ──
   const selectItem = (item: GitHubInboxItem) => onSearchChange(githubInboxSelectionForItem(item));
+  // A pasted PR or issue link (or #number) that names one loaded item opens it.
+  const pasteReference = (text: string): boolean => {
+    const item = resolveInboxItemReference(text, listData?.items ?? []);
+    if (!item) return false;
+    selectItem(item);
+    onSearchChange({ q: undefined });
+    return true;
+  };
   const togglePinned = (item: GitHubInboxItem) => {
     for (const input of pullRequestPinToggleInputs(item)) {
       pinMutation.mutate(input, {
@@ -433,6 +476,29 @@ export function GitHubInbox({
     }
   };
 
+  const selectedListItem = selection
+    ? (listData?.items ?? []).find(
+        (item) =>
+          item.kind === selection.kind &&
+          item.number === selection.number &&
+          item.repository.toLowerCase() === selection.repository.toLowerCase(),
+      )
+    : undefined;
+  const pageHost: GitHubItemPageHost = {
+    pin: selectedListItem
+      ? {
+          pinned: selectedListItem.isPinned === true,
+          onToggle: () => togglePinned(selectedListItem),
+        }
+      : undefined,
+    threads: sidechat?.sidechats ?? [],
+    onOpenThread: sidechat?.openSidechat,
+    onAsk: sidechat?.ask,
+    onAskQuestion: sidechat?.askQuestion,
+    askPending: sidechat?.askPending === true,
+    composerVisible: !dockOpen,
+  };
+
   const reviewRequestsOnlyOpen =
     filters.involvement === "reviewRequested" && filters.state !== "open";
 
@@ -446,7 +512,15 @@ export function GitHubInbox({
             "relative flex min-h-0 flex-col",
             isMobile ? "min-w-0 flex-1" : "min-w-[16rem] max-w-[calc(100%-18rem)] shrink-0",
           )}
-          style={isMobile ? undefined : { width: draggedListWidth?.width ?? LIST_DEFAULT_WIDTH }}
+          style={
+            isMobile
+              ? undefined
+              : {
+                  width:
+                    draggedListWidth?.width ??
+                    (dockOpen ? LIST_DEFAULT_WIDTH_DOCK_OPEN : LIST_DEFAULT_WIDTH_DOCK_CLOSED),
+                }
+          }
         >
           <div className="shrink-0">
             <GitHubInboxFilterBar
@@ -473,6 +547,7 @@ export function GitHubInbox({
               onLabelsChange={setLabels}
               onClearFilters={clearFilters}
               onRefresh={refresh}
+              onPasteReference={pasteReference}
             />
           </div>
           <div className="@container/list min-h-0 flex-1 overflow-y-auto px-6 pt-2 pb-8">
@@ -515,20 +590,20 @@ export function GitHubInbox({
                 </Empty>
               ) : (
                 <PullRequestList
-                  entries={entries}
-                  grouped={grouped}
+                  groups={groups}
+                  isSectionOpen={isSectionOpen}
+                  onToggleSection={toggleSection}
                   isSelected={(item) => isGitHubInboxItemSelected(item, selection)}
                   showProjectTitle={
                     filters.projectIds.length !== 1 && repositoryProjects.length > 1
                   }
                   projectIconFor={projectIconFor}
-                  showDiffColors={settings.showPullRequestDiffColors}
                   onSelect={selectItem}
                   onTogglePinned={togglePinned}
                 />
               )}
               {truncatedRepositoryCount > 0 ? (
-                <p className={cn(PR_FINE_TEXT_CLASS_NAME, "px-1 text-muted-foreground")}>
+                <p className={cn(PR_FINE_TEXT_CLASS_NAME, "text-muted-foreground")}>
                   Showing the 50 most recently updated {noun} per repository.{" "}
                   {truncatedRepositoryCount}{" "}
                   {truncatedRepositoryCount === 1 ? "repository has" : "repositories have"} more on
@@ -556,7 +631,7 @@ export function GitHubInbox({
           </div>
           {isMobile ? null : (
             <ListColumnResizeHandle
-              percent={draggedListWidth?.percent ?? 50}
+              percent={draggedListWidth?.percent ?? (dockOpen ? 50 : 32)}
               columnRef={columnRef}
               onResize={(width, percent) => setDraggedList({ dockOpen, width, percent })}
             />
@@ -573,8 +648,7 @@ export function GitHubInbox({
             <GitHubInboxDetail
               selection={selection}
               sendTargets={githubInboxSendTargets(listData?.items ?? [], selection, filters)}
-              onAsk={onAsk}
-              askPending={askPending === true}
+              pageHost={pageHost}
               onBack={isMobile ? goBackToList : undefined}
               onSelectPullRequest={(number) =>
                 onSearchChange({

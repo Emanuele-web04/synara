@@ -69,8 +69,7 @@ function GitHubInboxRouteView() {
           <GitHubInbox
             search={search}
             onSearchChange={updateSearch}
-            onAsk={sidechat.ask}
-            askPending={sidechat.askPending}
+            sidechat={sidechat}
             dockOpen={selection !== null && sidechat.dockState.open}
           />
         </div>
@@ -80,6 +79,7 @@ function GitHubInboxRouteView() {
           dockState={sidechat.dockState}
           selection={selection}
           onAskSelected={sidechat.askSelected}
+          onNewSidechat={sidechat.newSidechat}
         />
       ) : null}
     </div>

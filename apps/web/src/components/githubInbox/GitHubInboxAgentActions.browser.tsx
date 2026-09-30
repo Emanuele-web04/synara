@@ -202,7 +202,12 @@ const PULL_REQUEST_41_DETAIL: PullRequestDetail = {
   commentsTruncated: false,
   commentsIncomplete: false,
   commits: [],
-  mergeCapabilities: { merge: true, squash: true, rebase: true, deleteBranchOnMerge: false },
+  mergeCapabilities: {
+    merge: true,
+    squash: true,
+    rebase: true,
+    deleteBranchOnMerge: false,
+  },
   stack: null,
   stackMetadataIncomplete: false,
 };
@@ -334,8 +339,8 @@ function Harness({ initialSearch }: { initialSearch: GitHubInboxSearch }) {
         <GitHubInbox
           search={search}
           onSearchChange={update}
-          onAsk={sidechat.ask}
-          askPending={sidechat.askPending}
+          sidechat={sidechat}
+          dockOpen={selection !== null && sidechat.dockState.open}
         />
       </div>
       {selection ? (
@@ -343,6 +348,7 @@ function Harness({ initialSearch }: { initialSearch: GitHubInboxSearch }) {
           dockState={sidechat.dockState}
           selection={selection}
           onAskSelected={sidechat.askSelected}
+          onNewSidechat={sidechat.newSidechat}
         />
       ) : null}
     </div>
@@ -372,6 +378,12 @@ const PULL_REQUEST_SEARCH: GitHubInboxSearch = {
   selectedRepo: "acme/widgets",
   number: 41,
 };
+
+// The page's Ask is the floating composer; its "+" menu opens the side chat without sending.
+async function openSideChat() {
+  await page.getByRole("button", { name: "More ways to use this item" }).click();
+  await page.getByRole("menuitem", { name: "Open side chat" }).click();
+}
 
 function inboxDock() {
   return selectRightDockState(GITHUB_INBOX_DOCK_HOST_ID)(useRightDockStore.getState());
@@ -418,7 +430,10 @@ describe("Send to agent", () => {
     await page.getByRole("menuitem", { name: "Beta" }).click();
 
     await expect.poll(() => handleNewThread.mock.calls.length).toBe(1);
-    expect(handleNewThread).toHaveBeenCalledWith(projectB, { envMode: "local", fresh: true });
+    expect(handleNewThread).toHaveBeenCalledWith(projectB, {
+      envMode: "local",
+      fresh: true,
+    });
     expect(preparePullRequestThread).not.toHaveBeenCalled();
     await expect
       .poll(
@@ -473,7 +488,7 @@ describe("Ask", () => {
     await mount(ISSUE_SEARCH);
     await expect.element(page.getByRole("heading", { name: "Crash on launch" })).toBeVisible();
 
-    await page.getByRole("button", { name: "Ask", exact: true }).click();
+    await openSideChat();
 
     await expect.poll(() => createdSidechats.length).toBe(1);
     const [created] = createdSidechats;
@@ -502,28 +517,116 @@ describe("Ask", () => {
     // Nothing is sent: the user writes the question.
     expect(dispatchCommand.mock.calls.map(([command]) => command.type)).toEqual(["thread.create"]);
 
-    await page.getByRole("button", { name: "Ask", exact: true }).click();
+    // The composer returns once the dock is closed; opening again reuses the live side chat.
+    useRightDockStore.getState().setDockOpen(GITHUB_INBOX_DOCK_HOST_ID, false);
+    await openSideChat();
     await expect.poll(shownSidechat).toBe(sidechatId);
+    expect(inboxDock().open).toBe(true);
     expect(createdSidechats).toHaveLength(1);
   });
 
-  it("follows the selection and offers Ask for an item without a side chat", async () => {
+  it("sends the composer's question as the first turn of a new side chat", async () => {
     await mount(ISSUE_SEARCH);
-    await page.getByRole("button", { name: "Ask", exact: true }).click();
+    await expect.element(page.getByRole("heading", { name: "Crash on launch" })).toBeVisible();
+
+    const composer = page.getByRole("textbox", {
+      name: "Ask about this issue",
+    });
+    await composer.fill("Why does it crash?");
+    await userEvent.keyboard("{Enter}");
+
+    await expect.poll(() => createdSidechats.length).toBe(1);
+    const sidechatId = createdSidechats[0]!.threadId;
+    await expect.poll(shownSidechat).toBe(sidechatId);
+    expect(inboxDock().open).toBe(true);
+    // The question waits in the side chat's queue, with the item's card, for the destination
+    // chat to send through its normal first-send path; nothing else is dispatched here.
+    const queued = useComposerDraftStore.getState().draftsByThreadId[sidechatId]?.queuedTurns;
+    expect(queued).toHaveLength(1);
+    expect(queued?.[0]).toMatchObject({
+      kind: "chat",
+      prompt: "Why does it crash?",
+    });
+    expect(queued?.[0]?.kind === "chat" ? queued[0].pullRequestContexts : []).toMatchObject([
+      { itemKind: "issue", prNumber: 42 },
+    ]);
+    expect(dispatchCommand.mock.calls.map(([command]) => command.type)).toEqual(["thread.create"]);
+    // The dock's own composer takes over.
+    expect(document.querySelector("[data-github-item-composer]")).toBeNull();
+  });
+
+  it("sends a second question to the item's live side chat", async () => {
+    await mount(ISSUE_SEARCH);
+    await page.getByRole("textbox", { name: "Ask about this issue" }).fill("First question");
+    await userEvent.keyboard("{Enter}");
+    await expect.poll(() => createdSidechats.length).toBe(1);
+    const sidechatId = createdSidechats[0]!.threadId;
+    await expect.poll(() => inboxDock().open).toBe(true);
+
+    useRightDockStore.getState().setDockOpen(GITHUB_INBOX_DOCK_HOST_ID, false);
+    await page.getByRole("textbox", { name: "Ask about this issue" }).fill("Second question");
+    await userEvent.keyboard("{Enter}");
+
+    await expect
+      .poll(() => useComposerDraftStore.getState().draftsByThreadId[sidechatId]?.queuedTurns.length)
+      .toBe(2);
+    expect(createdSidechats).toHaveLength(1);
+    expect(inboxDock().open).toBe(true);
+  });
+
+  it("starts another side chat about the same item from the dock's plus", async () => {
+    await mount(ISSUE_SEARCH);
+    await openSideChat();
+    await expect.poll(() => createdSidechats.length).toBe(1);
+    await expect.poll(shownSidechat).toBe(createdSidechats[0]!.threadId);
+    await expect
+      .poll(() => useStore.getState().sidebarThreadSummaryById[createdSidechats[0]!.threadId])
+      .toBeDefined();
+
+    await page.getByRole("button", { name: "New side chat" }).click();
+    await expect.poll(() => createdSidechats.length).toBe(2);
+    await expect.poll(shownSidechat).toBe(createdSidechats[1]!.threadId);
+  });
+
+  it("opens an item's side chat from its Threads entry, reopening a closed dock", async () => {
+    await mount(ISSUE_SEARCH);
+    await openSideChat();
+    await expect.poll(() => createdSidechats.length).toBe(1);
+    const sidechatId = createdSidechats[0]!.threadId;
+    await expect.poll(() => useStore.getState().sidebarThreadSummaryById[sidechatId]).toBeDefined();
+
+    useRightDockStore.getState().setDockOpen(GITHUB_INBOX_DOCK_HOST_ID, false);
+    await expect.poll(() => inboxDock().open).toBe(false);
+
+    await page.getByRole("button", { name: "Crash on launch", exact: true }).click();
+    await expect.poll(() => inboxDock().open).toBe(true);
+    await expect.poll(shownSidechat).toBe(sidechatId);
+  });
+
+  it("follows the selection and closes the dock for an item without a side chat", async () => {
+    await mount(ISSUE_SEARCH);
+    await openSideChat();
     await expect.poll(() => createdSidechats.length).toBe(1);
     const issueSidechatId = createdSidechats[0]!.threadId;
     await expect.poll(shownSidechat).toBe(issueSidechatId);
 
+    // No side chat for the pull request yet: the dock closes and its floating composer returns.
     setSearchFromTest(PULL_REQUEST_SEARCH);
-    await expect.element(page.getByRole("button", { name: "Open Ask about PR #41" })).toBeVisible();
+    await expect.poll(() => inboxDock().open).toBe(false);
     expect(shownSidechat()).toBeNull();
-    expect(inboxDock().open).toBe(true);
+    await expect
+      .element(page.getByRole("textbox", { name: "Ask about this pull request" }))
+      .toBeVisible();
 
+    // Back on the issue, the (closed) dock points at its side chat again.
     setSearchFromTest(ISSUE_SEARCH);
-    await expect.poll(shownSidechat).toBe(issueSidechatId);
+    await expect
+      .poll(() => inboxDock().panes.find((pane) => pane.kind === "sidechat")?.threadId ?? null)
+      .toBe(issueSidechatId);
 
     setSearchFromTest(PULL_REQUEST_SEARCH);
-    await page.getByRole("button", { name: "Open Ask about PR #41" }).click();
+    await expect.poll(() => inboxDock().open).toBe(false);
+    await openSideChat();
     await expect.poll(() => createdSidechats.length).toBe(2);
     expect(createdSidechats[1]).toMatchObject({
       title: "Sidechat: Fix login redirect",
@@ -534,7 +637,7 @@ describe("Ask", () => {
 
   it("starts a new side chat once the item's side chat expired, from Ask or Start new", async () => {
     await mount(ISSUE_SEARCH);
-    await page.getByRole("button", { name: "Ask", exact: true }).click();
+    await openSideChat();
     await expect.poll(() => createdSidechats.length).toBe(1);
     const expiredId = createdSidechats[0]!.threadId;
     await expect.poll(shownSidechat).toBe(expiredId);
@@ -551,7 +654,7 @@ describe("Ask", () => {
 
   it("closes with Escape and reopens the same side chat with the shortcut", async () => {
     await mount(ISSUE_SEARCH);
-    await page.getByRole("button", { name: "Ask", exact: true }).click();
+    await openSideChat();
     await expect.poll(() => createdSidechats.length).toBe(1);
     const sidechatId = createdSidechats[0]!.threadId;
     await expect.poll(() => inboxDock().open).toBe(true);

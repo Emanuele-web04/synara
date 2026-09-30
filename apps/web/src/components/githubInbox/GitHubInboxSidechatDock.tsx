@@ -33,10 +33,13 @@ export function GitHubInboxSidechatDock({
   dockState,
   selection,
   onAskSelected,
+  onNewSidechat,
 }: {
   dockState: RightDockThreadState;
   selection: GitHubInboxSelection;
   onAskSelected: () => void;
+  /** A new side chat about the selected item, beside the one shown. */
+  onNewSidechat: () => void;
 }) {
   const closePane = useRightDockStore((store) => store.closePane);
   const setDockOpen = useRightDockStore((store) => store.setDockOpen);
@@ -76,6 +79,7 @@ export function GitHubInboxSidechatDock({
       shouldAcceptWidth={acceptAnyDockWidth}
       addMenuKinds={[]}
       launcherItems={launcherItems}
+      addAction={{ label: "New side chat", onClick: onNewSidechat }}
       motionKey={GITHUB_INBOX_DOCK_HOST_ID}
       {...(paneLabelOverrides ? { paneLabelOverrides } : {})}
       onClosePane={(paneId) => closePane(GITHUB_INBOX_DOCK_HOST_ID, paneId)}
