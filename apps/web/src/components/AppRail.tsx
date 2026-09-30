@@ -77,6 +77,7 @@ const RAIL_ITEM_GLYPH_NAMES: Record<RailItemId, string> = {
   inbox: "inbox-empty",
   spaces: "folders",
   kanban: "columns-3-wide",
+  tasks: "todos",
   pullRequests: "pull-request",
   automations: "clock",
   studio: "images-1",

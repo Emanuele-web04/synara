@@ -31,6 +31,7 @@ import {
   WsFeatureRpcGroup,
   WsProjectAgentRpcGroup,
   type AutomationStreamEvent,
+  type TodoStreamEvent,
   type GitActionProgressEvent,
   type GitCreateDetachedWorktreeResult,
   type GitRunStackedActionResult,
@@ -54,6 +55,7 @@ import {
   type WsPush,
   type WsPushChannel,
   type WsPushMessage,
+  TASKS_UNAVAILABLE_ERROR_CODE,
   ThreadId,
 } from "@synara/contracts";
 import {
@@ -384,6 +386,9 @@ const STREAM_ADMISSION_ERROR_CODES = new Set([
   "ORCHESTRATION_RESNAPSHOT_REQUIRED",
   "ORCHESTRATION_SNAPSHOT_STALLED",
   "ORCHESTRATION_PROJECTION_STATE_INCOMPLETE",
+  // A server that does not offer Tasks (Stable) refuses its stream for good;
+  // reconnecting the socket would only be refused again.
+  TASKS_UNAVAILABLE_ERROR_CODE,
 ]);
 
 const RESNAPSHOT_REQUIRED_ERROR_CODE = "ORCHESTRATION_RESNAPSHOT_REQUIRED";
@@ -1580,6 +1585,14 @@ export class WsTransport {
             (event: AutomationStreamEvent) => this.emit(WS_CHANNELS.automationEvent, event),
             restartChannel,
           );
+        } else if (channel === WS_CHANNELS.todoEvent) {
+          this.startStream(
+            client,
+            "todo.events",
+            client[WS_METHODS.subscribeTodoEvents]({}),
+            (event: TodoStreamEvent) => this.emit(WS_CHANNELS.todoEvent, event),
+            restartChannel,
+          );
         } else if (channel === DEVICE_WS_CHANNELS.event) {
           this.startStream(
             client,
@@ -1629,6 +1642,7 @@ export class WsTransport {
     else if (channel === WS_CHANNELS.terminalEvent) this.stopStream("terminal.events");
     else if (channel === WS_CHANNELS.projectDevServerEvent) this.stopStream("project.devServers");
     else if (channel === WS_CHANNELS.automationEvent) this.stopStream("automation.events");
+    else if (channel === WS_CHANNELS.todoEvent) this.stopStream("todo.events");
     else if (channel === DEVICE_WS_CHANNELS.event) this.stopStream("device.events");
     else if (channel === COMPUTER_WS_CHANNELS.event) this.stopStream("computer.events");
     else if (channel === ORCHESTRATION_WS_CHANNELS.domainEvent)

@@ -49,6 +49,7 @@ import {
 } from "~/components/chat/chatHeaderControls";
 import { CHAT_BACKGROUND_CLASS_NAME } from "~/components/chat/composerPickerStyles";
 import { Button } from "~/components/ui/button";
+import { StatusDot } from "~/components/ui/status-chip";
 import { RouteInsetSurface } from "~/components/RouteInsetSurface";
 import { automationApprovalGaps, buildAutomationDraftWarnings } from "~/lib/automationDraft";
 import {
@@ -63,7 +64,7 @@ import {
 } from "@synara/shared/automationCompletionPolicy";
 import { automationLifecycleState, canPauseAutomation } from "~/lib/automationStatus";
 import { useDesktopTopBarWindowControlsGutterClassName } from "~/hooks/useDesktopTopBarGutter";
-import { RouteSurfaceHeader } from "~/components/RouteSurfaceHeader";
+import { RouteSurfaceHeader } from "~/components/RouteSurface";
 import { CentralIcon } from "~/lib/central-icons";
 import { cn } from "~/lib/utils";
 import {
@@ -572,7 +573,7 @@ function AutomationDetailView() {
               <DetailGroup title="Status">
                 <DetailRow label="Status">
                   <StatusValue>
-                    <span className={cn("size-1.5 rounded-full", status.dotClassName)} />
+                    <StatusDot className={status.dotClassName} />
                     {status.label}
                   </StatusValue>
                 </DetailRow>

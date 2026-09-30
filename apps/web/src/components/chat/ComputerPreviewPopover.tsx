@@ -28,6 +28,7 @@ import { useThreadComputerStateSeed } from "../../hooks/useThreadComputerStateSe
 import { disclosurePopClassName } from "../../lib/disclosureMotion";
 import { PanelCollapseIcon, PanelExpandIcon, XIcon } from "../../lib/icons";
 import { cn } from "../../lib/utils";
+import { StatusDot } from "../ui/status-chip";
 import { computerCanvasLabel, shouldSubscribeToComputerStream } from "../ComputerPanel.logic";
 import { useComputerImageStream } from "../computer/useComputerImageStream";
 import {
@@ -353,7 +354,7 @@ function ComputerPreviewViewport(props: {
       ) : null}
       {statusLabel ? (
         <div className="pointer-events-none absolute bottom-2 left-2 flex max-w-[calc(100%_-_1rem)] items-center gap-1.5 rounded-full border border-white/15 bg-black/55 px-2.5 py-1 text-ui-xs font-medium text-white shadow-sm backdrop-blur-md">
-          <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-muted-foreground" />
+          <StatusDot aria-hidden="true" className="bg-muted-foreground" />
           <span className="truncate">{statusLabel}</span>
         </div>
       ) : null}

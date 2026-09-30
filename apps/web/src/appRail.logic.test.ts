@@ -28,6 +28,7 @@ describe("rail item order", () => {
       "inbox",
       "spaces",
       "kanban",
+      "tasks",
       "pullRequests",
       "studio",
     ]);
@@ -39,6 +40,7 @@ describe("rail item order", () => {
       "home",
       "inbox",
       "spaces",
+      "tasks",
       "pullRequests",
       "automations",
       "studio",
@@ -64,7 +66,7 @@ describe("rail item order", () => {
         studioAvailable: false,
         inboxAvailable: false,
       }),
-    ).toEqual(["home", "kanban", "pullRequests", "automations"]);
+    ).toEqual(["home", "kanban", "tasks", "pullRequests", "automations"]);
     expect(
       buildRailItemOrder({
         order,
@@ -82,6 +84,7 @@ describe("rail item order", () => {
       "home",
       "spaces",
       "kanban",
+      "tasks",
       "pullRequests",
       "automations",
     ]);
@@ -140,6 +143,7 @@ describe("rail shortcuts", () => {
 describe("railItemShowsPanel", () => {
   it("hides the panel only for the full-width sections", () => {
     expect(railItemShowsPanel("kanban")).toBe(false);
+    expect(railItemShowsPanel("tasks")).toBe(false);
     expect(railItemShowsPanel("pullRequests")).toBe(false);
     expect(railItemShowsPanel("inbox")).toBe(false);
     for (const id of ["home", "spaces", "automations", "studio", "settings"] as const) {
@@ -152,6 +156,7 @@ describe("railItemForPathname", () => {
   it("maps route prefixes to their rail item and everything else to null", () => {
     expect(railItemForPathname("/inbox")).toBe("inbox");
     expect(railItemForPathname("/kanban")).toBe("kanban");
+    expect(railItemForPathname("/tasks")).toBe("tasks");
     expect(railItemForPathname("/pull-requests/42")).toBe("pullRequests");
     expect(railItemForPathname("/automations")).toBe("automations");
     expect(railItemForPathname("/studio/abc")).toBe("studio");

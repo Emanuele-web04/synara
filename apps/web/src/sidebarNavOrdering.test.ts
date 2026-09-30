@@ -9,6 +9,7 @@ import {
   isSidebarNavItemId,
   normalizeHiddenSidebarNavItems,
   normalizeSidebarNavOrder,
+  resolveTasksSurfaceSlot,
   SIDEBAR_NAV_ITEM_IDS,
 } from "./sidebarNavOrdering";
 
@@ -24,6 +25,7 @@ describe("sidebarNavOrdering", () => {
       "newThread",
       "inbox",
       "kanban",
+      "tasks",
       "pullRequests",
     ]);
   });
@@ -34,6 +36,7 @@ describe("sidebarNavOrdering", () => {
       "newThread",
       "inbox",
       "kanban",
+      "tasks",
       "pullRequests",
     ]);
     // Once saved, the user's placement wins.
@@ -49,9 +52,35 @@ describe("sidebarNavOrdering", () => {
       "kanban",
       "newThread",
       "inbox",
+      "tasks",
       "pullRequests",
       "automations",
     ]);
     expect(normalizeHiddenSidebarNavItems(["bogus", "kanban", "kanban"])).toEqual(["kanban"]);
+  });
+});
+
+describe("resolveTasksSurfaceSlot", () => {
+  it("shows Tasks where Beta has it and Kanban elsewhere, in the first of their slots", () => {
+    const order = ["newThread", "pullRequests", "kanban", "automations", "tasks"] as const;
+    expect(resolveTasksSurfaceSlot(order, true)).toEqual([
+      "newThread",
+      "pullRequests",
+      "tasks",
+      "automations",
+    ]);
+    expect(resolveTasksSurfaceSlot(order, false)).toEqual([
+      "newThread",
+      "pullRequests",
+      "kanban",
+      "automations",
+    ]);
+  });
+
+  it("leaves an order without either item alone", () => {
+    expect(resolveTasksSurfaceSlot(["newThread", "automations"], true)).toEqual([
+      "newThread",
+      "automations",
+    ]);
   });
 });

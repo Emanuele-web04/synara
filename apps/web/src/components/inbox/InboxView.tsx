@@ -45,7 +45,7 @@ import { formatNumber } from "../profile/profileFormatting";
 import { ProjectSidebarIcon } from "../ProjectSidebarIcon";
 import { ProviderIcon } from "../ProviderIcon";
 import { RouteInsetSurface } from "../RouteInsetSurface";
-import { RouteSurfaceHeader } from "../RouteSurfaceHeader";
+import { RouteSurfaceHeader } from "../RouteSurface";
 import { resolvePullRequestReviewBadge } from "../Sidebar.logic";
 import { collectUnreadActivityThreads } from "../SidebarActivityView.logic";
 import { UsageProgressTrack } from "../UsageProgressTrack";

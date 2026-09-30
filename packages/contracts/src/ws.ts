@@ -15,6 +15,7 @@ import {
   AutomationStreamEvent,
   AutomationUpdateInput,
 } from "./automation";
+import { TodoCreateInput, TodoDeleteInput, TodoStreamEvent, TodoUpdateInput } from "./todo";
 import {
   ProjectAgentConfigureInput,
   ProjectAgentLinkProjectInput,
@@ -346,6 +347,12 @@ export const WS_METHODS = {
   automationResolveProposal: "automation.resolveProposal",
   subscribeAutomationEvents: "automation.subscribe",
 
+  // Todo methods (the Tasks view)
+  todoList: "todo.list",
+  todoCreate: "todo.create",
+  todoUpdate: "todo.update",
+  todoDelete: "todo.delete",
+  subscribeTodoEvents: "todo.subscribe",
   projectAgentGetOverview: "projectAgent.getOverview",
   projectAgentListSummaries: "projectAgent.listSummaries",
   projectAgentConfigure: "projectAgent.configure",
@@ -390,6 +397,7 @@ export const WS_METHODS = {
 
 export const WS_CHANNELS = {
   automationEvent: "automation.event",
+  todoEvent: "todo.event",
   gitActionProgress: "git.actionProgress",
   gitWorktreeSetupProgress: "git.worktreeSetupProgress",
   projectProvisionProgress: "project.provisionProgress",
@@ -601,6 +609,12 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.automationResolveProposal, AutomationResolveProposalInput),
   tagRequestBody(WS_METHODS.subscribeAutomationEvents, Schema.Struct({})),
 
+  // Todo methods
+  tagRequestBody(WS_METHODS.todoList, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.todoCreate, TodoCreateInput),
+  tagRequestBody(WS_METHODS.todoUpdate, TodoUpdateInput),
+  tagRequestBody(WS_METHODS.todoDelete, TodoDeleteInput),
+  tagRequestBody(WS_METHODS.subscribeTodoEvents, Schema.Struct({})),
   tagRequestBody(WS_METHODS.projectAgentGetOverview, ProjectAgentGetOverviewInput),
   tagRequestBody(WS_METHODS.projectAgentListSummaries, ProjectAgentListSummariesInput),
   tagRequestBody(WS_METHODS.projectAgentConfigure, ProjectAgentConfigureInput),
@@ -680,6 +694,7 @@ export interface WsPushPayloadByChannel {
   readonly [WS_CHANNELS.serverProviderStatusesUpdated]: typeof ServerProviderStatusesUpdatedPayload.Type;
   readonly [WS_CHANNELS.serverSettingsUpdated]: typeof ServerSettingsUpdatedPayload.Type;
   readonly [WS_CHANNELS.automationEvent]: typeof AutomationStreamEvent.Type;
+  readonly [WS_CHANNELS.todoEvent]: typeof TodoStreamEvent.Type;
   readonly [WS_CHANNELS.projectAgentEvent]: typeof ProjectAgentStreamEvent.Type;
   readonly [WS_CHANNELS.gitActionProgress]: typeof GitActionProgressEvent.Type;
   readonly [WS_CHANNELS.gitWorktreeSetupProgress]: typeof GitWorktreeSetupProgressEvent.Type;
@@ -728,6 +743,7 @@ export const WsPushAutomationEvent = makeWsPushSchema(
   WS_CHANNELS.automationEvent,
   AutomationStreamEvent,
 );
+export const WsPushTodoEvent = makeWsPushSchema(WS_CHANNELS.todoEvent, TodoStreamEvent);
 export const WsPushProjectAgentEvent = makeWsPushSchema(
   WS_CHANNELS.projectAgentEvent,
   ProjectAgentStreamEvent,
@@ -774,6 +790,7 @@ export const WsPushChannelSchema = Schema.Literals([
   WS_CHANNELS.serverProviderStatusesUpdated,
   WS_CHANNELS.serverSettingsUpdated,
   WS_CHANNELS.automationEvent,
+  WS_CHANNELS.todoEvent,
   WS_CHANNELS.projectAgentEvent,
   WS_CHANNELS.terminalEvent,
   WS_CHANNELS.projectDevServerEvent,
@@ -792,6 +809,7 @@ export const WsPush = Schema.Union([
   WsPushServerProviderStatusesUpdated,
   WsPushServerSettingsUpdated,
   WsPushAutomationEvent,
+  WsPushTodoEvent,
   WsPushProjectAgentEvent,
   WsPushGitActionProgress,
   WsPushGitWorktreeSetupProgress,

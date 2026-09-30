@@ -5,7 +5,7 @@ import { useState } from "react";
 import { CHAT_BACKGROUND_CLASS_NAME } from "~/components/chat/composerPickerStyles";
 import { Button } from "~/components/ui/button";
 import { RouteInsetSurface } from "~/components/RouteInsetSurface";
-import { RouteSurfaceHeader } from "~/components/RouteSurfaceHeader";
+import { RouteSurfaceHeader } from "~/components/RouteSurface";
 import { useSidebarLayout } from "~/hooks/useSidebarLayout";
 import { CentralIcon } from "~/lib/central-icons";
 import { cn } from "~/lib/utils";

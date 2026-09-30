@@ -1,12 +1,13 @@
-// FILE: RouteSurfaceHeader.tsx
-// Purpose: The top bar of a full-page route (Kanban, Pull requests, Automations, Inbox):
-//          a draggable strip that keeps clear of the desktop window controls, the sidebar
-//          controls first, then the page's own content.
-// Layer: Shared app component
-// Exports: RouteSurfaceHeader
+// FILE: RouteSurface.tsx
+// Purpose: The chrome full-width routes share (Tasks, Kanban, Inbox, Automations, PRs): the chat-style surface column
+//          and its draggable top bar with the sidebar navigation controls, where the caller's
+//          title, counts, and controls sit in one no-drag row.
+// Layer: Route UI component
+// Exports: RouteSurface, RouteSurfaceHeader
 
 import type { ReactNode } from "react";
 
+import { SidebarHeaderNavigationControls } from "~/components/SidebarHeaderNavigationControls";
 import {
   useDesktopTopBarTrafficLightGutterClassName,
   useDesktopTopBarWindowControlsGutterClassName,
@@ -17,8 +18,23 @@ import {
   CHAT_SURFACE_HEADER_HEIGHT_CLASS,
   CHAT_SURFACE_HEADER_PADDING_X_CLASS,
 } from "./chat/chatHeaderControls";
-import { SidebarHeaderNavigationControls } from "./SidebarHeaderNavigationControls";
+import { CHAT_BACKGROUND_CLASS_NAME } from "./chat/composerPickerStyles";
 
+/** The route's column: header on top, its content filling the rest. */
+export function RouteSurface({ children }: { children: ReactNode }) {
+  return (
+    <div
+      className={cn(
+        "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
+        CHAT_BACKGROUND_CLASS_NAME,
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
+/** Shared route top bar; each surface owns the layout of its controls. */
 export function RouteSurfaceHeader({
   divider = true,
   windowControlsGutter = true,

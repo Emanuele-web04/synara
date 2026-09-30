@@ -35,10 +35,7 @@ import {
   orderPullRequestEntriesPinnedFirst,
   pullRequestPinToggleInputs,
 } from "~/components/pullRequest/pullRequestList.logic";
-import {
-  PullRequestFilterPillGroup,
-  PullRequestProjectFilterPopover,
-} from "~/components/pullRequest/PullRequestListFilters";
+import { PullRequestProjectFilterPopover } from "~/components/pullRequest/PullRequestListFilters";
 import { PullRequestsUnavailableState } from "~/components/pullRequest/PullRequestsUnavailableState";
 import { usePullRequestPaneStateIcon } from "~/components/pullRequest/usePullRequestPaneStateIcon";
 import { PullRequestWarningNote } from "~/components/pullRequest/PullRequestWarningNote";
@@ -48,7 +45,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "~/components/u
 import { SearchInput } from "~/components/ui/search-input";
 import { Skeleton } from "~/components/ui/skeleton";
 import { toastManager } from "~/components/ui/toast";
-import { RouteSurfaceHeader } from "~/components/RouteSurfaceHeader";
+import { RouteSurfaceHeader } from "~/components/RouteSurface";
 import { RefreshCwIcon } from "~/lib/icons";
 import {
   prefetchPullRequestListState,
@@ -60,6 +57,7 @@ import {
   pullRequestSetPinnedMutationOptions,
   shouldLoadExactPullRequestInvolvement,
 } from "~/lib/pullRequestReactQuery";
+import { FilterPillGroup } from "~/components/FilterPillGroup";
 import { cn } from "~/lib/utils";
 import {
   createDefaultRightDockState,
@@ -411,12 +409,12 @@ function PullRequestsRouteView() {
                   the field filters it, which is also the reference layout. */}
               <div className="flex flex-col gap-3">
                 <div className="flex flex-wrap items-center gap-2">
-                  <PullRequestFilterPillGroup
+                  <FilterPillGroup
                     value={search.involvement}
                     options={INVOLVEMENT_TABS}
                     onChange={(involvement) => updateSearch({ involvement, ...CLEARED_SELECTION })}
                   />
-                  <PullRequestFilterPillGroup
+                  <FilterPillGroup
                     value={search.state}
                     options={STATE_TABS}
                     onIntent={handleStateIntent}

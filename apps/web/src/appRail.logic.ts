@@ -42,6 +42,7 @@ export const RAIL_ORDERABLE_ITEM_IDS = [
   "inbox",
   "spaces",
   "kanban",
+  "tasks",
   "pullRequests",
   "automations",
   "studio",
@@ -182,11 +183,11 @@ export function resolveActiveRailShortcutKey(input: {
 /**
  * Whether the panel column shows next to the rail for the active item. Every section either
  * owns a panel (Home/Spaces: projects and threads; Automations, Studio, Settings: their own
- * lists) or takes the full width: Kanban is one board, Pull requests has its own list and
- * detail panes, Inbox is one page.
+ * lists) or takes the full width: Kanban, Tasks, Pull requests, and Inbox each own
+ * their page layout.
  */
 export function railItemShowsPanel(id: RailItemId): boolean {
-  return id !== "kanban" && id !== "pullRequests" && id !== "inbox";
+  return id !== "kanban" && id !== "tasks" && id !== "pullRequests" && id !== "inbox";
 }
 
 function matchesRoute(pathname: string, route: string): boolean {
@@ -197,6 +198,7 @@ function matchesRoute(pathname: string, route: string): boolean {
 export function railItemForPathname(pathname: string): RailRouteItemId | null {
   if (matchesRoute(pathname, "/inbox")) return "inbox";
   if (matchesRoute(pathname, "/kanban")) return "kanban";
+  if (matchesRoute(pathname, "/tasks")) return "tasks";
   if (matchesRoute(pathname, "/pull-requests")) return "pullRequests";
   if (matchesRoute(pathname, "/automations")) return "automations";
   // The rail item keeps its stored id "studio"; Hubs live at /hubs with legacy redirects.
