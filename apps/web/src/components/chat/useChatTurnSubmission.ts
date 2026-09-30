@@ -588,6 +588,7 @@ export function useChatTurnSubmission({
       sendPreflightInFlightRef.current = true;
       const sendProviderAvailability = await resolveProviderSendAvailabilityWithRefresh({
         provider: selectedModelSelectionForSend.provider,
+        instanceId: selectedModelSelectionForSend.instanceId,
         statuses: providerStatuses,
         refreshStatuses: () => refreshProviderStatuses({ silent: true }),
       }).finally(() => {

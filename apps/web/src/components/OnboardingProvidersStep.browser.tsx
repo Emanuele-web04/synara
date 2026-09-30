@@ -27,6 +27,8 @@ vi.mock("../workspacePathsStore", () => ({
 
 const codexStatus: ServerProviderStatus = {
   provider: "codex",
+  instanceId: "codex",
+  driver: "codex",
   status: "ready",
   available: true,
   authStatus: "authenticated",

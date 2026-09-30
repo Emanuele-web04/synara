@@ -883,6 +883,9 @@ function readModelSessionFromThreadSession(
     threadId: previousThread?.id ?? incomingSession?.threadId ?? ThreadId.makeUnsafe("unknown"),
     status: previousSession.orchestrationStatus,
     providerName: previousSession.provider,
+    ...(previousSession.providerInstanceId !== undefined
+      ? { providerInstanceId: previousSession.providerInstanceId }
+      : {}),
     runtimeMode: previousThread?.runtimeMode ?? incomingSession?.runtimeMode ?? "full-access",
     activeTurnId: previousSession.activeTurnId ?? null,
     lastError: previousSession.lastError ?? null,
@@ -916,6 +919,11 @@ function mergeReadModelSessionWithLiveHotPath(
     return {
       ...nextSession,
       providerName: incomingSession.providerName,
+      ...(incomingSession.providerInstanceId !== undefined
+        ? { providerInstanceId: incomingSession.providerInstanceId }
+        : previousSession.providerInstanceId !== undefined
+          ? { providerInstanceId: previousSession.providerInstanceId }
+          : {}),
       runtimeMode: incomingSession.runtimeMode,
       activeTurnId: previousSession.activeTurnId ?? incomingSession.activeTurnId,
       lastError: previousSession.lastError ?? incomingSession.lastError,
@@ -1528,6 +1536,9 @@ export function normalizeThreadSession(
       : undefined;
   const nextSession = {
     provider: toLegacyProvider(incoming.providerName),
+    ...(incoming.providerInstanceId !== undefined
+      ? { providerInstanceId: incoming.providerInstanceId }
+      : {}),
     status: toLegacySessionStatus(incoming.status),
     orchestrationStatus: incoming.status,
     activeTurnId: incoming.activeTurnId ?? undefined,
@@ -1538,6 +1549,7 @@ export function normalizeThreadSession(
   if (
     previous &&
     previous.provider === nextSession.provider &&
+    previous.providerInstanceId === nextSession.providerInstanceId &&
     previous.status === nextSession.status &&
     previous.orchestrationStatus === nextSession.orchestrationStatus &&
     previous.activeTurnId === nextSession.activeTurnId &&

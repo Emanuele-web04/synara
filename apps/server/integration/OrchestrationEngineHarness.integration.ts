@@ -48,6 +48,7 @@ import { makeCodexAdapterLive } from "../src/provider/Layers/CodexAdapter.ts";
 import { CodexAdapter } from "../src/provider/Services/CodexAdapter.ts";
 import { ProviderService } from "../src/provider/Services/ProviderService.ts";
 import { ServerSettingsService } from "../src/serverSettings.ts";
+import { ServerSecretStore } from "../src/auth/Services/ServerSecretStore.ts";
 import { CheckpointReactorLive } from "../src/orchestration/Layers/CheckpointReactor.ts";
 import { StudioOutputReactorLive } from "../src/orchestration/Layers/StudioOutputReactor.ts";
 import { SidechatExpiryReactorLive } from "../src/orchestration/Layers/SidechatExpiryReactor.ts";
@@ -264,6 +265,7 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provide(OrchestrationProjectionPipelineLive),
       Layer.provide(OrchestrationEventStoreLive),
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
+      Layer.provide(ServerSettingsService.layerTest()),
     );
     const providerSessionDirectoryLayer = ProviderSessionDirectoryLive.pipe(
       Layer.provide(ProviderSessionRuntimeRepositoryLive),
@@ -290,10 +292,28 @@ export const makeOrchestrationIntegrationHarness = (
       ? makeProviderServiceLive().pipe(
           Layer.provide(providerSessionDirectoryLayer),
           Layer.provide(realCodexRegistry),
+          Layer.provide(ServerSettingsService.layerTest()),
+          Layer.provide(
+            Layer.succeed(ServerSecretStore, {
+              get: () => Effect.succeed(null),
+              set: () => Effect.void,
+              getOrCreateRandom: (_name, bytes) => Effect.succeed(new Uint8Array(bytes)),
+              remove: () => Effect.void,
+            }),
+          ),
         )
       : makeProviderServiceLive().pipe(
           Layer.provide(providerSessionDirectoryLayer),
           Layer.provide(fakeRegistry!),
+          Layer.provide(ServerSettingsService.layerTest()),
+          Layer.provide(
+            Layer.succeed(ServerSecretStore, {
+              get: () => Effect.succeed(null),
+              set: () => Effect.void,
+              getOrCreateRandom: (_name, bytes) => Effect.succeed(new Uint8Array(bytes)),
+              remove: () => Effect.void,
+            }),
+          ),
         );
 
     const checkpointStoreLayer = CheckpointStoreLive.pipe(Layer.provide(GitCoreLive));
@@ -357,6 +377,7 @@ export const makeOrchestrationIntegrationHarness = (
     const layer = orchestrationReactorLayer.pipe(
       Layer.provide(persistenceLayer),
       Layer.provideMerge(ServerConfig.layerTest(workspaceDir, rootDir)),
+      Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(NodeServices.layer),
     );
 

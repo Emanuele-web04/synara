@@ -62,6 +62,7 @@ export function TaskDelegateForm({
   const providerStatuses = useProviderStatusesForLocalConfig();
   const draft = useScratchComposerDraft({
     defaultProvider: settings.defaultProvider,
+    settings,
     initialPrompt: buildDelegationPrompt(todo),
   });
   const { scratchThreadId, prompt, setPrompt } = draft;

@@ -6,7 +6,13 @@
 // Layer: Web UI hook
 // Exports: useScratchModelCatalog, ScratchModelCatalog
 
-import type { ModelSlug, ProviderKind, RuntimeMode, ServerProviderStatus } from "@synara/contracts";
+import type {
+  ModelSlug,
+  ProviderInstanceId,
+  ProviderKind,
+  RuntimeMode,
+  ServerProviderStatus,
+} from "@synara/contracts";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { resolveRuntimeModelDescriptor } from "~/components/chat/runtimeModelCapabilities";
@@ -30,6 +36,7 @@ export function useScratchModelCatalog(input: {
   const {
     scratchThreadId,
     selectedProvider,
+    selectedProviderInstanceId,
     selectedModel,
     selectedModelSupportsAutoMode,
     // The scratch draft's own model setter, which also saves the sticky choice.
@@ -39,8 +46,8 @@ export function useScratchModelCatalog(input: {
   const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
   const [isTraitsPickerOpen, setIsTraitsPickerOpen] = useState(false);
   const selectedProviderStatus = useMemo(
-    () => findProviderStatus(input.providerStatuses, selectedProvider),
-    [input.providerStatuses, selectedProvider],
+    () => findProviderStatus(input.providerStatuses, selectedProvider, selectedProviderInstanceId),
+    [input.providerStatuses, selectedProvider, selectedProviderInstanceId],
   );
   const modelHintByProvider = useMemo<Partial<Record<ProviderKind, string | null>>>(
     () => ({ [selectedProvider]: selectedModel }),
@@ -48,12 +55,18 @@ export function useScratchModelCatalog(input: {
   );
   const catalog = useProviderModelCatalog({
     selectedProvider,
+    selectedProviderInstanceId,
     // Keep discovery warm while a picker can open, so effort and fast-mode controls fill in.
     discoveryEnabled: isModelPickerOpen || isTraitsPickerOpen,
     cwd: input.discoveryCwd,
     modelHintByProvider,
   });
-  const { modelOptionsByProvider, runtimeModelsByProvider, selectedRuntimeModel } = catalog;
+  const {
+    modelOptionsByProvider,
+    modelOptionsByProviderInstance,
+    runtimeModelsByProvider,
+    selectedRuntimeModel,
+  } = catalog;
   const runtimeModelForCapabilities = useMemo(
     () =>
       selectedRuntimeModel ??
@@ -68,14 +81,19 @@ export function useScratchModelCatalog(input: {
   );
 
   const handleProviderModelChange = useCallback(
-    (provider: ProviderKind, model: ModelSlug, options?: ProviderOptions) => {
+    (
+      provider: ProviderKind,
+      model: ModelSlug,
+      instanceId?: ProviderInstanceId,
+      options?: ProviderOptions,
+    ) => {
       const runtimeModel = resolveRuntimeModelDescriptor({
         provider,
         model,
         runtimeModels: runtimeModelsByProvider[provider],
       });
       setRuntimeMode((current) => normalizeRuntimeModeForProvider(current, provider));
-      setScratchProviderModel(provider, model, runtimeModel?.supportsAutoMode, options);
+      setScratchProviderModel(provider, model, instanceId, runtimeModel?.supportsAutoMode, options);
     },
     [runtimeModelsByProvider, setScratchProviderModel],
   );
@@ -99,7 +117,8 @@ export function useScratchModelCatalog(input: {
     if (selectedModel !== null) {
       return;
     }
-    const firstOption = modelOptionsByProvider[selectedProvider][0];
+    const firstOption = (modelOptionsByProviderInstance[selectedProviderInstanceId] ??
+      modelOptionsByProvider[selectedProvider])[0];
     if (firstOption) {
       useComposerDraftStore.getState().setModelSelection(
         scratchThreadId,
@@ -112,15 +131,18 @@ export function useScratchModelCatalog(input: {
             model: firstOption.slug,
             runtimeModels: runtimeModelsByProvider[selectedProvider],
           })?.supportsAutoMode,
+          { instanceId: selectedProviderInstanceId },
         ),
       );
     }
   }, [
     modelOptionsByProvider,
+    modelOptionsByProviderInstance,
     runtimeModelsByProvider,
     scratchThreadId,
     selectedModel,
     selectedProvider,
+    selectedProviderInstanceId,
   ]);
 
   return {

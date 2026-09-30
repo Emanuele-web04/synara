@@ -602,6 +602,21 @@ jobs:
             --expected-windows-publisher "$EXPECTED_WINDOWS_PUBLISHER" \
             --expected-windows-subject-dn "$EXPECTED_WINDOWS_SUBJECT_DN"
 
+      - name: Verify Windows installer with Microsoft Defender
+        id: windows_defender
+        if: matrix.platform == 'win' && needs.preflight.outputs.package_artifacts == 'true'
+        timeout-minutes: 10
+        shell: pwsh
+        run: ./scripts/verify-windows-defender.ps1 -AssetsDirectory release-publish -EvidenceDirectory "${{ runner.temp }}/windows-defender-evidence"
+
+      - name: Preserve Windows Defender evidence
+        if: ${{ always() && matrix.platform == 'win' && needs.preflight.outputs.package_artifacts == 'true' && steps.windows_defender.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-defender-${{ matrix.arch }}
+          path: ${{ runner.temp }}/windows-defender-evidence/
+          if-no-files-found: error
+
       - name: Smoke packaged desktop startup
         if: needs.preflight.outputs.package_artifacts == 'true'
         shell: bash

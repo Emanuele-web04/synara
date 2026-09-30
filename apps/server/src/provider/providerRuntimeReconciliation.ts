@@ -208,7 +208,10 @@ export function planProviderRuntimeReconciliation(input: {
   const liveSessionByThreadId = new Map(
     input.liveSessions.map((session) => [session.threadId, session]),
   );
-  const healthByProvider = new Map(input.pumpHealth.map((health) => [health.provider, health]));
+  const healthByProvider = new Map<
+    ProviderRuntimeBinding["provider"],
+    ProviderRuntimeEventPumpHealth
+  >(input.pumpHealth.map((health) => [health.provider, health]));
   const plans: ProviderRuntimeReconciliationPlan[] = [];
 
   for (const thread of input.threads) {

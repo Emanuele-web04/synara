@@ -31,6 +31,7 @@ import { useChatPendingInteractions } from "./useChatPendingInteractions";
 import { useChatRuntimeModes } from "./useChatRuntimeModes";
 import { useComposerDiscovery } from "./useComposerDiscovery";
 import { useComposerReferences } from "./useComposerReferences";
+import type { ComposerModelSelectionOptions } from "./ComposerModelPicker";
 
 interface ChatComposerCommandsInput {
   threadId: ThreadId;
@@ -62,7 +63,11 @@ interface ChatComposerCommandsInput {
   updateSelectedComposerMentions: ReturnType<
     typeof useComposerReferences
   >["updateSelectedComposerMentions"];
-  onProviderModelSelect: (provider: ProviderKind, model: ModelSlug) => Promise<void>;
+  onProviderModelSelect: (
+    provider: ProviderKind,
+    model: ModelSlug,
+    selectionOptions?: ComposerModelSelectionOptions,
+  ) => Promise<void>;
   composerMenuItems: ComposerCommandItem[];
   composerHighlightedItemId: string | null;
   activePendingQuestion: ReturnType<typeof useChatPendingInteractions>["activePendingQuestion"];
@@ -265,7 +270,11 @@ export function useChatComposerCommands({
         return;
       }
       if (item.type === "model") {
-        onProviderModelSelect(item.provider, item.model);
+        onProviderModelSelect(
+          item.provider,
+          item.model,
+          item.instanceId ? { instanceId: item.instanceId } : undefined,
+        );
         applyComposerTriggerReplacement({ snapshot, trigger, base: "" });
         return;
       }

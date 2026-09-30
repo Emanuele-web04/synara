@@ -230,8 +230,13 @@ export function ProjectImportPanel(props: {
       ) : null}
       {catalog?.sources.map((source) =>
         source.error ? (
-          <p key={source.provider} role="alert" className={cn("text-destructive", "text-ui-sm")}>
-            {IMPORT_PROVIDER_LABELS[source.provider]}: {source.error}
+          <p
+            key={`${source.provider}:${source.providerInstanceId ?? source.provider}`}
+            role="alert"
+            className={cn("text-destructive", "text-ui-sm")}
+          >
+            {IMPORT_PROVIDER_LABELS[source.provider]}
+            {source.accountLabel ? ` (${source.accountLabel})` : ""}: {source.error}
           </p>
         ) : null,
       )}

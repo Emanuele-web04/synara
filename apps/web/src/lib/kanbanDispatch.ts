@@ -19,7 +19,7 @@ import {
 } from "../components/kanban/kanban.logic";
 import { useKanbanUiStore } from "../kanbanUiStore";
 import type { SidebarThreadSummary } from "../types";
-import { dispatchDraftThread } from "./draftThreadDispatch";
+import { dispatchDraftThread, type DraftDispatchProviderInstance } from "./draftThreadDispatch";
 
 export type KanbanDraftDispatchResult =
   /** The drafted prompt is on its way; runtime events move the card to In Progress. */
@@ -29,11 +29,15 @@ export type KanbanDraftDispatchResult =
   | { kind: "unavailable" }
   | { kind: "error"; message: string };
 
+export { resolveDraftThreadDispatchTarget as resolveKanbanDraftDispatchTarget } from "./draftThreadDispatch";
+export type { DraftThreadDispatchTarget as KanbanDraftDispatchTarget } from "./draftThreadDispatch";
+
 export async function dispatchKanbanDraftCard(input: {
   card: KanbanCard;
   defaultProvider: ProviderKind;
   assistantDeliveryMode: AssistantDeliveryMode;
   providerOptions?: ProviderStartOptions | undefined;
+  providerInstances?: ReadonlyArray<DraftDispatchProviderInstance> | undefined;
 }): Promise<KanbanDraftDispatchResult> {
   const { card } = input;
   if (resolveDraftDropAction(card) !== "dispatch") {
@@ -49,6 +53,7 @@ export async function dispatchKanbanDraftCard(input: {
     defaultProvider: input.defaultProvider,
     assistantDeliveryMode: input.assistantDeliveryMode,
     providerOptions: input.providerOptions,
+    providerInstances: input.providerInstances,
   });
 }
 
@@ -60,6 +65,7 @@ interface KanbanDraftDispatchInput {
   defaultProvider: ProviderKind;
   assistantDeliveryMode: AssistantDeliveryMode;
   providerOptions?: ProviderStartOptions | undefined;
+  providerInstances?: ReadonlyArray<DraftDispatchProviderInstance> | undefined;
 }
 
 /**
@@ -79,11 +85,12 @@ export function dispatchKanbanDraftThread(
       // Optimistic move: show the card In Progress before any round-trip. Provider
       // session init can take seconds; runtime events confirm the move (reconciliation
       // clears the entry) or an abandoned dispatch reverts it.
-      onDispatchStart: ({ title, provider, baselineTurnId, startedAtMs }) =>
+      onDispatchStart: ({ title, provider, providerInstanceId, baselineTurnId, startedAtMs }) =>
         kanbanUi.markOptimisticDispatch(threadId, {
           projectId,
           title,
           provider,
+          providerInstanceId,
           baselineTurnId,
           droppedAtMs: startedAtMs,
         }),
