@@ -55,8 +55,12 @@ import { useAppSettings } from "../../appSettings";
 import { useStore } from "../../store";
 import { createSidebarDisplayThreadsSelector } from "../../storeSelectors";
 import { sortThreadsForSidebar } from "../Sidebar.logic";
-import { useOpenThreadTabs, useRecordOpenThreadTab } from "../../hooks/useOpenThreadTabs";
-import { resolveOpenThreadTabCloseTarget } from "../../openThreadTabs.logic";
+import {
+  useOpenThreadTabs,
+  useReadRouteThreadId,
+  useRecordOpenThreadTab,
+} from "../../hooks/useOpenThreadTabs";
+import { createOpenThreadTabCloseQueue } from "../../openThreadTabs.logic";
 import { useOpenThreadTabsStore } from "../../openThreadTabsStore";
 import { cn } from "~/lib/utils";
 import { useOpenFavoriteEditorShortcut } from "~/hooks/useOpenFavoriteEditorShortcut";
@@ -141,7 +145,8 @@ interface ChatHeaderProps {
     terminalHasRunningActivity: boolean;
     onNewChat: () => void;
     onNewTerminal: () => void;
-    onOpenChat: (threadId: ThreadId) => void;
+    // Resolves once the navigation settles, so a closed tab can wait for it.
+    onOpenChat: (threadId: ThreadId) => Promise<unknown>;
     onOpenTerminal: () => void;
     onCloseTerminal: () => void;
   } | null;
@@ -233,7 +238,7 @@ function EditorRailTabs(props: {
   terminalHasRunningActivity: boolean;
   onNewChat: () => void;
   onNewTerminal: () => void;
-  onOpenChat: (threadId: ThreadId) => void;
+  onOpenChat: (threadId: ThreadId) => Promise<unknown>;
   onOpenTerminal: () => void;
   onCloseTerminal: () => void;
 }) {
@@ -245,6 +250,8 @@ function EditorRailTabs(props: {
     projectId: props.projectId,
   });
   const closeThreadTab = useOpenThreadTabsStore((state) => state.closeThreadTab);
+  const readRouteThreadId = useReadRouteThreadId();
+  const [enqueueClose] = useState(createOpenThreadTabCloseQueue);
   const [terminalTabOpen, setTerminalTabOpen] = useState(props.terminalAvailable);
   // Timeout-0 keeps the state write asynchronous (no wasted pre-paint render), which also
   // keeps this component eligible for React Compiler; the reveal is invisible at a tick.
@@ -273,20 +280,23 @@ function EditorRailTabs(props: {
     props.onCloseTerminal();
   };
   const closeChatTab = (threadId: ThreadId) => {
-    const target = resolveOpenThreadTabCloseTarget({
-      tabs: chatTabs,
-      closedThreadId: threadId,
-      activeThreadId: props.activeSurface === "chat" ? props.activeThreadId : null,
+    const activeChatThreadId = props.activeSurface === "chat" ? props.activeThreadId : null;
+    // The only chat tab gives way to the terminal tab, which keeps the thread's route.
+    const fallsBackToTerminal = threadId === activeChatThreadId && chatTabs.length === 1;
+    // Same close flow as the chat header strip: the active chat's tab goes only once the
+    // route has left it, so a guarded navigation keeps it in both places.
+    void enqueueClose(() => {
+      const openThreadIds = useOpenThreadTabsStore.getState().threadIds;
+      return {
+        tabs: chatTabs.filter((tab) => openThreadIds.includes(tab.threadId)),
+        closedThreadId: threadId,
+        activeThreadId: props.activeSurface === "chat" ? readRouteThreadId() : null,
+        closeTab: closeThreadTab,
+        openTab: props.onOpenChat,
+        readRouteThreadId,
+      };
     });
-    closeThreadTab(threadId);
-    if (!target) {
-      return;
-    }
-    if (target.threadId) {
-      props.onOpenChat(target.threadId);
-      return;
-    }
-    if (terminalTabVisible) {
+    if (fallsBackToTerminal && terminalTabVisible) {
       openTerminalTab();
     }
   };

@@ -173,6 +173,20 @@ export function resolveOpenThreadTabCloseTarget(input: {
   return { threadId: resolveTabAfterClose(remaining, closedIndex)?.threadId ?? null };
 }
 
+export interface CloseOpenThreadTabInput {
+  tabs: readonly Pick<OpenThreadTab, "threadId">[];
+  closedThreadId: ThreadId;
+  activeThreadId: ThreadId | null;
+  closeTab: (threadId: ThreadId) => void;
+  openTab: (threadId: ThreadId) => Promise<unknown>;
+  // What replaces the last tab. Omitted when the host shows something else in its place
+  // without leaving the thread (the editor rail's terminal tab): the tab then closes at once.
+  openFreshChat?: (() => Promise<StartContainerChatResult>) | undefined;
+  readRouteThreadId: () => string | null;
+}
+
+export type CloseOpenThreadTabResult = { ok: true } | { ok: false; error: string };
+
 /**
  * Closes a tab. A background tab closes at once. The active tab first leaves for its
  * successor (or a fresh chat when it was the last tab) and closes only once the route
@@ -180,15 +194,9 @@ export function resolveOpenThreadTabCloseTarget(input: {
  * save) keeps the thread on screen, and it must keep its tab. Resolves with the fresh
  * chat's error when one could not be started.
  */
-export async function closeOpenThreadTab(input: {
-  tabs: readonly Pick<OpenThreadTab, "threadId">[];
-  closedThreadId: ThreadId;
-  activeThreadId: ThreadId | null;
-  closeTab: (threadId: ThreadId) => void;
-  openTab: (threadId: ThreadId) => Promise<unknown>;
-  openFreshChat: () => Promise<StartContainerChatResult>;
-  readRouteThreadId: () => string | null;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
+export async function closeOpenThreadTab(
+  input: CloseOpenThreadTabInput,
+): Promise<CloseOpenThreadTabResult> {
   const target = resolveOpenThreadTabCloseTarget(input);
   if (!target) {
     input.closeTab(input.closedThreadId);
@@ -196,14 +204,38 @@ export async function closeOpenThreadTab(input: {
   }
   if (target.threadId) {
     await input.openTab(target.threadId);
-  } else {
+  } else if (input.openFreshChat) {
     const result = await input.openFreshChat();
     if (!result.ok) {
       return result;
     }
+  } else {
+    input.closeTab(input.closedThreadId);
+    return { ok: true };
   }
   if (input.readRouteThreadId() !== input.closedThreadId) {
     input.closeTab(input.closedThreadId);
   }
   return { ok: true };
+}
+
+/**
+ * Runs tab closes one at a time, each reading its input when it starts rather than when
+ * its X was clicked. A second close clicked while the first is still navigating must see
+ * where that navigation lands: with the old active thread it would take the successor
+ * for a background tab and drop it, and the landing thread would then reopen it.
+ */
+export function createOpenThreadTabCloseQueue(): (
+  readInput: () => CloseOpenThreadTabInput,
+) => Promise<CloseOpenThreadTabResult> {
+  let queue: Promise<unknown> = Promise.resolve();
+  return (readInput) => {
+    const run = () => closeOpenThreadTab(readInput());
+    const queued = queue.then(run, run);
+    queue = queued.then(
+      () => undefined,
+      () => undefined,
+    );
+    return queued;
+  };
 }

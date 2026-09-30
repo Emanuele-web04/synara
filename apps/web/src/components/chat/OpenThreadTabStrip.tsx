@@ -6,18 +6,18 @@
 // Depends on: open-thread tab hooks/store and the shared SurfaceTabStrip + SurfaceTabChip.
 
 import type { ThreadId } from "@synara/contracts";
-import { useRouter } from "@tanstack/react-router";
 import { type CSSProperties, useRef, useState } from "react";
 
 import { useHandleNewChat } from "~/hooks/useHandleNewChat";
 import {
   useActivateThreadTab,
   useOpenThreadTabs,
+  useReadRouteThreadId,
   useRecordOpenThreadTab,
 } from "~/hooks/useOpenThreadTabs";
 import { TerminalIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
-import { closeOpenThreadTab } from "~/openThreadTabs.logic";
+import { createOpenThreadTabCloseQueue } from "~/openThreadTabs.logic";
 import { useOpenThreadTabsStore } from "~/openThreadTabsStore";
 
 import { ProviderIcon } from "../ProviderIcon";
@@ -40,16 +40,6 @@ const OPEN_THREAD_TAB_FROZEN_SIZE_CLASS_NAME =
 const OPEN_THREAD_TAB_ACTIVE_CLASS_NAME =
   "bg-[var(--color-background-surface)] hover:bg-[var(--color-background-surface)] shadow-[inset_0_0_0_0.5px_var(--app-rail-inset-border)]";
 
-function readRouteThreadId(router: ReturnType<typeof useRouter>): string | null {
-  for (const match of router.state.matches) {
-    const threadId = (match.params as { threadId?: unknown }).threadId;
-    if (typeof threadId === "string") {
-      return threadId;
-    }
-  }
-  return null;
-}
-
 export function OpenThreadTabStrip(props: {
   activeThreadId: ThreadId;
   onRenameActiveThread: () => void;
@@ -60,7 +50,8 @@ export function OpenThreadTabStrip(props: {
   const closeThreadTab = useOpenThreadTabsStore((state) => state.closeThreadTab);
   const activateThreadTab = useActivateThreadTab();
   const { handleNewChat } = useHandleNewChat();
-  const router = useRouter();
+  const readRouteThreadId = useReadRouteThreadId();
+  const [enqueueClose] = useState(createOpenThreadTabCloseQueue);
   const navRef = useRef<HTMLElement>(null);
   // Closing tabs with the pointer keeps the survivors at their current width until the
   // pointer leaves the strip (like browser tabs), so the next X lands under the cursor
@@ -78,15 +69,19 @@ export function OpenThreadTabStrip(props: {
 
   const closeTab = (threadId: ThreadId) => {
     freezeTabWidths();
-    // The last tab falls back to a fresh chat, as deleting the last thread does.
-    void closeOpenThreadTab({
-      tabs,
-      closedThreadId: threadId,
-      activeThreadId,
-      closeTab: closeThreadTab,
-      openTab: activateThreadTab,
-      openFreshChat: handleNewChat,
-      readRouteThreadId: () => readRouteThreadId(router),
+    void enqueueClose(() => {
+      const openThreadIds = useOpenThreadTabsStore.getState().threadIds;
+      return {
+        // The tabs as clicked, minus any an earlier queued close has since dropped.
+        tabs: tabs.filter((tab) => openThreadIds.includes(tab.threadId)),
+        closedThreadId: threadId,
+        activeThreadId: readRouteThreadId(),
+        closeTab: closeThreadTab,
+        openTab: activateThreadTab,
+        // The last tab falls back to a fresh chat, as deleting the last thread does.
+        openFreshChat: handleNewChat,
+        readRouteThreadId,
+      };
     }).then((result) => {
       if (!result.ok) {
         toastManager.add({

@@ -3,11 +3,12 @@
 //          thread/draft state, record the thread on screen as open, and switch threads
 //          from a tab the same way the sidebar and Ctrl+Tab switcher do.
 // Layer: UI hooks
-// Exports: useOpenThreadTabs, useRecordOpenThreadTab, useActivateThreadTab
+// Exports: useOpenThreadTabs, useRecordOpenThreadTab, useActivateThreadTab,
+//          useReadRouteThreadId
 
 import type { ProjectId, ThreadId } from "@synara/contracts";
 import { useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useRouter } from "@tanstack/react-router";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 
@@ -178,5 +179,22 @@ export function useActivateThreadTab(): (threadId: ThreadId) => Promise<void> {
       params: { threadId },
       search: (previous) => ({ ...stripDiffSearchParams(previous), splitViewId: undefined }),
     });
+  };
+}
+
+/**
+ * Reads the thread the route shows right now, for code that runs after a navigation
+ * settles (render-time props still hold the thread from before it).
+ */
+export function useReadRouteThreadId(): () => ThreadId | null {
+  const router = useRouter();
+  return () => {
+    for (const match of router.state.matches) {
+      const threadId = (match.params as { threadId?: unknown }).threadId;
+      if (typeof threadId === "string") {
+        return threadId as ThreadId;
+      }
+    }
+    return null;
   };
 }

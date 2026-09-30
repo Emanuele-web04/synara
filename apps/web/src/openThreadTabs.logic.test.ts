@@ -5,6 +5,7 @@ import {
   addOpenThreadTab,
   buildOpenThreadTabs,
   closeOpenThreadTab,
+  createOpenThreadTabCloseQueue,
   normalizeOpenThreadTabIds,
   type OpenThreadTabSource,
   resolveOpenThreadTabCloseTarget,
@@ -254,5 +255,50 @@ describe("closeOpenThreadTab", () => {
       error: "Home folder is not available yet.",
     });
     expect(failed.closeTab).not.toHaveBeenCalled();
+  });
+
+  it("closes the last tab at once when the host shows something else without leaving", async () => {
+    const closeTab = vi.fn();
+    await closeOpenThreadTab({
+      tabs: tabIds(["a"]),
+      closedThreadId: ThreadId.makeUnsafe("a"),
+      activeThreadId: ThreadId.makeUnsafe("a"),
+      closeTab,
+      openTab: vi.fn(),
+      readRouteThreadId: () => "a",
+    });
+
+    expect(closeTab).toHaveBeenCalledWith("a");
+  });
+});
+
+describe("createOpenThreadTabCloseQueue", () => {
+  it("closes the successor when its X is clicked while the first close is still navigating", async () => {
+    // Live app state: the persisted open ids and the route. A thread the route lands on
+    // records itself as open again, as the chat surface does.
+    const open = ["a", "b", "c"].map((id) => ThreadId.makeUnsafe(id));
+    let route: ThreadId = ThreadId.makeUnsafe("a");
+    const openTab = async (threadId: ThreadId) => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      route = threadId;
+      if (!open.includes(threadId)) open.push(threadId);
+    };
+    const renderedTabs = tabIds(["a", "b", "c"]);
+    const enqueueClose = createOpenThreadTabCloseQueue();
+    const close = (closed: string) =>
+      enqueueClose(() => ({
+        tabs: renderedTabs.filter((tab) => open.includes(tab.threadId)),
+        closedThreadId: ThreadId.makeUnsafe(closed),
+        activeThreadId: route,
+        closeTab: (threadId) => open.splice(open.indexOf(threadId), 1),
+        openTab,
+        readRouteThreadId: () => route,
+      }));
+
+    // Both X clicks land before the first navigation settles.
+    await Promise.all([close("a"), close("b")]);
+
+    expect(open).toEqual(["c"]);
+    expect(route).toBe("c");
   });
 });

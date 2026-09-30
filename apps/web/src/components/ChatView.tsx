@@ -4712,16 +4712,15 @@ export default function ChatView({
     onOpenTurnDiff(activeTurnLiveDiffState.turnId);
   }, [activeTurnLiveDiffState.turnId, onOpenTurnDiff]);
   const onNavigateToThread = useCallback(
-    (nextThreadId: ThreadId) => {
-      void navigate({
+    (nextThreadId: ThreadId) =>
+      navigate({
         to: "/$threadId",
         params: { threadId: nextThreadId },
         search: (previous) =>
           isEditorRail
             ? { ...stripDiffSearchParams(previous), view: "editor" }
             : stripDiffSearchParams(previous),
-      });
-    },
+      }),
     [isEditorRail, navigate],
   );
   const onOpenAutomation = useCallback(
@@ -4767,7 +4766,7 @@ export default function ChatView({
   const onOpenEditorChat = useCallback(
     (nextThreadId: ThreadId) => {
       storeOpenChatThreadPage(nextThreadId);
-      onNavigateToThread(nextThreadId);
+      return onNavigateToThread(nextThreadId);
     },
     [onNavigateToThread, storeOpenChatThreadPage],
   );
