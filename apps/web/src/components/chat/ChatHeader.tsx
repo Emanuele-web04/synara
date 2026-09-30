@@ -24,7 +24,8 @@ import {
   HandoffIcon,
   HistoryIcon,
   MessageCircleIcon,
-  PanelRightCloseIcon,
+  LayoutAlignLeftIcon,
+  LayoutRightIcon,
   PlusIcon,
   TerminalIcon,
   XIcon,
@@ -523,7 +524,14 @@ export function ChatHeader({
                 deletions={diffDeletions}
               />
             ) : null}
-            <SurfaceChipIcon icon={PanelRightCloseIcon} className="size-4" />
+            <SurfaceChipIcon
+              icon={
+                (togglesRightDock ? rightDockOpen : diffOpen)
+                  ? LayoutRightIcon
+                  : LayoutAlignLeftIcon
+              }
+              className="size-4"
+            />
           </Toggle>
         }
       />

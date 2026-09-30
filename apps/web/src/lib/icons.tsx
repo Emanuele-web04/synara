@@ -338,3 +338,12 @@ export const ZapIcon = adaptIcon(IconBolt);
 export const FastModeIcon: LucideIcon = centralIconWrapper("zap", "fill");
 // Outline twin of FastModeIcon (Central reversed set) for the inactive toggle state.
 export const FastModeOutlineIcon: LucideIcon = centralIconWrapper("zap");
+
+// Sidebar and panel toggles (Hugeicons, inlined).
+export {
+  LayoutAlignLeftIcon,
+  LayoutAlignRightIcon,
+  LayoutLeftIcon,
+  LayoutRightIcon,
+  PanelTopOpenIcon,
+} from "./hugeicons";

@@ -19,7 +19,7 @@ import {
   EMPTY_PANE_ID_SET,
   reconcileKeepMountedPaneIds,
 } from "~/lib/dockPaneActivation";
-import { PanelCollapseIcon, PanelExpandIcon, PanelRightCloseIcon, PlusIcon } from "~/lib/icons";
+import { LayoutRightIcon, PanelCollapseIcon, PanelExpandIcon, PlusIcon } from "~/lib/icons";
 import type {
   RightDockPane,
   RightDockPaneKind,
@@ -395,7 +395,7 @@ export function RightDock(props: RightDockProps) {
               className={DOCK_HEADER_ICON_BUTTON_CLASS}
               onClick={props.onCollapse}
             >
-              <PanelRightCloseIcon />
+              <LayoutRightIcon />
             </IconButton>
           </div>
           <div className="relative min-h-0 flex-1">
