@@ -52,6 +52,7 @@ import { formatClockDuration } from "~/session-logic";
 import { Button } from "~/components/ui/button";
 import {
   ChatHeaderButton,
+  ChatHeaderIconButton,
   ChatHeaderSplitDivider,
   ChatHeaderSplitGroup,
   CHAT_HEADER_CONTROL_CLASS_NAME,
@@ -1452,6 +1453,20 @@ export default function GitActionsControl({
     if (!promotedPull) return null;
     // Pull-only chrome: Environment already owns commit/push/PR dialogs, so this
     // instance must not mount a second copy of them beside the panel control.
+    if (hideQuickActionLabel) {
+      return (
+        <ChatHeaderIconButton
+          type="button"
+          tone="surface"
+          label={promotedPull.label}
+          title={promotedPull.label}
+          disabled={isGitActionRunning}
+          onClick={runSyncWithRemote}
+        >
+          <GitActionGlyph name="sync" />
+        </ChatHeaderIconButton>
+      );
+    }
     return (
       <ChatHeaderButton
         type="button"

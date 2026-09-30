@@ -20,7 +20,6 @@ import { TbExchange } from "react-icons/tb";
 import type { ThreadPrimarySurface } from "../../types";
 import GitActionsControl from "../GitActionsControl";
 import {
-  ArrowRightIcon,
   CheckIcon,
   HandoffIcon,
   HistoryIcon,
@@ -33,7 +32,7 @@ import {
 import { formatRelativeTime } from "~/lib/relativeTime";
 import {
   CHAT_HEADER_TOGGLE_CLASS_NAME,
-  ChatHeaderButton,
+  ChatHeaderGroupDivider,
   ChatHeaderIconButton,
   SurfaceChipIcon,
   SurfaceTabChip,
@@ -41,7 +40,6 @@ import {
 } from "./chatHeaderControls";
 import { DiffStat } from "../ui/diff-stat";
 import { IconButton } from "../ui/icon-button";
-import { Badge } from "../ui/badge";
 import { Menu, MenuItem, MenuTrigger } from "../ui/menu";
 import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
 import { OpenInPicker } from "./OpenInPicker";
@@ -98,12 +96,9 @@ interface ChatHeaderProps {
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
   diffToggleShortcutLabel: string | null;
-  handoffBadgeLabel: string | null;
   handoffActionLabel: string;
   handoffDisabled: boolean;
   handoffActionTargetProviders: ReadonlyArray<ProviderKind>;
-  handoffBadgeSourceProvider: ProviderKind | null;
-  handoffBadgeTargetProvider: ProviderKind | null;
   gitCwd: string | null;
   diffTotals: RepoDiffTotals;
   showGitActions?: boolean;
@@ -407,12 +402,9 @@ export function ChatHeader({
   keybindings,
   availableEditors,
   diffToggleShortcutLabel,
-  handoffBadgeLabel,
   handoffActionLabel,
   handoffDisabled,
   handoffActionTargetProviders,
-  handoffBadgeSourceProvider,
-  handoffBadgeTargetProvider,
   gitCwd,
   diffTotals,
   showGitActions: showGitActionsProp,
@@ -502,6 +494,8 @@ export function ChatHeader({
   // without a multi-pane dock (split/editor surfaces) keep the legacy diff-only
   // behavior until they gain their own launcher surface.
   const togglesRightDock = onToggleRightDock !== undefined;
+  const hasActionControls =
+    !minimalChrome && (!hideHandoffControls || activeProjectScripts !== undefined);
   const rightPanelToggleControl = showDiffToggle ? (
     <Tooltip>
       <TooltipTrigger
@@ -562,29 +556,6 @@ export function ChatHeader({
       </button>
     </React.Fragment>
   ));
-  const handoffBadge =
-    !hideHandoffControls && handoffBadgeLabel ? (
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Badge
-              variant="outline"
-              className="hidden !h-6 shrink-0 items-center justify-center gap-1 rounded-md px-1.5 text-ui-xs sm:inline-flex"
-            >
-              <span className="inline-flex size-4 shrink-0 items-center justify-center">
-                {renderProviderIcon(handoffBadgeSourceProvider, "size-3")}
-              </span>
-              <ArrowRightIcon className="size-2.5 shrink-0 opacity-45" />
-              <span className="inline-flex size-4 shrink-0 items-center justify-center">
-                {renderProviderIcon(handoffBadgeTargetProvider, "size-3")}
-              </span>
-            </Badge>
-          }
-        />
-        <TooltipPopup side="bottom">{handoffBadgeLabel}</TooltipPopup>
-      </Tooltip>
-    ) : null;
-
   return (
     <div ref={headerRef} className={cn("flex min-w-0 flex-1 items-center gap-2", className)}>
       <div
@@ -606,7 +577,6 @@ export function ChatHeader({
               </div>
             ) : null}
             {threadTabs}
-            {minimalChrome ? null : handoffBadge}
           </div>
         ) : (
           <div
@@ -691,7 +661,6 @@ export function ChatHeader({
                     onCloseTerminal={editorChatControls.onCloseTerminal}
                   />
                 ) : null}
-                {handoffBadge}
               </div>
             </div>
           </div>
@@ -708,17 +677,15 @@ export function ChatHeader({
                 render={
                   <MenuTrigger
                     render={
-                      <ChatHeaderButton
+                      <ChatHeaderIconButton
                         type="button"
-                        tone="outline"
-                        className={compact ? "gap-1" : "gap-1.5"}
-                        aria-label={handoffActionLabel}
+                        tone="surface"
+                        label={handoffActionLabel}
                         disabled={handoffDisabled || handoffActionTargetProviders.length === 0}
                       />
                     }
                   >
-                    <HandoffIcon className="size-[1em] shrink-0 opacity-80" />
-                    {!compact ? <span className="truncate font-normal">Hand off</span> : null}
+                    <HandoffIcon className="size-4 shrink-0" />
                   </MenuTrigger>
                 }
               />
@@ -740,7 +707,6 @@ export function ChatHeader({
             scripts={activeProjectScripts}
             keybindings={keybindings}
             preferredScriptId={preferredScriptId}
-            hideInlineLabel={compact}
             onRunScript={onRunProjectScript}
             onAddScript={onAddProjectScript}
             onUpdateScript={onUpdateProjectScript}
@@ -752,7 +718,7 @@ export function ChatHeader({
           <GitActionsControl
             gitCwd={gitCwd}
             activeThreadId={activeThreadId}
-            hideQuickActionLabel={compact}
+            hideQuickActionLabel
             visibleWhen="pull-available"
           />
         ) : null}
@@ -799,6 +765,8 @@ export function ChatHeader({
             Falls back to the legacy controls when no environment is resolved. */}
         {environment ? (
           <>
+            {/* Actions on the left, panel toggles on the right. */}
+            {hasActionControls ? <ChatHeaderGroupDivider /> : null}
             <EnvironmentToggle environment={environment} />
             {rightPanelToggleControl}
           </>

@@ -91,8 +91,9 @@ export const CHAT_SURFACE_HEADER_ROW_CLASS_NAME = cn(
 export const CHAT_HEADER_ICON_STRENGTH_CLASS_NAME =
   "text-[var(--color-text-foreground)] [&_svg]:!opacity-100";
 
-/** Fixed control height + radius for every header toolbar control. */
-export const CHAT_HEADER_CONTROL_CLASS_NAME = "!h-7 shrink-0 rounded-lg";
+/** Fixed control height + radius for every header toolbar control; `squircle` turns the
+ *  radius into continuous corners where supported and keeps it as the fallback. */
+export const CHAT_HEADER_CONTROL_CLASS_NAME = "!h-7 shrink-0 rounded-lg squircle";
 
 /** Idle text tone for flat header/dock controls (toggles, tabs, chrome icon buttons). */
 export const CHAT_SURFACE_CONTROL_IDLE_TEXT_CLASS_NAME =
@@ -461,7 +462,7 @@ export function SurfaceTabStrip({
 }
 
 export const CHAT_HEADER_ICON_CONTROL_CLASS_NAME =
-  "!size-7 shrink-0 rounded-lg [&_svg,&_[data-slot=central-icon]]:mx-0";
+  "!size-7 shrink-0 rounded-lg squircle [&_svg,&_[data-slot=central-icon]]:mx-0";
 
 /**
  * Square chrome icon-button footprint shared by every right-dock header — the tab
@@ -505,16 +506,40 @@ export function ChatHeaderSplitDivider() {
   return <div aria-hidden="true" className="w-px self-stretch bg-border" />;
 }
 
+/** Short hairline between groups of header controls (actions | panel toggles): the same
+ *  top-bar mark as the rail header divider and the divider between tabs. */
+export function ChatHeaderGroupDivider() {
+  return (
+    <div
+      aria-hidden="true"
+      className="h-(--app-chrome-divider-height) w-px shrink-0 bg-(--app-chrome-divider-color)"
+    />
+  );
+}
+
 export type DiffRenderMode = "stacked" | "split";
 
-/** Visual treatment shared across the header row. */
-export type ChatHeaderControlTone = "plain" | "outline";
+/** Visual treatment shared across the header row. `surface` is the quiet icon-only
+ *  look of the panel toggles (muted glyph at rest, filled on hover), for icon buttons
+ *  that sit in the same cluster. */
+export type ChatHeaderControlTone = "plain" | "outline" | "surface";
 
 /** Maps a header tone onto the shared Button variant taxonomy. */
 export function chatHeaderControlVariant(
   tone: ChatHeaderControlTone,
 ): NonNullable<ComponentProps<typeof Button>["variant"]> {
   return tone === "outline" ? "chrome-outline" : "chrome";
+}
+
+/** Glyph strength for a tone: surface buttons dim their glyph exactly like
+ *  {@link SurfaceChipIcon} so they match the Toggle chips beside them. */
+function chatHeaderIconStrengthClassName(tone: ChatHeaderControlTone): string {
+  return tone === "surface"
+    ? cn(
+        CHAT_SURFACE_CONTROL_IDLE_TEXT_CLASS_NAME,
+        "[&_[data-slot=central-icon]]:!opacity-70 [&_svg]:!size-4 [&_svg]:!opacity-70 [&_[data-slot=central-icon]]:!size-4",
+      )
+    : CHAT_HEADER_ICON_STRENGTH_CLASS_NAME;
 }
 
 type ChatHeaderButtonBaseProps = Omit<ComponentProps<typeof Button>, "variant" | "size"> & {
@@ -569,7 +594,7 @@ export const ChatHeaderIconButton = forwardRef<HTMLButtonElement, ChatHeaderIcon
         variant={chatHeaderControlVariant(tone)}
         className={cn(
           CHAT_HEADER_ICON_CONTROL_CLASS_NAME,
-          CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
+          chatHeaderIconStrengthClassName(tone),
           className,
         )}
       >
