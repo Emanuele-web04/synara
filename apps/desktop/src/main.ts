@@ -103,7 +103,11 @@ import {
   isWatchableBundlePath,
   type BundleSignature,
 } from "./bundleSwapDetection";
-import { waitForBackendStartupReady } from "./backendStartupReadiness";
+import {
+  isBackendStartupReadyResponse,
+  monitorBackendStartupHealth,
+  waitForBackendStartupReady,
+} from "./backendStartupReadiness";
 import { DesktopBetaChannel, readBetaImportResult, resolveBetaHomeDir } from "./betaChannel";
 import type { ExpectedTeamId } from "./betaInstaller";
 import {
@@ -173,6 +177,12 @@ import {
   shouldRefreshIconCache,
 } from "./macIconCacheRefresh";
 import { persistMacAppIcon } from "./macAppIcon";
+import {
+  MAC_WINDOW_VIBRANCY,
+  createWindowMaterialApplier,
+  parseDesktopWindowMaterial,
+  type WindowMaterialAddon,
+} from "./windowMaterial";
 import { collectMacUpdateDiagnostics } from "./macUpdateDiagnostics";
 import { openInitialBackendWindow } from "./initialBackendWindowOpen";
 import { isTrustedMediaPermissionRequest } from "./mediaPermissions";
@@ -821,19 +831,7 @@ async function waitForBackendWindowReady(baseUrl: string): Promise<"listening" |
         // minute; this observer is cancelled when that child exits or the app
         // shuts down.
         timeoutMs: null,
-        isReady: async (response) => {
-          if (!response.ok) {
-            return false;
-          }
-          try {
-            const payload = (await response.json()) as {
-              startupReady?: unknown;
-            };
-            return payload.startupReady === true;
-          } catch {
-            return false;
-          }
-        },
+        isReady: isBackendStartupReadyResponse,
       }),
     cancelHttpWait: cancelBackendReadinessWait,
   });
@@ -1994,6 +1992,34 @@ function resolveNotificationIconPath(): string | null {
   }
   return resolveResourcePath("synara.png") ?? resolveIconPath("png");
 }
+
+function loadWindowMaterialAddon(): WindowMaterialAddon | null {
+  const addonPath = app.isPackaged
+    ? Path.resolve(process.resourcesPath, "..", "Frameworks", "synara-window-material.node")
+    : Path.resolve(
+        __dirname,
+        "..",
+        ".electron-runtime",
+        "window-material",
+        "synara-window-material.node",
+      );
+  try {
+    const addonModule: { exports: Partial<WindowMaterialAddon> } = { exports: {} };
+    process.dlopen(addonModule, addonPath);
+    const { setBackgroundBlurRadius } = addonModule.exports;
+    if (typeof setBackgroundBlurRadius !== "function") {
+      throw new Error("setBackgroundBlurRadius export is missing");
+    }
+    return { setBackgroundBlurRadius };
+  } catch (error) {
+    console.warn(
+      `[desktop] Window blur addon unavailable, keeping vibrancy: ${formatErrorMessage(error)}`,
+    );
+    return null;
+  }
+}
+
+const applyWindowMaterial = createWindowMaterialApplier(loadWindowMaterialAddon);
 
 function resolveAppSnapHelperPath(): string {
   if (app.isPackaged) {
@@ -4511,6 +4537,7 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
   backendListeningDetector = listeningDetector;
   backendProcess = child;
   cuaDriverHost?.resume();
+  const backendBaseUrl = backendHttpUrl;
   let backendSessionClosed = false;
   const closeBackendSession = (details: string) => {
     if (backendSessionClosed) return;
@@ -4535,20 +4562,25 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
     detectors: [listeningDetector, startupBlockDetector, outputTailDetector],
   });
 
-  // A successful spawn only proves that Electron created the process. Reset the
-  // crash backoff and the circuit breaker after the backend actually listens;
-  // otherwise a startup error becomes a permanent 500 ms restart loop.
-  void listeningDetector.promise.then(
-    () => {
-      if (backendListeningDetector === listeningDetector) {
-        backendSupervision.recordReadiness();
-        maybeTrackBetaInstalled();
-      }
+  // Readiness is authoritative even when the optional log marker is delayed or
+  // absent. A successful spawn alone must never reset crash supervision.
+  const startupHealthMonitor = monitorBackendStartupHealth({
+    waitUntilReady: (signal) =>
+      waitForHttpReady(backendBaseUrl, {
+        path: "/health",
+        timeoutMs: null,
+        signal,
+        isReady: isBackendStartupReadyResponse,
+      }),
+    isCurrent: () => backendProcess === child,
+    onReady: () => {
+      backendSupervision.recordReadiness();
+      maybeTrackBetaInstalled();
     },
-    () => undefined,
-  );
+  });
 
   child.on("error", (error) => {
+    startupHealthMonitor.abort();
     if (backendListeningDetector === listeningDetector) {
       listeningDetector.fail(error);
       backendListeningDetector = null;
@@ -4562,6 +4594,7 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
   });
 
   child.on("exit", (code, signal) => {
+    startupHealthMonitor.abort();
     // Output can drain after a failed stop has restored the app's running state.
     const expectedExit = isQuitting;
     if (backendListeningDetector === listeningDetector) {
@@ -4943,6 +4976,14 @@ function registerIpcHandlers(): void {
     }
 
     nativeTheme.themeSource = theme;
+  });
+
+  ipcMain.removeHandler(IPC.setWindowMaterial);
+  ipcMain.handle(IPC.setWindowMaterial, (event, rawInput: unknown) => {
+    const input = parseDesktopWindowMaterial(rawInput);
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (process.platform !== "darwin" || !input || !window) return false;
+    return applyWindowMaterial(window, input);
   });
 
   ipcMain.removeHandler(IPC.getAppIcon);
@@ -5378,8 +5419,9 @@ function getIconOption(): { icon: string } | Record<string, never> {
   }
 }
 
-// macOS backs the translucent shell with window vibrancy, so the window is created
-// transparent (`#00000000`) over the vibrancy material. Windows/Linux have no vibrancy:
+// macOS backs the shell with window vibrancy, so the window is created transparent
+// (`#00000000`) over the vibrancy material. The renderer's translucency settings then swap
+// vibrancy for an adjustable desktop blur (see windowMaterial.ts). Windows/Linux have no vibrancy:
 // a transparent window there leaves backdrop-filter surfaces bleeding through and, on
 // fractional DPI, rendering blurry. So off macOS we create an opaque window and skip the
 // macOS-only options. The background tracks the OS light/dark appearance purely to avoid
@@ -5390,7 +5432,7 @@ function getWindowMaterialOptions(): BrowserWindowConstructorOptions {
     return { backgroundColor: nativeTheme.shouldUseDarkColors ? "#181818" : "#ffffff" };
   }
   return {
-    vibrancy: "under-window",
+    vibrancy: MAC_WINDOW_VIBRANCY,
     // "followWindow" lets macOS drop vibrancy blending to inactive when the
     // window is backgrounded, so WindowServer stops continuously recompositing
     // it. "active" forced full-cost blending even when the app was unfocused.

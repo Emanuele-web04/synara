@@ -106,6 +106,8 @@ import { useLocation, useNavigate, useParams, useSearch } from "@tanstack/react-
 import {
   type SidebarProjectSortOrder,
   type SidebarThreadSortOrder,
+  getProviderInstanceOptions,
+  type ProviderInstanceOption,
   useAppSettings,
 } from "../appSettings";
 import {
@@ -170,8 +172,12 @@ import { useThreadPullRequests } from "../hooks/useThreadPullRequests";
 import {
   providerComposerCapabilitiesQueryOptions,
   providerModelsQueryOptions,
-  supportsThreadImport,
 } from "../lib/providerDiscoveryReactQuery";
+import {
+  buildThreadImportCandidates,
+  filterThreadImportTargetsByCapabilities,
+  type ThreadImportTarget,
+} from "../lib/threadImport";
 import {
   resolveCurrentProjectTargetId,
   resolveLatestProjectTargetIdWithFallback,
@@ -281,11 +287,7 @@ import ReleaseHistoryDialog from "./ReleaseHistoryDialog";
 import { GROUPS_ON, isBetaFeatureOn } from "../betaFeatures";
 import { WHATS_NEW_ENTRIES } from "../whatsNew/entries";
 import { sortEntriesByVersionDesc } from "../whatsNew/logic";
-import {
-  SidebarSearchPalette,
-  type ImportProviderKind,
-  type SidebarSearchPaletteMode,
-} from "./SidebarSearchPalette";
+import { SidebarSearchPalette, type SidebarSearchPaletteMode } from "./SidebarSearchPalette";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useHandleNewGroupChat } from "../hooks/useHandleNewGroupChat";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
@@ -420,9 +422,10 @@ import { createClientPointMenuAnchor } from "~/lib/clientPointMenuAnchor";
 import { resolveThreadModelSummary } from "~/lib/threadModelSummary";
 import {
   canCreateThreadHandoff,
-  resolveAvailableHandoffTargetProviders,
+  resolveAvailableHandoffTargets,
   resolveThreadHandoffAvailability,
   resolveThreadHandoffBadgeLabel,
+  type ThreadHandoffTarget,
 } from "../lib/threadHandoff";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { beginThreadDrag, endThreadDrag } from "../lib/threadDrag";
@@ -696,7 +699,7 @@ function resolveWorktreeBadgeLabel(
 
 /** User message the coordinator receives when a thread is handed to a group. */
 function groupPickupMessageText(sourceThread: Pick<Thread, "id" | "title">): string {
-  return `A thread was handed to this group for you to pick up: "${sourceThread.title ?? "Untitled thread"}" (thread id ${sourceThread.id}). Use synara_read_thread to read it and continue the work it was doing.`;
+  return `A thread was handed to this hub for you to pick up: "${sourceThread.title ?? "Untitled thread"}" (thread id ${sourceThread.id}). Use synara_read_thread to read it and continue the work it was doing.`;
 }
 
 type ThreadMetaChip = {
@@ -1215,7 +1218,7 @@ function SidebarActivityBellButton({
 
 const SIDEBAR_SURFACE_PICKER_COPY: Record<SidebarView, { title: string; description: string }> = {
   threads: { title: "Synara", description: "Build, debug, and ship" },
-  groups: { title: "Groups", description: "Coordinated work across repos" },
+  groups: { title: "Hubs", description: "Coordinated work across repos" },
 };
 
 /**
@@ -1367,7 +1370,7 @@ export default function Sidebar() {
   const isOnSettings = useLocation({
     select: (loc) => loc.pathname === "/settings",
   });
-  const isOnGroupsRoute = pathname.startsWith("/groups");
+  const isOnGroupsRoute = pathname.startsWith("/hubs") || pathname.startsWith("/groups");
   const isOnKanban = pathname.startsWith("/kanban");
   const isOnTasks = pathname.startsWith("/tasks");
   const isOnAutomations = pathname.startsWith("/automations");
@@ -1434,6 +1437,10 @@ export default function Sidebar() {
     [automationListQuery.data],
   );
   const { settings: appSettings, serverSettings, updateSettings } = useAppSettings();
+  const sidebarProviderInstances = useMemo(
+    () => getProviderInstanceOptions(appSettings),
+    [appSettings],
+  );
   // Projects is always available; Groups and the standalone Chats footer can be hidden
   // independently from Settings.
   const chatsSectionVisible = appSettings.showChatsSection;
@@ -2398,10 +2405,10 @@ export default function Sidebar() {
   }, [draftThreadsByThreadId, groupProjectIdSet]);
 
   // Where the Groups segment lands, resolved directly (remembered Groups route, else the latest
-  // group chat) instead of bouncing through the "/groups" splash route — that extra hop +
+  // group chat) instead of bouncing through the "/hubs" splash route — that extra hop +
   // async redirect is what made the segment switch feel sluggish. Mirrors
   // resolveBackToThreadsTarget so both segments restore the thread you were last on.
-  // Archived chats are excluded, matching the /groups landing: the sidebar hides them, so
+  // Archived chats are excluded, matching the /hubs landing: the sidebar hides them, so
   // neither the segment switch nor settings back may resurrect one.
   const activeGroupSidebarThreads = useMemo(
     () => groupSidebarThreads.filter((thread) => (thread.archivedAt ?? null) === null),
@@ -2457,10 +2464,10 @@ export default function Sidebar() {
     lastActiveSidebarSegmentRef.current = isOnGroups ? "groups" : "threads";
   }, [isOnSettings, isOnGroups]);
 
-  // Shared Groups fallback: the /groups index route restores the last group thread or shows
+  // Shared Groups fallback: the /hubs index route restores the last group thread or shows
   // the Groups empty state, so landing there is the no-implicit-creation fallback.
   const openGroupChatFallback = useCallback(() => {
-    void navigate({ to: "/groups" });
+    void navigate({ to: "/hubs" });
   }, [navigate]);
 
   const handleBackToAppFromSettings = useCallback(() => {
@@ -2517,7 +2524,7 @@ export default function Sidebar() {
     ],
   );
 
-  // The `/groups` route owns the hidden-section redirect (a hidden Groups tab
+  // The `/hubs` route owns the hidden-section redirect (a hidden Groups tab
   // also hides the section surface only) — the sidebar must not bounce group
   // threads opened from search, split view, or a link while the tab is hidden.
   useEffect(() => {
@@ -2750,7 +2757,7 @@ export default function Sidebar() {
   ]);
 
   const handleImportThread = useCallback(
-    async (provider: ImportProviderKind, externalId: string) => {
+    async (target: ThreadImportTarget, externalId: string) => {
       const api = readNativeApi();
       if (!api) {
         throw new Error("The app server is unavailable.");
@@ -2767,13 +2774,16 @@ export default function Sidebar() {
         throw new Error("The target project could not be resolved.");
       }
 
+      const { provider, instanceId } = target;
       const providerDefaultModel = getDefaultModel(provider);
       let modelSelection =
-        activeProject.defaultModelSelection?.provider === provider
+        activeProject.defaultModelSelection?.provider === provider &&
+        activeProject.defaultModelSelection.instanceId === instanceId
           ? activeProject.defaultModelSelection
           : providerDefaultModel
             ? {
                 provider,
+                instanceId,
                 model: providerDefaultModel,
               }
             : null;
@@ -2785,6 +2795,7 @@ export default function Sidebar() {
           .fetchQuery(
             providerModelsQueryOptions({
               provider: "omp",
+              instanceId,
               cwd: activeProject.cwd,
             }),
           )
@@ -2793,6 +2804,7 @@ export default function Sidebar() {
         modelSelection = fallbackModel
           ? {
               provider: "omp",
+              instanceId,
               model: fallbackModel,
             }
           : null;
@@ -2801,7 +2813,7 @@ export default function Sidebar() {
         throw new Error(
           provider === "omp"
             ? "No Oh My Pi models are discovered yet; configure an OMP provider before importing."
-            : "Select a Pi model before importing a Pi thread.",
+            : `Select a ${PROVIDER_DISPLAY_NAMES[provider]} model before importing.`,
         );
       }
       const threadId = newThreadId();
@@ -2813,11 +2825,13 @@ export default function Sidebar() {
           ? `Imported Claude session${suffix ? ` ${suffix}` : ""}`
           : provider === "cursor"
             ? `Imported Cursor session${suffix ? ` ${suffix}` : ""}`
-            : provider === "opencode"
-              ? `Imported OpenCode session${suffix ? ` ${suffix}` : ""}`
-              : provider === "omp"
-                ? `Imported Oh My Pi session${suffix ? ` ${suffix}` : ""}`
-                : `Imported Codex thread${suffix ? ` ${suffix}` : ""}`;
+            : provider === "droid"
+              ? `Imported Droid session${suffix ? ` ${suffix}` : ""}`
+              : provider === "opencode"
+                ? `Imported OpenCode session${suffix ? ` ${suffix}` : ""}`
+                : provider === "omp"
+                  ? `Imported Oh My Pi session${suffix ? ` ${suffix}` : ""}`
+                  : `Imported Codex thread${suffix ? ` ${suffix}` : ""}`;
       let createdThread = false;
 
       try {
@@ -2960,9 +2974,9 @@ export default function Sidebar() {
   const copyThreadIdToClipboard = useCopyThreadIdToClipboard();
   const copyPathToClipboard = useCopyPathToClipboard();
   const handoffThread = useCallback(
-    async (thread: Thread, targetProvider: ProviderKind) => {
+    async (thread: Thread, target: ThreadHandoffTarget) => {
       try {
-        await createThreadHandoff(thread, targetProvider);
+        await createThreadHandoff(thread, target.provider, target.instanceId);
       } catch (error) {
         toastManager.add({
           type: "error",
@@ -3020,14 +3034,14 @@ export default function Sidebar() {
   const continueThreadAsGroup = useCallback(async (thread: Thread) => {
     const api = readNativeApi();
     if (!api?.projectAgent) return;
-    const groupId = await createGroupProject({ title: thread.title ?? "New group" }).catch(
+    const groupId = await createGroupProject({ title: thread.title ?? "New hub" }).catch(
       () => null,
     );
     if (!groupId) {
       toastManager.add({
         type: "error",
-        title: "Unable to create group",
-        description: "The Groups workspace is not ready yet — try again in a moment.",
+        title: "Unable to create hub",
+        description: "The Hubs workspace is not ready yet — try again in a moment.",
       });
       return;
     }
@@ -3041,8 +3055,8 @@ export default function Sidebar() {
     if (!overview) {
       toastManager.add({
         type: "error",
-        title: "Group created, but the project could not be linked",
-        description: "Link the repository from the group's settings instead.",
+        title: "Hub created, but the project could not be linked",
+        description: "Link the repository from the hub's settings instead.",
       });
     }
     setProjectAgentDialogState({
@@ -3066,8 +3080,8 @@ export default function Sidebar() {
       if (!overview) {
         toastManager.add({
           type: "error",
-          title: "Could not move the thread to the group",
-          description: "The project may already be linked to that group.",
+          title: "Could not move the thread to the hub",
+          description: "The project may already be linked to that hub.",
         });
         return;
       }
@@ -3078,7 +3092,7 @@ export default function Sidebar() {
         toastManager.add({
           type: "info",
           title: "Project linked",
-          description: "Set up the group's coordinator to hand the thread over.",
+          description: "Set up the hub's coordinator to hand the thread over.",
         });
       }
     },
@@ -3128,15 +3142,19 @@ export default function Sidebar() {
         });
       const threadStatus = threadSummary ? resolveThreadStatusForSidebar(threadSummary) : null;
       const handoffTargets = canHandoff
-        ? resolveAvailableHandoffTargetProviders({
+        ? resolveAvailableHandoffTargets({
             sourceProvider: thread.modelSelection.provider,
-            providerSettings: serverSettingsQuery.data?.providers,
-            providerStatuses,
+            sourceProviderInstanceId:
+              thread.session?.providerInstanceId ?? thread.modelSelection.instanceId,
+            providerInstances: getProviderInstanceOptions(appSettings),
           })
         : [];
-      const handoffItems = handoffTargets.map((provider, index) => ({
-        id: `handoff:${provider}`,
-        label: `Handoff to ${PROVIDER_DISPLAY_NAMES[provider]}`,
+      const handoffTargetById = new Map(
+        handoffTargets.map((target) => [`handoff:${target.instanceId}`, target]),
+      );
+      const handoffItems = handoffTargets.map((target, index) => ({
+        id: `handoff:${target.instanceId}`,
+        label: `Handoff to ${target.label}`,
         icon: THREAD_CONTEXT_MENU_ICONS.handoff,
         separatorBefore: index === 0,
       }));
@@ -3188,13 +3206,13 @@ export default function Sidebar() {
             : [
                 {
                   id: "continue-as-group",
-                  label: "Continue as a group",
+                  label: "Continue as a hub",
                   icon: THREAD_CONTEXT_MENU_ICONS.group,
                   separatorBefore: true,
                 },
                 {
                   id: "move-to-group",
-                  label: "Move to group…",
+                  label: "Move to hub…",
                   icon: THREAD_CONTEXT_MENU_ICONS.group,
                 },
               ]),
@@ -3241,9 +3259,9 @@ export default function Sidebar() {
         return;
       }
       if (typeof clicked === "string" && clicked.startsWith("handoff:")) {
-        const targetProvider = clicked.slice("handoff:".length);
-        if (handoffTargets.includes(targetProvider as ProviderKind)) {
-          await handoffThread(thread, targetProvider as ProviderKind);
+        const target = handoffTargetById.get(clicked);
+        if (target) {
+          await handoffThread(thread, target);
         }
         return;
       }
@@ -3366,8 +3384,8 @@ export default function Sidebar() {
         if (eligibleGroups.length === 0) {
           toastManager.add({
             type: "info",
-            title: "No groups yet",
-            description: "Create a group first, then move this thread into it.",
+            title: "No hubs yet",
+            description: "Create a hub first, then move this thread into it.",
           });
           return;
         }
@@ -3400,6 +3418,7 @@ export default function Sidebar() {
       await confirmAndDeleteThread(threadId);
     },
     [
+      appSettings,
       confirmAndArchiveThread,
       confirmAndDeleteThread,
       coordinatorThreadIds,
@@ -4338,7 +4357,7 @@ export default function Sidebar() {
           groupProjects,
         });
       if (!targetProjectId) {
-        void navigate({ to: "/groups" });
+        void navigate({ to: "/hubs" });
         return;
       }
       await handleNewGroupChat(targetProjectId, { fresh: true });
@@ -6474,7 +6493,7 @@ export default function Sidebar() {
     id === "home" || id === "spaces"
       ? RAIL_PANEL_ITEM_LABELS[id]
       : id === "studio"
-        ? "Groups"
+        ? "Hubs"
         : sidebarNavDescriptors[id].label;
   const railItemFor = (id: RailOrderableItemId): AppRailItem => {
     const base = { id, glyphs: railItemGlyphs(id), label: railItemLabel(id) };
@@ -7813,6 +7832,7 @@ export default function Sidebar() {
             });
           }}
           onOpenProject={handleOpenProjectFromSearch}
+          providerInstances={sidebarProviderInstances}
           onImportThread={handleImportThread}
           onOpenThread={(threadId) => {
             activateThreadFromSidebarIntent(ThreadId.makeUnsafe(threadId));
@@ -7856,27 +7876,29 @@ function SidebarSearchPaletteController(props: {
   onOpenFeedback: () => void;
   onOpenUsageSettings: () => void;
   onOpenProject: (projectId: string) => void;
-  onImportThread: (provider: ImportProviderKind, externalId: string) => Promise<void>;
+  providerInstances: readonly ProviderInstanceOption[];
+  onImportThread: (target: ThreadImportTarget, externalId: string) => Promise<void>;
   onOpenThread: (threadId: string) => void;
 }) {
   const selectAllThreads = useMemo(() => createAllThreadsSelector(), []);
   // Search keeps automation-run threads as an intent-driven escape hatch, while
   // structurally nested side chats stay out of standalone thread results.
   const selectSidebarDisplayThreads = useMemo(() => createSidebarDisplayThreadsSelector(), []);
+  const importCandidates = useMemo(
+    () => buildThreadImportCandidates(props.providerInstances),
+    [props.providerInstances],
+  );
   const importProviderCapabilityQueries = useQueries({
-    queries: (["codex", "claudeAgent", "cursor", "opencode", "omp"] as const).map((provider) =>
-      providerComposerCapabilitiesQueryOptions(provider),
+    queries: importCandidates.map((target) =>
+      providerComposerCapabilitiesQueryOptions(target.provider, target.instanceId),
     ),
   });
   const threads = useStore(selectAllThreads);
   const sidebarDisplayThreads = useStore(selectSidebarDisplayThreads);
-  const importProviders: ReadonlyArray<ImportProviderKind> = (
-    ["codex", "claudeAgent", "cursor", "opencode", "omp"] as const
-  ).filter(
-    (provider, index) =>
-      isBetaFeatureOn(provider) &&
-      supportsThreadImport(importProviderCapabilityQueries[index]?.data),
-  );
+  const importTargets = filterThreadImportTargetsByCapabilities(
+    importCandidates,
+    importProviderCapabilityQueries.map((query) => query.data),
+  ).filter((target) => isBetaFeatureOn(target.provider));
   // `threads` is rebuilt on every streamed store flush, so this projection is
   // cheap by construction (message text is cached per thread-messages array
   // below) and its result keeps the previous identity while nothing the
@@ -7931,7 +7953,7 @@ function SidebarSearchPaletteController(props: {
       onOpenFeedback={props.onOpenFeedback}
       onOpenUsageSettings={props.onOpenUsageSettings}
       onOpenProject={props.onOpenProject}
-      importProviders={importProviders}
+      importTargets={importTargets}
       onImportThread={props.onImportThread}
       onImportProjects={(providers) => useProjectImportDialogStore.getState().openDialog(providers)}
       onOpenThread={props.onOpenThread}

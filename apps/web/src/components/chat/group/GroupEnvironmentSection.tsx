@@ -127,7 +127,7 @@ export function GroupEnvironmentSection(props: {
       <SettingsSectionShell title="Workspace">
         <SettingsCard>
           <SettingsRow
-            title="Group folder"
+            title="Hub folder"
             description={
               props.workspacePath
                 ? abbreviateHomePath(props.workspacePath, homeDir)

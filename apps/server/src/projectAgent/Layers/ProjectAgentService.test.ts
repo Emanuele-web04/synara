@@ -57,7 +57,11 @@ const groupId2 = ProjectId.makeUnsafe("project-group-2");
 const ordinaryId = ProjectId.makeUnsafe("project-ordinary-1");
 const studioId = ProjectId.makeUnsafe("project-studio-1");
 const outsideGroupId = ProjectId.makeUnsafe("project-group-outside");
-const modelSelection = { provider: "codex" as const, model: "gpt-5-codex" };
+const modelSelection = {
+  provider: "codex" as const,
+  instanceId: "codex",
+  model: "gpt-5-codex",
+};
 const limits = {
   maxConcurrentWorkers: 2,
   maxNewWorkersPerTurn: 4,
@@ -352,6 +356,8 @@ function makeTestLayer(options?: {
     const unavailable = (options?.unavailableProviders ?? []).includes(provider);
     return {
       provider,
+      driver: provider,
+      instanceId: provider,
       status: unavailable ? "error" : "ready",
       available: !unavailable,
       authStatus: "authenticated",
@@ -476,7 +482,7 @@ const leftoverConfig = {
   disabledAt: null,
 };
 
-it.effect("configures a group and imports exactly one greeting", () => {
+it.effect("configures a hub and imports exactly one greeting", () => {
   const harness = makeTestLayer();
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
@@ -486,14 +492,14 @@ it.effect("configures a group and imports exactly one greeting", () => {
         projectId: groupId,
         coordinatorModelSelection: modelSelection,
         userDisplayName: "Dilip",
-        goal: "Ship groups",
+        goal: "Ship hubs",
         icon: "folder",
         autoMemoryEnabled: true,
       },
       { kind: "user" },
     );
     assert.equal(overview.configured, true);
-    assert.equal(overview.config?.goal, "Ship groups");
+    assert.equal(overview.config?.goal, "Ship hubs");
     const imported = harness.dispatched.filter(
       (command) => command.type === "thread.messages.import",
     );
@@ -501,7 +507,7 @@ it.effect("configures a group and imports exactly one greeting", () => {
     if (imported[0]?.type === "thread.messages.import") {
       assert.equal(imported[0].messages[0]?.role, "assistant");
       assert.equal(
-        imported[0].messages[0]?.text.includes("Hi Dilip, welcome to your new group."),
+        imported[0].messages[0]?.text.includes("Hi Dilip, welcome to your new hub."),
         true,
       );
       const threadCreate = harness.dispatched.find((command) => command.type === "thread.create");
@@ -632,7 +638,7 @@ it.effect("forbids configuring an ordinary project", () => {
   }).pipe(Effect.provide(harness.layer));
 });
 
-it.effect("rejects a group row outside the Groups root", () => {
+it.effect("rejects a hub row outside the Hubs root", () => {
   const harness = makeTestLayer();
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
@@ -733,7 +739,7 @@ it.effect("hides leftover ordinary configs and disables them on reconcile", () =
     );
     const activity = yield* repository.listActivity({ projectId: ordinaryId, limit: 10 });
     assert.equal(
-      activity.some((row) => row.summary === "Coordinator disabled: this project is not a group."),
+      activity.some((row) => row.summary === "Coordinator disabled: this project is not a hub."),
       true,
     );
     const activityAfterFirst = yield* repository.listActivity({
@@ -902,7 +908,7 @@ it.effect("scopes memory writes to MEMORY.md and per-thread files", () => {
   }).pipe(Effect.provide(harness.layer));
 });
 
-it.effect("links an ordinary repository to a group and is idempotent", () => {
+it.effect("links an ordinary repository to a hub and is idempotent", () => {
   const harness = makeTestLayer();
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
@@ -955,7 +961,7 @@ it.effect("links an ordinary repository to a group and is idempotent", () => {
   }).pipe(Effect.provide(harness.layer));
 });
 
-it.effect("surfaces linked projects in the overview before the group is configured", () => {
+it.effect("surfaces linked projects in the overview before the hub is configured", () => {
   const harness = makeTestLayer();
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
@@ -986,7 +992,7 @@ it.effect("surfaces linked projects in the overview before the group is configur
   }).pipe(Effect.provide(harness.layer));
 });
 
-it.effect("rejects linking a container, the group itself, or an unknown project", () => {
+it.effect("rejects linking a container, the hub itself, or an unknown project", () => {
   const harness = makeTestLayer();
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
@@ -1026,7 +1032,7 @@ it.effect("rejects linking a container, the group itself, or an unknown project"
   }).pipe(Effect.provide(harness.layer));
 });
 
-it.effect("allows group-coordinator thread creation in the group or a linked repo", () => {
+it.effect("allows hub-coordinator thread creation in the hub or a linked repo", () => {
   const harness = makeTestLayer();
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
@@ -1342,7 +1348,7 @@ it.effect("rejects a coordinator model whose provider is not installed", () => {
   }).pipe(Effect.provide(harness.layer));
 });
 
-it.effect("forbids a context packet across groups but allows own-group members (S1)", () => {
+it.effect("forbids a context packet across hubs but allows own-hub members (S1)", () => {
   const harness = makeTestLayer();
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
@@ -1371,7 +1377,7 @@ it.effect("forbids a context packet across groups but allows own-group members (
   }).pipe(Effect.provide(harness.layer));
 });
 
-it.effect("indexes routine group turns as non-wake and alert settles as wakeable", () => {
+it.effect("indexes routine hub turns as non-wake and alert settles as wakeable", () => {
   const harness = makeTestLayer();
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
@@ -1676,7 +1682,7 @@ it.effect("reports member threads, linked repos, and setup flags in summaries", 
   }).pipe(Effect.provide(harness.layer));
 });
 
-it.effect("blocks curated writes for group members and unmanaged threads", () => {
+it.effect("blocks curated writes for hub members and unmanaged threads", () => {
   const harness = makeTestLayer();
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
@@ -2522,7 +2528,7 @@ const workerPrincipal = (
     taskId: ProjectTaskId.makeUnsafe("task-1"),
   }) as const;
 
-it.effect("gates the new group tools by principal kind", () => {
+it.effect("gates the new hub tools by principal kind", () => {
   const harness = makeTestLayer();
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
@@ -3127,7 +3133,7 @@ it.effect("pause interrupts turns, blocks wakes, disables automations; resume re
   }).pipe(Effect.provide(harness.layer));
 });
 
-it.effect("archive hides the group and unarchive restores it", () => {
+it.effect("archive hides the hub and unarchive restores it", () => {
   const harness = makeTestLayer();
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
@@ -3231,7 +3237,7 @@ it.effect("archive hides the group and unarchive restores it", () => {
   }).pipe(Effect.provide(harness.layer));
 });
 
-it.effect("delete removes group data, keeps custom libraries and linked repos", () => {
+it.effect("delete removes hub data, keeps custom libraries and linked repos", () => {
   const harness = makeTestLayer();
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
@@ -3429,7 +3435,7 @@ it.effect("delete moves the managed library into the injected trash dir", () => 
   }).pipe(Effect.provide(harness.layer));
 });
 
-it.effect("delete aborts atomically when a group thread refuses to delete", () => {
+it.effect("delete aborts atomically when a hub thread refuses to delete", () => {
   const harness = makeTestLayer({ failCommandTypes: ["thread.delete"] });
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
@@ -3484,7 +3490,7 @@ it.effect("delete aborts atomically when a group thread refuses to delete", () =
   }).pipe(Effect.provide(harness.layer));
 });
 
-it.effect("requireEmpty delete succeeds on a group nothing was added to", () => {
+it.effect("requireEmpty delete succeeds on a hub nothing was added to", () => {
   const harness = makeTestLayer();
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
@@ -3507,7 +3513,7 @@ it.effect("requireEmpty delete succeeds on a group nothing was added to", () => 
   }).pipe(Effect.provide(harness.layer));
 });
 
-it.effect("requireEmpty delete refuses once anything landed and leaves the group intact", () => {
+it.effect("requireEmpty delete refuses once anything landed and leaves the hub intact", () => {
   const harness = makeTestLayer();
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
@@ -4010,7 +4016,7 @@ it.effect("libraryAdd copies directories without symlinks, .git, or node_modules
   }).pipe(Effect.provide(harness.layer));
 });
 
-it.effect("refuses coordinator turns while the group is paused or archived", () => {
+it.effect("refuses coordinator turns while the hub is paused or archived", () => {
   const harness = makeTestLayer();
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
@@ -4167,19 +4173,19 @@ it.effect("gives the coordinator thread its playbook packet on every turn", () =
     // playbook and watch state on every turn, not just the first.
     for (let turn = 0; turn < 2; turn += 1) {
       const packet = yield* service.formatContextPacketForTurn(coordinatorThreadId);
-      assert.equal(packet.includes("Group context packet"), true);
-      assert.equal(packet.includes("## Playbook\n# Group coordinator playbook"), true);
+      assert.equal(packet.includes("Hub context packet"), true);
+      assert.equal(packet.includes("## Playbook\n# Hub coordinator playbook"), true);
       assert.equal(packet.includes("## Watch"), true);
       assert.equal(packet.includes("## Workers"), true);
       // The member-only tools section never leaks into the coordinator packet.
-      assert.equal(packet.includes("## Group tools"), false);
+      assert.equal(packet.includes("## Hub tools"), false);
     }
 
     // Member threads get the shared packet without the coordinator playbook.
     const memberPacket = yield* service.formatContextPacketForTurn(groupMemberThreadId);
-    assert.equal(memberPacket.includes("Group context packet"), true);
+    assert.equal(memberPacket.includes("Hub context packet"), true);
     assert.equal(memberPacket.includes("## Playbook"), false);
-    assert.equal(memberPacket.includes("## Group tools"), true);
+    assert.equal(memberPacket.includes("## Hub tools"), true);
   }).pipe(Effect.provide(harness.layer));
 });
 
@@ -4202,7 +4208,7 @@ it.effect("only the coordinator packet claims the welcome message", () => {
     // Member threads explain they are not the coordinator instead.
     const memberPacket = yield* service.formatContextPacketForTurn(groupMemberThreadId);
     assert.equal(memberPacket.includes("welcome message from you"), false);
-    assert.equal(memberPacket.includes("member thread of this group"), true);
+    assert.equal(memberPacket.includes("member thread of this hub"), true);
 
     // Workers resolve through their assigned task. They carry coordinator-like
     // sections, but the welcome line still describes them as member threads.
@@ -4247,12 +4253,12 @@ it.effect("only the coordinator packet claims the welcome message", () => {
     );
     const workerPacket = yield* service.formatContextPacketForTurn(workerThreadId);
     assert.equal(workerPacket.includes("welcome message from you"), false);
-    assert.equal(workerPacket.includes("member thread of this group"), true);
+    assert.equal(workerPacket.includes("member thread of this hub"), true);
     assert.equal(workerPacket.includes("## Playbook"), true);
   }).pipe(Effect.provide(harness.layer));
 });
 
-it.effect("shows the group goal once when the active goal repeats it", () => {
+it.effect("shows the hub goal once when the active goal repeats it", () => {
   const harness = makeTestLayer();
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;
@@ -5527,7 +5533,7 @@ it.effect("re-arms monitoring after settle when a new turn starts", () => {
 });
 
 // Paused groups: state still records but no coordinator rows post.
-it.effect("suppresses monitor rows while the group is paused", () => {
+it.effect("suppresses monitor rows while the hub is paused", () => {
   const harness = makeTestLayer();
   return Effect.gen(function* () {
     const service = yield* ProjectAgentService;

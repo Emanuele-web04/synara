@@ -5,6 +5,7 @@
 // Exports: useKanbanTaskScratchDraft
 
 import type { ProviderKind } from "@synara/contracts";
+import type { AppSettings } from "../../appSettings";
 import { useCallback, useEffect, useRef } from "react";
 
 import {
@@ -19,7 +20,13 @@ import { useScratchComposerDraft } from "~/hooks/useScratchComposerDraft";
 import { type ComposerImageAttachment, useComposerDraftStore } from "../../composerDraftStore";
 import { toastManager } from "../ui/toast";
 
-export function useKanbanTaskScratchDraft(input: { readonly defaultProvider: ProviderKind }) {
+export function useKanbanTaskScratchDraft(input: {
+  readonly defaultProvider: AppSettings["defaultProvider"];
+  readonly settings: Pick<
+    AppSettings,
+    "codexAccounts" | "codexHomePath" | "providerInstances" | "selectedCodexAccountId"
+  >;
+}) {
   // Scratch composer draft backing the dialog: model/effort/speed state lives in
   // the composer draft store under this throwaway thread id, exactly like chat.
   const {
@@ -28,11 +35,12 @@ export function useKanbanTaskScratchDraft(input: { readonly defaultProvider: Pro
     prompt,
     setPrompt,
     selectedProvider,
+    selectedProviderInstanceId,
     selectedModel,
     selectedProviderModelOptions,
     selectedModelSupportsAutoMode,
     handleProviderModelChange,
-  } = useScratchComposerDraft({ defaultProvider: input.defaultProvider });
+  } = useScratchComposerDraft(input);
   const composerImages = scratchDraft.images;
   const composerAssistantSelections = scratchDraft.assistantSelections;
   const composerFileComments = scratchDraft.fileComments;
@@ -140,6 +148,7 @@ export function useKanbanTaskScratchDraft(input: { readonly defaultProvider: Pro
     pendingImageCount,
     waitForPendingImages,
     selectedProvider,
+    selectedProviderInstanceId,
     selectedModel,
     selectedModelSupportsAutoMode,
     selectedProviderModelOptions,

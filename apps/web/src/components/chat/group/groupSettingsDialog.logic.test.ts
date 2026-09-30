@@ -333,7 +333,7 @@ describe("buildGroupConfigureInput", () => {
     expect(input.captureEnabled).toBe(true);
   });
 
-  it("names the coordinator after the group only when general is dirty or onboarding", () => {
+  it("names the coordinator after the hub only when general is dirty or onboarding", () => {
     const clean = buildGroupConfigureInput({
       projectId,
       requestId: "req",
@@ -364,7 +364,7 @@ describe("buildGroupConfigureInput", () => {
     expect(onboarding.coordinatorName).toBe("gamma");
   });
 
-  it("keeps a user-chosen coordinator name untouched by a group rename", () => {
+  it("keeps a user-chosen coordinator name untouched by a hub rename", () => {
     const customConfig: ProjectAgentConfig = {
       ...baseConfig,
       coordinatorName: "Team lead",
@@ -425,7 +425,7 @@ describe("saveGroupSettings", () => {
       baseline: makeBaseline(),
       configure: vi.fn(),
     });
-    expect(result).toEqual({ ok: false, error: "Give the group a name." });
+    expect(result).toEqual({ ok: false, error: "Give the hub a name." });
   });
 
   it("configures before renaming when the name changed", async () => {
@@ -563,7 +563,7 @@ describe("isGroupOnboardingDiscardable", () => {
     expect(isGroupOnboardingDiscardable(empty)).toBe(true);
   });
 
-  it("is not discardable once the group has threads", () => {
+  it("is not discardable once the hub has threads", () => {
     expect(isGroupOnboardingDiscardable({ ...empty, threadIndexCount: 1 })).toBe(false);
     expect(isGroupOnboardingDiscardable({ ...empty, sidebarThreadCount: 2 })).toBe(false);
   });

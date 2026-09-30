@@ -12,6 +12,7 @@ import { useRef, useState } from "react";
 
 import {
   getProviderStartOptions,
+  getProviderInstanceOptions,
   resolveAssistantDeliveryMode,
   useAppSettings,
 } from "~/appSettings";
@@ -21,11 +22,15 @@ import type { ScratchModelDraft } from "~/hooks/useScratchComposerDraft";
 import type { ScratchModelCatalog } from "~/hooks/useScratchModelCatalog";
 import { ensureHomeChatProject } from "~/lib/chatProjects";
 import { createAndDispatchDraftThread } from "~/lib/draftThreadCreate";
-import { dispatchDraftThread, type DraftThreadDispatchResult } from "~/lib/draftThreadDispatch";
+import {
+  dispatchDraftThread,
+  resolveDraftThreadDispatchTarget,
+  type DraftThreadDispatchResult,
+} from "~/lib/draftThreadDispatch";
 import { resolveProviderSendAvailabilityWithRefresh } from "~/lib/providerAvailability";
 import { isRequestOutcomeUnknown } from "~/lib/requestOutcome";
 import { composerDraftHasUnsentContent } from "../../composerDraftDomain";
-import { useComposerDraftStore } from "../../composerDraftStore";
+import { providerInstanceModelSelectionKey, useComposerDraftStore } from "../../composerDraftStore";
 import { ensureNativeApi } from "../../nativeApi";
 import { buildModelSelection } from "../../providerModelOptions";
 import { DEFAULT_INTERACTION_MODE, type SidebarThreadSummary } from "../../types";
@@ -57,7 +62,13 @@ export function useTaskDelegation(options: {
     target,
     existingChat,
   } = options;
-  const { scratchThreadId, selectedProvider, selectedModel, selectedModelSupportsAutoMode } = draft;
+  const {
+    scratchThreadId,
+    selectedProvider,
+    selectedProviderInstanceId,
+    selectedModel,
+    selectedModelSupportsAutoMode,
+  } = draft;
   const { modelOptionsByProvider, runtimeMode, runtimeModelForCapabilities } = catalog;
   const navigate = useNavigate();
   const { settings } = useAppSettings();
@@ -163,6 +174,14 @@ export function useTaskDelegation(options: {
       expectedThreadId: todo.threadId,
     });
     if (!linked) return false;
+    const providerInstances = getProviderInstanceOptions(settings);
+    const dispatchTarget = resolveDraftThreadDispatchTarget({
+      threadId: chatId,
+      projectId: thread.projectId,
+      thread,
+      defaultProvider: settings.defaultProvider,
+      providerInstances,
+    });
     composerStore.setPrompt(chatId, prompt);
     const result = await dispatchDraftThread({
       threadId: chatId,
@@ -170,7 +189,8 @@ export function useTaskDelegation(options: {
       thread,
       defaultProvider: settings.defaultProvider,
       assistantDeliveryMode: resolveAssistantDeliveryMode(settings),
-      providerOptions: getProviderStartOptions(settings),
+      providerOptions: getProviderStartOptions(settings, dispatchTarget.instanceId),
+      providerInstances,
     });
     const started = reportResult(result, chatId, thread.title);
     if (!started) {
@@ -185,6 +205,7 @@ export function useTaskDelegation(options: {
     if (!target || selectedModel === null) return false;
     const availability = await resolveProviderSendAvailabilityWithRefresh({
       provider: selectedProvider,
+      instanceId: selectedProviderInstanceId,
       statuses: providerStatuses,
       refreshStatuses: () => refreshProviderStatuses({ silent: true }),
     });
@@ -205,7 +226,10 @@ export function useTaskDelegation(options: {
       return false;
     }
     const scratch = useComposerDraftStore.getState().draftsByThreadId[scratchThreadId];
-    const storedSelection = scratch?.modelSelectionByProvider[selectedProvider];
+    const storedSelection =
+      scratch?.modelSelectionByProvider[
+        providerInstanceModelSelectionKey(selectedProvider, selectedProviderInstanceId)
+      ];
     const modelSelection = buildModelSelection(
       selectedProvider,
       selectedModel,
@@ -213,6 +237,7 @@ export function useTaskDelegation(options: {
       selectedProvider === "claudeAgent"
         ? (runtimeModelForCapabilities?.supportsAutoMode ?? selectedModelSupportsAutoMode)
         : undefined,
+      { instanceId: selectedProviderInstanceId },
     );
     // A to-do without a project picks up the one it was delegated into.
     const adoptsProject = todo.projectId === null && target.kind === "project";
@@ -232,7 +257,8 @@ export function useTaskDelegation(options: {
         workingDirectory: target.kind === "folder" ? target.path : null,
         defaultProvider: settings.defaultProvider,
         assistantDeliveryMode: resolveAssistantDeliveryMode(settings),
-        providerOptions: getProviderStartOptions(settings),
+        providerOptions: getProviderStartOptions(settings, selectedProviderInstanceId),
+        providerInstances: getProviderInstanceOptions(settings),
         beforeDispatch: async (newThreadId) => {
           linked = await linkChat({
             id: todo.id,

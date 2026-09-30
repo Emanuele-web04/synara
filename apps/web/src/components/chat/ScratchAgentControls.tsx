@@ -9,7 +9,7 @@
 
 import type { ServerProviderStatus } from "@synara/contracts";
 
-import { useAppSettings } from "~/appSettings";
+import { getProviderInstanceOptions, useAppSettings } from "~/appSettings";
 import { RuntimeUsageControls } from "~/components/BranchToolbar";
 import { ProviderModelPicker } from "~/components/chat/ProviderModelPicker";
 import { TraitsPicker } from "~/components/chat/TraitsPicker";
@@ -39,19 +39,23 @@ export function ScratchModelPickers({
         lockedProvider={null}
         providers={providerStatuses}
         modelOptionsByProvider={catalog.modelOptionsByProvider}
+        modelOptionsByProviderInstance={catalog.modelOptionsByProviderInstance}
+        providerInstances={getProviderInstanceOptions(settings)}
+        selectedProviderInstanceId={draft.selectedProviderInstanceId}
         loadingModelProviders={catalog.loadingModelProviders}
         discoveryErrorsByProvider={catalog.discoveryErrorsByProvider}
         hiddenProviders={settings.hiddenProviders}
         providerOrder={settings.providerOrder}
         onProviderModelChange={catalog.handleProviderModelChange}
         onProviderModelRoleSelect={(model, options) =>
-          catalog.handleProviderModelChange("omp", model, options)
+          catalog.handleProviderModelChange("omp", model, undefined, options)
         }
         open={catalog.isModelPickerOpen}
         onOpenChange={catalog.setIsModelPickerOpen}
       />
       <TraitsPicker
         provider={draft.selectedProvider}
+        selectedProviderInstanceId={draft.selectedProviderInstanceId}
         threadId={draft.scratchThreadId}
         model={draft.selectedModel}
         runtimeModel={catalog.selectedRuntimeModel}

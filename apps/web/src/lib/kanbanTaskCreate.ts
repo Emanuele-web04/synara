@@ -11,6 +11,7 @@ import type {
   ThreadId,
 } from "@synara/contracts";
 
+import type { ProviderInstanceOption } from "../appSettings";
 import { createDraftThread, type DraftThreadInput } from "./draftThreadCreate";
 import { dispatchKanbanDraftThread, type KanbanDraftDispatchResult } from "./kanbanDispatch";
 
@@ -36,6 +37,7 @@ export async function createAndSendKanbanTask(
     defaultProvider: ProviderKind;
     assistantDeliveryMode: AssistantDeliveryMode;
     providerOptions?: ProviderStartOptions | undefined;
+    providerInstances?: ReadonlyArray<Pick<ProviderInstanceOption, "instanceId" | "provider">>;
   },
 ): Promise<{ threadId: ThreadId; result: KanbanDraftDispatchResult }> {
   const threadId = createKanbanDraftTask(input);
@@ -46,6 +48,7 @@ export async function createAndSendKanbanTask(
     defaultProvider: input.defaultProvider,
     assistantDeliveryMode: input.assistantDeliveryMode,
     providerOptions: input.providerOptions,
+    providerInstances: input.providerInstances,
   });
   return { threadId, result };
 }

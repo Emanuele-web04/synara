@@ -6,16 +6,29 @@
 // Layer: Web UI hook
 // Exports: useScratchComposerDraft, ScratchComposerDraft, ScratchModelDraft
 
-import type { ModelSlug, ProviderKind, ThreadId } from "@synara/contracts";
+import type { ModelSlug, ProviderInstanceId, ProviderKind, ThreadId } from "@synara/contracts";
 import { getDefaultModel } from "@synara/shared/model";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
+import {
+  getProviderInstanceOptions,
+  resolveSelectableProviderInstanceId,
+  type AppSettings,
+} from "../appSettings";
 import { newThreadId } from "~/lib/utils";
-import { useComposerDraftStore, useComposerThreadDraft } from "../composerDraftStore";
+import {
+  providerInstanceModelSelectionKey,
+  useComposerDraftStore,
+  useComposerThreadDraft,
+} from "../composerDraftStore";
 import { buildModelSelection, type ProviderOptions } from "../providerModelOptions";
 
 export function useScratchComposerDraft(input: {
   readonly defaultProvider: ProviderKind;
+  readonly settings: Pick<
+    AppSettings,
+    "codexAccounts" | "codexHomePath" | "providerInstances" | "selectedCodexAccountId"
+  >;
   /** Seeds the prompt once, on mount. */
   readonly initialPrompt?: string;
 }) {
@@ -35,11 +48,36 @@ export function useScratchComposerDraft(input: {
   const stickyModelSelectionByProvider = useComposerDraftStore(
     (state) => state.stickyModelSelectionByProvider,
   );
+  const activeProviderInstanceId = scratchDraft.activeProvider ?? stickyActiveProvider;
+  const providerInstances = useMemo(
+    () => getProviderInstanceOptions(input.settings),
+    [input.settings],
+  );
   const selectedProvider: ProviderKind =
-    scratchDraft.activeProvider ?? stickyActiveProvider ?? input.defaultProvider;
+    (activeProviderInstanceId
+      ? (scratchDraft.modelSelectionByProvider[activeProviderInstanceId]?.provider ??
+        stickyModelSelectionByProvider[activeProviderInstanceId]?.provider ??
+        providerInstances.find((instance) => instance.instanceId === activeProviderInstanceId)
+          ?.provider)
+      : null) ?? input.defaultProvider;
+  const selectedProviderInstanceId: ProviderInstanceId = resolveSelectableProviderInstanceId(
+    input.settings,
+    selectedProvider,
+    activeProviderInstanceId ??
+      Object.values(scratchDraft.modelSelectionByProvider).find(
+        (selection) => selection?.provider === selectedProvider,
+      )?.instanceId ??
+      Object.values(stickyModelSelectionByProvider).find(
+        (selection) => selection?.provider === selectedProvider,
+      )?.instanceId,
+  );
+  const selectionKey = providerInstanceModelSelectionKey(
+    selectedProvider,
+    selectedProviderInstanceId,
+  );
   const draftModelSelection =
-    scratchDraft.modelSelectionByProvider[selectedProvider] ??
-    stickyModelSelectionByProvider[selectedProvider];
+    scratchDraft.modelSelectionByProvider[selectionKey] ??
+    stickyModelSelectionByProvider[selectionKey];
   const selectedModel: ModelSlug | null =
     draftModelSelection?.model ?? getDefaultModel(selectedProvider);
 
@@ -54,16 +92,17 @@ export function useScratchComposerDraft(input: {
     (
       provider: ProviderKind,
       model: ModelSlug,
+      instanceId?: ProviderInstanceId,
       supportsAutoMode?: boolean,
       options?: ProviderOptions,
     ) => {
       // Mirrors the composer: update the scratch draft and persist the sticky selection.
-      useComposerDraftStore
-        .getState()
-        .setModelSelectionAndSticky(
-          scratchThreadId,
-          buildModelSelection(provider, model, options, supportsAutoMode),
-        );
+      useComposerDraftStore.getState().setModelSelectionAndSticky(
+        scratchThreadId,
+        buildModelSelection(provider, model, options, supportsAutoMode, {
+          instanceId: instanceId ?? provider,
+        }),
+      );
     },
     [scratchThreadId],
   );
@@ -74,6 +113,7 @@ export function useScratchComposerDraft(input: {
     prompt: scratchDraft.prompt,
     setPrompt,
     selectedProvider,
+    selectedProviderInstanceId,
     selectedModel,
     selectedProviderModelOptions: draftModelSelection?.options,
     selectedModelSupportsAutoMode:
@@ -95,6 +135,7 @@ export type ScratchModelDraft = Pick<
   | "scratchThreadId"
   | "prompt"
   | "setPrompt"
+  | "selectedProviderInstanceId"
   | "selectedProvider"
   | "selectedModel"
   | "selectedModelSupportsAutoMode"

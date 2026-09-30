@@ -17,7 +17,11 @@ import type {
 } from "@synara/contracts";
 
 import { useComposerDraftStore, type DraftThreadEnvMode } from "../composerDraftStore";
-import { dispatchDraftThread, type DraftThreadDispatchResult } from "./draftThreadDispatch";
+import {
+  dispatchDraftThread,
+  type DraftThreadDispatchResult,
+  type DraftDispatchProviderInstance,
+} from "./draftThreadDispatch";
 import { newThreadId } from "./utils";
 
 export interface DraftThreadInput {
@@ -71,6 +75,7 @@ export async function createAndDispatchDraftThread(
     defaultProvider: ProviderKind;
     assistantDeliveryMode: AssistantDeliveryMode;
     providerOptions?: ProviderStartOptions | undefined;
+    providerInstances?: ReadonlyArray<DraftDispatchProviderInstance>;
     beforeDispatch?: (threadId: ThreadId) => Promise<void>;
   },
 ): Promise<{ threadId: ThreadId; result: DraftThreadDispatchResult }> {
@@ -90,6 +95,7 @@ export async function createAndDispatchDraftThread(
     defaultProvider: input.defaultProvider,
     assistantDeliveryMode: input.assistantDeliveryMode,
     providerOptions: input.providerOptions,
+    providerInstances: input.providerInstances,
   });
   return { threadId, result };
 }

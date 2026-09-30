@@ -19,7 +19,7 @@ function gatedService() {
 }
 
 describe("gateProjectAgentServiceForStable", () => {
-  it("refuses group APIs with the Beta message", async () => {
+  it("refuses hub APIs with the Beta message", async () => {
     const { gated } = gatedService();
     const error = await Effect.runPromise(
       Effect.flip(gated.getOverview({ projectId: PROJECT_ID }, { kind: "user" })),
@@ -39,7 +39,7 @@ describe("gateProjectAgentServiceForStable", () => {
     expect(Array.from(events)).toEqual([]);
   });
 
-  it("treats a group thread's turn like any other thread's", async () => {
+  it("treats a hub thread's turn like any other thread's", async () => {
     const { gated } = gatedService();
     await expect(Effect.runPromise(gated.formatContextPacketForTurn(THREAD_ID))).resolves.toBe("");
     await expect(
@@ -47,7 +47,7 @@ describe("gateProjectAgentServiceForStable", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("still cleans up group data when a project is deleted", async () => {
+  it("still cleans up hub data when a project is deleted", async () => {
     const { gated, onProjectDeleted } = gatedService();
     await Effect.runPromise(gated.onProjectDeleted(PROJECT_ID));
     expect(onProjectDeleted).toHaveBeenCalledWith(PROJECT_ID);
@@ -55,7 +55,7 @@ describe("gateProjectAgentServiceForStable", () => {
 });
 
 describe("isGroupProjectCommand", () => {
-  it("matches only commands that create or re-kind a group", () => {
+  it("matches only commands that create or re-kind a hub", () => {
     expect(isGroupProjectCommand({ type: "project.create", kind: "group" })).toBe(true);
     expect(isGroupProjectCommand({ type: "project.meta.update", kind: "group" })).toBe(true);
     expect(isGroupProjectCommand({ type: "project.create", kind: "project" })).toBe(false);

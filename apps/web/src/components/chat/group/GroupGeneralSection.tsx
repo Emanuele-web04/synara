@@ -40,7 +40,7 @@ export function GroupGeneralSection(props: {
       ?.iconClassName ?? "";
   return (
     <div className="space-y-6">
-      <SettingsSectionShell title="Group">
+      <SettingsSectionShell title="Hub">
         <SettingsCard>
           <div className="space-y-1.5 px-4 py-3">
             <p className={cn(dialogFieldLabelClassName)}>Name</p>
@@ -48,8 +48,8 @@ export function GroupGeneralSection(props: {
               value={draft.name}
               maxLength={GROUP_NAME_MAX_CHARS}
               onChange={(event) => onChange({ name: event.target.value })}
-              placeholder="Group name"
-              aria-label="Group name"
+              placeholder="Hub name"
+              aria-label="Hub name"
             />
           </div>
           <div className="space-y-1.5 px-4 py-3">
@@ -57,7 +57,7 @@ export function GroupGeneralSection(props: {
               <p className={cn(dialogFieldLabelClassName)}>Icon</p>
               <button
                 type="button"
-                aria-label="Use the default group icon"
+                aria-label="Use the default hub icon"
                 className={cn(
                   "cursor-pointer rounded-sm text-ui-sm text-muted-foreground transition-colors hover:text-foreground",
                   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
@@ -67,7 +67,7 @@ export function GroupGeneralSection(props: {
                 Use default
               </button>
             </div>
-            <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Group icon">
+            <div className="flex flex-wrap items-center gap-1" role="group" aria-label="Hub icon">
               {COORDINATOR_ICON_OPTIONS.map(({ key, label, Icon }) => {
                 const selected = draft.coordinatorIcon === key;
                 return (
@@ -75,7 +75,7 @@ export function GroupGeneralSection(props: {
                     key={key}
                     type="button"
                     title={label}
-                    aria-label={`Group icon ${label}`}
+                    aria-label={`Hub icon ${label}`}
                     aria-pressed={selected}
                     className={appearanceOptionClassName(selected)}
                     onClick={() => onChange({ coordinatorIcon: selected ? "" : key })}
@@ -88,7 +88,7 @@ export function GroupGeneralSection(props: {
             <div
               className="flex flex-wrap items-center gap-1 pt-1"
               role="group"
-              aria-label="Group icon color"
+              aria-label="Hub icon color"
             >
               {COORDINATOR_COLOR_OPTIONS.map((option) => {
                 const selected = draft.coordinatorColor === option.key;
@@ -97,7 +97,7 @@ export function GroupGeneralSection(props: {
                     key={option.key}
                     type="button"
                     title={option.label}
-                    aria-label={`Group icon color ${option.label}`}
+                    aria-label={`Hub icon color ${option.label}`}
                     aria-pressed={selected}
                     className={appearanceOptionClassName(selected)}
                     onClick={() => onChange({ coordinatorColor: selected ? "" : option.key })}
@@ -117,8 +117,8 @@ export function GroupGeneralSection(props: {
               value={draft.goal}
               maxChars={GROUP_GOAL_MAX_CHARS}
               helper="The outcome you want the coordinator to work toward."
-              placeholder="What should this group accomplish?"
-              aria-label="Group goal"
+              placeholder="What should this hub accomplish?"
+              aria-label="Hub goal"
               onChange={(event) => onChange({ goal: event.target.value })}
             />
           </div>

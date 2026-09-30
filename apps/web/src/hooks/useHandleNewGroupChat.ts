@@ -41,7 +41,7 @@ export function useHandleNewGroupChat() {
       // A group owns one durable local workspace per chat. Reopening its stored draft
       // must never inherit an old project/worktree environment.
       forceLocalWorkspace: true,
-      errorLabel: "Unable to prepare a new group chat.",
+      errorLabel: "Unable to prepare a new hub chat.",
     });
 
   return { handleNewGroupChat };

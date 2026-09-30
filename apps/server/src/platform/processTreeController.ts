@@ -58,6 +58,7 @@ export interface ProcessTreeKiller {
 }
 
 export interface ProcessTreeKillerDependencies {
+  readonly platform: NodeJS.Platform;
   readonly captureChildrenMap: () => ProcessChildrenMap | null;
   readonly readCurrentProcesses: (pids: readonly number[]) => ProcessIdentityMap | null;
   readonly signalPid: (pid: number, signal: TerminalKillSignal) => Error | null;
@@ -202,6 +203,7 @@ export function createProcessTreeKiller(
   dependencies: Partial<ProcessTreeKillerDependencies> = {},
 ): ProcessTreeKiller {
   const deps: ProcessTreeKillerDependencies = {
+    platform: globalThis.process.platform,
     captureChildrenMap: captureProcessChildrenMapSync,
     readCurrentProcesses,
     signalPid,
@@ -214,7 +216,7 @@ export function createProcessTreeKiller(
       if (isUnsafeProcessTreeRoot(rootPid)) {
         return { descendants: [], captureComplete: false };
       }
-      if (globalThis.process.platform === "win32") {
+      if (deps.platform === "win32") {
         // The synchronous terminal compatibility API cannot query CIM safely.
         // Windows teardown owners must use captureProcessTree below.
         return { descendants: [], captureComplete: false };
@@ -284,9 +286,17 @@ export function createProcessTreeKiller(
         if (error) onError(error, { pid: descendant.pid, source: "captured" });
       }
       if (includeRootTree) {
-        deps.signalTree(rootPid, signal, (error) => {
+        if (deps.platform === "win32") {
+          deps.signalTree(rootPid, signal, (error) => {
+            if (error) onError(error, { pid: rootPid, source: "tree-kill" });
+          });
+        } else {
+          // The captured descendants were already signalled above. Signal the
+          // POSIX root directly so teardown cannot leak an unhandled error from
+          // tree-kill's internal `ps`/`pgrep` subprocesses when PATH is sparse.
+          const error = deps.signalPid(rootPid, signal);
           if (error) onError(error, { pid: rootPid, source: "tree-kill" });
-        });
+        }
       }
     },
   };

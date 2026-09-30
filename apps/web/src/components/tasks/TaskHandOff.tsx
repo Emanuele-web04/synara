@@ -53,6 +53,7 @@ export function TaskHandOff({
   const providerStatuses = useProviderStatusesForLocalConfig();
   const draft = useScratchComposerDraft({
     defaultProvider: settings.defaultProvider,
+    settings,
     initialPrompt: buildDelegationPrompt(todo),
   });
   const { scratchThreadId } = draft;

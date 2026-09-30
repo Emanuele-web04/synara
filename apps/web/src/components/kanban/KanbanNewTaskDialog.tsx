@@ -13,6 +13,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  getProviderInstanceOptions,
   getProviderStartOptions,
   resolveAssistantDeliveryMode,
   useAppSettings,
@@ -53,7 +54,7 @@ import { toastManager } from "~/components/ui/toast";
 import { useTheme } from "~/hooks/useTheme";
 import { ChevronRightIcon, LoaderCircleIcon, PaperclipIcon } from "~/lib/icons";
 import { formatComposerMentionToken } from "~/lib/composerMentions";
-import { findProviderStatus } from "~/lib/providerAvailability";
+import { resolveVoiceTranscriptionTarget } from "~/lib/providerAvailability";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
@@ -105,7 +106,6 @@ export function KanbanNewTaskDialog({
   const { settings } = useAppSettings();
   const { resolvedTheme } = useTheme();
   const assistantDeliveryMode = resolveAssistantDeliveryMode(settings);
-  const providerOptionsForDispatch = useMemo(() => getProviderStartOptions(settings), [settings]);
   const projects = useStore((state) => state.projects);
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const providerStatuses = useProviderStatusesForLocalConfig();
@@ -118,7 +118,7 @@ export function KanbanNewTaskDialog({
   const [selectedProjectId, setSelectedProjectId] = useState<ProjectId | null>(
     () => initialProjectId ?? projectOptions[0]?.id ?? null,
   );
-  const draft = useKanbanTaskScratchDraft({ defaultProvider: settings.defaultProvider });
+  const draft = useKanbanTaskScratchDraft({ defaultProvider: settings.defaultProvider, settings });
   const {
     scratchThreadId,
     prompt,
@@ -133,6 +133,7 @@ export function KanbanNewTaskDialog({
     pendingImageCount,
     waitForPendingImages,
     selectedProvider,
+    selectedProviderInstanceId,
     selectedModel,
     setPrompt,
     addComposerImages,
@@ -142,6 +143,11 @@ export function KanbanNewTaskDialog({
     removeComposerTerminalContext,
   } = draft;
   const promptRef = useRef(prompt);
+  const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
+  const providerOptionsForDispatch = useMemo(
+    () => getProviderStartOptions(settings, selectedProviderInstanceId),
+    [selectedProviderInstanceId, settings],
+  );
 
   const [interactionMode, setInteractionMode] =
     useState<ProviderInteractionMode>(DEFAULT_INTERACTION_MODE);
@@ -164,10 +170,17 @@ export function KanbanNewTaskDialog({
 
   // Voice transcription always rides on the Codex ChatGPT session, regardless of
   // which provider the task targets — gate the mic on the Codex status.
-  const voiceProviderStatus = useMemo(
-    () => findProviderStatus(providerStatuses, "codex"),
-    [providerStatuses],
+  const voiceProviderTarget = useMemo(
+    () =>
+      resolveVoiceTranscriptionTarget({
+        statuses: providerStatuses,
+        providerInstances,
+        selectedProvider,
+        selectedProviderInstanceId,
+      }),
+    [providerInstances, providerStatuses, selectedProvider, selectedProviderInstanceId],
   );
+  const voiceProviderStatus = voiceProviderTarget?.status ?? null;
   const catalog = useScratchModelCatalog({
     draft,
     providerStatuses,
@@ -175,6 +188,7 @@ export function KanbanNewTaskDialog({
   });
   const {
     modelOptionsByProvider,
+    modelOptionsByProviderInstance,
     selectedRuntimeAgents,
     runtimeMode,
     runtimeModelForCapabilities,
@@ -196,6 +210,7 @@ export function KanbanNewTaskDialog({
     selectedProjectId,
     hasSendableContent,
     selectedProvider,
+    selectedProviderInstanceId,
     selectedModel,
     selectedModelSupportsAutoMode: runtimeModelForCapabilities?.supportsAutoMode,
     taskPreview,
@@ -208,6 +223,7 @@ export function KanbanNewTaskDialog({
     defaultProvider: settings.defaultProvider,
     assistantDeliveryMode,
     providerOptionsForDispatch,
+    providerInstances,
     providerStatuses,
     isPreparingImages,
     waitForPendingImages,
@@ -245,7 +261,10 @@ export function KanbanNewTaskDialog({
     composerMentions,
     scratchThreadId,
     selectedProvider,
+    selectedProviderInstanceId,
     modelOptionsByProvider,
+    modelOptionsByProviderInstance,
+    providerInstances,
     selectedRuntimeAgents,
     selectedProjectCwd: selectedProject?.cwd ?? null,
     serverCwd: serverConfigQuery.data?.cwd ?? null,
@@ -272,6 +291,8 @@ export function KanbanNewTaskDialog({
     activeThreadId: null,
     threadId: scratchThreadId,
     selectedProvider,
+    selectedProviderInstanceId,
+    voiceProviderInstanceId: voiceProviderTarget?.instanceId ?? "codex",
     activeProviderStatus: voiceProviderStatus,
     pendingUserInputCount: 0,
     onTranscriptReady: handleTranscriptReady,
@@ -469,6 +490,7 @@ export function KanbanNewTaskDialog({
               <ComposerVoiceRecorderBar
                 durationLabel={voice.voiceRecordingDurationLabel}
                 isRecording={voice.isVoiceRecording}
+                isWaitingForAudio={voice.isVoiceWaitingForAudio}
                 isTranscribing={voice.isVoiceTranscribing}
                 waveformLevels={voice.voiceWaveformLevels}
                 onDiscard={voice.cancelComposerVoiceRecording}
@@ -524,6 +546,7 @@ export function KanbanNewTaskDialog({
                 <ComposerVoiceButton
                   disabled={!selectedProject}
                   isRecording={voice.isVoiceRecording}
+                  isStarting={voice.isVoiceStarting}
                   isTranscribing={voice.isVoiceTranscribing}
                   durationLabel={voice.voiceRecordingDurationLabel}
                   onClick={() => void voice.startComposerVoiceRecording()}

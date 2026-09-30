@@ -8,7 +8,9 @@
 
 import type {
   AssistantDeliveryMode,
+  ModelSelection,
   ProjectId,
+  ProviderInstanceId,
   ProviderKind,
   ProviderStartOptions,
   ThreadEnvironmentMode,
@@ -17,6 +19,7 @@ import type {
 } from "@synara/contracts";
 import { buildPromptThreadTitleFallback } from "@synara/shared/chatThreads";
 import { isPendingThreadWorktree } from "@synara/shared/threadEnvironment";
+import type { ProviderInstanceOption } from "../appSettings";
 import { composerDraftHasAttachments } from "../composerDraftDomain";
 import {
   resolvePreferredComposerModelSelection,
@@ -73,6 +76,7 @@ export interface DraftThreadDispatchHooks {
   onDispatchStart?: (start: {
     title: string;
     provider: ProviderKind;
+    providerInstanceId: ProviderInstanceId;
     /** latestTurn.turnId before this dispatch; null for a thread without turns. */
     baselineTurnId: TurnId | null;
     startedAtMs: number;
@@ -91,7 +95,53 @@ interface DraftThreadDispatchInput {
   defaultProvider: ProviderKind;
   assistantDeliveryMode: AssistantDeliveryMode;
   providerOptions?: ProviderStartOptions | undefined;
+  providerInstances?: ReadonlyArray<DraftDispatchProviderInstance> | undefined;
   hooks?: DraftThreadDispatchHooks | undefined;
+}
+
+export type DraftDispatchProviderInstance = Pick<ProviderInstanceOption, "instanceId" | "provider">;
+
+export interface DraftThreadDispatchTarget {
+  readonly modelSelection: ModelSelection;
+  readonly provider: ProviderKind;
+  readonly instanceId: ProviderInstanceId;
+}
+
+function resolveProviderForInstanceId(
+  providerInstances: ReadonlyArray<DraftDispatchProviderInstance> | undefined,
+  instanceId: ProviderInstanceId,
+): ProviderKind | null {
+  return (
+    providerInstances?.find((instance) => instance.instanceId === instanceId)?.provider ?? null
+  );
+}
+
+export function resolveDraftThreadDispatchTarget(input: {
+  threadId: ThreadId;
+  projectId: ProjectId;
+  thread: SidebarThreadSummary | null;
+  defaultProvider: ProviderKind;
+  providerInstances?: ReadonlyArray<DraftDispatchProviderInstance> | undefined;
+}): DraftThreadDispatchTarget {
+  const composerStore = useComposerDraftStore.getState();
+  const draftComposerState = composerStore.draftsByThreadId[input.threadId] ?? null;
+  const project =
+    useStore.getState().projects.find((candidate) => candidate.id === input.projectId) ?? null;
+  const resolveConfiguredProvider = (instanceId: ProviderInstanceId) =>
+    draftComposerState?.modelSelectionByProvider[instanceId]?.provider ??
+    resolveProviderForInstanceId(input.providerInstances, instanceId);
+  const modelSelection = resolvePreferredComposerModelSelection({
+    draft: draftComposerState,
+    threadModelSelection: input.thread?.modelSelection ?? null,
+    projectModelSelection: project?.defaultModelSelection ?? null,
+    defaultProvider: input.defaultProvider,
+    resolveProviderForInstanceId: resolveConfiguredProvider,
+  });
+  return {
+    modelSelection,
+    provider: modelSelection.provider,
+    instanceId: modelSelection.instanceId ?? modelSelection.provider,
+  };
 }
 
 // Racing callers (a double click on Start, a retry while the first send is still
@@ -145,12 +195,7 @@ async function dispatchDraftThreadOnce(
   const appState = useStore.getState();
   const project = appState.projects.find((candidate) => candidate.id === projectId) ?? null;
   const existingThread = thread ? getThreadFromState(appState, threadId) : null;
-  const modelSelection = resolvePreferredComposerModelSelection({
-    draft: draftComposerState,
-    threadModelSelection: thread?.modelSelection ?? null,
-    projectModelSelection: project?.defaultModelSelection ?? null,
-    defaultProvider: input.defaultProvider,
-  });
+  const { modelSelection } = resolveDraftThreadDispatchTarget(input);
   const draftThread = composerStore.getDraftThread(threadId);
   // Worktree creation is owned by the full chat composer path. This helper stays a
   // control surface and opens chat when a draft still needs that preflight.
@@ -240,6 +285,7 @@ async function dispatchDraftThreadOnce(
   hooks?.onDispatchStart?.({
     title: thread?.title ?? fallbackTitle,
     provider: modelSelection.provider,
+    providerInstanceId: modelSelection.instanceId ?? modelSelection.provider,
     baselineTurnId: thread?.latestTurn?.turnId ?? null,
     startedAtMs,
   });
@@ -257,6 +303,8 @@ async function dispatchDraftThreadOnce(
         options: undefined,
         projectDefaultModelSelection: project?.defaultModelSelection ?? null,
         projectId,
+        resolveProviderForInstanceId: (instanceId) =>
+          resolveProviderForInstanceId(input.providerInstances, instanceId),
       });
       const promotion = await promoteThreadCreate(
         {

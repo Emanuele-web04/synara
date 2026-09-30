@@ -56,7 +56,7 @@ export function makeProjectAgentTools(
     definition: {
       name: "synara_project_get_overview",
       description:
-        "Read the current group's coordinator overview: goal, focus, blockers, last summary, and linked repositories. The coordinator may create threads in this group or any linked repository listed here and in the context packet. Does not include document bodies.",
+        "Read the current hub's coordinator overview: goal, focus, blockers, last summary, and linked repositories. The coordinator may create threads in this hub or any linked repository listed here and in the context packet. Does not include document bodies.",
       inputSchema: {
         type: "object",
         properties: { projectId: { type: "string" } },
@@ -220,7 +220,7 @@ export function makeProjectAgentTools(
     definition: {
       name: "synara_project_remember",
       description:
-        "Save a note to the group's shared memory (memory/<date>-<slug>.md) and update the MEMORY.md index every group thread reads. Near-identical notes are deduplicated onto the existing memory file.",
+        "Save a note to the hub's shared memory (memory/<date>-<slug>.md) and update the MEMORY.md index every hub thread reads. Near-identical notes are deduplicated onto the existing memory file.",
       inputSchema: {
         type: "object",
         properties: {
@@ -231,7 +231,7 @@ export function makeProjectAgentTools(
         },
         required: ["projectId", "note"],
       },
-      annotations: { title: "Remember group note", ...WRITE_TOOL_ANNOTATIONS },
+      annotations: { title: "Remember hub note", ...WRITE_TOOL_ANNOTATIONS },
     },
     handler: (args, context) =>
       Effect.gen(function* () {
@@ -253,7 +253,7 @@ export function makeProjectAgentTools(
     definition: {
       name: "synara_project_forget",
       description:
-        "Remove a group memory note file (memory/<date>-<slug>.md) and its index line in MEMORY.md.",
+        "Remove a hub memory note file (memory/<date>-<slug>.md) and its index line in MEMORY.md.",
       inputSchema: {
         type: "object",
         properties: {
@@ -263,7 +263,7 @@ export function makeProjectAgentTools(
         },
         required: ["projectId", "path"],
       },
-      annotations: { title: "Forget group note", ...WRITE_TOOL_ANNOTATIONS },
+      annotations: { title: "Forget hub note", ...WRITE_TOOL_ANNOTATIONS },
     },
     handler: (args, context) =>
       Effect.gen(function* () {
@@ -285,7 +285,7 @@ export function makeProjectAgentTools(
     definition: {
       name: "synara_project_link_repository",
       description:
-        "Coordinator only. Link an existing ordinary Synara project to this group, by linkedProjectId or by its workspacePath. New group threads can then be started in that repository. Unlinking stays a user action.",
+        "Coordinator only. Link an existing ordinary Synara project to this hub, by linkedProjectId or by its workspacePath. New hub threads can then be started in that repository. Unlinking stays a user action.",
       inputSchema: {
         type: "object",
         properties: {
@@ -296,7 +296,7 @@ export function makeProjectAgentTools(
         },
         required: ["projectId"],
       },
-      annotations: { title: "Link repository to group", ...WRITE_TOOL_ANNOTATIONS },
+      annotations: { title: "Link repository to hub", ...WRITE_TOOL_ANNOTATIONS },
     },
     handler: (args, context) =>
       Effect.gen(function* () {
@@ -322,7 +322,7 @@ export function makeProjectAgentTools(
     definition: {
       name: "synara_project_library_list",
       description:
-        "List files in the group's Library (optionally under relativePath). Returns the library root path and entries.",
+        "List files in the hub's Library (optionally under relativePath). Returns the library root path and entries.",
       inputSchema: {
         type: "object",
         properties: {
@@ -331,7 +331,7 @@ export function makeProjectAgentTools(
         },
         required: ["projectId"],
       },
-      annotations: { title: "List group library", ...READ_ONLY_TOOL_ANNOTATIONS },
+      annotations: { title: "List hub library", ...READ_ONLY_TOOL_ANNOTATIONS },
     },
     handler: (args, context) =>
       Effect.gen(function* () {
@@ -350,7 +350,7 @@ export function makeProjectAgentTools(
     definition: {
       name: "synara_project_library_add",
       description:
-        "Copy a file or folder from this thread's own workspace into the group's Library and commit it. sourcePath must resolve inside your workspace; destinationPath defaults to the source name at the library root.",
+        "Copy a file or folder from this thread's own workspace into the hub's Library and commit it. sourcePath must resolve inside your workspace; destinationPath defaults to the source name at the library root.",
       inputSchema: {
         type: "object",
         properties: {
@@ -361,7 +361,7 @@ export function makeProjectAgentTools(
         },
         required: ["projectId", "sourcePath"],
       },
-      annotations: { title: "Add file to group library", ...WRITE_TOOL_ANNOTATIONS },
+      annotations: { title: "Add file to hub library", ...WRITE_TOOL_ANNOTATIONS },
     },
     handler: (args, context) =>
       Effect.gen(function* () {
@@ -382,13 +382,13 @@ export function makeProjectAgentTools(
     definition: {
       name: "synara_project_list_threads",
       description:
-        "Coordinator only. List every group thread — in the group and in linked repositories — with its live state, PR link, last update time, and task id.",
+        "Coordinator only. List every hub thread — in the hub and in linked repositories — with its live state, PR link, last update time, and task id.",
       inputSchema: {
         type: "object",
         properties: { projectId: { type: "string" } },
         required: ["projectId"],
       },
-      annotations: { title: "List group threads", ...READ_ONLY_TOOL_ANNOTATIONS },
+      annotations: { title: "List hub threads", ...READ_ONLY_TOOL_ANNOTATIONS },
     },
     handler: (args, context) =>
       Effect.gen(function* () {
