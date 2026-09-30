@@ -15,6 +15,7 @@ import {
   summarizeTaskList,
   UNSAVED_TODO_UPDATED_AT,
   type TaskRowModel,
+  unlinkChatInput,
   withSavedTaskText,
 } from "./tasks.logic";
 
@@ -338,5 +339,15 @@ describe("saved task text", () => {
       title: "Other",
     });
     expect(recordSavedTaskText(saved, { id: card.id, priority: "high" })).toBe(saved);
+  });
+});
+
+describe("unlinkChatInput", () => {
+  it("clears only the link this window shows", () => {
+    expect(unlinkChatInput(delegated)).toEqual({
+      id: delegated.id,
+      threadId: null,
+      expectedThreadId: threadId,
+    });
   });
 });

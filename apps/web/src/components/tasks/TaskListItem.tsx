@@ -17,7 +17,12 @@ import { TASK_META_TONE_CLASS } from "./TaskCardPrimitives";
 import { TaskPriorityGlyph, TaskStatusGlyph } from "./TaskGlyphs";
 import { TaskRowTitle, useTaskRename } from "./TaskRowTitle";
 import { buildTaskRowContextMenu } from "./taskRowContextMenu";
-import { describeTaskMeta, formatDueLabel, type TaskRowModel } from "./tasks.logic";
+import {
+  describeTaskMeta,
+  formatDueLabel,
+  type TaskRowModel,
+  unlinkChatInput,
+} from "./tasks.logic";
 import { useOpenChat } from "./useOpenChat";
 
 export function TaskListItem({
@@ -64,7 +69,7 @@ export function TaskListItem({
       );
       if (clicked === "rename") rename.startEditing();
       else if (clicked === "open-chat") openChat();
-      else if (clicked === "unlink-chat") onUpdate({ id: todo.id, threadId: null });
+      else if (clicked === "unlink-chat") onUpdate(unlinkChatInput(todo));
       else if (clicked === "delegate") onSelect();
       else if (clicked === "toggle-done") onUpdate({ id: todo.id, completed: !isDone });
       else if (clicked === "delete") onDelete();

@@ -23,6 +23,7 @@ import {
   recordSavedTaskText,
   type SavedTaskText,
   type TaskRowModel,
+  unlinkChatInput,
   withSavedTaskText,
 } from "./tasks.logic";
 import { useOpenChat } from "./useOpenChat";
@@ -145,7 +146,7 @@ export function TaskCard({
               <span className="text-ui-sm text-muted-foreground">
                 The chat this task was handed to no longer exists.
               </span>
-              <TaskPillButton onClick={() => onUpdate({ id: todo.id, threadId: null })}>
+              <TaskPillButton onClick={() => onUpdate(unlinkChatInput(todo))}>
                 Unlink
               </TaskPillButton>
             </TaskWell>

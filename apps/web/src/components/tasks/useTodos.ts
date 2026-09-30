@@ -54,14 +54,23 @@ const endPendingCreate = (id: TodoId) => {
 // Creates the server rejected: such a row never existed there, so a failed delete of it
 // must not bring it back.
 const failedCreateIds = new Set<TodoId>();
-// Edits queued behind a create. Their reply carries the whole stored row, so the create's
-// own reply (which predates them) must not overwrite the optimistic edits meanwhile.
-const pendingUpdateCountById = new Map<TodoId, number>();
-const trackPendingUpdate = (id: TodoId, delta: 1 | -1) => {
-  const count = (pendingUpdateCountById.get(id) ?? 0) + delta;
-  if (count > 0) pendingUpdateCountById.set(id, count);
-  else pendingUpdateCountById.delete(id);
+// Edits still on their way to the server, oldest first. A reply carries the whole stored
+// row as of that edit, so a create's reply, or an earlier edit's, must not drop the later
+// optimistic edits: they are laid back over it until their own replies land.
+const pendingUpdatesById = new Map<TodoId, TodoUpdateInput[]>();
+const beginPendingUpdate = (input: TodoUpdateInput) => {
+  pendingUpdatesById.set(input.id, [...(pendingUpdatesById.get(input.id) ?? []), input]);
 };
+const endPendingUpdate = (input: TodoUpdateInput) => {
+  const rest = (pendingUpdatesById.get(input.id) ?? []).filter((pending) => pending !== input);
+  if (rest.length > 0) pendingUpdatesById.set(input.id, rest);
+  else pendingUpdatesById.delete(input.id);
+};
+/** `todo` with the still-pending edits other than `settled` applied over it. */
+const withPendingUpdates = (todo: Todo, settled?: TodoUpdateInput): Todo =>
+  (pendingUpdatesById.get(todo.id) ?? [])
+    .filter((pending) => pending !== settled)
+    .reduce((row, pending) => applyTodoPatch(row, pending, row.updatedAt), todo);
 
 /**
  * applyTodoEvent, except that a to-do with an edit still in flight keeps its optimistic copy:
@@ -74,9 +83,9 @@ function applyTodoEventHoldingEdits(
   event: Parameters<typeof applyTodoEvent>[1],
 ): TodoListResult {
   const next = applyTodoEvent(prev, event);
-  if (!prev || pendingUpdateCountById.size === 0) return next;
+  if (!prev || pendingUpdatesById.size === 0) return next;
   const heldById = new Map(
-    prev.todos.filter((todo) => pendingUpdateCountById.has(todo.id)).map((todo) => [todo.id, todo]),
+    prev.todos.filter((todo) => pendingUpdatesById.has(todo.id)).map((todo) => [todo.id, todo]),
   );
   if (heldById.size === 0) return next;
   return { todos: next.todos.map((todo) => heldById.get(todo.id) ?? todo) };
@@ -173,7 +182,7 @@ export function useTodoMutations() {
       setList((todos) => upsertTodo(todos, optimistic));
     },
     onSuccess: (todo) => {
-      if (pendingUpdateCountById.has(todo.id)) return;
+      if (pendingUpdatesById.has(todo.id)) return;
       setList((todos) => upsertTodo(todos, todo));
     },
     onError: (error, input) => {
@@ -194,7 +203,7 @@ export function useTodoMutations() {
       return ensureNativeApi().todo.update(input);
     },
     onMutate: async (input) => {
-      trackPendingUpdate(input.id, 1);
+      beginPendingUpdate(input);
       await cancelListFetch();
       const previous = readTodo(input.id);
       if (previous) {
@@ -204,7 +213,9 @@ export function useTodoMutations() {
       }
       return { previous };
     },
-    onSuccess: (todo) => setList((todos) => upsertTodo(todos, todo)),
+    // An earlier edit's reply predates the later ones still in flight: keep those showing.
+    onSuccess: (todo, input) =>
+      setList((todos) => upsertTodo(todos, withPendingUpdates(todo, input))),
     onError: (error, input, context) => {
       // The edit may have been stored before the connection went: keep it showing and
       // let the server's copy settle it, instead of rolling back and reporting a failure.
@@ -216,10 +227,12 @@ export function useTodoMutations() {
       const previous = context?.previous;
       if (previous) {
         // Optimistic copies keep the stored updatedAt, so a changed one means the server
-        // sent something newer meanwhile; that copy wins over the rollback.
+        // sent something newer meanwhile; that copy wins over the rollback. The other
+        // edits still in flight stay applied.
+        const restored = withPendingUpdates(previous, input);
         setList((todos) =>
           todos.map((todo) =>
-            todo.id === input.id && todo.updatedAt === previous.updatedAt ? previous : todo,
+            todo.id === input.id && todo.updatedAt === previous.updatedAt ? restored : todo,
           ),
         );
       }
@@ -228,7 +241,7 @@ export function useTodoMutations() {
       void queryClient.invalidateQueries({ queryKey: todoQueryKey });
       showMutationError("Couldn't update the task")(error);
     },
-    onSettled: (_todo, _error, input) => trackPendingUpdate(input.id, -1),
+    onSettled: (_todo, _error, input) => endPendingUpdate(input),
   });
 
   const deleteMutation = useMutation({

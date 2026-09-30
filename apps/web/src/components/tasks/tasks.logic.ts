@@ -522,6 +522,14 @@ export function withSavedTaskText(todo: Todo, saved: SavedTaskText | null): Todo
   return { ...todo, ...savedTextFields(saved.title, saved.notes) };
 }
 
+/**
+ * Clears a to-do's chat link, but only the link this window shows: another window may have
+ * delegated it anew meanwhile, and that link must survive a stale Unlink.
+ */
+export function unlinkChatInput(todo: Pick<Todo, "id" | "threadId">): TodoUpdateInput {
+  return { id: todo.id, threadId: null, expectedThreadId: todo.threadId };
+}
+
 /** Prompt handed to the agent when a to-do is delegated. */
 export function buildDelegationPrompt(todo: Pick<Todo, "title" | "notes">): string {
   const notes = todo.notes.trim();
