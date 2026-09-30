@@ -529,6 +529,32 @@ describe("Ask", () => {
     expect(createdSidechats).toHaveLength(1);
   });
 
+  it("keeps side chats from another checkout in the item's thread list", async () => {
+    await mount(ISSUE_SEARCH);
+    await page.getByRole("button", { name: "Project: Alpha" }).click();
+    await page.getByRole("menuitemradio", { name: "Beta" }).click();
+    await openSideChat();
+    await expect.poll(() => createdSidechats.length).toBe(1);
+    expect(createdSidechats[0]?.projectId).toBe(projectB);
+    const threadId = createdSidechats[0]!.threadId;
+    await expect.poll(shownSidechat).toBe(threadId);
+    await expect
+      .poll(
+        () =>
+          Array.from(document.querySelectorAll("button")).some(
+            (button) => button.textContent === "Crash on launch",
+          ),
+        { timeout: 2000 },
+      )
+      .toBe(true);
+    setSearchFromTest(PULL_REQUEST_SEARCH);
+    await expect.poll(() => inboxDock().open).toBe(false);
+    setSearchFromTest(ISSUE_SEARCH);
+    await expect
+      .poll(() => inboxDock().panes.find((pane) => pane.kind === "sidechat")?.threadId)
+      .toBe(threadId);
+  });
+
   it("sends the composer's question with the selected provider instance into a new side chat", async () => {
     const modelSelection = {
       provider: "codex" as const,

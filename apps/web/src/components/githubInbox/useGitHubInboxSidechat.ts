@@ -142,11 +142,7 @@ export function useGitHubInboxSidechat(selection: GitHubInboxSelection | null) {
   const selectItemSidechats = useMemo(
     () =>
       projectId !== null && repository !== null && number !== null
-        ? createSidechatSummariesForGitHubItemSelector({
-            projectId,
-            repository,
-            number,
-          })
+        ? createSidechatSummariesForGitHubItemSelector({ repository, number })
         : selectNoSidechats,
     [projectId, repository, number],
   );

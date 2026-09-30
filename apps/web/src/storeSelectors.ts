@@ -485,15 +485,15 @@ export function createSidechatSummariesForSourceSelector(
   );
 }
 
-/** Standalone sidechats asked about one GitHub item from one project (the inbox's Ask). */
+/** Sidechats for one GitHub item; Ask can scope reuse to its chosen project. */
 export function createSidechatSummariesForGitHubItemSelector(item: {
-  readonly projectId: ProjectId;
+  readonly projectId?: ProjectId;
   readonly repository: string;
   readonly number: number;
 }): (state: AppState) => readonly SidebarThreadSummary[] {
   return createSortedSidechatSummariesSelector(
     (thread) =>
-      thread.projectId === item.projectId &&
+      (item.projectId === undefined || thread.projectId === item.projectId) &&
       sidechatContextMatchesGitHubItem(thread.sidechatContext, item),
   );
 }
