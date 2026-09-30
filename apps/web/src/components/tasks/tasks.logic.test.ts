@@ -6,12 +6,17 @@ import {
   applyTodoEvent,
   buildTaskSections,
   deriveTaskStatus,
-  filterTaskRows,
+  describeTaskMeta,
   formatDueLabel,
+  NEEDS_ANSWER_DETAIL,
+  pruneSavedTaskText,
+  recordSavedTaskText,
   resolveDuePreset,
+  summarizeTaskList,
   UNSAVED_TODO_UPDATED_AT,
   type TaskRowModel,
   unlinkChatInput,
+  withSavedTaskText,
 } from "./tasks.logic";
 
 function todo(overrides: Omit<Partial<Todo>, "id"> & { id: string }): Todo {
@@ -205,21 +210,48 @@ describe("buildTaskSections", () => {
   });
 });
 
-describe("filterTaskRows", () => {
-  it("splits open to-dos into mine and delegated, and done apart", () => {
-    const plain = row(todo({ id: "plain" }), "todo");
-    const delegatedRow = { ...row(todo({ id: "agent", threadId }), "running"), thread: thread() };
-    // Its chat is still a local draft, so no thread summary is loaded yet.
-    const startingRow = row(todo({ id: "starting", threadId }), "starting");
-    const finished = row(todo({ id: "done", completedAt: "2026-09-27T12:00:00.000Z" }), "done");
-    const rows = [plain, delegatedRow, startingRow, finished];
+function taskStatus(
+  kind: TaskRowModel["status"]["kind"],
+  extra: Partial<TaskRowModel["status"]> = {},
+): TaskRowModel["status"] {
+  return { kind, label: kind, detail: null, workStartedAt: null, chatMissing: false, ...extra };
+}
 
-    const ids = (filter: Parameters<typeof filterTaskRows>[1]) =>
-      filterTaskRows(rows, filter).map((r) => r.todo.id);
-    expect(ids("all")).toEqual(["plain", "agent", "starting", "done"]);
-    expect(ids("mine")).toEqual(["plain"]);
-    expect(ids("delegated")).toEqual(["agent", "starting"]);
-    expect(ids("done")).toEqual(["done"]);
+describe("describeTaskMeta", () => {
+  it("says what the agent does or needs, else the due day", () => {
+    expect(describeTaskMeta(taskStatus("running"), null)).toEqual({
+      text: "Working…",
+      tone: "muted",
+      live: true,
+    });
+    expect(describeTaskMeta(taskStatus("needs"), null)?.text).toBe("Needs your OK");
+    expect(describeTaskMeta(taskStatus("needs", { detail: NEEDS_ANSWER_DETAIL }), null)?.text).toBe(
+      "Asked you a question",
+    );
+    expect(describeTaskMeta(taskStatus("review"), null)?.tone).toBe("review");
+    expect(describeTaskMeta(taskStatus("todo"), { label: "Today", overdue: false })?.tone).toBe(
+      "strong",
+    );
+    expect(describeTaskMeta(taskStatus("todo"), { label: "Yesterday", overdue: true })?.tone).toBe(
+      "failure",
+    );
+    expect(describeTaskMeta(taskStatus("todo"), null)).toBeNull();
+    expect(describeTaskMeta(taskStatus("done"), null)).toBeNull();
+  });
+});
+
+describe("summarizeTaskList", () => {
+  it("leads with what needs the user", () => {
+    expect(
+      summarizeTaskList([
+        row(todo({ id: "a" }), "needs"),
+        row(todo({ id: "b" }), "review"),
+        row(todo({ id: "c" }), "running"),
+        row(todo({ id: "d" }), "todo"),
+      ]),
+    ).toBe("2 things need you · 1 working · 1 to do");
+    expect(summarizeTaskList([row(todo({ id: "e" }), "done")])).toBe("All done");
+    expect(summarizeTaskList([])).toBe("Add anything you need to do");
   });
 });
 
@@ -274,6 +306,39 @@ describe("applyTodoEvent", () => {
     list = applyTodoEvent(list, { type: "todo-deleted", todoId: older.id });
     list = applyTodoEvent(list, { type: "todo-upserted", todo: newer });
     expect(list.todos).toEqual([]);
+  });
+});
+
+describe("saved task text", () => {
+  const card = todo({ id: "todo-card", title: "Old title", notes: "" });
+  const other = todo({ id: "todo-other", title: "Old title", notes: "" });
+
+  it("reads an edit the to-do's copy doesn't show yet, only for that to-do", () => {
+    let saved = recordSavedTaskText(null, { id: card.id, notes: "Use the staging key" });
+    saved = recordSavedTaskText(saved, { id: card.id, title: "New title" });
+    expect(withSavedTaskText(card, saved)).toMatchObject({
+      title: "New title",
+      notes: "Use the staging key",
+    });
+    // Same title and notes, but another to-do: nothing carries over.
+    expect(withSavedTaskText(other, saved)).toBe(other);
+    expect(pruneSavedTaskText(saved, other)).toBeNull();
+  });
+
+  it("keeps an edit until the to-do's copy shows it, whatever else changes", () => {
+    const saved = recordSavedTaskText(null, { id: card.id, title: "New title" });
+    // Another field changed first: the unsaved title stays.
+    expect(pruneSavedTaskText(saved, { ...card, notes: "From another window" })).toEqual(saved);
+    expect(pruneSavedTaskText(saved, { ...card, title: "New title" })).toBeNull();
+  });
+
+  it("starts over when an edit is for another to-do", () => {
+    const saved = recordSavedTaskText(null, { id: card.id, notes: "For the card" });
+    expect(recordSavedTaskText(saved, { id: other.id, title: "Other" })).toEqual({
+      id: other.id,
+      title: "Other",
+    });
+    expect(recordSavedTaskText(saved, { id: card.id, priority: "high" })).toBe(saved);
   });
 });
 

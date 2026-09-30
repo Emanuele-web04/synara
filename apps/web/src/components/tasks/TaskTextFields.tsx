@@ -1,22 +1,32 @@
 // FILE: TaskTextFields.tsx
-// Purpose: The inspector's editable title and notes. Each field saves on blur, only when
+// Purpose: The task card's editable title and notes. Each field saves on blur, only when
 //          the user changed it, so an untouched field never overwrites another window's edit.
 // Layer: Tasks UI component
 // Exports: TaskTextFields
 
 import type { TodoUpdateInput } from "@synara/contracts";
-import { type KeyboardEvent, useEffect, useRef, useState } from "react";
+import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from "react";
 
 import type { TaskRowModel } from "./tasks.logic";
 
 export function TaskTextFields({
   row,
   onUpdate,
+  trailing,
+  autoFocusNotes = false,
 }: {
   row: TaskRowModel;
   onUpdate: (input: TodoUpdateInput) => void;
+  /** Sits on the title's first line, e.g. the card's Close button. */
+  trailing?: ReactNode;
+  /** Puts the cursor in the note once it mounts, for details to hand off with the task. */
+  autoFocusNotes?: boolean;
 }) {
   const { todo } = row;
+  const notesRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (autoFocusNotes) notesRef.current?.focus();
+  }, [autoFocusNotes]);
   const [title, setTitle] = useState(todo.title);
   const [notes, setNotes] = useState(todo.notes);
   // Adopt remote edits (another window, the row's inline rename) when not mid-edit.
@@ -71,26 +81,30 @@ export function TaskTextFields({
   };
 
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex flex-col gap-0.5">
+      <div className="flex items-start gap-2">
+        <textarea
+          aria-label="Task title"
+          rows={1}
+          value={title}
+          onFocus={() => focusField("title")}
+          onChange={(event) => setTitle(event.target.value)}
+          onBlur={commitTitle}
+          onKeyDown={handleTitleKeyDown}
+          className="font-system-ui field-sizing-content min-w-0 flex-1 resize-none bg-transparent text-ui-lg font-semibold leading-snug text-foreground outline-none"
+        />
+        {trailing}
+      </div>
       <textarea
-        aria-label="Task title"
-        rows={1}
-        value={title}
-        onFocus={() => focusField("title")}
-        onChange={(event) => setTitle(event.target.value)}
-        onBlur={commitTitle}
-        onKeyDown={handleTitleKeyDown}
-        className="font-system-ui field-sizing-content w-full resize-none bg-transparent text-ui-lg font-medium leading-snug text-foreground outline-none"
-      />
-      <textarea
+        ref={notesRef}
         aria-label="Notes"
-        rows={2}
+        rows={1}
         value={notes}
-        placeholder="Add notes…"
+        placeholder="Add a note"
         onFocus={() => focusField("notes")}
         onChange={(event) => setNotes(event.target.value)}
         onBlur={commitNotes}
-        className="font-system-ui field-sizing-content min-h-10 w-full resize-none bg-transparent text-ui leading-relaxed text-muted-foreground outline-none placeholder:text-muted-foreground/60 focus:text-foreground"
+        className="font-system-ui field-sizing-content min-h-5 w-full resize-none bg-transparent text-ui-sm leading-relaxed text-muted-foreground outline-none placeholder:text-muted-foreground/70 focus:text-foreground"
       />
     </div>
   );

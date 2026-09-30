@@ -52,10 +52,12 @@ it("blocks unlink throughout an in-flight start and restores recovery when its r
         resolveDispatch = resolve;
       }),
   );
+  let prompt = "";
   const hook = await renderHook(
     () => ({
       delegation: useTaskDelegation({
         todo,
+        readPrompt: () => prompt,
         onLinkChat: async () => undefined,
         onDelegated: undefined,
         draft: {
@@ -91,6 +93,9 @@ it("blocks unlink throughout an in-flight start and restores recovery when its r
   let pending: Promise<void> | undefined;
   try {
     expect(hook.result.current.freshCanUnlink).toBe(false);
+    await hook.result.current.delegation.handleStart();
+    expect(transport.dispatch).not.toHaveBeenCalled();
+    prompt = "Latest edited task title and note";
     pending = hook.result.current.delegation.handleStart();
     await vi.waitFor(() => expect(transport.dispatch).toHaveBeenCalledTimes(1));
     await vi.waitFor(() => expect(hook.result.current.oldCanUnlink).toBe(false));
