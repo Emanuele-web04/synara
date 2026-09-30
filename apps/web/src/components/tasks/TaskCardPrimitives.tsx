@@ -56,6 +56,11 @@ export function TaskActionButton({ className, ...props }: ComponentProps<typeof 
   return <Button shape="capsule" size="xs" {...props} className={cn("px-3", className)} />;
 }
 
+/** A block's next steps, on one right-aligned row. */
+export function TaskActionRow({ children }: { children: ReactNode }) {
+  return <div className="flex items-center justify-end gap-1.5">{children}</div>;
+}
+
 /** Muted line that introduces a block of the card. */
 export function TaskCardLabel({ children }: { children: ReactNode }) {
   return <span className="text-ui-sm text-muted-foreground">{children}</span>;

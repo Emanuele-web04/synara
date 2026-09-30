@@ -1,6 +1,7 @@
 // FILE: TaskQuickAdd.tsx
 // Purpose: The list's last row, where a new task is typed: Enter adds it, Tab adds it and
-//          opens its card to hand it to an agent, Escape clears the line. A title the server
+//          opens its card with the cursor in the note (⌘↵ there hands it to an agent),
+//          Escape clears the line. A title the server
 //          rejects comes back if nothing new was typed.
 // Layer: Tasks UI component
 // Exports: TaskQuickAdd

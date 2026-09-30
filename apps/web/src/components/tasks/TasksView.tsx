@@ -51,6 +51,12 @@ export default function TasksView() {
     return { openRows: sections.flatMap((section) => section.rows), completed };
   }, [rows]);
   const [selectedTodoId, setSelectedTodoId] = useState<TodoId | null>(null);
+  // A to-do added with Tab opens with the cursor in its note, for details to hand off.
+  const [notesFocusTodoId, setNotesFocusTodoId] = useState<TodoId | null>(null);
+  const selectTodo = (id: TodoId | null, options?: { focusNotes: boolean }) => {
+    setSelectedTodoId(id);
+    setNotesFocusTodoId(options?.focusNotes ? id : null);
+  };
   const selectedRow = rows.find((row) => row.todo.id === selectedTodoId) ?? null;
   const { projectNameById, projectCwdById, projectOptions } = useTaskProjects();
   const [showsAllDone, setShowsAllDone] = useState(false);
@@ -71,11 +77,11 @@ export default function TasksView() {
       key={row.todo.id}
       row={row}
       selected={row.todo.id === selectedTodoId}
-      onSelect={() => setSelectedTodoId(row.todo.id)}
+      onSelect={() => selectTodo(row.todo.id)}
       now={now}
       onUpdate={(input) => updateTodo(input)}
       onDelete={() => {
-        if (row.todo.id === selectedTodoId) setSelectedTodoId(null);
+        if (row.todo.id === selectedTodoId) selectTodo(null);
         deleteTodo(row.todo.id);
       }}
     />
@@ -98,7 +104,7 @@ export default function TasksView() {
             if (event.key !== "Escape" || event.defaultPrevented) return;
             const target = event.target;
             if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
-            setSelectedTodoId(null);
+            selectTodo(null);
           }}
         >
           {/* With the card open on a wide window, the list re-centres in the space left of it. */}
@@ -134,7 +140,7 @@ export default function TasksView() {
                   onCreate={(title, { open, onError }) => {
                     const id = newTodoId();
                     createTodo({ id, title }, { onError });
-                    if (open) setSelectedTodoId(id);
+                    if (open) selectTodo(id, { focusNotes: true });
                   }}
                 />
               </div>
@@ -168,7 +174,8 @@ export default function TasksView() {
               now={now}
               onUpdate={(input) => updateTodo(input)}
               onUpdateAsync={updateTodoAsync}
-              onClose={() => setSelectedTodoId(null)}
+              onClose={() => selectTodo(null)}
+              autoFocusNotes={notesFocusTodoId === selectedRow.todo.id}
               className="absolute top-4 right-4 max-h-[calc(100%-2rem)] w-[min(22rem,calc(100%-2rem))]"
             />
           ) : null}

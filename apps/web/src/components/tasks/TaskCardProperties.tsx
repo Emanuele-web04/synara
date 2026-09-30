@@ -16,7 +16,7 @@ import { formatDueLabel, todoPriorityLabel } from "./tasks.logic";
 
 const PILL_ICON_CLASS = "size-3.5 shrink-0 opacity-70";
 /** An unset property: a round icon-only pill. */
-const EMPTY_PILL_CLASS = "w-6 px-0 sm:w-6";
+const EMPTY_PILL_CLASS = "w-7 px-0 sm:w-6";
 
 export function TaskCardProperties({
   todo,

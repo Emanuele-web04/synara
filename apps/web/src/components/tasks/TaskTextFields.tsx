@@ -13,13 +13,20 @@ export function TaskTextFields({
   row,
   onUpdate,
   trailing,
+  autoFocusNotes = false,
 }: {
   row: TaskRowModel;
   onUpdate: (input: TodoUpdateInput) => void;
   /** Sits on the title's first line, e.g. the card's Close button. */
   trailing?: ReactNode;
+  /** Puts the cursor in the note once it mounts, for details to hand off with the task. */
+  autoFocusNotes?: boolean;
 }) {
   const { todo } = row;
+  const notesRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (autoFocusNotes) notesRef.current?.focus();
+  }, [autoFocusNotes]);
   const [title, setTitle] = useState(todo.title);
   const [notes, setNotes] = useState(todo.notes);
   // Adopt remote edits (another window, the row's inline rename) when not mid-edit.
@@ -89,6 +96,7 @@ export function TaskTextFields({
         {trailing}
       </div>
       <textarea
+        ref={notesRef}
         aria-label="Notes"
         rows={1}
         value={notes}

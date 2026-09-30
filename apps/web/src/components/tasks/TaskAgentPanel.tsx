@@ -8,14 +8,13 @@
 
 import { PROVIDER_DISPLAY_NAMES, type ThreadId, type TodoUpdateInput } from "@synara/contracts";
 import { formatModelDisplayName } from "@synara/shared/model";
-import type { ReactNode } from "react";
 
 import ChatMarkdown from "~/components/ChatMarkdown";
 import { ComposerPendingApprovalPanel } from "~/components/chat/ComposerPendingApprovalPanel";
 import { ProviderIcon } from "~/components/ProviderIcon";
 import { cn } from "~/lib/utils";
 import type { PendingApproval } from "../../session-logic";
-import { TaskActionButton, TaskPillButton, TaskWell } from "./TaskCardPrimitives";
+import { TaskActionButton, TaskActionRow, TaskPillButton, TaskWell } from "./TaskCardPrimitives";
 import { describeAgentLocation, formatAgentActivity, type TaskRowModel } from "./tasks.logic";
 import { useOpenChat } from "./useOpenChat";
 import { useTaskAgentActions, useTaskAgentThread } from "./useTaskAgent";
@@ -27,11 +26,6 @@ const APPROVAL_ASK: Record<PendingApproval["requestKind"], string> = {
   permissions: "wants more permissions",
   tool: "wants to use a tool",
 };
-
-/** The next steps under a state's block. */
-function TaskAgentActions({ children }: { children: ReactNode }) {
-  return <div className="flex items-center justify-end gap-1.5">{children}</div>;
-}
 
 export function TaskAgentPanel({
   row,
@@ -98,7 +92,7 @@ export function TaskAgentPanel({
               </span>
             ))}
           </TaskWell>
-          <TaskAgentActions>
+          <TaskActionRow>
             {/* Not while Starting: a reused chat may still be on its earlier turn, and Stop
                 interrupts whatever turn is active. */}
             {status.kind === "running" ? (
@@ -107,7 +101,7 @@ export function TaskAgentPanel({
               </TaskPillButton>
             ) : null}
             <TaskPillButton onClick={openChat}>Open chat</TaskPillButton>
-          </TaskAgentActions>
+          </TaskActionRow>
         </>
       ) : null}
 
@@ -129,7 +123,7 @@ export function TaskAgentPanel({
               </span>
             ) : null}
           </TaskWell>
-          <TaskAgentActions>
+          <TaskActionRow>
             <button
               type="button"
               onClick={openChat}
@@ -163,16 +157,16 @@ export function TaskAgentPanel({
             >
               Allow
             </TaskActionButton>
-          </TaskAgentActions>
+          </TaskActionRow>
         </>
       ) : null}
 
       {asksQuestion ? (
         <>
           <TaskWell>{headline(`${agentName} asked you a question`)}</TaskWell>
-          <TaskAgentActions>
+          <TaskActionRow>
             <TaskActionButton onClick={openChat}>Answer in the chat</TaskActionButton>
-          </TaskAgentActions>
+          </TaskActionRow>
         </>
       ) : null}
 
@@ -190,10 +184,10 @@ export function TaskAgentPanel({
               </div>
             ) : null}
           </TaskWell>
-          <TaskAgentActions>
+          <TaskActionRow>
             <TaskPillButton onClick={openChat}>Open chat</TaskPillButton>
             <TaskActionButton onClick={markDone}>Mark as done</TaskActionButton>
-          </TaskAgentActions>
+          </TaskActionRow>
         </>
       ) : null}
 
@@ -205,10 +199,10 @@ export function TaskAgentPanel({
               <span className="pl-5.5 text-ui-xs text-muted-foreground">{status.detail}</span>
             ) : null}
           </TaskWell>
-          <TaskAgentActions>
+          <TaskActionRow>
             <TaskPillButton onClick={openChat}>Open chat</TaskPillButton>
             <TaskPillButton onClick={markDone}>Mark as done</TaskPillButton>
-          </TaskAgentActions>
+          </TaskActionRow>
         </>
       ) : null}
     </section>

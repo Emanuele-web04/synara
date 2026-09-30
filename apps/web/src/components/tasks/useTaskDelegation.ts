@@ -37,6 +37,8 @@ export function useTaskDelegation(options: {
   /** Records the chat on the to-do; runs before anything is sent, and throwing aborts. */
   readonly onLinkChat: (input: TodoUpdateInput) => Promise<unknown>;
   readonly onDelegated: (() => void) | undefined;
+  /** What the agent gets, read when Start is pressed so an edit saved by that press counts. */
+  readonly readPrompt: () => string;
   readonly draft: ScratchModelDraft;
   readonly catalog: ScratchModelCatalog;
   readonly providerStatuses: readonly ServerProviderStatus[];
@@ -44,15 +46,18 @@ export function useTaskDelegation(options: {
   /** The chosen existing chat; null starts a new chat in `target`. */
   readonly existingChat: SidebarThreadSummary | null;
 }) {
-  const { todo, onLinkChat, onDelegated, draft, catalog, providerStatuses, target, existingChat } =
-    options;
   const {
-    scratchThreadId,
-    prompt,
-    selectedProvider,
-    selectedModel,
-    selectedModelSupportsAutoMode,
-  } = draft;
+    todo,
+    onLinkChat,
+    onDelegated,
+    readPrompt,
+    draft,
+    catalog,
+    providerStatuses,
+    target,
+    existingChat,
+  } = options;
+  const { scratchThreadId, selectedProvider, selectedModel, selectedModelSupportsAutoMode } = draft;
   const { modelOptionsByProvider, runtimeMode, runtimeModelForCapabilities } = catalog;
   const navigate = useNavigate();
   const { settings } = useAppSettings();
@@ -134,7 +139,7 @@ export function useTaskDelegation(options: {
     });
   };
 
-  const startInExistingChat = async (thread: SidebarThreadSummary) => {
+  const startInExistingChat = async (thread: SidebarThreadSummary, prompt: string) => {
     const chatId = thread.id;
     const composerStore = useComposerDraftStore.getState();
     const chatDraft = composerStore.draftsByThreadId[chatId];
@@ -176,7 +181,7 @@ export function useTaskDelegation(options: {
     return started;
   };
 
-  const startInNewChat = async () => {
+  const startInNewChat = async (prompt: string) => {
     if (!target || selectedModel === null) return false;
     const availability = await resolveProviderSendAvailabilityWithRefresh({
       provider: selectedProvider,
@@ -213,6 +218,8 @@ export function useTaskDelegation(options: {
     const adoptsProject = todo.projectId === null && target.kind === "project";
     let linked = true;
     let created: Awaited<ReturnType<typeof createAndDispatchDraftThread>>;
+    // The new chat copies the scratch draft (traits and all) rather than `prompt`.
+    useComposerDraftStore.getState().setPrompt(scratchThreadId, prompt);
     try {
       created = await createAndDispatchDraftThread({
         projectId,
@@ -254,18 +261,18 @@ export function useTaskDelegation(options: {
   };
 
   const canStart =
-    prompt.trim().length > 0 &&
-    !isStarting &&
-    (existingChat !== null || (target !== null && selectedModel !== null));
+    !isStarting && (existingChat !== null || (target !== null && selectedModel !== null));
 
   const handleStart = async () => {
     if (!canStart || isStartingRef.current) return;
+    const prompt = readPrompt();
+    if (prompt.trim().length === 0) return;
     isStartingRef.current = true;
     setIsStarting(true);
     try {
       const started = existingChat
-        ? await startInExistingChat(existingChat)
-        : await startInNewChat();
+        ? await startInExistingChat(existingChat, prompt)
+        : await startInNewChat(prompt);
       if (started) onDelegated?.();
     } catch (error) {
       toastManager.add({
