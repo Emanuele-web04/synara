@@ -128,6 +128,11 @@ export const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "update
 export const FollowUpBehavior = Schema.Literals(["queue", "steer"]);
 export type FollowUpBehavior = typeof FollowUpBehavior.Type;
 export const DEFAULT_FOLLOW_UP_BEHAVIOR: FollowUpBehavior = "queue";
+// What plain Enter does while a composer voice note is recording: "stop" only
+// transcribes into the draft, "send" also sends the draft once transcribed.
+export const VoiceEnterBehavior = Schema.Literals(["stop", "send"]);
+export type VoiceEnterBehavior = typeof VoiceEnterBehavior.Type;
+export const DEFAULT_VOICE_ENTER_BEHAVIOR: VoiceEnterBehavior = "stop";
 export const UiDensity = Schema.Literals(UI_DENSITY_MODES);
 export type UiDensity = typeof UiDensity.Type;
 export { DEFAULT_UI_DENSITY };
@@ -370,6 +375,7 @@ export const AppSettingsSchema = Schema.Struct({
   showEnvironmentInstructions: Schema.Boolean.pipe(withDefaults(() => false)),
   showEnvironmentNotepad: Schema.Boolean.pipe(withDefaults(() => false)),
   followUpBehavior: FollowUpBehavior.pipe(withDefaults(() => DEFAULT_FOLLOW_UP_BEHAVIOR)),
+  voiceEnterBehavior: VoiceEnterBehavior.pipe(withDefaults(() => DEFAULT_VOICE_ENTER_BEHAVIOR)),
   enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => true)),
   // Started threads: show reasoning effort as a stepped slider card in the composer's
   // model menu instead of radio rows. New chats keep the split model/effort pickers.

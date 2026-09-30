@@ -2688,6 +2688,19 @@ export default function ChatView({
     },
     onGuardWarning: warnVoiceGuard,
   });
+  // Bumped when Enter finishes a voice note under the "send" setting; the
+  // effect next to the late send handlers sends once the transcript commits.
+  const [voiceAutoSendRequest, setVoiceAutoSendRequest] = useState(0);
+  const finishComposerVoiceRecordingFromEnter = useCallback(() => {
+    const autoSend = settings.voiceEnterBehavior === "send";
+    const promptBeforeTranscript = promptRef.current;
+    void submitComposerVoiceRecording().then((transcribed) => {
+      // An empty transcript leaves the draft untouched; don't send it blind.
+      if (autoSend && transcribed && promptRef.current !== promptBeforeTranscript) {
+        setVoiceAutoSendRequest((current) => current + 1);
+      }
+    });
+  }, [promptRef, settings.voiceEnterBehavior, submitComposerVoiceRecording]);
   const addTerminalContextToDraft = useCallback(
     (selection: TerminalContextSelection) => {
       if (!activeThreadId) {
@@ -3661,6 +3674,7 @@ export default function ChatView({
     onBackgroundAllForegroundSubagentStripItems,
     isVoiceRecording,
     isVoiceTranscribing,
+    onVoiceRecordingEnter: finishComposerVoiceRecordingFromEnter,
     isComposerApprovalState,
     terminalState,
     terminalWorkspaceOpen,
@@ -4617,6 +4631,13 @@ export default function ChatView({
       handleStandaloneSlashCommand,
     };
   });
+
+  // Runs after the transcript and the cleared transcribing flag have committed,
+  // so the send guard and the live editor snapshot both see the dictated text.
+  useEffect(() => {
+    if (voiceAutoSendRequest === 0) return;
+    void lateComposerSendHandlersRef.current?.send();
+  }, [voiceAutoSendRequest]);
 
   const {
     onSelectComposerItem,

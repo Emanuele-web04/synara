@@ -14,6 +14,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   type AppSettings,
   type FollowUpBehavior,
+  type VoiceEnterBehavior,
   DEFAULT_UI_DENSITY,
   DEFAULT_CHAT_WIDTH,
   type UiDensity,
@@ -191,6 +192,11 @@ const FOLLOW_UP_BEHAVIOR_OPTIONS = [
   { value: "queue", label: "Queue" },
   { value: "steer", label: "Steer" },
 ] as const satisfies ReadonlyArray<{ value: FollowUpBehavior; label: string }>;
+
+const VOICE_ENTER_BEHAVIOR_OPTIONS = [
+  { value: "stop", label: "Stop" },
+  { value: "send", label: "Stop and send" },
+] as const satisfies ReadonlyArray<{ value: VoiceEnterBehavior; label: string }>;
 
 // ── Settings UI primitives ────────────────────────────────────────────────
 
@@ -374,6 +380,9 @@ function SettingsRouteView() {
       : []),
     ...(settings.composerEffortSlider !== defaults.composerEffortSlider ? ["Effort slider"] : []),
     ...(settings.followUpBehavior !== defaults.followUpBehavior ? ["Follow-up behavior"] : []),
+    ...(settings.voiceEnterBehavior !== defaults.voiceEnterBehavior
+      ? ["Enter while dictating"]
+      : []),
     ...(settings.autoOpenDevicePane !== defaults.autoOpenDevicePane
       ? ["Automatically open simulator"]
       : []),
@@ -1220,6 +1229,31 @@ function SettingsRouteView() {
               onValueChange={(value) => updateSettings({ followUpBehavior: value })}
               ariaLabel="Follow-up behavior"
               options={FOLLOW_UP_BEHAVIOR_OPTIONS}
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Enter while dictating"
+          description="Choose what Enter does while a voice note is recording: stop and transcribe into the composer, or stop and send the message once it is transcribed."
+          resetAction={
+            settings.voiceEnterBehavior !== defaults.voiceEnterBehavior ? (
+              <SettingResetButton
+                label="enter while dictating"
+                onClick={() =>
+                  updateSettings({
+                    voiceEnterBehavior: defaults.voiceEnterBehavior,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSegmentedControl
+              value={settings.voiceEnterBehavior}
+              onValueChange={(value) => updateSettings({ voiceEnterBehavior: value })}
+              ariaLabel="Enter while dictating"
+              options={VOICE_ENTER_BEHAVIOR_OPTIONS}
             />
           }
         />
