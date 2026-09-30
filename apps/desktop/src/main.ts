@@ -177,6 +177,12 @@ import {
   shouldRefreshIconCache,
 } from "./macIconCacheRefresh";
 import { persistMacAppIcon } from "./macAppIcon";
+import {
+  MAC_WINDOW_VIBRANCY,
+  createWindowMaterialApplier,
+  parseDesktopWindowMaterial,
+  type WindowMaterialAddon,
+} from "./windowMaterial";
 import { collectMacUpdateDiagnostics } from "./macUpdateDiagnostics";
 import { openInitialBackendWindow } from "./initialBackendWindowOpen";
 import { isTrustedMediaPermissionRequest } from "./mediaPermissions";
@@ -1986,6 +1992,34 @@ function resolveNotificationIconPath(): string | null {
   }
   return resolveResourcePath("synara.png") ?? resolveIconPath("png");
 }
+
+function loadWindowMaterialAddon(): WindowMaterialAddon | null {
+  const addonPath = app.isPackaged
+    ? Path.resolve(process.resourcesPath, "..", "Frameworks", "synara-window-material.node")
+    : Path.resolve(
+        __dirname,
+        "..",
+        ".electron-runtime",
+        "window-material",
+        "synara-window-material.node",
+      );
+  try {
+    const addonModule: { exports: Partial<WindowMaterialAddon> } = { exports: {} };
+    process.dlopen(addonModule, addonPath);
+    const { setBackgroundBlurRadius } = addonModule.exports;
+    if (typeof setBackgroundBlurRadius !== "function") {
+      throw new Error("setBackgroundBlurRadius export is missing");
+    }
+    return { setBackgroundBlurRadius };
+  } catch (error) {
+    console.warn(
+      `[desktop] Window blur addon unavailable, keeping vibrancy: ${formatErrorMessage(error)}`,
+    );
+    return null;
+  }
+}
+
+const applyWindowMaterial = createWindowMaterialApplier(loadWindowMaterialAddon);
 
 function resolveAppSnapHelperPath(): string {
   if (app.isPackaged) {
@@ -4944,6 +4978,14 @@ function registerIpcHandlers(): void {
     nativeTheme.themeSource = theme;
   });
 
+  ipcMain.removeHandler(IPC.setWindowMaterial);
+  ipcMain.handle(IPC.setWindowMaterial, (event, rawInput: unknown) => {
+    const input = parseDesktopWindowMaterial(rawInput);
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (process.platform !== "darwin" || !input || !window) return false;
+    return applyWindowMaterial(window, input);
+  });
+
   ipcMain.removeHandler(IPC.getAppIcon);
   ipcMain.handle(IPC.getAppIcon, () => readDesktopAppIcon());
 
@@ -5377,8 +5419,9 @@ function getIconOption(): { icon: string } | Record<string, never> {
   }
 }
 
-// macOS backs the translucent shell with window vibrancy, so the window is created
-// transparent (`#00000000`) over the vibrancy material. Windows/Linux have no vibrancy:
+// macOS backs the shell with window vibrancy, so the window is created transparent
+// (`#00000000`) over the vibrancy material. The renderer's translucency settings then swap
+// vibrancy for an adjustable desktop blur (see windowMaterial.ts). Windows/Linux have no vibrancy:
 // a transparent window there leaves backdrop-filter surfaces bleeding through and, on
 // fractional DPI, rendering blurry. So off macOS we create an opaque window and skip the
 // macOS-only options. The background tracks the OS light/dark appearance purely to avoid
@@ -5389,7 +5432,7 @@ function getWindowMaterialOptions(): BrowserWindowConstructorOptions {
     return { backgroundColor: nativeTheme.shouldUseDarkColors ? "#181818" : "#ffffff" };
   }
   return {
-    vibrancy: "under-window",
+    vibrancy: MAC_WINDOW_VIBRANCY,
     // "followWindow" lets macOS drop vibrancy blending to inactive when the
     // window is backgrounded, so WindowServer stops continuously recompositing
     // it. "active" forced full-cost blending even when the app was unfocused.

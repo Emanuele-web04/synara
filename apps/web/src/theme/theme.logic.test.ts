@@ -16,7 +16,9 @@ import {
   parseThemeShareString,
   parseThemeShareStringForVariant,
   resolveThemePack,
+  resetThemeVariant,
   setThemeCodeThemeId,
+  setWindowTranslucency,
   updateThemePackFromShareString,
 } from "./theme.logic";
 
@@ -347,6 +349,55 @@ describe("buildThemeCssVariables", () => {
     );
     expect(cssVariables.variables["--app-chat-code-surface"]).toBe(
       cssVariables.variables["--app-user-message-background"],
+    );
+  });
+});
+
+describe("window translucency", () => {
+  const macDesktop = { electron: true, isMac: true };
+
+  it("keeps the long-standing translucent fills at the default opacity", () => {
+    const dark = buildThemeCssVariables(
+      resolveThemePack(DEFAULT_THEME_STATE, "dark"),
+      "dark",
+      macDesktop,
+    );
+    const light = buildThemeCssVariables(
+      resolveThemePack(DEFAULT_THEME_STATE, "light"),
+      "light",
+      macDesktop,
+    );
+    expect(dark.material).toBe("translucent");
+    expect(dark.variables["--app-sidebar-surface"]).toMatch(/80%, black\) 72%, transparent\)$/);
+    expect(dark.variables["--app-rail-shell-opacity"]).toBe("64%");
+    expect(light.variables["--app-sidebar-surface"]).toMatch(/ 38%, transparent\)$/);
+    expect(light.variables["--app-rail-shell-opacity"]).toBe("82%");
+  });
+
+  it("scales the sidebar and rail fills with the chosen opacity", () => {
+    const pack = resolveThemePack(DEFAULT_THEME_STATE, "light");
+    const clear = buildThemeCssVariables(pack, "light", {
+      ...macDesktop,
+      translucency: { opacity: 0, blur: 0 },
+    });
+    const dense = buildThemeCssVariables(pack, "light", {
+      ...macDesktop,
+      translucency: { opacity: 90, blur: 0 },
+    });
+    expect(clear.variables["--app-sidebar-surface"]).toMatch(/ 0%, transparent\)$/);
+    expect(clear.variables["--app-rail-shell-opacity"]).toBe("0%");
+    expect(dense.variables["--app-rail-shell-opacity"]).toBe("100%");
+  });
+
+  it("gives stored states without translucency the defaults and clamps edits", () => {
+    const legacy = normalizeThemeState({ mode: "dark" });
+    expect(legacy.translucency).toEqual(DEFAULT_THEME_STATE.translucency);
+
+    const edited = setWindowTranslucency(legacy, "dark", { opacity: 140, blur: -3 });
+    expect(edited.translucency.dark).toEqual({ opacity: 100, blur: 0 });
+    expect(edited.translucency.light).toEqual(DEFAULT_THEME_STATE.translucency.light);
+    expect(resetThemeVariant(edited, "dark").translucency.dark).toEqual(
+      DEFAULT_THEME_STATE.translucency.dark,
     );
   });
 });
