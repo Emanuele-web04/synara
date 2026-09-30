@@ -63,6 +63,25 @@ const trackPendingUpdate = (id: TodoId, delta: 1 | -1) => {
   else pendingUpdateCountById.delete(id);
 };
 
+/**
+ * applyTodoEvent, except that a to-do with an edit still in flight keeps its optimistic copy:
+ * the edit shares the stored updatedAt, so an older server copy (a create's event, a refetch)
+ * would otherwise win and undo it, e.g. drop a chat link while its agent is starting. The
+ * edit's own reply carries the stored row.
+ */
+function applyTodoEventHoldingEdits(
+  prev: TodoListResult | undefined,
+  event: Parameters<typeof applyTodoEvent>[1],
+): TodoListResult {
+  const next = applyTodoEvent(prev, event);
+  if (!prev || pendingUpdateCountById.size === 0) return next;
+  const heldById = new Map(
+    prev.todos.filter((todo) => pendingUpdateCountById.has(todo.id)).map((todo) => [todo.id, todo]),
+  );
+  if (heldById.size === 0) return next;
+  return { todos: next.todos.map((todo) => heldById.get(todo.id) ?? todo) };
+}
+
 /** `enabled` is false where Tasks is a Beta-only feature, so Stable never asks the server. */
 export function useTodoList(enabled = true) {
   const queryClient = useQueryClient();
@@ -73,7 +92,7 @@ export function useTodoList(enabled = true) {
     queryFn: async () => {
       try {
         const { todos } = await ensureNativeApi().todo.list();
-        return applyTodoEvent(queryClient.getQueryData<TodoListResult>(todoQueryKey), {
+        return applyTodoEventHoldingEdits(queryClient.getQueryData<TodoListResult>(todoQueryKey), {
           type: "snapshot",
           todos,
         });
@@ -101,7 +120,9 @@ export function useTodoEventSubscription(enabled = true) {
     if (!enabled) return;
     const api = ensureNativeApi();
     return api.todo.onEvent((event) => {
-      queryClient.setQueryData<TodoListResult>(todoQueryKey, (prev) => applyTodoEvent(prev, event));
+      queryClient.setQueryData<TodoListResult>(todoQueryKey, (prev) =>
+        applyTodoEventHoldingEdits(prev, event),
+      );
     });
   }, [enabled, queryClient]);
 }
