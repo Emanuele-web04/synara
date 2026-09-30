@@ -114,6 +114,37 @@ describe("composerDraftStore modelSelection", () => {
     ).toEqual(modelSelection("devin", "adaptive", { fastMode: true }));
   });
 
+  it("seeds a per-provider model selection without switching the active provider", () => {
+    const store = useComposerDraftStore.getState();
+    store.setModelSelection(threadId, modelSelection("codex", "gpt-5.4"));
+
+    store.seedModelSelection(threadId, modelSelection("claudeAgent", "claude-opus-4-5"));
+
+    const draft = useComposerDraftStore.getState().draftsByThreadId[threadId];
+    expect(draft?.activeProvider).toBe("codex");
+    expect(draft?.modelSelectionByProvider.codex).toEqual(modelSelection("codex", "gpt-5.4"));
+    expect(draft?.modelSelectionByProvider.claudeAgent).toEqual(
+      modelSelection("claudeAgent", "claude-opus-4-5"),
+    );
+    // A later explicit pick can still switch providers — the seed is only a default.
+    store.setModelSelection(threadId, modelSelection("claudeAgent", "claude-fable-5"));
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.activeProvider).toBe(
+      "claudeAgent",
+    );
+  });
+
+  it("does not create an active provider when seeding an untouched draft", () => {
+    const store = useComposerDraftStore.getState();
+
+    store.seedModelSelection(threadId, modelSelection("claudeAgent", "claude-opus-4-5"));
+
+    const draft = useComposerDraftStore.getState().draftsByThreadId[threadId];
+    expect(draft?.activeProvider).toBeNull();
+    expect(draft?.modelSelectionByProvider.claudeAgent).toEqual(
+      modelSelection("claudeAgent", "claude-opus-4-5"),
+    );
+  });
+
   it("stores Antigravity base models and effort options separately", () => {
     const store = useComposerDraftStore.getState();
     const selection = modelSelection("antigravity", "Gemini 3.5 Flash", {

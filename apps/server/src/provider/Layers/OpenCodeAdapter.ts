@@ -50,7 +50,10 @@ import {
   SYNARA_HARNESS_POLICY_VERSION,
   takeSynaraHarnessPolicyForProviderSession,
 } from "../../agentGateway/harnessPolicy.ts";
-import { shouldAllowSynaraComputerProviderTool } from "../../agentGateway/computerToolPermission.ts";
+import {
+  isSynaraGatewayToolCall,
+  shouldAllowSynaraComputerProviderTool,
+} from "../../agentGateway/computerToolPermission.ts";
 import { buildOpenCodeMcpServer, SYNARA_MCP_SERVER_NAME } from "../../agentGateway/mcpInjection.ts";
 import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import {
@@ -103,6 +106,8 @@ export function resolveOpenCodePermissionPolicyReply(input: {
   readonly interactionMode: ProviderInteractionMode | undefined;
   readonly activeTurn: boolean;
   readonly computerControlEnabled: boolean;
+  readonly autoApproveSynaraTools?: boolean;
+  readonly gatewaySessionActive?: boolean;
   readonly permission: unknown;
   readonly metadata: unknown;
 }): "once" | "reject" | undefined {
@@ -117,6 +122,16 @@ export function resolveOpenCodePermissionPolicyReply(input: {
       runtimeMode: input.runtimeMode,
       permission: { name: input.permission, metadata: input.metadata },
     })
+  ) {
+    return "once";
+  }
+  // Gateway tools are server-authorized by the session token; a session opted
+  // into `autoApproveSynaraTools` (e.g. a group coordinator) must not stall on
+  // an interactive prompt for them. Everything else keeps the ordinary path.
+  if (
+    input.autoApproveSynaraTools === true &&
+    input.gatewaySessionActive === true &&
+    isSynaraGatewayToolCall({ name: input.permission, metadata: input.metadata })
   ) {
     return "once";
   }
@@ -183,6 +198,7 @@ interface OpenCodeSessionContext extends OpenCodeMessageState<Part> {
   pendingHarnessPolicyTurnId: TurnId | undefined;
   readonly gatewayControlAvailable: boolean;
   readonly enableComputerControl?: boolean;
+  readonly autoApproveSynaraTools?: boolean;
   gatewaySessionLease?: AgentGatewaySessionLease;
   session: ProviderSession;
   readonly lifecycleGeneration?: string;
@@ -2396,6 +2412,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               interactionMode: context.activeInteractionMode,
               activeTurn: turnId !== undefined && context.activeTurnId === turnId,
               computerControlEnabled: context.enableComputerControl === true,
+              autoApproveSynaraTools: context.autoApproveSynaraTools === true,
+              gatewaySessionActive: context.gatewaySessionLease !== undefined,
               permission: event.properties.permission,
               metadata: event.properties.metadata,
             });
@@ -3644,6 +3662,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   session,
                   gatewayControlAvailable: started.gatewayControlAvailable,
                   enableComputerControl: input.enableComputerControl === true,
+                  autoApproveSynaraTools: input.autoApproveSynaraTools === true,
                   ...(started.gatewayControlAvailable && agentGatewaySessionLease
                     ? {
                         gatewaySessionLease: agentGatewaySessionLease,

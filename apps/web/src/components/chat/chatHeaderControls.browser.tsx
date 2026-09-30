@@ -1,6 +1,8 @@
 // FILE: chatHeaderControls.browser.tsx
-// Purpose: Browser regressions for interactive versus static shared surface-tab chips and the
-//          trailing close treatment used by open-thread tabs.
+// Purpose: Browser regressions for interactive versus static shared surface-tab chips, the
+//          trailing close treatment used by open-thread tabs, and the surface-panel
+//          toggle's accessible name — the needs-you dot is announced as "needs
+//          attention", not only shown.
 // Layer: Chat header controls test
 
 import "../../index.css";
@@ -9,7 +11,9 @@ import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
-import { SurfaceTabChip } from "./chatHeaderControls";
+import { SettingsIcon } from "~/lib/icons";
+
+import { SurfacePanelToggle, SurfaceTabChip } from "./chatHeaderControls";
 
 describe("SurfaceTabChip selection", () => {
   afterEach(() => {
@@ -75,5 +79,41 @@ describe("SurfaceTabChip selection", () => {
     expect(onSelect).not.toHaveBeenCalled();
     await selectButton.click();
     expect(onSelect).toHaveBeenCalledOnce();
+  });
+});
+
+describe("SurfacePanelToggle", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("names the needs-attention state in the accessible name", async () => {
+    await render(
+      <SurfacePanelToggle
+        state={{ open: false, onOpenChange: () => {}, attention: true }}
+        icon={SettingsIcon}
+        ariaLabel="Group panel"
+        tooltip="Group panel"
+      />,
+    );
+
+    await expect
+      .element(page.getByRole("button", { name: "Group panel, needs attention" }))
+      .toBeInTheDocument();
+  });
+
+  it("keeps the plain label while no attention dot shows", async () => {
+    await render(
+      <SurfacePanelToggle
+        state={{ open: false, onOpenChange: () => {} }}
+        icon={SettingsIcon}
+        ariaLabel="Group panel"
+        tooltip="Group panel"
+      />,
+    );
+
+    await expect
+      .element(page.getByRole("button", { name: "Group panel", exact: true }))
+      .toBeInTheDocument();
   });
 });

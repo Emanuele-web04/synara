@@ -399,6 +399,52 @@ export function buildThreadRecapPrompt(input: {
   };
 }
 
+export function buildProjectDigestPrompt(input: {
+  readonly previousSummary?: string;
+  readonly activity: string;
+  readonly coverage: string;
+  readonly pinnedFocus: string;
+}) {
+  return {
+    prompt: [
+      "You are writing a project digest for Synara's Project panel.",
+      "Return a JSON object with keys: summary, focusItems.",
+      "Respond with only the JSON object, no prose and no code fences.",
+      "Rules:",
+      "- summary is at most 600 characters",
+      "- every focus item must include a source reference from the activity",
+      "- do not invent completed work or accepted tasks",
+      "- preserve pinned focus items",
+      "- if sources are missing, return fewer focus items rather than unsourced ones",
+      "- do not mention goals or tell the user to start a goal; goals are optional",
+      "- summarize current work and workers, not setup status",
+      "",
+      "Previous summary:",
+      limitSection(input.previousSummary?.trim() || "(none)", 800),
+      "",
+      "Coverage:",
+      limitSection(input.coverage, 800),
+      "",
+      "Pinned focus:",
+      limitSection(input.pinnedFocus || "(none)", 800),
+      "",
+      "Activity:",
+      limitSection(input.activity, 6_000),
+    ].join("\n"),
+    outputSchemaJson: Schema.Struct({
+      summary: Schema.String,
+      focusItems: Schema.Array(
+        Schema.Struct({
+          title: Schema.String,
+          kind: Schema.Literals(["task", "message", "artifact", "blocker"]),
+          source: Schema.String,
+        }),
+      ),
+    }),
+    rawTextFallback: { key: "summary" } satisfies RawTextFallback,
+  };
+}
+
 // Converts an explicit composer trigger into the same automation fields the create API expects.
 export function buildAutomationIntentPrompt(input: {
   readonly message: string;

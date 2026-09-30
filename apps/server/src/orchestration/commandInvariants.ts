@@ -19,6 +19,7 @@ import {
   THREAD_NOT_ARCHIVED_INVARIANT_MARKER,
 } from "@synara/shared/errorMessages";
 import {
+  isGroupContainerKind,
   isLegacyHomeChatContainerRow as isSharedLegacyHomeChatContainerRow,
   isOrdinaryProjectRow as isSharedOrdinaryProjectRow,
 } from "@synara/shared/projectContainers";
@@ -218,8 +219,8 @@ export function isLegacyHomeChatContainerRow(input: {
 
 /**
  * Server half of the web's project partitioning: ordinary projects are the user-visible
- * ones. Managed chat and Studio containers are excluded by kind alone; the legacy Home
- * chat container kept `kind: "project"` and is recognized by its row shape instead.
+ * ones. Managed chat, Studio, and group containers are excluded by kind alone; the legacy
+ * Home chat container kept `kind: "project"` and is recognized by its row shape instead.
  */
 export function isOrdinaryProjectRow(input: {
   readonly projectKind: ProjectKind | undefined;
@@ -227,6 +228,9 @@ export function isOrdinaryProjectRow(input: {
   readonly projectWorkspaceRoot: string;
   readonly workspacePaths: SpaceAssignmentWorkspacePaths | undefined;
 }): boolean {
+  if (isGroupContainerKind(input.projectKind)) {
+    return false;
+  }
   return isSharedOrdinaryProjectRow({
     projectKind: input.projectKind,
     projectTitle: input.projectTitle,

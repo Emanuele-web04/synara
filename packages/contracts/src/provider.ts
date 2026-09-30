@@ -62,6 +62,14 @@ export const ProviderSessionStartInput = Schema.Struct({
   providerOptions: Schema.optional(ProviderStartOptions),
   /** Explicit per-thread provisioning for the Linux computer MCP tools. */
   enableComputerControl: Schema.optional(Schema.Boolean),
+  /**
+   * Pre-approve the Synara group/gateway MCP tools (`mcp__synara__*`,
+   * `synara_*`) for this session even when the runtime mode would normally ask
+   * for approval. The gateway already authorizes them server-side; the
+   * interactive prompt only adds friction for trusted principals such as a
+   * group coordinator. File edits and shell commands still ask.
+   */
+  autoApproveSynaraTools: Schema.optional(Schema.Boolean),
   runtimeMode: RuntimeMode,
 });
 export type ProviderSessionStartInput = typeof ProviderSessionStartInput.Type;
@@ -100,6 +108,12 @@ export const ProviderForkThreadInput = Schema.Struct({
    * `computer:control` at the fork boundary.
    */
   enableComputerControl: Schema.optional(Schema.Boolean),
+  /**
+   * Same hand-off as `enableComputerControl`: the gateway-approval fact a
+   * start would carry, so a fork leases the same pre-approved Synara tools as
+   * its source session.
+   */
+  autoApproveSynaraTools: Schema.optional(Schema.Boolean),
   runtimeMode: RuntimeMode,
 });
 export type ProviderForkThreadInput = typeof ProviderForkThreadInput.Type;

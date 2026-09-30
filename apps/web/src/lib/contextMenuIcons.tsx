@@ -26,6 +26,7 @@ export const THREAD_CONTEXT_MENU_ICONS = {
   markUnread: EYE_OPEN_ICON_NAME,
   // Same glyph as the chat header's Hand off button.
   handoff: renderToStaticMarkup(<HandoffIcon />),
+  group: "folder-open-front",
   copy: COPY_ICON_NAME,
   openInTerminal: TERMINAL_ICON_NAME,
   // Same glyph as the thread row's hover archive button.

@@ -137,6 +137,8 @@ const makeProviderTextGeneration = Effect.gen(function* () {
       call("generateThreadTitle", input, (impl, value) => impl.generateThreadTitle(value)),
     generateThreadRecap: (input: TextGen.ThreadRecapGenerationInput) =>
       call("generateThreadRecap", input, (impl, value) => impl.generateThreadRecap(value)),
+    generateProjectDigest: (input: TextGen.ProjectDigestGenerationInput) =>
+      call("generateProjectDigest", input, (impl, value) => impl.generateProjectDigest(value)),
     generateAutomationIntent: (input: TextGen.AutomationIntentGenerationInput) =>
       call("generateAutomationIntent", input, (impl, value) =>
         impl.generateAutomationIntent(value),

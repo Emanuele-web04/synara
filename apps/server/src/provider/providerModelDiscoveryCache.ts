@@ -42,6 +42,8 @@ export interface ProviderModelDiscoveryCacheKey {
   readonly apiEndpoint: string | null;
   readonly agentDir: string | null;
   readonly cwd: string | null;
+  /** Claude catalogs depend on the installed CLI version, even at the same path. */
+  readonly runtimeVersion?: string | null;
 }
 
 export interface ProviderModelDiscoveryCache<E> {
@@ -91,7 +93,15 @@ export function providerModelDiscoveryCacheKey(
  */
 export const serializeProviderModelDiscoveryCacheKey = (
   key: ProviderModelDiscoveryCacheKey,
-): string => JSON.stringify([key.provider, key.binaryPath, key.apiEndpoint, key.agentDir, key.cwd]);
+): string =>
+  JSON.stringify([
+    key.provider,
+    key.binaryPath,
+    key.apiEndpoint,
+    key.agentDir,
+    key.cwd,
+    ...(key.runtimeVersion !== undefined ? [key.runtimeVersion] : []),
+  ]);
 
 /**
  * Only a non-empty, error-free catalog is worth remembering as "good". Static
