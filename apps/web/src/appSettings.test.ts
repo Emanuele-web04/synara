@@ -24,6 +24,7 @@ import {
   getServerDisabledProviders,
   isGitTextGenerationSettingsDirty,
   getProviderStartOptions,
+  mergeProviderStartOptions,
   normalizeChatFontSizePx,
   normalizeStoredAppSettings,
   normalizeTerminalFontFamily,
@@ -599,6 +600,41 @@ describe("getProviderStartOptions", () => {
   });
 });
 
+describe("mergeProviderStartOptions", () => {
+  it("returns the base when there is no overlay", () => {
+    const base = { codex: { binaryPath: "/opt/codex" } };
+    expect(mergeProviderStartOptions(base, undefined)).toEqual(base);
+  });
+
+  it("returns the overlay when there is no base", () => {
+    const overlay = { claudeAgent: { binaryPath: "/opt/claude" } };
+    expect(mergeProviderStartOptions(undefined, overlay)).toEqual(overlay);
+  });
+
+  it("keeps base providers the overlay does not name", () => {
+    expect(
+      mergeProviderStartOptions(
+        { codex: { binaryPath: "/opt/codex" }, claudeAgent: { permissionMode: "plan" } },
+        { claudeAgent: { binaryPath: "/opt/claude" } },
+      ),
+    ).toEqual({
+      codex: { binaryPath: "/opt/codex" },
+      claudeAgent: { permissionMode: "plan", binaryPath: "/opt/claude" },
+    });
+  });
+
+  it("lets the overlay win only the keys it sets on a shared provider", () => {
+    expect(
+      mergeProviderStartOptions(
+        { codex: { binaryPath: "/opt/codex", homePath: "/home/me/.codex" } },
+        { codex: { binaryPath: "/group/codex" } },
+      ),
+    ).toEqual({
+      codex: { binaryPath: "/group/codex", homePath: "/home/me/.codex" },
+    });
+  });
+});
+
 describe("provider-indexed custom model settings", () => {
   const settings = {
     customCodexModels: ["custom/codex-model"],
@@ -747,7 +783,7 @@ describe("AppSettingsSchema", () => {
       followUpBehavior: DEFAULT_FOLLOW_UP_BEHAVIOR,
       sidebarProjectSortOrder: "manual",
       sidebarThreadSortOrder: "updated_at",
-      showStudioSection: true,
+      showGroupsSection: true,
       showAutomationRunThreads: true,
       timestampFormat: "locale",
       customCodexModels: [],

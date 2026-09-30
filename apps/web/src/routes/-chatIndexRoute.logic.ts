@@ -38,10 +38,10 @@ export function resolveChatIndexRestoreRoute(input: {
       | undefined
     >
   >;
-  readonly studioProjectIds: ReadonlySet<ProjectId>;
+  readonly groupProjectIds: ReadonlySet<ProjectId>;
   /**
    * Still-unsent chat drafts. They have a route id but no sidebar summary yet, so the summary
-   * lookup below never matches them — mirrors the /studio landing's draft handling so a cold
+   * lookup below never matches them — mirrors the /groups landing's draft handling so a cold
    * start on "/" can reopen an unsent draft instead of always minting a new one.
    */
   readonly draftProjectIdByThreadId: ReadonlyMap<string, ProjectId>;
@@ -52,7 +52,7 @@ export function resolveChatIndexRestoreRoute(input: {
   readonly rememberedSplitViewThreadIds: readonly ThreadId[] | undefined;
   readonly landingSpace: ChatIndexLandingSpace | null;
 }): LastThreadRoute | null {
-  const { draftProjectIdByThreadId, landingSpace, sidebarThreadSummaryById, studioProjectIds } =
+  const { draftProjectIdByThreadId, landingSpace, sidebarThreadSummaryById, groupProjectIds } =
     input;
 
   const availableThreadIds = new Set<string>();
@@ -64,9 +64,9 @@ export function resolveChatIndexRestoreRoute(input: {
     if (threadSummary?.sidechatSourceThreadId) continue;
     const projectId = threadSummary?.projectId ?? draftProjectIdByThreadId.get(threadId);
     if (projectId === undefined) continue;
-    // Studio threads belong to the /studio surface; restoring one from "/" would silently
+    // Group threads belong to the /groups surface; restoring one from "/" would silently
     // switch the user into that segment.
-    if (studioProjectIds.has(projectId)) continue;
+    if (groupProjectIds.has(projectId)) continue;
     if (
       landingSpace &&
       !isThreadReachableFromSpace({

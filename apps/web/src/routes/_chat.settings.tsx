@@ -4,7 +4,7 @@
 // Exports: Settings route component for `/settings`
 
 import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@synara/contracts";
-import { isBetaFeatureOn, VISIBLE_PROVIDER_DESCRIPTORS } from "../betaFeatures";
+import { GROUPS_ON, isBetaFeatureOn, VISIBLE_PROVIDER_DESCRIPTORS } from "../betaFeatures";
 import { sameAppSnapShortcut } from "@synara/shared/appSnapShortcut";
 import { desktopFlavorFromProtocol } from "@synara/shared/betaFeatures";
 import { SafariAccessSetupButton } from "../components/SafariAccessOnboarding";
@@ -344,7 +344,9 @@ function SettingsRouteView() {
       ? ["Thread sort order"]
       : []),
     ...(settings.showChatsSection !== defaults.showChatsSection ? ["Chats section"] : []),
-    ...(settings.showStudioSection !== defaults.showStudioSection ? ["Studio section"] : []),
+    ...(GROUPS_ON && settings.showGroupsSection !== defaults.showGroupsSection
+      ? ["Groups section"]
+      : []),
     ...(settings.showAutomationRunThreads !== defaults.showAutomationRunThreads
       ? ["Automation runs"]
       : []),
@@ -700,13 +702,15 @@ function SettingsRouteView() {
           ariaLabel: "Show the Chats section in the sidebar",
         })}
 
-        {renderBooleanSettingRow({
-          settingKey: "showStudioSection",
-          title: "Studio",
-          description: "Show the Studio tab in the sidebar switcher.",
-          resetLabel: "studio section",
-          ariaLabel: "Show the Studio section in the sidebar",
-        })}
+        {GROUPS_ON
+          ? renderBooleanSettingRow({
+              settingKey: "showGroupsSection",
+              title: "Groups",
+              description: "Show the Groups tab in the sidebar switcher.",
+              resetLabel: "groups section",
+              ariaLabel: "Show the Groups section in the sidebar",
+            })
+          : null}
 
         {renderBooleanSettingRow({
           settingKey: "showAutomationRunThreads",

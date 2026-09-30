@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ServerAuth, type ServerAuthShape } from "./auth/Services/ServerAuth";
 import {
   resolveDefaultChatWorkspaceRoot,
+  resolveDefaultGroupsWorkspaceRoot,
   resolveDefaultStudioWorkspaceRoot,
   ServerConfig,
   type ServerConfigShape,
@@ -47,6 +48,7 @@ function makeServerConfig(overrides: Partial<ServerConfigShape> = {}): ServerCon
     homeDir: os.homedir(),
     chatWorkspaceRoot: resolveDefaultChatWorkspaceRoot({ homeDir: os.homedir() }),
     studioWorkspaceRoot: resolveDefaultStudioWorkspaceRoot({ homeDir: os.homedir() }),
+    groupsWorkspaceRoot: resolveDefaultGroupsWorkspaceRoot({ homeDir: os.homedir() }),
     baseDir,
     keybindingsConfigPath: path.join(baseDir, "keybindings.json"),
     serverRuntimeStatePath: path.join(baseDir, "runtime.json"),

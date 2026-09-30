@@ -112,6 +112,7 @@ describe("railItemForPathname", () => {
     expect(railItemForPathname("/pull-requests/42")).toBe("pullRequests");
     expect(railItemForPathname("/automations")).toBe("automations");
     expect(railItemForPathname("/studio/abc")).toBe("studio");
+    expect(railItemForPathname("/groups")).toBe("studio");
     expect(railItemForPathname("/settings")).toBe("settings");
     expect(railItemForPathname("/kanbanish")).toBeNull();
     expect(railItemForPathname("/")).toBeNull();

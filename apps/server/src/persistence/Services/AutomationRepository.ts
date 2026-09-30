@@ -31,6 +31,7 @@ export const CreateAutomationDefinitionInput = Schema.Struct({
   input: AutomationCreateInput,
   now: Schema.String,
   nextRunAt: Schema.optional(Schema.NullOr(Schema.String)),
+  managedByProject: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
 });
 export type CreateAutomationDefinitionInput = typeof CreateAutomationDefinitionInput.Type;
 
@@ -45,6 +46,7 @@ export const GetAutomationDefinitionInput = Schema.Struct({
 export type GetAutomationDefinitionInput = typeof GetAutomationDefinitionInput.Type;
 
 export const ListDueAutomationDefinitionsInput = Schema.Struct({
+  excludeProjectManaged: Schema.optional(Schema.Boolean),
   now: Schema.String,
   limit: Schema.Number,
 });
@@ -91,6 +93,7 @@ export type ResolvePendingAutomationProposalInput =
   typeof ResolvePendingAutomationProposalInput.Type;
 
 export const CreateAutomationRunInput = Schema.Struct({
+  excludeProjectManaged: Schema.optional(Schema.Boolean),
   id: AutomationRunId,
   automationId: AutomationId,
   projectId: ProjectId,
@@ -137,6 +140,7 @@ export const GetDeferredAutomationRunInput = Schema.Struct({
 export type GetDeferredAutomationRunInput = typeof GetDeferredAutomationRunInput.Type;
 
 export const ListDueDeferredAutomationRunsInput = Schema.Struct({
+  excludeProjectManaged: Schema.optional(Schema.Boolean),
   now: Schema.String,
   limit: Schema.Number,
 });
@@ -169,6 +173,7 @@ export const MarkAutomationRunStartedInput = Schema.Struct({
 export type MarkAutomationRunStartedInput = typeof MarkAutomationRunStartedInput.Type;
 
 export const ReserveDeferredAutomationRunInput = Schema.Struct({
+  excludeProjectManaged: Schema.optional(Schema.Boolean),
   id: AutomationRunId,
   threadId: ThreadId,
   reservedAt: Schema.String,
@@ -233,11 +238,13 @@ export type MarkAutomationRunWaitingForApprovalInput =
   typeof MarkAutomationRunWaitingForApprovalInput.Type;
 
 export const GetAutomationRunByThreadInput = Schema.Struct({
+  excludeProjectManaged: Schema.optional(Schema.Boolean),
   threadId: ThreadId,
 });
 export type GetAutomationRunByThreadInput = typeof GetAutomationRunByThreadInput.Type;
 
 export const ListRecoverableAutomationRunsInput = Schema.Struct({
+  excludeProjectManaged: Schema.optional(Schema.Boolean),
   limit: Schema.Number,
   afterCreatedAt: Schema.optional(Schema.String),
   afterRunId: Schema.optional(AutomationRunId),
@@ -245,6 +252,7 @@ export const ListRecoverableAutomationRunsInput = Schema.Struct({
 export type ListRecoverableAutomationRunsInput = typeof ListRecoverableAutomationRunsInput.Type;
 
 export const ListAutomationRunsNeedingCompletionEvaluationInput = Schema.Struct({
+  excludeProjectManaged: Schema.optional(Schema.Boolean),
   limit: Schema.Number,
 });
 export type ListAutomationRunsNeedingCompletionEvaluationInput =
@@ -256,12 +264,14 @@ export const CountActiveAutomationRunsInput = Schema.Struct({
 export type CountActiveAutomationRunsInput = typeof CountActiveAutomationRunsInput.Type;
 
 export const CountActiveAutomationRunsByThreadInput = Schema.Struct({
+  excludeProjectManaged: Schema.optional(Schema.Boolean),
   threadId: ThreadId,
 });
 export type CountActiveAutomationRunsByThreadInput =
   typeof CountActiveAutomationRunsByThreadInput.Type;
 
 export const CountPendingCompletionEvaluationsByThreadInput = Schema.Struct({
+  excludeProjectManaged: Schema.optional(Schema.Boolean),
   threadId: ThreadId,
 });
 export type CountPendingCompletionEvaluationsByThreadInput =
@@ -274,6 +284,7 @@ export type ListActiveAutomationRunsForDefinitionInput =
   typeof ListActiveAutomationRunsForDefinitionInput.Type;
 
 export const GetEarliestAutomationNextRunAtInput = Schema.Struct({
+  excludeProjectManaged: Schema.optional(Schema.Boolean),
   now: Schema.optional(Schema.String),
 });
 export type GetEarliestAutomationNextRunAtInput = typeof GetEarliestAutomationNextRunAtInput.Type;

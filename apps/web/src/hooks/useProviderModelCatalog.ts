@@ -80,9 +80,10 @@ export function useProviderModelCatalog(input: {
   modelHintByProvider?: Partial<Record<ProviderKind, string | null>>;
   /**
    * Restrict background discovery to the providers used by a non-picker surface.
-   * Picker surfaces can omit this to use the visible-provider list from settings.
+   * Picker surfaces can omit this — or pass undefined — to use the
+   * visible-provider list from settings.
    */
-  prefetchProviders?: ReadonlyArray<ProviderKind>;
+  prefetchProviders?: ReadonlyArray<ProviderKind> | undefined;
   /** Preserve eager Claude/Codex agent discovery on surfaces that already prefetch both. */
   agentDiscoveryPolicy?: "selected" | "eager-core";
 }): ProviderModelCatalog {
