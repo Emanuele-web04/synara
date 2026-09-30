@@ -1206,6 +1206,10 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
     // which leaks unrelated retry pressure across this file's many mounts.
     return { models: [], source: "unsupported", cached: false };
   }
+  // The sidebar badge reads this on every chat; keep its RPC response contract-valid.
+  if (tag === WS_METHODS.pullRequestsReviewRequestCount) {
+    return { count: 0, incomplete: false };
+  }
   if (tag === WS_METHODS.projectsListDevServers) {
     return { servers: [] };
   }
