@@ -8,6 +8,7 @@ import {
   buildGrokAcpSpawnInput,
   isGrokSessionStoragePathNotFoundError,
   resolveGrokAcpAuthMethodId,
+  resolveGrokAcpAuthMethodIdForEnv,
   runGrokAcpCompactionCommand,
 } from "./GrokAcpSupport.ts";
 
@@ -24,6 +25,7 @@ describe("buildGrokAcpSpawnInput", () => {
       command: "grok",
       args: ["--permission-mode", "default", "agent", "--no-leader", "stdio"],
       cwd: "/tmp/project",
+      providerEnvironment: { driver: "grok" },
     });
   });
 
@@ -52,6 +54,7 @@ describe("buildGrokAcpSpawnInput", () => {
         "stdio",
       ],
       cwd: "/tmp/project",
+      providerEnvironment: { driver: "grok" },
     });
     expect(spawn.args).not.toContain("--always-approve");
   });
@@ -160,6 +163,20 @@ describe("resolveGrokAcpAuthMethodId", () => {
     await expect(
       Effect.runPromise(
         resolveGrokAcpAuthMethodId(initializeWithAuthMethods(["cached_token", "xai.api_key"])),
+      ),
+    ).resolves.toBe("xai.api_key");
+  });
+
+  it("uses the selected legacy key without inheriting an ambient XAI_API_KEY alias", async () => {
+    process.env.XAI_API_KEY = "ambient-account-a";
+    delete process.env.GROK_CODE_XAI_API_KEY;
+
+    await expect(
+      Effect.runPromise(
+        resolveGrokAcpAuthMethodIdForEnv(
+          { GROK_CODE_XAI_API_KEY: "selected-account-b" },
+          "grok_work",
+        )(initializeWithAuthMethods(["cached_token", "xai.api_key"])),
       ),
     ).resolves.toBe("xai.api_key");
   });

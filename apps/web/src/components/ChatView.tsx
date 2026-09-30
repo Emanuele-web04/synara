@@ -17,6 +17,7 @@ import {
   type PendingClaudeCacheReview,
   type ProjectId,
   type ProjectScript,
+  type ProviderInstanceId,
   type ProviderKind,
   type ResolvedKeybindingsConfig,
   type ServerProviderStatus,
@@ -68,8 +69,9 @@ import {
 } from "~/lib/gitReactQuery";
 import { LoaderCircleIcon, RefreshCwIcon, TemporaryThreadIcon } from "~/lib/icons";
 import { getLocalFolderBrowseRootPath } from "~/lib/localFolderMentions";
-import { findProviderStatus } from "~/lib/providerAvailability";
-import { serverSettingsQueryOptions } from "~/lib/serverReactQuery";
+import { findProviderStatus, resolveVoiceTranscriptionTarget } from "~/lib/providerAvailability";
+import { resolveProviderInstanceLabel } from "~/lib/providerInstancePresentation";
+import { resolveAuxiliaryTextGenerationSelection } from "~/lib/textGenerationCapabilities";
 import { cn, isMacNavigatorPlatform, newCommandId, newThreadId, randomUUID } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import {
@@ -80,6 +82,7 @@ import { projectScriptRuntimeEnv } from "~/projectScripts";
 import {
   resolveAppModelSelection,
   resolveAssistantDeliveryMode,
+  resolveDefaultProviderInstanceId,
   useAppSettings,
 } from "../appSettings";
 import {
@@ -165,8 +168,9 @@ import {
 } from "../lib/threadEnvironment";
 import {
   canCreateThreadHandoff,
-  resolveAvailableHandoffTargetProviders,
+  resolveAvailableHandoffTargets,
   resolveThreadHandoffAvailability,
+  type ThreadHandoffTarget,
 } from "../lib/threadHandoff";
 import { buildDraftThreadRenameCreateInput, dispatchThreadRename } from "../lib/threadRename";
 import { useProjectEnvironmentStore } from "../projectEnvironmentStore";
@@ -204,6 +208,7 @@ import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { getThreadFromState } from "../threadDerivation";
 import { buildThreadSubscribeInput } from "../threadDetailResumeCursors";
+import { SETTINGS_TARGETS } from "../settingsNavigation";
 import {
   DEFAULT_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
@@ -219,6 +224,7 @@ import {
   DismissedProviderHealthBannersSchema,
   PullRequestDialogState,
   appendVoiceTranscriptToPrompt,
+  buildCollapsedCursorModelOptionsReset,
   buildLocalDraftThread,
   buildThreadBreadcrumbs,
   canApplyComposerFocus,
@@ -241,6 +247,7 @@ import {
   resolveWorkingLabel,
   shouldEnableComposerPastedTextCollapse,
   shouldRenderProviderHealthBanner,
+  shouldShowComposerProviderInstancePicker,
   shouldStartActiveTurnLayoutGrace,
   type PendingFileUndo,
 } from "./ChatView.logic";
@@ -280,6 +287,7 @@ import {
   ComposerModelPicker,
   type ComposerModelSelectionOptions,
 } from "./chat/ComposerModelPicker";
+import { ProviderInstancePicker } from "./chat/ProviderInstancePicker";
 import { ComposerPendingApprovalPanel } from "./chat/ComposerPendingApprovalPanel";
 import {
   ComposerClaudeCacheReviewPanel,
@@ -444,6 +452,7 @@ function getProviderHealthBannerDismissalKey(status: ServerProviderStatus | null
   }
   return [
     status.provider,
+    status.instanceId ?? status.provider,
     status.status,
     status.available ? "available" : "unavailable",
     status.authStatus,
@@ -1296,9 +1305,12 @@ export default function ChatView({
     lockedProvider,
     serverConfigQuery,
     selectedProvider,
+    providerInstances,
+    selectedProviderInstanceId,
     providerModelDiscoveryCwd,
     customModelsByProvider,
     modelOptionsByProvider,
+    modelOptionsByProviderInstance,
     loadingModelProviders,
     discoveryErrorsByProvider,
     runtimeModelsByProvider,
@@ -1323,6 +1335,21 @@ export default function ChatView({
     isModelPickerOpen: isComposerModelEffortPickerOpen,
     resolvedThreadWorktreePath,
   });
+  const selectedProviderInstances = useMemo(
+    () => providerInstances.filter((instance) => instance.provider === selectedProvider),
+    [providerInstances, selectedProvider],
+  );
+  const selectedProviderInstanceLabel = resolveProviderInstanceLabel(
+    selectedProviderInstances,
+    selectedProviderInstanceId,
+  );
+  const showProviderInstancePicker = shouldShowComposerProviderInstancePicker({
+    provider: selectedProvider,
+    selectedProviderInstanceId,
+    providerInstances: selectedProviderInstances,
+  });
+  // Cursor model variants always render collapsed in the composer picker.
+  const showExpandedCursorModelVariants = false;
   const {
     selectedComposerSkills,
     selectedComposerMentions,
@@ -1346,7 +1373,6 @@ export default function ChatView({
   const enableComputerControl = computerControlMode !== "off";
   const featureFlags = useFeatureFlags();
   const showDebugTaskBanner = import.meta.env.DEV && featureFlags["show-debug-task-banner"];
-  const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
 
   const phase = derivePhase(activeThread?.session ?? null);
   const isConnecting = phase === "connecting";
@@ -1997,6 +2023,7 @@ export default function ChatView({
   } = useComposerDiscovery({
     threadId,
     selectedProvider,
+    selectedProviderInstanceId,
     composerTrigger,
     composerCommandPicker,
     providerModelDiscoveryCwd,
@@ -2267,21 +2294,27 @@ export default function ChatView({
     settings,
     configuredProviderStatuses: serverConfigQuery.data?.providers,
   });
-  const handoffTargetProviders = useMemo(
+  const handoffTargets = useMemo(
     () =>
       activeThread
-        ? resolveAvailableHandoffTargetProviders({
+        ? resolveAvailableHandoffTargets({
             sourceProvider: activeThread.modelSelection.provider,
-            providerSettings: serverSettingsQuery.data?.providers,
-            providerStatuses,
+            sourceProviderInstanceId:
+              activeThread.session?.providerInstanceId ?? activeThread.modelSelection.instanceId,
+            providerInstances,
           })
         : [],
-    [activeThread, providerStatuses, serverSettingsQuery.data?.providers],
+    [activeThread, providerInstances],
   );
+  const sidechatTargetProviders = useMemo(
+    () => [...new Set(handoffTargets.map((target) => target.provider))],
+    [handoffTargets],
+  );
+
   const handoffActionLabel = activeThread ? "Hand off thread" : "Create handoff thread";
   const activeProviderStatus = useMemo(
-    () => findProviderStatus(providerStatuses, selectedProvider),
-    [selectedProvider, providerStatuses],
+    () => findProviderStatus(providerStatuses, selectedProvider, selectedProviderInstanceId),
+    [selectedProvider, selectedProviderInstanceId, providerStatuses],
   );
   const activeProviderHealthBannerDismissalKey = useMemo(
     () => getProviderHealthBannerDismissalKey(activeProviderStatus),
@@ -2292,10 +2325,17 @@ export default function ChatView({
     dismissedProviderHealthBannerKeys.includes(activeProviderHealthBannerDismissalKey)
       ? null
       : activeProviderStatus;
-  const voiceProviderStatus = useMemo(
-    () => findProviderStatus(providerStatuses, "codex"),
-    [providerStatuses],
+  const voiceProviderTarget = useMemo(
+    () =>
+      resolveVoiceTranscriptionTarget({
+        statuses: providerStatuses,
+        providerInstances,
+        selectedProvider,
+        selectedProviderInstanceId,
+      }),
+    [providerInstances, providerStatuses, selectedProvider, selectedProviderInstanceId],
   );
+  const voiceProviderStatus = voiceProviderTarget?.status ?? null;
   const refreshProviderStatuses = useRefreshProviderStatusesNow();
   const activeProjectCwd = activeProject?.cwd ?? null;
   const activeThreadWorktreePath = isGroupContainer ? null : (activeThread?.worktreePath ?? null);
@@ -2672,6 +2712,8 @@ export default function ChatView({
     activeThreadId: activeThread?.id ?? null,
     threadId,
     selectedProvider,
+    selectedProviderInstanceId,
+    voiceProviderInstanceId: voiceProviderTarget?.instanceId ?? "codex",
     activeProviderStatus: voiceProviderStatus,
     pendingUserInputCount: pendingUserInputs.length,
     onTranscriptReady: appendVoiceTranscriptToComposer,
@@ -2883,6 +2925,10 @@ export default function ChatView({
     latestTurnSettled,
     codexHomePath: settings.codexHomePath || null,
     providerOptions: providerOptionsForDispatch ?? null,
+    textGenerationModelSelection: resolveAuxiliaryTextGenerationSelection({
+      provider: selectedProvider,
+      modelSelection: selectedModelSelection,
+    }),
   });
   const hasRightDockPanes = useRightDockStore(
     (store) => selectRightDockState(threadId)(store).panes.length > 0,
@@ -3580,6 +3626,16 @@ export default function ChatView({
         scheduleComposerFocus();
         return;
       }
+      const resolvedInstanceId =
+        selectionOptions?.instanceId ?? resolveDefaultProviderInstanceId(settings, provider);
+      const lockedInstanceId =
+        lockedProvider !== null && provider === lockedProvider
+          ? (activeThread.session?.providerInstanceId ?? activeThread.modelSelection.instanceId)
+          : undefined;
+      if (lockedInstanceId && resolvedInstanceId !== lockedInstanceId) {
+        scheduleComposerFocus();
+        return;
+      }
       const resolvedModel = resolveCommittedProviderModel({
         selectedModel: model,
         availableOptions: modelOptionsByProvider[provider],
@@ -3596,8 +3652,9 @@ export default function ChatView({
         // A starred preset commits its provider options together with the model.
         selectionOptions?.modelOptions,
         provider === "claudeAgent" ? runtimeModel?.supportsAutoMode : undefined,
+        { instanceId: resolvedInstanceId },
       );
-      const providerStatus = findProviderStatus(providerStatuses, provider);
+      const providerStatus = findProviderStatus(providerStatuses, provider, resolvedInstanceId);
       const nextRuntimeMode =
         runtimeMode === "auto" &&
         !providerModelSupportsAutoRuntimeMode(provider, runtimeModel, providerStatus)
@@ -3612,10 +3669,21 @@ export default function ChatView({
         commit: () => {
           setComposerDraftModelSelectionAndSticky(activeThread.id, nextModelSelection);
           if (provider === "cursor" && !selectionOptions?.modelOptions) {
-            setComposerDraftProviderModelOptions(activeThread.id, provider, undefined, {
-              persistSticky: true,
-              model: resolvedModel,
-            });
+            setComposerDraftProviderModelOptions(
+              activeThread.id,
+              provider,
+              undefined,
+              buildCollapsedCursorModelOptionsReset({
+                provider,
+                instanceId: resolvedInstanceId,
+                model: resolvedModel,
+                showExpandedCursorModelVariants,
+              }) ?? {
+                persistSticky: true,
+                model: resolvedModel,
+                instanceId: resolvedInstanceId,
+              },
+            );
           }
         },
       });
@@ -3635,10 +3703,31 @@ export default function ChatView({
       runtimeMode,
       runtimeModelsByProvider,
       scheduleComposerFocus,
+      settings,
       setComposerDraftModelSelectionAndSticky,
       setComposerDraftProviderModelOptions,
+      showExpandedCursorModelVariants,
     ],
   );
+
+  const onProviderInstanceSelect = useCallback(
+    (instanceId: ProviderInstanceId) => {
+      void onProviderModelSelect(selectedProvider, selectedModelForPickerWithCustomFallback, {
+        instanceId,
+      });
+    },
+    [onProviderModelSelect, selectedModelForPickerWithCustomFallback, selectedProvider],
+  );
+  const openProviderAccountSettings = useCallback(() => {
+    void navigate({
+      to: "/settings",
+      search: {
+        section: "providers",
+        target: SETTINGS_TARGETS.providerInstalls,
+        provider: selectedProvider,
+      },
+    });
+  }, [navigate, selectedProvider]);
 
   const copyThreadIdToClipboard = useCopyThreadIdToClipboard();
 
@@ -3668,7 +3757,9 @@ export default function ChatView({
     handleModelPickerOpenChange,
     scheduleComposerFocus,
     modelOptionsByProvider,
+    modelOptionsByProviderInstance,
     selectedProvider,
+    selectedProviderInstanceId,
     selectedModel,
     onProviderModelSelect,
     handleTraitsPickerOpenChange,
@@ -3958,13 +4049,13 @@ export default function ChatView({
   );
 
   const onCreateHandoffThread = useCallback(
-    async (targetProvider: ProviderKind) => {
+    async (target: ThreadHandoffTarget) => {
       if (!activeThread || handoffDisabled) {
         return;
       }
 
       try {
-        await createThreadHandoff(activeThread, targetProvider);
+        await createThreadHandoff(activeThread, target.provider, target.instanceId);
       } catch (error) {
         toastManager.add({
           type: "error",
@@ -4321,6 +4412,8 @@ export default function ChatView({
     lockedProvider,
     model: selectedModelForPickerWithCustomFallback,
     modelOptionsByProvider,
+    modelOptionsByProviderInstance,
+    selectedProviderInstanceId,
   });
   const composerFooterTraitsSummary = resolveTraitsTriggerSummary({
     provider: selectedProvider,
@@ -4331,6 +4424,7 @@ export default function ChatView({
     runtimeAgents: dynamicAgents,
   });
   const composerFooterPlanInputsKey = [
+    selectedProviderInstanceLabel,
     composerFooterModelLabel,
     composerFooterTraitsSummary.summaryText,
     composerContextWindowLabel,
@@ -4365,7 +4459,7 @@ export default function ChatView({
     },
     [setIsModelPickerOpen, setIsTraitsPickerOpen, handleModelPickerOpenChange],
   );
-  const composerPickerControls = showComposerModelBootstrapSkeleton ? (
+  const composerModelAndTraitsControls = showComposerModelBootstrapSkeleton ? (
     selectedProviderRuntimeModelDiscoveryPending ? (
       <ComposerModelLoadingControl widthClassName={composerModelEffortPickerWidthClassName} />
     ) : (
@@ -4382,10 +4476,13 @@ export default function ChatView({
       lockedProvider={lockedProvider}
       providers={providerStatuses}
       modelOptionsByProvider={modelOptionsByProvider}
+      modelOptionsByProviderInstance={modelOptionsByProviderInstance}
       loadingModelProviders={loadingModelProviders}
       discoveryErrorsByProvider={discoveryErrorsByProvider}
       hiddenProviders={settings.hiddenProviders}
       providerOrder={settings.providerOrder}
+      providerInstances={providerInstances}
+      selectedProviderInstanceId={selectedProviderInstanceId}
       threadId={threadId}
       runtimeModel={selectedRuntimeModel}
       runtimeModelsByProvider={runtimeModelsByProvider}
@@ -4400,6 +4497,28 @@ export default function ChatView({
       shortcutLabel={modelPickerShortcutLabel}
     />
   );
+  const composerPickerControls = (
+    <>
+      {showProviderInstancePicker ? (
+        showComposerModelBootstrapSkeleton ? (
+          <ComposerControlSkeleton widthClassName={isComposerFooterCompact ? "w-10" : "w-32"} />
+        ) : (
+          <ProviderInstancePicker
+            provider={selectedProvider}
+            providerInstances={providerInstances}
+            providers={providerStatuses}
+            selectedProviderInstanceId={selectedProviderInstanceId}
+            selectionLocked={lockedProvider !== null}
+            compact={isComposerFooterCompact}
+            hideLabel={!composerFooterControlsPlan.showModelLabel}
+            onProviderInstanceChange={onProviderInstanceSelect}
+            onManageAccounts={openProviderAccountSettings}
+          />
+        )
+      ) : null}
+      {composerModelAndTraitsControls}
+    </>
+  );
   const toggleFastMode = useCallback(() => {
     if (!composerTraitSelection.caps.supportsFastMode) {
       scheduleComposerFocus();
@@ -4411,7 +4530,7 @@ export default function ChatView({
       buildNextProviderOptions(selectedProvider, selectedProviderModelOptions, {
         fastMode: !composerTraitSelection.fastModeEnabled,
       }),
-      { persistSticky: true },
+      { instanceId: selectedProviderInstanceId, persistSticky: true },
     );
     scheduleComposerFocus();
   }, [
@@ -4419,6 +4538,7 @@ export default function ChatView({
     composerTraitSelection.fastModeEnabled,
     scheduleComposerFocus,
     selectedProvider,
+    selectedProviderInstanceId,
     selectedProviderModelOptions,
     setComposerDraftProviderModelOptions,
     threadId,
@@ -4522,7 +4642,7 @@ export default function ChatView({
       activeThread?.session !== null &&
       activeThread?.session?.status !== "closed",
     canExecuteSideCommand,
-    sidechatTargetProviders: handoffTargetProviders,
+    sidechatTargetProviders: sidechatTargetProviders,
     canOfferExportCommand,
     supportsTextNativeReviewCommand,
     fastModeEnabled,
@@ -5911,7 +6031,7 @@ export default function ChatView({
           diffToggleShortcutLabel={diffPanelShortcutLabel}
           handoffActionLabel={handoffActionLabel}
           handoffDisabled={handoffDisabled}
-          handoffActionTargetProviders={handoffTargetProviders}
+          handoffActionTargets={handoffTargets}
           showHandoffAction={handoffAvailability.providerHandoff}
           gitCwd={threadWorkspaceCwd}
           diffTotals={repoDiffTotals}

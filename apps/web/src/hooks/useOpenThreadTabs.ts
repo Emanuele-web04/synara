@@ -12,7 +12,7 @@ import { useNavigate, useRouter } from "@tanstack/react-router";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { useAppSettings } from "../appSettings";
+import { getProviderInstanceOptions, useAppSettings } from "../appSettings";
 import { resolveDraftFallbackModelSelection } from "../components/ChatView.logic";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { stripDiffSearchParams } from "../diffRouteSearch";
@@ -63,10 +63,8 @@ export function useOpenThreadTabs(input: {
   const drafts = useComposerDraftStore(
     useShallow((state) => threadIds.map((threadId) => state.draftThreadsByThreadId[threadId])),
   );
-  const draftExplicitProviders = useComposerDraftStore(
-    useShallow((state) =>
-      threadIds.map((threadId) => state.draftsByThreadId[threadId]?.activeProvider ?? null),
-    ),
+  const draftComposerStates = useComposerDraftStore(
+    useShallow((state) => threadIds.map((threadId) => state.draftsByThreadId[threadId])),
   );
   const terminalEntryPoints = useTerminalStateStore(
     useShallow((state) =>
@@ -79,6 +77,7 @@ export function useOpenThreadTabs(input: {
   );
   const projects = useStore((state) => state.projects);
   const { settings } = useAppSettings();
+  const providerInstances = getProviderInstanceOptions(settings);
   const queryClient = useQueryClient();
   const providerStatuses = useProviderStatusesForLocalConfig();
   const providerStatusesReconciled = hasReconciledServerProviderStatuses(queryClient);
@@ -106,6 +105,14 @@ export function useOpenThreadTabs(input: {
     const draft = drafts[index];
     const summary = summaries[index];
     const activities = parentActivities[index];
+    const composerState = draftComposerStates[index];
+    const explicitInstanceId = composerState?.activeProvider;
+    const explicitProvider = explicitInstanceId
+      ? (composerState?.modelSelectionByProvider[explicitInstanceId]?.provider ??
+        providerInstances.find((instance) => instance.instanceId === explicitInstanceId)
+          ?.provider ??
+        null)
+      : null;
     const project = draft ? projects.find((candidate) => candidate.id === draft.projectId) : null;
     return {
       threadId,
@@ -120,7 +127,7 @@ export function useOpenThreadTabs(input: {
             entryPoint: draft.entryPoint,
             // Same rule the draft's composer uses to pick its provider.
             provider: resolveUnsentComposerProvider({
-              explicitProvider: draftExplicitProviders[index] ?? null,
+              explicitProvider,
               threadProvider: resolveDraftFallbackModelSelection({
                 projectDefault: project?.defaultModelSelection,
                 settingsDefaultProvider: settings.defaultProvider,
