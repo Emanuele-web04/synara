@@ -8,7 +8,6 @@
 import type { ProjectId, ProviderKind, ThreadId } from "@synara/contracts";
 
 import { resolveDraftThreadTitle } from "./components/ChatView.logic";
-import type { StartContainerChatResult } from "./lib/startContainerChat";
 import { resolveSubagentPresentationForThread } from "./lib/subagentPresentation";
 import { resolveTabAfterClose } from "./lib/tabStrip";
 import type { SidebarThreadSummary, Thread, ThreadPrimarySurface } from "./types";
@@ -190,13 +189,22 @@ export type LastTabReplacement = { ok: true; leavesRoute: boolean } | { ok: fals
 
 export type CloseOpenThreadTabResult = { ok: true } | { ok: false; error: string };
 
-/** The chat header's replacement for its last tab: a fresh chat, as deleting the last thread does. */
+/** The chat header's replacement for its last tab: a fresh chat in that tab's project. */
 export function replaceLastTabWithFreshChat(
-  openFreshChat: () => Promise<StartContainerChatResult>,
+  openFreshChat: () => Promise<ThreadId | null>,
 ): () => Promise<LastTabReplacement> {
   return async () => {
-    const result = await openFreshChat();
-    return result.ok ? { ok: true, leavesRoute: true } : result;
+    try {
+      const threadId = await openFreshChat();
+      return threadId
+        ? { ok: true, leavesRoute: true }
+        : { ok: false, error: "Unable to prepare a new chat." };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : "Unable to prepare a new chat.",
+      };
+    }
   };
 }
 

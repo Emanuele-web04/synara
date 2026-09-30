@@ -5,10 +5,10 @@
 // Layer: Chat header UI
 // Depends on: open-thread tab hooks/store and the shared SurfaceTabStrip + SurfaceTabChip.
 
-import type { ThreadId } from "@synara/contracts";
+import type { ProjectId, ThreadId } from "@synara/contracts";
 import { type CSSProperties, useRef, useState } from "react";
 
-import { useHandleNewChat } from "~/hooks/useHandleNewChat";
+import { useHandleNewThread } from "~/hooks/useHandleNewThread";
 import {
   useActivateThreadTab,
   useOpenThreadTabs,
@@ -49,7 +49,7 @@ export function OpenThreadTabStrip(props: {
   const tabs = useOpenThreadTabs({ activeThreadId });
   const closeThreadTab = useOpenThreadTabsStore((state) => state.closeThreadTab);
   const activateThreadTab = useActivateThreadTab();
-  const { handleNewChat } = useHandleNewChat();
+  const { handleNewThread, projects } = useHandleNewThread();
   const readRouteThreadId = useReadRouteThreadId();
   const [enqueueClose] = useState(createOpenThreadTabCloseQueue);
   const navRef = useRef<HTMLElement>(null);
@@ -67,7 +67,7 @@ export function OpenThreadTabStrip(props: {
     }
   };
 
-  const closeTab = (threadId: ThreadId) => {
+  const closeTab = (threadId: ThreadId, projectId: ProjectId) => {
     freezeTabWidths();
     void enqueueClose(() => {
       const openThreadIds = useOpenThreadTabsStore.getState().threadIds;
@@ -78,7 +78,17 @@ export function OpenThreadTabStrip(props: {
         activeThreadId: readRouteThreadId(),
         closeTab: closeThreadTab,
         openTab: activateThreadTab,
-        replaceLastTab: replaceLastTabWithFreshChat(handleNewChat),
+        replaceLastTab: replaceLastTabWithFreshChat(() => {
+          const project = projects.find((candidate) => candidate.id === projectId);
+          return handleNewThread(projectId, {
+            fresh: true,
+            // Home and Hubs use their container workspace; ordinary projects keep
+            // their chosen local/worktree default through handleNewThread.
+            ...(project && project.kind !== "project"
+              ? { envMode: "local" as const, branch: null, worktreePath: null }
+              : {}),
+          });
+        }),
         readRouteThreadId,
       };
     }).then((result) => {
@@ -135,7 +145,7 @@ export function OpenThreadTabStrip(props: {
               onSelect={() => {
                 if (!active) void activateThreadTab(tab.threadId);
               }}
-              onClose={closable ? () => closeTab(tab.threadId) : undefined}
+              onClose={closable ? () => closeTab(tab.threadId, tab.projectId) : undefined}
               onLabelDoubleClick={active ? props.onRenameActiveThread : undefined}
             />
           );

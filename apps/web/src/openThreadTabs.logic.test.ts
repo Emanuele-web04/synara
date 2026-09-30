@@ -203,9 +203,9 @@ describe("closeOpenThreadTab", () => {
       if (!input.blocked) route = threadId;
     });
     const openFreshChat = vi.fn(async () => {
-      if (input.freshChatError) return { ok: false as const, error: input.freshChatError };
+      if (input.freshChatError) throw new Error(input.freshChatError);
       route = "fresh";
-      return { ok: true as const, threadId: ThreadId.makeUnsafe("fresh") };
+      return ThreadId.makeUnsafe("fresh");
     });
     const replaceLastTab = replaceLastTabWithFreshChat(openFreshChat);
     const close = (tabs: readonly string[], closed: string) =>

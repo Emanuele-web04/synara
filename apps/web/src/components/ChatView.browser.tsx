@@ -71,6 +71,7 @@ import { hasReconciledServerProviderStatuses } from "../lib/serverReactQuery";
 import { getRouter } from "../router";
 import { showContextMenuFallback } from "../contextMenuFallback";
 import { useRightDockStore } from "../rightDockStore";
+import { useOpenThreadTabsStore } from "../openThreadTabsStore";
 import { useSplitViewStore } from "../splitViewStore";
 import { useSpacesUiStore } from "../spacesUiStore";
 import { useRailShellStore } from "../railShellStore";
@@ -9064,6 +9065,60 @@ describe("ChatView transcript geometry (full app)", () => {
       await mounted.cleanup();
     }
   });
+
+  it.each(["home", "project"] as const)(
+    "closing the last %s tab opens a fresh draft in the same project",
+    async (surface) => {
+      localStorage.setItem("synara:app-settings:v1", JSON.stringify({ sidebarLayout: "rail" }));
+      useOpenThreadTabsStore.setState({ threadIds: [] });
+      const snapshot = createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("last-tab-close"),
+        targetText: "Completed conversation",
+      });
+      const projectId = surface === "home" ? HOME_PROJECT_ID : PROJECT_ID;
+      const staleDraftId = ThreadId.makeUnsafe("closed-unsent-draft");
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot:
+          surface === "home" ? withActiveHomeChatThread(snapshot) : withHomeChatProject(snapshot),
+        configureFixture: (nextFixture) => {
+          nextFixture.welcome = {
+            ...nextFixture.welcome,
+            homeDir: "/Users/tester",
+            chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+          };
+        },
+      });
+      try {
+        await waitForLayout();
+        useComposerDraftStore.getState().setProjectDraftThreadId(projectId, staleDraftId, {});
+        useComposerDraftStore.getState().setPrompt(staleDraftId, "Unsent text from a closed tab");
+        useOpenThreadTabsStore.setState({ threadIds: [THREAD_ID] });
+        useProjectEnvironmentStore.getState().setProjectEnvMode(projectId, "worktree");
+        const close = await waitForElement<HTMLButtonElement>(
+          () =>
+            document.querySelector('nav[aria-label="Open threads"] button[aria-label^="Close "]'),
+          "The active thread should have a closeable rail tab.",
+        );
+        close.click();
+        await vi.waitFor(() => {
+          const nextId = mounted.router.state.location.pathname.slice(1) as ThreadId;
+          expect(nextId).not.toBe(THREAD_ID);
+          expect(nextId).not.toBe(staleDraftId);
+          const state = useComposerDraftStore.getState();
+          expect(state.getDraftThread(nextId)?.projectId).toBe(projectId);
+          expect(state.getDraftThread(nextId)?.envMode).toBe(
+            surface === "home" ? "local" : "worktree",
+          );
+          expect(state.draftsByThreadId[nextId]?.prompt ?? "").toBe("");
+          expect(useOpenThreadTabsStore.getState().threadIds).not.toContain(THREAD_ID);
+        });
+      } finally {
+        await mounted.cleanup();
+        useOpenThreadTabsStore.setState({ threadIds: [] });
+      }
+    },
+  );
 
   it("preserves a home-chat draft when the chat.newChat shortcut is reused after a thread switch", async () => {
     const mounted = await mountChatView({
