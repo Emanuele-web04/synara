@@ -475,11 +475,23 @@ function verifyPersistedAttachmentsForSlot(
   const acceptedAttachmentIds = persistedIdsRead.available
     ? verifiedAttachmentIds
     : retainedAttachmentIds;
-  const rejectedAttachments = attachments.filter(
+  let rejectedAttachments = attachments.filter(
     (attachment) => !acceptedAttachmentIds.has(attachment.id),
   );
+  if (!applyStateUpdate && draftPresent && rejectedAttachments.length > 0) {
+    // A newer sync for this slot already staged its own attachment list and
+    // owns final storage verification. Storage may still reflect only that
+    // newer list, so an older sync must not fail (or delete blobs for) an
+    // attachment whose image chip is still in the draft.
+    rejectedAttachments = rejectedAttachments.filter(
+      (attachment) => !retainedAttachmentIds.has(attachment.id),
+    );
+  }
   deletePersistedComposerImageBlobs(rejectedAttachments, () => get().draftsByThreadId);
   if (!draftPresent || rejectedAttachments.length > 0) return "rejected";
+  // Superseded callers cannot confirm durable storage for their own staged
+  // list; report unverified so a retry/hydration path can settle it later.
+  if (!applyStateUpdate) return "unverified";
   return persistedIdsRead.available ? "persisted" : "unverified";
 }
 

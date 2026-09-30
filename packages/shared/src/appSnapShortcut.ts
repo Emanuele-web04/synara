@@ -11,6 +11,32 @@ export const DEFAULT_APP_SNAP_SHORTCUT = {
   kind: "both-option-keys",
 } as const satisfies DesktopAppSnapShortcut;
 
+// `both-option-keys` has no Windows registration path in Electron's globalShortcut.
+// Ship a low-conflict single-modifier chord so Windows gets a working default
+// without waiting for the user to re-record one.
+export const DEFAULT_APP_SNAP_SHORTCUT_WINDOWS = {
+  kind: "key-chord",
+  modifier: "control",
+  key: "KeyY",
+} as const satisfies DesktopAppSnapShortcut;
+
+function isWindowsPlatformString(platform: string): boolean {
+  return /^win(dows)?/i.test(platform);
+}
+
+/**
+ * Platform default for a missing or macOS-only AppSnap shortcut.
+ * Pass an explicit platform string in tests; otherwise reads `navigator.platform`
+ * (empty outside the browser, which keeps the macOS default).
+ */
+export function defaultAppSnapShortcut(
+  platform: string = globalThis.navigator?.platform ?? "",
+): DesktopAppSnapShortcut {
+  return isWindowsPlatformString(platform)
+    ? DEFAULT_APP_SNAP_SHORTCUT_WINDOWS
+    : DEFAULT_APP_SNAP_SHORTCUT;
+}
+
 export const APP_SNAP_SHORTCUT_MODIFIERS = [
   "command",
   "control",
@@ -44,11 +70,21 @@ const MODIFIER_BY_EVENT_CODE: Readonly<Record<string, DesktopAppSnapShortcutModi
   ShiftRight: "shift",
 };
 
+export type AppSnapShortcutLabelStyle = "macos" | "windows";
+
 const MODIFIER_LABELS: Readonly<Record<DesktopAppSnapShortcutModifier, string>> = {
   command: "⌘ Command",
   control: "⌃ Control",
   option: "⌥ Option",
   shift: "⇧ Shift",
+};
+
+// Windows users read Ctrl/Alt/Win on the keycap; mac glyphs there read as noise.
+const WINDOWS_MODIFIER_LABELS: Readonly<Record<DesktopAppSnapShortcutModifier, string>> = {
+  command: "Win",
+  control: "Ctrl",
+  option: "Alt",
+  shift: "Shift",
 };
 
 const KEY_LABELS: Readonly<Record<string, string>> = {
@@ -136,29 +172,55 @@ export function appSnapModifierFromEventCode(code: string): DesktopAppSnapShortc
  * free, e.g. ⌘C or ⇧S: reserving it would break typing or a universal action
  * in every foreground app.
  */
-export function appSnapShortcutSystemConflict(chord: DesktopAppSnapKeyChord): string | null {
+export function appSnapShortcutSystemConflict(
+  chord: DesktopAppSnapKeyChord,
+  style: AppSnapShortcutLabelStyle = "macos",
+): string | null {
+  const modifierLabel = appSnapShortcutModifierLabel(chord.modifier, style);
+  const keyLabel = appSnapShortcutKeyLabel(chord.key);
   if (chord.modifier === "shift") {
-    return "⇧ combinations are used for typing and text selection — combine with ⌘, ⌃ or ⌥ instead.";
+    return style === "windows"
+      ? "Shift combinations are used for typing and text selection — combine with Ctrl, Alt, or Win instead."
+      : "⇧ combinations are used for typing and text selection — combine with ⌘, ⌃ or ⌥ instead.";
   }
   if (chord.modifier === "control") {
     const action = SYSTEM_CONTROL_CHORD_ACTIONS[chord.key];
-    return action ? `⌃ ${appSnapShortcutKeyLabel(chord.key)} ${action} in every terminal.` : null;
+    if (!action) return null;
+    return style === "windows"
+      ? `${modifierLabel} ${keyLabel} ${action} in every terminal.`
+      : `⌃ ${keyLabel} ${action} in every terminal.`;
   }
   if (chord.modifier !== "command") return null;
+  if (style === "windows") {
+    if (chord.key === "Space") return "Windows uses Win Space to switch keyboard inputs.";
+    if (chord.key === "Tab") return "Windows uses Win Tab for Task View.";
+    return null;
+  }
   const action = SYSTEM_COMMAND_CHORD_ACTIONS[chord.key];
   if (!action) return null;
   if (chord.key === "Space") return "macOS uses ⌘ Space for Spotlight.";
   if (chord.key === "Tab") return "macOS uses ⌘ Tab to switch apps.";
-  return `⌘ ${appSnapShortcutKeyLabel(chord.key)} is ${action} in almost every app.`;
+  return `⌘ ${keyLabel} is ${action} in almost every app.`;
 }
 
-export function appSnapShortcutLabels(shortcut: DesktopAppSnapShortcut): readonly [string, string] {
-  if (shortcut.kind === "both-option-keys") return ["⌥ left", "⌥ right"];
-  return [appSnapShortcutModifierLabel(shortcut.modifier), appSnapShortcutKeyLabel(shortcut.key)];
+export function appSnapShortcutLabels(
+  shortcut: DesktopAppSnapShortcut,
+  style: AppSnapShortcutLabelStyle = "macos",
+): readonly [string, string] {
+  if (shortcut.kind === "both-option-keys") {
+    return style === "windows" ? ["Alt left", "Alt right"] : ["⌥ left", "⌥ right"];
+  }
+  return [
+    appSnapShortcutModifierLabel(shortcut.modifier, style),
+    appSnapShortcutKeyLabel(shortcut.key),
+  ];
 }
 
-export function appSnapShortcutModifierLabel(modifier: DesktopAppSnapShortcutModifier): string {
-  return MODIFIER_LABELS[modifier];
+export function appSnapShortcutModifierLabel(
+  modifier: DesktopAppSnapShortcutModifier,
+  style: AppSnapShortcutLabelStyle = "macos",
+): string {
+  return style === "windows" ? WINDOWS_MODIFIER_LABELS[modifier] : MODIFIER_LABELS[modifier];
 }
 
 export function appSnapShortcutKeyLabel(code: string): string {

@@ -70,11 +70,14 @@ export async function insertAppSnapCaptureIntoDraft(
     };
     const sourceWithIcon = await sourceWithCachedIcon(source);
     const appSnapImage = { ...image, source: sourceWithIcon };
-    blobKey = await persistComposerImageBlob({
+    // A const keeps the narrowed `string` type inside the retry closure below;
+    // the outer `blobKey` stays nullable for the rollback paths.
+    const persistedBlobKey = await persistComposerImageBlob({
       threadId,
       imageId: appSnapImage.id,
       file: appSnapImage.file,
     });
+    blobKey = persistedBlobKey;
 
     if (!draftStore.addImage(threadId, appSnapImage)) {
       throw new Error(
@@ -82,25 +85,45 @@ export async function insertAppSnapCaptureIntoDraft(
       );
     }
     imageAddedToDraft = true;
-    const currentPersistedAttachments =
-      useComposerDraftStore.getState().draftsByThreadId[threadId]?.persistedAttachments ?? [];
-    const result = await draftStore.syncPersistedAttachments(threadId, [
-      ...currentPersistedAttachments.filter((attachment) => attachment.id !== appSnapImage.id),
-      {
-        id: appSnapImage.id,
-        name: appSnapImage.name,
-        mimeType: appSnapImage.mimeType,
-        sizeBytes: appSnapImage.sizeBytes,
-        blobKey,
-        source: sourceWithIcon,
-      },
-    ]);
+    const syncAttachmentList = () =>
+      draftStore.syncPersistedAttachments(threadId, [
+        ...(useComposerDraftStore
+          .getState()
+          .draftsByThreadId[threadId]?.persistedAttachments?.filter(
+            (attachment) => attachment.id !== appSnapImage.id,
+          ) ?? []),
+        {
+          id: appSnapImage.id,
+          name: appSnapImage.name,
+          mimeType: appSnapImage.mimeType,
+          sizeBytes: appSnapImage.sizeBytes,
+          blobKey: persistedBlobKey,
+          source: sourceWithIcon,
+        },
+      ]);
+    let result = await syncAttachmentList();
     if (result === "rejected") {
-      draftStore.removeImage(threadId, appSnapImage.id);
-      await deleteComposerImageBlob(blobKey).catch((cleanupError) =>
-        console.warn("[appsnap] Could not roll back rejected capture", cleanupError),
-      );
-      throw new Error("The AppSnap was captured, but its draft metadata was rejected.");
+      // Concurrent draft persistence can supersede this sync's generation;
+      // a single retry lets the newest staged list settle before failing.
+      result = await syncAttachmentList();
+    }
+    if (result === "rejected") {
+      const imageStillInDraft =
+        useComposerDraftStore
+          .getState()
+          .draftsByThreadId[threadId]?.images.some((entry) => entry.id === appSnapImage.id) ??
+        false;
+      if (imageStillInDraft) {
+        // The chip survived; treat a transient metadata race as unverified
+        // instead of deleting a capture the user can already see.
+        result = "unverified";
+      } else {
+        draftStore.removeImage(threadId, appSnapImage.id);
+        await deleteComposerImageBlob(blobKey).catch((cleanupError) =>
+          console.warn("[appsnap] Could not roll back rejected capture", cleanupError),
+        );
+        throw new Error("The AppSnap was captured, but its draft metadata was rejected.");
+      }
     }
     // Clear recalled prompt-history state only after the new attachment has
     // survived persistence verification. A rejected mutation must leave the

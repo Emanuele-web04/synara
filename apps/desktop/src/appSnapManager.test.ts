@@ -1,21 +1,53 @@
 import * as ChildProcess from "node:child_process";
 import { EventEmitter } from "node:events";
 import * as FS from "node:fs";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 
+import { BrowserWindow, desktopCapturer, nativeImage } from "electron";
 import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@synara/contracts";
 import { SYNARA_DEVELOPMENT_BUNDLE_ID } from "@synara/shared/desktopIdentity";
 import { describe, expect, it, vi, type Mock } from "vitest";
 
 import {
   DesktopAppSnapManager,
+  collectWindowsCaptureCandidates,
   desktopAppSnapPlatform,
+  isBlankWindowsThumbnail,
   isPathInsideDirectory,
   parseAppSnapHelperMessage,
+  parseWindowsWindowId,
+  WINDOWS_SOURCES_TIMEOUT_MS,
+  type DesktopAppSnapManagerOptions,
 } from "./appSnapManager";
+
+vi.mock("electron", () => ({
+  desktopCapturer: {
+    getSources: vi.fn(),
+  },
+  BrowserWindow: {
+    getAllWindows: vi.fn(() => []),
+  },
+  nativeImage: {
+    createFromBuffer: vi.fn(() => ({
+      isEmpty: () => false,
+      getSize: () => ({ width: 8, height: 8 }),
+      toBitmap: () => {
+        const bitmap = Buffer.alloc(8 * 8 * 4);
+        for (let index = 0; index < 64; index += 1) {
+          const offset = index * 4;
+          bitmap[offset] = (index * 37) % 256;
+          bitmap[offset + 1] = (index * 91) % 256;
+          bitmap[offset + 2] = (index * 13) % 256;
+          bitmap[offset + 3] = 255;
+        }
+        return bitmap;
+      },
+    })),
+  },
+}));
 
 type FakeChildProcess = ChildProcess.ChildProcessWithoutNullStreams & {
   stdin: PassThrough;
@@ -325,12 +357,12 @@ describe("desktop AppSnap platform state", () => {
     manager.dispose();
   });
 
-  it("exposes an explicit unsupported state outside macOS", async () => {
+  it("exposes an explicit unsupported state outside macOS and Windows", async () => {
     const onState = vi.fn();
     const manager = new DesktopAppSnapManager({
-      platform: "win32",
-      helperPath: "C:\\missing\\synara-appsnap-helper.exe",
-      captureDirectory: "C:\\tmp\\appsnap",
+      platform: "linux",
+      helperPath: "/missing/synara-appsnap-helper",
+      captureDirectory: "/tmp/appsnap",
       excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
       onState,
       onCaptured: vi.fn(),
@@ -340,11 +372,15 @@ describe("desktop AppSnap platform state", () => {
     expect(desktopAppSnapPlatform("darwin")).toBe("macos");
     expect(desktopAppSnapPlatform("linux")).toBe("linux");
     expect(await manager.setEnabled(true)).toMatchObject({
-      platform: "windows",
+      platform: "linux",
       supported: false,
       enabled: false,
       status: "unsupported",
       shortcut: null,
+    });
+    expect(manager.checkShortcut({ kind: "key-chord", modifier: "option", key: "KeyX" })).toEqual({
+      available: false,
+      reason: "AppSnap shortcuts are available only on macOS and Windows.",
     });
     expect(onState).not.toHaveBeenCalled();
   });
@@ -2392,5 +2428,825 @@ describe("AppSnap bounded helper shutdown", () => {
       manager.dispose();
       rmSync(directory, { recursive: true, force: true });
     }
+  });
+});
+
+function fakeWindowsSource(
+  id: string,
+  name: string,
+  png: Buffer = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]),
+) {
+  return { id, name, thumbnail: { toPNG: () => png } };
+}
+
+function variedBitmap(): Buffer {
+  const bitmap = Buffer.alloc(8 * 8 * 4);
+  for (let index = 0; index < 64; index += 1) {
+    const offset = index * 4;
+    bitmap[offset] = (index * 37) % 256;
+    bitmap[offset + 1] = (index * 91) % 256;
+    bitmap[offset + 2] = (index * 13) % 256;
+    bitmap[offset + 3] = 255;
+  }
+  return bitmap;
+}
+
+function stubNativeImageBlankness(blankBuffers: readonly Buffer[]): void {
+  vi.mocked(nativeImage.createFromBuffer).mockImplementation((png: Buffer) => {
+    const blank = blankBuffers.some((blankPng) => png.equals(blankPng));
+    return {
+      isEmpty: () => false,
+      getSize: () => ({ width: 8, height: 8 }),
+      toBitmap: () => (blank ? Buffer.alloc(8 * 8 * 4, 0) : variedBitmap()),
+    } as ReturnType<typeof nativeImage.createFromBuffer>;
+  });
+}
+
+describe("Windows native AppSnap", () => {
+  const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]);
+
+  function createWindowsManager(
+    options: {
+      enabled?: boolean;
+      shortcutRegistry?: { register: Mock; unregister: Mock };
+      windowsCaptureProbe?: DesktopAppSnapManagerOptions["windowsCaptureProbe"];
+    } = {},
+  ) {
+    const captureDirectory = mkdtempSync(join(tmpdir(), "synara-appsnap-win-"));
+    const spawn = vi.fn();
+    const onState = vi.fn();
+    const onCaptured = vi.fn();
+    const onError = vi.fn();
+    const manager = new DesktopAppSnapManager({
+      platform: "win32",
+      helperPath: "C:\\missing\\synara-appsnap-helper.exe",
+      captureDirectory,
+      excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
+      spawn: spawn as unknown as typeof ChildProcess.spawn,
+      ...(options.shortcutRegistry ? { shortcutRegistry: options.shortcutRegistry } : {}),
+      ...(options.windowsCaptureProbe ? { windowsCaptureProbe: options.windowsCaptureProbe } : {}),
+      onState,
+      onCaptured,
+      onError,
+    });
+    return {
+      manager,
+      captureDirectory,
+      spawn,
+      onState,
+      onCaptured,
+      onError,
+      async enable() {
+        if (options.enabled !== false) await manager.setEnabled(true);
+      },
+      dispose() {
+        manager.dispose();
+        rmSync(captureDirectory, { recursive: true, force: true });
+        vi.mocked(desktopCapturer.getSources).mockReset();
+        vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([]);
+        vi.mocked(nativeImage.createFromBuffer).mockReset();
+        vi.mocked(nativeImage.createFromBuffer).mockImplementation(
+          () =>
+            ({
+              isEmpty: () => false,
+              getSize: () => ({ width: 8, height: 8 }),
+              toBitmap: () => variedBitmap(),
+            }) as ReturnType<typeof nativeImage.createFromBuffer>,
+        );
+      },
+    };
+  }
+
+  it("initializes on Windows without throwing an unsupported state", () => {
+    const f = createWindowsManager({ enabled: false });
+    try {
+      expect(f.manager.getState()).toMatchObject({
+        platform: "windows",
+        supported: true,
+        enabled: false,
+        status: "disabled",
+        message: null,
+        shortcut: { kind: "key-chord", modifier: "control", key: "KeyY" },
+        inputMonitoringPermission: "unknown",
+        screenRecordingPermission: "unknown",
+      });
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it("probes Windows registration and rejects the macOS-only both-option-keys default", async () => {
+    const register = vi.fn(() => true);
+    const unregister = vi.fn();
+    const f = createWindowsManager({
+      enabled: false,
+      shortcutRegistry: { register, unregister },
+    });
+    try {
+      expect(f.manager.checkShortcut({ kind: "both-option-keys" })).toEqual({
+        available: false,
+        reason: "Both Option keys are a macOS-only shortcut. Choose a modifier and one other key.",
+      });
+      expect(
+        f.manager.checkShortcut({ kind: "key-chord", modifier: "option", key: "KeyX" }),
+      ).toEqual({ available: true, reason: null });
+      expect(register).toHaveBeenCalledWith("Alt+X", expect.any(Function));
+      expect(unregister).toHaveBeenCalledWith("Alt+X");
+
+      const adopted = await f.manager.setShortcut({
+        kind: "key-chord",
+        modifier: "option",
+        key: "KeyX",
+      });
+      expect(adopted.availability).toEqual({ available: true, reason: null });
+      expect(adopted.state.shortcut).toEqual({
+        kind: "key-chord",
+        modifier: "option",
+        key: "KeyX",
+      });
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it("reserves a key-chord when enabling and captures the frontmost window on trigger", async () => {
+    let windowsShortcutCallback: (() => void) | undefined;
+    const register = vi.fn((_accelerator: string, callback: () => void) => {
+      windowsShortcutCallback = callback;
+      return true;
+    });
+    const unregister = vi.fn();
+    const f = createWindowsManager({
+      enabled: false,
+      shortcutRegistry: { register, unregister },
+    });
+    try {
+      await f.manager.setShortcut({ kind: "key-chord", modifier: "option", key: "KeyX" });
+      const enabled = await f.manager.setEnabled(true);
+      expect(enabled).toMatchObject({ status: "ready", enabled: true });
+      expect(register).toHaveBeenCalledWith("Alt+X", expect.any(Function));
+
+      vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([]);
+      vi.mocked(desktopCapturer.getSources).mockResolvedValue([
+        fakeWindowsSource("window:555:0", "Notepad", PNG_BYTES),
+      ] as unknown as Awaited<ReturnType<typeof desktopCapturer.getSources>>);
+
+      windowsShortcutCallback?.();
+      await vi.waitFor(() => expect(f.onCaptured).toHaveBeenCalledTimes(1));
+      expect(f.onCaptured).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mimeType: "image/png",
+          sourceAppName: "Notepad",
+          sizeBytes: PNG_BYTES.byteLength,
+        }),
+      );
+      expect(await f.manager.listPendingCaptures()).toHaveLength(1);
+
+      const disabled = await f.manager.setEnabled(false);
+      expect(disabled.status).toBe("disabled");
+      expect(unregister).toHaveBeenCalledWith("Alt+X");
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it("reports an error while enabled with the macOS-only both-option-keys shortcut", async () => {
+    const f = createWindowsManager({ enabled: false });
+    try {
+      await f.manager.setShortcut({ kind: "both-option-keys" });
+      const enabled = await f.manager.setEnabled(true);
+      expect(enabled).toMatchObject({
+        status: "error",
+        enabled: true,
+        message: "Both Option keys are a macOS-only shortcut. Choose a modifier and one other key.",
+      });
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it("reports when another app owns the Windows accelerator", () => {
+    const f = createWindowsManager({
+      enabled: false,
+      shortcutRegistry: { register: vi.fn(() => false), unregister: vi.fn() },
+    });
+    try {
+      expect(
+        f.manager.checkShortcut({ kind: "key-chord", modifier: "option", key: "KeyX" }),
+      ).toEqual({
+        available: false,
+        reason: "Windows or another app is already using this shortcut.",
+      });
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it("short-circuits refresh and permission setup without spawning a helper", async () => {
+    const f = createWindowsManager({ enabled: false });
+    try {
+      const refreshed = await f.manager.refreshState([
+        "accessibility",
+        "inputMonitoring",
+        "screenRecording",
+      ]);
+      expect(f.spawn).not.toHaveBeenCalled();
+      expect(refreshed).toMatchObject({
+        inputMonitoringPermission: "granted",
+        screenRecordingPermission: "granted",
+        status: "disabled",
+      });
+
+      await f.manager.setEnabled(true);
+      const setup = await f.manager.startPermissionSetup(["screenRecording"]);
+      expect(f.spawn).not.toHaveBeenCalled();
+      expect(setup).toMatchObject({
+        // Default Ctrl+Y cannot be reserved without a globalShortcut registry;
+        // picker APIs still work while the shortcut row reports the conflict.
+        status: "error",
+        enabled: true,
+        screenRecordingPermission: "granted",
+      });
+      expect(await f.manager.releaseHeldInput()).toBe(false);
+      expect(f.spawn).not.toHaveBeenCalled();
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it("parses desktopCapturer window ids to HWND values", () => {
+    expect(parseWindowsWindowId("window:12345:0")).toBe(12345);
+    expect(parseWindowsWindowId("window:4294967295:0")).toBe(4294967295);
+    expect(parseWindowsWindowId("screen:0:0")).toBeNull();
+    expect(parseWindowsWindowId("window:0:0")).toBeNull();
+    expect(parseWindowsWindowId("window:4294967296:0")).toBeNull();
+    expect(parseWindowsWindowId("window:not-a-number:0")).toBeNull();
+  });
+
+  it("lists windows with parsed HWND ids and excludes Synara's own windows", async () => {
+    const f = createWindowsManager();
+    try {
+      const synaraHandle = Buffer.alloc(4);
+      synaraHandle.writeUInt32LE(12345, 0);
+      vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([
+        { getNativeWindowHandle: () => synaraHandle },
+      ] as unknown as ReturnType<typeof BrowserWindow.getAllWindows>);
+      vi.mocked(desktopCapturer.getSources).mockResolvedValue([
+        fakeWindowsSource("window:12345:0", "Synara"),
+        fakeWindowsSource("window:67890:0", "Notepad"),
+        fakeWindowsSource("screen:0:0", "Entire screen"),
+        fakeWindowsSource("window:0:0", "Invalid"),
+      ] as unknown as Awaited<ReturnType<typeof desktopCapturer.getSources>>);
+
+      await f.enable();
+      const windows = await f.manager.listWindows();
+      expect(windows).toEqual([
+        {
+          windowId: 67890,
+          appName: "Notepad",
+          bundleIdentifier: null,
+          windowTitle: "Notepad",
+          appIconDataUrl: null,
+        },
+      ]);
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it("captures a window, persists the PNG, and emits a well-formed capture payload", async () => {
+    const f = createWindowsManager();
+    try {
+      vi.mocked(desktopCapturer.getSources).mockResolvedValue([
+        fakeWindowsSource("window:77:0", "Notepad", PNG_BYTES),
+      ] as unknown as Awaited<ReturnType<typeof desktopCapturer.getSources>>);
+
+      await f.enable();
+      const capture = await f.manager.captureWindow(77);
+      expect(capture).toMatchObject({
+        mimeType: "image/png",
+        sizeBytes: PNG_BYTES.byteLength,
+        name: expect.stringMatching(/^appsnap-picker-[a-f0-9-]{36}\.png$/),
+        sourceAppName: "Notepad",
+        sourceWindowTitle: "Notepad",
+        sourceBundleIdentifier: null,
+      });
+      expect(capture.bytes.byteLength).toBe(PNG_BYTES.byteLength);
+      expect(Buffer.from(capture.bytes)).toEqual(PNG_BYTES);
+
+      const files = readdirSync(f.captureDirectory);
+      const pendingPng = files.find((entry) => /^pending-[a-f0-9]{64}\.png$/.test(entry));
+      expect(pendingPng).toBeDefined();
+      expect(FS.readFileSync(join(f.captureDirectory, pendingPng!))).toEqual(PNG_BYTES);
+      expect(files.some((entry) => entry.startsWith("appsnap-picker-"))).toBe(false);
+      expect(await f.manager.listPendingCaptures()).toHaveLength(1);
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it("rejects captureWindow when the HWND is gone", async () => {
+    const f = createWindowsManager();
+    try {
+      vi.mocked(desktopCapturer.getSources).mockResolvedValue([
+        fakeWindowsSource("window:1:0", "Other"),
+      ] as unknown as Awaited<ReturnType<typeof desktopCapturer.getSources>>);
+
+      await f.enable();
+      await expect(f.manager.captureWindow(999)).rejects.toThrow(
+        "Window 999 is no longer available. (window_unavailable)",
+      );
+      expect(await f.manager.listPendingCaptures()).toEqual([]);
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it("rejects captureWindow when the window returns a blank frame", async () => {
+    const f = createWindowsManager();
+    const blankPng = Buffer.alloc(64, 0);
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(blankPng, 0);
+    try {
+      vi.mocked(desktopCapturer.getSources).mockResolvedValue([
+        fakeWindowsSource("window:77:0", "Screen Recorder", blankPng),
+      ] as unknown as Awaited<ReturnType<typeof desktopCapturer.getSources>>);
+      stubNativeImageBlankness([blankPng]);
+
+      await f.enable();
+      await expect(f.manager.captureWindow(77)).rejects.toThrow(/blank frame.*\(capture-blocked\)/);
+      expect(await f.manager.listPendingCaptures()).toEqual([]);
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it("captures the first non-Synara window via captureCurrentApp", async () => {
+    const f = createWindowsManager();
+    try {
+      const synaraHandle = Buffer.alloc(4);
+      synaraHandle.writeUInt32LE(111, 0);
+      vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([
+        { getNativeWindowHandle: () => synaraHandle },
+      ] as unknown as ReturnType<typeof BrowserWindow.getAllWindows>);
+      vi.mocked(desktopCapturer.getSources).mockResolvedValue([
+        fakeWindowsSource("window:111:0", "Synara"),
+        fakeWindowsSource("window:222:0", "Explorer", PNG_BYTES),
+      ] as unknown as Awaited<ReturnType<typeof desktopCapturer.getSources>>);
+
+      const capture = await f.manager.captureCurrentApp("win-current");
+      expect(capture).toMatchObject({
+        mimeType: "image/png",
+        sizeBytes: PNG_BYTES.byteLength,
+        sourceAppName: "Explorer",
+      });
+      expect(Buffer.from(capture.bytes)).toEqual(PNG_BYTES);
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it("rejects captureCurrentApp when the chosen window returns a blank frame", async () => {
+    const f = createWindowsManager();
+    const blankPng = Buffer.alloc(64, 0);
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(blankPng, 0);
+    try {
+      vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([]);
+      vi.mocked(desktopCapturer.getSources).mockResolvedValue([
+        fakeWindowsSource("window:555:0", "Screen Recorder", blankPng),
+      ] as unknown as Awaited<ReturnType<typeof desktopCapturer.getSources>>);
+      stubNativeImageBlankness([blankPng]);
+
+      await expect(f.manager.captureCurrentApp("win-blank")).rejects.toThrow(/blank frame/);
+      expect(await f.manager.listPendingCaptures()).toEqual([]);
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it("skips a blank top window and captures the next viable one on hotkey", async () => {
+    let windowsShortcutCallback: (() => void) | undefined;
+    const register = vi.fn((_accelerator: string, callback: () => void) => {
+      windowsShortcutCallback = callback;
+      return true;
+    });
+    const f = createWindowsManager({
+      enabled: false,
+      shortcutRegistry: { register, unregister: vi.fn() },
+    });
+    const blankPng = Buffer.alloc(64, 0);
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(blankPng, 0);
+    try {
+      await f.manager.setShortcut({ kind: "key-chord", modifier: "option", key: "KeyX" });
+      await f.manager.setEnabled(true);
+      stubNativeImageBlankness([blankPng]);
+
+      const synaraHandle = Buffer.alloc(4);
+      synaraHandle.writeUInt32LE(111, 0);
+      vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([
+        { getNativeWindowHandle: () => synaraHandle },
+      ] as unknown as ReturnType<typeof BrowserWindow.getAllWindows>);
+      vi.mocked(desktopCapturer.getSources).mockResolvedValue([
+        fakeWindowsSource("window:111:0", "Synara", PNG_BYTES),
+        fakeWindowsSource("window:333:0", "Screen Recorder", blankPng),
+        fakeWindowsSource("window:444:0", "Windows Terminal", PNG_BYTES),
+      ] as unknown as Awaited<ReturnType<typeof desktopCapturer.getSources>>);
+
+      windowsShortcutCallback?.();
+      await vi.waitFor(() => expect(f.onCaptured).toHaveBeenCalledTimes(1));
+      expect(f.onCaptured).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sourceAppName: "Windows Terminal",
+          sizeBytes: PNG_BYTES.byteLength,
+        }),
+      );
+      expect(await f.manager.listPendingCaptures()).toHaveLength(1);
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it("emits capture-blocked instead of attaching a blank frame on hotkey", async () => {
+    let windowsShortcutCallback: (() => void) | undefined;
+    const register = vi.fn((_accelerator: string, callback: () => void) => {
+      windowsShortcutCallback = callback;
+      return true;
+    });
+    const f = createWindowsManager({
+      enabled: false,
+      shortcutRegistry: { register, unregister: vi.fn() },
+    });
+    const blankPng = Buffer.alloc(64, 0);
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(blankPng, 0);
+    try {
+      await f.manager.setShortcut({ kind: "key-chord", modifier: "option", key: "KeyX" });
+      await f.manager.setEnabled(true);
+      stubNativeImageBlankness([blankPng]);
+      vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([]);
+      vi.mocked(desktopCapturer.getSources).mockResolvedValue([
+        fakeWindowsSource("window:555:0", "Blank Recorder", blankPng),
+      ] as unknown as Awaited<ReturnType<typeof desktopCapturer.getSources>>);
+
+      windowsShortcutCallback?.();
+      await vi.waitFor(() => expect(f.onError).toHaveBeenCalledTimes(1));
+      expect(f.onError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          code: "capture-blocked",
+          message: expect.stringContaining("blank frame"),
+        }),
+        false,
+      );
+      expect(f.onCaptured).not.toHaveBeenCalled();
+      expect(await f.manager.listPendingCaptures()).toHaveLength(0);
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it("emits capture-blocked when the foreground window's frame is blank instead of falling back to another window", async () => {
+    let windowsShortcutCallback: (() => void) | undefined;
+    const register = vi.fn((_accelerator: string, callback: () => void) => {
+      windowsShortcutCallback = callback;
+      return true;
+    });
+    const f = createWindowsManager({
+      enabled: false,
+      shortcutRegistry: { register, unregister: vi.fn() },
+      windowsCaptureProbe: () => ({
+        foregroundHwnd: 67890n,
+        ownedHwnds: new Set<string>(),
+      }),
+    });
+    const blankPng = Buffer.alloc(64, 0);
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(blankPng, 0);
+    try {
+      await f.manager.setShortcut({ kind: "key-chord", modifier: "option", key: "KeyX" });
+      await f.manager.setEnabled(true);
+      stubNativeImageBlankness([blankPng]);
+      vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([]);
+      vi.mocked(desktopCapturer.getSources).mockResolvedValue([
+        fakeWindowsSource("window:123:0", "Developer Tools - http://localhost:5733/", PNG_BYTES),
+        fakeWindowsSource("window:67890:0", "Microsoft Edge", blankPng),
+        fakeWindowsSource("window:456:0", "Notepad", PNG_BYTES),
+      ] as unknown as Awaited<ReturnType<typeof desktopCapturer.getSources>>);
+
+      windowsShortcutCallback?.();
+      await vi.waitFor(() => expect(f.onError).toHaveBeenCalledTimes(1));
+      expect(f.onError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          code: "capture-blocked",
+          message: expect.stringContaining("blank frame"),
+        }),
+        false,
+      );
+      expect(f.onCaptured).not.toHaveBeenCalled();
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it("emits an error instead of going silent when getSources stalls under a screen recorder", async () => {
+    let windowsShortcutCallback: (() => void) | undefined;
+    const register = vi.fn((_accelerator: string, callback: () => void) => {
+      windowsShortcutCallback = callback;
+      return true;
+    });
+    const f = createWindowsManager({
+      enabled: false,
+      shortcutRegistry: { register, unregister: vi.fn() },
+    });
+    try {
+      await f.manager.setShortcut({ kind: "key-chord", modifier: "option", key: "KeyX" });
+      await f.manager.setEnabled(true);
+      vi.mocked(desktopCapturer.getSources).mockReturnValue(new Promise<never>(() => {}));
+
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      windowsShortcutCallback?.();
+      await vi.advanceTimersByTimeAsync(WINDOWS_SOURCES_TIMEOUT_MS + 500);
+      await flushPromises();
+
+      expect(f.onError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          code: "capture-failed",
+          message: expect.stringContaining("screen recorder"),
+        }),
+        false,
+      );
+      expect(f.onCaptured).not.toHaveBeenCalled();
+      expect(await f.manager.listPendingCaptures()).toHaveLength(0);
+
+      // The stall must release the in-flight guard so the next press runs.
+      windowsShortcutCallback?.();
+      await vi.advanceTimersByTimeAsync(WINDOWS_SOURCES_TIMEOUT_MS + 500);
+      await flushPromises();
+      expect(desktopCapturer.getSources).toHaveBeenCalledTimes(2);
+      expect(f.onError).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+      f.dispose();
+    }
+  });
+
+  it("rejects captureCurrentApp when getSources stalls under a screen recorder", async () => {
+    const f = createWindowsManager();
+    try {
+      vi.mocked(desktopCapturer.getSources).mockReturnValue(new Promise<never>(() => {}));
+      await f.enable();
+
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const capturing = expect(f.manager.captureCurrentApp("win-stall")).rejects.toThrow(
+        /screen recorder/,
+      );
+      await vi.advanceTimersByTimeAsync(WINDOWS_SOURCES_TIMEOUT_MS + 500);
+      await capturing;
+      expect(f.onCaptured).not.toHaveBeenCalled();
+      expect(await f.manager.listPendingCaptures()).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+      f.dispose();
+    }
+  });
+
+  it("captures the foreground window even when another window is first in z-order", async () => {
+    let windowsShortcutCallback: (() => void) | undefined;
+    const register = vi.fn((_accelerator: string, callback: () => void) => {
+      windowsShortcutCallback = callback;
+      return true;
+    });
+    const f = createWindowsManager({
+      enabled: false,
+      shortcutRegistry: { register, unregister: vi.fn() },
+      windowsCaptureProbe: () => ({
+        foregroundHwnd: 67890n,
+        ownedHwnds: new Set<string>(["111"]),
+      }),
+    });
+    try {
+      await f.manager.setShortcut({ kind: "key-chord", modifier: "option", key: "KeyX" });
+      await f.manager.setEnabled(true);
+      vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([]);
+      vi.mocked(desktopCapturer.getSources).mockResolvedValue([
+        fakeWindowsSource("window:123:0", "Developer Tools - http://localhost:5733/", PNG_BYTES),
+        fakeWindowsSource("window:456:0", "Notepad", PNG_BYTES),
+        fakeWindowsSource("window:67890:0", "Microsoft Edge", PNG_BYTES),
+      ] as unknown as Awaited<ReturnType<typeof desktopCapturer.getSources>>);
+
+      windowsShortcutCallback?.();
+      await vi.waitFor(() => expect(f.onCaptured).toHaveBeenCalledTimes(1));
+      expect(f.onCaptured).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceAppName: "Microsoft Edge" }),
+      );
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it("excludes every own-process HWND from the probe, not just BrowserWindow handles", async () => {
+    let windowsShortcutCallback: (() => void) | undefined;
+    const register = vi.fn((_accelerator: string, callback: () => void) => {
+      windowsShortcutCallback = callback;
+      return true;
+    });
+    const f = createWindowsManager({
+      enabled: false,
+      shortcutRegistry: { register, unregister: vi.fn() },
+      windowsCaptureProbe: () => ({
+        foregroundHwnd: 456n,
+        ownedHwnds: new Set<string>(["111", "123"]),
+      }),
+    });
+    try {
+      await f.manager.setShortcut({ kind: "key-chord", modifier: "option", key: "KeyX" });
+      await f.manager.setEnabled(true);
+      vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([]);
+      vi.mocked(desktopCapturer.getSources).mockResolvedValue([
+        fakeWindowsSource("window:123:0", "Developer Tools - http://localhost:5733/", PNG_BYTES),
+        fakeWindowsSource("window:456:0", "Notepad", PNG_BYTES),
+      ] as unknown as Awaited<ReturnType<typeof desktopCapturer.getSources>>);
+
+      windowsShortcutCallback?.();
+      await vi.waitFor(() => expect(f.onCaptured).toHaveBeenCalledTimes(1));
+      expect(f.onCaptured).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceAppName: "Notepad" }),
+      );
+    } finally {
+      f.dispose();
+    }
+  });
+
+  it("emits no-window when only Synara windows are capturable", async () => {
+    let windowsShortcutCallback: (() => void) | undefined;
+    const register = vi.fn((_accelerator: string, callback: () => void) => {
+      windowsShortcutCallback = callback;
+      return true;
+    });
+    const onError = vi.fn();
+    const captureDirectory = mkdtempSync(join(tmpdir(), "synara-appsnap-win-"));
+    const manager = new DesktopAppSnapManager({
+      platform: "win32",
+      helperPath: "C:\\missing\\synara-appsnap-helper.exe",
+      captureDirectory,
+      excludedBundleId: SYNARA_DEVELOPMENT_BUNDLE_ID,
+      spawn: vi.fn() as unknown as typeof ChildProcess.spawn,
+      shortcutRegistry: { register, unregister: vi.fn() },
+      onState: vi.fn(),
+      onCaptured: vi.fn(),
+      onError,
+    });
+    try {
+      await manager.setShortcut({ kind: "key-chord", modifier: "option", key: "KeyX" });
+      await manager.setEnabled(true);
+
+      const synaraHandle = Buffer.alloc(4);
+      synaraHandle.writeUInt32LE(111, 0);
+      vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([
+        { getNativeWindowHandle: () => synaraHandle },
+      ] as unknown as ReturnType<typeof BrowserWindow.getAllWindows>);
+      vi.mocked(desktopCapturer.getSources).mockResolvedValue([
+        fakeWindowsSource("window:111:0", "Synara", PNG_BYTES),
+      ] as unknown as Awaited<ReturnType<typeof desktopCapturer.getSources>>);
+
+      windowsShortcutCallback?.();
+      await vi.waitFor(() =>
+        expect(onError).toHaveBeenCalledWith(expect.objectContaining({ code: "no-window" }), false),
+      );
+    } finally {
+      manager.dispose();
+      rmSync(captureDirectory, { recursive: true, force: true });
+      vi.mocked(desktopCapturer.getSources).mockReset();
+      vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([]);
+      vi.mocked(nativeImage.createFromBuffer).mockReset();
+      vi.mocked(nativeImage.createFromBuffer).mockImplementation(
+        () =>
+          ({
+            isEmpty: () => false,
+            getSize: () => ({ width: 8, height: 8 }),
+            toBitmap: () => variedBitmap(),
+          }) as ReturnType<typeof nativeImage.createFromBuffer>,
+      );
+    }
+  });
+});
+
+describe("Windows capture candidate ranking", () => {
+  const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+  function markerPng(marker: number, length = 64): Buffer {
+    const png = Buffer.alloc(length);
+    PNG_SIGNATURE.copy(png, 0);
+    png.fill(marker, 8);
+    return png;
+  }
+
+  it("puts non-blank windows ahead of blank ones while preserving z-order", () => {
+    const sources = [
+      fakeWindowsSource("window:1:0", "Recorder", markerPng(0)),
+      fakeWindowsSource("window:2:0", "Terminal", markerPng(1)),
+      fakeWindowsSource("screen:0:0", "Screen", markerPng(1)),
+      fakeWindowsSource("window:3:0", "Browser", markerPng(1)),
+      fakeWindowsSource("window:4:0", "Cloaked", markerPng(0)),
+    ];
+    const ranked = collectWindowsCaptureCandidates(
+      sources as unknown as Awaited<ReturnType<typeof desktopCapturer.getSources>>,
+      new Set<string>(),
+      (png) => png[8] === 0,
+    );
+    expect(ranked.map((entry) => entry.source.name)).toEqual([
+      "Terminal",
+      "Browser",
+      "Recorder",
+      "Cloaked",
+    ]);
+    expect(ranked.map((entry) => entry.blank)).toEqual([false, false, true, true]);
+  });
+
+  it("drops Synara windows, non-window sources, and empty thumbnails", () => {
+    const sources = [
+      fakeWindowsSource("window:111:0", "Synara", markerPng(1)),
+      fakeWindowsSource("screen:0:0", "Desktop", markerPng(1)),
+      fakeWindowsSource("window:222:0", "Empty", Buffer.alloc(0)),
+      fakeWindowsSource("window:333:0", "Terminal", markerPng(1)),
+    ];
+    const ranked = collectWindowsCaptureCandidates(
+      sources as unknown as Awaited<ReturnType<typeof desktopCapturer.getSources>>,
+      new Set(["111"]),
+      () => false,
+    );
+    expect(ranked.map((entry) => entry.source.name)).toEqual(["Terminal"]);
+  });
+
+  it("promotes the foreground window ahead of z-order peers", () => {
+    const sources = [
+      fakeWindowsSource("window:1:0", "DevTools", markerPng(1)),
+      fakeWindowsSource("window:2:0", "Edge", markerPng(1)),
+      fakeWindowsSource("window:3:0", "Terminal", markerPng(1)),
+    ];
+    const ranked = collectWindowsCaptureCandidates(
+      sources as unknown as Awaited<ReturnType<typeof desktopCapturer.getSources>>,
+      new Set<string>(),
+      () => false,
+      { foregroundHwnd: 2n },
+    );
+    expect(ranked.map((entry) => entry.source.name)).toEqual(["Edge", "DevTools", "Terminal"]);
+  });
+
+  it("keeps z-order when the foreground window is not capturable", () => {
+    const sources = [
+      fakeWindowsSource("window:1:0", "DevTools", markerPng(1)),
+      fakeWindowsSource("window:2:0", "Edge", markerPng(1)),
+    ];
+    const ranked = collectWindowsCaptureCandidates(
+      sources as unknown as Awaited<ReturnType<typeof desktopCapturer.getSources>>,
+      new Set<string>(),
+      () => false,
+      { foregroundHwnd: 999n },
+    );
+    expect(ranked.map((entry) => entry.source.name)).toEqual(["DevTools", "Edge"]);
+  });
+
+  it("drops Synara-owned windows even when they are the foreground window", () => {
+    const sources = [
+      fakeWindowsSource("window:1:0", "DevTools", markerPng(1)),
+      fakeWindowsSource("window:2:0", "Edge", markerPng(1)),
+    ];
+    const ranked = collectWindowsCaptureCandidates(
+      sources as unknown as Awaited<ReturnType<typeof desktopCapturer.getSources>>,
+      new Set(["1"]),
+      () => false,
+      { foregroundHwnd: 1n },
+    );
+    expect(ranked.map((entry) => entry.source.name)).toEqual(["Edge"]);
+  });
+
+  it("treats empty payloads as blank and only near-solid black thumbnails as blank", () => {
+    expect(isBlankWindowsThumbnail(Buffer.alloc(0))).toBe(true);
+    expect(
+      isBlankWindowsThumbnail(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1])),
+    ).toBe(false);
+    expect(isBlankWindowsThumbnail(markerPng(1))).toBe(false);
+
+    const solidBlack = {
+      createFromBuffer: () => ({
+        isEmpty: () => false,
+        getSize: () => ({ width: 8, height: 8 }),
+        toBitmap: () => Buffer.alloc(8 * 8 * 4, 0),
+      }),
+    };
+    const solidWhite = {
+      createFromBuffer: () => ({
+        isEmpty: () => false,
+        getSize: () => ({ width: 8, height: 8 }),
+        toBitmap: () => Buffer.alloc(8 * 8 * 4, 255),
+      }),
+    };
+    const content = {
+      createFromBuffer: () => ({
+        isEmpty: () => false,
+        getSize: () => ({ width: 8, height: 8 }),
+        toBitmap: () => variedBitmap(),
+      }),
+    };
+    expect(isBlankWindowsThumbnail(markerPng(1), solidBlack)).toBe(true);
+    expect(isBlankWindowsThumbnail(markerPng(1), solidWhite)).toBe(false);
+    expect(isBlankWindowsThumbnail(markerPng(1), content)).toBe(false);
   });
 });

@@ -1,9 +1,17 @@
 // FILE: appSnapManager.ts
-// Purpose: Owns the macOS AppSnap helper lifecycle, permission state, and pending captures.
+// Purpose: Owns the macOS AppSnap helper lifecycle and native Windows AppSnap captures.
 // Layer: Desktop main-process service
-// Depends on: A signed Swift helper plus narrow filesystem/process adapters.
+// Depends on: A signed Swift helper (macOS), Electron desktopCapturer (Windows), and narrow filesystem/process adapters.
+
+import { BrowserWindow, desktopCapturer, nativeImage, type DesktopCapturerSource } from "electron";
 
 import { stopNativeHelper } from "./stopNativeHelper";
+import { nativeWindowHandleToHwnd } from "./windowsShellAppUserModel";
+import {
+  ensureWindowsWindowProbeHelper,
+  probeWindowsWindows,
+  type WindowsWindowProbeResult,
+} from "./windowsWindowProbe";
 
 import * as ChildProcess from "node:child_process";
 import * as Crypto from "node:crypto";
@@ -30,6 +38,7 @@ import {
 } from "@synara/contracts";
 import {
   DEFAULT_APP_SNAP_SHORTCUT,
+  DEFAULT_APP_SNAP_SHORTCUT_WINDOWS,
   appSnapShortcutAccelerator,
   appSnapShortcutSystemConflict,
   isAppSnapShortcut,
@@ -47,15 +56,35 @@ const HELPER_CAPTURE_IMAGE_PATTERN =
 const ORPHANED_PICKER_IMAGE_PATTERN =
   /^appsnap-picker-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\.png$/;
 const LIST_WINDOWS_TIMEOUT_MS = 5_000;
+// Windows Graphics Capture can stall indefinitely while another screen
+// recorder owns the screen, and desktopCapturer.getSources gives no timeout
+// of its own. Bound it so the hotkey always settles with an error (and
+// releases its in-flight guard) instead of going silent. 8s clears the
+// 5s WGC first-frame wait, so a slow-but-alive capture still resolves and
+// falls through to the blank-frame check.
+export const WINDOWS_SOURCES_TIMEOUT_MS = 8_000;
+const WINDOWS_SOURCES_TIMEOUT_MESSAGE =
+  "Could not list capturable windows in time, so the capture was cancelled. Another screen recorder may be blocking capture - stop other recordings and try again.";
 const CAPTURE_WINDOW_TIMEOUT_MS = 20_000;
 // Permission checks run through the serialized command queue, so a wedged
 // helper must be killed rather than stall every queued read behind it.
 const PERMISSION_COMMAND_TIMEOUT_MS = 10_000;
 const GUIDE_GRANT_WATCH_MAX_MS = 10 * 60 * 1000;
 const MAX_MACOS_WINDOW_ID = 0xffff_ffff;
-// Late helper answers to timed-out or interrupted picker requests are dropped
-// instead of being consumed as unsolicited hotkey captures.
+const WINDOWS_CAPTURE_THUMBNAIL_SIZE = { width: 4096, height: 4096 } as const;
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+// Near-solid frames with almost no channel spread are treated as blank only
+// when they are also near-black (recorder previews, cloaked/minimized windows).
+// Solid white/light frames stay capturable so a blank webpage still works.
+const BLANK_CHANNEL_RANGE = 10;
+const BLANK_MAX_LUMA = 12;
+// A blank frame means the capture path produced no usable pixels for the
+// chosen window (Windows Graphics Capture timeouts while another recorder
+// owns the screen, cloaked/minimized previews). Attaching it would label
+// another app's pixels with this window's name, so every capture path
+// fails loudly instead.
+const WINDOWS_BLANK_FRAME_MESSAGE =
+  "The window returned a blank frame, which usually means another screen recorder is blocking capture. Close other screen recorders and try again.";
 
 type AppSnapHelperProcess = ChildProcess.ChildProcessByStdio<Writable | null, Readable, Readable>;
 type AppSnapPermissionCommand =
@@ -163,6 +192,17 @@ export interface DesktopAppSnapManagerOptions {
     register: (accelerator: string, callback: () => void) => boolean;
     unregister: (accelerator: string) => void;
   };
+  /**
+   * Resolves the Windows foreground HWND and every top-level HWND owned by this
+   * process (main window + detached DevTools). Best effort: null falls back to
+   * BrowserWindow handles and desktopCapturer z-order only.
+   */
+  windowsCaptureProbe?: () =>
+    | Promise<WindowsWindowProbeResult | null>
+    | WindowsWindowProbeResult
+    | null;
+  /** Cache directory for the compiled window probe helper. Defaults next to captureDirectory. */
+  windowsProbeCacheDirectory?: string;
 }
 
 function normalizeDate(value: unknown, fallback: Date): string {
@@ -301,6 +341,125 @@ export function desktopAppSnapPlatform(platform: NodeJS.Platform): DesktopAppSna
   if (platform === "win32") return "windows";
   if (platform === "linux") return "linux";
   return "other";
+}
+
+/** desktopCapturer window ids look like `window:<hwnd>:<display>`; returns the HWND. */
+export function parseWindowsWindowId(sourceId: string): number | null {
+  const match = /^window:(\d+):/.exec(sourceId);
+  if (!match) return null;
+  const windowId = Number(match[1]);
+  if (!Number.isSafeInteger(windowId) || windowId <= 0 || windowId > MAX_MACOS_WINDOW_ID) {
+    return null;
+  }
+  return windowId;
+}
+
+type ThumbnailDecoder = {
+  createFromBuffer(buffer: Buffer): {
+    isEmpty(): boolean;
+    getSize(): { width: number; height: number };
+    toBitmap(): Buffer;
+  };
+};
+
+/** True when a captured PNG is empty, undecodable-as-content, or near-solid black. */
+export function isBlankWindowsThumbnail(
+  png: Buffer,
+  decoder: ThumbnailDecoder = nativeImage,
+): boolean {
+  if (png.byteLength === 0) return true;
+  if (png.byteLength < 24 || !png.subarray(0, 8).equals(PNG_SIGNATURE)) return false;
+  try {
+    const decoded = decoder.createFromBuffer(png);
+    if (decoded.isEmpty()) return true;
+    const { width, height } = decoded.getSize();
+    if (width < 4 || height < 4) return true;
+    const bitmap = decoded.toBitmap();
+    const pixelCount = Math.floor(bitmap.byteLength / 4);
+    if (pixelCount < 16) return true;
+    const step = Math.max(1, Math.floor(pixelCount / 64));
+    let minB = 255;
+    let maxB = 0;
+    let minG = 255;
+    let maxG = 0;
+    let minR = 255;
+    let maxR = 0;
+    let lumaSum = 0;
+    let samples = 0;
+    for (let index = 0; index < pixelCount; index += step) {
+      const offset = index * 4;
+      const b = bitmap[offset] ?? 0;
+      const g = bitmap[offset + 1] ?? 0;
+      const r = bitmap[offset + 2] ?? 0;
+      if (b < minB) minB = b;
+      if (b > maxB) maxB = b;
+      if (g < minG) minG = g;
+      if (g > maxG) maxG = g;
+      if (r < minR) minR = r;
+      if (r > maxR) maxR = r;
+      lumaSum += 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      samples += 1;
+    }
+    const range = Math.max(maxB - minB, maxG - minG, maxR - minR);
+    if (range > BLANK_CHANNEL_RANGE) return false;
+    return samples > 0 && lumaSum / samples <= BLANK_MAX_LUMA;
+  } catch {
+    return false;
+  }
+}
+
+export interface WindowsCaptureCandidate {
+  source: DesktopCapturerSource;
+  png: Buffer;
+  blank: boolean;
+}
+
+/**
+ * Ranked Windows capture candidates: non-Synara windows first, non-blank
+ * thumbnails ahead of blank ones, each group in desktopCapturer z-order
+ * (frontmost first). Empty thumbnails are dropped. When `foregroundHwnd` is
+ * provided, that window is promoted to the front of the final list so the
+ * capture matches what the user is actually looking at.
+ */
+export function collectWindowsCaptureCandidates(
+  sources: readonly DesktopCapturerSource[],
+  synaraHandles: ReadonlySet<string>,
+  isBlank: (png: Buffer) => boolean = isBlankWindowsThumbnail,
+  options: { readonly foregroundHwnd?: bigint | null } = {},
+): WindowsCaptureCandidate[] {
+  const viable: WindowsCaptureCandidate[] = [];
+  const blank: WindowsCaptureCandidate[] = [];
+  for (const source of sources) {
+    if (!source.id.startsWith("window:")) continue;
+    const parsed = parseWindowsWindowId(source.id);
+    if (parsed === null) continue;
+    if (synaraHandles.has(String(parsed))) continue;
+    let png: Buffer;
+    try {
+      png = source.thumbnail.toPNG();
+    } catch {
+      continue;
+    }
+    if (!png || png.byteLength === 0) continue;
+    const candidate: WindowsCaptureCandidate = { source, png, blank: isBlank(png) };
+    if (candidate.blank) blank.push(candidate);
+    else viable.push(candidate);
+  }
+  const ranked = [...viable, ...blank];
+  const foregroundHwnd = options.foregroundHwnd;
+  if (foregroundHwnd === null || foregroundHwnd === undefined || foregroundHwnd === 0n) {
+    return ranked;
+  }
+  const foregroundKey = foregroundHwnd.toString();
+  const foregroundIndex = ranked.findIndex((candidate) => {
+    const parsed = parseWindowsWindowId(candidate.source.id);
+    return parsed !== null && String(parsed) === foregroundKey;
+  });
+  if (foregroundIndex > 0) {
+    const [entry] = ranked.splice(foregroundIndex, 1);
+    if (entry) ranked.unshift(entry);
+  }
+  return ranked;
 }
 
 export function parseAppSnapHelperMessage(line: string): AppSnapHelperMessage | null {
@@ -562,6 +721,7 @@ export class DesktopAppSnapManager {
   } | null = null;
   #disposed = false;
   #requestedCapture: { id: string; cancel: () => void } | null = null;
+  #hotkeyCaptureInFlight = false;
   #intentionalWatchStop = false;
   #pendingCaptures: PendingAppSnapCaptureRecord[] = [];
   #pendingCapturesLoadPromise: Promise<void> | null = null;
@@ -607,18 +767,24 @@ export class DesktopAppSnapManager {
       spawn: options.spawn ?? ChildProcess.spawn,
     };
     this.#platform = desktopAppSnapPlatform(options.platform);
-    this.#status = this.#platform === "macos" ? "disabled" : "unsupported";
+    if (this.#platform === "windows") {
+      this.#shortcut = DEFAULT_APP_SNAP_SHORTCUT_WINDOWS;
+    }
+    this.#status =
+      this.#platform === "macos" || this.#platform === "windows" ? "disabled" : "unsupported";
     this.#message =
-      this.#platform === "macos" ? null : "AppSnap is available only in the macOS desktop app.";
+      this.#platform === "macos" || this.#platform === "windows"
+        ? null
+        : "AppSnap is available only in the macOS and Windows desktop apps.";
   }
 
   getState(): DesktopAppSnapState {
     return {
       platform: this.#platform,
-      supported: this.#platform === "macos",
+      supported: this.#platform === "macos" || this.#platform === "windows",
       enabled: this.#enabled,
       status: this.#permissionSetupFailure ? "error" : this.#status,
-      shortcut: this.#platform === "macos" ? this.#shortcut : null,
+      shortcut: this.#platform === "macos" || this.#platform === "windows" ? this.#shortcut : null,
       inputMonitoringPermission: this.#inputMonitoringPermission,
       screenRecordingPermission: this.#screenRecordingPermission,
       ...(this.#accessibilityPermission !== undefined
@@ -636,7 +802,13 @@ export class DesktopAppSnapManager {
     permissions?: readonly DesktopAppSnapPermissionKind[],
     options: { readonly force?: boolean } = {},
   ): Promise<DesktopAppSnapState> {
-    if (this.#platform !== "macos" || this.#disposed) return this.getState();
+    if (this.#disposed) return this.getState();
+    if (this.#platform === "windows") {
+      this.#reconcileWindowsShortcut();
+      this.#emitState();
+      return this.getState();
+    }
+    if (this.#platform !== "macos") return this.getState();
     if (!(await this.#runPermissionCommand("--check-permissions", permissions, !options.force))) {
       return this.getState();
     }
@@ -645,7 +817,14 @@ export class DesktopAppSnapManager {
   }
 
   async setEnabled(enabled: boolean): Promise<DesktopAppSnapState> {
-    if (this.#platform !== "macos" || this.#disposed) return this.getState();
+    if (this.#disposed) return this.getState();
+    if (this.#platform === "windows") {
+      this.#enabled = enabled;
+      this.#reconcileWindowsShortcut();
+      this.#emitState();
+      return this.getState();
+    }
+    if (this.#platform !== "macos") return this.getState();
     this.#enabled = enabled;
     if (!enabled) {
       this.#stopWatchProcess();
@@ -659,8 +838,11 @@ export class DesktopAppSnapManager {
   }
 
   checkShortcut(shortcut: unknown): DesktopAppSnapShortcutAvailability {
-    if (this.#platform !== "macos") {
-      return { available: false, reason: "AppSnap shortcuts are available only on macOS." };
+    if (this.#platform !== "macos" && this.#platform !== "windows") {
+      return {
+        available: false,
+        reason: "AppSnap shortcuts are available only on macOS and Windows.",
+      };
     }
     if (!isAppSnapShortcut(shortcut)) {
       return {
@@ -669,9 +851,19 @@ export class DesktopAppSnapManager {
       };
     }
     if (shortcut.kind === "both-option-keys") {
+      if (this.#platform === "windows") {
+        return {
+          available: false,
+          reason:
+            "Both Option keys are a macOS-only shortcut. Choose a modifier and one other key.",
+        };
+      }
       return { available: true, reason: null };
     }
-    const systemConflict = appSnapShortcutSystemConflict(shortcut);
+    const systemConflict = appSnapShortcutSystemConflict(
+      shortcut,
+      this.#platform === "windows" ? "windows" : "macos",
+    );
     if (systemConflict) {
       return { available: false, reason: systemConflict };
     }
@@ -684,17 +876,18 @@ export class DesktopAppSnapManager {
     if (!registry) {
       return { available: false, reason: "Global shortcut checks are unavailable." };
     }
+    const platformLabel = this.#platform === "windows" ? "Windows" : "macOS";
     try {
       if (!registry.register(accelerator, () => undefined)) {
         return {
           available: false,
-          reason: "macOS or another app is already using this shortcut.",
+          reason: `${platformLabel} or another app is already using this shortcut.`,
         };
       }
       registry.unregister(accelerator);
       return { available: true, reason: null };
     } catch {
-      return { available: false, reason: "macOS could not register this shortcut." };
+      return { available: false, reason: `${platformLabel} could not register this shortcut.` };
     }
   }
 
@@ -706,7 +899,7 @@ export class DesktopAppSnapManager {
   async setShortcut(shortcut: unknown): Promise<DesktopAppSnapShortcutUpdateResult> {
     const availability = this.checkShortcut(shortcut);
     if (
-      this.#platform !== "macos" ||
+      (this.#platform !== "macos" && this.#platform !== "windows") ||
       !isAppSnapShortcut(shortcut) ||
       sameAppSnapShortcut(this.#shortcut, shortcut)
     ) {
@@ -716,7 +909,13 @@ export class DesktopAppSnapManager {
     this.#stopWatchProcess();
     this.#releaseShortcutReservation();
     this.#shortcut = shortcut;
-    if (this.#enabled) await this.#reconcileWatchProcess();
+    if (this.#enabled) {
+      if (this.#platform === "windows") {
+        this.#reconcileWindowsShortcut();
+      } else {
+        await this.#reconcileWatchProcess();
+      }
+    }
     this.#emitState();
     return { state: this.getState(), availability };
   }
@@ -724,7 +923,14 @@ export class DesktopAppSnapManager {
   async requestPermissions(
     permissions?: readonly DesktopAppSnapPermissionKind[],
   ): Promise<DesktopAppSnapState> {
-    if (this.#platform !== "macos" || this.#disposed) return this.getState();
+    if (this.#disposed) return this.getState();
+    if (this.#platform === "windows") {
+      this.#permissionSetupFailure = null;
+      this.#reconcileWindowsShortcut();
+      this.#emitState();
+      return this.getState();
+    }
+    if (this.#platform !== "macos") return this.getState();
     this.#permissionSetupFailure = null;
     this.#permissionCheckCache.clear();
     if (!(await this.#runPermissionCommand("--request-permissions", permissions))) {
@@ -751,7 +957,14 @@ export class DesktopAppSnapManager {
   async startPermissionSetup(
     permissions: readonly DesktopAppSnapPermissionKind[],
   ): Promise<DesktopAppSnapState> {
-    if (this.#platform !== "macos" || this.#disposed) return this.getState();
+    if (this.#disposed) return this.getState();
+    if (this.#platform === "windows") {
+      this.#permissionSetupFailure = null;
+      this.#reconcileWindowsShortcut();
+      this.#emitState();
+      return this.getState();
+    }
+    if (this.#platform !== "macos") return this.getState();
     if (permissions.length === 0) return this.getState();
     this.hidePermissionGuide();
     const generation = this.#guideSessionGeneration;
@@ -804,6 +1017,34 @@ export class DesktopAppSnapManager {
   }
 
   async listWindows(): Promise<DesktopAppSnapWindowEntry[]> {
+    if (this.#platform === "windows") {
+      if (this.#disposed || !this.#enabled) throw new Error("AppSnap is not listening.");
+      const requestId = Crypto.randomUUID();
+      return await new Promise<DesktopAppSnapWindowEntry[]>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          this.#pendingWindowRequests.delete(requestId);
+          reject(new Error("Timed out while listing capturable windows."));
+        }, LIST_WINDOWS_TIMEOUT_MS);
+        this.#pendingWindowRequests.set(requestId, { resolve, reject, timer });
+        void this.#listWindowsSources()
+          .then(async (sources) => {
+            const { synaraHandles } = await this.#resolveWindowsCaptureContext();
+            this.#handleMessage({
+              type: "windows",
+              requestId,
+              windows: this.#mapWindowsWindowEntries(sources, synaraHandles),
+            });
+          })
+          .catch((error: unknown) => {
+            this.#handleMessage({
+              type: "error",
+              code: "windows_unavailable",
+              message: error instanceof Error ? error.message : String(error),
+              requestId,
+            });
+          });
+      });
+    }
     const child = this.#requireWatchProcess();
     const requestId = Crypto.randomUUID();
     return await new Promise<DesktopAppSnapWindowEntry[]>((resolve, reject) => {
@@ -821,6 +1062,22 @@ export class DesktopAppSnapManager {
   }
 
   async captureWindow(windowId: number): Promise<DesktopAppSnapCapture> {
+    if (this.#platform === "windows") {
+      if (!Number.isInteger(windowId) || windowId <= 0 || windowId > MAX_MACOS_WINDOW_ID) {
+        throw new Error("captureWindow requires a valid window id.");
+      }
+      if (this.#disposed || !this.#enabled) throw new Error("AppSnap is not listening.");
+      const requestId = `picker-${Crypto.randomUUID()}`;
+      return await new Promise<DesktopAppSnapCapture>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          this.#pendingCaptureRequests.delete(requestId);
+          this.#tombstoneCaptureRequest(requestId);
+          reject(new Error("Timed out while capturing the requested window."));
+        }, CAPTURE_WINDOW_TIMEOUT_MS);
+        this.#pendingCaptureRequests.set(requestId, { resolve, reject, timer });
+        void this.#captureWindowsSource(requestId, windowId);
+      });
+    }
     if (!Number.isInteger(windowId) || windowId <= 0 || windowId > MAX_MACOS_WINDOW_ID) {
       throw new Error("captureWindow requires a valid macOS window id.");
     }
@@ -1223,7 +1480,35 @@ export class DesktopAppSnapManager {
 
   /** Explicit read-only request. Independent of shortcut enablement and Input Monitoring. */
   async captureCurrentApp(requestId: string): Promise<DesktopAppSnapCapture> {
-    if (this.#disposed || this.#platform !== "macos") throw new Error("AppSnap is unavailable.");
+    if (this.#disposed) throw new Error("AppSnap is unavailable.");
+    if (this.#platform === "windows") {
+      if (this.#requestedCapture) throw new Error("An AppSnap request is already in progress.");
+      let cancelled = false;
+      const request = {
+        id: requestId,
+        cancel: () => {
+          cancelled = true;
+        },
+      };
+      this.#requestedCapture = request;
+      try {
+        const sources = await this.#listWindowsSources();
+        if (cancelled) throw new Error("AppSnap request cancelled.");
+        const { synaraHandles, foregroundHwnd } = await this.#resolveWindowsCaptureContext();
+        const candidate = collectWindowsCaptureCandidates(sources, synaraHandles, undefined, {
+          foregroundHwnd,
+        })[0];
+        if (!candidate) throw new Error("No capturable window was found.");
+        if (cancelled) throw new Error("AppSnap request cancelled.");
+        if (candidate.blank) throw new Error(WINDOWS_BLANK_FRAME_MESSAGE);
+        return this.#buildWindowsCapture(candidate.png, candidate.source);
+      } catch (error) {
+        throw error instanceof Error ? error : new Error(String(error));
+      } finally {
+        if (this.#requestedCapture === request) this.#requestedCapture = null;
+      }
+    }
+    if (this.#platform !== "macos") throw new Error("AppSnap is unavailable.");
     if (this.#requestedCapture) throw new Error("An AppSnap request is already in progress.");
     let cancelled = false;
     let cancelChild: (() => void) | undefined;
@@ -1730,12 +2015,92 @@ export class DesktopAppSnapManager {
     }
   }
 
+  /**
+   * Windows has no native helper: readiness is granted permissions plus an
+   * optional Electron globalShortcut reservation. `both-option-keys` cannot be
+   * reserved outside macOS, so it surfaces as an error until a key-chord is set.
+   */
+  #reconcileWindowsShortcut(): void {
+    if (this.#disposed) return;
+    this.#inputMonitoringPermission = "granted";
+    this.#screenRecordingPermission = "granted";
+    if (!this.#enabled) {
+      this.#releaseShortcutReservation();
+      this.#setState("disabled", null);
+      return;
+    }
+    if (this.#shortcut.kind === "both-option-keys") {
+      this.#releaseShortcutReservation();
+      this.#setState(
+        "error",
+        "Both Option keys are a macOS-only shortcut. Choose a modifier and one other key.",
+      );
+      return;
+    }
+    if (!this.#reserveShortcut(this.#shortcut)) {
+      this.#setState("error", "The AppSnap shortcut is already used by Windows or another app.");
+      return;
+    }
+    this.#setState("ready", null);
+  }
+
   #handleShortcutTrigger(): void {
     if (this.#disposed || !this.#enabled) return;
+    if (this.#platform === "windows") {
+      void this.#captureWindowsHotkey();
+      return;
+    }
     try {
       this.#watchProcess?.stdin?.write("trigger\n");
     } catch {
       // The helper exit handler owns recovery; a lost trigger is acceptable.
+    }
+  }
+
+  /** Hotkey path: capture the frontmost viable non-Synara window without a picker request. */
+  async #captureWindowsHotkey(): Promise<void> {
+    if (this.#disposed || !this.#enabled) return;
+    if (this.#hotkeyCaptureInFlight) return;
+    this.#hotkeyCaptureInFlight = true;
+    try {
+      const sources = await this.#listWindowsSources();
+      if (this.#disposed || !this.#enabled) return;
+      const { synaraHandles, foregroundHwnd } = await this.#resolveWindowsCaptureContext();
+      const candidate = collectWindowsCaptureCandidates(sources, synaraHandles, undefined, {
+        foregroundHwnd,
+      })[0];
+      if (!candidate) {
+        this.#emitCaptureError("no-window", "No capturable window was found.", undefined, false);
+        return;
+      }
+      if (candidate.blank) {
+        this.#emitCaptureError("capture-blocked", WINDOWS_BLANK_FRAME_MESSAGE, undefined, false);
+        return;
+      }
+      const { png, source } = candidate;
+      await FS.promises.mkdir(this.#options.captureDirectory, { recursive: true, mode: 0o700 });
+      const id = Crypto.randomUUID();
+      // No `picker-` prefix: a crash mid-write recovers as an unsolicited hotkey capture.
+      const name = `appsnap-${id}.png`;
+      const capturePath = Path.join(this.#options.captureDirectory, name);
+      await FS.promises.writeFile(capturePath, png, { mode: 0o600 });
+      this.#handleMessage({
+        type: "captured",
+        id,
+        path: capturePath,
+        name,
+        sourceAppName: normalizeOptionalText(source.name),
+        sourceWindowTitle: normalizeOptionalText(source.name),
+      });
+    } catch (error) {
+      this.#emitCaptureError(
+        "capture-failed",
+        error instanceof Error ? error.message : String(error),
+        undefined,
+        false,
+      );
+    } finally {
+      this.#hotkeyCaptureInFlight = false;
     }
   }
 
@@ -1966,6 +2331,7 @@ export class DesktopAppSnapManager {
    * `released` payload — a silent helper exit means the leak may stand.
    */
   async releaseHeldInput(): Promise<boolean> {
+    if (this.#platform === "windows") return false;
     const run = this.#permissionCommandQueue.then(() => this.#executeReleaseHeldInput());
     this.#permissionCommandQueue = run.then(
       () => undefined,
@@ -2033,6 +2399,12 @@ export class DesktopAppSnapManager {
       }
       return;
     }
+    this.#handleMessage(message);
+  }
+
+  /** Shared sink for helper NDJSON and native Windows capture results. */
+  #handleMessage(message: AppSnapHelperMessage): void {
+    if (this.#disposed) return;
     if (message.type === "windows") {
       this.#settleWindowRequest(message.requestId, message.windows);
       return;
@@ -2228,5 +2600,168 @@ export class DesktopAppSnapManager {
       },
       focusApp,
     );
+  }
+
+  #getSynaraWindowHandles(): Set<string> {
+    const handles = new Set<string>();
+    for (const win of BrowserWindow.getAllWindows()) {
+      try {
+        const handle = win.getNativeWindowHandle();
+        if (handle && handle.length > 0) handles.add(nativeWindowHandleToHwnd(handle).toString());
+      } catch {
+        // A destroyed window can throw; it is no longer a capture target.
+      }
+    }
+    return handles;
+  }
+
+  /**
+   * Merges BrowserWindow handles with every HWND owned by this process (catches
+   * detached DevTools) and reads the real foreground HWND for ranking.
+   */
+  async #resolveWindowsCaptureContext(): Promise<{
+    synaraHandles: Set<string>;
+    foregroundHwnd: bigint | null;
+  }> {
+    const synaraHandles = this.#getSynaraWindowHandles();
+    let foregroundHwnd: bigint | null = null;
+    try {
+      const probe = await this.#probeWindowsCapture();
+      if (probe) {
+        for (const hwnd of probe.ownedHwnds) synaraHandles.add(hwnd);
+        foregroundHwnd = probe.foregroundHwnd;
+      }
+    } catch {
+      // Probe is best-effort; fall back to BrowserWindow handles + z-order.
+    }
+    return { synaraHandles, foregroundHwnd };
+  }
+
+  async #probeWindowsCapture(): Promise<WindowsWindowProbeResult | null> {
+    if (this.#platform !== "windows") return null;
+    if (this.#options.windowsCaptureProbe) {
+      return await this.#options.windowsCaptureProbe();
+    }
+    try {
+      const cacheDirectory =
+        this.#options.windowsProbeCacheDirectory ?? Path.join(this.#options.captureDirectory, "..");
+      const helper = ensureWindowsWindowProbeHelper(cacheDirectory);
+      return probeWindowsWindows(helper, process.pid);
+    } catch {
+      return null;
+    }
+  }
+
+  #mapWindowsWindowEntries(
+    sources: readonly DesktopCapturerSource[],
+    synaraHandles: ReadonlySet<string> = this.#getSynaraWindowHandles(),
+  ): DesktopAppSnapWindowEntry[] {
+    const entries: DesktopAppSnapWindowEntry[] = [];
+    for (const source of sources) {
+      if (!source.id.startsWith("window:")) continue;
+      const windowId = parseWindowsWindowId(source.id);
+      if (windowId === null) continue;
+      if (synaraHandles.has(String(windowId))) continue;
+      entries.push({
+        windowId,
+        appName: normalizeOptionalText(source.name),
+        bundleIdentifier: null,
+        windowTitle: normalizeOptionalText(source.name),
+        appIconDataUrl: null,
+      });
+    }
+    return entries;
+  }
+
+  async #listWindowsSources(): Promise<DesktopCapturerSource[]> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await new Promise<DesktopCapturerSource[]>((resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(WINDOWS_SOURCES_TIMEOUT_MESSAGE)),
+          WINDOWS_SOURCES_TIMEOUT_MS,
+        );
+        desktopCapturer
+          .getSources({
+            types: ["window"],
+            thumbnailSize: { ...WINDOWS_CAPTURE_THUMBNAIL_SIZE },
+          })
+          .then(resolve, reject);
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  #buildWindowsCapture(png: Buffer, source: DesktopCapturerSource): DesktopAppSnapCapture {
+    const captureId = Crypto.randomUUID();
+    return {
+      id: captureId,
+      capturedAt: this.#options.now().toISOString(),
+      name: `appsnap-${captureId}.png`,
+      mimeType: "image/png",
+      sizeBytes: png.byteLength,
+      bytes: new Uint8Array(png),
+      sourceAppName: normalizeOptionalText(source.name),
+      sourceBundleIdentifier: null,
+      sourceAppIconDataUrl: null,
+      sourceWindowTitle: normalizeOptionalText(source.name),
+    };
+  }
+
+  async #captureWindowsSource(requestId: string, windowId: number): Promise<void> {
+    try {
+      const sources = await this.#listWindowsSources();
+      const source = sources.find((candidate) => parseWindowsWindowId(candidate.id) === windowId);
+      if (!source) {
+        this.#handleMessage({
+          type: "error",
+          id: requestId,
+          code: "window_unavailable",
+          message: `Window ${windowId} is no longer available.`,
+        });
+        return;
+      }
+      const png = source.thumbnail.toPNG();
+      if (!png || png.byteLength === 0) {
+        this.#handleMessage({
+          type: "error",
+          id: requestId,
+          code: "capture-failed",
+          message: "The window thumbnail is empty.",
+        });
+        return;
+      }
+      if (isBlankWindowsThumbnail(png)) {
+        this.#handleMessage({
+          type: "error",
+          id: requestId,
+          code: "capture-blocked",
+          message: WINDOWS_BLANK_FRAME_MESSAGE,
+        });
+        return;
+      }
+      await FS.promises.mkdir(this.#options.captureDirectory, { recursive: true, mode: 0o700 });
+      // `appsnap-picker-*` matches the orphan cleanup, so a crash mid-request
+      // never recovers this file as an unsolicited hotkey capture.
+      const name = `appsnap-${requestId}.png`;
+      const capturePath = Path.join(this.#options.captureDirectory, name);
+      await FS.promises.writeFile(capturePath, png, { mode: 0o600 });
+      this.#handleMessage({
+        type: "captured",
+        id: requestId,
+        path: capturePath,
+        name,
+        sourceAppName: normalizeOptionalText(source.name),
+        sourceWindowTitle: normalizeOptionalText(source.name),
+      });
+    } catch (error) {
+      this.#handleMessage({
+        type: "error",
+        id: requestId,
+        code: "capture-failed",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 }
