@@ -45,7 +45,7 @@ import { Button } from "../ui/button";
  * TYPE is derived from the shared number, so the build fails if the two ever drift.
  */
 export const CHAT_SURFACE_HEADER_HEIGHT_CLASS: `h-[${typeof CHAT_SURFACE_HEADER_HEIGHT_PX}px]` =
-  "h-[46px]";
+  "h-[44px]";
 
 /**
  * Standard horizontal inset for a chat-surface top bar (chat / workspace / settings
