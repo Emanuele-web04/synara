@@ -129,6 +129,7 @@ it.each(
       [
         "unconfirmed",
         "confirmed",
+        "accepted",
         "not-linked",
         "rejected",
         "unlink-unconfirmed",
@@ -198,6 +199,7 @@ it.each(
       }
       todo = { ...todo, threadId: input.threadId ?? null, linkedAt: now.toISOString() };
       if (
+        outcome === "accepted" ||
         outcome === "edited-link" ||
         outcome === "unlink-confirmed" ||
         outcome === "edited-start-failure" ||
@@ -260,7 +262,10 @@ it.each(
       }
       await pending;
       await hook.rerender();
-      const dispatched = outcome === "confirmed" || failsStart;
+      // A matching existing-chat link may belong to another window whose winning
+      // CAS reply was received. The losing window's interrupted reply proves nothing.
+      const dispatched =
+        outcome === "accepted" || (outcome === "confirmed" && destination === "new") || failsStart;
       expect(transport.dispatch).toHaveBeenCalledTimes(dispatched ? 1 : 0);
       expect(onLinkChat).toHaveBeenCalledTimes(failsStart || outcome === "edited-link" ? 2 : 1);
       if (outcome === "unlink-unconfirmed") {
@@ -268,9 +273,14 @@ it.each(
         todo = { ...todo, threadId: claimedThread };
         await hook.rerender();
       }
-      const uncertain = outcome === "unconfirmed" || outcome === "unlink-unconfirmed";
+      const uncertain =
+        (outcome === "unconfirmed" && destination === "new") || outcome === "unlink-unconfirmed";
       expect(hook.result.current.canUnlink).toBe(uncertain);
-      if (uncertain || outcome === "not-linked") {
+      if (
+        uncertain ||
+        outcome === "not-linked" ||
+        (destination === "existing" && (outcome === "confirmed" || outcome === "unconfirmed"))
+      ) {
         expect(notifications.add).toHaveBeenCalledWith(
           expect.objectContaining({ type: "warning" }),
         );
@@ -285,6 +295,7 @@ it.each(
         if (
           outcome === "unconfirmed" ||
           outcome === "confirmed" ||
+          outcome === "accepted" ||
           outcome === "unlink-unconfirmed" ||
           outcome === "edited-start-failure"
         ) {
