@@ -93,20 +93,22 @@ export default function TasksView() {
     <RouteInsetSurface>
       <RouteSurface>
         <RouteSurfaceHeader>
-          <h2 className="truncate text-ui-lg font-medium text-foreground">Tasks</h2>
-          <span className="shrink-0 text-ui leading-snug text-muted-foreground/70">
-            {openCount} open
-          </span>
-          <TasksViewSwitch current="list" />
-          <div className="ml-2 hidden sm:block">
-            <FilterPillGroup
-              ariaLabel="Show tasks"
-              value={filter}
-              options={TASK_FILTER_OPTIONS}
-              onChange={setFilter}
-            />
+          <div className="flex min-w-0 flex-1 items-center gap-2 [-webkit-app-region:no-drag]">
+            <h2 className="truncate text-ui-lg font-medium text-foreground">Tasks</h2>
+            <span className="shrink-0 text-ui leading-snug text-muted-foreground/70">
+              {openCount} open
+            </span>
+            <TasksViewSwitch current="list" />
+            <div className="ml-2 hidden sm:block">
+              <FilterPillGroup
+                ariaLabel="Show tasks"
+                value={filter}
+                options={TASK_FILTER_OPTIONS}
+                onChange={setFilter}
+              />
+            </div>
+            <NewTaskButton onClick={() => quickAddRef.current?.focus()} />
           </div>
-          <NewTaskButton onClick={() => quickAddRef.current?.focus()} />
         </RouteSurfaceHeader>
 
         {/* Escape closes the inspector unless a field or menu inside is handling it. */}

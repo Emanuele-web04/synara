@@ -1,5 +1,5 @@
 // FILE: RouteSurface.tsx
-// Purpose: The chrome full-width routes share (Tasks, Kanban): the chat-style surface column
+// Purpose: The chrome full-width routes share (Tasks, Kanban, Inbox, Automations, PRs): the chat-style surface column
 //          and its draggable top bar with the sidebar navigation controls, where the caller's
 //          title, counts, and controls sit in one no-drag row.
 // Layer: Route UI component
@@ -34,26 +34,44 @@ export function RouteSurface({ children }: { children: ReactNode }) {
   );
 }
 
-/** Top bar: navigation controls, then the caller's title, counts, and controls in one row. */
-export function RouteSurfaceHeader({ children }: { children: ReactNode }) {
-  const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
-  const desktopTopBarWindowControlsGutterClassName =
-    useDesktopTopBarWindowControlsGutterClassName();
+/** Shared route top bar; each surface owns the layout of its controls. */
+export function RouteSurfaceHeader({
+  divider = true,
+  windowControlsGutter = true,
+  className,
+  rowClassName,
+  children,
+}: {
+  /** The hairline under the bar; a page that opens onto cards leaves it off. */
+  divider?: boolean;
+  /** Off for a left column whose right neighbor already clears the window controls. */
+  windowControlsGutter?: boolean;
+  className?: string | undefined;
+  rowClassName?: string | undefined;
+  children?: ReactNode;
+}) {
+  const trafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
+  const windowControlsGutterClassName = useDesktopTopBarWindowControlsGutterClassName();
   return (
     <header
       className={cn(
-        CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
+        divider && CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
         CHAT_SURFACE_HEADER_PADDING_X_CLASS,
         "drag-region",
-        desktopTopBarTrafficLightGutterClassName,
-        desktopTopBarWindowControlsGutterClassName,
+        trafficLightGutterClassName,
+        windowControlsGutter && windowControlsGutterClassName,
+        className,
       )}
     >
-      <div className={cn("flex items-center gap-2 sm:gap-3", CHAT_SURFACE_HEADER_HEIGHT_CLASS)}>
+      <div
+        className={cn(
+          "flex items-center gap-2 sm:gap-3",
+          CHAT_SURFACE_HEADER_HEIGHT_CLASS,
+          rowClassName,
+        )}
+      >
         <SidebarHeaderNavigationControls />
-        <div className="flex min-w-0 flex-1 items-center gap-2 [-webkit-app-region:no-drag]">
-          {children}
-        </div>
+        {children}
       </div>
     </header>
   );

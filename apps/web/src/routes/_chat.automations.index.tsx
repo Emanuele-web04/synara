@@ -2,19 +2,10 @@ import { type AutomationDefinition, type AutomationRun } from "@synara/contracts
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 
-import {
-  CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
-  CHAT_SURFACE_HEADER_HEIGHT_CLASS,
-  CHAT_SURFACE_HEADER_PADDING_X_CLASS,
-} from "~/components/chat/chatHeaderControls";
 import { CHAT_BACKGROUND_CLASS_NAME } from "~/components/chat/composerPickerStyles";
-import { SidebarHeaderNavigationControls } from "~/components/SidebarHeaderNavigationControls";
 import { Button } from "~/components/ui/button";
 import { RouteInsetSurface } from "~/components/RouteInsetSurface";
-import {
-  useDesktopTopBarTrafficLightGutterClassName,
-  useDesktopTopBarWindowControlsGutterClassName,
-} from "~/hooks/useDesktopTopBarGutter";
+import { RouteSurfaceHeader } from "~/components/RouteSurface";
 import { useSidebarLayout } from "~/hooks/useSidebarLayout";
 import { CentralIcon } from "~/lib/central-icons";
 import { cn } from "~/lib/utils";
@@ -38,9 +29,6 @@ type AutomationStatusFilter = (typeof AUTOMATION_STATUS_FILTERS)[number];
 
 function AutomationsRouteView() {
   const navigate = useNavigate();
-  const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
-  const desktopTopBarWindowControlsGutterClassName =
-    useDesktopTopBarWindowControlsGutterClassName();
   const projects = useStore((state) => state.projects);
   // Rail layout: the Automations panel lists every automation, so this page is the
   // "pick one or create one" landing instead of a second copy of the list.
@@ -134,43 +122,32 @@ function AutomationsRouteView() {
           CHAT_BACKGROUND_CLASS_NAME,
         )}
       >
-        <header
-          className={cn(
-            CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
-            CHAT_SURFACE_HEADER_PADDING_X_CLASS,
-            "drag-region",
-            desktopTopBarTrafficLightGutterClassName,
-            desktopTopBarWindowControlsGutterClassName,
-          )}
-        >
-          <div className={cn("flex items-center gap-2 sm:gap-3", CHAT_SURFACE_HEADER_HEIGHT_CLASS)}>
-            <SidebarHeaderNavigationControls />
-            <div className="min-w-0 flex-1" />
-            <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
+        <RouteSurfaceHeader>
+          <div className="min-w-0 flex-1" />
+          <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="ghost"
+              aria-label="Refresh"
+              title="Refresh"
+              onClick={() => void refetch()}
+            >
+              <CentralIcon name="arrow-rotate-clockwise" className="size-4" />
+            </Button>
+            {isRailLayout ? null : (
               <Button
                 type="button"
-                size="icon-sm"
-                variant="ghost"
-                aria-label="Refresh"
-                title="Refresh"
-                onClick={() => void refetch()}
+                size="sm"
+                onClick={openCreateDialog}
+                disabled={projects.length === 0}
               >
-                <CentralIcon name="arrow-rotate-clockwise" className="size-4" />
+                <CentralIcon name="plus-small" className="size-4" />
+                New automation
               </Button>
-              {isRailLayout ? null : (
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={openCreateDialog}
-                  disabled={projects.length === 0}
-                >
-                  <CentralIcon name="plus-small" className="size-4" />
-                  New automation
-                </Button>
-              )}
-            </div>
+            )}
           </div>
-        </header>
+        </RouteSurfaceHeader>
 
         {isRailLayout ? (
           <main className="flex min-h-0 flex-1 flex-col items-center justify-center gap-1 px-6 pb-16 text-center">

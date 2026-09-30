@@ -6,7 +6,6 @@
 
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 
-import { CHAT_SURFACE_HEADER_PADDING_X_CLASS } from "~/components/chat/chatHeaderControls";
 import {
   CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME,
   CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME,
@@ -21,12 +20,8 @@ import {
   type GitHubInboxSearchPatch,
 } from "~/components/githubInbox/githubInbox.logic";
 import { RouteInsetSurface } from "~/components/RouteInsetSurface";
-import { SidebarHeaderNavigationControls } from "~/components/SidebarHeaderNavigationControls";
+import { RouteSurfaceHeader } from "~/components/RouteSurface";
 import { useGitHubInboxSidechat } from "~/components/githubInbox/useGitHubInboxSidechat";
-import {
-  useDesktopTopBarTrafficLightGutterClassName,
-  useDesktopTopBarWindowControlsGutterClassName,
-} from "~/hooks/useDesktopTopBarGutter";
 import { cn } from "~/lib/utils";
 
 export const Route = createFileRoute("/_chat/pull-requests/")({
@@ -37,8 +32,6 @@ export const Route = createFileRoute("/_chat/pull-requests/")({
 function GitHubInboxRouteView() {
   const search = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
-  const trafficLightGutter = useDesktopTopBarTrafficLightGutterClassName();
-  const windowControlsGutter = useDesktopTopBarWindowControlsGutterClassName();
   const updateSearch = (patch: GitHubInboxSearchPatch) =>
     void navigate({
       search: (previous) => mergeGitHubInboxSearch(previous, patch),
@@ -54,18 +47,12 @@ function GitHubInboxRouteView() {
           {/* Like Settings: the title lives at the top of the list column, so this strip only
               holds the sidebar toggle (shown while the sidebar is collapsed) and stays a drag
               region. */}
-          <div
-            className={cn(
-              // Rail layout: the strip is the shell band above the card, so it keeps the
-              // band's height. Classic: it is only as tall as the toggle, when that shows.
-              "app-top-bar drag-region flex shrink-0 items-center [[data-sidebar-layout=rail]_&]:h-[var(--app-top-strip-height)]",
-              CHAT_SURFACE_HEADER_PADDING_X_CLASS,
-              trafficLightGutter,
-              windowControlsGutter,
-            )}
-          >
-            <SidebarHeaderNavigationControls />
-          </div>
+          <RouteSurfaceHeader
+            divider={false}
+            className="app-top-bar shrink-0"
+            // Rail keeps the shell band; Classic only needs the visible toggle's height.
+            rowClassName="h-auto [[data-sidebar-layout=rail]_&]:h-[var(--app-top-strip-height)]"
+          />
           <GitHubInbox
             search={search}
             onSearchChange={updateSearch}

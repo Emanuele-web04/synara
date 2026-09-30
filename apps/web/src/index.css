@@ -13,6 +13,8 @@
   /* Font sizes that follow the size chosen in Settings (useAppTypography). */
   --text-ui: var(--app-font-size-ui);
   --text-ui-lg: var(--app-font-size-ui-lg);
+  /* A page's lede and headline figures: one step above ui-lg, still scaled by Settings. */
+  --text-ui-xl: calc(var(--app-font-size-ui-lg) * 1.3);
   --text-ui-sm: var(--app-font-size-ui-sm);
   --text-ui-xs: var(--app-font-size-ui-xs);
   --text-ui-2xs: var(--app-font-size-ui-2xs);

@@ -8,6 +8,10 @@ import type { LastThreadRoute } from "../chatRouteRestore";
 
 const SIDEBAR_UI_STATE_STORAGE_KEY = "synara:sidebar-ui:v1";
 
+// Same-tab readers (the Inbox) hear the sidebar's own writes; "storage" events only
+// reach other tabs.
+const sameTabWriteListeners = new Set<() => void>();
+
 export type SidebarUiState = {
   chatSectionExpanded: boolean;
   chatThreadListExtraPages: number;
@@ -157,6 +161,46 @@ export function subscribeSidebarUiState(listener: (state: SidebarUiState) => voi
   return () => window.removeEventListener("storage", handleStorage);
 }
 
+let snapshotRaw: string | null | undefined;
+let snapshot: SidebarUiState = DEFAULT_SIDEBAR_UI_STATE;
+
+/**
+ * The persisted state, parsed again only when the stored text changed, so it keeps one
+ * reference between writes (as useSyncExternalStore requires).
+ */
+export function readSidebarUiStateSnapshot(): SidebarUiState {
+  if (typeof window === "undefined") {
+    return DEFAULT_SIDEBAR_UI_STATE;
+  }
+  let raw: string | null = null;
+  try {
+    raw = window.localStorage.getItem(SIDEBAR_UI_STATE_STORAGE_KEY);
+  } catch {
+    raw = null;
+  }
+  if (raw !== snapshotRaw) {
+    snapshotRaw = raw;
+    snapshot = readSidebarUiState();
+  }
+  return snapshot;
+}
+
+/** Notifies on every write of the sidebar UI state, from this tab or another. */
+export function subscribeSidebarUiStateWrites(listener: () => void): () => void {
+  if (typeof window === "undefined") {
+    return () => {};
+  }
+  const handleStorage = (event: StorageEvent) => {
+    if (event.key === SIDEBAR_UI_STATE_STORAGE_KEY) listener();
+  };
+  sameTabWriteListeners.add(listener);
+  window.addEventListener("storage", handleStorage);
+  return () => {
+    sameTabWriteListeners.delete(listener);
+    window.removeEventListener("storage", handleStorage);
+  };
+}
+
 export function persistSidebarUiState(input: SidebarUiState): void {
   if (typeof window === "undefined") {
     return;
@@ -189,5 +233,7 @@ export function persistSidebarUiState(input: SidebarUiState): void {
     );
   } catch {
     // Ignore storage errors so sidebar rendering keeps working when persistence is unavailable.
+    return;
   }
+  for (const listener of sameTabWriteListeners) listener();
 }
