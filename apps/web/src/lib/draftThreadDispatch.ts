@@ -20,7 +20,7 @@ import type {
 import { buildPromptThreadTitleFallback } from "@synara/shared/chatThreads";
 import { isPendingThreadWorktree } from "@synara/shared/threadEnvironment";
 import type { ProviderInstanceOption } from "../appSettings";
-import { composerDraftHasAttachments } from "../composerDraftDomain";
+import { composerDraftHasAttachments, composerDraftsMatchForCleanup } from "../composerDraftDomain";
 import {
   resolvePreferredComposerModelSelection,
   useComposerDraftStore,
@@ -382,7 +382,7 @@ async function dispatchDraftThreadOnce(
   // Clear the consumed draft only while we still own it. An open composer may
   // have received new text or attachments while the dispatch reply was pending.
   const currentStore = useComposerDraftStore.getState();
-  if (currentStore.draftsByThreadId[threadId] === draftComposerState) {
+  if (composerDraftsMatchForCleanup(currentStore.draftsByThreadId[threadId], draftComposerState)) {
     currentStore.clearComposerContent(threadId);
   }
   return { kind: "dispatched" };

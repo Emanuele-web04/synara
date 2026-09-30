@@ -31,6 +31,7 @@ import { resolveProviderSendAvailabilityWithRefresh } from "~/lib/providerAvaila
 import { isRequestOutcomeUnknown } from "~/lib/requestOutcome";
 import {
   composerDraftHasUnsentContent,
+  composerDraftsMatchForCleanup,
   type ComposerThreadDraftState,
 } from "../../composerDraftDomain";
 import { providerInstanceModelSelectionKey, useComposerDraftStore } from "../../composerDraftStore";
@@ -334,7 +335,10 @@ export function useTaskDelegation(options: {
       const unlinked = await unlinkChat(threadId, adoptsProject);
       const currentStore = useComposerDraftStore.getState();
       // Keep uncertain links reachable, and never discard edits made during the request.
-      if (unlinked && currentStore.draftsByThreadId[threadId] === createdComposerState) {
+      if (
+        unlinked &&
+        composerDraftsMatchForCleanup(currentStore.draftsByThreadId[threadId], createdComposerState)
+      ) {
         currentStore.clearDraftThread(threadId);
       }
     }

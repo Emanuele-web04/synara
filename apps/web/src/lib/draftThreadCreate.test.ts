@@ -1,8 +1,8 @@
-import { ProjectId } from "@synara/contracts";
+import { ProjectId, type ThreadId } from "@synara/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useComposerDraftStore } from "../composerDraftStore";
-import { resetComposerDraftStore } from "../composerDraftStoreTestFixtures";
+import { makeFile, resetComposerDraftStore } from "../composerDraftStoreTestFixtures";
 import type { SidebarThreadSummary } from "../types";
 import { dispatchDraftThread } from "./draftThreadDispatch";
 import { createAndDispatchDraftThread, createDraftThread } from "./draftThreadCreate";
@@ -119,16 +119,50 @@ describe("draft thread creation", () => {
     expect(nativeApiMocks.dispatchCommand).not.toHaveBeenCalled();
     expect(Object.keys(useComposerDraftStore.getState().draftThreadsByThreadId)).toEqual([]);
   });
-  it.each(["dispatch", "link"] as const)(
-    "preserves edits made while %s is pending",
-    async (stage) => {
-      const projectId = ProjectId.makeUnsafe(`project-concurrent-${stage}`);
-      let editedId: import("@synara/contracts").ThreadId | undefined;
+  it.each(
+    (["dispatch", "link"] as const).flatMap((stage) =>
+      (["text", "file", "model", "deferred-attachment", "same-prompt", "persistence"] as const).map(
+        (change) => ({ stage, change }),
+      ),
+    ),
+  )(
+    "cleans up $stage after $change updates without losing user edits",
+    async ({ stage, change }) => {
+      const projectId = ProjectId.makeUnsafe(`project-concurrent-${stage}-${change}`);
+      let editedId: ThreadId | undefined;
+      const editWhilePending = (id: ThreadId) => {
+        editedId = id;
+        const store = useComposerDraftStore.getState();
+        if (change === "text") store.setPrompt(id, "My next message");
+        else if (change === "file") store.addFiles(id, [makeFile({ id: "next-file" })]);
+        else if (change === "model") store.setRuntimeMode(id, "full-access");
+        else if (change === "deferred-attachment") {
+          // Restored persistence can contain an image that has not hydrated to a File yet.
+          useComposerDraftStore.setState({
+            draftsByThreadId: {
+              ...store.draftsByThreadId,
+              [id]: {
+                ...store.draftsByThreadId[id]!,
+                persistedAttachments: [
+                  {
+                    id: "deferred",
+                    name: "later.png",
+                    mimeType: "image/png",
+                    sizeBytes: 12,
+                    blobKey: "later-image",
+                  },
+                ],
+              },
+            },
+          });
+        } else if (change === "same-prompt") store.setPrompt(id, "Original task");
+        // This action runs on composer mount even when no images exist.
+        else store.clearPersistedAttachments(id);
+      };
       if (stage === "dispatch") {
         nativeApiMocks.dispatchCommand.mockImplementationOnce(async () => undefined);
         nativeApiMocks.dispatchCommand.mockImplementationOnce(async (command) => {
-          editedId = (command as { threadId: import("@synara/contracts").ThreadId }).threadId;
-          useComposerDraftStore.getState().setPrompt(editedId, "My next message");
+          editWhilePending((command as { threadId: ThreadId }).threadId);
         });
       }
       const pending = createAndDispatchDraftThread({
@@ -142,16 +176,29 @@ describe("draft thread creation", () => {
         assistantDeliveryMode: "buffered",
         beforeDispatch: async (id) => {
           if (stage !== "link") return;
-          editedId = id;
-          useComposerDraftStore.getState().setPrompt(id, "My next message");
+          editWhilePending(id);
           throw new Error("Link refused");
         },
       });
       if (stage === "link") await expect(pending).rejects.toThrow("Link refused");
       else expect((await pending).result).toEqual({ kind: "dispatched" });
-      expect(useComposerDraftStore.getState().draftsByThreadId[editedId!]?.prompt).toBe(
-        "My next message",
+      const store = useComposerDraftStore.getState();
+      const draft = store.draftsByThreadId[editedId!];
+      const substantive =
+        change === "text" ||
+        change === "file" ||
+        change === "model" ||
+        change === "deferred-attachment";
+      expect(draft?.prompt ?? "").toBe(
+        substantive ? (change === "text" ? "My next message" : "Original task") : "",
       );
+      if (change === "file") expect(draft?.files.map((file) => file.id)).toEqual(["next-file"]);
+      if (change === "model") expect(draft?.runtimeMode).toBe("full-access");
+      if (change === "deferred-attachment")
+        expect(draft?.persistedAttachments.map((attachment) => attachment.id)).toEqual([
+          "deferred",
+        ]);
+      if (stage === "link") expect(store.getDraftThread(editedId!) !== null).toBe(substantive);
     },
   );
 });
