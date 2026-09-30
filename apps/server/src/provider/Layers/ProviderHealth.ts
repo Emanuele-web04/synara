@@ -123,10 +123,7 @@ import { isClaudeAutoModeCliVersionSupported } from "../claudeCliVersion.ts";
 import { collectUint8StreamText } from "../../stream/collectUint8StreamText";
 import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
 import { readGrokCachedLogin } from "../../providerUsage/providers/grok";
-import {
-  buildProviderProcessEnv,
-  type ProviderProcessEnvDriver,
-} from "../providerProcessEnv.ts";
+import { buildProviderProcessEnv, type ProviderProcessEnvDriver } from "../providerProcessEnv.ts";
 
 export { parseClaudeAuthStatusFromOutput } from "../claudeAuthStatus";
 export type { CommandResult } from "../providerCliOutput";
@@ -1623,7 +1620,9 @@ export const makeCheckGrokProviderStatus = (
     const hasApiKey = hasGrokApiKeyEnv(probeEnv);
     // Sessions authenticate with the API key when one is set, otherwise with the
     // cached `grok login` session (ACP `cached_token`), so report the same source.
-    const hasCachedLogin = !hasApiKey && (yield* Effect.promise(() => readCachedLogin())) !== null;
+    const hasCachedLogin =
+      !hasApiKey &&
+      (yield* Effect.promise(() => readCachedLogin(probeEnv, paths?.homeDir))) !== null;
 
     return {
       provider: GROK_PROVIDER,

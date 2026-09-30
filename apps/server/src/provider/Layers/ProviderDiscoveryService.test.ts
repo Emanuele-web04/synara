@@ -428,6 +428,8 @@ describe("ProviderDiscoveryService.listModels", () => {
               makeConfigLayer(() => [
                 {
                   provider: "claudeAgent",
+                  driver: "claudeAgent",
+                  instanceId: "claudeAgent",
                   status: "ready",
                   available: true,
                   authStatus: "authenticated",

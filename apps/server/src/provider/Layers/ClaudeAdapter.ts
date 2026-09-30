@@ -7636,7 +7636,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         // ProviderDiscoveryService owns caching and single-flight. The SDK's
         // supportedModels() returns initialization metadata, so an existing
         // session cannot discover models added by a CLI update.
-        const claudeSdkEnv = yield* resolveClaudeSdkEnv(input.homePath, input.environment, input.instanceId);
+        const claudeSdkEnv = yield* resolveClaudeSdkEnv(
+          input.homePath,
+          input.environment,
+          input.instanceId,
+        );
         return yield* Effect.tryPromise({
           try: () =>
             discoverModelsViaTemporaryProcess(

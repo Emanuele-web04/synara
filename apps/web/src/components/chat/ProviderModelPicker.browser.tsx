@@ -586,6 +586,7 @@ describe("ProviderModelPicker", () => {
       expect(mounted.onProviderModelChange).toHaveBeenCalledWith(
         "omp",
         "anthropic/claude-opus-4-6",
+        "omp",
       );
     } finally {
       await mounted.cleanup();

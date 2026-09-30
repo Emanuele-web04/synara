@@ -675,11 +675,18 @@ describe("ProfileStatsQuery", () => {
         expect(partial.topProviderPercent).toBe(100);
         expect(partial.unavailableProviders).toEqual(["grok"]);
         expect(partial.models).toEqual([
-          { provider: "codex", model: "codex-model", tokens: 1000, percent: 100 },
+          {
+            provider: "codex",
+            instanceId: "codex",
+            model: "codex-model",
+            tokens: 1000,
+            percent: 100,
+          },
         ]);
         const stats = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
         expect(stats.providerModels).toContainEqual({
           provider: "grok",
+          instanceId: "grok",
           model: "grok-model",
           turnCount: 1,
           percent: 50,

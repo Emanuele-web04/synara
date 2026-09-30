@@ -637,7 +637,12 @@ layer("AutomationService", (it) => {
       const listed = yield* service.list({ projectId });
       assert.deepEqual(
         listed.definitions.find((entry) => entry.id === created.id)?.modelSelection,
-        { provider: "claudeAgent", model: target.model, supportsAutoMode: true },
+        {
+          provider: "claudeAgent",
+          instanceId: "claudeAgent",
+          model: target.model,
+          supportsAutoMode: true,
+        },
       );
     }),
   );
@@ -688,7 +693,7 @@ layer("AutomationService", (it) => {
         const unchanged = yield* service.list({ projectId });
         assert.deepEqual(
           unchanged.definitions.find((entry) => entry.id === created.id)?.modelSelection,
-          selected.modelSelection,
+          { ...selected.modelSelection, instanceId: "claudeAgent" },
         );
         const nextSelection = {
           provider: "claudeAgent" as const,
@@ -701,7 +706,7 @@ layer("AutomationService", (it) => {
         const second = yield* service.runNow({ automationId: created.id });
         assert.strictEqual(second.run.threadId, ownedThreadId);
         const turn = dispatchedCommands.findLast((command) => command.type === "thread.turn.start");
-        assert.deepEqual(turn?.modelSelection, nextSelection);
+        assert.deepEqual(turn?.modelSelection, { ...nextSelection, instanceId: "claudeAgent" });
       }),
   );
 
@@ -732,7 +737,7 @@ layer("AutomationService", (it) => {
       const listed = yield* service.list({ projectId });
       assert.deepEqual(
         listed.definitions.find((entry) => entry.id === created.id)?.modelSelection,
-        created.modelSelection,
+        { ...created.modelSelection, instanceId: "codex" },
       );
     }),
   );

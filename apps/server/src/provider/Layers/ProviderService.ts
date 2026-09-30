@@ -3266,9 +3266,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         Effect.map((bindingOption) => {
           const binding = Option.getOrUndefined(bindingOption);
           if (!binding || !hasResumeCursor(binding.resumeCursor)) return undefined;
+          const provider = Schema.is(ProviderKind)(binding.provider) ? binding.provider : undefined;
+          if (!provider) return undefined;
           const modelSelection = readPersistedModelSelection(binding.runtimePayload);
           return {
-            provider: binding.provider,
+            provider,
             ...(modelSelection ? { modelSelection } : {}),
             ...(binding.runtimeMode !== undefined ? { runtimeMode: binding.runtimeMode } : {}),
             enableComputerControl: readPersistedComputerControl(binding.runtimePayload),

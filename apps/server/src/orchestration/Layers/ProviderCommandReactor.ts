@@ -898,16 +898,16 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const threadProviderOptions = new Map<string, ProviderStartOptions>();
+  // Store a map entry even when a session's resolved provider options are
+  // undefined. The entry then records that we already resolved the empty
+  // options state, so a later session-set event does not repeat settings IO
+  // on the ordered provider-intent journal.
+  const threadProviderOptions = new Map<string, ProviderStartOptions | undefined>();
   const setThreadProviderOptions = (
     threadId: string,
     providerOptions: ProviderStartOptions | undefined,
   ) => {
-    if (providerOptions === undefined) {
-      threadProviderOptions.delete(threadId);
-    } else {
-      threadProviderOptions.set(threadId, providerOptions);
-    }
+    threadProviderOptions.set(threadId, providerOptions);
   };
   // The selection last applied to each live session. Keep this separate from
   // projected thread metadata so an option changed mid-turn is still compared

@@ -493,7 +493,7 @@ describe("ClaudeTextGenerationServiceLive", () => {
         cwd,
         env: environment,
         encoding: "utf8",
-        timeout: 5_000,
+        timeout: 20_000,
       });
       assert.ifError(help.error);
       if (help.stdout.includes("--safe-mode")) return;

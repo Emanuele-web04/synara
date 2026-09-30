@@ -3039,7 +3039,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
                 asRuntimePayloadRecord(
                   Option.getOrUndefined(yield* directory.getBinding(threadId))?.runtimePayload,
                 ).modelSelection,
-                { provider: "claudeAgent", model: "claude-opus-4-6" },
+                { provider: "claudeAgent", instanceId: "claudeAgent", model: "claude-opus-4-6" },
               );
             }
           }),
@@ -5662,7 +5662,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       }).pipe(Effect.provide(secondProviderLayer));
       assert.deepEqual(savedProfile, {
         provider: "claudeAgent",
-        modelSelection: savedSelection,
+        modelSelection: { ...savedSelection, instanceId: "claudeAgent" },
         runtimeMode: "full-access",
         enableComputerControl: true,
       });
@@ -7681,6 +7681,32 @@ validation.layer("ProviderServiceLive validation", (it) => {
       assert.equal(failure.failure._tag, "ProviderValidationError");
       if (failure.failure._tag !== "ProviderValidationError") return;
       assert.equal(failure.failure.operation, "provider.session.start");
+    }),
+  );
+
+  it.effect("does not recover a persisted profile for a custom provider driver", () =>
+    Effect.gen(function* () {
+      const directory = yield* ProviderSessionDirectory;
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-custom-driver-profile");
+
+      yield* directory.upsert({
+        threadId,
+        provider: "customFork",
+        providerInstanceId: "customFork",
+        runtimeMode: "full-access",
+        status: "stopped",
+        resumeCursor: { resume: "custom-driver-cursor" },
+      });
+      const binding = yield* directory.getBinding(threadId);
+      assert.equal(Option.isSome(binding), true);
+      if (Option.isSome(binding)) {
+        assert.equal(binding.value.provider, "customFork");
+        assert.deepEqual(binding.value.resumeCursor, { resume: "custom-driver-cursor" });
+      }
+
+      const profile = yield* provider.getPersistedSessionProfile(threadId);
+      assert.equal(profile, undefined);
     }),
   );
 

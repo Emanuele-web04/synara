@@ -2009,7 +2009,10 @@ describe("ProviderCommandReactor", () => {
           await send("ordinary-pending-settings", "Continue with these settings", selection);
           await harness.drain();
           expect(harness.startSession).toHaveBeenCalledTimes(2);
-          expect(harness.startSession.mock.calls[1]?.[1].modelSelection).toEqual(selection);
+          expect(harness.startSession.mock.calls[1]?.[1].modelSelection).toEqual({
+            ...selection,
+            instanceId: "claudeAgent",
+          });
           expect(harness.startSession.mock.calls[1]?.[1].runtimeMode).toBe(
             changedSetting === "runtime" ? "full-access" : "approval-required",
           );
@@ -2074,22 +2077,11 @@ describe("ProviderCommandReactor", () => {
     });
 
     it("retains compaction cancellation when a native steer settles during preflight", async () => {
-      let releasePreparation!: () => void;
-      let preparationEntered = false;
-      const preparation = new Promise<void>((resolve) => {
-        releasePreparation = resolve;
-      });
       const cancelDiscovery = vi.fn(() => Effect.void);
       const harness = await createHarness({
         threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
         ingestRuntimeEvents: true,
         cancelClaudeCompactionDiscovery: cancelDiscovery,
-        getClaudeCacheObservation: () =>
-          Effect.succeed({
-            ...expiredCacheObservation(),
-            state: "likely-warm",
-            contextTokens: 16_000,
-          }),
       });
       await dispatchHarnessUserTurn(harness, {
         messageId: "before-native-steer",
@@ -2098,6 +2090,7 @@ describe("ProviderCommandReactor", () => {
       });
       await waitFor(() => harness.sendTurn.mock.calls.length === 1);
       await harness.drain();
+      const threadId = ThreadId.makeUnsafe("thread-1");
       const turnId = asTurnId("before-native-steer-turn");
       harness.setRuntimeSessionTurnState({
         threadId: "thread-1",
@@ -2109,7 +2102,7 @@ describe("ProviderCommandReactor", () => {
         eventId: asEventId("native-steer-started"),
         provider: "claudeAgent",
         createdAt: new Date().toISOString(),
-        threadId: ThreadId.makeUnsafe("thread-1"),
+        threadId,
         turnId,
         payload: {},
         providerRefs: {},
@@ -2117,18 +2110,24 @@ describe("ProviderCommandReactor", () => {
       await waitFor(
         async () => (await readHarnessThread(harness))?.session?.activeTurnId === turnId,
       );
-      const getSettings = harness.serverSettings.getSettings;
-      Object.assign(harness.serverSettings, {
-        getSettings: Effect.sync(() => {
-          preparationEntered = true;
-        }).pipe(Effect.andThen(Effect.promise(() => preparation)), Effect.andThen(getSettings)),
-      });
+
+      const leaseAcquired = Effect.runSync(Deferred.make<void>());
+      const releaseLease = Effect.runSync(Deferred.make<void>());
+      const leaseFiber = Effect.runFork(
+        harness.checkpointCoordinator.withThreadLease(
+          threadId,
+          Deferred.succeed(leaseAcquired, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseLease)),
+          ),
+        ),
+      );
+      await Effect.runPromise(Deferred.await(leaseAcquired));
       try {
-        await Effect.runPromise(
+        const response = await Effect.runPromise(
           harness.engine.dispatch({
             type: "thread.turn.start",
             commandId: CommandId.makeUnsafe("cmd-native-steer-compact"),
-            threadId: ThreadId.makeUnsafe("thread-1"),
+            threadId,
             message: {
               messageId: asMessageId("native-steer-compact"),
               role: "user",
@@ -2141,14 +2140,22 @@ describe("ProviderCommandReactor", () => {
             createdAt: new Date().toISOString(),
           }),
         );
-        await waitFor(() => preparationEntered);
+        await waitFor(async () => {
+          const delivery = await Effect.runPromise(
+            harness.deliveryRepository.getDelivery({
+              consumerName: PROVIDER_COMMAND_REACTOR_CONSUMER,
+              eventSequence: response.sequence,
+            }),
+          );
+          return Option.getOrUndefined(delivery)?.state === "inflight";
+        });
         harness.setRuntimeSessionTurnState({ threadId: "thread-1", status: "ready" });
         await harness.emitRuntimeEvent({
           type: "turn.completed",
           eventId: asEventId("native-steer-settled"),
           provider: "claudeAgent",
           createdAt: new Date().toISOString(),
-          threadId: ThreadId.makeUnsafe("thread-1"),
+          threadId,
           turnId,
           payload: { state: "completed" },
           providerRefs: {},
@@ -2157,18 +2164,18 @@ describe("ProviderCommandReactor", () => {
           harness.engine.dispatch({
             type: "thread.turn.interrupt",
             commandId: CommandId.makeUnsafe("cmd-native-steer-cancel"),
-            threadId: ThreadId.makeUnsafe("thread-1"),
+            threadId,
             createdAt: new Date().toISOString(),
           }),
         );
         await waitFor(() => cancelDiscovery.mock.calls.length === 1);
-        releasePreparation();
+        await Effect.runPromise(Deferred.succeed(releaseLease, undefined));
         await harness.drain();
         expect(harness.steerTurn).not.toHaveBeenCalled();
         expect(harness.sendTurn).toHaveBeenCalledTimes(1);
       } finally {
-        releasePreparation();
-        Object.assign(harness.serverSettings, { getSettings });
+        await Effect.runPromise(Deferred.succeed(releaseLease, undefined));
+        await Effect.runPromise(Effect.exit(Fiber.join(leaseFiber)));
       }
     });
 
@@ -14748,6 +14755,101 @@ describe("ProviderCommandReactor", () => {
       },
     });
     expect(harness.startSession.mock.calls[1]?.[1]).not.toHaveProperty("resumeCursor");
+  });
+
+  it("memoizes empty options across session-set events and refreshes them on a later turn", async () => {
+    const harness = await createHarness({
+      threadModelSelection: {
+        provider: "opencode",
+        instanceId: "opencode_work",
+        model: "opencode/nemotron-3-super-free",
+      },
+      serverSettings: {
+        providerInstances: {
+          opencode_work: { driver: "opencode", enabled: true, environment: [], config: {} },
+        },
+      },
+    });
+    const now = new Date().toISOString();
+    const session = {
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      status: "ready" as const,
+      providerName: "opencode" as const,
+      providerInstanceId: "opencode_work",
+      runtimeMode: "approval-required" as const,
+      activeTurnId: null,
+      lastError: null,
+      updatedAt: now,
+    };
+    let settingsReads = 0;
+    const getSettings = harness.serverSettings.getSettings;
+    Object.assign(harness.serverSettings, {
+      getSettings: getSettings.pipe(Effect.tap(() => Effect.sync(() => (settingsReads += 1)))),
+    });
+
+    const readsPerSessionSet: number[] = [];
+    for (const commandId of ["empty-options-session-set-1", "empty-options-session-set-2"]) {
+      const settingsReadsBefore = settingsReads;
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe(commandId),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          session,
+          createdAt: now,
+        }),
+      );
+      await harness.drain();
+      readsPerSessionSet.push(settingsReads - settingsReadsBefore);
+    }
+    expect(readsPerSessionSet[1]).toBeLessThan(readsPerSessionSet[0] ?? 0);
+
+    await Effect.runPromise(
+      harness.serverSettings.updateSettings({
+        providerInstances: {
+          opencode_work: {
+            driver: "opencode",
+            enabled: true,
+            environment: [{ name: "OPENCODE_API_KEY", value: "opencode-env-v2", sensitive: true }],
+            config: {
+              serverUrl: "http://127.0.0.1:4096",
+              serverPassword: "opencode-password-v2",
+            },
+          },
+        },
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-opencode-server-options-2"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-opencode-server-options-2"),
+          role: "user",
+          text: "updated server-side options",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      provider: "opencode",
+      providerInstanceId: "opencode_work",
+      providerOptions: {
+        opencode: {
+          serverUrl: "http://127.0.0.1:4096",
+          serverPassword: "opencode-password-v2",
+          environment: { OPENCODE_API_KEY: "opencode-env-v2" },
+        },
+      },
+    });
+    expect(harness.startSession.mock.calls[0]?.[1]).not.toHaveProperty("resumeCursor");
   });
 
   it("rejects a live session after its provider instance is disabled", async () => {

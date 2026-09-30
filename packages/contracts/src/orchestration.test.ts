@@ -47,6 +47,17 @@ const decodeOrchestrationCommand = Schema.decodeUnknownEffect(OrchestrationComma
 const decodeThreadPullRequest = Schema.decodeUnknownEffect(OrchestrationThreadPullRequest);
 const decodeModelSelection = Schema.decodeUnknownEffect(ModelSelection);
 
+it.effect("preserves account-scoped model selections through the JSON codec", () =>
+  Effect.gen(function* () {
+    const codec = Schema.toCodecJson(ModelSelection);
+    const selection = { provider: "codex", instanceId: "codex_work", model: "gpt-5.5" };
+    const wire = JSON.parse(JSON.stringify(Schema.encodeUnknownSync(codec)(selection)));
+    assert.deepStrictEqual(wire, selection);
+    const decoded = yield* Schema.decodeUnknownEffect(codec)(wire);
+    assert.deepStrictEqual(decoded, selection);
+  }),
+);
+
 it.effect("decodes last-known PRs persisted before draft/mergeability/diff fields existed", () =>
   Effect.gen(function* () {
     const legacy = yield* decodeThreadPullRequest({

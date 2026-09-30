@@ -1,4 +1,4 @@
-import { symlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import * as OS from "node:os";
 import { join } from "node:path";
 
@@ -66,6 +66,7 @@ import {
   makeProviderUpdateEnv,
 } from "./ProviderHealth";
 import { resolvePackageManagedProviderMaintenance } from "../providerMaintenance";
+import { providerIsolatedHomePath } from "../providerProcessEnv.ts";
 
 // ── Test helpers ────────────────────────────────────────────────────
 
@@ -2754,7 +2755,13 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       delete process.env.XAI_API_KEY;
       delete process.env.GROK_CODE_XAI_API_KEY;
       return Effect.gen(function* () {
-        const status = yield* makeCheckGrokProviderStatus(undefined, async () => null);
+        const status = yield* makeCheckGrokProviderStatus(
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          async () => null,
+        );
         assert.strictEqual(status.provider, "grok");
         assert.strictEqual(status.status, "ready");
         assert.strictEqual(status.available, true);
@@ -2826,9 +2833,15 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       delete process.env.XAI_API_KEY;
       delete process.env.GROK_CODE_XAI_API_KEY;
       return Effect.gen(function* () {
-        const status = yield* makeCheckGrokProviderStatus(undefined, async () => ({
-          accessToken: "cached-token",
-        }));
+        const status = yield* makeCheckGrokProviderStatus(
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          async () => ({
+            accessToken: "cached-token",
+          }),
+        );
         assert.strictEqual(status.status, "ready");
         assert.strictEqual(status.authStatus, "authenticated");
         assert.strictEqual(status.authType, "grokLogin");
@@ -2874,6 +2887,119 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         ),
       ),
     );
+
+    it.effect("passes the isolated Grok account environment to cached-login lookup", () =>
+      Effect.gen(function* () {
+        let cachedLoginHome: string | undefined;
+        const status = yield* makeCheckGrokProviderStatus(
+          undefined,
+          undefined,
+          "grok_work",
+          { homeDir: OS.tmpdir(), isolationRootDir: OS.tmpdir() },
+          async (env) => {
+            cachedLoginHome = env?.GROK_HOME;
+            return null;
+          },
+        );
+        assert.strictEqual(status.authStatus, "unknown");
+        assert.ok(cachedLoginHome?.includes("provider-homes"));
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) =>
+            args.join(" ") === "--version"
+              ? { stdout: "grok 0.1.0\n", stderr: "", code: 0 }
+              : { stdout: "", stderr: "", code: 1 },
+          ),
+        ),
+      ),
+    );
+
+    it.effect("isolates Grok cached logins by account home", () => {
+      const testRoot = mkdtempSync(join(OS.tmpdir(), "synara-grok-health-"));
+      const ambientHome = join(testRoot, "ambient");
+      const workHome = join(
+        providerIsolatedHomePath({
+          driver: "grok",
+          instanceId: "grok_work",
+          homeDir: testRoot,
+          isolationRootDir: testRoot,
+        }),
+        ".grok",
+      );
+      mkdirSync(ambientHome, { recursive: true });
+      mkdirSync(workHome, { recursive: true });
+      writeFileSync(
+        join(ambientHome, "auth.json"),
+        JSON.stringify({ "https://grok.com": { key: "ambient-token" } }),
+        "utf8",
+      );
+      const previousEnv = {
+        GROK_HOME: process.env.GROK_HOME,
+        GROK_AUTH_PATH: process.env.GROK_AUTH_PATH,
+        XAI_API_KEY: process.env.XAI_API_KEY,
+        GROK_CODE_XAI_API_KEY: process.env.GROK_CODE_XAI_API_KEY,
+        GROK_OAUTH_TOKEN: process.env.GROK_OAUTH_TOKEN,
+      };
+      process.env.GROK_HOME = ambientHome;
+      delete process.env.GROK_AUTH_PATH;
+      delete process.env.XAI_API_KEY;
+      delete process.env.GROK_CODE_XAI_API_KEY;
+      delete process.env.GROK_OAUTH_TOKEN;
+      const restoreEnv = () => {
+        for (const [name, value] of Object.entries(previousEnv)) {
+          if (value === undefined) delete process.env[name];
+          else process.env[name] = value;
+        }
+        rmSync(testRoot, { recursive: true, force: true });
+      };
+
+      return Effect.gen(function* () {
+        const workWithoutLogin = yield* makeCheckGrokProviderStatus(
+          "/custom/bin/grok",
+          undefined,
+          "grok_work",
+          { homeDir: testRoot, isolationRootDir: testRoot },
+        );
+        const personalWithLogin = yield* makeCheckGrokProviderStatus(
+          "/custom/bin/grok",
+          undefined,
+          "grok",
+        );
+        assert.strictEqual(workWithoutLogin.authStatus, "unknown");
+        assert.strictEqual(personalWithLogin.authStatus, "authenticated");
+
+        writeFileSync(
+          join(workHome, "auth.json"),
+          JSON.stringify({ "https://grok.com": { key: "work-token" } }),
+          "utf8",
+        );
+        writeFileSync(join(ambientHome, "auth.json"), "{}", "utf8");
+        const workWithLogin = yield* makeCheckGrokProviderStatus(
+          "/custom/bin/grok",
+          undefined,
+          "grok_work",
+          { homeDir: testRoot, isolationRootDir: testRoot },
+        );
+        const personalWithoutLogin = yield* makeCheckGrokProviderStatus(
+          "/custom/bin/grok",
+          undefined,
+          "grok",
+        );
+        assert.strictEqual(workWithLogin.authStatus, "authenticated");
+        assert.strictEqual(workWithLogin.authType, "grokLogin");
+        assert.strictEqual(personalWithoutLogin.authStatus, "unknown");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            if (args.join(" ") === "--version") {
+              return { stdout: "grok 0.1.0\n", stderr: "", code: 0 };
+            }
+            throw new Error(`Unexpected args: ${args.join(" ")}`);
+          }),
+        ),
+        Effect.ensuring(Effect.sync(restoreEnv)),
+      );
+    });
 
     it.effect("treats a non-default Grok instance as an empty credential boundary", () => {
       const previousXaiApiKey = process.env.XAI_API_KEY;

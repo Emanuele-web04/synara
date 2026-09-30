@@ -329,45 +329,56 @@ const ModelSelectionByProvider = Schema.Union([
 
 // Keep persisted inputs loose so malformed or mixed legacy drafts reach the
 // transform; the discriminated target union remains the canonical contract.
-const ModelSelectionSource = Schema.Struct({
-  provider: Schema.optional(Schema.Unknown),
-  instanceId: Schema.optional(Schema.Unknown),
-  model: Schema.Unknown,
-  options: Schema.optional(Schema.Unknown),
-  supportsAutoMode: Schema.optional(Schema.Unknown),
-});
-
-export const ModelSelection = ModelSelectionSource.pipe(
+const ModelSelectionJsonValue: Schema.Codec<unknown, unknown> = Schema.Json.pipe(
   Schema.decodeTo(
-    ModelSelectionByProvider,
-    SchemaTransformation.transformOrFail({
-      decode: (raw) => {
-        const provider = inferProviderForModelSelection(raw) ?? "codex";
-        const model =
-          typeof raw.model === "string" && raw.model.trim().length > 0
-            ? raw.model
-            : defaultModelForProvider(provider);
-        const instanceId =
-          typeof raw.instanceId === "string" && raw.instanceId.trim().length > 0
-            ? raw.instanceId.trim()
-            : provider;
-        const base: Record<string, unknown> = {
-          provider,
-          instanceId,
-          model,
-        };
-        if (raw.options !== undefined) {
-          base.options = raw.options;
-        }
-        if (raw.supportsAutoMode !== undefined) {
-          base.supportsAutoMode = raw.supportsAutoMode;
-        }
-        return Effect.succeed(base as typeof ModelSelectionByProvider.Encoded);
-      },
-      encode: (value) => Effect.succeed(value as typeof ModelSelectionSource.Encoded),
+    Schema.Unknown,
+    SchemaTransformation.transform({
+      decode: (value): unknown => value,
+      encode: (value): Schema.Json => value as Schema.Json,
     }),
   ),
 );
+
+const ModelSelectionSource = Schema.Struct({
+  provider: Schema.optional(ModelSelectionJsonValue),
+  instanceId: Schema.optional(ModelSelectionJsonValue),
+  model: Schema.optional(ModelSelectionJsonValue),
+  options: Schema.optional(ModelSelectionJsonValue),
+  supportsAutoMode: Schema.optional(ModelSelectionJsonValue),
+});
+
+export const ModelSelection: Schema.Codec<typeof ModelSelectionByProvider.Type, unknown> =
+  ModelSelectionSource.pipe(
+    Schema.decodeTo(
+      ModelSelectionByProvider,
+      SchemaTransformation.transformOrFail({
+        decode: (raw) => {
+          const provider = inferProviderForModelSelection(raw) ?? "codex";
+          const model =
+            typeof raw.model === "string" && raw.model.trim().length > 0
+              ? raw.model
+              : defaultModelForProvider(provider);
+          const instanceId =
+            typeof raw.instanceId === "string" && raw.instanceId.trim().length > 0
+              ? raw.instanceId.trim()
+              : provider;
+          const base: Record<string, unknown> = {
+            provider,
+            instanceId,
+            model,
+          };
+          if (raw.options !== undefined) {
+            base.options = raw.options;
+          }
+          if (raw.supportsAutoMode !== undefined) {
+            base.supportsAutoMode = raw.supportsAutoMode;
+          }
+          return Effect.succeed(base as typeof ModelSelectionByProvider.Encoded);
+        },
+        encode: (value) => Effect.succeed(value as typeof ModelSelectionSource.Encoded),
+      }),
+    ),
+  );
 export type ModelSelection = typeof ModelSelection.Type;
 
 export const CodexProviderStartOptions = Schema.Struct({

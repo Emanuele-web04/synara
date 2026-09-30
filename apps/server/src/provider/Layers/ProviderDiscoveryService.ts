@@ -470,8 +470,10 @@ const make = Effect.gen(function* () {
       const cacheKey = providerModelDiscoveryCacheKey(resolved);
       const runtimeVersion =
         resolved.provider === "claudeAgent"
-          ? ((yield* providerHealth.getStatuses).find((status) => status.provider === "claudeAgent" && status.instanceId === resolved.instanceId)
-              ?.version ?? null)
+          ? ((yield* providerHealth.getStatuses).find(
+              (status) =>
+                status.provider === "claudeAgent" && status.instanceId === resolved.instanceId,
+            )?.version ?? null)
           : undefined;
       return yield* modelDiscoveryCache.lookup(
         { ...cacheKey, ...(runtimeVersion !== undefined ? { runtimeVersion } : {}) },

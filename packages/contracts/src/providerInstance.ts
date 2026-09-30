@@ -3,13 +3,24 @@
 // Layer: Shared contracts
 // Exports: ProviderInstanceId, ProviderDriverKind, config map schemas, helpers
 
-import { Schema } from "effect";
+import { Schema, SchemaTransformation } from "effect";
 import { TrimmedNonEmptyString } from "./baseSchemas";
 
 const PROVIDER_SLUG_MAX_CHARS = 64;
 const PROVIDER_SLUG_PATTERN = /^[A-Za-z][A-Za-z0-9_-]*$/;
 const ENVIRONMENT_VARIABLE_NAME_MAX_CHARS = 128;
 const ENVIRONMENT_VARIABLE_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+// Preserve the opaque runtime type while declaring its JSON transport shape.
+const JsonUnknown: Schema.Codec<unknown, unknown> = Schema.Json.pipe(
+  Schema.decodeTo(
+    Schema.Unknown,
+    SchemaTransformation.transform({
+      decode: (value): unknown => value,
+      encode: (value): Schema.Json => value as Schema.Json,
+    }),
+  ),
+);
 
 const ProviderSlug = TrimmedNonEmptyString.check(
   Schema.isMaxLength(PROVIDER_SLUG_MAX_CHARS),
@@ -58,7 +69,7 @@ export const ProviderInstanceConfig = Schema.Struct({
   accentColor: Schema.optional(TrimmedNonEmptyString),
   environment: Schema.optionalKey(ProviderInstanceEnvironment),
   enabled: Schema.optionalKey(Schema.Boolean),
-  config: Schema.optionalKey(Schema.Unknown),
+  config: Schema.optionalKey(JsonUnknown),
 });
 export type ProviderInstanceConfig = typeof ProviderInstanceConfig.Type;
 
