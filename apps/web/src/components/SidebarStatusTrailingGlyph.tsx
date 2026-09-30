@@ -2,6 +2,7 @@
 // Purpose: Keep thread status glyphs identical across classic and Activity sidebar rows.
 // Layer: Sidebar UI primitive
 
+import { StatusDot } from "~/components/ui/status-chip";
 import { cn } from "~/lib/utils";
 import type { ThreadStatusPill } from "./Sidebar.logic";
 import { ThreadRunningSpinner } from "./ThreadRunningSpinner";
@@ -27,11 +28,5 @@ export function SidebarStatusTrailingGlyph({ status }: { status: ThreadStatusPil
       </span>
     );
   }
-  return (
-    <span
-      role="img"
-      aria-label={status.label}
-      className={cn("size-1.5 shrink-0 rounded-full", status.dotClass)}
-    />
-  );
+  return <StatusDot role="img" aria-label={status.label} className={status.dotClass} />;
 }

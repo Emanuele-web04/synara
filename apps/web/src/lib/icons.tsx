@@ -248,6 +248,11 @@ export const PluginIcon: LucideIcon = centralIconWrapper("puzzle");
 // terminal, skill cube) it sits beside, instead of the Tabler wrench it used to be.
 export const HammerIcon: LucideIcon = centralIconWrapper("hammer");
 export const HistoryIcon = adaptIcon(IconHistory);
+/** Tasks surface glyph (sidebar nav, rail): a checked square. */
+export const TasksIcon: LucideIcon = centralIconWrapper("todos");
+/** Hand a to-do to an agent. */
+export const DelegateIcon: LucideIcon = centralIconWrapper("sparkles-two");
+export const CalendarIcon: LucideIcon = centralIconWrapper("calendar-1");
 export const InfoIcon = adaptIcon(IconInfoCircle);
 export const KanbanIcon = centralIconWrapper("columns-3-wide");
 export const KeyboardIcon: LucideIcon = centralIconWrapper("keyboard");

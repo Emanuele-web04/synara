@@ -50,6 +50,7 @@ import {
 import { CHAT_BACKGROUND_CLASS_NAME } from "~/components/chat/composerPickerStyles";
 import { SidebarHeaderNavigationControls } from "~/components/SidebarHeaderNavigationControls";
 import { Button } from "~/components/ui/button";
+import { StatusDot } from "~/components/ui/status-chip";
 import { RouteInsetSurface } from "~/components/RouteInsetSurface";
 import { automationApprovalGaps, buildAutomationDraftWarnings } from "~/lib/automationDraft";
 import {
@@ -601,7 +602,7 @@ function AutomationDetailView() {
               <DetailGroup title="Status">
                 <DetailRow label="Status">
                   <StatusValue>
-                    <span className={cn("size-1.5 rounded-full", status.dotClassName)} />
+                    <StatusDot className={status.dotClassName} />
                     {status.label}
                   </StatusValue>
                 </DetailRow>

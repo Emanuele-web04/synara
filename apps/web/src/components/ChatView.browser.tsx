@@ -1211,6 +1211,10 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
   if (tag === WS_METHODS.automationList) {
     return { definitions: [], runs: [] };
   }
+  // The sidebar reads to-dos on Beta hosts; the `{}` fallback would fail to decode.
+  if (tag === WS_METHODS.todoList) {
+    return { todos: [] };
+  }
   if (tag === WS_METHODS.gitListBranches) {
     const cwd = typeof body.cwd === "string" ? body.cwd : null;
     const branchName = cwd ? (fixture.gitBranchByCwd[cwd] ?? "main") : "main";
@@ -1445,6 +1449,7 @@ const worker = setupWorker(
         method === WS_METHODS.subscribeOrchestrationDomainEvents ||
         method === WS_METHODS.subscribeProjectDevServerEvents ||
         method === WS_METHODS.subscribeAutomationEvents ||
+        method === WS_METHODS.subscribeTodoEvents ||
         // Left open like the rest: these are infinite subscriptions, and the
         // default below answers with an Exit, which a stream RPC reads as the
         // socket dying and answers with a full reconnect. That loops forever
@@ -2438,6 +2443,61 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it.each(["classic", "rail"])(
+    "preserves the hidden board slot when Tasks replaces Kanban in the %s sidebar",
+    async (sidebarLayout) => {
+      localStorage.setItem(
+        "synara:app-settings:v1",
+        JSON.stringify({
+          sidebarLayout,
+          hiddenSidebarNavItems: ["kanban"],
+          hiddenRailItems: ["kanban"],
+        }),
+      );
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: MessageId.makeUnsafe("hidden-tasks-slot"),
+          targetText: "Hidden Tasks slot",
+        }),
+      });
+      try {
+        await waitForLayout();
+        await expect
+          .element(page.getByRole("button", { name: "Tasks", exact: true }))
+          .not.toBeInTheDocument();
+        if (sidebarLayout === "rail") {
+          await page
+            .getByRole("navigation", { name: "Primary" })
+            .getByRole("button", { name: "More", exact: true })
+            .click();
+          await page.getByRole("menuitem", { name: "Customize…", exact: true }).click();
+        } else {
+          page
+            .getByRole("button", { name: "Pull requests", exact: true })
+            .element()
+            .dispatchEvent(
+              new MouseEvent("contextmenu", { bubbles: true, clientX: 120, clientY: 160 }),
+            );
+          await page.getByRole("menuitem", { name: "Customize", exact: true }).click();
+        }
+        await page
+          .getByRole("checkbox", { name: "Show Tasks in the sidebar", exact: true })
+          .click();
+        await page.getByRole("button", { name: "Done", exact: true }).click();
+        await expect
+          .element(page.getByRole("button", { name: "Tasks", exact: true }))
+          .toBeVisible();
+        const preference = sidebarLayout === "rail" ? "hiddenRailItems" : "hiddenSidebarNavItems";
+        expect(
+          JSON.parse(localStorage.getItem("synara:app-settings:v1") ?? "{}")[preference],
+        ).toEqual([]);
+      } finally {
+        await mounted.cleanup();
+      }
+    },
+  );
+
   it("preserves absent project pins when toggling a rail Space shortcut", async () => {
     localStorage.setItem(
       "synara:app-settings:v1",
@@ -2753,7 +2813,8 @@ describe("ChatView transcript geometry (full app)", () => {
       try {
         for (const id of [1, 2, 3]) {
           await page.getByRole("button", { name: new RegExp(`Choice ${id}`) }).click();
-          if (id < 3)
+          // Single-choice answers advance themselves; another Next click races the timer.
+          if (id < 3 && navigation !== "auto-advance")
             await page.getByRole("button", { name: "Next question", exact: true }).first().click();
         }
         if (navigation === "custom") {
@@ -5526,8 +5587,14 @@ describe("ChatView transcript geometry (full app)", () => {
     try {
       const editor = await waitForComposerEditor();
       await userEvent.click(editor);
-      const draft = "Keep this unsent draft while moving the caret. ".repeat(8);
-      await userEvent.keyboard(draft);
+      const phrase = "Keep this unsent draft while moving the caret. ";
+      const draft = phrase.repeat(8);
+      // Exercise caret/history behavior while allowing React to finish a frame between
+      // typing bursts, rather than hundreds of automation keys in one update batch.
+      for (let index = 0; index < 8; index += 1) {
+        await userEvent.keyboard(phrase);
+        await nextFrame();
+      }
       await userEvent.keyboard("{Shift>}{Enter}{/Shift}Second line");
       const prompt = useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt;
       await userEvent.keyboard("{ArrowUp>10/}");
