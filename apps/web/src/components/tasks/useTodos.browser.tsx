@@ -17,6 +17,7 @@ import { makeThread } from "../../storeTestFixtures";
 import { useTodoEventSubscription, useTodoMutations, useTaskRows, useTodoList } from "./useTodos";
 
 const transport = vi.hoisted(() => ({
+  create: vi.fn(),
   update: vi.fn(),
   onEvent: vi.fn(),
   delete: vi.fn(),
@@ -404,3 +405,137 @@ it.each(["success-first", "failure-first", "success-before-next-attempt"])(
     }
   },
 );
+
+it.each(["create", "delete"])(
+  "resumes uncertain-delete reconciliation after another successful %s cancels its list",
+  async (mutation) => {
+    const test = await mountTodos(`cancel-delete-recovery-${mutation}`, true);
+    const other = makeTodo(`other-task-${mutation}`);
+    let releaseCanceledList!: (value: TodoListResult) => void;
+    transport.list
+      .mockReset()
+      .mockImplementationOnce(
+        () =>
+          new Promise<TodoListResult>((resolve) => {
+            releaseCanceledList = resolve;
+          }),
+      )
+      .mockResolvedValue({ todos: mutation === "create" ? [test.todo, other] : [test.todo] });
+    transport.delete.mockImplementation(({ id }) =>
+      id === test.todo.id
+        ? Promise.reject(
+            Object.assign(new Error("Reply lost"), {
+              _tag: "WsTransportRequestInterruptedError",
+              code: "WS_REQUEST_RECONNECTED",
+            }),
+          )
+        : Promise.resolve({ deleted: true }),
+    );
+    transport.create.mockResolvedValue(other);
+    try {
+      if (mutation === "delete") test.emit({ type: "todo-upserted", todo: other });
+      await new Promise<void>((resolve) =>
+        test.hook.result.current.deleteTodo(test.todo.id, { onSettled: () => resolve() }),
+      );
+      await vi.waitFor(() => expect(releaseCanceledList).toBeDefined());
+      await new Promise<void>((resolve) => {
+        const options = { onSettled: () => resolve() };
+        if (mutation === "create")
+          test.hook.result.current.createTodo({ id: other.id, title: other.title }, options);
+        else test.hook.result.current.deleteTodo(other.id, options);
+      });
+      await vi.waitFor(() =>
+        expect(
+          test.client
+            .getQueryData<TodoListResult>(todoQueryKey)
+            ?.todos.some((todo) => todo.id === test.todo.id),
+        ).toBe(true),
+      );
+    } finally {
+      releaseCanceledList?.({ todos: [test.todo] });
+      await test.hook.unmount();
+      test.client.clear();
+    }
+  },
+);
+
+it("requests fresh reconciliation on a reconnect snapshot after the previous list failed", async () => {
+  const test = await mountTodos("reconnect-delete-recovery", true);
+  transport.delete.mockRejectedValue(
+    Object.assign(new Error("Reply lost"), {
+      _tag: "WsTransportRequestInterruptedError",
+      code: "WS_REQUEST_RECONNECTED",
+    }),
+  );
+  transport.list.mockRejectedValue(new Error("Still offline"));
+  let releaseFreshList!: (value: TodoListResult) => void;
+  try {
+    await new Promise<void>((resolve) =>
+      test.hook.result.current.deleteTodo(test.todo.id, { onSettled: () => resolve() }),
+    );
+    await vi.waitFor(() => expect(test.client.isFetching({ queryKey: todoQueryKey })).toBe(0));
+    transport.list.mockImplementation(
+      () =>
+        new Promise<TodoListResult>((resolve) => {
+          releaseFreshList = resolve;
+        }),
+    );
+    test.emit({ type: "snapshot", todos: [test.todo] });
+    // The event may predate deletion; it schedules a read, but cannot clear the guard itself.
+    expect(test.client.getQueryData<TodoListResult>(todoQueryKey)?.todos).toEqual([]);
+    await vi.waitFor(() => expect(releaseFreshList).toBeDefined());
+    releaseFreshList({ todos: [test.todo] });
+    await vi.waitFor(() => expect(test.current()).toEqual(test.todo));
+  } finally {
+    releaseFreshList?.({ todos: [] });
+    await test.hook.unmount();
+    test.client.clear();
+  }
+});
+
+it("keeps a created task when a pre-write list replies after create", async () => {
+  const test = await mountTodos("create-before-stale-list", true);
+  const created = makeTodo("created-while-list-pending");
+  let resolveCreate!: (todo: Todo) => void;
+  let resolveStaleList!: (value: TodoListResult) => void;
+  transport.create.mockImplementation(
+    () =>
+      new Promise<Todo>((resolve) => {
+        resolveCreate = resolve;
+      }),
+  );
+  transport.list
+    .mockReset()
+    .mockImplementationOnce(
+      () =>
+        new Promise<TodoListResult>((resolve) => {
+          resolveStaleList = resolve;
+        }),
+    )
+    .mockResolvedValue({ todos: [test.todo, created] });
+  const mutation = new Promise<void>((resolve) =>
+    test.hook.result.current.createTodo(
+      { id: created.id, title: created.title },
+      { onSettled: () => resolve() },
+    ),
+  );
+  let staleRead: Promise<void> | undefined;
+  try {
+    await vi.waitFor(() => expect(resolveCreate).toBeDefined());
+    staleRead = test.client.refetchQueries({ queryKey: todoQueryKey });
+    await vi.waitFor(() => expect(resolveStaleList).toBeDefined());
+    resolveCreate(created);
+    await mutation;
+    resolveStaleList({ todos: [test.todo] });
+    await staleRead;
+    await vi.waitFor(() => expect(test.client.isFetching({ queryKey: todoQueryKey })).toBe(0));
+    expect(test.client.getQueryData<TodoListResult>(todoQueryKey)?.todos).toContainEqual(created);
+  } finally {
+    resolveCreate?.(created);
+    resolveStaleList?.({ todos: [test.todo] });
+    await mutation;
+    await staleRead;
+    await test.hook.unmount();
+    test.client.clear();
+  }
+});

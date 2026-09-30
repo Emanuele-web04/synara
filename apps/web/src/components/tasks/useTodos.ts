@@ -163,6 +163,14 @@ export function useTodoEventSubscription(enabled = true) {
       queryClient.setQueryData<TodoListResult>(todoQueryKey, (prev) =>
         applyTodoEventHoldingEdits(prev, event),
       );
+      // A socket reconnect need not change navigator.onLine. Its snapshot can predate
+      // the uncertain delete, so request a fresh list rather than lifting its guard.
+      if (
+        event.type === "snapshot" &&
+        [...pendingDeletesById.values()].some((entry) => entry.uncertain)
+      ) {
+        void queryClient.invalidateQueries({ queryKey: todoQueryKey }, { cancelRefetch: false });
+      }
     });
   }, [enabled, queryClient]);
 }
@@ -184,6 +192,11 @@ export function useTodoMutations() {
     queryClient.getQueryData<TodoListResult>(todoQueryKey)?.todos.find((todo) => todo.id === id);
   // An in-flight list fetch would land after the optimistic write and replace it.
   const cancelListFetch = () => queryClient.cancelQueries({ queryKey: todoQueryKey });
+  // Every mutation can cancel another operation's recovery read. Start a fresh one
+  // after settling and clearing its pending state, regardless of success or failure.
+  const reconcileList = () => {
+    void queryClient.invalidateQueries({ queryKey: todoQueryKey });
+  };
 
   const createMutation = useMutation({
     // Creates are idempotent per id, so one that died with the connection is retried with
@@ -219,13 +232,12 @@ export function useTodoMutations() {
     onError: (error, input) => {
       failedCreateIds.add(input.id);
       setList((todos) => todos.filter((todo) => todo.id !== input.id));
-      // If a lost reply hid a stored create, the server's list brings the row back.
-      if (isRequestOutcomeUnknown(error)) {
-        void queryClient.invalidateQueries({ queryKey: todoQueryKey });
-      }
       showMutationError("Couldn't add the task")(error);
     },
-    onSettled: (_todo, _error, input) => endPendingCreate(input.id),
+    onSettled: (_todo, _error, input) => {
+      endPendingCreate(input.id);
+      reconcileList();
+    },
   });
 
   const updateMutation = useMutation({
@@ -251,10 +263,7 @@ export function useTodoMutations() {
       // The edit may have been stored before the connection went: keep it showing and
       // let the server's copy settle it, instead of rolling back and reporting a failure.
       // (Linking a chat re-reads the to-do in this case before deciding.)
-      if (isRequestOutcomeUnknown(error)) {
-        void queryClient.invalidateQueries({ queryKey: todoQueryKey });
-        return;
-      }
+      if (isRequestOutcomeUnknown(error)) return;
       const previous = context?.previous;
       if (previous) {
         // Optimistic copies keep the stored updatedAt, so a changed one means the server
@@ -267,18 +276,11 @@ export function useTodoMutations() {
           ),
         );
       }
-      // Overlapping edits share one updatedAt, so the rollback alone can't tell whose
-      // change is showing; the server's copy settles it.
-      void queryClient.invalidateQueries({ queryKey: todoQueryKey });
       showMutationError("Couldn't update the task")(error);
     },
     onSettled: (_todo, _error, input) => {
       endPendingUpdate(input);
-      // A newer event may have arrived before an older mutation reply. Once all local
-      // edits settle, reconcile any overlapping fields against the authoritative row.
-      if (!pendingUpdatesById.has(input.id)) {
-        void queryClient.invalidateQueries({ queryKey: todoQueryKey });
-      }
+      reconcileList();
     },
   });
 
@@ -308,7 +310,6 @@ export function useTodoMutations() {
       // server snapshot confirms whether the delete landed; do not flash a false error.
       if (isRequestOutcomeUnknown(error)) {
         context.deletion.uncertain = true;
-        void queryClient.invalidateQueries({ queryKey: todoQueryKey });
         return;
       }
       pendingDeletesById.delete(id);
@@ -319,9 +320,9 @@ export function useTodoMutations() {
       if (previous && !failedCreateIds.has(id)) {
         setList((todos) => upsertTodo(todos, previous));
       }
-      void queryClient.invalidateQueries({ queryKey: todoQueryKey });
       showMutationError("Couldn't delete the task")(error);
     },
+    onSettled: reconcileList,
   });
 
   return {
