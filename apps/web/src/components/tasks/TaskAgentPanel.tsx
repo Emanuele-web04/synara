@@ -1,13 +1,14 @@
 // FILE: TaskAgentPanel.tsx
-// Purpose: What the task card shows once a to-do is with an agent, in one soft block per
+// Purpose: What the task panel shows once a to-do is with an agent, in one soft block per
 //          state: working (with its last steps), needs your OK (Allow / Deny), a question to
 //          answer in the chat, ready for you (the reply), or stopped. Each ends with the one
-//          or two things to do next.
+//          or two things to do next, on a single right-aligned row.
 // Layer: Tasks UI component
 // Exports: TaskAgentPanel
 
 import { PROVIDER_DISPLAY_NAMES, type ThreadId, type TodoUpdateInput } from "@synara/contracts";
 import { formatModelDisplayName } from "@synara/shared/model";
+import type { ReactNode } from "react";
 
 import ChatMarkdown from "~/components/ChatMarkdown";
 import { ComposerPendingApprovalPanel } from "~/components/chat/ComposerPendingApprovalPanel";
@@ -25,6 +26,11 @@ const APPROVAL_ASK: Record<PendingApproval["requestKind"], string> = {
   permissions: "wants more permissions",
   tool: "wants to use a tool",
 };
+
+/** The next steps under a state's block, right-aligned like a panel's footer. */
+function TaskAgentActions({ children }: { children: ReactNode }) {
+  return <div className="flex items-center justify-end gap-1.5">{children}</div>;
+}
 
 export function TaskAgentPanel({
   row,
@@ -61,7 +67,7 @@ export function TaskAgentPanel({
   const markDone = () => onUpdate({ id: todo.id, completed: true });
 
   return (
-    <section aria-label="Agent" className="flex flex-col gap-3">
+    <section aria-label="Agent" className="flex flex-col gap-2.5">
       <div className="flex min-w-0 items-center gap-1.5 text-ui-sm text-muted-foreground">
         <ProviderIcon provider={provider} className="size-3.5 shrink-0" />
         <span className="shrink-0 text-foreground/80">{agentName}</span>
@@ -78,27 +84,25 @@ export function TaskAgentPanel({
       {status.kind === "running" || status.kind === "starting" ? (
         <>
           <TaskWell>
-            <span className="shimmer text-ui">
+            <span className="shimmer text-ui-sm">
               {status.kind === "running" ? `${agentName} is working on it` : "Starting…"}
             </span>
             {recentActivity.map((entry) => (
-              <span key={entry.id} className="min-w-0 truncate text-ui-sm text-muted-foreground">
+              <span key={entry.id} className="min-w-0 truncate text-ui-xs text-muted-foreground">
                 {entry.toolTitle ?? entry.label}
               </span>
             ))}
           </TaskWell>
-          <div className="flex gap-2">
+          <TaskAgentActions>
             {/* Not while Starting: a reused chat may still be on its earlier turn, and Stop
                 interrupts whatever turn is active. */}
             {status.kind === "running" ? (
-              <TaskPillButton className="flex-1" disabled={isStopping} onClick={() => void stop()}>
+              <TaskPillButton disabled={isStopping} onClick={() => void stop()}>
                 Stop
               </TaskPillButton>
             ) : null}
-            <TaskPillButton className="flex-1" onClick={openChat}>
-              Open chat
-            </TaskPillButton>
-          </div>
+            <TaskPillButton onClick={openChat}>Open chat</TaskPillButton>
+          </TaskAgentActions>
         </>
       ) : null}
 
@@ -113,7 +117,7 @@ export function TaskAgentPanel({
       ) : approval ? (
         <>
           <TaskWell>
-            <span className="text-ui text-foreground">
+            <span className="text-ui-sm text-foreground">
               {agentName} {APPROVAL_ASK[approval.requestKind]}
             </span>
             {approval.detail ? (
@@ -122,23 +126,15 @@ export function TaskAgentPanel({
               </span>
             ) : null}
           </TaskWell>
-          <div className="flex flex-col gap-2">
-            <TaskActionButton
-              size="default"
-              disabled={respondingKey === approval.requestId}
-              onClick={() =>
-                void respondToApproval(
-                  approval.requestId,
-                  "accept",
-                  approval.lifecycleGeneration,
-                  approval.requestKind,
-                )
-              }
+          <TaskAgentActions>
+            <button
+              type="button"
+              onClick={openChat}
+              className="mr-auto text-ui-sm text-muted-foreground outline-none hover:text-foreground focus-visible:underline"
             >
-              Allow
-            </TaskActionButton>
+              More choices
+            </button>
             <TaskPillButton
-              size="default"
               disabled={respondingKey === approval.requestId}
               onClick={() =>
                 void respondToApproval(
@@ -151,69 +147,69 @@ export function TaskAgentPanel({
             >
               Deny
             </TaskPillButton>
-            <button
-              type="button"
-              onClick={openChat}
-              className="self-center text-ui-sm text-muted-foreground outline-none hover:text-foreground focus-visible:underline"
+            <TaskActionButton
+              disabled={respondingKey === approval.requestId}
+              onClick={() =>
+                void respondToApproval(
+                  approval.requestId,
+                  "accept",
+                  approval.lifecycleGeneration,
+                  approval.requestKind,
+                )
+              }
             >
-              More choices in the chat
-            </button>
-          </div>
+              Allow
+            </TaskActionButton>
+          </TaskAgentActions>
         </>
       ) : null}
 
       {asksQuestion ? (
         <>
           <TaskWell>
-            <span className="text-ui text-foreground">{agentName} asked you a question</span>
+            <span className="text-ui-sm text-foreground">{agentName} asked you a question</span>
           </TaskWell>
-          <TaskActionButton onClick={openChat}>Answer in the chat</TaskActionButton>
+          <TaskAgentActions>
+            <TaskActionButton onClick={openChat}>Answer in the chat</TaskActionButton>
+          </TaskAgentActions>
         </>
       ) : null}
 
       {status.kind === "review" ? (
         <>
           <TaskWell>
-            <span className="text-ui-sm text-muted-foreground">
+            <span className="text-ui-xs text-muted-foreground">
               {formatAgentActivity(status, summary) ?? "Finished"}
             </span>
             {latestReply ? (
-              <div className="max-h-64 overflow-y-auto">
+              <div className="max-h-72 overflow-y-auto">
                 <ChatMarkdown
                   text={latestReply}
                   cwd={summary.worktreePath ?? fullPath ?? undefined}
-                  className="text-ui leading-relaxed"
+                  className="text-ui-sm leading-relaxed"
                 />
               </div>
             ) : null}
           </TaskWell>
-          <div className="flex gap-2">
-            <TaskPillButton className="flex-1" onClick={openChat}>
-              Open chat
-            </TaskPillButton>
-            <TaskActionButton className="flex-1" onClick={markDone}>
-              Mark as done
-            </TaskActionButton>
-          </div>
+          <TaskAgentActions>
+            <TaskPillButton onClick={openChat}>Open chat</TaskPillButton>
+            <TaskActionButton onClick={markDone}>Mark as done</TaskActionButton>
+          </TaskAgentActions>
         </>
       ) : null}
 
       {status.kind === "stopped" ? (
         <>
           <TaskWell>
-            <span className="text-ui text-status-failure">{status.label}</span>
+            <span className="text-ui-sm text-status-failure">{status.label}</span>
             {status.detail ? (
-              <span className="text-ui-sm text-muted-foreground">{status.detail}</span>
+              <span className="text-ui-xs text-muted-foreground">{status.detail}</span>
             ) : null}
           </TaskWell>
-          <div className="flex gap-2">
-            <TaskPillButton className="flex-1" onClick={openChat}>
-              Open chat
-            </TaskPillButton>
-            <TaskPillButton className="flex-1" onClick={markDone}>
-              Mark as done
-            </TaskPillButton>
-          </div>
+          <TaskAgentActions>
+            <TaskPillButton onClick={openChat}>Open chat</TaskPillButton>
+            <TaskPillButton onClick={markDone}>Mark as done</TaskPillButton>
+          </TaskAgentActions>
         </>
       ) : null}
     </section>

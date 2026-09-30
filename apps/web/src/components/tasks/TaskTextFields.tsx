@@ -1,5 +1,5 @@
 // FILE: TaskTextFields.tsx
-// Purpose: The task card's editable title and notes. Each field saves on blur, only when
+// Purpose: The task panel's editable title and notes. Each field saves on blur, only when
 //          the user changed it, so an untouched field never overwrites another window's edit.
 // Layer: Tasks UI component
 // Exports: TaskTextFields
@@ -71,7 +71,7 @@ export function TaskTextFields({
   };
 
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex flex-col gap-0.5">
       <textarea
         aria-label="Task title"
         rows={1}
@@ -80,8 +80,7 @@ export function TaskTextFields({
         onChange={(event) => setTitle(event.target.value)}
         onBlur={commitTitle}
         onKeyDown={handleTitleKeyDown}
-        // The card's heading, so it may use a fixed heading size (see uiFontSize.test.ts).
-        className="font-system-ui field-sizing-content w-full resize-none bg-transparent text-lg font-semibold leading-snug tracking-tight text-foreground outline-none"
+        className="font-system-ui field-sizing-content w-full resize-none bg-transparent text-ui-lg font-semibold leading-snug text-foreground outline-none"
       />
       <textarea
         aria-label="Notes"
@@ -91,7 +90,7 @@ export function TaskTextFields({
         onFocus={() => focusField("notes")}
         onChange={(event) => setNotes(event.target.value)}
         onBlur={commitNotes}
-        className="font-system-ui field-sizing-content min-h-6 w-full resize-none bg-transparent text-ui leading-relaxed text-muted-foreground outline-none placeholder:text-muted-foreground/70 focus:text-foreground"
+        className="font-system-ui field-sizing-content min-h-5 w-full resize-none bg-transparent text-ui-sm leading-relaxed text-muted-foreground outline-none placeholder:text-muted-foreground/70 focus:text-foreground"
       />
     </div>
   );

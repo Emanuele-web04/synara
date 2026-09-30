@@ -1,5 +1,5 @@
 // FILE: TaskHandOff.tsx
-// Purpose: The task card's "Hand it to an agent" form: what to do (seeded from the to-do),
+// Purpose: The task panel's "Hand it to an agent" form: what to do (seeded from the to-do),
 //          which agent and model, where it runs, and Start. The rest — reusing an existing
 //          chat, access, effort — sits behind "More options". Model state rides on a scratch
 //          composer draft so the shared composer pickers work unchanged; the start logic
@@ -90,7 +90,7 @@ export function TaskHandOff({
   return (
     <section
       aria-label="Hand it to an agent"
-      className="flex flex-col gap-2.5"
+      className="flex flex-col gap-2"
       onKeyDown={(event) => {
         if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
           event.preventDefault();
@@ -99,12 +99,12 @@ export function TaskHandOff({
       }}
     >
       <TaskCardLabel>Hand it to an agent</TaskCardLabel>
-      <TaskWell className="py-3">
+      <TaskWell>
         <textarea
           aria-label="What should the agent do?"
           value={prompt}
           onChange={(event) => setPrompt(event.target.value)}
-          className="font-system-ui field-sizing-content max-h-48 min-h-16 w-full resize-none bg-transparent text-ui leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/70"
+          className="font-system-ui field-sizing-content max-h-40 min-h-12 w-full resize-none bg-transparent text-ui-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/70"
         />
       </TaskWell>
 
@@ -126,7 +126,7 @@ export function TaskHandOff({
         </div>
       ) : null}
 
-      <div className="flex items-center justify-between gap-2 pt-1">
+      <div className="flex items-center justify-between gap-2">
         <button
           type="button"
           aria-expanded={showsMore}

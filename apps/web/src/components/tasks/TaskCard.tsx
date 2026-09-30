@@ -1,7 +1,7 @@
 // FILE: TaskCard.tsx
-// Purpose: The floating card for the selected to-do: its state, editable title and notes,
-//          property pills, then either the hand-off form (a plain to-do) or what its agent is
-//          doing and needs (a delegated one).
+// Purpose: The side panel for the selected to-do, docked to the right of the list: its
+//          state, editable title and note, property pills, then either the hand-off form (a
+//          plain to-do) or what its agent is doing and needs (a delegated one).
 // Layer: Tasks UI component
 // Exports: TaskCard
 
@@ -10,7 +10,6 @@ import type { ProjectId, TodoUpdateInput } from "@synara/contracts";
 import { IconButton } from "~/components/ui/icon-button";
 import { XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
-import { RAISED_SURFACE_CHROME_CLASS_NAME } from "../chat/composerPickerStyles";
 import { TaskAgentPanel } from "./TaskAgentPanel";
 import { TaskCardProperties } from "./TaskCardProperties";
 import { TASK_META_TONE_CLASS, TaskPillButton, TaskWell } from "./TaskCardPrimitives";
@@ -51,15 +50,14 @@ export function TaskCard({
       : (meta?.text ?? status.label);
 
   return (
-    <section
+    <aside
       aria-label="Task details"
       className={cn(
-        "flex flex-col gap-4.5 overflow-y-auto rounded-3xl bg-popover p-5.5",
-        RAISED_SURFACE_CHROME_CLASS_NAME,
+        "flex w-[22rem] shrink-0 flex-col gap-3.5 overflow-y-auto border-l border-border px-4 pt-3 pb-5",
         className,
       )}
     >
-      <div className="flex items-center gap-2">
+      <div className="flex h-6 items-center gap-2">
         <span
           className={cn(
             "flex-1 text-ui-sm",
@@ -84,6 +82,8 @@ export function TaskCard({
         onUpdate={onUpdate}
       />
 
+      <div className="h-px bg-border" />
+
       {thread ? (
         <TaskAgentPanel
           key={thread.id}
@@ -104,7 +104,7 @@ export function TaskCard({
         // Linked, but the chat has not reached this window yet: no second Start meanwhile.
         <>
           <TaskWell>
-            <span className="shimmer text-ui">{status.detail ?? "Starting the agent…"}</span>
+            <span className="shimmer text-ui-sm">{status.detail ?? "Starting the agent…"}</span>
           </TaskWell>
           <TaskPillButton className="self-start" onClick={openChat}>
             Open chat
@@ -125,6 +125,6 @@ export function TaskCard({
           <TaskHandOff key={todo.id} todo={todo} onLinkChat={onUpdateAsync} />
         </>
       )}
-    </section>
+    </aside>
   );
 }
