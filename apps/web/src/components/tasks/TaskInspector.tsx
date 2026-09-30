@@ -16,7 +16,7 @@ import { TaskStatusGlyph } from "./TaskGlyphs";
 import { TaskInspectorProperties } from "./TaskInspectorProperties";
 import { TaskNotice } from "./TaskInspectorPrimitives";
 import { TaskTextFields } from "./TaskTextFields";
-import type { TaskRowModel } from "./tasks.logic";
+import { type TaskRowModel, unlinkChatInput } from "./tasks.logic";
 import { useOpenChat } from "./useOpenChat";
 
 interface TaskInspectorProps {
@@ -94,7 +94,7 @@ export function TaskInspector({
               <TaskNotice
                 action={{
                   label: "Unlink",
-                  onClick: () => onUpdate({ id: todo.id, threadId: null }),
+                  onClick: () => onUpdate(unlinkChatInput(todo)),
                 }}
               >
                 The chat this task was delegated to no longer exists.

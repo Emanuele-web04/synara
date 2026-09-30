@@ -11,6 +11,7 @@ import {
   resolveDuePreset,
   UNSAVED_TODO_UPDATED_AT,
   type TaskRowModel,
+  unlinkChatInput,
 } from "./tasks.logic";
 
 function todo(overrides: Omit<Partial<Todo>, "id"> & { id: string }): Todo {
@@ -273,5 +274,15 @@ describe("applyTodoEvent", () => {
     list = applyTodoEvent(list, { type: "todo-deleted", todoId: older.id });
     list = applyTodoEvent(list, { type: "todo-upserted", todo: newer });
     expect(list.todos).toEqual([]);
+  });
+});
+
+describe("unlinkChatInput", () => {
+  it("clears only the link this window shows", () => {
+    expect(unlinkChatInput(delegated)).toEqual({
+      id: delegated.id,
+      threadId: null,
+      expectedThreadId: threadId,
+    });
   });
 });

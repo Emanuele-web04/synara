@@ -13,6 +13,7 @@ import type {
   TodoListResult,
   TodoPriority,
   TodoStreamEvent,
+  TodoUpdateInput,
 } from "@synara/contracts";
 
 import { formatRelativeTime } from "~/lib/relativeTime";
@@ -439,6 +440,14 @@ export function applyTodoEvent(
       markTodoDeleted(event.todoId);
       return { todos: base.todos.filter((todo) => todo.id !== event.todoId) };
   }
+}
+
+/**
+ * Clears a to-do's chat link, but only the link this window shows: another window may have
+ * delegated it anew meanwhile, and that link must survive a stale Unlink.
+ */
+export function unlinkChatInput(todo: Pick<Todo, "id" | "threadId">): TodoUpdateInput {
+  return { id: todo.id, threadId: null, expectedThreadId: todo.threadId };
 }
 
 /** Prompt handed to the agent when a to-do is delegated. */

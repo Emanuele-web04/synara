@@ -24,6 +24,7 @@ import {
   formatDueLabel,
   type TaskRowModel,
   todoPriorityLabel,
+  unlinkChatInput,
 } from "./tasks.logic";
 import { useOpenChat } from "./useOpenChat";
 
@@ -116,7 +117,7 @@ export function TaskRow({
       );
       if (clicked === "rename") rename.startEditing();
       else if (clicked === "open-chat") openChat();
-      else if (clicked === "unlink-chat") onUpdate({ id: todo.id, threadId: null });
+      else if (clicked === "unlink-chat") onUpdate(unlinkChatInput(todo));
       else if (clicked === "delegate") onRequestDelegate();
       else if (clicked === "toggle-done") toggleDone();
       else if (clicked === "delete") onDelete();
