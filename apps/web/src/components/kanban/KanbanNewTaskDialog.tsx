@@ -54,7 +54,7 @@ import { toastManager } from "~/components/ui/toast";
 import { useTheme } from "~/hooks/useTheme";
 import { ChevronRightIcon, LoaderCircleIcon, PaperclipIcon } from "~/lib/icons";
 import { formatComposerMentionToken } from "~/lib/composerMentions";
-import { findProviderStatus, resolveVoiceTranscriptionTarget } from "~/lib/providerAvailability";
+import { resolveVoiceTranscriptionTarget } from "~/lib/providerAvailability";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";

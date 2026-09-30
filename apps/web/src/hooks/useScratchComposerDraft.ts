@@ -97,14 +97,12 @@ export function useScratchComposerDraft(input: {
       options?: ProviderOptions,
     ) => {
       // Mirrors the composer: update the scratch draft and persist the sticky selection.
-      useComposerDraftStore
-        .getState()
-        .setModelSelectionAndSticky(
-          scratchThreadId,
-          buildModelSelection(provider, model, options, supportsAutoMode, {
-            instanceId: instanceId ?? provider,
-          }),
-        );
+      useComposerDraftStore.getState().setModelSelectionAndSticky(
+        scratchThreadId,
+        buildModelSelection(provider, model, options, supportsAutoMode, {
+          instanceId: instanceId ?? provider,
+        }),
+      );
     },
     [scratchThreadId],
   );

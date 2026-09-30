@@ -293,6 +293,34 @@ describe("ProfileStatsArchive", () => {
     deleteCheckpointRefsImpl = (input) => Effect.sync(() => recordDeletedCheckpointRefs(input));
   });
 
+  it("takes cumulative deltas per counter provider when a thread switches providers and back", () => {
+    const rows = aggregateThreadTokenRows([
+      {
+        totalProcessedTokens: 100_000,
+        usedTokens: null,
+        provider: "codex",
+        model: "gpt-5-codex",
+        createdAt: "2026-06-13T12:00:00.000Z",
+      },
+      {
+        totalProcessedTokens: 5_000,
+        usedTokens: null,
+        provider: "opencode",
+        model: "sonnet",
+        createdAt: "2026-06-13T12:10:00.000Z",
+      },
+      {
+        totalProcessedTokens: 110_000,
+        usedTokens: null,
+        provider: "codex",
+        model: "gpt-5-codex",
+        createdAt: "2026-06-13T12:20:00.000Z",
+      },
+    ]);
+
+    expect(rows.map((row) => row.tokens)).toEqual([100_000, 5_000, 10_000]);
+  });
+
   it("archives usedTokens-only model groups even when another group has cumulative telemetry", () => {
     const rows = aggregateThreadTokenRows([
       {
@@ -544,6 +572,51 @@ describe("ProfileStatsArchive", () => {
           { tokens: 1000, version: 1 },
         ]);
         expect(yield* sql`SELECT * FROM profile_stats_claude_legacy_usage`).toEqual([]);
+      }),
+    );
+  });
+
+  it("leaves Claude results of automation dispatches out of the archive", async () => {
+    await runArchiveTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const stats = yield* ProfileStatsQuery;
+        const archive = yield* ProfileStatsArchive;
+        yield* seedTwoThreadsWithActivity;
+        yield* acknowledgeProviderCommandJournal(sql);
+        yield* sql`
+          INSERT INTO projection_thread_messages (
+            message_id, thread_id, turn_id, role, text, is_streaming, source, dispatch_origin,
+            created_at, updated_at
+          )
+          VALUES ('m-auto', 'thread-purge', 'turn-auto', 'user', 'run', 0, 'native', 'automation',
+            '2026-06-13T18:40:00.000Z', '2026-06-13T18:40:00.000Z')
+        `;
+        yield* sql`
+          INSERT INTO projection_turns (
+            thread_id, turn_id, pending_message_id, state, requested_at, started_at, completed_at,
+            checkpoint_files_json
+          )
+          VALUES ('thread-purge', 'turn-auto', 'm-auto', 'completed', '2026-06-13T18:40:00.000Z',
+            '2026-06-13T18:40:00.000Z', '2026-06-13T18:45:00.000Z', '[]')
+        `;
+        yield* sql`
+          INSERT INTO projection_thread_activities
+            (activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at)
+          VALUES ('auto-result', 'thread-purge', 'turn-auto', 'info', 'turn.completed', 'done',
+            '{"provider":"claudeAgent","tokenAccountingVersion":1,"mainLoopTokens":7000}',
+            100, '2026-06-13T18:45:00Z')
+        `;
+
+        const before = yield* stats.getProfileTokenStats({ utcOffsetMinutes: 330 });
+        yield* archive.purgeThreadWithStatsSnapshot({
+          threadId: ThreadId.makeUnsafe("thread-purge"),
+        });
+
+        expect(yield* stats.getProfileTokenStats({ utcOffsetMinutes: 330 })).toEqual(before);
+        expect(
+          yield* sql`SELECT tokens FROM profile_stats_deleted_tokens WHERE tokens = 7000`,
+        ).toEqual([]);
       }),
     );
   });
