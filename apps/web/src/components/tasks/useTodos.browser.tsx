@@ -14,9 +14,14 @@ import { renderHook } from "vitest-browser-react";
 import { deriveTaskStatus, todoQueryKey } from "./tasks.logic";
 import { useStore } from "../../store";
 import { makeThread } from "../../storeTestFixtures";
-import { useTodoEventSubscription, useTodoMutations, useTaskRows } from "./useTodos";
+import { useTodoEventSubscription, useTodoMutations, useTaskRows, useTodoList } from "./useTodos";
 
-const transport = vi.hoisted(() => ({ update: vi.fn(), onEvent: vi.fn(), delete: vi.fn() }));
+const transport = vi.hoisted(() => ({
+  update: vi.fn(),
+  onEvent: vi.fn(),
+  delete: vi.fn(),
+  list: vi.fn(),
+}));
 const notifications = vi.hoisted(() => ({ add: vi.fn() }));
 vi.mock("../ui/toast", () => ({ toastManager: notifications }));
 vi.mock("../../nativeApi", () => ({ ensureNativeApi: () => ({ todo: transport }) }));
@@ -38,9 +43,11 @@ function makeTodo(id: string): Todo {
   };
 }
 
-async function mountTodos(id: string) {
+async function mountTodos(id: string, listEnabled = false) {
   const todo = makeTodo(id);
-  const client = new QueryClient();
+  const client = new QueryClient({
+    defaultOptions: { queries: { staleTime: Infinity, retryDelay: 0 } },
+  });
   client.setQueryData(todoQueryKey, { todos: [todo] });
   let listener: ((event: TodoStreamEvent) => void) | undefined;
   transport.onEvent.mockImplementation((callback) => {
@@ -56,7 +63,10 @@ async function mountTodos(id: string) {
   const hook = await renderHook(
     () => {
       useTodoEventSubscription();
-      return useTodoMutations();
+      useTodoList(listEnabled);
+      const mutations = useTodoMutations();
+      const secondMutations = useTodoMutations();
+      return { ...mutations, secondDeleteTodo: secondMutations.deleteTodo };
     },
     {
       wrapper: ({ children }: { children?: ReactNode }) => (
@@ -193,9 +203,56 @@ it("ignores unrelated chat updates for empty and unlinked task lists, while foll
   }
 });
 
-it("reconciles an interrupted delete without restoring the row or reporting a definitive failure", async () => {
-  const test = await mountTodos("unknown-delete");
+it("holds an uncertain deletion against late events and update replies until a fresh list reconciles it", async () => {
+  const test = await mountTodos("unknown-delete", true);
   notifications.add.mockClear();
+  transport.delete.mockRejectedValue(
+    Object.assign(new Error("Connection changed"), {
+      _tag: "WsTransportRequestInterruptedError",
+      code: "WS_REQUEST_RECONNECTED",
+    }),
+  );
+  transport.list.mockRejectedValue(new Error("Still offline"));
+  const pendingUpdate = test.hook.result.current.updateTodoAsync({
+    id: test.todo.id,
+    title: "Edited",
+  });
+  try {
+    await vi.waitFor(() => expect(test.current().title).toBe("Edited"));
+    await new Promise<void>((resolve) =>
+      test.hook.result.current.deleteTodo(test.todo.id, { onSettled: () => resolve() }),
+    );
+    await vi.waitFor(() => expect(test.client.isFetching({ queryKey: todoQueryKey })).toBe(0));
+    expect(notifications.add).not.toHaveBeenCalled();
+    test.emit({ type: "todo-upserted", todo: test.todo });
+    expect(test.client.getQueryData<TodoListResult>(todoQueryKey)?.todos).toEqual([]);
+    test.reply.resolve({ ...test.todo, title: "Edited" });
+    await pendingUpdate;
+    expect(test.client.getQueryData<TodoListResult>(todoQueryKey)?.todos).toEqual([]);
+    await vi.waitFor(() => expect(test.client.isFetching({ queryKey: todoQueryKey })).toBe(0));
+    // Stream snapshots can predate the delete; only a fresh successful list settles it.
+    test.emit({ type: "snapshot", todos: [test.todo] });
+    expect(test.client.getQueryData<TodoListResult>(todoQueryKey)?.todos).toEqual([]);
+    transport.list.mockResolvedValue({ todos: [test.todo] });
+    await test.client.refetchQueries({ queryKey: todoQueryKey });
+    expect(test.current()).toEqual(test.todo);
+  } finally {
+    test.reply.resolve(test.todo);
+    await pendingUpdate;
+    await test.hook.unmount();
+    test.client.clear();
+  }
+});
+
+it("keeps a confirmed deletion guarded when an older reconciliation list arrives later", async () => {
+  const test = await mountTodos("confirmed-delete-during-list", true);
+  let resolveList!: (value: TodoListResult) => void;
+  transport.list.mockImplementation(
+    () =>
+      new Promise<TodoListResult>((resolve) => {
+        resolveList = resolve;
+      }),
+  );
   transport.delete.mockRejectedValue(
     Object.assign(new Error("Connection changed"), {
       _tag: "WsTransportRequestInterruptedError",
@@ -206,13 +263,144 @@ it("reconciles an interrupted delete without restoring the row or reporting a de
     await new Promise<void>((resolve) =>
       test.hook.result.current.deleteTodo(test.todo.id, { onSettled: () => resolve() }),
     );
+    await vi.waitFor(() => expect(resolveList).toBeDefined());
+    test.emit({ type: "todo-deleted", todoId: test.todo.id });
+    resolveList({ todos: [test.todo] });
+    await vi.waitFor(() => expect(test.client.isFetching({ queryKey: todoQueryKey })).toBe(0));
     expect(test.client.getQueryData<TodoListResult>(todoQueryKey)?.todos).toEqual([]);
-    expect(notifications.add).not.toHaveBeenCalled();
-    // If the server did not apply it, reconciliation must be able to restore its row.
-    test.emit({ type: "snapshot", todos: [test.todo] });
-    expect(test.current()).toEqual(test.todo);
+    test.emit({ type: "todo-upserted", todo: test.todo });
+    expect(test.client.getQueryData<TodoListResult>(todoQueryKey)?.todos).toEqual([]);
   } finally {
+    resolveList?.({ todos: [] });
     await test.hook.unmount();
     test.client.clear();
   }
 });
+
+it("preserves server confirmation received before the delete's lost reply", async () => {
+  const test = await mountTodos("delete-confirmed-before-error", true);
+  let rejectDelete!: (error: Error) => void;
+  transport.delete.mockImplementation(
+    () =>
+      new Promise((_resolve, reject) => {
+        rejectDelete = reject;
+      }),
+  );
+  transport.list.mockResolvedValue({ todos: [test.todo] });
+  let settled: Promise<void> | undefined;
+  try {
+    settled = new Promise<void>((resolve) =>
+      test.hook.result.current.deleteTodo(test.todo.id, { onSettled: () => resolve() }),
+    );
+    await vi.waitFor(() => expect(rejectDelete).toBeDefined());
+    test.emit({ type: "todo-deleted", todoId: test.todo.id });
+    rejectDelete(
+      Object.assign(new Error("Reply lost"), {
+        _tag: "WsTransportRequestInterruptedError",
+        code: "WS_REQUEST_RECONNECTED",
+      }),
+    );
+    await settled;
+    await test.client.refetchQueries({ queryKey: todoQueryKey });
+    expect(test.client.getQueryData<TodoListResult>(todoQueryKey)?.todos).toEqual([]);
+  } finally {
+    rejectDelete?.(new Error("Test cleanup"));
+    await settled;
+    await test.hook.unmount();
+    test.client.clear();
+  }
+});
+
+it("does not let a canceled list release a newer delete's guard", async () => {
+  const test = await mountTodos("delete-replaces-canceled-list", true);
+  const replies: Array<(value: TodoListResult) => void> = [];
+  let firstListReturned = false;
+  transport.list.mockImplementation(() => {
+    const index = replies.length;
+    return new Promise<TodoListResult>((resolve) => {
+      replies.push(resolve);
+    }).then((result) => {
+      if (index === 0) firstListReturned = true;
+      return result;
+    });
+  });
+  transport.delete.mockRejectedValue(
+    Object.assign(new Error("Reply lost"), {
+      _tag: "WsTransportRequestInterruptedError",
+      code: "WS_REQUEST_RECONNECTED",
+    }),
+  );
+  const deleteTask = () =>
+    new Promise<void>((resolve) =>
+      test.hook.result.current.deleteTodo(test.todo.id, { onSettled: () => resolve() }),
+    );
+  try {
+    await deleteTask();
+    await vi.waitFor(() => expect(replies).toHaveLength(1));
+    await deleteTask();
+    await vi.waitFor(() => expect(replies).toHaveLength(2));
+    replies[0]!({ todos: [test.todo] });
+    await vi.waitFor(() => expect(firstListReturned).toBe(true));
+    test.emit({ type: "todo-upserted", todo: test.todo });
+    expect(test.client.getQueryData<TodoListResult>(todoQueryKey)?.todos).toEqual([]);
+    replies[1]!({ todos: [] });
+    await vi.waitFor(() => expect(test.client.isFetching({ queryKey: todoQueryKey })).toBe(0));
+    test.emit({ type: "todo-upserted", todo: test.todo });
+    expect(test.client.getQueryData<TodoListResult>(todoQueryKey)?.todos).toEqual([]);
+  } finally {
+    for (const reply of replies) reply({ todos: [] });
+    await test.hook.unmount();
+    test.client.clear();
+  }
+});
+
+it.each(["success-first", "failure-first", "success-before-next-attempt"])(
+  "keeps successful deletion authoritative across overlapping replies (%s)",
+  async (order) => {
+    const test = await mountTodos(`overlapping-delete-${order}`);
+    const deletes: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
+    transport.delete.mockImplementation(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          deletes.push({ resolve, reject });
+        }),
+    );
+    const deleteTask = () =>
+      new Promise<void>((resolve) =>
+        test.hook.result.current.deleteTodo(test.todo.id, { onSettled: () => resolve() }),
+      );
+    const first = deleteTask();
+    await vi.waitFor(() => expect(deletes).toHaveLength(1));
+    if (order === "success-before-next-attempt") {
+      deletes[0]!.resolve();
+      await first;
+    }
+    const second = new Promise<void>((resolve) =>
+      test.hook.result.current.secondDeleteTodo(test.todo.id, { onSettled: () => resolve() }),
+    );
+    await vi.waitFor(() => expect(deletes).toHaveLength(2));
+    try {
+      if (order !== "failure-first") {
+        deletes[0]!.resolve();
+        await first;
+        deletes[1]!.reject(new Error("Delete refused"));
+        await second;
+      } else {
+        deletes[1]!.reject(new Error("Delete refused"));
+        await second;
+        // An old copy can arrive before the authoritative success callback.
+        test.emit({ type: "todo-upserted", todo: test.todo });
+        deletes[0]!.resolve();
+        await first;
+      }
+      expect(test.client.getQueryData<TodoListResult>(todoQueryKey)?.todos).toEqual([]);
+      test.emit({ type: "todo-upserted", todo: test.todo });
+      expect(test.client.getQueryData<TodoListResult>(todoQueryKey)?.todos).toEqual([]);
+    } finally {
+      for (const reply of deletes) reply.resolve();
+      await Promise.all([first, second]);
+      await test.hook.unmount();
+      test.client.clear();
+    }
+  },
+);
