@@ -6,7 +6,7 @@ import { SegmentedPicker } from "./SegmentedPicker";
 export type ProjectSource = "local" | "github";
 
 /**
- * The compact raised-thumb picker previously used for the Synara/Studio switch,
+ * The compact raised-thumb picker previously used for the Synara/Groups switch,
  * adapted to choose how a project is added.
  */
 export function ProjectSourceSegmentedPicker(props: {

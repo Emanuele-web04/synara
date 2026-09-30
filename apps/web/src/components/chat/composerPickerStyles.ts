@@ -216,13 +216,18 @@ export const COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME =
  *  than plain `border-border`: the two cards sit side by side and must read as one weight. */
 export const ENVIRONMENT_PANEL_SURFACE_CLASS_NAME = `relative overflow-hidden rounded-2xl border ${RAISED_SURFACE_BORDER_CLASS_NAME} bg-popover text-popover-foreground ${COMPOSER_SURFACE_SHADOW_CLASS_NAME}`;
 
-/** Slide + inset timing matched to `SIDEBAR_OFFCANVAS_MOTION_CLASS` (right dock / thread sidebar). */
+/** Top-right overlay host shared by the right-side surface panels (Environment, Group,
+ *  Library). Panels that stack extra chrome (Environment's bottom rail) extend it. */
+export const ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME =
+  "pointer-events-none absolute inset-y-0 right-0 z-20 flex flex-col p-3";
+
+/** Slide + inset timing matched to shared disclosure motion (220ms). */
 export const ENVIRONMENT_PANEL_MOTION_CLASS =
-  "transition-[transform,opacity] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none";
+  "transition-[transform,opacity] duration-220 ease-out motion-reduce:transition-none";
 
 /** Transcript/composer right inset when the docked Environment card opens. */
 export const ENVIRONMENT_CONTENT_INSET_MOTION_CLASS =
-  "transition-[padding-right] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none";
+  "transition-[padding-right] duration-220 ease-out motion-reduce:transition-none";
 
 /** Anchors the command menu above the composer editor without shifting layout. */
 export const COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME =

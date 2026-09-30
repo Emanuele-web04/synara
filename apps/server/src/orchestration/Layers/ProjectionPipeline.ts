@@ -6,6 +6,7 @@ import { ApprovalRequestId, CommandId, type OrchestrationEvent } from "@synara/c
 import { resolveHumanMessageAt } from "@synara/shared/threadSummary";
 import { isSidechatThread } from "@synara/shared/sidechatThread";
 import { clearRemovedAsyncUserInputResponses } from "@synara/shared/asyncUserInput";
+import { isGroupContainerKind } from "@synara/shared/projectContainers";
 import {
   addPinnedMessage,
   removePinnedMessage,
@@ -553,7 +554,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           const project = yield* projectionProjectRepository.getById({
             projectId: event.payload.projectId,
           });
-          const isStudio = Option.isSome(project) && project.value.kind === "studio";
+          const isStudio = Option.isSome(project) && isGroupContainerKind(project.value.kind);
           yield* projectionThreadRepository.upsert({
             threadId: event.payload.threadId,
             projectId: event.payload.projectId,
@@ -624,7 +625,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                 projectId: currentThread.value.projectId,
               })
             : Option.none();
-          const isStudio = Option.isSome(project) && project.value.kind === "studio";
+          const isStudio = Option.isSome(project) && isGroupContainerKind(project.value.kind);
           return yield* updateThreadProjection(event.payload.threadId, (thread) => {
             const nextCreateBranchFlowCompleted =
               event.payload.createBranchFlowCompleted !== undefined
@@ -1299,7 +1300,11 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             requestedAt: event.payload.createdAt,
           });
           if (turnStartSession !== null) {
-            yield* projectionThreadSessionRepository.upsert(turnStartSession);
+            yield* projectionThreadSessionRepository.upsert({
+              ...turnStartSession,
+              lastActivityAt: event.payload.createdAt,
+              lastProgressAt: event.payload.createdAt,
+            });
           }
           return;
         }
@@ -1312,6 +1317,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             runtimeMode: event.payload.session.runtimeMode,
             activeTurnId: event.payload.session.activeTurnId,
             lastError: event.payload.session.lastError,
+            lastActivityAt: event.payload.session.lastActivityAt ?? null,
+            lastProgressAt: event.payload.session.lastProgressAt ?? null,
             updatedAt: event.payload.session.updatedAt,
           });
           return;

@@ -5,13 +5,13 @@ import { describe } from "vitest";
 
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
-import migration from "./109_ProjectionThreadsSidechatContext.ts";
+import migration from "./118_ProjectionThreadsSidechatContext.ts";
 
-describe("109_ProjectionThreadsSidechatContext", () => {
+describe("118_ProjectionThreadsSidechatContext", () => {
   it.effect("keeps existing threads and sidechats with no standalone context", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 108 });
+      yield* runMigrations({ toMigrationInclusive: 117 });
       yield* sql`
         INSERT INTO projection_threads (
           thread_id, project_id, title, model_selection_json, sidechat_source_thread_id,
@@ -23,7 +23,7 @@ describe("109_ProjectionThreadsSidechatContext", () => {
         )
       `;
 
-      yield* runMigrations({ toMigrationInclusive: 109 });
+      yield* runMigrations({ toMigrationInclusive: 118 });
       const [row] = yield* sql<{
         readonly source: string | null;
         readonly context: string | null;

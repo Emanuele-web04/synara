@@ -28,6 +28,7 @@ import {
 import { collectSubagentDescendants } from "@synara/shared/threadHierarchy";
 import { isSidechatThread } from "@synara/shared/sidechatThread";
 import { autoRuntimeModeSelectionIssue } from "@synara/shared/runtimeMode";
+import { isGroupContainerKind } from "@synara/shared/projectContainers";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
 import {
   collectTailTurnIds,
@@ -85,10 +86,10 @@ const nowIso = () => new Date().toISOString();
 // an unrecorded preference should degrade to live output, never to a silent
 // buffer that withholds the whole assistant message until turn completion.
 const DEFAULT_ASSISTANT_DELIVERY_MODE = "streaming" as const;
-const STUDIO_PROJECT_KIND_SET = new Set<ProjectKind>(["studio"]);
+const GROUP_CONTAINER_PROJECT_KIND_SET = new Set<ProjectKind>(["studio", "group"]);
 // Kinds that claim exclusive ownership of a workspace root. Chat containers are excluded: they
 // use placeholder roots (e.g. the home dir) that legitimately coexist with real projects.
-const WORKSPACE_OWNING_PROJECT_KIND_SET = new Set<ProjectKind>(["project", "studio"]);
+const WORKSPACE_OWNING_PROJECT_KIND_SET = new Set<ProjectKind>(["project", "studio", "group"]);
 
 function validateSidechatExecutionAvailable(
   command: Pick<OrchestrationCommand, "type">,
@@ -391,7 +392,7 @@ function resolveCreatedThreadWorkspaceMetadata(
   projectKind: ProjectKind | undefined,
   command: CreatedThreadWorkspaceCommand,
 ) {
-  if (projectKind === "studio") {
+  if (isGroupContainerKind(projectKind)) {
     return {
       envMode: "local" as const,
       branch: null,
@@ -507,7 +508,7 @@ function resolveThreadWorkspaceMetadataPatch(
   command: Extract<OrchestrationCommand, { type: "thread.meta.update" }>,
   currentThread: OrchestrationThread,
 ) {
-  if (projectKind === "studio") {
+  if (isGroupContainerKind(projectKind)) {
     return {
       envMode: "local" as const,
       branch: null,
@@ -780,7 +781,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         const existingStudioProject = listActiveProjectsByWorkspaceRoot(
           readModel,
           command.workspaceRoot,
-          { kinds: STUDIO_PROJECT_KIND_SET },
+          { kinds: GROUP_CONTAINER_PROJECT_KIND_SET },
         )[0];
         if (existingStudioProject) {
           return yield* new OrchestrationCommandInvariantError({
@@ -823,9 +824,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           });
         }
       }
-      if (nextProjectKind === "studio") {
+      if (isGroupContainerKind(nextProjectKind)) {
         // Cross-kind on purpose: a regular project already using this root would otherwise
-        // coexist with the Studio container, breaking workspace-root-to-project uniqueness
+        // coexist with the group container, breaking workspace-root-to-project uniqueness
         // that shell snapshot mapping and duplicate recovery rely on.
         const existingOwningProject = listActiveProjectsByWorkspaceRoot(
           readModel,
@@ -1096,8 +1097,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           runtimeMode: command.runtimeMode,
           interactionMode: command.interactionMode,
           ...resolveCreatedThreadWorkspaceMetadata(project.kind, command),
-          createBranchFlowCompleted:
-            project.kind === "studio" ? false : command.createBranchFlowCompleted,
+          createBranchFlowCompleted: isGroupContainerKind(project.kind)
+            ? false
+            : command.createBranchFlowCompleted,
           isPinned: command.isPinned,
           parentThreadId: command.parentThreadId,
           ...(command.creationSource !== undefined
@@ -1181,8 +1183,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           runtimeMode: command.runtimeMode,
           interactionMode: command.interactionMode,
           ...resolveCreatedThreadWorkspaceMetadata(project.kind, command),
-          createBranchFlowCompleted:
-            project.kind === "studio" ? false : command.createBranchFlowCompleted,
+          createBranchFlowCompleted: isGroupContainerKind(project.kind)
+            ? false
+            : command.createBranchFlowCompleted,
           isPinned: false,
           parentThreadId: null,
           subagentAgentId: null,
@@ -1282,8 +1285,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           runtimeMode: command.runtimeMode,
           interactionMode: command.interactionMode,
           ...resolveCreatedThreadWorkspaceMetadata(project.kind, command),
-          createBranchFlowCompleted:
-            project.kind === "studio" ? false : command.createBranchFlowCompleted,
+          createBranchFlowCompleted: isGroupContainerKind(project.kind)
+            ? false
+            : command.createBranchFlowCompleted,
           isPinned: false,
           parentThreadId: null,
           subagentAgentId: null,

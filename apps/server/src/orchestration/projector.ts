@@ -9,6 +9,7 @@ import {
   type OrchestrationMessageTextSegment,
 } from "@synara/contracts";
 import { clearRemovedAsyncUserInputResponses } from "@synara/shared/asyncUserInput";
+import { isGroupContainerKind } from "@synara/shared/projectContainers";
 import { isSidechatThread } from "@synara/shared/sidechatThread";
 import {
   addPinnedMessage,
@@ -533,8 +534,9 @@ export function projectEvent(
           event.type,
           "payload",
         );
-        const isStudio =
-          nextBase.projects.find((project) => project.id === payload.projectId)?.kind === "studio";
+        const isStudio = isGroupContainerKind(
+          nextBase.projects.find((project) => project.id === payload.projectId)?.kind,
+        );
         const thread: OrchestrationThread = yield* decodeForEvent(
           OrchestrationThread,
           {
@@ -670,9 +672,9 @@ export function projectEvent(
         Effect.map((payload) => {
           const existingThread =
             nextBase.threads.find((thread) => thread.id === payload.threadId) ?? null;
-          const isStudio =
-            nextBase.projects.find((project) => project.id === existingThread?.projectId)?.kind ===
-            "studio";
+          const isStudio = isGroupContainerKind(
+            nextBase.projects.find((project) => project.id === existingThread?.projectId)?.kind,
+          );
           const nextCreateBranchFlowCompleted =
             payload.createBranchFlowCompleted !== undefined
               ? payload.createBranchFlowCompleted

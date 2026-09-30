@@ -266,7 +266,16 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [106, "ProjectImportOrigins"],
         [107, "ProjectionThreadsHumanMessage"],
         [108, "GatewayCompletions"],
-        [109, "ProjectionThreadsSidechatContext"],
+        [109, "ProjectAgent"],
+        [110, "Groups"],
+        [111, "GroupLibraryHosting"],
+        [112, "CoordinatorAppearance"],
+        [113, "ProjectAgentWakeCursor"],
+        [114, "ProjectAgentLifecycle"],
+        [115, "ProjectAgentManagedWorkers"],
+        [116, "ProjectAgentWorkerRecovery"],
+        [117, "WorkerMonitoringLiveness"],
+        [118, "ProjectionThreadsSidechatContext"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -327,9 +336,57 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 106, name: "ProjectImportOrigins" },
           { migration_id: 107, name: "ProjectionThreadsHumanMessage" },
           { migration_id: 108, name: "GatewayCompletions" },
-          { migration_id: 109, name: "ProjectionThreadsSidechatContext" },
+          { migration_id: 109, name: "ProjectAgent" },
+          { migration_id: 110, name: "Groups" },
+          { migration_id: 111, name: "GroupLibraryHosting" },
+          { migration_id: 112, name: "CoordinatorAppearance" },
+          { migration_id: 113, name: "ProjectAgentWakeCursor" },
+          { migration_id: 114, name: "ProjectAgentLifecycle" },
+          { migration_id: 115, name: "ProjectAgentManagedWorkers" },
+          { migration_id: 116, name: "ProjectAgentWorkerRecovery" },
+          { migration_id: 117, name: "WorkerMonitoringLiveness" },
+          { migration_id: 118, name: "ProjectionThreadsSidechatContext" },
         ],
       );
+      const groupConfigColumns = yield* sql<{ readonly name: string }>`
+        SELECT name FROM pragma_table_info('project_agent_configs')
+      `;
+      assert.include(
+        groupConfigColumns.map((row) => row.name),
+        "goal",
+      );
+      assert.include(
+        groupConfigColumns.map((row) => row.name),
+        "icon",
+      );
+      assert.include(
+        groupConfigColumns.map((row) => row.name),
+        "auto_memory_enabled",
+      );
+      assert.include(
+        groupConfigColumns.map((row) => row.name),
+        "library_path",
+      );
+      assert.include(
+        groupConfigColumns.map((row) => row.name),
+        "library_remote_url",
+      );
+      assert.include(
+        groupConfigColumns.map((row) => row.name),
+        "library_push_on_change",
+      );
+      assert.include(
+        groupConfigColumns.map((row) => row.name),
+        "coordinator_icon",
+      );
+      assert.include(
+        groupConfigColumns.map((row) => row.name),
+        "coordinator_color",
+      );
+      const linkedTables = yield* sql<{ readonly name: string }>`
+        SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'project_agent_linked_projects'
+      `;
+      assert.equal(linkedTables.length, 1);
       const preserved = yield* sql<{ readonly count: number }>`
         SELECT COUNT(*) AS count FROM orchestration_consumer_state
       `;
@@ -429,7 +486,16 @@ agentGatewayRetentionLegacyLayer(
           [106, "ProjectImportOrigins"],
           [107, "ProjectionThreadsHumanMessage"],
           [108, "GatewayCompletions"],
-          [109, "ProjectionThreadsSidechatContext"],
+          [109, "ProjectAgent"],
+          [110, "Groups"],
+          [111, "GroupLibraryHosting"],
+          [112, "CoordinatorAppearance"],
+          [113, "ProjectAgentWakeCursor"],
+          [114, "ProjectAgentLifecycle"],
+          [115, "ProjectAgentManagedWorkers"],
+          [116, "ProjectAgentWorkerRecovery"],
+          [117, "WorkerMonitoringLiveness"],
+          [118, "ProjectionThreadsSidechatContext"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -533,7 +599,16 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [106, "ProjectImportOrigins"],
         [107, "ProjectionThreadsHumanMessage"],
         [108, "GatewayCompletions"],
-        [109, "ProjectionThreadsSidechatContext"],
+        [109, "ProjectAgent"],
+        [110, "Groups"],
+        [111, "GroupLibraryHosting"],
+        [112, "CoordinatorAppearance"],
+        [113, "ProjectAgentWakeCursor"],
+        [114, "ProjectAgentLifecycle"],
+        [115, "ProjectAgentManagedWorkers"],
+        [116, "ProjectAgentWorkerRecovery"],
+        [117, "WorkerMonitoringLiveness"],
+        [118, "ProjectionThreadsSidechatContext"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -578,7 +653,16 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [106, "ProjectImportOrigins"],
           [107, "ProjectionThreadsHumanMessage"],
           [108, "GatewayCompletions"],
-          [109, "ProjectionThreadsSidechatContext"],
+          [109, "ProjectAgent"],
+          [110, "Groups"],
+          [111, "GroupLibraryHosting"],
+          [112, "CoordinatorAppearance"],
+          [113, "ProjectAgentWakeCursor"],
+          [114, "ProjectAgentLifecycle"],
+          [115, "ProjectAgentManagedWorkers"],
+          [116, "ProjectAgentWorkerRecovery"],
+          [117, "WorkerMonitoringLiveness"],
+          [118, "ProjectionThreadsSidechatContext"],
         ],
       );
 
@@ -677,7 +761,16 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [106, "ProjectImportOrigins"],
         [107, "ProjectionThreadsHumanMessage"],
         [108, "GatewayCompletions"],
-        [109, "ProjectionThreadsSidechatContext"],
+        [109, "ProjectAgent"],
+        [110, "Groups"],
+        [111, "GroupLibraryHosting"],
+        [112, "CoordinatorAppearance"],
+        [113, "ProjectAgentWakeCursor"],
+        [114, "ProjectAgentLifecycle"],
+        [115, "ProjectAgentManagedWorkers"],
+        [116, "ProjectAgentWorkerRecovery"],
+        [117, "WorkerMonitoringLiveness"],
+        [118, "ProjectionThreadsSidechatContext"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -718,7 +811,16 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [106, "ProjectImportOrigins"],
           [107, "ProjectionThreadsHumanMessage"],
           [108, "GatewayCompletions"],
-          [109, "ProjectionThreadsSidechatContext"],
+          [109, "ProjectAgent"],
+          [110, "Groups"],
+          [111, "GroupLibraryHosting"],
+          [112, "CoordinatorAppearance"],
+          [113, "ProjectAgentWakeCursor"],
+          [114, "ProjectAgentLifecycle"],
+          [115, "ProjectAgentManagedWorkers"],
+          [116, "ProjectAgentWorkerRecovery"],
+          [117, "WorkerMonitoringLiveness"],
+          [118, "ProjectionThreadsSidechatContext"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`

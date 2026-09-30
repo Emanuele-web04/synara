@@ -33,6 +33,7 @@ import { createActiveTrailStore, deriveMessageTrailItems } from "./messageTrail.
 import { createThreadFindHighlightStore, type ThreadFindHighlightStore } from "./threadFind.logic";
 import { AgentActivityDetailView } from "./AgentActivityDetailView";
 import type { AgentActivityDetail } from "./agentActivity.logic";
+import { ThreadErrorBanner } from "./ThreadErrorBanner";
 
 interface ChatTranscriptPaneProps {
   activeThreadId: string;
@@ -105,6 +106,12 @@ interface ChatTranscriptPaneProps {
   messageChangeSignal?: ComponentProps<typeof MessagesTimeline>["messageChangeSignal"];
   timestampFormat: TimestampFormat;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
+  conversationOnly?: boolean;
+  /** Stored thread-level error, rendered in flow above the transcript. */
+  threadError?: string | null;
+  unblockingThread?: boolean;
+  onDismissThreadError?: () => void;
+  onUnblockThread?: () => void;
   workspaceRoot: string | undefined;
   keybindings?: ComponentProps<typeof MessagesTimeline>["keybindings"];
   availableEditors?: ComponentProps<typeof MessagesTimeline>["availableEditors"];
@@ -183,6 +190,11 @@ export function ChatTranscriptPane({
   messageChangeSignal,
   timestampFormat,
   turnDiffSummaryByAssistantMessageId,
+  conversationOnly,
+  threadError,
+  unblockingThread,
+  onDismissThreadError,
+  onUnblockThread,
   workspaceRoot,
   keybindings,
   availableEditors,
@@ -233,6 +245,19 @@ export function ChatTranscriptPane({
         terminalWorkspaceTerminalTabActive ? "pointer-events-none invisible" : "",
       )}
     >
+      {/* The thread error renders in flow above the transcript rather than as
+          a floating overlay, so it can never cover message content. */}
+      {!agentActivityDetail && threadError ? (
+        <div className="flex shrink-0 justify-center px-3 pt-2">
+          <ThreadErrorBanner
+            error={threadError}
+            unblocking={unblockingThread === true}
+            {...(onDismissThreadError ? { onDismiss: onDismissThreadError } : {})}
+            {...(onUnblockThread ? { onUnblock: onUnblockThread } : {})}
+          />
+        </div>
+      ) : null}
+
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         {agentActivityDetail && onCloseAgentActivityDetail ? (
           <AgentActivityDetailView
@@ -272,6 +297,7 @@ export function ChatTranscriptPane({
             timelineEntries={timelineEntries}
             messageChangeSignal={messageChangeSignal}
             turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
+            conversationOnly={conversationOnly === true}
             onOpenTurnDiff={onOpenTurnDiff}
             onOpenThread={onOpenThread}
             {...(onOpenAutomation ? { onOpenAutomation } : {})}

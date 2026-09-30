@@ -44,6 +44,8 @@ function automationScheduleActivityPayload(schedule: AutomationSchedule) {
   switch (schedule.type) {
     case "manual":
       return { type: "manual" } as const;
+    case "project-event":
+      return { type: "project-event", projectId: schedule.projectId } as const;
     case "once":
       return { type: "once", runAt: schedule.runAt } as const;
     case "interval":

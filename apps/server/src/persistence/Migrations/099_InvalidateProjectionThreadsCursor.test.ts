@@ -33,7 +33,8 @@ import asyncUserInputSchema from "./105_AsyncUserInput.ts";
 import messageTurnBoundarySchema from "./102_ProjectionThreadMessagesTurnBoundary.ts";
 import claudeCacheReviewSchema from "./104_ProjectionThreadsClaudeCacheReview.ts";
 import humanMessageSchema from "./107_ProjectionThreadsHumanMessage.ts";
-import sidechatContextSchema from "./109_ProjectionThreadsSidechatContext.ts";
+import workerMonitoringLivenessSchema from "./117_WorkerMonitoringLiveness.ts";
+import sidechatContextSchema from "./118_ProjectionThreadsSidechatContext.ts";
 
 const testLayer = OrchestrationProjectionPipelineLive.pipe(
   Layer.provideMerge(OrchestrationEventStoreLive),
@@ -74,6 +75,7 @@ it.layer(Layer.fresh(testLayer))("099_InvalidateProjectionThreadsCursor", (it) =
         yield* asyncUserInputSchema;
         yield* claudeCacheReviewSchema;
         yield* humanMessageSchema;
+        yield* workerMonitoringLivenessSchema;
         yield* sidechatContextSchema;
 
         const threadId = ThreadId.makeUnsafe("thread-099");

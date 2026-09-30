@@ -17,7 +17,11 @@ import {
  * is its ProviderKind: today that is "omp" only.
  */
 export type BetaOnlyFeature = string;
-export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = ["omp"];
+
+/** Groups: the coordinator, its threads, the Group panel and the Library. */
+export const GROUPS_BETA_FEATURE = "groups";
+
+export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = ["omp", GROUPS_BETA_FEATURE];
 
 /**
  * Whether a Beta-only feature is on for this host. Only the Stable

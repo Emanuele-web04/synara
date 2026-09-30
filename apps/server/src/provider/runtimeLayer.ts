@@ -22,6 +22,7 @@ import { makePiAdapterLive } from "./Layers/PiAdapter";
 import { makeOmpAdapterLive } from "./Layers/OmpAdapter";
 import { ProviderAdapterRegistryLive } from "./Layers/ProviderAdapterRegistry";
 import { ProviderDiscoveryServiceLive } from "./Layers/ProviderDiscoveryService";
+import { ProviderHealthLive } from "./Layers/ProviderHealth";
 import { makeDurableProviderServiceLive } from "./Layers/ProviderService";
 import { ProviderSessionDirectoryLive } from "./Layers/ProviderSessionDirectory";
 import { ProviderSessionRuntimeRepositoryLive } from "../persistence/Layers/ProviderSessionRuntime";
@@ -125,6 +126,7 @@ export function makeServerProviderLayer(
     );
     const providerDiscoveryLayer = ProviderDiscoveryServiceLive.pipe(
       Layer.provide(adapterRegistryLayer),
+      Layer.provide(ProviderHealthLive),
     );
     return Layer.mergeAll(
       providerServiceLayer,

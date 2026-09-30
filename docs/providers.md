@@ -82,11 +82,17 @@ For a release newer than Synara's catalog, the picker shows the concrete ID. Age
 that ID when it resolves to one discovered non-default model; ambiguous IDs require an exact
 advertised alias.
 
+Claude model discovery caches catalogs by the detected CLI version as well as the executable
+path. A detected CLI update refreshes the picker even when the path stays the same, including
+after a restart. Catalog revalidation uses a temporary Claude process because running sessions
+retain the model metadata returned when they initialized. Ordinary picker reads share the
+server cache rather than starting a process each time.
+
 For Codex, successful model discovery determines the built-in choices, including when the returned
 catalog is empty. Models absent from that catalog are not added back from Synara's static list.
 Custom models remain available. Until discovery succeeds, Synara uses a static fallback; a failed
 refresh keeps the last successful catalog. The shared discovery cache refreshes catalogs in the
-background after its ten-minute fresh window.
+background after its thirty-minute fresh window.
 
 The composer model picker has one tab per connected provider and a Starred tab. Starring a model
 saves it together with its current effort and speed, so one click (or `mod+1`…`mod+9` while the

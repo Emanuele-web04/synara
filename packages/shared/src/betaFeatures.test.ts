@@ -4,6 +4,7 @@ import {
   BETA_ONLY_FEATURES,
   desktopFlavorFromBundleId,
   desktopFlavorFromProtocol,
+  GROUPS_BETA_FEATURE,
   isBetaFeatureEnabled,
 } from "./betaFeatures";
 import {
@@ -21,6 +22,14 @@ describe("isBetaFeatureEnabled", () => {
       expect(isBetaFeatureEnabled("omp", flavor)).toBe(true);
     }
     expect(isBetaFeatureEnabled("omp", "production")).toBe(false);
+  });
+
+  it("keeps Groups out of Stable only", () => {
+    expect(BETA_ONLY_FEATURES).toContain(GROUPS_BETA_FEATURE);
+    for (const flavor of ["development", "canary", "cua", "beta", "unknown"] as const) {
+      expect(isBetaFeatureEnabled(GROUPS_BETA_FEATURE, flavor)).toBe(true);
+    }
+    expect(isBetaFeatureEnabled(GROUPS_BETA_FEATURE, "production")).toBe(false);
   });
 
   it("enables the rail sidebar layout in both Beta and Stable", () => {
