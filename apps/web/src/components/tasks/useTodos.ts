@@ -15,6 +15,7 @@ import type {
 import { applyTodoPatch } from "@synara/shared/todo";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
+import { useShallow } from "zustand/react/shallow";
 
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { ensureNativeApi } from "../../nativeApi";
@@ -278,6 +279,12 @@ export function useTodoMutations() {
     },
     onError: (error, id, context) => {
       unmarkTodoDeleted(id);
+      // A lost reply does not prove refusal. Keep the optimistic absence until a fresh
+      // server snapshot confirms whether the delete landed; do not flash a false error.
+      if (isRequestOutcomeUnknown(error)) {
+        void queryClient.invalidateQueries({ queryKey: todoQueryKey });
+        return;
+      }
       const previous = context?.previous;
       // Restore unless its create failed. A created row can still carry the optimistic
       // stamp (the delete mark blocked the create's reply); any newer copy replaces it.
@@ -301,13 +308,21 @@ export function useTodoMutations() {
 /** Every to-do joined with its linked chat and the status that chat implies. */
 /** `now` lets a just-linked chat read as Starting until its link settles; omit it where only attention counts. */
 export function useTaskRows(todos: readonly Todo[], now?: Date): TaskRowModel[] {
-  const threadSummaryById = useStore((state) => state.sidebarThreadSummaryById);
+  // The sidebar uses this hook even with no to-dos. Unrelated chat activity must not
+  // rerender its entire tree; subscribe only to summaries the current to-dos reference.
+  const linkedThreads = useStore(
+    useShallow((state) =>
+      todos.map((todo) =>
+        todo.threadId ? (state.sidebarThreadSummaryById[todo.threadId] ?? null) : null,
+      ),
+    ),
+  );
   const threadsHydrated = useStore((state) => state.threadsHydrated);
   const draftThreadsByThreadId = useComposerDraftStore((state) => state.draftThreadsByThreadId);
   return useMemo(
     () =>
-      todos.map((todo) => {
-        const thread = todo.threadId ? (threadSummaryById[todo.threadId] ?? null) : null;
+      todos.map((todo, index) => {
+        const thread = linkedThreads[index] ?? null;
         const hasDraftThread =
           todo.threadId !== null && draftThreadsByThreadId[todo.threadId] !== undefined;
         return {
@@ -316,7 +331,7 @@ export function useTaskRows(todos: readonly Todo[], now?: Date): TaskRowModel[] 
           status: deriveTaskStatus({ todo, thread, hasDraftThread, threadsHydrated, now }),
         };
       }),
-    [draftThreadsByThreadId, now, threadSummaryById, threadsHydrated, todos],
+    [draftThreadsByThreadId, linkedThreads, now, threadsHydrated, todos],
   );
 }
 
