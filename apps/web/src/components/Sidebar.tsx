@@ -4020,8 +4020,14 @@ export default function Sidebar() {
     [appSettings.sidebarNavOrder, tasksSurfaceEnabled],
   );
   const hiddenSidebarNavItems = useMemo(
-    () => new Set(normalizeHiddenSidebarNavItems(appSettings.hiddenSidebarNavItems)),
-    [appSettings.hiddenSidebarNavItems],
+    () =>
+      new Set(
+        resolveTasksSurfaceSlot(
+          normalizeHiddenSidebarNavItems(appSettings.hiddenSidebarNavItems),
+          tasksSurfaceEnabled,
+        ),
+      ),
+    [appSettings.hiddenSidebarNavItems, tasksSurfaceEnabled],
   );
   const [isCustomizingNav, setIsCustomizingNav] = useState(false);
   // Rail layout: the customize editor opens as a popover beside the rail.
@@ -4123,12 +4129,10 @@ export default function Sidebar() {
     (id: string, visible: boolean) => {
       // Ids come from the customize rows, which list SidebarNavItemIds only.
       const navId = id as SidebarNavItemId;
-      const hidden = normalizeHiddenSidebarNavItems(appSettings.hiddenSidebarNavItems).filter(
-        (entry) => entry !== navId,
-      );
+      const hidden = [...hiddenSidebarNavItems].filter((entry) => entry !== navId);
       updateSettings({ hiddenSidebarNavItems: visible ? hidden : [...hidden, navId] });
     },
-    [appSettings.hiddenSidebarNavItems, updateSettings],
+    [hiddenSidebarNavItems, updateSettings],
   );
   const handleNavContextMenu = useCallback((event: MouseEvent) => {
     if (!readNativeApi()) return;
@@ -6487,7 +6491,12 @@ export default function Sidebar() {
     normalizeRailItemOrder(appSettings.railItemOrder),
     tasksSurfaceEnabled,
   );
-  const hiddenRailItems = new Set(normalizeHiddenRailItems(appSettings.hiddenRailItems));
+  const hiddenRailItems = new Set(
+    resolveTasksSurfaceSlot(
+      normalizeHiddenRailItems(appSettings.hiddenRailItems),
+      tasksSurfaceEnabled,
+    ),
+  );
   const railItemLabel = (id: RailOrderableItemId): string =>
     id === "home" || id === "spaces"
       ? RAIL_PANEL_ITEM_LABELS[id]
