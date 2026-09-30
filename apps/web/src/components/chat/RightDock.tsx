@@ -332,7 +332,7 @@ export function RightDock(props: RightDockProps) {
               desktopTopBarWindowControlsGutterClassName,
             )}
           >
-            <SurfaceTabStrip className="flex-1" activeKey={props.state.activePaneId}>
+            <SurfaceTabStrip className="flex-1" activeKey={props.state.activePaneId} dividers>
               {props.state.panes.map((pane) => (
                 <RightDockTab
                   key={pane.id}

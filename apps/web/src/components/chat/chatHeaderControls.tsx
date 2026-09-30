@@ -286,7 +286,8 @@ export function SurfaceTabChip({
       data-surface-tab=""
       data-surface-tab-active={active ? "" : undefined}
       className={cn(
-        "group/dock-tab [-webkit-app-region:no-drag]",
+        // `relative` anchors the strip's between-tab divider (see SurfaceTabStrip).
+        "group/dock-tab relative [-webkit-app-region:no-drag]",
         trailingClose
           ? cn(
               CHAT_SURFACE_CHIP_CLASS_NAME,
@@ -385,14 +386,19 @@ export function SurfaceTabChip({
  * scrollbar, softly fades whichever edge still has tabs hidden behind it (`scroll-fade-x`
  * is scroll-driven, so a strip whose tabs fit shows no fade at all), keeps the active
  * chip in view when the selection changes or the strip is resized, and lets a vertical
- * mouse wheel scroll it sideways. Pass the active tab's id as {@link activeKey}.
+ * mouse wheel scroll it sideways. Pass the active tab's id as {@link activeKey};
+ * {@link dividers} draws the top-bar hairline between adjacent tabs.
  */
 export function SurfaceTabStrip({
   activeKey,
+  dividers,
   className,
   children,
   ...props
-}: ComponentProps<"div"> & { activeKey?: string | null | undefined }) {
+}: ComponentProps<"div"> & {
+  activeKey?: string | null | undefined;
+  dividers?: boolean | undefined;
+}) {
   const stripRef = useRef<HTMLDivElement>(null);
 
   // A tab selected past the visible edge (opened elsewhere, or appended at the end) must
@@ -445,6 +451,7 @@ export function SurfaceTabStrip({
       {...props}
       className={cn(
         "flex min-w-0 items-center gap-1 overflow-x-auto overflow-y-hidden overscroll-x-contain [scrollbar-width:none] scroll-fade-x [--scroll-fade-size:1.5rem] [&::-webkit-scrollbar]:hidden",
+        dividers && "surface-tab-dividers",
         className,
       )}
     >

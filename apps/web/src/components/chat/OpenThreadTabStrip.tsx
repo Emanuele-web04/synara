@@ -110,7 +110,7 @@ export function OpenThreadTabStrip(props: {
       }
       onPointerLeave={() => setFrozenTabWidthPx(null)}
     >
-      <SurfaceTabStrip activeKey={activeThreadId} className="flex-1">
+      <SurfaceTabStrip activeKey={activeThreadId} dividers className="flex-1">
         {tabs.map((tab) => {
           const active = tab.threadId === activeThreadId;
           // A lone unsent draft has nowhere to go: closing it would land on a new chat
