@@ -55,7 +55,8 @@ export interface UseComposerVoiceControllerResult {
   voiceRecordingDurationLabel: string;
   showVoiceNotesControl: boolean;
   startComposerVoiceRecording: () => Promise<void>;
-  submitComposerVoiceRecording: () => Promise<void>;
+  // Resolves true only when a current transcript reached onTranscriptReady.
+  submitComposerVoiceRecording: () => Promise<boolean>;
   cancelComposerVoiceRecording: () => void;
 }
 
@@ -228,12 +229,12 @@ export function useComposerVoiceController(
     }
   };
 
-  const submitComposerVoiceRecording = (): Promise<void> => {
+  const submitComposerVoiceRecording = (): Promise<boolean> => {
     if (!activeProject || !isVoiceRecording) {
-      return Promise.resolve();
+      return Promise.resolve(false);
     }
     if (!isVoiceActionArmed()) {
-      return Promise.resolve();
+      return Promise.resolve(false);
     }
 
     const api = readNativeApi();
@@ -243,7 +244,7 @@ export function useComposerVoiceController(
         title: "Voice transcription is unavailable right now.",
       });
       void cancelVoiceRecording();
-      return Promise.resolve();
+      return Promise.resolve(false);
     }
 
     setIsVoiceTranscribing(true);
@@ -259,16 +260,16 @@ export function useComposerVoiceController(
     // Promise chain instead of async/try-catch-finally: React Compiler does
     // not yet support try/finally, and it would skip optimizing this hook.
     return stopVoiceRecording()
-      .then((payload) => {
+      .then((payload): Promise<boolean> | boolean => {
         if (!isCurrentVoiceRequest()) {
-          return;
+          return false;
         }
         if (!payload) {
           toastManager.add({
             type: "warning",
             title: "No audio was captured.",
           });
-          return;
+          return false;
         }
         return api.server
           .transcribeVoice({
@@ -279,14 +280,15 @@ export function useComposerVoiceController(
           })
           .then((result) => {
             if (!isCurrentVoiceRequest()) {
-              return;
+              return false;
             }
             onTranscriptReady(result.text);
+            return true;
           });
       })
       .catch((error: unknown) => {
         if (!isCurrentVoiceRequest()) {
-          return;
+          return false;
         }
 
         const description =
@@ -312,14 +314,14 @@ export function useComposerVoiceController(
               }
             : {}),
         });
+        return false;
       })
       .finally(() => {
         if (isCurrentVoiceRequest()) {
           voiceRecordingStartedAtRef.current = null;
           setIsVoiceTranscribing(false);
         }
-      })
-      .then(() => undefined);
+      });
   };
 
   const cancelComposerVoiceRecording = () => {
