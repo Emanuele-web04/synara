@@ -825,6 +825,31 @@ describe("resolveShortcutCommand", () => {
     );
   });
 
+  it("resolves the sidechat default by physical key and respects customization and terminal focus", () => {
+    const optionS = event({ key: "ß", code: "KeyS", metaKey: true, altKey: true });
+    assert.strictEqual(
+      resolveShortcutCommand(optionS, [], {
+        platform: "MacIntel",
+        context: { terminalFocus: true },
+      }),
+      "sidechat.toggle",
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "s", ctrlKey: true, altKey: true }), [], {
+        platform: "Linux",
+        context: { terminalFocus: true },
+      }),
+    );
+    const custom = compile([{ shortcut: modShortcut("y"), command: "sidechat.toggle" }]);
+    assert.isNull(resolveShortcutCommand(optionS, custom, { platform: "MacIntel" }));
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "y", metaKey: true }), custom, {
+        platform: "MacIntel",
+      }),
+      "sidechat.toggle",
+    );
+  });
+
   it("falls back to creation defaults with the macOS terminal-focus escape hatch", () => {
     const legacyBindings = DEFAULT_BINDINGS.filter(
       (binding) => binding.command !== "chat.new" && binding.command !== "chat.newTerminal",

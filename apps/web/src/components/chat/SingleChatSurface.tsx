@@ -48,6 +48,8 @@ import { editorCenterModeFamily, type EditorCenterMode } from "../../lib/editorC
 import { gitBranchesQueryOptions } from "../../lib/gitReactQuery";
 import { canComposerHandlePanelWidth } from "../../lib/panelResize";
 import { projectListDirectoriesQueryOptions } from "../../lib/projectReactQuery";
+import { serverConfigQueryOptions } from "../../lib/serverReactQuery";
+import { useSidechatShortcut } from "./useSidechatShortcut";
 import { waitForSidechatCreator } from "../../lib/sidechatCreatorRegistry";
 import {
   clearSidechatPaneRetention,
@@ -81,6 +83,7 @@ import { useStore } from "../../store";
 import {
   createProjectSelector,
   createSidebarThreadSummariesSelector,
+  createSidechatSummariesForSourceSelector,
   createThreadWorkspaceMetadataSelector,
 } from "../../storeSelectors";
 import { sortThreadsForSidebar } from "../Sidebar.logic";
@@ -859,35 +862,48 @@ export function SingleChatSurface(props: {
       ? { [pullRequestPane.id]: pullRequestPaneStateIcon }
       : undefined;
 
-  const handleAddDockPane = (kind: RightDockPaneKind) => {
-    requestImmediateDockHydration(kind);
-    if (kind === "sidechat") {
-      // Sidechat spawns a thread; reuse the composer's /side flow (correct model
-      // selection) published via the registry instead of opening an empty pane.
-      void waitForSidechatCreator(props.threadId)
-        .then((createSidechat) => {
-          if (!createSidechat) {
-            toastManager.add({
-              type: "warning",
-              title: "Side chat is unavailable",
-              description: "Open a server-backed main thread before starting a Side chat.",
-            });
-            return;
-          }
-          return createSidechat();
-        })
-        .catch((error) => {
-          toastManager.add({
-            type: "error",
-            title: "Could not start Side chat",
-            description:
-              error instanceof Error
-                ? error.message
-                : "An error occurred while creating Side chat.",
-          });
+  const createDockSidechat = async () => {
+    // Reuse /side so the current model, permissions and workspace stay inherited.
+    requestImmediateDockHydration("sidechat");
+    try {
+      const createSidechat = await waitForSidechatCreator(props.threadId);
+      if (!createSidechat) {
+        toastManager.add({
+          type: "warning",
+          title: "Side chat is unavailable",
+          description: "Open a server-backed main thread before starting a Side chat.",
         });
+        return;
+      }
+      await createSidechat();
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Could not start Side chat",
+        description:
+          error instanceof Error ? error.message : "An error occurred while creating Side chat.",
+      });
+    }
+  };
+  const sourceSidechats = useStore(
+    useMemo(() => createSidechatSummariesForSourceSelector(props.threadId), [props.threadId]),
+  );
+  const shortcutConfig = useQuery(serverConfigQueryOptions());
+  useSidechatShortcut({
+    threadId: props.threadId,
+    enabled: props.search.view !== "editor",
+    keybindings: shortcutConfig.data?.keybindings ?? [],
+    sidechats: sourceSidechats,
+    createSidechat: createDockSidechat,
+    revealSidechat: () => requestImmediateDockHydration("sidechat"),
+  });
+
+  const handleAddDockPane = (kind: RightDockPaneKind) => {
+    if (kind === "sidechat") {
+      void createDockSidechat();
       return;
     }
+    requestImmediateDockHydration(kind);
     openPane(props.threadId, { kind });
   };
 
