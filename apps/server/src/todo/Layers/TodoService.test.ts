@@ -75,10 +75,11 @@ layer("TodoService", (it) => {
       const claimed = yield* todos.update({ id, threadId: first, expectedThreadId: null });
       assert.strictEqual(claimed.threadId, first);
 
-      const lost = yield* Effect.exit(
-        todos.update({ id, threadId: second, expectedThreadId: null }),
-      );
-      assert.isTrue(Exit.isFailure(lost));
+      // Targeting the same chat still loses the claim: only the first caller owns it.
+      for (const threadId of [first, second]) {
+        const lost = yield* Effect.exit(todos.update({ id, threadId, expectedThreadId: null }));
+        assert.isTrue(Exit.isFailure(lost));
+      }
       const { todos: listed } = yield* todos.list();
       assert.strictEqual(listed.find((todo) => todo.id === id)?.threadId, first);
     }),
