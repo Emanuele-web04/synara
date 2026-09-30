@@ -9,9 +9,9 @@
 
 import type { ProjectId, ThreadId } from "@synara/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import { getProviderStartOptions, useAppSettings } from "~/appSettings";
+import { getProviderInstanceOptions, getProviderStartOptions, useAppSettings } from "~/appSettings";
 import { createGitHubItemContextDraft } from "~/components/chat/environment/environmentPullRequest.logic";
 import { useSidechatShortcut } from "~/components/chat/useSidechatShortcut";
 import {
@@ -132,6 +132,13 @@ export function useGitHubInboxSidechat(selection: GitHubInboxSelection | null) {
     projectId !== null && repository !== null && number !== null
       ? itemKey({ projectId, repository, number })
       : null;
+  const selectedKeyRef = useRef(selectedKey);
+  useLayoutEffect(() => {
+    selectedKeyRef.current = selectedKey;
+    return () => {
+      selectedKeyRef.current = null;
+    };
+  }, [selectedKey]);
   const selectItemSidechats = useMemo(
     () =>
       projectId !== null && repository !== null && number !== null
@@ -186,6 +193,9 @@ export function useGitHubInboxSidechat(selection: GitHubInboxSelection | null) {
       threadModelSelection: null,
       projectModelSelection: project?.defaultModelSelection ?? null,
       defaultProvider: settings.defaultProvider,
+      resolveProviderForInstanceId: (instanceId) =>
+        getProviderInstanceOptions(settings).find((instance) => instance.instanceId === instanceId)
+          ?.provider,
     });
   };
 
@@ -220,7 +230,10 @@ export function useGitHubInboxSidechat(selection: GitHubInboxSelection | null) {
             question,
             target,
             modelSelection,
-            providerOptionsForDispatch: getProviderStartOptions(settings),
+            providerOptionsForDispatch: getProviderStartOptions(
+              settings,
+              modelSelection.instanceId,
+            ),
           });
         } else {
           // Seed the card before the pane's composer mounts; the user writes the question.
@@ -229,6 +242,9 @@ export function useGitHubInboxSidechat(selection: GitHubInboxSelection | null) {
             createGitHubItemContextDraft(target.source, { checkedOut: false }),
           );
         }
+        // Creation may finish after the user selected another item or left this page.
+        // Keep the created thread and its question, without replacing the current item's dock.
+        if (selectedKeyRef.current !== selectedKey) return;
         showSidechat(threadId);
         focusSidechat(threadId);
       },
@@ -298,7 +314,7 @@ export function useGitHubInboxSidechat(selection: GitHubInboxSelection | null) {
         question: text,
         target,
         modelSelection,
-        providerOptionsForDispatch: getProviderStartOptions(settings),
+        providerOptionsForDispatch: getProviderStartOptions(settings, modelSelection.instanceId),
       });
       showSidechat(existing);
       return;

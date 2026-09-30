@@ -10,6 +10,7 @@ import {
   OrchestrationThreadPullRequest,
   ProjectId,
   ProviderInteractionMode,
+  ProviderInstanceId,
   ProviderKind,
   ProviderMentionReference,
   ProviderModelOptions,
@@ -40,6 +41,7 @@ import {
   type ComposerPromptHistorySavedDraft,
   type ComposerThreadDraftState,
   type DraftThreadEnvMode,
+  type ModelSelectionByProviderInstance,
   type QueuedComposerTurn,
 } from "./composerDraftDomain";
 import {
@@ -47,7 +49,10 @@ import {
   legacyMergeModelSelectionIntoProviderModelOptions,
   legacySyncModelSelectionOptions,
   legacyToModelSelectionByProvider,
+  modelSelectionStorageKey,
   normalizeModelSelection,
+  normalizeModelSelectionMapByInstance,
+  normalizeProviderInstanceId,
   normalizeProviderKind,
   normalizeProviderModelOptions,
   sanitizeStickyModelSelectionMap,
@@ -71,11 +76,9 @@ import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "./types";
 const DraftThreadEnvModeSchema = Schema.Literals(["local", "worktree"]);
 const DraftThreadEntryPointSchema = Schema.Literals(["chat", "terminal"]);
 
-function normalizePersistedModelSelectionMap(
-  value: unknown,
-): Partial<Record<ProviderKind, ModelSelection>> {
+function normalizePersistedModelSelectionMap(value: unknown): ModelSelectionByProviderInstance {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return {};
-  const result: Partial<Record<ProviderKind, ModelSelection>> = {};
+  const result: ModelSelectionByProviderInstance = {};
   for (const [legacyProvider, rawSelection] of Object.entries(value)) {
     const selection = normalizeModelSelection(rawSelection, {
       provider: legacyProvider,
@@ -84,11 +87,26 @@ function normalizePersistedModelSelectionMap(
           ? (rawSelection as Record<string, unknown>).model
           : undefined,
     });
-    if (selection && !(legacyProvider === "kilo" && result.opencode !== undefined)) {
-      result[selection.provider] = selection;
+    const key = selection ? modelSelectionStorageKey(selection) : null;
+    if (selection && key && !(legacyProvider === "kilo" && result[key] !== undefined)) {
+      result[key] = selection;
     }
   }
   return result;
+}
+
+function normalizePersistedActiveProviderInstanceId(
+  value: unknown,
+  selections: ModelSelectionByProviderInstance,
+): ProviderInstanceId | null {
+  const instanceId = normalizeProviderInstanceId(value);
+  if (!instanceId) return null;
+  if (selections[instanceId] !== undefined) return instanceId;
+
+  const migratedProvider = normalizeProviderKind(value);
+  return migratedProvider && selections[migratedProvider] !== undefined
+    ? migratedProvider
+    : instanceId;
 }
 
 function cloneBrowserAnnotation(annotation: BrowserAnnotationDraft): BrowserAnnotationDraft {
@@ -297,9 +315,9 @@ const PersistedComposerThreadDraftState = Schema.Struct({
   queuedTurns: Schema.optionalKey(Schema.Array(PersistedQueuedComposerTurn)),
   restoredSourceProposedPlan: Schema.optionalKey(PersistedRestoredSourceProposedPlan),
   modelSelectionByProvider: Schema.optionalKey(
-    Schema.Record(ProviderKind, Schema.optionalKey(ModelSelection)),
+    Schema.Record(Schema.String, Schema.optional(ModelSelection)),
   ),
-  activeProvider: Schema.optionalKey(Schema.NullOr(ProviderKind)),
+  activeProvider: Schema.optionalKey(Schema.NullOr(ProviderInstanceId)),
   providerOptionsForDispatch: Schema.optionalKey(ProviderStartOptions),
   runtimeMode: Schema.optionalKey(RuntimeMode),
   interactionMode: Schema.optionalKey(ProviderInteractionMode),
@@ -368,9 +386,9 @@ const PersistedComposerDraftStoreState = Schema.Struct({
   draftThreadsByThreadId: Schema.Record(ThreadId, PersistedDraftThreadState),
   projectDraftThreadIdByProjectId: Schema.Record(ProjectId, ThreadId),
   stickyModelSelectionByProvider: Schema.optionalKey(
-    Schema.Record(ProviderKind, Schema.optionalKey(ModelSelection)),
+    Schema.Record(Schema.String, Schema.optional(ModelSelection)),
   ),
-  stickyActiveProvider: Schema.optionalKey(Schema.NullOr(ProviderKind)),
+  stickyActiveProvider: Schema.optionalKey(Schema.NullOr(ProviderInstanceId)),
 });
 
 export type PersistedComposerDraftStoreState = typeof PersistedComposerDraftStoreState.Type;
@@ -1053,8 +1071,8 @@ function normalizePersistedDraftsByThreadId(
     );
     // If the draft already has the v3 shape, use it directly
     const legacyDraftCandidate = draftValue as LegacyPersistedComposerThreadDraftState;
-    let modelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>> = {};
-    let activeProvider: ProviderKind | null = null;
+    let modelSelectionByProvider: ModelSelectionByProviderInstance = {};
+    let activeProvider: ProviderInstanceId | null = null;
 
     if (
       draftCandidate.modelSelectionByProvider &&
@@ -1064,7 +1082,10 @@ function normalizePersistedDraftsByThreadId(
       modelSelectionByProvider = normalizePersistedModelSelectionMap(
         draftCandidate.modelSelectionByProvider,
       );
-      activeProvider = normalizeProviderKind(draftCandidate.activeProvider);
+      activeProvider = normalizePersistedActiveProviderInstanceId(
+        draftCandidate.activeProvider,
+        modelSelectionByProvider,
+      );
     } else {
       // v2 or legacy format: migrate
       const normalizedModelOptions =
@@ -1094,7 +1115,7 @@ function normalizePersistedDraftsByThreadId(
         modelSelection,
         mergedModelOptions,
       );
-      activeProvider = modelSelection?.provider ?? null;
+      activeProvider = modelSelection ? modelSelectionStorageKey(modelSelection) : null;
     }
 
     const providerOptionsForDispatch = Schema.is(ProviderStartOptions)(
@@ -1520,8 +1541,8 @@ export function normalizeCurrentPersistedComposerDraftStoreState(
     );
 
   // Handle both v3 (modelSelectionByProvider) and v2/legacy formats
-  let stickyModelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>> = {};
-  let stickyActiveProvider: ProviderKind | null = null;
+  let stickyModelSelectionByProvider: ModelSelectionByProviderInstance = {};
+  let stickyActiveProvider: ProviderInstanceId | null = null;
   if (
     normalizedPersistedState.stickyModelSelectionByProvider &&
     typeof normalizedPersistedState.stickyModelSelectionByProvider === "object"
@@ -1529,7 +1550,10 @@ export function normalizeCurrentPersistedComposerDraftStoreState(
     stickyModelSelectionByProvider = normalizePersistedModelSelectionMap(
       normalizedPersistedState.stickyModelSelectionByProvider,
     );
-    stickyActiveProvider = normalizeProviderKind(normalizedPersistedState.stickyActiveProvider);
+    stickyActiveProvider = normalizePersistedActiveProviderInstanceId(
+      normalizedPersistedState.stickyActiveProvider,
+      stickyModelSelectionByProvider,
+    );
   } else {
     // Legacy migration path
     const stickyModelOptions =
@@ -1554,7 +1578,9 @@ export function normalizeCurrentPersistedComposerDraftStoreState(
       stickyModelSelection,
       nextStickyModelOptions,
     );
-    stickyActiveProvider = normalizeProviderKind(normalizedPersistedState.stickyProvider);
+    stickyActiveProvider = stickyModelSelection
+      ? modelSelectionStorageKey(stickyModelSelection)
+      : null;
   }
 
   return {
@@ -1643,9 +1669,13 @@ export function toHydratedThreadDraft(
   persistedDraft: PersistedComposerThreadDraftState,
 ): ComposerThreadDraftState {
   // The persisted draft is already in v3 shape (migration handles older formats)
-  const modelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>> =
-    persistedDraft.modelSelectionByProvider ?? {};
-  const activeProvider = normalizeProviderKind(persistedDraft.activeProvider) ?? null;
+  const modelSelectionByProvider = normalizeModelSelectionMapByInstance(
+    (persistedDraft.modelSelectionByProvider ?? {}) as ModelSelectionByProviderInstance,
+  );
+  const activeProvider = normalizePersistedActiveProviderInstanceId(
+    persistedDraft.activeProvider,
+    modelSelectionByProvider,
+  );
 
   return {
     ...(persistedDraft.pendingUserInputDrafts

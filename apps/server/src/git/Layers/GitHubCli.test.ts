@@ -14,7 +14,7 @@ import {
   fakeInboxIssueNode,
   fakeInboxPullRequestNode,
 } from "../testing/fakeGitHubCli.ts";
-import { GitHubCliLive, ISSUE_DETAIL_JSON_FIELDS } from "./GitHubCli.ts";
+import { GitHubCliLive } from "./GitHubCli.ts";
 
 const mockedRunProcess = vi.mocked(runProcess);
 
@@ -1153,37 +1153,99 @@ layer("GitHubCliLive", (it) => {
     }),
   );
 
+  for (const [totalCount, missingDate, expectedTruncated] of [
+    [100, false, false],
+    [101, false, true],
+    [100, true, true],
+  ] as const) {
+    it.effect(
+      `preserves issue comment total ${totalCount} and completeness (missing date: ${missingDate})`,
+      () =>
+        Effect.gen(function* () {
+          mockedRunProcess.mockResolvedValueOnce(
+            processResult(
+              JSON.stringify({
+                data: {
+                  repository: {
+                    issue: {
+                      number: 1,
+                      title: "Issue with comments",
+                      url: "https://github.com/acme/app/issues/1",
+                      createdAt: "2026-07-01T00:00:00Z",
+                      updatedAt: "2026-07-03T00:00:00Z",
+                      assignees: { nodes: [] },
+                      labels: { nodes: [] },
+                      comments: {
+                        totalCount,
+                        pageInfo: { hasNextPage: totalCount > 100 },
+                        nodes: Array.from({ length: 100 }, (_, index) => ({
+                          id: `IC_${index}`,
+                          body: "Comment",
+                          ...(missingDate && index === 0
+                            ? {}
+                            : { createdAt: "2026-07-02T00:00:00Z" }),
+                        })),
+                      },
+                    },
+                  },
+                },
+              }),
+            ),
+          );
+          const gh = yield* GitHubCli;
+          const detail = yield* gh.getIssueDetail({
+            cwd: "/repo",
+            repository: "acme/app",
+            number: 1,
+          });
+          assert.equal(detail.commentCount, totalCount);
+          assert.equal(detail.comments.length, missingDate ? 99 : 100);
+          assert.equal(detail.commentsTruncated, expectedTruncated);
+        }),
+    );
+  }
+
   it.effect("reads issue detail and posts issue comments over stdin", () =>
     Effect.gen(function* () {
       mockedRunProcess.mockResolvedValueOnce(
         processResult(
           JSON.stringify({
-            number: 1374,
-            title: "Feature request",
-            url: "https://github.com/acme/app/issues/1374",
-            body: "Details",
-            state: "CLOSED",
-            stateReason: "COMPLETED",
-            author: { login: "alex", name: "Alex" },
-            assignees: [],
-            labels: [{ name: "kind:feature", color: "0969da" }],
-            comments: [
-              {
-                id: "IC_2",
-                author: { login: "b" },
-                body: "second",
-                createdAt: "2026-07-03T00:00:00Z",
+            data: {
+              repository: {
+                issue: {
+                  number: 1374,
+                  title: "Feature request",
+                  url: "https://github.com/acme/app/issues/1374",
+                  body: "Details",
+                  state: "CLOSED",
+                  stateReason: "COMPLETED",
+                  author: { login: "alex", name: "Alex" },
+                  assignees: { nodes: [] },
+                  labels: { nodes: [{ name: "kind:feature", color: "0969da" }] },
+                  comments: {
+                    totalCount: 2,
+                    pageInfo: { hasNextPage: false },
+                    nodes: [
+                      {
+                        id: "IC_2",
+                        author: { login: "b" },
+                        body: "second",
+                        createdAt: "2026-07-03T00:00:00Z",
+                      },
+                      {
+                        id: "IC_1",
+                        author: { login: "a" },
+                        body: "first",
+                        createdAt: "2026-07-02T00:00:00Z",
+                      },
+                    ],
+                  },
+                  createdAt: "2026-07-01T00:00:00Z",
+                  updatedAt: "2026-07-03T00:00:00Z",
+                  closedAt: "2026-07-03T00:00:00Z",
+                },
               },
-              {
-                id: "IC_1",
-                author: { login: "a" },
-                body: "first",
-                createdAt: "2026-07-02T00:00:00Z",
-              },
-            ],
-            createdAt: "2026-07-01T00:00:00Z",
-            updatedAt: "2026-07-03T00:00:00Z",
-            closedAt: "2026-07-03T00:00:00Z",
+            },
           }),
         ),
       );
@@ -1213,13 +1275,18 @@ layer("GitHubCliLive", (it) => {
       );
       assert.equal(detail.commentsTruncated, false);
       expect(mockedRunProcess.mock.calls[0]?.[1]).toEqual([
-        "issue",
-        "view",
-        "1374",
-        "--repo",
-        "github.com/acme/app",
-        "--json",
-        ISSUE_DETAIL_JSON_FIELDS,
+        "api",
+        "graphql",
+        "--hostname",
+        "github.com",
+        "-f",
+        expect.stringContaining("comments(first: 100)"),
+        "-F",
+        "owner=acme",
+        "-F",
+        "name=app",
+        "-F",
+        "number=1374",
       ]);
       expect(mockedRunProcess.mock.calls[1]?.[1]).toEqual([
         "issue",

@@ -2,6 +2,10 @@
 // Purpose: Verifies OMP ACP spawn, auth, mode, model, and discovery behavior.
 // Layer: Provider ACP support tests
 
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
 import { Effect } from "effect";
 import * as AcpErrors from "./AcpErrors.ts";
 import type * as Acp from "@agentclientprotocol/sdk";
@@ -12,9 +16,11 @@ import {
   applyOmpAcpInteractionMode,
   applyOmpAcpModelSelection,
   buildOmpAcpSpawnInput,
+  ompAccountCacheScope,
   parseOmpCliModelList,
   parseOmpModelRoles,
   resolveOmpAcpAuthMethodId,
+  resolveOmpAgentDir,
   resolveOmpCliBinaryPath,
 } from "./OmpAcpSupport.ts";
 
@@ -62,6 +68,64 @@ describe("buildOmpAcpSpawnInput", () => {
   it("leaves PI_CODING_AGENT_DIR unset for the default profile", () => {
     const spawn = buildOmpAcpSpawnInput({ binaryPath: "/usr/local/bin/omp" }, "/tmp/project");
     expect(spawn.env?.PI_CODING_AGENT_DIR).toBeUndefined();
+  });
+
+  it("runs a non-default instance under a private home without ambient OMP credentials", () => {
+    const stateDir = mkdtempSync(path.join(tmpdir(), "omp-account-"));
+    const previous = {
+      agentDir: process.env.PI_CODING_AGENT_DIR,
+      apiKey: process.env.ANTHROPIC_API_KEY,
+    };
+    process.env.PI_CODING_AGENT_DIR = "/ambient/omp/agent";
+    process.env.ANTHROPIC_API_KEY = "ambient-key";
+    try {
+      const account = {
+        instanceId: "omp_work",
+        homeDir: "/home/user",
+        isolationRootDir: stateDir,
+      };
+      const spawn = buildOmpAcpSpawnInput(account, "/tmp/project");
+      const home = spawn.env?.HOME;
+      expect(home?.startsWith(path.join(stateDir, "provider-homes", "omp"))).toBe(true);
+      expect(spawn.env?.PI_CODING_AGENT_DIR).toBeUndefined();
+      expect(spawn.env?.ANTHROPIC_API_KEY).toBeUndefined();
+      expect(resolveOmpAgentDir(account)).toBe(path.join(home!, ".omp", "agent"));
+    } finally {
+      for (const [key, value] of [
+        ["PI_CODING_AGENT_DIR", previous.agentDir],
+        ["ANTHROPIC_API_KEY", previous.apiKey],
+      ] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a selected account environment and expands a home-relative agent dir", () => {
+    const account = {
+      instanceId: "omp_work",
+      environment: { HOME: "/accounts/work", OPENAI_API_KEY: "work-key" },
+      homeDir: "/home/user",
+    };
+    const spawn = buildOmpAcpSpawnInput({ ...account, agentDir: "~/omp-work" }, "/tmp/project");
+    expect(spawn.env?.HOME).toBe("/accounts/work");
+    expect(spawn.env?.OPENAI_API_KEY).toBe("work-key");
+    expect(spawn.env?.PI_CODING_AGENT_DIR).toBe(path.join("/home/user", "omp-work"));
+    expect(resolveOmpAgentDir(account)).toBe(path.join("/accounts/work", ".omp", "agent"));
+  });
+
+  it("scopes discovery caches per account without exposing environment values", () => {
+    expect(ompAccountCacheScope({ instanceId: "omp" })).toBe("");
+    const work = ompAccountCacheScope({ instanceId: "omp_work" });
+    const personal = ompAccountCacheScope({ instanceId: "omp_personal" });
+    expect(work).not.toBe(personal);
+    const withSecret = ompAccountCacheScope({
+      instanceId: "omp_work",
+      environment: { OPENAI_API_KEY: "secret-value" },
+    });
+    expect(withSecret).not.toContain("secret-value");
+    expect(withSecret).not.toBe(work);
   });
 });
 

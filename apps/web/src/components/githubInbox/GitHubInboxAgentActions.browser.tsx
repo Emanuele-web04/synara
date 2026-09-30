@@ -404,7 +404,11 @@ beforeEach(async () => {
     .mockResolvedValue({ branch: "fix/login", worktreePath: "/work/alpha-wt" });
   installNativeApi();
   useRightDockStore.setState({ dockStateByThreadId: {} });
-  useComposerDraftStore.setState({ draftsByThreadId: {} });
+  useComposerDraftStore.setState({
+    draftsByThreadId: {},
+    stickyModelSelectionByProvider: {},
+    stickyActiveProvider: null,
+  });
   // Drop the side chats an earlier test created.
   useStore.setState(initialState);
   useStore.setState({
@@ -525,7 +529,24 @@ describe("Ask", () => {
     expect(createdSidechats).toHaveLength(1);
   });
 
-  it("sends the composer's question as the first turn of a new side chat", async () => {
+  it("sends the composer's question with the selected provider instance into a new side chat", async () => {
+    const modelSelection = {
+      provider: "codex" as const,
+      instanceId: "codex_work",
+      model: "gpt-5-codex",
+    };
+    useComposerDraftStore.setState({
+      stickyActiveProvider: "codex_work",
+      stickyModelSelectionByProvider: { codex_work: modelSelection },
+    });
+    window.nativeApi!.server.getSettings = () =>
+      Promise.resolve({
+        ...DEFAULT_SERVER_SETTINGS_VIEW,
+        codexHomePath: "/default-account",
+        providerInstances: {
+          codex_work: { driver: "codex", enabled: true, config: { homePath: "/work-account" } },
+        },
+      });
     await mount(ISSUE_SEARCH);
     await expect.element(page.getByRole("heading", { name: "Crash on launch" })).toBeVisible();
 
@@ -546,13 +567,35 @@ describe("Ask", () => {
     expect(queued?.[0]).toMatchObject({
       kind: "chat",
       prompt: "Why does it crash?",
+      modelSelection,
+      providerOptionsForDispatch: { codex: { homePath: "/work-account" } },
     });
+    expect(createdSidechats[0]?.modelSelection).toEqual(modelSelection);
     expect(queued?.[0]?.kind === "chat" ? queued[0].pullRequestContexts : []).toMatchObject([
       { itemKind: "issue", prNumber: 42 },
     ]);
     expect(dispatchCommand.mock.calls.map(([command]) => command.type)).toEqual(["thread.create"]);
     // The dock's own composer takes over.
     expect(document.querySelector("[data-github-item-composer]")).toBeNull();
+  });
+
+  it("keeps the question available to retry when side chat creation fails", async () => {
+    dispatchCommand.mockRejectedValueOnce(new Error("Connection lost"));
+    await mount(ISSUE_SEARCH);
+    const composer = page.getByRole("textbox", { name: "Ask about this issue" });
+    await composer.fill("Please explain this crash");
+    await userEvent.keyboard("{Enter}");
+    await expect.poll(() => dispatchCommand.mock.calls.length).toBe(1);
+    await expect.element(composer).toHaveValue("Please explain this crash");
+    await page.getByRole("button", { name: "Ask in a side chat" }).click();
+    await expect.poll(() => createdSidechats.length).toBe(1);
+    const threadId = createdSidechats[0]!.threadId;
+    await expect.poll(shownSidechat).toBe(threadId);
+    expect(
+      useComposerDraftStore.getState().draftsByThreadId[threadId]?.queuedTurns[0],
+    ).toMatchObject({
+      prompt: "Please explain this crash",
+    });
   });
 
   it("sends a second question to the item's live side chat", async () => {
@@ -601,6 +644,35 @@ describe("Ask", () => {
     await page.getByRole("button", { name: "Crash on launch", exact: true }).click();
     await expect.poll(() => inboxDock().open).toBe(true);
     await expect.poll(shownSidechat).toBe(sidechatId);
+  });
+
+  it("does not reopen the previous item's side chat when creation finishes after selection changes", async () => {
+    let finishCreate!: () => void;
+    dispatchCommand.mockImplementationOnce(
+      (command) =>
+        new Promise((resolve) => {
+          if (command.type === "thread.create") createdSidechats.push(command);
+          finishCreate = () => resolve({ sequence: createdSidechats.length });
+        }),
+    );
+    await mount(ISSUE_SEARCH);
+    await openSideChat();
+    await expect.poll(() => createdSidechats.length).toBe(1);
+
+    setSearchFromTest(PULL_REQUEST_SEARCH);
+    await expect
+      .element(page.getByRole("textbox", { name: "Ask about this pull request" }))
+      .toBeVisible();
+    finishCreate();
+    const threadId = createdSidechats[0]!.threadId;
+    await expect.poll(() => useStore.getState().sidebarThreadSummaryById[threadId]).toBeDefined();
+    expect(inboxDock().open).toBe(false);
+    expect(shownSidechat()).toBeNull();
+    // The completed side chat remains available on the issue it belongs to.
+    setSearchFromTest(ISSUE_SEARCH);
+    await openSideChat();
+    await expect.poll(shownSidechat).toBe(threadId);
+    expect(createdSidechats).toHaveLength(1);
   });
 
   it("follows the selection and closes the dock for an item without a side chat", async () => {

@@ -48,7 +48,7 @@ export function ComposerModelPickerRow(props: {
   /** Null hides the hover effort side block (the picker's footer slider owns effort). */
   onSelectEffort: ((row: PickerRow, effort: string) => void) | null;
   onToggleStar: (entry: StarredModel) => void;
-  onUnstarModel: (entry: Pick<StarredModel, "provider" | "model">) => void;
+  onUnstarModel: (entry: Pick<StarredModel, "provider" | "instanceId" | "model">) => void;
 }) {
   const { row } = props;
   const selection = getComposerTraitSelection(
@@ -64,6 +64,7 @@ export function ComposerModelPickerRow(props: {
   );
   const starEntry: StarredModel = row.preset ?? {
     provider: row.provider,
+    ...(row.instanceId ? { instanceId: row.instanceId } : {}),
     model: row.model,
     ...resolveStarredTraits(selection),
   };

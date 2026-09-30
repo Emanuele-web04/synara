@@ -3,7 +3,7 @@
 // Layer: React hook
 // Exports: useThreadRecap for the Environment panel.
 
-import type { ProviderStartOptions, ThreadId } from "@synara/contracts";
+import type { ModelSelection, ProviderStartOptions, ThreadId } from "@synara/contracts";
 import { useEffect, useRef, useState } from "react";
 
 import {
@@ -33,6 +33,7 @@ export interface UseThreadRecapInput {
   readonly latestTurnSettled: boolean;
   readonly codexHomePath?: string | null;
   readonly providerOptions?: ProviderStartOptions | null;
+  readonly textGenerationModelSelection?: ModelSelection | null;
   readonly initialIdleMs?: number;
   readonly refreshIdleMs?: number;
   readonly idleMs?: number;
@@ -166,6 +167,9 @@ export function useThreadRecap(input: UseThreadRecapInput): UseThreadRecapResult
           ...(cacheEntry?.text ? { previousRecap: cacheEntry.text } : {}),
           ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
           ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+          ...(input.textGenerationModelSelection
+            ? { textGenerationModelSelection: input.textGenerationModelSelection }
+            : {}),
         })
         .then((result) => {
           const isCurrentSource =
@@ -242,6 +246,7 @@ export function useThreadRecap(input: UseThreadRecapInput): UseThreadRecapResult
     input.latestTurnSettled,
     input.providerOptions,
     input.refreshIdleMs,
+    input.textGenerationModelSelection,
     sourceHasNewMaterial,
     sourceSignature,
     threadId,

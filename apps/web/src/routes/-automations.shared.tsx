@@ -18,9 +18,13 @@ import {
 } from "@synara/contracts";
 import { automationRequiresTargetThread } from "@synara/shared/automationMode";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { useAppSettings } from "~/appSettings";
+import {
+  getProviderInstanceOptions,
+  resolveSelectableProviderInstanceId,
+  useAppSettings,
+} from "~/appSettings";
 import type { Thread } from "~/types";
 import {
   ComposerPickerMenuPopup,
@@ -865,9 +869,15 @@ export function AutomationModelPicker({
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const providerStatuses = useProviderStatusesForLocalConfig();
   const [open, setOpen] = useState(false);
-  const modelHintByProvider: Partial<Record<ProviderKind, string | null>> = {
-    [value.provider]: value.model,
-  };
+  const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
+  const selectedProviderInstanceId = useMemo(
+    () => resolveSelectableProviderInstanceId(settings, value.provider, value.instanceId),
+    [settings, value.instanceId, value.provider],
+  );
+  const modelHintByProvider = useMemo<Partial<Record<ProviderKind, string | null>>>(
+    () => ({ [value.provider]: value.model }),
+    [value.model, value.provider],
+  );
   const providerModelDiscoveryCwd = resolveProviderDiscoveryCwd({
     activeThreadWorktreePath: null,
     activeProjectCwd: projectCwd,
@@ -875,17 +885,23 @@ export function AutomationModelPicker({
   });
   const {
     modelOptionsByProvider,
+    modelOptionsByProviderInstance,
     loadingModelProviders,
     discoveryErrorsByProvider,
     runtimeModelsByProvider,
     selectedRuntimeModel,
   } = useProviderModelCatalog({
     selectedProvider: value.provider,
+    selectedProviderInstanceId,
     discoveryEnabled: open,
     cwd: providerModelDiscoveryCwd,
     modelHintByProvider,
   });
-  const providerStatus = findProviderStatus(providerStatuses, value.provider);
+  const providerStatus = findProviderStatus(
+    providerStatuses,
+    value.provider,
+    selectedProviderInstanceId,
+  );
   const persistedRuntimeModel =
     value.provider === "claudeAgent" && typeof value.supportsAutoMode === "boolean"
       ? {
@@ -911,6 +927,7 @@ export function AutomationModelPicker({
       lockedProvider={null}
       providers={providerStatuses}
       modelOptionsByProvider={modelOptionsByProvider}
+      modelOptionsByProviderInstance={modelOptionsByProviderInstance}
       loadingModelProviders={loadingModelProviders}
       discoveryErrorsByProvider={discoveryErrorsByProvider}
       hiddenProviders={settings.hiddenProviders}
@@ -918,14 +935,20 @@ export function AutomationModelPicker({
       disabled={disabled ?? false}
       open={open}
       onOpenChange={setOpen}
-      onProviderModelChange={(provider, model) => {
+      onProviderModelChange={(provider, model, instanceId) => {
         const runtimeModel = resolveRuntimeModelDescriptor({
           provider,
           model,
           runtimeModels: runtimeModelsByProvider[provider],
         });
-        onChange(buildModelSelection(provider, model, undefined, runtimeModel?.supportsAutoMode));
+        onChange(
+          buildModelSelection(provider, model, undefined, runtimeModel?.supportsAutoMode, {
+            instanceId: instanceId ?? provider,
+          }),
+        );
       }}
+      providerInstances={providerInstances}
+      selectedProviderInstanceId={selectedProviderInstanceId}
       onProviderModelRoleSelect={(model, options) => {
         onChange(buildModelSelection("omp", model, options));
       }}

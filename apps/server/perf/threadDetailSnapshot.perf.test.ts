@@ -13,8 +13,13 @@ import { THREAD_DETAIL_EVENT_TYPES } from "@synara/shared/threadDetailEvents";
 import { OrchestrationEventStoreLive } from "../src/persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationEventStore } from "../src/persistence/Services/OrchestrationEventStore.ts";
 import { makeSqlitePersistenceLive } from "../src/persistence/Layers/Sqlite.ts";
-import { OrchestrationProjectionSnapshotQueryLive } from "../src/orchestration/Layers/ProjectionSnapshotQuery.ts";
+import { OrchestrationProjectionSnapshotQueryLive as OrchestrationProjectionSnapshotQueryBase } from "../src/orchestration/Layers/ProjectionSnapshotQuery.ts";
 import { ProjectionSnapshotQuery } from "../src/orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ServerSettingsService } from "../src/serverSettings.ts";
+
+const OrchestrationProjectionSnapshotQueryLive = OrchestrationProjectionSnapshotQueryBase.pipe(
+  Layer.provide(ServerSettingsService.layerTest()),
+);
 
 const DB = process.env.SYNARA_PERF_DB;
 const SAMPLES = Number(process.env.SYNARA_PERF_SAMPLES ?? 5);

@@ -10,6 +10,7 @@
 import type { ProjectId, ThreadId } from "@synara/contracts";
 import { useMemo, useRef, useState, type ReactNode } from "react";
 
+import { getProviderInstanceOptions, useAppSettings } from "~/appSettings";
 import { ComposerPickerMenuPopup } from "~/components/chat/ComposerPickerMenuPopup";
 import {
   COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME,
@@ -31,7 +32,7 @@ import {
   LoaderCircleIcon,
   PlusIcon,
 } from "~/lib/icons";
-import { findProviderStatus } from "~/lib/providerAvailability";
+import { resolveVoiceTranscriptionTarget } from "~/lib/providerAvailability";
 import { resolveThreadEnvironmentPresentation } from "~/lib/threadEnvironment";
 import { cn } from "~/lib/utils";
 import { newThreadId } from "~/lib/utils";
@@ -72,19 +73,29 @@ export function GitHubItemFloatingComposer({
   const projectTitle =
     projects.find((entry) => entry.projectId === projectId)?.projectTitle ?? project?.name ?? "";
   const scratchThreadId = useMemo<ThreadId>(() => newThreadId(), []);
+  const { settings } = useAppSettings();
+  const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
   const providerStatuses = useProviderStatusesForLocalConfig();
   const refreshProviderStatuses = useRefreshProviderStatusesNow();
   // Voice notes are transcribed on the Codex ChatGPT session whatever the side chat's provider.
-  const voiceProviderStatus = useMemo(
-    () => findProviderStatus(providerStatuses, "codex"),
-    [providerStatuses],
+  const voiceProviderTarget = useMemo(
+    () =>
+      resolveVoiceTranscriptionTarget({
+        statuses: providerStatuses,
+        providerInstances,
+        selectedProvider: "codex",
+        selectedProviderInstanceId: "codex",
+      }),
+    [providerInstances, providerStatuses],
   );
   const voice = useComposerVoiceController({
     activeProject: project,
     activeThreadId: null,
     threadId: scratchThreadId,
     selectedProvider: "codex",
-    activeProviderStatus: voiceProviderStatus,
+    selectedProviderInstanceId: "codex",
+    voiceProviderInstanceId: voiceProviderTarget?.instanceId ?? "codex",
+    activeProviderStatus: voiceProviderTarget?.status ?? null,
     pendingUserInputCount: 0,
     onTranscriptReady: (transcript) =>
       setText((current) => (current.trim() ? `${current.trimEnd()} ${transcript}` : transcript)),
@@ -95,7 +106,6 @@ export function GitHubItemFloatingComposer({
   const submit = () => {
     if (!canSend) return;
     onSubmit(text);
-    setText("");
   };
 
   return (

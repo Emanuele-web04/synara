@@ -1555,25 +1555,45 @@ const RawIssueDetailSchema = Schema.Struct({
   state: Schema.optional(Schema.NullOr(Schema.String)),
   stateReason: Schema.optional(Schema.NullOr(Schema.String)),
   author: Schema.optional(Schema.NullOr(RawActorSchema)),
-  assignees: Schema.optional(Schema.NullOr(Schema.Array(RawActorSchema))),
-  labels: Schema.optional(Schema.NullOr(Schema.Array(RawLabelSchema))),
-  comments: Schema.optional(Schema.NullOr(Schema.Array(RawIssueCommentSchema))),
+  assignees: rawGraphQlNodes(RawActorSchema),
+  labels: rawGraphQlNodes(RawLabelSchema),
+  comments: Schema.Struct({
+    nodes: Schema.Array(Schema.NullOr(RawIssueCommentSchema)),
+    totalCount: Schema.Number,
+    pageInfo: Schema.Struct({ hasNextPage: Schema.Boolean }),
+  }),
   createdAt: TrimmedNonEmptyString,
   updatedAt: TrimmedNonEmptyString,
   closedAt: Schema.optional(Schema.NullOr(Schema.String)),
 });
+const RawIssueDetailResponseSchema = Schema.Struct({
+  data: Schema.Struct({ repository: Schema.Struct({ issue: RawIssueDetailSchema }) }),
+});
 
-export const ISSUE_DETAIL_JSON_FIELDS =
-  "number,title,body,state,stateReason,author,assignees,labels,comments,createdAt,updatedAt,closedAt,url";
-
-// `gh issue view --json comments` returns at most this many comments.
-const ISSUE_DETAIL_COMMENT_LIMIT = 100;
+// Read the connection metadata alongside its first page. `gh issue view --json comments`
+// discards totalCount/pageInfo, so a full page cannot distinguish 100 comments from 101.
+const ISSUE_DETAIL_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) {
+      number title url body state stateReason createdAt updatedAt closedAt
+      author { login avatarUrl url ... on User { name } }
+      assignees(first: 100) { nodes { login avatarUrl url name } }
+      labels(first: 100) { nodes { name color } }
+      comments(first: 100) {
+        totalCount pageInfo { hasNextPage }
+        nodes { id body url createdAt author { login avatarUrl url ... on User { name } } }
+      }
+    }
+  }
+}`;
 
 function normalizeIssueDetail(
   raw: Schema.Schema.Type<typeof RawIssueDetailSchema>,
 ): GitHubIssueDetailData {
   const state = normalizeIssueState(raw.state);
-  const comments = normalizeDetailComments({ comments: raw.comments ?? [] });
+  const comments = normalizeDetailComments({
+    comments: raw.comments.nodes.filter((node) => node !== null),
+  });
   return {
     number: raw.number,
     title: raw.title,
@@ -1581,18 +1601,19 @@ function normalizeIssueDetail(
     author: normalizeActor(raw.author),
     state,
     stateReason: normalizeIssueStateReason(state, raw.stateReason),
-    labels: normalizeLabels(raw.labels),
-    assignees: (raw.assignees ?? []).flatMap((actor) => {
+    labels: normalizeLabels((raw.labels.nodes ?? []).filter((node) => node !== null)),
+    assignees: (raw.assignees.nodes ?? []).flatMap((actor) => {
       const normalized = normalizeActor(actor);
       return normalized ? [normalized] : [];
     }),
-    commentCount: comments.length,
+    commentCount: raw.comments.totalCount,
     createdAt: raw.createdAt,
     updatedAt: raw.updatedAt,
     closedAt: raw.closedAt?.trim() || null,
     body: raw.body ?? "",
     comments: comments.toSorted((left, right) => left.createdAt.localeCompare(right.createdAt)),
-    commentsTruncated: (raw.comments?.length ?? 0) >= ISSUE_DETAIL_COMMENT_LIMIT,
+    commentsTruncated:
+      raw.comments.pageInfo.hasNextPage || comments.length < raw.comments.totalCount,
   };
 }
 
@@ -2208,29 +2229,35 @@ const makeGitHubCli = Effect.gen(function* () {
       }),
     getIssueDetail: (input) =>
       validateRepository(input.repository, "getIssueDetail").pipe(
-        Effect.flatMap((repository) =>
-          execute({
+        Effect.flatMap((repository) => {
+          const [owner = "", name = ""] = repository.split("/");
+          return execute({
             cwd: input.cwd,
             args: [
-              "issue",
-              "view",
-              String(input.number),
-              "--repo",
-              repositorySelector(repository),
-              "--json",
-              ISSUE_DETAIL_JSON_FIELDS,
+              "api",
+              "graphql",
+              "--hostname",
+              GITHUB_HOST,
+              "-f",
+              `query=${ISSUE_DETAIL_QUERY}`,
+              "-F",
+              `owner=${owner}`,
+              "-F",
+              `name=${name}`,
+              "-F",
+              `number=${input.number}`,
             ],
-          }),
-        ),
+          });
+        }),
         Effect.flatMap((result) =>
           decodeGitHubJson(
             result.stdout.trim(),
-            RawIssueDetailSchema,
+            RawIssueDetailResponseSchema,
             "getIssueDetail",
             "GitHub CLI returned invalid issue JSON.",
           ),
         ),
-        Effect.map(normalizeIssueDetail),
+        Effect.map((response) => normalizeIssueDetail(response.data.repository.issue)),
       ),
     commentOnIssue: (input) =>
       validateRepository(input.repository, "commentOnIssue").pipe(
