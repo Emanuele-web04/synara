@@ -1129,6 +1129,79 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     expect(runtime.cliModelCalls[0]).toMatchObject({ cwd: "/repo/model-discovery-config" });
   });
 
+  it("retains custom CLI models like OmniRoute when connected providers are in server inventory", async () => {
+    const runtime = createMockOpenCodeRuntime({
+      cliModels: [
+        {
+          slug: "opencode/minimax-m2.5-free",
+          providerID: "opencode",
+          modelID: "minimax-m2.5-free",
+          name: "MiniMax M2.5 Free",
+          variants: [],
+          supportedReasoningEfforts: [],
+        },
+        {
+          slug: "omniroute/antigravity/gemini-3.7-flash-high",
+          providerID: "omniroute",
+          modelID: "antigravity/gemini-3.7-flash-high",
+          name: "Gemini 3.7 Flash High",
+          variants: [],
+          supportedReasoningEfforts: [],
+        },
+      ],
+      inventory: {
+        providerList: {
+          connected: ["opencode"],
+          default: {},
+          all: [
+            {
+              id: "opencode",
+              name: "OpenCode",
+              source: "api",
+              models: {
+                "minimax-m2.5-free": {
+                  id: "minimax-m2.5-free",
+                  name: "MiniMax M2.5 Free",
+                },
+              },
+            } as unknown as Provider,
+          ],
+        },
+        agents: [],
+        consoleState: null,
+      },
+    });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const listModels = adapter.listModels;
+        if (!listModels) {
+          throw new Error("Expected OpenCode adapter to support runtime model listing.");
+        }
+        return yield* listModels({
+          provider: "opencode",
+          binaryPath: "opencode",
+          cwd: "/repo/model-discovery-config",
+        });
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(result?.models.map((model) => model.slug)).toEqual([
+      "omniroute/antigravity/gemini-3.7-flash-high",
+      "opencode/minimax-m2.5-free",
+    ]);
+  });
+
   it("lists OpenCode CLI models when server inventory discovery fails", async () => {
     const runtime = createMockOpenCodeRuntime({
       connectError: new OpenCodeRuntimeError({

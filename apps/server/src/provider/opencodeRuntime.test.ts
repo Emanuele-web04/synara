@@ -308,6 +308,25 @@ describe("buildOpenCodeServerProcessEnv", () => {
   });
 });
 
+describe("parseOpenCodeCliModelsOutput", () => {
+  it("preserves nested provider model slugs used by OmniRoute", () => {
+    const models = parseOpenCodeCliModelsOutput(
+      [
+        "omniroute/antigravity/gemini-3.7-flash-high",
+        '  {"id":"antigravity/gemini-3.7-flash-high","name":"Gemini 3.7 Flash","providerID":"omniroute"}',
+      ].join("\n"),
+    );
+
+    expect(models).toEqual([
+      expect.objectContaining({
+        slug: "omniroute/antigravity/gemini-3.7-flash-high",
+        providerID: "omniroute",
+        modelID: "antigravity/gemini-3.7-flash-high",
+      }),
+    ]);
+  });
+});
+
 describe("OpenCodeRuntime startup diagnostics", () => {
   it("wraps Windows .cmd server shims before spawning", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
