@@ -186,6 +186,13 @@ export interface RecapTotals {
   readonly agentWorkMs: number;
 }
 
+/** The comparison cutoff for the same local clock time on the previous day. */
+export function previousDayCutoffMs(asOfMs: number): number {
+  const previous = new Date(asOfMs);
+  previous.setDate(previous.getDate() - 1);
+  return previous.getTime();
+}
+
 /**
  * A day's additive totals up to `cutoffMs` (the hour holding the cutoff counts
  * pro rata), so the morning is compared with yesterday's morning, not all of yesterday.

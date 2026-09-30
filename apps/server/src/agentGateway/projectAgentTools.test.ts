@@ -13,7 +13,7 @@ const tools = makeProjectAgentTools({ projectAgent: stubService });
 const byName = new Map(tools.map((tool) => [tool.definition.name, tool] as const));
 
 describe("project agent tool surface", () => {
-  it("keeps every pre-groups tool name and capability unchanged", () => {
+  it("keeps every pre-hubs tool name and capability unchanged", () => {
     const expected = [
       "synara_project_get_overview",
       "synara_project_list_tasks",
@@ -35,7 +35,7 @@ describe("project agent tool surface", () => {
     expect(byName.get("synara_project_report_result")?.requiredCapability).toBe("thread:write");
   });
 
-  it("adds the six group tools with the right capabilities", () => {
+  it("adds the six hub tools with the right capabilities", () => {
     const expected: Record<string, { capability: string; activeTurn: boolean | undefined }> = {
       synara_project_remember: { capability: "thread:write", activeTurn: true },
       synara_project_forget: { capability: "thread:write", activeTurn: true },

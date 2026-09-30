@@ -13,6 +13,7 @@ import {
   groupInboxThreads,
   modelIconProvider,
   recapInputForRange,
+  previousDayCutoffMs,
   resolveInboxDay,
   sumRecapBefore,
   summarizeInboxSlots,
@@ -54,6 +55,18 @@ describe("resolveInboxDay", () => {
     afterAll(() => {
       process.env.TZ = originalTimeZone;
     });
+
+    it.each([
+      [3, 29, 28],
+      [10, 25, 24],
+    ])(
+      "compares the same local time across the clock change on %i/%i",
+      (month, date, previousDate) => {
+        expect(previousDayCutoffMs(local(month, date, 3, 30))).toBe(
+          local(month, previousDate, 3, 30),
+        );
+      },
+    );
 
     it("gives the fall-back night 25 one-hour bars and the spring-forward night 23", () => {
       // Clocks go back at 03:00 on Oct 25 and forward at 02:00 on Mar 29, both inside the

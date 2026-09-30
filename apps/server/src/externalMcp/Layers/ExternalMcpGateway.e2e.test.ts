@@ -292,6 +292,8 @@ describe("external MCP gateway stdio flow", () => {
       "pi",
     ].map((provider) => ({
       provider: provider as ServerProviderStatus["provider"],
+      instanceId: provider as ServerProviderStatus["instanceId"],
+      driver: provider as ServerProviderStatus["driver"],
       status: "ready",
       available: true,
       authStatus: "authenticated",

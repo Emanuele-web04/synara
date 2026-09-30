@@ -7,13 +7,18 @@ import {
   TurnId,
   type OrchestrationThreadShell,
 } from "@synara/contracts";
-import { Effect, Exit, Layer, Option, Scope, Stream } from "effect";
+import { Effect, Exit, FileSystem, Layer, Option, Scope, Stream } from "effect";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+
+import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
 
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { ProviderSessionRuntimeRepositoryLive } from "../../persistence/Layers/ProviderSessionRuntime.ts";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery";
 import { fakeProjectionSnapshotQuery } from "../../orchestration/testing/fakeProjectionSnapshotQuery";
+import { ServerSecretStore } from "../../auth/Services/ServerSecretStore.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderUnsupportedError } from "../Errors.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
@@ -177,6 +182,7 @@ describe("ProviderSessionReaperLive", () => {
           {
             threadId,
             provider: "codex",
+            providerInstanceId: "codex",
             status: "running",
             lastSeenAt: "2026-01-01T00:00:00.000Z",
             resumeCursor: { threadId: "native-thread-reaper-active" },
@@ -222,6 +228,7 @@ describe("ProviderSessionReaperLive", () => {
           {
             threadId,
             provider: "codex",
+            providerInstanceId: "codex",
             status: "running",
             lastSeenAt: "2026-01-01T00:00:00.000Z",
             resumeCursor: { threadId: "native-thread-reaper-missing-runtime-stop" },
@@ -274,9 +281,45 @@ async function assertIdleReaperPreservesResumeCursor(
     Layer.provide(SqlitePersistenceMemory),
   );
   const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
+  const settingsLayer = Layer.unwrap(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "synara-reaper-codex-" });
+      const homePath = join(root, "codex");
+      const runtimeHome = join(root, "synara");
+      yield* fs.makeDirectory(homePath);
+      yield* fs.writeFileString(join(homePath, "config.toml"), "");
+      // Real adapters prepare this state before returning a resumable session.
+      yield* Effect.promise(() =>
+        buildCodexProcessEnv({
+          env: { ...process.env, SYNARA_HOME: runtimeHome },
+          homePath,
+          accountId: "default",
+        }),
+      );
+      return ServerSettingsService.layerTest({
+        providerInstances: {
+          codex: {
+            driver: "codex",
+            environment: [{ name: "SYNARA_HOME", value: runtimeHome, sensitive: false }],
+            config: { homePath, accountId: "default" },
+          },
+        },
+      });
+    }),
+  ).pipe(Layer.provide(NodeServices.layer));
   const providerLayer = makeProviderServiceLive({ runtimeIdleStopMs: 0 }).pipe(
     Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
     Layer.provide(directoryLayer),
+    Layer.provide(settingsLayer),
+    Layer.provide(
+      Layer.succeed(ServerSecretStore, {
+        get: () => Effect.succeed(null),
+        set: () => Effect.void,
+        getOrCreateRandom: (_name, bytes) => Effect.succeed(new Uint8Array(bytes)),
+        remove: () => Effect.void,
+      }),
+    ),
   );
   const sharedLayer = Layer.mergeAll(providerLayer, directoryLayer, NodeServices.layer);
   const reaperLayer = makeProviderSessionReaperLive({

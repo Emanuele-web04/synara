@@ -130,7 +130,7 @@ import { stripDiagnosticImages } from "../stripDiagnosticImages.ts";
 import { ServerConfig } from "../../config.ts";
 import { buildFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { loadClaudeAgentSdk } from "../claudeAgentSdk.ts";
-import { buildClaudeProcessEnv, withClaudeArtifactOptIn } from "../claudeProcessEnv.ts";
+import { withClaudeArtifactOptIn } from "../claudeProcessEnv.ts";
 import { ClaudeRequestUsage } from "../claudeRequestUsage.ts";
 import {
   CLAUDE_CONTEXT_WINDOW_MAX_TOKENS,
@@ -168,6 +168,7 @@ import {
   readClaudeWorkflowOutputText,
   type ClaudeWorkflowRuntimeState,
 } from "../claudeWorkflowRuntime.ts";
+import { buildClaudeInstanceProcessEnv } from "../claudeEnvironment.ts";
 import { positiveFiniteNumber } from "../tokenUsage.ts";
 import {
   isClaudeAutoModeCliVersionSupported,
@@ -191,6 +192,8 @@ import {
   teardownProviderProcessTree,
   type ProcessExitHandle,
 } from "../supervisedProcessTeardown.ts";
+
+export { claudeHomeEnvironment } from "../claudeEnvironment.ts";
 
 const PROVIDER = "claudeAgent" as const;
 const CLAUDE_DISCOVERY_THREAD_ID = ThreadId.makeUnsafe("claude:discovery");
@@ -350,6 +353,8 @@ interface ClaudeSessionContext {
   readonly artifactsEnabled: boolean;
   // Tool names from Claude's `init` message, once the first turn has produced it.
   initToolNames?: ReadonlySet<string>;
+  readonly commandDiscoveryKey: string;
+  readonly accountDiscoveryKey: string;
   readonly messageStream?: AsyncIterable<SDKMessage>;
   readonly processOwner: ClaudeProcessOwner;
   readonly stoppedSignal: Deferred.Deferred<void>;
@@ -689,6 +694,59 @@ function neverResolvingUserMessageStream(): AsyncIterable<SDKUserMessage> {
       };
     },
   };
+}
+
+function claudeDiscoveryKey(input: {
+  readonly instanceId?: string | null | undefined;
+  readonly binaryPath?: string | null | undefined;
+  readonly homePath?: string | null | undefined;
+  readonly environment?: Readonly<Record<string, string>> | undefined;
+  readonly cwd?: string | null | undefined;
+  readonly includeCwd?: boolean;
+}): string {
+  return JSON.stringify({
+    instanceId: input.instanceId?.trim() || null,
+    binaryPath: input.binaryPath?.trim() || "claude",
+    homePath: input.homePath?.trim() || null,
+    environment: environmentFingerprint(input.environment),
+    cwd: input.includeCwd === false ? null : input.cwd?.trim() || null,
+  });
+}
+
+function environmentFingerprint(
+  environment: Readonly<Record<string, string>> | undefined,
+): Record<string, string> | null {
+  if (!environment || Object.keys(environment).length === 0) {
+    return null;
+  }
+  return Object.fromEntries(
+    Object.entries(environment)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([name, value]) => [name, hashCacheComponent(value)]),
+  );
+}
+
+function hashCacheComponent(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function claudeEnvironment(
+  homePath: string | null | undefined,
+  fallbackHomePath?: string | undefined,
+  environment?: Readonly<Record<string, string>> | undefined,
+  providerInstanceId?: string,
+  isolationRootDir?: string,
+): NodeJS.ProcessEnv {
+  return buildClaudeInstanceProcessEnv(homePath, environment, {
+    ...(fallbackHomePath ? { homeDir: fallbackHomePath } : {}),
+    ...(providerInstanceId ? { providerInstanceId } : {}),
+    ...(isolationRootDir ? { isolationRootDir } : {}),
+  });
 }
 
 function isUuid(value: string): boolean {
@@ -2048,9 +2106,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     const failedStartupProcessOwners = new Map<ThreadId, ClaudeProcessOwner>();
     const failedDiscoveryProcessOwners = new Set<ClaudeProcessOwner>();
     const sessionLifecycleLock = makeKeyedLock<ThreadId>();
-    let cachedAgents: ProviderListAgentsResult | null = null;
+    const cachedAgentsByKey = new Map<string, ProviderListAgentsResult>();
     const verifyClaudeAutoModelSupport = (input: {
       readonly queryRuntime: ClaudeQueryRuntime;
+      readonly discoveryKey: string;
       readonly selectedModel: string | undefined;
       readonly apiModelId: string | undefined;
       readonly operation: "startSession" | "sendTurn";
@@ -2119,9 +2178,20 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     const nextEventId = Effect.map(Random.nextUUIDv4, (id) => EventId.makeUnsafe(id));
     const makeEventStamp = () => Effect.all({ eventId: nextEventId, createdAt: nowIso });
     const withSessionLifecycleLock = sessionLifecycleLock.withLock;
-    const resolveClaudeSdkEnv = Effect.sync(() =>
-      buildClaudeProcessEnv({ homeDir: serverConfig.homeDir }),
-    );
+    const resolveClaudeSdkEnv = (
+      homePath?: string | null,
+      environment?: Readonly<Record<string, string>>,
+      providerInstanceId?: string,
+    ) =>
+      Effect.sync(() =>
+        claudeEnvironment(
+          homePath,
+          serverConfig.homeDir,
+          environment,
+          providerInstanceId,
+          serverConfig.stateDir,
+        ),
+      );
 
     const bindClaudeProcessOwner =
       (owner: ClaudeProcessOwner) =>
@@ -2204,6 +2274,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     ): Effect.Effect<void> =>
       Queue.offer(runtimeEventQueue, {
         ...(stripDiagnosticImages(event) as ProviderRuntimeEvent),
+        ...(event.providerInstanceId === undefined && context.session.providerInstanceId
+          ? { providerInstanceId: context.session.providerInstanceId }
+          : {}),
         ...(context.lifecycleGeneration !== undefined
           ? { lifecycleGeneration: context.lifecycleGeneration }
           : {}),
@@ -3433,6 +3506,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         taskId: undefined,
         context: {
           session: context.session,
+          commandDiscoveryKey: context.commandDiscoveryKey,
+          accountDiscoveryKey: context.accountDiscoveryKey,
           ...(context.lifecycleGeneration === undefined
             ? {}
             : { lifecycleGeneration: context.lifecycleGeneration }),
@@ -5341,7 +5416,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       input: Parameters<ClaudeAdapterShape["startSession"]>[0],
     ) =>
       Effect.gen(function* () {
-        const claudeSdkEnv = yield* resolveClaudeSdkEnv;
+        const claudeSdkEnv = yield* resolveClaudeSdkEnv(
+          input.providerOptions?.claudeAgent?.homePath,
+          input.providerOptions?.claudeAgent?.environment,
+          input.providerInstanceId,
+        );
         if (input.runtimeMode !== "auto") return { claudeSdkEnv, snapshotSupported: false };
         const binaryPath = input.providerOptions?.claudeAgent?.binaryPath ?? "claude";
         const installedVersion = yield* Effect.tryPromise({
@@ -5873,6 +5952,21 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         const providerOptions = input.providerOptions?.claudeAgent;
         const modelSelection =
           input.modelSelection?.provider === "claudeAgent" ? input.modelSelection : undefined;
+        const providerInstanceId = input.providerInstanceId ?? modelSelection?.instanceId;
+        const commandDiscoveryKey = claudeDiscoveryKey({
+          instanceId: providerInstanceId,
+          binaryPath: providerOptions?.binaryPath,
+          homePath: providerOptions?.homePath,
+          environment: providerOptions?.environment,
+          cwd: input.cwd,
+        });
+        const accountDiscoveryKey = claudeDiscoveryKey({
+          instanceId: providerInstanceId,
+          binaryPath: providerOptions?.binaryPath,
+          homePath: providerOptions?.homePath,
+          environment: providerOptions?.environment,
+          includeCwd: false,
+        });
         const requestedEffort = trimOrNull(modelSelection?.options?.effort ?? null);
         const requestedAutoCompactWindow = normalizeClaudeModelOptions(
           modelSelection?.model,
@@ -6039,6 +6133,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           if (input.runtimeMode === "auto") {
             yield* verifyClaudeAutoModelSupport({
               queryRuntime,
+              discoveryKey: accountDiscoveryKey,
               selectedModel: effectiveClaudeModel,
               apiModelId,
               operation: "startSession",
@@ -6046,11 +6141,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           }
 
           // Populate agent cache in background from first session
-          if (!cachedAgents) {
+          if (!cachedAgentsByKey.has(accountDiscoveryKey)) {
             queryRuntime
               .supportedAgents()
               .then((agents) => {
-                cachedAgents = {
+                cachedAgentsByKey.set(accountDiscoveryKey, {
                   agents: agents.map((a) => ({
                     name: a.name,
                     displayName: a.name,
@@ -6059,7 +6154,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                   })),
                   source: "sdk",
                   cached: false,
-                };
+                });
               })
               .catch(() => {
                 /* ignore discovery failures */
@@ -6083,6 +6178,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           const session: ProviderSession = {
             threadId,
             provider: PROVIDER,
+            ...(providerInstanceId ? { providerInstanceId } : {}),
             status: "ready",
             runtimeMode: input.runtimeMode,
             ...(input.cwd ? { cwd: input.cwd } : {}),
@@ -6118,6 +6214,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               : {}),
             promptQueue,
             query: queryRuntime,
+            commandDiscoveryKey,
+            accountDiscoveryKey,
             ...(messageStream ? { messageStream } : {}),
             processOwner,
             stoppedSignal: Deferred.makeUnsafe<void>(),
@@ -6487,6 +6585,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             if (context.session.runtimeMode === "auto") {
               yield* verifyClaudeAutoModelSupport({
                 queryRuntime: context.query,
+                discoveryKey: context.accountDiscoveryKey,
                 selectedModel: modelSelection.model,
                 apiModelId,
                 operation: "sendTurn",
@@ -7064,6 +7163,20 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               "The source Claude session has a turn in flight; Synara will rebuild the fork from its retained transcript.",
           });
         }
+        const claudeOptions = input.providerOptions?.claudeAgent;
+        const requiresScopedSessionStore =
+          (input.modelSelection?.instanceId !== undefined &&
+            input.modelSelection.instanceId !== "claudeAgent") ||
+          claudeOptions?.homePath !== undefined ||
+          claudeOptions?.environment !== undefined;
+        if (!liveSource && requiresScopedSessionStore) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "forkThread",
+            issue:
+              "A stopped account-scoped Claude session cannot be forked safely through the default SDK store; Synara will rebuild the fork from its retained transcript.",
+          });
+        }
         const sourceState = readClaudeResumeState(input.sourceResumeCursor);
         const sourceSessionId = liveSource?.resumeSessionId ?? sourceState?.resume;
         if (!sourceSessionId) {
@@ -7266,11 +7379,12 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     // Native discovery caches — avoid spawning a process per query.
     let commandsCache: {
       result: ProviderListCommandsResult;
-      cwd: string;
+      key: string;
       enableArtifacts: boolean;
     } | null = null;
     // Keyed by everything the spawned process depends on, so a lookup never joins
-    // (and then caches) a discovery started for another workspace or Artifact opt-in.
+    // (and then caches) a discovery started for another instance, workspace, or
+    // Artifact opt-in.
     const pendingCommandDiscoveries = new Map<string, Promise<ProviderListCommandsResult>>();
     let commandDiscoveryTail: Promise<unknown> = Promise.resolve();
 
@@ -7359,20 +7473,29 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     ) =>
       Effect.gen(function* () {
         const enableArtifacts = input.enableArtifacts === true;
+        const discoveryKey = claudeDiscoveryKey(input);
         // 1. Try an active session first (cheapest path).
         // A thread's own session is the truth for that thread. Without one, only
         // borrow a session spawned with the same Artifact opt-in a new session
         // would get, or its command list would misreport `/design` and `/slides`.
+        // The thread's own session only answers for the same account; its cwd may
+        // legitimately differ from the discovery request's.
         const ownContext = input.threadId
           ? sessions.get(ThreadId.makeUnsafe(input.threadId))
           : undefined;
+        const accountDiscoveryKey = claudeDiscoveryKey({ ...input, includeCwd: false });
         const context =
-          ownContext && !ownContext.stopped
+          ownContext &&
+          !ownContext.stopped &&
+          ownContext.accountDiscoveryKey === accountDiscoveryKey
             ? ownContext
             : input.threadId
               ? undefined
               : [...sessions.values()].find(
-                  (s) => !s.stopped && s.artifactsEnabled === enableArtifacts,
+                  (s) =>
+                    !s.stopped &&
+                    s.commandDiscoveryKey === discoveryKey &&
+                    s.artifactsEnabled === enableArtifacts,
                 );
 
         if (context && !context.stopped) {
@@ -7390,14 +7513,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           );
           // Cache under the flag this process was spawned with, not the current
           // setting, so a pre-toggle session cannot poison fresh discovery.
-          commandsCache = { result, cwd: input.cwd, enableArtifacts: context.artifactsEnabled };
+          commandsCache = { result, key: discoveryKey, enableArtifacts: context.artifactsEnabled };
           return result;
         }
 
         // 2. Return from cache if valid and not force-reloading.
         if (
           commandsCache &&
-          commandsCache.cwd === input.cwd &&
+          commandsCache.key === discoveryKey &&
           commandsCache.enableArtifacts === enableArtifacts &&
           !input.forceReload
         ) {
@@ -7405,10 +7528,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
 
         // 3. Spawn a temporary process for discovery (deduplicating concurrent requests).
-        const claudeSdkEnv = yield* resolveClaudeSdkEnv;
+        const claudeSdkEnv = yield* resolveClaudeSdkEnv(
+          input.homePath,
+          input.environment,
+          input.instanceId,
+        );
         const binaryPath = input.binaryPath ?? "claude";
-        const discoveryKey = JSON.stringify([input.cwd, binaryPath, enableArtifacts]);
-        let discoveryPromise = pendingCommandDiscoveries.get(discoveryKey);
+        const pendingKey = JSON.stringify([discoveryKey, enableArtifacts]);
+        let discoveryPromise = pendingCommandDiscoveries.get(pendingKey);
         if (!discoveryPromise) {
           // Distinct lookups queue behind each other: still one temporary Claude
           // process at a time, as when every caller shared a single promise.
@@ -7425,10 +7552,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             );
           discoveryPromise = started;
           commandDiscoveryTail = started;
-          pendingCommandDiscoveries.set(discoveryKey, started);
+          pendingCommandDiscoveries.set(pendingKey, started);
           const forget = () => {
-            if (pendingCommandDiscoveries.get(discoveryKey) === started) {
-              pendingCommandDiscoveries.delete(discoveryKey);
+            if (pendingCommandDiscoveries.get(pendingKey) === started) {
+              pendingCommandDiscoveries.delete(pendingKey);
             }
           };
           void started.then(forget, forget);
@@ -7446,7 +7573,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             }),
         });
 
-        commandsCache = { result, cwd: input.cwd, enableArtifacts };
+        commandsCache = { result, key: discoveryKey, enableArtifacts };
         return result;
       });
 
@@ -7509,7 +7636,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         // ProviderDiscoveryService owns caching and single-flight. The SDK's
         // supportedModels() returns initialization metadata, so an existing
         // session cannot discover models added by a CLI update.
-        const claudeSdkEnv = yield* resolveClaudeSdkEnv;
+        const claudeSdkEnv = yield* resolveClaudeSdkEnv(
+          input.homePath,
+          input.environment,
+          input.instanceId,
+        );
         return yield* Effect.tryPromise({
           try: () =>
             discoverModelsViaTemporaryProcess(
@@ -7527,17 +7658,19 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         });
       });
 
-    const listAgents: NonNullable<ClaudeAdapterShape["listAgents"]> = (_input) =>
+    const listAgents: NonNullable<ClaudeAdapterShape["listAgents"]> = (input) =>
       Effect.sync(() => {
+        const discoveryKey = claudeDiscoveryKey({ ...input, includeCwd: false });
+        const cachedAgents = cachedAgentsByKey.get(discoveryKey);
         if (cachedAgents) {
           return { ...cachedAgents, cached: true };
         }
         for (const [, context] of sessions) {
-          if (!context.stopped && context.query) {
+          if (!context.stopped && context.query && context.accountDiscoveryKey === discoveryKey) {
             context.query
               .supportedAgents()
               .then((agents) => {
-                cachedAgents = {
+                cachedAgentsByKey.set(discoveryKey, {
                   agents: agents.map((a) => ({
                     name: a.name,
                     displayName: a.name,
@@ -7546,7 +7679,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                   })),
                   source: "sdk",
                   cached: false,
-                };
+                });
               })
               .catch(() => {});
             break;

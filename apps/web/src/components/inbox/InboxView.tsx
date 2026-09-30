@@ -54,6 +54,7 @@ import {
   recapBucketsByStart,
   recapInputForRange,
   recapTokens,
+  previousDayCutoffMs,
   resolveInboxDay,
   sumRecapBefore,
   summarizeInboxSlots,
@@ -418,7 +419,7 @@ function RecapDigest({
   // with a whole day and a recap that is a few minutes old is not compared with a newer one.
   const asOfMs = Date.parse(recap.generatedAt) || nowMs;
   const yesterdaySoFar = previousRecap
-    ? sumRecapBefore(previousRecap, day.previousDay, day.previousDay.fromMs + (asOfMs - day.fromMs))
+    ? sumRecapBefore(previousRecap, day.previousDay, previousDayCutoffMs(asOfMs))
     : null;
   const input = { recap, previousRecap, yesterdaySoFar, slots };
   const sentences = buildInboxDigest(input);

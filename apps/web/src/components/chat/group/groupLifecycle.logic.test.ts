@@ -27,7 +27,7 @@ describe("buildGroupDeletedNotice", () => {
     ]);
   });
 
-  it("explains why the group folder was kept", () => {
+  it("explains why the hub folder was kept", () => {
     const notice = buildGroupDeletedNotice({
       libraryLeftOnDiskPath: null,
       workspaceLeftOnDiskPath: "/Users/a/Documents/Synara/Groups/crew",
@@ -35,7 +35,7 @@ describe("buildGroupDeletedNotice", () => {
     assert.equal(notice?.description.includes("has your files"), true);
     assert.equal(notice?.description.includes("/Users/a/Documents/Synara/Groups/crew"), true);
     assert.deepEqual(notice?.copyItems, [
-      { label: "group folder path", text: "/Users/a/Documents/Synara/Groups/crew" },
+      { label: "hub folder path", text: "/Users/a/Documents/Synara/Groups/crew" },
     ]);
   });
 
@@ -48,7 +48,7 @@ describe("buildGroupDeletedNotice", () => {
     assert.equal(notice?.description.includes("/kept/group-folder"), true);
     assert.deepEqual(notice?.copyItems, [
       { label: "library path", text: "/kept/library" },
-      { label: "group folder path", text: "/kept/group-folder" },
+      { label: "hub folder path", text: "/kept/group-folder" },
     ]);
   });
 });

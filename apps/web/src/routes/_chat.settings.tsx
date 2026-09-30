@@ -14,6 +14,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   type AppSettings,
   type FollowUpBehavior,
+  type VoiceEnterBehavior,
   DEFAULT_UI_DENSITY,
   DEFAULT_CHAT_WIDTH,
   type UiDensity,
@@ -108,7 +109,7 @@ import {
   isWindowsPlatform,
 } from "../lib/utils";
 import { ensureNativeApi, readNativeApi } from "../nativeApi";
-import { sameProviderOrder } from "../providerOrdering";
+import { isProviderKind, sameProviderOrder } from "../providerOrdering";
 import {
   normalizeSettingsSection,
   SETTINGS_NAV_ITEMS,
@@ -192,6 +193,11 @@ const FOLLOW_UP_BEHAVIOR_OPTIONS = [
   { value: "steer", label: "Steer" },
 ] as const satisfies ReadonlyArray<{ value: FollowUpBehavior; label: string }>;
 
+const VOICE_ENTER_BEHAVIOR_OPTIONS = [
+  { value: "stop", label: "Stop" },
+  { value: "send", label: "Stop and send" },
+] as const satisfies ReadonlyArray<{ value: VoiceEnterBehavior; label: string }>;
+
 // ── Settings UI primitives ────────────────────────────────────────────────
 
 // Shared settings controls live in ~/components/settings/SettingControls.
@@ -199,7 +205,6 @@ const FOLLOW_UP_BEHAVIOR_OPTIONS = [
 function isProviderSelectOption(value: string): value is ProviderKind {
   return PROVIDER_SELECT_OPTIONS.includes(value as ProviderKind);
 }
-
 // Keys of AppSettings whose value is a plain boolean — the only ones that can be
 // driven by the shared on/off toggle row below.
 type BooleanSettingKey = {
@@ -212,6 +217,10 @@ function SettingsRouteView() {
   const routeSearch = useSearch({ strict: false }) as Record<string, unknown>;
   const activeSection = normalizeSettingsSection(routeSearch.section);
   const settingsTarget = typeof routeSearch.target === "string" ? routeSearch.target : null;
+  const settingsProviderTarget =
+    typeof routeSearch.provider === "string" && isProviderKind(routeSearch.provider)
+      ? routeSearch.provider
+      : null;
   const activeSectionItem = SETTINGS_NAV_ITEMS.find((item) => item.id === activeSection)!;
 
   const {
@@ -345,7 +354,7 @@ function SettingsRouteView() {
       : []),
     ...(settings.showChatsSection !== defaults.showChatsSection ? ["Chats section"] : []),
     ...(GROUPS_ON && settings.showGroupsSection !== defaults.showGroupsSection
-      ? ["Groups section"]
+      ? ["Hubs section"]
       : []),
     ...(settings.showAutomationRunThreads !== defaults.showAutomationRunThreads
       ? ["Automation runs"]
@@ -374,6 +383,9 @@ function SettingsRouteView() {
       : []),
     ...(settings.composerEffortSlider !== defaults.composerEffortSlider ? ["Effort slider"] : []),
     ...(settings.followUpBehavior !== defaults.followUpBehavior ? ["Follow-up behavior"] : []),
+    ...(settings.voiceEnterBehavior !== defaults.voiceEnterBehavior
+      ? ["Enter while dictating"]
+      : []),
     ...(settings.autoOpenDevicePane !== defaults.autoOpenDevicePane
       ? ["Automatically open simulator"]
       : []),
@@ -705,10 +717,10 @@ function SettingsRouteView() {
         {GROUPS_ON
           ? renderBooleanSettingRow({
               settingKey: "showGroupsSection",
-              title: "Groups",
-              description: "Show the Groups tab in the sidebar switcher.",
-              resetLabel: "groups section",
-              ariaLabel: "Show the Groups section in the sidebar",
+              title: "Hubs",
+              description: "Show the Hubs tab in the sidebar switcher.",
+              resetLabel: "hubs section",
+              ariaLabel: "Show the Hubs section in the sidebar",
             })
           : null}
 
@@ -1224,6 +1236,31 @@ function SettingsRouteView() {
           }
         />
 
+        <SettingsRow
+          title="Enter while dictating"
+          description="Choose what Enter does while a voice note is recording: stop and transcribe into the composer, or stop and send the message once it is transcribed."
+          resetAction={
+            settings.voiceEnterBehavior !== defaults.voiceEnterBehavior ? (
+              <SettingResetButton
+                label="enter while dictating"
+                onClick={() =>
+                  updateSettings({
+                    voiceEnterBehavior: defaults.voiceEnterBehavior,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSegmentedControl
+              value={settings.voiceEnterBehavior}
+              onValueChange={(value) => updateSettings({ voiceEnterBehavior: value })}
+              ariaLabel="Enter while dictating"
+              options={VOICE_ENTER_BEHAVIOR_OPTIONS}
+            />
+          }
+        />
+
         {renderBooleanSettingRow({
           settingKey: "enableAssistantStreaming",
           title: "Assistant output",
@@ -1422,6 +1459,7 @@ function SettingsRouteView() {
                 />
                 <ProvidersSettingsPanel
                   active={activeSection === "providers"}
+                  providerTarget={settingsProviderTarget}
                   settings={settings}
                   defaults={defaults}
                   updateSettings={updateSettings}

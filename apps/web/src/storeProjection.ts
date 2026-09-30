@@ -610,6 +610,7 @@ function rebuildThreadShellRecords(
       thread.claudeCacheReview != null || previousThread?.claudeCacheReviewSequence !== undefined
         ? snapshotSequence
         : undefined,
+      { restoringSession: true },
     );
     const threadId = next.shell.id;
 
@@ -1365,7 +1366,9 @@ function syncServerThreadDetailWithOptions(
     commitThreadProjection(
       writeThreadState(
         state,
-        normalizeThreadFromReadModel(nextThreadDetail, previousThread, options?.snapshotSequence),
+        normalizeThreadFromReadModel(nextThreadDetail, previousThread, options?.snapshotSequence, {
+          restoringSession: !state.threadsHydrated,
+        }),
         previousThread,
       ),
       thread.id,
@@ -1430,6 +1433,7 @@ export function applyShellEvent(state: AppState, event: OrchestrationShellStream
           event.thread,
           getThreadFromState(state, event.thread.id),
           event.sequence,
+          { restoringSession: !state.threadsHydrated },
         ),
       );
       return commitThreadProjection(nextState, event.thread.id);
@@ -1484,6 +1488,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
         thread.claudeCacheReview != null || existing?.claudeCacheReviewSequence !== undefined
           ? readModel.snapshotSequence
           : undefined,
+        { restoringSession: true },
       );
     });
   const nextThreadIds = new Set(nextThreads.map((thread) => thread.id));

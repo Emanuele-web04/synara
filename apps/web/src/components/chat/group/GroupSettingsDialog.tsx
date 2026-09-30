@@ -323,14 +323,14 @@ export function GroupSettingsDialog(props: {
     });
     setDiscarding(false);
     if (result === null) {
-      setDiscardError("Could not delete this group. Try again from the group's settings.");
+      setDiscardError("Could not delete this hub. Try again from the hub's settings.");
       return;
     }
     setDiscardConfirmOpen(false);
     props.onOpenChange(false);
   };
 
-  const title = props.mode === "onboarding" ? "Set up your group" : props.projectName;
+  const title = props.mode === "onboarding" ? "Set up your hub" : props.projectName;
 
   return (
     <>
@@ -352,13 +352,13 @@ export function GroupSettingsDialog(props: {
             <DialogTitle>{title}</DialogTitle>
             <DialogDescription>
               {props.mode === "onboarding"
-                ? "Choose how the coordinator works with this group."
-                : "Coordinator settings for this group."}
+                ? "Choose how the coordinator works with this hub."
+                : "Coordinator settings for this hub."}
             </DialogDescription>
           </DialogHeader>
           <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
             <nav
-              aria-label="Group settings sections"
+              aria-label="Hub settings sections"
               className="shrink-0 overflow-x-auto border-b border-[color:var(--color-border-light)] px-1.5 py-2 sm:w-[220px] sm:overflow-x-visible sm:overflow-y-auto sm:border-b-0 sm:border-r"
             >
               <ul className={cn("flex flex-row sm:flex-col", SETTINGS_SIDEBAR_LIST_GAP_CLASS_NAME)}>
@@ -407,7 +407,7 @@ export function GroupSettingsDialog(props: {
                       {agent.error}
                     </p>
                   ) : (
-                    <Spinner aria-label="Loading group settings" className="size-4" />
+                    <Spinner aria-label="Loading hub settings" className="size-4" />
                   )}
                 </div>
               ) : section === "general" ? (
@@ -467,7 +467,7 @@ export function GroupSettingsDialog(props: {
               disabled={saving || draft === null || (props.mode === "edit" && !dirty)}
               onClick={() => void handleSave()}
             >
-              {props.mode === "onboarding" ? "Create group" : "Save"}
+              {props.mode === "onboarding" ? "Create hub" : "Save"}
             </Button>
           </DialogFooter>
         </DialogPopup>
@@ -480,10 +480,10 @@ export function GroupSettingsDialog(props: {
       >
         <AlertDialogPopup>
           <AlertDialogHeader>
-            <AlertDialogTitle>Discard this group?</AlertDialogTitle>
+            <AlertDialogTitle>Discard this hub?</AlertDialogTitle>
             <AlertDialogDescription>
               "{props.projectName}" has no threads, files, or linked repositories yet. Deleting it
-              removes the group entirely — or keep it and finish setup later.
+              removes the hub entirely — or keep it and finish setup later.
             </AlertDialogDescription>
           </AlertDialogHeader>
           {discardError ? (
@@ -505,7 +505,7 @@ export function GroupSettingsDialog(props: {
                 />
               }
             >
-              Keep group
+              Keep hub
             </AlertDialogClose>
             <Button
               size="sm"
@@ -513,7 +513,7 @@ export function GroupSettingsDialog(props: {
               disabled={discarding}
               onClick={() => void confirmDiscard()}
             >
-              Discard group
+              Discard hub
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>

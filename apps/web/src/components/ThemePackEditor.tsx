@@ -3,6 +3,7 @@
 // Layer: Web settings UI
 // Exports: ThemePackEditor
 
+import { DESKTOP_WINDOW_BLUR_RADIUS_MAX } from "@synara/contracts";
 import { type CSSProperties, useEffect, useId, useMemo, useRef, useState } from "react";
 import { HexColorPicker } from "react-colorful";
 import { Button } from "./ui/button";
@@ -19,9 +20,10 @@ import {
 import { Input } from "./ui/input";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Select, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
-import { Switch } from "./ui/switch";
+import { DisclosureRegion } from "./ui/DisclosureRegion";
 import { Textarea } from "./ui/textarea";
 import { toastManager } from "./ui/toast";
+import { SettingsSegmentedControl } from "./settings/SettingControls";
 import { SettingsCard, SettingsSelectPopup } from "./settings/SettingsPanelPrimitives";
 import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
 import { type ChromeTheme, type ThemeMode, type ThemeVariant, useTheme } from "../hooks/useTheme";
@@ -48,6 +50,10 @@ type ThemePackEditorProps = {
 };
 
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+const SIDEBAR_MATERIAL_OPTIONS = [
+  { value: "solid", label: "Solid" },
+  { value: "translucent", label: "Translucent" },
+] as const;
 const COLOR_PICKER_COMMIT_DELAY_MS = 220;
 
 /** Borderless text action in the editor's header chrome (Copy, Import). */
@@ -73,6 +79,8 @@ export function ThemePackEditor({
     resolvedTheme,
     theme: themeMode,
     systemUiFont,
+    setWindowTranslucency,
+    translucency: translucencyByVariant,
     updateThemePack,
     updateThemeFonts,
   } = useTheme();
@@ -81,6 +89,7 @@ export function ThemePackEditor({
 
   const pack = variant === "dark" ? darkTheme : lightTheme;
   const theme = pack.theme;
+  const translucency = translucencyByVariant[variant];
   const previewVariables = useMemo(
     () => buildThemeCssVariables(pack, variant, { systemUiFont }).variables,
     [pack, variant, systemUiFont],
@@ -302,17 +311,49 @@ export function ThemePackEditor({
           </div>
         </ThemeRow>
 
-        <ThemeRow label="Translucent sidebar">
-          <Switch
-            checked={!theme.opaqueWindows}
-            onCheckedChange={(checked) => updateThemePack(variant, { opaqueWindows: !checked })}
-            aria-label={`${titleLabel} translucent sidebar`}
-          />
-        </ThemeRow>
+        <div>
+          <ThemeRow label="Sidebar">
+            <SettingsSegmentedControl
+              value={theme.opaqueWindows ? "solid" : "translucent"}
+              onValueChange={(value) =>
+                updateThemePack(variant, { opaqueWindows: value === "solid" })
+              }
+              ariaLabel={`${titleLabel} sidebar material`}
+              options={SIDEBAR_MATERIAL_OPTIONS}
+            />
+          </ThemeRow>
+          <DisclosureRegion open={!theme.opaqueWindows}>
+            <div
+              className={cn(
+                SETTINGS_STACKED_ROWS_DIVIDER_CLASS_NAME,
+                "border-t border-[color:var(--color-border)]",
+              )}
+            >
+              <ThemeRow label="Opacity">
+                <ThemeSlider
+                  value={translucency.opacity}
+                  max={100}
+                  suffix="%"
+                  onChange={(next) => setWindowTranslucency(variant, { opacity: next })}
+                  ariaLabel={`${titleLabel} sidebar opacity`}
+                />
+              </ThemeRow>
+              <ThemeRow label="Blur">
+                <ThemeSlider
+                  value={translucency.blur}
+                  max={DESKTOP_WINDOW_BLUR_RADIUS_MAX}
+                  onChange={(next) => setWindowTranslucency(variant, { blur: next })}
+                  ariaLabel={`${titleLabel} background blur`}
+                />
+              </ThemeRow>
+            </div>
+          </DisclosureRegion>
+        </div>
 
         <ThemeRow label="Contrast">
-          <ContrastSlider
+          <ThemeSlider
             value={theme.contrast}
+            max={100}
             onChange={(next) => updateThemePack(variant, { contrast: next })}
             ariaLabel={`${titleLabel} contrast`}
           />
@@ -565,24 +606,28 @@ function FontInput({
 
 // ── Slider ────────────────────────────────────────────────────────────────
 
-function ContrastSlider({
+function ThemeSlider({
   value,
+  max,
+  suffix = "",
   onChange,
   ariaLabel,
 }: {
   value: number;
+  max: number;
+  suffix?: string;
   onChange: (next: number) => void;
   ariaLabel: string;
 }) {
   const id = useId();
-  const fillPct = Math.max(0, Math.min(100, value));
+  const fillPct = Math.max(0, Math.min(100, (value / max) * 100));
   return (
     <div className="flex items-center gap-3">
       <input
         id={id}
         type="range"
         min={0}
-        max={100}
+        max={max}
         step={1}
         value={value}
         onChange={(event) => onChange(Number(event.target.value))}
@@ -592,8 +637,9 @@ function ContrastSlider({
           background: `linear-gradient(to right, var(--primary) 0%, var(--primary) ${fillPct}%, var(--input) ${fillPct}%, var(--input) 100%)`,
         }}
       />
-      <span className="w-7 text-right font-chat-code text-ui leading-snug text-muted-foreground tabular-nums">
+      <span className="w-10 text-right font-chat-code text-ui leading-snug text-muted-foreground tabular-nums">
         {value}
+        {suffix}
       </span>
     </div>
   );

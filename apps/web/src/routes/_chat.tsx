@@ -11,6 +11,7 @@ import {
 } from "../appNavigation";
 import { AppRailSlotProvider } from "../components/AppRail";
 import { AppShellTopStrip } from "../components/AppShellTopStrip";
+import { resolveSelectableProviderInstanceId, useAppSettings } from "../appSettings";
 import ShortcutsDialog from "../components/ShortcutsDialog";
 import { RecentViewSwitcher } from "../components/RecentViewSwitcher";
 import { shouldRenderTerminalWorkspace } from "../components/ChatView.logic";
@@ -214,7 +215,9 @@ function ChatRouteGlobalShortcuts() {
   const navigate = useNavigate();
   const isGroupsRoute = useLocation({
     select: (location) =>
-      location.pathname.startsWith("/groups") || location.pathname.startsWith("/studio"),
+      location.pathname.startsWith("/hubs") ||
+      location.pathname.startsWith("/groups") ||
+      location.pathname.startsWith("/studio"),
   });
   const { toggleSidebar } = useSidebar();
   const [shortcutsDialogOpen, setShortcutsDialogOpen] = useState(false);
@@ -259,6 +262,7 @@ function ChatRouteGlobalShortcuts() {
   const platform = getNavigatorPlatform();
   const providerStatuses = useProviderStatusesForLocalConfig();
   const refreshProviderStatuses = useRefreshProviderStatusesNow();
+  const { settings } = useAppSettings();
   const activeThreadTerminalState = activeContextThreadId
     ? selectThreadTerminalState(terminalStateByThreadId, activeContextThreadId)
     : null;
@@ -311,7 +315,7 @@ function ChatRouteGlobalShortcuts() {
   // the app entirely, not merely absent from the Space you happen to be in.
   const persistedLatestProjectStillExists = resolveLatestProjectTargetId(projects, latestProjectId);
   // A bare "new chat" on the Groups surface lands in the active (or first) group; with
-  // no groups at all there is no implicit container — the /groups empty state shows.
+  // no groups at all there is no implicit container — the /hubs empty state shows.
   const handleNewGroupChatForSurface = useCallback(
     (options?: { fresh?: boolean }) => {
       const targetProjectId = resolveGroupChatTargetProjectId({
@@ -319,7 +323,7 @@ function ChatRouteGlobalShortcuts() {
         groupProjects,
       });
       if (!targetProjectId) {
-        return navigate({ to: "/groups" }).then((): { ok: true; threadId: null } => ({
+        return navigate({ to: "/hubs" }).then((): { ok: true; threadId: null } => ({
           ok: true,
           threadId: null,
         }));
@@ -469,8 +473,10 @@ function ChatRouteGlobalShortcuts() {
         event.preventDefault();
         event.stopPropagation();
         void (async () => {
+          const providerInstanceId = resolveSelectableProviderInstanceId(settings, provider);
           const providerAvailability = await resolveProviderSendAvailabilityWithRefresh({
             provider,
+            instanceId: providerInstanceId,
             statuses: providerStatuses,
             refreshStatuses: () => refreshProviderStatuses({ silent: true }),
           });
@@ -517,6 +523,7 @@ function ChatRouteGlobalShortcuts() {
     refreshProviderStatuses,
     recentSwitcherState,
     selectedThreadIdsSize,
+    settings,
     terminalOpen,
     terminalWorkspaceOpen,
     toggleSidebar,

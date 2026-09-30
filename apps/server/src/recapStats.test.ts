@@ -248,6 +248,43 @@ describe("RecapStatsQuery", () => {
     expect(recap.unavailableProviders).toEqual([]);
   });
 
+  it("attributes instance-only turns to the session driver alongside their token usage", async () => {
+    const recap = await runRecapTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* seedDay;
+        yield* sql`
+          UPDATE projection_threads
+          SET model_selection_json = '{"instanceId":"work-account","model":"openai/gpt-5"}'
+          WHERE thread_id = 'thread-a'
+        `;
+        yield* sql`
+          UPDATE orchestration_events
+          SET payload_json = json_set(payload_json, '$.modelSelection',
+            json('{"instanceId":"work-account","model":"openai/gpt-5"}'))
+          WHERE stream_id = 'thread-a'
+        `;
+        yield* sql`
+          INSERT INTO projection_thread_sessions
+            (thread_id, status, provider_name, provider_instance_id, updated_at)
+          VALUES ('thread-a', 'ready', 'pi', 'work-account', '2026-09-30T18:30:00.000Z')
+        `;
+        yield* sql`
+          UPDATE projection_thread_activities
+          SET payload_json = json_set(payload_json, '$.provider', 'pi')
+          WHERE thread_id = 'thread-a'
+        `;
+        return yield* (yield* RecapStatsQuery).getRecap(RECAP_INPUT);
+      }),
+    );
+
+    expect(recap.models).toEqual([
+      { provider: "pi", model: "openai/gpt-5", turns: 3, tokens: 40_000 },
+      { provider: "codex", model: "gpt-5-codex", turns: 1, tokens: 7_000 },
+    ]);
+    expect(recap.unavailableProviders).toEqual([]);
+  });
+
   it("counts long-running turns, folds dated models, and skips subagent threads", async () => {
     const recap = await runRecapTest(
       Effect.gen(function* () {

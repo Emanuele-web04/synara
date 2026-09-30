@@ -84,7 +84,8 @@ export function makeServerRuntimeServicesLayer(
 ) {
   const agentGatewayCredentialsLayer =
     options.agentGatewayCredentialsLayer ?? AgentGatewayCredentialsWithSecretsLive;
-  const providerHealthLayer = ProviderHealthLive.pipe(Layer.provideMerge(ServerSettingsLive));
+  const serverSettingsLayer = ServerSettingsLive;
+  const providerHealthLayer = ProviderHealthLive.pipe(Layer.provideMerge(serverSettingsLayer));
   const checkpointStoreLayer = CheckpointStoreLive.pipe(Layer.provide(GitCoreLive));
 
   const checkpointDiffQueryLayer = CheckpointDiffQueryLive.pipe(
@@ -118,7 +119,7 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(ProjectionTurnRepositoryLive),
     Layer.provideMerge(GitCoreLive),
     Layer.provideMerge(TextGenerationLayerLive),
-    Layer.provideMerge(ServerSettingsLive),
+    Layer.provideMerge(serverSettingsLayer),
     Layer.provideMerge(runtimeServicesLayer),
   );
   const projectAgentServiceLayer = ProjectAgentServiceLive.pipe(
@@ -127,7 +128,7 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(TextGenerationLayerLive),
     Layer.provideMerge(GitCoreLive),
     Layer.provideMerge(runtimeServicesLayer),
-    Layer.provideMerge(ServerSettingsLive),
+    Layer.provideMerge(serverSettingsLayer),
     Layer.provideMerge(providerHealthLayer),
   );
   const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(
@@ -137,7 +138,7 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(studioOutputReactorLayer),
     Layer.provideMerge(GitCoreLive),
     Layer.provideMerge(TextGenerationLayerLive),
-    Layer.provideMerge(ServerSettingsLive),
+    Layer.provideMerge(serverSettingsLayer),
     Layer.provideMerge(AgentGatewayOperationRepositoryLive),
     Layer.provideMerge(projectAgentServiceLayer),
     // Persistence-level only: the reactor must recognize coordinator threads to
@@ -216,7 +217,7 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(GitCoreLive),
     Layer.provideMerge(ProjectionTurnRepositoryLive),
     Layer.provideMerge(AgentGatewayOperationRepositoryLive),
-    Layer.provideMerge(ServerSettingsLive),
+    Layer.provideMerge(serverSettingsLayer),
     Layer.provideMerge(providerHealthLayer),
   );
   const agentGatewayLayer = AgentGatewayLive.pipe(
@@ -230,7 +231,7 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(OrchestrationEventDeliveryRepositoryLive),
     Layer.provideMerge(ProviderRuntimeEventRepositoryLive),
     Layer.provideMerge(ThreadDiagnosticsQueryLive),
-    Layer.provideMerge(ServerSettingsLive),
+    Layer.provideMerge(serverSettingsLayer),
     Layer.provideMerge(providerHealthLayer),
     Layer.provideMerge(BrowserAutomationHostLive),
     // The gateway exposes device_* tools only where a backend can exist, but it
@@ -275,7 +276,6 @@ export function makeServerRuntimeServicesLayer(
     TextGenerationLayerLive,
     TerminalLayerLive,
     KeybindingsLive,
-    ServerSettingsLive,
     ServerEnvironmentLive,
     ProfileStatsQueryLive,
     RecapStatsQueryLive,
@@ -284,7 +284,7 @@ export function makeServerRuntimeServicesLayer(
     ServerRuntimeStartupLive,
     WorkspaceLayerLive,
     ProjectFaviconResolverLive,
-  ).pipe(Layer.provideMerge(NodeServices.layer));
+  ).pipe(Layer.provideMerge(serverSettingsLayer), Layer.provideMerge(NodeServices.layer));
 }
 
 /**
