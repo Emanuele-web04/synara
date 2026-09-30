@@ -1,6 +1,7 @@
 import {
   ThreadId,
   type ModelSlug,
+  type ProviderInstanceId,
   type ProviderKind,
   type ResolvedKeybindingsConfig,
 } from "@synara/contracts";
@@ -24,6 +25,7 @@ import { useChatTerminalController } from "./useChatTerminalController";
 import { useChatWorkLog } from "./useChatWorkLog";
 import { useComposerVoiceController } from "./useComposerVoiceController";
 import { toastManager } from "../ui/toast";
+import type { ComposerModelSelectionOptions } from "./ComposerModelPicker";
 function eventTargetsComposer(
   event: globalThis.KeyboardEvent,
   composerForm: HTMLFormElement | null,
@@ -77,9 +79,17 @@ interface ChatKeyboardShortcutsInput {
   handleModelPickerOpenChange: (open: boolean) => void;
   scheduleComposerFocus: () => void;
   modelOptionsByProvider: ReturnType<typeof useChatProviderModels>["modelOptionsByProvider"];
+  modelOptionsByProviderInstance: ReturnType<
+    typeof useChatProviderModels
+  >["modelOptionsByProviderInstance"];
   selectedProvider: ProviderKind;
+  selectedProviderInstanceId: ProviderInstanceId;
   selectedModel: string;
-  onProviderModelSelect: (provider: ProviderKind, model: ModelSlug) => Promise<void>;
+  onProviderModelSelect: (
+    provider: ProviderKind,
+    model: ModelSlug,
+    selectionOptions?: ComposerModelSelectionOptions,
+  ) => Promise<void>;
   handleTraitsPickerOpenChange: (open: boolean) => void;
   toggleTerminalVisibility: ReturnType<
     typeof useChatTerminalController
@@ -137,7 +147,9 @@ export function useChatKeyboardShortcuts({
   handleModelPickerOpenChange,
   scheduleComposerFocus,
   modelOptionsByProvider,
+  modelOptionsByProviderInstance,
   selectedProvider,
+  selectedProviderInstanceId,
   selectedModel,
   onProviderModelSelect,
   handleTraitsPickerOpenChange,
@@ -265,15 +277,20 @@ export function useChatKeyboardShortcuts({
         event.preventDefault();
         event.stopPropagation();
         const direction = command === "model.next" ? "next" : "previous";
-        const providerOptions = modelOptionsByProvider[selectedProvider] ?? [];
+        const providerOptions =
+          modelOptionsByProviderInstance[selectedProviderInstanceId] ??
+          modelOptionsByProvider[selectedProvider] ??
+          [];
         const nextSlug = resolveCycledModelSlug({
           currentModel: selectedModel,
           options: providerOptions,
-          favoriteSlugs: readStarredModelSlugs(selectedProvider),
+          favoriteSlugs: readStarredModelSlugs(selectedProvider, selectedProviderInstanceId),
           direction,
         });
         if (!nextSlug) return;
-        onProviderModelSelect(selectedProvider, nextSlug as ModelSlug);
+        onProviderModelSelect(selectedProvider, nextSlug as ModelSlug, {
+          instanceId: selectedProviderInstanceId,
+        });
         return;
       }
 
@@ -500,8 +517,10 @@ export function useChatKeyboardShortcuts({
     toggleTerminalVisibility,
     activeThread,
     selectedProvider,
+    selectedProviderInstanceId,
     selectedModel,
     modelOptionsByProvider,
+    modelOptionsByProviderInstance,
     onProviderModelSelect,
     copyThreadIdToClipboard,
   ]);

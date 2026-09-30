@@ -21,6 +21,7 @@ import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ServerConfig } from "../../config.ts";
 import { createEmptyReadModel, projectEvent } from "../projector.ts";
 import { THREAD_DETAIL_EVENT_TYPES } from "@synara/shared/threadDetailEvents";
+import { ServerSettingsService } from "../../serverSettings.ts";
 
 type FixtureCommand<T = OrchestrationCommand> = T extends OrchestrationCommand
   ? Omit<T, "commandId" | "createdAt" | "threadId">
@@ -33,6 +34,7 @@ async function setup() {
     Layer.provide(OrchestrationProjectionSnapshotQueryLive),
     Layer.provide(OrchestrationEventStoreLive),
     Layer.provide(OrchestrationCommandReceiptRepositoryLive),
+    Layer.provide(ServerSettingsService.layerTest()),
     Layer.provideMerge(db),
     Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "synara-async-history-" })),
     Layer.provideMerge(NodeServices.layer),

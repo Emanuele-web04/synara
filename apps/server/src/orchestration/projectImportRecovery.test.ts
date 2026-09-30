@@ -15,6 +15,7 @@ import { OrchestrationProjectionPipelineLive } from "./Layers/ProjectionPipeline
 import { OrchestrationProjectionSnapshotQueryLive } from "./Layers/ProjectionSnapshotQuery";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine";
 import { makeProjectImportHandlers } from "./projectImportRoute";
+import { ServerSettingsService } from "../serverSettings.ts";
 
 it.each(["pending", "completed"] as const)(
   "recovers a deleted %s import with durable reservations and command receipts",
@@ -25,6 +26,7 @@ it.each(["pending", "completed"] as const)(
         Layer.provide(OrchestrationProjectionSnapshotQueryLive),
         Layer.provide(OrchestrationEventStoreLive),
         Layer.provide(OrchestrationCommandReceiptRepositoryLive),
+        Layer.provide(ServerSettingsService.layerTest()),
         Layer.provideMerge(SqlitePersistenceMemory),
         Layer.provideMerge(
           ServerConfig.layerTest(process.cwd(), { prefix: "synara-project-import-recovery-" }),

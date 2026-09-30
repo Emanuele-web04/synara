@@ -57,7 +57,11 @@ const groupId2 = ProjectId.makeUnsafe("project-group-2");
 const ordinaryId = ProjectId.makeUnsafe("project-ordinary-1");
 const studioId = ProjectId.makeUnsafe("project-studio-1");
 const outsideGroupId = ProjectId.makeUnsafe("project-group-outside");
-const modelSelection = { provider: "codex" as const, model: "gpt-5-codex" };
+const modelSelection = {
+  provider: "codex" as const,
+  instanceId: "codex",
+  model: "gpt-5-codex",
+};
 const limits = {
   maxConcurrentWorkers: 2,
   maxNewWorkersPerTurn: 4,
@@ -352,6 +356,8 @@ function makeTestLayer(options?: {
     const unavailable = (options?.unavailableProviders ?? []).includes(provider);
     return {
       provider,
+      driver: provider,
+      instanceId: provider,
       status: unavailable ? "error" : "ready",
       available: !unavailable,
       authStatus: "authenticated",
