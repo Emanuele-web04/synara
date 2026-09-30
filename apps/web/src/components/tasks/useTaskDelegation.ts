@@ -35,6 +35,7 @@ import { ensureNativeApi } from "../../nativeApi";
 import { buildModelSelection } from "../../providerModelOptions";
 import { DEFAULT_INTERACTION_MODE, type SidebarThreadSummary } from "../../types";
 import { useWorkspacePathsStore } from "../../workspacePathsStore";
+import { beginTaskDelegation, finishTaskDelegation } from "./taskDelegationState";
 import type { DelegateTarget } from "./useTaskDelegateTarget";
 
 export function useTaskDelegation(options: {
@@ -76,6 +77,7 @@ export function useTaskDelegation(options: {
   const [isStarting, setIsStarting] = useState(false);
   // Synchronous re-entry guard: a repeated ⌘↵ can land before React flushes isStarting.
   const isStartingRef = useRef(false);
+  const uncertainThreadRef = useRef<ThreadId | null>(null);
 
   const reportResult = (
     result: DraftThreadDispatchResult,
@@ -83,6 +85,7 @@ export function useTaskDelegation(options: {
     agentLabel: string,
   ): boolean => {
     if (result.kind === "error" && result.outcomeUnknown) {
+      uncertainThreadRef.current = threadId;
       // The server may have started the agent: keep the link and the chat rather than
       // orphan live work. If nothing arrives, the task's menu can unlink it.
       toastManager.add({
@@ -292,7 +295,8 @@ export function useTaskDelegation(options: {
   const handleStart = async () => {
     if (!canStart || isStartingRef.current) return;
     const prompt = readPrompt();
-    if (prompt.trim().length === 0) return;
+    if (prompt.trim().length === 0 || !beginTaskDelegation(todo.id)) return;
+    uncertainThreadRef.current = null;
     isStartingRef.current = true;
     setIsStarting(true);
     try {
@@ -307,6 +311,7 @@ export function useTaskDelegation(options: {
         description: error instanceof Error ? error.message : "Unexpected error.",
       });
     } finally {
+      finishTaskDelegation(todo.id, uncertainThreadRef.current);
       isStartingRef.current = false;
       setIsStarting(false);
     }

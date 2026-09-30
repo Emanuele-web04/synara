@@ -23,6 +23,7 @@ import {
   type TaskRowModel,
   unlinkChatInput,
 } from "./tasks.logic";
+import { useTaskCanUnlink } from "./taskDelegationState";
 import { useOpenChat } from "./useOpenChat";
 
 export function TaskListItem({
@@ -45,6 +46,7 @@ export function TaskListItem({
   const openChat = useOpenChat(todo.threadId);
   const rename = useTaskRename(todo, onUpdate);
   const isDone = status.kind === "done";
+  const canUnlink = useTaskCanUnlink(todo, status.kind, now);
   // Linked to a chat that still exists, even before its summary loads ("Starting").
   const isDelegated = todo.threadId !== null && !status.chatMissing;
   const meta = describeTaskMeta(status, todo.dueDate ? formatDueLabel(todo.dueDate, now) : null);
@@ -68,7 +70,7 @@ export function TaskListItem({
           isDelegated,
           isDone,
           hasLink: todo.threadId !== null,
-          canUnlink: status.kind !== "starting",
+          canUnlink,
         }),
         { x: event.clientX, y: event.clientY },
       );

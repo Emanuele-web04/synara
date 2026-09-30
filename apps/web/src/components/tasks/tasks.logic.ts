@@ -58,6 +58,11 @@ const TODO_STATUS: TaskStatus = {
 /** How long a new link's chat may take to reach every window before it counts as missing. */
 const LINK_SETTLE_MS = 60_000;
 
+/** A durable cross-window grace period while a newly linked chat reaches the client. */
+export function isTaskLinkSettling(todo: Pick<Todo, "linkedAt">, now: Date): boolean {
+  return todo.linkedAt !== null && now.getTime() - Date.parse(todo.linkedAt) < LINK_SETTLE_MS;
+}
+
 export function deriveTaskStatus(input: {
   todo: Pick<Todo, "completedAt" | "threadId" | "delegationBaseTurnId" | "linkedAt">;
   thread: SidebarThreadSummary | null;
@@ -81,11 +86,7 @@ export function deriveTaskStatus(input: {
       return { ...TODO_STATUS, kind: "starting", label: "Loading", detail: "Loading the chat…" };
     }
     // Another window (or this one after a reload) may still be creating the chat.
-    if (
-      input.now &&
-      todo.linkedAt !== null &&
-      input.now.getTime() - Date.parse(todo.linkedAt) < LINK_SETTLE_MS
-    ) {
+    if (input.now && isTaskLinkSettling(todo, input.now)) {
       return { ...TODO_STATUS, kind: "starting", label: "Starting" };
     }
     return { ...TODO_STATUS, chatMissing: true };

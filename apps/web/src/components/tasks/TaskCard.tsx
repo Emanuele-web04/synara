@@ -26,6 +26,7 @@ import {
   unlinkChatInput,
   withSavedTaskText,
 } from "./tasks.logic";
+import { useTaskCanUnlink } from "./taskDelegationState";
 import { useOpenChat } from "./useOpenChat";
 
 export function TaskCard({
@@ -54,6 +55,7 @@ export function TaskCard({
 }) {
   const { todo, status, thread } = row;
   const openChat = useOpenChat(todo.threadId);
+  const canUnlink = useTaskCanUnlink(todo, status.kind, now);
   const startHandOffRef = useRef<(() => void) | null>(null);
 
   // Title and note edits saved here that the to-do's copy doesn't show yet (see SavedTaskText).
@@ -137,6 +139,11 @@ export function TaskCard({
           </TaskWell>
           <TaskActionRow>
             <TaskPillButton onClick={openChat}>Open chat</TaskPillButton>
+            {canUnlink ? (
+              <TaskPillButton onClick={() => onUpdate(unlinkChatInput(todo))}>
+                Unlink
+              </TaskPillButton>
+            ) : null}
           </TaskActionRow>
         </>
       ) : (
@@ -146,9 +153,11 @@ export function TaskCard({
               <span className="text-ui-sm text-muted-foreground">
                 The chat this task was handed to no longer exists.
               </span>
-              <TaskPillButton onClick={() => onUpdate(unlinkChatInput(todo))}>
-                Unlink
-              </TaskPillButton>
+              {canUnlink ? (
+                <TaskPillButton onClick={() => onUpdate(unlinkChatInput(todo))}>
+                  Unlink
+                </TaskPillButton>
+              ) : null}
             </TaskWell>
           ) : null}
           <TaskHandOff
