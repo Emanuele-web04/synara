@@ -16,7 +16,7 @@ import * as path from "node:path";
 import { writeFileStringAtomically } from "../atomicWrite";
 
 export interface PersistedModelCatalogEntry {
-  /** Serialized ProviderModelDiscoveryCacheKey (provider + binaryPath + apiEndpoint + agentDir + cwd). */
+  /** Serialized ProviderModelDiscoveryCacheKey, including Claude's runtime version. */
   readonly key: string;
   readonly result: ProviderListModelsResult;
   readonly storedAt: number;

@@ -1,5 +1,6 @@
 import type {
   ProjectId,
+  ProjectKind,
   ProjectScript,
   ProviderMentionReference,
   ProviderSkillReference,
@@ -77,7 +78,7 @@ interface PreparedChatTurn {
   interactionModeForSend: ProviderInteractionMode;
   nextThreadWorkingDirectory: string | null;
   activeThread: Thread;
-  targetProjectKindForSend: "project" | "chat" | "studio";
+  targetProjectKindForSend: ProjectKind;
   setupScriptForWorktree: ProjectScript | null;
   messageCreatedAt: string;
   turnAttachmentsPromise: ReturnType<typeof stageUploadComposerAttachments>;

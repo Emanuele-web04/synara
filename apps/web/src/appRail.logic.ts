@@ -182,7 +182,8 @@ export function railItemForPathname(pathname: string): RailRouteItemId | null {
   if (matchesRoute(pathname, "/tasks")) return "tasks";
   if (matchesRoute(pathname, "/pull-requests")) return "pullRequests";
   if (matchesRoute(pathname, "/automations")) return "automations";
-  if (matchesRoute(pathname, "/studio")) return "studio";
+  // The rail item keeps its stored id "studio"; Groups lives at /groups (/studio redirects).
+  if (matchesRoute(pathname, "/groups") || matchesRoute(pathname, "/studio")) return "studio";
   if (matchesRoute(pathname, "/settings")) return "settings";
   return null;
 }

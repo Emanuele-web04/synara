@@ -14,11 +14,16 @@ import {
 /**
  * Features that ship only in non-Stable builds. Keep a feature out of Stable
  * by adding its key here; promote it by deleting the entry. A provider's key
- * is its ProviderKind: today that is "omp". "tasks" is the Tasks to-do list,
- * which replaces Kanban in Beta while Stable keeps Kanban.
+ * is its ProviderKind: today that is "omp". "groups" is Groups (below);
+ * "tasks" is the Tasks to-do list, which replaces Kanban in Beta while Stable
+ * keeps Kanban.
  */
 export type BetaOnlyFeature = string;
-export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = ["omp", "tasks"];
+
+/** Groups: the coordinator, its threads, the Group panel and the Library. */
+export const GROUPS_BETA_FEATURE = "groups";
+
+export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = ["omp", GROUPS_BETA_FEATURE, "tasks"];
 
 /**
  * Whether a Beta-only feature is on for this host. Only the Stable

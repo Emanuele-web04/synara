@@ -22,12 +22,14 @@ import GitActionsControl from "../GitActionsControl";
 import {
   ArrowRightIcon,
   CheckIcon,
+  FoldersIcon,
   HandoffIcon,
   HistoryIcon,
   MessageCircleIcon,
   PanelRightCloseIcon,
   PlusIcon,
   TerminalIcon,
+  WorkflowIcon,
   XIcon,
 } from "~/lib/icons";
 import { formatRelativeTime } from "~/lib/relativeTime";
@@ -65,6 +67,7 @@ import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { ProviderIcon } from "../ProviderIcon";
 import { ProviderUsageMenuControl } from "../ProviderUsageMenuControl";
 import { EnvironmentToggle, type EnvironmentToggleState } from "./environment/EnvironmentToggle";
+import { SurfacePanelToggle, type SurfacePanelToggleState } from "./chatHeaderControls";
 
 /**
  * Width (px) below which collapsible header controls drop their text labels and
@@ -86,9 +89,9 @@ interface ChatHeaderProps {
   className?: string;
   hideSidebarControls?: boolean;
   hideHandoffControls?: boolean;
-  // Empty-draft landings hide all thread-scoped chrome (title, Hand off, project
-  // scripts, git/open-in) — the chat hasn't started yet — keeping only the sidebar
-  // cluster plus the Environment and right-panel toggles.
+  // Empty-draft landings hide all thread-scoped chrome (title, handoff badge,
+  // project scripts, git/open-in) — the chat hasn't started yet — keeping only
+  // the sidebar cluster plus the Environment and right-panel toggles.
   minimalChrome?: boolean;
   isGitRepo: boolean;
   openInTarget: string | null;
@@ -101,6 +104,9 @@ interface ChatHeaderProps {
   handoffActionLabel: string;
   handoffDisabled: boolean;
   handoffActionTargetProviders: ReadonlyArray<ProviderKind>;
+  // Coordinator threads pass false — a hand-off copy would read as a second
+  // coordinator, so the action itself is hidden rather than disabled.
+  showHandoffAction?: boolean;
   handoffBadgeSourceProvider: ProviderKind | null;
   handoffBadgeTargetProvider: ProviderKind | null;
   gitCwd: string | null;
@@ -117,6 +123,8 @@ interface ChatHeaderProps {
   // Open-in-editor + git-actions + diff-toggle cluster into one Environment button that
   // drives the Environment panel; otherwise the legacy cluster is rendered.
   environment?: EnvironmentToggleState | null;
+  projectPanel?: SurfacePanelToggleState | null;
+  libraryPanel?: SurfacePanelToggleState | null;
   chatLayoutAction?: {
     kind: "split" | "maximize";
     label: string;
@@ -524,6 +532,7 @@ export function ChatHeader({
   handoffActionLabel,
   handoffDisabled,
   handoffActionTargetProviders,
+  showHandoffAction: showHandoffActionProp,
   handoffBadgeSourceProvider,
   handoffBadgeTargetProvider,
   gitCwd,
@@ -537,6 +546,8 @@ export function ChatHeader({
   surfaceMode: surfaceModeProp,
   isSidechat: isSidechatProp,
   environment: environmentProp,
+  projectPanel = null,
+  libraryPanel = null,
   chatLayoutAction: chatLayoutActionProp,
   changeThreadAction: changeThreadActionProp,
   editorChatControls: editorChatControlsProp,
@@ -553,6 +564,7 @@ export function ChatHeader({
 }: ChatHeaderProps) {
   const hideSidebarControls = hideSidebarControlsProp ?? false;
   const hideHandoffControls = hideHandoffControlsProp ?? false;
+  const showHandoffAction = showHandoffActionProp ?? true;
   const minimalChrome = minimalChromeProp ?? false;
   const showGitActions = showGitActionsProp ?? true;
   const showDiffToggle = showDiffToggleProp ?? true;
@@ -798,7 +810,7 @@ export function ChatHeader({
         {!minimalChrome && !hideHandoffControls && !environment ? (
           <ProviderUsageMenuControl provider={activeProvider} />
         ) : null}
-        {!minimalChrome && !hideHandoffControls ? (
+        {!minimalChrome && !hideHandoffControls && showHandoffAction ? (
           <Menu modal={false}>
             <Tooltip>
               <TooltipTrigger
@@ -897,12 +909,28 @@ export function ChatHeader({
         {environment ? (
           <>
             <EnvironmentToggle environment={environment} />
+            {projectPanel ? (
+              <SurfacePanelToggle
+                state={projectPanel}
+                icon={WorkflowIcon}
+                ariaLabel="Toggle group panel"
+                tooltip="Group"
+              />
+            ) : null}
+            {libraryPanel ? (
+              <SurfacePanelToggle
+                state={libraryPanel}
+                icon={FoldersIcon}
+                ariaLabel="Toggle library panel"
+                tooltip="Library"
+              />
+            ) : null}
             {rightPanelToggleControl}
           </>
         ) : (
           <>
             {/* Open in editor: dedicated split-button with an editor switcher; the project
-                action control now lives beside Hand off as its own project command surface. */}
+                action control sits beside it as its own project command surface. */}
             {!minimalChrome && activeProjectName ? (
               <OpenInPicker
                 keybindings={keybindings}

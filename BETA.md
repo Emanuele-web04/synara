@@ -284,8 +284,19 @@ To put a feature behind the list:
 
 Promote a feature to Stable by deleting its entry; every gate resolves itself.
 
-The list currently contains `omp` (Oh My Pi), available in Beta and gated off in
-Stable. The rail sidebar layout is available in both Stable and Beta.
+The list currently contains `omp` (Oh My Pi) and `groups` (Groups), both available
+in Beta and gated off in Stable. The rail sidebar layout is available in both Stable
+and Beta.
+
+On Stable, Groups is inert rather than hidden data: the server refuses the group
+APIs, Library routes and gateway tools, stops coordinator wakes and monitoring,
+leaves saved Group check-ins and completion evaluations unchanged and unscheduled,
+uses ordinary Synara tool approvals for former coordinator chats, and refuses
+creating a group; the web hides the Groups tab, route, setting, and
+thread actions, and shows any existing group folder as an ordinary project so its
+chats stay reachable. The gate lives in
+`apps/server/src/projectAgent/groupsBetaGate.ts` and `GROUPS_ON` in
+`apps/web/src/betaFeatures.ts`.
 
 ## Diagnostics
 

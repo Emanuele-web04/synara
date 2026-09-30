@@ -3,7 +3,11 @@
 // Layer: Route/UI support
 // Exports: isBetaFeatureOn, visibleProviderDescriptors, VISIBLE_PROVIDER_DESCRIPTORS
 
-import { desktopFlavorFromProtocol, isBetaFeatureEnabled } from "@synara/shared/betaFeatures";
+import {
+  desktopFlavorFromProtocol,
+  GROUPS_BETA_FEATURE,
+  isBetaFeatureEnabled,
+} from "@synara/shared/betaFeatures";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 
 // The desktop serves the app from its own scheme, so the protocol names the
@@ -18,6 +22,13 @@ const DESKTOP_FLAVOR = desktopFlavorFromProtocol(
 
 export const isBetaFeatureOn = (feature: string): boolean =>
   isBetaFeatureEnabled(feature, DESKTOP_FLAVOR);
+
+/**
+ * Groups is Beta-only. Off, group folders read as ordinary projects (so no
+ * chat is hidden), and every Groups entry point is gone. The server refuses
+ * the group APIs regardless; this only keeps Stable from offering them.
+ */
+export const GROUPS_ON = isBetaFeatureOn(GROUPS_BETA_FEATURE);
 
 /**
  * Provider descriptors with Beta-only providers removed on Stable. A

@@ -71,6 +71,47 @@ mainline UI — run them while checking out or merging those branches.
 - Do not manufacture aged/stale or high-volume cap evidence by mutating a live
   database. Use authorized fixtures or report those coverage gaps explicitly.
 
+## Groups-web testing (group panel, group threads, library)
+
+- There is no UI path to open a chat inside an unconfigured group (the group row
+  only expands; "New thread" on the threads surface opens Create project). To get
+  a group thread, register a client-side draft in DevTools console:
+  `(await import('/src/composerDraftStore.ts')).useComposerDraftStore.getState()
+.registerDraftThread('<uuid>', {projectId:'<realProjectId>', entryPoint:'chat',
+createdAt:new Date().toISOString(), envMode:'local'})`.
+  Read the real projectId from `useStore.getState().projects` — do not type it
+  from notes; a mistyped id resolves to no project, `isGroupContainer` stays
+  false, and the Group/Library header toggles silently disappear. Repoint a wrong
+  id with `setDraftThreadContext(threadId, {projectId})`.
+- For navigation that must keep drafts alive, use
+  `(await import('/src/appNavigation.ts')).appHistory.push('/<threadId>')`.
+  Typing a URL in the address bar is a full reload: drafts are lost and any id
+  not in `useStore.threads`/`draftThreadsByThreadId` bounces to a fresh chat via
+  createFreshChat. Coordinator/agent threads are not in `threads`, so their
+  URLs are not deep-linkable after reload — use in-session nav or a draft.
+- Store/logic probes (DevTools console via cmd+alt+j — `read_dom`/
+  `browser_console` tools report "Chrome is not in the foreground"):
+  `useStore.getState()` from `/src/store.ts` (threads, projects,
+  sidebarThreadSummaryById, threadsHydrated); `/src/workspacePathsStore.ts`
+  (groupsWorkspaceRoot); `/src/lib/groupProjects.ts` (isGroupContainerProject);
+  `/src/storeSelectors.ts` (createProjectSelector). Settings live in
+  `localStorage['synara:app-settings:v1']` (e.g. showGroupsSection).
+- Library panel refresh: the library root is
+  `<SYNARA_HOME>/dev/project-context/<projectId>/library`; `library.list` uses
+  fs.readdir, so files/dirs created on disk appear without UI actions. Refresh
+  is triggered by the window `focus` event — do a real OS-level blur/focus
+  (`open -a TextEdit`, then re-activate the specific Chrome window via the
+  Window menu; `open -a "Google Chrome"` may surface a different Chrome window).
+- Coordinate mapping on the test Mac: real display 1600x1200, tool screenshot
+  space 1024x768 (≈0.64 scale, +~88px browser chrome y). With DevTools docked,
+  innerWidth≈1045 and the page is the left ~669px of the screenshot — get DOM
+  positions via `getBoundingClientRect()` in console, click `(x*0.64,
+(88+y)*0.64)`. In-app toasts can cover the header panel toggles.
+- GroupSettingsDialog saves without provider credentials (falls back to
+  codex/gpt-5-codex) and creates the coordinator thread server-side; the
+  coordinator's first turn then errors "Codex CLI is not installed" — expected
+  in a no-credential env, not a config failure.
+
 ## Devin Secrets Needed
 
 None for an already available no-auth provider/model in an isolated instance.

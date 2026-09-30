@@ -200,6 +200,9 @@ const WorkspaceRootLookupInput = Schema.Struct({
 const ProjectIdLookupInput = Schema.Struct({
   projectId: ProjectId,
 });
+const ProjectIdsLookupInput = Schema.Struct({
+  projectIds: Schema.Array(ProjectId),
+});
 const SpaceIdLookupInput = Schema.Struct({
   spaceId: SpaceId,
 });
@@ -451,6 +454,8 @@ function toProjectedSession(row: ProjectionThreadSessionDbRow): OrchestrationSes
     runtimeMode: row.runtimeMode,
     activeTurnId: row.activeTurnId,
     lastError: row.lastError,
+    lastActivityAt: row.lastActivityAt,
+    lastProgressAt: row.lastProgressAt,
     updatedAt: row.updatedAt,
   };
 }
@@ -1370,6 +1375,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           runtime_mode AS "runtimeMode",
           active_turn_id AS "activeTurnId",
           last_error AS "lastError",
+          last_activity_at AS "lastActivityAt",
+          last_progress_at AS "lastProgressAt",
           updated_at AS "updatedAt"
         FROM projection_thread_sessions
         ORDER BY thread_id ASC
@@ -1566,6 +1573,29 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         WHERE project_id = ${projectId}
           AND deleted_at IS NULL
         LIMIT 1
+      `,
+  });
+
+  const listProjectRowsByIds = SqlSchema.findAll({
+    Request: ProjectIdsLookupInput,
+    Result: ProjectionProjectLookupRowSchema,
+    execute: ({ projectIds }) =>
+      sql`
+        SELECT
+          project_id AS "projectId",
+          kind,
+          title,
+          workspace_root AS "workspaceRoot",
+          default_model_selection_json AS "defaultModelSelection",
+          scripts_json AS "scripts",
+          is_pinned AS "isPinned",
+          space_id AS "spaceId",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt",
+          deleted_at AS "deletedAt"
+        FROM projection_projects
+        WHERE deleted_at IS NULL
+          AND project_id IN ${sql.in(projectIds)}
       `,
   });
 
@@ -2053,6 +2083,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           runtime_mode AS "runtimeMode",
           active_turn_id AS "activeTurnId",
           last_error AS "lastError",
+          last_activity_at AS "lastActivityAt",
+          last_progress_at AS "lastProgressAt",
           updated_at AS "updatedAt"
         FROM projection_thread_sessions
         WHERE thread_id IN ${sql.in(threadIds)}
@@ -2107,6 +2139,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           runtime_mode AS "runtimeMode",
           active_turn_id AS "activeTurnId",
           last_error AS "lastError",
+          last_activity_at AS "lastActivityAt",
+          last_progress_at AS "lastProgressAt",
           updated_at AS "updatedAt"
         FROM projection_thread_sessions
         WHERE thread_id = ${threadId}
@@ -2848,6 +2882,29 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       Effect.map((option) => Option.map(option, (row) => toProjectedProjectShell(row))),
     );
 
+  const getProjectShellsByIds: ProjectionSnapshotQueryShape["getProjectShellsByIds"] = (
+    projectIds,
+  ) => {
+    if (projectIds.length === 0) {
+      return Effect.succeed([]);
+    }
+    return listProjectRowsByIds({ projectIds: [...projectIds] }).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.getProjectShellsByIds:query",
+          "ProjectionSnapshotQuery.getProjectShellsByIds:decodeRow",
+        ),
+      ),
+      Effect.flatMap((rows) =>
+        decodeProjectionProjectRows(
+          rows,
+          "ProjectionSnapshotQuery.getProjectShellsByIds:decodeModelSelection",
+        ),
+      ),
+      Effect.map((rows) => rows.map(toProjectedProjectShell)),
+    );
+  };
+
   const getSpaceShellById: ProjectionSnapshotQueryShape["getSpaceShellById"] = (spaceId) =>
     getSpaceRowById({ spaceId }).pipe(
       Effect.mapError(
@@ -3465,6 +3522,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     listManagedWorktreeThreads,
     getActiveProjectByWorkspaceRoot,
     getProjectShellById,
+    getProjectShellsByIds,
     getSpaceShellById,
     getFirstActiveThreadIdByProjectId,
     getThreadCheckpointContext,
