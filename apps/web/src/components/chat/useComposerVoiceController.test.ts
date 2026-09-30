@@ -106,6 +106,8 @@ vi.mock("../../lib/voiceRecorder", () => ({
     error instanceof Error && error.name === "VoiceRecordingCancelledError",
   useVoiceRecorder: () => ({
     isRecording: recorder.isRecording,
+    isStarting: false,
+    hasAudioSignal: true,
     durationMs: 0,
     waveformLevels: [],
     startRecording: recorder.startRecording,

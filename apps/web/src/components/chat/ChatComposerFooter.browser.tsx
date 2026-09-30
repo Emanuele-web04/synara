@@ -22,6 +22,8 @@ function mountFooter(input: {
       voice={{
         enabled: false,
         recording: false,
+        starting: false,
+        waitingForAudio: false,
         transcribing: false,
         durationLabel: "",
         waveformLevels: [],

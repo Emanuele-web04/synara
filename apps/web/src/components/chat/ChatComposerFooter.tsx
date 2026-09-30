@@ -22,6 +22,8 @@ interface ChatComposerFooterProps {
   voice: {
     enabled: boolean;
     recording: boolean;
+    starting: boolean;
+    waitingForAudio: boolean;
     transcribing: boolean;
     durationLabel: string;
     waveformLevels: readonly number[];
@@ -138,6 +140,7 @@ export function ChatComposerFooter({
           <ComposerVoiceRecorderBar
             disabled={submission.connecting || submission.busy || submission.expired}
             isRecording={voice.recording}
+            isWaitingForAudio={voice.waitingForAudio}
             isTranscribing={voice.transcribing}
             durationLabel={voice.durationLabel}
             waveformLevels={voice.waveformLevels}
@@ -249,6 +252,7 @@ export function ChatComposerFooter({
                 <ComposerVoiceButton
                   disabled={submission.connecting || submission.busy || submission.expired}
                   isRecording={voice.recording}
+                  isStarting={voice.starting}
                   isTranscribing={voice.transcribing}
                   durationLabel={voice.durationLabel}
                   onClick={voice.onToggle}
