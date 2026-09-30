@@ -780,6 +780,7 @@ export function createWsNativeApi(): NativeApi {
       getProfileStats: (input) => transport.request(WS_METHODS.statsGetProfileStats, input),
       getProfileTokenStats: (input) =>
         transport.request(WS_METHODS.statsGetProfileTokenStats, input),
+      getRecap: (input) => transport.request(WS_METHODS.statsGetRecap, input),
     },
     provider: {
       getComposerCapabilities: (input) =>
