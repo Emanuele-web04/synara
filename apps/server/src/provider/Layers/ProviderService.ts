@@ -270,6 +270,7 @@ function toRuntimePayloadFromSession(
     readonly modelSelection?: unknown;
     readonly providerOptions?: unknown;
     readonly enableComputerControl?: boolean;
+    readonly autoApproveSynaraTools?: boolean;
     readonly lastRuntimeEvent?: string;
     readonly lastRuntimeEventAt?: string;
     readonly lifecycleGeneration?: string;
@@ -287,6 +288,9 @@ function toRuntimePayloadFromSession(
     ...(extra?.providerOptions !== undefined ? { providerOptions: extra.providerOptions } : {}),
     ...(extra?.enableComputerControl !== undefined
       ? { enableComputerControl: extra.enableComputerControl }
+      : {}),
+    ...(extra?.autoApproveSynaraTools !== undefined
+      ? { autoApproveSynaraTools: extra.autoApproveSynaraTools }
       : {}),
     ...(extra?.lastRuntimeEvent !== undefined ? { lastRuntimeEvent: extra.lastRuntimeEvent } : {}),
     ...(extra?.lastRuntimeEventAt !== undefined
@@ -316,6 +320,12 @@ function readPersistedComputerControl(
   runtimePayload: ProviderRuntimeBinding["runtimePayload"],
 ): boolean {
   return runtimePayloadRecord(runtimePayload).enableComputerControl === true;
+}
+
+function readPersistedAutoApproveSynaraTools(
+  runtimePayload: ProviderRuntimeBinding["runtimePayload"],
+): boolean {
+  return runtimePayloadRecord(runtimePayload).autoApproveSynaraTools === true;
 }
 
 function readPersistedCwd(
@@ -839,6 +849,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         readonly modelSelection?: unknown;
         readonly providerOptions?: unknown;
         readonly enableComputerControl?: boolean;
+        readonly autoApproveSynaraTools?: boolean;
         readonly lastRuntimeEvent?: string;
         readonly lastRuntimeEventAt?: string;
         readonly runtimePayload?: Record<string, unknown>;
@@ -1619,6 +1630,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             const persistedModelSelection = readPersistedModelSelection(binding.runtimePayload);
             const persistedProviderOptions = readPersistedProviderOptions(binding.runtimePayload);
             const persistedComputerControl = readPersistedComputerControl(binding.runtimePayload);
+            const persistedAutoApproveSynaraTools = readPersistedAutoApproveSynaraTools(
+              binding.runtimePayload,
+            );
             yield* validateAutoRuntimeMode(
               input.operation,
               binding.provider,
@@ -1634,6 +1648,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               ...(persistedModelSelection ? { modelSelection: persistedModelSelection } : {}),
               ...(persistedProviderOptions ? { providerOptions: persistedProviderOptions } : {}),
               ...(persistedComputerControl ? { enableComputerControl: true } : {}),
+              ...(persistedAutoApproveSynaraTools ? { autoApproveSynaraTools: true } : {}),
               ...(hasPersistedResumeCursor ? { resumeCursor: binding.resumeCursor } : {}),
               runtimeMode: binding.runtimeMode ?? "full-access",
             };
@@ -1652,6 +1667,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               upsertSessionBinding(resumed, threadId, {
                 lifecycleGeneration: lease.generation,
                 ...(persistedComputerControl ? { enableComputerControl: true } : {}),
+                ...(persistedAutoApproveSynaraTools ? { autoApproveSynaraTools: true } : {}),
               }).pipe(
                 Effect.andThen(
                   requiresCredentialRotation
@@ -1661,6 +1677,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                         runtimePayload: {
                           [AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED]: false,
                           ...(persistedComputerControl ? { enableComputerControl: true } : {}),
+                          ...(persistedAutoApproveSynaraTools
+                            ? { autoApproveSynaraTools: true }
+                            : {}),
                         },
                       })
                     : Effect.void,
@@ -1919,6 +1938,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 (persistedBinding?.provider === input.provider
                   ? readPersistedComputerControl(persistedBinding.runtimePayload)
                   : false);
+              const effectiveAutoApproveSynaraTools =
+                input.autoApproveSynaraTools ??
+                (persistedBinding?.provider === input.provider
+                  ? readPersistedAutoApproveSynaraTools(persistedBinding.runtimePayload)
+                  : false);
               let replacementStarted = false;
               const startupLifecycle = new ProviderStartupLifecycle();
               const startAndPersistReplacement = Effect.gen(function* () {
@@ -1926,6 +1950,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 const resolvedAdapterStartInput = {
                   ...adapterStartInput,
                   enableComputerControl: effectiveComputerControl,
+                  autoApproveSynaraTools: effectiveAutoApproveSynaraTools,
                   lifecycleGeneration: lease.generation,
                   ...(effectiveProviderOptions !== undefined
                     ? { providerOptions: effectiveProviderOptions }
@@ -2017,6 +2042,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                     modelSelection: input.modelSelection,
                     providerOptions: effectiveProviderOptions,
                     enableComputerControl: effectiveComputerControl,
+                    autoApproveSynaraTools: effectiveAutoApproveSynaraTools,
                     lifecycleGeneration: lease.generation,
                     runtimePayload: {
                       [AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED]: false,
@@ -2068,6 +2094,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               const previousComputerControl = readPersistedComputerControl(
                 persistedBinding.runtimePayload,
               );
+              const previousAutoApproveSynaraTools = readPersistedAutoApproveSynaraTools(
+                persistedBinding.runtimePayload,
+              );
               // The recycled flag is a (value, generation) pair with the restored
               // lifecycle generation, not the old bool alone: when the failed
               // replacement turn carried an explicit computer-control value, that
@@ -2076,6 +2105,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               // previous binding's value is recycled with its generation.
               const restoredComputerControl =
                 input.enableComputerControl ?? previousComputerControl;
+              const restoredAutoApproveSynaraTools =
+                input.autoApproveSynaraTools ?? previousAutoApproveSynaraTools;
               const previousCwd = readPersistedCwd(persistedBinding.runtimePayload);
               yield* previousAdapter.stopSession(threadId);
 
@@ -2103,6 +2134,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                             ? { providerOptions: previousProviderOptions }
                             : {}),
                           ...(restoredComputerControl ? { enableComputerControl: true } : {}),
+                          ...(restoredAutoApproveSynaraTools
+                            ? { autoApproveSynaraTools: true }
+                            : {}),
                           ...(persistedBinding.resumeCursor !== undefined
                             ? { resumeCursor: persistedBinding.resumeCursor }
                             : {}),
@@ -2120,6 +2154,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                             modelSelection: previousModelSelection,
                             providerOptions: previousProviderOptions,
                             enableComputerControl: restoredComputerControl,
+                            autoApproveSynaraTools: restoredAutoApproveSynaraTools,
                           }),
                         );
                         // The restored runtime stamps its events with the exact
@@ -2286,6 +2321,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 // The fork writes the thread's first binding row, so the flag
                 // must land here or resumeSession re-leases without it.
                 ...(input.enableComputerControl ? { enableComputerControl: true } : {}),
+                ...(input.autoApproveSynaraTools ? { autoApproveSynaraTools: true } : {}),
                 lastRuntimeEvent: "provider.thread.forked",
                 lastRuntimeEventAt: new Date().toISOString(),
               });

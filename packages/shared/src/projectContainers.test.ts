@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  isGroupContainerKind,
   isLegacyHomeChatContainerRow,
   isOrdinaryProjectRow,
   matchesLegacyHomeChatWorkspaceRoot,
@@ -73,6 +74,7 @@ describe("isOrdinaryProjectRow", () => {
   it("rejects managed containers by kind and the legacy Home row by shape", () => {
     expect(isOrdinaryProjectRow({ ...row, projectKind: "chat" })).toBe(false);
     expect(isOrdinaryProjectRow({ ...row, projectKind: "studio" })).toBe(false);
+    expect(isOrdinaryProjectRow({ ...row, projectKind: "group" })).toBe(false);
     expect(
       isOrdinaryProjectRow({
         projectKind: "project",
@@ -81,5 +83,15 @@ describe("isOrdinaryProjectRow", () => {
         paths: PATHS,
       }),
     ).toBe(false);
+  });
+});
+
+describe("isGroupContainerKind", () => {
+  it("treats group and studio as containers", () => {
+    expect(isGroupContainerKind("group")).toBe(true);
+    expect(isGroupContainerKind("studio")).toBe(true);
+    expect(isGroupContainerKind("project")).toBe(false);
+    expect(isGroupContainerKind("chat")).toBe(false);
+    expect(isGroupContainerKind(undefined)).toBe(false);
   });
 });

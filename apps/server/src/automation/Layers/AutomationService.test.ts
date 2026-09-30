@@ -20,6 +20,9 @@ import {
 import { isTemporaryWorktreeBranch } from "@synara/shared/git";
 import { Duration, Effect, Layer, Option, Stream } from "effect";
 import { TestClock } from "effect/testing";
+import { afterEach, vi } from "vitest";
+
+import * as groupsBetaGate from "../../projectAgent/groupsBetaGate.ts";
 
 import { resolveAgentGatewayTarget } from "../../agentGateway/targetResolver.ts";
 import { readModelSelectionArg } from "../../agentGateway/toolInput.ts";
@@ -488,6 +491,7 @@ const textGeneration = {
   generateBranchName: () => Effect.die("unused"),
   generateThreadTitle: () => Effect.die("unused"),
   generateThreadRecap: () => Effect.die("unused"),
+  generateProjectDigest: () => Effect.die("unused"),
   generateAutomationIntent: () => Effect.die("unused"),
   evaluateAutomationCompletion: (input: CompletionEvaluationInputForTest) => {
     completionEvaluationInputs.push(input);
@@ -2115,6 +2119,39 @@ layer("AutomationService", (it) => {
         (yield* service.list({ projectId })).runs.find((entry) => entry.id === run.id)?.status,
         "running",
       );
+    }),
+  );
+
+  it.effect("coalesces repeated runNow calls onto the queued check-in run", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-coalesced-manual");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+      });
+      const first = yield* service.runNow({ automationId: created.id });
+      assert.strictEqual(first.run.status, "running");
+
+      // With a run still active, a manual Run now queues one deferred check-in;
+      // further Run now clicks (e.g. repeated project saves) must reuse it.
+      const second = yield* service.runNow({ automationId: created.id });
+      assert.strictEqual(second.run.status, "pending");
+      assert.isNotNull(second.run.deferredUntil);
+
+      const third = yield* service.runNow({ automationId: created.id });
+      assert.strictEqual(third.run.status, "pending");
+      assert.strictEqual(third.run.id, second.run.id);
+
+      const listed = yield* service.list({ projectId });
+      assert.strictEqual(listed.runs.filter((entry) => entry.status === "pending").length, 1);
+
+      yield* service.cancelRun({ runId: second.run.id });
+      yield* service.cancelRun({ runId: first.run.id });
     }),
   );
 
@@ -5390,5 +5427,178 @@ layer("AutomationService", (it) => {
       assert.strictEqual(second.run.status, "running");
       assert.notStrictEqual(first.run.id, second.run.id);
     }),
+  );
+});
+
+layer("Stable saved Groups automations", (it) => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it.effect("refuses saved group check-ins without changing their definitions or runs", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const groupsEnabled = vi
+        .spyOn(groupsBetaGate, "isServerGroupsEnabled")
+        .mockReturnValue(false);
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const targetThreadId = ThreadId.makeUnsafe("stable-manual-coordinator");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      for (const managedByProject of [true, false]) {
+        const definition = yield* repository.createDefinition({
+          id: AutomationId.makeUnsafe(`stable-manual-check-in-${managedByProject}`),
+          input: {
+            ...createInput("local"),
+            schedule: { type: "project-event", projectId },
+            mode: "heartbeat",
+            targetThreadId,
+            sourceThreadId: targetThreadId,
+            enabled: true,
+          },
+          now,
+          nextRunAt: null,
+          managedByProject,
+        });
+        const savedDefinition = yield* repository.getDefinitionById({ id: definition.id });
+        const result = yield* service.runNow({ automationId: definition.id }).pipe(Effect.result);
+        assert.equal(result._tag, "Failure");
+        if (result._tag === "Failure") assert.match(result.failure.message, /Synara Beta/);
+        assert.deepEqual(
+          yield* repository.getDefinitionById({ id: definition.id }),
+          savedDefinition,
+        );
+        assert.deepEqual(
+          yield* repository.listRunsForDefinition({ automationId: definition.id, limit: 10 }),
+          [],
+        );
+      }
+      assert.deepEqual(dispatchedCommands, []);
+      groupsEnabled.mockReturnValue(true);
+      const resumed = yield* service.runNow({
+        automationId: AutomationId.makeUnsafe("stable-manual-check-in-false"),
+      });
+      assert.equal(resumed.run.status, "running");
+      assert.equal(
+        dispatchedCommands.filter((command) => command.type === "thread.turn.start").length,
+        1,
+      );
+    }),
+  );
+
+  it.effect(
+    "leaves saved group work inert through scheduling and recovery while ordinary automations run",
+    () =>
+      Effect.gen(function* () {
+        resetHarness();
+        vi.spyOn(groupsBetaGate, "isServerGroupsEnabled").mockReturnValue(false);
+        const service = yield* AutomationService;
+        const repository = yield* AutomationRepository;
+        const targetThreadId = ThreadId.makeUnsafe("stable-saved-coordinator");
+        threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+        const definition = yield* repository.createDefinition({
+          id: AutomationId.makeUnsafe("stable-saved-check-in"),
+          input: {
+            ...createInput("local"),
+            schedule: { type: "interval", everySeconds: 60 },
+            mode: "heartbeat",
+            targetThreadId,
+            enabled: true,
+            maxRuntimeSeconds: 1,
+            completionPolicy: aiCompletionPolicy("the goal is complete"),
+          },
+          now,
+          nextRunAt: now,
+          managedByProject: true,
+        });
+        const savedRuns: AutomationRun[] = [];
+        for (const state of ["succeeded", "deferred", "pending", "running"] as const) {
+          const run = yield* repository.createRun({
+            id: AutomationRunId.makeUnsafe(`stable-saved-${state}`),
+            automationId: definition.id,
+            projectId,
+            threadId: state === "deferred" || state === "pending" ? null : targetThreadId,
+            messageId: MessageId.makeUnsafe(`stable-message-${state}`),
+            threadCreateCommandId: CommandId.makeUnsafe(`stable-create-${state}`),
+            turnStartCommandId: CommandId.makeUnsafe(`stable-start-${state}`),
+            trigger: { type: "manual" },
+            scheduledFor: now,
+            deferredUntil: state === "deferred" ? now : null,
+            permissionSnapshot: {
+              provider: "codex",
+              modelSelection: { provider: "codex", model: "gpt-5-codex" },
+              runtimeMode: "approval-required",
+              interactionMode: "default",
+              worktreeMode: "local",
+              allowedCapabilities: ["send-turn"],
+              completionPolicyVersion: definition.completionPolicyVersion,
+              createdAt: now,
+            },
+            now,
+          });
+          if (state === "running") {
+            yield* repository.markRunStarted({
+              id: run.id,
+              threadId: targetThreadId,
+              messageId: run.messageId!,
+              threadCreateCommandId: run.threadCreateCommandId!,
+              turnStartCommandId: run.turnStartCommandId!,
+              startedAt: now,
+            });
+          } else if (state === "succeeded") {
+            yield* repository.markRunSucceeded({
+              id: run.id,
+              turnId: TurnId.makeUnsafe("stable-saved-completed-turn"),
+              result: { outcome: "unknown", summary: null, unread: true, archivedAt: null },
+              finishedAt: now,
+              accountedAt: now,
+            });
+          }
+          const persisted = yield* repository.getRunById({ id: run.id });
+          assert.isTrue(Option.isSome(persisted));
+          savedRuns.push(Option.getOrThrow(persisted));
+        }
+        const savedDefinition = yield* repository.getDefinitionById({ id: definition.id });
+        yield* service.recoverPendingRuns();
+        yield* service.reconcileActiveRuns();
+        yield* service.reconcileThread({ threadId: targetThreadId });
+        yield* service.runDueOnce({ now: "2026-06-16T10:02:00.000Z", limit: 1 });
+        assert.deepEqual(dispatchedCommands, []);
+        assert.deepEqual(completionEvaluationInputs, []);
+        assert.deepEqual(
+          yield* repository.getDefinitionById({ id: definition.id }),
+          savedDefinition,
+        );
+        for (const run of savedRuns) {
+          assert.deepEqual(yield* repository.getRunById({ id: run.id }), Option.some(run));
+        }
+        const ordinary = yield* repository.createDefinition({
+          id: AutomationId.makeUnsafe("stable-ordinary-check-in"),
+          input: {
+            ...createInput("local"),
+            mode: "heartbeat",
+            targetThreadId,
+            schedule: { type: "interval", everySeconds: 60 },
+          },
+          now,
+          nextRunAt: "2026-06-16T10:01:00.000Z",
+        });
+        yield* service.runDueOnce({ now: "2026-06-16T10:02:00.000Z", limit: 1 });
+        assert.equal(
+          dispatchedCommands.filter((command) => command.type === "thread.turn.start").length,
+          1,
+        );
+        const ordinaryRuns = yield* repository.listRunsForDefinition({
+          automationId: ordinary.id,
+          limit: 10,
+        });
+        assert.equal(ordinaryRuns[0]?.status, "running");
+        const ordinaryDefinition = Option.getOrThrow(
+          yield* repository.getDefinitionById({ id: ordinary.id }),
+        );
+        assert.equal(
+          yield* repository.getEarliestNextRunAt({ excludeProjectManaged: true }),
+          ordinaryDefinition.nextRunAt,
+        );
+        assert.equal(yield* repository.getEarliestNextRunAt(), now);
+      }),
   );
 });

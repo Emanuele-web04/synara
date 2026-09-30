@@ -37,7 +37,7 @@ interface ChatProjectScriptsInput {
   activeThread: Thread | undefined;
   activeProject: Project | undefined;
   gitCwd: string | null;
-  isStudioContainer: boolean;
+  isGroupContainer: boolean;
   terminalState: ThreadTerminalState;
   requestTerminalFocus: () => void;
   setTerminalOpen: (open: boolean) => void;
@@ -49,7 +49,7 @@ export function useChatProjectScripts({
   activeThread,
   activeProject,
   gitCwd,
-  isStudioContainer,
+  isGroupContainer,
   terminalState,
   requestTerminalFocus,
   setTerminalOpen,
@@ -108,7 +108,7 @@ export function useChatProjectScripts({
           threadId: activeThreadId,
           terminalId: targetTerminalId,
           project: {
-            cwd: isStudioContainer ? targetCwd : activeProject.cwd,
+            cwd: isGroupContainer ? targetCwd : activeProject.cwd,
           },
           cwd: targetCwd,
           command: script.command,
@@ -144,7 +144,7 @@ export function useChatProjectScripts({
       activeThread,
       activeThreadId,
       gitCwd,
-      isStudioContainer,
+      isGroupContainer,
       requestTerminalFocus,
       setTerminalOpen,
       setThreadError,

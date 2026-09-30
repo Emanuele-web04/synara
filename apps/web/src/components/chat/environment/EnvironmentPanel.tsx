@@ -26,6 +26,7 @@ import { useAppSettings } from "~/appSettings";
 import { SETTINGS_TARGETS } from "~/settingsNavigation";
 import {
   ENVIRONMENT_PANEL_MOTION_CLASS,
+  ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME as BASE_ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME,
   ENVIRONMENT_PANEL_SURFACE_CLASS_NAME,
 } from "~/components/chat/composerPickerStyles";
 import BranchToolbar, { type BranchToolbarProps } from "~/components/BranchToolbar";
@@ -41,6 +42,7 @@ import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { ArrowUpRightIcon, ChangesIcon, GitHubIcon, SettingsIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
+import { revealFolderInShell } from "~/lib/revealFolder";
 import { deleteActiveThreadFromClient } from "~/lib/activeThreadDelete";
 import { gitRemoveWorktreeMutationOptions } from "~/lib/gitReactQuery";
 import { waitForSidechatCreator } from "~/lib/sidechatCreatorRegistry";
@@ -69,7 +71,7 @@ import { EnvironmentNotesSection } from "./EnvironmentNotesSection";
 import { EnvironmentPinnedSection } from "./EnvironmentPinnedSection";
 import { EnvironmentProjectInstructionsSection } from "./EnvironmentProjectInstructionsSection";
 import { ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME } from "./environmentPanelStyles";
-import { shouldShowStudioFolderRow } from "./EnvironmentPanel.logic";
+import { shouldShowGroupFolderRow } from "./EnvironmentPanel.logic";
 import {
   ENVIRONMENT_ROW_ICON_CLASS_NAME,
   EnvironmentCollapsibleSection,
@@ -85,8 +87,10 @@ import {
 // scrollbar pinned to the viewport's far right.
 export const ENVIRONMENT_DOCKED_CONTENT_INSET_PX = 312;
 
-const ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME =
-  "pointer-events-none absolute inset-y-0 right-0 z-20 flex flex-col items-end gap-3 overflow-y-auto p-3";
+const ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME = cn(
+  BASE_ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME,
+  "items-end gap-3 overflow-y-auto",
+);
 
 export interface EnvironmentPanelProps {
   /** Drives the slide-in/out transition; the panel stays mounted so CSS can interpolate. */
@@ -112,12 +116,12 @@ export interface EnvironmentPanelProps {
   /** Active provider for the usage row (same chip the header shows). */
   activeProvider: ProviderKind;
   /**
-   * Whether the active thread is a Studio chat. Studio chats show the Output section:
+   * Whether the active thread is a group chat. Group chats show the Output section:
    * the Outbox files THIS chat produced, so its output stays attached to the chat.
    */
-  isStudioChat: boolean;
-  /** Ordinary cwd selected for this Studio chat; this is not a Git worktree. */
-  studioFolderPath?: string | null;
+  isGroupChat: boolean;
+  /** Ordinary cwd selected for this group chat; this is not a Git worktree. */
+  groupFolderPath?: string | null;
   /** Whether the active runtime exposes git actions (hides "Commit and Push" otherwise). */
   showGitActions: boolean;
   /** Current diff-panel open state, so the "Changes" row reflects/toggles it. */
@@ -226,8 +230,8 @@ export function EnvironmentPanel({
   availableEditors,
   activeThreadId,
   activeProvider,
-  isStudioChat,
-  studioFolderPath: studioFolderPathProp,
+  isGroupChat,
+  groupFolderPath: groupFolderPathProp,
   showGitActions,
   diffOpen,
   threadAutomations,
@@ -259,7 +263,7 @@ export function EnvironmentPanel({
 }: EnvironmentPanelProps) {
   const githubRepository = githubRepositoryProp ?? null;
   const githubRepositories = githubRepositoriesProp ?? [];
-  const studioFolderPath = studioFolderPathProp ?? null;
+  const groupFolderPath = groupFolderPathProp ?? null;
   const diffDisabledReason = diffDisabledReasonProp ?? null;
   const recap = recapProp ?? null;
   const onOpenEditorView = onOpenEditorViewProp ?? null;
@@ -275,9 +279,9 @@ export function EnvironmentPanel({
   const changesDisabled = diffDisabledReason !== null && !diffOpen;
   const showRecap = Boolean(recap?.text) || recap?.status === "pending";
   const markdownCwd = openInTarget ?? gitCwd ?? undefined;
-  const showStudioFolderRow = shouldShowStudioFolderRow({
-    isStudioChat,
-    studioFolderPath,
+  const showGroupFolderRow = shouldShowGroupFolderRow({
+    isGroupChat,
+    groupFolderPath,
     nativeShellAvailable: isElectron,
   });
 
@@ -318,36 +322,17 @@ export function EnvironmentPanel({
         </IconButton>
       </div>
 
-      {showStudioFolderRow && studioFolderPath ? (
+      {showGroupFolderRow && groupFolderPath ? (
         <EnvironmentRow
           icon={<FolderClosed className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
           label={
-            <span className="truncate" title={studioFolderPath}>
-              {basenameOfPath(studioFolderPath) || studioFolderPath}
+            <span className="truncate" title={groupFolderPath}>
+              {basenameOfPath(groupFolderPath) || groupFolderPath}
             </span>
           }
           trailing={<ArrowUpRightIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
           onClick={() => {
-            const api = readNativeApi();
-            if (!api) {
-              toastManager.add({
-                type: "error",
-                title: "Unable to open folder",
-                description: "The desktop connection is not available yet.",
-              });
-              return;
-            }
-            void api.shell
-              .showInFolder(studioFolderPath)
-              .then(onClose)
-              .catch((error) => {
-                toastManager.add({
-                  type: "error",
-                  title: "Unable to open folder",
-                  description:
-                    error instanceof Error ? error.message : "An unknown error occurred.",
-                });
-              });
+            revealFolderInShell({ path: groupFolderPath, onRevealed: onClose });
           }}
         />
       ) : null}
@@ -490,7 +475,7 @@ export function EnvironmentPanel({
         />
       ) : null}
 
-      {isStudioChat && activeThreadId ? (
+      {isGroupChat && activeThreadId ? (
         <EnvironmentStudioOutputsSection threadId={activeThreadId} enabled={open} />
       ) : null}
 
@@ -568,6 +553,7 @@ export function EnvironmentPanel({
       className={ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME}
       data-environment-panel-variant={variant}
       aria-hidden={!open}
+      inert={!open}
     >
       <div
         className={cn(

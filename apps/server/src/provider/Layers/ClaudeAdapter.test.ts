@@ -37,6 +37,10 @@ import { ServerConfig } from "../../config.ts";
 import { MINIMUM_CLAUDE_AUTO_MODE_CLI_VERSION } from "../claudeCliVersion.ts";
 import { claudeCacheForModel } from "../claudeCacheObservation.ts";
 import { ProviderAdapterRequestError, ProviderAdapterValidationError } from "../Errors.ts";
+import {
+  makeProviderModelDiscoveryCache,
+  providerModelDiscoveryCacheKey,
+} from "../providerModelDiscoveryCache.ts";
 import { ClaudeAdapter, type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import {
   buildEmbeddedClaudeSystemPromptAppend,
@@ -842,6 +846,126 @@ describe("ClaudeAdapterLive", () => {
       const createInput = harness.getLastCreateQueryInput();
       assert.equal(createInput?.options.permissionMode, "auto");
       assert.equal(createInput?.options.allowDangerouslySkipPermissions, undefined);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect(
+    "pre-approves Synara group tools for an opted-in coordinator session while Bash still asks",
+    () => {
+      const gateway = makeGatewayCredentialsHarness();
+      const harness = makeMultiQueryHarness({ gatewayCredentials: gateway.credentials });
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "approval-required",
+          autoApproveSynaraTools: true,
+        });
+
+        const canUseTool = harness.createInputs[0]?.options.canUseTool;
+        if (!canUseTool) {
+          return assert.fail("Expected a canUseTool hook on the query options.");
+        }
+
+        for (const [index, toolName] of [
+          "mcp__synara__synara_create_thread",
+          "synara_project_link_repository",
+        ].entries()) {
+          const result = (yield* Effect.promise(() =>
+            canUseTool(
+              toolName,
+              {},
+              {
+                signal: new AbortController().signal,
+                toolUseID: `tool-use-synara-${index}`,
+                requestId: `request-synara-${index}`,
+              },
+            ),
+          )) as PermissionResult;
+          assert.equal(result.behavior, "allow");
+        }
+
+        const bashPermission = canUseTool(
+          "Bash",
+          { command: "pwd" },
+          {
+            signal: new AbortController().signal,
+            toolUseID: "tool-use-bash-1",
+            requestId: "request-bash-1",
+          },
+        );
+        const requested = yield* Stream.filter(
+          adapter.streamEvents,
+          (event) => event.type === "request.opened",
+        ).pipe(Stream.runHead);
+        if (requested._tag !== "Some" || requested.value.type !== "request.opened") {
+          return assert.fail("Bash must still open an approval request.");
+        }
+        if (!requested.value.requestId) {
+          return assert.fail("The approval request must carry a request id.");
+        }
+        yield* adapter.respondToRequest(
+          THREAD_ID,
+          ApprovalRequestId.makeUnsafe(requested.value.requestId),
+          "decline",
+        );
+        yield* Stream.runHead(adapter.streamEvents);
+        const bashResult = (yield* Effect.promise(() => bashPermission)) as PermissionResult;
+        assert.equal(bashResult.behavior, "deny");
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
+  it.effect("keeps Synara group tools on the approval path when the session did not opt in", () => {
+    const gateway = makeGatewayCredentialsHarness();
+    const harness = makeMultiQueryHarness({ gatewayCredentials: gateway.credentials });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "approval-required",
+      });
+
+      const canUseTool = harness.createInputs[0]?.options.canUseTool;
+      if (!canUseTool) {
+        return assert.fail("Expected a canUseTool hook on the query options.");
+      }
+
+      const pending = canUseTool(
+        "mcp__synara__synara_create_thread",
+        {},
+        {
+          signal: new AbortController().signal,
+          toolUseID: "tool-use-synara-no-opt-in",
+          requestId: "request-synara-no-opt-in",
+        },
+      );
+      const requested = yield* Stream.filter(
+        adapter.streamEvents,
+        (event) => event.type === "request.opened",
+      ).pipe(Stream.runHead);
+      if (requested._tag !== "Some" || requested.value.type !== "request.opened") {
+        return assert.fail("A non-opted-in session must still ask for gateway tools.");
+      }
+      if (!requested.value.requestId) {
+        return assert.fail("The approval request must carry a request id.");
+      }
+      yield* adapter.respondToRequest(
+        THREAD_ID,
+        ApprovalRequestId.makeUnsafe(requested.value.requestId),
+        "decline",
+      );
+      yield* Stream.runHead(adapter.streamEvents);
+      const result = (yield* Effect.promise(() => pending)) as PermissionResult;
+      assert.equal(result.behavior, "deny");
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -5586,13 +5710,61 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       );
       assert.equal(query.closeCalls, 1);
       assert.equal(createQueryCalls, 1);
+    }).pipe(Effect.provide(layer));
+  });
 
-      const cached = yield* listModels({
+  it.effect("refreshes Claude models while an older session remains active", () => {
+    const queries: FakeClaudeQuery[] = [];
+    const layer = makeClaudeAdapterLive({
+      createQuery: () => {
+        const query = new FakeClaudeQuery();
+        setSupportedModels(query, [
+          {
+            value: "sonnet",
+            resolvedModel: queries.length < 2 ? "claude-sonnet-5" : "claude-sonnet-5-5",
+            displayName: "Sonnet",
+            description: "Sonnet model",
+          },
+        ]);
+        queries.push(query);
+        return query;
+      },
+    }).pipe(
+      Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+      Layer.provideMerge(NodeServices.layer),
+    );
+    let now = 0;
+    const cache = makeProviderModelDiscoveryCache({ now: () => now, freshTtlMs: 1_000 });
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
         provider: "claudeAgent",
-        cwd: "/tmp/project",
+        runtimeMode: "approval-required",
       });
-      assert.equal(cached.cached, true);
-      assert.equal(createQueryCalls, 1);
+      const input = { provider: "claudeAgent" as const, cwd: "/tmp/project" };
+      const key = providerModelDiscoveryCacheKey(input);
+      const discover = Effect.suspend(() => adapter.listModels!(input));
+
+      const first = yield* cache.lookup(key, discover);
+      assert.equal(first.models[0]?.resolvedModel, "claude-sonnet-5");
+      const fresh = yield* cache.lookup(key, discover);
+      assert.equal(fresh.cached, true);
+
+      now = 2_000;
+      const stale = yield* cache.lookup(key, discover);
+      assert.equal(stale.models[0]?.resolvedModel, "claude-sonnet-5");
+      yield* Effect.promise(() =>
+        vi.waitFor(async () => {
+          const refreshed = await Effect.runPromise(cache.lookup(key, discover));
+          assert.equal(refreshed.models[0]?.resolvedModel, "claude-sonnet-5-5");
+        }),
+      );
+      assert.equal(yield* adapter.hasSession(THREAD_ID), true);
+      assert.equal(queries[0]?.closeCalls, 0);
+      assert.equal(queries[1]?.closeCalls, 1);
+      assert.equal(queries[2]?.closeCalls, 1);
     }).pipe(Effect.provide(layer));
   });
 
@@ -8834,7 +9006,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
 
   it.effect("closes an uninstalled Claude query when post-spawn setup fails", () => {
     const query = new FakeClaudeQuery();
-    (query as unknown as { supportedModels: () => Promise<[]> }).supportedModels = () => {
+    (query as unknown as { supportedAgents: () => Promise<[]> }).supportedAgents = () => {
       throw new Error("simulated post-spawn setup failure");
     };
     const layer = makeClaudeAdapterLive({ createQuery: () => query }).pipe(

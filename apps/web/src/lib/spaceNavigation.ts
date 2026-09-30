@@ -22,7 +22,7 @@ export function isProjectInSpace(
 }
 
 /**
- * Whether a Space may land on a thread in this project. The Chats and Studio containers belong
+ * Whether a Space may land on a thread in this project. The Chats and Groups containers belong
  * to no Space and are reachable from every one of them; any other thread belongs to exactly its
  * project's Space. Fails closed on a project we cannot resolve — a thread we cannot classify is
  * not a safe landing, and a fresh chat beats silently reverting the user's Space selection.
