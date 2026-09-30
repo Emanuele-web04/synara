@@ -168,7 +168,12 @@ export function summarizeInboxSlots(
         future: hour.future,
       })),
     };
-    const idle = summary.prompts === 0 && summary.turns === 0 && summary.tokens === 0;
+    // Agent time counts: a turn that started earlier can keep a slot busy on its own.
+    const idle =
+      summary.prompts === 0 &&
+      summary.turns === 0 &&
+      summary.tokens === 0 &&
+      summary.agentWorkMs === 0;
     if (summary.status === "now" || !idle) summaries.push(summary);
   }
   return summaries;

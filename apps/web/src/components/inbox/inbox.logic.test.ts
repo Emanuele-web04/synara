@@ -137,6 +137,29 @@ describe("summarizeInboxSlots", () => {
     ]);
   });
 
+  it("keeps a past slot whose only activity is an agent still running from before", () => {
+    const now = local(9, 30, 13, 30);
+    const day = resolveInboxDay(now);
+    const recap = recapWithHours(day, () => ({ prompts: 0, tokens: 0 }));
+    const morningHour = recap.slots[2];
+    if (!morningHour) throw new Error("expected a morning hour");
+    const slots = summarizeInboxSlots(
+      {
+        ...recap,
+        slots: recap.slots.map((slot) =>
+          slot === morningHour ? { ...slot, agentWorkMs: 3_600_000 } : slot,
+        ),
+      },
+      day,
+      now,
+    );
+
+    expect(slots.map((slot) => [slot.id, slot.agentWorkMs])).toEqual([
+      ["morning", 3_600_000],
+      ["afternoon", 0],
+    ]);
+  });
+
   it("keeps the current slot even before anything ran in it", () => {
     const now = local(9, 30, 5);
     const day = resolveInboxDay(now);
