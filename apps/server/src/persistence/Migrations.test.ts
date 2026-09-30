@@ -166,7 +166,7 @@ layer("reconcileMigrationLineage", (it) => {
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
-      yield* runMigrations({ toMigrationInclusive: 108 });
+      yield* runMigrations({ toMigrationInclusive: 117 });
       const now = new Date().toISOString();
       yield* sql`
         ALTER TABLE projection_thread_sessions
@@ -283,10 +283,10 @@ layer("reconcileMigrationLineage", (it) => {
           )
       `;
 
-      const executed = yield* runMigrations({ toMigrationInclusive: 110 });
+      const executed = yield* runMigrations({ toMigrationInclusive: 119 });
       assert.deepStrictEqual(
         executed.map(([id]) => id),
-        [109, 110],
+        [118, 119],
       );
 
       const projectionSessionColumns = yield* tableColumnNames(sql, "projection_thread_sessions");
@@ -339,7 +339,7 @@ layer("reconcileMigrationLineage", (it) => {
       const sql = yield* SqlClient.SqlClient;
       const now = new Date().toISOString();
 
-      yield* runMigrations({ toMigrationInclusive: 108 });
+      yield* runMigrations({ toMigrationInclusive: 117 });
       yield* sql`
         INSERT INTO projection_threads (
           thread_id,
@@ -446,7 +446,7 @@ layer("reconcileMigrationLineage", (it) => {
           )
       `;
 
-      yield* runMigrations({ toMigrationInclusive: 110 });
+      yield* runMigrations({ toMigrationInclusive: 119 });
 
       const [projectionSession] = yield* sql<{
         readonly providerInstanceId: string | null;

@@ -31,6 +31,7 @@ import {
   TurnId,
 } from "@synara/contracts";
 import { it, assert, vi } from "@effect/vitest";
+import { afterAll, beforeAll } from "vitest";
 import { assertFailure } from "@effect/vitest/utils";
 
 import {
@@ -92,6 +93,31 @@ import {
 } from "../../persistence/Layers/Sqlite.ts";
 import { AGENT_GATEWAY_TURN_AUTHORITY_RETIRED } from "../../agentGateway/sessionLease.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+
+// The fake adapter never prepares Codex storage. Give lifecycle tests real
+// continuation metadata without reading or writing the developer's Codex home.
+let defaultCodexFixtureRoot: string | undefined;
+const previousCodexHome = process.env.CODEX_HOME;
+const previousSynaraHome = process.env.SYNARA_HOME;
+beforeAll(async () => {
+  defaultCodexFixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "synara-provider-default-"));
+  const codexHome = path.join(defaultCodexFixtureRoot, "codex");
+  const synaraHome = path.join(defaultCodexFixtureRoot, "synara");
+  fs.mkdirSync(codexHome);
+  fs.writeFileSync(path.join(codexHome, "config.toml"), "", "utf8");
+  await buildCodexProcessEnv({
+    env: { ...process.env, CODEX_HOME: codexHome, SYNARA_HOME: synaraHome },
+  });
+  process.env.CODEX_HOME = codexHome;
+  process.env.SYNARA_HOME = synaraHome;
+});
+afterAll(() => {
+  if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+  else process.env.CODEX_HOME = previousCodexHome;
+  if (previousSynaraHome === undefined) delete process.env.SYNARA_HOME;
+  else process.env.SYNARA_HOME = previousSynaraHome;
+  if (defaultCodexFixtureRoot) fs.rmSync(defaultCodexFixtureRoot, { recursive: true, force: true });
+});
 
 const asRequestId = (value: string): ApprovalRequestId => ApprovalRequestId.makeUnsafe(value);
 const asEventId = (value: string): EventId => EventId.makeUnsafe(value);

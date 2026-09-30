@@ -133,6 +133,50 @@ function resolveBundledClaudeBinaryPath(): string {
 }
 
 describe("ClaudeTextGenerationServiceLive", () => {
+  it.effect("generates a project digest with the selected Claude model", () =>
+    Effect.gen(function* () {
+      const textGeneration = yield* ClaudeTextGeneration;
+      const generated = yield* textGeneration.generateProjectDigest({
+        cwd: "/repo",
+        previousSummary: "Worker started",
+        activity: "thread-1 completed the account migration",
+        coverage: "1 thread",
+        pinnedFocus: "Account isolation",
+        modelSelection: {
+          provider: "claudeAgent",
+          instanceId: "claudeAgent",
+          model: "claude-sonnet-4-5",
+        },
+      });
+      assert.deepEqual(generated, {
+        summary: "Account migration completed",
+        focusItems: [{ title: "Account isolation", kind: "task", source: "thread-1" }],
+      });
+    }).pipe(
+      Effect.provide(ClaudeTextGenerationServiceLive),
+      Effect.provide(
+        mockSpawnerLayer((args, command) => {
+          assert.strictEqual(command, "claude");
+          assert.strictEqual(args[args.indexOf("--model") + 1], "claude-sonnet-4-5");
+          const schema = JSON.parse(args[args.indexOf("--json-schema") + 1] ?? "{}");
+          assert.includeMembers(schema.required, ["summary", "focusItems"]);
+          return {
+            stdout: JSON.stringify({
+              structured_output: {
+                summary: "Account migration completed",
+                focusItems: [{ title: "Account isolation", kind: "task", source: "thread-1" }],
+              },
+            }),
+            stderr: "",
+            code: 0,
+          };
+        }),
+      ),
+      Effect.provide(ServerConfig.layerTest(process.cwd(), { prefix: "claude-digest-test-" })),
+      Effect.provide(NodeServices.layer),
+    ),
+  );
+
   it.effect("uses the server home as the default Claude process home", () =>
     Effect.gen(function* () {
       const textGeneration = yield* ClaudeTextGeneration;

@@ -23,6 +23,7 @@ import {
   buildCommitMessagePrompt,
   buildDiffSummaryPrompt,
   buildPrContentPrompt,
+  buildProjectDigestPrompt,
   buildThreadRecapPrompt,
   buildThreadTitlePrompt,
   sanitizeCommitSubject,
@@ -472,6 +473,29 @@ const makeClaudeTextGeneration = Effect.gen(function* () {
     } satisfies ThreadRecapGenerationResult;
   });
 
+  const generateProjectDigest: TextGenerationShape["generateProjectDigest"] = Effect.fn(
+    "ClaudeTextGeneration.generateProjectDigest",
+  )(function* (input) {
+    const modelSelection = yield* requireClaudeModelSelection(
+      "generateProjectDigest",
+      input.modelSelection,
+    );
+    const { prompt, outputSchemaJson } = buildProjectDigestPrompt({
+      ...(input.previousSummary ? { previousSummary: input.previousSummary } : {}),
+      activity: input.activity,
+      coverage: input.coverage,
+      pinnedFocus: input.pinnedFocus,
+    });
+    return yield* runClaudeJson({
+      operation: "generateProjectDigest",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson,
+      modelSelection,
+      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+    });
+  });
+
   const generateAutomationIntent: TextGenerationShape["generateAutomationIntent"] = Effect.fn(
     "ClaudeTextGeneration.generateAutomationIntent",
   )(function* (input) {
@@ -518,6 +542,7 @@ const makeClaudeTextGeneration = Effect.gen(function* () {
     generateBranchName,
     generateThreadTitle,
     generateThreadRecap,
+    generateProjectDigest,
     generateAutomationIntent,
     evaluateAutomationCompletion,
   } satisfies TextGenerationShape;

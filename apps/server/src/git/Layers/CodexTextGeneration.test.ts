@@ -1896,7 +1896,7 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const sharedCodexHome = yield* fs.makeTempDirectoryScoped({
-          prefix: "t3code-shared-codex-",
+          prefix: "synara-shared-codex-",
         });
         yield* fs.writeFileString(
           path.join(sharedCodexHome, "auth.json"),

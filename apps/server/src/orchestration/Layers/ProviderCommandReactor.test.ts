@@ -350,7 +350,7 @@ describe("ProviderCommandReactor", () => {
     // The provider that minted each persisted cursor: a cursor can only
     // natively resume a session on its own provider, so a cross-provider
     // restart that drops the input cursor must not pick it back up here.
-    const persistedResumeCursorProviders = new Map<ThreadId, ProviderKind>();
+    const persistedResumeCursorProviders = new Map<ThreadId, ProviderSession["provider"]>();
     const pendingPriorTranscriptBootstraps = new Set<ThreadId>();
     const listSessions = vi.fn<ProviderServiceShape["listSessions"]>(() =>
       Effect.succeed(runtimeSessions),

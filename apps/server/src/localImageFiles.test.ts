@@ -158,7 +158,7 @@ describe("resolveAllowedLocalPreviewFile", () => {
     assert.equal(result, null);
   });
 
-  it("allows generated images from the configured Codex account overlay after direct-home toggles", async () => {
+  it("allows generated images from the configured Codex account overlay", async () => {
     const fakeRoot = path.join(
       process.cwd(),
       `.test-codex-configured-account-overlay-${process.pid}-${Date.now()}`,
@@ -195,7 +195,6 @@ describe("resolveAllowedLocalPreviewFile", () => {
             homePath: sourceHome,
             shadowHomePath: shadowHome,
             accountId: "work",
-            environment: { DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0" },
           },
         ],
       });

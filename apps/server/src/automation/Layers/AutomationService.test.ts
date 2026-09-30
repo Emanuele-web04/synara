@@ -2393,7 +2393,12 @@ layer("AutomationService", (it) => {
       assert.strictEqual(third.run.id, second.run.id);
 
       const listed = yield* service.list({ projectId });
-      assert.strictEqual(listed.runs.filter((entry) => entry.status === "pending").length, 1);
+      assert.strictEqual(
+        listed.runs.filter(
+          (entry) => entry.automationId === created.id && entry.status === "pending",
+        ).length,
+        1,
+      );
 
       yield* service.cancelRun({ runId: second.run.id });
       yield* service.cancelRun({ runId: first.run.id });

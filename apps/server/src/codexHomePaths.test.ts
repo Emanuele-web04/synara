@@ -121,11 +121,10 @@ describe("Codex home paths", () => {
     ]);
   });
 
-  it("keeps explicit shared homes isolated when a legacy plugin toggle is enabled", () => {
+  it("keeps explicit shared homes isolated", () => {
     const env = {
       CODEX_HOME: "/users/me/.codex",
       SYNARA_HOME: "/synara/runtime",
-      DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0",
     };
     const segment = resolveCodexHomeOverlayAccountSegment({
       accountId: "codex_2",
@@ -154,7 +153,6 @@ describe("Codex home paths", () => {
         env: {
           CODEX_HOME: "/users/me/.codex",
           SYNARA_HOME: "/synara/runtime",
-          DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0",
         },
         homePath,
         accountId: "codex_2",

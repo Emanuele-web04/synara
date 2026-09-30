@@ -444,7 +444,7 @@ describe("localImageEffectRouteLayer", () => {
   });
 
   it("serves generated images from live Codex session homes after settings drift", async () => {
-    const workspace = makeTempDir("dpcode-effect-image-live-session-workspace-");
+    const workspace = makeTempDir("synara-effect-image-live-session-workspace-");
     writeFileSync(path.join(workspace, ".git"), "gitdir: .git");
     const image = makeGeneratedImage("synara-live-codex-home-");
     const config = makeServerConfig({ cwd: workspace });

@@ -60,7 +60,12 @@ function readMacManagedPreference(
       typeof cause === "object" && cause !== null && "stderr" in cause
         ? String((cause as { readonly stderr?: unknown }).stderr ?? "")
         : "";
-    if (/does not exist/i.test(stderr)) return undefined;
+    if (
+      /does not exist/i.test(stderr) ||
+      stderr.trim() === `Error: Could not find key '${key}' in domain 'com.openai.codex'.`
+    ) {
+      return undefined;
+    }
     throw new CodexTextGenerationConfigError(
       `Managed macOS Codex preference ${key} could not be checked safely.`,
       { cause },

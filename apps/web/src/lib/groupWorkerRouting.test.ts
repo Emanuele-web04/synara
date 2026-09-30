@@ -219,6 +219,8 @@ describe("resolveGroupWorkerRoutingDefaults", () => {
 
 const GROUP_PROVIDER_STATUS: ServerProviderStatus = {
   provider: "claudeAgent",
+  driver: "claudeAgent",
+  instanceId: "claudeAgent",
   status: "ready",
   available: true,
   authStatus: "authenticated",
@@ -227,6 +229,8 @@ const GROUP_PROVIDER_STATUS: ServerProviderStatus = {
 
 const FALLBACK_PROVIDER_STATUS: ServerProviderStatus = {
   provider: "codex",
+  driver: "codex",
+  instanceId: "codex",
   status: "ready",
   available: true,
   authStatus: "authenticated",
@@ -277,6 +281,8 @@ describe("applyGroupWorkerRoutingDefaults", () => {
       providerStatuses: [
         {
           provider: "claudeAgent",
+          driver: "claudeAgent",
+          instanceId: "claudeAgent",
           status: "error",
           available: false,
           authStatus: "unknown",
@@ -306,6 +312,8 @@ describe("applyGroupWorkerRoutingDefaults", () => {
       providerStatuses: [
         {
           provider: "claudeAgent",
+          driver: "claudeAgent",
+          instanceId: "claudeAgent",
           status: "warning",
           available: true,
           authStatus: "unauthenticated",

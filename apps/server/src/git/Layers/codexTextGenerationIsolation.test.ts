@@ -193,17 +193,22 @@ it.layer(NodeServices.layer)("Codex text-generation isolation", (it) => {
           },
         }),
       ).toThrowError(/could not be checked safely/);
-      expect(() =>
-        assertNoExternalCodexConfigLayers({
-          platform: "darwin",
-          systemConfigPaths: [],
-          executeMacDefaultsRead: () => {
-            throw Object.assign(new Error("missing"), {
-              stderr: "The domain/default pair does not exist",
-            });
-          },
-        }),
-      ).not.toThrow();
+      for (const missingPreferenceMessage of [
+        "The domain/default pair does not exist",
+        "Error: Could not find key 'config_toml_base64' in domain 'com.openai.codex'.",
+      ]) {
+        expect(() =>
+          assertNoExternalCodexConfigLayers({
+            platform: "darwin",
+            systemConfigPaths: [],
+            executeMacDefaultsRead: (key) => {
+              throw Object.assign(new Error("missing"), {
+                stderr: missingPreferenceMessage.replace("config_toml_base64", key),
+              });
+            },
+          }),
+        ).not.toThrow();
+      }
     }),
   );
 

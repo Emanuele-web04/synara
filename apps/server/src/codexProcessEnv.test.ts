@@ -821,12 +821,11 @@ describe("buildCodexProcessEnv account overlays", () => {
     }
   });
 
-  it("keeps an explicitly repeated shared home isolated when a legacy plugin toggle is enabled", async () => {
+  it("keeps an explicitly repeated shared home isolated", async () => {
     const fixture = makeAccountFixture();
     const sharedEnv = {
       ...fixture.env,
       CODEX_HOME: fixture.homePath,
-      DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0",
     };
     writeFileSync(path.join(fixture.homePath, "config.toml"), 'model = "gpt-5.4"\n', "utf8");
 
@@ -850,7 +849,7 @@ describe("buildCodexProcessEnv account overlays", () => {
     }
   });
 
-  it("mirrors private state only from a distinct dedicated home with a legacy plugin toggle", async () => {
+  it("mirrors private state only from a distinct dedicated home", async () => {
     const fixture = makeAccountFixture();
     const dedicatedHomePath = path.join(fixture.root, "codex-work-home");
     mkdirSync(dedicatedHomePath, { recursive: true });
@@ -861,7 +860,6 @@ describe("buildCodexProcessEnv account overlays", () => {
         env: {
           ...fixture.env,
           CODEX_HOME: fixture.homePath,
-          DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0",
         },
         homePath: dedicatedHomePath,
         accountId: "work",

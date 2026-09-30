@@ -1976,7 +1976,7 @@ const make = Effect.gen(function* () {
     // session, then the recorded spawn selection, then the projected row — is
     // the binding turns must honor.
     const boundProvider: ProviderKind | undefined =
-      activeSession?.provider ??
+      (isProviderKind(activeSession?.provider) ? activeSession.provider : undefined) ??
       threadSessionModelSelections.get(threadId)?.provider ??
       establishedProvider;
     // A stored thread.modelSelection naming a different provider than the
@@ -1989,8 +1989,7 @@ const make = Effect.gen(function* () {
     const providerRebindRequested =
       boundProvider !== undefined &&
       boundProvider !== thread.modelSelection.provider &&
-      (requestedModelSelection === undefined ||
-        desiredProvider === thread.modelSelection.provider);
+      (requestedModelSelection === undefined || desiredProvider === thread.modelSelection.provider);
     if (
       boundProvider !== undefined &&
       requestedModelSelection !== undefined &&
