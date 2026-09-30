@@ -4070,15 +4070,18 @@ export default function Sidebar() {
       ),
     [availableSidebarNavIds, hiddenSidebarNavItems, sidebarNavDescriptors],
   );
+  // Reorders only what this build ships: an item it leaves out (Inbox on Stable) stays out
+  // of the saved order, so it joins at its default place once it ships instead of wherever
+  // the user's drags pushed its hidden slot.
   const handleNavOrderReorder = useCallback(
     (activeId: string, overId: string) => {
-      const order = normalizeSidebarNavOrder(appSettings.sidebarNavOrder);
+      const order = availableSidebarNavIds;
       const fromIndex = order.indexOf(activeId as SidebarNavItemId);
       const toIndex = order.indexOf(overId as SidebarNavItemId);
       if (fromIndex < 0 || toIndex < 0) return;
-      updateSettings({ sidebarNavOrder: arrayMove(order, fromIndex, toIndex) });
+      updateSettings({ sidebarNavOrder: arrayMove([...order], fromIndex, toIndex) });
     },
-    [appSettings.sidebarNavOrder, updateSettings],
+    [availableSidebarNavIds, updateSettings],
   );
   const handleNavItemVisibleChange = useCallback(
     (id: string, visible: boolean) => {
@@ -6579,10 +6582,13 @@ export default function Sidebar() {
       locked: !railItemCanHide(id),
     }));
   const handleRailItemReorder = (activeId: string, overId: string) => {
-    const fromIndex = railItemOrder.indexOf(activeId as RailOrderableItemId);
-    const toIndex = railItemOrder.indexOf(overId as RailOrderableItemId);
+    // Same rule as the nav: an unshipped item (Inbox on Stable) stays out of the saved order.
+    // Groups keeps its slot, since it is only switched off, not missing from the build.
+    const order = railItemOrder.filter((id) => id !== "inbox" || inboxAvailable);
+    const fromIndex = order.indexOf(activeId as RailOrderableItemId);
+    const toIndex = order.indexOf(overId as RailOrderableItemId);
     if (fromIndex < 0 || toIndex < 0) return;
-    updateSettings({ railItemOrder: arrayMove(railItemOrder, fromIndex, toIndex) });
+    updateSettings({ railItemOrder: arrayMove(order, fromIndex, toIndex) });
   };
   const handleRailItemVisibleChange = (id: string, visible: boolean) => {
     // Ids come from the rail customize rows, which list RailOrderableItemIds only.
