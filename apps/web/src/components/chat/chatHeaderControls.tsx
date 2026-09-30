@@ -183,7 +183,7 @@ export const DOCK_TAB_CLOSE_GLYPH_CLASS_NAME =
 /** Trailing close button for content tabs: a 20px target overlaid on the chip's end with
  *  its own hover disc, so it reads as separate from the (already filled) chip behind it. */
 const SURFACE_TAB_TRAILING_CLOSE_CLASS_NAME =
-  "absolute top-1/2 right-1 flex size-5 -translate-y-1/2 cursor-pointer items-center justify-center rounded-md text-[var(--color-text-foreground-secondary)] outline-none transition-[opacity,background-color,color] hover:bg-[color-mix(in_srgb,var(--foreground)_8%,transparent)] hover:text-[var(--color-text-foreground)] focus-visible:ring-1 focus-visible:ring-ring/60";
+  "absolute top-1/2 right-1.5 flex size-5 -translate-y-1/2 cursor-pointer items-center justify-center rounded-md text-[var(--color-text-foreground-secondary)] outline-none transition-[opacity,background-color,color] hover:bg-[color-mix(in_srgb,var(--foreground)_8%,transparent)] hover:text-[var(--color-text-foreground)] focus-visible:ring-1 focus-visible:ring-ring/60";
 
 /** Keyboard focus ring for a chip's select button (the chip itself carries no focus). */
 const SURFACE_TAB_SELECT_FOCUS_CLASS_NAME =
@@ -257,15 +257,16 @@ export function SurfaceTabChip({
   const glyph = <span className="flex size-4 shrink-0 items-center justify-center">{icon}</span>;
   const labelClassNames = cn(
     "flex min-w-0 items-center gap-1.5 text-left",
+    // Content tabs carry a title rather than a tool name, so they get a roomier chip.
     trailingClose &&
       cn(
-        "flex-1 self-stretch rounded-[inherit] pl-1.5",
+        "flex-1 gap-2 self-stretch rounded-[inherit] pl-2.5",
         // Room for the overlaid X only while it shows.
         !onClose
-          ? "pr-1.5"
+          ? "pr-2.5"
           : active
-            ? "pr-6"
-            : "pr-1.5 group-focus-within/dock-tab:pr-6 group-hover/dock-tab:pr-6",
+            ? "pr-8"
+            : "pr-2.5 group-focus-within/dock-tab:pr-8 group-hover/dock-tab:pr-8",
       ),
     labelClassName,
   );
@@ -287,7 +288,7 @@ export function SurfaceTabChip({
       className={cn(
         "group/dock-tab [-webkit-app-region:no-drag]",
         trailingClose
-          ? cn(CHAT_SURFACE_CHIP_CLASS_NAME, "relative flex min-w-0 items-center px-0")
+          ? cn(CHAT_SURFACE_CHIP_CLASS_NAME, "relative flex !h-8 min-w-0 items-center px-0")
           : DOCK_TAB_CHIP_CLASS_NAME,
         active && CHAT_SURFACE_CONTROL_ACTIVE_CLASS_NAME,
         className,

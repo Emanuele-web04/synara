@@ -28,7 +28,7 @@ import { SurfaceTabChip, SurfaceTabStrip } from "./chatHeaderControls";
 // to a floor that still fits the icon, a few characters, and the close button. Past the
 // floor the strip scrolls instead of crushing the tabs further. The floor never exceeds
 // the strip itself, so a strip squeezed by a narrow window still shows one whole tab.
-const OPEN_THREAD_TAB_SIZE_CLASS_NAME = "min-w-[min(8.5em,100%)] grow-0 shrink basis-[18em]";
+const OPEN_THREAD_TAB_SIZE_CLASS_NAME = "min-w-[min(9em,100%)] grow-0 shrink basis-[18em]";
 const OPEN_THREAD_TAB_FROZEN_SIZE_CLASS_NAME =
   "min-w-0 grow-0 shrink-0 basis-[var(--open-thread-tab-frozen-width)]";
 // The strip sits on the rail's shell band, above the chat card. The active tab takes the
