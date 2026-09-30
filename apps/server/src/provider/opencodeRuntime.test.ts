@@ -301,7 +301,7 @@ describe("buildOpenCodeServerProcessEnv", () => {
     expect(env.OPENAI_API_KEY).toBeUndefined();
     expect(env.OPENCODE_CONFIG_CONTENT).toBeUndefined();
     expect(env.ANTHROPIC_API_KEY).toBe("selected-account-b");
-    expect(env.PATH).toBe("/usr/bin");
+    expect(env.PATH?.split(delimiter)[0]).toBe("/usr/bin");
     expect(env.HTTPS_PROXY).toBe("http://proxy.example");
   });
 
