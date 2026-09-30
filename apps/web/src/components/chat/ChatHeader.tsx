@@ -280,9 +280,6 @@ function EditorRailTabs(props: {
     props.onCloseTerminal();
   };
   const closeChatTab = (threadId: ThreadId) => {
-    const activeChatThreadId = props.activeSurface === "chat" ? props.activeThreadId : null;
-    // The only chat tab gives way to the terminal tab, which keeps the thread's route.
-    const fallsBackToTerminal = threadId === activeChatThreadId && chatTabs.length === 1;
     // Same close flow as the chat header strip: the active chat's tab goes only once the
     // route has left it, so a guarded navigation keeps it in both places.
     void enqueueClose(() => {
@@ -293,12 +290,16 @@ function EditorRailTabs(props: {
         activeThreadId: props.activeSurface === "chat" ? readRouteThreadId() : null,
         closeTab: closeThreadTab,
         openTab: props.onOpenChat,
+        // The last chat tab gives way to the terminal tab, which keeps the thread's route.
+        replaceLastTab: terminalTabVisible
+          ? async () => {
+              openTerminalTab();
+              return { ok: true, leavesRoute: false };
+            }
+          : undefined,
         readRouteThreadId,
       };
     });
-    if (fallsBackToTerminal && terminalTabVisible) {
-      openTerminalTab();
-    }
   };
 
   return (

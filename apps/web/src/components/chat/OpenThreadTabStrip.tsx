@@ -17,7 +17,7 @@ import {
 } from "~/hooks/useOpenThreadTabs";
 import { TerminalIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
-import { createOpenThreadTabCloseQueue } from "~/openThreadTabs.logic";
+import { createOpenThreadTabCloseQueue, replaceLastTabWithFreshChat } from "~/openThreadTabs.logic";
 import { useOpenThreadTabsStore } from "~/openThreadTabsStore";
 
 import { ProviderIcon } from "../ProviderIcon";
@@ -78,8 +78,7 @@ export function OpenThreadTabStrip(props: {
         activeThreadId: readRouteThreadId(),
         closeTab: closeThreadTab,
         openTab: activateThreadTab,
-        // The last tab falls back to a fresh chat, as deleting the last thread does.
-        openFreshChat: handleNewChat,
+        replaceLastTab: replaceLastTabWithFreshChat(handleNewChat),
         readRouteThreadId,
       };
     }).then((result) => {

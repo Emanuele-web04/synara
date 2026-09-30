@@ -6,6 +6,7 @@ import {
   buildOpenThreadTabs,
   closeOpenThreadTab,
   createOpenThreadTabCloseQueue,
+  replaceLastTabWithFreshChat,
   normalizeOpenThreadTabIds,
   type OpenThreadTabSource,
   resolveOpenThreadTabCloseTarget,
@@ -206,6 +207,7 @@ describe("closeOpenThreadTab", () => {
       route = "fresh";
       return { ok: true as const, threadId: ThreadId.makeUnsafe("fresh") };
     });
+    const replaceLastTab = replaceLastTabWithFreshChat(openFreshChat);
     const close = (tabs: readonly string[], closed: string) =>
       closeOpenThreadTab({
         tabs: tabIds(tabs),
@@ -213,7 +215,7 @@ describe("closeOpenThreadTab", () => {
         activeThreadId: ThreadId.makeUnsafe(input.active),
         closeTab,
         openTab,
-        openFreshChat,
+        replaceLastTab,
         readRouteThreadId: () => route,
       });
     return { close, closeTab, openTab, openFreshChat };
@@ -257,7 +259,7 @@ describe("closeOpenThreadTab", () => {
     expect(failed.closeTab).not.toHaveBeenCalled();
   });
 
-  it("closes the last tab at once when the host shows something else without leaving", async () => {
+  it("keeps the last tab when nothing can take its place", async () => {
     const closeTab = vi.fn();
     await closeOpenThreadTab({
       tabs: tabIds(["a"]),
@@ -268,7 +270,7 @@ describe("closeOpenThreadTab", () => {
       readRouteThreadId: () => "a",
     });
 
-    expect(closeTab).toHaveBeenCalledWith("a");
+    expect(closeTab).not.toHaveBeenCalled();
   });
 });
 
@@ -300,5 +302,31 @@ describe("createOpenThreadTabCloseQueue", () => {
 
     expect(open).toEqual(["c"]);
     expect(route).toBe("c");
+  });
+
+  it("falls back from the last tab when an earlier queued close left only one", async () => {
+    // The editor rail: two chat tabs, the terminal tab replacing the last one in place.
+    const open = ["a", "b"].map((id) => ThreadId.makeUnsafe(id));
+    let route: ThreadId = ThreadId.makeUnsafe("a");
+    const replaceLastTab = vi.fn(async () => ({ ok: true as const, leavesRoute: false }));
+    const enqueueClose = createOpenThreadTabCloseQueue();
+    const close = (closed: string) =>
+      enqueueClose(() => ({
+        tabs: tabIds(["a", "b"]).filter((tab) => open.includes(tab.threadId)),
+        closedThreadId: ThreadId.makeUnsafe(closed),
+        activeThreadId: route,
+        closeTab: (threadId) => open.splice(open.indexOf(threadId), 1),
+        openTab: async (threadId) => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          route = threadId;
+        },
+        replaceLastTab,
+        readRouteThreadId: () => route,
+      }));
+
+    await Promise.all([close("a"), close("b")]);
+
+    expect(replaceLastTab).toHaveBeenCalledOnce();
+    expect(open).toEqual([]);
   });
 });

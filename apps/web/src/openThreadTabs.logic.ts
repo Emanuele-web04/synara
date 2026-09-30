@@ -179,20 +179,33 @@ export interface CloseOpenThreadTabInput {
   activeThreadId: ThreadId | null;
   closeTab: (threadId: ThreadId) => void;
   openTab: (threadId: ThreadId) => Promise<unknown>;
-  // What replaces the last tab. Omitted when the host shows something else in its place
-  // without leaving the thread (the editor rail's terminal tab): the tab then closes at once.
-  openFreshChat?: (() => Promise<StartContainerChatResult>) | undefined;
+  // What takes the last tab's place, decided when the close runs; without one the last
+  // tab stays open. A replacement that keeps the thread's route (the editor rail's
+  // terminal tab) lets the tab close at once instead of waiting for the route to move.
+  replaceLastTab?: (() => Promise<LastTabReplacement>) | undefined;
   readRouteThreadId: () => string | null;
 }
 
+export type LastTabReplacement = { ok: true; leavesRoute: boolean } | { ok: false; error: string };
+
 export type CloseOpenThreadTabResult = { ok: true } | { ok: false; error: string };
+
+/** The chat header's replacement for its last tab: a fresh chat, as deleting the last thread does. */
+export function replaceLastTabWithFreshChat(
+  openFreshChat: () => Promise<StartContainerChatResult>,
+): () => Promise<LastTabReplacement> {
+  return async () => {
+    const result = await openFreshChat();
+    return result.ok ? { ok: true, leavesRoute: true } : result;
+  };
+}
 
 /**
  * Closes a tab. A background tab closes at once. The active tab first leaves for its
- * successor (or a fresh chat when it was the last tab) and closes only once the route
- * has actually moved off it: a guarded navigation (unsaved editor buffers that fail to
- * save) keeps the thread on screen, and it must keep its tab. Resolves with the fresh
- * chat's error when one could not be started.
+ * successor (or its host's replacement when it was the last tab) and closes only once
+ * the route has actually moved off it: a guarded navigation (unsaved editor buffers
+ * that fail to save) keeps the thread on screen, and it must keep its tab. Resolves
+ * with the replacement's error when one could not be opened.
  */
 export async function closeOpenThreadTab(
   input: CloseOpenThreadTabInput,
@@ -204,14 +217,18 @@ export async function closeOpenThreadTab(
   }
   if (target.threadId) {
     await input.openTab(target.threadId);
-  } else if (input.openFreshChat) {
-    const result = await input.openFreshChat();
-    if (!result.ok) {
-      return result;
-    }
   } else {
-    input.closeTab(input.closedThreadId);
-    return { ok: true };
+    if (!input.replaceLastTab) {
+      return { ok: true };
+    }
+    const replacement = await input.replaceLastTab();
+    if (!replacement.ok) {
+      return replacement;
+    }
+    if (!replacement.leavesRoute) {
+      input.closeTab(input.closedThreadId);
+      return { ok: true };
+    }
   }
   if (input.readRouteThreadId() !== input.closedThreadId) {
     input.closeTab(input.closedThreadId);
