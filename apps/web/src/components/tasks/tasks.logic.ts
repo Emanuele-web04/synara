@@ -413,15 +413,18 @@ export const EMPTY_TODO_LIST: TodoListResult = { todos: [] };
 /** Stamps an optimistic create until the server confirms it; any stored row is newer. */
 export const UNSAVED_TODO_UPDATED_AT = "1970-01-01T00:00:00.000Z";
 
-const deletedTodoIds = new Set<TodoId>();
+const deletedTodosById = new Map<TodoId, "pending" | "confirmed">();
 
-export function markTodoDeleted(todoId: TodoId): void {
-  deletedTodoIds.add(todoId);
+export function markTodoDeleted(todoId: TodoId, confirmed = false): void {
+  // Confirmation is terminal: later duplicate attempts cannot downgrade it.
+  if (confirmed || deletedTodosById.get(todoId) !== "confirmed") {
+    deletedTodosById.set(todoId, confirmed ? "confirmed" : "pending");
+  }
 }
 
-/** Undoes markTodoDeleted when the delete it anticipated failed. */
+/** Roll back an unconfirmed delete; a server-confirmed deletion can never be undone. */
 export function unmarkTodoDeleted(todoId: TodoId): void {
-  deletedTodoIds.delete(todoId);
+  if (deletedTodosById.get(todoId) !== "confirmed") deletedTodosById.delete(todoId);
 }
 
 function isSameOrNewer(candidate: string, existing: string): boolean {
@@ -429,7 +432,7 @@ function isSameOrNewer(candidate: string, existing: string): boolean {
 }
 
 export function upsertTodo(todos: readonly Todo[], incoming: Todo): Todo[] {
-  if (deletedTodoIds.has(incoming.id)) {
+  if (deletedTodosById.has(incoming.id)) {
     return [...todos];
   }
   const existing = todos.find((todo) => todo.id === incoming.id);
@@ -454,7 +457,7 @@ export function applyTodoEvent(
       return {
         todos: [
           ...event.todos.flatMap((todo) => {
-            if (deletedTodoIds.has(todo.id)) return [];
+            if (deletedTodosById.has(todo.id)) return [];
             const previous = previousById.get(todo.id);
             // Snapshots are reconciliation data: a newer live copy keeps winning.
             return [
@@ -472,7 +475,7 @@ export function applyTodoEvent(
     case "todo-upserted":
       return { todos: upsertTodo(base.todos, event.todo) };
     case "todo-deleted":
-      markTodoDeleted(event.todoId);
+      markTodoDeleted(event.todoId, true);
       return { todos: base.todos.filter((todo) => todo.id !== event.todoId) };
   }
 }
