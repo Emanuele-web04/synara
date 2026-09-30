@@ -21,7 +21,14 @@ export type BetaOnlyFeature = string;
 /** Groups: the coordinator, its threads, the Group panel and the Library. */
 export const GROUPS_BETA_FEATURE = "groups";
 
-export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = ["omp", GROUPS_BETA_FEATURE];
+/** Inbox: the Inbox page and its `stats.getRecap` RPC. */
+export const INBOX_BETA_FEATURE = "inbox";
+
+export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [
+  "omp",
+  GROUPS_BETA_FEATURE,
+  INBOX_BETA_FEATURE,
+];
 
 /**
  * Whether a Beta-only feature is on for this host. Only the Stable
