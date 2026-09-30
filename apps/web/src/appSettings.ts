@@ -171,7 +171,7 @@ export const DEFAULT_TASKS_VIEW_MODE: TasksViewMode = "list";
 /** Classic: one sidebar column. Rail: fixed icon tabs plus a panel (see useSidebarLayout). */
 export const SidebarLayout = Schema.Literals(["classic", "rail"]);
 export type SidebarLayout = typeof SidebarLayout.Type;
-export const DEFAULT_SIDEBAR_LAYOUT: SidebarLayout = "classic";
+export const DEFAULT_SIDEBAR_LAYOUT: SidebarLayout = "rail";
 export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
 export const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
 export const FollowUpBehavior = Schema.Literals(["queue", "steer"]);

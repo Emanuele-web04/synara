@@ -29,8 +29,8 @@ export const INBOX_BETA_FEATURE = "inbox";
 export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [
   "omp",
   GROUPS_BETA_FEATURE,
-  "tasks",
   INBOX_BETA_FEATURE,
+  "tasks",
 ];
 
 /**

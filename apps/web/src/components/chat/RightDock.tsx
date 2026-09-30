@@ -19,7 +19,7 @@ import {
   EMPTY_PANE_ID_SET,
   reconcileKeepMountedPaneIds,
 } from "~/lib/dockPaneActivation";
-import { PanelCollapseIcon, PanelExpandIcon, PanelRightCloseIcon, PlusIcon } from "~/lib/icons";
+import { LayoutRightIcon, PanelCollapseIcon, PanelExpandIcon, PlusSignIcon } from "~/lib/icons";
 import type {
   RightDockPane,
   RightDockPaneKind,
@@ -42,6 +42,7 @@ import {
   CHAT_SURFACE_HEADER_ROW_CLASS_NAME,
   DOCK_HEADER_ICON_BUTTON_CLASS,
   SurfaceTabChip,
+  SurfaceTabStrip,
 } from "./chatHeaderControls";
 import {
   getRightDockPaneMeta,
@@ -336,7 +337,7 @@ export function RightDock(props: RightDockProps) {
               desktopTopBarWindowControlsGutterClassName,
             )}
           >
-            <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+            <SurfaceTabStrip className="flex-1" activeKey={props.state.activePaneId} dividers>
               {props.state.panes.map((pane) => (
                 <RightDockTab
                   key={pane.id}
@@ -348,7 +349,7 @@ export function RightDock(props: RightDockProps) {
                   onClose={() => props.onClosePane(pane.id)}
                 />
               ))}
-            </div>
+            </SurfaceTabStrip>
             {props.state.panes.length > 0 && props.addMenuKinds.length > 0 ? (
               <Menu modal={false}>
                 <MenuTrigger
@@ -362,7 +363,7 @@ export function RightDock(props: RightDockProps) {
                     />
                   }
                 >
-                  <PlusIcon className="size-3.5" />
+                  <PlusSignIcon className="size-4" />
                 </MenuTrigger>
                 <ComposerPickerMenuPopup align="end" side="bottom" className="w-44 min-w-44">
                   {props.addMenuKinds.map((kind) => {
@@ -387,7 +388,7 @@ export function RightDock(props: RightDockProps) {
                 className={DOCK_HEADER_ICON_BUTTON_CLASS}
                 onClick={props.addAction.onClick}
               >
-                <PlusIcon className="size-3.5" />
+                <PlusSignIcon className="size-3.5" />
               </IconButton>
             ) : null}
             {!isMobile && (maximized || activePane !== null) ? (
@@ -401,7 +402,11 @@ export function RightDock(props: RightDockProps) {
                 className={DOCK_HEADER_ICON_BUTTON_CLASS}
                 onClick={() => setExpandedKey(maximized ? null : expansionKey)}
               >
-                {maximized ? <PanelCollapseIcon /> : <PanelExpandIcon />}
+                {maximized ? (
+                  <PanelCollapseIcon className="size-4" />
+                ) : (
+                  <PanelExpandIcon className="size-4" />
+                )}
               </IconButton>
             ) : null}
             <IconButton
@@ -413,7 +418,7 @@ export function RightDock(props: RightDockProps) {
               className={DOCK_HEADER_ICON_BUTTON_CLASS}
               onClick={props.onCollapse}
             >
-              <PanelRightCloseIcon />
+              <LayoutRightIcon className="size-4" />
             </IconButton>
           </div>
           <div className="relative min-h-0 flex-1">

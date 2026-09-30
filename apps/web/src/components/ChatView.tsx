@@ -56,6 +56,7 @@ import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useIsMobile } from "~/hooks/useMediaQuery";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { useRepoDiffTotals } from "~/hooks/useRepoDiffTotals";
+import { useSidebarLayout } from "~/hooks/useSidebarLayout";
 import { useThreadRecap } from "~/hooks/useThreadRecap";
 import { SINGLE_CHAT_PANE_SCOPE_ID } from "~/lib/chatPaneScope";
 import { formatComposerMentionToken } from "~/lib/composerMentions";
@@ -169,7 +170,6 @@ import {
   canCreateThreadHandoff,
   resolveAvailableHandoffTargets,
   resolveThreadHandoffAvailability,
-  resolveThreadHandoffBadgeLabel,
   type ThreadHandoffTarget,
 } from "../lib/threadHandoff";
 import { buildDraftThreadRenameCreateInput, dispatchThreadRename } from "../lib/threadRename";
@@ -265,6 +265,7 @@ import { ThreadWorktreeHandoffDialog } from "./ThreadWorktreeHandoffDialog";
 
 import { ChatComposerFooter } from "./chat/ChatComposerFooter";
 import { ChatHeader } from "./chat/ChatHeader";
+import { OpenThreadTabStrip } from "./chat/OpenThreadTabStrip";
 import { ChatSurfaceHeader } from "./chat/ChatSurfaceHeader";
 import { useAsyncUserInputResponse } from "./chat/useAsyncUserInputResponse";
 import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
@@ -618,6 +619,7 @@ export default function ChatView({
     gitCreateDetachedWorktreeMutationOptions({ queryClient }),
   );
   const isEditorRail = presentationMode === "editor";
+  const isRailLayout = useSidebarLayout() === "rail";
   const isInactiveSplitPane = surfaceMode === "split" && !isFocusedPane;
   const {
     composerDraft,
@@ -2299,14 +2301,6 @@ export default function ChatView({
     settings,
     configuredProviderStatuses: serverConfigQuery.data?.providers,
   });
-  const handoffBadgeLabel = useMemo(
-    () => (activeThread ? resolveThreadHandoffBadgeLabel(activeThread) : null),
-    [activeThread],
-  );
-  const handoffBadgeSourceProvider = activeThread?.handoff?.sourceProvider ?? null;
-  const handoffBadgeTargetProvider = activeThread?.handoff
-    ? activeThread.modelSelection.provider
-    : null;
   const handoffTargets = useMemo(
     () =>
       activeThread
@@ -4871,16 +4865,15 @@ export default function ChatView({
     onOpenTurnDiff(activeTurnLiveDiffState.turnId);
   }, [activeTurnLiveDiffState.turnId, onOpenTurnDiff]);
   const onNavigateToThread = useCallback(
-    (nextThreadId: ThreadId) => {
-      void navigate({
+    (nextThreadId: ThreadId) =>
+      navigate({
         to: "/$threadId",
         params: { threadId: nextThreadId },
         search: (previous) =>
           isEditorRail
             ? { ...stripDiffSearchParams(previous), view: "editor" }
             : stripDiffSearchParams(previous),
-      });
-    },
+      }),
     [isEditorRail, navigate],
   );
   const onOpenAutomation = useCallback(
@@ -4926,7 +4919,7 @@ export default function ChatView({
   const onOpenEditorChat = useCallback(
     (nextThreadId: ThreadId) => {
       storeOpenChatThreadPage(nextThreadId);
-      onNavigateToThread(nextThreadId);
+      return onNavigateToThread(nextThreadId);
     },
     [onNavigateToThread, storeOpenChatThreadPage],
   );
@@ -5118,6 +5111,10 @@ export default function ChatView({
     );
   }
 
+  // Open-thread tabs belong to the rail shell's single chat; split panes, the editor rail,
+  // and the classic sidebar keep the plain thread title.
+  const showOpenThreadTabs = isRailLayout && surfaceMode === "single" && !isEditorRail;
+
   const activeThreadDisplayTitle = resolveActiveThreadTitle({
     title: isCoordinatorConversation
       ? resolveGroupCoordinatorDisplayName({
@@ -5266,7 +5263,7 @@ export default function ChatView({
       // both themes (chips float over the page), rounded on top only and flush against
       // the input shell below. No overlap/underlay tricks — in dark mode a slice tucked
       // behind the composer's translucent corners reads as a visible cut along the seam.
-      className="chat-composer-shell mx-auto flex min-h-8 w-full min-w-0 flex-nowrap items-center gap-x-1.5 overflow-hidden !rounded-b-none !rounded-t-[var(--composer-radius)] px-1.5 py-1 transition-colors duration-150 ease-out motion-reduce:transition-none sm:min-h-7"
+      className="chat-composer-shell squircle mx-auto flex min-h-8 w-full min-w-0 flex-nowrap items-center gap-x-1.5 overflow-hidden !rounded-b-none !rounded-t-[var(--composer-radius)] px-1.5 py-1 transition-colors duration-150 ease-out motion-reduce:transition-none sm:min-h-7"
     >
       {showContainerChatWorkspacePicker ? (
         <ProjectPicker
@@ -6055,6 +6052,16 @@ export default function ChatView({
           {...(isEditorRail
             ? { className: cn(CHAT_SURFACE_HEADER_PADDING_X_CLASS, "h-full") }
             : {})}
+          {...(showOpenThreadTabs
+            ? {
+                threadTabs: (
+                  <OpenThreadTabStrip
+                    activeThreadId={activeThread.id}
+                    onRenameActiveThread={() => setRenameDialogOpen(true)}
+                  />
+                ),
+              }
+            : {})}
           isSidechat={isSidechatThread(activeThread)}
           hideSidebarControls={isEditorRail}
           hideHandoffControls={terminalWorkspaceTerminalTabActive || isEditorRail}
@@ -6068,13 +6075,10 @@ export default function ChatView({
           keybindings={keybindings}
           availableEditors={availableEditors}
           diffToggleShortcutLabel={diffPanelShortcutLabel}
-          handoffBadgeLabel={handoffBadgeLabel}
           handoffActionLabel={handoffActionLabel}
           handoffDisabled={handoffDisabled}
           handoffActionTargets={handoffTargets}
           showHandoffAction={handoffAvailability.providerHandoff}
-          handoffBadgeSourceProvider={handoffBadgeSourceProvider}
-          handoffBadgeTargetProvider={handoffBadgeTargetProvider}
           gitCwd={threadWorkspaceCwd}
           diffTotals={repoDiffTotals}
           showGitActions={showGitActions && !isEditorRail}
