@@ -522,7 +522,7 @@ export default function InboxView() {
   const seenCompletionAtRef = useRef(latestCompletionAt);
   const lastCompletionRefetchAtRef = useRef(0);
   useEffect(() => {
-    if (seenCompletionAtRef.current === latestCompletionAt) return;
+    if (!inboxAvailable || seenCompletionAtRef.current === latestCompletionAt) return;
     const waitMs = Math.max(
       0,
       lastCompletionRefetchAtRef.current + RECAP_REFETCH_MIN_INTERVAL_MS - Date.now(),
@@ -533,7 +533,7 @@ export default function InboxView() {
       void refetchRecap();
     }, waitMs);
     return () => window.clearTimeout(timer);
-  }, [latestCompletionAt, refetchRecap]);
+  }, [inboxAvailable, latestCompletionAt, refetchRecap]);
   // Yesterday waits for today so the page never holds two expensive reads at once.
   const previousRecapQuery = useQuery(
     serverRecapQueryOptions(previousDayInput, {
