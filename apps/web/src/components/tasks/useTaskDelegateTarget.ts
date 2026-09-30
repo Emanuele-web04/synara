@@ -29,10 +29,18 @@ export function useTaskDelegateTarget(todoProjectId: Todo["projectId"]) {
   // Automatic selection follows task project edits. An explicit Run in choice stays
   // independent, including a custom folder, until the form is opened for another task.
   const [selectedTarget, setTarget] = useState<DelegateTarget | null>(null);
-  const preferred = [todoProjectId, latestProjectId].find(
-    (id) => id !== null && userProjects.some((project) => project.id === id),
+  // The layout's current project only seeds the form; switching spaces later must
+  // not silently retarget an unassigned task. A deleted fallback requires a choice.
+  const [fallbackProjectId] = useState(
+    () =>
+      userProjects.find((project) => project.id === latestProjectId)?.id ??
+      userProjects[0]?.id ??
+      null,
   );
-  const projectId = preferred ?? userProjects[0]?.id ?? null;
+  const preferredProjectId = todoProjectId ?? fallbackProjectId;
+  const projectId = userProjects.some((project) => project.id === preferredProjectId)
+    ? preferredProjectId
+    : null;
   const target = useMemo<DelegateTarget | null>(
     () => selectedTarget ?? (projectId ? { kind: "project", projectId } : null),
     [projectId, selectedTarget],
