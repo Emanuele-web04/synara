@@ -13,11 +13,6 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { lazy, Suspense, useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 
 import {
-  CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
-  CHAT_SURFACE_HEADER_HEIGHT_CLASS,
-  CHAT_SURFACE_HEADER_PADDING_X_CLASS,
-} from "~/components/chat/chatHeaderControls";
-import {
   CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME,
   CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME,
 } from "~/components/chat/composerPickerStyles";
@@ -48,16 +43,12 @@ import { PullRequestsUnavailableState } from "~/components/pullRequest/PullReque
 import { usePullRequestPaneStateIcon } from "~/components/pullRequest/usePullRequestPaneStateIcon";
 import { PullRequestWarningNote } from "~/components/pullRequest/PullRequestWarningNote";
 import { RouteInsetSurface } from "~/components/RouteInsetSurface";
-import { SidebarHeaderNavigationControls } from "~/components/SidebarHeaderNavigationControls";
 import { Button } from "~/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "~/components/ui/empty";
 import { SearchInput } from "~/components/ui/search-input";
 import { Skeleton } from "~/components/ui/skeleton";
 import { toastManager } from "~/components/ui/toast";
-import {
-  useDesktopTopBarTrafficLightGutterClassName,
-  useDesktopTopBarWindowControlsGutterClassName,
-} from "~/hooks/useDesktopTopBarGutter";
+import { RouteSurfaceHeader } from "~/components/RouteSurfaceHeader";
 import { RefreshCwIcon } from "~/lib/icons";
 import {
   prefetchPullRequestListState,
@@ -150,8 +141,6 @@ function PullRequestsRouteView() {
   const { settings } = useAppSettings();
   const search = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
-  const trafficLightGutter = useDesktopTopBarTrafficLightGutterClassName();
-  const windowControlsGutter = useDesktopTopBarWindowControlsGutterClassName();
   const projects = useStore((store) => store.projects);
   const queryClient = useQueryClient();
   // One fetch per (state, project): the server returns the "all" involvement superset and the
@@ -383,50 +372,39 @@ function PullRequestsRouteView() {
     <div className={cn(CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME, CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME)}>
       <RouteInsetSurface surfaceClassName="bg-transparent">
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--color-background-surface)]">
-          <header
-            className={cn(
-              CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
-              CHAT_SURFACE_HEADER_PADDING_X_CLASS,
-              "drag-region",
-              trafficLightGutter,
-              windowControlsGutter,
-            )}
-          >
-            <div className={cn("flex items-center gap-2", CHAT_SURFACE_HEADER_HEIGHT_CLASS)}>
-              <SidebarHeaderNavigationControls />
-              {/* The title rides the surface header like the automations detail route, so the
+          <RouteSurfaceHeader rowClassName="sm:gap-2">
+            {/* The title rides the surface header like the automations detail route, so the
                   scroll area opens straight onto the filters and the list. */}
-              <h1 className="truncate font-heading text-ui-lg font-medium">Pull requests</h1>
-              {scopedProjectName ? (
-                <>
-                  <span aria-hidden className="text-muted-foreground/50">
-                    ·
-                  </span>
-                  <span className="truncate text-ui leading-snug text-muted-foreground">
-                    {scopedProjectName}
-                  </span>
-                </>
-              ) : null}
-              <div className="min-w-0 flex-1" />
-              <Button
-                size="icon-sm"
-                variant="ghost"
-                aria-label="Refresh pull requests"
-                title={
-                  activeActionCount > 0 ? "Wait for the pull request action to finish" : "Refresh"
-                }
-                disabled={refreshBlocked}
-                onClick={handleManualRefresh}
-              >
-                {/* Spins only for a refresh the user actually asked for. Background refetches
+            <h1 className="truncate font-heading text-ui-lg font-medium">Pull requests</h1>
+            {scopedProjectName ? (
+              <>
+                <span aria-hidden className="text-muted-foreground/50">
+                  ·
+                </span>
+                <span className="truncate text-ui leading-snug text-muted-foreground">
+                  {scopedProjectName}
+                </span>
+              </>
+            ) : null}
+            <div className="min-w-0 flex-1" />
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              aria-label="Refresh pull requests"
+              title={
+                activeActionCount > 0 ? "Wait for the pull request action to finish" : "Refresh"
+              }
+              disabled={refreshBlocked}
+              onClick={handleManualRefresh}
+            >
+              {/* Spins only for a refresh the user actually asked for. Background refetches
                     (window focus, remount) are constant and unprompted, so animating them
                     turned the header into a fidget rather than a signal. */}
-                <RefreshCwIcon
-                  className={cn("size-4", refreshMutation.isPending && "animate-spin")}
-                />
-              </Button>
-            </div>
-          </header>
+              <RefreshCwIcon
+                className={cn("size-4", refreshMutation.isPending && "animate-spin")}
+              />
+            </Button>
+          </RouteSurfaceHeader>
           <main className="min-h-0 flex-1 overflow-y-auto">
             <div className="mx-auto flex w-full max-w-5xl flex-col gap-4 px-5 pb-12 pt-4 sm:px-7">
               {/* Scope first, then search within it: the pills read as the view you are in and

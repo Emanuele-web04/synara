@@ -188,6 +188,17 @@ function cachedCoordinatorThreadIdSet(
   return next;
 }
 
+/**
+ * The hidden coordinator threads, read from the summaries the sidebar keeps loaded and
+ * live. For surfaces beside the sidebar that only filter threads; they do not start
+ * another load or event subscription.
+ */
+export function useCoordinatorThreadIds(): ReadonlySet<string> {
+  return cachedCoordinatorThreadIdSet(
+    useProjectAgentSummariesStore((state) => state.summariesByProjectId),
+  );
+}
+
 const SUMMARIES_REFRESH_DEBOUNCE_MS = 400;
 let summariesRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 

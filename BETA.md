@@ -298,7 +298,9 @@ chats stay reachable. The gate lives in
 `apps/server/src/projectAgent/groupsBetaGate.ts` and `GROUPS_ON` in
 `apps/web/src/betaFeatures.ts`.
 
-`inbox` is the Inbox: the server refuses its `stats.getRecap` RPC on Stable.
+`inbox` is the Inbox page: the server refuses its `stats.getRecap` RPC on Stable, the
+web hides its rail and sidebar entries and redirects the route, and a saved rail or
+sidebar order that mentions it is ignored there.
 
 ## Diagnostics
 
