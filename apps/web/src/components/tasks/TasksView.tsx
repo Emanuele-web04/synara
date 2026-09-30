@@ -139,7 +139,18 @@ export default function TasksView() {
                   inputRef={quickAddRef}
                   onCreate={(title, { open, onError }) => {
                     const id = newTodoId();
-                    createTodo({ id, title }, { onError });
+                    createTodo(
+                      { id, title },
+                      {
+                        onError: () => {
+                          onError();
+                          // The server refused it and its row is gone: close its card too, so
+                          // nothing more is typed into it or handed off from it.
+                          setSelectedTodoId((current) => (current === id ? null : current));
+                          setNotesFocusTodoId((current) => (current === id ? null : current));
+                        },
+                      },
+                    );
                     if (open) selectTodo(id, { focusNotes: true });
                   }}
                 />
