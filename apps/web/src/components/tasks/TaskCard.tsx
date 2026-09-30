@@ -18,7 +18,13 @@ import { TaskCardProperties } from "./TaskCardProperties";
 import { TaskActionRow, TaskPillButton, TaskWell } from "./TaskCardPrimitives";
 import { TaskHandOff } from "./TaskHandOff";
 import { TaskTextFields } from "./TaskTextFields";
-import type { TaskRowModel } from "./tasks.logic";
+import {
+  pruneSavedTaskText,
+  recordSavedTaskText,
+  type SavedTaskText,
+  type TaskRowModel,
+  withSavedTaskText,
+} from "./tasks.logic";
 import { useOpenChat } from "./useOpenChat";
 
 export function TaskCard({
@@ -49,18 +55,17 @@ export function TaskCard({
   const openChat = useOpenChat(todo.threadId);
   const startHandOffRef = useRef<(() => void) | null>(null);
 
-  // Title and note edits saved from this card, until the to-do's own copy carries them: Start
-  // reads the to-do through them, so an edit saved by that same press still reaches the agent.
-  const savedTextRef = useRef<{ title?: string; notes?: string }>({});
+  // Title and note edits saved here that the to-do's copy doesn't show yet (see SavedTaskText).
+  // The card stays mounted across selections, so they are tied to the to-do they were for.
+  const savedTextRef = useRef<SavedTaskText | null>(null);
   useEffect(() => {
-    savedTextRef.current = {};
-  }, [todo.title, todo.notes]);
+    savedTextRef.current = pruneSavedTaskText(savedTextRef.current, todo);
+  }, [todo]);
   const saveText = (input: TodoUpdateInput) => {
-    if (input.title !== undefined) savedTextRef.current.title = input.title;
-    if (input.notes !== undefined) savedTextRef.current.notes = input.notes;
+    savedTextRef.current = recordSavedTaskText(savedTextRef.current, input);
     onUpdate(input);
   };
-  const readTodo = (): Todo => ({ ...todo, ...savedTextRef.current });
+  const readTodo = (): Todo => withSavedTaskText(todo, savedTextRef.current);
 
   return (
     <section

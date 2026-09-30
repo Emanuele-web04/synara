@@ -9,10 +9,13 @@ import {
   describeTaskMeta,
   formatDueLabel,
   NEEDS_ANSWER_DETAIL,
+  pruneSavedTaskText,
+  recordSavedTaskText,
   resolveDuePreset,
   summarizeTaskList,
   UNSAVED_TODO_UPDATED_AT,
   type TaskRowModel,
+  withSavedTaskText,
 } from "./tasks.logic";
 
 function todo(overrides: Omit<Partial<Todo>, "id"> & { id: string }): Todo {
@@ -302,5 +305,38 @@ describe("applyTodoEvent", () => {
     list = applyTodoEvent(list, { type: "todo-deleted", todoId: older.id });
     list = applyTodoEvent(list, { type: "todo-upserted", todo: newer });
     expect(list.todos).toEqual([]);
+  });
+});
+
+describe("saved task text", () => {
+  const card = todo({ id: "todo-card", title: "Old title", notes: "" });
+  const other = todo({ id: "todo-other", title: "Old title", notes: "" });
+
+  it("reads an edit the to-do's copy doesn't show yet, only for that to-do", () => {
+    let saved = recordSavedTaskText(null, { id: card.id, notes: "Use the staging key" });
+    saved = recordSavedTaskText(saved, { id: card.id, title: "New title" });
+    expect(withSavedTaskText(card, saved)).toMatchObject({
+      title: "New title",
+      notes: "Use the staging key",
+    });
+    // Same title and notes, but another to-do: nothing carries over.
+    expect(withSavedTaskText(other, saved)).toBe(other);
+    expect(pruneSavedTaskText(saved, other)).toBeNull();
+  });
+
+  it("keeps an edit until the to-do's copy shows it, whatever else changes", () => {
+    const saved = recordSavedTaskText(null, { id: card.id, title: "New title" });
+    // Another field changed first: the unsaved title stays.
+    expect(pruneSavedTaskText(saved, { ...card, notes: "From another window" })).toEqual(saved);
+    expect(pruneSavedTaskText(saved, { ...card, title: "New title" })).toBeNull();
+  });
+
+  it("starts over when an edit is for another to-do", () => {
+    const saved = recordSavedTaskText(null, { id: card.id, notes: "For the card" });
+    expect(recordSavedTaskText(saved, { id: other.id, title: "Other" })).toEqual({
+      id: other.id,
+      title: "Other",
+    });
+    expect(recordSavedTaskText(saved, { id: card.id, priority: "high" })).toBe(saved);
   });
 });

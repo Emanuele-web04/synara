@@ -1,7 +1,7 @@
 // FILE: tasks.logic.ts
 // Purpose: Pure derivation for the Tasks view — a to-do's status from its linked agent
 //          chat, grouping and ordering, due-date labels, and the React Query cache
-//          reducer for the live to-do event stream.
+//          reducer for the live to-do event stream, and the text a delegation sends.
 // Layer: UI logic (no React, no stores) so the task math stays unit-testable.
 // Exports: deriveTaskStatus, buildTaskSections, applyTodoEvent, due-date helpers,
 //          priority metadata.
@@ -13,6 +13,7 @@ import type {
   TodoListResult,
   TodoPriority,
   TodoStreamEvent,
+  TodoUpdateInput,
 } from "@synara/contracts";
 
 import { formatRelativeTime } from "~/lib/relativeTime";
@@ -473,6 +474,52 @@ export function applyTodoEvent(
       markTodoDeleted(event.todoId);
       return { todos: base.todos.filter((todo) => todo.id !== event.todoId) };
   }
+}
+
+/**
+ * Title and note edits the card saved for one to-do that its own copy may not show yet (the
+ * optimistic write lands a moment later). Start reads the to-do through them, so an edit
+ * saved by that same press still reaches the agent.
+ */
+export interface SavedTaskText {
+  readonly id: TodoId;
+  readonly title?: string;
+  readonly notes?: string;
+}
+
+function savedTextFields(title: string | undefined, notes: string | undefined) {
+  return { ...(title === undefined ? {} : { title }), ...(notes === undefined ? {} : { notes }) };
+}
+
+/** Records a saved title or note, starting over when the edit is for another to-do. */
+export function recordSavedTaskText(
+  saved: SavedTaskText | null,
+  input: TodoUpdateInput,
+): SavedTaskText | null {
+  if (input.title === undefined && input.notes === undefined) return saved;
+  const current = saved?.id === input.id ? saved : null;
+  return {
+    id: input.id,
+    ...savedTextFields(input.title ?? current?.title, input.notes ?? current?.notes),
+  };
+}
+
+/** Keeps only the edits `todo` doesn't show yet; none once another to-do is selected. */
+export function pruneSavedTaskText(
+  saved: SavedTaskText | null,
+  todo: Pick<Todo, "id" | "title" | "notes">,
+): SavedTaskText | null {
+  if (!saved || saved.id !== todo.id) return null;
+  const title = saved.title === todo.title ? undefined : saved.title;
+  const notes = saved.notes === todo.notes ? undefined : saved.notes;
+  if (title === undefined && notes === undefined) return null;
+  return { id: saved.id, ...savedTextFields(title, notes) };
+}
+
+/** The to-do as last saved from the card. */
+export function withSavedTaskText(todo: Todo, saved: SavedTaskText | null): Todo {
+  if (!saved || saved.id !== todo.id) return todo;
+  return { ...todo, ...savedTextFields(saved.title, saved.notes) };
 }
 
 /** Prompt handed to the agent when a to-do is delegated. */
