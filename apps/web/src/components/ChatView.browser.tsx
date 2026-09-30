@@ -2899,7 +2899,7 @@ describe("ChatView transcript geometry (full app)", () => {
     expect(
       medianRatio,
       `Issue #550 benchmark: ${JSON.stringify({ reports, ratios })}`,
-    ).toBeLessThan(3);
+    ).toBeLessThan(0);
   });
 
   it("cancels a multi-question prompt with choices through the orchestration command", async () => {
