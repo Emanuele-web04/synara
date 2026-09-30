@@ -21,13 +21,13 @@ describe("resolveGroupCoordinatorRowLabel", () => {
     expect(
       resolveGroupCoordinatorRowLabel({
         configured: true,
-        coordinatorName: "Group lead",
+        coordinatorName: "Hub lead",
         groupName: "Alpha",
       }),
-    ).toBe("Group lead");
+    ).toBe("Hub lead");
   });
 
-  it("defaults to the group name when the stored name is the generated default", () => {
+  it("defaults to the hub name when the stored name is the generated default", () => {
     expect(
       resolveGroupCoordinatorRowLabel({
         configured: true,
@@ -63,7 +63,7 @@ describe("resolveGroupCoordinatorRowLabel", () => {
 });
 
 describe("resolveGroupCoordinatorDisplayName", () => {
-  it("maps the legacy '<title> Coordinator' default onto the group name", () => {
+  it("maps the legacy '<title> Coordinator' default onto the hub name", () => {
     expect(
       resolveGroupCoordinatorDisplayName({
         coordinatorName: "Building Mars Coordinator",
@@ -107,14 +107,14 @@ describe("resolveGroupsListEmptyState", () => {
     expect(resolveGroupsListEmptyState({ threadsHydrated: false, groupCount: 2 })).toBe("loading");
   });
 
-  it("reports no groups once hydrated and none exist", () => {
+  it("reports no hubs once hydrated and none exist", () => {
     expect(resolveGroupsListEmptyState({ threadsHydrated: true, groupCount: 0 })).toBe("no-groups");
     expect(resolveGroupsListEmptyState({ threadsHydrated: true, groupCount: 1 })).toBeNull();
   });
 });
 
 describe("resolveGroupChatTargetProjectId", () => {
-  it("targets the active project when it is a group", () => {
+  it("targets the active project when it is a hub", () => {
     expect(
       resolveGroupChatTargetProjectId({
         activeProject: { id: GROUP_B },
@@ -123,7 +123,7 @@ describe("resolveGroupChatTargetProjectId", () => {
     ).toBe(GROUP_B);
   });
 
-  it("falls back to the first group when the active project is ordinary or absent", () => {
+  it("falls back to the first hub when the active project is ordinary or absent", () => {
     expect(
       resolveGroupChatTargetProjectId({
         activeProject: { id: ORDINARY },
@@ -138,7 +138,7 @@ describe("resolveGroupChatTargetProjectId", () => {
     ).toBe(GROUP_B);
   });
 
-  it("returns null when no group exists", () => {
+  it("returns null when no hub exists", () => {
     expect(resolveGroupChatTargetProjectId({ activeProject: null, groupProjects: [] })).toBeNull();
   });
 });

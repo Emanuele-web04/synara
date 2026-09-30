@@ -354,7 +354,7 @@ function SettingsRouteView() {
       : []),
     ...(settings.showChatsSection !== defaults.showChatsSection ? ["Chats section"] : []),
     ...(GROUPS_ON && settings.showGroupsSection !== defaults.showGroupsSection
-      ? ["Groups section"]
+      ? ["Hubs section"]
       : []),
     ...(settings.showAutomationRunThreads !== defaults.showAutomationRunThreads
       ? ["Automation runs"]
@@ -717,10 +717,10 @@ function SettingsRouteView() {
         {GROUPS_ON
           ? renderBooleanSettingRow({
               settingKey: "showGroupsSection",
-              title: "Groups",
-              description: "Show the Groups tab in the sidebar switcher.",
-              resetLabel: "groups section",
-              ariaLabel: "Show the Groups section in the sidebar",
+              title: "Hubs",
+              description: "Show the Hubs tab in the sidebar switcher.",
+              resetLabel: "hubs section",
+              ariaLabel: "Show the Hubs section in the sidebar",
             })
           : null}
 

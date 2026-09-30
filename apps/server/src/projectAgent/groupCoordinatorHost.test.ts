@@ -15,7 +15,7 @@ describe("isGroupCoordinatorHostProject", () => {
     studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
   };
 
-  it("accepts a group under the Groups root", () => {
+  it("accepts a hub under the Hubs root", () => {
     expect(
       isGroupCoordinatorHostProject({
         kind: "group",
@@ -45,7 +45,7 @@ describe("isGroupCoordinatorHostProject", () => {
     ).toBe(false);
   });
 
-  it("rejects a group row outside the Groups root", () => {
+  it("rejects a hub row outside the Hubs root", () => {
     expect(
       isGroupCoordinatorHostProject({
         kind: "group",
@@ -74,7 +74,7 @@ describe("coordinator welcome copy", () => {
   });
 
   it("substitutes the name into the greeting", () => {
-    expect(coordinatorWelcomeText("Dilip")).toContain("Hi Dilip, welcome to your new group.");
+    expect(coordinatorWelcomeText("Dilip")).toContain("Hi Dilip, welcome to your new hub.");
   });
 
   it("derives a stable welcome message id from the coordinator thread", () => {

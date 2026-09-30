@@ -1269,7 +1269,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
             return ordinary
               ? Effect.succeed(project)
               : Effect.fail(
-                  fail("Only ordinary repositories can be linked to a group.", "forbidden"),
+                  fail("Only ordinary repositories can be linked to a hub.", "forbidden"),
                 );
           },
         }),
@@ -1300,7 +1300,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
             });
             return allowed
               ? Effect.succeed(project)
-              : Effect.fail(fail("The coordinator is only available on groups.", "forbidden"));
+              : Effect.fail(fail("The coordinator is only available on hubs.", "forbidden"));
           },
         }),
       ),
@@ -1806,7 +1806,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         stateDir: serverConfig.stateDir,
         projectId,
         libraryPath: agentConfig?.libraryPath,
-      }).pipe(Effect.mapError(toServiceError("Failed to resolve the group library.")));
+      }).pipe(Effect.mapError(toServiceError("Failed to resolve the hub library.")));
       yield* assertLibraryRootLocation({
         root,
         stateDir: serverConfig.stateDir,
@@ -1814,7 +1814,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         studioWorkspaceRoot: serverConfig.studioWorkspaceRoot,
         isCustomPath: agentConfig?.libraryPath !== undefined,
         projectId,
-      }).pipe(Effect.mapError(toServiceError("Failed to resolve the group library.")));
+      }).pipe(Effect.mapError(toServiceError("Failed to resolve the hub library.")));
       return {
         root,
         agentConfig,
@@ -1845,7 +1845,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
     Effect.gen(function* () {
       const heads = yield* repository
         .listDocumentHeads(projectId)
-        .pipe(Effect.mapError(toServiceError("Failed to list group memory.")));
+        .pipe(Effect.mapError(toServiceError("Failed to list hub memory.")));
       const paths = heads
         .map((head) => head.logicalPath)
         .filter((logicalPath) => GROUP_MEMORY_NOTE_PATTERN.test(logicalPath));
@@ -1854,7 +1854,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
       }
       return yield* repository
         .readDocumentRevisions({ projectId, logicalPaths: paths })
-        .pipe(Effect.mapError(toServiceError("Failed to read group memory.")));
+        .pipe(Effect.mapError(toServiceError("Failed to read hub memory.")));
     });
 
   // One `- [title](path) — summary` line per note in MEMORY.md, the index
@@ -1920,7 +1920,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
     Effect.gen(function* () {
       if (principal.kind === "user") {
         return yield* Effect.fail(
-          fail("The library add tool runs from a group thread or the coordinator.", "forbidden"),
+          fail("The library add tool runs from a hub thread or the coordinator.", "forbidden"),
         );
       }
       const shell = yield* snapshotQuery
@@ -1987,13 +1987,13 @@ export const makeProjectAgentService = Effect.gen(function* () {
     Effect.gen(function* () {
       const index = yield* repository
         .listThreadIndex(input.projectId)
-        .pipe(Effect.mapError(toServiceError("Failed to load group threads.")));
+        .pipe(Effect.mapError(toServiceError("Failed to load hub threads.")));
       const groupThreads = yield* projectionThreads
         .listByProjectId({ projectId: input.projectId })
-        .pipe(Effect.mapError(toServiceError("Failed to load group threads.")));
+        .pipe(Effect.mapError(toServiceError("Failed to load hub threads.")));
       const tasks = yield* repository
         .listTasks({ projectId: input.projectId, includeArchived: true, limit: 500 })
-        .pipe(Effect.mapError(toServiceError("Failed to load group tasks.")));
+        .pipe(Effect.mapError(toServiceError("Failed to load hub tasks.")));
       const workers = yield* repository
         .listManagedWorkers(input.projectId)
         .pipe(Effect.mapError(toServiceError("Failed to load managed workers.")));
@@ -2016,7 +2016,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
       }
       const shells = yield* snapshotQuery
         .getThreadShellsByIds([...ids])
-        .pipe(Effect.mapError(toServiceError("Failed to load group threads.")));
+        .pipe(Effect.mapError(toServiceError("Failed to load hub threads.")));
       return { index, tasks, shells };
     });
 
@@ -2035,7 +2035,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
           createdAt: isoNow(),
         } as OrchestrationCommand);
         return options?.stopOnError === true
-          ? dispatch.pipe(Effect.mapError(toServiceError("Failed to update group threads.")))
+          ? dispatch.pipe(Effect.mapError(toServiceError("Failed to update hub threads.")))
           : dispatch.pipe(Effect.catch(() => Effect.void));
       },
       { discard: true },
@@ -2047,7 +2047,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
     Effect.gen(function* () {
       const listed = yield* automationService
         .list({ projectId })
-        .pipe(Effect.mapError(toServiceError("Failed to load group automations.")));
+        .pipe(Effect.mapError(toServiceError("Failed to load hub automations.")));
       const enabledIds = listed.definitions
         .filter((definition) => definition.enabled && definition.archivedAt === null)
         .map((definition) => definition.id);
@@ -2344,7 +2344,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
       if (existingReceipt) return existingReceipt;
       yield* resolveGroupCoordinatorProject(input.projectId);
       if (input.linkedProjectId === input.projectId) {
-        return yield* Effect.fail(fail("A group cannot link to itself.", "invalid"));
+        return yield* Effect.fail(fail("A hub cannot link to itself.", "invalid"));
       }
       const linked = yield* requireOrdinaryRepoProject(input.linkedProjectId);
       const currentIds = yield* repository
@@ -2681,12 +2681,12 @@ export const makeProjectAgentService = Effect.gen(function* () {
                     }),
                   ).pipe(
                     Effect.mapError((cause) =>
-                      fail(`Could not move the group library: ${cause.message}`, "invalid"),
+                      fail(`Could not move the hub library: ${cause.message}`, "invalid"),
                     ),
                   );
                   if (moveResult.moved) {
                     yield* Effect.logInfo(
-                      `moved the group library from ${previousRoot} to ${nextRoot}`,
+                      `moved the hub library from ${previousRoot} to ${nextRoot}`,
                     );
                   }
                   return yield* repository
@@ -2858,7 +2858,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
       Effect.gen(function* () {
         if (!isCoordinatorPrincipal(principal, input.projectId)) {
           return yield* Effect.fail(
-            fail("Only the group's coordinator can link a repository.", "forbidden"),
+            fail("Only the hub's coordinator can link a repository.", "forbidden"),
           );
         }
         const linkedProjectId = yield* Effect.gen(function* () {
@@ -2890,7 +2890,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         yield* requireProjectAccess(principal, input.projectId);
         if (principal.kind === "user" || principal.kind === "unmanaged") {
           return yield* Effect.fail(
-            fail("Only group threads and the coordinator can save group memory.", "forbidden"),
+            fail("Only hub threads and the coordinator can save hub memory.", "forbidden"),
           );
         }
         const existingReceipt = yield* replayReceipt(
@@ -2988,7 +2988,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         yield* requireProjectAccess(principal, input.projectId);
         if (principal.kind === "user" || principal.kind === "unmanaged") {
           return yield* Effect.fail(
-            fail("Only group threads and the coordinator can remove group memory.", "forbidden"),
+            fail("Only hub threads and the coordinator can remove hub memory.", "forbidden"),
           );
         }
         const existingReceipt = yield* replayReceipt(
@@ -3003,15 +3003,12 @@ export const makeProjectAgentService = Effect.gen(function* () {
         });
         if (!GROUP_MEMORY_NOTE_PATTERN.test(logicalPath)) {
           return yield* Effect.fail(
-            fail(
-              `Only group memory notes (memory/<date>-<slug>.md) can be forgotten.`,
-              "forbidden",
-            ),
+            fail(`Only hub memory notes (memory/<date>-<slug>.md) can be forgotten.`, "forbidden"),
           );
         }
         const head = yield* repository
           .getDocumentHead(input.projectId, logicalPath)
-          .pipe(Effect.mapError(toServiceError("Failed to load group memory.")));
+          .pipe(Effect.mapError(toServiceError("Failed to load hub memory.")));
         if (Option.isNone(head)) {
           const result = { deleted: false };
           yield* storeReceipt(input.requestId, input.projectId, "forget", result);
@@ -3019,7 +3016,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         }
         yield* repository
           .deleteDocument({ projectId: input.projectId, logicalPath })
-          .pipe(Effect.mapError(toServiceError("Failed to remove group memory.")));
+          .pipe(Effect.mapError(toServiceError("Failed to remove hub memory.")));
         yield* Effect.tryPromise({
           try: () =>
             fs.rm(materializeDocumentPath(serverConfig.stateDir, input.projectId, logicalPath), {
@@ -3061,9 +3058,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
               Effect.gen(function* () {
                 yield* ensureLibraryRepo(git, root, input.projectId, {
                   isManaged: libraryIsManaged,
-                }).pipe(Effect.mapError(toServiceError("Failed to prepare the group library.")));
+                }).pipe(Effect.mapError(toServiceError("Failed to prepare the hub library.")));
                 return yield* listLibraryEntries(root, input.relativePath).pipe(
-                  Effect.mapError(toServiceError("Failed to list the group library.")),
+                  Effect.mapError(toServiceError("Failed to list the hub library.")),
                 );
               }),
             );
@@ -3095,7 +3092,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
                 const caller = yield* resolveLibraryCallerSource(principal, input.sourcePath);
                 yield* ensureLibraryRepo(git, root, input.projectId, {
                   isManaged: libraryIsManaged,
-                }).pipe(Effect.mapError(toServiceError("Failed to prepare the group library.")));
+                }).pipe(Effect.mapError(toServiceError("Failed to prepare the hub library.")));
                 yield* Effect.tryPromise({
                   try: () => fs.lstat(caller.source),
                   catch: () =>
@@ -3123,13 +3120,13 @@ export const makeProjectAgentService = Effect.gen(function* () {
                   catch: (cause) =>
                     cause instanceof LibraryAddTooLargeError
                       ? fail(cause.message, "invalid")
-                      : toServiceError("Failed to copy into the group library.")(cause),
+                      : toServiceError("Failed to copy into the hub library.")(cause),
                 });
                 const { commitSha } = yield* commitLibraryChange(
                   git,
                   root,
                   `Add ${relativePath} from ${caller.threadTitle}`,
-                ).pipe(Effect.mapError(toServiceError("Failed to commit the group library.")));
+                ).pipe(Effect.mapError(toServiceError("Failed to commit the hub library.")));
                 return {
                   result: { path: relativePath, commitSha },
                   threadTitle: caller.threadTitle,
@@ -3158,7 +3155,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
       Effect.gen(function* () {
         if (!isCoordinatorPrincipal(principal, input.projectId)) {
           return yield* Effect.fail(
-            fail("Only the group's coordinator can list group threads.", "forbidden"),
+            fail("Only the hub's coordinator can list hub threads.", "forbidden"),
           );
         }
         yield* resolveGroupCoordinatorProject(input.projectId);
@@ -3185,7 +3182,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         );
         const projectShells = yield* snapshotQuery
           .getProjectShellsByIds([...new Set(shells.map((shell) => shell.projectId))])
-          .pipe(Effect.mapError(toServiceError("Failed to load group projects.")));
+          .pipe(Effect.mapError(toServiceError("Failed to load hub projects.")));
         const projectTitleById = new Map(projectShells.map((shell) => [shell.id, shell.title]));
         const rows: ProjectAgentGroupThreadEntry[] = shells.map((shell) => {
           const task = taskByThreadId.get(shell.id) ?? null;
@@ -3238,7 +3235,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
       withProjectLock(
         input.projectId,
         Effect.gen(function* () {
-          yield* requireUserLifecycleAction("Pausing a group", principal);
+          yield* requireUserLifecycleAction("Pausing a hub", principal);
           const existingReceipt = yield* replayReceipt(
             input.requestId,
             input.projectId,
@@ -3263,7 +3260,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
                 },
                 config.revision,
               )
-              .pipe(Effect.mapError(toServiceError("Failed to pause the group.")));
+              .pipe(Effect.mapError(toServiceError("Failed to pause the hub.")));
             yield* publish({ type: "config-upserted", config: saved });
             // Interrupt live turns on the coordinator and member threads so a
             // paused group stops producing work immediately.
@@ -3296,7 +3293,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
               goalId: null,
               taskId: null,
               source: null,
-              summary: "Paused group.",
+              summary: "Paused hub.",
               createdAt: isoNow(),
             });
           }
@@ -3311,7 +3308,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const overview = yield* withProjectLock(
           input.projectId,
           Effect.gen(function* () {
-            yield* requireUserLifecycleAction("Resuming a group", principal);
+            yield* requireUserLifecycleAction("Resuming a hub", principal);
             const existingReceipt = yield* replayReceipt(
               input.requestId,
               input.projectId,
@@ -3335,7 +3332,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
                   },
                   config.revision,
                 )
-                .pipe(Effect.mapError(toServiceError("Failed to resume the group.")));
+                .pipe(Effect.mapError(toServiceError("Failed to resume the hub.")));
               yield* publish({ type: "config-upserted", config: saved });
               yield* appendActivity({
                 projectId: input.projectId,
@@ -3345,7 +3342,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
                 goalId: null,
                 taskId: null,
                 source: null,
-                summary: "Resumed group.",
+                summary: "Resumed hub.",
                 createdAt: isoNow(),
               });
             }
@@ -3364,7 +3361,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
       withProjectLock(
         input.projectId,
         Effect.gen(function* () {
-          yield* requireUserLifecycleAction("Archiving a group", principal);
+          yield* requireUserLifecycleAction("Archiving a hub", principal);
           const existingReceipt = yield* replayReceipt(
             input.requestId,
             input.projectId,
@@ -3389,7 +3386,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
                 },
                 config.revision,
               )
-              .pipe(Effect.mapError(toServiceError("Failed to archive the group.")));
+              .pipe(Effect.mapError(toServiceError("Failed to archive the hub.")));
             yield* publish({ type: "config-upserted", config: saved });
             const { shells } = yield* listGroupThreadShells({
               projectId: input.projectId,
@@ -3416,7 +3413,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
               goalId: null,
               taskId: null,
               source: null,
-              summary: "Archived group.",
+              summary: "Archived hub.",
               createdAt: isoNow(),
             });
           }
@@ -3431,7 +3428,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const overview = yield* withProjectLock(
           input.projectId,
           Effect.gen(function* () {
-            yield* requireUserLifecycleAction("Unarchiving a group", principal);
+            yield* requireUserLifecycleAction("Unarchiving a hub", principal);
             const existingReceipt = yield* replayReceipt(
               input.requestId,
               input.projectId,
@@ -3458,7 +3455,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
                   },
                   config.revision,
                 )
-                .pipe(Effect.mapError(toServiceError("Failed to unarchive the group.")));
+                .pipe(Effect.mapError(toServiceError("Failed to unarchive the hub.")));
               yield* publish({ type: "config-upserted", config: saved });
               const { shells } = yield* listGroupThreadShells({
                 projectId: input.projectId,
@@ -3483,7 +3480,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
                 goalId: null,
                 taskId: null,
                 source: null,
-                summary: "Unarchived group.",
+                summary: "Unarchived hub.",
                 createdAt: isoNow(),
               });
             }
@@ -3511,7 +3508,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const config = yield* requireConfig(input.projectId);
         if (config.pausedAt !== null || config.archivedAt !== null) {
           return yield* Effect.fail(
-            fail("Resume or unarchive the group before restarting its coordinator.", "conflict"),
+            fail("Resume or unarchive the hub before restarting its coordinator.", "conflict"),
           );
         }
         yield* orchestrationEngine
@@ -3547,7 +3544,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
       withProjectLock(
         input.projectId,
         Effect.gen(function* () {
-          yield* requireUserLifecycleAction("Deleting a group", principal);
+          yield* requireUserLifecycleAction("Deleting a hub", principal);
           const existingReceipt = yield* replayReceipt(
             input.requestId,
             input.projectId,
@@ -3557,7 +3554,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
           const project = yield* resolveGroupCoordinatorProject(input.projectId);
           if (input.confirmName.trim() !== project.title.trim()) {
             return yield* Effect.fail(
-              fail("Type the group's name exactly to confirm deletion.", "forbidden"),
+              fail("Type the hub's name exactly to confirm deletion.", "forbidden"),
             );
           }
           const result = yield* withLibraryRootLock(
@@ -3583,7 +3580,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
                 stateDir: serverConfig.stateDir,
                 projectId: input.projectId,
                 libraryPath: agentConfig?.libraryPath,
-              }).pipe(Effect.mapError(toServiceError("Failed to resolve the group library.")));
+              }).pipe(Effect.mapError(toServiceError("Failed to resolve the hub library.")));
               const libraryIsCustom = agentConfig?.libraryPath !== undefined;
               if (!libraryIsCustom) {
                 yield* assertLibraryRootLocation({
@@ -3593,7 +3590,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
                   studioWorkspaceRoot: serverConfig.studioWorkspaceRoot,
                   isCustomPath: false,
                   projectId: input.projectId,
-                }).pipe(Effect.mapError(toServiceError("Failed to resolve the group library.")));
+                }).pipe(Effect.mapError(toServiceError("Failed to resolve the hub library.")));
               }
               if (input.requireEmpty === true) {
                 // The dialog-side "still empty" probe is a hint, not a guard —
@@ -3615,7 +3612,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
                   },
                   catch: () =>
                     new ProjectAgentServiceError({
-                      message: "Could not inspect the group's library.",
+                      message: "Could not inspect the hub's library.",
                       code: "invalid",
                     }),
                 });
@@ -3628,7 +3625,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
                             ? Effect.succeed<ReadonlyArray<LibraryEntry>>([])
                             : Effect.fail(error),
                         ),
-                        Effect.mapError(toServiceError("Failed to list the group library.")),
+                        Effect.mapError(toServiceError("Failed to list the hub library.")),
                       );
                 // The seeded Artifacts/ scaffold (holding only the marker /
                 // keep files listLibraryEntries filters out) is not content —
@@ -3647,13 +3644,13 @@ export const makeProjectAgentService = Effect.gen(function* () {
                         ? Effect.succeed<ReadonlyArray<LibraryEntry>>([])
                         : Effect.fail(error),
                     ),
-                    Effect.mapError(toServiceError("Failed to list the group library.")),
+                    Effect.mapError(toServiceError("Failed to list the hub library.")),
                   );
                   libraryEmpty = artifactsEntries.length === 0;
                 }
                 const documentHeads = yield* repository
                   .listDocumentHeads(input.projectId)
-                  .pipe(Effect.mapError(toServiceError("Failed to load group documents.")));
+                  .pipe(Effect.mapError(toServiceError("Failed to load hub documents.")));
                 const seedContentByPath = new Map(
                   SEED_DOCUMENTS.map((seed) => [seed.path, seed.content]),
                 );
@@ -3669,7 +3666,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
                 if (!threadsPristine || !documentsPristine || !libraryEmpty) {
                   return yield* Effect.fail(
                     fail(
-                      "This group is no longer empty — finish setup or delete it from the group's settings.",
+                      "This hub is no longer empty — finish setup or delete it from the hub's settings.",
                       "conflict",
                     ),
                   );
@@ -3694,12 +3691,12 @@ export const makeProjectAgentService = Effect.gen(function* () {
                   projectId: input.projectId,
                   createdAt: isoNow(),
                 } as OrchestrationCommand)
-                .pipe(Effect.mapError(toServiceError("Failed to delete the group project.")));
+                .pipe(Effect.mapError(toServiceError("Failed to delete the hub project.")));
               // Only once the project is gone: automations, coordinator rows,
               // the context mirror, and the managed library come down too.
               const listed = yield* automationService
                 .list({ projectId: input.projectId, includeArchived: true })
-                .pipe(Effect.mapError(toServiceError("Failed to load group automations.")));
+                .pipe(Effect.mapError(toServiceError("Failed to load hub automations.")));
               for (const definition of listed.definitions) {
                 yield* automationService
                   .delete({ id: definition.id })
@@ -3707,7 +3704,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
               }
               yield* repository
                 .deleteProjectData(input.projectId)
-                .pipe(Effect.mapError(toServiceError("Failed to delete group coordinator data.")));
+                .pipe(Effect.mapError(toServiceError("Failed to delete hub coordinator data.")));
               let libraryLeftOnDiskPath: string | null = null;
               if (libraryIsCustom) {
                 // A user-chosen library folder is never moved or deleted.
@@ -3727,7 +3724,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
                     recursive: true,
                     force: true,
                   }),
-                catch: toServiceError("Failed to remove group context files."),
+                catch: toServiceError("Failed to remove hub context files."),
               });
               // The managed group workspace folder only gets removed when
               // nothing but Synara-generated instructions remain inside; any
@@ -4707,7 +4704,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const memoryIndexText =
           Option.isSome(memoryIndex) && memoryIndex.value.content.trim().length > 0
             ? memoryIndex.value.content.trim()
-            : "Empty. Save group-wide memory with synara_project_remember.";
+            : "Empty. Save hub-wide memory with synara_project_remember.";
         const groupLibraryRoot = Option.isSome(config)
           ? yield* resolveGroupLibraryRoot(principal.projectId)
               .pipe(Effect.map(({ root }) => root))
@@ -4749,7 +4746,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         // reports, memory files, decisions, tasks) trails and truncates first.
         const budget = truncateToContextBudget([
           { label: "Instructions", text: packet.instructions },
-          { label: "Group memory index", text: memoryIndexText },
+          { label: "Hub memory index", text: memoryIndexText },
           ...(isCoordinatorLike
             ? [
                 {
@@ -4774,8 +4771,8 @@ export const makeProjectAgentService = Effect.gen(function* () {
             ? []
             : [
                 {
-                  label: "Group tools",
-                  text: "Save shared group memory with synara_project_remember; deliver files to the group Library with synara_project_library_add — sources must be inside your own workspace.",
+                  label: "Hub tools",
+                  text: "Save shared hub memory with synara_project_remember; deliver files to the hub Library with synara_project_library_add — sources must be inside your own workspace.",
                 },
               ]),
           {
@@ -4827,10 +4824,10 @@ export const makeProjectAgentService = Effect.gen(function* () {
           },
         ]);
         return [
-          "Group context packet (authoritative durable state; additional documents via synara_project_read_document):",
+          "Hub context packet (authoritative durable state; additional documents via synara_project_read_document):",
           principal.kind === "coordinator"
             ? "This thread opened with a welcome message from you; the user may be replying to it."
-            : "You are a member thread of this group, not its coordinator — the coordinator's welcome lives on the coordinator's own thread.",
+            : "You are a member thread of this hub, not its coordinator — the coordinator's welcome lives on the coordinator's own thread.",
           budget.packet,
           packet.historicalCoverage === "partial"
             ? "Historical coverage is partial; remaining threads are not yet summarized."
@@ -5094,7 +5091,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
                   goalId: null,
                   taskId: null,
                   source: null,
-                  summary: "Coordinator disabled: this project is not a group.",
+                  summary: "Coordinator disabled: this project is not a hub.",
                   createdAt: now,
                 });
               }
@@ -6090,7 +6087,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         if (Option.isSome(hostProject)) {
           const config = yield* repository
             .getConfig(shell.value.projectId)
-            .pipe(Effect.mapError(toServiceError("Failed to resolve group coordinator.")));
+            .pipe(Effect.mapError(toServiceError("Failed to resolve hub coordinator.")));
           if (Option.isSome(config)) {
             return {
               kind: "group-member" as const,
@@ -6104,11 +6101,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
         // the thread index recorded them.
         const configs = yield* repository
           .listConfigs()
-          .pipe(Effect.mapError(toServiceError("Failed to resolve group membership.")));
+          .pipe(Effect.mapError(toServiceError("Failed to resolve hub membership.")));
         for (const config of configs) {
           const index = yield* repository
             .listThreadIndex(config.projectId)
-            .pipe(Effect.mapError(toServiceError("Failed to resolve group membership.")));
+            .pipe(Effect.mapError(toServiceError("Failed to resolve hub membership.")));
           if (index.some((entry) => entry.threadId === threadId)) {
             return {
               kind: "group-member" as const,
@@ -6190,7 +6187,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
         const allowed = shells.map((shell) => `${shell.title} (${shell.id})`).join(", ");
         return yield* Effect.fail(
           fail(
-            `The coordinator can only create threads in this group or its linked repositories. Allowed: ${allowed || String(caller.projectId)}.`,
+            `The coordinator can only create threads in this hub or its linked repositories. Allowed: ${allowed || String(caller.projectId)}.`,
             "forbidden",
           ),
         );
@@ -6203,19 +6200,16 @@ export const makeProjectAgentService = Effect.gen(function* () {
       Effect.gen(function* () {
         const config = yield* repository
           .getConfigByCoordinatorThread(input.threadId)
-          .pipe(Effect.mapError(toServiceError("Failed to load group coordinator state.")));
+          .pipe(Effect.mapError(toServiceError("Failed to load hub coordinator state.")));
         if (Option.isNone(config)) return;
         if (config.value.pausedAt !== null) {
           return yield* Effect.fail(
-            fail("This group is paused — resume it before driving the coordinator.", "conflict"),
+            fail("This hub is paused — resume it before driving the coordinator.", "conflict"),
           );
         }
         if (config.value.archivedAt !== null) {
           return yield* Effect.fail(
-            fail(
-              "This group is archived — unarchive it before driving the coordinator.",
-              "conflict",
-            ),
+            fail("This hub is archived — unarchive it before driving the coordinator.", "conflict"),
           );
         }
       }),
