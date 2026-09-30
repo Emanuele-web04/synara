@@ -16,6 +16,7 @@ import type {
   ThreadId,
 } from "@synara/contracts";
 
+import { composerDraftsMatchForCleanup } from "../composerDraftDomain";
 import { useComposerDraftStore, type DraftThreadEnvMode } from "../composerDraftStore";
 import {
   dispatchDraftThread,
@@ -91,7 +92,7 @@ export async function createAndDispatchDraftThread(
       const currentStore = useComposerDraftStore.getState();
       if (
         !isRequestOutcomeUnknown(error) &&
-        currentStore.draftsByThreadId[threadId] === createdComposerState
+        composerDraftsMatchForCleanup(currentStore.draftsByThreadId[threadId], createdComposerState)
       ) {
         currentStore.clearDraftThread(threadId);
       }

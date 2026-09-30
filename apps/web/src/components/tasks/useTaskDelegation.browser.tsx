@@ -141,6 +141,7 @@ it.each(
         "unlink-retained",
         "unlink-confirmed",
         "edited-start-failure",
+        "persisted-start-failure",
         "edited-link",
       ] as const
     )
@@ -189,8 +190,11 @@ it.each(
       outcome === "unlink-unconfirmed" ||
       outcome === "unlink-retained" ||
       outcome === "unlink-confirmed" ||
-      outcome === "edited-start-failure";
+      outcome === "edited-start-failure" ||
+      outcome === "persisted-start-failure";
     transport.dispatch.mockImplementation(async () => {
+      if (outcome === "persisted-start-failure")
+        useComposerDraftStore.getState().clearPersistedAttachments(claimedThread!);
       if (outcome === "edited-start-failure") {
         // A user types in the open chat while its dispatch request is pending.
         useComposerDraftStore.getState().setPrompt(claimedThread!, "My next message");
@@ -211,6 +215,7 @@ it.each(
         outcome === "edited-link" ||
         outcome === "unlink-confirmed" ||
         outcome === "edited-start-failure" ||
+        outcome === "persisted-start-failure" ||
         ((outcome === "unlink-unconfirmed" || outcome === "unlink-retained") &&
           input.threadId !== null)
       )
