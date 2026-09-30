@@ -1,37 +1,42 @@
 // FILE: TaskQuickAdd.tsx
-// Purpose: The "New task" line at the top of the list: type a title, press Enter. Escape
-//          clears it; a title the server rejects comes back if nothing new was typed.
+// Purpose: The list's last row, where a new task is typed: Enter adds it, Tab adds it and
+//          opens its card with the cursor in the note (⌘↵ there hands it to an agent),
+//          Escape clears the line. A title the server
+//          rejects comes back if nothing new was typed.
 // Layer: Tasks UI component
 // Exports: TaskQuickAdd
 
 import { type KeyboardEvent, type RefObject, useState } from "react";
-
-import { PlusIcon } from "~/lib/icons";
-import { cn } from "~/lib/utils";
-import { TASK_LIST_INSET_CLASS } from "./taskListStyles";
 
 export function TaskQuickAdd({
   inputRef,
   onCreate,
 }: {
   inputRef: RefObject<HTMLInputElement | null>;
-  onCreate: (title: string, options: { onError: () => void }) => void;
+  /** `open` asks to open the new task's card right away (Tab). */
+  onCreate: (title: string, options: { open: boolean; onError: () => void }) => void;
 }) {
   const [draftTitle, setDraftTitle] = useState("");
 
-  const addTask = () => {
+  const addTask = (open: boolean) => {
     const title = draftTitle.trim();
-    if (title.length === 0) return;
+    if (title.length === 0) return false;
     setDraftTitle("");
     onCreate(title, {
+      open,
       // Give the typed title back if the server didn't take it and nothing new was typed.
       onError: () => setDraftTitle((current) => (current.length === 0 ? title : current)),
     });
+    return true;
   };
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+    if (event.nativeEvent.isComposing) return;
+    if (event.key === "Enter") {
       event.preventDefault();
-      addTask();
+      addTask(false);
+    } else if (event.key === "Tab" && !event.shiftKey) {
+      // An empty line keeps Tab's usual focus move.
+      if (addTask(true)) event.preventDefault();
     } else if (event.key === "Escape") {
       setDraftTitle("");
       event.currentTarget.blur();
@@ -39,22 +44,27 @@ export function TaskQuickAdd({
   };
 
   return (
-    <div
-      className={cn(
-        "flex h-10 items-center gap-2.5 border-b border-border px-5",
-        TASK_LIST_INSET_CLASS,
-      )}
-    >
-      <PlusIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground/70" />
+    <label className="flex min-h-10.5 items-center gap-3 rounded-xl px-3">
+      <svg viewBox="0 0 18 18" fill="none" aria-hidden className="size-4.5 shrink-0">
+        <circle
+          cx="9"
+          cy="9"
+          r="7.25"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeDasharray="2 3"
+          className="text-muted-foreground/45"
+        />
+      </svg>
       <input
         ref={inputRef}
         aria-label="New task"
-        placeholder="New task"
+        placeholder="Add a task, or press Tab to hand it to an agent"
         value={draftTitle}
         onChange={(event) => setDraftTitle(event.target.value)}
         onKeyDown={handleKeyDown}
-        className="font-system-ui min-w-0 flex-1 bg-transparent text-ui text-foreground outline-none placeholder:text-muted-foreground/70"
+        className="font-system-ui h-10 min-w-0 flex-1 bg-transparent text-ui text-foreground outline-none placeholder:text-muted-foreground/70"
       />
-    </div>
+    </label>
   );
 }

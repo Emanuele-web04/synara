@@ -26,9 +26,9 @@ using separate worktrees also have separate working directories and branches.
   Open threads appear as tabs across the top of the chat. The classic single-column sidebar remains
   available in Settings → General → Sidebar layout.
 - **Tasks** (Beta; Stable keeps Kanban) — a to-do list for anything you need to do, with or without
-  a project. Select a to-do to open its details, then **Delegate** it to an agent: pick the
+  a project. Select a to-do to open its floating card, then hand it to an agent with **Start**: pick the
   provider, model, and effort, the project or folder it works in, and a new or existing chat. The
-  to-do then follows the chat's status — Running, Needs you, Review when the agent finishes, or
+  agent receives the to-do's current title and note. The to-do then follows the chat's status — Running, Needs you, Review when the agent finishes, or
   Failed — and its details show the agent's recent activity, let you approve a pending request
   without opening the chat, and show the agent's latest reply for review before you mark it done. A
   List / Kanban switch in the header opens the Kanban board instead, and the Tasks entry remembers
