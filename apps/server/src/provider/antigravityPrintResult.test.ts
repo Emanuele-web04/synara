@@ -161,4 +161,48 @@ describe("Antigravity print result", () => {
       parseAntigravityPrintResult(encode([response, { event: "error", message: "" }])),
     ).toMatchObject({ completedResponse: false, state: "failed" });
   });
+
+  it("forwards cumulative result usage and the conversation id", () => {
+    expect(
+      parseAntigravityPrintResult(
+        encode([
+          response,
+          {
+            event: "result",
+            result: {
+              status: "SUCCESS",
+              conversation_id: " conversation-1 ",
+              usage: {
+                input_tokens: 80,
+                output_tokens: 20,
+                cache_read_tokens: 40,
+                thinking_tokens: 5,
+                total_tokens: 100,
+              },
+            },
+          },
+        ]),
+      ),
+    ).toMatchObject({
+      conversationId: "conversation-1",
+      usage: {
+        usedTokens: 0,
+        totalProcessedTokens: 100,
+        inputTokens: 80,
+        outputTokens: 20,
+        cachedInputTokens: 40,
+        reasoningOutputTokens: 5,
+      },
+    });
+  });
+
+  it("omits usage without a positive total", () => {
+    for (const usage of [undefined, {}, { total_tokens: 0 }, { input_tokens: 80 }]) {
+      const result = parseAntigravityPrintResult(
+        encode([response, { event: "result", result: { status: "SUCCESS", usage } }]),
+      );
+      expect(result).not.toHaveProperty("usage");
+      expect(result).not.toHaveProperty("conversationId");
+    }
+  });
 });
