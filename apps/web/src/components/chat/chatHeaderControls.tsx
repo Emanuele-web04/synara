@@ -363,13 +363,14 @@ export function SurfaceTabChip({
           type="button"
           className={cn(
             SURFACE_TAB_TRAILING_CLOSE_CLASS_NAME,
-            // Hidden but still hit-testable: a pointer always hovers (revealing it) before
-            // clicking, and after a close slides the next tab under the cursor the browser
-            // can lag a frame in re-evaluating :hover — a rapid second click must still
-            // close that tab rather than fall through and select it.
+            // Hidden but still hit-testable for a mouse: it always hovers (revealing it)
+            // before clicking, and after a close slides the next tab under the cursor the
+            // browser can lag a frame in re-evaluating :hover — a rapid second click must
+            // still close that tab rather than fall through and select it. A touch has no
+            // hover, so a tap on the hidden X selects the tab instead.
             active
               ? "opacity-100"
-              : "opacity-0 group-focus-within/dock-tab:opacity-100 group-hover/dock-tab:opacity-100",
+              : "opacity-0 group-focus-within/dock-tab:opacity-100 group-hover/dock-tab:opacity-100 pointer-coarse:pointer-events-none",
           )}
           aria-label={closeLabel}
           title={closeLabel}

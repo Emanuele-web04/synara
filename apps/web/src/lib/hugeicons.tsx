@@ -1,7 +1,8 @@
 // FILE: hugeicons.tsx
 // Purpose: The few Hugeicons the app uses (stroke · rounded), inlined as SVG so the icon
 //          package is not a dependency. Paths copied verbatim from
-//          @hugeicons/core-free-icons 4.3.5 (MIT, https://hugeicons.com).
+//          @hugeicons/core-free-icons 4.3.5 (MIT, https://hugeicons.com). To add one, print
+//          its entry with `node apps/web/scripts/hugeicon-snippet.mjs <icon-name>`.
 // Layer: Icon registry (re-exported from ~/lib/icons)
 
 import type { SVGProps } from "react";
@@ -14,7 +15,13 @@ interface HugeiconPath {
   round?: boolean;
 }
 
-function createHugeicon(displayName: string, paths: readonly HugeiconPath[]): LucideIcon {
+// Hugeicons draws a 1.5 stroke on a 24 grid, under 1px once shrunk to the 12–14px of
+// meta rows and menus; callers rendering one that small pass a heavier `strokeWidth`.
+function createHugeicon(
+  displayName: string,
+  paths: readonly HugeiconPath[],
+  options: { strokeWidth?: number } = {},
+): LucideIcon {
   function Hugeicon(props: SVGProps<SVGSVGElement>) {
     return (
       <svg
@@ -24,7 +31,7 @@ function createHugeicon(displayName: string, paths: readonly HugeiconPath[]): Lu
         viewBox="0 0 24 24"
         fill="none"
         stroke="currentColor"
-        strokeWidth={1.5}
+        strokeWidth={options.strokeWidth ?? 1.5}
         aria-hidden
         {...props}
       >
@@ -113,20 +120,27 @@ export const CollapseIcon = createHugeicon("CollapseIcon", [
   },
 ]);
 
-/** Merged pull request (`workflow-circle-06`): the PR-state glyph for "merged". */
-export const WorkflowCircle06Icon = createHugeicon("WorkflowCircle06Icon", [
-  {
-    d: "M9 5C9 6.65685 7.65685 8 6 8C4.34315 8 3 6.65685 3 5C3 3.34315 4.34315 2 6 2C7.65685 2 9 3.34315 9 5Z",
-  },
-  {
-    d: "M21 14C21 15.6569 19.6569 17 18 17C16.3431 17 15 15.6569 15 14C15 12.3431 16.3431 11 18 11C19.6569 11 21 12.3431 21 14Z",
-  },
-  {
-    d: "M9 19C9 20.6569 7.65685 22 6 22C4.34315 22 3 20.6569 3 19C3 17.3431 4.34315 16 6 16C7.65685 16 9 17.3431 9 19Z",
-  },
-  { d: "M6 8V16", round: true },
-  { d: "M15 14H12C8.68629 14 6 11.3137 6 8", round: true },
-]);
+/**
+ * Merged pull request (`workflow-circle-06`): the PR-state glyph for "merged". Always a
+ * small status glyph beside the heavier Central PR glyphs, so it defaults to their weight.
+ */
+export const WorkflowCircle06Icon = createHugeicon(
+  "WorkflowCircle06Icon",
+  [
+    {
+      d: "M9 5C9 6.65685 7.65685 8 6 8C4.34315 8 3 6.65685 3 5C3 3.34315 4.34315 2 6 2C7.65685 2 9 3.34315 9 5Z",
+    },
+    {
+      d: "M21 14C21 15.6569 19.6569 17 18 17C16.3431 17 15 15.6569 15 14C15 12.3431 16.3431 11 18 11C19.6569 11 21 12.3431 21 14Z",
+    },
+    {
+      d: "M9 19C9 20.6569 7.65685 22 6 22C4.34315 22 3 20.6569 3 19C3 17.3431 4.34315 16 6 16C7.65685 16 9 17.3431 9 19Z",
+    },
+    { d: "M6 8V16", round: true },
+    { d: "M15 14H12C8.68629 14 6 11.3137 6 8", round: true },
+  ],
+  { strokeWidth: 1.75 },
+);
 
 /** Hand off (`arrow-data-transfer-horizontal`): move a thread to another provider or worktree. */
 export const ArrowDataTransferHorizontalIcon = createHugeicon("ArrowDataTransferHorizontalIcon", [

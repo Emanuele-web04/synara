@@ -1,10 +1,22 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CHAT_SURFACE_HEADER_HEIGHT_PX,
+  getMacTrafficLightPosition,
   MAC_DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CSS_PX,
+  MAC_TRAFFIC_LIGHT_DOT_RADIUS_PX,
   resolveDesktopDipRectFromCssRect,
   resolveMacDesktopTopBarTrafficLightGutterCssPx,
 } from "./desktopChrome";
+
+describe("getMacTrafficLightPosition", () => {
+  it("centres the traffic-light dots on the header", () => {
+    // Native lights take whole points: an odd header height would round them half a
+    // point off the renderer's controls.
+    const { y } = getMacTrafficLightPosition();
+    expect(y + MAC_TRAFFIC_LIGHT_DOT_RADIUS_PX).toBe(CHAT_SURFACE_HEADER_HEIGHT_PX / 2);
+  });
+});
 
 describe("resolveMacDesktopTopBarTrafficLightGutterCssPx", () => {
   it("inverse-scales the gutter as zoom increases", () => {

@@ -25,6 +25,7 @@ import {
 } from "../openThreadTabs.logic";
 import { useOpenThreadTabsStore } from "../openThreadTabsStore";
 import { useStore } from "../store";
+import { selectThreadActivities } from "../threadDerivation";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { useThreadDetailPrewarm } from "../threadDetailPrewarm";
 import { useProviderStatusesForLocalConfig } from "./useProviderStatusesForLocalConfig";
@@ -46,6 +47,17 @@ export function useOpenThreadTabs(input: {
   // typing) does not re-render the strip.
   const summaries = useStore(
     useShallow((state) => threadIds.map((threadId) => state.sidebarThreadSummaryById[threadId])),
+  );
+  // Subagent tabs name their agent from the parent's activity log, like the sidebar row.
+  // Activity arrays are cached per thread, so this only changes when a parent logs one
+  // (not on every streamed token, as the parent's whole Thread would).
+  const parentActivities = useStore(
+    useShallow((state) =>
+      threadIds.map((threadId) => {
+        const parentThreadId = state.sidebarThreadSummaryById[threadId]?.parentThreadId;
+        return parentThreadId ? selectThreadActivities(state, parentThreadId) : undefined;
+      }),
+    ),
   );
   const drafts = useComposerDraftStore(
     useShallow((state) => threadIds.map((threadId) => state.draftThreadsByThreadId[threadId])),
@@ -91,10 +103,16 @@ export function useOpenThreadTabs(input: {
 
   const sources = threadIds.map((threadId, index): OpenThreadTabSource => {
     const draft = drafts[index];
+    const summary = summaries[index];
+    const activities = parentActivities[index];
     const project = draft ? projects.find((candidate) => candidate.id === draft.projectId) : null;
     return {
       threadId,
-      summary: summaries[index],
+      summary,
+      parentThread:
+        summary?.parentThreadId && activities
+          ? { id: summary.parentThreadId, activities }
+          : undefined,
       draft: draft
         ? {
             projectId: draft.projectId,

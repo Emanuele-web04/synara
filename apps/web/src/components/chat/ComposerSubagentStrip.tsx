@@ -110,9 +110,9 @@ export const ComposerSubagentStrip = function ComposerSubagentStrip({
           title={compact ? "Expand subagent strip" : "Collapse subagent strip"}
         >
           {compact ? (
-            <PanelExpandIcon className="size-3" />
+            <PanelExpandIcon className="size-3" strokeWidth={2} />
           ) : (
-            <PanelCollapseIcon className="size-3" />
+            <PanelCollapseIcon className="size-3" strokeWidth={2} />
           )}
         </Button>
       </ComposerStackedPanelHeaderRow>

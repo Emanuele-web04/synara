@@ -17,10 +17,11 @@ import {
 } from "~/hooks/useOpenThreadTabs";
 import { TerminalIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
-import { resolveOpenThreadTabCloseTarget } from "~/openThreadTabs.logic";
+import { closeOpenThreadTab } from "~/openThreadTabs.logic";
 import { useOpenThreadTabsStore } from "~/openThreadTabsStore";
 
 import { ProviderIcon } from "../ProviderIcon";
+import { toastManager } from "../ui/toast";
 import { SurfaceTabChip, SurfaceTabStrip } from "./chatHeaderControls";
 
 // Tab width in `em` of the chip's own UI font, so it scales with the font size chosen in
@@ -77,23 +78,22 @@ export function OpenThreadTabStrip(props: {
 
   const closeTab = (threadId: ThreadId) => {
     freezeTabWidths();
-    const target = resolveOpenThreadTabCloseTarget({
+    // The last tab falls back to a fresh chat, as deleting the last thread does.
+    void closeOpenThreadTab({
       tabs,
       closedThreadId: threadId,
       activeThreadId,
-    });
-    if (!target) {
-      closeThreadTab(threadId);
-      return;
-    }
-    // Leave the thread first and drop its tab only once the route actually moved: a
-    // guarded navigation (unsaved editor buffers that fail to save) keeps the thread on
-    // screen, and it must keep its tab. The last tab falls back to a fresh chat, as
-    // deleting the last thread does.
-    const leave = target.threadId ? activateThreadTab(target.threadId) : handleNewChat();
-    void leave.then(() => {
-      if (readRouteThreadId(router) !== threadId) {
-        closeThreadTab(threadId);
+      closeTab: closeThreadTab,
+      openTab: activateThreadTab,
+      openFreshChat: handleNewChat,
+      readRouteThreadId: () => readRouteThreadId(router),
+    }).then((result) => {
+      if (!result.ok) {
+        toastManager.add({
+          type: "error",
+          title: "Unable to close the tab",
+          description: result.error,
+        });
       }
     });
   };

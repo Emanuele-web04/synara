@@ -7,7 +7,7 @@
 
 import type { ThreadId } from "@synara/contracts";
 import { create } from "zustand";
-import { createJSONStorage, persist } from "zustand/middleware";
+import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 
 import { createMemoryStorage } from "./lib/storage";
 import {
@@ -25,6 +25,23 @@ interface OpenThreadTabsStoreState {
 }
 
 const OPEN_THREAD_TABS_STORAGE_KEY = "synara:open-thread-tabs:v1";
+// The editor rail's own per-project chat tabs, which this store replaced. Not migrated
+// (the rail's tabs were a subset of the threads on screen); dropped on the first write.
+const LEGACY_EDITOR_RAIL_CHAT_TABS_STORAGE_KEY = "synara.editor.railChatTabsByProjectId";
+
+function createOpenThreadTabsStorage(): StateStorage {
+  return {
+    getItem: (name) => localStorage.getItem(name),
+    setItem: (name, value) => {
+      localStorage.setItem(name, value);
+      localStorage.removeItem(LEGACY_EDITOR_RAIL_CHAT_TABS_STORAGE_KEY);
+    },
+    removeItem: (name) => {
+      localStorage.removeItem(name);
+      localStorage.removeItem(LEGACY_EDITOR_RAIL_CHAT_TABS_STORAGE_KEY);
+    },
+  };
+}
 
 export const useOpenThreadTabsStore = create<OpenThreadTabsStoreState>()(
   persist(
@@ -52,7 +69,7 @@ export const useOpenThreadTabsStore = create<OpenThreadTabsStoreState>()(
     {
       name: OPEN_THREAD_TABS_STORAGE_KEY,
       storage: createJSONStorage(() =>
-        typeof localStorage === "undefined" ? createMemoryStorage() : localStorage,
+        typeof localStorage === "undefined" ? createMemoryStorage() : createOpenThreadTabsStorage(),
       ),
       partialize: (state) => ({ threadIds: state.threadIds }),
       merge: (persistedState, currentState) => ({

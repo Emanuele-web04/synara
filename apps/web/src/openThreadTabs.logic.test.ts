@@ -1,14 +1,15 @@
 import { ProjectId, ThreadId } from "@synara/contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   addOpenThreadTab,
   buildOpenThreadTabs,
+  closeOpenThreadTab,
   normalizeOpenThreadTabIds,
   type OpenThreadTabSource,
   resolveOpenThreadTabCloseTarget,
 } from "./openThreadTabs.logic";
-import type { SidebarThreadSummary } from "./types";
+import type { SidebarThreadSummary, Thread } from "./types";
 
 const projectA = ProjectId.makeUnsafe("project-a");
 const projectB = ProjectId.makeUnsafe("project-b");
@@ -91,6 +92,40 @@ describe("buildOpenThreadTabs", () => {
     ]);
   });
 
+  it("names a subagent tab from its parent's activity when its own metadata is a placeholder", () => {
+    const parentId = ThreadId.makeUnsafe("parent");
+    const tabs = buildOpenThreadTabs({
+      activeThreadId: null,
+      sources: [
+        {
+          ...serverSource("subagent:parent:child-1", {
+            title: "Subagent 019d8cae",
+            parentThreadId: parentId,
+          }),
+          parentThread: {
+            id: parentId,
+            activities: [
+              {
+                payload: {
+                  data: {
+                    item: {
+                      receiverThreadIds: ["child-1"],
+                      receiverAgents: [
+                        { threadId: "child-1", agentNickname: "Locke", agentRole: "explorer" },
+                      ],
+                    },
+                  },
+                },
+              },
+            ] as unknown as Thread["activities"],
+          },
+        },
+      ],
+    });
+
+    expect(tabs.map((tab) => tab.title)).toEqual(["Locke [explorer]"]);
+  });
+
   it("drops threads that no longer exist, and archived or Side chats unless on screen", () => {
     const sources: OpenThreadTabSource[] = [
       serverSource("kept"),
@@ -154,5 +189,70 @@ describe("resolveOpenThreadTabCloseTarget", () => {
         activeThreadId: ThreadId.makeUnsafe("a"),
       }),
     ).toEqual({ threadId: null });
+  });
+});
+
+describe("closeOpenThreadTab", () => {
+  // A route that follows successful navigations, unless a guard blocks leaving `blocked`.
+  function harness(input: { active: string; blocked?: boolean; freshChatError?: string }) {
+    let route: string | null = input.active;
+    const closeTab = vi.fn();
+    const openTab = vi.fn(async (threadId: string) => {
+      if (!input.blocked) route = threadId;
+    });
+    const openFreshChat = vi.fn(async () => {
+      if (input.freshChatError) return { ok: false as const, error: input.freshChatError };
+      route = "fresh";
+      return { ok: true as const, threadId: ThreadId.makeUnsafe("fresh") };
+    });
+    const close = (tabs: readonly string[], closed: string) =>
+      closeOpenThreadTab({
+        tabs: tabIds(tabs),
+        closedThreadId: ThreadId.makeUnsafe(closed),
+        activeThreadId: ThreadId.makeUnsafe(input.active),
+        closeTab,
+        openTab,
+        openFreshChat,
+        readRouteThreadId: () => route,
+      });
+    return { close, closeTab, openTab, openFreshChat };
+  }
+
+  it("closes a background tab without navigating", async () => {
+    const { close, closeTab, openTab } = harness({ active: "b" });
+
+    await expect(close(["a", "b"], "a")).resolves.toEqual({ ok: true });
+    expect(closeTab).toHaveBeenCalledWith("a");
+    expect(openTab).not.toHaveBeenCalled();
+  });
+
+  it("moves to the successor before closing the active tab", async () => {
+    const { close, closeTab, openTab } = harness({ active: "b" });
+
+    await close(["a", "b", "c"], "b");
+    expect(openTab).toHaveBeenCalledWith("c");
+    expect(closeTab).toHaveBeenCalledWith("b");
+    expect(openTab.mock.invocationCallOrder[0]).toBeLessThan(closeTab.mock.invocationCallOrder[0]!);
+  });
+
+  it("keeps the active tab when navigation is blocked", async () => {
+    const { close, closeTab, openTab } = harness({ active: "b", blocked: true });
+
+    await expect(close(["a", "b"], "b")).resolves.toEqual({ ok: true });
+    expect(openTab).toHaveBeenCalledWith("a");
+    expect(closeTab).not.toHaveBeenCalled();
+  });
+
+  it("opens a fresh chat for the last tab, keeping the tab when that fails", async () => {
+    const opened = harness({ active: "a" });
+    await opened.close(["a"], "a");
+    expect(opened.closeTab).toHaveBeenCalledWith("a");
+
+    const failed = harness({ active: "a", freshChatError: "Home folder is not available yet." });
+    await expect(failed.close(["a"], "a")).resolves.toEqual({
+      ok: false,
+      error: "Home folder is not available yet.",
+    });
+    expect(failed.closeTab).not.toHaveBeenCalled();
   });
 });

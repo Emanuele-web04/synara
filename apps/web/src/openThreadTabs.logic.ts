@@ -3,14 +3,15 @@
 //          deciding which open threads render as tabs, how each tab is labelled, and
 //          which tab takes over when the active one closes.
 // Layer: UI state logic
-// Exports: open-list transitions, persisted-list normalization, tab derivation, close successor
+// Exports: open-list transitions, persisted-list normalization, tab derivation, close flow
 
 import type { ProjectId, ProviderKind, ThreadId } from "@synara/contracts";
 
 import { resolveDraftThreadTitle } from "./components/ChatView.logic";
+import type { StartContainerChatResult } from "./lib/startContainerChat";
 import { resolveSubagentPresentationForThread } from "./lib/subagentPresentation";
 import { resolveTabAfterClose } from "./lib/tabStrip";
-import type { SidebarThreadSummary, ThreadPrimarySurface } from "./types";
+import type { SidebarThreadSummary, Thread, ThreadPrimarySurface } from "./types";
 
 export interface OpenThreadTab {
   threadId: ThreadId;
@@ -27,6 +28,9 @@ export interface OpenThreadTab {
 export interface OpenThreadTabSource {
   threadId: ThreadId;
   summary: SidebarThreadSummary | undefined;
+  // A subagent thread's parent, whose activity log names the agent when the subagent's
+  // own summary does not.
+  parentThread?: Pick<Thread, "id" | "activities"> | undefined;
   draft:
     | {
         projectId: ProjectId;
@@ -96,14 +100,17 @@ export function canKeepOpenThreadTab(
 }
 
 function resolveOpenThreadTab(source: OpenThreadTabSource): OpenThreadTab | null {
-  const { summary, draft } = source;
+  const { summary, draft, parentThread } = source;
   if (summary) {
     return {
       threadId: source.threadId,
       projectId: summary.projectId,
       // Subagent threads read as their agent, exactly like the sidebar row.
       title: summary.parentThreadId
-        ? resolveSubagentPresentationForThread({ thread: summary }).fullLabel
+        ? resolveSubagentPresentationForThread({
+            thread: summary,
+            threads: parentThread ? [parentThread] : undefined,
+          }).fullLabel
         : summary.title,
       provider: summary.session?.provider ?? summary.modelSelection.provider,
       isTerminal: source.terminalEntryPoint,
@@ -164,4 +171,39 @@ export function resolveOpenThreadTabCloseTarget(input: {
   const closedIndex = input.tabs.findIndex((tab) => tab.threadId === input.closedThreadId);
   const remaining = input.tabs.filter((tab) => tab.threadId !== input.closedThreadId);
   return { threadId: resolveTabAfterClose(remaining, closedIndex)?.threadId ?? null };
+}
+
+/**
+ * Closes a tab. A background tab closes at once. The active tab first leaves for its
+ * successor (or a fresh chat when it was the last tab) and closes only once the route
+ * has actually moved off it: a guarded navigation (unsaved editor buffers that fail to
+ * save) keeps the thread on screen, and it must keep its tab. Resolves with the fresh
+ * chat's error when one could not be started.
+ */
+export async function closeOpenThreadTab(input: {
+  tabs: readonly Pick<OpenThreadTab, "threadId">[];
+  closedThreadId: ThreadId;
+  activeThreadId: ThreadId | null;
+  closeTab: (threadId: ThreadId) => void;
+  openTab: (threadId: ThreadId) => Promise<unknown>;
+  openFreshChat: () => Promise<StartContainerChatResult>;
+  readRouteThreadId: () => string | null;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const target = resolveOpenThreadTabCloseTarget(input);
+  if (!target) {
+    input.closeTab(input.closedThreadId);
+    return { ok: true };
+  }
+  if (target.threadId) {
+    await input.openTab(target.threadId);
+  } else {
+    const result = await input.openFreshChat();
+    if (!result.ok) {
+      return result;
+    }
+  }
+  if (input.readRouteThreadId() !== input.closedThreadId) {
+    input.closeTab(input.closedThreadId);
+  }
+  return { ok: true };
 }

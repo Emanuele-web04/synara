@@ -107,9 +107,6 @@ export const BackToParentIcon: LucideIcon = centralIconWrapper("arrow-share-left
 export const WorkflowIcon: LucideIcon = centralIconWrapper("agents");
 export const SteerIcon: LucideIcon = centralIconWrapper("arrow-corner-down-right");
 export const ComposerSendArrowIcon: LucideIcon = centralIconWrapper("arrow-up");
-// Central asset name for context menus (native menus resolve icons by name); the React
-// HandoffIcon is the Hugeicons glyph re-exported below.
-export const HANDOFF_ICON_NAME = "arrow-left-right";
 export const SkillCubeIcon: LucideIcon = centralIconWrapper("building-blocks");
 export const NewThreadIcon: LucideIcon = centralIconWrapper("compose-pencil");
 // Command palette (⌘K) action glyphs: one Central outline set so the rows read as a family.
