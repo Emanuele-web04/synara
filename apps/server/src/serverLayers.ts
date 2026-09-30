@@ -37,6 +37,7 @@ import { ServerAuthPolicyLive } from "./auth/Layers/ServerAuthPolicy";
 import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore";
 import { SessionCredentialServiceLive } from "./auth/Layers/SessionCredentialService";
 import { ProfileStatsQueryLive } from "./profileStats";
+import { RecapStatsQueryLive } from "./recapStats";
 import { ProfileStatsArchiveLive } from "./profileStatsArchive";
 import { ServerLifecycleEventsLive } from "./serverLifecycleEvents";
 import { ServerRuntimeStartupLive } from "./serverRuntimeStartup";
@@ -281,6 +282,7 @@ export function makeServerRuntimeServicesLayer(
     KeybindingsLive,
     ServerEnvironmentLive,
     ProfileStatsQueryLive,
+    RecapStatsQueryLive,
     authServicesLayer,
     ServerLifecycleEventsLive,
     ServerRuntimeStartupLive,

@@ -20,23 +20,25 @@ export function buildTaskRowContextMenu(input: {
   /** Linked to a chat that still exists. */
   isDelegated: boolean;
   isDone: boolean;
+  /** False while a delegation is still starting, before its link has settled. */
+  canUnlink: boolean;
   /** Has a chat link at all, even to a chat that was deleted. */
   hasLink: boolean;
 }): ContextMenuItem<TaskRowMenuAction>[] {
-  const { isDelegated, isDone, hasLink } = input;
+  const { isDelegated, isDone, hasLink, canUnlink } = input;
   return [
     { id: "rename", label: "Rename", icon: THREAD_CONTEXT_MENU_ICONS.rename },
     ...(isDelegated
       ? [
           { id: "open-chat" as const, label: "Open chat", separatorBefore: true },
-          { id: "unlink-chat" as const, label: "Unlink chat" },
+          ...(canUnlink ? [{ id: "unlink-chat" as const, label: "Unlink chat" }] : []),
         ]
       : [
           ...(isDone
             ? []
             : [{ id: "delegate" as const, label: "Delegate…", separatorBefore: true }]),
           // A link to a chat that was deleted can still be cleared.
-          ...(hasLink
+          ...(hasLink && canUnlink
             ? [{ id: "unlink-chat" as const, label: "Unlink chat", separatorBefore: isDone }]
             : []),
         ]),

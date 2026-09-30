@@ -112,7 +112,12 @@ export function TaskRow({
     onSelect();
     void (async () => {
       const clicked = await api.contextMenu.show(
-        buildTaskRowContextMenu({ isDelegated, isDone, hasLink: todo.threadId !== null }),
+        buildTaskRowContextMenu({
+          isDelegated,
+          isDone,
+          hasLink: todo.threadId !== null,
+          canUnlink: status.kind !== "starting",
+        }),
         { x: event.clientX, y: event.clientY },
       );
       if (clicked === "rename") rename.startEditing();
