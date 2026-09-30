@@ -166,17 +166,34 @@ export function ChatComposerFooter({
                 : "Next question"}
           </Button>
         ) : submission.phase === "running" || submission.connecting ? (
-          <Button
-            type="button"
-            variant="prominent"
-            size="icon-xs"
-            className="sm:size-[26px]"
-            onClick={submission.onInterrupt}
-            aria-label="Stop generation"
-            title="Stop the current response. On Mac, press Ctrl+C to interrupt."
-          >
-            <span aria-hidden="true" className="block size-2 rounded-[1px] bg-current" />
-          </Button>
+          <>
+            {/* Dictating a follow-up is allowed mid-turn: the transcript lands in the
+                composer and sending it follows the queue/steer behavior. */}
+            {voice.enabled &&
+            !submission.connecting &&
+            !voice.recording &&
+            !voice.transcribing &&
+            !submission.hasPendingUserInputs ? (
+              <ComposerVoiceButton
+                disabled={submission.busy || submission.expired}
+                isRecording={false}
+                isTranscribing={false}
+                durationLabel={voice.durationLabel}
+                onClick={voice.onToggle}
+              />
+            ) : null}
+            <Button
+              type="button"
+              variant="prominent"
+              size="icon-xs"
+              className="sm:size-[26px]"
+              onClick={submission.onInterrupt}
+              aria-label="Stop generation"
+              title="Stop the current response. On Mac, press Ctrl+C to interrupt."
+            >
+              <span aria-hidden="true" className="block size-2 rounded-[1px] bg-current" />
+            </Button>
+          </>
         ) : !submission.hasPendingUserInputs && !voice.recording && !voice.transcribing ? (
           submission.showPlanFollowUp ? (
             submission.hasPrompt ? (
