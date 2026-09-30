@@ -137,8 +137,11 @@ export const makeGitHubInboxSnapshotStore = (dependencies: {
       ttlMs: 0,
     });
 
+    const isCurrentGeneration = (key: string, generation: number) =>
+      (generations.get(key) ?? 0) === generation;
+
     const store = (key: string, generation: number, entry: GitHubInboxSnapshotEntry) => {
-      if ((generations.get(key) ?? 0) !== generation) return;
+      if (!isCurrentGeneration(key, generation)) return;
       entries.delete(key);
       entries.set(key, entry);
       fullReadRequired.delete(key);
@@ -208,13 +211,13 @@ export const makeGitHubInboxSnapshotStore = (dependencies: {
 
     const read = (input: {
       readonly key: string;
+      readonly generation: number;
       readonly cwd: string;
       readonly repository: string;
       readonly state: GitHubInboxState;
       readonly skipProbe: boolean;
     }) =>
       Effect.gen(function* () {
-        const generation = generations.get(input.key) ?? 0;
         const previous = entries.get(input.key);
         const startedAt = now();
         const canProbe =
@@ -242,7 +245,7 @@ export const makeGitHubInboxSnapshotStore = (dependencies: {
           );
         if (!probe.changed && previous) {
           const extended = { ...previous, validatedAt: now() };
-          store(input.key, generation, extended);
+          store(input.key, input.generation, extended);
           return extended;
         }
 
@@ -272,18 +275,24 @@ export const makeGitHubInboxSnapshotStore = (dependencies: {
           validatedAt: readAt,
           involvementError: involved.error,
         };
-        store(input.key, generation, entry);
+        store(input.key, input.generation, entry);
         return entry;
       });
 
     const staleAfterFailure = (
       key: string,
+      generation: number,
       entry: GitHubInboxSnapshotEntry | null,
       error: GitHubCliError,
     ): GitHubInboxSnapshotLoad => {
       const failedAt = now();
       if (error.reason === "rate-limited") {
         return { _tag: "stale", entry, error, retryAt: pauseAfterRateLimitError(failedAt) };
+      }
+      // Existing waiters may finish after invalidation, but their failure must not
+      // replace the newer generation's backoff. Rate limits above remain global.
+      if (!isCurrentGeneration(key, generation)) {
+        return { _tag: "stale", entry, error, retryAt: null };
       }
       const count = (failures.get(key)?.count ?? 0) + 1;
       const retryAt = failedAt + githubInboxFailureBackoffMs(count);
@@ -295,7 +304,9 @@ export const makeGitHubInboxSnapshotStore = (dependencies: {
       Effect.gen(function* () {
         const key = snapshotKey(input.repository, input.state);
         const startedAt = now();
+        const generation = (generations.get(key) ?? 0) + (input.forceRefresh ? 1 : 0);
         if (input.forceRefresh) {
+          generations.set(key, generation);
           failures.delete(key);
           yield* inFlight.invalidate(key);
         }
@@ -339,6 +350,7 @@ export const makeGitHubInboxSnapshotStore = (dependencies: {
             key,
             read({
               key,
+              generation,
               cwd: input.cwd,
               repository: input.repository,
               state: input.state,
@@ -350,14 +362,16 @@ export const makeGitHubInboxSnapshotStore = (dependencies: {
               // The list rows arrived but the involvement search did not: show them with the
               // failure, under the same backoff as a failed read.
               if (entry.involvementError) {
-                return staleAfterFailure(key, entry, entry.involvementError);
+                return staleAfterFailure(key, generation, entry, entry.involvementError);
               }
-              failures.delete(key);
+              if (isCurrentGeneration(key, generation)) failures.delete(key);
               return { _tag: "fresh", entry };
             }),
             Effect.catch((error): Effect.Effect<GitHubInboxSnapshotLoad, GitHubCliError> => {
               if (isGlobalGitHubCliError(error)) return Effect.fail(error);
-              return Effect.succeed(staleAfterFailure(key, entries.get(key) ?? null, error));
+              return Effect.succeed(
+                staleAfterFailure(key, generation, entries.get(key) ?? null, error),
+              );
             }),
           );
       });

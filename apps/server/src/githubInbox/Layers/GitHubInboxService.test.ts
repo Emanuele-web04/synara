@@ -1,5 +1,5 @@
 import { ProjectId, type OrchestrationProject } from "@synara/contracts";
-import { Effect } from "effect";
+import { Deferred, Effect, Fiber } from "effect";
 import { describe, expect, it } from "vitest";
 
 import { GitHubCliError } from "../../git/Errors";
@@ -362,6 +362,129 @@ describe("GitHubInboxService.list", () => {
       results.first.repositoryBatches[0]?.fetchedAt,
     );
   });
+
+  it.each(["304", "full read"] as const)(
+    "keeps a manual refresh after an older %s request completes",
+    async (olderRead) => {
+      const project = makeProject("project-refresh-race", "App");
+      const clock = { value: Date.parse(now) };
+      const started = await Effect.runPromise(Deferred.make<void>());
+      const release = await Effect.runPromise(Deferred.make<void>());
+      let title = "Before refresh";
+      const base = makeGitHub({
+        inbox: () =>
+          fakeInboxGraphQlJson({ pullRequests: [fakeInboxPullRequestNode(1, { title })] }),
+      });
+      const holdResult = <A, E>(effect: Effect.Effect<A, E>) =>
+        Effect.gen(function* () {
+          const result = yield* effect;
+          yield* Deferred.succeed(started, undefined);
+          yield* Deferred.await(release);
+          return result;
+        });
+      let fullReads = 0;
+      const github: GitHubCliShape = {
+        ...base.github,
+        probeRepositoryInboxChanges: (input) =>
+          olderRead === "304" && input.etag !== null
+            ? holdResult(Effect.succeed({ changed: false as const }))
+            : base.github.probeRepositoryInboxChanges(input),
+        listRepositoryInbox: (input) => {
+          const read = base.github.listRepositoryInbox(input);
+          fullReads += 1;
+          return olderRead === "full read" && fullReads === 2 ? holdResult(read) : read;
+        },
+      };
+
+      const result = await runInbox(
+        { projects: [project], repositories: new Map([[project.id, ["acme/app"]]]), github, clock },
+        (service) =>
+          Effect.gen(function* () {
+            yield* service.list({ state: "open" });
+            clock.value += GITHUB_INBOX_SNAPSHOT_TTL_MS;
+            const oldRequest = yield* service.list({ state: "open" }).pipe(Effect.forkChild);
+            yield* Deferred.await(started);
+            title = "After refresh";
+            const refreshed = yield* service.list({ state: "open", forceRefresh: true });
+            yield* Deferred.succeed(release, undefined);
+            const older = yield* Fiber.join(oldRequest);
+            const cached = yield* service.list({ state: "open" });
+            return { refreshed, older, cached };
+          }),
+      );
+
+      expect(result.refreshed.items[0]?.title).toBe("After refresh");
+      expect(result.older.items[0]?.title).toBe("Before refresh");
+      expect(result.cached.items[0]?.title).toBe("After refresh");
+      expect(base.inboxCalls).toHaveLength(olderRead === "304" ? 2 : 3);
+    },
+  );
+
+  it.each(["success", "failure"] as const)(
+    "preserves a refresh's failure backoff after an older %s completes",
+    async (olderOutcome) => {
+      const project = makeProject("project-refresh-backoff", "App");
+      const clock = { value: Date.parse(now) };
+      const started = await Effect.runPromise(Deferred.make<void>());
+      const release = await Effect.runPromise(Deferred.make<void>());
+      const base = makeGitHub({
+        inbox: () => fakeInboxGraphQlJson({ pullRequests: [fakeInboxPullRequestNode(1)] }),
+      });
+      const oldError = new GitHubCliError({
+        operation: "listRepositoryInbox",
+        detail: "Older request failed",
+        reason: "other",
+      });
+      const refreshError = new GitHubCliError({
+        operation: "listRepositoryInbox",
+        detail: "Refresh failed",
+        reason: "other",
+      });
+      let fullReads = 0;
+      const github: GitHubCliShape = {
+        ...base.github,
+        listRepositoryInbox: (input) => {
+          fullReads += 1;
+          if (fullReads === 2) {
+            return Effect.gen(function* () {
+              yield* Deferred.succeed(started, undefined);
+              yield* Deferred.await(release);
+              return yield* olderOutcome === "failure"
+                ? Effect.fail(oldError)
+                : base.github.listRepositoryInbox(input);
+            });
+          }
+          if (fullReads === 3) return Effect.fail(refreshError);
+          return base.github.listRepositoryInbox(input);
+        },
+      };
+
+      const result = await runInbox(
+        { projects: [project], repositories: new Map([[project.id, ["acme/app"]]]), github, clock },
+        (service) =>
+          Effect.gen(function* () {
+            yield* service.list({ state: "open" });
+            clock.value += GITHUB_INBOX_SNAPSHOT_TTL_MS;
+            const oldRequest = yield* service.list({ state: "open" }).pipe(Effect.forkChild);
+            yield* Deferred.await(started);
+            const refreshed = yield* service.list({ state: "open", forceRefresh: true });
+            yield* Deferred.succeed(release, undefined);
+            yield* Fiber.join(oldRequest);
+            const backedOff = yield* service.list({ state: "open" });
+            const readsDuringBackoff = fullReads;
+            clock.value += GITHUB_INBOX_FAILURE_BACKOFF_BASE_MS + 1;
+            const recovered = yield* service.list({ state: "open" });
+            return { refreshed, backedOff, readsDuringBackoff, recovered };
+          }),
+      );
+
+      expect(result.refreshed.errors[0]?.message).toBe("Refresh failed");
+      expect(result.backedOff.errors[0]?.message).toBe("Refresh failed");
+      expect(result.readsDuringBackoff).toBe(3);
+      expect(result.recovered.errors).toEqual([]);
+      expect(fullReads).toBe(4);
+    },
+  );
 
   it("stops refetching below the rate-limit floor and shows the cached rows until the reset", async () => {
     const project = makeProject("project-floor", "App");
