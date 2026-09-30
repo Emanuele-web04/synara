@@ -1,6 +1,7 @@
 // FILE: TaskCardProperties.tsx
 // Purpose: The task card's row of property pills — due day, project, priority — each one
-//          opening the same picker the rest of Tasks uses.
+//          opening the same picker the rest of Tasks uses. A property that is set shows its
+//          value; an unset one is just its icon, so an empty to-do stays quiet.
 // Layer: Tasks UI component
 // Exports: TaskCardProperties
 
@@ -14,6 +15,8 @@ import { TaskDueMenu, TaskPriorityMenu, TaskProjectMenu } from "./TaskPropertyMe
 import { formatDueLabel, todoPriorityLabel } from "./tasks.logic";
 
 const PILL_ICON_CLASS = "size-3.5 shrink-0 opacity-70";
+/** An unset property: a round icon-only pill. */
+const EMPTY_PILL_CLASS = "w-6 px-0 sm:w-6";
 
 export function TaskCardProperties({
   todo,
@@ -40,31 +43,45 @@ export function TaskCardProperties({
         trigger={
           <TaskPillButton
             aria-label={due ? `Due ${due.label}` : "Set a due day"}
-            className={cn(due?.overdue && "text-status-failure hover:text-status-failure")}
+            title={due ? undefined : "Due day"}
+            className={cn(
+              !due && EMPTY_PILL_CLASS,
+              due?.overdue && "text-status-failure hover:text-status-failure",
+            )}
           />
         }
       >
         <CalendarIcon aria-hidden className={PILL_ICON_CLASS} />
-        {due ? due.label : "No date"}
+        {due?.label}
       </TaskDueMenu>
       <TaskProjectMenu
         projectId={todo.projectId}
         projectOptions={projectOptions}
         onChange={(projectId) => onUpdate({ id: todo.id, projectId })}
         trigger={
-          <TaskPillButton aria-label={projectName ? `Project: ${projectName}` : "Set a project"} />
+          <TaskPillButton
+            aria-label={projectName ? `Project: ${projectName}` : "Set a project"}
+            title={projectName ? undefined : "Project"}
+            className={cn(!projectName && EMPTY_PILL_CLASS)}
+          />
         }
       >
         <FolderIcon aria-hidden className={PILL_ICON_CLASS} />
-        <span className="max-w-40 truncate">{projectName ?? "No project"}</span>
+        {projectName ? <span className="max-w-40 truncate">{projectName}</span> : null}
       </TaskProjectMenu>
       <TaskPriorityMenu
         priority={todo.priority}
         onChange={(priority) => onUpdate({ id: todo.id, priority })}
-        trigger={<TaskPillButton aria-label={`Priority: ${todoPriorityLabel(todo.priority)}`} />}
+        trigger={
+          <TaskPillButton
+            aria-label={`Priority: ${todoPriorityLabel(todo.priority)}`}
+            title={todo.priority === "none" ? "Priority" : undefined}
+            className={cn(todo.priority === "none" && EMPTY_PILL_CLASS)}
+          />
+        }
       >
         <TaskPriorityGlyph priority={todo.priority} />
-        {todo.priority === "none" ? "Priority" : todoPriorityLabel(todo.priority)}
+        {todo.priority === "none" ? null : todoPriorityLabel(todo.priority)}
       </TaskPriorityMenu>
     </div>
   );

@@ -1,5 +1,5 @@
 // FILE: TaskCardPrimitives.tsx
-// Purpose: The few building blocks the task panel repeats: the soft "well" that
+// Purpose: The few building blocks the floating task card repeats: the soft "well" that
 //          holds an agent's state or the hand-off prompt, the capsule buttons (a soft one and
 //          the ink one for the main action), the muted label, and the tone colours a task's
 //          status words use.
@@ -12,7 +12,7 @@ import { Button } from "~/components/ui/button";
 import { cn } from "~/lib/utils";
 import type { TaskMetaTone } from "./tasks.logic";
 
-/** Text colour of a task's status word, in the list and in the panel. */
+/** Text colour of a task's status word, in the list and on the card. */
 export const TASK_META_TONE_CLASS: Record<TaskMetaTone, string> = {
   muted: "text-muted-foreground",
   strong: "text-foreground/80",
@@ -26,7 +26,7 @@ export function TaskWell({ className, children }: { className?: string; children
   return (
     <div
       className={cn(
-        "flex flex-col gap-1.5 rounded-xl bg-[var(--color-background-button-secondary)] px-3 py-2.5",
+        "flex flex-col gap-1.5 rounded-2xl bg-[var(--color-background-button-secondary)] px-3.5 py-3",
         className,
       )}
     >
@@ -51,12 +51,12 @@ export function TaskPillButton({ className, ...props }: ComponentProps<typeof Bu
   );
 }
 
-/** The ink capsule for the panel's one main action (Start, Allow, Mark as done). */
+/** The ink capsule for the card's one main action (Start, Allow, Mark as done). */
 export function TaskActionButton({ className, ...props }: ComponentProps<typeof Button>) {
   return <Button shape="capsule" size="xs" {...props} className={cn("px-3", className)} />;
 }
 
-/** Muted line that introduces a block of the panel. */
+/** Muted line that introduces a block of the card. */
 export function TaskCardLabel({ children }: { children: ReactNode }) {
   return <span className="text-ui-sm text-muted-foreground">{children}</span>;
 }

@@ -2,7 +2,7 @@
 // Purpose: The Tasks route — one calm list of everything to do, any of which can be handed to
 //          an agent. Open to-dos come first (what needs the user, then what's working, then
 //          the rest), a line at the end adds a new one, and finished ones fade out below.
-//          Selecting a to-do opens its side panel on the right.
+//          Selecting a to-do opens its card, floating beside the list.
 // Layer: Tasks route surface
 // Exports: TasksView (default)
 
@@ -13,6 +13,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { useNowMs } from "~/hooks/useNowMs";
 import { isNewTaskShortcut } from "~/lib/newTaskShortcut";
+import { cn } from "~/lib/utils";
 import { useTasksSurfaceEnabled } from "../../tasksSurface";
 import { RouteInsetSurface } from "../RouteInsetSurface";
 import { RouteSurface, RouteSurfaceHeader } from "../RouteSurface";
@@ -90,9 +91,9 @@ export default function TasksView() {
           </div>
         </RouteSurfaceHeader>
 
-        {/* Escape closes the panel unless a field or menu inside is handling it. */}
+        {/* Escape closes the card unless a field or menu inside is handling it. */}
         <div
-          className="flex min-h-0 flex-1"
+          className="relative min-h-0 flex-1"
           onKeyDown={(event) => {
             if (event.key !== "Escape" || event.defaultPrevented) return;
             const target = event.target;
@@ -100,7 +101,13 @@ export default function TasksView() {
             setSelectedTodoId(null);
           }}
         >
-          <div className="min-w-0 flex-1 overflow-y-auto">
+          {/* With the card open on a wide window, the list re-centres in the space left of it. */}
+          <div
+            className={cn(
+              "h-full overflow-y-auto transition-[padding] duration-200",
+              selectedRow && "xl:pr-[24rem]",
+            )}
+          >
             <div className="mx-auto flex w-full max-w-[36rem] flex-col gap-7 px-6 pt-10 pb-20">
               <header className="flex flex-col gap-1 px-3">
                 <h1 className="text-2xl font-semibold tracking-tight text-foreground">Tasks</h1>
@@ -162,6 +169,7 @@ export default function TasksView() {
               onUpdate={(input) => updateTodo(input)}
               onUpdateAsync={updateTodoAsync}
               onClose={() => setSelectedTodoId(null)}
+              className="absolute top-4 right-4 max-h-[calc(100%-2rem)] w-[min(22rem,calc(100%-2rem))]"
             />
           ) : null}
         </div>

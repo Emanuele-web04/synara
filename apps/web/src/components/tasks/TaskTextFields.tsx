@@ -1,20 +1,23 @@
 // FILE: TaskTextFields.tsx
-// Purpose: The task panel's editable title and notes. Each field saves on blur, only when
+// Purpose: The task card's editable title and notes. Each field saves on blur, only when
 //          the user changed it, so an untouched field never overwrites another window's edit.
 // Layer: Tasks UI component
 // Exports: TaskTextFields
 
 import type { TodoUpdateInput } from "@synara/contracts";
-import { type KeyboardEvent, useEffect, useRef, useState } from "react";
+import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from "react";
 
 import type { TaskRowModel } from "./tasks.logic";
 
 export function TaskTextFields({
   row,
   onUpdate,
+  trailing,
 }: {
   row: TaskRowModel;
   onUpdate: (input: TodoUpdateInput) => void;
+  /** Sits on the title's first line, e.g. the card's Close button. */
+  trailing?: ReactNode;
 }) {
   const { todo } = row;
   const [title, setTitle] = useState(todo.title);
@@ -72,16 +75,19 @@ export function TaskTextFields({
 
   return (
     <div className="flex flex-col gap-0.5">
-      <textarea
-        aria-label="Task title"
-        rows={1}
-        value={title}
-        onFocus={() => focusField("title")}
-        onChange={(event) => setTitle(event.target.value)}
-        onBlur={commitTitle}
-        onKeyDown={handleTitleKeyDown}
-        className="font-system-ui field-sizing-content w-full resize-none bg-transparent text-ui-lg font-semibold leading-snug text-foreground outline-none"
-      />
+      <div className="flex items-start gap-2">
+        <textarea
+          aria-label="Task title"
+          rows={1}
+          value={title}
+          onFocus={() => focusField("title")}
+          onChange={(event) => setTitle(event.target.value)}
+          onBlur={commitTitle}
+          onKeyDown={handleTitleKeyDown}
+          className="font-system-ui field-sizing-content min-w-0 flex-1 resize-none bg-transparent text-ui-lg font-semibold leading-snug text-foreground outline-none"
+        />
+        {trailing}
+      </div>
       <textarea
         aria-label="Notes"
         rows={1}

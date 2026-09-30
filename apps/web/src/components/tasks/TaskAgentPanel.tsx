@@ -1,8 +1,8 @@
 // FILE: TaskAgentPanel.tsx
-// Purpose: What the task panel shows once a to-do is with an agent, in one soft block per
-//          state: working (with its last steps), needs your OK (Allow / Deny), a question to
-//          answer in the chat, ready for you (the reply), or stopped. Each ends with the one
-//          or two things to do next, on a single right-aligned row.
+// Purpose: What the task card shows once a to-do is with an agent: one soft block per state
+//          — working (with its last steps), needs your OK (Allow / Deny), a question to
+//          answer in the chat, ready for you (the reply), or stopped — headed by the agent's
+//          icon and one line, then the one or two things to do next on a right-aligned row.
 // Layer: Tasks UI component
 // Exports: TaskAgentPanel
 
@@ -13,6 +13,7 @@ import type { ReactNode } from "react";
 import ChatMarkdown from "~/components/ChatMarkdown";
 import { ComposerPendingApprovalPanel } from "~/components/chat/ComposerPendingApprovalPanel";
 import { ProviderIcon } from "~/components/ProviderIcon";
+import { cn } from "~/lib/utils";
 import type { PendingApproval } from "../../session-logic";
 import { TaskActionButton, TaskPillButton, TaskWell } from "./TaskCardPrimitives";
 import { describeAgentLocation, formatAgentActivity, type TaskRowModel } from "./tasks.logic";
@@ -27,7 +28,7 @@ const APPROVAL_ASK: Record<PendingApproval["requestKind"], string> = {
   tool: "wants to use a tool",
 };
 
-/** The next steps under a state's block, right-aligned like a panel's footer. */
+/** The next steps under a state's block. */
 function TaskAgentActions({ children }: { children: ReactNode }) {
   return <div className="flex items-center justify-end gap-1.5">{children}</div>;
 }
@@ -60,35 +61,39 @@ export function TaskAgentPanel({
   const agentName = PROVIDER_DISPLAY_NAMES[provider];
   const location = describeAgentLocation(summary, projectNameById);
   const fullPath = summary.workingDirectory ?? projectCwdById.get(summary.projectId) ?? null;
+  const model =
+    formatModelDisplayName(summary.modelSelection.model) ?? summary.modelSelection.model;
   // Only the delegated turn's own requests: while a reused chat is still on its earlier
   // turn (Starting), those belong to other work.
   const approval = status.kind === "needs" ? pendingApprovals[0] : undefined;
   const asksQuestion = status.kind === "needs" && !approval && hasPendingUserInput;
   const markDone = () => onUpdate({ id: todo.id, completed: true });
 
-  return (
-    <section aria-label="Agent" className="flex flex-col gap-2.5">
-      <div className="flex min-w-0 items-center gap-1.5 text-ui-sm text-muted-foreground">
-        <ProviderIcon provider={provider} className="size-3.5 shrink-0" />
-        <span className="shrink-0 text-foreground/80">{agentName}</span>
-        <span className="min-w-0 truncate">
-          {formatModelDisplayName(summary.modelSelection.model) ?? summary.modelSelection.model}
-        </span>
-        {location ? (
-          <span className="min-w-0 truncate" title={fullPath ?? undefined}>
-            · in {location}
-          </span>
-        ) : null}
-      </div>
+  // The agent's icon and one line open each block; the model and place are its tooltip.
+  const headline = (text: string, className?: string) => (
+    <div
+      className="flex min-w-0 items-center gap-2"
+      title={`${agentName} · ${model}${location ? ` · in ${fullPath ?? location}` : ""}`}
+    >
+      <ProviderIcon provider={provider} className="size-3.5 shrink-0" />
+      <span className={cn("min-w-0 text-ui-sm text-foreground", className)}>{text}</span>
+    </div>
+  );
 
+  return (
+    <section aria-label={`${agentName} · ${model}`} className="flex flex-col gap-2">
       {status.kind === "running" || status.kind === "starting" ? (
         <>
           <TaskWell>
-            <span className="shimmer text-ui-sm">
-              {status.kind === "running" ? `${agentName} is working on it` : "Starting…"}
-            </span>
+            {headline(
+              status.kind === "running" ? `${agentName} is working on it` : "Starting…",
+              "shimmer",
+            )}
             {recentActivity.map((entry) => (
-              <span key={entry.id} className="min-w-0 truncate text-ui-xs text-muted-foreground">
+              <span
+                key={entry.id}
+                className="min-w-0 truncate pl-5.5 text-ui-xs text-muted-foreground"
+              >
                 {entry.toolTitle ?? entry.label}
               </span>
             ))}
@@ -117,9 +122,7 @@ export function TaskAgentPanel({
       ) : approval ? (
         <>
           <TaskWell>
-            <span className="text-ui-sm text-foreground">
-              {agentName} {APPROVAL_ASK[approval.requestKind]}
-            </span>
+            {headline(`${agentName} ${APPROVAL_ASK[approval.requestKind]}`)}
             {approval.detail ? (
               <span className="line-clamp-3 font-mono text-ui-xs break-all text-muted-foreground">
                 {approval.detail}
@@ -166,9 +169,7 @@ export function TaskAgentPanel({
 
       {asksQuestion ? (
         <>
-          <TaskWell>
-            <span className="text-ui-sm text-foreground">{agentName} asked you a question</span>
-          </TaskWell>
+          <TaskWell>{headline(`${agentName} asked you a question`)}</TaskWell>
           <TaskAgentActions>
             <TaskActionButton onClick={openChat}>Answer in the chat</TaskActionButton>
           </TaskAgentActions>
@@ -178,9 +179,7 @@ export function TaskAgentPanel({
       {status.kind === "review" ? (
         <>
           <TaskWell>
-            <span className="text-ui-xs text-muted-foreground">
-              {formatAgentActivity(status, summary) ?? "Finished"}
-            </span>
+            {headline(formatAgentActivity(status, summary) ?? "Finished", "text-muted-foreground")}
             {latestReply ? (
               <div className="max-h-72 overflow-y-auto">
                 <ChatMarkdown
@@ -201,9 +200,9 @@ export function TaskAgentPanel({
       {status.kind === "stopped" ? (
         <>
           <TaskWell>
-            <span className="text-ui-sm text-status-failure">{status.label}</span>
+            {headline(status.label, "text-status-failure")}
             {status.detail ? (
-              <span className="text-ui-xs text-muted-foreground">{status.detail}</span>
+              <span className="pl-5.5 text-ui-xs text-muted-foreground">{status.detail}</span>
             ) : null}
           </TaskWell>
           <TaskAgentActions>

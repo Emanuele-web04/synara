@@ -1,7 +1,7 @@
 // FILE: TaskCard.tsx
-// Purpose: The side panel for the selected to-do, docked to the right of the list: its
-//          state, editable title and note, property pills, then either the hand-off form (a
-//          plain to-do) or what its agent is doing and needs (a delegated one).
+// Purpose: The floating card for the selected to-do: its editable title and note, property
+//          pills, then either the hand-off controls (a plain to-do) or what its agent is
+//          doing and needs (a delegated one).
 // Layer: Tasks UI component
 // Exports: TaskCard
 
@@ -10,12 +10,13 @@ import type { ProjectId, TodoUpdateInput } from "@synara/contracts";
 import { IconButton } from "~/components/ui/icon-button";
 import { XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import { RAISED_SURFACE_CHROME_CLASS_NAME } from "../chat/composerPickerStyles";
 import { TaskAgentPanel } from "./TaskAgentPanel";
 import { TaskCardProperties } from "./TaskCardProperties";
-import { TASK_META_TONE_CLASS, TaskPillButton, TaskWell } from "./TaskCardPrimitives";
+import { TaskPillButton, TaskWell } from "./TaskCardPrimitives";
 import { TaskHandOff } from "./TaskHandOff";
 import { TaskTextFields } from "./TaskTextFields";
-import { describeTaskMeta, type TaskRowModel } from "./tasks.logic";
+import type { TaskRowModel } from "./tasks.logic";
 import { useOpenChat } from "./useOpenChat";
 
 export function TaskCard({
@@ -41,38 +42,33 @@ export function TaskCard({
 }) {
   const { todo, status, thread } = row;
   const openChat = useOpenChat(todo.threadId);
-  const isDone = status.kind === "done";
-  const meta = describeTaskMeta(status, null);
-  const statusText = isDone
-    ? "Done"
-    : status.kind === "todo"
-      ? "To do"
-      : (meta?.text ?? status.label);
 
   return (
-    <aside
+    <section
       aria-label="Task details"
       className={cn(
-        "flex w-[22rem] shrink-0 flex-col gap-3.5 overflow-y-auto border-l border-border px-4 pt-3 pb-5",
+        "flex flex-col gap-3.5 overflow-y-auto rounded-3xl bg-popover p-4",
+        RAISED_SURFACE_CHROME_CLASS_NAME,
         className,
       )}
     >
-      <div className="flex h-6 items-center gap-2">
-        <span
-          className={cn(
-            "flex-1 text-ui-sm",
-            meta && !isDone ? TASK_META_TONE_CLASS[meta.tone] : "text-muted-foreground",
-          )}
-        >
-          {statusText}
-        </span>
-        <IconButton label="Close" size="icon-xs" variant="ghost" onClick={onClose}>
-          <XIcon className="size-3.5" />
-        </IconButton>
-      </div>
-
       {/* Keyed by id so switching the selection never carries a half-typed edit over. */}
-      <TaskTextFields key={todo.id} row={row} onUpdate={onUpdate} />
+      <TaskTextFields
+        key={todo.id}
+        row={row}
+        onUpdate={onUpdate}
+        trailing={
+          <IconButton
+            label="Close"
+            size="icon-xs"
+            variant="ghost"
+            className="-mr-1 shrink-0 text-muted-foreground"
+            onClick={onClose}
+          >
+            <XIcon className="size-3.5" />
+          </IconButton>
+        }
+      />
 
       <TaskCardProperties
         todo={todo}
@@ -81,8 +77,6 @@ export function TaskCard({
         now={now}
         onUpdate={onUpdate}
       />
-
-      <div className="h-px bg-border" />
 
       {thread ? (
         <TaskAgentPanel
@@ -93,7 +87,7 @@ export function TaskCard({
           projectCwdById={projectCwdById}
           onUpdate={onUpdate}
         />
-      ) : isDone ? (
+      ) : status.kind === "done" ? (
         <TaskPillButton
           className="self-start"
           onClick={() => onUpdate({ id: todo.id, completed: false })}
@@ -106,7 +100,7 @@ export function TaskCard({
           <TaskWell>
             <span className="shimmer text-ui-sm">{status.detail ?? "Starting the agent…"}</span>
           </TaskWell>
-          <TaskPillButton className="self-start" onClick={openChat}>
+          <TaskPillButton className="self-end" onClick={openChat}>
             Open chat
           </TaskPillButton>
         </>
@@ -125,6 +119,6 @@ export function TaskCard({
           <TaskHandOff key={todo.id} todo={todo} onLinkChat={onUpdateAsync} />
         </>
       )}
-    </aside>
+    </section>
   );
 }
