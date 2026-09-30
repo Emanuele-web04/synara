@@ -11,6 +11,7 @@ import {
   ListChecksIcon,
   PlayIcon,
   PlusIcon,
+  PlusSignIcon,
   SettingsIcon,
 } from "~/lib/icons";
 import React, { type FormEvent, type KeyboardEvent, useCallback, useMemo, useState } from "react";
@@ -313,7 +314,7 @@ export default function ProjectScriptsControl({
           title="Add action"
           onClick={openAddDialog}
         >
-          <PlusIcon className="size-4" />
+          <PlusSignIcon className="size-4" />
         </ChatHeaderIconButton>
       ) : null}
 

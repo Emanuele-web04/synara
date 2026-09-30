@@ -346,4 +346,5 @@ export {
   LayoutLeftIcon,
   LayoutRightIcon,
   PanelTopOpenIcon,
+  PlusSignIcon,
 } from "./hugeicons";

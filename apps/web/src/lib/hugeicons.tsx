@@ -83,3 +83,8 @@ export const PanelTopOpenIcon = createHugeicon("PanelTopOpenIcon", [
   { d: "M20.9922 9L2.99219 9", round: true },
   { d: "M8.99219 13L11.9922 16L14.9922 13", round: true },
 ]);
+
+/** Plus (`plus-sign`): add actions in the top bar, matching the toggles beside them. */
+export const PlusSignIcon = createHugeicon("PlusSignIcon", [
+  { d: "M12 4V20M20 12H4", round: true },
+]);

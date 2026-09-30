@@ -19,7 +19,7 @@ import {
   EMPTY_PANE_ID_SET,
   reconcileKeepMountedPaneIds,
 } from "~/lib/dockPaneActivation";
-import { LayoutRightIcon, PanelCollapseIcon, PanelExpandIcon, PlusIcon } from "~/lib/icons";
+import { LayoutRightIcon, PanelCollapseIcon, PanelExpandIcon, PlusSignIcon } from "~/lib/icons";
 import type {
   RightDockPane,
   RightDockPaneKind,
@@ -358,7 +358,7 @@ export function RightDock(props: RightDockProps) {
                     />
                   }
                 >
-                  <PlusIcon className="size-3.5" />
+                  <PlusSignIcon className="size-4" />
                 </MenuTrigger>
                 <ComposerPickerMenuPopup align="end" side="bottom" className="w-44 min-w-44">
                   {props.addMenuKinds.map((kind) => {
