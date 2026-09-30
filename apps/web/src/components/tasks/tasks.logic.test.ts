@@ -6,9 +6,11 @@ import {
   applyTodoEvent,
   buildTaskSections,
   deriveTaskStatus,
-  filterTaskRows,
+  describeTaskMeta,
   formatDueLabel,
+  NEEDS_ANSWER_DETAIL,
   resolveDuePreset,
+  summarizeTaskList,
   UNSAVED_TODO_UPDATED_AT,
   type TaskRowModel,
 } from "./tasks.logic";
@@ -204,21 +206,48 @@ describe("buildTaskSections", () => {
   });
 });
 
-describe("filterTaskRows", () => {
-  it("splits open to-dos into mine and delegated, and done apart", () => {
-    const plain = row(todo({ id: "plain" }), "todo");
-    const delegatedRow = { ...row(todo({ id: "agent", threadId }), "running"), thread: thread() };
-    // Its chat is still a local draft, so no thread summary is loaded yet.
-    const startingRow = row(todo({ id: "starting", threadId }), "starting");
-    const finished = row(todo({ id: "done", completedAt: "2026-09-27T12:00:00.000Z" }), "done");
-    const rows = [plain, delegatedRow, startingRow, finished];
+function taskStatus(
+  kind: TaskRowModel["status"]["kind"],
+  extra: Partial<TaskRowModel["status"]> = {},
+): TaskRowModel["status"] {
+  return { kind, label: kind, detail: null, workStartedAt: null, chatMissing: false, ...extra };
+}
 
-    const ids = (filter: Parameters<typeof filterTaskRows>[1]) =>
-      filterTaskRows(rows, filter).map((r) => r.todo.id);
-    expect(ids("all")).toEqual(["plain", "agent", "starting", "done"]);
-    expect(ids("mine")).toEqual(["plain"]);
-    expect(ids("delegated")).toEqual(["agent", "starting"]);
-    expect(ids("done")).toEqual(["done"]);
+describe("describeTaskMeta", () => {
+  it("says what the agent does or needs, else the due day", () => {
+    expect(describeTaskMeta(taskStatus("running"), null)).toEqual({
+      text: "Working…",
+      tone: "muted",
+      live: true,
+    });
+    expect(describeTaskMeta(taskStatus("needs"), null)?.text).toBe("Needs your OK");
+    expect(describeTaskMeta(taskStatus("needs", { detail: NEEDS_ANSWER_DETAIL }), null)?.text).toBe(
+      "Asked you a question",
+    );
+    expect(describeTaskMeta(taskStatus("review"), null)?.tone).toBe("review");
+    expect(describeTaskMeta(taskStatus("todo"), { label: "Today", overdue: false })?.tone).toBe(
+      "strong",
+    );
+    expect(describeTaskMeta(taskStatus("todo"), { label: "Yesterday", overdue: true })?.tone).toBe(
+      "failure",
+    );
+    expect(describeTaskMeta(taskStatus("todo"), null)).toBeNull();
+    expect(describeTaskMeta(taskStatus("done"), null)).toBeNull();
+  });
+});
+
+describe("summarizeTaskList", () => {
+  it("leads with what needs the user", () => {
+    expect(
+      summarizeTaskList([
+        row(todo({ id: "a" }), "needs"),
+        row(todo({ id: "b" }), "review"),
+        row(todo({ id: "c" }), "running"),
+        row(todo({ id: "d" }), "todo"),
+      ]),
+    ).toBe("2 things need you · 1 working · 1 to do");
+    expect(summarizeTaskList([row(todo({ id: "e" }), "done")])).toBe("All done");
+    expect(summarizeTaskList([])).toBe("Add anything you need to do");
   });
 });
 

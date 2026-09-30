@@ -43,6 +43,9 @@ export interface TaskStatus {
   chatMissing: boolean;
 }
 
+export const NEEDS_APPROVAL_DETAIL = "Waiting for your approval";
+export const NEEDS_ANSWER_DETAIL = "Asked you a question";
+
 const TODO_STATUS: TaskStatus = {
   kind: "todo",
   label: "To do",
@@ -102,11 +105,11 @@ export function deriveTaskStatus(input: {
       ...TODO_STATUS,
       kind: "needs",
       label: "Needs you",
-      detail: "Waiting for your approval",
+      detail: NEEDS_APPROVAL_DETAIL,
     };
   }
   if (thread.hasPendingUserInput && canAnswer) {
-    return { ...TODO_STATUS, kind: "needs", label: "Needs you", detail: "Asked you a question" };
+    return { ...TODO_STATUS, kind: "needs", label: "Needs you", detail: NEEDS_ANSWER_DETAIL };
   }
   if (isThreadActivelyWorking(thread)) {
     return {
@@ -158,6 +161,65 @@ export function formatAgentActivity(
   }
   if (status.kind === "starting") return "Starting…";
   return status.detail;
+}
+
+/** How a row's one quiet status word reads: muted, or tinted when it wants the user. */
+export type TaskMetaTone = "muted" | "strong" | "attention" | "review" | "failure";
+
+export interface TaskMeta {
+  text: string;
+  tone: TaskMetaTone;
+  /** Agent work in progress: the row shimmers it. */
+  live: boolean;
+}
+
+/** The short word after a row's title: its due day, or what its agent is doing or needs. */
+export function describeTaskMeta(
+  status: TaskStatus,
+  due: { label: string; overdue: boolean } | null,
+): TaskMeta | null {
+  switch (status.kind) {
+    case "starting":
+      return { text: "Starting…", tone: "muted", live: true };
+    case "running":
+      return { text: "Working…", tone: "muted", live: true };
+    case "needs":
+      return {
+        text: status.detail === NEEDS_ANSWER_DETAIL ? "Asked you a question" : "Needs your OK",
+        tone: "attention",
+        live: false,
+      };
+    case "review":
+      return { text: "Ready for you", tone: "review", live: false };
+    case "stopped":
+      return { text: status.label, tone: "failure", live: false };
+    case "done":
+      return null;
+    case "todo":
+      if (status.chatMissing) return { text: "Chat deleted", tone: "muted", live: false };
+      if (!due) return null;
+      return {
+        text: due.label,
+        tone: due.overdue ? "failure" : due.label === "Today" ? "strong" : "muted",
+        live: false,
+      };
+  }
+}
+
+/** The line under the page title: what needs the user, then what's left to do. */
+export function summarizeTaskList(rows: readonly TaskRowModel[]): string {
+  const attention = rows.filter((row) => isTaskNeedingAttention(row.status)).length;
+  const toDo = rows.filter((row) => row.status.kind === "todo").length;
+  const working = rows.filter(
+    (row) => row.status.kind === "running" || row.status.kind === "starting",
+  ).length;
+  const parts = [
+    attention > 0 ? `${attention} ${attention === 1 ? "thing needs" : "things need"} you` : null,
+    working > 0 ? `${working} working` : null,
+    toDo > 0 ? `${toDo} to do` : null,
+  ].filter((part) => part !== null);
+  if (parts.length > 0) return parts.join(" · ");
+  return rows.length > 0 ? "All done" : "Add anything you need to do";
 }
 
 export function folderLabel(path: string): string {
@@ -275,34 +337,6 @@ export function buildTaskSections(rows: readonly TaskRowModel[]): {
     (right.todo.completedAt ?? "").localeCompare(left.todo.completedAt ?? ""),
   );
   return { sections, completed };
-}
-
-export type TaskFilter = "all" | "mine" | "delegated" | "done";
-
-export const TASK_FILTER_OPTIONS: ReadonlyArray<{ value: TaskFilter; label: string }> = [
-  { value: "all", label: "All" },
-  { value: "mine", label: "Mine" },
-  { value: "delegated", label: "Delegated" },
-  { value: "done", label: "Done" },
-];
-
-/** Mine: open to-dos with no agent. Delegated: open to-dos an agent chat is working on. */
-export function filterTaskRows(
-  rows: readonly TaskRowModel[],
-  filter: TaskFilter,
-): readonly TaskRowModel[] {
-  switch (filter) {
-    case "all":
-      return rows;
-    case "done":
-      return rows.filter((row) => row.status.kind === "done");
-    // By the link, not the loaded chat: a chat that is still a draft or went missing
-    // was still delegated.
-    case "mine":
-      return rows.filter((row) => row.status.kind !== "done" && row.todo.threadId === null);
-    case "delegated":
-      return rows.filter((row) => row.status.kind !== "done" && row.todo.threadId !== null);
-  }
 }
 
 // ── Due dates ────────────────────────────────────────────────────────
