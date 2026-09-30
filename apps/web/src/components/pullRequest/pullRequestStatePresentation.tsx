@@ -2,8 +2,8 @@
 // Purpose: Single source of truth for how a pull request's state renders across the app —
 //          the sidebar thread badge, kanban card chip, list rows, detail panel, and dock tab
 //          all resolve label, color, and glyph from here so no surface can drift. Icons come
-//          from the same three-node Central "reversed" family (pull-request / draft /
-//          request-closed / merged-simple).
+//          from the three-node Central "reversed" family (pull-request / draft /
+//          request-closed / merge-conflict); merged uses the Hugeicons workflow-circle-06.
 // Layer: Pull request presentation
 // Exports: PrStatePresentation, resolvePrStatePresentation, PR_STATE_PRESENTATION_ICONS,
 //          PullRequestConflictIcon

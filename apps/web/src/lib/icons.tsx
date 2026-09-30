@@ -203,7 +203,6 @@ export const GitBranchIcon: LucideIcon = centralIconWrapper("branch");
 // second, unrelated icon next to it, so fork and branch share one visual.
 export const GitForkIcon: LucideIcon = GitBranchIcon;
 export const GitMergeIcon: LucideIcon = centralIconWrapper("merged");
-export const GitMergedSimpleIcon: LucideIcon = centralIconWrapper("merged-simple");
 export const PushIcon: LucideIcon = centralIconWrapper("cloud-simple-upload");
 export const GitHubIcon: LucideIcon = (props) => (
   <SiGithub className={props.className} style={props.style} />
@@ -347,4 +346,6 @@ export {
   LayoutRightIcon,
   PanelTopOpenIcon,
   PlusSignIcon,
+  // Merged pull requests (the PR-state glyph); merge *actions* keep GitMergeIcon.
+  WorkflowCircle06Icon as GitMergedSimpleIcon,
 } from "./hugeicons";
