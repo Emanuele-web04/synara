@@ -24,7 +24,7 @@ import { resolveProviderUsageSummary } from "~/hooks/useProviderUsageSummary";
 import { useActivityThreads } from "~/hooks/useActivityThreads";
 import { useDismissedThreadStatusKeys } from "~/hooks/useDismissedThreadStatusKeys";
 import { useNowMs } from "~/hooks/useNowMs";
-import { pullRequestReviewRequestCountQueryOptions } from "~/lib/pullRequestQueryOptions";
+import { githubInboxReviewBadgeQueryOptions } from "~/lib/pullRequestReactQuery";
 import {
   deriveProviderUsageDisplayRows,
   providerUsageProgressTrackProps,
@@ -543,7 +543,7 @@ export default function InboxView() {
   );
   // Only asked when there is a GitHub-backed project to ask about.
   const reviewRequestQuery = useQuery({
-    ...pullRequestReviewRequestCountQueryOptions({ projectId: null }),
+    ...githubInboxReviewBadgeQueryOptions(),
     enabled: inboxAvailable && projects.some((project) => project.kind === "project"),
   });
   // Shares the ["automations"] cache the sidebar keeps live.
@@ -645,7 +645,11 @@ export default function InboxView() {
                     onOpenPullRequests={() =>
                       void navigate({
                         to: "/pull-requests",
-                        search: { involvement: "reviewing", state: "open" },
+                        search: {
+                          type: "pullRequest",
+                          involvement: "reviewRequested",
+                          state: "open",
+                        },
                       })
                     }
                     onOpenAutomations={() => void navigate({ to: "/automations" })}
