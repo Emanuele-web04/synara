@@ -2758,7 +2758,8 @@ describe("ChatView transcript geometry (full app)", () => {
       try {
         for (const id of [1, 2, 3]) {
           await page.getByRole("button", { name: new RegExp(`Choice ${id}`) }).click();
-          if (id < 3)
+          // Single-choice answers advance themselves; another Next click races the timer.
+          if (id < 3 && navigation !== "auto-advance")
             await page.getByRole("button", { name: "Next question", exact: true }).first().click();
         }
         if (navigation === "custom") {

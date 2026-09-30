@@ -284,9 +284,9 @@ To put a feature behind the list:
 
 Promote a feature to Stable by deleting its entry; every gate resolves itself.
 
-The list currently contains `omp` (Oh My Pi) and `groups` (Hubs), both available
-in Beta and gated off in Stable. The rail sidebar layout is available in both Stable
-and Beta.
+The list currently contains `omp` (Oh My Pi), `groups` (Hubs), and `inbox` (Inbox),
+all available in Beta and gated off in Stable. The rail sidebar layout is available in
+both Stable and Beta.
 
 On Stable, Hubs are inert rather than hidden data: the server refuses the hub
 APIs, Library routes and gateway tools, stops coordinator wakes and monitoring,
@@ -297,6 +297,8 @@ thread actions, and shows any existing hub folder as an ordinary project so its
 chats stay reachable. The gate lives in
 `apps/server/src/projectAgent/groupsBetaGate.ts` and `GROUPS_ON` in
 `apps/web/src/betaFeatures.ts`.
+
+`inbox` is the Inbox: the server refuses its `stats.getRecap` RPC on Stable.
 
 ## Diagnostics
 

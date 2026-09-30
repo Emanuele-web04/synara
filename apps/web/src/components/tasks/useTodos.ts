@@ -58,12 +58,26 @@ const failedCreateIds = new Set<TodoId>();
 // row as of that edit, so a create's reply, or an earlier edit's, must not drop the later
 // optimistic edits: those are laid back over it until their own replies land. Earlier ones
 // are already in it, or land after it with their own (newer) reply.
-const pendingUpdatesById = new Map<TodoId, TodoUpdateInput[]>();
-const beginPendingUpdate = (input: TodoUpdateInput) => {
-  pendingUpdatesById.set(input.id, [...(pendingUpdatesById.get(input.id) ?? []), input]);
+interface PendingUpdate {
+  input: TodoUpdateInput;
+  appliedAt: string;
+}
+const pendingUpdatesById = new Map<TodoId, PendingUpdate[]>();
+const beginPendingUpdate = (input: TodoUpdateInput): PendingUpdate => {
+  const pending = { input, appliedAt: new Date().toISOString() };
+  pendingUpdatesById.set(input.id, [...(pendingUpdatesById.get(input.id) ?? []), pending]);
+  return pending;
 };
+// Local action timestamps (linkedAt/completedAt) use the action's own time, while the
+// server revision stays unchanged so authoritative replies can still replace the row.
+const applyPendingUpdate = (todo: Todo, pending: PendingUpdate): Todo => ({
+  ...applyTodoPatch(todo, pending.input, pending.appliedAt),
+  updatedAt: todo.updatedAt,
+});
 const endPendingUpdate = (input: TodoUpdateInput) => {
-  const rest = (pendingUpdatesById.get(input.id) ?? []).filter((pending) => pending !== input);
+  const rest = (pendingUpdatesById.get(input.id) ?? []).filter(
+    (pending) => pending.input !== input,
+  );
   if (rest.length > 0) pendingUpdatesById.set(input.id, rest);
   else pendingUpdatesById.delete(input.id);
 };
@@ -71,27 +85,22 @@ const endPendingUpdate = (input: TodoUpdateInput) => {
 const withLaterPendingUpdates = (todo: Todo, settled: TodoUpdateInput): Todo => {
   const pending = pendingUpdatesById.get(todo.id) ?? [];
   return pending
-    .slice(pending.indexOf(settled) + 1)
-    .reduce((row, later) => applyTodoPatch(row, later, row.updatedAt), todo);
+    .slice(pending.findIndex((entry) => entry.input === settled) + 1)
+    .reduce(applyPendingUpdate, todo);
 };
 
-/**
- * applyTodoEvent, except that a to-do with an edit still in flight keeps its optimistic copy:
- * the edit shares the stored updatedAt, so an older server copy (a create's event, a refetch)
- * would otherwise win and undo it, e.g. drop a chat link while its agent is starting. The
- * edit's own reply carries the stored row.
- */
+/** Keep only pending edited fields over server events; unrelated remote changes stay live. */
 function applyTodoEventHoldingEdits(
   prev: TodoListResult | undefined,
   event: Parameters<typeof applyTodoEvent>[1],
 ): TodoListResult {
   const next = applyTodoEvent(prev, event);
-  if (!prev || pendingUpdatesById.size === 0) return next;
-  const heldById = new Map(
-    prev.todos.filter((todo) => pendingUpdatesById.has(todo.id)).map((todo) => [todo.id, todo]),
-  );
-  if (heldById.size === 0) return next;
-  return { todos: next.todos.map((todo) => heldById.get(todo.id) ?? todo) };
+  if (pendingUpdatesById.size === 0) return next;
+  return {
+    todos: next.todos.map((todo) =>
+      (pendingUpdatesById.get(todo.id) ?? []).reduce(applyPendingUpdate, todo),
+    ),
+  };
 }
 
 /** `enabled` is false where Tasks is a Beta-only feature, so Stable never asks the server. */
@@ -206,12 +215,12 @@ export function useTodoMutations() {
       return ensureNativeApi().todo.update(input);
     },
     onMutate: async (input) => {
-      beginPendingUpdate(input);
+      const pending = beginPendingUpdate(input);
       await cancelListFetch();
       const previous = readTodo(input.id);
       if (previous) {
         // Keep the stored updatedAt: the server's reply is newer and replaces this copy.
-        const optimistic = applyTodoPatch(previous, input, previous.updatedAt);
+        const optimistic = applyPendingUpdate(previous, pending);
         setList((todos) => todos.map((todo) => (todo.id === input.id ? optimistic : todo)));
       }
       return { previous };
@@ -244,7 +253,14 @@ export function useTodoMutations() {
       void queryClient.invalidateQueries({ queryKey: todoQueryKey });
       showMutationError("Couldn't update the task")(error);
     },
-    onSettled: (_todo, _error, input) => endPendingUpdate(input),
+    onSettled: (_todo, _error, input) => {
+      endPendingUpdate(input);
+      // A newer event may have arrived before an older mutation reply. Once all local
+      // edits settle, reconcile any overlapping fields against the authoritative row.
+      if (!pendingUpdatesById.has(input.id)) {
+        void queryClient.invalidateQueries({ queryKey: todoQueryKey });
+      }
+    },
   });
 
   const deleteMutation = useMutation({
