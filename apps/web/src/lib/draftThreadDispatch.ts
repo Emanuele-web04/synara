@@ -379,8 +379,11 @@ async function dispatchDraftThreadOnce(
     };
   }
 
-  // The prompt was consumed by the dispatched turn; an open composer for this
-  // thread should not keep offering it.
-  useComposerDraftStore.getState().clearComposerContent(threadId);
+  // Clear the consumed draft only while we still own it. An open composer may
+  // have received new text or attachments while the dispatch reply was pending.
+  const currentStore = useComposerDraftStore.getState();
+  if (currentStore.draftsByThreadId[threadId] === draftComposerState) {
+    currentStore.clearComposerContent(threadId);
+  }
   return { kind: "dispatched" };
 }

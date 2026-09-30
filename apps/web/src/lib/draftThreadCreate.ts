@@ -23,6 +23,7 @@ import {
   type DraftDispatchProviderInstance,
 } from "./draftThreadDispatch";
 import { newThreadId } from "./utils";
+import { isRequestOutcomeUnknown } from "./requestOutcome";
 
 export interface DraftThreadInput {
   projectId: ProjectId;
@@ -81,10 +82,19 @@ export async function createAndDispatchDraftThread(
 ): Promise<{ threadId: ThreadId; result: DraftThreadDispatchResult }> {
   const threadId = createDraftThread(input);
   if (input.beforeDispatch) {
+    const createdComposerState = useComposerDraftStore.getState().draftsByThreadId[threadId];
     try {
       await input.beforeDispatch(threadId);
     } catch (error) {
-      useComposerDraftStore.getState().clearDraftThread(threadId);
+      // A lost pre-dispatch reply may have stored a link to this draft. Keep it
+      // reachable with its unsent content until the caller reconciles that outcome.
+      const currentStore = useComposerDraftStore.getState();
+      if (
+        !isRequestOutcomeUnknown(error) &&
+        currentStore.draftsByThreadId[threadId] === createdComposerState
+      ) {
+        currentStore.clearDraftThread(threadId);
+      }
       throw error;
     }
   }
