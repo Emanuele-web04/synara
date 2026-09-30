@@ -2885,7 +2885,7 @@ describe("ChatView transcript geometry (full app)", () => {
     // shared CI worker must not decide whether the limit is met.
     const reports: Array<Awaited<ReturnType<typeof measure>> & { sample: number }> = [];
     const ratios: number[] = [];
-    for (let sample = 0; sample < 3; sample += 1) {
+    for (let sample = 0; sample < 12; sample += 1) {
       const short = { sample, ...(await measure(cases[0])) };
       const nearCap = { sample, ...(await measure(cases[1])) };
       reports.push(short, nearCap);

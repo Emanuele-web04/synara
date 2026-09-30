@@ -190,7 +190,7 @@ export function useChatWorkLog({
   const stripRawWorkLogEntries = useMemo(
     () =>
       resolveComposerStripWorkLogEntries({
-        hasDistinctParentSource: true,
+        hasDistinctParentSource: stripParentThread !== undefined,
         activeWorkLogEntries: rawWorkLogEntries,
         deriveParentWorkLogEntries: () =>
           deriveWorkLogEntries(stripSourceActivities, stripSourceLatestTurnId ?? undefined, {
