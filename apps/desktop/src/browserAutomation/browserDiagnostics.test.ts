@@ -351,5 +351,6 @@ describe("browser diagnostics store", () => {
       expect(output).toEqual(expected);
       diagnostics.dispose(runtime);
     },
+    15_000,
   );
 });

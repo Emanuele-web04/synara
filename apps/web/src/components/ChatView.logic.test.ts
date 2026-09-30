@@ -17,6 +17,7 @@ import type { WorkLogEntry } from "../session-logic";
 
 import {
   appendVoiceTranscriptToPrompt,
+  buildCollapsedCursorModelOptionsReset,
   buildTranscriptAutoFollowSignal,
   buildTranscriptTailKey,
   canApplyComposerFocus,
@@ -76,6 +77,7 @@ import {
   shouldHandlePromptHistoryNavigationKey,
   shouldRenderProviderHealthBanner,
   shouldShowComposerModelBootstrapSkeleton,
+  shouldShowComposerProviderInstancePicker,
   shouldStartActiveTurnLayoutGrace,
   worktreeSetupHasError,
 } from "./ChatView.logic";
@@ -151,6 +153,63 @@ describe("composer strip work-log derivation", () => {
       deriveParentWorkLogEntries,
     });
     expect(deriveParentWorkLogEntries).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the account picker visible for a missing profile on every provider", () => {
+    expect(
+      shouldShowComposerProviderInstancePicker({
+        provider: "cursor",
+        selectedProviderInstanceId: "cursor_removed",
+        providerInstances: [{ instanceId: "cursor" }],
+      }),
+    ).toBe(true);
+    expect(
+      shouldShowComposerProviderInstancePicker({
+        provider: "opencode",
+        selectedProviderInstanceId: "opencode_removed",
+        providerInstances: [{ instanceId: "opencode" }],
+      }),
+    ).toBe(true);
+  });
+
+  it("still hides a redundant single-profile picker when the selection exists", () => {
+    expect(
+      shouldShowComposerProviderInstancePicker({
+        provider: "cursor",
+        selectedProviderInstanceId: "cursor",
+        providerInstances: [{ instanceId: "cursor" }],
+      }),
+    ).toBe(false);
+    expect(
+      shouldShowComposerProviderInstancePicker({
+        provider: "codex",
+        selectedProviderInstanceId: "codex",
+        providerInstances: [{ instanceId: "codex" }],
+      }),
+    ).toBe(true);
+  });
+
+  it("targets collapsed Cursor option resets at the selected non-default instance", () => {
+    expect(
+      buildCollapsedCursorModelOptionsReset({
+        provider: "cursor",
+        instanceId: "cursor_work",
+        model: "cursor/auto" as ModelSlug,
+        showExpandedCursorModelVariants: false,
+      }),
+    ).toEqual({
+      persistSticky: true,
+      instanceId: "cursor_work",
+      model: "cursor/auto",
+    });
+    expect(
+      buildCollapsedCursorModelOptionsReset({
+        provider: "cursor",
+        instanceId: "cursor_work",
+        model: "cursor/auto" as ModelSlug,
+        showExpandedCursorModelVariants: true,
+      }),
+    ).toBeUndefined();
   });
 });
 
@@ -948,6 +1007,8 @@ describe("voice helpers", () => {
   it("derives voice-note availability from provider auth and runtime state", () => {
     expect(
       deriveComposerVoiceState({
+        enabled: true,
+        available: true,
         authStatus: "authenticated",
         voiceTranscriptionAvailable: true,
         isRecording: false,
@@ -961,6 +1022,8 @@ describe("voice helpers", () => {
 
     expect(
       deriveComposerVoiceState({
+        enabled: true,
+        available: true,
         authStatus: "unauthenticated",
         voiceTranscriptionAvailable: true,
         isRecording: true,
@@ -968,6 +1031,51 @@ describe("voice helpers", () => {
       }),
     ).toEqual({
       canRenderVoiceNotes: false,
+      canStartVoiceNotes: false,
+      showVoiceNotesControl: true,
+    });
+
+    expect(
+      deriveComposerVoiceState({
+        enabled: false,
+        available: true,
+        authStatus: "authenticated",
+        voiceTranscriptionAvailable: true,
+        isRecording: false,
+        isTranscribing: false,
+      }),
+    ).toEqual({
+      canRenderVoiceNotes: false,
+      canStartVoiceNotes: false,
+      showVoiceNotesControl: false,
+    });
+
+    expect(
+      deriveComposerVoiceState({
+        enabled: true,
+        available: false,
+        authStatus: "authenticated",
+        voiceTranscriptionAvailable: true,
+        isRecording: false,
+        isTranscribing: false,
+      }),
+    ).toEqual({
+      canRenderVoiceNotes: false,
+      canStartVoiceNotes: false,
+      showVoiceNotesControl: false,
+    });
+
+    expect(
+      deriveComposerVoiceState({
+        enabled: true,
+        available: true,
+        authStatus: "authenticated",
+        voiceTranscriptionAvailable: false,
+        isRecording: false,
+        isTranscribing: false,
+      }),
+    ).toEqual({
+      canRenderVoiceNotes: true,
       canStartVoiceNotes: false,
       showVoiceNotesControl: true,
     });

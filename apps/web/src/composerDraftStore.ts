@@ -2,7 +2,12 @@
 // Purpose: Public Zustand facade for composer drafts, model choices, attachments, and persistence.
 // Exports: Stable composer draft API, hooks, and promotion helpers.
 
-import { type ModelSelection, type ProviderKind, type ThreadId } from "@synara/contracts";
+import {
+  type ModelSelection,
+  type ProviderInstanceId,
+  type ProviderKind,
+  type ThreadId,
+} from "@synara/contracts";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
@@ -60,6 +65,7 @@ export type {
 export type { BrowserAnnotationDraft } from "./lib/browserAnnotations";
 export {
   deriveEffectiveComposerModelState,
+  providerInstanceModelSelectionKey,
   resolvePreferredComposerModelSelection,
 } from "./composerDraftModels";
 export type { EffectiveComposerModelState } from "./composerDraftModels";
@@ -120,6 +126,7 @@ export function useComposerThreadDraft(threadId: ThreadId): ComposerThreadDraftS
 export function useEffectiveComposerModelState(input: {
   threadId: ThreadId;
   selectedProvider: ProviderKind;
+  selectedProviderInstanceId?: ProviderInstanceId | null | undefined;
   threadModelSelection: ModelSelection | null | undefined;
   projectModelSelection: ModelSelection | null | undefined;
   customModelsByProvider: Record<ProviderKind, readonly string[]>;
@@ -131,6 +138,7 @@ export function useEffectiveComposerModelState(input: {
   return deriveEffectiveComposerModelState({
     draft,
     selectedProvider: input.selectedProvider,
+    selectedProviderInstanceId: input.selectedProviderInstanceId,
     threadModelSelection: input.threadModelSelection,
     projectModelSelection: input.projectModelSelection,
     customModelsByProvider: input.customModelsByProvider,

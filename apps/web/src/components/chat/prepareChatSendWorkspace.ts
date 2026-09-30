@@ -148,6 +148,7 @@ export async function prepareChatSendWorkspace({
       getDefaultModel(selectedModelSelectionForSend.provider) ||
       DEFAULT_MODEL_BY_PROVIDER.codex,
     selectedModelSelectionForSend.options,
+    { instanceId: selectedModelSelectionForSend.instanceId },
   );
   const firstSendTarget = resolveFirstSendTarget({
     activeProject,

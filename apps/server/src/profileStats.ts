@@ -8,16 +8,21 @@
 
 import nodePath from "node:path";
 
-import type {
-  ProfileQuota,
-  ProfileStats,
-  ProfileTokenStats,
-  ProviderKind,
-  StatsGetProfileStatsInput,
-  StatsGetProfileTokenStatsInput,
+import {
+  ProviderInstanceId,
+  type ProfileQuota,
+  type ProfileStats,
+  type ProfileTokenStats,
+  type ProviderKind,
+  type StatsGetProfileStatsInput,
+  type StatsGetProfileTokenStatsInput,
 } from "@synara/contracts";
 import { isBuiltInComposerSlashCommandName } from "@synara/shared/composerSlashCommands";
-import { Effect, Layer, ServiceMap } from "effect";
+import {
+  inferLegacyProviderKindFromInstanceId,
+  inferLegacyProviderKindFromModel,
+} from "@synara/shared/providerInstances";
+import { Effect, Layer, Schema, ServiceMap } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import type * as Statement from "effect/unstable/sql/Statement";
 
@@ -59,6 +64,7 @@ interface PromptActivityRow extends CountRow {
 
 interface TurnInsightRow extends CountRow {
   readonly provider: string | null;
+  readonly instanceId: string | null;
   readonly model: string | null;
   readonly reasoning: string | null;
 }
@@ -90,6 +96,7 @@ interface MostWorkedProjectRow {
 interface TokenDayRow {
   readonly day: string | null;
   readonly provider: string | null;
+  readonly instanceId: string | null;
   readonly model: string | null;
   readonly tokens: number;
 }
@@ -441,15 +448,29 @@ function arcName(startHour: number): string {
   return "Night Owl Arc";
 }
 
-export function normalizeProviderKind(value: unknown): ProviderKind | "unknown" {
+export function normalizeProviderKind(value: unknown, model?: unknown): ProviderKind | "unknown" {
   const provider = nonEmptyString(value);
-  return provider && PROVIDER_KINDS.has(provider as ProviderKind)
-    ? (provider as ProviderKind)
-    : "unknown";
+  if (provider) {
+    if (PROVIDER_KINDS.has(provider as ProviderKind)) {
+      return provider as ProviderKind;
+    }
+    const inferredFromInstance = inferLegacyProviderKindFromInstanceId(provider);
+    if (inferredFromInstance) {
+      return inferredFromInstance;
+    }
+  }
+  const modelValue = nonEmptyString(model);
+  return modelValue ? inferLegacyProviderKindFromModel(modelValue) : "unknown";
+}
+
+function normalizeProviderInstanceId(value: unknown): ProviderInstanceId | "unknown" {
+  const instanceId = nonEmptyString(value);
+  return instanceId && Schema.is(ProviderInstanceId)(instanceId) ? instanceId : "unknown";
 }
 
 interface TokenModelUsageCount {
   readonly provider: ProviderKind | "unknown";
+  readonly instanceId: ProviderInstanceId | "unknown";
   readonly model: string;
   tokens: number;
 }
@@ -474,17 +495,18 @@ function aggregateTokenActivity(rows: ReadonlyArray<TokenDayRow>): TokenActivity
     }
     tokensByDay.set(day, (tokensByDay.get(day) ?? 0) + tokens);
     lifetime += tokens;
-    const provider = normalizeProviderKind(row.provider);
+    const provider = normalizeProviderKind(row.provider, row.model);
     if (provider !== "unknown") {
       tokensByProvider.set(provider, (tokensByProvider.get(provider) ?? 0) + tokens);
     }
+    const instanceId = normalizeProviderInstanceId(row.instanceId);
     const model = nonEmptyString(row.model) ?? "unknown";
-    const providerModelKey = `${provider}\u0000${model}`;
+    const providerModelKey = `${provider}\u0000${instanceId}\u0000${model}`;
     const existing = tokensByProviderModel.get(providerModelKey);
     if (existing) {
       existing.tokens += tokens;
     } else {
-      tokensByProviderModel.set(providerModelKey, { provider, model, tokens });
+      tokensByProviderModel.set(providerModelKey, { provider, instanceId, model, tokens });
     }
   }
   return { tokensByDay, tokensByProvider, tokensByProviderModel, lifetime };
@@ -612,6 +634,10 @@ export function turnModelSelectionCte(sql: SqlClient.SqlClient, scope?: TokenSta
       pt.thread_id AS thread_id,
       pt.turn_id AS turn_id,
       MAX(json_extract(e.payload_json, '$.modelSelection.provider')) AS provider,
+      MAX(COALESCE(
+        json_extract(e.payload_json, '$.modelSelection.instanceId'),
+        json_extract(e.payload_json, '$.modelSelection.provider')
+      )) AS instanceId,
       MAX(json_extract(e.payload_json, '$.modelSelection.model')) AS model
     FROM orchestration_events e
     JOIN projection_turns pt
@@ -625,32 +651,6 @@ export function turnModelSelectionCte(sql: SqlClient.SqlClient, scope?: TokenSta
   `;
 }
 
-// Positive per-step token deltas for every provider and dispatch origin.
-// Defines `turn_model`, the Claude CTEs, and
-// `token_delta_rows(thread_id, created_at, provider, model, dispatch_origin, tokens)`;
-// callers pick origins and bucket `created_at` themselves. Deltas always need a
-// thread's full ordered history, so filter token_delta_rows by time, never the
-// scope: the first row inside a time window would otherwise count its whole
-// cumulative total.
-//
-// Claude uses versioned turn results (including subagents once), with retained
-// main-loop results as a partial historical fallback; see claudeTokenStats.ts.
-// Other providers' token usage comes straight from Synara's own DB (no external
-// ~/.codex/~/.claude archives, so it is provider-agnostic AND per-instance). Each
-// `context-window.updated` activity carries a running token counter; the
-// positive delta is the tokens processed in that step. Deltas are attributed to
-// the provider/model selected for the turn that processed them (activity turn_id
-// → turn's pending message → turn-start modelSelection); the thread's current
-// selection is only a fallback for legacy rows, so switching models mid-thread
-// keeps history accurate.
-// Counters are per provider: each provider's runtime keeps its own running
-// total, so deltas are taken within (thread, emitting provider). A thread that
-// goes Codex → OpenCode → Codex must not subtract OpenCode's counter from
-// Codex's. Session ids are deliberately not part of the partition: older rows
-// lack them and a resumed session keeps its running total.
-// Counter scale: totalProcessedTokens is the preferred cumulative counter.
-// Some provider/model groups only emit usedTokens; keep those as separate
-// fallback series so a mixed-provider thread does not drop their tokens.
 /**
  * The prompts the user sent (native messages that no automation or agent
  * dispatched) plus the archived prompts of purged threads, as
@@ -684,6 +684,32 @@ export function userPromptEventsQuery(
   `;
 }
 
+// Positive per-step token deltas for every provider and dispatch origin.
+// Defines `turn_model`, the Claude CTEs, and `token_delta_rows(thread_id, created_at,
+// provider, instanceId, model, dispatch_origin, tokens)`;
+// callers pick origins and bucket `created_at` themselves. Deltas always need a
+// thread's full ordered history, so filter token_delta_rows by time, never the
+// scope: the first row inside a time window would otherwise count its whole
+// cumulative total.
+//
+// Claude uses versioned turn results (including subagents once), with retained
+// main-loop results as a partial historical fallback; see claudeTokenStats.ts.
+// Other providers' token usage comes straight from Synara's own DB (no external
+// ~/.codex/~/.claude archives, so it is provider-agnostic AND per-instance). Each
+// `context-window.updated` activity carries a running token counter; the
+// positive delta is the tokens processed in that step. Deltas are attributed to
+// the provider/model selected for the turn that processed them (activity turn_id
+// → turn's pending message → turn-start modelSelection); the thread's current
+// selection is only a fallback for legacy rows, so switching models mid-thread
+// keeps history accurate.
+// Counters are per provider: each provider's runtime keeps its own running
+// total, so deltas are taken within (thread, emitting provider). A thread that
+// goes Codex → OpenCode → Codex must not subtract OpenCode's counter from
+// Codex's. Session ids are deliberately not part of the partition: older rows
+// lack them and a resumed session keeps its running total.
+// Counter scale: totalProcessedTokens is the preferred cumulative counter.
+// Some provider/model groups only emit usedTokens; keep those as separate
+// fallback series so a mixed-provider thread does not drop their tokens.
 export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThreadScope) {
   const deltaOrder = sql.literal(`
     ORDER BY
@@ -702,13 +728,41 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
         a.thread_id AS thread_id,
         COALESCE(
           tm.provider,
+          CASE
+            WHEN tm.instanceId = s.provider_instance_id THEN s.provider_name
+            ELSE tm.instanceId
+          END,
           json_extract(a.payload_json, '$.provider'),
           CASE
             WHEN th.model_selection_json IS NOT NULL AND json_valid(th.model_selection_json)
             THEN json_extract(th.model_selection_json, '$.provider')
           END,
+          CASE
+            WHEN th.model_selection_json IS NOT NULL AND json_valid(th.model_selection_json)
+            THEN CASE
+              WHEN json_extract(th.model_selection_json, '$.instanceId') = s.provider_instance_id
+              THEN s.provider_name
+              ELSE json_extract(th.model_selection_json, '$.instanceId')
+            END
+          END,
+          s.provider_name,
           'unknown'
         ) AS provider,
+        COALESCE(
+          tm.instanceId,
+          CASE
+            WHEN th.model_selection_json IS NOT NULL AND json_valid(th.model_selection_json)
+            THEN json_extract(th.model_selection_json, '$.instanceId')
+          END,
+          s.provider_instance_id,
+          tm.provider,
+          CASE
+            WHEN th.model_selection_json IS NOT NULL AND json_valid(th.model_selection_json)
+            THEN json_extract(th.model_selection_json, '$.provider')
+          END,
+          s.provider_name,
+          'unknown'
+        ) AS instanceId,
         COALESCE(
           json_extract(a.payload_json, '$.provider'),
           tm.provider,
@@ -740,6 +794,7 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
         a.activity_id AS activity_id
       FROM projection_thread_activities a
       JOIN projection_threads th ON th.thread_id = a.thread_id
+      LEFT JOIN projection_thread_sessions s ON s.thread_id = th.thread_id
       LEFT JOIN turn_model tm
         ON tm.thread_id = a.thread_id
        AND tm.turn_id = a.turn_id
@@ -763,15 +818,16 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
       SELECT * FROM token_activity WHERE provider != 'claudeAgent'
     ),
     provider_model_scale AS (
-      SELECT thread_id, provider, model, MAX(tp IS NOT NULL) AS has_cumulative
+      SELECT thread_id, provider, instanceId, model, MAX(tp IS NOT NULL) AS has_cumulative
       FROM ev
-      GROUP BY thread_id, provider, model
+      GROUP BY thread_id, provider, instanceId, model
     ),
     cumulative_kept AS (
       SELECT
         thread_id,
         counter_provider,
         provider,
+        instanceId,
         model,
         tp AS tot,
         dispatch_origin,
@@ -786,6 +842,7 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
         thread_id,
         created_at,
         provider,
+        instanceId,
         model,
         dispatch_origin,
         CASE
@@ -797,6 +854,7 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
           thread_id,
           created_at,
           provider,
+          instanceId,
           model,
           dispatch_origin,
           tot,
@@ -809,6 +867,7 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
         ev.thread_id AS thread_id,
         ev.counter_provider AS counter_provider,
         ev.provider AS provider,
+        ev.instanceId AS instanceId,
         ev.model AS model,
         ev.ut AS tot,
         ev.dispatch_origin AS dispatch_origin,
@@ -819,6 +878,7 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
       JOIN provider_model_scale pms
         ON pms.thread_id = ev.thread_id
        AND pms.provider = ev.provider
+       AND pms.instanceId = ev.instanceId
        AND pms.model = ev.model
       WHERE ev.tp IS NULL
         AND ev.ut IS NOT NULL
@@ -829,12 +889,17 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
         thread_id,
         created_at,
         provider,
+        instanceId,
         model,
         dispatch_origin,
         CASE
           WHEN previous_tot IS NULL THEN tot
           WHEN tot < previous_tot
-            AND (provider != previous_provider OR model != previous_model)
+            AND (
+              provider != previous_provider
+              OR instanceId != previous_instance_id
+              OR model != previous_model
+            )
           THEN tot
           ELSE MAX(0, tot - previous_tot)
         END AS d
@@ -843,26 +908,40 @@ export function tokenDeltaCtes(sql: SqlClient.SqlClient, scope?: TokenStatsThrea
           thread_id,
           created_at,
           provider,
+          instanceId,
           model,
           dispatch_origin,
           tot,
           LAG(tot) OVER (PARTITION BY thread_id, counter_provider ${deltaOrder}) AS previous_tot,
           LAG(provider) OVER (PARTITION BY thread_id, counter_provider ${deltaOrder})
             AS previous_provider,
+          LAG(instanceId) OVER (PARTITION BY thread_id, counter_provider ${deltaOrder})
+            AS previous_instance_id,
           LAG(model) OVER (PARTITION BY thread_id, counter_provider ${deltaOrder})
             AS previous_model
         FROM used_only_kept
       )
     ),
     token_delta_rows AS (
-      SELECT thread_id, created_at, provider, model, dispatch_origin, d AS tokens
+      SELECT thread_id, created_at, provider, instanceId, model, dispatch_origin, d AS tokens
       FROM cumulative_delta
       UNION ALL
-      SELECT thread_id, created_at, provider, model, dispatch_origin, d AS tokens
+      SELECT thread_id, created_at, provider, instanceId, model, dispatch_origin, d AS tokens
       FROM used_only_delta
       UNION ALL
-      SELECT thread_id, created_at, 'claudeAgent', model, dispatch_origin, tokens
-      FROM claude_token_rows
+      SELECT
+        c.thread_id,
+        c.created_at,
+        'claudeAgent',
+        COALESCE(tm.instanceId, s.provider_instance_id, 'claudeAgent'),
+        c.model,
+        c.dispatch_origin,
+        c.tokens
+      FROM claude_token_rows c
+      LEFT JOIN turn_model tm
+        ON tm.thread_id = c.thread_id
+       AND tm.turn_id = c.turn_id
+      LEFT JOIN projection_thread_sessions s ON s.thread_id = c.thread_id
     )
   `;
 }
@@ -942,13 +1021,14 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       sql<TokenDayRow>`
         WITH ${tokenDeltaCtes(sql)},
         all_tokens AS (
-          SELECT created_at, provider, model, tokens AS d
+          SELECT created_at, provider, instanceId, model, tokens AS d
           FROM token_delta_rows
           WHERE dispatch_origin IS NULL OR dispatch_origin = 'user'
           UNION ALL
           SELECT
             a.created_at,
             COALESCE(a.provider, 'unknown') AS provider,
+            COALESCE(a.provider_instance_id, a.provider, 'unknown') AS instanceId,
             COALESCE(a.model, 'unknown') AS model,
             a.tokens AS d
           FROM profile_stats_deleted_tokens a
@@ -957,10 +1037,11 @@ const makeProfileStatsQuery = Effect.gen(function* () {
         SELECT
           STRFTIME('%Y-%m-%d', DATETIME(created_at, ${tz})) AS day,
           provider,
+          instanceId,
           model,
           SUM(d) AS tokens
         FROM all_tokens
-        GROUP BY day, provider, model
+        GROUP BY day, provider, instanceId, model
       `,
     );
 
@@ -982,12 +1063,50 @@ const makeProfileStatsQuery = Effect.gen(function* () {
           SELECT
             CASE
               WHEN json_type(e.payload_json, '$.modelSelection') = 'object'
-              THEN json_extract(e.payload_json, '$.modelSelection.provider')
+              THEN COALESCE(
+                json_extract(e.payload_json, '$.modelSelection.provider'),
+                json_extract(e.payload_json, '$.modelSelection.instanceId'),
+                CASE
+                  WHEN t.model_selection_json IS NOT NULL AND json_valid(t.model_selection_json)
+                  THEN COALESCE(
+                    json_extract(t.model_selection_json, '$.provider'),
+                    json_extract(t.model_selection_json, '$.instanceId')
+                  )
+                END,
+                s.provider_name
+              )
               ELSE CASE
                 WHEN t.model_selection_json IS NOT NULL AND json_valid(t.model_selection_json)
-                THEN json_extract(t.model_selection_json, '$.provider')
+                THEN COALESCE(
+                  json_extract(t.model_selection_json, '$.provider'),
+                  json_extract(t.model_selection_json, '$.instanceId')
+                )
+                ELSE s.provider_name
               END
             END AS provider,
+            CASE
+              WHEN json_type(e.payload_json, '$.modelSelection') = 'object'
+              THEN COALESCE(
+                json_extract(e.payload_json, '$.modelSelection.instanceId'),
+                s.provider_instance_id,
+                CASE
+                  WHEN t.model_selection_json IS NOT NULL AND json_valid(t.model_selection_json)
+                  THEN json_extract(t.model_selection_json, '$.instanceId')
+                END,
+                json_extract(e.payload_json, '$.modelSelection.provider'),
+                s.provider_name
+              )
+              ELSE CASE
+                WHEN t.model_selection_json IS NOT NULL AND json_valid(t.model_selection_json)
+                THEN COALESCE(
+                  json_extract(t.model_selection_json, '$.instanceId'),
+                  s.provider_instance_id,
+                  json_extract(t.model_selection_json, '$.provider'),
+                  s.provider_name
+                )
+                ELSE COALESCE(s.provider_instance_id, s.provider_name)
+              END
+            END AS instanceId,
             CASE
               WHEN json_type(e.payload_json, '$.modelSelection') = 'object'
               THEN json_extract(e.payload_json, '$.modelSelection.model')
@@ -998,21 +1117,50 @@ const makeProfileStatsQuery = Effect.gen(function* () {
             END AS model,
             CASE
               WHEN json_type(e.payload_json, '$.modelSelection') = 'object'
-              THEN COALESCE(
-                json_extract(e.payload_json, '$.modelSelection.options.reasoningEffort'),
-                json_extract(e.payload_json, '$.modelSelection.options.effort')
-              )
+              THEN CASE
+                -- Model selections persist options either as a legacy object or
+                -- as the canonical array of {id, value} option selections.
+                WHEN json_type(e.payload_json, '$.modelSelection.options') = 'array'
+                THEN (
+                  SELECT json_extract(option_entry.value, '$.value')
+                  FROM json_each(e.payload_json, '$.modelSelection.options') AS option_entry
+                  WHERE json_extract(option_entry.value, '$.id') IN ('reasoningEffort', 'effort')
+                  ORDER BY CASE json_extract(option_entry.value, '$.id')
+                    WHEN 'reasoningEffort' THEN 0
+                    ELSE 1
+                  END
+                  LIMIT 1
+                )
+                ELSE COALESCE(
+                  json_extract(e.payload_json, '$.modelSelection.options.reasoningEffort'),
+                  json_extract(e.payload_json, '$.modelSelection.options.effort')
+                )
+              END
               ELSE CASE
                 WHEN t.model_selection_json IS NOT NULL AND json_valid(t.model_selection_json)
-                THEN COALESCE(
-                  json_extract(t.model_selection_json, '$.options.reasoningEffort'),
-                  json_extract(t.model_selection_json, '$.options.effort')
-                )
+                THEN CASE
+                  WHEN json_type(t.model_selection_json, '$.options') = 'array'
+                  THEN (
+                    SELECT json_extract(option_entry.value, '$.value')
+                    FROM json_each(t.model_selection_json, '$.options') AS option_entry
+                    WHERE json_extract(option_entry.value, '$.id') IN ('reasoningEffort', 'effort')
+                    ORDER BY CASE json_extract(option_entry.value, '$.id')
+                      WHEN 'reasoningEffort' THEN 0
+                      ELSE 1
+                    END
+                    LIMIT 1
+                  )
+                  ELSE COALESCE(
+                    json_extract(t.model_selection_json, '$.options.reasoningEffort'),
+                    json_extract(t.model_selection_json, '$.options.effort')
+                  )
+                END
               END
             END AS reasoning
           FROM orchestration_events e
           JOIN projection_threads t
             ON t.thread_id = COALESCE(json_extract(e.payload_json, '$.threadId'), e.stream_id)
+          LEFT JOIN projection_thread_sessions s ON s.thread_id = t.thread_id
           LEFT JOIN projection_thread_messages um
             ON um.thread_id = COALESCE(json_extract(e.payload_json, '$.threadId'), e.stream_id)
            AND um.message_id = json_extract(e.payload_json, '$.messageId')
@@ -1020,17 +1168,18 @@ const makeProfileStatsQuery = Effect.gen(function* () {
             AND (um.dispatch_origin IS NULL OR um.dispatch_origin = 'user')
         ),
         turn_counts AS (
-          SELECT provider, model, reasoning, COUNT(*) AS count
+          SELECT provider, instanceId, model, reasoning, COUNT(*) AS count
           FROM per_turn
-          GROUP BY provider, model, reasoning
+          GROUP BY provider, instanceId, model, reasoning
           UNION ALL
-          SELECT provider, model, reasoning, turn_count AS count
+          SELECT provider, COALESCE(provider_instance_id, provider) AS instanceId,
+            model, reasoning, turn_count AS count
           FROM profile_stats_deleted_turns
         )
-        SELECT provider, model, reasoning, SUM(count) AS count
+        SELECT provider, instanceId, model, reasoning, SUM(count) AS count
         FROM turn_counts
-        GROUP BY provider, model, reasoning
-        ORDER BY count DESC, provider ASC, model ASC, reasoning ASC
+        GROUP BY provider, instanceId, model, reasoning
+        ORDER BY count DESC, provider ASC, instanceId ASC, model ASC, reasoning ASC
       `,
     );
 
@@ -1188,20 +1337,31 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       // ── Provider / model mix ──
       const providerModelCounts = new Map<
         string,
-        { readonly provider: string | null; readonly model: string | null; count: number }
+        {
+          readonly provider: string | null;
+          readonly instanceId: string | null;
+          readonly model: string | null;
+          count: number;
+        }
       >();
       const reasoningCounts = new Map<string, { readonly reasoning: string; count: number }>();
 
       for (const row of turnInsightRows) {
         const count = num(row.count);
-        const provider = nonEmptyString(row.provider);
+        const rawProvider = nonEmptyString(row.provider);
+        const providerKind = normalizeProviderKind(rawProvider, row.model);
+        const provider = providerKind === "unknown" ? rawProvider : providerKind;
+        const instanceId =
+          nonEmptyString(row.instanceId) ??
+          rawProvider ??
+          (providerKind === "unknown" ? null : providerKind);
         const model = nonEmptyString(row.model);
-        const providerModelKey = `${provider ?? ""}\u0000${model ?? ""}`;
+        const providerModelKey = `${provider ?? ""}\u0000${instanceId ?? ""}\u0000${model ?? ""}`;
         const existingProviderModel = providerModelCounts.get(providerModelKey);
         if (existingProviderModel) {
           existingProviderModel.count += count;
         } else {
-          providerModelCounts.set(providerModelKey, { provider, model, count });
+          providerModelCounts.set(providerModelKey, { provider, instanceId, model, count });
         }
 
         const reasoning = nonEmptyString(row.reasoning);
@@ -1219,13 +1379,15 @@ const makeProfileStatsQuery = Effect.gen(function* () {
         (left, right) =>
           right.count - left.count ||
           compareNullableText(left.provider, right.provider) ||
+          compareNullableText(left.instanceId, right.instanceId) ||
           compareNullableText(left.model, right.model),
       );
       const totalModelTurns = providerModelRows.reduce((sum, row) => sum + num(row.count), 0);
       const providerModels: ProviderModelUsage[] = providerModelRows.slice(0, 8).map((row) => {
         const count = num(row.count);
         return {
-          provider: normalizeProviderKind(row.provider),
+          provider: normalizeProviderKind(row.provider, row.model),
+          instanceId: normalizeProviderInstanceId(row.instanceId),
           model: nonEmptyString(row.model) ?? "unknown",
           turnCount: count,
           percent: percent1(count, totalModelTurns),
@@ -1236,7 +1398,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       // Turn-based ranking: the token-based one lives on ProfileTokenStats so the
       // heavy token query runs once, and clients prefer it when available.
       for (const row of providerModelRows) {
-        const provider = normalizeProviderKind(row.provider);
+        const provider = normalizeProviderKind(row.provider, row.model);
         if (provider === "unknown") {
           continue;
         }
@@ -1347,7 +1509,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       // UI uses this list to say so instead of silently under-reporting them.
       const providersWithTurns = new Set<ProviderKind>();
       for (const row of turnInsightRows) {
-        const provider = normalizeProviderKind(row.provider);
+        const provider = normalizeProviderKind(row.provider, row.model);
         if (provider !== "unknown") {
           providersWithTurns.add(provider);
         }
@@ -1377,11 +1539,13 @@ const makeProfileStatsQuery = Effect.gen(function* () {
           (left, right) =>
             right.tokens - left.tokens ||
             compareNullableText(left.provider, right.provider) ||
+            compareNullableText(left.instanceId, right.instanceId) ||
             compareNullableText(left.model, right.model),
         )
         .slice(0, 8)
         .map((row) => ({
           provider: row.provider,
+          instanceId: row.instanceId,
           model: row.model,
           tokens: row.tokens,
           percent: percent1(row.tokens, lifetime),

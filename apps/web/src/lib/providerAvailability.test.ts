@@ -2,14 +2,20 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { ServerProviderStatus } from "@synara/contracts";
 import {
+  findProviderStatus,
   isProviderUsable,
   normalizeProviderStatusForLocalConfig,
+  providerUnavailableReason,
   resolveAvailableProviderPreference,
+  resolveProviderSendAvailability,
   resolveProviderSendAvailabilityWithRefresh,
+  resolveVoiceTranscriptionTarget,
 } from "./providerAvailability";
 
 const BASE_STATUS: ServerProviderStatus = {
   provider: "antigravity",
+  instanceId: "antigravity",
+  driver: "antigravity",
   status: "error",
   available: false,
   authStatus: "unknown",
@@ -48,6 +54,8 @@ describe("normalizeProviderStatusForLocalConfig", () => {
         status: {
           ...READY_STATUS,
           provider: "opencode",
+          instanceId: "opencode",
+          driver: "opencode",
           message: "OpenCode is ready.",
         },
         customBinaryPath: "/custom/bin/opencode",
@@ -55,6 +63,8 @@ describe("normalizeProviderStatusForLocalConfig", () => {
       }),
     ).toEqual({
       provider: "opencode",
+      instanceId: "opencode",
+      driver: "opencode",
       status: "warning",
       available: false,
       authStatus: "unknown",
@@ -70,6 +80,8 @@ describe("normalizeProviderStatusForLocalConfig", () => {
         status: {
           ...BASE_STATUS,
           provider: "opencode",
+          instanceId: "opencode",
+          driver: "opencode",
           message: "OpenCode CLI (`opencode`) is not installed or not on PATH.",
         },
         customBinaryPath: "/custom/bin/opencode",
@@ -77,6 +89,35 @@ describe("normalizeProviderStatusForLocalConfig", () => {
       }),
     ).toEqual({
       provider: "opencode",
+      instanceId: "opencode",
+      driver: "opencode",
+      authStatus: "unknown",
+      available: true,
+      checkedAt: BASE_STATUS.checkedAt,
+      status: "ready",
+    });
+  });
+
+  it("preserves provider instance metadata when a confirmed custom path becomes ready", () => {
+    expect(
+      normalizeProviderStatusForLocalConfig({
+        provider: "claudeAgent",
+        status: {
+          ...BASE_STATUS,
+          provider: "claudeAgent",
+          driver: "claudeAgent",
+          instanceId: "claude_work",
+          displayName: "Claude Work",
+          message: "Claude Code CLI (`claude`) is not installed or not on PATH.",
+        },
+        customBinaryPath: "/custom/bin/claude",
+        confirmedCustomBinaryPath: "/custom/bin/claude",
+      }),
+    ).toEqual({
+      provider: "claudeAgent",
+      driver: "claudeAgent",
+      instanceId: "claude_work",
+      displayName: "Claude Work",
       authStatus: "unknown",
       available: true,
       checkedAt: BASE_STATUS.checkedAt,
@@ -91,6 +132,8 @@ describe("normalizeProviderStatusForLocalConfig", () => {
         status: {
           ...BASE_STATUS,
           provider: "opencode",
+          instanceId: "opencode",
+          driver: "opencode",
           message: "OpenCode CLI (`opencode`) is not installed or not on PATH.",
         },
         customBinaryPath: "/custom/bin/opencode-next",
@@ -99,11 +142,31 @@ describe("normalizeProviderStatusForLocalConfig", () => {
     ).toEqual({
       ...BASE_STATUS,
       provider: "opencode",
+      instanceId: "opencode",
+      driver: "opencode",
       available: true,
       status: "warning",
       message:
         "OpenCode uses a custom local binary path in this app. Availability will be confirmed when you start a session.",
     });
+  });
+
+  it("does not use custom binary fallback for disabled provider instances", () => {
+    const disabledStatus: ServerProviderStatus = {
+      ...BASE_STATUS,
+      instanceId: "antigravity_work",
+      displayName: "Antigravity Work",
+      enabled: false,
+      message: "Provider is disabled in Synara settings.",
+    };
+
+    expect(
+      normalizeProviderStatusForLocalConfig({
+        provider: "antigravity",
+        status: disabledStatus,
+        customBinaryPath: "/opt/homebrew/bin/gemini",
+      }),
+    ).toEqual(disabledStatus);
   });
 
   it("preserves authenticated and unauthenticated statuses", () => {
@@ -127,6 +190,8 @@ describe("normalizeProviderStatusForLocalConfig", () => {
   it("does not reuse Auto capability from a different Claude binary", () => {
     const status: ServerProviderStatus = {
       provider: "claudeAgent",
+      instanceId: "claudeAgent",
+      driver: "claudeAgent",
       status: "ready",
       available: true,
       authStatus: "authenticated",
@@ -143,6 +208,8 @@ describe("normalizeProviderStatusForLocalConfig", () => {
       }),
     ).toEqual({
       provider: "claudeAgent",
+      instanceId: "claudeAgent",
+      driver: "claudeAgent",
       status: "ready",
       available: true,
       authStatus: "authenticated",
@@ -153,6 +220,8 @@ describe("normalizeProviderStatusForLocalConfig", () => {
   it("preserves Auto capability probed from the selected Codex binary", () => {
     const status: ServerProviderStatus = {
       provider: "codex",
+      instanceId: "codex",
+      driver: "codex",
       status: "ready",
       available: true,
       authStatus: "authenticated",
@@ -171,6 +240,134 @@ describe("normalizeProviderStatusForLocalConfig", () => {
   });
 });
 
+describe("resolveVoiceTranscriptionTarget", () => {
+  const codexStatus = (
+    instanceId: string,
+    voiceTranscriptionAvailable: boolean | undefined,
+  ): ServerProviderStatus => ({
+    ...READY_STATUS,
+    provider: "codex",
+    driver: "codex",
+    instanceId,
+    displayName: instanceId,
+    ...(voiceTranscriptionAvailable === undefined ? {} : { voiceTranscriptionAvailable }),
+  });
+  const providerInstances = [
+    {
+      instanceId: "codex" as const,
+      provider: "codex" as const,
+      enabled: true,
+      isDefault: true,
+    },
+    {
+      instanceId: "codex_work" as const,
+      provider: "codex" as const,
+      enabled: true,
+      isDefault: false,
+    },
+  ];
+
+  it("uses a capable selected Codex account", () => {
+    expect(
+      resolveVoiceTranscriptionTarget({
+        statuses: [codexStatus("codex", true), codexStatus("codex_work", true)],
+        providerInstances,
+        selectedProvider: "codex",
+        selectedProviderInstanceId: "codex_work",
+      })?.instanceId,
+    ).toBe("codex_work");
+  });
+
+  it("uses a secondary capable Codex account when the default cannot transcribe", () => {
+    expect(
+      resolveVoiceTranscriptionTarget({
+        statuses: [codexStatus("codex", false), codexStatus("codex_work", true)],
+        providerInstances,
+        selectedProvider: "grok",
+        selectedProviderInstanceId: "grok",
+      })?.instanceId,
+    ).toBe("codex_work");
+  });
+
+  it("chooses secondary accounts deterministically regardless of status arrival order", () => {
+    const instances = [
+      ...providerInstances,
+      {
+        instanceId: "codex_alpha" as const,
+        provider: "codex" as const,
+        enabled: true,
+        isDefault: false,
+      },
+    ];
+    const statuses = [
+      codexStatus("codex_work", true),
+      codexStatus("codex_alpha", true),
+      codexStatus("codex", false),
+    ];
+
+    expect(
+      resolveVoiceTranscriptionTarget({
+        statuses,
+        providerInstances: instances,
+        selectedProvider: "grok",
+        selectedProviderInstanceId: "grok",
+      })?.instanceId,
+    ).toBe("codex_alpha");
+    expect(
+      resolveVoiceTranscriptionTarget({
+        statuses: [...statuses].reverse(),
+        providerInstances: [...instances].reverse(),
+        selectedProvider: "grok",
+        selectedProviderInstanceId: "grok",
+      })?.instanceId,
+    ).toBe("codex_alpha");
+  });
+
+  it("ignores a removed selected account even when its stale status advertises voice", () => {
+    expect(
+      resolveVoiceTranscriptionTarget({
+        statuses: [codexStatus("codex", true), codexStatus("codex_removed", true)],
+        providerInstances,
+        selectedProvider: "codex",
+        selectedProviderInstanceId: "codex_removed",
+      })?.instanceId,
+    ).toBe("codex");
+  });
+
+  it("returns no target when all configured Codex instances are disabled", () => {
+    expect(
+      resolveVoiceTranscriptionTarget({
+        statuses: [codexStatus("codex", true), codexStatus("codex_work", true)],
+        providerInstances: providerInstances.map((instance) => ({ ...instance, enabled: false })),
+        selectedProvider: "codex",
+        selectedProviderInstanceId: "codex_work",
+      }),
+    ).toBeNull();
+  });
+
+  it("does not resurrect a status-only stale Codex instance", () => {
+    expect(
+      resolveVoiceTranscriptionTarget({
+        statuses: [codexStatus("codex_removed", true)],
+        providerInstances: [],
+        selectedProvider: "grok",
+        selectedProviderInstanceId: "grok",
+      }),
+    ).toBeNull();
+  });
+
+  it("does not fall back to an unavailable configured instance", () => {
+    expect(
+      resolveVoiceTranscriptionTarget({
+        statuses: [{ ...codexStatus("codex", true), available: false }],
+        providerInstances: providerInstances.slice(0, 1),
+        selectedProvider: "grok",
+        selectedProviderInstanceId: "grok",
+      }),
+    ).toBeNull();
+  });
+});
+
 describe("isProviderUsable", () => {
   it("blocks unavailable or unauthenticated providers", () => {
     expect(isProviderUsable(null)).toBe(false);
@@ -179,9 +376,45 @@ describe("isProviderUsable", () => {
     expect(
       isProviderUsable({ ...BASE_STATUS, available: true, authStatus: "unauthenticated" }),
     ).toBe(false);
-    expect(isProviderUsable({ ...BASE_STATUS, available: true, authStatus: "authenticated" })).toBe(
-      true,
-    );
+    // Advisory warnings the health layer marks available (Pi bundled SDK,
+    // Cursor model-discovery warnings) stay sendable.
+    expect(
+      isProviderUsable({
+        ...BASE_STATUS,
+        available: true,
+        status: "warning",
+        authStatus: "authenticated",
+      }),
+    ).toBe(true);
+    expect(
+      isProviderUsable({
+        ...BASE_STATUS,
+        available: true,
+        status: "ready",
+        authStatus: "authenticated",
+      }),
+    ).toBe(true);
+  });
+
+  it("allows the local custom-binary confirmation fallback to start a session", () => {
+    const normalized = normalizeProviderStatusForLocalConfig({
+      provider: "grok",
+      status: {
+        ...BASE_STATUS,
+        provider: "grok",
+        instanceId: "grok",
+        driver: "grok",
+      },
+      customBinaryPath: "/opt/homebrew/bin/grok",
+    });
+
+    expect(normalized?.status).toBe("warning");
+    expect(isProviderUsable(normalized)).toBe(true);
+    expect(
+      resolveProviderSendAvailability({ provider: "grok", statuses: [normalized!] }),
+    ).toMatchObject({
+      usable: true,
+    });
   });
 });
 
@@ -204,9 +437,16 @@ describe("resolveAvailableProviderPreference", () => {
           {
             ...READY_STATUS,
             provider: "claudeAgent",
+            instanceId: "claudeAgent",
+            driver: "claudeAgent",
             authStatus: "unauthenticated",
           },
-          { ...READY_STATUS, provider: "cursor" },
+          {
+            ...READY_STATUS,
+            provider: "cursor",
+            instanceId: "cursor",
+            driver: "cursor",
+          },
         ],
         providerOrder: ["claudeAgent", "cursor"],
       }),
@@ -221,9 +461,16 @@ describe("resolveAvailableProviderPreference", () => {
           {
             ...READY_STATUS,
             provider: "claudeAgent",
+            instanceId: "claudeAgent",
+            driver: "claudeAgent",
             authStatus: "unauthenticated",
           },
-          { ...READY_STATUS, provider: "codex" },
+          {
+            ...READY_STATUS,
+            provider: "codex",
+            instanceId: "codex",
+            driver: "codex",
+          },
         ],
       }),
     ).toBe("codex");
@@ -293,6 +540,85 @@ describe("resolveProviderSendAvailabilityWithRefresh", () => {
     ).resolves.toMatchObject({
       usable: false,
       unavailableReason: "Antigravity is not authenticated yet.",
+    });
+  });
+});
+
+describe("providerUnavailableReason", () => {
+  it("uses provider instance display names when available", () => {
+    expect(
+      providerUnavailableReason({
+        ...BASE_STATUS,
+        provider: "claudeAgent",
+        instanceId: "claude_work",
+        driver: "claudeAgent",
+        displayName: "Claude Work",
+        authStatus: "unauthenticated",
+      }),
+    ).toBe("Claude Work is not authenticated yet.");
+  });
+});
+
+describe("findProviderStatus", () => {
+  it("selects the exact provider instance when multiple instances share a provider", () => {
+    const statuses: ServerProviderStatus[] = [
+      {
+        ...BASE_STATUS,
+        provider: "claudeAgent",
+        instanceId: "claude",
+        driver: "claudeAgent",
+        displayName: "Claude",
+        status: "ready",
+        available: true,
+        authStatus: "authenticated",
+      },
+      {
+        ...BASE_STATUS,
+        provider: "claudeAgent",
+        instanceId: "claude_work",
+        driver: "claudeAgent",
+        displayName: "Work",
+        message: "Work account is disabled.",
+      },
+    ];
+
+    expect(findProviderStatus(statuses, "claudeAgent", "claude_work")).toEqual(statuses[1]);
+    expect(
+      resolveProviderSendAvailability({
+        provider: "claudeAgent",
+        instanceId: "claude_work",
+        statuses,
+      }),
+    ).toMatchObject({
+      usable: false,
+      unavailableReason: "Work account is disabled.",
+    });
+  });
+
+  it("does not fall back to the default provider status when an explicit instance is missing", () => {
+    const statuses: ServerProviderStatus[] = [
+      {
+        ...BASE_STATUS,
+        provider: "claudeAgent",
+        instanceId: "claudeAgent",
+        driver: "claudeAgent",
+        displayName: "Claude",
+        status: "ready",
+        available: true,
+        authStatus: "authenticated",
+      },
+    ];
+
+    expect(findProviderStatus(statuses, "claudeAgent", "claude_work")).toBeNull();
+    expect(
+      resolveProviderSendAvailability({
+        provider: "claudeAgent",
+        instanceId: "claude_work",
+        statuses,
+      }),
+    ).toMatchObject({
+      usable: false,
+      unavailableReason: "Provider status is still loading.",
     });
   });
 });
