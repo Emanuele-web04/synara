@@ -42,6 +42,14 @@ export interface RightDockPane {
   pullRequestInitialTab: PullRequestInitialTab | null;
 }
 
+/**
+ * The GitHub inbox hosts a dock without a thread: standalone side chats about the selected
+ * item. It is keyed by this fixed id, which can never collide with a thread id.
+ */
+export const GITHUB_INBOX_DOCK_HOST_ID = "github-inbox";
+/** Who owns a dock: a chat thread, or the GitHub inbox page. */
+export type RightDockHostId = ThreadId | typeof GITHUB_INBOX_DOCK_HOST_ID;
+
 export interface RightDockThreadState {
   open: boolean;
   panes: RightDockPane[];
@@ -368,6 +376,24 @@ export function updatePaneInState(
   return changed ? { ...state, panes: nextPanes } : state;
 }
 
+// Points the (singleton) side chat pane at another thread, or removes it for null, without
+// opening or closing the dock. A host whose side chat follows a selection (the GitHub inbox)
+// uses it so a closed dock stays closed and an open one shows the new target.
+export function setSidechatPaneThreadInState(
+  state: RightDockThreadState,
+  input: { paneId: string; threadId: ThreadId | null },
+): RightDockThreadState {
+  const existing = findSingletonPane(state, "sidechat");
+  if (input.threadId === null) {
+    return existing ? closePaneInState(state, existing.id) : state;
+  }
+  if (existing) {
+    return updatePaneInState(state, existing.id, { threadId: input.threadId });
+  }
+  const pane = createPane({ paneId: input.paneId, kind: "sidechat", threadId: input.threadId });
+  return { open: state.open, panes: [...state.panes, pane], activePaneId: pane.id };
+}
+
 // Header toggles behave like a visibility switch for a singleton kind: if that
 // kind is the active visible pane, collapse the dock (preserving tabs);
 // otherwise open/focus it.
@@ -406,14 +432,14 @@ export function findMissingSidechatPaneIds(
 export function resolveVisibleDockSidechatThreadIds(input: {
   dockRendered: boolean;
   dockStateByThreadId: Record<string, RightDockThreadState | undefined>;
-  hostThreadIds: readonly ThreadId[];
+  hostThreadIds: readonly RightDockHostId[];
 }): ThreadId[] {
   if (!input.dockRendered) {
     return [];
   }
 
   const sidechatThreadIds: ThreadId[] = [];
-  const seenThreadIds = new Set<ThreadId>(input.hostThreadIds);
+  const seenThreadIds = new Set<string>(input.hostThreadIds);
   for (const hostThreadId of input.hostThreadIds) {
     const dockState = input.dockStateByThreadId[hostThreadId];
     if (!dockState) {

@@ -184,6 +184,7 @@ describe("orchestration projector", () => {
         subagentRole: null,
         forkSourceThreadId: null,
         sidechatSourceThreadId: null,
+        sidechatContext: null,
         sidechatLastActivityAt: null,
         sidechatExpiredAt: null,
         lastKnownPr: null,

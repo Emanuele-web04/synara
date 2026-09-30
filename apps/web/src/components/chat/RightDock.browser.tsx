@@ -324,3 +324,58 @@ it("offers maximize for every pane kind, not only documents", async () => {
   await expect.poll(() => container.getBoundingClientRect().width).toBeLessThan(1000);
   await screen.unmount();
 });
+
+it("opens at half the shell by default and at the host's share when it asks for one", async () => {
+  await page.viewport(1280, 800);
+  const state: RightDockThreadState = {
+    open: true,
+    activePaneId: "file",
+    panes: [
+      {
+        id: "file",
+        kind: "file",
+        filePath: "note.md",
+        threadId: null,
+        diffTurnId: null,
+        diffFilePath: null,
+        pullRequestProjectId: null,
+        pullRequestRepository: null,
+        pullRequestNumber: null,
+        pullRequestInitialTab: null,
+      },
+    ],
+  };
+  const dockWidth = async (openWidthFraction: number | undefined) => {
+    const screen = await renderDock(
+      <div style={{ display: "flex", width: 1000, height: 600 }}>
+        <div style={{ flex: 1 }}>Chat</div>
+        <RightDock
+          state={state}
+          minWidth={200}
+          defaultWidth="500px"
+          {...(openWidthFraction === undefined ? {} : { openWidthFraction })}
+          shouldAcceptWidth={() => true}
+          addMenuKinds={[]}
+          onClosePane={() => {}}
+          onCollapse={() => {}}
+          onOpenChange={() => {}}
+          onAddPane={() => {}}
+          renderPane={() => <div data-testid="pane">Pane</div>}
+        />
+      </div>,
+    );
+    const container = document
+      .querySelector<HTMLElement>('[data-testid="pane"]')!
+      .closest<HTMLElement>('[data-slot="sidebar-container"]')!;
+    const measure = () => Math.round(container.getBoundingClientRect().width);
+    return { screen, measure };
+  };
+
+  const half = await dockWidth(undefined);
+  await expect.poll(half.measure).toBe(500);
+  await half.screen.unmount();
+
+  const quarter = await dockWidth(0.25);
+  await expect.poll(quarter.measure).toBe(250);
+  await quarter.screen.unmount();
+});

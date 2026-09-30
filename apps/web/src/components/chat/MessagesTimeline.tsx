@@ -1639,6 +1639,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         <UserMessagePullRequestContextCard
                           key={context.index}
                           scope={context.scope}
+                          itemKind={context.itemKind}
                           title={context.title}
                           subtitle={context.subtitle}
                           text={context.text}

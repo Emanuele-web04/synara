@@ -152,7 +152,10 @@ import {
 import { useProviderStatusRefresh } from "../hooks/useProviderStatusRefresh";
 import { resolveSplitViewThreadIds, selectSplitView, useSplitViewStore } from "../splitViewStore";
 import { useRightDockStore } from "../rightDockStore";
-import { resolveVisibleDockSidechatThreadIds } from "../rightDockStore.logic";
+import {
+  GITHUB_INBOX_DOCK_HOST_ID,
+  resolveVisibleDockSidechatThreadIds,
+} from "../rightDockStore.logic";
 import { arraysShallowEqual } from "../storeNormalization";
 import { providerModelDiscoveryInvalidationFingerprint } from "../lib/providerDiscoveryInvalidation";
 import {
@@ -183,6 +186,7 @@ import {
   shouldInvalidateProviderQueriesForEvent,
 } from "./-rootEventInvalidation";
 import { createDesktopProjectRecoveryAttemptGate } from "./-desktopProjectRecoveryAttempt";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
 
 const SHELL_SNAPSHOT_BOOTSTRAP_FALLBACK_DELAY_MS = 1_500;
 const THREAD_DETAIL_CATCHUP_INTERVAL_MS = 1_500;
@@ -1216,17 +1220,21 @@ function EventRouter() {
   // Right-dock sidechat panes render a full ChatView for their embedded thread,
   // so they need a detail lease exactly like split-view panes: without one the
   // sidechat's snapshot never syncs and its transcript stays on the loading state.
+  // The Inbox route (`/pull-requests`) hosts a thread-less dock for standalone side chats.
   const dockStateByThreadId = useRightDockStore((store) => store.dockStateByThreadId);
+  const isGitHubInboxRoute = pathname === "/pull-requests" || pathname === "/pull-requests/";
   const visibleThreadIds = useMemo(
     () => [
       ...hostThreadIds,
       ...resolveVisibleDockSidechatThreadIds({
         dockRendered: routeSearch.view !== "editor",
         dockStateByThreadId,
-        hostThreadIds,
+        hostThreadIds: isGitHubInboxRoute
+          ? [...hostThreadIds, GITHUB_INBOX_DOCK_HOST_ID]
+          : hostThreadIds,
       }),
     ],
-    [dockStateByThreadId, hostThreadIds, routeSearch.view],
+    [dockStateByThreadId, hostThreadIds, isGitHubInboxRoute, routeSearch.view],
   );
   const retainedThreadIds = useRetainedThreadDetailIds();
   const serverThreadIdSet = useMemo(() => new Set(serverThreadIds), [serverThreadIds]);
@@ -1235,7 +1243,7 @@ function EventRouter() {
     () =>
       new Set(
         serverThreadIds.filter((threadId) =>
-          Boolean(sidebarThreadSummaryById[threadId]?.sidechatSourceThreadId),
+          isSidechatThread(sidebarThreadSummaryById[threadId] ?? {}),
         ),
       ),
     [serverThreadIds, sidebarThreadSummaryById],

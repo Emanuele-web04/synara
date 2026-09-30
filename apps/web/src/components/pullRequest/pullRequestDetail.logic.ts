@@ -1,6 +1,6 @@
 // FILE: pullRequestDetail.logic.ts
-// Purpose: Pure helpers shared by every host of the pull request detail surface (the
-//          /pull-requests route overlay and the chat right-dock pane): the canonical
+// Purpose: Pure helpers shared by every host of the pull request detail surface (the inbox
+//          route's detail pane and the chat right-dock pane): the canonical
 //          pane identity key, the "PR #n" tab chip label, the plain-language state
 //          descriptor, and the flattened chronological timeline event list.
 // Layer: Web domain helpers (no React)
@@ -24,7 +24,7 @@ export function pullRequestDetailInputKey(input: PullRequestDetailInput): string
   return `${input.projectId}:${input.repository}#${input.number}`;
 }
 
-/** Tab chip label shared by the route overlay chip and the right-dock pane tab. */
+/** Tab chip label for the right-dock pane tab. */
 export function pullRequestPaneTabLabel(number: number): string {
   return `PR #${number}`;
 }

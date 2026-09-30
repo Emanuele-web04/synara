@@ -25,6 +25,7 @@ import { useHandleNewStudioChat } from "../hooks/useHandleNewStudioChat";
 import { collectStudioProjectIds, findStudioDraftThreadId } from "../lib/studioProjects";
 import { EMPTY_THREAD_IDS, useStore } from "../store";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
 
 // How long the splash below waits for the welcome's Studio root before surfacing an error —
 // generous next to a normal welcome round-trip, mirroring the home route's eventual error+retry.
@@ -64,7 +65,7 @@ function StudioIndexRouteView() {
     const summary = sidebarThreadSummaryById[threadId];
     return summary &&
       (summary.archivedAt ?? null) === null &&
-      !summary.sidechatSourceThreadId &&
+      !isSidechatThread(summary) &&
       studioProjectIds.has(summary.projectId)
       ? [summary]
       : [];

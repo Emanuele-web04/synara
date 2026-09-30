@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import { Effect, Fiber } from "effect";
+import { Effect, Fiber, Layer } from "effect";
 import { TestClock } from "effect/testing";
 import { afterEach, expect, vi } from "vitest";
 
@@ -9,9 +9,22 @@ vi.mock("../../processRunner", () => ({
 
 import { runProcess } from "../../processRunner";
 import { GitHubCli, PULL_REQUEST_SUMMARY_JSON_FIELDS } from "../Services/GitHubCli.ts";
-import { GitHubCliLive } from "./GitHubCli.ts";
+import {
+  fakeInboxGraphQlJson,
+  fakeInboxIssueNode,
+  fakeInboxPullRequestNode,
+} from "../testing/fakeGitHubCli.ts";
+import { GitHubCliLive, ISSUE_DETAIL_JSON_FIELDS } from "./GitHubCli.ts";
 
 const mockedRunProcess = vi.mocked(runProcess);
+
+const processResult = (stdout: string, overrides: { code?: number; stderr?: string } = {}) => ({
+  stdout,
+  stderr: overrides.stderr ?? "",
+  code: overrides.code ?? 0,
+  signal: null,
+  timedOut: false,
+});
 const layer = it.layer(GitHubCliLive);
 
 afterEach(() => {
@@ -749,293 +762,477 @@ layer("GitHubCliLive", (it) => {
     }),
   );
 
-  it.effect("lists repository pull requests while skipping malformed entries", () =>
+  it.effect(
+    "reads a repository's inbox lists in one GraphQL call without the involvement search",
+    () =>
+      Effect.gen(function* () {
+        vi.stubEnv("GH_HOST", "enterprise.example.com");
+        mockedRunProcess.mockResolvedValueOnce(
+          processResult(
+            fakeInboxGraphQlJson({
+              viewer: "octocat",
+              pullRequests: [
+                fakeInboxPullRequestNode(9, {
+                  reviewRequests: {
+                    nodes: [
+                      { requestedReviewer: { __typename: "User", login: "reviewer" } },
+                      { requestedReviewer: { __typename: "Team", slug: "platform" } },
+                    ],
+                  },
+                  labels: { nodes: [{ name: "ready", color: "00ff00" }] },
+                  assignees: {
+                    nodes: [{ login: "octocat", avatarUrl: null, url: null, name: null }],
+                  },
+                  comments: { totalCount: 3 },
+                  stackEntry: { position: 2 },
+                  stack: { number: 4, size: 3, baseRefName: "main" },
+                }),
+                { __typename: "PullRequest", number: "broken" },
+              ],
+              pullRequestTotalCount: 120,
+              issues: [fakeInboxIssueNode(12, { comments: { totalCount: 5 } })],
+              // Ignored by the lists decoder: the involvement document reads it.
+              mine: [fakeInboxIssueNode(3)],
+              reviewRequested: [9],
+              reviewRequestedCount: 60,
+              rateLimit: { cost: 5, remaining: 4_321, resetAt: "2026-07-15T01:00:00Z" },
+            }),
+          ),
+        );
+
+        const gh = yield* GitHubCli;
+        const snapshot = yield* gh.listRepositoryInbox({
+          cwd: "/repo",
+          repository: "acme/app",
+          state: "open",
+        });
+
+        assert.equal(mockedRunProcess.mock.calls.length, 1);
+        assert.equal(snapshot.viewer, "octocat");
+        assert.deepStrictEqual(
+          snapshot.pullRequests.map((pullRequest) => pullRequest.number),
+          [9],
+        );
+        assert.deepStrictEqual(
+          snapshot.issues.map((issue) => issue.number),
+          [12],
+        );
+        const pullRequest = snapshot.pullRequests[0]!;
+        assert.deepStrictEqual(pullRequest.reviewRequestLogins, ["reviewer"]);
+        assert.deepStrictEqual(pullRequest.labels, [{ name: "ready", color: "00ff00" }]);
+        assert.equal(pullRequest.commentCount, 3);
+        assert.deepStrictEqual(
+          pullRequest.assignees.map((assignee) => assignee.login),
+          ["octocat"],
+        );
+        assert.deepStrictEqual(pullRequest.stack, {
+          number: 4,
+          size: 3,
+          position: 2,
+          baseBranch: "main",
+        });
+        assert.equal(snapshot.issues[0]?.commentCount, 5);
+        assert.equal(snapshot.truncatedPullRequests, true);
+        assert.equal(snapshot.truncatedIssues, false);
+        assert.deepStrictEqual(snapshot.reviewRequestedNumbers, [9]);
+        assert.equal(snapshot.reviewRequestedCount, 60);
+        assert.deepStrictEqual(snapshot.rateLimit, {
+          cost: 5,
+          remaining: 4_321,
+          resetAt: "2026-07-15T01:00:00Z",
+        });
+        const [command, args, options] = mockedRunProcess.mock.calls[0]!;
+        assert.equal(command, "gh");
+        const query = (args as string[]).find((arg) => arg.startsWith("query=")) ?? "";
+        expect(query).not.toContain("mine:");
+        expect(query).not.toContain("$mineQuery");
+        expect((args as string[]).some((arg) => arg.startsWith("mineQuery="))).toBe(false);
+        expect(args).toEqual(
+          expect.arrayContaining([
+            "api",
+            "graphql",
+            "--hostname",
+            "github.com",
+            expect.stringContaining("reviewRequested: search(query: $reviewQuery"),
+            "owner=acme",
+            "name=app",
+            "prStates[]=OPEN",
+            "issueStates[]=OPEN",
+            "reviewQuery=repo:acme/app is:pr is:open review-requested:@me",
+            "includeReview=true",
+          ]),
+        );
+        expect(options).toEqual(
+          expect.objectContaining({ env: expect.objectContaining({ GH_HOST: "github.com" }) }),
+        );
+      }),
+  );
+
+  it.effect("reads the involvement search as its own document with full row fields", () =>
     Effect.gen(function* () {
-      mockedRunProcess.mockResolvedValueOnce({
-        stdout: JSON.stringify([
-          {
-            number: 9,
-            title: "Healthy PR",
-            url: "https://github.com/acme/app/pull/9",
-            author: { login: "octocat" },
-            headRefName: "healthy",
-            baseRefName: "main",
-            state: "OPEN",
-            isDraft: false,
-            additions: 4,
-            deletions: 1,
-            createdAt: "2026-07-01T00:00:00Z",
-            updatedAt: "2026-07-02T00:00:00Z",
-            reviewRequests: [
-              { __typename: "User", login: "reviewer" },
-              { __typename: "Team", name: "Platform", slug: "platform" },
+      mockedRunProcess.mockResolvedValueOnce(
+        processResult(
+          fakeInboxGraphQlJson({
+            mine: [
+              fakeInboxIssueNode(3, { title: "Old issue" }),
+              fakeInboxPullRequestNode(9),
+              fakeInboxIssueNode(3),
+              { __typename: "PullRequest", number: 11, title: null },
+              { __typename: "Discussion", number: 4 },
             ],
-            reviews: [],
-            labels: [{ name: "ready", color: "00ff00" }],
-          },
-          { number: "broken" },
-        ]),
-        stderr: "",
-        code: 0,
-        signal: null,
-        timedOut: false,
-      });
-      mockedRunProcess.mockResolvedValueOnce({
-        stdout: JSON.stringify({
-          data: {
-            repository: {
-              pr_9: {
-                stackEntry: { position: 2 },
-                stack: { number: 4, size: 3, baseRefName: "main" },
-              },
-            },
-          },
-        }),
-        stderr: "",
-        code: 0,
-        signal: null,
-        timedOut: false,
-      });
-
-      const gh = yield* GitHubCli;
-      const result = yield* gh.listRepositoryPullRequests({
-        cwd: "/repo",
-        repository: "acme/app",
-        state: "open",
-        involvement: "reviewing",
-        viewer: "octocat",
-      });
-
-      assert.equal(result.rawCount, 2);
-      assert.equal(result.entries.length, 1);
-      assert.equal(result.entries[0]?.title, "Healthy PR");
-      assert.deepStrictEqual(result.entries[0]?.reviewRequestLogins, ["reviewer"]);
-      assert.deepStrictEqual(result.entries[0]?.stack, {
-        number: 4,
-        size: 3,
-        position: 2,
-        baseBranch: "main",
-      });
-      expect(mockedRunProcess.mock.calls[0]?.[1]).toEqual([
-        "pr",
-        "list",
-        "--repo",
-        "github.com/acme/app",
-        "--search",
-        "review-requested:octocat",
-        "--state",
-        "open",
-        "--limit",
-        "50",
-        "--json",
-        expect.any(String),
-      ]);
-      expect(mockedRunProcess.mock.calls[1]?.[1]).toEqual([
-        "api",
-        "graphql",
-        "--hostname",
-        "github.com",
-        "-f",
-        expect.stringContaining("pr_9: pullRequest(number: 9)"),
-        "-F",
-        "owner=acme",
-        "-F",
-        "repo=app",
-      ]);
-    }),
-  );
-
-  it.effect("filters authored repository lists before applying the limit", () =>
-    Effect.gen(function* () {
-      mockedRunProcess.mockResolvedValueOnce({
-        stdout: "[]",
-        stderr: "",
-        code: 0,
-        signal: null,
-        timedOut: false,
-      });
-      const gh = yield* GitHubCli;
-      yield* gh.listRepositoryPullRequests({
-        cwd: "/repo",
-        repository: "acme/app",
-        state: "merged",
-        involvement: "authored",
-        viewer: "octocat",
-        limit: 50,
-      });
-      expect(mockedRunProcess.mock.calls[0]?.[1]).toEqual(
-        expect.arrayContaining([
-          "--repo",
-          "github.com/acme/app",
-          "--author",
-          "octocat",
-          "--state",
-          "merged",
-          "--limit",
-          "50",
-        ]),
+            rateLimit: { cost: 2, remaining: 4_300, resetAt: "2026-07-15T01:00:00Z" },
+          }),
+        ),
       );
-    }),
-  );
-
-  it.effect("enriches an individually recovered pull request with stack metadata", () =>
-    Effect.gen(function* () {
-      mockedRunProcess.mockResolvedValueOnce({
-        stdout: JSON.stringify({
-          number: 99,
-          title: "Pinned beyond the list cap",
-          url: "https://github.com/acme/app/pull/99",
-          headRefName: "stack-top",
-          baseRefName: "stack-base",
-          state: "OPEN",
-          createdAt: "2026-07-01T00:00:00Z",
-          updatedAt: "2026-07-02T00:00:00Z",
-        }),
-        stderr: "",
-        code: 0,
-        signal: null,
-        timedOut: false,
-      });
-      mockedRunProcess.mockResolvedValueOnce({
-        stdout: JSON.stringify({
-          data: {
-            repository: {
-              pr_99: {
-                stackEntry: { position: 3 },
-                stack: { number: 7, size: 3, baseRefName: "main" },
-              },
-            },
-          },
-        }),
-        stderr: "",
-        code: 0,
-        signal: null,
-        timedOut: false,
-      });
 
       const gh = yield* GitHubCli;
-      const result = yield* gh.getPullRequestListItem({
-        cwd: "/repo",
-        repository: "acme/app",
-        number: 99,
-      });
-
-      assert.deepStrictEqual(result.stack, {
-        number: 7,
-        size: 3,
-        position: 3,
-        baseBranch: "main",
-      });
-      expect(mockedRunProcess.mock.calls[1]?.[1]).toEqual(
-        expect.arrayContaining([expect.stringContaining("pr_99: pullRequest(number: 99)")]),
-      );
-    }),
-  );
-
-  it.effect("keeps repository rows when optional stack enrichment fails", () =>
-    Effect.gen(function* () {
-      mockedRunProcess.mockResolvedValueOnce({
-        stdout: JSON.stringify([
-          {
-            number: 11,
-            title: "Still visible",
-            url: "https://github.com/acme/app/pull/11",
-            headRefName: "feature",
-            baseRefName: "main",
-            state: "OPEN",
-            createdAt: "2026-07-01T00:00:00Z",
-            updatedAt: "2026-07-02T00:00:00Z",
-          },
-        ]),
-        stderr: "",
-        code: 0,
-        signal: null,
-        timedOut: false,
-      });
-      mockedRunProcess.mockRejectedValueOnce(new Error("GraphQL field unavailable"));
-
-      const gh = yield* GitHubCli;
-      const result = yield* gh.listRepositoryPullRequests({
-        cwd: "/repo",
-        repository: "acme/app",
-        state: "open",
-        involvement: "all",
-        viewer: "octocat",
-      });
-
-      assert.equal(result.entries[0]?.title, "Still visible");
-      assert.equal(result.entries[0]?.stack, null);
-    }),
-  );
-
-  it.effect("uses GitHub's team-aware review search for beyond-cap pin verification", () =>
-    Effect.gen(function* () {
-      vi.stubEnv("GH_HOST", "enterprise.example.com");
-      mockedRunProcess.mockResolvedValueOnce({
-        stdout: JSON.stringify([{ number: 51 }, { number: 87 }]),
-        stderr: "",
-        code: 0,
-        signal: null,
-        timedOut: false,
-      });
-
-      const gh = yield* GitHubCli;
-      const numbers = yield* gh.listReviewRequestedPullRequestNumbers({
-        cwd: "/repo",
-        repository: "acme/app",
-        viewer: "octocat",
-        limit: 1_000,
-      });
-
-      assert.deepStrictEqual(numbers, [51, 87]);
-      expect(mockedRunProcess.mock.calls[0]?.[1]).toEqual([
-        "search",
-        "prs",
-        "--repo",
-        "acme/app",
-        "--review-requested",
-        "octocat",
-        "--state",
-        "open",
-        "--limit",
-        "1000",
-        "--json",
-        "number",
-      ]);
-      expect(mockedRunProcess.mock.calls[0]?.[2]).toEqual(
-        expect.objectContaining({
-          env: expect.objectContaining({ GH_HOST: "github.com" }),
-          signal: expect.any(AbortSignal),
-        }),
-      );
-    }),
-  );
-
-  it.effect("excludes merged pull requests from closed repository lists", () =>
-    Effect.gen(function* () {
-      mockedRunProcess.mockResolvedValueOnce({
-        stdout: "[]",
-        stderr: "",
-        code: 0,
-        signal: null,
-        timedOut: false,
-      });
-      const gh = yield* GitHubCli;
-      yield* gh.listRepositoryPullRequests({
+      const involvement = yield* gh.listRepositoryInboxInvolvement({
         cwd: "/repo",
         repository: "acme/app",
         state: "closed",
-        involvement: "reviewing",
-        viewer: "octocat",
-        limit: 50,
       });
+
+      // #11 is malformed, so it has no row, but it still marks the viewer as involved.
+      assert.deepStrictEqual(involvement.involvedNumbers, [3, 9, 11]);
+      assert.deepStrictEqual(
+        involvement.items.map((remote) => [remote.kind, remote.item.number, remote.item.title]),
+        [
+          ["issue", 3, "Old issue"],
+          ["pullRequest", 9, "PR 9"],
+          ["issue", 3, "Issue 3"],
+        ],
+      );
+      assert.equal(involvement.rateLimit?.remaining, 4_300);
+      const args = mockedRunProcess.mock.calls[0]?.[1] as string[];
+      const query = args.find((arg) => arg.startsWith("query=")) ?? "";
+      expect(query).toContain(
+        "issueCount nodes { __typename ...InboxPullRequestFields ...InboxIssueFields }",
+      );
+      expect(query).not.toContain("repository(");
+      expect(args).toEqual(
+        expect.arrayContaining(["graphql", "mineQuery=repo:acme/app is:closed involves:@me"]),
+      );
+    }),
+  );
+
+  it.effect("drops the stack fields from both inbox documents after either is rejected", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockRejectedValueOnce(
+        new Error(
+          "gh api graphql failed (code=1, signal=null). gh: Field 'stackEntry' doesn't exist on type 'PullRequest'",
+        ),
+      );
+      mockedRunProcess.mockResolvedValue(processResult(fakeInboxGraphQlJson({})));
+
+      // A fresh layer: the shared one may already have turned the stack fields off.
+      yield* Effect.gen(function* () {
+        const gh = yield* GitHubCli;
+        const input = { cwd: "/repo", repository: "acme/app", state: "open" } as const;
+        yield* gh.listRepositoryInboxInvolvement(input);
+        yield* gh.listRepositoryInbox(input);
+        yield* gh.listRepositoryInboxInvolvement(input);
+      }).pipe(Effect.provide(Layer.fresh(GitHubCliLive)));
+
+      const queries = mockedRunProcess.mock.calls.map(
+        (call) => (call[1] as string[]).find((arg) => arg.startsWith("query=")) ?? "",
+      );
+      assert.equal(queries.length, 4);
+      expect(queries[0]).toContain("stackEntry");
+      expect(queries[0]).toContain("mine:");
+      expect(queries[1]).toContain("mine:");
+      for (const query of queries.slice(1)) expect(query).not.toContain("stackEntry");
+      expect(queries[2]).toContain("repository(");
+    }),
+  );
+
+  it.effect("reads closed and merged items together and skips the review search", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockResolvedValueOnce(
+        processResult(
+          fakeInboxGraphQlJson({
+            pullRequests: [
+              fakeInboxPullRequestNode(5, { state: "MERGED", mergedAt: "2026-07-03T00:00:00Z" }),
+              fakeInboxPullRequestNode(6, { state: "CLOSED" }),
+            ],
+            issues: [
+              fakeInboxIssueNode(7, { state: "CLOSED", stateReason: "NOT_PLANNED" }),
+              fakeInboxIssueNode(8, { state: "CLOSED", stateReason: "DUPLICATE" }),
+            ],
+            reviewRequested: null,
+          }),
+        ),
+      );
+
+      const gh = yield* GitHubCli;
+      const snapshot = yield* gh.listRepositoryInbox({
+        cwd: "/repo",
+        repository: "acme/app",
+        state: "closed",
+      });
+
+      assert.deepStrictEqual(
+        snapshot.pullRequests.map((pullRequest) => pullRequest.state),
+        ["merged", "closed"],
+      );
+      assert.deepStrictEqual(
+        snapshot.issues.map((issue) => issue.stateReason),
+        ["not-planned", "duplicate"],
+      );
+      assert.equal(snapshot.reviewRequestedCount, 0);
+      const args = mockedRunProcess.mock.calls[0]?.[1];
+      expect(args).toEqual(
+        expect.arrayContaining([
+          "prStates[]=CLOSED",
+          "prStates[]=MERGED",
+          "issueStates[]=CLOSED",
+          "includeReview=false",
+        ]),
+      );
+      expect(args).not.toContain("prStates[]=OPEN");
+    }),
+  );
+
+  it.effect("drops the optional stack fields once GitHub rejects them", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockRejectedValueOnce(
+        new Error(
+          "gh api graphql failed (code=1, signal=null). gh: Field 'stackEntry' doesn't exist on type 'PullRequest'",
+        ),
+      );
+      mockedRunProcess.mockResolvedValue(processResult(fakeInboxGraphQlJson({})));
+
+      const gh = yield* GitHubCli;
+      yield* gh.listRepositoryInbox({ cwd: "/repo", repository: "acme/app", state: "open" });
+      yield* gh.listRepositoryInbox({ cwd: "/repo", repository: "acme/app", state: "open" });
+
+      const queries = mockedRunProcess.mock.calls.map((call) =>
+        (call[1] as string[]).find((arg) => arg.startsWith("query=")),
+      );
+      assert.equal(queries.length, 3);
+      expect(queries[0]).toContain("stackEntry");
+      expect(queries[1]).not.toContain("stackEntry");
+      expect(queries[2]).not.toContain("stackEntry");
+    }),
+  );
+
+  it.effect("classifies GitHub rate limits separately from other failures", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockRejectedValueOnce(
+        new Error(
+          "gh api graphql -f query=query { rateLimit { cost } } failed (code=1, signal=null). gh: API rate limit exceeded for user ID 1. (HTTP 403)",
+        ),
+      );
+      mockedRunProcess.mockRejectedValueOnce(
+        new Error(
+          "gh api graphql -f query=query { rateLimit { cost } } failed (code=1, signal=null). gh: Something went wrong (HTTP 502)",
+        ),
+      );
+      mockedRunProcess.mockResolvedValueOnce(
+        processResult(
+          fakeInboxGraphQlJson({
+            errors: [{ type: "RATE_LIMITED", message: "API rate limit already exceeded" }],
+          }),
+        ),
+      );
+
+      const gh = yield* GitHubCli;
+      const read = () =>
+        gh
+          .listRepositoryInbox({ cwd: "/repo", repository: "acme/app", state: "open" })
+          .pipe(Effect.flip);
+      assert.equal((yield* read()).reason, "rate-limited");
+      assert.equal((yield* read()).reason, "other");
+      assert.equal((yield* read()).reason, "rate-limited");
+    }),
+  );
+
+  it.effect("probes for changes with a conditional request that a 304 answers for free", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockResolvedValueOnce(
+        processResult(
+          'HTTP/2.0 200 OK\r\nEtag: W/"abc"\r\nX-Ratelimit-Remaining: 4999\r\n\r\n[{"number":1}]',
+        ),
+      );
+      mockedRunProcess.mockResolvedValueOnce(
+        processResult('HTTP/2.0 304 Not Modified\r\nEtag: "abc"\r\n\r\n', {
+          code: 1,
+          stderr: "gh: HTTP 304",
+        }),
+      );
+      mockedRunProcess.mockResolvedValueOnce(
+        processResult("HTTP/2.0 403 Forbidden\r\n\r\n", {
+          code: 1,
+          stderr: "gh: API rate limit exceeded for user ID 1. (HTTP 403)",
+        }),
+      );
+
+      const gh = yield* GitHubCli;
+      const first = yield* gh.probeRepositoryInboxChanges({
+        cwd: "/repo",
+        repository: "acme/app",
+        etag: null,
+      });
+      const second = yield* gh.probeRepositoryInboxChanges({
+        cwd: "/repo",
+        repository: "acme/app",
+        etag: 'W/"abc"',
+      });
+      const limited = yield* gh
+        .probeRepositoryInboxChanges({ cwd: "/repo", repository: "acme/app", etag: 'W/"abc"' })
+        .pipe(Effect.flip);
+
+      assert.deepStrictEqual(first, { changed: true, etag: 'W/"abc"' });
+      assert.deepStrictEqual(second, { changed: false });
+      assert.equal(limited.reason, "rate-limited");
+      expect(mockedRunProcess.mock.calls[0]?.[1]).toEqual([
+        "api",
+        "--hostname",
+        "github.com",
+        "-i",
+        "repos/acme/app/issues?state=all&sort=updated&direction=desc&per_page=1",
+      ]);
+      expect(mockedRunProcess.mock.calls[1]?.[1]).toEqual(
+        expect.arrayContaining(["-H", 'If-None-Match: W/"abc"']),
+      );
+      expect(mockedRunProcess.mock.calls[1]?.[2]).toEqual(
+        expect.objectContaining({ allowNonZeroExit: true }),
+      );
+    }),
+  );
+
+  it.effect("looks up pinned items by number and treats only GitHub's NOT_FOUND as missing", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockResolvedValueOnce(
+        processResult(
+          JSON.stringify({
+            data: {
+              repository: {
+                item_4: fakeInboxIssueNode(4),
+                item_9: fakeInboxPullRequestNode(9),
+                item_99: null,
+              },
+            },
+            errors: [
+              {
+                type: "NOT_FOUND",
+                path: ["repository", "item_99"],
+                message: "Could not resolve to an issue or pull request with the number of 99.",
+              },
+            ],
+          }),
+          { code: 1, stderr: "gh: Could not resolve to an issue or pull request" },
+        ),
+      );
+      mockedRunProcess.mockResolvedValueOnce(
+        processResult("", { code: 1, stderr: "gh: HTTP 502: Bad Gateway" }),
+      );
+
+      const gh = yield* GitHubCli;
+      const results = yield* gh.getRepositoryInboxItems({
+        cwd: "/repo",
+        repository: "acme/app",
+        numbers: [4, 9, 99],
+      });
+      const failure = yield* gh
+        .getRepositoryInboxItems({ cwd: "/repo", repository: "acme/app", numbers: [5] })
+        .pipe(Effect.flip);
+
+      const kindOf = (number: number) => {
+        const lookup = results.get(number);
+        return lookup?._tag === "found" ? lookup.item.kind : null;
+      };
+      assert.equal(kindOf(4), "issue");
+      assert.equal(kindOf(9), "pullRequest");
+      assert.deepStrictEqual(results.get(99), { _tag: "not-found" });
+      assert.equal(failure.reason, "other");
       expect(mockedRunProcess.mock.calls[0]?.[1]).toEqual(
         expect.arrayContaining([
-          "--search",
-          "review-requested:octocat is:unmerged",
-          "--state",
-          "closed",
+          expect.stringContaining("item_99: issueOrPullRequest(number: 99)"),
         ]),
+      );
+    }),
+  );
+
+  it.effect("reads issue detail and posts issue comments over stdin", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockResolvedValueOnce(
+        processResult(
+          JSON.stringify({
+            number: 1374,
+            title: "Feature request",
+            url: "https://github.com/acme/app/issues/1374",
+            body: "Details",
+            state: "CLOSED",
+            stateReason: "COMPLETED",
+            author: { login: "alex", name: "Alex" },
+            assignees: [],
+            labels: [{ name: "kind:feature", color: "0969da" }],
+            comments: [
+              {
+                id: "IC_2",
+                author: { login: "b" },
+                body: "second",
+                createdAt: "2026-07-03T00:00:00Z",
+              },
+              {
+                id: "IC_1",
+                author: { login: "a" },
+                body: "first",
+                createdAt: "2026-07-02T00:00:00Z",
+              },
+            ],
+            createdAt: "2026-07-01T00:00:00Z",
+            updatedAt: "2026-07-03T00:00:00Z",
+            closedAt: "2026-07-03T00:00:00Z",
+          }),
+        ),
+      );
+      mockedRunProcess.mockResolvedValueOnce(processResult(""));
+
+      const gh = yield* GitHubCli;
+      const detail = yield* gh.getIssueDetail({
+        cwd: "/repo",
+        repository: "acme/app",
+        number: 1374,
+      });
+      yield* gh.commentOnIssue({
+        cwd: "/repo",
+        repository: "acme/app",
+        number: 1374,
+        body: "private text",
+      });
+
+      assert.equal(detail.state, "closed");
+      assert.equal(detail.stateReason, "completed");
+      assert.deepStrictEqual(
+        detail.comments.map((comment) => [comment.id, comment.kind]),
+        [
+          ["IC_1", "issue-comment"],
+          ["IC_2", "issue-comment"],
+        ],
+      );
+      assert.equal(detail.commentsTruncated, false);
+      expect(mockedRunProcess.mock.calls[0]?.[1]).toEqual([
+        "issue",
+        "view",
+        "1374",
+        "--repo",
+        "github.com/acme/app",
+        "--json",
+        ISSUE_DETAIL_JSON_FIELDS,
+      ]);
+      expect(mockedRunProcess.mock.calls[1]?.[1]).toEqual([
+        "issue",
+        "comment",
+        "1374",
+        "--repo",
+        "github.com/acme/app",
+        "--body-file",
+        "-",
+      ]);
+      expect(mockedRunProcess.mock.calls[1]?.[1]).not.toContain("private text");
+      expect(mockedRunProcess.mock.calls[1]?.[2]).toEqual(
+        expect.objectContaining({ stdin: "private text" }),
       );
     }),
   );

@@ -17,6 +17,7 @@ import type {
   OrchestrationSessionStatus,
   OrchestrationThreadActivity,
   ThreadHandoff,
+  ThreadSidechatContext,
   ProjectScript as ContractProjectScript,
   ThreadId,
   ProjectId,
@@ -269,6 +270,7 @@ export interface Thread extends ThreadWorkspaceState {
   subagentRole?: string | null;
   forkSourceThreadId?: ThreadId | null;
   sidechatSourceThreadId?: ThreadId | null;
+  sidechatContext?: ThreadSidechatContext | null;
   sidechatLastActivityAt?: string | null;
   sidechatExpiredAt?: string | null;
   handoff?: ThreadHandoff | null;
@@ -318,6 +320,7 @@ export interface ThreadShell extends ThreadWorkspaceState {
   subagentRole?: string | null;
   forkSourceThreadId?: ThreadId | null;
   sidechatSourceThreadId?: ThreadId | null;
+  sidechatContext?: ThreadSidechatContext | null;
   sidechatLastActivityAt?: string | null;
   sidechatExpiredAt?: string | null;
   handoff?: ThreadHandoff | null;
@@ -372,6 +375,7 @@ export interface SidebarThreadSummary {
   hasLiveTailWork: boolean;
   forkSourceThreadId?: ThreadId | null;
   sidechatSourceThreadId?: ThreadId | null;
+  sidechatContext?: ThreadSidechatContext | null;
   sidechatLastActivityAt?: string | null;
   sidechatExpiredAt?: string | null;
   handoff?: ThreadHandoff | null;

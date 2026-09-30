@@ -633,10 +633,12 @@ export function createWsNativeApi(): NativeApi {
       onActionProgress: gitActionProgressListeners.subscribe,
       onWorktreeSetupProgress: gitWorktreeSetupProgressListeners.subscribe,
     },
+    githubInbox: {
+      list: (input) => transport.request(WS_METHODS.githubInboxList, input),
+      issueDetail: (input) => transport.request(WS_METHODS.githubInboxIssueDetail, input),
+      issueComment: (input) => transport.request(WS_METHODS.githubInboxIssueComment, input),
+    },
     pullRequests: {
-      list: (input) => transport.request(WS_METHODS.pullRequestsList, input),
-      reviewRequestCount: (input) =>
-        transport.request(WS_METHODS.pullRequestsReviewRequestCount, input),
       detail: (input) => transport.request(WS_METHODS.pullRequestsDetail, input),
       diff: (input) => transport.request(WS_METHODS.pullRequestsDiff, input),
       action: (input) =>

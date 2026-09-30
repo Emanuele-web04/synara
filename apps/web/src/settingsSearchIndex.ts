@@ -378,6 +378,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Disable automatic iOS Simulator device pane opening. Use Simulator.app without the mirrored panel reopening. background launch",
   },
   {
+    id: "behavior:include-fork-upstreams",
+    section: "behavior",
+    title: "Include fork upstreams",
+    keywords:
+      "Also list pull requests and issues from each project's other GitHub remotes, such as the repository a fork was made from. code review inbox github upstream remote fork",
+  },
+  {
     id: "behavior:diff-line-wrapping",
     section: "behavior",
     title: "Diff line wrapping",

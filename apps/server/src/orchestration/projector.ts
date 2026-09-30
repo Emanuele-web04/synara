@@ -9,6 +9,7 @@ import {
   type OrchestrationMessageTextSegment,
 } from "@synara/contracts";
 import { clearRemovedAsyncUserInputResponses } from "@synara/shared/asyncUserInput";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
 import {
   addPinnedMessage,
   removePinnedMessage,
@@ -565,6 +566,7 @@ export function projectEvent(
             subagentRole: payload.subagentRole,
             forkSourceThreadId: payload.forkSourceThreadId,
             sidechatSourceThreadId: payload.sidechatSourceThreadId,
+            sidechatContext: payload.sidechatContext,
             sidechatLastActivityAt: payload.sidechatLastActivityAt,
             sidechatExpiredAt: payload.sidechatExpiredAt,
             lastKnownPr: payload.lastKnownPr ?? null,
@@ -931,9 +933,7 @@ export function projectEvent(
               ...(turnStartSession !== null ? { session: turnStartSession } : {}),
               runtimeMode: payload.runtimeMode,
               interactionMode: payload.interactionMode,
-              ...(thread.sidechatSourceThreadId
-                ? { sidechatLastActivityAt: payload.createdAt }
-                : {}),
+              ...(isSidechatThread(thread) ? { sidechatLastActivityAt: payload.createdAt } : {}),
               updatedAt: payload.createdAt,
             }),
           };
@@ -1133,7 +1133,7 @@ export function projectEvent(
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             session,
-            ...(thread.sidechatSourceThreadId && !thread.sidechatExpiredAt
+            ...(isSidechatThread(thread) && !thread.sidechatExpiredAt
               ? { sidechatLastActivityAt: session.updatedAt }
               : {}),
             latestTurn:

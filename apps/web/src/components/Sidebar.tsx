@@ -172,8 +172,9 @@ import {
   resolveNewThreadTarget,
 } from "../lib/projectShortcutTargets";
 import {
+  githubInboxQueryKeys,
+  githubInboxReviewBadgeQueryOptions,
   pullRequestQueryKeys,
-  pullRequestReviewRequestCountQueryOptions,
 } from "../lib/pullRequestReactQuery";
 import { prefetchModelsForNewThread } from "../lib/providerModelPrefetch";
 import {
@@ -480,6 +481,7 @@ import {
   spaceKey,
   resolveActiveSpaceId,
 } from "../lib/spaceGrouping";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
 
 // Central glyphs for the sidebar section-header buttons (expand/collapse, sort, add).
 const ExpandAllIcon = createCentralIconComponent("expand-45");
@@ -1372,11 +1374,13 @@ export default function Sidebar() {
   useEffect(() => {
     if (previousPullRequestRepositoryConfigRef.current === pullRequestRepositoryConfig) return;
     previousPullRequestRepositoryConfigRef.current = pullRequestRepositoryConfig;
+    void queryClient.invalidateQueries({ queryKey: githubInboxQueryKeys.all });
     void queryClient.invalidateQueries({ queryKey: pullRequestQueryKeys.all });
   }, [pullRequestRepositoryConfig, queryClient]);
-  // Count-only server query keeps rich pull-request rows off the wire and out of this cache.
+  // The badge observes the open inbox list and shares its server snapshot, so an open inbox makes
+  // it free; with the inbox closed it refreshes every 15 minutes.
   const pullRequestsReviewingQuery = useQuery({
-    ...pullRequestReviewRequestCountQueryOptions({ projectId: null }),
+    ...githubInboxReviewBadgeQueryOptions(),
     enabled: projects.some((project) => project.kind === "project"),
   });
   const pullRequestsReviewBadge = resolvePullRequestReviewBadge(pullRequestsReviewingQuery.data);
@@ -2071,7 +2075,7 @@ export default function Sidebar() {
             (thread) =>
               thread.projectId === projectId &&
               (thread.archivedAt ?? null) === null &&
-              !thread.sidechatSourceThreadId,
+              !isSidechatThread(thread),
           )
           .map((thread) => ({
             id: thread.id,
@@ -3762,14 +3766,12 @@ export default function Sidebar() {
       },
       pullRequests: {
         icon: IoIosGitCompare,
-        label: "Pull requests",
+        label: "Code review",
         active: isOnPullRequests,
         badge: pullRequestsReviewBadge,
         onClick: () => {
-          void navigate({
-            to: "/pull-requests",
-            search: { involvement: "all", state: "open" },
-          });
+          // No search: the inbox reopens with the filters the user last chose.
+          void navigate({ to: "/pull-requests" });
         },
       },
       automations: {
@@ -4935,25 +4937,22 @@ export default function Sidebar() {
     );
   }
 
-  // Pull requests / new terminal thread / new thread for one project. Shared by the tree's
+  // Inbox / new terminal thread / new thread for one project. Shared by the tree's
   // hover toolbar and the rail layout's Spaces drill-in header.
   function renderProjectThreadActions(project: (typeof sortedProjects)[number]) {
     return (
       <>
         <SidebarIconButton
           icon={IoIosGitCompare}
-          label={`View pull requests for ${project.name}`}
-          tooltip="Pull requests"
+          label={`Open code review for ${project.name}`}
+          tooltip="Code review"
           tooltipSide="top"
           onClick={(event) => {
             event.preventDefault();
             event.stopPropagation();
-            // Opens the in-app pull requests view scoped to this project (selecting a
-            // row there opens the right-dock detail panel) instead of leaving for GitHub.
-            void navigate({
-              to: "/pull-requests",
-              search: { involvement: "all", state: "open", projectId: project.id },
-            });
+            // Opens the in-app inbox scoped to this project for this visit (the URL
+            // override leaves the saved project filter alone) instead of leaving for GitHub.
+            void navigate({ to: "/pull-requests", search: { projectId: project.id } });
           }}
         />
         <SidebarIconButton

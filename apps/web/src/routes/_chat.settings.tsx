@@ -396,6 +396,9 @@ function SettingsRouteView() {
     ...(settings.showPullRequestDiffColors !== defaults.showPullRequestDiffColors
       ? ["Pull request diff colors"]
       : []),
+    ...(settings.githubInboxIncludeUpstreams !== defaults.githubInboxIncludeUpstreams
+      ? ["Include fork upstreams"]
+      : []),
     ...(settings.confirmThreadDelete !== defaults.confirmThreadDelete
       ? ["Delete confirmation"]
       : []),
@@ -1254,6 +1257,15 @@ function SettingsRouteView() {
           description: "Show additions in green and deletions in red in pull request summaries.",
           resetLabel: "pull request diff colors",
           ariaLabel: "Show pull request diff colors",
+        })}
+
+        {renderBooleanSettingRow({
+          settingKey: "githubInboxIncludeUpstreams",
+          title: "Include fork upstreams",
+          description:
+            "Also list pull requests and issues from each project's other GitHub remotes, such as the repository a fork was made from. Off reads only the project's own repository.",
+          resetLabel: "include fork upstreams",
+          ariaLabel: "Include fork upstreams in code review",
         })}
 
         {renderBooleanSettingRow({

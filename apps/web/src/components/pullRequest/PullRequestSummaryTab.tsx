@@ -1,13 +1,15 @@
 // FILE: PullRequestSummaryTab.tsx
-// Purpose: The Summary tab of the pull request detail surface — title + author line, plain
-//          meta rows (branch, reviewers, comments, checks), and the Description / Checks /
-//          Comments disclosure sections. Pure presentation over an already-loaded detail;
-//          all queries, actions, and tab switching stay in PullRequestDetailPanel.
+// Purpose: The Summary tab of the pull request detail surface — title + author line (unless the
+//          host shows a GitHubItemHeader), plain meta rows (branch, reviewers, comments, checks),
+//          and the Description / Checks / Comments disclosure sections. Presentation over an
+//          already-loaded detail plus the comment mutation; the detail query, actions, and tab
+//          switching stay in PullRequestDetailPanel.
 // Layer: Pull request presentation
 // Exports: PullRequestSummaryTab
 
 import type { PullRequestDetail } from "@synara/contracts";
-import { useState, type ReactNode } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 
 import {
   PULL_REQUEST_CHECK_STATUS_LABELS,
@@ -15,9 +17,8 @@ import {
   summarizePullRequestComments,
   withStableCheckKeys,
 } from "~/components/chat/environment/environmentPullRequest.logic";
-import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "~/components/ui/collapsible";
-import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
 import { ChatBubbleIcon, GitBranchIcon, UsersIcon } from "~/lib/icons";
+import { pullRequestCommentMutationOptions } from "~/lib/pullRequestReactQuery";
 import { formatRelativeTime } from "~/lib/relativeTime";
 import { ensureNativeApi } from "~/nativeApi";
 import { describePullRequestState } from "./pullRequestDetail.logic";
@@ -30,12 +31,12 @@ import { PullRequestCommentCard } from "./PullRequestCommentCard";
 import { PullRequestCommentComposer } from "./PullRequestCommentComposer";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
 import { PullRequestDiffStat } from "./PullRequestDiffStat";
+import { PullRequestDisclosureSection } from "./PullRequestDisclosureSection";
 import { PullRequestWarningNote } from "./PullRequestWarningNote";
 import {
   PR_BODY_TEXT_CLASS_NAME,
   PR_FINE_TEXT_CLASS_NAME,
   PR_META_TEXT_CLASS_NAME,
-  PR_SECTION_TITLE_TEXT_CLASS_NAME,
 } from "./pullRequestText";
 import { cn } from "~/lib/utils";
 
@@ -71,59 +72,36 @@ function MetaRow({
   );
 }
 
-function DisclosureSection({
-  label,
-  count,
-  children,
-  defaultOpen: defaultOpenProp,
+export function PullRequestSummaryTab({
+  detail,
+  showHeading: showHeadingProp,
 }: {
-  label: string;
-  count?: number;
-  children: ReactNode;
-  defaultOpen?: boolean;
+  detail: PullRequestDetail;
+  /** The title and author line. Off when the host already shows them in a GitHubItemHeader. */
+  showHeading?: boolean;
 }) {
-  const defaultOpen = defaultOpenProp ?? true;
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <Collapsible open={open} onOpenChange={setOpen}>
-      {/* Reference layout: title first, chevron riding to its right, count after — the
-          section reads as a heading with an affordance, not a tree node. */}
-      <CollapsibleTrigger
-        className={cn(
-          PR_SECTION_TITLE_TEXT_CLASS_NAME,
-          "flex w-full items-center gap-1.5 border-t border-border/60 px-5 py-3 text-left font-medium",
-        )}
-      >
-        <span>{label}</span>
-        <DisclosureChevron open={open} />
-        {count === undefined ? null : (
-          <span className={cn(PR_META_TEXT_CLASS_NAME, "tabular-nums text-muted-foreground")}>
-            {count}
-          </span>
-        )}
-      </CollapsibleTrigger>
-      <CollapsiblePanel>
-        <div className="px-5 pb-4">{children}</div>
-      </CollapsiblePanel>
-    </Collapsible>
-  );
-}
-
-export function PullRequestSummaryTab({ detail }: { detail: PullRequestDetail }) {
+  const showHeading = showHeadingProp ?? true;
+  const queryClient = useQueryClient();
+  const commentMutation = useMutation(pullRequestCommentMutationOptions(queryClient));
   return (
     <div className="h-full overflow-y-auto">
-      <section className="space-y-4 px-5 py-5">
-        <div className="min-w-0">
-          <h1 className="text-lg font-semibold leading-snug">{detail.title}</h1>
-          {/* Muted line, with the author the one thing lifted out of it. */}
-          <PullRequestMetaLine
-            className={cn(PR_META_TEXT_CLASS_NAME, "mt-1.5 flex-wrap text-muted-foreground")}
-          >
-            <PullRequestActorLabel actor={detail.author} className="font-medium text-foreground" />
-            <span>{formatRelativeTime(detail.updatedAt)}</span>
-            <span>{describePullRequestState(detail.state, detail.isDraft)}</span>
-          </PullRequestMetaLine>
-        </div>
+      <section className={cn("space-y-4 px-5", showHeading ? "py-5" : "py-3")}>
+        {showHeading ? (
+          <div className="min-w-0">
+            <h1 className="text-lg font-semibold leading-snug">{detail.title}</h1>
+            {/* Muted line, with the author the one thing lifted out of it. */}
+            <PullRequestMetaLine
+              className={cn(PR_META_TEXT_CLASS_NAME, "mt-1.5 flex-wrap text-muted-foreground")}
+            >
+              <PullRequestActorLabel
+                actor={detail.author}
+                className="font-medium text-foreground"
+              />
+              <span>{formatRelativeTime(detail.updatedAt)}</span>
+              <span>{describePullRequestState(detail.state, detail.isDraft)}</span>
+            </PullRequestMetaLine>
+          </div>
+        ) : null}
         <div>
           <MetaRow icon={<GitBranchIcon className="size-3.5" />} label="Branch">
             {/* One line: the branch names absorb every pixel the row has spare, and only the
@@ -175,14 +153,14 @@ export function PullRequestSummaryTab({ detail }: { detail: PullRequestDetail })
         </div>
       </section>
       {/* No edit pencil here: there is no backend "edit PR description" action to back it. */}
-      <DisclosureSection label="Description">
+      <PullRequestDisclosureSection label="Description">
         <PullRequestMarkdown
           text={detail.body}
           fallback="_No description provided._"
           cwd={detail.workspaceRoot}
         />
-      </DisclosureSection>
-      <DisclosureSection label="Checks" count={detail.checks.length}>
+      </PullRequestDisclosureSection>
+      <PullRequestDisclosureSection label="Checks" count={detail.checks.length}>
         <div className="space-y-1">
           {detail.checks.length === 0 ? (
             <p className={cn(PR_META_TEXT_CLASS_NAME, "text-muted-foreground")}>
@@ -213,9 +191,9 @@ export function PullRequestSummaryTab({ detail }: { detail: PullRequestDetail })
             ))
           )}
         </div>
-      </DisclosureSection>
+      </PullRequestDisclosureSection>
       {/* Open by default so the comment composer is immediately reachable. */}
-      <DisclosureSection label="Comments" count={detail.comments.length}>
+      <PullRequestDisclosureSection label="Comments" count={detail.comments.length}>
         <div className="space-y-2">
           {detail.commentsTruncated || detail.commentsIncomplete ? (
             <PullRequestWarningNote>
@@ -241,9 +219,9 @@ export function PullRequestSummaryTab({ detail }: { detail: PullRequestDetail })
               ))}
             </div>
           )}
-          <PullRequestCommentComposer detail={detail} />
+          <PullRequestCommentComposer target={detail} mutation={commentMutation} />
         </div>
-      </DisclosureSection>
+      </PullRequestDisclosureSection>
     </div>
   );
 }

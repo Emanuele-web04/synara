@@ -1,10 +1,16 @@
 // FILE: PullRequestRow.browser.tsx
-// Purpose: Browser-level regression coverage for the separate row-select and pin controls.
+// Purpose: Browser-level regression coverage for the separate row-select and pin controls, and
+//          for issue rows (glyph, labels, comment count) in the shared inbox row.
 // Layer: Pull request presentation test
 
 import "../../index.css";
 
-import type { PullRequestListEntry } from "@synara/contracts";
+import type {
+  GitHubInboxIssueItem,
+  GitHubInboxItem,
+  GitHubInboxPullRequestItem,
+  PullRequestListEntry,
+} from "@synara/contracts";
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
@@ -12,13 +18,13 @@ import { useState } from "react";
 
 import { PullRequestAvatar } from "./PullRequestAvatar";
 import { PullRequestList } from "./PullRequestList";
-import { PullRequestProjectFilterPopover } from "./PullRequestListFilters";
 import { PullRequestRow } from "./PullRequestRow";
 import { groupPullRequestEntriesByInvolvement } from "./pullRequestList.logic";
 import { focusPullRequestRow, isFocusInsideRightDock } from "./pullRequestFocus";
 
-function makeEntry(isPinned: boolean): PullRequestListEntry {
+function makeEntry(isPinned: boolean): GitHubInboxPullRequestItem {
   return {
+    kind: "pullRequest",
     projectId: "project-1" as PullRequestListEntry["projectId"],
     projectTitle: "Project One",
     repository: "acme/widgets",
@@ -47,18 +53,45 @@ function makeEntry(isPinned: boolean): PullRequestListEntry {
     mergeability: "unknown",
     stack: null,
     labels: [],
+    commentCount: 0,
+    assignees: [],
+    viewerInvolvement: { authored: false, assigned: false, involved: false },
+  };
+}
+
+function makeIssue(overrides: Partial<GitHubInboxIssueItem> = {}): GitHubInboxIssueItem {
+  const projectId = "project-1" as GitHubInboxIssueItem["projectId"];
+  return {
+    kind: "issue",
+    projectId,
+    projectTitle: "Project One",
+    projectContexts: [{ projectId, projectTitle: "Project One", isPinned: false }],
+    repository: "acme/widgets",
+    number: 7,
+    title: "Widgets wobble",
+    url: "https://github.com/acme/widgets/issues/7",
+    author: null,
+    state: "open",
+    stateReason: null,
+    labels: [],
+    assignees: [],
+    commentCount: 0,
+    createdAt: "2026-07-13T08:00:00.000Z",
+    updatedAt: "2026-07-14T08:00:00.000Z",
+    closedAt: null,
+    isPinned: false,
+    viewerInvolvement: { authored: false, assigned: false, involved: false },
+    ...overrides,
   };
 }
 
 function StatefulGroupedList() {
-  const [entry, setEntry] = useState(() => makeEntry(false));
+  const [entry, setEntry] = useState<GitHubInboxItem>(() => makeEntry(false));
   return (
     <PullRequestList
       entries={[entry]}
       grouped={groupPullRequestEntriesByInvolvement([entry], null)}
-      selectedProjectId={undefined}
-      selectedRepo={undefined}
-      selectedNumber={undefined}
+      isSelected={() => false}
       onSelect={() => {}}
       onTogglePinned={(current) => setEntry({ ...current, isPinned: !current.isPinned })}
     />
@@ -196,42 +229,54 @@ describe("PullRequestRow pin control", () => {
   });
 });
 
-describe("PullRequestProjectFilterPopover", () => {
+describe("PullRequestRow issue rows", () => {
   afterEach(() => {
     document.body.innerHTML = "";
   });
 
-  it("announces the selected project on both the trigger and options", async () => {
-    const projectId = "project-1" as PullRequestListEntry["projectId"];
+  it("shows the issue glyph, a capped set of label chips, and the comment count", async () => {
     await render(
-      <PullRequestProjectFilterPopover
-        projects={[[projectId, "Project One"]]}
-        value={projectId}
-        onChange={vi.fn()}
+      <PullRequestRow
+        entry={makeIssue({
+          commentCount: 3,
+          labels: [
+            { name: "kind:bug", color: "d73a4a" },
+            { name: "area:ui", color: "not-a-color" },
+            { name: "status:triage", color: null },
+          ],
+        })}
+        selected={false}
+        onClick={vi.fn()}
+        onTogglePinned={vi.fn()}
       />,
     );
 
-    const trigger = page.getByRole("button", {
-      name: "Filter pull requests by project: Project One",
-    });
-    expect(trigger).toBeVisible();
-    expect(
-      document
-        .querySelector('button[aria-label="Filter pull requests by project: Project One"]')
-        ?.getAttribute("aria-pressed"),
-    ).toBe("true");
-    await trigger.click();
-    const optionButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("button"));
-    const selectedOption = optionButtons.find(
-      (button) => button.textContent?.trim() === "Project One",
+    await expect.element(page.getByRole("img", { name: "Issue open" })).toBeVisible();
+    await expect.element(page.getByRole("button", { name: "Pin issue #7" })).toBeInTheDocument();
+    expect(document.body.textContent).toContain("kind:bug");
+    expect(document.body.textContent).toContain("area:ui");
+    expect(document.body.textContent).not.toContain("status:triage");
+    expect(document.body.textContent).toContain("+1");
+    expect(document.querySelector('[title="3 comments"]')?.textContent).toBe("3");
+    // Only a validated hex reaches a style; the malformed color falls back to the muted dot.
+    const dots = Array.from(
+      document.querySelectorAll<HTMLElement>("[data-slot=badge] > span[aria-hidden]"),
     );
-    const allProjectsOption = optionButtons.find(
-      (button) => button.textContent?.trim() === "All projects",
+    expect(dots[0]?.style.backgroundColor).toBe("rgb(215, 58, 74)");
+    expect(dots[1]?.style.backgroundColor).toBe("");
+  });
+
+  it("marks issues closed as not planned with the struck glyph", async () => {
+    await render(
+      <PullRequestRow
+        entry={makeIssue({ state: "closed", stateReason: "not-planned" })}
+        selected={false}
+        onClick={vi.fn()}
+        onTogglePinned={vi.fn()}
+      />,
     );
-    expect(selectedOption?.getAttribute("aria-pressed")).toBe("true");
-    expect(allProjectsOption?.getAttribute("aria-pressed")).toBe("false");
-    // Close the portalled popover before the browser renderer unmounts this test root.
-    await page.getByRole("button", { name: "All projects" }).click();
+
+    await expect.element(page.getByRole("img", { name: "Issue not planned" })).toBeVisible();
   });
 });
 

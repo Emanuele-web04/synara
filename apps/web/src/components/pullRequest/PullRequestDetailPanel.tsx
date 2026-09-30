@@ -3,8 +3,12 @@
 //          actions (merge/ready/draft/close/reopen, fix findings, copy link), the header with
 //          its Summary/Timeline/Code tab switcher, the Code tab's diff viewport, and the
 //          confirm dialogs. Summary and Timeline rendering live in their own tab components.
+//          Two hosts: the chat thread's right dock (compact tab header, the default) and the
+//          GitHub inbox page (`layout="page"`: the shared GitHubItemHeader above the tabs).
+//          Both offer Send to agent and Ask: as header buttons on the page, in the "…" menu in
+//          the dock; each host supplies its own Ask (the inbox's side chat, or the thread's).
 // Layer: Pull request presentation
-// Exports: PullRequestDetailPanel
+// Exports: PullRequestDetailPanel, PullRequestDetailSkeleton
 
 import type {
   PullRequestAction,
@@ -14,7 +18,6 @@ import type {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { lazy, Suspense, useRef, useState } from "react";
 
-import { useAppSettings } from "~/appSettings";
 import {
   CHAT_HEADER_CONTROL_CLASS_NAME,
   CHAT_HEADER_ICON_CONTROL_CLASS_NAME,
@@ -26,6 +29,7 @@ import { ComposerPickerMenuPopup } from "~/components/chat/ComposerPickerMenuPop
 import {
   buildFixFindingsPrompt,
   buildResolveConflictsPrompt,
+  createGitHubItemContextDraft,
   createPullRequestContextDraft,
 } from "~/components/chat/environment/environmentPullRequest.logic";
 import { Button } from "~/components/ui/button";
@@ -42,8 +46,9 @@ import {
 import { Skeleton } from "~/components/ui/skeleton";
 import { toastManager } from "~/components/ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
-import { addChatPullRequestContext } from "~/lib/chatReferences";
 import {
+  BotIcon,
+  ChatBubbleIcon,
   EllipsisIcon,
   ExternalLinkIcon,
   GitMergeConflictIcon,
@@ -56,16 +61,20 @@ import {
   LinkIcon,
   XIcon,
 } from "~/lib/icons";
-import { gitPreparePullRequestThreadMutationOptions } from "~/lib/gitReactQuery";
 import {
   pullRequestActionMutationOptions,
   pullRequestDetailQueryOptions,
   pullRequestQueryErrorState,
 } from "~/lib/pullRequestReactQuery";
-import { type PullRequestContextDraft } from "~/lib/pullRequestContext";
 import { cn } from "~/lib/utils";
 import { ensureNativeApi } from "~/nativeApi";
-import { useHandleNewThread } from "~/hooks/useHandleNewThread";
+import { useStartGitHubItemThread } from "~/hooks/useStartGitHubItemThread";
+import { GitHubItemAgentActions, type GitHubItemSendTarget } from "./GitHubItemAgentActions";
+import {
+  githubItemCardSourceFromPullRequest,
+  type GitHubItemAgentTarget,
+} from "./githubItemAgentContext";
+import { GitHubItemBackButton, GitHubItemHeader } from "./GitHubItemHeader";
 import {
   copyPullRequestLink,
   PullRequestConfirmActionDialog,
@@ -114,7 +123,7 @@ const PR_HEADER_ACTION_BUTTON_CLASS_NAME = cn(
 // Lazy: the diff renderer + worker pool are heavyweight and only needed on the Code tab.
 const PullRequestCodeTab = lazy(() => import("./PullRequestCodeTab"));
 
-function DetailSkeleton() {
+export function PullRequestDetailSkeleton() {
   return (
     <div className="space-y-4 p-5">
       <Skeleton className="h-7 w-4/5" />
@@ -128,21 +137,35 @@ function DetailSkeleton() {
 export function PullRequestDetailPanel({
   input,
   initialTab: initialTabProp,
+  layout: layoutProp,
   onClose,
+  onBack,
   onSelectPullRequest,
   pollingEnabled: pollingEnabledProp,
+  sendTargets: sendTargetsProp,
+  onAsk,
+  askPending,
 }: {
   input: PullRequestDetailInput;
   initialTab?: DetailTab;
+  /** "dock" (default): compact tab header for the chat dock. "page": the inbox's detail pane,
+   *  led by the shared GitHubItemHeader (title, people, dates, Open on GitHub). */
+  layout?: "dock" | "page";
   onClose?: () => void;
+  /** Page layout on a narrow window: return to the list. */
+  onBack?: () => void;
   onSelectPullRequest?: (number: number) => void;
   pollingEnabled?: boolean;
+  /** Projects Send to agent may open the thread in. Defaults to the pull request's project. */
+  sendTargets?: ReadonlyArray<GitHubItemSendTarget>;
+  /** The host's side chat for this pull request. Absent hides Ask. */
+  onAsk?: ((target: GitHubItemAgentTarget) => void) | undefined;
+  askPending?: boolean;
 }) {
   const initialTab = initialTabProp ?? "summary";
+  const layout = layoutProp ?? "dock";
   const pollingEnabled = pollingEnabledProp ?? true;
   const queryClient = useQueryClient();
-  const { settings } = useAppSettings();
-  const { handleNewThread } = useHandleNewThread();
   // Panel state keyed to the PR it belongs to: switching PRs (or landing tab)
   // derives straight back to the defaults with no state-resetting effect.
   const panelKey = `${input.projectId}\u0000${input.repository}\u0000${input.number}\u0000${initialTab}`;
@@ -170,22 +193,24 @@ export function PullRequestDetailPanel({
   const setMergeMethod = (next: PullRequestMergeMethod) => patchPanelState({ mergeMethod: next });
   const setConfirmAction = (next: "merge" | "close" | null) =>
     patchPanelState({ confirmAction: next });
-  const [preparingThread, setPreparingThread] = useState<"findings" | "conflicts" | null>(null);
   const actionInFlightRef = useRef(false);
   const detailQuery = useQuery(pullRequestDetailQueryOptions(input, { pollingEnabled }));
   const actionMutation = useMutation(pullRequestActionMutationOptions(queryClient));
   const detail = detailQuery.data;
   const detailErrorState = pullRequestQueryErrorState(detailQuery);
-  // Shared git prepare mutation (instead of a raw native call) so Git status/snapshot caches
-  // invalidate exactly like every other prepare-thread flow in the app.
-  const prepareThreadMutation = useMutation(
-    gitPreparePullRequestThreadMutationOptions({
-      cwd: detail?.workspaceRoot ?? null,
-      queryClient,
-    }),
-  );
+  // Fix findings, Resolve conflicts, and Send to agent all hand the pull request to a fresh
+  // thread the same way: prepare its branch, open the thread, attach the card to review.
+  const { start: startItemThread, pendingAction: preparingThread } = useStartGitHubItemThread({
+    workspaceRoot: detail?.workspaceRoot ?? null,
+  });
+  const sendTargets: ReadonlyArray<GitHubItemSendTarget> =
+    sendTargetsProp && sendTargetsProp.length > 0
+      ? sendTargetsProp
+      : detail
+        ? [{ projectId: detail.projectId, projectTitle: detail.projectTitle }]
+        : [];
 
-  // Promise chains instead of async/try-finally in the two runners below:
+  // Promise chain instead of async/try-finally in the runner below:
   // React Compiler does not yet support try/finally and would skip this
   // component entirely.
   const runAction = (action: PullRequestAction, method?: PullRequestMergeMethod) => {
@@ -220,91 +245,76 @@ export function PullRequestDetailPanel({
       });
   };
 
-  // "Fix findings" and "Resolve conflicts" hand the PR to a fresh thread the same way:
-  // prepare a worktree on the PR branch, create the thread, and attach the task as a
-  // context card in its composer for the user to review and send.
-  const startPullRequestThread = (
-    kind: "findings" | "conflicts",
-    card: PullRequestContextDraft,
-    errorTitle: string,
-  ) => {
-    if (!detail || preparingThread !== null) return;
-    setPreparingThread(kind);
-    const mode = settings.defaultThreadEnvMode;
-    void prepareThreadMutation
-      .mutateAsync({ reference: detail.url, mode })
-      .then((prepared) =>
-        Promise.resolve(
-          handleNewThread(detail.projectId, {
-            branch: prepared.branch,
-            worktreePath: prepared.worktreePath,
-            envMode: mode,
-            // This action is an explicit handoff from the PR browser. Reusing the project's
-            // existing draft can leave the user on the PR route and insert the prompt into a
-            // hidden composer, making the button appear inert.
-            fresh: true,
-          }),
-        ).then((threadId) => {
-          if (!threadId) throw new Error("Could not create a draft thread for this pull request.");
-          addChatPullRequestContext(threadId, card);
-        }),
-      )
-      .catch((error: unknown) => {
-        toastManager.add({
-          type: "error",
-          title: errorTitle,
-          description:
-            error instanceof Error ? error.message : "The PR thread could not be prepared.",
-        });
-      })
-      .finally(() => {
-        setPreparingThread(null);
-      });
+  const sendToAgent = (projectId: GitHubItemSendTarget["projectId"]) => {
+    if (!detail) return;
+    const source = githubItemCardSourceFromPullRequest(detail);
+    startItemThread({
+      action: "send",
+      projectId,
+      pullRequestUrl: detail.url,
+      card: (environment) => createGitHubItemContextDraft(source, environment),
+      errorTitle: "Could not send the pull request to an agent",
+    });
   };
+  const ask = onAsk
+    ? () => {
+        if (detail)
+          onAsk({
+            projectId: input.projectId,
+            source: githubItemCardSourceFromPullRequest(detail),
+          });
+      }
+    : undefined;
 
   const fixFindings = () => {
     if (!detail) return;
-    void startPullRequestThread(
-      "findings",
-      createPullRequestContextDraft({
-        scope: "everything",
-        pr: detail,
-        title: "Fix findings",
-        subtitle: `#${detail.number} ${detail.title}`,
-        text: buildFixFindingsPrompt({
-          prNumber: detail.number,
-          prTitle: detail.title,
-          prUrl: detail.url,
-          headBranch: detail.headBranch,
-          baseBranch: detail.baseBranch,
-          comments: detail.comments,
-          checks: detail.checks,
-          commentsTruncated: detail.commentsTruncated,
-          commentsIncomplete: detail.commentsIncomplete,
-        }),
+    const card = createPullRequestContextDraft({
+      scope: "everything",
+      pr: detail,
+      title: "Fix findings",
+      subtitle: `#${detail.number} ${detail.title}`,
+      text: buildFixFindingsPrompt({
+        prNumber: detail.number,
+        prTitle: detail.title,
+        prUrl: detail.url,
+        headBranch: detail.headBranch,
+        baseBranch: detail.baseBranch,
+        comments: detail.comments,
+        checks: detail.checks,
+        commentsTruncated: detail.commentsTruncated,
+        commentsIncomplete: detail.commentsIncomplete,
       }),
-      "Could not prepare findings",
-    );
+    });
+    startItemThread({
+      action: "findings",
+      projectId: detail.projectId,
+      pullRequestUrl: detail.url,
+      card: () => card,
+      errorTitle: "Could not prepare findings",
+    });
   };
 
   const resolveConflicts = () => {
     if (!detail) return;
-    void startPullRequestThread(
-      "conflicts",
-      createPullRequestContextDraft({
-        scope: "conflicts",
-        pr: detail,
-        title: "Merge conflicts",
-        subtitle: `Conflicts with ${detail.baseBranch}`,
-        text: buildResolveConflictsPrompt({
-          prNumber: detail.number,
-          prUrl: detail.url,
-          baseBranch: detail.baseBranch,
-          headBranch: detail.headBranch,
-        }),
+    const card = createPullRequestContextDraft({
+      scope: "conflicts",
+      pr: detail,
+      title: "Merge conflicts",
+      subtitle: `Conflicts with ${detail.baseBranch}`,
+      text: buildResolveConflictsPrompt({
+        prNumber: detail.number,
+        prUrl: detail.url,
+        baseBranch: detail.baseBranch,
+        headBranch: detail.headBranch,
       }),
-      "Could not prepare conflict resolution",
-    );
+    });
+    startItemThread({
+      action: "conflicts",
+      projectId: detail.projectId,
+      pullRequestUrl: detail.url,
+      card: () => card,
+      errorTitle: "Could not prepare conflict resolution",
+    });
   };
 
   const allowedMethods = detail
@@ -326,12 +336,37 @@ export function PullRequestDetailPanel({
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-[var(--color-background-surface)] text-foreground">
+      {layout === "page" && detail ? (
+        <GitHubItemHeader
+          item={{ kind: "pullRequest", ...detail }}
+          {...(onBack ? { onBack } : {})}
+          agentActions={
+            <GitHubItemAgentActions
+              sendTargets={sendTargets}
+              sending={preparingThread === "send"}
+              onSendToAgent={sendToAgent}
+              onAsk={ask}
+              asking={askPending === true}
+            />
+          }
+        />
+      ) : null}
       {/* No rule under the header: the tab row already reads as its own band, and the section
           borders further down are the only dividers the panel needs. */}
-      <header className="flex min-h-12 shrink-0 items-center gap-2 px-2">
+      <header
+        className={cn(
+          "flex min-h-12 shrink-0 items-center gap-2",
+          layout === "page" ? "px-2.5" : "px-2",
+        )}
+      >
+        {layout === "page" && !detail && onBack ? <GitHubItemBackButton onBack={onBack} /> : null}
         {/* No state glyph here: the dock tab above already carries it, and the Summary tab
             spells the state out in words. A third copy in between was pure repetition. */}
-        <nav className="flex min-w-0 items-center gap-0.5" aria-label="Pull request detail tabs">
+        {/* Scrolls rather than slides under the actions when the pane is very narrow. */}
+        <nav
+          className="turn-chip-strip flex min-w-0 items-center gap-0.5 overflow-x-auto"
+          aria-label="Pull request detail tabs"
+        >
           {TABS.map((item) => (
             <button
               key={item.value}
@@ -360,15 +395,18 @@ export function PullRequestDetailPanel({
                   {...(onSelectPullRequest ? { onSelectPullRequest } : {})}
                 />
               ) : null}
-              <IconButton
-                variant="chrome"
-                label="Open in external browser"
-                tooltip="Open in external browser"
-                className={PR_HEADER_ICON_BUTTON_CLASS_NAME}
-                onClick={() => void ensureNativeApi().shell.openExternal(detail.url)}
-              >
-                <ExternalLinkIcon />
-              </IconButton>
+              {/* The page header says "Open on GitHub" in words; the dock keeps the icon. */}
+              {layout === "dock" ? (
+                <IconButton
+                  variant="chrome"
+                  label="Open in external browser"
+                  tooltip="Open in external browser"
+                  className={PR_HEADER_ICON_BUTTON_CLASS_NAME}
+                  onClick={() => void ensureNativeApi().shell.openExternal(detail.url)}
+                >
+                  <ExternalLinkIcon />
+                </IconButton>
+              ) : null}
               <Menu>
                 <MenuTrigger
                   render={
@@ -434,6 +472,34 @@ export function PullRequestDetailPanel({
                     <LinkIcon className="size-3.5 shrink-0" />
                     <span>Copy link</span>
                   </MenuItem>
+                  {/* The page header shows these as buttons; the compact dock header keeps
+                      them here, beside the other actions that hand work to a thread. */}
+                  {layout === "dock" ? (
+                    <>
+                      {sendTargets.map((target) => (
+                        <MenuItem
+                          key={target.projectId}
+                          onClick={() => sendToAgent(target.projectId)}
+                          disabled={preparingThread !== null}
+                        >
+                          <BotIcon className="size-3.5 shrink-0" />
+                          <span className="truncate">
+                            {preparingThread === "send"
+                              ? "Preparing…"
+                              : sendTargets.length > 1
+                                ? `Send to agent in ${target.projectTitle}`
+                                : "Send to agent"}
+                          </span>
+                        </MenuItem>
+                      ))}
+                      {ask ? (
+                        <MenuItem onClick={ask} disabled={askPending === true}>
+                          <ChatBubbleIcon className="size-3.5 shrink-0" />
+                          <span>Ask in a side chat</span>
+                        </MenuItem>
+                      ) : null}
+                    </>
+                  ) : null}
                   <MenuItem onClick={fixFindings} disabled={preparingThread !== null}>
                     <HammerIcon className="size-3.5 shrink-0" />
                     <span>
@@ -565,7 +631,7 @@ export function PullRequestDetailPanel({
 
       <div className="min-h-0 flex-1 overflow-hidden">
         {detailQuery.isPending ? (
-          <DetailSkeleton />
+          <PullRequestDetailSkeleton />
         ) : detailErrorState.initialError ? (
           <PullRequestsUnavailableState
             error={detailErrorState.initialError}
@@ -592,11 +658,11 @@ export function PullRequestDetailPanel({
             ) : null}
             <div className="min-h-0 flex-1">
               {tab === "summary" ? (
-                <PullRequestSummaryTab detail={detail} />
+                <PullRequestSummaryTab detail={detail} showHeading={layout === "dock"} />
               ) : tab === "timeline" ? (
                 <PullRequestTimelineTab detail={detail} />
               ) : (
-                <Suspense fallback={<DetailSkeleton />}>
+                <Suspense fallback={<PullRequestDetailSkeleton />}>
                   <PullRequestCodeTab input={input} detail={detail} />
                 </Suspense>
               )}

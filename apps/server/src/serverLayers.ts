@@ -55,6 +55,7 @@ import { ProviderRuntimeEventRepositoryLive } from "./persistence/Layers/Provide
 import { ThreadDiagnosticsQueryLive } from "./diagnostics/Layers/ThreadDiagnosticsQuery";
 import { ManagedAttachmentCleanupLive } from "./managedAttachmentCleanup";
 import { PullRequestServiceLive } from "./pullRequests/Layers/PullRequestService";
+import { GitHubInboxServiceLive } from "./githubInbox/Layers/GitHubInboxService";
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 import { makeServerProviderLayer } from "./provider/runtimeLayer";
 
@@ -215,10 +216,16 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(DeviceServiceLive),
     Layer.provideMerge(ComputerServiceLive),
   );
-  const pullRequestServiceLayer = PullRequestServiceLive.pipe(
+  // The inbox owns the repository inventory, GitHub read queue, and snapshots; the pull request
+  // service shares them so detail reads and mutations stay consistent with the list.
+  const githubInboxServiceLayer = GitHubInboxServiceLive.pipe(
     Layer.provideMerge(GitLayerLive),
     Layer.provideMerge(ProjectPullRequestPinsLive),
     Layer.provideMerge(OrchestrationLayerLive),
+    Layer.provideMerge(ServerSettingsLive),
+  );
+  const pullRequestServiceLayer = PullRequestServiceLive.pipe(
+    Layer.provideMerge(githubInboxServiceLayer),
   );
 
   return Layer.mergeAll(

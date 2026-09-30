@@ -13,6 +13,7 @@ import {
   DEFAULT_SERVER_SETTINGS,
   DEFAULT_SERVER_SETTINGS_VIEW,
   GIT_TEXT_GENERATION_PROVIDERS,
+  GitHubInboxState,
   TrimmedNonEmptyString,
   ProviderKind,
   type GitTextGenerationProvider,
@@ -54,6 +55,7 @@ import {
   RAIL_ORDERABLE_ITEM_IDS,
 } from "./appRail.logic";
 import { ensureNativeApi } from "./nativeApi";
+import { githubInboxQueryKeys } from "./lib/githubInboxQueryOptions";
 import { providerDiscoveryQueryKeys } from "./lib/providerDiscoveryReactQuery";
 import {
   invalidateProviderUsageQueries,
@@ -126,6 +128,18 @@ export const DEFAULT_SIDEBAR_LAYOUT: SidebarLayout = "classic";
 export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
 export const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
 export const FollowUpBehavior = Schema.Literals(["queue", "steer"]);
+/** GitHub inbox kind filter: both kinds, or only pull requests or only issues. */
+export const GitHubInboxKindFilter = Schema.Literals(["all", "pullRequest", "issue"]);
+export type GitHubInboxKindFilter = typeof GitHubInboxKindFilter.Type;
+/** GitHub inbox involvement filter, applied on the client over the loaded superset. */
+export const GitHubInboxInvolvementFilter = Schema.Literals([
+  "everything",
+  "involved",
+  "reviewRequested",
+  "authored",
+  "assigned",
+]);
+export type GitHubInboxInvolvementFilter = typeof GitHubInboxInvolvementFilter.Type;
 export type FollowUpBehavior = typeof FollowUpBehavior.Type;
 export const DEFAULT_FOLLOW_UP_BEHAVIOR: FollowUpBehavior = "queue";
 export const UiDensity = Schema.Literals(UI_DENSITY_MODES);
@@ -317,6 +331,22 @@ export const AppSettingsSchema = Schema.Struct({
   confirmTerminalTabClose: Schema.Boolean.pipe(withDefaults(() => true)),
   diffWordWrap: Schema.Boolean.pipe(withDefaults(() => false)),
   showPullRequestDiffColors: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Local-only GitHub inbox view state: the filters the page reopens with (URL parameters
+  // override them for one visit; search text lives only in the URL). The column widths are not
+  // stored: the page always opens at even fractions.
+  githubInboxKind: GitHubInboxKindFilter.pipe(withDefaults(() => "all" as const)),
+  githubInboxState: GitHubInboxState.pipe(withDefaults(() => "open" as const)),
+  githubInboxInvolvement: GitHubInboxInvolvementFilter.pipe(
+    withDefaults(() => "everything" as const),
+  ),
+  githubInboxProjectIds: Schema.Array(Schema.String.check(Schema.isMaxLength(512))).pipe(
+    withDefaults(() => []),
+  ),
+  githubInboxLabels: Schema.Array(Schema.String.check(Schema.isMaxLength(256))).pipe(
+    withDefaults(() => []),
+  ),
+  // Server-backed: the inbox also reads each project's other GitHub remotes (fork upstreams).
+  githubInboxIncludeUpstreams: Schema.Boolean.pipe(withDefaults(() => false)),
   // Local-only UI preferences for hiding sidebar surfaces a user doesn't want.
   // `showChatsSection` controls the standalone "Chats" list in the sidebar footer
   // (rootless chats not tied to a project). `showStudioSection` controls the
@@ -814,6 +844,7 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
     cursorBinaryPath: settings.providers.cursor.binaryPath,
     devinBinaryPath: settings.providers.devin.binaryPath,
     defaultThreadEnvMode: settings.defaultThreadEnvMode,
+    githubInboxIncludeUpstreams: settings.githubInboxIncludeUpstreams,
     enableAssistantStreaming: settings.enableAssistantStreaming,
     enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
     antigravityBinaryPath: settings.providers.antigravity.binaryPath,
@@ -921,6 +952,9 @@ export function appSettingsPatchToServerSettingsPatch(
   }
   if (patch.defaultThreadEnvMode === "local" || patch.defaultThreadEnvMode === "worktree") {
     serverPatch.defaultThreadEnvMode = patch.defaultThreadEnvMode;
+  }
+  if (hasOwn(patch, "githubInboxIncludeUpstreams")) {
+    serverPatch.githubInboxIncludeUpstreams = Boolean(patch.githubInboxIncludeUpstreams);
   }
   if (hasOwn(patch, "onboardingCompletedAt")) {
     serverPatch.onboardingCompletedAt = patch.onboardingCompletedAt ?? null;
@@ -1618,6 +1652,12 @@ export function useAppSettings() {
       try {
         const nextSettings = await api.server.updateSettings(serverPatch);
         queryClient.setQueryData(serverQueryKeys.settings(), nextSettings);
+        if (hasOwn(patch, "githubInboxIncludeUpstreams")) {
+          // The repository set changed, so the inbox lists (and the review badge) are stale.
+          await queryClient
+            .invalidateQueries({ queryKey: githubInboxQueryKeys.all })
+            .catch(() => undefined);
+        }
         if (hasOwn(patch, "disabledProviders")) {
           await refreshProvidersAfterEnablementChange();
         } else if (touchesProviderDiscoverySettings(patch)) {

@@ -4,10 +4,12 @@ import { NonNegativeInt } from "./baseSchemas";
 
 export const WS_PROTOCOL_EPOCH = 1;
 // Revision 2 changes PullRequestCommit.authors to permit name-only authors.
-// Keep revision 1 out of the compatibility range so older clients cannot
-// decode the new nullable login shape and fail while rendering PR details.
-export const WS_PROTOCOL_MIN_REVISION = 2;
-export const WS_PROTOCOL_MAX_REVISION = 2;
+// Revision 3 replaces pullRequests.list and pullRequests.reviewRequestCount with
+// githubInbox.list and adds the "rate-limited" PullRequestsUnavailableError reason.
+// Keep older revisions out of the compatibility range: a revision-2 client would
+// call methods this server no longer serves and could not decode the new error.
+export const WS_PROTOCOL_MIN_REVISION = 3;
+export const WS_PROTOCOL_MAX_REVISION = 3;
 export const WS_BOOTSTRAP_METHOD = "bootstrap.negotiate";
 export const WS_BOOTSTRAP_PATH = "/ws/bootstrap";
 export const WS_NEGOTIATE_HTTP_PATH = "/ws/negotiate";

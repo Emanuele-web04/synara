@@ -1,12 +1,14 @@
 // FILE: PullRequestList.tsx
-// Purpose: The pull requests list body — renders entries as PullRequestRows, either flat or
+// Purpose: The GitHub inbox list body — renders pull request and issue rows, either flat or
 //          under the involvement group headers produced by groupPullRequestEntriesByInvolvement
-//          (the "All" tab). Rows use repository + number identity because the global list has
-//          one row per remote PR; selection still retains project context for the detail panel.
+//          (the Everything view). Rows use repository + number identity because the list has
+//          one row per remote item; selection still retains project context for the detail.
 // Layer: Pull request presentation
 // Exports: PullRequestList
 
-import type { ProjectId, PullRequestListEntry } from "@synara/contracts";
+import type { GitHubInboxItem, ProjectId } from "@synara/contracts";
+import type { ReactNode } from "react";
+
 import { pullRequestListEntryKey, type PullRequestListGroup } from "./pullRequestList.logic";
 import { PullRequestRow } from "./PullRequestRow";
 import { PR_FINE_TEXT_CLASS_NAME, PR_QUIET_INK_CLASS_NAME } from "./pullRequestText";
@@ -15,37 +17,34 @@ import { cn } from "~/lib/utils";
 export const PullRequestList = function PullRequestList({
   entries,
   grouped,
-  selectedProjectId,
-  selectedRepo,
-  selectedNumber,
+  isSelected,
   showProjectTitle: showProjectTitleProp,
+  projectIconFor,
   showDiffColors: showDiffColorsProp,
   onSelect,
   onTogglePinned,
 }: {
-  entries: PullRequestListEntry[];
+  entries: GitHubInboxItem[];
   grouped: PullRequestListGroup[] | null;
-  selectedProjectId: ProjectId | undefined;
-  selectedRepo: string | undefined;
-  selectedNumber: number | undefined;
+  isSelected: (entry: GitHubInboxItem) => boolean;
   showProjectTitle?: boolean;
+  projectIconFor?: (projectId: ProjectId) => ReactNode;
   showDiffColors?: boolean;
-  onSelect: (entry: PullRequestListEntry) => void;
-  onTogglePinned: (entry: PullRequestListEntry) => void;
+  onSelect: (entry: GitHubInboxItem) => void;
+  onTogglePinned: (entry: GitHubInboxItem) => void;
 }) {
   const showProjectTitle = showProjectTitleProp ?? false;
   const showDiffColors = showDiffColorsProp ?? true;
-  const renderEntry = (entry: PullRequestListEntry) => (
+  const renderEntry = (entry: GitHubInboxItem) => (
     <PullRequestRow
       key={pullRequestListEntryKey(entry)}
       entry={entry}
       showProjectTitle={showProjectTitle}
+      {...(showProjectTitle && projectIconFor
+        ? { projectIcon: projectIconFor(entry.projectId) }
+        : {})}
       showDiffColors={showDiffColors}
-      selected={
-        selectedProjectId === entry.projectId &&
-        selectedRepo === entry.repository &&
-        selectedNumber === entry.number
-      }
+      selected={isSelected(entry)}
       onClick={onSelect}
       onTogglePinned={onTogglePinned}
     />

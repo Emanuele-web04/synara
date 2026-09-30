@@ -4,12 +4,13 @@
 // Layer: Route UI logic helpers
 // Exports: home-chat restore-route resolution.
 
-import type { ProjectId, SpaceId, ThreadId } from "@synara/contracts";
+import type { ProjectId, SpaceId, ThreadId, ThreadSidechatContext } from "@synara/contracts";
 
 import { resolveRestorableThreadRoute, type LastThreadRoute } from "../chatRouteRestore";
 import type { ServerWorkspacePaths } from "../lib/serverWorkspacePaths";
 import { isThreadReachableFromSpace } from "../lib/spaceNavigation";
 import type { Project } from "../types";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
 
 /**
  * Set only when "/" was reached by *selecting* a Space. The landing then restores threads that
@@ -34,6 +35,7 @@ export function resolveChatIndexRestoreRoute(input: {
       | {
           readonly projectId: ProjectId;
           readonly sidechatSourceThreadId?: ThreadId | null;
+          readonly sidechatContext?: ThreadSidechatContext | null;
         }
       | undefined
     >
@@ -61,7 +63,7 @@ export function resolveChatIndexRestoreRoute(input: {
     // from the same snapshot as threadIds, so this only ever excludes a thread if that invariant
     // breaks — and then a fresh draft beats restoring into the wrong segment.
     const threadSummary = sidebarThreadSummaryById[threadId];
-    if (threadSummary?.sidechatSourceThreadId) continue;
+    if (threadSummary && isSidechatThread(threadSummary)) continue;
     const projectId = threadSummary?.projectId ?? draftProjectIdByThreadId.get(threadId);
     if (projectId === undefined) continue;
     // Studio threads belong to the /studio surface; restoring one from "/" would silently

@@ -2,12 +2,7 @@
 // Purpose: Shared sidebar sorting and status helpers used by the thread list UI.
 // Exports: Sidebar row state derivation, add-project error helpers, sort utilities, and visibility helpers.
 
-import {
-  MAX_PINNED_PROJECTS,
-  type ProjectId,
-  type PullRequestReviewRequestCountResult,
-  type ThreadId,
-} from "@synara/contracts";
+import { MAX_PINNED_PROJECTS, type ProjectId, type ThreadId } from "@synara/contracts";
 import { pluralize } from "@synara/shared/text";
 import { resolveThreadEnvironmentMode } from "@synara/shared/threadEnvironment";
 import { isWorkspaceRootWithin, workspaceRootsEqual } from "@synara/shared/threadWorkspace";
@@ -15,6 +10,7 @@ import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "../appSett
 import { resolveRestorableThreadRoute, type LastThreadRoute } from "../chatRouteRestore";
 import type { ChatMessage, Project, SidebarThreadSummary, Thread } from "../types";
 import { cn } from "../lib/utils";
+import type { GitHubReviewRequestBadgeCount } from "../lib/githubInboxQueryOptions";
 import {
   derivePinnedIds,
   getPinnedItems,
@@ -61,7 +57,7 @@ export function isProjectsSidebarSurface(input: {
 
 /** Keep partial review counts visible without presenting them as exact. */
 export function resolvePullRequestReviewBadge(
-  result: PullRequestReviewRequestCountResult | undefined,
+  result: GitHubReviewRequestBadgeCount | undefined,
 ): SidebarActionBadge | null {
   if (!result) return null;
   if (result.incomplete) {

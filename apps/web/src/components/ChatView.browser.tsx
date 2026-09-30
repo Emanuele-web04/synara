@@ -7898,6 +7898,37 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it("sizes a standalone side chat's empty landing for its item and a narrow dock", async () => {
+    const snapshot = addThreadToSnapshot(createDraftOnlySnapshot(), THREAD_ID);
+    const sidechat = {
+      ...snapshot.threads[0]!,
+      session: null,
+      sidechatContext: {
+        kind: "github-item" as const,
+        itemKind: "pullRequest" as const,
+        repository: "acme/widgets",
+        number: 1368,
+        url: "https://github.com/acme/widgets/pull/1368",
+      },
+    };
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: { ...snapshot, threads: [sidechat] },
+    });
+
+    try {
+      await expect
+        .element(page.getByTestId("empty-landing-heading"))
+        .toHaveTextContent("Ask about PR #1368");
+      // No project, environment, branch, or Temporary tray, and no import banner.
+      expect(document.querySelector('[data-empty-landing-controls="true"]')).toBeNull();
+      expect(document.body.textContent).not.toContain("Import your Claude Code");
+      expect(document.body.innerHTML).toContain("Ask about this pull request");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("keeps the transcript open while the first turn starts before its message arrives", async () => {
     const snapshot = addThreadToSnapshot(createDraftOnlySnapshot(), THREAD_ID);
     const emptyThread = { ...snapshot.threads[0]!, session: null };

@@ -392,6 +392,7 @@ import { Button } from "./ui/button";
 import { SidebarHeaderTrigger } from "./ui/sidebar";
 import { Skeleton } from "./ui/skeleton";
 import { toastManager } from "./ui/toast";
+import { isSidechatThread, isStandaloneSidechatThread } from "@synara/shared/sidechatThread";
 
 // The terminal drawer drags in xterm plus its addons (~223 KB gzip). Both mount points
 // are conditional, so loading it lazily keeps the terminal stack out of the initial
@@ -1816,6 +1817,12 @@ export default function ChatView({
     threadDetailHydration === "ready";
   const isEmptyChatLanding =
     isCenteredEmptyLanding && Boolean(homeDir) && isContainerLandingProject;
+  // A standalone side chat asks about one GitHub item from the code review page's narrow dock:
+  // its landing names the item instead of the project, at a size that fits a quarter-width pane.
+  const standaloneSidechatContext =
+    activeThread && isStandaloneSidechatThread(activeThread) ? activeThread.sidechatContext : null;
+  const standaloneSidechatItemNoun =
+    standaloneSidechatContext?.itemKind === "issue" ? "issue" : "pull request";
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
     useTurnDiffSummaries(activeThread);
   const turnDiffSummaryByAssistantMessageId = useMemo(() => {
@@ -2056,7 +2063,7 @@ export default function ChatView({
     selectedSkillCount: selectedComposerSkills.length,
     selectedMentionCount: selectedComposerMentions.length,
     interactionMode,
-    isSidechat: Boolean(activeThread?.sidechatSourceThreadId),
+    isSidechat: activeThread ? isSidechatThread(activeThread) : false,
   } as const;
   const canExecuteSideCommand =
     isServerThread &&
@@ -2998,8 +3005,9 @@ export default function ChatView({
     onMessagesWheelBase,
   });
 
+  // Runs for unfocused split panes too: they stay visible, and a side chat in a narrow dock is
+  // always one, so skipping the measurement left its footer clipped instead of tiered.
   useLayoutEffect(() => {
-    if (isInactiveSplitPane) return;
     const composerForm = composerFormRef.current;
     if (!composerForm) return;
     const measureComposerFormWidth = () => composerForm.clientWidth;
@@ -3079,7 +3087,9 @@ export default function ChatView({
     composerFormHeightRef,
     activeThread?.id,
     composerFooterHasWideActions,
-    isInactiveSplitPane,
+    // The landing and the transcript mount the composer form in different places, so moving
+    // between them replaces the node the observer watches.
+    isCenteredEmptyLanding,
   ]);
 
   useEffect(() => {
@@ -4918,8 +4928,11 @@ export default function ChatView({
         <span className="min-w-0 truncate">{activeProjectDisplayName}</span>
       </span>
     ) : null;
+  // A standalone side chat runs in its project's own folder, locally, and expires by itself, so
+  // the project, environment, branch, and Temporary controls have nothing to offer there.
   const showEmptyLandingControls =
     isCenteredEmptyLanding &&
+    !standaloneSidechatContext &&
     (isEmptyChatLanding ||
       showEmptyLandingProjectPicker ||
       emptyLandingProjectChip !== null ||
@@ -5047,7 +5060,7 @@ export default function ChatView({
     showGitActions,
     diffOpen: resolvedDiffOpen,
     threadAutomations: threadAutomationItems,
-    sidechats: activeThread.sidechatSourceThreadId
+    sidechats: isSidechatThread(activeThread)
       ? null
       : sourceThreadSidechats.map((sidechat) => ({
           id: sidechat.id,
@@ -5131,15 +5144,21 @@ export default function ChatView({
     traits: composerTraitSelection,
   });
   const startReplacementSidechat = () => {
-    const sourceThreadId = activeThread?.sidechatSourceThreadId;
-    if (!sourceThreadId) return;
-    void waitForSidechatCreator(sourceThreadId)
+    if (!activeThread) return;
+    // A forked sidechat is replaced by its source thread's creator. A standalone one has no
+    // source thread: the inbox that hosts it registers its replacement under its own id.
+    const standalone = isStandaloneSidechatThread(activeThread);
+    const creatorHostId = standalone ? activeThread.id : activeThread.sidechatSourceThreadId;
+    if (!creatorHostId) return;
+    void waitForSidechatCreator(creatorHostId)
       .then((createSidechat) => {
         if (!createSidechat) {
           toastManager.add({
             type: "warning",
             title: "Side chat is unavailable",
-            description: "Open the parent chat before starting a replacement side chat.",
+            description: standalone
+              ? "Open the item in Code review before starting a new side chat."
+              : "Open the parent chat before starting a replacement side chat.",
           });
           return;
         }
@@ -5522,9 +5541,11 @@ export default function ChatView({
                               ? "Message this subagent while it works"
                               : hasLiveTurn
                                 ? "Ask for follow-up changes"
-                                : phase === "disconnected"
-                                  ? "Ask for follow-up changes or attach images"
-                                  : "Ask anything, @tag files/folders, or use / to show available commands"
+                                : standaloneSidechatContext
+                                  ? `Ask about this ${standaloneSidechatItemNoun}`
+                                  : phase === "disconnected"
+                                    ? "Ask for follow-up changes or attach images"
+                                    : "Ask anything, @tag files/folders, or use / to show available commands"
                     }
                     disabled={isComposerEditorDisabled}
                   />
@@ -5690,7 +5711,7 @@ export default function ChatView({
           {...(isEditorRail
             ? { className: cn(CHAT_SURFACE_HEADER_PADDING_X_CLASS, "h-full") }
             : {})}
-          isSidechat={Boolean(activeThread.sidechatSourceThreadId)}
+          isSidechat={isSidechatThread(activeThread)}
           hideSidebarControls={isEditorRail}
           hideHandoffControls={terminalWorkspaceTerminalTabActive || isEditorRail}
           minimalChrome={isCenteredEmptyLanding}
@@ -5858,21 +5879,33 @@ export default function ChatView({
                 <div className="relative flex min-h-0 flex-1 items-center justify-center">
                   {/* Pinned to the top so the heading stays optically centered; hidden on
                       short panes where it would crowd the heading. */}
-                  <div className="absolute inset-x-0 top-4 flex justify-center px-6 [@media(max-height:620px)]:hidden">
-                    <ProjectImportLandingBanner className="w-full max-w-[520px]" />
-                  </div>
+                  {standaloneSidechatContext ? null : (
+                    <div className="absolute inset-x-0 top-4 flex justify-center px-6 [@media(max-height:620px)]:hidden">
+                      <ProjectImportLandingBanner className="w-full max-w-[520px]" />
+                    </div>
+                  )}
                   <div
                     className={cn(
-                      "flex flex-col items-center gap-4 px-6 text-center select-none",
+                      "flex flex-col items-center text-center select-none",
+                      standaloneSidechatContext ? "gap-3 px-4" : "gap-4 px-6",
                       CHAT_COLUMN_FRAME_CLASS_NAME,
                     )}
                   >
-                    <SynaraLogo aria-label="Synara logo" className="size-10" />
+                    <SynaraLogo
+                      aria-label="Synara logo"
+                      className={standaloneSidechatContext ? "size-7" : "size-10"}
+                    />
                     <h2
                       data-testid="empty-landing-heading"
-                      className="text-[26px] font-normal leading-[1.15] tracking-[-0.015em] text-foreground/95 sm:text-[30px]"
+                      className={
+                        standaloneSidechatContext
+                          ? "text-lg font-normal leading-snug text-foreground/95"
+                          : "text-[26px] font-normal leading-[1.15] tracking-[-0.015em] text-foreground/95 sm:text-[30px]"
+                      }
                     >
-                      {isEmptyChatLanding ? (
+                      {standaloneSidechatContext ? (
+                        `Ask about ${standaloneSidechatContext.itemKind === "issue" ? "issue" : "PR"} #${standaloneSidechatContext.number}`
+                      ) : isEmptyChatLanding ? (
                         "What should we work on?"
                       ) : (
                         <>
@@ -6185,7 +6218,7 @@ export default function ChatView({
           action={pendingTranscriptSelectionAction}
           defaultEnvMode={selectionChatEnvMode ?? settings.defaultThreadEnvMode}
           canUseWorktree={isGitRepo && !isContainerLandingProject}
-          canAddToSide={isServerThread && !activeThread.sidechatSourceThreadId}
+          canAddToSide={isServerThread && !isSidechatThread(activeThread)}
           onDismiss={dismissTranscriptSelectionAction}
           onAddToChat={commitTranscriptAssistantSelection}
           onAddToSide={(selection) =>
