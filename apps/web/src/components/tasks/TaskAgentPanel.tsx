@@ -15,7 +15,12 @@ import { ProviderIcon } from "~/components/ProviderIcon";
 import { cn } from "~/lib/utils";
 import type { PendingApproval } from "../../session-logic";
 import { TaskActionButton, TaskActionRow, TaskPillButton, TaskWell } from "./TaskCardPrimitives";
-import { describeAgentLocation, formatAgentActivity, type TaskRowModel } from "./tasks.logic";
+import {
+  describeAgentLocation,
+  formatAgentActivity,
+  NEEDS_ANSWER_DETAIL,
+  type TaskRowModel,
+} from "./tasks.logic";
 import { useOpenChat } from "./useOpenChat";
 import { useTaskAgentActions, useTaskAgentThread } from "./useTaskAgent";
 
@@ -60,7 +65,13 @@ export function TaskAgentPanel({
   // Only the delegated turn's own requests: while a reused chat is still on its earlier
   // turn (Starting), those belong to other work.
   const approval = status.kind === "needs" ? pendingApprovals[0] : undefined;
-  const asksQuestion = status.kind === "needs" && !approval && hasPendingUserInput;
+  // The row's status comes from the chat summary; the request itself only arrives with the
+  // chat's details, which may lag or never load here. Without it, the chat is where to act.
+  const asksQuestion =
+    status.kind === "needs" &&
+    !approval &&
+    (hasPendingUserInput || status.detail === NEEDS_ANSWER_DETAIL);
+  const awaitsOk = status.kind === "needs" && !approval && !asksQuestion;
   const markDone = () => onUpdate({ id: todo.id, completed: true });
 
   // The agent's icon and one line open each block; the model and place are its tooltip.
@@ -166,6 +177,15 @@ export function TaskAgentPanel({
           <TaskWell>{headline(`${agentName} asked you a question`)}</TaskWell>
           <TaskActionRow>
             <TaskActionButton onClick={openChat}>Answer in the chat</TaskActionButton>
+          </TaskActionRow>
+        </>
+      ) : null}
+
+      {awaitsOk ? (
+        <>
+          <TaskWell>{headline(`${agentName} is waiting for your OK`)}</TaskWell>
+          <TaskActionRow>
+            <TaskActionButton onClick={openChat}>Open chat</TaskActionButton>
           </TaskActionRow>
         </>
       ) : null}
