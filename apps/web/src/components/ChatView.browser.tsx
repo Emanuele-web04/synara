@@ -2893,13 +2893,13 @@ describe("ChatView transcript geometry (full app)", () => {
     }
 
     const medianRatio = ratios.sort((left, right) => left - right)[1]!;
-    // Without owner stacks, main measures about 2.1x on macOS and 2.3-2.6x on
-    // Linux CI. Deriving the work log twice per live activity (the #550
-    // regression) measures 2.6-3.1x on macOS and more on Linux CI.
+    // Without owner stacks and after the warm-up, main measures a 2.1x median on
+    // Linux CI (median-of-3 groups 1.85-2.16x). Deriving the work log twice per
+    // live activity (the #550 regression) measures 2.90-3.09x there.
     expect(
       medianRatio,
       `Issue #550 benchmark: ${JSON.stringify({ reports, ratios })}`,
-    ).toBeLessThan(3);
+    ).toBeLessThan(2.5);
   });
 
   it("cancels a multi-question prompt with choices through the orchestration command", async () => {
