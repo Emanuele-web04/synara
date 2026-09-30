@@ -4,6 +4,7 @@
 // Exports: dock pane types, default-state factory, and immutable open/close/activate helpers.
 
 import type { ProjectId, ThreadId, TurnId } from "@synara/contracts";
+import { resolveTabAfterClose } from "./lib/tabStrip";
 import { isPlainObject, sanitizeStringKeyedRecord } from "./persistedRecord";
 
 // Single source of truth for the dock pane kinds. The union type, the runtime
@@ -276,11 +277,7 @@ function resolveActiveAfterRemoval(
   if (previousActiveId !== removedId) {
     return previousActiveId;
   }
-  if (panes.length === 0) {
-    return null;
-  }
-  const neighborIndex = Math.min(removedIndex, panes.length - 1);
-  return panes[neighborIndex]?.id ?? null;
+  return resolveTabAfterClose(panes, removedIndex)?.id ?? null;
 }
 
 export function closePaneInState(

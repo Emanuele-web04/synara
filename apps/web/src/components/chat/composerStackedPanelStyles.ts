@@ -14,7 +14,7 @@ import { COMPOSER_STACKED_SURFACE_BORDER_CLASS_NAME } from "./composerPickerStyl
  *  z-index: the input shell paints later and keeps its top border visible across
  *  the seam. */
 export const COMPOSER_STACKED_PANEL_CHROME_CLASS_NAME = [
-  "chat-composer-stacked-top relative overflow-hidden border border-b-0",
+  "chat-composer-stacked-top squircle relative overflow-hidden border border-b-0",
   COMPOSER_STACKED_SURFACE_BORDER_CLASS_NAME,
 ].join(" ");
 

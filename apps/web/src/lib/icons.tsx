@@ -103,14 +103,10 @@ export const AppsIcon: LucideIcon = (props) => (
 export const BackgroundTrayIcon: LucideIcon = centralIconWrapper("arrow-down-wall");
 export const ContextCompactionIcon: LucideIcon = centralIconWrapper("arrows-hide");
 export const ComputerUseIcon: LucideIcon = centralIconWrapper("cursor-1");
-export const PanelExpandIcon: LucideIcon = centralIconWrapper("expand-45");
-export const PanelCollapseIcon: LucideIcon = centralIconWrapper("minimize-45");
 export const BackToParentIcon: LucideIcon = centralIconWrapper("arrow-share-left");
 export const WorkflowIcon: LucideIcon = centralIconWrapper("agents");
 export const SteerIcon: LucideIcon = centralIconWrapper("arrow-corner-down-right");
 export const ComposerSendArrowIcon: LucideIcon = centralIconWrapper("arrow-up");
-export const HANDOFF_ICON_NAME = "arrow-left-right";
-export const HandoffIcon: LucideIcon = centralIconWrapper(HANDOFF_ICON_NAME);
 export const SkillCubeIcon: LucideIcon = centralIconWrapper("building-blocks");
 export const NewThreadIcon: LucideIcon = centralIconWrapper("compose-pencil");
 // Command palette (⌘K) action glyphs: one Central outline set so the rows read as a family.
@@ -206,7 +202,6 @@ export const GitBranchIcon: LucideIcon = centralIconWrapper("branch");
 // second, unrelated icon next to it, so fork and branch share one visual.
 export const GitForkIcon: LucideIcon = GitBranchIcon;
 export const GitMergeIcon: LucideIcon = centralIconWrapper("merged");
-export const GitMergedSimpleIcon: LucideIcon = centralIconWrapper("merged-simple");
 export const PushIcon: LucideIcon = centralIconWrapper("cloud-simple-upload");
 export const GitHubIcon: LucideIcon = (props) => (
   <SiGithub className={props.className} style={props.style} />
@@ -344,3 +339,18 @@ export const ZapIcon = adaptIcon(IconBolt);
 export const FastModeIcon: LucideIcon = centralIconWrapper("zap", "fill");
 // Outline twin of FastModeIcon (Central reversed set) for the inactive toggle state.
 export const FastModeOutlineIcon: LucideIcon = centralIconWrapper("zap");
+
+// Sidebar and panel toggles, expand/collapse, top-bar add, and handoff (Hugeicons, inlined).
+export {
+  ArrowDataTransferHorizontalIcon as HandoffIcon,
+  CollapseIcon as PanelCollapseIcon,
+  ExpandIcon as PanelExpandIcon,
+  LayoutAlignLeftIcon,
+  LayoutAlignRightIcon,
+  LayoutLeftIcon,
+  LayoutRightIcon,
+  PanelTopOpenIcon,
+  PlusSignIcon,
+  // Merged pull requests (the PR-state glyph); merge *actions* keep GitMergeIcon.
+  WorkflowCircle06Icon as GitMergedSimpleIcon,
+} from "./hugeicons";
