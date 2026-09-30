@@ -26,13 +26,17 @@ export function useTaskDelegateTarget(todoProjectId: Todo["projectId"]) {
     () => userProjects.map((project) => ({ id: project.id, name: project.name })),
     [userProjects],
   );
-  const [target, setTarget] = useState<DelegateTarget | null>(() => {
-    const preferred = [todoProjectId, latestProjectId].find(
-      (id) => id !== null && userProjects.some((project) => project.id === id),
-    );
-    const projectId = preferred ?? userProjects[0]?.id ?? null;
-    return projectId ? { kind: "project", projectId } : null;
-  });
+  // Automatic selection follows task project edits. An explicit Run in choice stays
+  // independent, including a custom folder, until the form is opened for another task.
+  const [selectedTarget, setTarget] = useState<DelegateTarget | null>(null);
+  const preferred = [todoProjectId, latestProjectId].find(
+    (id) => id !== null && userProjects.some((project) => project.id === id),
+  );
+  const projectId = preferred ?? userProjects[0]?.id ?? null;
+  const target = useMemo<DelegateTarget | null>(
+    () => selectedTarget ?? (projectId ? { kind: "project", projectId } : null),
+    [projectId, selectedTarget],
+  );
   const targetProject =
     target?.kind === "project"
       ? (userProjects.find((project) => project.id === target.projectId) ?? null)
