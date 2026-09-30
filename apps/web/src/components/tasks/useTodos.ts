@@ -55,6 +55,13 @@ const endPendingCreate = (id: TodoId) => {
 // Creates the server rejected: such a row never existed there, so a failed delete of it
 // must not bring it back.
 const failedCreateIds = new Set<TodoId>();
+// A lost delete reply retains its tombstone until a list requested after that outcome
+// confirms the row still exists. Entry identity prevents old requests/callbacks from
+// settling a newer delete of the same ID; confirmed deletions keep their tombstones.
+interface PendingDelete {
+  uncertain: boolean;
+}
+const pendingDeletesById = new Map<TodoId, PendingDelete>();
 // Edits still on their way to the server, oldest first. A reply carries the whole stored
 // row as of that edit, so a create's reply, or an earlier edit's, must not drop the later
 // optimistic edits: those are laid back over it until their own replies land. Earlier ones
@@ -95,6 +102,7 @@ function applyTodoEventHoldingEdits(
   prev: TodoListResult | undefined,
   event: Parameters<typeof applyTodoEvent>[1],
 ): TodoListResult {
+  if (event.type === "todo-deleted") pendingDeletesById.delete(event.todoId);
   const next = applyTodoEvent(prev, event);
   if (pendingUpdatesById.size === 0) return next;
   return {
@@ -111,9 +119,19 @@ export function useTodoList(enabled = true) {
     queryKey: todoQueryKey,
     // Merged like a stream snapshot, so a refetch can't undo newer live copies or bring
     // back a to-do that was just deleted.
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
+      const uncertainDeletes = [...pendingDeletesById].filter(([, entry]) => entry.uncertain);
       try {
         const { todos } = await ensureNativeApi().todo.list();
+        if (!signal.aborted && uncertainDeletes.length > 0) {
+          const presentIds = new Set(todos.map((todo) => todo.id));
+          for (const [id, entry] of uncertainDeletes) {
+            if (pendingDeletesById.get(id) !== entry) continue;
+            pendingDeletesById.delete(id);
+            if (presentIds.has(id)) unmarkTodoDeleted(id);
+            else markTodoDeleted(id, true);
+          }
+        }
         return applyTodoEventHoldingEdits(queryClient.getQueryData<TodoListResult>(todoQueryKey), {
           type: "snapshot",
           todos,
@@ -273,19 +291,29 @@ export function useTodoMutations() {
       await cancelListFetch();
       const previous = readTodo(id);
       // Marked now, so an update reply that lands before the delete can't re-add it.
+      const deletion: PendingDelete = { uncertain: false };
+      pendingDeletesById.set(id, deletion);
       markTodoDeleted(id);
       setList((todos) => todos.filter((todo) => todo.id !== id));
-      return { previous };
+      return { previous, deletion };
+    },
+    onSuccess: (_result, id) => {
+      pendingDeletesById.delete(id);
+      markTodoDeleted(id, true);
+      setList((todos) => todos.filter((todo) => todo.id !== id));
     },
     onError: (error, id, context) => {
-      unmarkTodoDeleted(id);
+      if (!context || pendingDeletesById.get(id) !== context.deletion) return;
       // A lost reply does not prove refusal. Keep the optimistic absence until a fresh
       // server snapshot confirms whether the delete landed; do not flash a false error.
       if (isRequestOutcomeUnknown(error)) {
+        context.deletion.uncertain = true;
         void queryClient.invalidateQueries({ queryKey: todoQueryKey });
         return;
       }
-      const previous = context?.previous;
+      pendingDeletesById.delete(id);
+      unmarkTodoDeleted(id);
+      const previous = context.previous;
       // Restore unless its create failed. A created row can still carry the optimistic
       // stamp (the delete mark blocked the create's reply); any newer copy replaces it.
       if (previous && !failedCreateIds.has(id)) {
