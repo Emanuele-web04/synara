@@ -284,7 +284,7 @@ To put a feature behind the list:
 
 Promote a feature to Stable by deleting its entry; every gate resolves itself.
 
-The list currently contains `omp` (Oh My Pi), `groups` (Hubs), and `inbox` (Inbox),
+The list currently contains `omp` (Oh My Pi), `groups` (Hubs), `tasks` (Tasks), and `inbox` (Inbox),
 all available in Beta and gated off in Stable. The rail sidebar layout is available in
 both Stable and Beta.
 
@@ -297,6 +297,10 @@ thread actions, and shows any existing hub folder as an ordinary project so its
 chats stay reachable. The gate lives in
 `apps/server/src/projectAgent/groupsBetaGate.ts` and `GROUPS_ON` in
 `apps/web/src/betaFeatures.ts`.
+
+`tasks` enables the Tasks list and delegation APIs. In Beta, Tasks takes Kanban's
+navigation slot and preserves its saved order and visibility; Stable keeps Kanban.
+A Beta client connected to a server that refuses Tasks returns to Kanban.
 
 `inbox` is the Inbox page: the server refuses its `stats.getRecap` RPC on Stable, the
 web hides its rail and sidebar entries and redirects the route, and a saved rail or

@@ -26,6 +26,7 @@ import {
   todoPriorityLabel,
   unlinkChatInput,
 } from "./tasks.logic";
+import { useTaskCanUnlink } from "./taskDelegationState";
 import { useOpenChat } from "./useOpenChat";
 
 const stopRowSelect = (event: MouseEvent) => event.stopPropagation();
@@ -93,6 +94,7 @@ export function TaskRow({
   const openChat = useOpenChat(todo.threadId);
   const rename = useTaskRename(todo, onUpdate);
   const isDone = status.kind === "done";
+  const canUnlink = useTaskCanUnlink(todo, status.kind, now);
   // Linked to a chat that still exists, even before its summary loads ("Starting").
   const isDelegated = todo.threadId !== null && !status.chatMissing;
   const showsAgent = thread !== null && !isDone;
@@ -116,7 +118,7 @@ export function TaskRow({
           isDelegated,
           isDone,
           hasLink: todo.threadId !== null,
-          canUnlink: status.kind !== "starting",
+          canUnlink,
         }),
         { x: event.clientX, y: event.clientY },
       );

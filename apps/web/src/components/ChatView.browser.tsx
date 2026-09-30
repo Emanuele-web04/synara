@@ -71,6 +71,7 @@ import { hasReconciledServerProviderStatuses } from "../lib/serverReactQuery";
 import { getRouter } from "../router";
 import { showContextMenuFallback } from "../contextMenuFallback";
 import { useRightDockStore } from "../rightDockStore";
+import { useOpenThreadTabsStore } from "../openThreadTabsStore";
 import { useSplitViewStore } from "../splitViewStore";
 import { useSpacesUiStore } from "../spacesUiStore";
 import { useRailShellStore } from "../railShellStore";
@@ -2443,6 +2444,61 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it.each(["classic", "rail"])(
+    "preserves the hidden board slot when Tasks replaces Kanban in the %s sidebar",
+    async (sidebarLayout) => {
+      localStorage.setItem(
+        "synara:app-settings:v1",
+        JSON.stringify({
+          sidebarLayout,
+          hiddenSidebarNavItems: ["kanban"],
+          hiddenRailItems: ["kanban"],
+        }),
+      );
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: MessageId.makeUnsafe("hidden-tasks-slot"),
+          targetText: "Hidden Tasks slot",
+        }),
+      });
+      try {
+        await waitForLayout();
+        await expect
+          .element(page.getByRole("button", { name: "Tasks", exact: true }))
+          .not.toBeInTheDocument();
+        if (sidebarLayout === "rail") {
+          await page
+            .getByRole("navigation", { name: "Primary" })
+            .getByRole("button", { name: "More", exact: true })
+            .click();
+          await page.getByRole("menuitem", { name: "Customize…", exact: true }).click();
+        } else {
+          page
+            .getByRole("button", { name: "Pull requests", exact: true })
+            .element()
+            .dispatchEvent(
+              new MouseEvent("contextmenu", { bubbles: true, clientX: 120, clientY: 160 }),
+            );
+          await page.getByRole("menuitem", { name: "Customize", exact: true }).click();
+        }
+        await page
+          .getByRole("checkbox", { name: "Show Tasks in the sidebar", exact: true })
+          .click();
+        await page.getByRole("button", { name: "Done", exact: true }).click();
+        await expect
+          .element(page.getByRole("button", { name: "Tasks", exact: true }))
+          .toBeVisible();
+        const preference = sidebarLayout === "rail" ? "hiddenRailItems" : "hiddenSidebarNavItems";
+        expect(
+          JSON.parse(localStorage.getItem("synara:app-settings:v1") ?? "{}")[preference],
+        ).toEqual([]);
+      } finally {
+        await mounted.cleanup();
+      }
+    },
+  );
+
   it("preserves absent project pins when toggling a rail Space shortcut", async () => {
     localStorage.setItem(
       "synara:app-settings:v1",
@@ -2758,7 +2814,8 @@ describe("ChatView transcript geometry (full app)", () => {
       try {
         for (const id of [1, 2, 3]) {
           await page.getByRole("button", { name: new RegExp(`Choice ${id}`) }).click();
-          if (id < 3)
+          // Single-choice answers advance themselves; another Next click races the timer.
+          if (id < 3 && navigation !== "auto-advance")
             await page.getByRole("button", { name: "Next question", exact: true }).first().click();
         }
         if (navigation === "custom") {
@@ -7413,12 +7470,13 @@ describe("ChatView transcript geometry (full app)", () => {
       const projectPickerTrigger = page.getByTestId("project-picker-trigger");
       await expect.element(projectPickerTrigger).toBeInTheDocument();
       const resetProjectButton = page.getByTestId("project-picker-reset-trigger");
-      const folderIcon = projectPickerTrigger
-        .element()
-        .querySelector<HTMLElement>("[class*='transition-opacity']");
-      expect(folderIcon).not.toBeNull();
+      // Re-query on every check: crossing the mobile breakpoint swaps the rail shell for the
+      // classic one, which remounts the composer and detaches any node held from before.
+      const queryFolderIcon = () =>
+        projectPickerTrigger.element().querySelector<HTMLElement>("[class*='transition-opacity']");
+      expect(queryFolderIcon()).not.toBeNull();
       const expectResetAlignedWithFolderIcon = () => {
-        const folderIconRect = folderIcon!.getBoundingClientRect();
+        const folderIconRect = queryFolderIcon()!.getBoundingClientRect();
         const resetButtonRect = resetProjectButton.element().getBoundingClientRect();
         const folderIconCenterX = folderIconRect.left + folderIconRect.width / 2;
         const resetButtonCenterX = resetButtonRect.left + resetButtonRect.width / 2;
@@ -7461,6 +7519,10 @@ describe("ChatView transcript geometry (full app)", () => {
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       expectResetAlignedWithFolderIcon();
       await mounted.setViewport(DEFAULT_VIEWPORT);
+      // The round trip through the mobile breakpoint remounted the composer; the reset below
+      // must keep focus in the one now on screen.
+      const settledComposerEditor = await waitForComposerEditor();
+      settledComposerEditor.focus();
 
       const originalRequestAnimationFrame = window.requestAnimationFrame;
       let frameRequestCount = 0;
@@ -7486,7 +7548,7 @@ describe("ChatView transcript geometry (full app)", () => {
       }
 
       expect(frameRequestCount).toBe(0);
-      expect(document.activeElement).toBe(composerEditor);
+      expect(document.activeElement).toBe(settledComposerEditor);
       await expect.element(page.getByText("Don't work in a project")).not.toBeInTheDocument();
       await expect.element(page.getByTestId("workspace-picker-trigger")).toBeInTheDocument();
     } finally {
@@ -9064,6 +9126,60 @@ describe("ChatView transcript geometry (full app)", () => {
       await mounted.cleanup();
     }
   });
+
+  it.each(["home", "project"] as const)(
+    "closing the last %s tab opens a fresh draft in the same project",
+    async (surface) => {
+      localStorage.setItem("synara:app-settings:v1", JSON.stringify({ sidebarLayout: "rail" }));
+      useOpenThreadTabsStore.setState({ threadIds: [] });
+      const snapshot = createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("last-tab-close"),
+        targetText: "Completed conversation",
+      });
+      const projectId = surface === "home" ? HOME_PROJECT_ID : PROJECT_ID;
+      const staleDraftId = ThreadId.makeUnsafe("closed-unsent-draft");
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot:
+          surface === "home" ? withActiveHomeChatThread(snapshot) : withHomeChatProject(snapshot),
+        configureFixture: (nextFixture) => {
+          nextFixture.welcome = {
+            ...nextFixture.welcome,
+            homeDir: "/Users/tester",
+            chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+          };
+        },
+      });
+      try {
+        await waitForLayout();
+        useComposerDraftStore.getState().setProjectDraftThreadId(projectId, staleDraftId, {});
+        useComposerDraftStore.getState().setPrompt(staleDraftId, "Unsent text from a closed tab");
+        useOpenThreadTabsStore.setState({ threadIds: [THREAD_ID] });
+        useProjectEnvironmentStore.getState().setProjectEnvMode(projectId, "worktree");
+        const close = await waitForElement<HTMLButtonElement>(
+          () =>
+            document.querySelector('nav[aria-label="Open threads"] button[aria-label^="Close "]'),
+          "The active thread should have a closeable rail tab.",
+        );
+        close.click();
+        await vi.waitFor(() => {
+          const nextId = mounted.router.state.location.pathname.slice(1) as ThreadId;
+          expect(nextId).not.toBe(THREAD_ID);
+          expect(nextId).not.toBe(staleDraftId);
+          const state = useComposerDraftStore.getState();
+          expect(state.getDraftThread(nextId)?.projectId).toBe(projectId);
+          expect(state.getDraftThread(nextId)?.envMode).toBe(
+            surface === "home" ? "local" : "worktree",
+          );
+          expect(state.draftsByThreadId[nextId]?.prompt ?? "").toBe("");
+          expect(useOpenThreadTabsStore.getState().threadIds).not.toContain(THREAD_ID);
+        });
+      } finally {
+        await mounted.cleanup();
+        useOpenThreadTabsStore.setState({ threadIds: [] });
+      }
+    },
+  );
 
   it("preserves a home-chat draft when the chat.newChat shortcut is reused after a thread switch", async () => {
     const mounted = await mountChatView({

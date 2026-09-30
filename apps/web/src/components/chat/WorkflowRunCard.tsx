@@ -434,9 +434,9 @@ export function WorkflowRunCard({
             title={compact ? "Expand workflow panel" : "Collapse workflow panel"}
           >
             {compact ? (
-              <PanelExpandIcon className="size-3" />
+              <PanelExpandIcon className="size-3" strokeWidth={2} />
             ) : (
-              <PanelCollapseIcon className="size-3" />
+              <PanelCollapseIcon className="size-3" strokeWidth={2} />
             )}
           </Button>
         </div>

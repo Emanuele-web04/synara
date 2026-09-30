@@ -9,6 +9,7 @@ import type { BrowserTabState } from "@synara/contracts";
 import { isBlankBrowserTabUrl } from "@synara/shared/browserSession";
 
 import { GlobeIcon, PlusIcon, XIcon } from "~/lib/icons";
+import { scrollTabIntoView } from "~/lib/tabStrip";
 import { cn } from "~/lib/utils";
 
 import {
@@ -29,20 +30,6 @@ export interface BrowserTabStripProps {
   onSelectTab: (tabId: string) => void;
   onCloseTab: (tabId: string) => void;
   onCreateTab: () => void;
-}
-
-// Scroll only the strip itself (not `scrollIntoView`, which would also scroll every
-// scrollable ancestor such as the dock or chat column when the pane mounts offscreen).
-function scrollTabIntoView(strip: HTMLElement, tab: HTMLElement): void {
-  const stripRect = strip.getBoundingClientRect();
-  const tabRect = tab.getBoundingClientRect();
-  const left = tabRect.left - stripRect.left + strip.scrollLeft;
-  const right = left + tabRect.width;
-  if (left < strip.scrollLeft) {
-    strip.scrollLeft = left;
-  } else if (right > strip.scrollLeft + strip.clientWidth) {
-    strip.scrollLeft = right - strip.clientWidth;
-  }
 }
 
 export function BrowserTabStrip(props: BrowserTabStripProps) {

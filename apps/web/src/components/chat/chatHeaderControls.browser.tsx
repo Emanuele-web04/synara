@@ -1,7 +1,8 @@
 // FILE: chatHeaderControls.browser.tsx
-// Purpose: Browser regressions for interactive versus static shared surface-tab chips,
-//          plus the surface-panel toggle's accessible name — the needs-you dot is
-//          announced as "needs attention", not only shown.
+// Purpose: Browser regressions for interactive versus static shared surface-tab chips, the
+//          trailing close treatment used by open-thread tabs, and the surface-panel
+//          toggle's accessible name — the needs-you dot is announced as "needs
+//          attention", not only shown.
 // Layer: Chat header controls test
 
 import "../../index.css";
@@ -50,6 +51,33 @@ describe("SurfaceTabChip selection", () => {
     const selectButton = document.querySelector<HTMLButtonElement>('button[aria-pressed="true"]');
     expect(selectButton).not.toBeNull();
     selectButton?.click();
+    expect(onSelect).toHaveBeenCalledOnce();
+  });
+
+  it("closes a trailing-close tab from its X or a middle click without selecting it", async () => {
+    const onSelect = vi.fn();
+    const onClose = vi.fn();
+    await render(
+      <SurfaceTabChip
+        closePlacement="trailing"
+        selectionAria="current"
+        icon={<span aria-hidden>AI</span>}
+        label="Fix reconnect race"
+        closeLabel="Close Fix reconnect race"
+        onSelect={onSelect}
+        onClose={onClose}
+      />,
+    );
+
+    await page.getByRole("button", { name: "Close Fix reconnect race" }).click();
+    const selectButton = page.getByRole("button", { name: "Fix reconnect race", exact: true });
+    selectButton
+      .element()
+      .dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true, cancelable: true }));
+
+    expect(onClose).toHaveBeenCalledTimes(2);
+    expect(onSelect).not.toHaveBeenCalled();
+    await selectButton.click();
     expect(onSelect).toHaveBeenCalledOnce();
   });
 });

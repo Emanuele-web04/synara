@@ -367,9 +367,9 @@ describe("isGitTextGenerationSettingsDirty", () => {
 });
 
 describe("sidebar layout", () => {
-  it("decodes settings saved before the layout existed as classic", () => {
+  it("decodes settings without a layout choice as the rail default", () => {
     const decoded = Schema.decodeUnknownSync(AppSettingsSchema)({ showChatsSection: false });
-    expect(normalizeStoredAppSettings(decoded).sidebarLayout).toBe("classic");
+    expect(normalizeStoredAppSettings(decoded).sidebarLayout).toBe("rail");
   });
 });
 
