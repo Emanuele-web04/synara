@@ -1216,6 +1216,18 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
   if (tag === WS_METHODS.todoList) {
     return { todos: [] };
   }
+  // The Code review badge shares the inbox list; keep its background read contract-valid.
+  if (tag === WS_METHODS.githubInboxList) {
+    return {
+      viewer: null,
+      items: [],
+      errors: [],
+      repositoryBatches: [],
+      rateLimit: null,
+      reviewRequestedCount: 0,
+      reviewRequestedCountIncomplete: false,
+    };
+  }
   if (tag === WS_METHODS.gitListBranches) {
     const cwd = typeof body.cwd === "string" ? body.cwd : null;
     const branchName = cwd ? (fixture.gitBranchByCwd[cwd] ?? "main") : "main";
@@ -2475,7 +2487,7 @@ describe("ChatView transcript geometry (full app)", () => {
           await page.getByRole("menuitem", { name: "Customize…", exact: true }).click();
         } else {
           page
-            .getByRole("button", { name: "Pull requests", exact: true })
+            .getByRole("button", { name: "Code review", exact: true })
             .element()
             .dispatchEvent(
               new MouseEvent("contextmenu", { bubbles: true, clientX: 120, clientY: 160 }),
