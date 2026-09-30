@@ -28,6 +28,12 @@ export interface ProjectMenuPickerOption {
   readonly spaceName?: string;
 }
 
+/** A first row that clears the choice, e.g. "No project" on a to-do. */
+export interface ProjectMenuPickerNoneOption {
+  readonly label: string;
+  readonly onSelect: () => void;
+}
+
 interface ResolvedProjectOption extends ProjectMenuPickerOption {
   readonly resolvedSpaceId: SpaceId | null;
   readonly resolvedSpaceName: string;
@@ -43,8 +49,8 @@ export function ProjectMenuPicker(props: {
   children?: ReactNode;
   align?: "start" | "center" | "end";
   popupClassName?: string;
-  /** Adds a first row that clears the choice, e.g. "No project" on a to-do. */
-  noneOption?: { readonly label: string; readonly onSelect: () => void };
+  /** Adds a first row that clears the choice. */
+  noneOption?: ProjectMenuPickerNoneOption;
   /** Closes the menu once a row is picked instead of leaving it open. */
   closeOnSelect?: boolean;
 }) {
@@ -79,7 +85,7 @@ function ProjectMenuPickerList(props: {
   projectOptions: ReadonlyArray<ProjectMenuPickerOption>;
   selectedProjectId: ProjectId | null;
   onProjectIdChange: (projectId: ProjectId) => void;
-  noneOption?: { readonly label: string; readonly onSelect: () => void } | undefined;
+  noneOption?: ProjectMenuPickerNoneOption | undefined;
   closeOnSelect: boolean;
 }) {
   const [query, setQuery] = useState("");

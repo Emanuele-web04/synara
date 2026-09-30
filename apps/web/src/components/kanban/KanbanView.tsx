@@ -8,29 +8,17 @@ import type { ProjectId } from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { SidebarHeaderNavigationControls } from "~/components/SidebarHeaderNavigationControls";
 import { Button } from "~/components/ui/button";
-import { Kbd, KbdGroup } from "~/components/ui/kbd";
 import { RouteInsetSurface } from "../RouteInsetSurface";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
-import {
-  useDesktopTopBarTrafficLightGutterClassName,
-  useDesktopTopBarWindowControlsGutterClassName,
-} from "~/hooks/useDesktopTopBarGutter";
 import { useNowMs } from "~/hooks/useNowMs";
 import { useThreadPullRequests } from "~/hooks/useThreadPullRequests";
-import { ArrowLeftIcon, PlusIcon } from "~/lib/icons";
-import { isNewTaskShortcut, NEW_TASK_SHORTCUT_PARTS } from "~/lib/newTaskShortcut";
-import { cn } from "~/lib/utils";
+import { ArrowLeftIcon } from "~/lib/icons";
+import { isNewTaskShortcut } from "~/lib/newTaskShortcut";
 
 import { useStore } from "../../store";
+import { NewTaskButton } from "../tasks/NewTaskButton";
 import { TasksViewSwitch } from "../tasks/TasksViewSwitch";
-import {
-  CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
-  CHAT_SURFACE_HEADER_HEIGHT_CLASS,
-  CHAT_SURFACE_HEADER_PADDING_X_CLASS,
-} from "../chat/chatHeaderControls";
-import { CHAT_BACKGROUND_CLASS_NAME } from "../chat/composerPickerStyles";
+import { RouteSurface, RouteSurfaceHeader } from "../RouteSurface";
 import { KanbanNewTaskDialog } from "./KanbanNewTaskDialog";
 import { KanbanOverview } from "./KanbanOverview";
 import { KanbanProjectBoardView } from "./KanbanProjectBoardView";
@@ -42,9 +30,6 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
   const navigate = useNavigate();
   const board = useKanbanBoard();
   const threadsHydrated = useStore((state) => state.threadsHydrated);
-  const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
-  const desktopTopBarWindowControlsGutterClassName =
-    useDesktopTopBarWindowControlsGutterClassName();
 
   const projectBoard =
     projectId === null
@@ -152,70 +137,30 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
 
   return (
     <RouteInsetSurface>
-      <div
-        className={cn(
-          "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
-          CHAT_BACKGROUND_CLASS_NAME,
-        )}
-      >
-        <header
-          className={cn(
-            CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
-            CHAT_SURFACE_HEADER_PADDING_X_CLASS,
-            "drag-region",
-            desktopTopBarTrafficLightGutterClassName,
-            desktopTopBarWindowControlsGutterClassName,
-          )}
-        >
-          <div className={cn("flex items-center gap-2 sm:gap-3", CHAT_SURFACE_HEADER_HEIGHT_CLASS)}>
-            <SidebarHeaderNavigationControls />
-            <div className="flex min-w-0 flex-1 items-center gap-2 [-webkit-app-region:no-drag]">
-              {projectBoard ? (
-                <Button
-                  size="icon-xs"
-                  variant="ghost"
-                  onClick={handleBackToOverview}
-                  aria-label="Back to all projects"
-                >
-                  <ArrowLeftIcon className="size-3.5" />
-                </Button>
-              ) : null}
-              <h2 className="max-w-[clamp(16rem,50vw,40rem)] truncate text-ui-lg font-medium text-foreground">
-                {projectBoard ? projectBoard.projectName : "Kanban"}
-              </h2>
-              <span className="shrink-0 text-ui leading-snug text-muted-foreground/70">
-                {projectBoard ? projectBoard.totalCount : board.totalCount} tasks
-              </span>
-              {projectBoard ? null : <TasksViewSwitch current="kanban" />}
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      size="sm"
-                      variant="chrome"
-                      className="ml-auto shrink-0 gap-1.5"
-                      disabled={newTaskProjectOptions.length === 0}
-                      onClick={handleNewTaskInProjectBoard}
-                    >
-                      <PlusIcon className="size-3.5" />
-                      New task
-                    </Button>
-                  }
-                />
-                <TooltipPopup side="bottom">
-                  <span className="flex items-center gap-2">
-                    New task
-                    <KbdGroup>
-                      {NEW_TASK_SHORTCUT_PARTS.map((part) => (
-                        <Kbd key={part}>{part}</Kbd>
-                      ))}
-                    </KbdGroup>
-                  </span>
-                </TooltipPopup>
-              </Tooltip>
-            </div>
-          </div>
-        </header>
+      <RouteSurface>
+        <RouteSurfaceHeader>
+          {projectBoard ? (
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              onClick={handleBackToOverview}
+              aria-label="Back to all projects"
+            >
+              <ArrowLeftIcon className="size-3.5" />
+            </Button>
+          ) : null}
+          <h2 className="max-w-[clamp(16rem,50vw,40rem)] truncate text-ui-lg font-medium text-foreground">
+            {projectBoard ? projectBoard.projectName : "Kanban"}
+          </h2>
+          <span className="shrink-0 text-ui leading-snug text-muted-foreground/70">
+            {projectBoard ? projectBoard.totalCount : board.totalCount} tasks
+          </span>
+          {projectBoard ? null : <TasksViewSwitch current="kanban" />}
+          <NewTaskButton
+            disabled={newTaskProjectOptions.length === 0}
+            onClick={handleNewTaskInProjectBoard}
+          />
+        </RouteSurfaceHeader>
 
         <div className="min-h-0 min-w-0 flex-1 pt-3">
           {projectBoard ? (
@@ -239,7 +184,7 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
             />
           )}
         </div>
-      </div>
+      </RouteSurface>
 
       {newTaskDialog ? (
         <KanbanNewTaskDialog

@@ -17,14 +17,11 @@ import {
   resolveAssistantDeliveryMode,
   useAppSettings,
 } from "~/appSettings";
-import { RuntimeUsageControls } from "~/components/BranchToolbar";
 import {
   ComposerPromptEditor,
   type ComposerPromptEditorHandle,
 } from "~/components/ComposerPromptEditor";
 import { ComposerCommandMenu } from "~/components/chat/ComposerCommandMenu";
-import { ProviderModelPicker } from "~/components/chat/ProviderModelPicker";
-import { TraitsPicker } from "~/components/chat/TraitsPicker";
 import {
   ComposerLocalDirectoryMenu,
   type ComposerLocalDirectoryMenuHandle,
@@ -68,6 +65,10 @@ import { DEFAULT_INTERACTION_MODE } from "../../types";
 import { appendKanbanTaskTranscript, buildKanbanTaskPreview } from "./KanbanNewTaskDialog.logic";
 import { KanbanTaskExtrasMenu } from "./KanbanTaskExtrasMenu";
 import { KanbanTaskProjectPicker } from "./KanbanTaskProjectPicker";
+import {
+  ScratchModelPickers,
+  ScratchRuntimeControls,
+} from "~/components/chat/ScratchAgentControls";
 import { useKanbanTaskComposerMenu } from "./useKanbanTaskComposerMenu";
 import { useKanbanTaskScratchDraft } from "./useKanbanTaskScratchDraft";
 import { useKanbanTaskSubmit } from "./useKanbanTaskSubmit";
@@ -117,6 +118,7 @@ export function KanbanNewTaskDialog({
   const [selectedProjectId, setSelectedProjectId] = useState<ProjectId | null>(
     () => initialProjectId ?? projectOptions[0]?.id ?? null,
   );
+  const draft = useKanbanTaskScratchDraft({ defaultProvider: settings.defaultProvider });
   const {
     scratchThreadId,
     prompt,
@@ -132,16 +134,13 @@ export function KanbanNewTaskDialog({
     waitForPendingImages,
     selectedProvider,
     selectedModel,
-    selectedModelSupportsAutoMode,
-    selectedProviderModelOptions,
     setPrompt,
-    handleProviderModelChange: setScratchProviderModel,
     addComposerImages,
     removeComposerImage,
     clearComposerAssistantSelections,
     clearComposerFileComments,
     removeComposerTerminalContext,
-  } = useKanbanTaskScratchDraft({ defaultProvider: settings.defaultProvider });
+  } = draft;
   const promptRef = useRef(prompt);
 
   const [interactionMode, setInteractionMode] =
@@ -151,8 +150,6 @@ export function KanbanNewTaskDialog({
   // fresh chat). The Draft column's "+" opens the dialog with the toggle on, so
   // the task parks in Draft — matching where the user clicked.
   const [sendAsDraft, setSendAsDraft] = useState(initialSendAsDraft);
-  const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
-  const [isTraitsPickerOpen, setIsTraitsPickerOpen] = useState(false);
   const [isDragOverComposer, setIsDragOverComposer] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
   const selectedProject = useMemo(
@@ -171,28 +168,18 @@ export function KanbanNewTaskDialog({
     () => findProviderStatus(providerStatuses, "codex"),
     [providerStatuses],
   );
-  const {
-    modelOptionsByProvider,
-    loadingModelProviders,
-    discoveryErrorsByProvider,
-    runtimeModelsByProvider,
-    selectedRuntimeModel,
-    selectedRuntimeAgents,
-    runtimeMode,
-    setRuntimeMode,
-    selectedProviderStatus,
-    runtimeModelForCapabilities: selectedRuntimeModelForCapabilities,
-    handleProviderModelChange,
-  } = useScratchModelCatalog({
-    scratchThreadId,
-    selectedProvider,
-    selectedModel,
-    selectedModelSupportsAutoMode,
-    setScratchProviderModel,
+  const catalog = useScratchModelCatalog({
+    draft,
     providerStatuses,
-    discoveryEnabled: isModelPickerOpen || isTraitsPickerOpen,
     discoveryCwd: providerModelDiscoveryCwd,
   });
+  const {
+    modelOptionsByProvider,
+    selectedRuntimeAgents,
+    runtimeMode,
+    runtimeModelForCapabilities,
+    handleProviderModelChange,
+  } = catalog;
   const trimmedPrompt = prompt.trim();
   const hasSendableContent =
     trimmedPrompt.length > 0 ||
@@ -210,7 +197,7 @@ export function KanbanNewTaskDialog({
     hasSendableContent,
     selectedProvider,
     selectedModel,
-    selectedModelSupportsAutoMode: selectedRuntimeModelForCapabilities?.supportsAutoMode,
+    selectedModelSupportsAutoMode: runtimeModelForCapabilities?.supportsAutoMode,
     taskPreview,
     trimmedPrompt,
     scratchThreadId,
@@ -496,47 +483,15 @@ export function KanbanNewTaskDialog({
                     envMode={envMode}
                     onEnvModeChange={setEnvMode}
                   />
-                  <RuntimeUsageControls
-                    provider={selectedProvider}
-                    runtimeModel={selectedRuntimeModelForCapabilities}
-                    providerStatus={selectedProviderStatus}
-                    runtimeMode={runtimeMode}
-                    onRuntimeModeChange={setRuntimeMode}
-                  />
+                  <ScratchRuntimeControls draft={draft} catalog={catalog} />
                 </div>
                 <div className="flex shrink-0 items-center gap-1.5">
                   {/* Same split controls as a fresh chat composer: model picker plus
                       the separate effort/thinking/speed picker. */}
-                  <ProviderModelPicker
-                    compact
-                    provider={selectedProvider}
-                    model={selectedModel ?? ""}
-                    lockedProvider={null}
-                    providers={providerStatuses}
-                    modelOptionsByProvider={modelOptionsByProvider}
-                    loadingModelProviders={loadingModelProviders}
-                    discoveryErrorsByProvider={discoveryErrorsByProvider}
-                    hiddenProviders={settings.hiddenProviders}
-                    providerOrder={settings.providerOrder}
-                    onProviderModelChange={handleProviderModelChange}
-                    onProviderModelRoleSelect={(model, options) =>
-                      handleProviderModelChange("omp", model, options)
-                    }
-                    open={isModelPickerOpen}
-                    onOpenChange={setIsModelPickerOpen}
-                  />
-                  <TraitsPicker
-                    provider={selectedProvider}
-                    threadId={scratchThreadId}
-                    model={selectedModel}
-                    runtimeModel={selectedRuntimeModel}
-                    runtimeModels={runtimeModelsByProvider[selectedProvider]}
-                    runtimeAgents={selectedRuntimeAgents}
-                    modelOptions={selectedProviderModelOptions}
-                    prompt={prompt}
-                    onPromptChange={setPrompt}
-                    open={isTraitsPickerOpen}
-                    onOpenChange={setIsTraitsPickerOpen}
+                  <ScratchModelPickers
+                    draft={draft}
+                    catalog={catalog}
+                    providerStatuses={providerStatuses}
                   />
                 </div>
               </div>

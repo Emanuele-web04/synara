@@ -21,6 +21,7 @@ import {
   subagentStatusDotClassName,
   subagentStatusTextToneClassName,
 } from "~/lib/subagentPresentation";
+import { StatusDot } from "~/components/ui/status-chip";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { DisclosureRegion } from "../ui/DisclosureRegion";
@@ -160,12 +161,7 @@ export const ComposerSubagentStrip = function ComposerSubagentStrip({
                   title={item.fullLabel}
                   onClick={() => onOpenThread(item.threadId)}
                 >
-                  <span
-                    className={cn(
-                      "size-1.5 shrink-0 rounded-full",
-                      subagentStatusDotClassName(item.statusKind),
-                    )}
-                  />
+                  <StatusDot className={subagentStatusDotClassName(item.statusKind)} />
                   <span className="min-w-0 flex-1 truncate text-ui font-medium text-foreground/85">
                     <span>{item.primaryLabel}</span>
                     {item.role ? (

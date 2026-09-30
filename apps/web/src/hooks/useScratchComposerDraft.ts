@@ -4,7 +4,7 @@
 //          shared model and effort pickers read and write model state exactly like a
 //          fresh chat composer. The draft is discarded on unmount.
 // Layer: Web UI hook
-// Exports: useScratchComposerDraft
+// Exports: useScratchComposerDraft, ScratchComposerDraft, ScratchModelDraft
 
 import type { ModelSlug, ProviderKind, ThreadId } from "@synara/contracts";
 import { getDefaultModel } from "@synara/shared/model";
@@ -83,3 +83,21 @@ export function useScratchComposerDraft(input: {
     handleProviderModelChange,
   };
 }
+
+export type ScratchComposerDraft = ReturnType<typeof useScratchComposerDraft>;
+
+/**
+ * The slice of a scratch draft that the model catalog and pickers read, so a surface that
+ * layers more state on the draft (Kanban's images and mentions) can pass its own draft.
+ */
+export type ScratchModelDraft = Pick<
+  ScratchComposerDraft,
+  | "scratchThreadId"
+  | "prompt"
+  | "setPrompt"
+  | "selectedProvider"
+  | "selectedModel"
+  | "selectedModelSupportsAutoMode"
+  | "selectedProviderModelOptions"
+  | "handleProviderModelChange"
+>;

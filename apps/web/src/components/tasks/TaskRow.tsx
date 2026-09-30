@@ -7,18 +7,17 @@
 // Exports: TaskRow
 
 import type { ProjectId, TodoUpdateInput } from "@synara/contracts";
-import { formatModelDisplayName } from "@synara/shared/model";
-import { useNavigate } from "@tanstack/react-router";
-import { type KeyboardEvent, type MouseEvent, useState } from "react";
+import type { ComponentProps, MouseEvent, ReactNode } from "react";
 
-import { ProviderIcon } from "~/components/ProviderIcon";
 import { Button } from "~/components/ui/button";
-import { THREAD_CONTEXT_MENU_ICONS } from "~/lib/contextMenuIcons";
 import { CalendarIcon, DelegateIcon, FolderIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { readNativeApi } from "../../nativeApi";
 import { TaskPriorityGlyph, TaskStatusChip, TaskStatusGlyph } from "./TaskGlyphs";
 import { TaskDueMenu, TaskPriorityMenu, TaskProjectMenu } from "./TaskPropertyMenus";
+import { TaskRowAgentLine } from "./TaskRowAgentLine";
+import { TaskRowTitle, useTaskRename } from "./TaskRowTitle";
+import { buildTaskRowContextMenu } from "./taskRowContextMenu";
 import {
   describeAgentLocation,
   formatAgentActivity,
@@ -26,13 +25,44 @@ import {
   type TaskRowModel,
   todoPriorityLabel,
 } from "./tasks.logic";
+import { useOpenChat } from "./useOpenChat";
 
-// Property menus act on the to-do without selecting its row.
 const stopRowSelect = (event: MouseEvent) => event.stopPropagation();
+// A button inside the row that acts without also selecting the row.
+const withoutRowSelect = (action: () => void) => (event: MouseEvent) => {
+  event.stopPropagation();
+  action();
+};
 
 const PROPERTY_BUTTON_CLASS =
   "h-6 gap-1 rounded-md px-1.5 text-ui-sm font-normal text-muted-foreground hover:text-foreground";
 const HOVER_REVEAL_CLASS = "opacity-0 group-hover/task:opacity-100 focus-visible:opacity-100";
+
+/** Property menus act on the to-do without selecting its row; React bubbles clicks from
+ *  their portaled popups through here too. */
+function TaskRowMenuZone({ children }: { children: ReactNode }) {
+  return (
+    <div className="contents" onClick={stopRowSelect}>
+      {children}
+    </div>
+  );
+}
+
+/** The row's project / due-date chip; an unset one shows only while the row is hovered. */
+function TaskRowPropertyButton({
+  empty,
+  className,
+  ...props
+}: ComponentProps<typeof Button> & { empty: boolean }) {
+  return (
+    <Button
+      size="xs"
+      variant="ghost"
+      {...props}
+      className={cn(PROPERTY_BUTTON_CLASS, empty && HOVER_REVEAL_CLASS, className)}
+    />
+  );
+}
 
 interface TaskRowProps {
   row: TaskRowModel;
@@ -59,9 +89,8 @@ export function TaskRow({
   onDelete,
 }: TaskRowProps) {
   const { todo, status, thread } = row;
-  const navigate = useNavigate();
-  const [isEditing, setIsEditing] = useState(false);
-  const [draftTitle, setDraftTitle] = useState(todo.title);
+  const openChat = useOpenChat(todo.threadId);
+  const rename = useTaskRename(todo, onUpdate);
   const isDone = status.kind === "done";
   // Linked to a chat that still exists, even before its summary loads ("Starting").
   const isDelegated = todo.threadId !== null && !status.chatMissing;
@@ -73,34 +102,6 @@ export function TaskRow({
   const agentLocation = thread ? describeAgentLocation(thread, projectNameById) : null;
   const agentActivity = formatAgentActivity(status, thread);
 
-  const openChat = () => {
-    if (todo.threadId) void navigate({ to: "/$threadId", params: { threadId: todo.threadId } });
-  };
-  // The title the rename started from: saving an unchanged draft must not write it back
-  // over a rename another window made meanwhile.
-  const [editStartTitle, setEditStartTitle] = useState(todo.title);
-  const startEditing = () => {
-    setDraftTitle(todo.title);
-    setEditStartTitle(todo.title);
-    setIsEditing(true);
-  };
-  const commitTitle = () => {
-    setIsEditing(false);
-    const nextTitle = draftTitle.trim();
-    if (nextTitle.length > 0 && nextTitle !== editStartTitle && nextTitle !== todo.title) {
-      onUpdate({ id: todo.id, title: nextTitle });
-    }
-  };
-  const handleTitleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.nativeEvent.isComposing) return;
-    if (event.key === "Enter") {
-      event.preventDefault();
-      commitTitle();
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      setIsEditing(false);
-    }
-  };
   const toggleDone = () => onUpdate({ id: todo.id, completed: !isDone });
 
   const handleContextMenu = (event: MouseEvent) => {
@@ -110,38 +111,10 @@ export function TaskRow({
     onSelect();
     void (async () => {
       const clicked = await api.contextMenu.show(
-        [
-          { id: "rename", label: "Rename", icon: THREAD_CONTEXT_MENU_ICONS.rename },
-          ...(isDelegated
-            ? [
-                { id: "open-chat" as const, label: "Open chat", separatorBefore: true },
-                { id: "unlink-chat" as const, label: "Unlink chat" },
-              ]
-            : [
-                ...(isDone
-                  ? []
-                  : [{ id: "delegate" as const, label: "Delegate…", separatorBefore: true }]),
-                // A link to a chat that was deleted can still be cleared.
-                ...(todo.threadId !== null
-                  ? [{ id: "unlink-chat" as const, label: "Unlink chat", separatorBefore: isDone }]
-                  : []),
-              ]),
-          {
-            id: "toggle-done",
-            label: isDone ? "Mark as not done" : "Mark as done",
-            separatorBefore: true,
-          },
-          {
-            id: "delete",
-            label: "Delete",
-            icon: THREAD_CONTEXT_MENU_ICONS.delete,
-            destructive: true,
-            separatorBefore: true,
-          },
-        ],
+        buildTaskRowContextMenu({ isDelegated, isDone, hasLink: todo.threadId !== null }),
         { x: event.clientX, y: event.clientY },
       );
-      if (clicked === "rename") startEditing();
+      if (clicked === "rename") rename.startEditing();
       else if (clicked === "open-chat") openChat();
       else if (clicked === "unlink-chat") onUpdate({ id: todo.id, threadId: null });
       else if (clicked === "delegate") onRequestDelegate();
@@ -164,9 +137,7 @@ export function TaskRow({
         selected ? "bg-accent" : "hover:bg-accent/70",
       )}
     >
-      {/* Property menus act on the to-do without selecting it; React bubbles clicks from
-          their portaled popups through here too. */}
-      <div className="contents" onClick={stopRowSelect}>
+      <TaskRowMenuZone>
         <TaskPriorityMenu
           priority={todo.priority}
           onChange={(priority) => onUpdate({ id: todo.id, priority })}
@@ -183,14 +154,11 @@ export function TaskRow({
         >
           <TaskPriorityGlyph priority={todo.priority} />
         </TaskPriorityMenu>
-      </div>
+      </TaskRowMenuZone>
 
       <button
         type="button"
-        onClick={(event) => {
-          event.stopPropagation();
-          toggleDone();
-        }}
+        onClick={withoutRowSelect(toggleDone)}
         aria-label={`${isDone ? "Mark as not done" : "Mark as done"}: ${todo.title} (${status.label})`}
         className="flex shrink-0 rounded-full outline-none focus-visible:ring-1 focus-visible:ring-ring"
       >
@@ -198,62 +166,14 @@ export function TaskRow({
       </button>
 
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        {isEditing ? (
-          <input
-            aria-label="Task title"
-            value={draftTitle}
-            autoFocus
-            onFocus={(event) => event.currentTarget.select()}
-            onChange={(event) => setDraftTitle(event.target.value)}
-            onBlur={commitTitle}
-            onKeyDown={handleTitleKeyDown}
-            className="font-system-ui min-w-0 bg-transparent text-ui text-foreground outline-none"
-          />
-        ) : (
-          <button
-            type="button"
-            onDoubleClick={startEditing}
-            onKeyDown={(event) => {
-              if (event.key === "F2") {
-                event.preventDefault();
-                startEditing();
-              }
-            }}
-            title="Double-click or press F2 to rename"
-            className={cn(
-              "min-w-0 truncate text-left text-ui outline-none",
-              isDone ? "text-muted-foreground" : "text-foreground",
-            )}
-          >
-            {todo.title}
-          </button>
-        )}
+        <TaskRowTitle title={todo.title} isDone={isDone} rename={rename} />
         {showsAgent && thread ? (
-          <div className="flex min-w-0 items-center gap-1.5 text-ui-sm text-muted-foreground">
-            <ProviderIcon provider={thread.modelSelection.provider} className="size-3 shrink-0" />
-            <span className="shrink-0 text-foreground/80">
-              {formatModelDisplayName(thread.modelSelection.model) ?? thread.modelSelection.model}
-            </span>
-            {agentLocation ? (
-              <>
-                <span className="shrink-0">in</span>
-                <span className="min-w-0 shrink truncate font-mono text-ui-xs text-foreground/70">
-                  {agentLocation}
-                </span>
-              </>
-            ) : null}
-            {agentActivity ? (
-              <>
-                <span className="shrink-0">·</span>
-                <span className="min-w-0 truncate">{agentActivity}</span>
-              </>
-            ) : null}
-          </div>
+          <TaskRowAgentLine thread={thread} location={agentLocation} activity={agentActivity} />
         ) : null}
       </div>
 
       <div className="flex shrink-0 items-center gap-1">
-        <div className="contents" onClick={stopRowSelect}>
+        <TaskRowMenuZone>
           {showsProjectLabel ? (
             <TaskProjectMenu
               projectId={todo.projectId}
@@ -261,11 +181,9 @@ export function TaskRow({
               onChange={(projectId) => onUpdate({ id: todo.id, projectId })}
               align="end"
               trigger={
-                <Button
-                  size="xs"
-                  variant="ghost"
+                <TaskRowPropertyButton
+                  empty={!projectName}
                   aria-label={projectName ? `Project: ${projectName}` : "Set project"}
-                  className={cn(PROPERTY_BUTTON_CLASS, !projectName && HOVER_REVEAL_CLASS)}
                 />
               }
             >
@@ -284,32 +202,24 @@ export function TaskRow({
               onChange={(dueDate) => onUpdate({ id: todo.id, dueDate })}
               align="end"
               trigger={
-                <Button
-                  size="xs"
-                  variant="ghost"
+                <TaskRowPropertyButton
+                  empty={!due}
                   aria-label={due ? `Due ${due.label}` : "Set due date"}
-                  className={cn(
-                    PROPERTY_BUTTON_CLASS,
-                    due?.overdue && "text-status-failure hover:text-status-failure",
-                    !due && HOVER_REVEAL_CLASS,
-                  )}
+                  className={cn(due?.overdue && "text-status-failure hover:text-status-failure")}
                 />
               }
             >
               {due ? due.label : <CalendarIcon aria-hidden className="size-3.5" />}
             </TaskDueMenu>
           )}
-        </div>
+        </TaskRowMenuZone>
 
         {showsAgent && status.kind === "review" ? (
           <Button
             size="xs"
             variant="outline"
             className="text-ui-sm"
-            onClick={(event) => {
-              event.stopPropagation();
-              toggleDone();
-            }}
+            onClick={withoutRowSelect(toggleDone)}
           >
             Mark done
           </Button>
@@ -331,10 +241,7 @@ export function TaskRow({
             size="xs"
             variant="outline"
             className={cn("gap-1.5 text-ui-sm", !selected && HOVER_REVEAL_CLASS)}
-            onClick={(event) => {
-              event.stopPropagation();
-              onRequestDelegate();
-            }}
+            onClick={withoutRowSelect(onRequestDelegate)}
           >
             <DelegateIcon aria-hidden className="size-3.5 text-status-merged" />
             Delegate

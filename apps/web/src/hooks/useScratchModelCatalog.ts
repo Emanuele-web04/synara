@@ -1,18 +1,12 @@
 // FILE: useScratchModelCatalog.ts
-// Purpose: The model catalog, runtime mode, and model changes behind a scratch composer
-//          draft (see useScratchComposerDraft), so surfaces that start a chat without the
-//          chat composer (Kanban's new-task dialog, the Tasks delegate form) pick models
-//          and runtime modes exactly like chat.
+// Purpose: The model catalog, runtime mode, picker open state, and model changes behind a
+//          scratch composer draft (see useScratchComposerDraft), so surfaces that start a
+//          chat without the chat composer (Kanban's new-task dialog, the Tasks delegate
+//          form) pick models and runtime modes exactly like chat.
 // Layer: Web UI hook
-// Exports: useScratchModelCatalog
+// Exports: useScratchModelCatalog, ScratchModelCatalog
 
-import type {
-  ModelSlug,
-  ProviderKind,
-  RuntimeMode,
-  ServerProviderStatus,
-  ThreadId,
-} from "@synara/contracts";
+import type { ModelSlug, ProviderKind, RuntimeMode, ServerProviderStatus } from "@synara/contracts";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { resolveRuntimeModelDescriptor } from "~/components/chat/runtimeModelCapabilities";
@@ -25,22 +19,12 @@ import {
 import { useComposerDraftStore } from "../composerDraftStore";
 import { buildModelSelection, type ProviderOptions } from "../providerModelOptions";
 import { DEFAULT_RUNTIME_MODE } from "../types";
+import type { ScratchModelDraft } from "./useScratchComposerDraft";
 
 export function useScratchModelCatalog(input: {
-  readonly scratchThreadId: ThreadId;
-  readonly selectedProvider: ProviderKind;
-  readonly selectedModel: ModelSlug | null;
-  readonly selectedModelSupportsAutoMode: boolean | undefined;
-  /** The scratch draft's own model setter, which also saves the sticky choice. */
-  readonly setScratchProviderModel: (
-    provider: ProviderKind,
-    model: ModelSlug,
-    supportsAutoMode?: boolean,
-    options?: ProviderOptions,
-  ) => void;
+  /** The scratch draft whose provider/model selection this catalog serves. */
+  readonly draft: ScratchModelDraft;
   readonly providerStatuses: readonly ServerProviderStatus[];
-  /** Keep discovery warm while a picker can open, so effort and fast-mode controls fill in. */
-  readonly discoveryEnabled: boolean;
   readonly discoveryCwd: string | null;
 }) {
   const {
@@ -48,9 +32,12 @@ export function useScratchModelCatalog(input: {
     selectedProvider,
     selectedModel,
     selectedModelSupportsAutoMode,
-    setScratchProviderModel,
-  } = input;
+    // The scratch draft's own model setter, which also saves the sticky choice.
+    handleProviderModelChange: setScratchProviderModel,
+  } = input.draft;
   const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>(DEFAULT_RUNTIME_MODE);
+  const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
+  const [isTraitsPickerOpen, setIsTraitsPickerOpen] = useState(false);
   const selectedProviderStatus = useMemo(
     () => findProviderStatus(input.providerStatuses, selectedProvider),
     [input.providerStatuses, selectedProvider],
@@ -61,7 +48,8 @@ export function useScratchModelCatalog(input: {
   );
   const catalog = useProviderModelCatalog({
     selectedProvider,
-    discoveryEnabled: input.discoveryEnabled,
+    // Keep discovery warm while a picker can open, so effort and fast-mode controls fill in.
+    discoveryEnabled: isModelPickerOpen || isTraitsPickerOpen,
     cwd: input.discoveryCwd,
     modelHintByProvider,
   });
@@ -142,5 +130,11 @@ export function useScratchModelCatalog(input: {
     selectedProviderStatus,
     runtimeModelForCapabilities,
     handleProviderModelChange,
+    isModelPickerOpen,
+    setIsModelPickerOpen,
+    isTraitsPickerOpen,
+    setIsTraitsPickerOpen,
   };
 }
+
+export type ScratchModelCatalog = ReturnType<typeof useScratchModelCatalog>;

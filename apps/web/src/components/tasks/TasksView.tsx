@@ -8,53 +8,29 @@
 
 import { TodoId } from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { FilterPillGroup } from "~/components/FilterPillGroup";
-import { SidebarHeaderNavigationControls } from "~/components/SidebarHeaderNavigationControls";
-import { Button } from "~/components/ui/button";
-import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
-import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
-import { Kbd, KbdGroup } from "~/components/ui/kbd";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
-import {
-  useDesktopTopBarTrafficLightGutterClassName,
-  useDesktopTopBarWindowControlsGutterClassName,
-} from "~/hooks/useDesktopTopBarGutter";
 import { useNowMs } from "~/hooks/useNowMs";
-import { PlusIcon } from "~/lib/icons";
-import { isNewTaskShortcut, NEW_TASK_SHORTCUT_PARTS } from "~/lib/newTaskShortcut";
-import { cn } from "~/lib/utils";
-import { useStore } from "../../store";
+import { isNewTaskShortcut } from "~/lib/newTaskShortcut";
 import { useTasksSurfaceEnabled } from "../../tasksSurface";
-import {
-  CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
-  CHAT_SURFACE_HEADER_HEIGHT_CLASS,
-  CHAT_SURFACE_HEADER_PADDING_X_CLASS,
-} from "../chat/chatHeaderControls";
-import { CHAT_BACKGROUND_CLASS_NAME } from "../chat/composerPickerStyles";
+import { RouteSurface, RouteSurfaceHeader } from "../RouteSurface";
 import { RouteInsetSurface } from "../RouteInsetSurface";
-import { TaskStatusGlyph } from "./TaskGlyphs";
-import { TaskRow } from "./TaskRow";
-import { TasksViewSwitch } from "./TasksViewSwitch";
 import { TaskInspector } from "./TaskInspector";
+import { TaskListEmptyState } from "./TaskListEmptyState";
+import { TaskListSections } from "./TaskListSections";
+import { TaskQuickAdd } from "./TaskQuickAdd";
+import { TaskRow } from "./TaskRow";
+import { NewTaskButton } from "./NewTaskButton";
+import { TasksViewSwitch } from "./TasksViewSwitch";
 import {
   buildTaskSections,
   filterTaskRows,
   TASK_FILTER_OPTIONS,
   type TaskFilter,
-  type TaskSectionKey,
-  type TaskStatusKind,
 } from "./tasks.logic";
+import { useTaskProjects } from "./useTaskProjects";
 import { useTaskRows, useTodoList, useTodoMutations } from "./useTodos";
-
-const SECTION_GLYPH: Record<TaskSectionKey, TaskStatusKind> = {
-  needs: "needs",
-  running: "running",
-  todo: "todo",
-};
-
-const ROW_INSET_CLASS = "pl-[3.125rem]";
 
 function newTodoId(): TodoId {
   return TodoId.makeUnsafe(`todo:${crypto.randomUUID()}`);
@@ -78,29 +54,10 @@ export default function TasksView() {
   const { sections, completed } = useMemo(() => buildTaskSections(visibleRows), [visibleRows]);
   const [selectedTodoId, setSelectedTodoId] = useState<TodoId | null>(null);
   const selectedRow = rows.find((row) => row.todo.id === selectedTodoId) ?? null;
-  const projects = useStore((state) => state.projects);
-  const projectNameById = useMemo(
-    () => new Map<string, string>(projects.map((project) => [project.id, project.name])),
-    [projects],
-  );
-  const projectCwdById = useMemo(
-    () => new Map<string, string>(projects.map((project) => [project.id, project.cwd])),
-    [projects],
-  );
-  const projectOptions = useMemo(
-    () =>
-      projects
-        .filter((project) => project.kind === "project")
-        .map((project) => ({ id: project.id, name: project.name })),
-    [projects],
-  );
+  const { projectNameById, projectCwdById, projectOptions } = useTaskProjects();
   const openCount = rows.filter((row) => row.status.kind !== "done").length;
   const [showCompleted, setShowCompleted] = useState(false);
-  const [draftTitle, setDraftTitle] = useState("");
   const quickAddRef = useRef<HTMLInputElement>(null);
-  const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
-  const desktopTopBarWindowControlsGutterClassName =
-    useDesktopTopBarWindowControlsGutterClassName();
 
   useEffect(() => {
     function onKeyDown(event: globalThis.KeyboardEvent) {
@@ -111,26 +68,6 @@ export default function TasksView() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
-
-  const addTask = () => {
-    const title = draftTitle.trim();
-    if (title.length === 0) return;
-    setDraftTitle("");
-    createTodo(
-      { id: newTodoId(), title },
-      // Give the typed title back if the server didn't take it and nothing new was typed.
-      { onError: () => setDraftTitle((current) => (current.length === 0 ? title : current)) },
-    );
-  };
-  const handleQuickAddKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Enter" && !event.nativeEvent.isComposing) {
-      event.preventDefault();
-      addTask();
-    } else if (event.key === "Escape") {
-      setDraftTitle("");
-      event.currentTarget.blur();
-    }
-  };
 
   const renderRow = (row: (typeof rows)[number]) => (
     <TaskRow
@@ -154,65 +91,23 @@ export default function TasksView() {
 
   return (
     <RouteInsetSurface>
-      <div
-        className={cn(
-          "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
-          CHAT_BACKGROUND_CLASS_NAME,
-        )}
-      >
-        <header
-          className={cn(
-            CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
-            CHAT_SURFACE_HEADER_PADDING_X_CLASS,
-            "drag-region",
-            desktopTopBarTrafficLightGutterClassName,
-            desktopTopBarWindowControlsGutterClassName,
-          )}
-        >
-          <div className={cn("flex items-center gap-2 sm:gap-3", CHAT_SURFACE_HEADER_HEIGHT_CLASS)}>
-            <SidebarHeaderNavigationControls />
-            <div className="flex min-w-0 flex-1 items-center gap-2 [-webkit-app-region:no-drag]">
-              <h2 className="truncate text-ui-lg font-medium text-foreground">Tasks</h2>
-              <span className="shrink-0 text-ui leading-snug text-muted-foreground/70">
-                {openCount} open
-              </span>
-              <TasksViewSwitch current="list" />
-              <div className="ml-2 hidden sm:block">
-                <FilterPillGroup
-                  ariaLabel="Show tasks"
-                  value={filter}
-                  options={TASK_FILTER_OPTIONS}
-                  onChange={setFilter}
-                />
-              </div>
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      size="sm"
-                      variant="chrome"
-                      className="ml-auto shrink-0 gap-1.5"
-                      onClick={() => quickAddRef.current?.focus()}
-                    >
-                      <PlusIcon className="size-3.5" />
-                      New task
-                    </Button>
-                  }
-                />
-                <TooltipPopup side="bottom">
-                  <span className="flex items-center gap-2">
-                    New task
-                    <KbdGroup>
-                      {NEW_TASK_SHORTCUT_PARTS.map((part) => (
-                        <Kbd key={part}>{part}</Kbd>
-                      ))}
-                    </KbdGroup>
-                  </span>
-                </TooltipPopup>
-              </Tooltip>
-            </div>
+      <RouteSurface>
+        <RouteSurfaceHeader>
+          <h2 className="truncate text-ui-lg font-medium text-foreground">Tasks</h2>
+          <span className="shrink-0 text-ui leading-snug text-muted-foreground/70">
+            {openCount} open
+          </span>
+          <TasksViewSwitch current="list" />
+          <div className="ml-2 hidden sm:block">
+            <FilterPillGroup
+              ariaLabel="Show tasks"
+              value={filter}
+              options={TASK_FILTER_OPTIONS}
+              onChange={setFilter}
+            />
           </div>
-        </header>
+          <NewTaskButton onClick={() => quickAddRef.current?.focus()} />
+        </RouteSurfaceHeader>
 
         {/* Escape closes the inspector unless a field or menu inside is handling it. */}
         <div
@@ -225,93 +120,24 @@ export default function TasksView() {
           }}
         >
           <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
-            <div
-              className={cn(
-                "flex h-10 items-center gap-2.5 border-b border-border px-5",
-                ROW_INSET_CLASS,
-              )}
-            >
-              <PlusIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground/70" />
-              <input
-                ref={quickAddRef}
-                aria-label="New task"
-                placeholder="New task"
-                value={draftTitle}
-                onChange={(event) => setDraftTitle(event.target.value)}
-                onKeyDown={handleQuickAddKeyDown}
-                className="font-system-ui min-w-0 flex-1 bg-transparent text-ui text-foreground outline-none placeholder:text-muted-foreground/70"
-              />
-            </div>
-
-            <div>
-              {sections.map((section) => (
-                <section key={section.key} aria-label={section.label}>
-                  <div
-                    className={cn(
-                      "flex h-8.5 items-center gap-2.5 border-b border-border bg-muted/40 px-5",
-                      ROW_INSET_CLASS,
-                    )}
-                  >
-                    <TaskStatusGlyph kind={SECTION_GLYPH[section.key]} animated={false} />
-                    <h3 className="text-ui-sm font-medium text-foreground">{section.label}</h3>
-                    <span className="text-ui-sm text-muted-foreground">{section.rows.length}</span>
-                  </div>
-                  <div role="list" aria-label={section.label}>
-                    {section.rows.map(renderRow)}
-                  </div>
-                </section>
-              ))}
-
-              {completed.length > 0 ? (
-                <section aria-label="Completed">
-                  <button
-                    type="button"
-                    aria-expanded={completedExpanded}
-                    onClick={() => setShowCompleted((current) => !current)}
-                    className={cn(
-                      "flex h-8.5 w-full items-center gap-2.5 border-b border-border bg-muted/40 px-5 text-left",
-                      ROW_INSET_CLASS,
-                    )}
-                  >
-                    <TaskStatusGlyph kind="done" />
-                    <span className="text-ui-sm font-medium text-foreground">Completed</span>
-                    <span className="text-ui-sm text-muted-foreground">{completed.length}</span>
-                    <DisclosureChevron
-                      open={completedExpanded}
-                      className="size-3 text-muted-foreground"
-                    />
-                  </button>
-                  <DisclosureRegion open={completedExpanded}>
-                    <div role="list" aria-label="Completed">
-                      {completed.map(renderRow)}
-                    </div>
-                  </DisclosureRegion>
-                </section>
-              ) : null}
-            </div>
-
-            {isError && rows.length === 0 ? (
-              <div className="flex flex-col items-center gap-2 px-5 py-16 text-center">
-                <p className="text-ui text-foreground">Couldn't load your tasks</p>
-                <Button size="sm" variant="outline" onClick={() => void refetch()}>
-                  Try again
-                </Button>
-              </div>
-            ) : null}
-            {!isLoading && !isError && rows.length === 0 ? (
-              <div className="flex flex-col items-center gap-1 px-5 py-16 text-center">
-                <p className="text-ui text-foreground">No tasks yet</p>
-                <p className="max-w-sm text-ui-sm text-muted-foreground">
-                  Add anything you need to do. Select a task and choose Delegate to hand it to an
-                  agent in a project or folder.
-                </p>
-              </div>
-            ) : null}
-            {!isLoading && rows.length > 0 && visibleRows.length === 0 ? (
-              <p className="px-5 py-16 text-center text-ui-sm text-muted-foreground">
-                Nothing here.
-              </p>
-            ) : null}
+            <TaskQuickAdd
+              inputRef={quickAddRef}
+              onCreate={(title, options) => createTodo({ id: newTodoId(), title }, options)}
+            />
+            <TaskListSections
+              sections={sections}
+              completed={completed}
+              completedExpanded={completedExpanded}
+              onToggleCompleted={() => setShowCompleted((current) => !current)}
+              renderRow={renderRow}
+            />
+            <TaskListEmptyState
+              isLoading={isLoading}
+              isError={isError}
+              totalCount={rows.length}
+              visibleCount={visibleRows.length}
+              onRetry={() => void refetch()}
+            />
           </div>
           {selectedRow ? (
             <TaskInspector
@@ -326,7 +152,7 @@ export default function TasksView() {
             />
           ) : null}
         </div>
-      </div>
+      </RouteSurface>
     </RouteInsetSurface>
   );
 }

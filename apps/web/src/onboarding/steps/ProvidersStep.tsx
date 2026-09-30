@@ -15,6 +15,7 @@ import { ProviderIcon } from "~/components/ProviderIcon";
 import { Checkbox } from "~/components/ui/checkbox";
 import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
 import { Skeleton } from "~/components/ui/skeleton";
+import { StatusDot } from "~/components/ui/status-chip";
 import { RefreshCwIcon, XIcon } from "~/lib/icons";
 import {
   findProviderStatus,
@@ -206,10 +207,7 @@ export function ProvidersStep(props: { readonly detection: ProviderDetection }) 
                     </>
                   ) : (
                     <>
-                      <span
-                        aria-hidden
-                        className={cn("size-1.5 shrink-0 rounded-full", presentation.dotClassName)}
-                      />
+                      <StatusDot aria-hidden className={presentation.dotClassName} />
                       {presentation.label}
                     </>
                   )}

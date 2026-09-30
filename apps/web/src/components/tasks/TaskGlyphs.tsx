@@ -6,50 +6,39 @@
 
 import type { TodoPriority } from "@synara/contracts";
 
+import { STATUS_GLYPH_CUTOUT_STROKE, StatusChip } from "~/components/ui/status-chip";
 import { cn } from "~/lib/utils";
 import type { TaskStatusKind } from "./tasks.logic";
 
-const STATUS_COLOR_CLASS: Record<TaskStatusKind, string> = {
-  todo: "text-muted-foreground/55",
-  starting: "text-muted-foreground/70",
-  running: "text-info",
-  needs: "text-warning",
-  review: "text-status-merged",
-  stopped: "text-status-failure",
-  done: "text-muted-foreground/60",
-};
-
-const STATUS_CHIP_CLASS: Partial<Record<TaskStatusKind, string>> = {
-  starting: "bg-muted text-muted-foreground",
-  running: "bg-info/12 text-info",
-  needs: "bg-warning/14 text-warning",
-  review: "bg-status-merged/14 text-status-merged",
-  stopped: "bg-status-failure/12 text-status-failure",
+// One row per status: the glyph's ink, and the pill classes for statuses that name an
+// agent's activity (nothing for plain or done to-dos, which have no chip).
+const STATUS_TONE: Record<TaskStatusKind, { glyph: string; chip?: string }> = {
+  todo: { glyph: "text-muted-foreground/55" },
+  starting: { glyph: "text-muted-foreground/70", chip: "bg-muted text-muted-foreground" },
+  running: { glyph: "text-info", chip: "bg-info/12 text-info" },
+  needs: { glyph: "text-warning", chip: "bg-warning/14 text-warning" },
+  review: { glyph: "text-status-merged", chip: "bg-status-merged/14 text-status-merged" },
+  stopped: { glyph: "text-status-failure", chip: "bg-status-failure/12 text-status-failure" },
+  done: { glyph: "text-muted-foreground/60" },
 };
 
 /** The pill naming what a delegated agent is doing; nothing for plain or done to-dos. */
 export function TaskStatusChip({ kind, label }: { kind: TaskStatusKind; label: string }) {
-  const chipClass = STATUS_CHIP_CLASS[kind];
+  const chipClass = STATUS_TONE[kind].chip;
   if (!chipClass) return null;
   return (
-    <span
-      className={cn(
-        "flex h-5.5 shrink-0 items-center gap-1.5 rounded-full px-2 text-ui-xs font-medium",
-        chipClass,
-      )}
-    >
-      <span
-        aria-hidden
-        className={cn("size-1.5 rounded-full bg-current", kind === "running" && "animate-pulse")}
-      />
+    <StatusChip variant="pill" pulse={kind === "running"} className={chipClass}>
       {label}
-    </span>
+    </StatusChip>
   );
 }
 
-// On-fill ink for glyphs painted as solid discs: the surface color, so the mark reads
-// as a cut-out in both themes.
-const CUTOUT_STROKE = "var(--color-background-surface, white)";
+// Statuses drawn as a solid disc with a mark cut out of it.
+const DISC_MARKS = {
+  done: { d: "M5 8.2l2 2 4-4.2", strokeWidth: 1.6 },
+  needs: { d: "M8 4.6v4M8 11.2v.2", strokeWidth: 1.7 },
+  stopped: { d: "M5.7 5.7l4.6 4.6M10.3 5.7l-4.6 4.6", strokeWidth: 1.6 },
+} as const;
 
 export function TaskStatusGlyph({
   kind,
@@ -61,46 +50,26 @@ export function TaskStatusGlyph({
   /** False keeps the running spinner still, e.g. on a section header. */
   animated?: boolean;
 }) {
-  const classes = cn("size-4 shrink-0", STATUS_COLOR_CLASS[kind], className);
+  const classes = cn("size-4 shrink-0", STATUS_TONE[kind].glyph, className);
   switch (kind) {
     case "done":
+    case "needs":
+    case "stopped": {
+      const mark = DISC_MARKS[kind];
       return (
         <svg viewBox="0 0 16 16" className={classes} aria-hidden>
           <circle cx="8" cy="8" r="7" fill="currentColor" />
           <path
-            d="M5 8.2l2 2 4-4.2"
+            d={mark.d}
             fill="none"
-            stroke={CUTOUT_STROKE}
-            strokeWidth="1.6"
+            stroke={STATUS_GLYPH_CUTOUT_STROKE}
+            strokeWidth={mark.strokeWidth}
             strokeLinecap="round"
             strokeLinejoin="round"
           />
         </svg>
       );
-    case "needs":
-      return (
-        <svg viewBox="0 0 16 16" className={classes} aria-hidden>
-          <circle cx="8" cy="8" r="7" fill="currentColor" />
-          <path
-            d="M8 4.6v4M8 11.2v.2"
-            stroke={CUTOUT_STROKE}
-            strokeWidth="1.7"
-            strokeLinecap="round"
-          />
-        </svg>
-      );
-    case "stopped":
-      return (
-        <svg viewBox="0 0 16 16" className={classes} aria-hidden>
-          <circle cx="8" cy="8" r="7" fill="currentColor" />
-          <path
-            d="M5.7 5.7l4.6 4.6M10.3 5.7l-4.6 4.6"
-            stroke={CUTOUT_STROKE}
-            strokeWidth="1.6"
-            strokeLinecap="round"
-          />
-        </svg>
-      );
+    }
     case "review":
       return (
         <svg viewBox="0 0 16 16" fill="none" className={classes} aria-hidden>
@@ -133,6 +102,7 @@ export function TaskStatusGlyph({
         </svg>
       );
     case "starting":
+    case "todo":
       return (
         <svg viewBox="0 0 16 16" fill="none" className={classes} aria-hidden>
           <circle
@@ -141,14 +111,8 @@ export function TaskStatusGlyph({
             r="6.25"
             stroke="currentColor"
             strokeWidth="1.4"
-            strokeDasharray="2.2 2.2"
+            {...(kind === "starting" ? { strokeDasharray: "2.2 2.2" } : {})}
           />
-        </svg>
-      );
-    case "todo":
-      return (
-        <svg viewBox="0 0 16 16" fill="none" className={classes} aria-hidden>
-          <circle cx="8" cy="8" r="6.25" stroke="currentColor" strokeWidth="1.4" />
         </svg>
       );
   }
@@ -169,7 +133,12 @@ export function TaskPriorityGlyph({
         aria-hidden
       >
         <rect x="1.5" y="1.5" width="13" height="13" rx="3.5" fill="currentColor" />
-        <path d="M8 4.6v4M8 11v.3" stroke={CUTOUT_STROKE} strokeWidth="1.7" strokeLinecap="round" />
+        <path
+          d="M8 4.6v4M8 11v.3"
+          stroke={STATUS_GLYPH_CUTOUT_STROKE}
+          strokeWidth="1.7"
+          strokeLinecap="round"
+        />
       </svg>
     );
   }

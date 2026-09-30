@@ -58,6 +58,7 @@ import {
   storeEditorRailChatTabs,
   type EditorRailChatTabSnapshot,
 } from "../../editorViewState";
+import { StatusDot } from "~/components/ui/status-chip";
 import { cn } from "~/lib/utils";
 import { useOpenFavoriteEditorShortcut } from "~/hooks/useOpenFavoriteEditorShortcut";
 import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
@@ -475,7 +476,7 @@ function EditorRailTabs(props: {
               icon={<TerminalIcon className="size-3 shrink-0 text-[var(--color-text-accent)]" />}
               trailing={
                 props.terminalHasRunningActivity ? (
-                  <span className="size-1.5 shrink-0 rounded-full bg-emerald-500/80" />
+                  <StatusDot className="bg-emerald-500/80" />
                 ) : null
               }
               onSelect={openTerminalTab}

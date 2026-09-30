@@ -13,35 +13,65 @@ import { Menu, MenuItem, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "~/co
 import { TaskPriorityGlyph } from "./TaskGlyphs";
 import { DUE_PRESET_OPTIONS, resolveDuePreset, TODO_PRIORITY_OPTIONS } from "./tasks.logic";
 
+/** What every property picker takes besides its own value: the trigger it opens from. */
+interface TaskPropertyMenuProps {
+  trigger: ReactElement;
+  /** What the trigger shows — the property's current value. */
+  children: ReactNode;
+  align?: "start" | "end" | undefined;
+}
+
+function TaskPropertyMenu({
+  trigger,
+  triggerContent,
+  align,
+  popupClassName,
+  children,
+}: {
+  trigger: ReactElement;
+  triggerContent: ReactNode;
+  align: "start" | "end" | undefined;
+  popupClassName: string;
+  children: ReactNode;
+}) {
+  return (
+    <Menu>
+      <MenuTrigger render={trigger}>{triggerContent}</MenuTrigger>
+      <ComposerPickerMenuPopup align={align ?? "start"} className={popupClassName}>
+        {children}
+      </ComposerPickerMenuPopup>
+    </Menu>
+  );
+}
+
 export function TaskPriorityMenu({
   priority,
   onChange,
   trigger,
   children,
-  align = "start",
-}: {
+  align,
+}: TaskPropertyMenuProps & {
   priority: TodoPriority;
   onChange: (priority: TodoPriority) => void;
-  trigger: ReactElement;
-  children: ReactNode;
-  align?: "start" | "end";
 }) {
   return (
-    <Menu>
-      <MenuTrigger render={trigger}>{children}</MenuTrigger>
-      <ComposerPickerMenuPopup align={align} className="min-w-40">
-        <MenuRadioGroup value={priority} onValueChange={(value) => onChange(value as TodoPriority)}>
-          {TODO_PRIORITY_OPTIONS.map((option) => (
-            <MenuRadioItem key={option.value} value={option.value} closeOnClick>
-              <span className="flex items-center gap-2">
-                <TaskPriorityGlyph priority={option.value} />
-                {option.label}
-              </span>
-            </MenuRadioItem>
-          ))}
-        </MenuRadioGroup>
-      </ComposerPickerMenuPopup>
-    </Menu>
+    <TaskPropertyMenu
+      trigger={trigger}
+      triggerContent={children}
+      align={align}
+      popupClassName="min-w-40"
+    >
+      <MenuRadioGroup value={priority} onValueChange={(value) => onChange(value as TodoPriority)}>
+        {TODO_PRIORITY_OPTIONS.map((option) => (
+          <MenuRadioItem key={option.value} value={option.value} closeOnClick>
+            <span className="flex items-center gap-2">
+              <TaskPriorityGlyph priority={option.value} />
+              {option.label}
+            </span>
+          </MenuRadioItem>
+        ))}
+      </MenuRadioGroup>
+    </TaskPropertyMenu>
   );
 }
 
@@ -51,14 +81,11 @@ export function TaskProjectMenu({
   onChange,
   trigger,
   children,
-  align = "start",
-}: {
+  align,
+}: TaskPropertyMenuProps & {
   projectId: ProjectId | null;
   projectOptions: ReadonlyArray<{ id: ProjectId; name: string }>;
   onChange: (projectId: ProjectId | null) => void;
-  trigger: ReactElement;
-  children: ReactNode;
-  align?: "start" | "end";
 }) {
   return (
     <ProjectMenuPicker
@@ -67,7 +94,7 @@ export function TaskProjectMenu({
       onProjectIdChange={onChange}
       noneOption={{ label: "No project", onSelect: () => onChange(null) }}
       closeOnSelect
-      align={align}
+      align={align ?? "start"}
       trigger={trigger}
     >
       {children}
@@ -81,29 +108,25 @@ export function TaskDueMenu({
   onChange,
   trigger,
   children,
-  align = "start",
-}: {
+  align,
+}: TaskPropertyMenuProps & {
   dueDate: TodoDueDate | null;
   now: Date;
   onChange: (dueDate: TodoDueDate | null) => void;
-  trigger: ReactElement;
-  children: ReactNode;
-  align?: "start" | "end";
 }) {
   return (
-    <Menu>
-      <MenuTrigger render={trigger}>{children}</MenuTrigger>
-      <ComposerPickerMenuPopup align={align} className="min-w-36">
-        {DUE_PRESET_OPTIONS.map((option) => (
-          <MenuItem
-            key={option.value}
-            onClick={() => onChange(resolveDuePreset(option.value, now))}
-          >
-            {option.label}
-          </MenuItem>
-        ))}
-        {dueDate ? <MenuItem onClick={() => onChange(null)}>No due date</MenuItem> : null}
-      </ComposerPickerMenuPopup>
-    </Menu>
+    <TaskPropertyMenu
+      trigger={trigger}
+      triggerContent={children}
+      align={align}
+      popupClassName="min-w-36"
+    >
+      {DUE_PRESET_OPTIONS.map((option) => (
+        <MenuItem key={option.value} onClick={() => onChange(resolveDuePreset(option.value, now))}>
+          {option.label}
+        </MenuItem>
+      ))}
+      {dueDate ? <MenuItem onClick={() => onChange(null)}>No due date</MenuItem> : null}
+    </TaskPropertyMenu>
   );
 }
