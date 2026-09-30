@@ -336,6 +336,8 @@ import {
   StatsGetProfileStatsResult,
   StatsGetProfileTokenStatsInput,
   StatsGetProfileTokenStatsResult,
+  StatsGetRecapInput,
+  StatsGetRecapResult,
 } from "./stats";
 import { WS_METHODS } from "./ws";
 import {
@@ -1378,6 +1380,12 @@ export const WsStatsGetProfileTokenStatsRpc = Rpc.make(WS_METHODS.statsGetProfil
   error: WsRpcError,
 });
 
+export const WsStatsGetRecapRpc = Rpc.make(WS_METHODS.statsGetRecap, {
+  payload: StatsGetRecapInput,
+  success: StatsGetRecapResult,
+  error: WsRpcError,
+});
+
 export const WsServerGetDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetDiagnostics, {
   payload: Schema.Struct({}),
   success: ServerDiagnosticsResult,
@@ -1879,6 +1887,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsServerConsumeCodexResetCreditRpc,
   WsStatsGetProfileStatsRpc,
   WsStatsGetProfileTokenStatsRpc,
+  WsStatsGetRecapRpc,
   WsServerGetDiagnosticsRpc,
   WsServerReadThreadDiagnosticsRpc,
   WsServerPrewarmVoiceRpc,

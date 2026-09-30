@@ -174,7 +174,11 @@ import {
   ServerVoicePrewarmInput,
   ServerVoiceTranscriptionInput,
 } from "./server";
-import { StatsGetProfileStatsInput, StatsGetProfileTokenStatsInput } from "./stats";
+import {
+  StatsGetProfileStatsInput,
+  StatsGetProfileTokenStatsInput,
+  StatsGetRecapInput,
+} from "./stats";
 import {
   ProviderListCommandsInput,
   ProviderGetComposerCapabilitiesInput,
@@ -301,6 +305,7 @@ export const WS_METHODS = {
   serverConsumeCodexResetCredit: "server.consumeCodexResetCredit",
   statsGetProfileStats: "stats.getProfileStats",
   statsGetProfileTokenStats: "stats.getProfileTokenStats",
+  statsGetRecap: "stats.getRecap",
   serverGetDiagnostics: "server.getDiagnostics",
   serverReadThreadDiagnostics: "server.readThreadDiagnostics",
   serverPrewarmVoice: "server.prewarmVoice",
@@ -563,6 +568,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.serverConsumeCodexResetCredit, ServerConsumeCodexResetCreditInput),
   tagRequestBody(WS_METHODS.statsGetProfileStats, StatsGetProfileStatsInput),
   tagRequestBody(WS_METHODS.statsGetProfileTokenStats, StatsGetProfileTokenStatsInput),
+  tagRequestBody(WS_METHODS.statsGetRecap, StatsGetRecapInput),
   tagRequestBody(WS_METHODS.serverGetDiagnostics, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverReadThreadDiagnostics, ServerReadThreadDiagnosticsInput),
   tagRequestBody(WS_METHODS.serverPrewarmVoice, ServerVoicePrewarmInput),
