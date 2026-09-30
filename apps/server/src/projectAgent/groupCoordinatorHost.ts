@@ -36,7 +36,7 @@ export function coordinatorWelcomeDisplayName(input: {
 }
 
 export function coordinatorWelcomeText(name: string): string {
-  return `Hi ${name}, welcome to your new group. I coordinate the work here: ask for whatever you need, and I'll either answer you directly or start threads to work on things in parallel.\n\nThreads do the work on their own. The Group panel on the right shows which ones are working, which are done, and which need you. I'll keep an eye on what's running and post updates when something finishes or needs you. You can also ask me to change my instructions, add repositories, or send you scheduled updates.`;
+  return `Hi ${name}, welcome to your new hub. I coordinate the work here: ask for whatever you need, and I'll either answer you directly or start threads to work on things in parallel.\n\nThreads do the work on their own. The Hub panel on the right shows which ones are working, which are done, and which need you. I'll keep an eye on what's running and post updates when something finishes or needs you. You can also ask me to change my instructions, add repositories, or send you scheduled updates.`;
 }
 
 export function coordinatorWelcomeMessageId(threadId: ThreadId): MessageId {

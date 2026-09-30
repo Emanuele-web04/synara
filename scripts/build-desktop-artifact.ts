@@ -27,6 +27,7 @@ import {
   MAC_DEVICE_HELPER_RESOURCE_PATH,
   MAC_ICON_ASSET_NAME,
   MAC_ICON_COMPOSER_DEPLOYMENT_TARGET,
+  MAC_WINDOW_MATERIAL_ADDON_STAGE_PATH,
   validateDesktopNativeBuildHost,
 } from "./lib/desktop-platform-build-config.ts";
 import { stageDesktopRuntimeResources } from "./lib/desktop-runtime-resources.ts";
@@ -79,11 +80,10 @@ const iconSourceFor = (assetPath: string) =>
 const NodePtySmokeScript = Effect.zipWith(RepoRoot, Effect.service(Path.Path), (repoRoot, path) =>
   path.join(repoRoot, "scripts/node-pty-smoke.mjs"),
 );
-const AppSnapHelperBuildScript = Effect.zipWith(
-  RepoRoot,
-  Effect.service(Path.Path),
-  (repoRoot, path) => path.join(repoRoot, "apps/desktop/scripts/build-appsnap-helper.mjs"),
-);
+const desktopBuildScript = (name: string) =>
+  Effect.zipWith(RepoRoot, Effect.service(Path.Path), (repoRoot, path) =>
+    path.join(repoRoot, "apps/desktop/scripts", name),
+  );
 const encodeJsonString = Schema.encodeEffect(Schema.UnknownFromJsonString);
 
 interface PlatformConfig {
@@ -985,18 +985,23 @@ const assertPlatformBuildResources = Effect.fn("assertPlatformBuildResources")(f
   }
 });
 
-const stageMacAppSnapHelper = Effect.fn("stageMacAppSnapHelper")(function* (
+// Builds one of the macOS native pieces (AppSnap helper, window-material addon) into the
+// stage tree, where the mac build config's extraFiles picks it up.
+const stageMacNativeBuild = Effect.fn("stageMacNativeBuild")(function* (
+  label: string,
+  buildScriptName: string,
+  stagePath: string,
   stageAppDir: string,
   arch: typeof BuildArch.Type,
   verbose: boolean,
 ) {
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
-  const buildScript = yield* AppSnapHelperBuildScript;
-  const outputPath = path.join(stageAppDir, MAC_APPSNAP_HELPER_STAGE_PATH);
+  const buildScript = yield* desktopBuildScript(buildScriptName);
+  const outputPath = path.join(stageAppDir, stagePath);
 
   yield* fs.makeDirectory(path.dirname(outputPath), { recursive: true });
-  yield* Effect.log(`[desktop-artifact] Building native AppSnap helper (${arch})...`);
+  yield* Effect.log(`[desktop-artifact] Building native ${label} (${arch})...`);
   yield* runCommand(
     ChildProcess.make({
       cwd: stageAppDir,
@@ -1006,7 +1011,7 @@ const stageMacAppSnapHelper = Effect.fn("stageMacAppSnapHelper")(function* (
 
   if (!(yield* fs.exists(outputPath))) {
     return yield* new BuildScriptError({
-      message: `AppSnap helper build completed but output was not found at ${outputPath}`,
+      message: `${label} build completed but output was not found at ${outputPath}`,
     });
   }
 });
@@ -1272,7 +1277,25 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   if (options.platform === "mac") {
     yield* timedBuildStage(
       "appsnap-helper",
-      stageMacAppSnapHelper(stageAppDir, options.arch, options.verbose),
+      stageMacNativeBuild(
+        "AppSnap helper",
+        "build-appsnap-helper.mjs",
+        MAC_APPSNAP_HELPER_STAGE_PATH,
+        stageAppDir,
+        options.arch,
+        options.verbose,
+      ),
+    );
+    yield* timedBuildStage(
+      "window-material-addon",
+      stageMacNativeBuild(
+        "window-material addon",
+        "build-window-material-addon.mjs",
+        MAC_WINDOW_MATERIAL_ADDON_STAGE_PATH,
+        stageAppDir,
+        options.arch,
+        options.verbose,
+      ),
     );
   }
 

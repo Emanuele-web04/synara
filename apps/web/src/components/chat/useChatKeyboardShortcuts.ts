@@ -62,6 +62,7 @@ interface ChatKeyboardShortcutsInput {
   onBackgroundAllForegroundSubagentStripItems: () => Promise<void>;
   isVoiceRecording: ReturnType<typeof useComposerVoiceController>["isVoiceRecording"];
   isVoiceTranscribing: ReturnType<typeof useComposerVoiceController>["isVoiceTranscribing"];
+  onVoiceRecordingEnter: () => void;
   isComposerApprovalState: boolean;
   terminalState: ReturnType<typeof useChatTerminalController>["terminalState"];
   terminalWorkspaceOpen: ReturnType<typeof useChatTerminalController>["terminalWorkspaceOpen"];
@@ -134,6 +135,7 @@ export function useChatKeyboardShortcuts({
   onBackgroundAllForegroundSubagentStripItems,
   isVoiceRecording,
   isVoiceTranscribing,
+  onVoiceRecordingEnter,
   isComposerApprovalState,
   terminalState,
   terminalWorkspaceOpen,
@@ -216,6 +218,25 @@ export function useChatKeyboardShortcuts({
         event.preventDefault();
         event.stopPropagation();
         void onBackgroundAllForegroundSubagentStripItems();
+        return;
+      }
+      // Plain Enter while dictating finishes the voice note instead of sending
+      // the typed draft around a still-running recording (or re-clicking a
+      // focused recorder button). The caller decides whether to also send.
+      if (
+        isVoiceRecording &&
+        event.key === "Enter" &&
+        !event.isComposing &&
+        !event.shiftKey &&
+        !event.altKey &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !isTerminalFocused() &&
+        canHandleComposerPickerShortcut(event, composerFormRef.current)
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        onVoiceRecordingEnter();
         return;
       }
       const composerPickerShortcutActive =
@@ -510,6 +531,7 @@ export function useChatKeyboardShortcuts({
     isComposerApprovalState,
     isVoiceRecording,
     isVoiceTranscribing,
+    onVoiceRecordingEnter,
     setTerminalWorkspaceTab,
     surfaceMode,
     scheduleComposerFocus,

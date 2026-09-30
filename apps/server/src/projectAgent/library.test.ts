@@ -99,7 +99,7 @@ describe("resolveLibraryRoot", () => {
   });
 });
 
-it.layer(TestLayer)("group library", (it) => {
+it.layer(TestLayer)("hub library", (it) => {
   it.effect("initializes a git repo with Artifacts/ and an initial commit on first use", () =>
     Effect.gen(function* () {
       const root = yield* makeTmpDir;
@@ -577,7 +577,7 @@ it.layer(TestLayer)("group library", (it) => {
     }),
   );
 
-  it.effect("refuses a library owned by another group", () =>
+  it.effect("refuses a library owned by another hub", () =>
     Effect.gen(function* () {
       const base = yield* makeTmpDir;
       const git = yield* GitCore;

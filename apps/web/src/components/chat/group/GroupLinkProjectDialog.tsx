@@ -73,7 +73,7 @@ export function GroupLinkProjectDialog(props: {
         <DialogHeader>
           <DialogTitle>Add repository</DialogTitle>
           <DialogDescription>
-            Link an existing project so the group can work in its folder.
+            Link an existing project so the hub can work in its folder.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-3">

@@ -265,7 +265,7 @@ export function GroupPullRequestsSection({
   if (rows.length === 0) {
     return (
       <PanelStateMessage density="compact" className={GROUP_PANEL_EMPTY_STATE_CLASS_NAME}>
-        <p>No pull requests yet. PRs opened by group threads land here.</p>
+        <p>No pull requests yet. PRs opened by hub threads land here.</p>
       </PanelStateMessage>
     );
   }

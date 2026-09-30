@@ -1136,7 +1136,7 @@ const binaryUploadEffectHandler = Effect.gen(function* () {
         });
       if (!isGroupContainer) {
         return yield* new LibraryError({
-          message: "The group library is only available on group containers.",
+          message: "The hub library is only available on hub containers.",
           code: "forbidden",
         });
       }

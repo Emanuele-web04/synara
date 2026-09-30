@@ -19,6 +19,7 @@ import { Route as ChatThreadIdRouteImport } from './routes/_chat.$threadId'
 import { Route as ChatStudioIndexRouteImport } from './routes/_chat.studio.index'
 import { Route as ChatPullRequestsIndexRouteImport } from './routes/_chat.pull-requests.index'
 import { Route as ChatKanbanIndexRouteImport } from './routes/_chat.kanban.index'
+import { Route as ChatHubsIndexRouteImport } from './routes/_chat.hubs.index'
 import { Route as ChatGroupsIndexRouteImport } from './routes/_chat.groups.index'
 import { Route as ChatAutomationsIndexRouteImport } from './routes/_chat.automations.index'
 import { Route as ChatKanbanProjectIdRouteImport } from './routes/_chat.kanban.$projectId'
@@ -73,6 +74,11 @@ const ChatKanbanIndexRoute = ChatKanbanIndexRouteImport.update({
   path: '/kanban/',
   getParentRoute: () => ChatRoute,
 } as any)
+const ChatHubsIndexRoute = ChatHubsIndexRouteImport.update({
+  id: '/hubs/',
+  path: '/hubs/',
+  getParentRoute: () => ChatRoute,
+} as any)
 const ChatGroupsIndexRoute = ChatGroupsIndexRouteImport.update({
   id: '/groups/',
   path: '/groups/',
@@ -106,6 +112,7 @@ export interface FileRoutesByFullPath {
   '/kanban/$projectId': typeof ChatKanbanProjectIdRoute
   '/automations/': typeof ChatAutomationsIndexRoute
   '/groups/': typeof ChatGroupsIndexRoute
+  '/hubs/': typeof ChatHubsIndexRoute
   '/kanban/': typeof ChatKanbanIndexRoute
   '/pull-requests/': typeof ChatPullRequestsIndexRoute
   '/studio/': typeof ChatStudioIndexRoute
@@ -119,6 +126,7 @@ export interface FileRoutesByTo {
   '/kanban/$projectId': typeof ChatKanbanProjectIdRoute
   '/automations': typeof ChatAutomationsIndexRoute
   '/groups': typeof ChatGroupsIndexRoute
+  '/hubs': typeof ChatHubsIndexRoute
   '/kanban': typeof ChatKanbanIndexRoute
   '/pull-requests': typeof ChatPullRequestsIndexRoute
   '/studio': typeof ChatStudioIndexRoute
@@ -136,6 +144,7 @@ export interface FileRoutesById {
   '/_chat/kanban/$projectId': typeof ChatKanbanProjectIdRoute
   '/_chat/automations/': typeof ChatAutomationsIndexRoute
   '/_chat/groups/': typeof ChatGroupsIndexRoute
+  '/_chat/hubs/': typeof ChatHubsIndexRoute
   '/_chat/kanban/': typeof ChatKanbanIndexRoute
   '/_chat/pull-requests/': typeof ChatPullRequestsIndexRoute
   '/_chat/studio/': typeof ChatStudioIndexRoute
@@ -153,6 +162,7 @@ export interface FileRouteTypes {
     | '/kanban/$projectId'
     | '/automations/'
     | '/groups/'
+    | '/hubs/'
     | '/kanban/'
     | '/pull-requests/'
     | '/studio/'
@@ -166,6 +176,7 @@ export interface FileRouteTypes {
     | '/kanban/$projectId'
     | '/automations'
     | '/groups'
+    | '/hubs'
     | '/kanban'
     | '/pull-requests'
     | '/studio'
@@ -182,6 +193,7 @@ export interface FileRouteTypes {
     | '/_chat/kanban/$projectId'
     | '/_chat/automations/'
     | '/_chat/groups/'
+    | '/_chat/hubs/'
     | '/_chat/kanban/'
     | '/_chat/pull-requests/'
     | '/_chat/studio/'
@@ -263,6 +275,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatKanbanIndexRouteImport
       parentRoute: typeof ChatRoute
     }
+    '/_chat/hubs/': {
+      id: '/_chat/hubs/'
+      path: '/hubs'
+      fullPath: '/hubs/'
+      preLoaderRoute: typeof ChatHubsIndexRouteImport
+      parentRoute: typeof ChatRoute
+    }
     '/_chat/groups/': {
       id: '/_chat/groups/'
       path: '/groups'
@@ -328,6 +347,7 @@ interface ChatRouteChildren {
   ChatIndexRoute: typeof ChatIndexRoute
   ChatKanbanProjectIdRoute: typeof ChatKanbanProjectIdRoute
   ChatGroupsIndexRoute: typeof ChatGroupsIndexRoute
+  ChatHubsIndexRoute: typeof ChatHubsIndexRoute
   ChatKanbanIndexRoute: typeof ChatKanbanIndexRoute
   ChatStudioIndexRoute: typeof ChatStudioIndexRoute
 }
@@ -341,6 +361,7 @@ const ChatRouteChildren: ChatRouteChildren = {
   ChatIndexRoute: ChatIndexRoute,
   ChatKanbanProjectIdRoute: ChatKanbanProjectIdRoute,
   ChatGroupsIndexRoute: ChatGroupsIndexRoute,
+  ChatHubsIndexRoute: ChatHubsIndexRoute,
   ChatKanbanIndexRoute: ChatKanbanIndexRoute,
   ChatStudioIndexRoute: ChatStudioIndexRoute,
 }
