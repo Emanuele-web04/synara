@@ -216,6 +216,7 @@ it.each(
       () => ({
         delegation: useTaskDelegation({
           todo,
+          readPrompt: () => "Keep my task\n\nKeep my notes",
           onLinkChat,
           onDelegated: undefined,
           draft: {
