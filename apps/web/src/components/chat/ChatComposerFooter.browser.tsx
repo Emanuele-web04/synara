@@ -10,6 +10,7 @@ function mountFooter(input: {
   connecting: boolean;
   onInterrupt?: () => void;
   voiceEnabled?: boolean;
+  voiceRecording?: boolean;
   onVoiceToggle?: () => void;
 }) {
   return render(
@@ -23,7 +24,7 @@ function mountFooter(input: {
       sidebarAction={null}
       voice={{
         enabled: input.voiceEnabled ?? false,
-        recording: false,
+        recording: input.voiceRecording ?? false,
         starting: false,
         waitingForAudio: false,
         transcribing: false,
@@ -84,6 +85,24 @@ describe("ChatComposerFooter stop control", () => {
       await expect.element(mic).toBeVisible();
       await mic.click();
       expect(onVoiceToggle).toHaveBeenCalledOnce();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("shows only the recorder's stop while dictating mid-turn", async () => {
+    const screen = await mountFooter({
+      phase: "running",
+      connecting: false,
+      voiceEnabled: true,
+      voiceRecording: true,
+    });
+    try {
+      await expect
+        .element(page.getByRole("button", { name: "Stop voice recording" }))
+        .toBeVisible();
+      expect(document.querySelector('button[aria-label="Stop generation"]')).toBeNull();
+      expect(document.querySelector('button[aria-label="Record voice note"]')).toBeNull();
     } finally {
       await screen.unmount();
     }

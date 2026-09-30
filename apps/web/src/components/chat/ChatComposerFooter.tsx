@@ -186,17 +186,22 @@ export function ChatComposerFooter({
                 onClick={voice.onToggle}
               />
             ) : null}
-            <Button
-              type="button"
-              variant="prominent"
-              size="icon-xs"
-              className="sm:size-[26px]"
-              onClick={submission.onInterrupt}
-              aria-label="Stop generation"
-              title="Stop the current response. On Mac, press Ctrl+C to interrupt."
-            >
-              <span aria-hidden="true" className="block size-2 rounded-[1px] bg-current" />
-            </Button>
+            {/* While dictating, the recorder bar owns this slot (as it does for the
+                send button); two identical stop squares side by side would be
+                ambiguous. Stop generation returns once the voice note is done. */}
+            {!voice.recording && !voice.transcribing ? (
+              <Button
+                type="button"
+                variant="prominent"
+                size="icon-xs"
+                className="sm:size-[26px]"
+                onClick={submission.onInterrupt}
+                aria-label="Stop generation"
+                title="Stop the current response. On Mac, press Ctrl+C to interrupt."
+              >
+                <span aria-hidden="true" className="block size-2 rounded-[1px] bg-current" />
+              </Button>
+            ) : null}
           </>
         ) : !submission.hasPendingUserInputs && !voice.recording && !voice.transcribing ? (
           submission.showPlanFollowUp ? (
