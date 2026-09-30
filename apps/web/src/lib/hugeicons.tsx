@@ -45,7 +45,7 @@ function createHugeicon(displayName: string, paths: readonly HugeiconPath[]): Lu
 const ROUNDED_SQUARE =
   "M11 3H13C16.7712 3 18.6569 3 19.8284 4.17157C21 5.34315 21 7.22876 21 11V13C21 16.7712 21 18.6569 19.8284 19.8284C18.6569 21 16.7712 21 13 21H11C7.22876 21 5.34315 21 4.17157 19.8284C3 18.6569 3 16.7712 3 13V11C3 7.22876 3 5.34315 4.17157 4.17157C5.34315 3 7.22876 3 11 3Z";
 
-/** Sidebar on the left, collapsed (`layout-align-right`). */
+/** Sidebar on the right, collapsed to a slim handle (`layout-align-right`). */
 export const LayoutAlignRightIcon = createHugeicon("LayoutAlignRightIcon", [
   { d: ROUNDED_SQUARE, round: true },
   { d: "M16 8L16 16", round: true },
@@ -60,7 +60,7 @@ export const LayoutLeftIcon = createHugeicon("LayoutLeftIcon", [
   { d: "M9 21.5L9 2.5" },
 ]);
 
-/** Sidebar on the right, collapsed (`layout-align-left`). */
+/** Sidebar on the left, collapsed to a slim handle (`layout-align-left`). */
 export const LayoutAlignLeftIcon = createHugeicon("LayoutAlignLeftIcon", [
   { d: ROUNDED_SQUARE, round: true },
   { d: "M8.00488 16.0049L8.00488 8.00488", round: true },
@@ -87,4 +87,28 @@ export const PanelTopOpenIcon = createHugeicon("PanelTopOpenIcon", [
 /** Plus (`plus-sign`): add actions in the top bar, matching the toggles beside them. */
 export const PlusSignIcon = createHugeicon("PlusSignIcon", [
   { d: "M12 4V20M20 12H4", round: true },
+]);
+
+/** Expand (`expand`): grow a panel or card to its larger size. */
+export const ExpandIcon = createHugeicon("ExpandIcon", [
+  {
+    d: "M19 12L19 8.99996C19 7.11435 18.9999 6.17155 18.4142 5.58577C17.8284 4.99999 16.8856 4.99999 15 5L12 5.00001",
+    round: true,
+  },
+  {
+    d: "M5 12L5.00003 15C5.00004 16.8856 5.00005 17.8284 5.58584 18.4142C6.17163 19 7.11443 19 9.00004 19L12 19",
+    round: true,
+  },
+]);
+
+/** Collapse (`collapse`): return an expanded panel or card to its compact size. */
+export const CollapseIcon = createHugeicon("CollapseIcon", [
+  {
+    d: "M13 4L13 7.00002C13 8.88563 13.0001 9.82843 13.5858 10.4142C14.1716 11 15.1144 11 17 11L20 11",
+    round: true,
+  },
+  {
+    d: "M11.0001 20L11 17C11 15.1144 11 14.1715 10.4142 13.5858C9.82843 13 8.88563 13 7.00002 13L4.00006 13",
+    round: true,
+  },
 ]);

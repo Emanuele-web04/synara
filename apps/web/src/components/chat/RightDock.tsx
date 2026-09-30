@@ -383,7 +383,11 @@ export function RightDock(props: RightDockProps) {
                 className={DOCK_HEADER_ICON_BUTTON_CLASS}
                 onClick={() => setExpandedKey(maximized ? null : expansionKey)}
               >
-                {maximized ? <PanelCollapseIcon /> : <PanelExpandIcon />}
+                {maximized ? (
+                  <PanelCollapseIcon className="size-4" />
+                ) : (
+                  <PanelExpandIcon className="size-4" />
+                )}
               </IconButton>
             ) : null}
             <IconButton
@@ -395,7 +399,7 @@ export function RightDock(props: RightDockProps) {
               className={DOCK_HEADER_ICON_BUTTON_CLASS}
               onClick={props.onCollapse}
             >
-              <LayoutRightIcon />
+              <LayoutRightIcon className="size-4" />
             </IconButton>
           </div>
           <div className="relative min-h-0 flex-1">

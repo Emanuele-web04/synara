@@ -103,8 +103,6 @@ export const AppsIcon: LucideIcon = (props) => (
 export const BackgroundTrayIcon: LucideIcon = centralIconWrapper("arrow-down-wall");
 export const ContextCompactionIcon: LucideIcon = centralIconWrapper("arrows-hide");
 export const ComputerUseIcon: LucideIcon = centralIconWrapper("cursor-1");
-export const PanelExpandIcon: LucideIcon = centralIconWrapper("expand-45");
-export const PanelCollapseIcon: LucideIcon = centralIconWrapper("minimize-45");
 export const BackToParentIcon: LucideIcon = centralIconWrapper("arrow-share-left");
 export const WorkflowIcon: LucideIcon = centralIconWrapper("agents");
 export const SteerIcon: LucideIcon = centralIconWrapper("arrow-corner-down-right");
@@ -339,8 +337,10 @@ export const FastModeIcon: LucideIcon = centralIconWrapper("zap", "fill");
 // Outline twin of FastModeIcon (Central reversed set) for the inactive toggle state.
 export const FastModeOutlineIcon: LucideIcon = centralIconWrapper("zap");
 
-// Sidebar and panel toggles (Hugeicons, inlined).
+// Sidebar and panel toggles, expand/collapse, and top-bar add (Hugeicons, inlined).
 export {
+  CollapseIcon as PanelCollapseIcon,
+  ExpandIcon as PanelExpandIcon,
   LayoutAlignLeftIcon,
   LayoutAlignRightIcon,
   LayoutLeftIcon,

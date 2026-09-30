@@ -24,7 +24,7 @@ import {
   HandoffIcon,
   HistoryIcon,
   MessageCircleIcon,
-  LayoutAlignLeftIcon,
+  LayoutAlignRightIcon,
   LayoutRightIcon,
   PlusIcon,
   TerminalIcon,
@@ -528,7 +528,7 @@ export function ChatHeader({
               icon={
                 (togglesRightDock ? rightDockOpen : diffOpen)
                   ? LayoutRightIcon
-                  : LayoutAlignLeftIcon
+                  : LayoutAlignRightIcon
               }
               className="size-4"
             />

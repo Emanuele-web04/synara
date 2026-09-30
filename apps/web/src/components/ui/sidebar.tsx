@@ -2,7 +2,7 @@ import { mergeProps } from "@base-ui/react/merge-props";
 import { useRender } from "@base-ui/react/use-render";
 import { cva, type VariantProps } from "class-variance-authority";
 import * as React from "react";
-import { LayoutAlignRightIcon, LayoutLeftIcon } from "~/lib/icons";
+import { LayoutAlignLeftIcon, LayoutLeftIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
@@ -382,7 +382,7 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
   const { toggleSidebar, isMobile, open, openMobile } = useSidebar();
   // The glyph shows the sidebar's current state: a full left column while it is open, a
   // slim handle once it is collapsed.
-  const SidebarStateIcon = (isMobile ? openMobile : open) ? LayoutLeftIcon : LayoutAlignRightIcon;
+  const SidebarStateIcon = (isMobile ? openMobile : open) ? LayoutLeftIcon : LayoutAlignLeftIcon;
 
   return (
     <Button
