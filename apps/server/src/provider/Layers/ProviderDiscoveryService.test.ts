@@ -16,9 +16,10 @@ import type {
   ProviderListCommandsResult,
   ProviderListModelsResult,
   ProviderListSkillsResult,
+  ServerProviderStatus,
 } from "@synara/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Stream } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -34,6 +35,7 @@ import { ProviderAdapterRequestError } from "../Errors.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
 import { ProviderDiscoveryService } from "../Services/ProviderDiscoveryService.ts";
+import { ProviderHealth } from "../Services/ProviderHealth.ts";
 import { clearSkillsCatalogCacheForTests } from "../skillsCatalog.ts";
 import { ProviderDiscoveryServiceLive } from "./ProviderDiscoveryService.ts";
 
@@ -50,7 +52,7 @@ async function writeSkill(skillDir: string, name: string): Promise<void> {
   );
 }
 
-const makeConfigLayer = () =>
+const makeConfigLayer = (getStatuses: () => readonly ServerProviderStatus[] = () => []) =>
   Layer.effect(
     ServerConfig,
     Effect.gen(function* () {
@@ -76,6 +78,15 @@ const makeConfigLayer = () =>
         logWebSocketEvents: false,
       } satisfies ServerConfigShape;
     }),
+  ).pipe(
+    Layer.provideMerge(
+      Layer.succeed(ProviderHealth, {
+        getStatuses: Effect.sync(getStatuses),
+        refresh: Effect.sync(getStatuses),
+        updateProvider: () => Effect.die("Provider updates are not used by discovery tests."),
+        streamChanges: Stream.empty,
+      }),
+    ),
   );
 
 const makeRegistryLayer = (adapter: Partial<ProviderAdapterShape<ProviderAdapterError>>) =>
@@ -231,6 +242,78 @@ describe("ProviderDiscoveryService.getComposerCapabilities", () => {
 });
 
 describe("ProviderDiscoveryService.listModels", () => {
+  it.each(["running service", "restart"])(
+    "refreshes Claude models after a CLI update across a %s",
+    async (mode) => {
+      let version = "2.1.283";
+      let resolvedModel = "claude-sonnet-5";
+      let adapterCalls = 0;
+      const makeLayer = () =>
+        ProviderDiscoveryServiceLive.pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(
+              makeConfigLayer(() => [
+                {
+                  provider: "claudeAgent",
+                  status: "ready",
+                  available: true,
+                  authStatus: "authenticated",
+                  version,
+                  checkedAt: "2026-09-30T00:00:00.000Z",
+                },
+              ]),
+              ServerSettingsService.layerTest(),
+              makeRegistryLayer({
+                listModels: () =>
+                  Effect.sync(() => {
+                    adapterCalls += 1;
+                    return {
+                      models: [{ slug: "sonnet", resolvedModel, name: "Sonnet" }],
+                      source: "sdk",
+                      cached: false,
+                    };
+                  }),
+              }),
+            ).pipe(Layer.provideMerge(NodeServices.layer)),
+          ),
+        );
+      const input = { provider: "claudeAgent" as const, cwd };
+      const upgrade = () => {
+        version = "2.1.284";
+        resolvedModel = "claude-sonnet-5-5";
+      };
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          const discovery = yield* ProviderDiscoveryService;
+          const first = yield* discovery.listModels(input);
+          expect(first.models[0]?.resolvedModel).toBe("claude-sonnet-5");
+          const cached = yield* discovery.listModels(input);
+          expect(cached.cached).toBe(true);
+          if (mode === "restart") return null;
+          upgrade();
+          return yield* discovery.listModels(input);
+        }).pipe(Effect.provide(makeLayer())),
+      );
+
+      let refreshed = result;
+      if (mode === "restart") {
+        expect(existsSync(path.join(baseDir, "userdata", "provider-models", "catalogs.json"))).toBe(
+          true,
+        );
+        upgrade();
+        refreshed = await Effect.runPromise(
+          Effect.gen(function* () {
+            const discovery = yield* ProviderDiscoveryService;
+            return yield* discovery.listModels(input);
+          }).pipe(Effect.provide(makeLayer())),
+        );
+      }
+      expect(refreshed?.models[0]?.resolvedModel).toBe("claude-sonnet-5-5");
+      expect(refreshed?.cached).toBe(false);
+      expect(adapterCalls).toBe(2);
+    },
+  );
+
   it("skips OpenCode agent and command discovery until re-enabled", async () => {
     const adapterCalls: string[] = [];
     const adapter: Partial<ProviderAdapterShape<ProviderAdapterError>> = {

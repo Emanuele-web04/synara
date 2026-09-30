@@ -1426,6 +1426,15 @@ function makeClaudeGatewayRuntime(models: ModelInfo[]) {
         ),
       ),
       Layer.provide(ServerSettingsService.layerTest()),
+      Layer.provide(
+        Layer.succeed(ProviderHealth, {
+          getStatuses: Effect.succeed([]),
+          refresh: Effect.succeed([]),
+          updateProvider: () =>
+            Effect.die("Provider updates are not used by Claude gateway tests."),
+          streamChanges: Stream.empty,
+        }),
+      ),
       Layer.provideMerge(layer),
     ),
   };

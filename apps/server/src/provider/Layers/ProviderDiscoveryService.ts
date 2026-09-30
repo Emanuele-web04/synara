@@ -21,6 +21,7 @@ import { gateBetaOnlyProviders, ServerSettingsService } from "../../serverSettin
 import { ProviderValidationError } from "../Errors.ts";
 import type { ProviderDiscoveryError } from "../Services/ProviderDiscoveryService.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
+import { ProviderHealth } from "../Services/ProviderHealth.ts";
 import {
   ProviderDiscoveryService,
   type ProviderDiscoveryServiceShape,
@@ -101,6 +102,7 @@ const make = Effect.gen(function* () {
   const registry = yield* ProviderAdapterRegistry;
   const serverConfig = yield* ServerConfig;
   const serverSettings = yield* ServerSettingsService;
+  const providerHealth = yield* ProviderHealth;
   // One catalog cache for every provider: adapters that spawn a CLI/ACP process
   // per listModels call share stale-while-revalidate, single-flight, and
   // failure-replay behaviour with adapters that reuse a running process.
@@ -381,7 +383,16 @@ const make = Effect.gen(function* () {
       if (parsed.provider === "omp") {
         return yield* discover;
       }
-      return yield* modelDiscoveryCache.lookup(providerModelDiscoveryCacheKey(parsed), discover);
+      const cacheKey = providerModelDiscoveryCacheKey(parsed);
+      const runtimeVersion =
+        parsed.provider === "claudeAgent"
+          ? ((yield* providerHealth.getStatuses).find((status) => status.provider === "claudeAgent")
+              ?.version ?? null)
+          : undefined;
+      return yield* modelDiscoveryCache.lookup(
+        { ...cacheKey, ...(runtimeVersion !== undefined ? { runtimeVersion } : {}) },
+        discover,
+      );
     });
 
   const listAgents: ProviderDiscoveryServiceShape["listAgents"] = (input) =>

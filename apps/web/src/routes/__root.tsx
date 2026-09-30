@@ -2424,6 +2424,9 @@ function EventRouter() {
           queryKey: ["provider-discovery", "models", "cursor"],
         });
         void queryClient.invalidateQueries({
+          queryKey: ["provider-discovery", "models", "claudeAgent"],
+        });
+        void queryClient.invalidateQueries({
           queryKey: providerDiscoveryQueryKeys.agentsForProvider("opencode"),
         });
       }

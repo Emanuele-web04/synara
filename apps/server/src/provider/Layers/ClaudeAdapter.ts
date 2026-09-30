@@ -2045,7 +2045,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     const failedStartupProcessOwners = new Map<ThreadId, ClaudeProcessOwner>();
     const failedDiscoveryProcessOwners = new Set<ClaudeProcessOwner>();
     const sessionLifecycleLock = makeKeyedLock<ThreadId>();
-    let cachedModels: ProviderListModelsResult | null = null;
     let cachedAgents: ProviderListAgentsResult | null = null;
     const verifyClaudeAutoModelSupport = (input: {
       readonly queryRuntime: ClaudeQueryRuntime;
@@ -2080,11 +2079,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 }),
           ),
         );
-        cachedModels = {
-          models: discoveredModels.map(mapClaudeModelInfo),
-          source: "sdk",
-          cached: false,
-        };
         const requestedModels = new Set(
           [input.selectedModel, input.apiModelId].filter(
             (model): model is string => model !== undefined,
@@ -6027,20 +6021,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               apiModelId,
               operation: "startSession",
             });
-          } else if (!cachedModels) {
-            // Populate model cache in the background from the first non-Auto session.
-            queryRuntime
-              .supportedModels()
-              .then((models) => {
-                cachedModels = {
-                  models: models.map(mapClaudeModelInfo),
-                  source: "sdk",
-                  cached: false,
-                };
-              })
-              .catch(() => {
-                /* ignore discovery failures */
-              });
           }
 
           // Populate agent cache in background from first session
@@ -7271,7 +7251,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     // (and then caches) a discovery started for another workspace or Artifact opt-in.
     const pendingCommandDiscoveries = new Map<string, Promise<ProviderListCommandsResult>>();
     let commandDiscoveryTail: Promise<unknown> = Promise.resolve();
-    let pendingModelDiscovery: Promise<ProviderListModelsResult> | null = null;
 
     async function discoverViaTemporaryProcess<T>(
       cwd: string,
@@ -7505,41 +7484,17 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
     const listModels: NonNullable<ClaudeAdapterShape["listModels"]> = (input) =>
       Effect.gen(function* () {
-        if (cachedModels) {
-          return { ...cachedModels, cached: true };
-        }
-
-        // Prefer an active session so discovery does not spawn another process.
-        for (const [, context] of sessions) {
-          if (!context.stopped && context.query) {
-            const result = yield* Effect.tryPromise({
-              try: async () => ({
-                models: (await context.query.supportedModels()).map(mapClaudeModelInfo),
-                source: "sdk",
-                cached: false,
-              }),
-              catch: (cause) => toRequestError(context.session.threadId, "listModels", cause),
-            });
-            cachedModels = result;
-            return result;
-          }
-        }
-
-        // Cold starts have no active Claude session. Discover with one
-        // short-lived SDK process so the UI receives model capability flags on
-        // its first request instead of caching an empty "pending" catalog.
+        // ProviderDiscoveryService owns caching and single-flight. The SDK's
+        // supportedModels() returns initialization metadata, so an existing
+        // session cannot discover models added by a CLI update.
         const claudeSdkEnv = yield* resolveClaudeSdkEnv;
-        const discoveryPromise =
-          pendingModelDiscovery ??
-          discoverModelsViaTemporaryProcess(
-            input.cwd ?? serverConfig.cwd,
-            claudeSdkEnv,
-            input.binaryPath ?? "claude",
-          );
-        pendingModelDiscovery = discoveryPromise;
-
-        const result = yield* Effect.tryPromise({
-          try: () => discoveryPromise,
+        return yield* Effect.tryPromise({
+          try: () =>
+            discoverModelsViaTemporaryProcess(
+              input.cwd ?? serverConfig.cwd,
+              claudeSdkEnv,
+              input.binaryPath ?? "claude",
+            ),
           catch: (cause) =>
             new ProviderAdapterProcessError({
               provider: PROVIDER,
@@ -7547,21 +7502,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               detail: toMessage(cause, "Failed to discover Claude models."),
               cause,
             }),
-        }).pipe(
-          Effect.tap(() =>
-            Effect.sync(() => {
-              pendingModelDiscovery = null;
-            }),
-          ),
-          Effect.tapError(() =>
-            Effect.sync(() => {
-              pendingModelDiscovery = null;
-            }),
-          ),
-        );
-
-        cachedModels = result;
-        return result;
+        });
       });
 
     const listAgents: NonNullable<ClaudeAdapterShape["listAgents"]> = (_input) =>

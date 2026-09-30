@@ -37,6 +37,10 @@ import { ServerConfig } from "../../config.ts";
 import { MINIMUM_CLAUDE_AUTO_MODE_CLI_VERSION } from "../claudeCliVersion.ts";
 import { claudeCacheForModel } from "../claudeCacheObservation.ts";
 import { ProviderAdapterRequestError, ProviderAdapterValidationError } from "../Errors.ts";
+import {
+  makeProviderModelDiscoveryCache,
+  providerModelDiscoveryCacheKey,
+} from "../providerModelDiscoveryCache.ts";
 import { ClaudeAdapter, type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import {
   buildEmbeddedClaudeSystemPromptAppend,
@@ -5586,13 +5590,61 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       );
       assert.equal(query.closeCalls, 1);
       assert.equal(createQueryCalls, 1);
+    }).pipe(Effect.provide(layer));
+  });
 
-      const cached = yield* listModels({
+  it.effect("refreshes Claude models while an older session remains active", () => {
+    const queries: FakeClaudeQuery[] = [];
+    const layer = makeClaudeAdapterLive({
+      createQuery: () => {
+        const query = new FakeClaudeQuery();
+        setSupportedModels(query, [
+          {
+            value: "sonnet",
+            resolvedModel: queries.length < 2 ? "claude-sonnet-5" : "claude-sonnet-5-5",
+            displayName: "Sonnet",
+            description: "Sonnet model",
+          },
+        ]);
+        queries.push(query);
+        return query;
+      },
+    }).pipe(
+      Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+      Layer.provideMerge(NodeServices.layer),
+    );
+    let now = 0;
+    const cache = makeProviderModelDiscoveryCache({ now: () => now, freshTtlMs: 1_000 });
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
         provider: "claudeAgent",
-        cwd: "/tmp/project",
+        runtimeMode: "approval-required",
       });
-      assert.equal(cached.cached, true);
-      assert.equal(createQueryCalls, 1);
+      const input = { provider: "claudeAgent" as const, cwd: "/tmp/project" };
+      const key = providerModelDiscoveryCacheKey(input);
+      const discover = Effect.suspend(() => adapter.listModels!(input));
+
+      const first = yield* cache.lookup(key, discover);
+      assert.equal(first.models[0]?.resolvedModel, "claude-sonnet-5");
+      const fresh = yield* cache.lookup(key, discover);
+      assert.equal(fresh.cached, true);
+
+      now = 2_000;
+      const stale = yield* cache.lookup(key, discover);
+      assert.equal(stale.models[0]?.resolvedModel, "claude-sonnet-5");
+      yield* Effect.promise(() =>
+        vi.waitFor(async () => {
+          const refreshed = await Effect.runPromise(cache.lookup(key, discover));
+          assert.equal(refreshed.models[0]?.resolvedModel, "claude-sonnet-5-5");
+        }),
+      );
+      assert.equal(yield* adapter.hasSession(THREAD_ID), true);
+      assert.equal(queries[0]?.closeCalls, 0);
+      assert.equal(queries[1]?.closeCalls, 1);
+      assert.equal(queries[2]?.closeCalls, 1);
     }).pipe(Effect.provide(layer));
   });
 
@@ -8834,7 +8886,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
 
   it.effect("closes an uninstalled Claude query when post-spawn setup fails", () => {
     const query = new FakeClaudeQuery();
-    (query as unknown as { supportedModels: () => Promise<[]> }).supportedModels = () => {
+    (query as unknown as { supportedAgents: () => Promise<[]> }).supportedAgents = () => {
       throw new Error("simulated post-spawn setup failure");
     };
     const layer = makeClaudeAdapterLive({ createQuery: () => query }).pipe(
