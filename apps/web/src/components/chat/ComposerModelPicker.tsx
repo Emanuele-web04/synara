@@ -35,6 +35,7 @@ import {
 import { SearchIcon } from "~/lib/icons";
 import { starredModelInstanceId, starredModelSlotKey } from "~/lib/starredModels";
 import { cn, isMacNavigatorPlatform } from "~/lib/utils";
+import { ProviderAccountAvatar } from "../ProviderAccountBadge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Menu, MenuGroup, MenuGroupLabel } from "../ui/menu";
@@ -560,8 +561,21 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
             )}
           >
             {setupMessage !== null ? (
-              <div className="flex flex-col items-start gap-2 px-2 py-3 text-muted-foreground text-ui leading-relaxed">
-                <span>{setupMessage}</span>
+              <div className="flex flex-col items-center gap-2 px-3 py-4 text-center">
+                {openProviderTab ? (
+                  <ProviderAccountAvatar
+                    provider={openProviderTab.provider}
+                    initials={openProviderTab.badge}
+                    accentColor={openProviderTab.accentColor}
+                    className="[&_[data-accent],&_[aria-hidden]]:ring-popover"
+                  />
+                ) : null}
+                <span className="text-ui font-medium text-foreground">
+                  {openProviderTab?.label ?? "This account"} needs setup
+                </span>
+                <span className="text-ui-sm leading-snug text-muted-foreground">
+                  {setupMessage}
+                </span>
                 <Button type="button" size="xs" variant="outline" onClick={openProviderSettings}>
                   Open provider setup
                 </Button>

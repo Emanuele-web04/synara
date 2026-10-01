@@ -203,9 +203,7 @@ it("edits the selected account beside the list and offers its sign-in command", 
 
   await page.getByRole("button", { name: "Select Work", exact: true }).click();
   const editor = page.getByRole("group", { name: "Work account", exact: true });
-  await expect
-    .element(editor.getByText(/Not authenticated · Codex CLI is not authenticated/u))
-    .toBeVisible();
+  await expect.element(editor.getByText("Not authenticated", { exact: true })).toBeVisible();
   await expect.element(editor.getByText(/To sign in, run/u)).toBeVisible();
   await expect.element(editor.getByRole("button", { name: /^Copy .* login$/u })).toBeVisible();
   await expect.element(editor.getByText("Environment variables")).toBeVisible();

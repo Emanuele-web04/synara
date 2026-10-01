@@ -37,6 +37,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  type CSSProperties,
   type MouseEvent,
   type ReactNode,
   useCallback,
@@ -72,6 +73,7 @@ import {
 } from "~/lib/icons";
 import { copyTextToClipboard } from "~/hooks/useCopyToClipboard";
 import {
+  normalizeProviderAccentColor,
   providerAccountInitials,
   shouldShowProviderAccountBadge,
 } from "~/lib/providerInstancePresentation";
@@ -116,7 +118,8 @@ import { SelectItem } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
 import { ProviderIcon } from "../ProviderIcon";
-import { ProviderAccountBadge } from "../ProviderAccountBadge";
+import { ProviderAccountAvatar } from "../ProviderAccountBadge";
+import { StatusChip } from "../ui/status-chip";
 import {
   AddProviderAccountDialog,
   type AddProviderAccountConfigField,
@@ -937,6 +940,13 @@ function providerAccountIdentityFields(
   ];
 }
 
+const ACCOUNT_STATUS_PILL_CLASS_NAME: Record<ProviderAccountStatusTone, string> = {
+  ready: "bg-emerald-500/12 text-emerald-700 dark:text-emerald-300",
+  warning: "bg-amber-500/14 text-amber-700 dark:text-amber-300",
+  error: "bg-red-500/12 text-red-700 dark:text-red-300",
+  idle: "bg-muted text-muted-foreground",
+};
+
 const ACCOUNT_STATUS_DOT_CLASS_NAME: Record<ProviderAccountStatusTone, string> = {
   ready: "bg-emerald-500",
   warning: "bg-amber-500",
@@ -1344,26 +1354,46 @@ function ProviderAccountsControl(props: {
       (explicit.displayName !== undefined ||
         explicit.accentColor !== undefined ||
         explicit.enabled === false);
-    const sectionLabelClassName = "block text-ui-sm font-medium text-foreground";
+    const badgeInitials = shouldShowProviderAccountBadge(account, allAccounts)
+      ? providerAccountInitials(account.label)
+      : null;
     return (
       <div
         className={cn(
           SETTINGS_OUTLINED_SURFACE_CLASS_NAME,
           SETTINGS_INSET_RADIUS_CLASS_NAME,
-          "min-w-0 flex-1 space-y-3 px-3 py-3",
+          "min-w-0 flex-1 overflow-hidden",
         )}
         // Remount per account so a pending debounced edit can never land on another one.
         key={instanceId}
         role="group"
         aria-label={`${account.label} account`}
       >
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-2">
-            <ProviderIcon provider={provider} className="size-4 shrink-0" />
-            <span className="truncate text-ui font-medium text-foreground">{account.label}</span>
-            {account.isDefault ? (
-              <span className="shrink-0 text-ui-xs text-muted-foreground">Default</span>
-            ) : null}
+        <div className="flex items-start gap-3 border-b border-border/70 bg-muted/25 px-3 py-3">
+          <ProviderAccountAvatar
+            provider={provider}
+            initials={badgeInitials}
+            accentColor={account.accentColor}
+            size="md"
+          />
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="truncate text-ui-lg font-medium text-foreground">
+                {account.label}
+              </span>
+              {account.isDefault ? (
+                <span className="shrink-0 rounded-full border border-border/70 px-1.5 py-px text-ui-2xs font-medium text-muted-foreground">
+                  Default
+                </span>
+              ) : null}
+            </div>
+            <StatusChip
+              variant="pill"
+              className={cn("mt-1 w-fit max-w-full", ACCOUNT_STATUS_PILL_CLASS_NAME[status.tone])}
+              dotClassName={ACCOUNT_STATUS_DOT_CLASS_NAME[status.tone]}
+            >
+              <span className="truncate">{status.headline}</span>
+            </StatusChip>
           </div>
           {account.isDefault ? (
             defaultIsCustomized ? (
@@ -1388,43 +1418,14 @@ function ProviderAccountsControl(props: {
           )}
         </div>
 
-        <div className="space-y-1">
-          <label
-            htmlFor={`provider-instance-${instanceId}-label`}
-            className={sectionLabelClassName}
-          >
-            Display name
-          </label>
-          <ProviderInstanceStatusLine status={status} showDetail />
-          <DebouncedSettingTextInput
-            id={`provider-instance-${instanceId}-label`}
-            size="sm"
-            variant="soft"
-            value={
-              account.isDefault
-                ? (explicit?.displayName ?? "")
-                : (manageable?.instance.displayName ?? "")
-            }
-            onCommit={(displayName) =>
-              updateInstance(instanceId, { displayName }, legacyCodexAccountId)
-            }
-            placeholder={account.isDefault ? providerLabel : "Work"}
-            spellCheck={false}
-          />
-          <ProviderAccentColorControl
-            value={account.accentColor}
-            accountLabel={account.label}
-            onChange={(accentColor) =>
-              updateInstance(instanceId, { accentColor: accentColor ?? null })
-            }
-          />
-        </div>
-
         {signInCommand ? (
-          <div className="flex items-center gap-2 text-ui-sm text-muted-foreground">
-            <span className="min-w-0">
-              To sign in, run <code className="font-mono text-foreground">{signInCommand}</code> in
-              a Synara terminal, then refresh status.
+          <div className="flex items-center gap-2 border-b border-amber-500/25 bg-amber-500/8 px-3 py-2 text-ui-sm text-foreground/90">
+            <span className="min-w-0 flex-1">
+              To sign in, run{" "}
+              <code className="rounded-sm bg-background/70 px-1 py-px font-mono text-foreground">
+                {signInCommand}
+              </code>{" "}
+              in a Synara terminal, then refresh status.
             </span>
             <Button
               type="button"
@@ -1436,10 +1437,53 @@ function ProviderAccountsControl(props: {
               <CopyIcon className="size-3.5" />
             </Button>
           </div>
+        ) : status.detail && status.tone !== "ready" && status.tone !== "idle" ? (
+          <div className="border-b border-border/70 px-3 py-2 text-ui-sm text-muted-foreground">
+            {status.detail}
+          </div>
         ) : null}
 
-        <div className="space-y-2">
-          <span className={sectionLabelClassName}>Runtime</span>
+        <ProviderAccountEditorSection title="Identity">
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <label
+                htmlFor={`provider-instance-${instanceId}-label`}
+                className="block text-ui-sm font-medium text-foreground"
+              >
+                Display name
+              </label>
+              <DebouncedSettingTextInput
+                id={`provider-instance-${instanceId}-label`}
+                size="sm"
+                variant="soft"
+                value={
+                  account.isDefault
+                    ? (explicit?.displayName ?? "")
+                    : (manageable?.instance.displayName ?? "")
+                }
+                onCommit={(displayName) =>
+                  updateInstance(instanceId, { displayName }, legacyCodexAccountId)
+                }
+                placeholder={account.isDefault ? providerLabel : "Work"}
+                spellCheck={false}
+              />
+            </div>
+            <div className="space-y-1">
+              <span className="block text-ui-sm font-medium text-foreground">Accent color</span>
+              <div className="flex min-h-7 items-center">
+                <ProviderAccentColorControl
+                  value={account.accentColor}
+                  accountLabel={account.label}
+                  onChange={(accentColor) =>
+                    updateInstance(instanceId, { accentColor: accentColor ?? null })
+                  }
+                />
+              </div>
+            </div>
+          </div>
+        </ProviderAccountEditorSection>
+
+        <ProviderAccountEditorSection title="Runtime">
           {account.isDefault ? (
             <div className="space-y-3">
               {props.config.fields.map((field) => (
@@ -1460,12 +1504,12 @@ function ProviderAccountsControl(props: {
           ) : manageable ? (
             renderAccountRuntime(manageable, cliCommand)
           ) : null}
-        </div>
+        </ProviderAccountEditorSection>
 
         {/* A migrated Codex account is routed by its saved identity; an environment of
             its own would make the server drop that route, so none is offered. */}
         {legacyCodexAccountId === null ? (
-          <div className="grid gap-2">
+          <ProviderAccountEditorSection title="Environment">
             <ProviderInstanceEnvironmentEditor
               instanceId={instanceId}
               environment={
@@ -1473,7 +1517,7 @@ function ProviderAccountsControl(props: {
               }
               onChange={(environment) => updateInstance(instanceId, { environment })}
             />
-          </div>
+          </ProviderAccountEditorSection>
         ) : null}
       </div>
     );
@@ -1481,7 +1525,7 @@ function ProviderAccountsControl(props: {
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
+      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2 sm:flex-nowrap">
         <div className="min-w-0">
           <span className="block text-ui-sm font-medium text-foreground">
             {providerLabel} accounts
@@ -1491,7 +1535,7 @@ function ProviderAccountsControl(props: {
             stays on the account it started with.
           </span>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           <Button
             type="button"
             size="xs"
@@ -1535,10 +1579,20 @@ function ProviderAccountsControl(props: {
                 key={account.instanceId}
                 role="listitem"
                 className={cn(
-                  "flex items-center gap-2 px-3 py-2",
-                  selected && "bg-muted/45",
+                  "relative flex items-center gap-2 px-3 py-2.5 transition-colors",
+                  selected
+                    ? // The bar takes the account's accent, so the selection points at it.
+                      "bg-muted/55 before:absolute before:inset-y-2 before:left-0 before:w-0.5 before:rounded-r-full before:bg-(--account-accent,var(--foreground))"
+                    : "hover:bg-muted/25",
                   !account.enabled && !selected && "opacity-60",
                 )}
+                style={
+                  normalizeProviderAccentColor(account.accentColor)
+                    ? ({
+                        "--account-accent": normalizeProviderAccentColor(account.accentColor),
+                      } as CSSProperties)
+                    : undefined
+                }
               >
                 <button
                   type="button"
@@ -1547,16 +1601,15 @@ function ProviderAccountsControl(props: {
                   className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring/60"
                   onClick={() => setSelectedAccountId(account.instanceId)}
                 >
-                  <span className="relative flex shrink-0">
-                    <ProviderIcon provider={provider} className="size-4" />
-                    {shouldShowProviderAccountBadge(account, allAccounts) ? (
-                      <ProviderAccountBadge
-                        initials={providerAccountInitials(account.label)}
-                        accentColor={account.accentColor}
-                        className="absolute -right-1.5 -bottom-1"
-                      />
-                    ) : null}
-                  </span>
+                  <ProviderAccountAvatar
+                    provider={provider}
+                    initials={
+                      shouldShowProviderAccountBadge(account, allAccounts)
+                        ? providerAccountInitials(account.label)
+                        : null
+                    }
+                    accentColor={account.accentColor}
+                  />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-ui-sm font-medium text-foreground">
                       {account.label}
@@ -1594,27 +1647,26 @@ function ProviderAccountsControl(props: {
   );
 }
 
-function ProviderInstanceStatusLine(props: {
-  status: ProviderAccountStatusSummary;
-  /** Append the server's diagnosis when the account is not healthy. */
-  showDetail?: boolean;
-}) {
-  const detail =
-    props.showDetail && props.status.tone !== "ready" && props.status.tone !== "idle"
-      ? props.status.detail
-      : null;
+function ProviderInstanceStatusLine(props: { status: ProviderAccountStatusSummary }) {
   return (
-    <span className="flex min-w-0 items-start gap-1.5 text-ui-xs text-muted-foreground">
-      <span
-        className={cn(
-          "mt-1.5 size-1.5 shrink-0 rounded-full",
-          ACCOUNT_STATUS_DOT_CLASS_NAME[props.status.tone],
-        )}
-      />
-      <span className={detail ? "min-w-0" : "truncate"}>
-        {detail ? `${props.status.headline} · ${detail}` : props.status.headline}
-      </span>
-    </span>
+    <StatusChip
+      className="text-ui-xs text-muted-foreground"
+      dotClassName={ACCOUNT_STATUS_DOT_CLASS_NAME[props.status.tone]}
+    >
+      <span className="truncate">{props.status.headline}</span>
+    </StatusChip>
+  );
+}
+
+// One titled band of the account editor; bands are separated by hairlines.
+function ProviderAccountEditorSection(props: { title: string; children: ReactNode }) {
+  return (
+    <section className="space-y-2 border-b border-border/70 px-3 py-3 last:border-b-0">
+      <h4 className="text-ui-xs font-medium tracking-wide text-muted-foreground uppercase">
+        {props.title}
+      </h4>
+      {props.children}
+    </section>
   );
 }
 

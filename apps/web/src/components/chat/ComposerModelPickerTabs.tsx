@@ -9,13 +9,14 @@ import {
   type ProviderKind,
   type ServerProviderStatus,
 } from "@synara/contracts";
-import { type ReactNode } from "react";
+import { type CSSProperties, type ReactNode } from "react";
 
 import { PlusIcon, StarFilledIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "../ProviderIcon";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
+  normalizeProviderAccentColor,
   providerAccountInitials,
   providerAccountQualifiedLabel,
   shouldShowProviderAccountBadge,
@@ -35,8 +36,8 @@ function PickerTabButton(props: {
   tooltip?: string;
   active: boolean;
   disabled?: boolean;
-  /** Greyed like a disabled tab while staying openable (an account awaiting setup). */
-  dimmed?: boolean;
+  /** Colors the active marker: the account's accent, so the open tab points at it. */
+  accentColor?: string | undefined;
   onSelect: () => void;
   children: ReactNode;
 }) {
@@ -53,12 +54,16 @@ function PickerTabButton(props: {
             // why the tab is closed.
             aria-disabled={props.disabled ?? false}
             className={cn(
-              "relative flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted-foreground/70 outline-none transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring/60 aria-disabled:cursor-default aria-disabled:opacity-40 aria-disabled:hover:bg-transparent aria-disabled:hover:text-muted-foreground/70",
-              props.dimmed && !props.disabled && "opacity-40",
+              "relative flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted-foreground/70 outline-none transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring/60 aria-disabled:cursor-default aria-disabled:hover:bg-transparent aria-disabled:hover:text-muted-foreground/70",
               props.active &&
                 // The accent token is theme-injected; fall back to the icon color without it.
-                "text-foreground after:absolute after:inset-x-1.5 after:-bottom-1 after:h-0.5 after:rounded-full after:bg-[var(--color-text-accent,currentColor)]",
+                "text-foreground after:absolute after:inset-x-1.5 after:-bottom-1 after:h-0.5 after:rounded-full after:bg-[var(--tab-accent,var(--color-text-accent,currentColor))]",
             )}
+            style={
+              props.accentColor
+                ? ({ "--tab-accent": props.accentColor } as CSSProperties)
+                : undefined
+            }
             onClick={() => {
               if (!props.disabled) props.onSelect();
             }}
@@ -212,18 +217,23 @@ export function ComposerModelPickerTabs(props: {
             tooltip={providerTab.unavailableLabel ?? providerTab.label}
             active={props.tab === providerTab.instanceId}
             disabled={providerTab.blocked}
-            dimmed={providerTab.unavailableLabel !== null}
+            accentColor={normalizeProviderAccentColor(providerTab.accentColor)}
             onSelect={() => props.onTabChange(providerTab.instanceId)}
           >
             <TabIcon
               aria-hidden="true"
-              className={cn("size-4", getProviderIconClassName(providerTab.provider, ""))}
+              className={cn(
+                "size-4",
+                getProviderIconClassName(providerTab.provider, ""),
+                // Only the icon fades, so the initials still say whose tab is closed.
+                providerTab.unavailableLabel !== null && "opacity-35",
+              )}
             />
             {providerTab.badge ? (
               <ProviderAccountBadge
                 initials={providerTab.badge}
                 accentColor={providerTab.accentColor}
-                className="absolute -right-1 -bottom-0.5"
+                className="absolute -right-1.5 -bottom-1 origin-bottom-right scale-85"
               />
             ) : null}
           </PickerTabButton>
