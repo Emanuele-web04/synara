@@ -302,7 +302,9 @@ chats stay reachable. The gate lives in
 navigation slot and preserves its saved order and visibility; Stable keeps Kanban.
 A Beta client connected to a server that refuses Tasks returns to Kanban.
 
-`inbox` is the Inbox: the server refuses its `stats.getRecap` RPC on Stable.
+`inbox` is the Inbox page: the server refuses its `stats.getRecap` RPC on Stable, the
+web hides its rail and sidebar entries and redirects the route, and a saved rail or
+sidebar order that mentions it is ignored there.
 
 ## Diagnostics
 

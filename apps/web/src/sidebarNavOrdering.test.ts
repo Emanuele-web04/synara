@@ -20,12 +20,29 @@ describe("sidebarNavOrdering", () => {
   });
 
   it("keeps persisted order while appending newly shipped items at the end", () => {
-    expect(normalizeSidebarNavOrder(["automations", "newThread"])).toEqual([
+    expect(normalizeSidebarNavOrder(["automations", "newThread", "inbox"])).toEqual([
       "automations",
       "newThread",
+      "inbox",
       "kanban",
       "tasks",
       "pullRequests",
+    ]);
+  });
+
+  it("slots Inbox under New thread in an order saved before it shipped", () => {
+    expect(normalizeSidebarNavOrder(["automations", "newThread", "kanban"])).toEqual([
+      "automations",
+      "newThread",
+      "inbox",
+      "kanban",
+      "tasks",
+      "pullRequests",
+    ]);
+    // Once saved, the user's placement wins.
+    expect(normalizeSidebarNavOrder(["inbox", "newThread"]).slice(0, 2)).toEqual([
+      "inbox",
+      "newThread",
     ]);
   });
 
@@ -34,6 +51,7 @@ describe("sidebarNavOrdering", () => {
     expect(normalizeSidebarNavOrder(["kanban", "bogus", "kanban"])).toEqual([
       "kanban",
       "newThread",
+      "inbox",
       "tasks",
       "pullRequests",
       "automations",

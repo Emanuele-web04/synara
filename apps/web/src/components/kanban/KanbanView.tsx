@@ -139,27 +139,29 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
     <RouteInsetSurface>
       <RouteSurface>
         <RouteSurfaceHeader>
-          {projectBoard ? (
-            <Button
-              size="icon-xs"
-              variant="ghost"
-              onClick={handleBackToOverview}
-              aria-label="Back to all projects"
-            >
-              <ArrowLeftIcon className="size-3.5" />
-            </Button>
-          ) : null}
-          <h2 className="max-w-[clamp(16rem,50vw,40rem)] truncate text-ui-lg font-medium text-foreground">
-            {projectBoard ? projectBoard.projectName : "Kanban"}
-          </h2>
-          <span className="shrink-0 text-ui leading-snug text-muted-foreground/70">
-            {projectBoard ? projectBoard.totalCount : board.totalCount} tasks
-          </span>
-          {projectBoard ? null : <TasksViewSwitch current="kanban" />}
-          <NewTaskButton
-            disabled={newTaskProjectOptions.length === 0}
-            onClick={handleNewTaskInProjectBoard}
-          />
+          <div className="flex min-w-0 flex-1 items-center gap-2 [-webkit-app-region:no-drag]">
+            {projectBoard ? (
+              <Button
+                size="icon-xs"
+                variant="ghost"
+                onClick={handleBackToOverview}
+                aria-label="Back to all projects"
+              >
+                <ArrowLeftIcon className="size-3.5" />
+              </Button>
+            ) : null}
+            <h2 className="max-w-[clamp(16rem,50vw,40rem)] truncate text-ui-lg font-medium text-foreground">
+              {projectBoard ? projectBoard.projectName : "Kanban"}
+            </h2>
+            <span className="shrink-0 text-ui leading-snug text-muted-foreground/70">
+              {projectBoard ? projectBoard.totalCount : board.totalCount} tasks
+            </span>
+            {projectBoard ? null : <TasksViewSwitch current="kanban" />}
+            <NewTaskButton
+              disabled={newTaskProjectOptions.length === 0}
+              onClick={handleNewTaskInProjectBoard}
+            />
+          </div>
         </RouteSurfaceHeader>
 
         <div className="min-h-0 min-w-0 flex-1 pt-3">

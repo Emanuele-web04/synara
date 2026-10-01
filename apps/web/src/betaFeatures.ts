@@ -6,6 +6,7 @@
 import {
   desktopFlavorFromProtocol,
   GROUPS_BETA_FEATURE,
+  INBOX_BETA_FEATURE,
   isBetaFeatureEnabled,
 } from "@synara/shared/betaFeatures";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
@@ -29,6 +30,12 @@ export const isBetaFeatureOn = (feature: string): boolean =>
  * the group APIs regardless; this only keeps Stable from offering them.
  */
 export const GROUPS_ON = isBetaFeatureOn(GROUPS_BETA_FEATURE);
+
+/**
+ * Inbox is Beta-only. Off, its rail and sidebar entries are gone and its route
+ * redirects home; the server refuses its recap RPC regardless.
+ */
+export const INBOX_ON = isBetaFeatureOn(INBOX_BETA_FEATURE);
 
 /**
  * Provider descriptors with Beta-only providers removed on Stable. A

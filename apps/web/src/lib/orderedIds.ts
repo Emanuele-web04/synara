@@ -20,6 +20,22 @@ export function normalizeKnownIds<Id extends string>(
 }
 
 /**
+ * `order` with `id` right after `afterId` when the saved order predates `id`, instead of
+ * at the end where normalizeIdOrder appends it. Once the user saves a placement, it wins.
+ */
+export function placeNewIdAfter<Id extends string>(
+  order: ReadonlyArray<Id>,
+  savedOrder: ReadonlyArray<string>,
+  id: Id,
+  afterId: Id,
+): Id[] {
+  if (savedOrder.includes(id)) return [...order];
+  const withoutId = order.filter((entry) => entry !== id);
+  withoutId.splice(withoutId.indexOf(afterId) + 1, 0, id);
+  return withoutId;
+}
+
+/**
  * A complete order: the saved known ids first, then any default id the saved order lacks
  * (items shipped after the user persisted an order), appended in default order.
  */
