@@ -635,11 +635,11 @@ export function SidebarActivityView({
   );
   // The open thread stays on screen even when its section is collapsed.
   const revealedThreads = useMemo(
-    () => [
-      ...pinnedRows.revealed,
-      ...(groupMode === "time" ? earlierRows.revealed : []),
-      ...settledRows.revealed,
-    ],
+    () => ({
+      pinned: pinnedRows.revealed,
+      earlier: groupMode === "time" ? earlierRows.revealed : [],
+      settled: settledRows.revealed,
+    }),
     [earlierRows.revealed, groupMode, pinnedRows.revealed, settledRows.revealed],
   );
   const visibleThreadIds = useMemo(

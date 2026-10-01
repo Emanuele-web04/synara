@@ -578,11 +578,11 @@ describe("collectVisibleActivityThreadIds", () => {
         earlierOpen: false,
         earlier: [],
         projectGroups: [],
-        settledOpen: false,
-        settled: [],
-        revealed: [thread("old-active")],
+        settledOpen: true,
+        settled: [thread("done")],
+        revealed: { pinned: [], earlier: [thread("old-active")], settled: [] },
       }),
-    ).toEqual(["recent", "old-active"]);
+    ).toEqual(["recent", "old-active", "done"]);
   });
 });
 

@@ -364,18 +364,24 @@ export function collectVisibleActivityThreadIds(input: {
   settledOpen: boolean;
   settled: readonly SidebarThreadSummary[];
   /** The open thread shown under a collapsed header; mounted whatever the section state. */
-  revealed?: readonly SidebarThreadSummary[];
+  revealed?: {
+    pinned: readonly SidebarThreadSummary[];
+    earlier: readonly SidebarThreadSummary[];
+    settled: readonly SidebarThreadSummary[];
+  };
 }): ThreadId[] {
   const visible: SidebarThreadSummary[] = [];
   if (input.pinnedOpen) visible.push(...input.pinned);
+  if (input.revealed) visible.push(...input.revealed.pinned);
   if (input.groupMode === "project") {
     for (const group of input.projectGroups) visible.push(...group);
   } else {
     visible.push(...input.recent, ...input.today, ...input.yesterday);
     if (input.earlierOpen) visible.push(...input.earlier);
+    if (input.revealed) visible.push(...input.revealed.earlier);
   }
   if (input.settledOpen) visible.push(...input.settled);
-  if (input.revealed) visible.push(...input.revealed);
+  if (input.revealed) visible.push(...input.revealed.settled);
   return [...new Set(visible.map((thread) => thread.id))];
 }
 
