@@ -2564,7 +2564,7 @@ export default function ChatView({
   const openRightDockPane = useRightDockStore((store) => store.openPane);
   const openPullRequestLink = (url: string) => {
     const repository = parseGitHubRepositoryNameWithOwnerFromPullRequestUrl(url);
-    const number = Number(/\/pull\/(\d+)/i.exec(url)?.[1]);
+    const number = repository ? Number(new URL(url).pathname.split("/")[4]) : NaN;
     if (!repository || !activeProjectId || !Number.isInteger(number)) {
       openBrowserUrl(url);
       return;
