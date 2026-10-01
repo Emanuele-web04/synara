@@ -29,7 +29,7 @@ const desktopFlavor = resolveSynaraDesktopFlavor({
 const desktopIdentity = synaraDesktopIdentity(desktopFlavor);
 const APP_DISPLAY_NAME = desktopIdentity.displayName;
 const APP_BUNDLE_ID = desktopIdentity.bundleId;
-const LAUNCHER_VERSION = 6;
+const LAUNCHER_VERSION = 7;
 // Kept in sync with BRAND_ASSET_PATHS.productionMacIconComposer and the macOS
 // icon constants in scripts/lib/desktop-platform-build-config.ts. The packaged
 // build compiles the same asset; this launcher does it for dev and Canary,

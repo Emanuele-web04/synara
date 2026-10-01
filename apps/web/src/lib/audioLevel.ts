@@ -7,6 +7,7 @@
 import type { DesktopAudioLevelSource } from "@synara/contracts";
 import { AUDIO_TRAIL_BETA_FEATURE } from "@synara/shared/betaFeatures";
 import { isBetaFeatureOn } from "~/betaFeatures";
+import { isMacNavigatorPlatform } from "./utils";
 
 type LevelListener = (level: number) => void;
 
@@ -26,6 +27,7 @@ const RELEASE_DELAY_MS = 1_000;
 export function isAudioLevelAvailable(): boolean {
   return (
     typeof window !== "undefined" &&
+    isMacNavigatorPlatform() &&
     window.desktopBridge?.audioLevel !== undefined &&
     isBetaFeatureOn(AUDIO_TRAIL_BETA_FEATURE)
   );

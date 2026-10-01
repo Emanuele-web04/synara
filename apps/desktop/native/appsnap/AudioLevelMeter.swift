@@ -226,8 +226,8 @@ final class SystemAudioLevelTap {
 /// The default input device, via an AVAudioEngine input tap.
 ///
 /// Microphone access belongs to the Synara app that spawned this helper, the
-/// same grant voice notes use. A missing grant is reported instead of
-/// prompting from a background process the user never looked at.
+/// same grant voice notes use. The first opt-in can request access; a denied
+/// grant is reported without prompting again.
 final class MicrophoneLevelReader {
     let accumulator = AudioLevelAccumulator(silenceFloorDecibels: microphoneSilenceFloorDecibels)
     private let engine = AVAudioEngine()
@@ -241,7 +241,12 @@ final class MicrophoneLevelReader {
                 allowed = result
                 granted.signal()
             }
-            granted.wait()
+            // Consent can stay open indefinitely. Keep the main run loop
+            // servicing SIGTERM and the parent monitor while waiting, so
+            // switching the source off or quitting still releases this helper.
+            while granted.wait(timeout: .now()) != .success {
+                RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05))
+            }
             guard allowed else { throw denied() }
         } else if status != .authorized {
             throw denied()
