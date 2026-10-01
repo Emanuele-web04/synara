@@ -5539,18 +5539,15 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         ): Promise<HookJSONOutput> => {
           if (options.signal.aborted || hookInput.hook_event_name !== "SessionStart") return {};
           if (sessionId && hookInput.session_id !== sessionId) return {};
-          const nativeObservation = claudeCacheFromSessionStart(
+          const current = Effect.runSync(Ref.get(contextRef));
+          const previous = current ? current.cacheObservation : resumeState?.claudeCache;
+          const observation = claudeCacheFromSessionStart(
             hookInput as unknown as Record<string, unknown>,
             new Date(cacheClock.currentTimeMillisUnsafe()).toISOString(),
             input.lifecycleGeneration,
+            previous,
           );
-          if (!nativeObservation) return {};
-          const current = Effect.runSync(Ref.get(contextRef));
-          const previous = current ? current.cacheObservation : resumeState?.claudeCache;
-          const observation: ClaudeCacheObservation = {
-            ...(previous?.nativeSessionId === nativeObservation.nativeSessionId ? previous : {}),
-            ...nativeObservation,
-          };
+          if (!observation) return {};
           if (!current) startupCacheObservation = observation;
           else if (
             !current.stopped &&

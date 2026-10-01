@@ -1346,6 +1346,7 @@ export default function ChatView({
     loadingModelProviders,
     discoveryErrorsByProvider,
     runtimeModelsByProvider,
+    runtimeModelsByProviderInstance,
     dynamicAgents,
     selectedProviderRuntimeModelDiscoveryPending,
     composerModelOptions,
@@ -1376,7 +1377,6 @@ export default function ChatView({
     selectedProviderInstanceId,
   );
   const showProviderInstancePicker = shouldShowComposerProviderInstancePicker({
-    provider: selectedProvider,
     selectedProviderInstanceId,
     providerInstances: selectedProviderInstances,
   });
@@ -3639,7 +3639,10 @@ export default function ChatView({
         selectionOptions?.instanceId ?? resolveDefaultProviderInstanceId(settings, provider);
       const lockedInstanceId =
         lockedProvider !== null && provider === lockedProvider
-          ? (activeThread.session?.providerInstanceId ?? activeThread.modelSelection.instanceId)
+          ? (activeThread.session?.providerInstanceId ??
+            activeThread.modelSelection.instanceId ??
+            // A thread that never stored an account runs in the one the composer shows.
+            selectedProviderInstanceId)
           : undefined;
       if (lockedInstanceId && resolvedInstanceId !== lockedInstanceId) {
         scheduleComposerFocus();
@@ -3647,13 +3650,17 @@ export default function ChatView({
       }
       const resolvedModel = resolveCommittedProviderModel({
         selectedModel: model,
-        availableOptions: modelOptionsByProvider[provider],
+        // Accounts of one provider can expose different catalogs.
+        availableOptions:
+          modelOptionsByProviderInstance[resolvedInstanceId] ?? modelOptionsByProvider[provider],
         fallback: () => resolveAppModelSelection(provider, customModelsByProvider, model),
       });
       const runtimeModel = resolveRuntimeModelDescriptor({
         provider,
         model: resolvedModel,
-        runtimeModels: runtimeModelsByProvider[provider],
+        // Accounts of one provider can advertise different capabilities.
+        runtimeModels:
+          runtimeModelsByProviderInstance[resolvedInstanceId] ?? runtimeModelsByProvider[provider],
       });
       const nextModelSelection = buildModelSelection(
         provider,
@@ -3707,11 +3714,14 @@ export default function ChatView({
       customModelsByProvider,
       lockedProvider,
       modelOptionsByProvider,
+      modelOptionsByProviderInstance,
       persistRuntimeModeChange,
       providerStatuses,
       runtimeMode,
       runtimeModelsByProvider,
+      runtimeModelsByProviderInstance,
       scheduleComposerFocus,
+      selectedProviderInstanceId,
       settings,
       setComposerDraftModelSelectionAndSticky,
       setComposerDraftProviderModelOptions,

@@ -50,6 +50,10 @@ export interface ProviderModelCatalog {
    * must feed them through (see {@link selectedRuntimeModel}).
    */
   runtimeModelsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelDescriptor>>;
+  /** Account-local runtime descriptors; known accounts are empty until discovery resolves. */
+  runtimeModelsByProviderInstance: Partial<
+    Record<ProviderInstanceId, ReadonlyArray<ProviderModelDescriptor>>
+  >;
   /** The runtime descriptor matching `selectedProvider` + its selected-model hint. */
   selectedRuntimeModel: ProviderModelDescriptor | undefined;
   /** Runtime-discovered agents/modes for the selected provider (opencode/claude/codex). */
@@ -632,6 +636,18 @@ export function useProviderModelCatalog(input: {
     ],
   );
 
+  const runtimeModelsByProviderInstance = useMemo(() => {
+    const byInstance: Partial<Record<ProviderInstanceId, ReadonlyArray<ProviderModelDescriptor>>> =
+      {};
+    for (const instance of providerInstances) {
+      // A configured account without discovery must not fall back to a sibling's
+      // runtime metadata. Its static/custom model options remain available above.
+      byInstance[instance.instanceId] =
+        dynamicModelsByProviderInstance[instance.instanceId]?.models ?? [];
+    }
+    return byInstance;
+  }, [dynamicModelsByProviderInstance, providerInstances]);
+
   const selectedRuntimeModel = useMemo(
     () =>
       resolveRuntimeModelDescriptor({
@@ -746,6 +762,7 @@ export function useProviderModelCatalog(input: {
       modelOptionsByProviderInstance,
       loadingModelProviders,
       runtimeModelsByProvider,
+      runtimeModelsByProviderInstance,
       selectedRuntimeModel,
       selectedRuntimeAgents,
       selectedProviderModelsLoading,
@@ -759,6 +776,7 @@ export function useProviderModelCatalog(input: {
       modelOptionsByProvider,
       modelOptionsByProviderInstance,
       runtimeModelsByProvider,
+      runtimeModelsByProviderInstance,
       selectedProviderModelsLoading,
       selectedProviderRuntimeModelDiscoveryPending,
       selectedRuntimeAgents,

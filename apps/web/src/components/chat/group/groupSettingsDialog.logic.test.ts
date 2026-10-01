@@ -213,6 +213,15 @@ describe("modelSelectionsEqual", () => {
       }),
     ).toBe(false);
   });
+
+  it("tells accounts of one provider apart and treats no account as the default one", () => {
+    expect(
+      modelSelectionsEqual(codexSelection, { ...codexSelection, instanceId: "codex_work" }),
+    ).toBe(false);
+    expect(modelSelectionsEqual(codexSelection, { ...codexSelection, instanceId: "codex" })).toBe(
+      true,
+    );
+  });
 });
 
 describe("resolveGroupModelCatalogPrefetchProviders", () => {

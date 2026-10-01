@@ -12946,6 +12946,81 @@ describe("Claude cache preflight", () => {
   };
 
   for (const timing of ["early", "late"] as const) {
+    for (const response of ["newer", "same"] as const) {
+      it.effect(`reconciles ${timing} native warmth with the ${response} saved response`, () => {
+        let hookResult: Promise<unknown> | undefined;
+        const reportWarmCache = (options: ClaudeQueryOptions) =>
+          options.hooks!.SessionStart![0]!.hooks[0]!(
+            {
+              hook_event_name: "SessionStart",
+              session_id: nativeSessionId,
+              source: "resume",
+              context_tokens: 120_000,
+              seconds_since_last_response: 0,
+              prompt_cache_likely_expired: false,
+              transcript_path: "/tmp/fixture.jsonl",
+              cwd: "/tmp",
+            },
+            undefined,
+            { signal: new AbortController().signal },
+          );
+        const harness = makeMultiQueryHarness({
+          onCreate: (options) => {
+            if (timing === "early") hookResult = reportWarmCache(options);
+          },
+        });
+        return Effect.gen(function* () {
+          yield* TestClock.adjust("2 hours");
+          const adapter = yield* ClaudeAdapter;
+          const lastResponseAt =
+            response === "same" ? "1970-01-01T02:00:00.000Z" : resumedObservation.lastResponseAt;
+          yield* adapter.startSession({
+            threadId: THREAD_ID,
+            runtimeMode: "full-access",
+            resumeCursor: {
+              resume: nativeSessionId,
+              claudeCache: {
+                ...resumedObservation,
+                observedAt: lastResponseAt,
+                lastResponseAt,
+                cacheReferenceAt: resumedObservation.observedAt,
+                state: "likely-expired",
+              },
+            },
+          });
+          if (timing === "late") {
+            hookResult = reportWarmCache(harness.createInputs[0]!.options);
+          }
+          yield* Effect.promise(() => hookResult!);
+          const observation = yield* adapter.getClaudeCacheObservation!(THREAD_ID);
+          assert.equal(observation?.contextTokens, 120_000);
+          assert.equal(
+            assessClaudeCache(observation, Date.parse(observation!.observedAt) + 1000)
+              .requiresConfirmation,
+            response === "same",
+          );
+          const cursor = (yield* adapter.listSessions())[0]!.resumeCursor;
+          yield* adapter.stopSession(THREAD_ID);
+          yield* adapter.startSession({
+            threadId: THREAD_ID,
+            runtimeMode: "full-access",
+            resumeCursor: cursor,
+          });
+          const restored = yield* adapter.getClaudeCacheObservation!(THREAD_ID);
+          assert.equal(
+            assessClaudeCache(restored, Date.parse(restored!.observedAt) + 1000)
+              .requiresConfirmation,
+            response === "same",
+          );
+        }).pipe(
+          Effect.provideService(Random.Random, makeDeterministicRandomService()),
+          Effect.provide(harness.layer),
+        );
+      });
+    }
+  }
+
+  for (const timing of ["early", "late"] as const) {
     for (const model of [undefined, "claude-opus-4-6"]) {
       it.effect(
         `identifies ${timing} model-less cache evidence using configured model ${model}`,

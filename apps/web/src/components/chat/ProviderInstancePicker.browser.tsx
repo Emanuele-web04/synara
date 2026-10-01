@@ -6,56 +6,59 @@ import { render } from "vitest-browser-react";
 import { ProviderInstancePicker } from "./ProviderInstancePicker";
 import type { ProviderModelPickerInstance } from "./ProviderModelPicker";
 
+// Accounts are picked in the model picker. This menu only appears when the composer's
+// account no longer exists, so every case starts from a selection that is gone.
+const REMOVED_ACCOUNT_ID = "codex_removed";
+
 const INSTANCES: ReadonlyArray<ProviderModelPickerInstance> = [
-  {
-    instanceId: "codex",
-    provider: "codex",
-    label: "Personal",
-    enabled: true,
-    isDefault: true,
-  },
-  {
-    instanceId: "codex_work",
-    provider: "codex",
-    label: "Work",
-    enabled: true,
-    isDefault: false,
-  },
+  { instanceId: "codex", provider: "codex", label: "Codex", enabled: true, isDefault: true },
+  { instanceId: "codex_work", provider: "codex", label: "Work", enabled: true, isDefault: false },
 ];
 
-const PROVIDERS: ReadonlyArray<ServerProviderStatus> = INSTANCES.map((instance) => ({
-  provider: "codex",
-  instanceId: instance.instanceId,
-  driver: "codex",
-  displayName: instance.label,
-  status: "ready",
-  available: true,
-  authStatus: "authenticated",
-  checkedAt: "2026-07-08T12:00:00.000Z",
-}));
+function accountStatus(
+  instance: ProviderModelPickerInstance,
+  overrides: Partial<ServerProviderStatus> = {},
+): ServerProviderStatus {
+  return {
+    provider: instance.provider,
+    instanceId: instance.instanceId,
+    driver: instance.provider,
+    displayName: instance.label,
+    status: "ready",
+    available: true,
+    authStatus: "authenticated",
+    checkedAt: "2026-07-08T12:00:00.000Z",
+    ...overrides,
+  };
+}
+
+const PROVIDERS = INSTANCES.map((instance) => accountStatus(instance));
 
 describe("ProviderInstancePicker", () => {
   afterEach(() => {
     document.body.innerHTML = "";
   });
 
-  it("shows account selection separately from models", async () => {
+  it("names the missing account and offers every configured account as a replacement", async () => {
     const onProviderInstanceChange = vi.fn();
-    const onManageAccounts = vi.fn();
     const screen = await render(
       <ProviderInstancePicker
         provider="codex"
         providerInstances={INSTANCES}
         providers={PROVIDERS}
-        selectedProviderInstanceId="codex"
+        selectedProviderInstanceId={REMOVED_ACCOUNT_ID}
         onProviderInstanceChange={onProviderInstanceChange}
-        onManageAccounts={onManageAccounts}
+        onManageAccounts={vi.fn()}
       />,
     );
 
     try {
-      await page.getByRole("button", { name: /Account: Personal/ }).click();
+      await page.getByRole("button", { name: /Account: Missing account/ }).click();
       await expect.element(page.getByText("Accounts", { exact: true })).toBeInTheDocument();
+      await expect
+        .element(page.getByRole("menuitemradio", { name: /Missing account/ }))
+        .toBeDisabled();
+      await expect.element(page.getByRole("menuitemradio", { name: "Codex" })).toBeEnabled();
       await page.getByRole("menuitemradio", { name: "Work" }).click();
 
       expect(onProviderInstanceChange).toHaveBeenCalledWith("codex_work");
@@ -64,122 +67,53 @@ describe("ProviderInstancePicker", () => {
     }
   });
 
-  it("keeps account management visible when only the default account exists", async () => {
-    const onManageAccounts = vi.fn();
+  it("does not offer an account that is turned off or not signed in", async () => {
+    const onProviderInstanceChange = vi.fn();
+    const signedOut: ProviderModelPickerInstance = {
+      instanceId: "codex_side",
+      provider: "codex",
+      label: "Side",
+      enabled: true,
+      isDefault: false,
+    };
     const screen = await render(
       <ProviderInstancePicker
         provider="codex"
-        providerInstances={[INSTANCES[0]!]}
-        providers={[PROVIDERS[0]!]}
-        selectedProviderInstanceId="codex"
-        onProviderInstanceChange={vi.fn()}
-        onManageAccounts={onManageAccounts}
+        providerInstances={[INSTANCES[0]!, { ...INSTANCES[1]!, enabled: false }, signedOut]}
+        providers={[
+          PROVIDERS[0]!,
+          PROVIDERS[1]!,
+          accountStatus(signedOut, { authStatus: "unauthenticated" }),
+        ]}
+        selectedProviderInstanceId={REMOVED_ACCOUNT_ID}
+        onProviderInstanceChange={onProviderInstanceChange}
+        onManageAccounts={vi.fn()}
       />,
     );
 
     try {
-      await page.getByRole("button", { name: /Account: Personal/ }).click();
-      await page.getByRole("menuitem", { name: "Manage accounts…" }).click();
-
-      expect(onManageAccounts).toHaveBeenCalledOnce();
+      await page.getByRole("button", { name: /Account: Missing account/ }).click();
+      const work = page.getByRole("menuitemradio", { name: /Work/ });
+      await expect.element(work).toBeDisabled();
+      expect(work.element().textContent).toContain("Disabled");
+      const side = page.getByRole("menuitemradio", { name: /Side/ });
+      await expect.element(side).toBeDisabled();
+      expect(side.element().textContent).toContain("Sign in");
+      await expect.element(page.getByRole("menuitemradio", { name: "Codex" })).toBeEnabled();
+      expect(onProviderInstanceChange).not.toHaveBeenCalled();
     } finally {
       await screen.unmount();
     }
   });
 
-  it("does not allow a started thread to switch to a sibling account", async () => {
+  it("keeps a started thread on its missing account", async () => {
     const onProviderInstanceChange = vi.fn();
     const screen = await render(
       <ProviderInstancePicker
         provider="codex"
         providerInstances={INSTANCES}
         providers={PROVIDERS}
-        selectedProviderInstanceId="codex"
-        selectionLocked
-        onProviderInstanceChange={onProviderInstanceChange}
-        onManageAccounts={vi.fn()}
-      />,
-    );
-
-    try {
-      await page.getByRole("button", { name: /Account: Personal/ }).click();
-      const workAccount = page.getByRole("menuitemradio", { name: /Work/ });
-      await expect.element(workAccount).toBeDisabled();
-      await expect.element(page.getByText("New thread")).toBeInTheDocument();
-      expect(onProviderInstanceChange).not.toHaveBeenCalled();
-    } finally {
-      await screen.unmount();
-    }
-  });
-
-  it("shows a missing profile and lets an unlocked draft choose a configured replacement", async () => {
-    const onProviderInstanceChange = vi.fn();
-    const cursorInstance = {
-      instanceId: "cursor" as const,
-      provider: "cursor" as const,
-      label: "Default Cursor",
-      enabled: true,
-      isDefault: true,
-    };
-    const cursorStatus: ServerProviderStatus = {
-      provider: "cursor",
-      instanceId: "cursor",
-      driver: "cursor",
-      displayName: "Default Cursor",
-      status: "ready",
-      available: true,
-      authStatus: "authenticated",
-      checkedAt: "2026-07-08T12:00:00.000Z",
-    };
-    const screen = await render(
-      <ProviderInstancePicker
-        provider="cursor"
-        providerInstances={[cursorInstance]}
-        providers={[cursorStatus]}
-        selectedProviderInstanceId="cursor_removed"
-        onProviderInstanceChange={onProviderInstanceChange}
-        onManageAccounts={vi.fn()}
-      />,
-    );
-
-    try {
-      await page.getByRole("button", { name: /Account: Missing account/ }).click();
-      await expect
-        .element(page.getByRole("menuitemradio", { name: /Missing account/ }))
-        .toBeDisabled();
-      await page.getByRole("menuitemradio", { name: "Default Cursor" }).click();
-
-      expect(onProviderInstanceChange).toHaveBeenCalledWith("cursor");
-    } finally {
-      await screen.unmount();
-    }
-  });
-
-  it("keeps a missing profile visible without unlocking a started thread", async () => {
-    const onProviderInstanceChange = vi.fn();
-    const cursorInstance = {
-      instanceId: "cursor" as const,
-      provider: "cursor" as const,
-      label: "Default Cursor",
-      enabled: true,
-      isDefault: true,
-    };
-    const cursorStatus: ServerProviderStatus = {
-      provider: "cursor",
-      instanceId: "cursor",
-      driver: "cursor",
-      displayName: "Default Cursor",
-      status: "ready",
-      available: true,
-      authStatus: "authenticated",
-      checkedAt: "2026-07-08T12:00:00.000Z",
-    };
-    const screen = await render(
-      <ProviderInstancePicker
-        provider="cursor"
-        providerInstances={[cursorInstance]}
-        providers={[cursorStatus]}
-        selectedProviderInstanceId="cursor_removed"
+        selectedProviderInstanceId={REMOVED_ACCOUNT_ID}
         selectionLocked
         onProviderInstanceChange={onProviderInstanceChange}
         onManageAccounts={vi.fn()}
@@ -191,11 +125,35 @@ describe("ProviderInstancePicker", () => {
       await expect
         .element(page.getByRole("menuitemradio", { name: /Missing account/ }))
         .toBeDisabled();
-      await expect
-        .element(page.getByRole("menuitemradio", { name: /Default Cursor/ }))
-        .toBeDisabled();
-      await expect.element(page.getByText("New thread")).toBeInTheDocument();
+      for (const name of [/Codex/, /Work/]) {
+        const replacement = page.getByRole("menuitemradio", { name });
+        await expect.element(replacement).toBeDisabled();
+        expect(replacement.element().textContent).toContain("New thread");
+      }
       expect(onProviderInstanceChange).not.toHaveBeenCalled();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("links to account settings, where the missing account can be added back", async () => {
+    const onManageAccounts = vi.fn();
+    const screen = await render(
+      <ProviderInstancePicker
+        provider="codex"
+        providerInstances={[INSTANCES[0]!]}
+        providers={[PROVIDERS[0]!]}
+        selectedProviderInstanceId={REMOVED_ACCOUNT_ID}
+        onProviderInstanceChange={vi.fn()}
+        onManageAccounts={onManageAccounts}
+      />,
+    );
+
+    try {
+      await page.getByRole("button", { name: /Account: Missing account/ }).click();
+      await page.getByRole("menuitem", { name: "Manage accounts…" }).click();
+
+      expect(onManageAccounts).toHaveBeenCalledOnce();
     } finally {
       await screen.unmount();
     }

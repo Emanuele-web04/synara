@@ -14,6 +14,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   AppSettingsSchema,
+  buildProviderInstanceSettingsPatch,
   applyLocalAppSettingsPatch,
   appSettingsPatchToServerSettingsPatch,
   buildInitialServerSettingsMigrationPatch,
@@ -1208,6 +1209,49 @@ describe("getProviderInstanceOptions", () => {
     expect(Schema.is(ProviderInstanceId)(accountOption?.instanceId)).toBe(true);
   });
 
+  it("keeps the provider's own name on a default account that only stores overrides", () => {
+    const options = getProviderInstanceOptions({
+      codexAccounts: [],
+      codexHomePath: "",
+      providerInstances: {
+        claudeAgent: { driver: "claudeAgent", accentColor: "#7c3aed" },
+        opencode: { driver: "opencode", displayName: "Team OpenCode" },
+        codex_work: { driver: "codex", accentColor: "#16a34a" },
+      },
+      selectedCodexAccountId: "default",
+    });
+    const byId = new Map(options.map((option) => [String(option.instanceId), option]));
+
+    expect(byId.get("claudeAgent")).toMatchObject({
+      label: "Claude",
+      accentColor: "#7c3aed",
+      isDefault: true,
+    });
+    expect(byId.get("opencode")).toMatchObject({ label: "Team OpenCode", isDefault: true });
+    // A named-by-id account falls back to its humanized id.
+    expect(byId.get("codex_work")).toMatchObject({
+      label: "Codex Work",
+      accentColor: "#16a34a",
+      isDefault: false,
+    });
+    expect(byId.get("codex")?.accentColor).toBeUndefined();
+  });
+
+  it("keeps a migrated Codex account's saved name when its explicit entry only overrides", () => {
+    const instanceId = codexAccountInstanceId("work");
+    const options = getProviderInstanceOptions({
+      codexAccounts: [{ id: "work", label: "Office", homePath: "", shadowHomePath: "" }],
+      codexHomePath: "",
+      providerInstances: { [instanceId]: { driver: "codex", enabled: false } },
+      selectedCodexAccountId: "default",
+    });
+
+    expect(options.find((option) => option.instanceId === instanceId)).toMatchObject({
+      label: "Office",
+      enabled: false,
+    });
+  });
+
   it("keeps unsupported instances visible for missing-driver affordances", () => {
     expect(
       getUnsupportedProviderInstanceOptions({
@@ -1304,6 +1348,150 @@ describe("getProviderInstanceOptions", () => {
       providerInstances: {},
       selectedCodexAccountId: "default",
     });
+  });
+});
+
+describe("buildProviderInstanceSettingsPatch", () => {
+  const instanceId = codexAccountInstanceId("work@example.com");
+  const migrated = {
+    codexAccounts: [
+      {
+        id: "work@example.com",
+        label: "Work",
+        homePath: "/Users/you/.codex-work",
+        shadowHomePath: "",
+      },
+      { id: "side", label: "Side", homePath: "", shadowHomePath: "" },
+    ],
+    codexHomePath: "",
+    providerInstances: {},
+    selectedCodexAccountId: "work@example.com",
+  };
+
+  it("routes a migrated account's rename and homes to its codexAccounts entry", () => {
+    expect(
+      buildProviderInstanceSettingsPatch(
+        migrated,
+        instanceId,
+        { displayName: "Office", config: { shadowHomePath: "/Users/you/.codex-shadow" } },
+        "work@example.com",
+      ),
+    ).toEqual({
+      codexAccounts: [
+        {
+          id: "work@example.com",
+          label: "Office",
+          homePath: "/Users/you/.codex-work",
+          shadowHomePath: "/Users/you/.codex-shadow",
+        },
+        { id: "side", label: "Side", homePath: "", shadowHomePath: "" },
+      ],
+    });
+  });
+
+  it("clears a stale explicit copy of the identity it moves, keeping other overrides", () => {
+    expect(
+      buildProviderInstanceSettingsPatch(
+        {
+          ...migrated,
+          providerInstances: {
+            [instanceId]: {
+              driver: "codex",
+              displayName: "Stale name",
+              enabled: false,
+              config: {
+                homePath: "/stale/home",
+                shadowHomePath: "/stale/shadow",
+                binaryPath: "/opt/work-codex",
+              },
+            },
+          },
+        },
+        instanceId,
+        { config: { homePath: "/Users/you/.codex-office" } },
+        "work@example.com",
+      ),
+    ).toEqual({
+      codexAccounts: [
+        {
+          id: "work@example.com",
+          label: "Work",
+          homePath: "/Users/you/.codex-office",
+          shadowHomePath: "",
+        },
+        { id: "side", label: "Side", homePath: "", shadowHomePath: "" },
+      ],
+      providerInstances: {
+        [instanceId]: {
+          driver: "codex",
+          enabled: false,
+          config: { binaryPath: "/opt/work-codex" },
+        },
+      },
+    });
+  });
+
+  it("keeps a migrated account's other edits on an explicit entry that carries no identity", () => {
+    expect(
+      buildProviderInstanceSettingsPatch(
+        migrated,
+        instanceId,
+        { enabled: false, accentColor: "#16a34a", config: { binaryPath: "/opt/work-codex" } },
+        "work@example.com",
+      ),
+    ).toEqual({
+      providerInstances: {
+        [instanceId]: {
+          driver: "codex",
+          accentColor: "#16a34a",
+          enabled: false,
+          config: { binaryPath: "/opt/work-codex" },
+        },
+      },
+    });
+  });
+
+  it("edits an explicit account in place and clears what the patch empties", () => {
+    expect(
+      buildProviderInstanceSettingsPatch(
+        {
+          ...migrated,
+          providerInstances: {
+            claude_work: {
+              driver: "claudeAgent",
+              displayName: "Work",
+              accentColor: "#2563eb",
+              enabled: true,
+              config: { configDir: "~/.claude-work" },
+            },
+          },
+        },
+        "claude_work",
+        { displayName: "  ", accentColor: null, config: { configDir: "~/.claude-office" } },
+      ),
+    ).toEqual({
+      providerInstances: {
+        claude_work: {
+          driver: "claudeAgent",
+          enabled: true,
+          config: { configDir: "~/.claude-office" },
+        },
+      },
+    });
+  });
+
+  it("gives a default account its first explicit entry", () => {
+    expect(
+      buildProviderInstanceSettingsPatch(migrated, "claudeAgent", { displayName: "Personal" }),
+    ).toEqual({
+      providerInstances: { claudeAgent: { driver: "claudeAgent", displayName: "Personal" } },
+    });
+  });
+
+  it("ignores an account that does not exist", () => {
+    expect(
+      buildProviderInstanceSettingsPatch(migrated, "codex_gone", { enabled: false }),
+    ).toBeNull();
   });
 });
 
