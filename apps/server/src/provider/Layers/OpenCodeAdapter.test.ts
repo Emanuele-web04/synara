@@ -6509,6 +6509,63 @@ describe("OpenCode background subagent tasks", () => {
     expect(events[1]).toMatchObject({ payload: { state: "completed" } });
   });
 
+  it("tracks a resumed background child after its previous task settled", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+
+    const events = await runWithAdapter(runtime, eventQueue, (adapter, threadId) =>
+      Effect.gen(function* () {
+        const resumedToolCompleted = yield* Deferred.make<void>();
+        const eventsFiber = yield* Stream.runCollect(
+          adapter.streamEvents.pipe(
+            Stream.tap((event) =>
+              event.type === "item.completed" && event.itemId === "call-resumed"
+                ? Deferred.succeed(resumedToolCompleted, undefined)
+                : Effect.void,
+            ),
+            Stream.takeUntil((event) => event.type === "session.exited"),
+          ),
+        ).pipe(Effect.forkChild);
+        yield* adapter.startSession({ provider: "opencode", threadId, runtimeMode: "full-access" });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "spawn and resume a background agent",
+          attachments: [],
+          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+        });
+        const part = backgroundTaskToolPart("child-session-1");
+        pushOpenCodePart(eventQueue, part);
+        eventQueue.push({ type: "session.idle", properties: { sessionID: "child-session-1" } });
+        // task_id resumes the same OpenCode session and reuses its job ID,
+        // while this tool invocation has a new call ID.
+        pushOpenCodePart(eventQueue, {
+          ...part,
+          id: "part-resumed",
+          callID: "call-resumed",
+        } as Part);
+        yield* Deferred.await(resumedToolCompleted);
+        yield* adapter.stopSession(threadId);
+        const collected = Array.from(yield* Fiber.join(eventsFiber));
+        eventQueue.close();
+        return collected.filter(onlyTaskEvents);
+      }),
+    );
+
+    expect(events.map((event) => event.type)).toEqual([
+      "task.started",
+      "task.updated",
+      "task.completed",
+      "task.started",
+      "task.updated",
+      "task.completed",
+    ]);
+    expect(events[3]).toMatchObject({
+      payload: { taskId: "child-session-1", toolUseId: "call-resumed" },
+    });
+    expect(events[4]).toMatchObject({ payload: { status: "running", isBackgrounded: true } });
+    expect(events[5]).toMatchObject({ payload: { status: "stopped" } });
+  });
+
   it("settles the background task as failed from a synthetic parent text part", async () => {
     const eventQueue = createSubscribedEventQueue();
     const runtime = createMockOpenCodeRuntime();
@@ -6560,6 +6617,97 @@ describe("OpenCode background subagent tasks", () => {
         summary: "Background task failed: exploded",
       },
     });
+  });
+
+  it("preserves a background failure reported after the child went idle", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+    const events = await runWithAdapter(runtime, eventQueue, (adapter, threadId) =>
+      Effect.gen(function* () {
+        const eventsFiber = yield* Stream.runCollect(
+          Stream.takeUntil(
+            adapter.streamEvents,
+            (event) => event.type === "item.completed" && event.itemId === "call-marker",
+          ),
+        ).pipe(Effect.forkChild);
+        yield* adapter.startSession({ provider: "opencode", threadId, runtimeMode: "full-access" });
+        yield* adapter.sendTurn({
+          threadId,
+          input: "spawn a background agent",
+          attachments: [],
+          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+        });
+        const part = backgroundTaskToolPart("child-session-1");
+        pushOpenCodePart(eventQueue, part);
+        // OpenCode marks the child idle before task.ts inspects its final
+        // assistant/tool result and injects the authoritative error result.
+        eventQueue.push({ type: "session.idle", properties: { sessionID: "child-session-1" } });
+        pushOpenCodePart(eventQueue, {
+          id: "part-late-error",
+          messageID: "user-late-error",
+          sessionID: "opencode-session-1",
+          type: "text",
+          synthetic: true,
+          text: '<task id="child-session-1" state="error"><summary>Background task failed: tool error</summary></task>',
+          time: { start: 1 },
+        } as Part);
+        pushOpenCodePart(eventQueue, {
+          ...part,
+          id: "part-marker",
+          callID: "call-marker",
+          tool: "read",
+        } as Part);
+        const collected = Array.from(yield* Fiber.join(eventsFiber));
+        eventQueue.close();
+        return collected.filter((event) => event.type === "task.completed");
+      }),
+    );
+    expect(events.at(-1)).toMatchObject({
+      payload: {
+        taskId: "child-session-1",
+        status: "failed",
+        summary: "Background task failed: tool error",
+      },
+    });
+  });
+
+  it("settles background tasks before replacing their provider session", async () => {
+    const eventQueue = createSubscribedEventQueue();
+    const runtime = createMockOpenCodeRuntime();
+
+    const events = await runWithAdapter(runtime, eventQueue, (adapter, threadId) =>
+      Effect.gen(function* () {
+        const startedFiber = yield* Stream.runCollect(
+          Stream.take(Stream.filter(adapter.streamEvents, onlyTaskEvents), 2),
+        ).pipe(Effect.forkChild);
+        const input = {
+          provider: "opencode" as const,
+          threadId,
+          runtimeMode: "full-access" as const,
+        };
+        yield* adapter.startSession(input);
+        yield* adapter.sendTurn({
+          threadId,
+          input: "spawn a background agent",
+          attachments: [],
+          modelSelection: { provider: "opencode", model: "openai/gpt-5.4" },
+        });
+        pushOpenCodePart(eventQueue, backgroundTaskToolPart("child-session-1"));
+        yield* Fiber.join(startedFiber);
+
+        const replacedFiber = yield* Stream.runCollect(
+          Stream.takeUntil(adapter.streamEvents, (event) => event.type === "session.started"),
+        ).pipe(Effect.forkChild);
+        yield* adapter.startSession(input);
+        const collected = Array.from(yield* Fiber.join(replacedFiber));
+        eventQueue.close();
+        return collected.filter(onlyTaskEvents);
+      }),
+    );
+
+    expect(events).toMatchObject([
+      { type: "task.completed", payload: { taskId: "child-session-1", status: "stopped" } },
+    ]);
   });
 
   it("settles unsettled background tasks as stopped on session teardown", async () => {
