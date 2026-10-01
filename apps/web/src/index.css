@@ -3094,17 +3094,30 @@ diffs-container {
 
 /* ─── Raised chrome on a whole-window glass shell ─────────────────────────────────
    The window's fill is the body's translucent coat, and the desktop behind it is blurred
-   natively. Raised surfaces therefore take one sheer tint (`--app-glass-raised-surface`,
+   natively. Raised surfaces therefore take one denser tint (`--app-glass-raised-surface`,
    theme.logic) and NO backdrop-filter: Chromium paints the filtered backdrop over the
    backdrop it sampled, so a blur here lays a second copy of the coat under the surface
    and the surface reads as a solid slab (measured: a 30% coat came out at 59%).
 
    `.app-glass-raised` opts in any other surface that paints an opaque fill of its own:
-   cards, standalone composers, and filled controls. Unlayered, so it wins over the
+   cards and filled controls. Unlayered, so it wins over the
    surface's Tailwind fill only while the attribute is set. */
+:root[data-window-translucency="window"] :is(.chat-raised-panel-surface, .app-glass-raised),
+:root[data-window-translucency="window"] [data-chat-composer-slot] .chat-composer-surface {
+  background: var(--app-glass-raised-surface);
+}
+
+/* Composer surfaces are dense by default on a glass shell: one can float over anything
+   (the PR composer over the PR, the selection composer over the transcript), and with no
+   blur the raised tint would leave that content readable through it. Only the chat
+   composer's own slot (`data-chat-composer-slot`, ChatView) opts into the tint above,
+   because the transcript dissolves at its top edge (see `.scroll-edge-fade` below). */
+:root[data-window-translucency="window"] .chat-composer-surface {
+  background: var(--app-overlay-surface);
+}
+
 :root[data-window-translucency="window"]
   :is(.chat-composer-surface, .chat-raised-panel-surface, .app-glass-raised) {
-  background: var(--app-glass-raised-surface);
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
@@ -3128,12 +3141,35 @@ diffs-container {
 }
 
 /* A floating side panel overlays transcript text, and with no blur a sheer tint would
-   leave that text readable through it. It keeps a dense fill; the docked variant insets
-   the transcript, so nothing sits behind it. */
+   leave that text readable through it. It takes the dense overlay fill below; the docked
+   variant insets the transcript, so nothing sits behind it. */
 :root[data-window-translucency="window"]
   [data-environment-panel-variant="floating"]
   .chat-raised-panel-surface {
-  background: color-mix(in srgb, var(--popover) 88%, transparent);
+  background: var(--app-overlay-surface);
+}
+
+/* ─── Overlays on a translucent window ────────────────────────────────────────────
+   Menus, pickers, popovers, and tooltips are frosted: a thin fill over a backdrop blur.
+   Over a translucent region (the sidebar, or the whole window) that blur cannot work:
+   Chromium composites the blurred copy over the sharp original instead of replacing it,
+   so whatever sits behind the popup stays readable through the thin fill. On a
+   translucent window they drop the blur and take a near-opaque fill instead. Scoped to
+   the material, not the translucency scope, because a popup can open over the sidebar
+   in either scope. `!important` beats the inline fill of the fallback context menu. */
+:root[data-window-material="translucent"] {
+  --app-overlay-surface: color-mix(in srgb, var(--popover) 96%, transparent);
+}
+
+:root[data-window-material="translucent"] :is(.app-popup-surface, .composer-picker-menu-surface) {
+  background: var(--app-overlay-surface) !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+:root[data-window-material="translucent"] .app-popup-surface::before {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 /* The composer no longer frosts what scrolls beneath it, so the transcript dissolves

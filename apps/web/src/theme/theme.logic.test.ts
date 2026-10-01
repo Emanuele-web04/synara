@@ -383,16 +383,16 @@ describe("window translucency", () => {
     expect(dark.variables["--app-sidebar-chip-surface"]).toBe(
       dark.variables["--app-window-background"],
     );
-    // Raised chrome is a lighter pane over the coat: ink in dark, the elevated tone in light.
+    // Raised chrome is a denser pane of the elevated tone, tracking the coat's opacity.
     expect(dark.variables["--app-glass-raised-surface"]).toBe(
-      "color-mix(in srgb, var(--foreground) 7%, transparent)",
+      "color-mix(in srgb, var(--popover) 46%, transparent)",
     );
     const light = buildThemeCssVariables(resolveThemePack(DEFAULT_THEME_STATE, "light"), "light", {
       ...macDesktop,
       translucency: { opacity: 38, blur: null, sidebarOnly: false },
     });
     expect(light.variables["--app-glass-raised-surface"]).toBe(
-      "color-mix(in srgb, var(--popover) 19%, transparent)",
+      "color-mix(in srgb, var(--popover) 29%, transparent)",
     );
   });
 
