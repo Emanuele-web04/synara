@@ -165,3 +165,40 @@ and guard; a smaller short-case denominator alone does not authorize a weaker li
 
 After pulling, run `bun install` and clear Vite's dependency cache
 (`apps/web/node_modules/.vite`) so the patched list build is prebundled again.
+
+## Review validation with the unchanged Issue #550 guard
+
+The initial complete change failed the existing 2.5 limit in two quiet probes
+(median ratios 3.50 and 3.61), despite reducing absolute render work. A temporary
+stage profile identified repeated activity normalization as 87.8% of near-cap
+work-log derivation time. Activity objects are immutable store values, so the
+normalizer now reuses that pure per-activity result through a WeakMap. Filtering,
+collapse and turn settlement still run with the current projection on every call.
+The reconnect test verifies running → failed → running with the same activity and
+fresh metadata from a replacement event.
+
+A serial matched pair compared main `2c2d2bb942f47c6717167ac061378421016aae1f`
+with candidate `e90ce8a4d656ab147c2a600060e17c0155e62c78`, including that repair.
+Both cases warm up before three paired samples, using Node 24.21.0, Bun 1.4.2,
+Vitest 4.1.10 and headless Chromium with no competing validation processes.
+Numeric logging was temporary and happened after measured work; it was removed.
+[Raw review records](./review-measurements.json) preserve all paired samples.
+
+| Issue #550 measure (median) |     Main | Repaired candidate |
+| --------------------------- | -------: | -----------------: |
+| Short React commit work     |  44.6 ms |            22.9 ms |
+| Near-cap React commit work  | 106.5 ms |            39.7 ms |
+| Paired near-cap/short ratio |    2.388 |              1.734 |
+
+Both versions pass the unchanged 2.5 ratio limit. These records establish bounded
+React commit work for this development fixture, not production desktop speed or
+application-wide CPU, RAM or GPU improvements. One candidate near-cap input P95
+sample was 83.3 ms while the others were 34.3 and 34.6 ms; no reliable input-tail
+improvement is claimed. The later tab, streaming and startup figures above remain
+author-reported; the first-commit measurements and these review records are the
+committed raw evidence.
+
+Review also reproduced and fixed two queued tab-navigation races: opening a terminal
+or closing the pressed chat tab now cancels its deferred activation. Full editor-route
+regressions verify that late animation-frame callbacks and the background fallback
+cannot reopen the chat afterward.
