@@ -8,14 +8,18 @@ import {
   type ProviderKind,
   type ThreadId,
 } from "@synara/contracts";
+import { useMemo } from "react";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { useShallow } from "zustand/react/shallow";
 
 import { createComposerDraftStoreState } from "./composerDraftActions";
 import {
   COMPOSER_DRAFT_STORAGE_KEY,
   COMPOSER_DRAFT_STORAGE_VERSION,
+  composerThreadDraftIsPending,
   selectComposerThreadDraft,
+  selectThreadIdsWithPendingDraft,
   type ComposerDraftStoreState,
   type ComposerThreadDraftState,
 } from "./composerDraftDomain";
@@ -43,6 +47,7 @@ export {
 } from "./composerDraftAttachments";
 export {
   captureComposerPromptHistorySavedDraft,
+  composerThreadDraftIsPending,
   COMPOSER_DRAFT_STORAGE_KEY,
   COMPOSER_DRAFT_STORAGE_VERSION,
   PersistedComposerImageAttachment,
@@ -121,6 +126,22 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
 
 export function useComposerThreadDraft(threadId: ThreadId): ComposerThreadDraftState {
   return useComposerDraftStore((state) => selectComposerThreadDraft(state, threadId));
+}
+
+export function useThreadHasPendingDraft(threadId: ThreadId): boolean {
+  return useComposerDraftStore((state) => {
+    const draft = state.draftsByThreadId[threadId];
+    return draft !== undefined && composerThreadDraftIsPending(draft);
+  });
+}
+
+/**
+ * Threads whose composer holds an unsent message. The set only changes identity when
+ * a thread gains or loses its draft, not on every keystroke.
+ */
+export function useThreadIdsWithPendingDraft(): ReadonlySet<ThreadId> {
+  const threadIds = useComposerDraftStore(useShallow(selectThreadIdsWithPendingDraft));
+  return useMemo(() => new Set(threadIds), [threadIds]);
 }
 
 export function useEffectiveComposerModelState(input: {

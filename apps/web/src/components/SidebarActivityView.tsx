@@ -38,6 +38,7 @@ import {
   sidebarHoverRevealHideClassName,
 } from "../sidebarRowStyles";
 import { resolveThreadPullRequestFallback } from "../hooks/useThreadPullRequests";
+import { useThreadIdsWithPendingDraft } from "../composerDraftStore";
 import type { Project, SidebarThreadSummary } from "../types";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { FolderClosed } from "./FolderClosed";
@@ -80,7 +81,7 @@ import {
   SidebarShowMoreRow,
 } from "./SidebarListSection";
 import { SidebarSectionToolbar } from "./SidebarSectionToolbar";
-import { SidebarStatusTrailingGlyph } from "./SidebarStatusTrailingGlyph";
+import { SidebarDraftGlyph, SidebarStatusTrailingGlyph } from "./SidebarStatusTrailingGlyph";
 import { ThreadArchiveActionButton } from "./ThreadArchiveActionButton";
 import { ThreadPinToggleButton } from "./ThreadPinToggleButton";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
@@ -111,6 +112,7 @@ function ActivityThreadRow({
   isActive,
   isSettled,
   isPinned,
+  hasPendingDraft,
   pr,
   status,
   onOpen,
@@ -128,6 +130,7 @@ function ActivityThreadRow({
   isActive: boolean;
   isSettled: boolean;
   isPinned: boolean;
+  hasPendingDraft: boolean;
   pr: OrchestrationThreadPullRequest | null;
   status: ThreadStatusPill | null;
   onOpen: () => void;
@@ -217,6 +220,7 @@ function ActivityThreadRow({
             >
               {thread.title}
             </span>
+            {hasPendingDraft ? <SidebarDraftGlyph /> : null}
           </span>
           <span className="flex min-w-0 items-center gap-1.5">
             {project?.cwd ? (
@@ -523,6 +527,7 @@ export function SidebarActivityView({
     () => new Map(),
   );
 
+  const draftThreadIdSet = useThreadIdsWithPendingDraft();
   const isRealProject = useCallback(
     (projectId: ProjectId) => projectById.get(projectId)?.kind === "project",
     [projectById],
@@ -551,12 +556,14 @@ export function SidebarActivityView({
       buildActivityViewModel({
         threads,
         pinnedThreadIdSet,
+        draftThreadIdSet,
         settledOverrideByThreadId,
         projectFilterIds,
       }),
-    [pinnedThreadIdSet, projectFilterIds, settledOverrideByThreadId, threads],
+    [draftThreadIdSet, pinnedThreadIdSet, projectFilterIds, settledOverrideByThreadId, threads],
   );
   const scopedPinnedThreads = model.pinned;
+  const draftThreads = model.drafts;
   // Coarse clock so the date bucketing memo stays effective across renders that
   // happen within the same minute; buckets are day-granular anyway.
   const nowMs = Math.floor(Date.now() / 60_000) * 60_000;
@@ -571,9 +578,10 @@ export function SidebarActivityView({
   const projectGroups = useMemo(
     () =>
       groupMode === "project"
-        ? groupActivityThreadsByProject(model.active, isRealProject)
+        ? // Drafts go in first so they lead their project's block.
+          groupActivityThreadsByProject([...model.drafts, ...model.active], isRealProject)
         : EMPTY_PROJECT_GROUPS,
-    [groupMode, isRealProject, model.active],
+    [groupMode, isRealProject, model.active, model.drafts],
   );
 
   const earlierPaging = resolveSidebarThreadListPaging({
@@ -608,6 +616,7 @@ export function SidebarActivityView({
         groupMode,
         pinnedOpen,
         pinned: scopedPinnedThreads,
+        drafts: draftThreads,
         recent: recentThreads,
         today: dateBuckets.today,
         yesterday: dateBuckets.yesterday,
@@ -621,6 +630,7 @@ export function SidebarActivityView({
       dateBuckets.earlier,
       dateBuckets.today,
       dateBuckets.yesterday,
+      draftThreads,
       earlierOpen,
       earlierPaging.previewLimit,
       groupMode,
@@ -660,6 +670,7 @@ export function SidebarActivityView({
       isActive={activeThreadId === thread.id}
       isSettled={isSettled}
       isPinned={pinnedThreadIdSet.has(thread.id)}
+      hasPendingDraft={draftThreadIdSet.has(thread.id)}
       pr={
         // An explicit null from the resolver means the persisted PR was ruled out (e.g. the
         // checkout moved on); falling back to raw lastKnownPr would resurrect that stale
@@ -695,7 +706,10 @@ export function SidebarActivityView({
   // section has rows — a feed with nothing active but a populated Pinned or Done
   // section is not empty.
   const isEmpty =
-    model.active.length === 0 && model.settled.length === 0 && scopedPinnedThreads.length === 0;
+    model.active.length === 0 &&
+    model.settled.length === 0 &&
+    draftThreads.length === 0 &&
+    scopedPinnedThreads.length === 0;
   const emptyLabel =
     activeScope === null
       ? "No activity yet"
@@ -797,6 +811,12 @@ export function SidebarActivityView({
         ))
       ) : (
         <>
+          {draftThreads.length > 0 ? (
+            <div>
+              <SidebarSectionLabel label="Drafts" />
+              <div className="flex flex-col gap-0.5">{draftThreads.map(renderActiveRow)}</div>
+            </div>
+          ) : null}
           {recentThreads.length > 0 ? (
             <div>
               <SidebarSectionLabel label="Recent" />
