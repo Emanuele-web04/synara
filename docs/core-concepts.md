@@ -49,6 +49,10 @@ running, what changed, whether the UI works, or whether the task is safe to ship
 
 A project is the folder Synara works with.
 
+The project picker shows registered projects and local folders. Creating a task worktree does not
+add another project entry. If the current draft already uses an unregistered folder, the picker keeps
+that folder visible with its path.
+
 Git repositories unlock the complete delivery workflow:
 
 - Branches
