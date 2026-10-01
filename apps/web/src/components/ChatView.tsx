@@ -887,7 +887,7 @@ export default function ChatView({
   const activeComposerMenuItemRef = useRef<ComposerCommandItem | null>(null);
   const localDirectoryMenuRef = useRef<ComposerLocalDirectoryMenuHandle | null>(null);
 
-  const sendInFlightRef = useRef(false);
+  const sendInFlightRef = useMemo(() => ({ threadId, current: false }), [threadId]);
   const sendPreflightInFlightRef = useRef(false);
   const dragDepthRef = useRef(0);
   const terminalOpenByThreadRef = useRef<Record<string, boolean>>({});
@@ -1602,7 +1602,6 @@ export default function ChatView({
 
   const {
     localDispatch,
-    setLocalDispatch,
     worktreeSetupResolutionRef,
     worktreeSetupPendingAction,
     setWorktreeSetupPendingAction,
@@ -1619,6 +1618,7 @@ export default function ChatView({
     armLocalDispatchAckFallback,
     scheduleFailedWorktreeSetupDispatchReset,
   } = useChatLocalDispatch({
+    threadId,
     phase,
     activeLatestTurn,
     activeThread,
@@ -3339,7 +3339,6 @@ export default function ChatView({
     // render->effect->render cascade. The expanded image and timeline hook's
     // optimistic messages clear before paint, so these residual resets can wait.
     const settle = window.setTimeout(() => {
-      setLocalDispatch(null);
       setComposerHighlightedItemId(null);
       setComposerCursor(
         collapseExpandedComposerCursor(promptRef.current, promptRef.current.length),
@@ -3355,7 +3354,6 @@ export default function ChatView({
     setIsDragOverComposer,
     setComposerHighlightedItemId,
     dragDepthRef,
-    setLocalDispatch,
     threadId,
   ]);
 

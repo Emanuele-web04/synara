@@ -1958,6 +1958,25 @@ describe("runWorktreeCreationFlow", () => {
     };
   }
 
+  it("does not start Git if setup was resolved during task registration", async () => {
+    const resolution = createWorktreeSetupResolution();
+    resolution.resolve("cancel");
+    let starts = 0;
+    const result = await runWorktreeCreationFlow({
+      progressId: "cancelled-before-git",
+      resolution,
+      subscribeToProgress: () => () => undefined,
+      onCreationStep: () => undefined,
+      startCreation: async () => {
+        starts += 1;
+        return { worktree: { path: "/unused" } };
+      },
+      removeWorktree: async () => undefined,
+    });
+    expect(result).toEqual({ outcome: "resolved" });
+    expect(starts).toBe(0);
+  });
+
   it("advances steps only for this creation's phase-started events", async () => {
     const harness = startFlowHarness();
 

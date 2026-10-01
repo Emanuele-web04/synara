@@ -1314,7 +1314,11 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
   return {};
 }
 
-function installDeterministicSendNativeApi(options?: { rejectTurnStart?: boolean }): () => void {
+function installDeterministicSendNativeApi(options?: {
+  rejectTurnStart?: boolean;
+  beforeWorktreeCreation?: () => Promise<void>;
+  projectThreadCommands?: boolean;
+}): () => void {
   const previousNativeApi = window.nativeApi;
   const wsNativeApi = readNativeApi();
   if (!wsNativeApi) {
@@ -1335,6 +1339,7 @@ function installDeterministicSendNativeApi(options?: { rejectTurnStart?: boolean
             ...input,
           };
           wsRequests.push(request);
+          await options?.beforeWorktreeCreation?.();
           return resolveWsRpc(request) as Awaited<
             ReturnType<typeof wsNativeApi.git.createDetachedWorktree>
           >;
@@ -1368,6 +1373,31 @@ function installDeterministicSendNativeApi(options?: { rejectTurnStart?: boolean
           });
           if (options?.rejectTurnStart && command.type === "thread.turn.start") {
             throw new Error("Turn start failed for test.");
+          }
+          if (options?.projectThreadCommands && command.type === "thread.create") {
+            const snapshot = addThreadToSnapshot(fixture.snapshot, command.threadId);
+            fixture.snapshot = {
+              ...snapshot,
+              threads: snapshot.threads.map((thread) =>
+                thread.id === command.threadId
+                  ? { ...thread, ...command, id: command.threadId, session: null }
+                  : thread,
+              ),
+            };
+            useStore.getState().syncServerReadModel(fixture.snapshot);
+          }
+          if (options?.projectThreadCommands && command.type === "thread.meta.update") {
+            const patch = Object.fromEntries(
+              Object.entries(command).filter(([, value]) => value !== undefined),
+            );
+            fixture.snapshot = {
+              ...fixture.snapshot,
+              snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+              threads: fixture.snapshot.threads.map((thread) =>
+                thread.id === command.threadId ? { ...thread, ...patch } : thread,
+              ),
+            };
+            useStore.getState().syncServerReadModel(fixture.snapshot);
           }
           return { sequence: fixture.snapshot.snapshotSequence + 1 };
         },
@@ -8345,6 +8375,158 @@ describe("ChatView transcript geometry (full app)", () => {
     },
   );
 
+  it.each(["success", "failure", "revisit", "cancel"] as const)(
+    "opens another draft during worktree creation and preserves the original send on %s",
+    async (outcome) => {
+      let finishCreation!: () => void;
+      const creationGate = new Promise<void>((resolve) => {
+        finishCreation = resolve;
+      });
+      const restoreNativeApi = installDeterministicSendNativeApi({
+        projectThreadCommands: true,
+        beforeWorktreeCreation: async () => {
+          await creationGate;
+          if (outcome !== "success") throw new Error("Worktree creation failed for test.");
+        },
+      });
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: MessageId.makeUnsafe("worktree-new-thread-shortcut"),
+          targetText: "worktree shortcut",
+        }),
+      });
+
+      try {
+        useProjectEnvironmentStore.getState().setProjectEnvMode(PROJECT_ID, "worktree");
+        await page.getByTestId("new-thread-button").click();
+        const sendingPath = await waitForURL(
+          mounted.router,
+          (path) => UUID_ROUTE_RE.test(path),
+          "Expected a worktree draft.",
+        );
+        const sendingId = sendingPath.slice(1) as ThreadId;
+        useComposerDraftStore.getState().setPrompt(sendingId, "Create while I start another task");
+        await vi.waitFor(() => {
+          expect(useComposerDraftStore.getState().getDraftThread(sendingId)?.branch).toBe("main");
+        });
+        const sendButton = await waitForSendButton();
+        await vi.waitFor(() => expect(sendButton.disabled).toBe(false));
+        sendButton.click();
+        await vi.waitFor(() => {
+          expect(
+            wsRequests.some((request) => request._tag === WS_METHODS.gitCreateDetachedWorktree),
+          ).toBe(true);
+        });
+
+        // The real sidebar must display the durable thread while the git RPC is pending.
+        await vi.waitFor(
+          () => {
+            expect(
+              document.querySelector(
+                '[role="button"][aria-label="Open Create while I start another task"]',
+              ),
+            ).toBeTruthy();
+            expect(
+              document.querySelector('[role="img"][aria-label="Preparing worktree"]'),
+            ).toBeTruthy();
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        expect(
+          wsRequests
+            .map(readDispatchedCommand)
+            .filter((command) => command?.type === "thread.turn.start"),
+        ).toHaveLength(0);
+
+        // Use the actual default mod+N shortcut while the worktree RPC is unresolved.
+        await dispatchConfiguredShortcutWhenReady(window, { key: "n" });
+        const nextPath = await waitForURL(
+          mounted.router,
+          (path) => UUID_ROUTE_RE.test(path) && path !== sendingPath,
+          "New thread must remain available during worktree creation.",
+        );
+        const nextId = nextPath.slice(1) as ThreadId;
+        expect(useComposerDraftStore.getState().getDraftThread(sendingId)).not.toBeNull();
+        expect(
+          useComposerDraftStore.getState().getDraftThreadByProjectId(PROJECT_ID)?.threadId,
+        ).toBe(nextId);
+        useComposerDraftStore.getState().setPrompt(nextId, "Independent draft");
+        if (outcome === "revisit" || outcome === "cancel") {
+          await page
+            .getByRole("button", { name: "Open Create while I start another task", exact: true })
+            .click();
+          await vi.waitFor(
+            () =>
+              expect(
+                Array.from(document.querySelectorAll("button")).find(
+                  (button) => button.textContent?.trim() === "Cancel",
+                ),
+              ).toBeTruthy(),
+            { timeout: 8_000 },
+          );
+        }
+        if (outcome === "cancel") {
+          const cancel = Array.from(document.querySelectorAll("button")).find(
+            (button) => button.textContent?.trim() === "Cancel",
+          );
+          cancel?.click();
+          await vi.waitFor(() =>
+            expect(useComposerDraftStore.getState().draftsByThreadId[sendingId]?.prompt).toBe(
+              "Create while I start another task",
+            ),
+          );
+        }
+        if (outcome === "revisit") {
+          await mounted.router.navigate({ to: "/$threadId", params: { threadId: THREAD_ID } });
+          useComposerDraftStore.getState().setPrompt(THREAD_ID, "Existing task draft");
+          await vi.waitFor(() =>
+            expect(document.querySelector('[contenteditable="true"]')?.textContent).toContain(
+              "Existing task draft",
+            ),
+          );
+        }
+        finishCreation();
+
+        await vi.waitFor(
+          () => {
+            if (outcome === "success") {
+              const turns = wsRequests
+                .map(readDispatchedCommand)
+                .filter((command) => command?.type === "thread.turn.start");
+              expect(turns).toHaveLength(1);
+              expect(turns[0]).toMatchObject({ threadId: sendingId });
+            } else {
+              expect(useComposerDraftStore.getState().draftsByThreadId[sendingId]?.prompt).toBe(
+                "Create while I start another task",
+              );
+              expect(
+                wsRequests
+                  .map(readDispatchedCommand)
+                  .filter((command) => command?.type === "thread.turn.start"),
+              ).toHaveLength(0);
+            }
+            expect(mounted.router.state.location.pathname).toBe(
+              outcome === "revisit"
+                ? `/${THREAD_ID}`
+                : outcome === "cancel"
+                  ? sendingPath
+                  : nextPath,
+            );
+            expect(useComposerDraftStore.getState().draftsByThreadId[nextId]?.prompt).toBe(
+              "Independent draft",
+            );
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+      } finally {
+        finishCreation();
+        await mounted.cleanup();
+        restoreNativeApi();
+      }
+    },
+  );
+
   it("creates a detached worktree on first send in New worktree mode", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
     const mounted = await mountChatView({
@@ -8436,6 +8618,19 @@ describe("ChatView transcript geometry (full app)", () => {
           );
           expect(createThreadRequest).toBeTruthy();
           expect(createThreadRequest?.command).toMatchObject({
+            envMode: "worktree",
+            branch: "main",
+            worktreePath: null,
+          });
+          const linkedWorkspace = wsRequests
+            .map(readDispatchedCommand)
+            .find(
+              (command) =>
+                command?.type === "thread.meta.update" &&
+                command.threadId === newThreadId &&
+                command.worktreePath === "/repo/.codex/worktrees/generated/synara",
+            );
+          expect(linkedWorkspace).toMatchObject({
             envMode: "worktree",
             branch: temporaryBranch,
             worktreePath: "/repo/.codex/worktrees/generated/synara",

@@ -18,6 +18,12 @@ work** — its conversation, provider session, working environment, tool activit
 A project can contain many tasks. Each task has its own transcript and provider lifecycle. Tasks
 using separate worktrees also have separate working directories and branches.
 
+New thread (⌘N on macOS, Ctrl+N elsewhere) reopens an unsent draft. Once a send is in progress,
+including worktree preparation, it opens another draft while the original send continues.
+The task appears in the sidebar before Git preparation finishes, with a **Preparing worktree**
+indicator. Its provider session starts only after the worktree is ready. If preparation fails or
+is cancelled, the task and its prompt remain available for retry.
+
 ## The main surfaces
 
 - **Sidebar** — projects, spaces, tasks, and activity requiring attention. The default rail layout

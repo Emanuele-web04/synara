@@ -42,6 +42,10 @@ import { PinStatusIcon, pinActionLabel } from "~/lib/pin";
 import { useTasksNeedingAttentionCount, useTodoEventSubscription } from "./tasks/useTodos";
 import { THREAD_CONTEXT_MENU_ICONS } from "~/lib/contextMenuIcons";
 import { ensureNativeApi } from "~/nativeApi";
+import {
+  getActiveComposerSendThreadIds,
+  subscribeComposerSends,
+} from "~/lib/composerSendOwnership";
 import { autoAnimate } from "@formkit/auto-animate";
 import { FiGitBranch } from "react-icons/fi";
 import { IoIosGitCompare } from "react-icons/io";
@@ -1350,6 +1354,11 @@ export default function Sidebar() {
   const openTerminalThreadPage = useTerminalStateStore((state) => state.openTerminalThreadPage);
   const clearProjectDraftThreads = useComposerDraftStore((store) => store.clearProjectDraftThreads);
   const draftThreadsByThreadId = useComposerDraftStore((store) => store.draftThreadsByThreadId);
+  const activeComposerSendThreadIds = useSyncExternalStore(
+    subscribeComposerSends,
+    getActiveComposerSendThreadIds,
+    getActiveComposerSendThreadIds,
+  );
   const temporaryThreadIds = useTemporaryThreadStore((store) => store.temporaryThreadIds);
   const persistedPinnedProjectIds = usePinnedProjectsStore((store) => store.pinnedProjectIds);
   const pinProjectLocally = usePinnedProjectsStore((store) => store.pinProject);
@@ -1798,8 +1807,13 @@ export default function Sidebar() {
         },
         hasPendingApprovals: thread.hasPendingApprovals,
         hasPendingUserInput: thread.hasPendingUserInput,
+        isPreparingWorktree:
+          activeComposerSendThreadIds.has(thread.id) &&
+          thread.envMode === "worktree" &&
+          thread.latestTurn === null &&
+          thread.session === null,
       }),
-    [dismissedThreadStatusKeyByThreadId],
+    [activeComposerSendThreadIds, dismissedThreadStatusKeyByThreadId],
   );
 
   useEffect(() => {
@@ -4312,7 +4326,8 @@ export default function Sidebar() {
       const tone: SpaceActivityTone =
         status.label === "Working" ||
         status.label === "Connecting" ||
-        status.label === "In Background"
+        status.label === "In Background" ||
+        status.label === "Preparing worktree"
           ? "running"
           : status.label === "Completed"
             ? "completed"
