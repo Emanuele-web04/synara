@@ -77,6 +77,7 @@ import {
   PICKER_PANEL_PLAIN_SEARCH_INPUT_CLASS_NAME,
 } from "./pickerPanelStyles";
 import {
+  AVAILABLE_PROVIDER_OPTIONS,
   type ProviderModelOptionsByProviderInstance,
   type ProviderModelPickerInstance,
   resolveProviderModelLabel,
@@ -171,21 +172,6 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
   const usesEffortSlider = effortControl === "slider";
 
   const { starredModels, toggleStarredModel, unstarModel } = useStarredModels();
-  // A locked thread can only ever run its own provider's presets, and a preset of a
-  // removed or disabled account cannot run at all.
-  const knownInstances = props.providerInstances;
-  const usableStarredModels = starredModels.filter((entry) => {
-    if (lockedProvider !== null && entry.provider !== lockedProvider) return false;
-    const instanceId = starredModelInstanceId(entry);
-    return (
-      instanceId === entry.provider ||
-      knownInstances === undefined ||
-      knownInstances.some(
-        (instance) => instance.instanceId === instanceId && instance.enabled !== false,
-      )
-    );
-  });
-
   const instancesFor = (provider: ProviderKind): ReadonlyArray<ProviderModelPickerInstance> =>
     (props.providerInstances ?? []).filter((instance) => instance.provider === provider);
   const selectedInstanceIdFor = (provider: ProviderKind): ProviderInstanceId => {
@@ -204,6 +190,22 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     );
   };
   const activeInstanceId = selectedInstanceIdFor(activeProvider);
+
+  // A locked thread can only ever run its own account's presets, and a preset of a
+  // removed or disabled account cannot run at all.
+  const knownInstances = props.providerInstances;
+  const usableStarredModels = starredModels.filter((entry) => {
+    if (lockedProvider !== null && entry.provider !== lockedProvider) return false;
+    const instanceId = starredModelInstanceId(entry);
+    if (lockedProvider !== null && instanceId !== activeInstanceId) return false;
+    return (
+      instanceId === entry.provider ||
+      knownInstances === undefined ||
+      knownInstances.some(
+        (instance) => instance.instanceId === instanceId && instance.enabled !== false,
+      )
+    );
+  });
 
   const [tab, setTab] = useState<ComposerModelPickerTab>(activeInstanceId);
   const [query, setQuery] = useState("");
@@ -273,14 +275,24 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     props.runtimeModel,
   );
 
+  const visibleProviderOptions = resolveVisibleProviderOptions({
+    provider: props.provider,
+    lockedProvider,
+    providers: props.providers,
+    hiddenProviders: props.hiddenProviders,
+    providerOrder: props.providerOrder,
+  }).filter((option) => lockedProvider === null || option.value === lockedProvider);
+  // The composer's own provider keeps its tab even when none of its accounts can run,
+  // so the tab can say why instead of the picker listing models that will not start.
+  const activeProviderOption = AVAILABLE_PROVIDER_OPTIONS.find(
+    (option) => option.value === activeProvider,
+  );
   const providerTabs = resolveComposerModelPickerProviderTabs({
-    options: resolveVisibleProviderOptions({
-      provider: props.provider,
-      lockedProvider,
-      providers: props.providers,
-      hiddenProviders: props.hiddenProviders,
-      providerOrder: props.providerOrder,
-    }).filter((option) => lockedProvider === null || option.value === lockedProvider),
+    options:
+      activeProviderOption &&
+      !visibleProviderOptions.some((option) => option.value === activeProvider)
+        ? [activeProviderOption, ...visibleProviderOptions]
+        : visibleProviderOptions,
     providers: props.providers,
     providerInstances: props.providerInstances,
     lockedInstanceId: lockedProvider !== null ? activeInstanceId : null,
@@ -490,7 +502,8 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
       <ComposerModelMenuTrigger
         provider={activeProvider}
         accountLabel={activeProviderTab?.name ? activeProviderTab.label : null}
-        accountName={activeProviderTab?.name ?? null}
+        // The default account is implied; only another one is worth the room.
+        accountName={activeProviderTab?.dotted ? activeProviderTab.name : null}
         accountAccentColor={activeProviderTab?.accentColor}
         modelLabel={modelLabel}
         statusLabel={resolveComposerTraitStatusLabel(currentTraitSelection)}

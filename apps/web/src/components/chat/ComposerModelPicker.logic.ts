@@ -22,7 +22,8 @@ type ComposerTraitSelection = ReturnType<typeof getComposerTraitSelection>;
 
 /** Tab id of the starred presets list; every other tab id is a provider account
  *  (instance id; a provider's default account shares the provider id). */
-export const STARRED_TAB = "starred";
+// The colon keeps it outside the account id alphabet, so no account can claim it.
+export const STARRED_TAB = ":starred";
 export type ComposerModelPickerTab = typeof STARRED_TAB | ProviderInstanceId;
 
 /** Marks the open picker so global mod+digit handlers (thread jump) yield to its rows. */

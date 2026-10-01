@@ -513,8 +513,12 @@ describe("ComposerModelPicker with several accounts", () => {
       const defaultTab = page.getByRole("tab", { name: "Codex", exact: true });
       const workTab = page.getByRole("tab", { name: "Codex · Work", exact: true });
       await expect.element(defaultTab).toHaveAttribute("aria-selected", "true");
+      // Only the open tab spells its account out; the other stays icon-sized.
       expect(defaultTab.element().textContent).toBe("Codex");
+      expect(workTab.element().textContent).toBe("");
+      await workTab.click();
       expect(workTab.element().textContent).toBe("Work");
+      expect(defaultTab.element().textContent).toBe("");
       // A disabled account is managed in settings, not offered in the picker.
       expect(page.getByRole("tab", { name: /Old/u }).elements()).toHaveLength(0);
       // Claude has a single account, so its icon says it all.
@@ -589,6 +593,27 @@ describe("ComposerModelPicker with several accounts", () => {
         .element(page.getByRole("tab", { name: "Codex", exact: true }))
         .toHaveAttribute("aria-selected", "true");
       expect(page.getByRole("tab", { name: "Claude" }).elements()).toHaveLength(0);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("offers a started thread only its own account's starred presets", async () => {
+    const screen = await mountPicker({ ...multiAccount, lockedProvider: "codex" }, undefined, [
+      { provider: "codex", model: GPT_5_4, effort: null, fastMode: null, thinking: null },
+      {
+        provider: "codex",
+        instanceId: "codex_work",
+        model: GPT_5_WORK,
+        effort: null,
+        fastMode: null,
+        thinking: null,
+      },
+    ]);
+    try {
+      await page.getByRole("tab", { name: "Starred" }).click();
+      await expect.element(page.getByRole("menuitem", { name: /GPT-5\.4/u })).toBeVisible();
+      expect(page.getByRole("menuitem", { name: /GPT-5 Work/u }).elements()).toHaveLength(0);
     } finally {
       await screen.unmount();
     }

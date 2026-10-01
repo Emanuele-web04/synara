@@ -13,21 +13,29 @@ import { cn } from "~/lib/utils";
 
 import { ProviderIcon } from "./ProviderIcon";
 
-/** Dot in the account's accent color; renders nothing for an account without one. */
+/**
+ * Dot in the account's accent color. Without an accent it renders nothing, unless
+ * `always` asks for a neutral dot (a second account, which must differ from the default).
+ */
 export function ProviderAccountDot(props: {
   accentColor?: string | undefined;
+  always?: boolean;
   /** Position, plus a `ring-*` color matching the surface the dot is cut out of. */
   className?: string;
 }) {
   const accentColor = normalizeProviderAccentColor(props.accentColor);
-  if (!accentColor) return null;
+  if (!accentColor && !props.always) return null;
   return (
     <span
       aria-hidden="true"
       data-accent={accentColor}
-      style={{ backgroundColor: accentColor }}
+      style={accentColor ? { backgroundColor: accentColor } : undefined}
       // The ring takes the surface color, so the dot reads as cut out of the icon.
-      className={cn("size-2 rounded-full ring-2 ring-popover", props.className)}
+      className={cn(
+        "size-2 rounded-full ring-2 ring-popover",
+        !accentColor && "bg-muted-foreground",
+        props.className,
+      )}
     />
   );
 }

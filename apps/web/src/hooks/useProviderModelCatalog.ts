@@ -50,6 +50,10 @@ export interface ProviderModelCatalog {
    * must feed them through (see {@link selectedRuntimeModel}).
    */
   runtimeModelsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelDescriptor>>;
+  /** Runtime descriptors of each account whose catalog has been discovered. */
+  runtimeModelsByProviderInstance: Partial<
+    Record<ProviderInstanceId, ReadonlyArray<ProviderModelDescriptor>>
+  >;
   /** The runtime descriptor matching `selectedProvider` + its selected-model hint. */
   selectedRuntimeModel: ProviderModelDescriptor | undefined;
   /** Runtime-discovered agents/modes for the selected provider (opencode/claude/codex). */
@@ -620,6 +624,15 @@ export function useProviderModelCatalog(input: {
     ],
   );
 
+  const runtimeModelsByProviderInstance = useMemo(() => {
+    const byInstance: Partial<Record<ProviderInstanceId, ReadonlyArray<ProviderModelDescriptor>>> =
+      {};
+    for (const [instanceId, result] of Object.entries(dynamicModelsByProviderInstance)) {
+      if (result) byInstance[instanceId as ProviderInstanceId] = result.models;
+    }
+    return byInstance;
+  }, [dynamicModelsByProviderInstance]);
+
   const selectedRuntimeModel = useMemo(
     () =>
       resolveRuntimeModelDescriptor({
@@ -734,6 +747,7 @@ export function useProviderModelCatalog(input: {
       modelOptionsByProviderInstance,
       loadingModelProviders,
       runtimeModelsByProvider,
+      runtimeModelsByProviderInstance,
       selectedRuntimeModel,
       selectedRuntimeAgents,
       selectedProviderModelsLoading,
@@ -747,6 +761,7 @@ export function useProviderModelCatalog(input: {
       modelOptionsByProvider,
       modelOptionsByProviderInstance,
       runtimeModelsByProvider,
+      runtimeModelsByProviderInstance,
       selectedProviderModelsLoading,
       selectedProviderRuntimeModelDiscoveryPending,
       selectedRuntimeAgents,

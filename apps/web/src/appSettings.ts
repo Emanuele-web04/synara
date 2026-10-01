@@ -987,10 +987,12 @@ export function getProviderInstanceOptions(
     }
     const config = isRecord(raw.config) ? raw.config : {};
     const isDefault = instanceId === raw.driver;
-    // An explicit entry for the default account may only carry overrides (custom
-    // models, an accent); without a name it keeps the provider's own label.
+    // An explicit entry for a derived account (a default, a migrated Codex account) may
+    // only carry overrides such as an accent or a switch; it keeps the derived name.
+    const derived = optionsById.get(instanceId);
     const label =
       raw.displayName?.trim() ||
+      (derived?.driver === raw.driver ? derived.label : undefined) ||
       (isDefault
         ? defaultProviderInstanceLabel(raw.driver)
         : fallbackProviderInstanceLabel(instanceId));

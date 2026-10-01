@@ -1237,6 +1237,21 @@ describe("getProviderInstanceOptions", () => {
     expect(byId.get("codex")?.accentColor).toBeUndefined();
   });
 
+  it("keeps a migrated Codex account's saved name when its explicit entry only overrides", () => {
+    const instanceId = codexAccountInstanceId("work");
+    const options = getProviderInstanceOptions({
+      codexAccounts: [{ id: "work", label: "Office", homePath: "", shadowHomePath: "" }],
+      codexHomePath: "",
+      providerInstances: { [instanceId]: { driver: "codex", enabled: false } },
+      selectedCodexAccountId: "default",
+    });
+
+    expect(options.find((option) => option.instanceId === instanceId)).toMatchObject({
+      label: "Office",
+      enabled: false,
+    });
+  });
+
   it("keeps unsupported instances visible for missing-driver affordances", () => {
     expect(
       getUnsupportedProviderInstanceOptions({

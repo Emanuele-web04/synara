@@ -20,9 +20,10 @@ The **Codex accounts** list has one row per account:
   details most accounts never touch sit behind **Advanced**.
 
 In the model picker every enabled account gets its own tab. Accounts of the
-same provider share the provider icon, so their tabs are labelled with the
-account's name; an accent color adds a dot of that color on the icon. The
-account's name also appears on the composer's model button, so you can always tell which account a
+same provider share the provider icon, so the open tab spells out its
+account's name and every account beyond the default carries a dot on its icon,
+in the account's accent color when it has one. An account other than the
+default is also named on the composer's model button, so you can always tell which account a
 message will use.
 
 ## How isolation works

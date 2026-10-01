@@ -306,7 +306,11 @@ type ProviderModelMenuItemsProps = {
     model: ModelSlug,
     instanceId?: ProviderInstanceId,
   ) => void;
-  onProviderModelRoleSelect?: (model: ModelSlug, options: OmpModelOptions) => void;
+  onProviderModelRoleSelect?: (
+    model: ModelSlug,
+    options: OmpModelOptions,
+    instanceId: ProviderInstanceId,
+  ) => void;
   // Invoked after a model selection commits so callers can close ancestor
   // menus and refocus the composer.
   onAfterSelection?: () => void;
@@ -482,6 +486,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
           selectedOption.role.thinkingLevel
             ? { thinkingLevel: selectedOption.role.thinkingLevel }
             : {},
+          instanceId,
         );
       } else {
         // Surfaces without the role callback still commit the role's model so
@@ -912,7 +917,11 @@ type ProviderModelPickerProps = {
     model: ModelSlug,
     instanceId?: ProviderInstanceId,
   ) => void;
-  onProviderModelRoleSelect?: (model: ModelSlug, options: OmpModelOptions) => void;
+  onProviderModelRoleSelect?: (
+    model: ModelSlug,
+    options: OmpModelOptions,
+    instanceId: ProviderInstanceId,
+  ) => void;
 };
 
 export const ProviderModelPicker = function ProviderModelPicker(props: ProviderModelPickerProps) {

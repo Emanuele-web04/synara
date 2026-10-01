@@ -621,9 +621,12 @@ describe("ProviderModelPicker", () => {
       await page.getByRole("button").click();
       await page.getByRole("menuitemradio", { name: "Dreaming Proposer" }).click();
 
-      expect(mounted.onProviderModelRoleSelect).toHaveBeenCalledWith("anthropic/claude-opus-4-6", {
-        thinkingLevel: "high",
-      });
+      // The role is committed for the account whose list it was picked from.
+      expect(mounted.onProviderModelRoleSelect).toHaveBeenCalledWith(
+        "anthropic/claude-opus-4-6",
+        { thinkingLevel: "high" },
+        "omp",
+      );
       expect(mounted.onProviderModelChange).not.toHaveBeenCalled();
     } finally {
       await mounted.cleanup();

@@ -819,10 +819,13 @@ function CodexDefaultAccountControl(props: {
   settings: AppSettings;
   updateSettings: (patch: Partial<AppSettings>) => void;
 }) {
-  const accountOptions = getCodexAccountOptions(props.settings);
+  // The default account goes by the provider's name here too, as in the account list.
+  const accountOptions = getCodexAccountOptions(props.settings).map((account) =>
+    account.isDefault ? { ...account, label: PROVIDER_DISPLAY_NAMES.codex } : account,
+  );
   const selectedAccountLabel =
     accountOptions.find((account) => account.id === props.settings.selectedCodexAccountId)?.label ??
-    "Default";
+    PROVIDER_DISPLAY_NAMES.codex;
 
   return (
     <div className="space-y-1">
@@ -893,7 +896,9 @@ function providerInstanceLaunchConfig(
     }
     if (value.trim()) result[key] = value;
   }
-  if (config.provider === "codex") {
+  // A home names an account's identity: inheriting the default's would sign the new
+  // account in as the default one.
+  if (config.provider === "codex" || config.provider === "claudeAgent") {
     delete result.homePath;
   }
   return result;
@@ -1619,7 +1624,13 @@ function ProviderAccountsControl(props: {
           label: option.title,
         }))}
         initialProvider={provider}
-        existingIds={new Set(allAccounts.map((option) => String(option.instanceId)))}
+        // Includes accounts of a missing driver, which the list does not show.
+        existingIds={
+          new Set([
+            ...allAccounts.map((option) => String(option.instanceId)),
+            ...Object.keys(props.settings.providerInstances),
+          ])
+        }
         configFieldsFor={providerAccountIdentityFields}
         onAdd={addAccount}
       />

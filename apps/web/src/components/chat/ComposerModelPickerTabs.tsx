@@ -82,8 +82,11 @@ export type ComposerModelPickerProviderTab = {
   /** Account the tab lists models for; a default account shares the provider id. */
   instanceId: ProviderInstanceId;
   label: string;
-  /** Account name written beside the icon; null while the icon alone identifies it. */
+  /** Account name written beside the icon of the open tab; null while the provider has
+   *  one account and its icon says it all. */
   name: string | null;
+  /** A second account of its provider: its icon is dotted to differ from the default. */
+  dotted: boolean;
   accentColor?: string | undefined;
   /** Tooltip sentence explaining why the account cannot run right now; null when it can. */
   unavailableLabel: string | null;
@@ -157,9 +160,18 @@ export function resolveComposerModelPickerProviderTabs(input: {
                 ? option.label
                 : account.label,
             name: hasSiblingAccounts ? account.label : null,
+            dotted: hasSiblingAccounts && !account.isDefault,
             accentColor: account.accentColor,
           }))
-        : [{ instanceId: option.value, label: option.label, name: null, accentColor: undefined }];
+        : [
+            {
+              instanceId: option.value,
+              label: option.label,
+              name: null,
+              dotted: false,
+              accentColor: undefined,
+            },
+          ];
     return tabs.map((tab) => {
       const state = resolveAccountTabState({
         label: tab.label,
@@ -176,6 +188,7 @@ export function resolveComposerModelPickerProviderTabs(input: {
         instanceId: tab.instanceId,
         label: tab.label,
         name: tab.name,
+        dotted: tab.dotted,
         accentColor: tab.accentColor,
         unavailableLabel: state.unavailableLabel,
         blocked: state.blocked,
@@ -227,17 +240,12 @@ export function ComposerModelPickerTabs(props: {
             />
             <ProviderAccountDot
               accentColor={providerTab.accentColor}
+              always={providerTab.dotted}
               className="absolute top-0.5 left-4.5"
             />
-            {providerTab.name ? (
-              <span
-                className={cn(
-                  "max-w-20 truncate text-ui-sm",
-                  providerTab.unavailableLabel !== null && "opacity-50",
-                )}
-              >
-                {providerTab.name}
-              </span>
+            {/* Only the open tab spells its account out; the others stay icon-sized. */}
+            {providerTab.name && props.tab === providerTab.instanceId ? (
+              <span className="max-w-20 truncate text-ui-sm">{providerTab.name}</span>
             ) : null}
           </PickerTabButton>
         );
