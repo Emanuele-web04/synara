@@ -20,7 +20,7 @@ interface HugeiconPath {
 function createHugeicon(
   displayName: string,
   paths: readonly HugeiconPath[],
-  options: { strokeWidth?: number } = {},
+  options: { strokeWidth?: number; solid?: boolean } = {},
 ): LucideIcon {
   function Hugeicon(props: SVGProps<SVGSVGElement>) {
     return (
@@ -29,7 +29,7 @@ function createHugeicon(
         width={24}
         height={24}
         viewBox="0 0 24 24"
-        fill="none"
+        fill={options.solid ? "currentColor" : "none"}
         stroke="currentColor"
         strokeWidth={options.strokeWidth ?? 1.5}
         aria-hidden
@@ -165,3 +165,31 @@ export const CheckmarkSquare02Icon = createHugeicon("CheckmarkSquare02Icon", [
   { d: CHECKBOX_SQUARE },
   { d: "M8 12.5L10.5 15L16 9", round: true },
 ]);
+
+const DASHBOARD_CIRCLE_PATHS: readonly HugeiconPath[] = [
+  {
+    d: "M21 6.75C21 4.67893 19.3211 3 17.25 3C15.1789 3 13.5 4.67893 13.5 6.75C13.5 8.82107 15.1789 10.5 17.25 10.5C19.3211 10.5 21 8.82107 21 6.75Z",
+  },
+  {
+    d: "M10.5 6.75C10.5 4.67893 8.82107 3 6.75 3C4.67893 3 3 4.67893 3 6.75C3 8.82107 4.67893 10.5 6.75 10.5C8.82107 10.5 10.5 8.82107 10.5 6.75Z",
+  },
+  {
+    d: "M21 17.25C21 15.1789 19.3211 13.5 17.25 13.5C15.1789 13.5 13.5 15.1789 13.5 17.25C13.5 19.3211 15.1789 21 17.25 21C19.3211 21 21 19.3211 21 17.25Z",
+  },
+  {
+    d: "M10.5 17.25C10.5 15.1789 8.82107 13.5 6.75 13.5C4.67893 13.5 3 15.1789 3 17.25C3 19.3211 4.67893 21 6.75 21C8.82107 21 10.5 19.3211 10.5 17.25Z",
+  },
+];
+
+/** Hub (`dashboard-circle`, four circles together): related work gathered in one place. */
+export const DashboardCircleIcon = createHugeicon("DashboardCircleIcon", DASHBOARD_CIRCLE_PATHS);
+
+/**
+ * The hub circles painted solid: the rail's active state. The free Hugeicons set is
+ * stroke-only, so this fills the outline glyph's own paths.
+ */
+export const DashboardCircleSolidIcon = createHugeicon(
+  "DashboardCircleSolidIcon",
+  DASHBOARD_CIRCLE_PATHS,
+  { solid: true },
+);

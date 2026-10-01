@@ -2542,9 +2542,14 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it.each(["Home", "Spaces", "Project", "Void"])(
-    "leaves Activity when selecting rail %s",
-    async (destination) => {
+  it.each([
+    { destination: "Home", keepsActivity: true },
+    { destination: "Spaces", keepsActivity: false },
+    { destination: "Project", keepsActivity: false },
+    { destination: "Void", keepsActivity: false },
+  ])(
+    "keeps Activity=$keepsActivity when selecting rail $destination",
+    async ({ destination, keepsActivity }) => {
       localStorage.setItem(
         "synara:app-settings:v1",
         JSON.stringify({
@@ -2566,12 +2571,21 @@ describe("ChatView transcript geometry (full app)", () => {
           .getByRole("navigation", { name: "Primary" })
           .getByRole("button", { name: destination, exact: true })
           .click();
-        await expect
-          .element(page.getByRole("button", { name: "Switch to activity view", exact: true }))
-          .toBeVisible();
-        await expect
-          .element(page.getByRole("button", { name: "Activity options" }))
-          .not.toBeInTheDocument();
+        if (keepsActivity) {
+          await expect
+            .element(page.getByRole("button", { name: "Switch to classic view", exact: true }))
+            .toBeVisible();
+          await expect
+            .element(page.getByRole("button", { name: "Activity options" }))
+            .toBeVisible();
+        } else {
+          await expect
+            .element(page.getByRole("button", { name: "Switch to activity view", exact: true }))
+            .toBeVisible();
+          await expect
+            .element(page.getByRole("button", { name: "Activity options" }))
+            .not.toBeInTheDocument();
+        }
       } finally {
         await mounted.cleanup();
         useRailShellStore.getState().closeSpacesProject();

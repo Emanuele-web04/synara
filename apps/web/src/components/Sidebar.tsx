@@ -6531,7 +6531,9 @@ export default function Sidebar() {
         badge: null,
         active: railActiveItem === id && activeRailShortcutKey === null,
         onSelect: () => {
-          setActivityViewEnabledSmoothly(false);
+          // Home is the threads panel, so it keeps the Activity view the user chose;
+          // only the Spaces drill-in replaces it.
+          if (id === "spaces") setActivityViewEnabledSmoothly(false);
           selectRailPanelItem(id);
           // Projects live next to the threads only: from another section, Home and
           // Spaces go back to the thread view instead of opening over that section.
