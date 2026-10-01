@@ -59,7 +59,7 @@ import {
   removeManageableProviderInstance,
   type AppSettings,
   type AppSettingsBinding,
-  type CodexAccountSettings,
+  type ManageableProviderInstance,
 } from "~/appSettings";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
@@ -826,69 +826,26 @@ function ProviderInstallFieldControl(props: {
   );
 }
 
-function CodexAccountsControl(props: {
+// Settings written before accounts became provider instances also store which Codex
+// account new threads start on. Only those settings still need the choice surfaced.
+function CodexDefaultAccountControl(props: {
   settings: AppSettings;
   updateSettings: (patch: Partial<AppSettings>) => void;
 }) {
-  const accounts = props.settings.codexAccounts;
   const accountOptions = getCodexAccountOptions(props.settings);
   const selectedAccountLabel =
     accountOptions.find((account) => account.id === props.settings.selectedCodexAccountId)?.label ??
     "Default";
 
-  const addAccount = () => {
-    const existingIds = new Set(accounts.map((account) => account.id));
-    let index = accounts.length + 1;
-    let id = `account${index}`;
-    while (existingIds.has(id)) {
-      index += 1;
-      id = `account${index}`;
-    }
-    const nextAccount: CodexAccountSettings = {
-      id,
-      label: `Account ${index}`,
-      homePath: props.settings.codexHomePath,
-      shadowHomePath: "",
-    };
-    props.updateSettings({
-      codexAccounts: [...accounts, nextAccount],
-      selectedCodexAccountId: id,
-    });
-  };
-
-  const updateAccount = (accountId: string, patch: Partial<Omit<CodexAccountSettings, "id">>) => {
-    props.updateSettings({
-      codexAccounts: normalizeCodexAccounts(
-        accounts.map((account) => (account.id === accountId ? { ...account, ...patch } : account)),
-      ),
-    });
-  };
-
-  const removeAccount = (accountId: string) => {
-    props.updateSettings(
-      removeManageableProviderInstance(props.settings, codexAccountInstanceId(accountId)),
-    );
-  };
-
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="min-w-0">
-          <span className="block text-ui-sm font-medium text-foreground">Codex account</span>
-          <span className="mt-1 block text-ui-sm text-muted-foreground">
-            Select the account used for new Codex turns.
-          </span>
-        </div>
-        <Button type="button" size="xs" variant="outline" onClick={addAccount}>
-          <PlusIcon className="size-3.5" />
-          Add
-        </Button>
-      </div>
-
+    <div className="space-y-1">
+      <span className="block text-ui-sm font-medium text-foreground">
+        Codex account for new threads
+      </span>
       <SettingsSelectControl
         value={props.settings.selectedCodexAccountId}
         onValueChange={(selectedCodexAccountId) => props.updateSettings({ selectedCodexAccountId })}
-        ariaLabel="Codex account"
+        ariaLabel="Codex account for new threads"
         triggerClassName="w-full"
         valueContent={<span className="truncate">{selectedAccountLabel}</span>}
       >
@@ -898,84 +855,9 @@ function CodexAccountsControl(props: {
           </SelectItem>
         ))}
       </SettingsSelectControl>
-
-      {accounts.length > 0 ? (
-        <div className="space-y-2">
-          {accounts.map((account) => (
-            <div
-              key={account.id}
-              className={cn(
-                SETTINGS_OUTLINED_SURFACE_CLASS_NAME,
-                SETTINGS_INSET_RADIUS_CLASS_NAME,
-                "px-3 py-3",
-              )}
-            >
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <div className="min-w-0">
-                  <div className="truncate text-ui-sm font-medium text-foreground">
-                    {account.label || account.id}
-                  </div>
-                  <div className="truncate text-ui-xs text-muted-foreground">{account.id}</div>
-                </div>
-                <Button
-                  type="button"
-                  size="xs"
-                  variant="ghost"
-                  onClick={() => removeAccount(account.id)}
-                >
-                  <XIcon className="size-3.5" />
-                  Remove
-                </Button>
-              </div>
-              <div className="grid gap-2 sm:grid-cols-2">
-                <label className="block">
-                  <span className="block text-ui-sm font-medium text-foreground">Label</span>
-                  <DebouncedSettingTextInput
-                    id={`codex-account-${account.id}-label`}
-                    size="sm"
-                    variant="soft"
-                    className="mt-1"
-                    value={account.label}
-                    onCommit={(label) => updateAccount(account.id, { label })}
-                    placeholder="Work"
-                    spellCheck={false}
-                  />
-                </label>
-                <label className="block">
-                  <span className="block text-ui-sm font-medium text-foreground">
-                    Shared CODEX_HOME
-                  </span>
-                  <DebouncedSettingTextInput
-                    id={`codex-account-${account.id}-home`}
-                    size="sm"
-                    variant="soft"
-                    className="mt-1"
-                    value={account.homePath}
-                    onCommit={(homePath) => updateAccount(account.id, { homePath })}
-                    placeholder={props.settings.codexHomePath || "~/.codex"}
-                    spellCheck={false}
-                  />
-                </label>
-                <label className="block sm:col-span-2">
-                  <span className="block text-ui-sm font-medium text-foreground">
-                    Shadow auth home
-                  </span>
-                  <DebouncedSettingTextInput
-                    id={`codex-account-${account.id}-shadow-home`}
-                    size="sm"
-                    variant="soft"
-                    className="mt-1"
-                    value={account.shadowHomePath}
-                    onCommit={(shadowHomePath) => updateAccount(account.id, { shadowHomePath })}
-                    placeholder="~/.codex_work"
-                    spellCheck={false}
-                  />
-                </label>
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : null}
+      <span className="block text-ui-sm text-muted-foreground">
+        Used until you pick another account in the model picker.
+      </span>
     </div>
   );
 }
@@ -1081,7 +963,7 @@ function ProviderInstancesControl(props: {
     next[instanceId] = {
       driver: provider,
       displayName: `${providerLabel} ${index}`,
-      enabled: provider !== "codex",
+      enabled: true,
       config: providerInstanceLaunchConfig(props.config, props.settings),
     };
     updateInstances(next);
@@ -1118,9 +1000,49 @@ function ProviderInstancesControl(props: {
       readonly environment?: ProviderInstanceEnvironment | undefined;
       readonly config?: Record<string, unknown> | undefined;
     },
+    legacyCodexAccountId: string | null = null,
   ) => {
+    const explicit = props.settings.providerInstances[instanceId];
+    const legacyAccountPatch = legacyCodexAccountId
+      ? {
+          ...(patch.displayName !== undefined ? { label: patch.displayName } : {}),
+          ...(typeof patch.config?.homePath === "string"
+            ? { homePath: patch.config.homePath }
+            : {}),
+          ...(typeof patch.config?.shadowHomePath === "string"
+            ? { shadowHomePath: patch.config.shadowHomePath }
+            : {}),
+        }
+      : {};
+    if (Object.keys(legacyAccountPatch).length > 0) {
+      // A migrated account keeps its name and homes in codexAccounts. An explicit copy
+      // that drifts from that entry makes the server drop the account's route, so the
+      // edit goes to the entry and any stale explicit copy is cleared.
+      const { displayName: _displayName, ...explicitRest } = explicit ?? { driver: provider };
+      const {
+        homePath: _homePath,
+        shadowHomePath: _shadowHomePath,
+        ...explicitConfig
+      } = (explicit?.config ?? {}) as Record<string, unknown>;
+      props.updateSettings({
+        codexAccounts: normalizeCodexAccounts(
+          props.settings.codexAccounts.map((account) =>
+            account.id === legacyCodexAccountId ? { ...account, ...legacyAccountPatch } : account,
+          ),
+        ),
+        ...(explicit
+          ? {
+              providerInstances: {
+                ...props.settings.providerInstances,
+                [instanceId]: { ...explicitRest, config: explicitConfig },
+              } as ProviderInstanceConfigMap,
+            }
+          : {}),
+      });
+      return;
+    }
     const existing: ProviderInstanceConfig | null =
-      props.settings.providerInstances[instanceId] ??
+      explicit ??
       (() => {
         const derived = getProviderInstanceOptions(props.settings).find(
           (instance) => instance.instanceId === instanceId,
@@ -1158,31 +1080,98 @@ function ProviderInstancesControl(props: {
     if (!config || typeof config !== "object" || Array.isArray(config)) return false;
     return (config as Record<string, unknown>)[key] === true;
   };
-  const instanceSectionLabel =
-    provider === "codex"
-      ? "Codex accounts"
-      : provider === "claudeAgent"
-        ? "Claude accounts"
-        : "Provider profiles";
+  const isAccountProvider = provider === "codex" || provider === "claudeAgent";
+  const entryNoun = isAccountProvider ? "account" : "profile";
+  const signInCommandSuffix =
+    provider === "codex" ? " login" : provider === "claudeAgent" ? " auth login" : null;
+  // Launch details most accounts never touch; kept behind the card's Advanced disclosure.
+  const isAdvancedField = (field: ProviderInstallField) =>
+    field.kind === "boolean" ||
+    providerInstanceConfigKey(field) === "binaryPath" ||
+    field.settingsKey === "claudeHomePath";
+
+  const renderField = (
+    field: ProviderInstallField,
+    { instanceId, instance, legacyCodexAccountId }: ManageableProviderInstance,
+  ) => {
+    const configKey = providerInstanceConfigKey(field);
+    if (field.kind === "boolean") {
+      return (
+        <label
+          key={field.settingsKey}
+          className="flex items-center justify-between gap-3 sm:col-span-2"
+        >
+          <span className="text-ui-sm font-medium text-foreground">{field.label}</span>
+          <Switch
+            checked={readConfigBoolean(instance.config, configKey)}
+            onCheckedChange={(checked) =>
+              updateInstance(instanceId, { config: { [configKey]: checked } })
+            }
+            aria-label={`${field.label} for ${instance.displayName || instanceId}`}
+          />
+        </label>
+      );
+    }
+    const redacted =
+      field.kind === "password" &&
+      instance.config !== null &&
+      typeof instance.config === "object" &&
+      !Array.isArray(instance.config) &&
+      (instance.config as Record<string, unknown>)[`${configKey}Redacted`] === true;
+    const inputId = `provider-instance-${instanceId}-${configKey}`;
+    return (
+      <div className="block" key={field.settingsKey}>
+        <label htmlFor={inputId} className="block text-ui-sm font-medium text-foreground">
+          {field.label}
+        </label>
+        <div className="mt-1 flex items-center gap-2">
+          <DebouncedSettingTextInput
+            id={inputId}
+            size="sm"
+            variant="soft"
+            className="flex-1"
+            type={field.kind === "password" ? "password" : "text"}
+            value={redacted ? "" : readConfigString(instance.config, configKey)}
+            onCommit={(value) => {
+              if (redacted && value.length === 0) return;
+              updateInstance(instanceId, { config: { [configKey]: value } }, legacyCodexAccountId);
+            }}
+            placeholder={redacted ? "Secret saved — type to replace" : field.placeholder}
+            spellCheck={false}
+          />
+          {redacted ? (
+            <Button
+              type="button"
+              size="xs"
+              variant="ghost"
+              onClick={() => updateInstance(instanceId, { config: { [configKey]: "" } })}
+              aria-label={`Clear saved ${field.label.toLowerCase()} for ${
+                instance.displayName || instanceId
+              }`}
+            >
+              Clear
+            </Button>
+          ) : null}
+        </div>
+      </div>
+    );
+  };
+
+  const defaultStatus = providerInstanceStatusSummary(props.providerStatusByInstance.get(provider));
 
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
           <span className="block text-ui-sm font-medium text-foreground">
-            {instanceSectionLabel}
+            {isAccountProvider ? `${providerLabel} accounts` : `${providerLabel} profiles`}
           </span>
           <span className="mt-1 block text-ui-sm text-muted-foreground">
-            {provider === "codex"
-              ? "Add a separately routed Codex instance with its own home or shadow auth home."
-              : provider === "claudeAgent"
-                ? "Add a separate Claude account with its own config directory and optional " +
-                  "credential directory."
-                : provider === "opencode"
-                  ? "Add launch profiles for separate external servers or local runtime settings."
-                  : provider === "pi"
-                    ? "Add Pi launch profiles with separate agent directories or environments."
-                    : "Add launch profiles with provider-specific paths and isolated environments."}
+            {isAccountProvider
+              ? "Each account signs in on its own and gets its own tab in the model picker. " +
+                "A thread stays on the account it started with."
+              : "Each profile launches the CLI with its own paths and environment and gets " +
+                "its own tab in the model picker. A thread stays on the profile it started with."}
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -1195,7 +1184,7 @@ function ProviderInstancesControl(props: {
             title={
               typeof window === "undefined" || !window.desktopBridge
                 ? "Directory import is available in the Synara desktop app."
-                : "Reference an existing provider directory without moving it."
+                : `Use an existing ${providerLabel} directory as a new ${entryNoun}, without moving it.`
             }
           >
             <FolderOpenIcon className="size-3.5" />
@@ -1203,12 +1192,27 @@ function ProviderInstancesControl(props: {
           </Button>
           <Button type="button" size="xs" variant="outline" onClick={addInstance}>
             <PlusIcon className="size-3.5" />
-            Add
+            Add {entryNoun}
           </Button>
         </div>
       </div>
 
-      {instances.map(({ instanceId, instance }) => {
+      <div
+        className={cn(
+          SETTINGS_OUTLINED_SURFACE_CLASS_NAME,
+          SETTINGS_INSET_RADIUS_CLASS_NAME,
+          "px-3 py-2.5",
+        )}
+      >
+        <div className="truncate text-ui-sm font-medium text-foreground">Default</div>
+        <div className="truncate text-ui-xs text-muted-foreground">
+          Your regular {providerLabel} sign-in, with the paths set above.
+        </div>
+        <ProviderInstanceStatusLine status={defaultStatus} />
+      </div>
+
+      {instances.map((entry) => {
+        const { instanceId, instance, legacyCodexAccountId } = entry;
         const cliCommand = providerCliCommandName({
           provider,
           instanceId,
@@ -1223,9 +1227,12 @@ function ProviderInstancesControl(props: {
         const cliAliasInvalid =
           cliAlias.length > 0 && normalizeProviderCliAlias(cliAlias) === undefined;
         const cliCommandConflicts = (terminalCommandCounts.get(cliCommand) ?? 0) > 1;
-        const instanceStatus = providerInstanceStatusSummary(
-          props.providerStatusByInstance.get(instanceId),
-        );
+        const enabled = instance.enabled !== false;
+        const liveStatus = props.providerStatusByInstance.get(instanceId);
+        const signInCommand =
+          enabled && signInCommandSuffix !== null && liveStatus?.authStatus === "unauthenticated"
+            ? `${cliCommand}${signInCommandSuffix}`
+            : null;
         return (
           <div
             key={instanceId}
@@ -1240,19 +1247,20 @@ function ProviderInstancesControl(props: {
                 <div className="truncate text-ui-sm font-medium text-foreground">
                   {instance.displayName || instanceId}
                 </div>
-                <div className="truncate text-ui-xs text-muted-foreground">{instanceId}</div>
-                {instance.enabled !== false ? (
-                  <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground">
-                    <span
-                      className={cn("size-1.5 shrink-0 rounded-full", instanceStatus.dotClassName)}
-                    />
-                    <span className="truncate">{instanceStatus.label}</span>
-                  </div>
-                ) : null}
+                <ProviderInstanceStatusLine
+                  status={
+                    enabled
+                      ? providerInstanceStatusSummary(liveStatus)
+                      : {
+                          dotClassName: "bg-muted-foreground/40",
+                          label: "Off · hidden from the model picker",
+                        }
+                  }
+                />
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 <Switch
-                  checked={instance.enabled !== false}
+                  checked={enabled}
                   onCheckedChange={(enabled) => updateInstance(instanceId, { enabled })}
                   aria-label={`Enable ${instance.displayName || instanceId}`}
                 />
@@ -1271,6 +1279,25 @@ function ProviderInstancesControl(props: {
                 </Button>
               </div>
             </div>
+            {signInCommand ? (
+              <div className="mb-2 flex items-center gap-2 text-ui-sm text-muted-foreground">
+                <span className="min-w-0">
+                  To sign in, run <code className="font-mono text-foreground">
+                    {signInCommand}
+                  </code>{" "}
+                  in a Synara terminal, then refresh status.
+                </span>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="ghost"
+                  aria-label={`Copy ${signInCommand}`}
+                  onClick={() => void copyTextToClipboard(signInCommand)}
+                >
+                  <CopyIcon className="size-3.5" />
+                </Button>
+              </div>
+            ) : null}
             <div className="grid gap-2 sm:grid-cols-2">
               <label className="block">
                 <span className="block text-ui-sm font-medium text-foreground">Label</span>
@@ -1280,7 +1307,9 @@ function ProviderInstancesControl(props: {
                   variant="soft"
                   className="mt-1"
                   value={instance.displayName ?? ""}
-                  onCommit={(displayName) => updateInstance(instanceId, { displayName })}
+                  onCommit={(displayName) =>
+                    updateInstance(instanceId, { displayName }, legacyCodexAccountId)
+                  }
                   placeholder="Work"
                   spellCheck={false}
                 />
@@ -1304,6 +1333,87 @@ function ProviderInstancesControl(props: {
                   </Button>
                 </div>
               </label>
+              {props.config.fields
+                .filter((field) => !isAdvancedField(field))
+                .map((field) => renderField(field, entry))}
+              {provider === "codex" ? (
+                <label className="block">
+                  <span className="block text-ui-sm font-medium text-foreground">
+                    Shadow auth home
+                  </span>
+                  <DebouncedSettingTextInput
+                    id={`provider-instance-${instanceId}-shadow-home`}
+                    size="sm"
+                    variant="soft"
+                    className="mt-1"
+                    value={readConfigString(instance.config, "shadowHomePath")}
+                    onCommit={(shadowHomePath) =>
+                      updateInstance(
+                        instanceId,
+                        { config: { shadowHomePath } },
+                        legacyCodexAccountId,
+                      )
+                    }
+                    placeholder="~/.codex_work"
+                    spellCheck={false}
+                  />
+                </label>
+              ) : null}
+              {provider === "claudeAgent" ? (
+                <label className="block sm:col-span-2">
+                  <span className="block text-ui-sm font-medium text-foreground">
+                    Claude config directory
+                  </span>
+                  <DebouncedSettingTextInput
+                    id={`provider-instance-${instanceId}-config-dir`}
+                    size="sm"
+                    variant="soft"
+                    className="mt-1"
+                    value={readConfigString(instance.config, "configDir")}
+                    onCommit={(configDir) => updateInstance(instanceId, { config: { configDir } })}
+                    placeholder="~/.claude-work"
+                    spellCheck={false}
+                  />
+                </label>
+              ) : null}
+              {isAccountProvider ? (
+                <span className="block text-ui-sm text-muted-foreground sm:col-span-2">
+                  {provider === "codex"
+                    ? "Leave both paths blank and Synara keeps this account's sign-in in its " +
+                      "own folder. Set a shadow auth home to keep only the sign-in elsewhere " +
+                      "while sharing settings and history with the default account, or a " +
+                      "CODEX_HOME to keep everything separate."
+                    : "Leave blank and Synara keeps this account's sign-in in its own folder. " +
+                      "Set a directory to use a Claude config folder you already signed in to."}
+                </span>
+              ) : null}
+              {provider !== "codex" &&
+              provider !== "claudeAgent" &&
+              provider !== "pi" &&
+              provider !== "omp" ? (
+                <label className="block sm:col-span-2">
+                  <span className="block text-ui-sm font-medium text-foreground">
+                    Profile directory
+                  </span>
+                  <DebouncedSettingTextInput
+                    id={`provider-instance-${instanceId}-profile-dir`}
+                    size="sm"
+                    variant="soft"
+                    className="mt-1"
+                    value={readConfigString(instance.config, "profileDir")}
+                    onCommit={(profileDir) =>
+                      updateInstance(instanceId, { config: { profileDir } })
+                    }
+                    placeholder="Provider account directory"
+                    spellCheck={false}
+                  />
+                  <span className="mt-1 block text-ui-sm text-muted-foreground">
+                    Used as this profile's provider config root without changing your shell files.
+                  </span>
+                </label>
+              ) : null}
+            </div>
+            <ProviderInstanceAdvancedSection>
               <label className="block sm:col-span-2">
                 <span className="block text-ui-sm font-medium text-foreground">
                   Command override
@@ -1333,159 +1443,28 @@ function ProviderInstancesControl(props: {
                       : "Available in Synara terminals for zsh, bash, fish, and scripts."}
                 </span>
               </label>
-              {props.config.fields.map((field) => {
-                const configKey = providerInstanceConfigKey(field);
-                if (field.kind === "boolean") {
-                  return (
-                    <label
-                      key={field.settingsKey}
-                      className="flex items-center justify-between gap-3 sm:col-span-2"
-                    >
-                      <span className="text-ui-sm font-medium text-foreground">{field.label}</span>
-                      <Switch
-                        checked={readConfigBoolean(instance.config, configKey)}
-                        onCheckedChange={(checked) =>
-                          updateInstance(instanceId, { config: { [configKey]: checked } })
-                        }
-                        aria-label={`${field.label} for ${instance.displayName || instanceId}`}
-                      />
-                    </label>
-                  );
-                }
-                const redacted =
-                  field.kind === "password" &&
-                  instance.config !== null &&
-                  typeof instance.config === "object" &&
-                  !Array.isArray(instance.config) &&
-                  (instance.config as Record<string, unknown>)[`${configKey}Redacted`] === true;
-                const inputId = `provider-instance-${instanceId}-${configKey}`;
-                return (
-                  <div className="block" key={field.settingsKey}>
-                    <label
-                      htmlFor={inputId}
-                      className="block text-ui-sm font-medium text-foreground"
-                    >
-                      {field.label}
-                    </label>
-                    <div className="mt-1 flex items-center gap-2">
-                      <DebouncedSettingTextInput
-                        id={inputId}
-                        size="sm"
-                        variant="soft"
-                        className="flex-1"
-                        type={field.kind === "password" ? "password" : "text"}
-                        value={redacted ? "" : readConfigString(instance.config, configKey)}
-                        onCommit={(value) => {
-                          if (redacted && value.length === 0) return;
-                          updateInstance(instanceId, { config: { [configKey]: value } });
-                        }}
-                        placeholder={
-                          redacted ? "Secret saved — type to replace" : field.placeholder
-                        }
-                        spellCheck={false}
-                      />
-                      {redacted ? (
-                        <Button
-                          type="button"
-                          size="xs"
-                          variant="ghost"
-                          onClick={() =>
-                            updateInstance(instanceId, { config: { [configKey]: "" } })
-                          }
-                          aria-label={`Clear saved ${field.label.toLowerCase()} for ${
-                            instance.displayName || instanceId
-                          }`}
-                        >
-                          Clear
-                        </Button>
-                      ) : null}
-                    </div>
-                  </div>
-                );
-              })}
-              {provider === "codex" ? (
-                <label className="block sm:col-span-2">
-                  <span className="block text-ui-sm font-medium text-foreground">
-                    Shadow auth home
-                  </span>
-                  <DebouncedSettingTextInput
-                    id={`provider-instance-${instanceId}-shadow-home`}
-                    size="sm"
-                    variant="soft"
-                    className="mt-1"
-                    value={readConfigString(instance.config, "shadowHomePath")}
-                    onCommit={(shadowHomePath) =>
-                      updateInstance(instanceId, { config: { shadowHomePath } })
-                    }
-                    placeholder="~/.codex_work"
-                    spellCheck={false}
-                  />
-                </label>
-              ) : null}
+              {props.config.fields
+                .filter(isAdvancedField)
+                .map((field) => renderField(field, entry))}
               {provider === "claudeAgent" ? (
-                <>
-                  <label className="block">
-                    <span className="block text-ui-sm font-medium text-foreground">
-                      Claude config directory
-                    </span>
-                    <DebouncedSettingTextInput
-                      id={`provider-instance-${instanceId}-config-dir`}
-                      size="sm"
-                      variant="soft"
-                      className="mt-1"
-                      value={readConfigString(instance.config, "configDir")}
-                      onCommit={(configDir) =>
-                        updateInstance(instanceId, { config: { configDir } })
-                      }
-                      placeholder="~/.claude-work"
-                      spellCheck={false}
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="block text-ui-sm font-medium text-foreground">
-                      Claude credential directory
-                    </span>
-                    <DebouncedSettingTextInput
-                      id={`provider-instance-${instanceId}-secure-storage-dir`}
-                      size="sm"
-                      variant="soft"
-                      className="mt-1"
-                      value={readConfigString(instance.config, "secureStorageDir")}
-                      onCommit={(secureStorageDir) =>
-                        updateInstance(instanceId, { config: { secureStorageDir } })
-                      }
-                      placeholder="Optional shared credential directory"
-                      spellCheck={false}
-                    />
-                    <span className="mt-1 block text-ui-sm text-muted-foreground">
-                      Advanced Claude CLI compatibility setting. Leave blank unless your setup
-                      already uses a separate secure-storage directory.
-                    </span>
-                  </label>
-                </>
-              ) : null}
-              {provider !== "codex" &&
-              provider !== "claudeAgent" &&
-              provider !== "pi" &&
-              provider !== "omp" ? (
-                <label className="block sm:col-span-2">
+                <label className="block">
                   <span className="block text-ui-sm font-medium text-foreground">
-                    Profile directory
+                    Claude credential directory
                   </span>
                   <DebouncedSettingTextInput
-                    id={`provider-instance-${instanceId}-profile-dir`}
+                    id={`provider-instance-${instanceId}-secure-storage-dir`}
                     size="sm"
                     variant="soft"
                     className="mt-1"
-                    value={readConfigString(instance.config, "profileDir")}
-                    onCommit={(profileDir) =>
-                      updateInstance(instanceId, { config: { profileDir } })
+                    value={readConfigString(instance.config, "secureStorageDir")}
+                    onCommit={(secureStorageDir) =>
+                      updateInstance(instanceId, { config: { secureStorageDir } })
                     }
-                    placeholder="Provider account directory"
+                    placeholder="Optional shared credential directory"
                     spellCheck={false}
                   />
                   <span className="mt-1 block text-ui-sm text-muted-foreground">
-                    Used as this profile's provider config root without changing your shell files.
+                    Leave blank unless your setup already uses a separate secure-storage directory.
                   </span>
                 </label>
               ) : null}
@@ -1494,11 +1473,40 @@ function ProviderInstancesControl(props: {
                 environment={instance.environment}
                 onChange={(environment) => updateInstance(instanceId, { environment })}
               />
-            </div>
+            </ProviderInstanceAdvancedSection>
           </div>
         );
       })}
     </div>
+  );
+}
+
+function ProviderInstanceStatusLine(props: {
+  status: ReturnType<typeof providerInstanceStatusSummary>;
+}) {
+  return (
+    <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground">
+      <span className={cn("size-1.5 shrink-0 rounded-full", props.status.dotClassName)} />
+      <span className="truncate">{props.status.label}</span>
+    </div>
+  );
+}
+
+function ProviderInstanceAdvancedSection(props: { children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Collapsible open={open} onOpenChange={setOpen}>
+      <CollapsibleTrigger
+        type="button"
+        className="mt-3 flex items-center gap-1 text-ui-sm text-muted-foreground"
+      >
+        Advanced
+        <DisclosureChevron open={open} className="size-3.5 shrink-0" />
+      </CollapsibleTrigger>
+      <CollapsiblePanel>
+        <div className="mt-2 grid gap-2 sm:grid-cols-2">{props.children}</div>
+      </CollapsiblePanel>
+    </Collapsible>
   );
 }
 
@@ -1637,8 +1645,8 @@ function ProviderToolRow(props: {
                   updateSettings={props.updateSettings}
                 />
               ))}
-              {props.config.provider === "codex" ? (
-                <CodexAccountsControl
+              {props.config.provider === "codex" && props.settings.codexAccounts.length > 0 ? (
+                <CodexDefaultAccountControl
                   settings={props.settings}
                   updateSettings={props.updateSettings}
                 />
