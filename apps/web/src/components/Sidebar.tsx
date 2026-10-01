@@ -3978,6 +3978,10 @@ export default function Sidebar() {
   // --- Rail customization: the editor opens as a popover beside the rail. ---
   const [isCustomizingNav, setIsCustomizingNav] = useState(false);
   const railSlot = useAppRailSlot();
+  // Phones have no shell slot: the rail rides inside the sidebar sheet, so its own wrapper
+  // anchors the editor there.
+  const [mobileRailElement, setMobileRailElement] = useState<HTMLDivElement | null>(null);
+  const railCustomizeAnchor = railSlot ?? mobileRailElement;
   const [navCustomizeMenuPosition, setNavCustomizeMenuPosition] = useState<{
     x: number;
     y: number;
@@ -6637,7 +6641,7 @@ export default function Sidebar() {
   return (
     <>
       {isMobile ? null : <AppRailPortal {...appRailProps} />}
-      {railSlot ? (
+      {railCustomizeAnchor ? (
         <Popover
           open={isCustomizingNav}
           onOpenChange={(open) => {
@@ -6645,7 +6649,7 @@ export default function Sidebar() {
           }}
         >
           <PopoverPopup
-            anchor={railSlot}
+            anchor={railCustomizeAnchor}
             side="right"
             align="start"
             sideOffset={8}
@@ -6677,7 +6681,11 @@ export default function Sidebar() {
           beside the panel. On desktop both wrappers vanish (`contents`) and the rail is
           portaled into the shell instead. */}
       <div className={isMobile ? "flex min-h-0 flex-1" : "contents"}>
-        {isMobile ? <AppRail {...appRailProps} /> : null}
+        {isMobile ? (
+          <div ref={setMobileRailElement} className="flex shrink-0">
+            <AppRail {...appRailProps} />
+          </div>
+        ) : null}
         <div className={isMobile ? "flex min-h-0 min-w-0 flex-1 flex-col" : "contents"}>
           <SidebarContent className="gap-0 font-system-ui">
             {showArm64IntelBuildWarning && arm64IntelBuildWarningDescription ? (

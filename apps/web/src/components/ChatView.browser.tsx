@@ -2504,6 +2504,10 @@ describe("ChatView transcript geometry (full app)", () => {
       await expect
         .element(rail.getByRole("button", { name: "Settings", exact: true }))
         .toBeVisible();
+      // Customize has no shell slot to anchor to on phones; it opens beside the sheet's rail.
+      await rail.getByRole("button", { name: "More", exact: true }).click();
+      await page.getByRole("menuitem", { name: "Customize…", exact: true }).click();
+      await expect.element(page.getByRole("button", { name: "Done", exact: true })).toBeVisible();
     } finally {
       await mounted.cleanup();
     }
