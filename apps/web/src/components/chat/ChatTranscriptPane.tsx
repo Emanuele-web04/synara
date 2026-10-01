@@ -18,10 +18,11 @@ import {
   type TouchEventHandler,
   type WheelEventHandler,
 } from "react";
-import { type TimestampFormat } from "../../appSettings";
+import { type MessageTrailAudioSource, type TimestampFormat } from "../../appSettings";
 import { type TurnDiffSummary, type WorktreeSetupSnapshot } from "../../types";
 import { ArrowDownIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import { AUDIO_LEVEL_SUBSCRIBERS, isAudioLevelAvailable } from "~/lib/audioLevel";
 import { ELEVATED_HOVER_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 import { DISCLOSURE_CONTENT_MOTION_CLASS } from "~/lib/disclosureMotion";
 import { type ExpandedImagePreview } from "./ExpandedImagePreview";
@@ -105,6 +106,8 @@ interface ChatTranscriptPaneProps {
   timelineEntries: ComponentProps<typeof MessagesTimeline>["timelineEntries"];
   messageChangeSignal?: ComponentProps<typeof MessagesTimeline>["messageChangeSignal"];
   timestampFormat: TimestampFormat;
+  /** Sound the message trail moves with (Beta desktop setting). */
+  messageTrailAudioSource?: MessageTrailAudioSource;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   conversationOnly?: boolean;
   /** Stored thread-level error, rendered in flow above the transcript. */
@@ -189,6 +192,7 @@ export function ChatTranscriptPane({
   timelineEntries,
   messageChangeSignal,
   timestampFormat,
+  messageTrailAudioSource,
   turnDiffSummaryByAssistantMessageId,
   conversationOnly,
   threadError,
@@ -387,6 +391,13 @@ export function ChatTranscriptPane({
             items={trailItems}
             activeStore={activeTrailStore}
             onSelect={handleTrailSelect}
+            subscribeAudioLevel={
+              messageTrailAudioSource &&
+              messageTrailAudioSource !== "off" &&
+              isAudioLevelAvailable()
+                ? AUDIO_LEVEL_SUBSCRIBERS[messageTrailAudioSource]
+                : undefined
+            }
           />
         ) : null}
       </div>

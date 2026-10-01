@@ -28,6 +28,8 @@ const frameworkArguments = [
   "-framework",
   "CoreServices",
   "-framework",
+  "CoreAudio",
+  "-framework",
   "CoreGraphics",
   "-framework",
   "CoreImage",

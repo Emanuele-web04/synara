@@ -14,6 +14,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   type AppSettings,
   type FollowUpBehavior,
+  type MessageTrailAudioSource,
   type VoiceEnterBehavior,
   DEFAULT_UI_DENSITY,
   DEFAULT_CHAT_WIDTH,
@@ -117,6 +118,7 @@ import {
   settingRowAnchorId,
 } from "../settingsNavigation";
 import { SETTINGS_PAGE_BACKGROUND_CLASS_NAME } from "../settingsPanelStyles";
+import { isAudioLevelAvailable } from "../lib/audioLevel";
 
 // ── Settings taxonomy ──────────────────────────────────────────────────────
 
@@ -192,6 +194,13 @@ const FOLLOW_UP_BEHAVIOR_OPTIONS = [
   { value: "queue", label: "Queue" },
   { value: "steer", label: "Steer" },
 ] as const satisfies ReadonlyArray<{ value: FollowUpBehavior; label: string }>;
+
+const MESSAGE_TRAIL_AUDIO_SOURCE_OPTIONS = [
+  { value: "off", label: "Off" },
+  { value: "system", label: "Mac audio" },
+  { value: "microphone", label: "Microphone" },
+  { value: "both", label: "Both" },
+] as const satisfies ReadonlyArray<{ value: MessageTrailAudioSource; label: string }>;
 
 const VOICE_ENTER_BEHAVIOR_OPTIONS = [
   { value: "stop", label: "Stop" },
@@ -382,6 +391,9 @@ function SettingsRouteView() {
       ? ["Assistant output"]
       : []),
     ...(settings.composerEffortSlider !== defaults.composerEffortSlider ? ["Effort slider"] : []),
+    ...(settings.messageTrailAudioSource !== defaults.messageTrailAudioSource
+      ? ["Message trail sound"]
+      : []),
     ...(settings.followUpBehavior !== defaults.followUpBehavior ? ["Follow-up behavior"] : []),
     ...(settings.voiceEnterBehavior !== defaults.voiceEnterBehavior
       ? ["Enter while dictating"]
@@ -1280,6 +1292,31 @@ function SettingsRouteView() {
           resetLabel: "effort slider",
           ariaLabel: "Show effort slider in the composer",
         })}
+
+        {isAudioLevelAvailable() ? (
+          <SettingsRow
+            title="Message trail sound"
+            description="Make the message marks on the left of long chats move with sound: what your Mac plays (a video, a meeting), your microphone, or whichever is louder. macOS asks for access the first time. Synara only reads how loud the sound is and never records it."
+            resetAction={
+              settings.messageTrailAudioSource !== defaults.messageTrailAudioSource ? (
+                <SettingResetButton
+                  label="message trail sound"
+                  onClick={() =>
+                    updateSettings({ messageTrailAudioSource: defaults.messageTrailAudioSource })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <SettingsSegmentedControl
+                value={settings.messageTrailAudioSource}
+                onValueChange={(value) => updateSettings({ messageTrailAudioSource: value })}
+                ariaLabel="Message trail sound"
+                options={MESSAGE_TRAIL_AUDIO_SOURCE_OPTIONS}
+              />
+            }
+          />
+        ) : null}
 
         {renderBooleanSettingRow({
           settingKey: "autoOpenDevicePane",
