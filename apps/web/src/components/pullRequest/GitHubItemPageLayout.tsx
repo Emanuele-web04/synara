@@ -248,7 +248,7 @@ export function GitHubItemDetailPage({
   overlay?: ReactNode;
 }) {
   return (
-    <div className="flex h-full min-h-0 w-full flex-col bg-[var(--color-background-surface)] text-foreground">
+    <div className="flex h-full min-h-0 w-full flex-col app-content-surface text-foreground">
       {/* The top bar is its own container so its controls can tighten once it is narrow (the
           side chat is open) and stay on one row; if even that is too narrow the actions wrap
           under the tabs, still right-aligned. */}
