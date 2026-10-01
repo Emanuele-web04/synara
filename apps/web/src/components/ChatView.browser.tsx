@@ -2967,13 +2967,18 @@ describe("ChatView transcript geometry (full app)", () => {
     }
 
     const medianRatio = ratios.sort((left, right) => left - right)[1]!;
-    // Without owner stacks and after the warm-up, main measures a 2.1x median on
-    // Linux CI (median-of-3 groups 1.85-2.16x). Deriving the work log twice per
-    // live activity (the #550 regression) measures 2.90-3.09x there.
+    // Without owner stacks and after the warm-up, this measured a 2.1x median on
+    // Linux CI (median-of-3 groups 1.85-2.16x) while the shell, chat header and
+    // composer still re-rendered for every live event, and 2.90-3.09x with the work
+    // log derived twice per live activity (the #550 regression). Those no longer
+    // follow live events, which takes the same fixed cost off both cases (locally
+    // 73 -> 39 ms short, 149 -> 108 ms near-cap) and so raises the healthy ratio to
+    // about 2.8x. The regression's extra work is unchanged, which now puts it above
+    // 4.3x.
     expect(
       medianRatio,
       `Issue #550 benchmark: ${JSON.stringify({ reports, ratios })}`,
-    ).toBeLessThan(2.5);
+    ).toBeLessThan(3.5);
   });
 
   it("cancels a multi-question prompt with choices through the orchestration command", async () => {

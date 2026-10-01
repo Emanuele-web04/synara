@@ -232,6 +232,40 @@ export function createAllThreadsMessagelessSelector(): (state: AppState) => bool
   };
 }
 
+/** A thread's shell without `updatedAt`, the one field every streamed delta rewrites. */
+export type ThreadShellSettings = Omit<ThreadShell, "updatedAt">;
+
+function threadShellSettingsEqual(left: ThreadShell, right: ThreadShell): boolean {
+  for (const key of new Set([...Object.keys(left), ...Object.keys(right)])) {
+    if (key !== "updatedAt" && left[key as keyof ThreadShell] !== right[key as keyof ThreadShell]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** One thread's shell for subscribers that act on its settings (project, model, modes,
+ *  workspace) and must not re-render while it streams: the result keeps its identity until
+ *  a field other than `updatedAt` changes. */
+export function createThreadShellSettingsSelector(
+  threadId: ThreadId | null | undefined,
+): (state: AppState) => ThreadShellSettings | undefined {
+  let previousSource: ThreadShell | undefined;
+  let previousResult: ThreadShell | undefined;
+
+  return (state) => {
+    const source = threadId ? state.threadShellById?.[threadId] : undefined;
+    if (source === previousSource) {
+      return previousResult;
+    }
+    previousSource = source;
+    if (!source || !previousResult || !threadShellSettingsEqual(source, previousResult)) {
+      previousResult = source;
+    }
+    return previousResult;
+  };
+}
+
 export function createThreadProjectIdSelector(
   threadId: ThreadId | null | undefined,
 ): (state: AppState) => ProjectId | null {
