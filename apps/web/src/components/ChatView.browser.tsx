@@ -9460,6 +9460,95 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it("reveals an opened transcript once its end scroll lands, not after the list's fallback delay", async () => {
+    onTestFinished(skipReactDevOwnerStacks());
+    localStorage.setItem("synara:app-settings:v1", JSON.stringify({ sidebarLayout: "rail" }));
+    useOpenThreadTabsStore.setState({ threadIds: [] });
+    const base = createSnapshotForTargetUser({
+      targetMessageId: MessageId.makeUnsafe("transcript-reveal"),
+      targetText: "Transcript reveal conversation",
+    });
+    const source = base.threads[0]!;
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: {
+        ...base,
+        threads: [
+          source,
+          {
+            ...source,
+            id: OTHER_THREAD_ID,
+            title: "Other tab",
+            session: source.session ? { ...source.session, threadId: OTHER_THREAD_ID } : null,
+            messages: source.messages.map((message) =>
+              Object.assign({}, message, { id: MessageId.makeUnsafe(`other-${message.id}`) }),
+            ),
+          },
+        ],
+      },
+    });
+    try {
+      useOpenThreadTabsStore.setState({ threadIds: [THREAD_ID, OTHER_THREAD_ID] });
+      await waitForLayout();
+      const scrollToVisibleMs: number[] = [];
+      for (let index = 0; index < 5; index += 1) {
+        const toSecond = index % 2 === 0;
+        const targetId = toSecond ? OTHER_THREAD_ID : THREAD_ID;
+        const tabButtons = document.querySelectorAll<HTMLButtonElement>(
+          'nav[aria-label="Open threads"] [data-surface-tab] > button:not([aria-label])',
+        );
+        let scrolledAt: number | null = null;
+        const onScroll = (event: Event) => {
+          if ((event.target as HTMLElement | null)?.dataset?.chatScrollContainer === "true") {
+            scrolledAt ??= performance.now();
+          }
+        };
+        document.addEventListener("scroll", onScroll, { capture: true });
+        const startedAt = performance.now();
+        tabButtons[toSecond ? 1 : 0]!.click();
+        let visibleAt: number | null = null;
+        let distanceFromBottomPx: number | null = null;
+        while (performance.now() - startedAt < 5_000) {
+          await nextFrame();
+          const scrollContainer = document.querySelector<HTMLElement>(
+            '[data-chat-scroll-container="true"]',
+          );
+          if (
+            mounted.router.state.location.pathname === `/${targetId}` &&
+            scrollContainer?.querySelector(
+              `[data-assistant-message-id="${toSecond ? "other-" : ""}msg-assistant-21"]`,
+            ) &&
+            isTranscriptContentVisible(scrollContainer)
+          ) {
+            visibleAt = performance.now();
+            distanceFromBottomPx =
+              scrollContainer.scrollHeight -
+              scrollContainer.clientHeight -
+              scrollContainer.scrollTop;
+            break;
+          }
+        }
+        document.removeEventListener("scroll", onScroll, { capture: true });
+        expect(visibleAt, "The opened transcript must become visible").not.toBeNull();
+        // Revealing early must not expose a transcript that is not at its end yet.
+        expect(distanceFromBottomPx).toBeLessThanOrEqual(1);
+        expect(scrolledAt, "Opening a transcript scrolls it to its end").not.toBeNull();
+        scrollToVisibleMs.push(visibleAt! - scrolledAt!);
+        await waitForLayout();
+      }
+      // The list hides its rows until its initial end scroll counts as finished. Its target
+      // sits past what the scroller can reach (footer and bottom padding), so without the
+      // native-end check in the @legendapp/list patch that only happens on a fixed 100 ms
+      // fallback: about 80 ms here, against one frame with it. The median keeps one slow
+      // frame on a busy worker from deciding.
+      const median = scrollToVisibleMs.toSorted((left, right) => left - right)[2]!;
+      expect(median, JSON.stringify(scrollToVisibleMs)).toBeLessThan(50);
+    } finally {
+      await mounted.cleanup();
+      useOpenThreadTabsStore.setState({ threadIds: [] });
+    }
+  });
+
   it("preserves a home-chat draft when the chat.newChat shortcut is reused after a thread switch", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
