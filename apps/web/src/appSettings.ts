@@ -2582,6 +2582,39 @@ export function getCustomBinaryPathForProviderInstance(
     : "";
 }
 
+let resolvedDefaultAppSettings: AppSettings | undefined;
+
+function getResolvedDefaultAppSettings(): AppSettings {
+  resolvedDefaultAppSettings ??= normalizeAppSettings({
+    ...DEFAULT_APP_SETTINGS,
+    ...serverSettingsToAppSettings(DEFAULT_SERVER_SETTINGS_VIEW),
+  });
+  return resolvedDefaultAppSettings;
+}
+
+// Every `useAppSettings` caller resolves the same two inputs (the stored settings and the
+// server's), and there are dozens of callers mounted at once, several inside the chat
+// alone. Resolving once per input pair saves those passes and hands every caller the same
+// `settings` object, so memos keyed on it agree across components.
+let resolvedAppSettings:
+  | { local: AppSettings; server: ServerSettingsView | undefined; settings: AppSettings }
+  | undefined;
+
+function resolveAppSettings(
+  local: AppSettings,
+  server: ServerSettingsView | undefined,
+): AppSettings {
+  if (resolvedAppSettings?.local === local && resolvedAppSettings.server === server) {
+    return resolvedAppSettings.settings;
+  }
+  const settings = normalizeAppSettings({
+    ...normalizeStoredAppSettings(local),
+    ...(server ? serverSettingsToAppSettings(server) : {}),
+  });
+  resolvedAppSettings = { local, server, settings };
+  return settings;
+}
+
 export function useAppSettings() {
   const queryClient = useQueryClient();
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
@@ -2608,16 +2641,8 @@ export function useAppSettings() {
     [],
   );
 
-  const defaults = normalizeAppSettings({
-    ...DEFAULT_APP_SETTINGS,
-    ...serverSettingsToAppSettings(DEFAULT_SERVER_SETTINGS_VIEW),
-  });
-
-  const normalizedLocalSettings = normalizeStoredAppSettings(localSettings);
-  const settings = normalizeAppSettings({
-    ...normalizedLocalSettings,
-    ...(serverSettingsQuery.data ? serverSettingsToAppSettings(serverSettingsQuery.data) : {}),
-  });
+  const defaults = getResolvedDefaultAppSettings();
+  const settings = resolveAppSettings(localSettings, serverSettingsQuery.data);
 
   useEffect(() => {
     if (normalizedStoredSettingsRef.current) {

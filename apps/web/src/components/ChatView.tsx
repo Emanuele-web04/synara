@@ -57,6 +57,7 @@ import { useIsMobile } from "~/hooks/useMediaQuery";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { useRepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { useSidebarLayout } from "~/hooks/useSidebarLayout";
+import { useStableCallback } from "~/hooks/useStableCallback";
 import { useThreadRecap } from "~/hooks/useThreadRecap";
 import { SINGLE_CHAT_PANE_SCOPE_ID } from "~/lib/chatPaneScope";
 import { formatComposerMentionToken } from "~/lib/composerMentions";
@@ -1152,9 +1153,16 @@ export default function ChatView({
   const threadLineageThreads = useStore(
     useMemo(() => createThreadLineageSelector(activeThread?.id ?? null), [activeThread?.id]),
   );
+  // Read once here so the memo depends on the two fields it uses instead of the thread
+  // object, whose identity changes with every streamed token (and re-rendered the header).
+  const activeThreadParentId = activeThread?.parentThreadId ?? null;
   const threadBreadcrumbs = useMemo(
-    () => buildThreadBreadcrumbs(threadLineageThreads, activeThread),
-    [activeThread, threadLineageThreads],
+    () =>
+      buildThreadBreadcrumbs(
+        threadLineageThreads,
+        activeThreadId ? { id: activeThreadId, parentThreadId: activeThreadParentId } : null,
+      ),
+    [activeThreadId, activeThreadParentId, threadLineageThreads],
   );
   // Group threads are always local. Their optional "Use a folder" cwd is stored separately
   // from Git worktree metadata; the server migration repairs the legacy mixed representation.
@@ -2324,17 +2332,19 @@ export default function ChatView({
     settings,
     configuredProviderStatuses: serverConfigQuery.data?.providers,
   });
+  const activeThreadProvider = activeThread?.modelSelection.provider ?? null;
+  const activeThreadProviderInstanceId =
+    activeThread?.session?.providerInstanceId ?? activeThread?.modelSelection.instanceId;
   const handoffTargets = useMemo(
     () =>
-      activeThread
+      activeThreadProvider
         ? resolveAvailableHandoffTargets({
-            sourceProvider: activeThread.modelSelection.provider,
-            sourceProviderInstanceId:
-              activeThread.session?.providerInstanceId ?? activeThread.modelSelection.instanceId,
+            sourceProvider: activeThreadProvider,
+            sourceProviderInstanceId: activeThreadProviderInstanceId,
             providerInstances,
           })
         : [],
-    [activeThread, providerInstances],
+    [activeThreadProvider, activeThreadProviderInstanceId, providerInstances],
   );
   const sidechatTargetProviders = useMemo(
     () => [...new Set(handoffTargets.map((target) => target.provider))],
@@ -4048,27 +4058,25 @@ export default function ChatView({
     ],
   );
 
-  const onCreateHandoffThread = useCallback(
-    async (target: ThreadHandoffTarget) => {
-      if (!activeThread || handoffDisabled) {
-        return;
-      }
+  // Stable: it reads the whole thread, which changes with every streamed token.
+  const onCreateHandoffThread = useStableCallback(async (target: ThreadHandoffTarget) => {
+    if (!activeThread || handoffDisabled) {
+      return;
+    }
 
-      try {
-        await createThreadHandoff(activeThread, target.provider, target.instanceId);
-      } catch (error) {
-        toastManager.add({
-          type: "error",
-          title: "Could not create handoff thread",
-          description:
-            error instanceof Error
-              ? error.message
-              : "An error occurred while creating the handoff thread.",
-        });
-      }
-    },
-    [activeThread, createThreadHandoff, handoffDisabled],
-  );
+    try {
+      await createThreadHandoff(activeThread, target.provider, target.instanceId);
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Could not create handoff thread",
+        description:
+          error instanceof Error
+            ? error.message
+            : "An error occurred while creating the handoff thread.",
+      });
+    }
+  });
 
   const clearComposerInput = useCallback(
     (threadId: ThreadId) => {
@@ -4459,6 +4467,10 @@ export default function ChatView({
     },
     [setIsModelPickerOpen, setIsTraitsPickerOpen, handleModelPickerOpenChange],
   );
+  // Event handlers handed to children below. Their closures read live thread and draft
+  // state, so they are recreated with every streamed token and keystroke; one identity
+  // keeps those children from re-rendering (and re-registering editor commands) for it.
+  const handleProviderModelChange = useStableCallback(onProviderModelSelect);
   const composerModelAndTraitsControls = showComposerModelBootstrapSkeleton ? (
     selectedProviderRuntimeModelDiscoveryPending ? (
       <ComposerModelLoadingControl widthClassName={composerModelEffortPickerWidthClassName} />
@@ -4490,7 +4502,7 @@ export default function ChatView({
       modelOptions={selectedProviderModelOptions}
       prompt={prompt}
       onPromptChange={setPromptFromTraits}
-      onProviderModelChange={onProviderModelSelect}
+      onProviderModelChange={handleProviderModelChange}
       onSelectionCommitted={scheduleComposerFocus}
       open={isComposerModelEffortPickerOpen}
       onOpenChange={handleComposerModelEffortPickerOpenChange}
@@ -4923,12 +4935,9 @@ export default function ChatView({
     },
     [onRevertToTurnCount, revertTurnCountByUserMessageId],
   );
-  const onRunProjectScriptFromHeader = useCallback(
-    (script: ProjectScript) => {
-      void runProjectScript(script);
-    },
-    [runProjectScript],
-  );
+  const onRunProjectScriptFromHeader = useStableCallback((script: ProjectScript) => {
+    void runProjectScript(script);
+  });
   const dismissActiveThreadError = useCallback(() => {
     if (!activeThread) return;
     setThreadError(activeThread.id, null);
@@ -5041,6 +5050,17 @@ export default function ChatView({
       }),
     [activeProject?.defaultModelSelection, settings.defaultProvider],
   );
+
+  const handlePromptChange = useStableCallback(onPromptChange);
+  const handleComposerCommandKey = useStableCallback(onComposerCommandKey);
+  const handleComposerPaste = useStableCallback(onComposerPaste);
+  const handleCollapsePastedText = useStableCallback(addPastedTextToDraft);
+  const handleEnvModeChange = useStableCallback(onEnvModeChange);
+  const handleHandoffToWorktree = useStableCallback(onHandoffToWorktree);
+  const handleHandoffToLocal = useStableCallback(onHandoffToLocal);
+  const handleConfirmWorktreeHandoff = useStableCallback(confirmWorktreeHandoff);
+  const handleResetInteractionMode = useStableCallback(resetInteractionMode);
+  const closeAgentActivityDetail = useStableCallback(() => setOpenAgentActivityId(null));
 
   // Empty state: no active thread
   if (!activeThread) {
@@ -5176,11 +5196,15 @@ export default function ChatView({
   );
   const branchToolbarProps = {
     threadId: activeThread.id,
-    onEnvModeChange,
+    onEnvModeChange: handleEnvModeChange,
     envLocked,
     threadDetailReady: threadDetailHydration === "ready",
     ...(handoffAvailability.workspaceHandoff
-      ? { onHandoffToWorktree, onHandoffToLocal, handoffBusy }
+      ? {
+          onHandoffToWorktree: handleHandoffToWorktree,
+          onHandoffToLocal: handleHandoffToLocal,
+          handoffBusy,
+        }
       : {}),
     onComposerFocusRequest: scheduleComposerFocus,
     ...(isGroupContainer ? { fixedLocalWorkspaceCwd: threadWorkspaceCwd } : {}),
@@ -5335,6 +5359,16 @@ export default function ChatView({
     activeThread.id,
   ).map((definition) => ({ definition }));
 
+  // Read from the two inputs it uses, not from the thread object, so the list keeps its
+  // identity (and the Environment panel its render) while the thread streams.
+  const activeThreadIsSidechat = isSidechatThread(activeThread);
+  const environmentSidechats = activeThreadIsSidechat
+    ? null
+    : sourceThreadSidechats.map((sidechat) => ({
+        id: sidechat.id,
+        title: sidechat.title,
+        expiredAt: sidechat.sidechatExpiredAt ?? null,
+      }));
   // Shared inputs for both Environment panel surfaces (the header Popover when the dock is
   // open, and the docked right column when it is closed) so the two never drift.
   const environmentPanelProps: Omit<EnvironmentPanelProps, "open" | "variant"> = {
@@ -5352,13 +5386,7 @@ export default function ChatView({
     showGitActions,
     diffOpen: resolvedDiffOpen,
     threadAutomations: threadAutomationItems,
-    sidechats: isSidechatThread(activeThread)
-      ? null
-      : sourceThreadSidechats.map((sidechat) => ({
-          id: sidechat.id,
-          title: sidechat.title,
-          expiredAt: sidechat.sidechatExpiredAt ?? null,
-        })),
+    sidechats: environmentSidechats,
     diffDisabledReason,
     diffTotals: repoDiffTotals,
     branchToolbar: branchToolbarProps,
@@ -5830,11 +5858,11 @@ export default function ChatView({
                   }
                   mentionReferences={selectedComposerMentions}
                   onRemoveTerminalContext={removeComposerTerminalContextFromDraft}
-                  onChange={onPromptChange}
-                  onCommandKeyDown={onComposerCommandKey}
-                  onPaste={onComposerPaste}
+                  onChange={handlePromptChange}
+                  onCommandKeyDown={handleComposerCommandKey}
+                  onPaste={handleComposerPaste}
                   {...(canCollapsePastedTextToDraft
-                    ? { onCollapsePastedText: addPastedTextToDraft }
+                    ? { onCollapsePastedText: handleCollapsePastedText }
                     : {})}
                   placeholder={
                     isComposerApprovalState
@@ -5907,7 +5935,7 @@ export default function ChatView({
                     ) : null
                   }
                   interactionMode={interactionMode}
-                  resetInteractionMode={resetInteractionMode}
+                  resetInteractionMode={handleResetInteractionMode}
                   sidebarAction={
                     activeTaskList || sidebarProposedPlan || planSidebarOpen
                       ? {
@@ -6350,7 +6378,7 @@ export default function ChatView({
                     onMessagesTouchMove={onMessagesTouchMove}
                     onMessagesTouchEnd={onMessagesTouchEnd}
                     onOpenAgentActivity={setOpenAgentActivityId}
-                    onCloseAgentActivityDetail={() => setOpenAgentActivityId(null)}
+                    onCloseAgentActivityDetail={closeAgentActivityDetail}
                     scrollButtonVisible={showScrollToBottom}
                     onScrollToBottom={onScrollToBottom}
                     contentInsetRightPx={contentInsetRightPx}
@@ -6595,7 +6623,7 @@ export default function ChatView({
         busy={handoffBusy}
         onWorktreeNameChange={setWorktreeHandoffName}
         onOpenChange={setWorktreeHandoffDialogOpen}
-        onConfirm={confirmWorktreeHandoff}
+        onConfirm={handleConfirmWorktreeHandoff}
       />
       {!isInactiveSplitPane && activeProject && !isSidechatExpired ? (
         <TranscriptSelectionActionLayer

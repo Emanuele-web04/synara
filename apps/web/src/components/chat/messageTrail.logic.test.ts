@@ -96,6 +96,19 @@ describe("deriveMessageTrailItems", () => {
     expect(deriveMessageTrailItems(entries)).toBe(deriveMessageTrailItems(entries));
   });
 
+  it("reuses the previous items for a rebuilt entries array whose trail is unchanged", () => {
+    const user = messageEntry("u1", "user", "ask");
+    const reply = messageEntry("a1", "assistant", "reply");
+    const before = deriveMessageTrailItems([user, reply]);
+
+    // A streamed token rebuilds the array; a work row does not show in the trail.
+    expect(deriveMessageTrailItems([user, reply, workEntry("w1")])).toBe(before);
+
+    const grown = deriveMessageTrailItems([user, messageEntry("a1", "assistant", "reply grew")]);
+    expect(grown).not.toBe(before);
+    expect(grown[0]?.responsePreview).toBe("reply grew");
+  });
+
   it("reflects a mid-list message replacement despite the per-message preview cache", () => {
     const unchangedUser = messageEntry("u1", "user", "  first   question ");
     const before = deriveMessageTrailItems([

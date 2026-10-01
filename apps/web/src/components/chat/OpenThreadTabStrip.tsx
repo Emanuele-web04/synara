@@ -6,7 +6,7 @@
 // Depends on: open-thread tab hooks/store and the shared SurfaceTabStrip + SurfaceTabChip.
 
 import type { ProjectId, ThreadId } from "@synara/contracts";
-import { type CSSProperties, useEffect, useRef, useState } from "react";
+import { type CSSProperties, useRef, useState } from "react";
 
 import { useHandleNewThread } from "~/hooks/useHandleNewThread";
 import {
@@ -15,6 +15,7 @@ import {
   useReadRouteThreadId,
   useRecordOpenThreadTab,
 } from "~/hooks/useOpenThreadTabs";
+import { useOptimisticTabSelection } from "~/hooks/useOptimisticTabSelection";
 import { TerminalIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { createOpenThreadTabCloseQueue, replaceLastTabWithFreshChat } from "~/openThreadTabs.logic";
@@ -23,7 +24,6 @@ import { useOpenThreadTabsStore } from "~/openThreadTabsStore";
 import { ProviderIcon } from "../ProviderIcon";
 import { toastManager } from "../ui/toast";
 import { SurfaceTabChip, SurfaceTabStrip } from "./chatHeaderControls";
-import { scheduleDeferredChatMount } from "./deferredChatMount";
 
 // Tab width in `em` of the chip's own UI font, so it scales with the font size chosen in
 // Settings: every tab starts at a comfortable basis and shrinks evenly with the rest down
@@ -59,38 +59,12 @@ export function OpenThreadTabStrip(props: {
   // instead of the widened neighbour's title.
   const [frozenTabWidthPx, setFrozenTabWidthPx] = useState<number | null>(null);
   // The tab being switched to paints as active at once, like a pressed sidebar row; the
-  // thread itself (a whole chat to render) follows once that frame is on screen. Scoped to
-  // the thread it was pressed from, so any route change, to the target or elsewhere, ends
-  // the override without an effect.
-  const [pendingSelection, setPendingSelection] = useState<{
-    from: ThreadId;
-    to: ThreadId;
-  } | null>(null);
-  const cancelPendingSelectionRef = useRef<(() => void) | null>(null);
-  useEffect(() => () => cancelPendingSelectionRef.current?.(), []);
-  const shownThreadId =
-    pendingSelection?.from === activeThreadId &&
-    tabs.some((tab) => tab.threadId === pendingSelection.to)
-      ? pendingSelection.to
-      : activeThreadId;
-
-  const selectTab = (threadId: ThreadId) => {
-    cancelPendingSelectionRef.current?.();
-    cancelPendingSelectionRef.current = null;
-    if (threadId === activeThreadId) {
-      setPendingSelection(null);
-      return;
-    }
-    setPendingSelection({ from: activeThreadId, to: threadId });
-    cancelPendingSelectionRef.current = scheduleDeferredChatMount(window, () => {
-      cancelPendingSelectionRef.current = null;
-      // A navigation that leaves the thread on screen (a guarded editor) hands the
-      // highlight back to it.
-      void activateThreadTab(threadId).finally(() => {
-        setPendingSelection((current) => (current?.to === threadId ? null : current));
-      });
-    });
-  };
+  // thread itself (a whole chat to render) follows once that frame is on screen.
+  const { shownKey: shownThreadId, select: selectTab } = useOptimisticTabSelection({
+    activeKey: activeThreadId,
+    hasTab: (threadId) => tabs.some((tab) => tab.threadId === threadId),
+    activate: activateThreadTab,
+  });
 
   const freezeTabWidths = () => {
     const nav = navRef.current;

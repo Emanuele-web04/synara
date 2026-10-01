@@ -67,6 +67,7 @@ const modelQueries = new Map<ProviderKind, QueryResultLike>();
 const instanceModelQueries = new Map<string, QueryResultLike>();
 const agentQueries = new Map<ProviderKind, QueryResultLike>();
 let lastInstanceQueryResults: QueryResultLike[] = [];
+let lastCombinedInstanceQueryResults: unknown;
 const MODEL_HINTS = { cursor: "composer-2" } as const;
 const SETTINGS = {
   antigravityBinaryPath: "",
@@ -134,6 +135,7 @@ beforeEach(() => {
   instanceModelQueries.clear();
   agentQueries.clear();
   lastInstanceQueryResults = [];
+  lastCombinedInstanceQueryResults = undefined;
   mocks.useAppSettings
     .mockReset()
     .mockReturnValue({ settings: SETTINGS, serverSettings: DEFAULT_SERVER_SETTINGS });
@@ -149,22 +151,36 @@ beforeEach(() => {
   });
   mocks.useQueries
     .mockReset()
-    .mockImplementation(({ queries }: { readonly queries: ReadonlyArray<QueryOptionsLike> }) => {
-      const next = queries.map((query) => {
-        const instanceId = query.queryKey[3];
-        return query.enabled === false || typeof instanceId !== "string"
-          ? EMPTY_QUERY
-          : (instanceModelQueries.get(instanceId) ?? EMPTY_QUERY);
-      });
-      if (
-        next.length === lastInstanceQueryResults.length &&
-        next.every((result, index) => result === lastInstanceQueryResults[index])
-      ) {
-        return lastInstanceQueryResults;
-      }
-      lastInstanceQueryResults = next;
-      return next;
-    });
+    .mockImplementation(
+      ({
+        queries,
+        combine,
+      }: {
+        readonly queries: ReadonlyArray<QueryOptionsLike>;
+        readonly combine?: (results: ReadonlyArray<QueryResultLike>) => unknown;
+      }) => {
+        const next = queries.map((query) => {
+          const instanceId = query.queryKey[3];
+          return query.enabled === false || typeof instanceId !== "string"
+            ? EMPTY_QUERY
+            : (instanceModelQueries.get(instanceId) ?? EMPTY_QUERY);
+        });
+        const changed =
+          next.length !== lastInstanceQueryResults.length ||
+          next.some((result, index) => result !== lastInstanceQueryResults[index]);
+        if (changed) {
+          lastInstanceQueryResults = next;
+        }
+        if (!combine) {
+          return lastInstanceQueryResults;
+        }
+        // Like the real hook: the combined value keeps its identity while the results do.
+        if (changed || lastCombinedInstanceQueryResults === undefined) {
+          lastCombinedInstanceQueryResults = combine(lastInstanceQueryResults);
+        }
+        return lastCombinedInstanceQueryResults;
+      },
+    );
 });
 
 describe("useProviderModelCatalog", () => {
