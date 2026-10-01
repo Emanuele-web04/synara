@@ -2963,20 +2963,21 @@ describe("deriveWorkLogEntries", () => {
 
   it("settles orphaned activity from latest-turn state after a reconnect gap", () => {
     const turnId = TurnId.makeUnsafe("turn-with-reconnect-gap");
+    const payload = {
+      itemType: "command_execution",
+      title: "Bash",
+      data: {
+        toolCallId: "reconnected-command",
+        command: "sleep 5",
+      },
+    };
     const activity = makeActivity({
       id: "reconnected-command-start",
       createdAt: "2026-02-23T00:00:01.000Z",
       kind: "tool.started",
       summary: "Bash started",
       turnId,
-      payload: {
-        itemType: "command_execution",
-        title: "Bash",
-        data: {
-          toolCallId: "reconnected-command",
-          command: "sleep 5",
-        },
-      },
+      payload,
     });
     const running = deriveWorkLogEntries([activity], turnId, { activeTurnId: turnId });
     expect(running[0]?.toolStatus).toBe("running");
@@ -2998,7 +2999,7 @@ describe("deriveWorkLogEntries", () => {
     // A replacement of the same event id carries fresh provider metadata.
     const replacement = {
       ...activity,
-      payload: { ...activity.payload, detail: "Provider resumed the command" },
+      payload: { ...payload, detail: "Provider resumed the command" },
     };
     expect(deriveWorkLogEntries([replacement], turnId, { activeTurnId: turnId })[0]?.detail).toBe(
       "Provider resumed the command",
