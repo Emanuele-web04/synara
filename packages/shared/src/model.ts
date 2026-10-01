@@ -293,6 +293,14 @@ export function resolveDevinModelVariant(input: {
     return explicitVariant;
   }
 
+  // A pinned variant only means something for the model it was discovered on.
+  // An unknown UID here is a stale option leaking across model switches, so it
+  // is ignored rather than sent to the process as `--model`.
+  const knownExplicitVariant =
+    explicitVariant !== undefined && variants.some((variant) => variant.model === explicitVariant)
+      ? explicitVariant
+      : undefined;
+
   const reasoningEffort = trimOrNull(input.reasoningEffort);
   const contextWindow = trimOrNull(input.contextWindow);
   const mapsReasoningEffort =
@@ -306,7 +314,7 @@ export function resolveDevinModelVariant(input: {
   const mapsContextWindow =
     contextWindow !== null && variants.some((variant) => variant.contextWindow !== undefined);
   if (!mapsReasoningEffort && !mapsFastMode && !mapsThinking && !mapsContextWindow) {
-    return explicitVariant;
+    return knownExplicitVariant;
   }
 
   const effectiveReasoningEffort =

@@ -312,6 +312,9 @@ export type ProviderContextWindowDescriptor = typeof ProviderContextWindowDescri
 // effort/context/fast controls separate from the provider's opaque model UID.
 export const ProviderModelVariantDescriptor = Schema.Struct({
   model: TrimmedNonEmptyString,
+  // Provider-supplied display name for the concrete variant (e.g. a Fusion
+  // pairing like "Claude Fable 5.1 High + SWE-2 Medium").
+  label: Schema.optional(TrimmedNonEmptyString),
   reasoningEffort: Schema.optional(TrimmedNonEmptyString),
   contextWindow: Schema.optional(TrimmedNonEmptyString),
   fastMode: Schema.optional(Schema.Boolean),
