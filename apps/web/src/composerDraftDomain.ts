@@ -982,6 +982,26 @@ export function composerDraftHasUnsentContent(
   );
 }
 
+/**
+ * Whether a chat's composer holds a message the user started and left unsent. While
+ * prompt history is being browsed, `prompt` holds a recalled entry, so the saved real
+ * draft decides instead.
+ */
+export function composerThreadDraftIsPending(draft: ComposerThreadDraftState): boolean {
+  return composerDraftHasUnsentContent(draft.promptHistorySavedDraft ?? draft);
+}
+
+/** Thread ids with a pending draft, sorted so shallow selectors stay stable while typing. */
+export function selectThreadIdsWithPendingDraft(
+  state: Pick<ComposerDraftStoreState, "draftsByThreadId">,
+): ThreadId[] {
+  const threadIds: ThreadId[] = [];
+  for (const [threadId, draft] of Object.entries(state.draftsByThreadId)) {
+    if (composerThreadDraftIsPending(draft)) threadIds.push(threadId as ThreadId);
+  }
+  return threadIds.toSorted();
+}
+
 export function normalizeDraftThreadEntryPoint(
   value: unknown,
   fallback: ThreadPrimarySurface = "chat",
