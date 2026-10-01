@@ -20,6 +20,7 @@ import {
   providerAccountQualifiedLabel,
 } from "~/lib/providerInstancePresentation";
 import { ProviderAccountDot } from "../ProviderAccountMark";
+import { SurfaceTabStrip } from "./chatHeaderControls";
 import { type ComposerModelPickerTab, STARRED_TAB } from "./ComposerModelPicker.logic";
 import {
   findProviderStatusForInstance,
@@ -48,6 +49,7 @@ function PickerTabButton(props: {
             role="tab"
             aria-label={props.label}
             aria-selected={props.active}
+            {...(props.active ? { "data-surface-tab-active": "" } : {})}
             // Not the native attribute: a disabled button swallows the hover that shows
             // why the tab is closed.
             aria-disabled={props.disabled ?? false}
@@ -206,50 +208,57 @@ export function ComposerModelPickerTabs(props: {
   onAddProviders?: (() => void) | undefined;
 }) {
   return (
-    <div
-      role="tablist"
-      aria-label="Model sources"
-      className="flex shrink-0 items-center gap-0.5 overflow-x-auto border-b border-border p-1.5 [scrollbar-width:none]"
-    >
-      <PickerTabButton
-        label="Starred"
-        active={props.tab === STARRED_TAB}
-        onSelect={() => props.onTabChange(STARRED_TAB)}
+    <div className="flex shrink-0 items-center gap-0.5 border-b border-border p-1.5">
+      {/* Many providers and accounts overflow the popup: the strip scrolls sideways, fades
+          its hidden edge, and keeps the open tab in view. The vertical padding leaves room
+          for the open tab's marker, which hangs below the button. */}
+      <SurfaceTabStrip
+        role="tablist"
+        aria-label="Model sources"
+        activeKey={props.tab}
+        className="-my-1 flex-1 gap-0.5 py-1"
       >
-        <StarFilledIcon aria-hidden="true" className="size-3.5" />
-      </PickerTabButton>
-      {props.providerTabs.map((providerTab) => {
-        const TabIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[providerTab.provider];
-        return (
-          <PickerTabButton
-            key={providerTab.instanceId}
-            label={providerTab.label}
-            tooltip={providerTab.unavailableLabel ?? providerTab.label}
-            active={props.tab === providerTab.instanceId}
-            disabled={providerTab.blocked}
-            accentColor={normalizeProviderAccentColor(providerTab.accentColor)}
-            onSelect={() => props.onTabChange(providerTab.instanceId)}
-          >
-            <TabIcon
-              aria-hidden="true"
-              className={cn(
-                "size-4",
-                getProviderIconClassName(providerTab.provider, ""),
-                providerTab.unavailableLabel !== null && "opacity-40",
-              )}
-            />
-            <ProviderAccountDot
-              accentColor={providerTab.accentColor}
-              always={providerTab.dotted}
-              className="absolute top-0.5 left-4.5"
-            />
-            {/* Only the open tab spells its account out; the others stay icon-sized. */}
-            {providerTab.name && props.tab === providerTab.instanceId ? (
-              <span className="max-w-20 truncate text-ui-sm">{providerTab.name}</span>
-            ) : null}
-          </PickerTabButton>
-        );
-      })}
+        <PickerTabButton
+          label="Starred"
+          active={props.tab === STARRED_TAB}
+          onSelect={() => props.onTabChange(STARRED_TAB)}
+        >
+          <StarFilledIcon aria-hidden="true" className="size-3.5" />
+        </PickerTabButton>
+        {props.providerTabs.map((providerTab) => {
+          const TabIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[providerTab.provider];
+          return (
+            <PickerTabButton
+              key={providerTab.instanceId}
+              label={providerTab.label}
+              tooltip={providerTab.unavailableLabel ?? providerTab.label}
+              active={props.tab === providerTab.instanceId}
+              disabled={providerTab.blocked}
+              accentColor={normalizeProviderAccentColor(providerTab.accentColor)}
+              onSelect={() => props.onTabChange(providerTab.instanceId)}
+            >
+              <TabIcon
+                aria-hidden="true"
+                className={cn(
+                  "size-4",
+                  getProviderIconClassName(providerTab.provider, ""),
+                  providerTab.unavailableLabel !== null && "opacity-40",
+                )}
+              />
+              <ProviderAccountDot
+                accentColor={providerTab.accentColor}
+                always={providerTab.dotted}
+                className="absolute top-0.5 left-4.5"
+              />
+              {/* Only the open tab spells its account out; the others stay icon-sized. */}
+              {providerTab.name && props.tab === providerTab.instanceId ? (
+                <span className="max-w-20 truncate text-ui-sm">{providerTab.name}</span>
+              ) : null}
+            </PickerTabButton>
+          );
+        })}
+      </SurfaceTabStrip>
+      {/* Outside the strip, so it stays reachable however far the tabs scroll. */}
       {props.onAddProviders ? (
         <PickerTabButton label="Add providers" active={false} onSelect={props.onAddProviders}>
           <PlusIcon aria-hidden="true" className="size-3.5" />

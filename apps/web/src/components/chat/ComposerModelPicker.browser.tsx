@@ -598,6 +598,55 @@ describe("ComposerModelPicker with several accounts", () => {
     }
   });
 
+  it("scrolls a crowded tab strip sideways and keeps the open tab in view", async () => {
+    const providers: ProviderKind[] = [
+      "codex",
+      "claudeAgent",
+      "cursor",
+      "devin",
+      "antigravity",
+      "grok",
+      "droid",
+      "opencode",
+      "pi",
+      "omp",
+    ];
+    const screen = await mountPicker({
+      providers: [...providers.map(readyProvider), WORK_ACCOUNT_STATUS],
+      providerInstances: CODEX_ACCOUNTS,
+      modelOptionsByProviderInstance: WORK_ACCOUNT_MODELS,
+    });
+    try {
+      const strip = page.getByRole("tablist", { name: "Model sources" }).element();
+      expect(strip.scrollWidth).toBeGreaterThan(strip.clientWidth);
+      const isInView = (tab: Element) => {
+        const tabRect = tab.getBoundingClientRect();
+        const stripRect = strip.getBoundingClientRect();
+        return tabRect.left >= stripRect.left - 1 && tabRect.right <= stripRect.right + 1;
+      };
+      // The shortcut to provider settings sits outside the strip and never scrolls away.
+      const addProviders = page.getByRole("tab", { name: "Add providers" }).element();
+      expect(strip.contains(addProviders)).toBe(false);
+
+      // A vertical mouse wheel scrolls the strip sideways.
+      strip.dispatchEvent(
+        new WheelEvent("wheel", { deltaY: 120, bubbles: true, cancelable: true }),
+      );
+      expect(strip.scrollLeft).toBeGreaterThan(0);
+
+      // Walking the tabs with the keyboard brings each newly opened one into view.
+      strip.scrollLeft = 0;
+      for (let step = 0; step < 9; step += 1) {
+        await userEvent.keyboard("{Tab}");
+      }
+      const openTab = strip.querySelector('[aria-selected="true"]')!;
+      await vi.waitFor(() => expect(isInView(openTab)).toBe(true));
+      expect(strip.scrollLeft).toBeGreaterThan(0);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it("offers a started thread only its own account's starred presets", async () => {
     const screen = await mountPicker({ ...multiAccount, lockedProvider: "codex" }, undefined, [
       { provider: "codex", model: GPT_5_4, effort: null, fastMode: null, thinking: null },
