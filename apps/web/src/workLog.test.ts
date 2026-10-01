@@ -2963,31 +2963,28 @@ describe("deriveWorkLogEntries", () => {
 
   it("settles orphaned activity from latest-turn state after a reconnect gap", () => {
     const turnId = TurnId.makeUnsafe("turn-with-reconnect-gap");
-    const entries = deriveWorkLogEntries(
-      [
-        makeActivity({
-          id: "reconnected-command-start",
-          createdAt: "2026-02-23T00:00:01.000Z",
-          kind: "tool.started",
-          summary: "Bash started",
-          turnId,
-          payload: {
-            itemType: "command_execution",
-            title: "Bash",
-            data: {
-              toolCallId: "reconnected-command",
-              command: "sleep 5",
-            },
-          },
-        }),
-      ],
+    const activity = makeActivity({
+      id: "reconnected-command-start",
+      createdAt: "2026-02-23T00:00:01.000Z",
+      kind: "tool.started",
+      summary: "Bash started",
       turnId,
-      {
-        activeTurnId: null,
-        latestTurnState: "error",
-        latestTurnCompletedAt: "2026-02-23T00:00:04.000Z",
+      payload: {
+        itemType: "command_execution",
+        title: "Bash",
+        data: {
+          toolCallId: "reconnected-command",
+          command: "sleep 5",
+        },
       },
-    );
+    });
+    const running = deriveWorkLogEntries([activity], turnId, { activeTurnId: turnId });
+    expect(running[0]?.toolStatus).toBe("running");
+    const entries = deriveWorkLogEntries([activity], turnId, {
+      activeTurnId: null,
+      latestTurnState: "error",
+      latestTurnCompletedAt: "2026-02-23T00:00:04.000Z",
+    });
 
     expect(entries[0]?.liveActivity).toMatchObject({
       state: "failed",
@@ -2995,6 +2992,17 @@ describe("deriveWorkLogEntries", () => {
       elapsedSeconds: 3,
     });
     expect(entries[0]?.toolStatus).toBe("failed");
+    // Reconciliation belongs to the current thread projection, not the retained
+    // activity: recovering the running projection must not keep a cached failure.
+    expect(deriveWorkLogEntries([activity], turnId, { activeTurnId: turnId })).toEqual(running);
+    // A replacement of the same event id carries fresh provider metadata.
+    const replacement = {
+      ...activity,
+      payload: { ...activity.payload, detail: "Provider resumed the command" },
+    };
+    expect(deriveWorkLogEntries([replacement], turnId, { activeTurnId: turnId })[0]?.detail).toBe(
+      "Provider resumed the command",
+    );
   });
 
   it("advances retained elapsed time across metadata-only updates", () => {
