@@ -17,11 +17,9 @@ import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "../ProviderIcon";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   normalizeProviderAccentColor,
-  providerAccountInitials,
   providerAccountQualifiedLabel,
-  shouldShowProviderAccountBadge,
 } from "~/lib/providerInstancePresentation";
-import { ProviderAccountBadge } from "../ProviderAccountBadge";
+import { ProviderAccountDot } from "../ProviderAccountMark";
 import { type ComposerModelPickerTab, STARRED_TAB } from "./ComposerModelPicker.logic";
 import {
   findProviderStatusForInstance,
@@ -54,7 +52,7 @@ function PickerTabButton(props: {
             // why the tab is closed.
             aria-disabled={props.disabled ?? false}
             className={cn(
-              "relative flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted-foreground/70 outline-none transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring/60 aria-disabled:cursor-default aria-disabled:hover:bg-transparent aria-disabled:hover:text-muted-foreground/70",
+              "relative flex h-7 min-w-7 shrink-0 cursor-pointer items-center justify-center gap-1.5 rounded-lg px-1.5 text-muted-foreground/70 outline-none transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring/60 aria-disabled:cursor-default aria-disabled:hover:bg-transparent aria-disabled:hover:text-muted-foreground/70",
               props.active &&
                 // The accent token is theme-injected; fall back to the icon color without it.
                 "text-foreground after:absolute after:inset-x-1.5 after:-bottom-1 after:h-0.5 after:rounded-full after:bg-[var(--tab-accent,var(--color-text-accent,currentColor))]",
@@ -84,8 +82,8 @@ export type ComposerModelPickerProviderTab = {
   /** Account the tab lists models for; a default account shares the provider id. */
   instanceId: ProviderInstanceId;
   label: string;
-  /** Initials telling same-provider accounts apart; null while the icon is unambiguous. */
-  badge: string | null;
+  /** Account name written beside the icon; null while the icon alone identifies it. */
+  name: string | null;
   accentColor?: string | undefined;
   /** Tooltip sentence explaining why the account cannot run right now; null when it can. */
   unavailableLabel: string | null;
@@ -144,9 +142,10 @@ export function resolveComposerModelPickerProviderTabs(input: {
   providerInstances?: ReadonlyArray<ProviderModelPickerInstance> | undefined;
   lockedInstanceId?: ProviderInstanceId | null | undefined;
 }): ComposerModelPickerProviderTab[] {
-  const enabledAccounts = (input.providerInstances ?? []).filter((instance) => instance.enabled);
   return input.options.flatMap((option) => {
-    const accounts = enabledAccounts.filter((instance) => instance.provider === option.value);
+    const accounts = (input.providerInstances ?? []).filter(
+      (instance) => instance.enabled && instance.provider === option.value,
+    );
     const hasSiblingAccounts = accounts.length > 1;
     const tabs =
       accounts.length > 0
@@ -157,12 +156,10 @@ export function resolveComposerModelPickerProviderTabs(input: {
               : account.isDefault
                 ? option.label
                 : account.label,
-            badge: shouldShowProviderAccountBadge(account, enabledAccounts)
-              ? providerAccountInitials(account.label)
-              : null,
+            name: hasSiblingAccounts ? account.label : null,
             accentColor: account.accentColor,
           }))
-        : [{ instanceId: option.value, label: option.label, badge: null, accentColor: undefined }];
+        : [{ instanceId: option.value, label: option.label, name: null, accentColor: undefined }];
     return tabs.map((tab) => {
       const state = resolveAccountTabState({
         label: tab.label,
@@ -178,7 +175,7 @@ export function resolveComposerModelPickerProviderTabs(input: {
         provider: option.value,
         instanceId: tab.instanceId,
         label: tab.label,
-        badge: tab.badge,
+        name: tab.name,
         accentColor: tab.accentColor,
         unavailableLabel: state.unavailableLabel,
         blocked: state.blocked,
@@ -225,16 +222,22 @@ export function ComposerModelPickerTabs(props: {
               className={cn(
                 "size-4",
                 getProviderIconClassName(providerTab.provider, ""),
-                // Only the icon fades, so the initials still say whose tab is closed.
-                providerTab.unavailableLabel !== null && "opacity-35",
+                providerTab.unavailableLabel !== null && "opacity-40",
               )}
             />
-            {providerTab.badge ? (
-              <ProviderAccountBadge
-                initials={providerTab.badge}
-                accentColor={providerTab.accentColor}
-                className="absolute -right-1.5 -bottom-1 origin-bottom-right scale-85"
-              />
+            <ProviderAccountDot
+              accentColor={providerTab.accentColor}
+              className="absolute top-0.5 left-4.5"
+            />
+            {providerTab.name ? (
+              <span
+                className={cn(
+                  "max-w-20 truncate text-ui-sm",
+                  providerTab.unavailableLabel !== null && "opacity-50",
+                )}
+              >
+                {providerTab.name}
+              </span>
             ) : null}
           </PickerTabButton>
         );

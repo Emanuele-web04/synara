@@ -184,7 +184,7 @@ export function AddProviderAccountDialog(props: {
                 accountLabel={label.trim() || "the new account"}
               />
               <span className="block text-ui-sm text-muted-foreground">
-                Optional marker shown on the account&apos;s badge in the picker.
+                Optional. Shows as a dot on the account&apos;s icon in the picker.
               </span>
             </div>
             {configFields.map((field) => (

@@ -9,7 +9,7 @@ import { useState } from "react";
 
 import { ChevronDownIcon, FastModeIcon, SettingsIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
-import { ProviderAccountBadge } from "../ProviderAccountBadge";
+import { ProviderAccountDot } from "../ProviderAccountMark";
 import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "../ProviderIcon";
 import { Button } from "../ui/button";
 import { MenuTrigger } from "../ui/menu";
@@ -27,7 +27,8 @@ export function ComposerModelMenuTrigger(props: {
   provider: ProviderKind;
   /** Set while the provider has several accounts, to tell which one the composer runs in. */
   accountLabel?: string | null | undefined;
-  accountBadge?: string | null | undefined;
+  /** The account's own name, written before the model while the provider has several. */
+  accountName?: string | null | undefined;
   accountAccentColor?: string | undefined;
   modelLabel: string;
   statusLabel: string | null;
@@ -103,15 +104,20 @@ export function ComposerModelMenuTrigger(props: {
               getProviderIconClassName(props.provider, "text-[var(--color-text-foreground)]"),
             )}
           />
-          {props.accountBadge ? (
-            <>
-              <ProviderAccountBadge
-                initials={props.accountBadge}
-                accentColor={props.accountAccentColor}
-                className="shrink-0"
-              />
+          <ProviderAccountDot
+            accentColor={props.accountAccentColor}
+            className="-ms-1 size-1.5 shrink-0 self-start ring-0"
+          />
+          {props.accountName ? (
+            props.hideModelLabel ? (
               <span className="sr-only">{props.accountLabel}</span>
-            </>
+            ) : (
+              <span
+                className={cn("max-w-24 shrink-0 truncate", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)}
+              >
+                {props.accountName}
+              </span>
+            )
           ) : null}
           {props.hideModelLabel ? (
             <span className="sr-only">{label.modelLabel}</span>

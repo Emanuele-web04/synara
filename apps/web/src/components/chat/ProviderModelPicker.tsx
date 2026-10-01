@@ -61,11 +61,9 @@ import { PlusIcon } from "~/lib/icons";
 import { isProviderUsable } from "../../lib/providerAvailability";
 import {
   MISSING_PROVIDER_INSTANCE_LABEL,
-  providerAccountInitials,
   providerAccountQualifiedLabel,
-  shouldShowProviderAccountBadge,
 } from "../../lib/providerInstancePresentation";
-import { ProviderAccountBadge } from "../ProviderAccountBadge";
+import { ProviderAccountDot } from "../ProviderAccountMark";
 
 function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): option is {
   value: ProviderKind;
@@ -755,10 +753,9 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
                     providerIconClassName(option.value, "text-muted-foreground/85"),
                   )}
                 />
-                <ProviderAccountBadge
-                  initials={providerAccountInitials(account.label)}
+                <ProviderAccountDot
                   accentColor={account.accentColor}
-                  className="absolute -right-1.5 -bottom-1"
+                  className="absolute -top-0.5 -right-1 size-1.5"
                 />
               </span>
             );
@@ -941,10 +938,6 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
         instance.provider === activeProvider &&
         instance.instanceId === props.selectedProviderInstanceId,
     );
-  const triggerLabel = selectedProviderInstanceIsMissing
-    ? `${MISSING_PROVIDER_INSTANCE_LABEL} · ${selectedModelLabel}`
-    : selectedModelLabel;
-  const ProviderIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[activeProvider];
   const selectedAccount =
     props.showProviderInstanceChoices === false
       ? undefined
@@ -953,12 +946,21 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
             instance.provider === activeProvider &&
             instance.instanceId === (props.selectedProviderInstanceId ?? activeProvider),
         );
-  const selectedAccountBadge =
-    selectedAccount &&
-    shouldShowProviderAccountBadge(selectedAccount, props.providerInstances ?? [])
-      ? providerAccountInitials(selectedAccount.label)
-      : null;
-
+  // The model alone does not say which account runs it once a provider has several.
+  const selectedAccountHasSiblings =
+    selectedAccount !== undefined &&
+    (props.providerInstances ?? []).some(
+      (instance) =>
+        instance.enabled &&
+        instance.provider === selectedAccount.provider &&
+        instance.instanceId !== selectedAccount.instanceId,
+    );
+  const triggerLabel = selectedProviderInstanceIsMissing
+    ? `${MISSING_PROVIDER_INSTANCE_LABEL} · ${selectedModelLabel}`
+    : selectedAccount && selectedAccountHasSiblings
+      ? `${selectedAccount.label} · ${selectedModelLabel}`
+      : selectedModelLabel;
+  const ProviderIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[activeProvider];
   const setMenuOpen = (nextOpen: boolean) => {
     if (open === undefined) {
       setUncontrolledMenuOpen(nextOpen);
@@ -1006,16 +1008,10 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
               props.activeProviderIconClassName,
             )}
           />
-          {selectedAccount && selectedAccountBadge ? (
-            <>
-              <ProviderAccountBadge
-                initials={selectedAccountBadge}
-                accentColor={selectedAccount.accentColor}
-                className="absolute -right-1.5 -bottom-1"
-              />
-              <span className="sr-only">{selectedAccount.label}</span>
-            </>
-          ) : null}
+          <ProviderAccountDot
+            accentColor={selectedAccount?.accentColor}
+            className="absolute -top-0.5 -right-1 size-1.5 ring-0"
+          />
         </span>
       }
       label={triggerLabel}

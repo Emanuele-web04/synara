@@ -3,10 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   deriveProviderAccountId,
   normalizeProviderAccentColor,
-  providerAccountInitials,
   providerAccountQualifiedLabel,
   resolveProviderInstanceLabel,
-  shouldShowProviderAccountBadge,
   validateProviderAccountId,
 } from "./providerInstancePresentation";
 
@@ -15,28 +13,6 @@ describe("provider instance presentation", () => {
     expect(
       resolveProviderInstanceLabel([{ instanceId: "codex", label: "Personal" }], "codex_deleted"),
     ).toBe("Missing account");
-  });
-});
-
-describe("providerAccountInitials", () => {
-  it.each([
-    ["Work", "WO"],
-    ["work", "WO"],
-    ["Claude 2", "C2"],
-    ["Work laptop extra", "WL"],
-    ["codex_personal", "CP"],
-    ["side-project", "SP"],
-    ["  Padded   Name  ", "PN"],
-    ["X", "X"],
-    ["", ""],
-    ["   ", ""],
-  ])("marks %j as %j", (label, initials) => {
-    expect(providerAccountInitials(label)).toBe(initials);
-  });
-
-  it("keeps astral characters whole instead of splitting surrogate pairs", () => {
-    expect(providerAccountInitials("🚀 Launch")).toBe("🚀L");
-    expect(providerAccountInitials("🚀🛰️x")).toBe("🚀🛰");
   });
 });
 
@@ -52,33 +28,6 @@ describe("normalizeProviderAccentColor", () => {
       expect(normalizeProviderAccentColor(value)).toBeUndefined();
     },
   );
-});
-
-describe("shouldShowProviderAccountBadge", () => {
-  const codex = { instanceId: "codex", provider: "codex", enabled: true } as const;
-  const work = { instanceId: "codex_work", provider: "codex", enabled: true } as const;
-  const claude = { instanceId: "claudeAgent", provider: "claudeAgent", enabled: true } as const;
-
-  it("stays off while the provider icon alone identifies the account", () => {
-    expect(shouldShowProviderAccountBadge(codex, [codex, claude])).toBe(false);
-  });
-
-  it("turns on for every account of a provider that has several enabled", () => {
-    expect(shouldShowProviderAccountBadge(codex, [codex, work, claude])).toBe(true);
-    expect(shouldShowProviderAccountBadge(work, [codex, work, claude])).toBe(true);
-    expect(shouldShowProviderAccountBadge(claude, [codex, work, claude])).toBe(false);
-  });
-
-  it("ignores disabled siblings, which no picker offers", () => {
-    expect(shouldShowProviderAccountBadge(codex, [codex, { ...work, enabled: false }])).toBe(false);
-  });
-
-  it("turns on for a lone account with a valid accent color", () => {
-    expect(shouldShowProviderAccountBadge({ ...codex, accentColor: "#2563eb" }, [codex])).toBe(
-      true,
-    );
-    expect(shouldShowProviderAccountBadge({ ...codex, accentColor: "blue" }, [codex])).toBe(false);
-  });
 });
 
 describe("providerAccountQualifiedLabel", () => {

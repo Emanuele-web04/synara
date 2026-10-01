@@ -292,7 +292,7 @@ describe("ProviderModelPicker", () => {
     }
   });
 
-  it("lists each account of a provider as its own entry with an initials badge", async () => {
+  it("lists each account of a provider as its own named entry", async () => {
     const mounted = await mountPicker({
       provider: "codex",
       model: "gpt-5-codex",
@@ -341,13 +341,10 @@ describe("ProviderModelPicker", () => {
     });
 
     try {
-      // The trigger marks the account the selection runs in.
-      const triggerBadge = page
-        .getByRole("button")
-        .element()
-        .querySelector<HTMLElement>("[data-accent]");
-      expect(triggerBadge?.textContent).toBe("WO");
-      expect(triggerBadge?.dataset.accent).toBe("#16a34a");
+      // The trigger names the account the selection runs in.
+      const trigger = page.getByRole("button").element();
+      expect(trigger.textContent).toContain("Work · GPT-5 Codex");
+      expect(trigger.querySelector<HTMLElement>("[data-accent]")?.dataset.accent).toBe("#16a34a");
 
       await page.getByRole("button").click();
       await expect

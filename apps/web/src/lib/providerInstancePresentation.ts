@@ -17,18 +17,6 @@ export function resolveProviderInstanceLabel(
   );
 }
 
-// Two-character marker telling same-provider accounts apart on their identical icons:
-// "Work" -> "WO", "Claude 2" -> "C2", "codex_personal" -> "CP".
-export function providerAccountInitials(label: string): string {
-  const words = label.replace(/[_-]+/gu, " ").split(/\s+/u).filter(Boolean);
-  // Array.from keeps emoji and other astral characters whole.
-  const characters =
-    words.length > 1
-      ? words.slice(0, 2).map((word) => Array.from(word)[0] ?? "")
-      : Array.from(words[0] ?? "").slice(0, 2);
-  return characters.join("").toUpperCase();
-}
-
 const ACCENT_COLOR_PATTERN = /^#[0-9a-f]{6}$/iu;
 
 /** Swatches offered when picking an account's accent color. */
@@ -45,28 +33,6 @@ export const PROVIDER_ACCENT_COLOR_SWATCHES = [
 export function normalizeProviderAccentColor(value: string | null | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed && ACCENT_COLOR_PATTERN.test(trimmed) ? trimmed.toLowerCase() : undefined;
-}
-
-type BadgeAccount = {
-  readonly instanceId: ProviderInstanceId;
-  readonly provider: ProviderKind;
-  readonly enabled: boolean;
-  readonly accentColor?: string | undefined;
-};
-
-// An account wears its initials when the icon alone is ambiguous (another enabled
-// account of the same provider) or when the user gave it an accent color.
-export function shouldShowProviderAccountBadge(
-  account: BadgeAccount,
-  accounts: ReadonlyArray<BadgeAccount>,
-): boolean {
-  if (normalizeProviderAccentColor(account.accentColor) !== undefined) return true;
-  return accounts.some(
-    (other) =>
-      other.provider === account.provider &&
-      other.instanceId !== account.instanceId &&
-      other.enabled,
-  );
 }
 
 // "Codex · Work" unless the account name already carries the provider name.

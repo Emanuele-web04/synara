@@ -178,10 +178,11 @@ it("lists every account of a provider, default included, with a status title and
   expect(codexAccountRow("Codex").textContent).toContain("Authenticated");
   expect(codexAccountRow("Work").textContent).toContain("Not authenticated");
   expect(codexAccountRow("Old").textContent).toContain("Disabled");
-  // Initials tell the accounts apart; the accent tints the one that has it.
-  const workBadge = codexAccountRow("Work").querySelector<HTMLElement>("[data-accent]");
-  expect(workBadge?.textContent).toBe("WO");
-  expect(workBadge?.dataset.accent).toBe("#16a34a");
+  // Names tell the accounts apart; an accent washes the icon of the one that has it.
+  expect(codexAccountRow("Work").querySelector<HTMLElement>("[data-accent]")?.dataset.accent).toBe(
+    "#16a34a",
+  );
+  expect(codexAccountRow("Codex").querySelector("[data-accent]")).toBeNull();
 
   await expect
     .element(page.getByRole("switch", { name: "Enable Codex", exact: true }))

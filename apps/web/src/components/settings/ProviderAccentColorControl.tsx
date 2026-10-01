@@ -1,5 +1,5 @@
 // FILE: ProviderAccentColorControl.tsx
-// Purpose: Swatch row for an account's optional accent color, shown on its initials badge.
+// Purpose: Swatch row for an account's optional accent color, shown as a dot on its icon.
 // Layer: Settings UI components
 // Depends on: account presentation helpers.
 

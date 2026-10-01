@@ -495,7 +495,7 @@ describe("ComposerModelPicker with several accounts", () => {
     modelOptionsByProviderInstance: WORK_ACCOUNT_MODELS,
   };
 
-  it("gives each enabled account its own tab with an initials badge", async () => {
+  it("gives each enabled account its own named tab", async () => {
     const screen = await mountPicker({
       ...multiAccount,
       providerInstances: [
@@ -513,11 +513,11 @@ describe("ComposerModelPicker with several accounts", () => {
       const defaultTab = page.getByRole("tab", { name: "Codex", exact: true });
       const workTab = page.getByRole("tab", { name: "Codex · Work", exact: true });
       await expect.element(defaultTab).toHaveAttribute("aria-selected", "true");
-      expect(defaultTab.element().textContent).toBe("CO");
-      expect(workTab.element().textContent).toBe("WO");
+      expect(defaultTab.element().textContent).toBe("Codex");
+      expect(workTab.element().textContent).toBe("Work");
       // A disabled account is managed in settings, not offered in the picker.
       expect(page.getByRole("tab", { name: /Old/u }).elements()).toHaveLength(0);
-      // Claude has a single account, so its icon needs no marker.
+      // Claude has a single account, so its icon says it all.
       expect(page.getByRole("tab", { name: "Claude" }).element().textContent).toBe("");
     } finally {
       await screen.unmount();
@@ -541,7 +541,7 @@ describe("ComposerModelPicker with several accounts", () => {
     }
   });
 
-  it("marks the composer's account on the trigger, tinted with its accent color", async () => {
+  it("names the composer's account on the trigger and dots it with its accent color", async () => {
     const screen = await mountPicker({
       ...multiAccount,
       selectedProviderInstanceId: "codex_work",
@@ -549,23 +549,23 @@ describe("ComposerModelPicker with several accounts", () => {
     });
     try {
       const trigger = page.getByRole("button", { name: "Change model and reasoning" }).element();
-      const badge = trigger.querySelector<HTMLElement>("[data-accent]");
-      expect(badge?.textContent).toBe("WO");
-      expect(badge?.dataset.accent).toBe("#16a34a");
-      expect(trigger.textContent).toContain("Codex · Work");
+      const dot = trigger.querySelector<HTMLElement>("[data-accent]");
+      expect(dot?.dataset.accent).toBe("#16a34a");
+      // The account's name is written before the model.
+      expect(trigger.textContent).toContain("Work");
     } finally {
       await screen.unmount();
     }
   });
 
-  it("badges a lone account once it has an accent color", async () => {
+  it("dots a lone account that has an accent color without naming it", async () => {
     const screen = await mountPicker({
       providerInstances: [{ ...CODEX_ACCOUNTS[0]!, accentColor: "#2563eb" }],
     });
     try {
-      expect(page.getByRole("tab", { name: "Codex", exact: true }).element().textContent).toBe(
-        "CO",
-      );
+      const tab = page.getByRole("tab", { name: "Codex", exact: true }).element();
+      expect(tab.textContent).toBe("");
+      expect(tab.querySelector<HTMLElement>("[data-accent]")?.dataset.accent).toBe("#2563eb");
     } finally {
       await screen.unmount();
     }

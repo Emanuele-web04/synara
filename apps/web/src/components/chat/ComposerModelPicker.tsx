@@ -35,7 +35,7 @@ import {
 import { SearchIcon } from "~/lib/icons";
 import { starredModelInstanceId, starredModelSlotKey } from "~/lib/starredModels";
 import { cn, isMacNavigatorPlatform } from "~/lib/utils";
-import { ProviderAccountAvatar } from "../ProviderAccountBadge";
+import { ProviderAccountAvatar } from "../ProviderAccountMark";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Menu, MenuGroup, MenuGroupLabel } from "../ui/menu";
@@ -489,8 +489,8 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     >
       <ComposerModelMenuTrigger
         provider={activeProvider}
-        accountLabel={activeProviderTab?.badge ? activeProviderTab.label : null}
-        accountBadge={activeProviderTab?.badge ?? null}
+        accountLabel={activeProviderTab?.name ? activeProviderTab.label : null}
+        accountName={activeProviderTab?.name ?? null}
         accountAccentColor={activeProviderTab?.accentColor}
         modelLabel={modelLabel}
         statusLabel={resolveComposerTraitStatusLabel(currentTraitSelection)}
@@ -565,9 +565,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
                 {openProviderTab ? (
                   <ProviderAccountAvatar
                     provider={openProviderTab.provider}
-                    initials={openProviderTab.badge}
                     accentColor={openProviderTab.accentColor}
-                    className="[&_[data-accent],&_[aria-hidden]]:ring-popover"
                   />
                 ) : null}
                 <span className="text-ui font-medium text-foreground">

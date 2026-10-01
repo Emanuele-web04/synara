@@ -72,11 +72,7 @@ import {
   XIcon,
 } from "~/lib/icons";
 import { copyTextToClipboard } from "~/hooks/useCopyToClipboard";
-import {
-  normalizeProviderAccentColor,
-  providerAccountInitials,
-  shouldShowProviderAccountBadge,
-} from "~/lib/providerInstancePresentation";
+import { normalizeProviderAccentColor } from "~/lib/providerInstancePresentation";
 import {
   type ProviderAccountStatusSummary,
   type ProviderAccountStatusTone,
@@ -118,7 +114,7 @@ import { SelectItem } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
 import { ProviderIcon } from "../ProviderIcon";
-import { ProviderAccountAvatar } from "../ProviderAccountBadge";
+import { ProviderAccountAvatar } from "../ProviderAccountMark";
 import { StatusChip } from "../ui/status-chip";
 import {
   AddProviderAccountDialog,
@@ -1354,9 +1350,6 @@ function ProviderAccountsControl(props: {
       (explicit.displayName !== undefined ||
         explicit.accentColor !== undefined ||
         explicit.enabled === false);
-    const badgeInitials = shouldShowProviderAccountBadge(account, allAccounts)
-      ? providerAccountInitials(account.label)
-      : null;
     return (
       <div
         className={cn(
@@ -1370,12 +1363,7 @@ function ProviderAccountsControl(props: {
         aria-label={`${account.label} account`}
       >
         <div className="flex items-start gap-3 border-b border-border/70 bg-muted/25 px-3 py-3">
-          <ProviderAccountAvatar
-            provider={provider}
-            initials={badgeInitials}
-            accentColor={account.accentColor}
-            size="md"
-          />
+          <ProviderAccountAvatar provider={provider} accentColor={account.accentColor} size="md" />
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 items-center gap-2">
               <span className="truncate text-ui-lg font-medium text-foreground">
@@ -1601,15 +1589,7 @@ function ProviderAccountsControl(props: {
                   className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring/60"
                   onClick={() => setSelectedAccountId(account.instanceId)}
                 >
-                  <ProviderAccountAvatar
-                    provider={provider}
-                    initials={
-                      shouldShowProviderAccountBadge(account, allAccounts)
-                        ? providerAccountInitials(account.label)
-                        : null
-                    }
-                    accentColor={account.accentColor}
-                  />
+                  <ProviderAccountAvatar provider={provider} accentColor={account.accentColor} />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-ui-sm font-medium text-foreground">
                       {account.label}
