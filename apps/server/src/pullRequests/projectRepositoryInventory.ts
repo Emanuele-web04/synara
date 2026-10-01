@@ -1,4 +1,4 @@
-import type { OrchestrationProject, ProjectId, PullRequestsListResult } from "@synara/contracts";
+import type { GitHubInboxListError, OrchestrationProject, ProjectId } from "@synara/contracts";
 import { Effect } from "effect";
 
 import type {
@@ -14,7 +14,7 @@ export type ProjectRepositoryResolution = {
 };
 
 export type ProjectRepositoryIndex = {
-  readonly errors: PullRequestsListResult["errors"];
+  readonly errors: ReadonlyArray<GitHubInboxListError>;
   readonly repositoryKeysByProject: ReadonlyMap<ProjectId, Set<string>>;
   readonly uniqueRepositories: ReadonlyMap<
     string,
@@ -50,13 +50,17 @@ export function resolveProjectRepositoryInventories(input: {
 export function indexProjectRepositoryInventories(
   resolved: ReadonlyArray<ProjectRepositoryResolution>,
 ): ProjectRepositoryIndex {
-  const errors = resolved.flatMap(({ project, error }) =>
+  const errors = resolved.flatMap(({ project, error }): GitHubInboxListError[] =>
     error
       ? [
           {
             projectId: project.id,
             projectTitle: project.title,
+            repository: null,
             message: error instanceof Error ? error.message : "Repository lookup failed.",
+            reason: "unavailable",
+            retryAt: null,
+            showingCachedData: false,
           },
         ]
       : [],
@@ -120,15 +124,19 @@ export function cleanupUnconfiguredPullRequestPins(input: {
           isPinned: false,
         })
         .pipe(
-          Effect.map((): PullRequestsListResult["errors"][number] | null => null),
+          Effect.map((): GitHubInboxListError | null => null),
           Effect.catch((error) => {
             const project = input.projectById.get(row.projectId);
-            return Effect.succeed(
+            return Effect.succeed<GitHubInboxListError | null>(
               project
                 ? {
                     projectId: project.id,
                     projectTitle: project.title,
-                    message: `Stale pull request pin cleanup failed: ${error.message}`,
+                    repository: row.repositoryKey,
+                    message: `Stale pin cleanup failed: ${error.message}`,
+                    reason: "unavailable",
+                    retryAt: null,
+                    showingCachedData: false,
                   }
                 : null,
             );

@@ -52,12 +52,6 @@ import {
 } from "./rightDockPaneMeta";
 import { useDesktopTopBarWindowControlsGutterClassName } from "~/hooks/useDesktopTopBarGutter";
 
-// Shared sizing defaults for dock hosts: the resize floor for a single readable pane and the
-// "half the shell, but never cramped" opening width. The thread route tunes its own values
-// around the composer; simpler hosts (e.g. the /pull-requests route) use these as-is.
-export const RIGHT_DOCK_MIN_WIDTH = 26 * 16;
-export const RIGHT_DOCK_DEFAULT_WIDTH = "max(28rem, calc(50vw - 8rem))";
-
 // Pane kinds whose content has a natural width, opened at that size rather than
 // at the even split. The device pane frames a portrait phone, so its useful
 // width is whatever lets the phone reach full height: a ~19.5:9 chassis stays
@@ -71,6 +65,9 @@ interface RightDockProps {
   state: RightDockThreadState;
   minWidth: number;
   defaultWidth: string;
+  /** Share of the shell the dock takes each time it opens. The chat thread dock is an even
+   *  split (the default, 0.5); a host whose dock is a side companion can open it narrower. */
+  openWidthFraction?: number;
   shouldAcceptWidth: (context: { nextWidth: number; wrapper: HTMLElement }) => boolean;
   paneLabelOverrides?: Record<string, string | undefined>;
   // Per-pane tab glyph overrides (same shape as label overrides) — e.g. a pull request pane
@@ -78,6 +75,8 @@ interface RightDockProps {
   paneIconOverrides?: Record<string, ReactNode | undefined>;
   addMenuKinds: readonly RightDockPaneKind[];
   launcherItems?: readonly RightDockLauncherItem[];
+  /** A plain "+" for hosts whose only addable thing is one kind (no menu to choose from). */
+  addAction?: { label: string; onClick: () => void };
   // Single-pane hosts omit selection so their lone tab label is static; multi-pane chat hosts
   // provide the callback and keep the normal selectable-tab behavior.
   onSelectPane?: ((paneId: string) => void) | undefined;
@@ -90,7 +89,11 @@ interface RightDockProps {
   browserRuntimeMode?: DockPaneRuntimeMode;
   renderPane: (
     pane: RightDockPane,
-    context: { runtimeMode: DockPaneRuntimeMode; isActive: boolean; isVisible: boolean },
+    context: {
+      runtimeMode: DockPaneRuntimeMode;
+      isActive: boolean;
+      isVisible: boolean;
+    },
   ) => ReactNode;
 }
 
@@ -193,11 +196,11 @@ export function RightDock(props: RightDockProps) {
     useDesktopTopBarWindowControlsGutterClassName();
 
   const keepMountedPaneIds = useKeepMountedPaneIds(props.state.panes, activePane);
-  // The dock must open as an exact 50/50 split of the chat shell. The CSS
-  // default can only approximate half (it cannot observe the resizable left
+  // The dock must open as an exact share of the chat shell (half by default). The
+  // CSS default can only approximate it (it cannot observe the resizable left
   // sidebar), so on every open we measure the shell row hosting chat + dock and
-  // pin the dock width to exactly half of it. Mid-session drags still resize
-  // freely; the next open re-centers the split.
+  // pin the dock width to exactly that share. Mid-session drags still resize
+  // freely; the next open restores the share.
   const contentRef = useRef<HTMLDivElement | null>(null);
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const expansionKey = props.motionKey ?? "dock";
@@ -245,6 +248,7 @@ export function RightDock(props: RightDockProps) {
     if (!props.state.open) setExpandedKey(null);
   }, [props.state.open]);
   const minWidth = props.minWidth;
+  const openWidthFraction = props.openWidthFraction ?? 0.5;
   const activePaneKind = activePane?.kind ?? null;
   useEffect(() => {
     if (!props.state.open) {
@@ -259,11 +263,12 @@ export function RightDock(props: RightDockProps) {
     // stranded in empty space, so kinds that render a fixed-aspect object open
     // at their own comfortable size instead of the even split.
     const preferredWidth = activePaneKind ? RIGHT_DOCK_PREFERRED_WIDTH[activePaneKind] : undefined;
-    const openWidth = preferredWidth ?? Math.round(shell.getBoundingClientRect().width / 2);
+    const openWidth =
+      preferredWidth ?? Math.round(shell.getBoundingClientRect().width * openWidthFraction);
     if (openWidth > 0) {
       wrapper.style.setProperty("--sidebar-width", `${Math.max(minWidth, openWidth)}px`);
     }
-  }, [props.state.open, minWidth, activePaneKind]);
+  }, [props.state.open, minWidth, openWidthFraction, activePaneKind]);
   const renderedPanes = props.state.panes.filter(
     (pane) => pane.id === activePane?.id || keepMountedPaneIds.has(pane.id),
   );
@@ -373,12 +378,26 @@ export function RightDock(props: RightDockProps) {
                 </ComposerPickerMenuPopup>
               </Menu>
             ) : null}
+            {props.state.panes.length > 0 && props.addMenuKinds.length === 0 && props.addAction ? (
+              <IconButton
+                variant="chrome"
+                size="icon-xs"
+                label={props.addAction.label}
+                tooltip={props.addAction.label}
+                tooltipSide="bottom"
+                className={DOCK_HEADER_ICON_BUTTON_CLASS}
+                onClick={props.addAction.onClick}
+              >
+                <PlusSignIcon className="size-3.5" />
+              </IconButton>
+            ) : null}
             {!isMobile && (maximized || activePane !== null) ? (
               <IconButton
                 variant="chrome"
                 size="icon-xs"
                 label={maximized ? "Restore panel" : "Maximize panel"}
                 tooltip={maximized ? "Restore panel" : "Maximize panel"}
+                tooltipSide="bottom"
                 aria-pressed={maximized}
                 className={DOCK_HEADER_ICON_BUTTON_CLASS}
                 onClick={() => setExpandedKey(maximized ? null : expansionKey)}

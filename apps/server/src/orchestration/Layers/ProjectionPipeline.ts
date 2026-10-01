@@ -4,6 +4,7 @@ import {
 } from "../../persistence/messageTextChunks.ts";
 import { ApprovalRequestId, CommandId, type OrchestrationEvent } from "@synara/contracts";
 import { resolveHumanMessageAt } from "@synara/shared/threadSummary";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
 import { clearRemovedAsyncUserInputResponses } from "@synara/shared/asyncUserInput";
 import { isGroupContainerKind } from "@synara/shared/projectContainers";
 import {
@@ -591,6 +592,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             subagentRole: event.payload.subagentRole ?? null,
             forkSourceThreadId: event.payload.forkSourceThreadId,
             sidechatSourceThreadId: event.payload.sidechatSourceThreadId,
+            sidechatContext: event.payload.sidechatContext,
             sidechatLastActivityAt: event.payload.sidechatLastActivityAt,
             sidechatExpiredAt: event.payload.sidechatExpiredAt,
             lastKnownPr: event.payload.lastKnownPr ?? null,
@@ -863,7 +865,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                   interactionMode: event.payload.interactionMode,
                 }
               : {}),
-            ...(existingRow.value.sidechatSourceThreadId
+            ...(isSidechatThread(existingRow.value)
               ? { sidechatLastActivityAt: event.payload.createdAt }
               : {}),
             updatedAt: event.payload.createdAt,
@@ -984,7 +986,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             thread: {
               ...existingRow.value,
               ...(event.type === "thread.session-set" &&
-              existingRow.value.sidechatSourceThreadId &&
+              isSidechatThread(existingRow.value) &&
               !existingRow.value.sidechatExpiredAt
                 ? { sidechatLastActivityAt: event.payload.session.updatedAt }
                 : {}),

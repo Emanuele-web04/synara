@@ -195,10 +195,13 @@ import {
   PullRequestActionInput,
   PullRequestCommentInput,
   PullRequestDetailInput,
-  PullRequestReviewRequestCountInput,
   PullRequestSetPinnedInput,
-  PullRequestsListInput,
 } from "./pullRequests";
+import {
+  GitHubInboxListInput,
+  GitHubIssueCommentInput,
+  GitHubIssueDetailInput,
+} from "./githubInbox";
 import {
   ExternalMcpCreateIntegrationInput,
   ExternalMcpRefreshPairingInput,
@@ -269,9 +272,10 @@ export const WS_METHODS = {
   gitPullRequestSnapshot: "git.pullRequestSnapshot",
   gitPreparePullRequestThread: "git.preparePullRequestThread",
 
-  // Global pull request methods
-  pullRequestsList: "pullRequests.list",
-  pullRequestsReviewRequestCount: "pullRequests.reviewRequestCount",
+  // GitHub inbox and global pull request methods
+  githubInboxList: "githubInbox.list",
+  githubInboxIssueDetail: "githubInbox.issueDetail",
+  githubInboxIssueComment: "githubInbox.issueComment",
   pullRequestsDetail: "pullRequests.detail",
   pullRequestsDiff: "pullRequests.diff",
   pullRequestsAction: "pullRequests.action",
@@ -540,13 +544,16 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.gitPreparePullRequestThread, GitPreparePullRequestThreadInput),
 
   // Global pull requests
-  tagRequestBody(WS_METHODS.pullRequestsList, PullRequestsListInput),
-  tagRequestBody(WS_METHODS.pullRequestsReviewRequestCount, PullRequestReviewRequestCountInput),
   tagRequestBody(WS_METHODS.pullRequestsDetail, PullRequestDetailInput),
   tagRequestBody(WS_METHODS.pullRequestsDiff, PullRequestDetailInput),
   tagRequestBody(WS_METHODS.pullRequestsAction, PullRequestActionInput),
   tagRequestBody(WS_METHODS.pullRequestsComment, PullRequestCommentInput),
   tagRequestBody(WS_METHODS.pullRequestsSetPinned, PullRequestSetPinnedInput),
+
+  // GitHub inbox (pull requests and issues)
+  tagRequestBody(WS_METHODS.githubInboxList, GitHubInboxListInput),
+  tagRequestBody(WS_METHODS.githubInboxIssueDetail, GitHubIssueDetailInput),
+  tagRequestBody(WS_METHODS.githubInboxIssueComment, GitHubIssueCommentInput),
 
   // Terminal methods
   tagRequestBody(WS_METHODS.terminalOpen, TerminalOpenInput),

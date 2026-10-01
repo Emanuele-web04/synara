@@ -1206,10 +1206,6 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
     // which leaks unrelated retry pressure across this file's many mounts.
     return { models: [], source: "unsupported", cached: false };
   }
-  // The sidebar badge reads this on every chat; keep its RPC response contract-valid.
-  if (tag === WS_METHODS.pullRequestsReviewRequestCount) {
-    return { count: 0, incomplete: false };
-  }
   if (tag === WS_METHODS.projectsListDevServers) {
     return { servers: [] };
   }
@@ -1219,6 +1215,18 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
   // The sidebar reads to-dos on Beta hosts; the `{}` fallback would fail to decode.
   if (tag === WS_METHODS.todoList) {
     return { todos: [] };
+  }
+  // The Code review badge shares the inbox list; keep its background read contract-valid.
+  if (tag === WS_METHODS.githubInboxList) {
+    return {
+      viewer: null,
+      items: [],
+      errors: [],
+      repositoryBatches: [],
+      rateLimit: null,
+      reviewRequestedCount: 0,
+      reviewRequestedCountIncomplete: false,
+    };
   }
   if (tag === WS_METHODS.gitListBranches) {
     const cwd = typeof body.cwd === "string" ? body.cwd : null;
@@ -2479,7 +2487,7 @@ describe("ChatView transcript geometry (full app)", () => {
           await page.getByRole("menuitem", { name: "Customize…", exact: true }).click();
         } else {
           page
-            .getByRole("button", { name: "Pull requests", exact: true })
+            .getByRole("button", { name: "Code review", exact: true })
             .element()
             .dispatchEvent(
               new MouseEvent("contextmenu", { bubbles: true, clientX: 120, clientY: 160 }),
@@ -8204,6 +8212,37 @@ describe("ChatView transcript geometry (full app)", () => {
     } finally {
       await mounted.cleanup();
       restoreNativeApi();
+    }
+  });
+
+  it("sizes a standalone side chat's empty landing for its item and a narrow dock", async () => {
+    const snapshot = addThreadToSnapshot(createDraftOnlySnapshot(), THREAD_ID);
+    const sidechat = {
+      ...snapshot.threads[0]!,
+      session: null,
+      sidechatContext: {
+        kind: "github-item" as const,
+        itemKind: "pullRequest" as const,
+        repository: "acme/widgets",
+        number: 1368,
+        url: "https://github.com/acme/widgets/pull/1368",
+      },
+    };
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: { ...snapshot, threads: [sidechat] },
+    });
+
+    try {
+      await expect
+        .element(page.getByTestId("empty-landing-heading"))
+        .toHaveTextContent("Ask about PR #1368");
+      // No project, environment, branch, or Temporary tray, and no import banner.
+      expect(document.querySelector('[data-empty-landing-controls="true"]')).toBeNull();
+      expect(document.body.textContent).not.toContain("Import your Claude Code");
+      expect(document.body.innerHTML).toContain("Ask about this pull request");
+    } finally {
+      await mounted.cleanup();
     }
   });
 

@@ -86,6 +86,7 @@ import {
 } from "./composerPickerStyles";
 import { routeSplitBrowserPanelOpenRequest } from "./browserPanelOpenRequest";
 import { cn } from "~/lib/utils";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
 
 const SPLIT_PANE_PANEL_DEFAULT_WIDTH_PX = 22 * 16;
 const BROWSER_SPLIT_PANE_PANEL_DEFAULT_WIDTH_PX = 30 * 16;
@@ -930,7 +931,7 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
   const selectableThreads = useMemo(
     () =>
       threads
-        .filter((thread) => !thread.sidechatSourceThreadId)
+        .filter((thread) => !isSidechatThread(thread))
         .toSorted(
           (left, right) =>
             Date.parse(right.updatedAt ?? right.createdAt) -

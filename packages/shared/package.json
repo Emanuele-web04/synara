@@ -192,6 +192,10 @@
       "types": "./src/sidechatExpiry.ts",
       "import": "./src/sidechatExpiry.ts"
     },
+    "./sidechatThread": {
+      "types": "./src/sidechatThread.ts",
+      "import": "./src/sidechatThread.ts"
+    },
     "./threadSummary": {
       "types": "./src/threadSummary.ts",
       "import": "./src/threadSummary.ts"

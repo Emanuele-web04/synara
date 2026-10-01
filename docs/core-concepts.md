@@ -21,10 +21,12 @@ using separate worktrees also have separate working directories and branches.
 ## The main surfaces
 
 - **Sidebar** — projects, spaces, tasks, and activity requiring attention. The default rail layout
-  is a fixed column of icon tabs for Home, Spaces, Kanban (Tasks in Beta), Pull requests, Automations, Hubs (Beta), and
+  is a fixed column of icon tabs for Home, Spaces, Kanban (Tasks in Beta), Code review, Automations, Hubs (Beta), and
   Settings, with the thread panel beside it and the route shown as a card inset from the window.
   Open threads appear as tabs across the top of the chat. The classic single-column sidebar remains
   available in Settings → General → Sidebar layout.
+- **Code review** — pull requests and issues from the GitHub repositories of your projects, with a
+  detail pane and three actions on every item (see [Code review](#code-review))
 - **Tasks** (Beta; Stable keeps Kanban) — a to-do list for anything you need to do, with or without
   a project. Select a to-do to open its floating card, then hand it to an agent with **Start**: pick the
   provider, model, and effort, the project or folder it works in, and a new or existing chat. The
@@ -88,6 +90,32 @@ the same task and ownership boundary.
 Sidechats inherit the source chat's selected permissions, including Full access. Approve for me
 is preserved when the selected provider and model support it; otherwise the sidechat uses Ask for
 approval. You can change a sidechat's permissions independently after creating it.
+
+A sidechat can also stand alone, with no source chat: **Ask** on a Code review item opens one about
+that pull request or issue. It has no transcript to import and no permissions to inherit, so it
+starts in Ask for approval, runs in the project's own checkout without switching branches, and
+is told to treat the item's text as untrusted reference data. Like any sidechat it stays out of
+the thread list and expires after an hour of inactivity.
+
+## Code review
+
+Code review lists the open or closed pull requests and issues of the GitHub repositories behind
+your projects: each project contributes the repository of its current branch remote (or
+`remote.pushDefault`, then `origin`), and **Include fork upstreams** in Settings adds its other
+GitHub remotes. Two projects on one repository share one list. Filters (kind, projects, state,
+involvement, labels) stay local and are remembered; GitHub is refreshed about every five minutes
+while the page is visible, on window focus, and with the refresh button.
+
+Every item offers three actions:
+
+- **Send to agent** opens a new draft thread in the item's project with the item attached as a
+  card. For a pull request, Synara first checks out its branch (worktree or local, following
+  **Settings → General → New threads**). You write the instructions and send; nothing starts
+  on its own. When the repository belongs to several projects, you pick the project.
+- **Ask** opens a standalone sidechat about the item in a dock beside it, so you never leave
+  Code review. Asking again reopens the item's live sidechat; `mod+alt+s` toggles it and Escape closes
+  it. In a chat thread's pull request panel, Ask uses that thread's own sidechat instead.
+- **Open on GitHub**.
 
 ## Environments
 

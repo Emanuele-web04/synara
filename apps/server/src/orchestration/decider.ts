@@ -26,6 +26,7 @@ import {
   workspaceRootsEqual,
 } from "@synara/shared/threadWorkspace";
 import { collectSubagentDescendants } from "@synara/shared/threadHierarchy";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
 import { autoRuntimeModeSelectionIssue } from "@synara/shared/runtimeMode";
 import { isGroupContainerKind } from "@synara/shared/projectContainers";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
@@ -102,6 +103,30 @@ function validateSidechatExecutionAvailable(
         }),
       )
     : Effect.void;
+}
+
+// A standalone sidechat is a top-level, user-created thread in the project's own checkout:
+// no source thread to fork or return to, no parent, no worktree or branch switch.
+function validateStandaloneSidechatCreate(
+  command: Extract<OrchestrationCommand, { type: "thread.create" }>,
+) {
+  const conflict =
+    command.sourceThreadId !== undefined ||
+    command.sourceTurnId !== undefined ||
+    command.creationSource !== undefined ||
+    command.parentThreadId != null
+      ? "A standalone side chat cannot also have a source or parent thread."
+      : (command.envMode ?? "local") !== "local" || command.worktreePath != null
+        ? "A standalone side chat runs in the project's local checkout."
+        : null;
+  return conflict === null
+    ? Effect.void
+    : Effect.fail(
+        new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: conflict,
+        }),
+      );
 }
 
 function validateAutoRuntimeMode(
@@ -1052,6 +1077,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       if (command.creationSource !== "provider_native") {
         yield* validateAutoRuntimeMode(command, command.modelSelection, command.runtimeMode);
       }
+      const sidechatContext = command.sidechatContext ?? null;
+      if (sidechatContext !== null) {
+        yield* validateStandaloneSidechatCreate(command);
+      }
       return {
         ...withEventBase({
           aggregateKind: "thread",
@@ -1086,6 +1115,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           subagentNickname: command.subagentNickname,
           subagentRole: command.subagentRole,
           forkSourceThreadId: null,
+          // A standalone sidechat starts its inactivity clock at creation, like a forked one.
+          ...(sidechatContext !== null
+            ? {
+                sidechatContext,
+                sidechatLastActivityAt: command.createdAt,
+                sidechatExpiredAt: null,
+              }
+            : {}),
           lastKnownPr: command.lastKnownPr,
           handoff: null,
           createdAt: command.createdAt,
@@ -1299,7 +1336,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
 
     case "thread.sidechat.activity.record": {
       const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
-      if (!thread.sidechatSourceThreadId) {
+      if (!isSidechatThread(thread)) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: `Thread '${command.threadId}' is not a side chat.`,
@@ -1329,7 +1366,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
 
     case "thread.sidechat.expire": {
       const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
-      if (!thread.sidechatSourceThreadId) {
+      if (!isSidechatThread(thread)) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
           detail: `Thread '${command.threadId}' is not a side chat.`,

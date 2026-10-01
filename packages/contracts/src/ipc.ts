@@ -170,13 +170,17 @@ import type {
   PullRequestDetail,
   PullRequestDetailInput,
   PullRequestDiffResult,
-  PullRequestReviewRequestCountInput,
-  PullRequestReviewRequestCountResult,
   PullRequestSetPinnedInput,
   PullRequestSetPinnedResult,
-  PullRequestsListInput,
-  PullRequestsListResult,
 } from "./pullRequests";
+import type {
+  GitHubInboxListInput,
+  GitHubInboxListResult,
+  GitHubIssueCommentInput,
+  GitHubIssueCommentResult,
+  GitHubIssueDetail,
+  GitHubIssueDetailInput,
+} from "./githubInbox";
 import type {
   ProjectCreateLocalFilePreviewGrantInput,
   ProjectCreateLocalFilePreviewGrantResult,
@@ -1092,11 +1096,12 @@ export interface NativeApi {
       callback: (event: GitWorktreeSetupProgressEvent) => void,
     ) => () => void;
   };
+  githubInbox: {
+    list: (input: GitHubInboxListInput) => Promise<GitHubInboxListResult>;
+    issueDetail: (input: GitHubIssueDetailInput) => Promise<GitHubIssueDetail>;
+    issueComment: (input: GitHubIssueCommentInput) => Promise<GitHubIssueCommentResult>;
+  };
   pullRequests: {
-    list: (input: PullRequestsListInput) => Promise<PullRequestsListResult>;
-    reviewRequestCount: (
-      input: PullRequestReviewRequestCountInput,
-    ) => Promise<PullRequestReviewRequestCountResult>;
     detail: (input: PullRequestDetailInput) => Promise<PullRequestDetail>;
     diff: (input: PullRequestDetailInput) => Promise<PullRequestDiffResult>;
     action: (input: PullRequestActionInput) => Promise<PullRequestActionResult>;

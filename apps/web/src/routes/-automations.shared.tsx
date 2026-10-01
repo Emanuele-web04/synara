@@ -109,6 +109,7 @@ import { useProviderModelCatalog } from "~/hooks/useProviderModelCatalog";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
 import { useStore } from "~/store";
 import { resolveThreadPickerTitle } from "./-chatThreadRoute.logic";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
 
 export const automationQueryKey = ["automations"] as const;
 export const EMPTY_AUTOMATION_LIST: AutomationListResult = {
@@ -121,11 +122,9 @@ const AUTOMATION_DEFINITION_UPDATE_SCOPE = {
 } as const;
 
 export function automationTargetThreads<
-  TThread extends Pick<Thread, "projectId" | "sidechatSourceThreadId">,
+  TThread extends Pick<Thread, "projectId" | "sidechatSourceThreadId" | "sidechatContext">,
 >(threads: readonly TThread[], projectId: string): readonly TThread[] {
-  return threads.filter(
-    (thread) => thread.projectId === projectId && !thread.sidechatSourceThreadId,
-  );
+  return threads.filter((thread) => thread.projectId === projectId && !isSidechatThread(thread));
 }
 
 export function automationDefinitionUpdateMutationOptions(
@@ -990,7 +989,7 @@ export function AutomationDialog({
   readonly form: AutomationFormState;
   readonly projects: ReturnType<typeof useStore.getState>["projects"];
   readonly threads: ReadonlyArray<
-    Pick<Thread, "id" | "projectId" | "title" | "sidechatSourceThreadId">
+    Pick<Thread, "id" | "projectId" | "title" | "sidechatSourceThreadId" | "sidechatContext">
   >;
   readonly warnings?: readonly AutomationDraftWarning[];
   readonly acknowledgedWarningIds?: ReadonlySet<AutomationDraftWarningId>;

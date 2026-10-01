@@ -9,6 +9,7 @@
 // Depends on: hub project lookup, the shared restore/create route surface, and the hub
 //             new-chat hook.
 
+import { isSidechatThread } from "@synara/shared/sidechatThread";
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
@@ -71,7 +72,7 @@ function HubsIndexRouteView() {
     const summary = sidebarThreadSummaryById[threadId];
     return summary &&
       (summary.archivedAt ?? null) === null &&
-      !summary.sidechatSourceThreadId &&
+      !isSidechatThread(summary) &&
       groupProjectIds.has(summary.projectId)
       ? [summary]
       : [];

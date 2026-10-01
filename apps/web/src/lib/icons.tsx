@@ -212,9 +212,16 @@ export const GitPullRequestIcon = centralIconWrapper("pull-request");
 export const GitPullRequestDraftIcon: LucideIcon = centralIconWrapper("draft");
 export const GitPullRequestClosedIcon: LucideIcon = centralIconWrapper("request-closed");
 export const GitMergeConflictIcon: LucideIcon = centralIconWrapper("merge-conflict");
+// Issue state glyphs, GitHub's shapes from the same Central outline set: a ring with a dot
+// (open), a checked ring (closed as completed), and a struck ring (closed as not planned).
+export const IssueOpenedIcon: LucideIcon = centralIconWrapper("record");
+export const IssueClosedIcon: LucideIcon = centralIconWrapper("circle-check");
+export const IssueNotPlannedIcon: LucideIcon = centralIconWrapper("circle-ban-sign");
 // Three descending-width lines — the app's one "filter controls" glyph (pull
 // request list filters, and anywhere else that opens a filter popover).
 export const FilterIcon: LucideIcon = centralIconWrapper("filter-2");
+// GitHub labels (the code review label filter).
+export const TagIcon: LucideIcon = centralIconWrapper("tag");
 // Two-person glyph for "reviewers"/"people" rows (pull request meta grid).
 export const UsersIcon: LucideIcon = centralIconWrapper("user-group");
 // One globe for the whole app (browser rows, web search, favicon fallback,

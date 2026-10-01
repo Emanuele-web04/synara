@@ -1,7 +1,8 @@
 // FILE: pullRequestContext.ts
-// Purpose: Shared helpers for pull request context cards — the composer attachment that
-//   "Repair" / "Add to chat" in the PR menu create instead of pasting a long prompt into
-//   the editor. A card shows a short title + subtitle; its full prompt rides to the
+// Purpose: Shared helpers for GitHub item context cards — the composer attachment that
+//   "Repair" / "Add to chat" in the PR menu and the inbox's Send to agent / Ask create instead
+//   of pasting a long prompt into the editor. A card is about a pull request or, with
+//   `itemKind: "issue"`, an issue. A card shows a short title + subtitle; its full prompt rides to the
 //   provider in a trailing <pull_request_context> block and is parsed back out to render
 //   the same card in the transcript.
 // Layer: Web composer utility
@@ -18,10 +19,16 @@ export const PULL_REQUEST_CONTEXT_SCOPES = [
 ] as const;
 export type PullRequestContextScope = (typeof PULL_REQUEST_CONTEXT_SCOPES)[number];
 
+/** What the card is about. Cards stored before issues existed have no kind: a pull request. */
+export type PullRequestContextItemKind = "pullRequest" | "issue";
+
 export interface PullRequestContextDraft {
   id: string;
   createdAt: string;
   scope: PullRequestContextScope;
+  /** Absent means a pull request, so drafts and transcripts written earlier still parse. */
+  itemKind?: PullRequestContextItemKind;
+  /** The item's number and URL (named for pull requests, which came first). */
   prNumber: number;
   prUrl: string;
   /** Card headline, e.g. "1 failing check". */
@@ -35,6 +42,7 @@ export interface PullRequestContextDraft {
 export interface ParsedPullRequestContextEntry {
   index: number;
   scope: PullRequestContextScope;
+  itemKind: PullRequestContextItemKind;
   prNumber: number;
   prUrl: string;
   title: string;
@@ -52,6 +60,7 @@ const TRAILING_PULL_REQUEST_CONTEXT_BLOCK_PATTERN =
 
 interface SerializedPullRequestContextEntry {
   readonly scope: PullRequestContextScope;
+  readonly itemKind?: "issue";
   readonly prNumber: number;
   readonly prUrl: string;
   readonly title: string;
@@ -95,6 +104,7 @@ export function normalizePullRequestContext(
     id,
     createdAt: draft.createdAt,
     scope: draft.scope,
+    ...(draft.itemKind === "issue" ? { itemKind: "issue" as const } : {}),
     prNumber: draft.prNumber,
     prUrl: draft.prUrl.trim(),
     title,
@@ -129,16 +139,21 @@ export function pullRequestContextDedupKey(
   return `${context.scope}\u0000${context.prNumber}\u0000${context.prUrl}`;
 }
 
+export function pullRequestContextItemLabel(
+  context: Pick<PullRequestContextDraft, "itemKind" | "prNumber">,
+): string {
+  return `${context.itemKind === "issue" ? "Issue" : "PR"} #${context.prNumber}`;
+}
+
 export function formatPullRequestContextTitleSeed(
-  contexts: ReadonlyArray<Pick<PullRequestContextDraft, "title" | "prNumber">>,
+  contexts: ReadonlyArray<Pick<PullRequestContextDraft, "title" | "prNumber" | "itemKind">>,
 ): string | null {
   const first = contexts[0];
   if (!first) {
     return null;
   }
-  return contexts.length === 1
-    ? `${first.title} on PR #${first.prNumber}`
-    : `PR #${first.prNumber}`;
+  const itemLabel = pullRequestContextItemLabel(first);
+  return contexts.length === 1 ? `${first.title} on ${itemLabel}` : itemLabel;
 }
 
 // --- Send-time serialization (cards -> trailing block)
@@ -150,14 +165,27 @@ export function buildPullRequestContextBlock(
   if (usable.length === 0) {
     return "";
   }
-  const payload: SerializedPullRequestContextEntry[] = usable.map((context) => ({
-    scope: context.scope,
-    prNumber: context.prNumber,
-    prUrl: context.prUrl,
-    title: context.title,
-    subtitle: context.subtitle,
-    text: context.text,
-  }));
+  const payload: SerializedPullRequestContextEntry[] = usable.map((context) =>
+    // Only issue cards carry a kind, so pull request blocks stay byte-identical to older ones.
+    context.itemKind === "issue"
+      ? {
+          scope: context.scope,
+          itemKind: "issue",
+          prNumber: context.prNumber,
+          prUrl: context.prUrl,
+          title: context.title,
+          subtitle: context.subtitle,
+          text: context.text,
+        }
+      : {
+          scope: context.scope,
+          prNumber: context.prNumber,
+          prUrl: context.prUrl,
+          title: context.title,
+          subtitle: context.subtitle,
+          text: context.text,
+        },
+  );
   return ["<pull_request_context>", JSON.stringify(payload), "</pull_request_context>"].join("\n");
 }
 
@@ -198,6 +226,7 @@ function parseEntries(block: string): ParsedPullRequestContextEntry[] {
         {
           index: index + 1,
           scope: candidate.scope,
+          itemKind: candidate.itemKind === "issue" ? "issue" : "pullRequest",
           prNumber,
           prUrl: typeof candidate.prUrl === "string" ? candidate.prUrl : "",
           title: candidate.title,

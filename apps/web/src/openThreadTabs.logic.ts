@@ -6,6 +6,7 @@
 // Exports: open-list transitions, persisted-list normalization, tab derivation, close flow
 
 import type { ProjectId, ProviderKind, ThreadId } from "@synara/contracts";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
 
 import { resolveDraftThreadTitle } from "./components/ChatView.logic";
 import { resolveSubagentPresentationForThread } from "./lib/subagentPresentation";
@@ -85,7 +86,7 @@ export function normalizeOpenThreadTabIds(input: unknown): ThreadId[] {
 
 /**
  * Whether an open thread can keep a tab while it is not being viewed. Archived threads
- * and Side chats (which live in their source thread's dock) keep one only while they
+ * and Side chats (which live in their host's dock) keep one only while they
  * are the thread on screen; anything that no longer exists loses it.
  */
 export function canKeepOpenThreadTab(
@@ -93,7 +94,7 @@ export function canKeepOpenThreadTab(
   hasDraft: boolean,
 ): boolean {
   if (summary) {
-    return summary.archivedAt == null && !summary.sidechatSourceThreadId;
+    return summary.archivedAt == null && !isSidechatThread(summary);
   }
   return hasDraft;
 }

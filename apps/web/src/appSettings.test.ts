@@ -366,6 +366,17 @@ describe("isGitTextGenerationSettingsDirty", () => {
   });
 });
 
+describe("removed settings", () => {
+  it("ignores a code review list width stored before widths became fractions", () => {
+    const decoded = Schema.decodeUnknownSync(AppSettingsSchema)({
+      githubInboxListWidth: 420,
+      githubInboxKind: "issue",
+    });
+    expect(decoded).not.toHaveProperty("githubInboxListWidth");
+    expect(decoded.githubInboxKind).toBe("issue");
+  });
+});
+
 describe("sidebar layout", () => {
   it("decodes settings without a layout choice as the rail default", () => {
     const decoded = Schema.decodeUnknownSync(AppSettingsSchema)({ showChatsSection: false });

@@ -134,6 +134,15 @@ describe("buildOpenThreadTabs", () => {
       { ...serverSource("deleted"), summary: undefined },
       serverSource("archived", { archivedAt: "2026-09-30T00:00:00.000Z" }),
       serverSource("side", { sidechatSourceThreadId: ThreadId.makeUnsafe("kept") }),
+      serverSource("standalone-side", {
+        sidechatContext: {
+          kind: "github-item",
+          itemKind: "issue",
+          repository: "acme/widgets",
+          number: 42,
+          url: "https://github.com/acme/widgets/issues/42",
+        },
+      }),
     ];
 
     expect(

@@ -228,6 +228,10 @@ import {
   makeResnapshotEscalationTracker,
 } from "./wsSnapshotLiveStream";
 import { PullRequestService } from "./pullRequests/Services/PullRequestService";
+import {
+  GitHubInboxRateLimitedError,
+  GitHubInboxService,
+} from "./githubInbox/Services/GitHubInboxService";
 import { resolveGitHubRepository } from "./pullRequests/repositoryResolution";
 import {
   GitHubProjectProvisioningError,
@@ -484,6 +488,7 @@ const makeWsRpcHandlersLayer = () =>
       const sidechatExpiryReactor = yield* SidechatExpiryReactor;
       const path = yield* Path.Path;
       const pullRequests = yield* PullRequestService;
+      const githubInbox = yield* GitHubInboxService;
       const profileStatsQuery = yield* ProfileStatsQuery;
       const recapStatsQuery = yield* RecapStatsQuery;
       const projectionReadModelQuery = yield* ProjectionSnapshotQuery;
@@ -650,6 +655,19 @@ const makeWsRpcHandlersLayer = () =>
         if (isGlobalGitHubCliError(cause)) {
           return new PullRequestsUnavailableError({
             reason: cause.reason === "not-installed" ? "gh-not-installed" : "gh-not-authenticated",
+            message: cause.detail,
+          });
+        }
+        if (cause instanceof GitHubInboxRateLimitedError) {
+          return new PullRequestsUnavailableError({
+            reason: "rate-limited",
+            message: cause.message,
+            retryAt: cause.retryAt,
+          });
+        }
+        if (cause instanceof GitHubCliError && cause.reason === "rate-limited") {
+          return new PullRequestsUnavailableError({
+            reason: "rate-limited",
             message: cause.detail,
           });
         }
@@ -1877,13 +1895,15 @@ const makeWsRpcHandlersLayer = () =>
             refreshGitStatusAfter(input.cwd, gitManager.preparePullRequestThread(input)),
             "Failed to prepare pull request thread",
           ),
-        [WS_METHODS.pullRequestsList]: (input) =>
-          pullRequestsEffect(pullRequests.list(input), "Failed to list pull requests"),
-        [WS_METHODS.pullRequestsReviewRequestCount]: (input) =>
+        [WS_METHODS.githubInboxList]: (input) =>
           pullRequestsEffect(
-            pullRequests.reviewRequestCount(input),
-            "Failed to count pull request review requests",
+            githubInbox.list(input),
+            "Failed to load GitHub pull requests and issues",
           ),
+        [WS_METHODS.githubInboxIssueDetail]: (input) =>
+          pullRequestsEffect(githubInbox.issueDetail(input), "Failed to load issue"),
+        [WS_METHODS.githubInboxIssueComment]: (input) =>
+          pullRequestsEffect(githubInbox.issueComment(input), "Could not post the comment"),
         [WS_METHODS.pullRequestsDetail]: (input) =>
           pullRequestsEffect(pullRequests.detail(input), "Failed to load pull request"),
         [WS_METHODS.pullRequestsDiff]: (input) =>

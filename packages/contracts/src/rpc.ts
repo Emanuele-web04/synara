@@ -223,14 +223,18 @@ import {
   PullRequestDetail,
   PullRequestDetailInput,
   PullRequestDiffResult,
-  PullRequestReviewRequestCountInput,
-  PullRequestReviewRequestCountResult,
   PullRequestSetPinnedInput,
   PullRequestSetPinnedResult,
-  PullRequestsListInput,
-  PullRequestsListResult,
   PullRequestsUnavailableError,
 } from "./pullRequests";
+import {
+  GitHubInboxListInput,
+  GitHubInboxListResult,
+  GitHubIssueCommentInput,
+  GitHubIssueCommentResult,
+  GitHubIssueDetail,
+  GitHubIssueDetailInput,
+} from "./githubInbox";
 import {
   ClientOrchestrationCommand,
   ORCHESTRATION_WS_METHODS,
@@ -1073,20 +1077,23 @@ export const WsGitPreparePullRequestThreadRpc = Rpc.make(WS_METHODS.gitPreparePu
 
 const PullRequestsRpcError = Schema.Union([PullRequestsUnavailableError, WsRpcError]);
 
-export const WsPullRequestsListRpc = Rpc.make(WS_METHODS.pullRequestsList, {
-  payload: PullRequestsListInput,
-  success: PullRequestsListResult,
+export const WsGitHubInboxListRpc = Rpc.make(WS_METHODS.githubInboxList, {
+  payload: GitHubInboxListInput,
+  success: GitHubInboxListResult,
   error: PullRequestsRpcError,
 });
 
-export const WsPullRequestsReviewRequestCountRpc = Rpc.make(
-  WS_METHODS.pullRequestsReviewRequestCount,
-  {
-    payload: PullRequestReviewRequestCountInput,
-    success: PullRequestReviewRequestCountResult,
-    error: PullRequestsRpcError,
-  },
-);
+export const WsGitHubInboxIssueDetailRpc = Rpc.make(WS_METHODS.githubInboxIssueDetail, {
+  payload: GitHubIssueDetailInput,
+  success: GitHubIssueDetail,
+  error: PullRequestsRpcError,
+});
+
+export const WsGitHubInboxIssueCommentRpc = Rpc.make(WS_METHODS.githubInboxIssueComment, {
+  payload: GitHubIssueCommentInput,
+  success: GitHubIssueCommentResult,
+  error: PullRequestsRpcError,
+});
 
 export const WsPullRequestsDetailRpc = Rpc.make(WS_METHODS.pullRequestsDetail, {
   payload: PullRequestDetailInput,
@@ -1878,8 +1885,9 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsGitResolvePullRequestRpc,
   WsGitPullRequestSnapshotRpc,
   WsGitPreparePullRequestThreadRpc,
-  WsPullRequestsListRpc,
-  WsPullRequestsReviewRequestCountRpc,
+  WsGitHubInboxListRpc,
+  WsGitHubInboxIssueDetailRpc,
+  WsGitHubInboxIssueCommentRpc,
   WsPullRequestsDetailRpc,
   WsPullRequestsDiffRpc,
   WsPullRequestsActionRpc,

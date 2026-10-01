@@ -23,6 +23,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 
 import { ComposerPickerMenuPopup, ComposerPickerMenuSubPopup } from "../ComposerPickerMenuPopup";
+import { MENU_ICON_CLASS_NAME } from "../composerPickerStyles";
 import {
   Menu,
   MenuItem,
@@ -100,8 +101,6 @@ import {
   withStableCheckKeys,
   type PullRequestChecksTone,
 } from "./environmentPullRequest.logic";
-
-const MENU_ICON_CLASS_NAME = "size-3.5 shrink-0";
 /** Icon-only action sharing the "View PR" row (copy link, open in GitHub). */
 const MENU_INLINE_ACTION_CLASS_NAME = "shrink-0 px-1.5";
 /** Right-aligned secondary value on a menu row (diff stat, count, current status).

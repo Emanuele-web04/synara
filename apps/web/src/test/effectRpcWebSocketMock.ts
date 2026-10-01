@@ -166,6 +166,7 @@ export function createShellSnapshotFromReadModel(
         subagentRole: thread.subagentRole ?? null,
         forkSourceThreadId: thread.forkSourceThreadId ?? null,
         sidechatSourceThreadId: thread.sidechatSourceThreadId ?? null,
+        sidechatContext: thread.sidechatContext ?? null,
         sidechatLastActivityAt: thread.sidechatLastActivityAt ?? null,
         sidechatExpiredAt: thread.sidechatExpiredAt ?? null,
         latestTurn: thread.latestTurn,
