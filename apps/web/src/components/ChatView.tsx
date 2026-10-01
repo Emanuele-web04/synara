@@ -910,19 +910,36 @@ export default function ChatView({
     settledThreadBranchWarningDismissedThreadId,
     setSettledThreadBranchWarningDismissedThreadId,
   ] = useState<ThreadId | null>(null);
+  const pendingThreadBranchActivationRef = useRef<{
+    threadId: ThreadId;
+    branch: string | null;
+    isSettled: boolean;
+  } | null>(null);
   useEffect(() => {
     if (!activeThread || activeThreadBranchAtActivation?.threadId === activeThread.id) {
       return;
     }
-    setActiveThreadBranchAtActivation({
-      threadId: activeThread.id,
-      branch: activeThread.branch,
-      isSettled: activeThread.settledAt != null,
-    });
-    setSettledThreadBranchWarningDismissedThreadId(null);
+    // Captured on the commit that activates the thread, stored post-paint: until then the
+    // read below falls back to the live branch, so writing it here would only re-render
+    // the whole chat before its first paint (the render->effect->render cascade). The ref
+    // keeps that first capture when the thread updates again before the write lands.
+    if (pendingThreadBranchActivationRef.current?.threadId !== activeThread.id) {
+      pendingThreadBranchActivationRef.current = {
+        threadId: activeThread.id,
+        branch: activeThread.branch,
+        isSettled: activeThread.settledAt != null,
+      };
+    }
+    const activation = pendingThreadBranchActivationRef.current;
+    const settle = window.setTimeout(() => {
+      setActiveThreadBranchAtActivation(activation);
+      setSettledThreadBranchWarningDismissedThreadId(null);
+    }, 0);
+    return () => window.clearTimeout(settle);
   }, [
     setActiveThreadBranchAtActivation,
     setSettledThreadBranchWarningDismissedThreadId,
+    pendingThreadBranchActivationRef,
     activeThread,
     activeThreadBranchAtActivation?.threadId,
   ]);

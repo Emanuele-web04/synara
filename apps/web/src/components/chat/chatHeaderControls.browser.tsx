@@ -1,19 +1,19 @@
 // FILE: chatHeaderControls.browser.tsx
 // Purpose: Browser regressions for interactive versus static shared surface-tab chips, the
-//          trailing close treatment used by open-thread tabs, and the surface-panel
-//          toggle's accessible name — the needs-you dot is announced as "needs
-//          attention", not only shown.
+//          trailing close treatment and pointer-down selection used by open-thread tabs,
+//          the strip revealing its active tab, and the surface-panel toggle's accessible
+//          name — the needs-you dot is announced as "needs attention", not only shown.
 // Layer: Chat header controls test
 
 import "../../index.css";
 
-import { page } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { SettingsIcon } from "~/lib/icons";
 
-import { SurfacePanelToggle, SurfaceTabChip } from "./chatHeaderControls";
+import { SurfacePanelToggle, SurfaceTabChip, SurfaceTabStrip } from "./chatHeaderControls";
 
 describe("SurfaceTabChip selection", () => {
   afterEach(() => {
@@ -79,6 +79,83 @@ describe("SurfaceTabChip selection", () => {
     expect(onSelect).not.toHaveBeenCalled();
     await selectButton.click();
     expect(onSelect).toHaveBeenCalledOnce();
+  });
+});
+
+describe("SurfaceTabChip pointer-down selection", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("selects once per mouse press and still selects from a click without a press", async () => {
+    const onSelect = vi.fn();
+    await render(
+      <SurfaceTabChip
+        closePlacement="trailing"
+        selectionAria="current"
+        selectOnPointerDown
+        icon={<span aria-hidden>AI</span>}
+        label="Fix reconnect race"
+        onSelect={onSelect}
+      />,
+    );
+    const selectButton = page
+      .getByRole("button", { name: "Fix reconnect race", exact: true })
+      .element() as HTMLButtonElement;
+
+    // A real mouse press: the pointer-down selects, the click ending it must not repeat.
+    await userEvent.click(selectButton);
+    expect(onSelect).toHaveBeenCalledOnce();
+
+    // Keyboard activation fires a click with no pointer-down before it.
+    selectButton.click();
+    expect(onSelect).toHaveBeenCalledTimes(2);
+
+    // A press that leaves the tab never clicks; the next click selects again.
+    selectButton.dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse", button: 0 }),
+    );
+    selectButton.dispatchEvent(new PointerEvent("pointerout", { bubbles: true }));
+    selectButton.click();
+    expect(onSelect).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe("SurfaceTabStrip", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("scrolls a newly active tab hidden past the strip's edge into view", async () => {
+    const tabs = ["one", "two", "three", "four", "five", "six"];
+    const renderStrip = (activeKey: string) => (
+      <div style={{ width: 240 }}>
+        <SurfaceTabStrip activeKey={activeKey} data-testid="strip">
+          {tabs.map((tab) => (
+            <SurfaceTabChip
+              key={tab}
+              active={tab === activeKey}
+              className="w-32 shrink-0"
+              icon={<span aria-hidden>T</span>}
+              label={`Tab ${tab}`}
+              onSelect={vi.fn()}
+            />
+          ))}
+        </SurfaceTabStrip>
+      </div>
+    );
+    const screen = await render(renderStrip("one"));
+    const strip = page.getByTestId("strip").element() as HTMLElement;
+    expect(strip.scrollWidth).toBeGreaterThan(strip.clientWidth);
+
+    await screen.rerender(renderStrip("six"));
+
+    await vi.waitFor(() => {
+      const stripRect = strip.getBoundingClientRect();
+      const tabRect = strip.querySelector("[data-surface-tab-active]")!.getBoundingClientRect();
+      expect(tabRect.left).toBeGreaterThanOrEqual(stripRect.left - 1);
+      expect(tabRect.right).toBeLessThanOrEqual(stripRect.right + 1);
+    });
   });
 });
 

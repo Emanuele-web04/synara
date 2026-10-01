@@ -9398,6 +9398,63 @@ describe("ChatView transcript geometry (full app)", () => {
     },
   );
 
+  it("pressing a tab marks it current at once and opens its chat without remounting the strip", async () => {
+    localStorage.setItem("synara:app-settings:v1", JSON.stringify({ sidebarLayout: "rail" }));
+    useOpenThreadTabsStore.setState({ threadIds: [] });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("tab-switch-target"),
+        targetText: "Conversation behind the first tab",
+      }),
+    });
+    try {
+      await waitForLayout();
+      // A new chat nobody has opened yet: the tab whose first visit used to drop the whole
+      // chat (header and strip included) back to the mount loader.
+      const draftId = ThreadId.makeUnsafe("unvisited-draft-tab");
+      useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, draftId, {});
+      useOpenThreadTabsStore.setState({ threadIds: [THREAD_ID, draftId] });
+      const strip = await waitForElement<HTMLElement>(
+        () => document.querySelector('nav[aria-label="Open threads"]'),
+        "The rail chat header should show the open-thread strip.",
+      );
+      const draftTab = await waitForElement<HTMLButtonElement>(
+        () => strip.querySelector('button[title="New thread"]'),
+        "The draft should have a tab.",
+      );
+      let stripLeftDocument = false;
+      const observer = new MutationObserver(() => {
+        if (!strip.isConnected) stripLeftDocument = true;
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+      try {
+        draftTab.dispatchEvent(
+          new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse", button: 0 }),
+        );
+        // The highlight lands with the press itself; the navigation waits for that frame
+        // to paint, so no frame may pass before both are checked.
+        await Promise.resolve();
+        expect(draftTab.getAttribute("aria-current")).toBe("page");
+        expect(mounted.router.state.location.pathname).toBe(`/${THREAD_ID}`);
+
+        await vi.waitFor(() => expect(mounted.router.state.location.pathname).toBe(`/${draftId}`));
+        await waitForElement(
+          () => document.querySelector('[data-testid="empty-landing-heading"]'),
+          "The draft's landing should render.",
+        );
+        await waitForLayout();
+        expect(stripLeftDocument).toBe(false);
+        expect(draftTab.getAttribute("aria-current")).toBe("page");
+      } finally {
+        observer.disconnect();
+      }
+    } finally {
+      await mounted.cleanup();
+      useOpenThreadTabsStore.setState({ threadIds: [] });
+    }
+  });
+
   it("preserves a home-chat draft when the chat.newChat shortcut is reused after a thread switch", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,

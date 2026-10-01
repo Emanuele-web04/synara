@@ -6,7 +6,7 @@
 // Depends on: open-thread tab hooks/store and the shared SurfaceTabStrip + SurfaceTabChip.
 
 import type { ProjectId, ThreadId } from "@synara/contracts";
-import { type CSSProperties, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useRef, useState } from "react";
 
 import { useHandleNewThread } from "~/hooks/useHandleNewThread";
 import {
@@ -23,6 +23,7 @@ import { useOpenThreadTabsStore } from "~/openThreadTabsStore";
 import { ProviderIcon } from "../ProviderIcon";
 import { toastManager } from "../ui/toast";
 import { SurfaceTabChip, SurfaceTabStrip } from "./chatHeaderControls";
+import { scheduleDeferredChatMount } from "./deferredChatMount";
 
 // Tab width in `em` of the chip's own UI font, so it scales with the font size chosen in
 // Settings: every tab starts at a comfortable basis and shrinks evenly with the rest down
@@ -57,6 +58,39 @@ export function OpenThreadTabStrip(props: {
   // pointer leaves the strip (like browser tabs), so the next X lands under the cursor
   // instead of the widened neighbour's title.
   const [frozenTabWidthPx, setFrozenTabWidthPx] = useState<number | null>(null);
+  // The tab being switched to paints as active at once, like a pressed sidebar row; the
+  // thread itself (a whole chat to render) follows once that frame is on screen. Scoped to
+  // the thread it was pressed from, so any route change, to the target or elsewhere, ends
+  // the override without an effect.
+  const [pendingSelection, setPendingSelection] = useState<{
+    from: ThreadId;
+    to: ThreadId;
+  } | null>(null);
+  const cancelPendingSelectionRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => cancelPendingSelectionRef.current?.(), []);
+  const shownThreadId =
+    pendingSelection?.from === activeThreadId &&
+    tabs.some((tab) => tab.threadId === pendingSelection.to)
+      ? pendingSelection.to
+      : activeThreadId;
+
+  const selectTab = (threadId: ThreadId) => {
+    cancelPendingSelectionRef.current?.();
+    cancelPendingSelectionRef.current = null;
+    if (threadId === activeThreadId) {
+      setPendingSelection(null);
+      return;
+    }
+    setPendingSelection({ from: activeThreadId, to: threadId });
+    cancelPendingSelectionRef.current = scheduleDeferredChatMount(window, () => {
+      cancelPendingSelectionRef.current = null;
+      // A navigation that leaves the thread on screen (a guarded editor) hands the
+      // highlight back to it.
+      void activateThreadTab(threadId).finally(() => {
+        setPendingSelection((current) => (current?.to === threadId ? null : current));
+      });
+    });
+  };
 
   const freezeTabWidths = () => {
     const nav = navRef.current;
@@ -114,9 +148,9 @@ export function OpenThreadTabStrip(props: {
       }
       onPointerLeave={() => setFrozenTabWidthPx(null)}
     >
-      <SurfaceTabStrip activeKey={activeThreadId} dividers className="flex-1">
+      <SurfaceTabStrip activeKey={shownThreadId} dividers className="flex-1">
         {tabs.map((tab) => {
-          const active = tab.threadId === activeThreadId;
+          const active = tab.threadId === shownThreadId;
           // A lone unsent draft has nowhere to go: closing it would land on a new chat
           // that is the same draft again.
           const closable = tabs.length > 1 || !tab.isDraft;
@@ -126,6 +160,7 @@ export function OpenThreadTabStrip(props: {
               active={active}
               closePlacement="trailing"
               selectionAria="current"
+              selectOnPointerDown
               className={cn(
                 frozenTabWidthPx === null
                   ? OPEN_THREAD_TAB_SIZE_CLASS_NAME
@@ -143,10 +178,12 @@ export function OpenThreadTabStrip(props: {
               }
               closeLabel={`Close ${tab.title}`}
               onSelect={() => {
-                if (!active) void activateThreadTab(tab.threadId);
+                if (!active) selectTab(tab.threadId);
               }}
               onClose={closable ? () => closeTab(tab.threadId, tab.projectId) : undefined}
-              onLabelDoubleClick={active ? props.onRenameActiveThread : undefined}
+              onLabelDoubleClick={
+                tab.threadId === activeThreadId ? props.onRenameActiveThread : undefined
+              }
             />
           );
         })}

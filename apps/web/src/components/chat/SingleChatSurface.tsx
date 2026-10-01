@@ -263,7 +263,14 @@ export function SingleChatSurface(props: {
     // synchronous setState in the effect body; both setters are user-mutable
     // elsewhere, so deriving here would mean stamping the thread key in every one.
     const timer = window.setTimeout(() => {
-      setEditorExpandedDirectories(new Set(persisted?.expandedDirectories ?? []));
+      // Keep the current set when the persisted one matches (usually both empty): a fresh
+      // identity would re-render this surface and the chat on every thread switch.
+      setEditorExpandedDirectories((current) => {
+        const next = persisted?.expandedDirectories ?? [];
+        return current.size === next.length && next.every((directory) => current.has(directory))
+          ? current
+          : new Set(next);
+      });
       setEditorCenterMode(props.search.editorFilePath ? "file" : (persisted?.centerMode ?? "diff"));
     }, 0);
     return () => window.clearTimeout(timer);
