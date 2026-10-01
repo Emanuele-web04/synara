@@ -28,7 +28,8 @@ export type PullRequestListGroupKey =
   | "authored"
   | "reviewRequested"
   | "involved"
-  | "others";
+  | "others"
+  | "all";
 
 export interface PullRequestListGroup<T = GitHubInboxItem> {
   key: PullRequestListGroupKey;
@@ -42,6 +43,7 @@ const GROUP_LABELS: Record<PullRequestListGroupKey, string> = {
   reviewRequested: "Needs my review",
   involved: "Involving me",
   others: "Everything else",
+  all: "All",
 };
 
 const GROUP_ORDER: readonly PullRequestListGroupKey[] = [
@@ -50,6 +52,7 @@ const GROUP_ORDER: readonly PullRequestListGroupKey[] = [
   "reviewRequested",
   "involved",
   "others",
+  "all",
 ];
 
 /** The fields that say how the viewer relates to a row. Structural so older pull request rows
@@ -197,6 +200,28 @@ export function orderPullRequestEntriesPinnedFirst<T extends { isPinned?: boolea
 }
 
 /**
+ * The list as GitHub shows it: pins first, then every other row in one section, keeping the
+ * caller's order (newest activity first). Empty sections are dropped.
+ */
+export function groupPullRequestEntriesPinnedThenAll<T extends { isPinned?: boolean | undefined }>(
+  entries: readonly T[],
+): PullRequestListGroup<T>[] {
+  const groups: PullRequestListGroup<T>[] = [
+    {
+      key: "pinned",
+      label: GROUP_LABELS.pinned,
+      entries: entries.filter((entry) => entry.isPinned === true),
+    },
+    {
+      key: "all",
+      label: GROUP_LABELS.all,
+      entries: entries.filter((entry) => entry.isPinned !== true),
+    },
+  ];
+  return groups.filter((group) => group.entries.length > 0);
+}
+
+/**
  * Buckets rows into the list's sections. Pins lead. Then the viewer's own items, then items
  * waiting on the viewer's review (teams included), then the rest that involve the viewer
  * (assigned or mentioned), then everything else. Empty sections are dropped.
@@ -211,6 +236,7 @@ export function groupPullRequestEntriesByInvolvement<T extends InboxRelationSour
     reviewRequested: [],
     involved: [],
     others: [],
+    all: [],
   };
 
   for (const entry of entries) {

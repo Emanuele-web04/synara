@@ -329,19 +329,26 @@ describe("selectVisibleInboxItems", () => {
     expect(ordered.map((item) => item.number)).toEqual([4, 1, 3, 2]);
   });
 
-  it("sections the rows by involvement, pins first", () => {
-    const visible = selectVisibleInboxItems(items, filters(), {
+  it("lists pins first, then every other row in one list by latest activity", () => {
+    // The viewer's own row is the oldest; it must not jump ahead of newer rows by others.
+    const ownIsOldest = items.map((item) =>
+      item.number === 4
+        ? pullRequest(4, { author: actor("viewer"), updatedAt: "2000-01-01T00:00:00.000Z" })
+        : item,
+    );
+    const visible = selectVisibleInboxItems(ownIsOldest, filters(), {
       viewer,
       normalizedQuery: "",
     });
-    const keys = groupVisibleInboxItems(visible, viewer).map((group) => group.key);
-    expect(keys[0]).toBe("pinned");
-    expect(keys).toEqual(expect.arrayContaining(["pinned"]));
-    const unpinned = groupVisibleInboxItems(
-      visible.filter((item) => item.isPinned !== true),
-      viewer,
+    const groups = groupVisibleInboxItems(visible);
+    expect(groups.map((group) => group.key)).toEqual(["all"]);
+    expect(groups[0]?.entries.map((item) => item.number).at(-1)).toBe(4);
+
+    const pinned = groupVisibleInboxItems(
+      selectVisibleInboxItems(items, filters(), { viewer, normalizedQuery: "" }),
     );
-    expect(unpinned.some((group) => group.key === "pinned")).toBe(false);
+    expect(pinned.map((group) => group.key)).toEqual(["pinned", "all"]);
+    expect(pinned[0]?.entries.map((item) => item.number)).toEqual([4]);
   });
 });
 

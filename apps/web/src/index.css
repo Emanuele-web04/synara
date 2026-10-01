@@ -95,7 +95,9 @@
   }
   body {
     @apply text-foreground relative;
-    background: var(--app-shell-background, transparent);
+    /* `--app-window-background` is the single translucent coat when the whole window is
+       glass (see theme.logic); otherwise it matches the shell background. */
+    background: var(--app-window-background, var(--app-shell-background, transparent));
   }
   :root {
     /* One token for the INTERNAL chat-surface dividers: the horizontal chrome-bar
@@ -139,10 +141,17 @@
      visually separated. Ring + shadow are one box-shadow so they don't affect
      layout. */
   .sidebar-icon-chip {
-    background: var(--app-sidebar-surface, var(--card));
+    background: var(--app-sidebar-chip-surface, var(--app-sidebar-surface, var(--card)));
     box-shadow:
       0 0 0 1px var(--sidebar-border),
       0 1px 2px 0 rgb(0 0 0 / 0.05);
+  }
+
+  /* Route content surface (chat column, route wrappers, dock body). Opaque, unless the
+     whole window is translucent: then it goes clear and the body's single glass coat shows
+     through, so nested route surfaces never stack the fill. */
+  .app-content-surface {
+    background: var(--app-content-surface, var(--color-background-surface));
   }
 
   /* ─── Content seam (sidebar ↔ route divider) ──────────────────────────────────
@@ -239,6 +248,16 @@
   /* No sidebar material sits behind the rail layout's rows, so chips take the panel tone. */
   [data-sidebar-layout="rail"] .sidebar-icon-chip {
     background: var(--app-rail-panel-background);
+  }
+
+  /* Whole-window glass: the rail layout's panel and chips share the body's coat instead of
+     painting their own tones over it. */
+  :root[data-window-translucency="window"] [data-sidebar-layout="rail"] {
+    --app-rail-panel-background: transparent;
+  }
+
+  :root[data-window-translucency="window"] [data-sidebar-layout="rail"] .sidebar-icon-chip {
+    background: var(--app-sidebar-chip-surface);
   }
 
   /* ─── Chat-surface header hairline (horizontal counterpart of the seam) ───────────
@@ -2807,8 +2826,17 @@ diffs-container {
    body already paints that surface, so they go transparent. */
 [data-sidebar-layout="rail"]
   .chat-content-card
-  :is(.bg-\[var\(--color-background-surface\)\], .app-settings-surface):has(.app-top-bar) {
+  :is(.app-content-surface, .app-settings-surface):has(.app-top-bar) {
   background: transparent;
+}
+
+/* A maximized right dock covers the chat column, so it keeps an opaque body even when the
+   whole window is glass; otherwise the transcript would show through it. Unlayered and
+   placed after the rail rule above so it also wins over that transparent override. */
+:root[data-window-translucency="window"]
+  [data-dock-maximized]
+  [data-slot="sidebar-inner"].app-content-surface {
+  background: var(--color-background-surface);
 }
 
 /* The dock's bottom-right corner is the block's corner. */
@@ -2829,7 +2857,7 @@ diffs-container {
 
 [data-sidebar-layout="rail"] .chat-content-card::before {
   z-index: -1;
-  background: var(--color-background-surface);
+  background: var(--app-content-surface, var(--color-background-surface));
   box-shadow: none;
 }
 

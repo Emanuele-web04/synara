@@ -280,6 +280,47 @@ describe("buildActivityViewModel", () => {
     expect(resumed.active.map((thread) => thread.id)).toEqual(["reviewed"]);
     expect(resumed.settled).toEqual([]);
   });
+
+  it("lifts unsent drafts to the top and keeps pinned drafts first within Pinned", () => {
+    const turn = completedTurn("2026-08-01T09:30:00.000Z");
+    const newest = makeThread({
+      id: "newest",
+      latestTurn: turn,
+      latestHumanMessageAt: "2026-08-01T12:00:00.000Z",
+    });
+    const oldDraft = makeThread({
+      id: "old-draft",
+      latestTurn: turn,
+      latestHumanMessageAt: "2026-08-01T08:00:00.000Z",
+    });
+    const settledDraft = makeThread({
+      id: "settled-draft",
+      latestTurn: turn,
+      latestHumanMessageAt: "2026-08-01T09:00:00.000Z",
+      settledAt: "2026-08-01T09:45:00.000Z",
+    });
+    const pinnedPlain = makeThread({
+      id: "pinned-plain",
+      latestTurn: turn,
+      latestHumanMessageAt: "2026-08-01T11:00:00.000Z",
+    });
+    const pinnedDraft = makeThread({
+      id: "pinned-draft",
+      latestTurn: turn,
+      latestHumanMessageAt: "2026-08-01T07:00:00.000Z",
+    });
+
+    const model = buildActivityViewModel({
+      threads: [newest, oldDraft, settledDraft, pinnedPlain, pinnedDraft],
+      pinnedThreadIdSet: new Set([pinnedPlain.id, pinnedDraft.id]),
+      draftThreadIdSet: new Set([oldDraft.id, settledDraft.id, pinnedDraft.id]),
+    });
+
+    expect(model.drafts.map((thread) => thread.id)).toEqual(["settled-draft", "old-draft"]);
+    expect(model.active.map((thread) => thread.id)).toEqual(["newest"]);
+    expect(model.settled).toEqual([]);
+    expect(model.pinned.map((thread) => thread.id)).toEqual(["pinned-draft", "pinned-plain"]);
+  });
 });
 
 describe("date buckets", () => {
@@ -553,6 +594,7 @@ describe("collectVisibleActivityThreadIds", () => {
         groupMode: "time",
         pinnedOpen: false,
         pinned: [thread("pinned")],
+        drafts: [thread("draft")],
         recent: [thread("recent")],
         today: [thread("today")],
         yesterday: [thread("yesterday")],
@@ -562,7 +604,7 @@ describe("collectVisibleActivityThreadIds", () => {
         settledOpen: false,
         settled: [thread("done")],
       }),
-    ).toEqual(["recent", "today", "yesterday", "earlier-visible"]);
+    ).toEqual(["draft", "recent", "today", "yesterday", "earlier-visible"]);
   });
 
   it("includes the open thread revealed under a collapsed section", () => {
@@ -572,6 +614,7 @@ describe("collectVisibleActivityThreadIds", () => {
         groupMode: "time",
         pinnedOpen: true,
         pinned: [],
+        drafts: [],
         recent: [thread("recent")],
         today: [],
         yesterday: [],

@@ -190,6 +190,7 @@ function applyThemeState(state: ThemeState, suppressTransitions = false) {
   root.setAttribute("data-theme-mode", state.mode);
   root.setAttribute("data-theme-variant", variant);
   root.setAttribute("data-window-material", cssVariableBuild.material);
+  root.setAttribute("data-window-translucency", cssVariableBuild.translucencyScope);
 
   for (const [name, value] of Object.entries(cssVariableBuild.variables)) {
     if (value.trim().length === 0) {

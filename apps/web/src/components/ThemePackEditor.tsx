@@ -21,6 +21,7 @@ import { Input } from "./ui/input";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Select, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { DisclosureRegion } from "./ui/DisclosureRegion";
+import { Switch } from "./ui/switch";
 import { Textarea } from "./ui/textarea";
 import { toastManager } from "./ui/toast";
 import { SettingsSegmentedControl } from "./settings/SettingControls";
@@ -50,7 +51,7 @@ type ThemePackEditorProps = {
 };
 
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
-const SIDEBAR_MATERIAL_OPTIONS = [
+const WINDOW_MATERIAL_OPTIONS = [
   { value: "solid", label: "Solid" },
   { value: "translucent", label: "Translucent" },
 ] as const;
@@ -312,14 +313,14 @@ export function ThemePackEditor({
         </ThemeRow>
 
         <div>
-          <ThemeRow label="Sidebar">
+          <ThemeRow label="Window">
             <SettingsSegmentedControl
               value={theme.opaqueWindows ? "solid" : "translucent"}
               onValueChange={(value) =>
                 updateThemePack(variant, { opaqueWindows: value === "solid" })
               }
-              ariaLabel={`${titleLabel} sidebar material`}
-              options={SIDEBAR_MATERIAL_OPTIONS}
+              ariaLabel={`${titleLabel} window material`}
+              options={WINDOW_MATERIAL_OPTIONS}
             />
           </ThemeRow>
           <DisclosureRegion open={!theme.opaqueWindows}>
@@ -329,13 +330,22 @@ export function ThemePackEditor({
                 "border-t border-[color:var(--color-border)]",
               )}
             >
+              <ThemeRow label="Sidebar only">
+                <Switch
+                  checked={translucency.sidebarOnly}
+                  onCheckedChange={(checked) =>
+                    setWindowTranslucency(variant, { sidebarOnly: checked })
+                  }
+                  aria-label={`${titleLabel} translucent sidebar only`}
+                />
+              </ThemeRow>
               <ThemeRow label="Opacity">
                 <ThemeSlider
                   value={translucency.opacity}
                   max={100}
                   suffix="%"
                   onChange={(next) => setWindowTranslucency(variant, { opacity: next })}
-                  ariaLabel={`${titleLabel} sidebar opacity`}
+                  ariaLabel={`${titleLabel} translucency opacity`}
                 />
               </ThemeRow>
               <ThemeRow label="Blur">

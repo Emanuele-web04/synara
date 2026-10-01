@@ -68,20 +68,28 @@ function compareThreadIds(
 
 export interface ActivityViewModel {
   pinned: SidebarThreadSummary[];
+  /** Unpinned chats with an unsent composer message; they lead the feed until sent or cleared. */
+  drafts: SidebarThreadSummary[];
   active: SidebarThreadSummary[];
   settled: SidebarThreadSummary[];
 }
 
-/** Pinned and active rows follow human sends; explicitly settled rows keep settlement order. */
+/**
+ * Pinned, draft, and active rows follow human sends; explicitly settled rows keep
+ * settlement order. Pinned drafts stay pinned but lead that section.
+ */
 export function buildActivityViewModel(input: {
   threads: readonly SidebarThreadSummary[];
   pinnedThreadIdSet: ReadonlySet<ThreadId>;
+  draftThreadIdSet?: ReadonlySet<ThreadId>;
   settledOverrideByThreadId?: ReadonlyMap<ThreadId, boolean>;
   /** Project scope as a set so merged scopes (all project-less chats) filter as one. */
   projectFilterIds?: ReadonlySet<ProjectId> | null;
 }): ActivityViewModel {
   const projectFilterIds = input.projectFilterIds ?? null;
+  const draftThreadIdSet = input.draftThreadIdSet ?? null;
   const pinned: SidebarThreadSummary[] = [];
+  const drafts: SidebarThreadSummary[] = [];
   const active: SidebarThreadSummary[] = [];
   const settled: SidebarThreadSummary[] = [];
 
@@ -90,6 +98,10 @@ export function buildActivityViewModel(input: {
     if (projectFilterIds !== null && !projectFilterIds.has(thread.projectId)) continue;
     if (input.pinnedThreadIdSet.has(thread.id)) {
       pinned.push(thread);
+      continue;
+    }
+    if (draftThreadIdSet?.has(thread.id)) {
+      drafts.push(thread);
       continue;
     }
     if (isThreadSettledForActivity(thread, input.settledOverrideByThreadId)) {
@@ -102,7 +114,11 @@ export function buildActivityViewModel(input: {
   const compareRecency = (left: SidebarThreadSummary, right: SidebarThreadSummary) =>
     resolveActivityRecencyMs(right) - resolveActivityRecencyMs(left) ||
     compareThreadIds(left, right);
-  pinned.sort(compareRecency);
+  const isDraft = (thread: SidebarThreadSummary) => draftThreadIdSet?.has(thread.id) ?? false;
+  pinned.sort(
+    (left, right) => Number(isDraft(right)) - Number(isDraft(left)) || compareRecency(left, right),
+  );
+  drafts.sort(compareRecency);
   active.sort(compareRecency);
   settled.sort((left, right) => {
     // Optimistically settled threads have no settledAt yet; their latest
@@ -112,7 +128,7 @@ export function buildActivityViewModel(input: {
     return rightSettledMs - leftSettledMs || compareThreadIds(left, right);
   });
 
-  return { pinned, active, settled };
+  return { pinned, drafts, active, settled };
 }
 
 export type ActivityDateBucket = "today" | "yesterday" | "earlier";
@@ -355,6 +371,7 @@ export function collectVisibleActivityThreadIds(input: {
   groupMode: ActivityGroupMode;
   pinnedOpen: boolean;
   pinned: readonly SidebarThreadSummary[];
+  drafts: readonly SidebarThreadSummary[];
   recent: readonly SidebarThreadSummary[];
   today: readonly SidebarThreadSummary[];
   yesterday: readonly SidebarThreadSummary[];
@@ -376,7 +393,7 @@ export function collectVisibleActivityThreadIds(input: {
   if (input.groupMode === "project") {
     for (const group of input.projectGroups) visible.push(...group);
   } else {
-    visible.push(...input.recent, ...input.today, ...input.yesterday);
+    visible.push(...input.drafts, ...input.recent, ...input.today, ...input.yesterday);
     if (input.earlierOpen) visible.push(...input.earlier);
     if (input.revealed) visible.push(...input.revealed.earlier);
   }
