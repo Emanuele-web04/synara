@@ -56,7 +56,6 @@ import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useIsMobile } from "~/hooks/useMediaQuery";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { useRepoDiffTotals } from "~/hooks/useRepoDiffTotals";
-import { useSidebarLayout } from "~/hooks/useSidebarLayout";
 import { useStableCallback } from "~/hooks/useStableCallback";
 import { useThreadRecap } from "~/hooks/useThreadRecap";
 import { SINGLE_CHAT_PANE_SCOPE_ID } from "~/lib/chatPaneScope";
@@ -629,7 +628,6 @@ export default function ChatView({
     gitCreateDetachedWorktreeMutationOptions({ queryClient }),
   );
   const isEditorRail = presentationMode === "editor";
-  const isRailLayout = useSidebarLayout() === "rail";
   const isInactiveSplitPane = surfaceMode === "split" && !isFocusedPane;
   const {
     composerDraft,
@@ -5139,9 +5137,9 @@ export default function ChatView({
     );
   }
 
-  // Open-thread tabs belong to the rail shell's single chat; split panes, the editor rail,
-  // and the classic sidebar keep the plain thread title.
-  const showOpenThreadTabs = isRailLayout && surfaceMode === "single" && !isEditorRail;
+  // Open-thread tabs belong to the single chat on desktop; split panes, the editor rail, and
+  // phone-width headers keep the plain thread title.
+  const showOpenThreadTabs = !isMobileViewport && surfaceMode === "single" && !isEditorRail;
 
   const activeThreadDisplayTitle = resolveActiveThreadTitle({
     title: isCoordinatorConversation
