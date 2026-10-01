@@ -9188,53 +9188,73 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("keeps the terminal selected after cancelling a pending editor chat tab switch", async () => {
-    const mounted = await mountChatView({
-      viewport: DEFAULT_VIEWPORT,
-      snapshot: createSnapshotForTargetUser({
-        targetMessageId: MessageId.makeUnsafe("editor-tab-cancel"),
-        targetText: "Editor chat",
-      }),
-      initialEntry: `/${THREAD_ID}?view=editor`,
-    });
-    try {
-      useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, OTHER_THREAD_ID, {});
-      useOpenThreadTabsStore.setState({ threadIds: [THREAD_ID, OTHER_THREAD_ID] });
-      useTerminalStateStore.getState().setTerminalOpen(THREAD_ID, true);
-      await expect
-        .element(page.getByRole("button", { name: "Terminal", exact: true }))
-        .toBeVisible();
-      await page.getByRole("button", { name: "Chat 1", exact: true }).click();
-      await waitForLayout();
-      // Hold the scheduled chat activation until the later terminal selection has happened.
-      const frames: FrameRequestCallback[] = [];
-      const animationFrame = vi
-        .spyOn(window, "requestAnimationFrame")
-        .mockImplementation((callback) => {
-          frames.push(callback);
-          return frames.length;
-        });
-      page
-        .getByRole("button", { name: "Chat 2", exact: true })
-        .element()
-        .dispatchEvent(
-          new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse", button: 0 }),
-        );
-      (
-        page.getByRole("button", { name: "Terminal", exact: true }).element() as HTMLButtonElement
-      ).click();
-      animationFrame.mockRestore();
-      for (const callback of frames) callback(performance.now());
-      await new Promise((resolve) => window.setTimeout(resolve, 550));
-      expect(mounted.router.state.location.pathname).toBe(`/${THREAD_ID}`);
-      await expect
-        .element(page.getByRole("button", { name: "Terminal", exact: true }))
-        .toHaveAttribute("aria-pressed", "true");
-    } finally {
-      vi.restoreAllMocks();
-      await mounted.cleanup();
-    }
-  });
+  it.each(["terminal", "close"] as const)(
+    "cancels a pending editor chat tab switch after %s",
+    async (action) => {
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: MessageId.makeUnsafe("editor-tab-cancel"),
+          targetText: "Editor chat",
+        }),
+        initialEntry: `/${THREAD_ID}?view=editor`,
+      });
+      try {
+        useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, OTHER_THREAD_ID, {});
+        useOpenThreadTabsStore.setState({ threadIds: [THREAD_ID, OTHER_THREAD_ID] });
+        useTerminalStateStore.getState().setTerminalOpen(THREAD_ID, true);
+        await expect
+          .element(page.getByRole("button", { name: "Terminal", exact: true }))
+          .toBeVisible();
+        await page.getByRole("button", { name: "Chat 1", exact: true }).click();
+        await waitForLayout();
+        // Hold the scheduled chat activation until the later terminal selection has happened.
+        const frames: FrameRequestCallback[] = [];
+        const animationFrame = vi
+          .spyOn(window, "requestAnimationFrame")
+          .mockImplementation((callback) => {
+            frames.push(callback);
+            return frames.length;
+          });
+        page
+          .getByRole("button", { name: "Chat 2", exact: true })
+          .element()
+          .dispatchEvent(
+            new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse", button: 0 }),
+          );
+        if (action === "terminal") {
+          (
+            page
+              .getByRole("button", { name: "Terminal", exact: true })
+              .element() as HTMLButtonElement
+          ).click();
+        } else {
+          const targetTab = page.getByRole("button", { name: "Chat 2", exact: true }).element();
+          const closeButton = targetTab
+            .closest("[data-surface-tab]")!
+            .querySelector<HTMLButtonElement>("button[aria-label^='Close ']")!;
+          closeButton.click();
+          await vi.waitFor(() => {
+            expect(useOpenThreadTabsStore.getState().threadIds).not.toContain(OTHER_THREAD_ID);
+          });
+        }
+        animationFrame.mockRestore();
+        for (const callback of frames) callback(performance.now());
+        await new Promise((resolve) => window.setTimeout(resolve, 550));
+        expect(mounted.router.state.location.pathname).toBe(`/${THREAD_ID}`);
+        if (action === "terminal") {
+          await expect
+            .element(page.getByRole("button", { name: "Terminal", exact: true }))
+            .toHaveAttribute("aria-pressed", "true");
+        } else {
+          expect(useOpenThreadTabsStore.getState().threadIds).not.toContain(OTHER_THREAD_ID);
+        }
+      } finally {
+        vi.restoreAllMocks();
+        await mounted.cleanup();
+      }
+    },
+  );
 
   it.each(["saved", "draft"] as const)(
     "switches horizontal tabs without blanking the header or composer (%s)",

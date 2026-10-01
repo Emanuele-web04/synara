@@ -60,7 +60,11 @@ export function OpenThreadTabStrip(props: {
   const [frozenTabWidthPx, setFrozenTabWidthPx] = useState<number | null>(null);
   // The tab being switched to paints as active at once, like a pressed sidebar row; the
   // thread itself (a whole chat to render) follows once that frame is on screen.
-  const { shownKey: shownThreadId, select: selectTab } = useOptimisticTabSelection({
+  const {
+    shownKey: shownThreadId,
+    select: selectTab,
+    cancel: cancelTabSelection,
+  } = useOptimisticTabSelection({
     activeKey: activeThreadId,
     hasTab: (threadId) => tabs.some((tab) => tab.threadId === threadId),
     activate: activateThreadTab,
@@ -76,6 +80,7 @@ export function OpenThreadTabStrip(props: {
   };
 
   const closeTab = (threadId: ThreadId, projectId: ProjectId) => {
+    cancelTabSelection();
     freezeTabWidths();
     void enqueueClose(() => {
       const openThreadIds = useOpenThreadTabsStore.getState().threadIds;

@@ -298,6 +298,7 @@ function EditorRailTabs(props: {
     props.onCloseTerminal();
   };
   const closeChatTab = (threadId: ThreadId) => {
+    cancelChatTabSelection();
     // Same close flow as the chat header strip: the active chat's tab goes only once the
     // route has left it, so a guarded navigation keeps it in both places.
     void enqueueClose(() => {
