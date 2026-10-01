@@ -9188,7 +9188,7 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it.each(["terminal", "close"] as const)(
+  it.each(["terminal", "close", "navigation", "navigation-back"] as const)(
     "cancels a pending editor chat tab switch after %s",
     async (action) => {
       const mounted = await mountChatView({
@@ -9200,15 +9200,24 @@ describe("ChatView transcript geometry (full app)", () => {
         initialEntry: `/${THREAD_ID}?view=editor`,
       });
       try {
+        const laterThreadId = ThreadId.makeUnsafe("editor-tab-later-navigation");
+        const laterNavigation = action === "navigation" || action === "navigation-back";
+        if (laterNavigation) {
+          useComposerDraftStore.getState().registerDraftThread(laterThreadId, {
+            projectId: PROJECT_ID,
+          });
+        }
         useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, OTHER_THREAD_ID, {});
-        useOpenThreadTabsStore.setState({ threadIds: [THREAD_ID, OTHER_THREAD_ID] });
+        useOpenThreadTabsStore.setState({
+          threadIds: [THREAD_ID, OTHER_THREAD_ID, ...(laterNavigation ? [laterThreadId] : [])],
+        });
         useTerminalStateStore.getState().setTerminalOpen(THREAD_ID, true);
         await expect
           .element(page.getByRole("button", { name: "Terminal", exact: true }))
           .toBeVisible();
         await page.getByRole("button", { name: "Chat 1", exact: true }).click();
         await waitForLayout();
-        // Hold the scheduled chat activation until the later terminal selection has happened.
+        // Hold deferred activation until the later terminal, close or navigation action.
         const frames: FrameRequestCallback[] = [];
         const animationFrame = vi
           .spyOn(window, "requestAnimationFrame")
@@ -9228,6 +9237,24 @@ describe("ChatView transcript geometry (full app)", () => {
               .getByRole("button", { name: "Terminal", exact: true })
               .element() as HTMLButtonElement
           ).click();
+        } else if (laterNavigation) {
+          await mounted.router.navigate({
+            to: "/$threadId",
+            params: { threadId: laterThreadId },
+            search: () => ({ view: "editor" as const }),
+          });
+          await expect
+            .element(page.getByRole("button", { name: "Chat 3", exact: true }))
+            .toHaveAttribute("aria-pressed", "true");
+          if (action === "navigation-back") {
+            await mounted.router.navigate({
+              to: "/$threadId",
+              params: { threadId: THREAD_ID },
+              search: () => ({ view: "editor" as const }),
+            });
+            expect(mounted.router.state.location.pathname).toBe(`/${THREAD_ID}`);
+            await new Promise((resolve) => window.setTimeout(resolve, 0));
+          }
         } else {
           const targetTab = page.getByRole("button", { name: "Chat 2", exact: true }).element();
           const closeButton = targetTab
@@ -9241,12 +9268,21 @@ describe("ChatView transcript geometry (full app)", () => {
         animationFrame.mockRestore();
         for (const callback of frames) callback(performance.now());
         await new Promise((resolve) => window.setTimeout(resolve, 550));
-        expect(mounted.router.state.location.pathname).toBe(`/${THREAD_ID}`);
+        expect(mounted.router.state.location.pathname).toBe(
+          `/${action === "navigation" ? laterThreadId : THREAD_ID}`,
+        );
         if (action === "terminal") {
           await expect
             .element(page.getByRole("button", { name: "Terminal", exact: true }))
             .toHaveAttribute("aria-pressed", "true");
-        } else {
+        } else if (action === "navigation-back") {
+          expect(
+            page
+              .getByRole("button", { name: "Chat 1", exact: true })
+              .element()
+              .getAttribute("aria-pressed"),
+          ).toBe("true");
+        } else if (action === "close") {
           expect(useOpenThreadTabsStore.getState().threadIds).not.toContain(OTHER_THREAD_ID);
         }
       } finally {

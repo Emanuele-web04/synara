@@ -198,7 +198,9 @@ improvement is claimed. The later tab, streaming and startup figures above remai
 author-reported; the first-commit measurements and these review records are the
 committed raw evidence.
 
-Review also reproduced and fixed two queued tab-navigation races: opening a terminal
-or closing the pressed chat tab now cancels its deferred activation. Full editor-route
-regressions verify that late animation-frame callbacks and the background fallback
-cannot reopen the chat afterward.
+Review also reproduced and fixed queued tab-navigation races: opening a terminal,
+closing the pressed chat tab, or committing a later navigation cancels its deferred
+activation. Navigating away and back also clears the old optimistic highlight. Full
+editor-route regressions verify that late animation-frame callbacks and the background
+fallback cannot reopen the chat afterward. Actual activation invokes the router
+synchronously; pending navigation cancellation remains owned by the router.
