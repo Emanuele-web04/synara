@@ -5,6 +5,7 @@ import {
   readLocalComputerPermissionBridge,
 } from "~/lib/computerProvisioning";
 import { useCallback } from "react";
+import { hasActiveComposerSend } from "~/lib/composerSendOwnership";
 import {
   filterPromptProviderMentionReferences,
   filterPromptSkillReferences,
@@ -187,6 +188,7 @@ export function useChatTurnSubmission({
   persistThreadSettingsForNextTurn,
 }: ChatTurnSubmissionInput) {
   const executePreparedTurn = useChatTurnExecution({
+    activeThreadIdRef,
     isServerThread,
     setStoreThreadWorkspace,
     clearLocalDispatchWorktreeSetup,
@@ -209,14 +211,6 @@ export function useChatTurnSubmission({
     failLocalDispatchWorktreeSetup,
     setOptimisticUserMessages,
     promptRef,
-    composerImagesRef,
-    composerFilesRef,
-    composerAssistantSelectionsRef,
-    composerBrowserAnnotationsRef,
-    composerFileCommentsRef,
-    composerTerminalContextsRef,
-    composerPastedTextsRef,
-    composerPullRequestContextsRef,
     setPrompt,
     setComposerCursor,
     addComposerImagesToDraft,
@@ -256,6 +250,7 @@ export function useChatTurnSubmission({
         !api ||
         !lateSendHandlers ||
         !activeThread ||
+        hasActiveComposerSend(activeThread.id) ||
         activeThread.claudeCacheReview != null ||
         activeThread.sidechatExpiredAt ||
         isSendBusy ||

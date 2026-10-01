@@ -938,6 +938,32 @@ describe("resolveThreadStatusTrailingIndicator", () => {
 });
 
 describe("resolveThreadStatusPill", () => {
+  it("shows worktree preparation before there is a provider session or turn", () => {
+    const thread = {
+      interactionMode: "default" as const,
+      latestTurn: null,
+      lastVisitedAt: undefined,
+      session: null,
+      updatedAt: "2026-10-01T10:00:00.000Z",
+    };
+    expect(
+      resolveThreadStatusPill({
+        thread,
+        hasPendingApprovals: false,
+        hasPendingUserInput: false,
+        isPreparingWorktree: true,
+      }),
+    ).toMatchObject({ label: "Preparing worktree", pulse: true, dismissible: false });
+    expect(
+      resolveThreadStatusPill({
+        thread,
+        hasPendingApprovals: false,
+        hasPendingUserInput: false,
+        isPreparingWorktree: false,
+      }),
+    ).toBeNull();
+  });
+
   const baseThread = {
     interactionMode: "plan" as const,
     latestTurn: null,
