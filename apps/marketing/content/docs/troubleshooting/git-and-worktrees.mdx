@@ -25,6 +25,12 @@ Confirm:
 
 Do not diagnose the primary checkout when the task actually owns a managed worktree.
 
+## Slow branch or worktree creation
+
+Synara serializes local Git mutations across linked worktrees of the same repository. Automatic publication after the first-turn branch rename runs outside that queue, so a slow remote or authentication timeout does not hold up other local branch or worktree creation. The thread shows the renamed local branch before publication finishes; a publication failure leaves that local branch intact and is recorded in the server log.
+
+If creation remains slow, check the checkout size, local changes and `.worktreeinclude` files being copied, and any configured worktree setup script. These are separate from remote publication.
+
 ## Detached HEAD in a managed worktree
 
 A detached HEAD can be intentional. Synara-managed worktrees may begin from a selected base ref without immediately attaching a named branch.
