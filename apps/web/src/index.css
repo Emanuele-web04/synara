@@ -246,6 +246,8 @@
      painting their own tones over it. */
   :root[data-window-translucency="window"] [data-sidebar-layout="rail"] {
     --app-rail-panel-background: transparent;
+    /* The card the active tab normally matches is clear, so the tab takes an ink tint. */
+    --app-rail-tab-active-surface: color-mix(in srgb, var(--foreground) 8%, transparent);
   }
 
   :root[data-window-translucency="window"] [data-sidebar-layout="rail"] .sidebar-icon-chip {
@@ -310,7 +312,10 @@
 
 .chat-pane-enter {
   animation: chat-pane-enter 140ms ease-out;
-  will-change: opacity;
+  /* Keeps the pane's stacking context without a standing `will-change: opacity`: that made
+     the pane a backdrop root, so the composer's blur sampled an empty layer instead of the
+     surface behind the pane and rendered as a dark slab on a glass window. */
+  isolation: isolate;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -3035,7 +3040,9 @@ diffs-container {
    pickers are built from, so the composer now lifts off the transcript exactly the
    way they do.
 
-   `--composer-glass-opacity` keeps every composer-family surface on one knob. */
+   `--composer-glass-opacity` keeps every composer-family surface on one knob. When the
+   whole window is glass, theme.logic lowers it in step with the window's own opacity: the
+   fill then stacks on the body's coat, and the default would read as a solid slab. */
 :root {
   --composer-glass-opacity: 55%;
   --composer-glass-stacked-opacity: calc(var(--composer-glass-opacity) / 2);
@@ -3078,6 +3085,24 @@ diffs-container {
     var(--composer-glass-surface) var(--composer-glass-opacity),
     transparent
   );
+}
+
+/* Raised panels docked over the transcript (Environment, Library, Project). Opaque, so the
+   transcript never bleeds through; when the whole window is glass they take the composer's
+   material instead, since the two cards sit side by side. The panels clip their own
+   overflow, so the blur sits on the element itself. */
+.chat-raised-panel-surface {
+  background: var(--popover);
+}
+
+:root[data-window-translucency="window"] .chat-raised-panel-surface {
+  background: color-mix(
+    in srgb,
+    var(--composer-glass-surface) var(--composer-glass-opacity),
+    transparent
+  );
+  -webkit-backdrop-filter: var(--composer-glass-filter);
+  backdrop-filter: var(--composer-glass-filter);
 }
 
 /* Recessed track: a hairline border + faint inner shadow read the base as a sunken

@@ -215,10 +215,12 @@ export const COMPOSER_PICKER_TOOLTIP_SURFACE_CLASS_NAME = `${COMPOSER_PICKER_MEN
 export const COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME =
   "relative overflow-hidden rounded-2xl border border-border bg-popover text-popover-foreground";
 
-/** Opaque Environment panel card — same rationale as the command menu (overlays transcript).
+/** Environment panel card. Opaque for the same reason as the command menu (it overlays the
+ *  transcript), except on a whole-window glass shell, where it takes the composer's glass
+ *  (see `.chat-raised-panel-surface` in index.css).
  *  Docks alongside the composer, so it carries the shared raised-chrome border rather
  *  than plain `border-border`: the two cards sit side by side and must read as one weight. */
-export const ENVIRONMENT_PANEL_SURFACE_CLASS_NAME = `relative overflow-hidden rounded-2xl border ${RAISED_SURFACE_BORDER_CLASS_NAME} bg-popover text-popover-foreground ${COMPOSER_SURFACE_SHADOW_CLASS_NAME}`;
+export const ENVIRONMENT_PANEL_SURFACE_CLASS_NAME = `relative overflow-hidden rounded-2xl border ${RAISED_SURFACE_BORDER_CLASS_NAME} chat-raised-panel-surface text-popover-foreground ${COMPOSER_SURFACE_SHADOW_CLASS_NAME}`;
 
 /** Top-right overlay host shared by the right-side surface panels (Environment, Group,
  *  Library). Panels that stack extra chrome (Environment's bottom rail) extend it. */
