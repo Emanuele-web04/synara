@@ -78,8 +78,9 @@ export const COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME = MUTED_LABEL_TEXT_CLASS_NAME
 // tuned via the `--picker-section-py` token on `[data-slot="menu-label"]`.
 
 export const COMPOSER_MAX_WIDTH_CLASS_NAME = "max-w-[var(--app-chat-max-width,46rem)]";
-/** Main chat column background — matches the theme Background setting exactly. */
-export const CHAT_BACKGROUND_CLASS_NAME = "bg-[var(--color-background-surface)]";
+/** Main chat column background — the theme Background setting exactly, or clear when the
+ *  whole window is translucent (see `.app-content-surface` in index.css). */
+export const CHAT_BACKGROUND_CLASS_NAME = "app-content-surface";
 
 /** Turns the main content column into a distinct, opaque surface over the
  *  (optionally translucent) sidebar instead of sharing one continuous material with it.

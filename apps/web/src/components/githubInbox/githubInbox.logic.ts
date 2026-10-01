@@ -28,7 +28,7 @@ import type {
 import {
   filterInboxItemsByInvolvement,
   matchesPullRequestSearchQuery,
-  groupPullRequestEntriesByInvolvement,
+  groupPullRequestEntriesPinnedThenAll,
   orderPullRequestEntriesPinnedFirst,
   pullRequestListEntryKey,
   safeGitHubLabelColor,
@@ -414,12 +414,14 @@ export function countInboxItemsByKind(
   return counts;
 }
 
-/** The list's sections (Pinned, Authored by me, Needs my review, Involving me, Everything else). */
+/**
+ * The list's sections: Pinned, then everything else in one list by latest activity, as on
+ * GitHub. Narrowing to the viewer's own or review-requested items is the involvement filter's job.
+ */
 export function groupVisibleInboxItems(
   items: ReadonlyArray<GitHubInboxItem>,
-  viewer: string | null | undefined,
 ): PullRequestListGroup[] {
-  return groupPullRequestEntriesByInvolvement(items, viewer);
+  return groupPullRequestEntriesPinnedThenAll(items);
 }
 
 // ── Section state ──────────────────────────────────────────────────────────

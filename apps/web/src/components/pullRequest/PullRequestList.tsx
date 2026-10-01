@@ -1,8 +1,8 @@
 // FILE: PullRequestList.tsx
-// Purpose: The GitHub inbox list body — the involvement sections (Pinned, Authored by me, Needs
-//          my review, Involving me, Everything else), built from the sidebar's own list sections:
-//          each shows its first page of rows with "Show more" / "Show less", and every section
-//          but Pinned folds behind its label. Rows use repository + number identity because the
+// Purpose: The GitHub inbox list body — Pinned, then All (or the involvement sections), built
+//          from the sidebar's own list sections: each shows its first page of rows with "Show
+//          more" / "Show less". Pinned and All stay open; involvement sections fold behind their
+//          label. All shows its label only under Pinned, so an unpinned list reads like GitHub's. Rows use repository + number identity because the
 //          list has one row per remote item; selection still retains project context for the
 //          detail.
 // Layer: Pull request presentation
@@ -46,7 +46,7 @@ export const PullRequestList = function PullRequestList({
 }: {
   groups: ReadonlyArray<PullRequestListGroup>;
   isSelected: (entry: GitHubInboxItem) => boolean;
-  /** Whether a collapsible section is expanded. Pinned is always open. */
+  /** Whether a collapsible section is expanded. Pinned and All are always open. */
   isSectionOpen: (key: PullRequestListGroupKey) => boolean;
   onToggleSection: (key: PullRequestListGroupKey) => void;
   showProjectTitle?: boolean;
@@ -115,13 +115,15 @@ export const PullRequestList = function PullRequestList({
         );
         return (
           <section key={group.key} aria-label={group.label} data-inbox-section={group.key}>
-            {group.key === "pinned" ? (
+            {group.key === "pinned" || group.key === "all" ? (
               <>
-                <SidebarSectionLabel
-                  as="h2"
-                  label={group.label}
-                  className={LIST_INSET_CLASS_NAME}
-                />
+                {group.key === "pinned" || groups.length > 1 ? (
+                  <SidebarSectionLabel
+                    as="h2"
+                    label={group.label}
+                    className={LIST_INSET_CLASS_NAME}
+                  />
+                ) : null}
                 <div className="flex flex-col gap-0.5">{rows}</div>
               </>
             ) : (

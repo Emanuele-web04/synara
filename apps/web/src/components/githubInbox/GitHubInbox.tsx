@@ -348,16 +348,18 @@ export function GitHubInbox({
     normalizedQuery: deferredQuery,
     preferredProjectId: selection?.projectId,
   });
-  const groups = groupVisibleInboxItems(entries, listData?.viewer);
+  const groups = groupVisibleInboxItems(entries);
   // While searching, every section opens so a match is never hidden behind a fold.
   const expandedSections: ReadonlyArray<PullRequestListGroupKey> =
     settings.githubInboxExpandedSections ?? DEFAULT_EXPANDED_INBOX_SECTIONS;
-  type FoldableSection = Exclude<PullRequestListGroupKey, "pinned">;
+  type FoldableSection = Exclude<PullRequestListGroupKey, "pinned" | "all">;
   const isSectionOpen = (key: PullRequestListGroupKey) =>
     deferredQuery.length > 0 || expandedSections.includes(key);
   const toggleSection = (key: PullRequestListGroupKey) => {
-    if (key === "pinned") return;
-    const open = expandedSections.filter((entry): entry is FoldableSection => entry !== "pinned");
+    if (key === "pinned" || key === "all") return;
+    const open = expandedSections.filter(
+      (entry): entry is FoldableSection => entry !== "pinned" && entry !== "all",
+    );
     updateSettings({
       githubInboxExpandedSections: open.includes(key)
         ? open.filter((entry) => entry !== key)

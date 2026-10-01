@@ -356,18 +356,67 @@ describe("buildThemeCssVariables", () => {
 describe("window translucency", () => {
   const macDesktop = { electron: true, isMac: true };
 
-  it("keeps the long-standing translucent fills at the default opacity", () => {
+  const sidebarOnly = (opacity: number) => ({
+    ...macDesktop,
+    translucency: { opacity, blur: 0, sidebarOnly: true },
+  });
+
+  it("makes the whole window one translucent coat by default", () => {
     const dark = buildThemeCssVariables(
       resolveThemePack(DEFAULT_THEME_STATE, "dark"),
       "dark",
       macDesktop,
     );
+    expect(dark.material).toBe("translucent");
+    expect(dark.translucencyScope).toBe("window");
+    // The body carries the only fill; every surface above it stays clear so nested route
+    // surfaces never stack it.
+    expect(dark.variables["--app-window-background"]).toMatch(/80%, black\) 72%, transparent\)$/);
+    expect(dark.variables["--app-content-surface"]).toBe("transparent");
+    expect(dark.variables["--app-settings-surface"]).toBe("transparent");
+    expect(dark.variables["--app-sidebar-surface"]).toBe("transparent");
+    expect(dark.variables["--app-sidebar-backdrop-filter"]).toBe("none");
+    expect(dark.variables["--app-rail-shell-opacity"]).toBe("0%");
+    expect(dark.variables["--app-sidebar-chip-surface"]).toBe(
+      dark.variables["--app-window-background"],
+    );
+  });
+
+  it("keeps the content opaque and the shell clear for opaque windows", () => {
+    const opaque = buildThemeCssVariables(resolveThemePack(DEFAULT_THEME_STATE, "dark"), "dark", {
+      electron: true,
+      isMac: false,
+    });
+    expect(opaque.material).toBe("opaque");
+    expect(opaque.translucencyScope).toBe("none");
+    expect(opaque.variables["--app-content-surface"]).toBe(
+      opaque.variables["--color-background-surface"],
+    );
+    expect(opaque.variables["--app-window-background"]).toBe(
+      opaque.variables["--app-shell-background"],
+    );
+  });
+
+  it("keeps the long-standing sidebar fills when limited to the sidebar", () => {
+    const dark = buildThemeCssVariables(
+      resolveThemePack(DEFAULT_THEME_STATE, "dark"),
+      "dark",
+      sidebarOnly(72),
+    );
     const light = buildThemeCssVariables(
       resolveThemePack(DEFAULT_THEME_STATE, "light"),
       "light",
-      macDesktop,
+      sidebarOnly(38),
     );
     expect(dark.material).toBe("translucent");
+    expect(dark.translucencyScope).toBe("sidebar");
+    expect(dark.variables["--app-window-background"]).toBe("transparent");
+    expect(dark.variables["--app-content-surface"]).toBe(
+      dark.variables["--color-background-surface"],
+    );
+    expect(dark.variables["--app-settings-surface"]).toBe(
+      dark.variables["--color-background-surface"],
+    );
     expect(dark.variables["--app-sidebar-surface"]).toMatch(/80%, black\) 72%, transparent\)$/);
     expect(dark.variables["--app-rail-shell-opacity"]).toBe("64%");
     expect(light.variables["--app-sidebar-surface"]).toMatch(/ 38%, transparent\)$/);
@@ -376,14 +425,8 @@ describe("window translucency", () => {
 
   it("scales the sidebar and rail fills with the chosen opacity", () => {
     const pack = resolveThemePack(DEFAULT_THEME_STATE, "light");
-    const clear = buildThemeCssVariables(pack, "light", {
-      ...macDesktop,
-      translucency: { opacity: 0, blur: 0 },
-    });
-    const dense = buildThemeCssVariables(pack, "light", {
-      ...macDesktop,
-      translucency: { opacity: 90, blur: 0 },
-    });
+    const clear = buildThemeCssVariables(pack, "light", sidebarOnly(0));
+    const dense = buildThemeCssVariables(pack, "light", sidebarOnly(90));
     expect(clear.variables["--app-sidebar-surface"]).toMatch(/ 0%, transparent\)$/);
     expect(clear.variables["--app-rail-shell-opacity"]).toBe("0%");
     expect(dense.variables["--app-rail-shell-opacity"]).toBe("100%");
@@ -393,8 +436,17 @@ describe("window translucency", () => {
     const legacy = normalizeThemeState({ mode: "dark" });
     expect(legacy.translucency).toEqual(DEFAULT_THEME_STATE.translucency);
 
-    const edited = setWindowTranslucency(legacy, "dark", { opacity: 140, blur: -3 });
-    expect(edited.translucency.dark).toEqual({ opacity: 100, blur: 0 });
+    // States saved before the scope existed get whole-window glass, the new default.
+    expect(
+      normalizeThemeState({ translucency: { dark: { opacity: 50, blur: 10 } } }).translucency.dark,
+    ).toEqual({ opacity: 50, blur: 10, sidebarOnly: false });
+
+    const edited = setWindowTranslucency(legacy, "dark", {
+      opacity: 140,
+      blur: -3,
+      sidebarOnly: true,
+    });
+    expect(edited.translucency.dark).toEqual({ opacity: 100, blur: 0, sidebarOnly: true });
     expect(edited.translucency.light).toEqual(DEFAULT_THEME_STATE.translucency.light);
     expect(resetThemeVariant(edited, "dark").translucency.dark).toEqual(
       DEFAULT_THEME_STATE.translucency.dark,
