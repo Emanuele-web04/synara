@@ -6,6 +6,7 @@ import {
   buildOpenThreadTabs,
   closeOpenThreadTab,
   createOpenThreadTabCloseQueue,
+  moveOpenThreadTab,
   replaceLastTabWithFreshChat,
   normalizeOpenThreadTabIds,
   type OpenThreadTabSource,
@@ -50,6 +51,17 @@ describe("open thread tab list", () => {
 
     expect(addOpenThreadTab(open, ThreadId.makeUnsafe("a"))).toEqual(open);
     expect(addOpenThreadTab(open, ThreadId.makeUnsafe("d"))).toEqual([...open, "d"]);
+  });
+
+  it("moves a dragged tab into the slot of the tab it is dropped on", () => {
+    const open = ["a", "b", "c", "d"].map((id) => ThreadId.makeUnsafe(id));
+    const move = (from: string, to: string) =>
+      moveOpenThreadTab(open, ThreadId.makeUnsafe(from), ThreadId.makeUnsafe(to));
+
+    expect(move("a", "c")).toEqual(["b", "c", "a", "d"]);
+    expect(move("d", "b")).toEqual(["a", "d", "b", "c"]);
+    expect(move("b", "b")).toBe(open);
+    expect(move("b", "missing")).toBe(open);
   });
 
   it("restores a persisted list without duplicates or malformed entries", () => {

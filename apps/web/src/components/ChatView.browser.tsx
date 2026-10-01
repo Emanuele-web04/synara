@@ -1580,6 +1580,20 @@ async function nextFrame(): Promise<void> {
   });
 }
 
+function mousePointerEvent(type: string, x: number, y: number): PointerEvent {
+  return new PointerEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    pointerType: "mouse",
+    pointerId: 1,
+    isPrimary: true,
+    button: 0,
+    buttons: type === "pointerup" ? 0 : 1,
+    clientX: x,
+    clientY: y,
+  });
+}
+
 async function waitForLayout(): Promise<void> {
   await nextFrame();
   await nextFrame();
@@ -9443,6 +9457,126 @@ describe("ChatView transcript geometry (full app)", () => {
       await expect
         .element(page.getByRole("dialog", { name: "Hand off to worktree" }), { timeout: 2_000 })
         .not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it.each(["saved", "draft", "terminal"] as const)(
+    "reorders a background horizontal tab across navigation and persists the order (%s)",
+    async (kind) => {
+      const thirdId = ThreadId.makeUnsafe("drag-tab-third");
+      let snapshot = createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("drag-tabs"),
+        targetText: "Drag tabs",
+      });
+      snapshot = addThreadToSnapshot(snapshot, thirdId);
+      if (kind !== "draft") snapshot = addThreadToSnapshot(snapshot, OTHER_THREAD_ID);
+      snapshot = {
+        ...snapshot,
+        threads: snapshot.threads.map((thread) =>
+          thread.id === thirdId ? Object.assign({}, thread, { title: "Destination tab" }) : thread,
+        ),
+      };
+      const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+      try {
+        if (kind === "draft") {
+          useComposerDraftStore.getState().registerDraftThread(OTHER_THREAD_ID, {
+            projectId: PROJECT_ID,
+          });
+        } else if (kind === "terminal") {
+          useTerminalStateStore.getState().openTerminalThreadPage(OTHER_THREAD_ID);
+        }
+        useOpenThreadTabsStore.setState({ threadIds: [THREAD_ID, OTHER_THREAD_ID, thirdId] });
+        await vi.waitFor(() =>
+          expect(
+            document.querySelectorAll('nav[aria-label="Open threads"] [data-surface-tab]'),
+          ).toHaveLength(3),
+        );
+        await waitForLayout();
+        const labels = document.querySelectorAll<HTMLButtonElement>(
+          'nav[aria-label="Open threads"] [data-surface-tab] > button:not([aria-label])',
+        );
+        const source = labels[1]!.getBoundingClientRect();
+        const x = source.left + source.width / 2;
+        const y = source.top + source.height / 2;
+        labels[1]!.dispatchEvent(mousePointerEvent("pointerdown", x, y));
+        document.dispatchEvent(mousePointerEvent("pointermove", x + 8, y));
+        await waitForLayout();
+        await vi.waitFor(() =>
+          expect(mounted.router.state.location.pathname).toBe(`/${OTHER_THREAD_ID}`),
+        );
+        const currentLabels = document.querySelectorAll<HTMLButtonElement>(
+          'nav[aria-label="Open threads"] [data-surface-tab] > button:not([aria-label])',
+        );
+        const target = currentLabels[2]!.getBoundingClientRect();
+        const targetX = target.left + target.width / 2;
+        document.dispatchEvent(mousePointerEvent("pointermove", targetX, y));
+        await waitForLayout();
+        document.dispatchEvent(mousePointerEvent("pointermove", targetX + 1, y));
+        await nextFrame();
+        document.dispatchEvent(mousePointerEvent("pointerup", targetX + 1, y));
+        await vi.waitFor(() =>
+          expect(useOpenThreadTabsStore.getState().threadIds).toEqual([
+            THREAD_ID,
+            thirdId,
+            OTHER_THREAD_ID,
+          ]),
+        );
+        expect(
+          JSON.parse(localStorage.getItem("synara:open-thread-tabs:v1")!).state.threadIds,
+        ).toEqual([THREAD_ID, thirdId, OTHER_THREAD_ID]);
+        await vi.waitFor(() =>
+          expect(mounted.router.state.location.pathname).toBe(`/${OTHER_THREAD_ID}`),
+        );
+        expect(
+          document.querySelector('nav[aria-label="Open threads"] button[aria-current="page"]')
+            ?.textContent,
+        ).toBe("New thread");
+        expect(
+          [
+            ...document.querySelectorAll(
+              'nav[aria-label="Open threads"] [data-surface-tab] > button:not([aria-label])',
+            ),
+          ].map((label) => label.textContent),
+        ).toEqual([THREAD_TITLE, "Destination tab", "New thread"]);
+      } finally {
+        await mounted.cleanup();
+      }
+    },
+  );
+
+  it("keeps close-button pointer travel from starting a horizontal tab drag", async () => {
+    const snapshot = addThreadToSnapshot(
+      createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("drag-close"),
+        targetText: "Close a tab",
+      }),
+      OTHER_THREAD_ID,
+    );
+    const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+    try {
+      useOpenThreadTabsStore.setState({ threadIds: [THREAD_ID, OTHER_THREAD_ID] });
+      await vi.waitFor(() =>
+        expect(
+          document.querySelectorAll('nav[aria-label="Open threads"] [data-surface-tab]'),
+        ).toHaveLength(2),
+      );
+      const button = document.querySelectorAll<HTMLButtonElement>(
+        'nav[aria-label="Open threads"] button[aria-label^="Close "]',
+      )[0]!;
+      await userEvent.hover(button);
+      await userEvent.dragAndDrop(button, button, {
+        sourcePosition: { x: 12, y: 12 },
+        targetPosition: { x: 19, y: 12 },
+      });
+      await vi.waitFor(
+        () => expect(useOpenThreadTabsStore.getState().threadIds).not.toContain(THREAD_ID),
+        {
+          timeout: 2_000,
+        },
+      );
+      expect(useOpenThreadTabsStore.getState().threadIds).toEqual([OTHER_THREAD_ID]);
     } finally {
       await mounted.cleanup();
     }
