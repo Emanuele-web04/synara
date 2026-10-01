@@ -45,7 +45,6 @@ interface ChatProviderModelsInput {
   activeProject: Project | undefined;
   composerDraft: ReturnType<typeof useComposerThreadDraft>;
   settings: AppSettings;
-  isModelPickerOpen: boolean;
   resolvedThreadWorktreePath: string | null;
 }
 
@@ -55,7 +54,6 @@ export function useChatProviderModels({
   activeProject,
   composerDraft,
   settings,
-  isModelPickerOpen,
   resolvedThreadWorktreePath,
 }: ChatProviderModelsInput) {
   const queryClient = useQueryClient();
@@ -195,6 +193,7 @@ export function useChatProviderModels({
     modelOptionsByProvider,
     modelOptionsByProviderInstance,
     loadingModelProviders,
+    refreshModels,
     discoveryErrorsByProvider,
     runtimeModelsByProvider,
     runtimeModelsByProviderInstance,
@@ -204,7 +203,8 @@ export function useChatProviderModels({
   } = useProviderModelCatalog({
     selectedProvider,
     selectedProviderInstanceId,
-    discoveryEnabled: isModelPickerOpen,
+    // Browsing a provider tab requests just that account through refreshModels.
+    discoveryEnabled: false,
     cwd: providerModelDiscoveryCwd,
     modelHintByProvider: composerModelHintByProvider,
     agentDiscoveryPolicy: "eager-core",
@@ -406,6 +406,7 @@ export function useChatProviderModels({
     modelOptionsByProvider,
     modelOptionsByProviderInstance,
     loadingModelProviders,
+    refreshModels,
     discoveryErrorsByProvider,
     runtimeModelsByProvider,
     runtimeModelsByProviderInstance,

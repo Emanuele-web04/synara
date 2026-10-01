@@ -11,8 +11,8 @@ import type {
   ProviderListModelsResult,
   ProviderModelDescriptor,
 } from "@synara/contracts";
-import { useQueries, useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo } from "react";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo } from "react";
 
 import {
   getAppModelOptions,
@@ -35,6 +35,11 @@ import { mergeDynamicModelOptions, type ProviderModelOption } from "../providerM
 import type { ProviderModelOptionsByProviderInstance } from "../components/chat/ProviderModelPicker";
 
 export interface ProviderModelCatalog {
+  refreshModels: (
+    provider: ProviderKind,
+    instanceId: ProviderInstanceId,
+    refresh: "if-stale" | "now",
+  ) => Promise<void>;
   customModelsByProvider: ReturnType<typeof getCustomModelsByProvider>;
   modelOptionsByProvider: Record<
     ProviderKind,
@@ -100,6 +105,7 @@ function modelQueryOptionsForProviderInstance(input: {
   readonly instanceId: ProviderInstanceId;
   readonly cwd: string | null;
   readonly enabled: boolean;
+  readonly refresh?: "if-stale" | "now";
 }) {
   const providerOptions = getProviderStartOptions(input.settings, input.instanceId)?.[
     input.provider
@@ -113,8 +119,9 @@ function modelQueryOptionsForProviderInstance(input: {
     accountId: readProviderOptionString(providerOptions, "accountId"),
     apiEndpoint: readProviderOptionString(providerOptions, "apiEndpoint"),
     agentDir: readProviderOptionString(providerOptions, "agentDir"),
-    cwd: input.cwd,
+    cwd: CWD_SCOPED_MODEL_DISCOVERY_PROVIDERS.has(input.provider) ? input.cwd : null,
     enabled: input.enabled,
+    ...(input.refresh ? { refresh: input.refresh, priority: "foreground" } : {}),
   });
 }
 
@@ -158,6 +165,29 @@ export function useProviderModelCatalog(input: {
   const agentDiscoveryPolicy = input.agentDiscoveryPolicy ?? "selected";
   const discoveryCwd = input.cwd ?? null;
   const { settings, serverSettings } = useAppSettings();
+  const queryClient = useQueryClient();
+  const refreshModels = useCallback<ProviderModelCatalog["refreshModels"]>(
+    async (provider, instanceId, refresh) => {
+      const options = modelQueryOptionsForProviderInstance({
+        settings,
+        provider,
+        instanceId,
+        cwd: discoveryCwd,
+        enabled: true,
+        refresh,
+      });
+      // A prefetch already running may return a stale snapshot. Let it finish before
+      // issuing the interactive read, rather than losing refresh intent by joining it.
+      const wasFetching = queryClient.getQueryState(options.queryKey)?.fetchStatus === "fetching";
+      if (wasFetching) await queryClient.fetchQuery({ ...options, retry: false });
+      await queryClient.fetchQuery({
+        ...options,
+        staleTime: refresh === "now" || wasFetching ? 0 : 30_000,
+        retry: false,
+      });
+    },
+    [queryClient, settings, discoveryCwd],
+  );
   const customModelsByProvider = useMemo(() => getCustomModelsByProvider(settings), [settings]);
   const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
   // Callers without an explicit instance selection route to the provider's
@@ -262,9 +292,7 @@ export function useProviderModelCatalog(input: {
       settings,
       provider,
       instanceId: instance?.instanceId ?? provider,
-      // Only project-scoped catalogs key on cwd, matching the new-thread
-      // prefetch so a warmed catalog serves the composer's first read.
-      cwd: CWD_SCOPED_MODEL_DISCOVERY_PROVIDERS.has(provider) ? discoveryCwd : null,
+      cwd: discoveryCwd,
       enabled,
     });
   };
@@ -757,6 +785,7 @@ export function useProviderModelCatalog(input: {
 
   return useMemo(
     () => ({
+      refreshModels,
       customModelsByProvider,
       modelOptionsByProvider,
       modelOptionsByProviderInstance,
@@ -770,6 +799,7 @@ export function useProviderModelCatalog(input: {
       discoveryErrorsByProvider,
     }),
     [
+      refreshModels,
       customModelsByProvider,
       discoveryErrorsByProvider,
       loadingModelProviders,

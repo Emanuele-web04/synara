@@ -1351,6 +1351,7 @@ export default function ChatView({
     modelOptionsByProvider,
     modelOptionsByProviderInstance,
     loadingModelProviders,
+    refreshModels,
     discoveryErrorsByProvider,
     runtimeModelsByProvider,
     runtimeModelsByProviderInstance,
@@ -1372,7 +1373,6 @@ export default function ChatView({
     activeProject,
     composerDraft,
     settings,
-    isModelPickerOpen: isComposerModelEffortPickerOpen,
     resolvedThreadWorktreePath,
   });
   const selectedProviderInstances = useMemo(
@@ -4522,6 +4522,7 @@ export default function ChatView({
       modelOptionsByProvider={modelOptionsByProvider}
       modelOptionsByProviderInstance={modelOptionsByProviderInstance}
       loadingModelProviders={loadingModelProviders}
+      onRefreshModels={refreshModels}
       discoveryErrorsByProvider={discoveryErrorsByProvider}
       hiddenProviders={settings.hiddenProviders}
       providerOrder={settings.providerOrder}
