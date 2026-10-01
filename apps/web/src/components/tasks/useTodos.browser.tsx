@@ -158,6 +158,7 @@ it("ignores unrelated chat updates for empty and unlinked task lists, while foll
   const unrelated = {
     ...makeThread({ id: ThreadId.makeUnsafe("unrelated") }),
     hasLiveTailWork: false,
+    pendingBackgroundWorkCount: 0,
     latestUserMessageAt: null,
     hasPendingApprovals: false,
     hasPendingUserInput: false,
