@@ -40,9 +40,14 @@ function pullRequestsEqual(
 /**
  * Derives the durable thread metadata observed at a provider-turn boundary.
  *
- * A successful lookup may intentionally clear a prior PR when the current branch has none.
- * A transient lookup failure preserves a PR on an unchanged branch, but clears it when the
- * branch itself changed so the sidebar never labels the new branch with the previous branch's PR.
+ * Dedicated worktree: a successful lookup may intentionally clear a prior PR when the current
+ * branch has none. A transient lookup failure preserves a PR on an unchanged branch, but clears
+ * it when the branch itself changed so the sidebar never labels the new branch with the previous
+ * branch's PR.
+ *
+ * Shared checkout (no `dedicatedWorktree`): the checkout's branch can move for reasons unrelated
+ * to the thread, so a branch without a PR is not evidence that the thread lost its PR. The stored
+ * PR is only replaced when a PR is actually found on the observed branch, never cleared.
  */
 export function deriveThreadGitMetadataPatch(input: {
   readonly currentBranch: string | null;
@@ -66,7 +71,11 @@ export function deriveThreadGitMetadataPatch(input: {
   const branchChanged = input.currentBranch !== input.observedBranch;
   let nextPullRequest = input.currentPullRequest;
 
-  if (input.observedBranch === null) {
+  if (input.dedicatedWorktree === undefined) {
+    if (input.pullRequestLookup.status === "resolved" && input.pullRequestLookup.pullRequest) {
+      nextPullRequest = input.pullRequestLookup.pullRequest;
+    }
+  } else if (input.observedBranch === null) {
     nextPullRequest = null;
   } else if (input.pullRequestLookup.status === "resolved") {
     nextPullRequest = input.pullRequestLookup.pullRequest;
