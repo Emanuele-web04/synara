@@ -16,6 +16,7 @@ import {
   createThreadExistsSelector,
   createThreadGitActionsMetadataSelector,
   createThreadProjectIdSelector,
+  createThreadShellSettingsSelector,
   createThreadShellsSelector,
   createThreadWorkspaceMetadataSelector,
   isSidebarThreadVisible,
@@ -105,6 +106,44 @@ describe("createThreadShellsSelector", () => {
 
     expect(after).not.toBe(before);
     expect(after[0]?.title).toBe("renamed");
+  });
+});
+
+describe("createThreadShellSettingsSelector", () => {
+  it("keeps its result while a streaming thread only rewrites updatedAt", () => {
+    const selectSettings = createThreadShellSettingsSelector(threadIdA);
+    const before = selectSettings(makeState({ threadShellById: { [threadIdA]: shellA } }));
+    const streamed = selectSettings(
+      makeState({
+        threadShellById: { [threadIdA]: { ...shellA, updatedAt: "2026-01-01T00:00:05.000Z" } },
+      }),
+    );
+
+    expect(before).toBe(shellA);
+    expect(streamed).toBe(before);
+  });
+
+  it("returns the new shell when a setting changes, appears, or is dropped", () => {
+    const selectSettings = createThreadShellSettingsSelector(threadIdA);
+    selectSettings(makeState({ threadShellById: { [threadIdA]: shellA } }));
+
+    const renamed = { ...shellA, title: "renamed", updatedAt: "2026-01-01T00:00:05.000Z" };
+    expect(selectSettings(makeState({ threadShellById: { [threadIdA]: renamed } }))).toBe(renamed);
+
+    const withBranch = { ...renamed, branch: "main" };
+    expect(selectSettings(makeState({ threadShellById: { [threadIdA]: withBranch } }))).toBe(
+      withBranch,
+    );
+    expect(selectSettings(makeState({ threadShellById: { [threadIdA]: renamed } }))).toBe(renamed);
+  });
+
+  it("follows the thread being removed and restored", () => {
+    const selectSettings = createThreadShellSettingsSelector(threadIdA);
+    selectSettings(makeState({ threadShellById: { [threadIdA]: shellA } }));
+
+    expect(selectSettings(makeState({}))).toBeUndefined();
+    expect(selectSettings(makeState({ threadShellById: { [threadIdA]: shellA } }))).toBe(shellA);
+    expect(createThreadShellSettingsSelector(null)(makeState({}))).toBeUndefined();
   });
 });
 

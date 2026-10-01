@@ -15,6 +15,7 @@ import {
   useReadRouteThreadId,
   useRecordOpenThreadTab,
 } from "~/hooks/useOpenThreadTabs";
+import { useOptimisticTabSelection } from "~/hooks/useOptimisticTabSelection";
 import { TerminalIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { createOpenThreadTabCloseQueue, replaceLastTabWithFreshChat } from "~/openThreadTabs.logic";
@@ -57,6 +58,17 @@ export function OpenThreadTabStrip(props: {
   // pointer leaves the strip (like browser tabs), so the next X lands under the cursor
   // instead of the widened neighbour's title.
   const [frozenTabWidthPx, setFrozenTabWidthPx] = useState<number | null>(null);
+  // The tab being switched to paints as active at once, like a pressed sidebar row; the
+  // thread itself (a whole chat to render) follows once that frame is on screen.
+  const {
+    shownKey: shownThreadId,
+    select: selectTab,
+    cancel: cancelTabSelection,
+  } = useOptimisticTabSelection({
+    activeKey: activeThreadId,
+    hasTab: (threadId) => tabs.some((tab) => tab.threadId === threadId),
+    activate: activateThreadTab,
+  });
 
   const freezeTabWidths = () => {
     const nav = navRef.current;
@@ -68,6 +80,7 @@ export function OpenThreadTabStrip(props: {
   };
 
   const closeTab = (threadId: ThreadId, projectId: ProjectId) => {
+    cancelTabSelection();
     freezeTabWidths();
     void enqueueClose(() => {
       const openThreadIds = useOpenThreadTabsStore.getState().threadIds;
@@ -114,9 +127,9 @@ export function OpenThreadTabStrip(props: {
       }
       onPointerLeave={() => setFrozenTabWidthPx(null)}
     >
-      <SurfaceTabStrip activeKey={activeThreadId} dividers className="flex-1">
+      <SurfaceTabStrip activeKey={shownThreadId} dividers className="flex-1">
         {tabs.map((tab) => {
-          const active = tab.threadId === activeThreadId;
+          const active = tab.threadId === shownThreadId;
           // A lone unsent draft has nowhere to go: closing it would land on a new chat
           // that is the same draft again.
           const closable = tabs.length > 1 || !tab.isDraft;
@@ -126,6 +139,7 @@ export function OpenThreadTabStrip(props: {
               active={active}
               closePlacement="trailing"
               selectionAria="current"
+              selectOnPointerDown
               className={cn(
                 frozenTabWidthPx === null
                   ? OPEN_THREAD_TAB_SIZE_CLASS_NAME
@@ -143,10 +157,12 @@ export function OpenThreadTabStrip(props: {
               }
               closeLabel={`Close ${tab.title}`}
               onSelect={() => {
-                if (!active) void activateThreadTab(tab.threadId);
+                if (!active) selectTab(tab.threadId);
               }}
               onClose={closable ? () => closeTab(tab.threadId, tab.projectId) : undefined}
-              onLabelDoubleClick={active ? props.onRenameActiveThread : undefined}
+              onLabelDoubleClick={
+                tab.threadId === activeThreadId ? props.onRenameActiveThread : undefined
+              }
             />
           );
         })}

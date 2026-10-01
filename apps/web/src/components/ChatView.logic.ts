@@ -76,16 +76,10 @@ export const DismissedProviderHealthBannersSchema = Schema.Array(Schema.String);
 
 export function canApplyComposerFocus(input: {
   readonly windowHasFocus: boolean;
-  readonly secondaryChromeReady: boolean;
   readonly editorAvailable: boolean;
   readonly editorDisabled: boolean;
 }): boolean {
-  return (
-    input.windowHasFocus &&
-    input.secondaryChromeReady &&
-    input.editorAvailable &&
-    !input.editorDisabled
-  );
+  return input.windowHasFocus && input.editorAvailable && !input.editorDisabled;
 }
 
 export interface PendingFileUndo {

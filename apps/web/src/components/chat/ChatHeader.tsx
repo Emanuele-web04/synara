@@ -60,6 +60,7 @@ import {
   useReadRouteThreadId,
   useRecordOpenThreadTab,
 } from "../../hooks/useOpenThreadTabs";
+import { useOptimisticTabSelection } from "../../hooks/useOptimisticTabSelection";
 import { createOpenThreadTabCloseQueue } from "../../openThreadTabs.logic";
 import { useOpenThreadTabsStore } from "../../openThreadTabsStore";
 import { StatusDot } from "~/components/ui/status-chip";
@@ -254,6 +255,19 @@ function EditorRailTabs(props: {
   const closeThreadTab = useOpenThreadTabsStore((state) => state.closeThreadTab);
   const readRouteThreadId = useReadRouteThreadId();
   const [enqueueClose] = useState(createOpenThreadTabCloseQueue);
+  // Same press feedback as the chat header strip: the pressed chat tab highlights at once
+  // and its thread opens after that frame. The terminal tab only flips a surface, so it
+  // stays a direct switch.
+  const activeTabKey = props.activeSurface === "chat" ? props.activeThreadId : "terminal";
+  const {
+    shownKey: shownTabKey,
+    select: selectChatTab,
+    cancel: cancelChatTabSelection,
+  } = useOptimisticTabSelection<string>({
+    activeKey: activeTabKey,
+    hasTab: (key) => chatTabs.some((tab) => tab.threadId === key),
+    activate: (key) => props.onOpenChat(key as ThreadId),
+  });
   const [terminalTabOpen, setTerminalTabOpen] = useState(props.terminalAvailable);
   // Timeout-0 keeps the state write asynchronous (no wasted pre-paint render), which also
   // keeps this component eligible for React Compiler; the reveal is invisible at a tick.
@@ -270,10 +284,12 @@ function EditorRailTabs(props: {
   const tabCount = chatTabs.length + (terminalTabVisible ? 1 : 0);
   const shouldShowTabs = tabCount > 1;
   const newTerminalTab = () => {
+    cancelChatTabSelection();
     setTerminalTabOpen(true);
     props.onNewTerminal();
   };
   const openTerminalTab = () => {
+    cancelChatTabSelection();
     setTerminalTabOpen(true);
     props.onOpenTerminal();
   };
@@ -282,6 +298,7 @@ function EditorRailTabs(props: {
     props.onCloseTerminal();
   };
   const closeChatTab = (threadId: ThreadId) => {
+    cancelChatTabSelection();
     // Same close flow as the chat header strip: the active chat's tab goes only once the
     // route has left it, so a guarded navigation keeps it in both places.
     void enqueueClose(() => {
@@ -347,14 +364,12 @@ function EditorRailTabs(props: {
         // Same chip tabs as the right dock's pane strip so every tab row in the
         // app reads identically. Pushed to the header's right edge (ml-auto) so the
         // title and new/history controls stay grouped on the left.
-        <SurfaceTabStrip
-          className="ml-auto"
-          activeKey={props.activeSurface === "chat" ? props.activeThreadId : "terminal"}
-        >
+        <SurfaceTabStrip className="ml-auto" activeKey={shownTabKey}>
           {chatTabs.map((thread, index) => (
             <SurfaceTabChip
               key={thread.threadId}
-              active={props.activeSurface === "chat" && thread.threadId === props.activeThreadId}
+              active={thread.threadId === shownTabKey}
+              selectOnPointerDown
               title={thread.title}
               label={`Chat ${index + 1}`}
               labelClassName="max-w-24"
@@ -366,13 +381,13 @@ function EditorRailTabs(props: {
                 />
               }
               closeLabel={`Close ${thread.title}`}
-              onSelect={() => props.onOpenChat(thread.threadId)}
+              onSelect={() => selectChatTab(thread.threadId)}
               onClose={() => closeChatTab(thread.threadId)}
             />
           ))}
           {terminalTabVisible ? (
             <SurfaceTabChip
-              active={props.activeSurface === "terminal"}
+              active={shownTabKey === "terminal"}
               title="Terminal"
               label="Terminal"
               labelClassName="max-w-24"

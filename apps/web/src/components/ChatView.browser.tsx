@@ -2979,9 +2979,7 @@ describe("ChatView transcript geometry (full app)", () => {
     }
 
     const medianRatio = ratios.sort((left, right) => left - right)[1]!;
-    // Without owner stacks and after the warm-up, main measures a 2.1x median on
-    // Linux CI (median-of-3 groups 1.85-2.16x). Deriving the work log twice per
-    // live activity (the #550 regression) measures 2.90-3.09x there.
+    // Preserve the existing Issue #550 regression limit after the performance changes.
     expect(
       medianRatio,
       `Issue #550 benchmark: ${JSON.stringify({ reports, ratios })}`,
@@ -9175,6 +9173,365 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it("closes a worktree handoff dialog when navigating to a draft thread", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("handoff-owner"),
+        targetText: "Saved thread handoff",
+      }),
+    });
+    try {
+      useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, OTHER_THREAD_ID, {});
+      useComposerDraftStore.getState().setPrompt(OTHER_THREAD_ID, "Destination draft");
+      await page.getByRole("button", { name: "Toggle environment panel", exact: true }).click();
+      await expect.element(page.getByRole("button", { name: "Local", exact: true })).toBeVisible();
+      await page.getByRole("button", { name: "Local", exact: true }).click();
+      await expect
+        .element(page.getByRole("menuitem", { name: "Hand off to new worktree" }))
+        .toBeVisible();
+      await page.getByRole("menuitem", { name: "Hand off to new worktree" }).click();
+      await expect
+        .element(page.getByRole("dialog", { name: "Hand off to worktree" }))
+        .toBeVisible();
+      await page.getByRole("textbox", { name: "Worktree name" }).fill("source-thread-worktree");
+      // Browser/history navigation remains possible while the dialog makes background clicks inert.
+      await mounted.router.navigate({ to: "/$threadId", params: { threadId: OTHER_THREAD_ID } });
+      await vi.waitFor(() => {
+        expect(mounted.router.state.location.pathname).toBe(`/${OTHER_THREAD_ID}`);
+        expect(document.querySelector('[contenteditable="true"]')?.textContent).toBe(
+          "Destination draft",
+        );
+      });
+      await expect
+        .element(page.getByRole("dialog", { name: "Hand off to worktree" }), { timeout: 2_000 })
+        .not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it.each(["terminal", "close", "navigation", "navigation-back", "inflight"] as const)(
+    "cancels a pending editor chat tab switch after %s",
+    async (action) => {
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: MessageId.makeUnsafe("editor-tab-cancel"),
+          targetText: "Editor chat",
+        }),
+        initialEntry: `/${THREAD_ID}?view=editor`,
+      });
+      try {
+        const laterThreadId = ThreadId.makeUnsafe("editor-tab-later-navigation");
+        const laterNavigation =
+          action === "navigation" || action === "navigation-back" || action === "inflight";
+        if (laterNavigation) {
+          useComposerDraftStore.getState().registerDraftThread(laterThreadId, {
+            projectId: PROJECT_ID,
+          });
+        }
+        useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, OTHER_THREAD_ID, {});
+        useOpenThreadTabsStore.setState({
+          threadIds: [THREAD_ID, OTHER_THREAD_ID, ...(laterNavigation ? [laterThreadId] : [])],
+        });
+        useTerminalStateStore.getState().setTerminalOpen(THREAD_ID, true);
+        await expect
+          .element(page.getByRole("button", { name: "Terminal", exact: true }))
+          .toBeVisible();
+        await page.getByRole("button", { name: "Chat 1", exact: true }).click();
+        await waitForLayout();
+        // Hold deferred activation until the later terminal, close or navigation action.
+        const frames: FrameRequestCallback[] = [];
+        const animationFrame = vi
+          .spyOn(window, "requestAnimationFrame")
+          .mockImplementation((callback) => {
+            frames.push(callback);
+            return frames.length;
+          });
+        let pressedLaterTab = false;
+        let firstNavigation: Promise<void> | null = null;
+        if (action === "inflight") {
+          const navigate = mounted.router.navigate;
+          vi.spyOn(mounted.router, "navigate").mockImplementation((options) => {
+            const result = navigate(options);
+            if (
+              !pressedLaterTab &&
+              options.to === "/$threadId" &&
+              options.params &&
+              typeof options.params === "object" &&
+              "threadId" in options.params &&
+              (options.params as { threadId?: string }).threadId === OTHER_THREAD_ID
+            ) {
+              firstNavigation = result;
+              // The second press happens after activate returns, before React commits
+              // the first route. Use the actual router, without a synthetic loader.
+              queueMicrotask(() => {
+                pressedLaterTab = true;
+                page
+                  .getByRole("button", { name: "Chat 3", exact: true })
+                  .element()
+                  .dispatchEvent(
+                    new PointerEvent("pointerdown", {
+                      bubbles: true,
+                      pointerType: "mouse",
+                      button: 0,
+                    }),
+                  );
+              });
+            }
+            return result;
+          });
+        }
+        page
+          .getByRole("button", { name: "Chat 2", exact: true })
+          .element()
+          .dispatchEvent(
+            new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse", button: 0 }),
+          );
+        if (action === "terminal") {
+          (
+            page
+              .getByRole("button", { name: "Terminal", exact: true })
+              .element() as HTMLButtonElement
+          ).click();
+        } else if (action === "inflight") {
+          const firstFrames = frames.slice();
+          for (const callback of firstFrames) callback(performance.now());
+          await vi.waitFor(() => expect(pressedLaterTab).toBe(true), { timeout: 2_000 });
+          await firstNavigation;
+          await new Promise((resolve) => window.setTimeout(resolve, 0));
+          frames.splice(0, firstFrames.length);
+        } else if (laterNavigation) {
+          await mounted.router.navigate({
+            to: "/$threadId",
+            params: { threadId: laterThreadId },
+            search: () => ({ view: "editor" as const }),
+          });
+          await expect
+            .element(page.getByRole("button", { name: "Chat 3", exact: true }))
+            .toHaveAttribute("aria-pressed", "true");
+          if (action === "navigation-back") {
+            await mounted.router.navigate({
+              to: "/$threadId",
+              params: { threadId: THREAD_ID },
+              search: () => ({ view: "editor" as const }),
+            });
+            expect(mounted.router.state.location.pathname).toBe(`/${THREAD_ID}`);
+            await new Promise((resolve) => window.setTimeout(resolve, 0));
+          }
+        } else {
+          const targetTab = page.getByRole("button", { name: "Chat 2", exact: true }).element();
+          const closeButton = targetTab
+            .closest("[data-surface-tab]")!
+            .querySelector<HTMLButtonElement>("button[aria-label^='Close ']")!;
+          closeButton.click();
+          await vi.waitFor(() => {
+            expect(useOpenThreadTabsStore.getState().threadIds).not.toContain(OTHER_THREAD_ID);
+          });
+        }
+        animationFrame.mockRestore();
+        for (const callback of frames) callback(performance.now());
+        await new Promise((resolve) => window.setTimeout(resolve, 550));
+        expect(mounted.router.state.location.pathname).toBe(
+          `/${action === "navigation" || action === "inflight" ? laterThreadId : THREAD_ID}`,
+        );
+        if (action === "terminal") {
+          await expect
+            .element(page.getByRole("button", { name: "Terminal", exact: true }))
+            .toHaveAttribute("aria-pressed", "true");
+        } else if (action === "inflight") {
+          expect(
+            page
+              .getByRole("button", { name: "Chat 3", exact: true })
+              .element()
+              .getAttribute("aria-pressed"),
+          ).toBe("true");
+        } else if (action === "navigation-back") {
+          expect(
+            page
+              .getByRole("button", { name: "Chat 1", exact: true })
+              .element()
+              .getAttribute("aria-pressed"),
+          ).toBe("true");
+        } else if (action === "close") {
+          expect(useOpenThreadTabsStore.getState().threadIds).not.toContain(OTHER_THREAD_ID);
+        }
+      } finally {
+        vi.restoreAllMocks();
+        await mounted.cleanup();
+      }
+    },
+  );
+
+  it.each(["saved", "draft"] as const)(
+    "switches horizontal tabs without blanking the header or composer (%s)",
+    async (targetKind) => {
+      onTestFinished(skipReactDevOwnerStacks());
+      localStorage.setItem("synara:app-settings:v1", JSON.stringify({ sidebarLayout: "rail" }));
+      useOpenThreadTabsStore.setState({ threadIds: [] });
+      let snapshot = createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("horizontal-tabs"),
+        targetText: "Horizontal tabs conversation",
+      });
+      if (targetKind === "saved") {
+        const source = snapshot.threads[0]!;
+        snapshot = {
+          ...snapshot,
+          threads: [
+            ...snapshot.threads,
+            {
+              ...source,
+              id: OTHER_THREAD_ID,
+              title: "Other tab",
+              session: source.session ? { ...source.session, threadId: OTHER_THREAD_ID } : null,
+              messages: source.messages.map((message) => ({
+                ...message,
+                id: MessageId.makeUnsafe(`other-${message.id}`),
+              })),
+            },
+          ],
+        };
+      }
+      const commits: number[] = [];
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot,
+        onRender: (_id, _phase, duration) => commits.push(duration),
+      });
+      try {
+        if (targetKind === "draft") {
+          useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, OTHER_THREAD_ID, {});
+        }
+        useComposerDraftStore.getState().setPrompt(THREAD_ID, "Draft in first tab");
+        useComposerDraftStore.getState().setPrompt(OTHER_THREAD_ID, "Draft in second tab");
+        useOpenThreadTabsStore.setState({ threadIds: [THREAD_ID, OTHER_THREAD_ID] });
+        await vi.waitFor(() =>
+          expect(document.querySelector('[contenteditable="true"]')?.textContent).toContain(
+            "Draft in first tab",
+          ),
+        );
+        await waitForLayout();
+
+        const samples = [];
+        const storageWrites = vi.spyOn(Storage.prototype, "setItem");
+        onTestFinished(() => storageWrites.mockRestore());
+        // The opt-in runs the same correctness path for longer; do not add a
+        // wall-clock threshold to CI. The first round trip warms both targets.
+        const rounds = import.meta.env.VITE_TAB_SWITCH_BENCHMARK === "1" ? 12 : 2;
+        for (let index = 0; index < rounds * 2; index += 1) {
+          const toSecond = index % 2 === 0;
+          const targetId = toSecond ? OTHER_THREAD_ID : THREAD_ID;
+          const expectedPrompt = toSecond ? "Draft in second tab" : "Draft in first tab";
+          const tabButtons = document.querySelectorAll<HTMLButtonElement>(
+            'nav[aria-label="Open threads"] [data-surface-tab] > button:not([aria-label])',
+          );
+          expect(tabButtons).toHaveLength(2);
+          commits.length = 0;
+          storageWrites.mockClear();
+          const startedAt = performance.now();
+          let missingHeaderFrames = 0;
+          let missingComposerFrames = 0;
+          tabButtons[toSecond ? 1 : 0]!.click();
+          let ready = false;
+          let domReadyMs: number | null = null;
+          while (performance.now() - startedAt < 5_000) {
+            await nextFrame();
+            const activeTab = document.querySelector(
+              'nav[aria-label="Open threads"] button[aria-current="page"]',
+            );
+            const editor = document.querySelector(
+              '[data-chat-composer-form="true"] [contenteditable="true"]',
+            );
+            if (!activeTab) missingHeaderFrames += 1;
+            if (!editor) missingComposerFrames += 1;
+            if (
+              mounted.router.state.location.pathname === `/${targetId}` &&
+              activeTab &&
+              editor?.textContent === expectedPrompt &&
+              ((targetKind === "draft" && toSecond) ||
+                document.querySelector(
+                  `[data-assistant-message-id="${toSecond ? "other-" : ""}msg-assistant-21"]`,
+                ))
+            ) {
+              domReadyMs ??= performance.now() - startedAt;
+              const scrollContainer = document.querySelector<HTMLElement>(
+                '[data-chat-scroll-container="true"]',
+              );
+              // A row in the DOM can still be transparent while LegendList
+              // settles its initial scroll. Include that work in opening time.
+              if (
+                (targetKind === "draft" && toSecond) ||
+                (scrollContainer && isTranscriptContentVisible(scrollContainer))
+              ) {
+                ready = true;
+                break;
+              }
+            }
+          }
+          expect(ready, "Target tab must show its own composer and transcript").toBe(true);
+          samples.push({
+            target: toSecond ? targetKind : "saved",
+            ms: performance.now() - startedAt,
+            domReadyMs,
+            reactMs: commits.reduce((sum, duration) => sum + duration, 0),
+            commits: commits.length,
+            tabWrites: storageWrites.mock.calls.filter(
+              ([key]) => key === "synara:open-thread-tabs:v1",
+            ).length,
+            missingHeaderFrames,
+            missingComposerFrames,
+          });
+          await waitForLayout();
+        }
+        if (import.meta.env.VITE_TAB_SWITCH_BENCHMARK === "1") {
+          console.info(`TAB_SWITCH_BENCHMARK ${JSON.stringify({ targetKind, samples })}`);
+        }
+        expect(samples.every((sample) => sample.missingHeaderFrames === 0)).toBe(true);
+        expect(samples.every((sample) => sample.missingComposerFrames === 0)).toBe(true);
+        expect(samples.every((sample) => sample.tabWrites === 0)).toBe(true);
+        expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(
+          "Draft in first tab",
+        );
+        expect(useComposerDraftStore.getState().draftsByThreadId[OTHER_THREAD_ID]?.prompt).toBe(
+          "Draft in second tab",
+        );
+        // Retaining the surrounding composer must not retain another chat's
+        // Lexical undo history or route its edits into the destination draft.
+        const firstEditor = await waitForComposerEditor();
+        await userEvent.click(firstEditor);
+        await userEvent.keyboard("{End} private text");
+        await vi.waitFor(() =>
+          expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toContain(
+            "private text",
+          ),
+        );
+        const secondTab = document.querySelectorAll<HTMLButtonElement>(
+          'nav[aria-label="Open threads"] [data-surface-tab] > button:not([aria-label])',
+        )[1]!;
+        secondTab.click();
+        await vi.waitFor(() =>
+          expect(document.querySelector('[contenteditable="true"]')?.textContent).toBe(
+            "Draft in second tab",
+          ),
+        );
+        const secondEditor = await waitForComposerEditor();
+        await userEvent.click(secondEditor);
+        await userEvent.keyboard(
+          isMacNavigatorPlatform() ? "{Meta>}z{/Meta}" : "{Control>}z{/Control}",
+        );
+        await waitForLayout();
+        expect(secondEditor.textContent).toBe("Draft in second tab");
+        expect(useComposerDraftStore.getState().draftsByThreadId[OTHER_THREAD_ID]?.prompt).toBe(
+          "Draft in second tab",
+        );
+      } finally {
+        await mounted.cleanup();
+        useOpenThreadTabsStore.setState({ threadIds: [] });
+      }
+    },
+  );
+
   it.each(["home", "project"] as const)(
     "closing the last %s tab opens a fresh draft in the same project",
     async (surface) => {
@@ -9228,6 +9585,152 @@ describe("ChatView transcript geometry (full app)", () => {
       }
     },
   );
+
+  it("pressing a tab marks it current at once and opens its chat without remounting the strip", async () => {
+    localStorage.setItem("synara:app-settings:v1", JSON.stringify({ sidebarLayout: "rail" }));
+    useOpenThreadTabsStore.setState({ threadIds: [] });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("tab-switch-target"),
+        targetText: "Conversation behind the first tab",
+      }),
+    });
+    try {
+      await waitForLayout();
+      // A new chat nobody has opened yet: the tab whose first visit used to drop the whole
+      // chat (header and strip included) back to the mount loader.
+      const draftId = ThreadId.makeUnsafe("unvisited-draft-tab");
+      useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, draftId, {});
+      useOpenThreadTabsStore.setState({ threadIds: [THREAD_ID, draftId] });
+      const strip = await waitForElement<HTMLElement>(
+        () => document.querySelector('nav[aria-label="Open threads"]'),
+        "The rail chat header should show the open-thread strip.",
+      );
+      const draftTab = await waitForElement<HTMLButtonElement>(
+        () => strip.querySelector('button[title="New thread"]'),
+        "The draft should have a tab.",
+      );
+      let stripLeftDocument = false;
+      const observer = new MutationObserver(() => {
+        if (!strip.isConnected) stripLeftDocument = true;
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+      try {
+        draftTab.dispatchEvent(
+          new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse", button: 0 }),
+        );
+        // The highlight lands with the press itself; the navigation waits for that frame
+        // to paint, so no frame may pass before both are checked.
+        await Promise.resolve();
+        expect(draftTab.getAttribute("aria-current")).toBe("page");
+        expect(mounted.router.state.location.pathname).toBe(`/${THREAD_ID}`);
+
+        await vi.waitFor(() => expect(mounted.router.state.location.pathname).toBe(`/${draftId}`));
+        await waitForElement(
+          () => document.querySelector('[data-testid="empty-landing-heading"]'),
+          "The draft's landing should render.",
+        );
+        await waitForLayout();
+        expect(stripLeftDocument).toBe(false);
+        expect(draftTab.getAttribute("aria-current")).toBe("page");
+      } finally {
+        observer.disconnect();
+      }
+    } finally {
+      await mounted.cleanup();
+      useOpenThreadTabsStore.setState({ threadIds: [] });
+    }
+  });
+
+  it("reveals an opened transcript once its end scroll lands, not after the list's fallback delay", async () => {
+    onTestFinished(skipReactDevOwnerStacks());
+    localStorage.setItem("synara:app-settings:v1", JSON.stringify({ sidebarLayout: "rail" }));
+    useOpenThreadTabsStore.setState({ threadIds: [] });
+    const base = createSnapshotForTargetUser({
+      targetMessageId: MessageId.makeUnsafe("transcript-reveal"),
+      targetText: "Transcript reveal conversation",
+    });
+    const source = base.threads[0]!;
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: {
+        ...base,
+        threads: [
+          source,
+          {
+            ...source,
+            id: OTHER_THREAD_ID,
+            title: "Other tab",
+            session: source.session ? { ...source.session, threadId: OTHER_THREAD_ID } : null,
+            messages: source.messages.map((message) =>
+              Object.assign({}, message, { id: MessageId.makeUnsafe(`other-${message.id}`) }),
+            ),
+          },
+        ],
+      },
+    });
+    try {
+      useOpenThreadTabsStore.setState({ threadIds: [THREAD_ID, OTHER_THREAD_ID] });
+      await waitForLayout();
+      const scrollToVisibleMs: number[] = [];
+      for (let index = 0; index < 5; index += 1) {
+        const toSecond = index % 2 === 0;
+        const targetId = toSecond ? OTHER_THREAD_ID : THREAD_ID;
+        const tabButtons = document.querySelectorAll<HTMLButtonElement>(
+          'nav[aria-label="Open threads"] [data-surface-tab] > button:not([aria-label])',
+        );
+        let scrolledAt: number | null = null;
+        const onScroll = (event: Event) => {
+          if ((event.target as HTMLElement | null)?.dataset?.chatScrollContainer === "true") {
+            scrolledAt ??= performance.now();
+          }
+        };
+        document.addEventListener("scroll", onScroll, { capture: true });
+        const startedAt = performance.now();
+        tabButtons[toSecond ? 1 : 0]!.click();
+        let visibleAt: number | null = null;
+        let distanceFromBottomPx: number | null = null;
+        while (performance.now() - startedAt < 5_000) {
+          await nextFrame();
+          const scrollContainer = document.querySelector<HTMLElement>(
+            '[data-chat-scroll-container="true"]',
+          );
+          if (
+            mounted.router.state.location.pathname === `/${targetId}` &&
+            scrollContainer?.querySelector(
+              `[data-assistant-message-id="${toSecond ? "other-" : ""}msg-assistant-21"]`,
+            ) &&
+            isTranscriptContentVisible(scrollContainer)
+          ) {
+            visibleAt = performance.now();
+            distanceFromBottomPx =
+              scrollContainer.scrollHeight -
+              scrollContainer.clientHeight -
+              scrollContainer.scrollTop;
+            break;
+          }
+        }
+        document.removeEventListener("scroll", onScroll, { capture: true });
+        expect(visibleAt, "The opened transcript must become visible").not.toBeNull();
+        // Revealing early must not expose a transcript that is not at its end yet.
+        expect(distanceFromBottomPx).toBeLessThanOrEqual(1);
+        expect(scrolledAt, "Opening a transcript scrolls it to its end").not.toBeNull();
+        scrollToVisibleMs.push(visibleAt! - scrolledAt!);
+        await waitForLayout();
+      }
+      // The list hides its rows until its initial end scroll counts as finished. Its target
+      // sits past what the scroller can reach (footer and bottom padding), so without the
+      // native-end check in the @legendapp/list patch that only happens on a fixed 100 ms
+      // fallback: about 80 ms here, against one frame with it. The median keeps one slow
+      // frame on a busy worker from deciding.
+      const median = scrollToVisibleMs.toSorted((left, right) => left - right)[2]!;
+      expect(median, JSON.stringify(scrollToVisibleMs)).toBeLessThan(50);
+    } finally {
+      await mounted.cleanup();
+      useOpenThreadTabsStore.setState({ threadIds: [] });
+    }
+  });
 
   it("preserves a home-chat draft when the chat.newChat shortcut is reused after a thread switch", async () => {
     const mounted = await mountChatView({

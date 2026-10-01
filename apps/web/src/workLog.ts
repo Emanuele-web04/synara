@@ -719,7 +719,16 @@ function extractProviderContextLifecycleInfo(
   };
 }
 
+// Store activities are immutable. Reuse their pure normalization when a live
+// update replaces the containing array; turn filtering and settlement still run
+// for each derivation with the current thread context.
+const derivedWorkLogEntryCache = new WeakMap<OrchestrationThreadActivity, DerivedWorkLogEntry>();
+
 function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWorkLogEntry {
+  const cached = derivedWorkLogEntryCache.get(activity);
+  if (cached) {
+    return cached;
+  }
   const payload =
     activity.payload && typeof activity.payload === "object"
       ? (activity.payload as Record<string, unknown>)
@@ -940,6 +949,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (collapseCommand) {
     entry.collapseCommand = collapseCommand;
   }
+  derivedWorkLogEntryCache.set(activity, entry);
   return entry;
 }
 

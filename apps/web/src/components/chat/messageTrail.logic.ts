@@ -54,6 +54,24 @@ function normalizePreviewCached(message: { readonly text: string }): string {
 // The timeline entry array is itself immutable (rebuilt only when its inputs
 // change), so repeat renders off the same entries reuse the whole projection.
 const trailItemsByEntries = new WeakMap<readonly TimelineEntry[], MessageTrailItem[]>();
+// The most recent projection, for reuse across entry arrays (see deriveMessageTrailItems).
+let lastTrailItems: MessageTrailItem[] | undefined;
+
+function trailItemsEqual(left: readonly MessageTrailItem[], right: readonly MessageTrailItem[]) {
+  return (
+    left.length === right.length &&
+    left.every((item, index) => {
+      const other = right[index]!;
+      return (
+        item.id === other.id &&
+        item.ordinal === other.ordinal &&
+        item.preview === other.preview &&
+        item.responsePreview === other.responsePreview &&
+        item.attachmentCount === other.attachmentCount
+      );
+    })
+  );
+}
 
 /**
  * Project the timeline into one trail item per user message, in transcript order.
@@ -94,8 +112,14 @@ export function deriveMessageTrailItems(
       }
     }
   }
-  trailItemsByEntries.set(timelineEntries, items);
-  return items;
+  // A streaming reply rebuilds the entry array on every token while the trail itself
+  // (one item per sent message) rarely changes: hand back the previous projection when it
+  // is equal, so the trail keeps its identity and does not re-render per token.
+  const reusedItems =
+    lastTrailItems !== undefined && trailItemsEqual(lastTrailItems, items) ? lastTrailItems : items;
+  lastTrailItems = reusedItems;
+  trailItemsByEntries.set(timelineEntries, reusedItems);
+  return reusedItems;
 }
 
 /** A sent-message row paired with its index in the virtualized row list. */

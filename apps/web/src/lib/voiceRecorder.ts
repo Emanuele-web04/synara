@@ -284,7 +284,9 @@ export function useVoiceRecorder() {
     await teardownRuntime();
     waveformLevelsRef.current = [];
     waveformLastEmitAtRef.current = 0;
-    setWaveformLevels([]);
+    // Cancelling with nothing recorded (every thread switch) must not hand the host a
+    // fresh empty array to re-render for.
+    setWaveformLevels((current) => (current.length === 0 ? current : []));
   }, [teardownRuntime]);
 
   useEffect(

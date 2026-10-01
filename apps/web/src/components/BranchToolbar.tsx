@@ -28,7 +28,7 @@ import { useStore } from "../store";
 import {
   createAccountRateLimitThreadsSelector,
   createProjectSelector,
-  createThreadSelector,
+  createThreadShellSettingsSelector,
 } from "../storeSelectors";
 import {
   EnvMode,
@@ -284,7 +284,12 @@ export default function BranchToolbar({
   const threads = useStore(rateLimitThreadsSelector);
   const { settings } = useAppSettings();
 
-  const serverThread = useStore(useMemo(() => createThreadSelector(threadId), [threadId]));
+  // Settings and session only, never the transcript: subscribing to the whole thread
+  // re-rendered the toolbar for every streamed token.
+  const serverThread = useStore(
+    useMemo(() => createThreadShellSettingsSelector(threadId), [threadId]),
+  );
+  const serverThreadSession = useStore((state) => state.threadSessionById?.[threadId] ?? null);
   const activeProjectId = serverThread?.projectId ?? draftThread?.projectId ?? null;
   const activeProject = useStore(
     useMemo(() => createProjectSelector(activeProjectId), [activeProjectId]),
@@ -301,7 +306,7 @@ export default function BranchToolbar({
     ? (serverThread.workingDirectory ?? null)
     : (draftThread?.workingDirectory ?? null);
   const activeProvider =
-    serverThread?.session?.provider ?? serverThread?.modelSelection.provider ?? null;
+    serverThreadSession?.provider ?? serverThread?.modelSelection.provider ?? null;
   const usesFixedLocalWorkspace = fixedLocalWorkspaceCwd !== undefined;
   const branchCwd = usesFixedLocalWorkspace
     ? fixedLocalWorkspaceCwd
@@ -332,7 +337,7 @@ export default function BranchToolbar({
         }
 
         const api = readNativeApi();
-        if (serverThread?.session && api) {
+        if (serverThreadSession && api) {
           void api.orchestration
             .dispatchCommand({
               type: "thread.session.stop",
@@ -382,7 +387,7 @@ export default function BranchToolbar({
       const api = readNativeApi();
       // If the effective cwd is about to change, stop the running session so the
       // next message creates a new one with the correct cwd.
-      if (serverThread?.session && worktreePath !== activeWorktreePath && api) {
+      if (serverThreadSession && worktreePath !== activeWorktreePath && api) {
         void api.orchestration
           .dispatchCommand({
             type: "thread.session.stop",
@@ -429,7 +434,7 @@ export default function BranchToolbar({
       activeThreadId,
       activeThreadBranch,
       activeWorkingDirectory,
-      serverThread?.session,
+      serverThreadSession,
       activeWorktreePath,
       hasServerThread,
       setThreadWorkspaceAction,

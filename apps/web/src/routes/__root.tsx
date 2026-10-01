@@ -78,7 +78,7 @@ import {
 } from "../composerDraftStore";
 import { useStore } from "../store";
 import { EMPTY_THREAD_IDS } from "../storeState";
-import { createAllThreadsSelector } from "../storeSelectors";
+import { createAllThreadsSelector, createThreadSelector } from "../storeSelectors";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { terminalActivityFromEvent } from "../terminalActivity";
 import {
@@ -848,8 +848,13 @@ function GlobalShortcutsDialog() {
 }
 
 function GlobalFeedbackDialog() {
-  const { activeProject, activeThread } = useFocusedChatContext();
+  const { activeProject, focusedThreadId } = useFocusedChatContext();
   const isOpen = useFeedbackDialogStore((state) => state.isOpen);
+  // The report describes the live thread, transcript counts included; only follow it while
+  // the dialog is open so a closed dialog does not re-render for every streamed token.
+  const activeThread = useStore(
+    useMemo(() => createThreadSelector(isOpen ? focusedThreadId : null), [focusedThreadId, isOpen]),
+  );
   const requestedContext = useFeedbackDialogStore((state) => state.context);
   const setOpen = useFeedbackDialogStore((state) => state.setOpen);
   const context: FeedbackThreadContext = requestedContext ?? {

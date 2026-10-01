@@ -204,11 +204,9 @@ export function SingleChatSurface(props: {
   const draftThread = useComposerDraftStore(
     (store) => store.draftThreadsByThreadId[props.threadId] ?? null,
   );
-  // A registered-but-unpromoted draft is the freeze case: landing a brand-new
-  // chat commits the whole ChatView subtree synchronously. Defer that mount
-  // behind the chat mount loader so the paint is never blocked. Opening an
-  // existing thread keeps today's immediate mount (no draft -> no loader).
-  const isBrandNewDraftThread = draftThread !== null;
+  // Defer a draft on the first mount so the shell can paint. Once mounted,
+  // DeferredChatView keeps the view alive when navigating between tabs.
+  const isDraftThread = draftThread !== null;
   // File preview must follow the same runtime cwd as chat markdown, diffs, and git:
   // worktree-backed threads resolve links against their materialized worktree.
   const workspaceRoot = resolveFilePreviewWorkspaceRoot({
@@ -265,7 +263,14 @@ export function SingleChatSurface(props: {
     // synchronous setState in the effect body; both setters are user-mutable
     // elsewhere, so deriving here would mean stamping the thread key in every one.
     const timer = window.setTimeout(() => {
-      setEditorExpandedDirectories(new Set(persisted?.expandedDirectories ?? []));
+      // Keep the current set when the persisted one matches (usually both empty): a fresh
+      // identity would re-render this surface and the chat on every thread switch.
+      setEditorExpandedDirectories((current) => {
+        const next = persisted?.expandedDirectories ?? [];
+        return current.size === next.length && next.every((directory) => current.has(directory))
+          ? current
+          : new Set(next);
+      });
       setEditorCenterMode(props.search.editorFilePath ? "file" : (persisted?.centerMode ?? "diff"));
     }, 0);
     return () => window.clearTimeout(timer);
@@ -1139,7 +1144,7 @@ export function SingleChatSurface(props: {
             <DeferredChatView
               threadId={props.threadId}
               paneScopeId={SINGLE_CHAT_PANE_SCOPE_ID}
-              deferMount={isBrandNewDraftThread}
+              deferMount={isDraftThread}
               surfaceMode="single"
               isFocusedPane
               panelState={chatPanelState}

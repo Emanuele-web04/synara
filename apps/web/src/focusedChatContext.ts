@@ -15,14 +15,20 @@ import {
   useSplitViewStore,
 } from "./splitViewStore";
 import { useStore } from "./store";
-import { createProjectSelector, createThreadSelector } from "./storeSelectors";
-import type { Project, Thread } from "./types";
+import {
+  createProjectSelector,
+  createThreadShellSettingsSelector,
+  type ThreadShellSettings,
+} from "./storeSelectors";
+import type { Project } from "./types";
 
 export interface FocusedChatContext {
   routeThreadId: ThreadIdType | null;
   splitView: SplitView | null;
   focusedThreadId: ThreadIdType | null;
-  activeThread: Thread | null;
+  // Settings only, never the transcript: this context is read all over the shell (sidebar,
+  // tabs, global shortcuts), which must not re-render for every streamed token.
+  activeThread: ThreadShellSettings | null;
   activeDraftThread: DraftThreadState | null;
   activeProject: Project | null;
   activeProjectId: Project["id"] | null;
@@ -42,7 +48,7 @@ export function useFocusedChatContext(): FocusedChatContext {
     ? resolveSplitViewFocusedPaneThreadId(activeSplitView)
     : routeThreadId;
   const activeThread = useStore(
-    useMemo(() => createThreadSelector(focusedThreadId), [focusedThreadId]),
+    useMemo(() => createThreadShellSettingsSelector(focusedThreadId), [focusedThreadId]),
   );
   const activeDraftThread =
     focusedThreadId !== null ? (draftThreadsByThreadId[focusedThreadId] ?? null) : null;

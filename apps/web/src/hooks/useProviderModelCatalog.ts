@@ -68,6 +68,13 @@ export interface ProviderModelCatalog {
 
 const EMPTY_PROVIDER_AGENTS: ReadonlyArray<ProviderAgentDescriptor> = [];
 
+// Module scope: `useQueries` recombines whenever this function's identity changes.
+function selectQueryData<Data>(
+  results: ReadonlyArray<{ data: Data | undefined }>,
+): Array<Data | undefined> {
+  return results.map((result) => result.data);
+}
+
 // OMP's catalog is global, but its `modelRoles` merge a project layer, so the
 // composer keeps cwd in the key for roles to reflect the active project.
 const CWD_SCOPED_MODEL_DISCOVERY_PROVIDERS: ReadonlySet<ProviderKind> = new Set([
@@ -157,7 +164,7 @@ export function useProviderModelCatalog(input: {
   // default instance, so that is the only instance discovery must warm.
   const effectiveSelectedInstanceId = (selectedProviderInstanceId?.trim() ||
     selectedProvider) as ProviderInstanceId;
-  const instanceModelQueries = useQueries({
+  const instanceModelData = useQueries({
     queries: providerInstances.map((instance) =>
       modelQueryOptionsForProviderInstance({
         settings,
@@ -169,11 +176,16 @@ export function useProviderModelCatalog(input: {
         enabled: discoveryEnabled || effectiveSelectedInstanceId === instance.instanceId,
       }),
     ),
+    // Only the data is read. `useQueries` otherwise returns a new array on every render,
+    // which rebuilt every instance's model options (and re-rendered the model picker) on
+    // every keystroke and streamed token; the combined result keeps its identity while
+    // the data is unchanged.
+    combine: selectQueryData,
   });
   const dynamicModelsByProviderInstance = useMemo(() => {
     const byInstance: Partial<Record<ProviderInstanceId, ProviderListModelsResult>> = {};
     providerInstances.forEach((instance, index) => {
-      const data = instanceModelQueries[index]?.data;
+      const data = instanceModelData[index];
       if (data) {
         byInstance[instance.instanceId] =
           instance.provider === "cursor"
@@ -182,7 +194,7 @@ export function useProviderModelCatalog(input: {
       }
     });
     return byInstance;
-  }, [instanceModelQueries, providerInstances]);
+  }, [instanceModelData, providerInstances]);
   const hiddenProviderSet = useMemo(
     () => new Set<ProviderKind>(settings.hiddenProviders),
     [settings.hiddenProviders],

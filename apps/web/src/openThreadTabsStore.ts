@@ -45,25 +45,24 @@ function createOpenThreadTabsStorage(): StateStorage {
 
 export const useOpenThreadTabsStore = create<OpenThreadTabsStoreState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       threadIds: [],
+      // Zustand persist writes even when set returns the same state. Skip set
+      // entirely for unchanged tabs, especially on the layout-effect navigation path.
       openThreadTab: (threadId) => {
-        set((state) => {
-          const threadIds = addOpenThreadTab(state.threadIds, threadId);
-          return threadIds === state.threadIds ? state : { threadIds };
-        });
+        const current = get().threadIds;
+        const threadIds = addOpenThreadTab(current, threadId);
+        if (threadIds !== current) set({ threadIds });
       },
       closeThreadTab: (threadId) => {
-        set((state) => {
-          const threadIds = removeOpenThreadTab(state.threadIds, threadId);
-          return threadIds === state.threadIds ? state : { threadIds };
-        });
+        const current = get().threadIds;
+        const threadIds = removeOpenThreadTab(current, threadId);
+        if (threadIds !== current) set({ threadIds });
       },
       pruneThreadTabs: (isKept) => {
-        set((state) => {
-          const threadIds = pruneOpenThreadTabs(state.threadIds, isKept);
-          return threadIds === state.threadIds ? state : { threadIds };
-        });
+        const current = get().threadIds;
+        const threadIds = pruneOpenThreadTabs(current, isKept);
+        if (threadIds !== current) set({ threadIds });
       },
     }),
     {
