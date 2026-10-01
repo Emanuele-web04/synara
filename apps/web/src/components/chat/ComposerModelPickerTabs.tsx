@@ -30,6 +30,8 @@ import {
 
 function PickerTabButton(props: {
   label: string;
+  /** False for the settings shortcut outside the tab list. */
+  tab?: boolean;
   /** Defaults to the label; an unavailable account explains itself here instead. */
   tooltip?: string;
   active: boolean;
@@ -45,9 +47,9 @@ function PickerTabButton(props: {
         render={
           <button
             type="button"
-            role="tab"
+            role={props.tab === false ? undefined : "tab"}
             aria-label={props.label}
-            aria-selected={props.active}
+            aria-selected={props.tab === false ? undefined : props.active}
             {...(props.active ? { "data-surface-tab-active": "" } : {})}
             // Not the native attribute: a disabled button swallows the hover that shows
             // why the tab is closed.
@@ -260,7 +262,12 @@ export function ComposerModelPickerTabs(props: {
       </SurfaceTabStrip>
       {/* Outside the strip, so it stays reachable however far the tabs scroll. */}
       {props.onAddProviders ? (
-        <PickerTabButton label="Add providers" active={false} onSelect={props.onAddProviders}>
+        <PickerTabButton
+          label="Add providers"
+          tab={false}
+          active={false}
+          onSelect={props.onAddProviders}
+        >
           <PlusIcon aria-hidden="true" className="size-3.5" />
         </PickerTabButton>
       ) : null}

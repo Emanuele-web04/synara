@@ -50,7 +50,7 @@ export interface ProviderModelCatalog {
    * must feed them through (see {@link selectedRuntimeModel}).
    */
   runtimeModelsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelDescriptor>>;
-  /** Runtime descriptors of each account whose catalog has been discovered. */
+  /** Account-local runtime descriptors; known accounts are empty until discovery resolves. */
   runtimeModelsByProviderInstance: Partial<
     Record<ProviderInstanceId, ReadonlyArray<ProviderModelDescriptor>>
   >;
@@ -627,11 +627,14 @@ export function useProviderModelCatalog(input: {
   const runtimeModelsByProviderInstance = useMemo(() => {
     const byInstance: Partial<Record<ProviderInstanceId, ReadonlyArray<ProviderModelDescriptor>>> =
       {};
-    for (const [instanceId, result] of Object.entries(dynamicModelsByProviderInstance)) {
-      if (result) byInstance[instanceId as ProviderInstanceId] = result.models;
+    for (const instance of providerInstances) {
+      // A configured account without discovery must not fall back to a sibling's
+      // runtime metadata. Its static/custom model options remain available above.
+      byInstance[instance.instanceId] =
+        dynamicModelsByProviderInstance[instance.instanceId]?.models ?? [];
     }
     return byInstance;
-  }, [dynamicModelsByProviderInstance]);
+  }, [dynamicModelsByProviderInstance, providerInstances]);
 
   const selectedRuntimeModel = useMemo(
     () =>

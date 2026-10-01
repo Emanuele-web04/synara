@@ -625,7 +625,7 @@ describe("ComposerModelPicker with several accounts", () => {
         return tabRect.left >= stripRect.left - 1 && tabRect.right <= stripRect.right + 1;
       };
       // The shortcut to provider settings sits outside the strip and never scrolls away.
-      const addProviders = page.getByRole("tab", { name: "Add providers" }).element();
+      const addProviders = page.getByRole("button", { name: "Add providers" }).element();
       expect(strip.contains(addProviders)).toBe(false);
 
       // A vertical mouse wheel scrolls the strip sideways.

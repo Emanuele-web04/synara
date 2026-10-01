@@ -153,6 +153,7 @@ export function GroupModelRow(props: {
     loadingModelProviders,
     discoveryErrorsByProvider,
     runtimeModelsByProvider,
+    runtimeModelsByProviderInstance,
   } = useGroupModelCatalog({
     selection: props.selection,
     selectedProviderInstanceId,
@@ -189,7 +190,11 @@ export function GroupModelRow(props: {
               const runtimeModel = resolveRuntimeModelDescriptor({
                 provider,
                 model,
-                runtimeModels: runtimeModelsByProvider[provider],
+                runtimeModels:
+                  runtimeModelsByProviderInstance[instanceId ?? provider] ??
+                  ((instanceId ?? provider) === selectedProviderInstanceId
+                    ? runtimeModelsByProvider[provider]
+                    : undefined),
               });
               const options = carryEffortOverride({
                 current: props.selection,
