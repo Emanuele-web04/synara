@@ -10,6 +10,7 @@ vi.mock("@tanstack/react-router", () => ({ useParams: () => route.threadId }));
 vi.mock("../../hooks/useDiffRouteSearch", () => ({ useDiffRouteSearch: () => ({}) }));
 
 import { ToastProvider, toastManager } from "./toast";
+import { buildGitActionFailureToast } from "../GitActionsControl.logic";
 
 let root: Root;
 let host: HTMLDivElement;
@@ -38,6 +39,26 @@ function addTimedToast(onClose: () => void) {
     }),
   );
 }
+
+it("shows the failed Git step and copyable error until dismissed", async () => {
+  const message = "Codex authentication failed (401 Unauthorized). Check credentials in Settings.";
+  flushSync(() =>
+    toastManager.add(
+      buildGitActionFailureToast({
+        message,
+        phase: "pr",
+        threadId: ThreadId.makeUnsafe("toast-thread"),
+      }),
+    ),
+  );
+  expect(document.querySelector('[data-slot="toast-description"]')?.textContent).toBe(message);
+  expect(document.querySelector('[data-slot="toast-title"]')?.textContent).toBe(
+    "PR creation failed",
+  );
+  expect(document.querySelector('button[aria-label="Copy error message"]')).not.toBeNull();
+  await vi.advanceTimersByTimeAsync(20_000);
+  expect(document.querySelector('[data-slot="toast-description"]')?.textContent).toBe(message);
+});
 
 beforeEach(() => {
   route.threadId = "toast-thread";
