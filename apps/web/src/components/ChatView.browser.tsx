@@ -18,6 +18,7 @@ import {
   DEVICE_WS_METHODS,
   COMPUTER_WS_METHODS,
   ORCHESTRATION_WS_METHODS,
+  OrchestrationProposedPlanId,
   type OrchestrationReadModel,
   type ProjectId,
   type ServerConfig,
@@ -8462,6 +8463,22 @@ describe("ChatView transcript geometry (full app)", () => {
           useComposerDraftStore.getState().getDraftThreadByProjectId(PROJECT_ID)?.threadId,
         ).toBe(nextId);
         useComposerDraftStore.getState().setPrompt(nextId, "Independent draft");
+        const nextPlanSource = {
+          threadId: THREAD_ID,
+          planId: OrchestrationProposedPlanId.makeUnsafe("independent-draft-plan"),
+        };
+        if (outcome === "success") {
+          useComposerDraftStore.getState().setRestoredSourceProposedPlan(nextId, {
+            threadId: nextId,
+            restoredPrompt: "Independent draft",
+            sourceProposedPlan: nextPlanSource,
+          });
+          await vi.waitFor(() =>
+            expect(document.querySelector('[contenteditable="true"]')?.textContent).toContain(
+              "Independent draft",
+            ),
+          );
+        }
         if (outcome === "revisit" || outcome === "cancel") {
           await page
             .getByRole("button", { name: "Open Create while I start another task", exact: true })
@@ -8529,6 +8546,24 @@ describe("ChatView transcript geometry (full app)", () => {
           },
           { timeout: 8_000, interval: 16 },
         );
+        if (outcome === "success") {
+          const worktreeCheckbox = await waitForWorktreeCheckbox();
+          worktreeCheckbox.click();
+          await vi.waitFor(() =>
+            expect(worktreeCheckbox.getAttribute("aria-checked")).toBe("false"),
+          );
+          const nextSend = await waitForSendButton();
+          await vi.waitFor(() => expect(nextSend.disabled).toBe(false));
+          nextSend.click();
+          await vi.waitFor(() => {
+            const nextTurn = wsRequests
+              .map(readDispatchedCommand)
+              .find(
+                (command) => command?.type === "thread.turn.start" && command.threadId === nextId,
+              );
+            expect(nextTurn).toMatchObject({ sourceProposedPlan: nextPlanSource });
+          });
+        }
       } finally {
         finishCreation();
         await mounted.cleanup();

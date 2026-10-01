@@ -655,7 +655,12 @@ export function useChatTurnExecution({
           setPlanSidebarOpen(true);
         }
         if (queuedChatTurn === null) {
-          setRestoredQueuedSourceProposedPlan(threadIdForSend, null);
+          (activeThreadIdRef.current === threadIdForSend
+            ? setRestoredQueuedSourceProposedPlan
+            : useComposerDraftStore.getState().setRestoredSourceProposedPlan)(
+            threadIdForSend,
+            null,
+          );
         }
       })().catch(async (err: unknown) => {
         // A user-cancelled worktree setup unwinds through this same rollback,
