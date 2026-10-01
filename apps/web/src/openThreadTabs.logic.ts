@@ -6,6 +6,7 @@
 // Exports: open-list transitions, persisted-list normalization, tab derivation, close flow
 
 import type { ProjectId, ProviderKind, ThreadId } from "@synara/contracts";
+import { arrayMove } from "@dnd-kit/sortable";
 import { isSidechatThread } from "@synara/shared/sidechatThread";
 
 import { resolveDraftThreadTitle } from "./components/ChatView.logic";
@@ -60,6 +61,22 @@ export function removeOpenThreadTab(
   return threadIds.includes(threadId)
     ? threadIds.filter((candidate) => candidate !== threadId)
     : threadIds;
+}
+
+/**
+ * Drops a dragged tab onto another tab's slot. Indexed in the full open list, so tabs
+ * the strip is not showing (another project's, in the editor view) keep their places.
+ */
+export function moveOpenThreadTab(
+  threadIds: readonly ThreadId[],
+  threadId: ThreadId,
+  overThreadId: ThreadId,
+): readonly ThreadId[] {
+  const fromIndex = threadIds.indexOf(threadId);
+  const toIndex = threadIds.indexOf(overThreadId);
+  return fromIndex < 0 || toIndex < 0 || fromIndex === toIndex
+    ? threadIds
+    : arrayMove([...threadIds], fromIndex, toIndex);
 }
 
 export function pruneOpenThreadTabs(
