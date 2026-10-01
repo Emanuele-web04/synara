@@ -2560,41 +2560,39 @@ export default function ChatView({
   );
   // Chat links offer the PR pane only for repositories this project owns, matching the
   // Environment panel; any other pull request falls back to the in-app browser.
+  // Left to the React Compiler to memoize: manual hooks here cannot be preserved.
   const openRightDockPane = useRightDockStore((store) => store.openPane);
-  const openPullRequestLink = useCallback(
-    (url: string) => {
-      const repository = parseGitHubRepositoryNameWithOwnerFromPullRequestUrl(url);
-      const number = Number(/\/pull\/(\d+)/i.exec(url)?.[1]);
-      if (!repository || !activeProjectId || !Number.isInteger(number)) {
-        openBrowserUrl(url);
-        return;
-      }
-      void queryClient.fetchQuery(gitGithubRepositoryQueryOptions(gitBranchSourceCwd)).then(
-        (result) => {
-          const belongsToProject = result.repositories.some(
-            (candidate) => candidate.nameWithOwner.toLowerCase() === repository.toLowerCase(),
-          );
-          if (!belongsToProject) {
-            openBrowserUrl(url);
-            return;
-          }
-          openRightDockPane(threadId, {
-            kind: "pullRequest",
-            pullRequestProjectId: activeProjectId,
-            pullRequestRepository: repository,
-            pullRequestNumber: number,
-            pullRequestInitialTab: "summary",
-          });
-        },
-        () => openBrowserUrl(url),
-      );
-    },
-    [activeProjectId, gitBranchSourceCwd, openBrowserUrl, openRightDockPane, queryClient, threadId],
-  );
-  const chatLinkActions = useMemo<ChatLinkActions>(
-    () => ({ openInBrowserPanel: openBrowserUrl, openPullRequest: openPullRequestLink }),
-    [openBrowserUrl, openPullRequestLink],
-  );
+  const openPullRequestLink = (url: string) => {
+    const repository = parseGitHubRepositoryNameWithOwnerFromPullRequestUrl(url);
+    const number = Number(/\/pull\/(\d+)/i.exec(url)?.[1]);
+    if (!repository || !activeProjectId || !Number.isInteger(number)) {
+      openBrowserUrl(url);
+      return;
+    }
+    void queryClient.fetchQuery(gitGithubRepositoryQueryOptions(gitBranchSourceCwd)).then(
+      (result) => {
+        const belongsToProject = result.repositories.some(
+          (candidate) => candidate.nameWithOwner.toLowerCase() === repository.toLowerCase(),
+        );
+        if (!belongsToProject) {
+          openBrowserUrl(url);
+          return;
+        }
+        openRightDockPane(threadId, {
+          kind: "pullRequest",
+          pullRequestProjectId: activeProjectId,
+          pullRequestRepository: repository,
+          pullRequestNumber: number,
+          pullRequestInitialTab: "summary",
+        });
+      },
+      () => openBrowserUrl(url),
+    );
+  };
+  const chatLinkActions: ChatLinkActions = {
+    openInBrowserPanel: openBrowserUrl,
+    openPullRequest: openPullRequestLink,
+  };
 
   const envLocked = Boolean(
     activeThread &&
