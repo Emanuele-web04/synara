@@ -687,7 +687,10 @@ describe("Ask", () => {
     useRightDockStore.getState().setDockOpen(GITHUB_INBOX_DOCK_HOST_ID, false);
     await expect.poll(() => inboxDock().open).toBe(false);
 
-    await page.getByRole("button", { name: "Crash on launch", exact: true }).click();
+    await expect.element(page.getByTestId("dock-sidechat")).not.toBeInTheDocument();
+    const details = page.getByRole("complementary", { name: "Details" });
+    await expect.element(details).toBeVisible();
+    await details.getByRole("button", { name: "Crash on launch", exact: true }).click();
     await expect.poll(() => inboxDock().open).toBe(true);
     await expect.poll(shownSidechat).toBe(sidechatId);
   });
