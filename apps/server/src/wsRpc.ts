@@ -4,6 +4,7 @@ import { execFile } from "node:child_process";
 import {
   CommandId,
   COMPUTER_WS_METHODS,
+  TASKS_UNAVAILABLE_ERROR_CODE,
   DEFAULT_TERMINAL_ID,
   DEVICE_WS_METHODS,
   ORCHESTRATION_WS_METHODS,
@@ -48,6 +49,8 @@ import { Headers, HttpRouter, HttpServerRequest, HttpServerResponse } from "effe
 import { RpcMiddleware, RpcSchema, RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import { AutomationService } from "./automation/Services/AutomationService";
+import { TodoService } from "./todo/Services/TodoService";
+import { isServerBetaFeatureEnabled } from "./betaFeatureGate";
 import { ProjectAgentService } from "./projectAgent/Services/ProjectAgentService";
 import { isGroupCoordinatorHostProject } from "./projectAgent/groupCoordinatorHost";
 import {
@@ -171,6 +174,7 @@ import { ProviderService } from "./provider/Services/ProviderService";
 import { consumeCodexResetCreditEffect, listProviderUsage } from "./providerUsage";
 import { getProviderUsageSnapshot } from "./providerUsageSnapshot";
 import { ProfileStatsQuery } from "./profileStats";
+import { RecapStatsQuery } from "./recapStats";
 import { redactSensitiveProcessArgs } from "./processArgumentRedaction";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment";
 import { ExternalMcpService } from "./externalMcp/Services/ExternalMcpService";
@@ -224,6 +228,10 @@ import {
   makeResnapshotEscalationTracker,
 } from "./wsSnapshotLiveStream";
 import { PullRequestService } from "./pullRequests/Services/PullRequestService";
+import {
+  GitHubInboxRateLimitedError,
+  GitHubInboxService,
+} from "./githubInbox/Services/GitHubInboxService";
 import { resolveGitHubRepository } from "./pullRequests/repositoryResolution";
 import {
   GitHubProjectProvisioningError,
@@ -462,6 +470,7 @@ const makeWsRpcHandlersLayer = () =>
     Effect.gen(function* () {
       const checkpointDiffQuery = yield* CheckpointDiffQuery;
       const automationService = yield* AutomationService;
+      const todoService = yield* TodoService;
       const projectAgentService = yield* ProjectAgentService;
       const projectAgentRepository = yield* ProjectAgentRepository;
       const config = yield* ServerConfig;
@@ -479,7 +488,9 @@ const makeWsRpcHandlersLayer = () =>
       const sidechatExpiryReactor = yield* SidechatExpiryReactor;
       const path = yield* Path.Path;
       const pullRequests = yield* PullRequestService;
+      const githubInbox = yield* GitHubInboxService;
       const profileStatsQuery = yield* ProfileStatsQuery;
+      const recapStatsQuery = yield* RecapStatsQuery;
       const projectionReadModelQuery = yield* ProjectionSnapshotQuery;
       const providerAdapterRegistry = yield* ProviderAdapterRegistry;
       const providerDiscoveryService = yield* ProviderDiscoveryService;
@@ -647,6 +658,19 @@ const makeWsRpcHandlersLayer = () =>
             message: cause.detail,
           });
         }
+        if (cause instanceof GitHubInboxRateLimitedError) {
+          return new PullRequestsUnavailableError({
+            reason: "rate-limited",
+            message: cause.message,
+            retryAt: cause.retryAt,
+          });
+        }
+        if (cause instanceof GitHubCliError && cause.reason === "rate-limited") {
+          return new PullRequestsUnavailableError({
+            reason: "rate-limited",
+            message: cause.detail,
+          });
+        }
         return toWsRpcError(cause, fallbackMessage);
       };
 
@@ -748,14 +772,14 @@ const makeWsRpcHandlersLayer = () =>
           Effect.mapError(
             (cause) =>
               new WsRpcError({
-                message: `Failed to create group workspace: ${workspaceRoot}`,
+                message: `Failed to create hub workspace: ${workspaceRoot}`,
                 cause,
               }),
           ),
           Effect.andThen(
             ensureGroupWorkspaceInstructionsFiles(workspaceRoot).pipe(
               Effect.catch((cause) =>
-                Effect.logWarning("failed to write group workspace instructions", {
+                Effect.logWarning("failed to write hub workspace instructions", {
                   workspaceRoot,
                   cause,
                 }),
@@ -787,7 +811,7 @@ const makeWsRpcHandlersLayer = () =>
             Effect.mapError(
               (cause) =>
                 new WsRpcError({
-                  message: "Failed to list group workspace roots.",
+                  message: "Failed to list hub workspace roots.",
                   cause,
                 }),
             ),
@@ -1100,6 +1124,16 @@ const makeWsRpcHandlersLayer = () =>
       const rpcEffect = <A, E, R>(effect: Effect.Effect<A, E, R>, fallbackMessage: string) =>
         effect.pipe(Effect.mapError((cause) => toWsRpcError(cause, fallbackMessage)));
 
+      const tasksEnabled = isServerBetaFeatureEnabled("tasks");
+      const tasksUnavailableError = () =>
+        new WsRpcError({
+          message: "Tasks is available in Synara Beta.",
+          code: TASKS_UNAVAILABLE_ERROR_CODE,
+          retryable: false,
+        });
+      const whenTasksEnabled = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        tasksEnabled ? effect : Effect.fail(tasksUnavailableError());
+
       const toProjectProvisionRpcError = (cause: unknown) =>
         cause instanceof GitHubProjectProvisioningError
           ? new WsRpcError({
@@ -1147,7 +1181,7 @@ const makeWsRpcHandlersLayer = () =>
             });
           if (!allowed) {
             return yield* new WsRpcError({
-              message: "The group library is only available on group containers.",
+              message: "The hub library is only available on hub containers.",
             });
           }
           const agentConfig = yield* projectAgentRepository
@@ -1861,13 +1895,15 @@ const makeWsRpcHandlersLayer = () =>
             refreshGitStatusAfter(input.cwd, gitManager.preparePullRequestThread(input)),
             "Failed to prepare pull request thread",
           ),
-        [WS_METHODS.pullRequestsList]: (input) =>
-          pullRequestsEffect(pullRequests.list(input), "Failed to list pull requests"),
-        [WS_METHODS.pullRequestsReviewRequestCount]: (input) =>
+        [WS_METHODS.githubInboxList]: (input) =>
           pullRequestsEffect(
-            pullRequests.reviewRequestCount(input),
-            "Failed to count pull request review requests",
+            githubInbox.list(input),
+            "Failed to load GitHub pull requests and issues",
           ),
+        [WS_METHODS.githubInboxIssueDetail]: (input) =>
+          pullRequestsEffect(githubInbox.issueDetail(input), "Failed to load issue"),
+        [WS_METHODS.githubInboxIssueComment]: (input) =>
+          pullRequestsEffect(githubInbox.issueComment(input), "Could not post the comment"),
         [WS_METHODS.pullRequestsDetail]: (input) =>
           pullRequestsEffect(pullRequests.detail(input), "Failed to load pull request"),
         [WS_METHODS.pullRequestsDiff]: (input) =>
@@ -2166,6 +2202,8 @@ const makeWsRpcHandlersLayer = () =>
             profileStatsQuery.getProfileTokenStats(input),
             "Failed to load profile token stats",
           ),
+        [WS_METHODS.statsGetRecap]: (input) =>
+          rpcEffect(recapStatsQuery.getRecap(input), "Failed to load the recap"),
         [WS_METHODS.serverGetProviderUsageSnapshot]: (input) =>
           rpcEffect(getProviderUsageSnapshot(input), "Failed to load provider usage"),
         [WS_METHODS.serverListProviderUsage]: (input) =>
@@ -2536,7 +2574,7 @@ const makeWsRpcHandlersLayer = () =>
             Effect.andThen(
               rpcEffect(
                 projectAgentService.pauseGroup(input, { kind: "user" }),
-                "Failed to pause group",
+                "Failed to pause hub",
               ),
             ),
           ),
@@ -2545,7 +2583,7 @@ const makeWsRpcHandlersLayer = () =>
             Effect.andThen(
               rpcEffect(
                 projectAgentService.resumeGroup(input, { kind: "user" }),
-                "Failed to resume group",
+                "Failed to resume hub",
               ),
             ),
           ),
@@ -2554,7 +2592,7 @@ const makeWsRpcHandlersLayer = () =>
             Effect.andThen(
               rpcEffect(
                 projectAgentService.archiveGroup(input, { kind: "user" }),
-                "Failed to archive group",
+                "Failed to archive hub",
               ),
             ),
           ),
@@ -2563,7 +2601,7 @@ const makeWsRpcHandlersLayer = () =>
             Effect.andThen(
               rpcEffect(
                 projectAgentService.unarchiveGroup(input, { kind: "user" }),
-                "Failed to unarchive group",
+                "Failed to unarchive hub",
               ),
             ),
           ),
@@ -2581,7 +2619,7 @@ const makeWsRpcHandlersLayer = () =>
             Effect.andThen(
               rpcEffect(
                 projectAgentService.deleteGroup(input, { kind: "user" }),
-                "Failed to delete group",
+                "Failed to delete hub",
               ),
             ),
           ),
@@ -2693,7 +2731,7 @@ const makeWsRpcHandlersLayer = () =>
                 return { root, entries };
               }),
             ),
-            "Failed to list the group library",
+            "Failed to list the hub library",
           ),
         [WS_METHODS.projectAgentLibraryMkdir]: (input) =>
           requireWsOwnerSession.pipe(
@@ -2900,6 +2938,25 @@ const makeWsRpcHandlersLayer = () =>
               Stream.mapError((cause) => toWsRpcError(cause, "Automation event stream failed")),
             ),
           ),
+        // Tasks is Beta-only; Stable refuses it here and keeps Kanban.
+        [WS_METHODS.todoList]: () =>
+          whenTasksEnabled(rpcEffect(todoService.list(), "Failed to list tasks")),
+        [WS_METHODS.todoCreate]: (input) =>
+          whenTasksEnabled(rpcEffect(todoService.create(input), "Failed to create task")),
+        [WS_METHODS.todoUpdate]: (input) =>
+          whenTasksEnabled(rpcEffect(todoService.update(input), "Failed to update task")),
+        [WS_METHODS.todoDelete]: (input) =>
+          whenTasksEnabled(rpcEffect(todoService.delete(input), "Failed to delete task")),
+        [WS_METHODS.subscribeTodoEvents]: (_, { clientId }) =>
+          tasksEnabled
+            ? streamAdmission.guard(
+                clientId,
+                { key: "todo.events" },
+                todoService.streamChanges.pipe(
+                  Stream.mapError((cause) => toWsRpcError(cause, "Task event stream failed")),
+                ),
+              )
+            : Stream.fail(tasksUnavailableError()),
 
         ...makeWsDeviceHandlers(deviceService),
         [DEVICE_WS_METHODS.subscribeEvents]: (_, { clientId }) =>

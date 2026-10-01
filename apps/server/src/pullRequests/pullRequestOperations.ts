@@ -28,10 +28,16 @@ export function makePullRequestOperations(dependencies: {
     repository: string,
   ) => Effect.Effect<PullRequestDetail["mergeCapabilities"], unknown>;
   withGitHubRead: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+  /** Short server cache around a validated detail read; honours `forceRefresh`. */
+  cacheDetail: (
+    input: { projectId: string; repository: string; number: number; forceRefresh: boolean },
+    load: Effect.Effect<PullRequestDetail, unknown>,
+  ) => Effect.Effect<PullRequestDetail, unknown>;
+  /** `wholeRepository` covers stacked merges, which change every PR below the merged one. */
   finalizeMutationCaches: (
     repository: string,
     number: number,
-    options: { readonly invalidateReviewMatches: boolean },
+    options: { readonly wholeRepository: boolean },
   ) => Effect.Effect<void, never>;
 }): PullRequestOperations {
   const loadDetail = (project: OrchestrationProject, repositoryInput: string, number: number) =>
@@ -116,9 +122,20 @@ export function makePullRequestOperations(dependencies: {
     });
 
   const detail: PullRequestServiceShape["detail"] = (input) =>
-    dependencies
-      .findProject(input.projectId)
-      .pipe(Effect.flatMap((project) => loadDetail(project, input.repository, input.number)));
+    Effect.gen(function* () {
+      const project = yield* dependencies.findProject(input.projectId);
+      // Validate before touching the cache so a crafted repository never reads a cached entry.
+      const repository = yield* dependencies.validateProjectRepository(project, input.repository);
+      return yield* dependencies.cacheDetail(
+        {
+          projectId: project.id,
+          repository,
+          number: input.number,
+          forceRefresh: input.forceRefresh === true,
+        },
+        loadDetail(project, repository, input.number),
+      );
+    });
 
   const diff: PullRequestServiceShape["diff"] = (input) =>
     Effect.gen(function* () {
@@ -167,7 +184,7 @@ export function makePullRequestOperations(dependencies: {
         .pipe(
           Effect.ensuring(
             dependencies.finalizeMutationCaches(repository, input.number, {
-              invalidateReviewMatches: true,
+              wholeRepository: input.action === "merge",
             }),
           ),
         );
@@ -194,7 +211,7 @@ export function makePullRequestOperations(dependencies: {
         .pipe(
           Effect.ensuring(
             dependencies.finalizeMutationCaches(repository, input.number, {
-              invalidateReviewMatches: false,
+              wholeRepository: false,
             }),
           ),
         );

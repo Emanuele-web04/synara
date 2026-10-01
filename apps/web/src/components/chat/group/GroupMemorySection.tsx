@@ -149,7 +149,7 @@ export function GroupMemorySection(props: {
 
   return (
     <div className="space-y-6">
-      <SettingsSectionShell title="Group instructions">
+      <SettingsSectionShell title="Hub instructions">
         <div className="space-y-1">
           <CharacterCountTextarea
             value={autosave.value}
@@ -158,8 +158,8 @@ export function GroupMemorySection(props: {
             onBlur={autosave.onBlur}
             maxChars={GROUP_INSTRUCTIONS_MAX_CHARS}
             helper="Like a CLAUDE.md: instructions and rules you write that every new thread reads and follows."
-            placeholder="Instructions every thread in this group follows."
-            aria-label="Group instructions"
+            placeholder="Instructions every thread in this hub follows."
+            aria-label="Hub instructions"
           />
           {instructionsSource.serverBacked ? (
             <p className="text-ui-sm text-muted-foreground">Applies immediately.</p>
@@ -176,7 +176,7 @@ export function GroupMemorySection(props: {
         <SettingsCard>
           <SettingsRow
             title="Write memory notes"
-            description="Notes the coordinator writes itself as it works in this group."
+            description="Notes the coordinator writes itself as it works in this hub."
             control={
               <Switch
                 checked={draft.autoMemoryEnabled}
@@ -187,7 +187,7 @@ export function GroupMemorySection(props: {
           />
           <SettingsListRow
             title="MEMORY.md"
-            description="The coordinator's running memory for this group."
+            description="The coordinator's running memory for this hub."
             actions={
               <Button
                 size="xs"

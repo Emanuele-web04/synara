@@ -827,6 +827,11 @@ export function resolveDraftFallbackModelSelection(input: {
   return buildModelSelection(provider, model);
 }
 
+/** Placeholder title for a thread that has not been sent yet (header, open-thread tabs). */
+export function resolveDraftThreadTitle(entryPoint: DraftThreadState["entryPoint"]): string {
+  return entryPoint === "terminal" ? "New terminal" : "New thread";
+}
+
 export function buildLocalDraftThread(
   threadId: ThreadId,
   draftThread: DraftThreadState,
@@ -837,7 +842,7 @@ export function buildLocalDraftThread(
     id: threadId,
     codexThreadId: null,
     projectId: draftThread.projectId,
-    title: draftThread.entryPoint === "terminal" ? "New terminal" : "New thread",
+    title: resolveDraftThreadTitle(draftThread.entryPoint),
     modelSelection: fallbackModelSelection,
     runtimeMode: draftThread.runtimeMode,
     interactionMode: draftThread.interactionMode,

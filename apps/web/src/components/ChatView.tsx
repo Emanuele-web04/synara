@@ -56,6 +56,7 @@ import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useIsMobile } from "~/hooks/useMediaQuery";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { useRepoDiffTotals } from "~/hooks/useRepoDiffTotals";
+import { useSidebarLayout } from "~/hooks/useSidebarLayout";
 import { useThreadRecap } from "~/hooks/useThreadRecap";
 import { SINGLE_CHAT_PANE_SCOPE_ID } from "~/lib/chatPaneScope";
 import { formatComposerMentionToken } from "~/lib/composerMentions";
@@ -169,7 +170,6 @@ import {
   canCreateThreadHandoff,
   resolveAvailableHandoffTargets,
   resolveThreadHandoffAvailability,
-  resolveThreadHandoffBadgeLabel,
   type ThreadHandoffTarget,
 } from "../lib/threadHandoff";
 import { buildDraftThreadRenameCreateInput, dispatchThreadRename } from "../lib/threadRename";
@@ -265,6 +265,7 @@ import { ThreadWorktreeHandoffDialog } from "./ThreadWorktreeHandoffDialog";
 
 import { ChatComposerFooter } from "./chat/ChatComposerFooter";
 import { ChatHeader } from "./chat/ChatHeader";
+import { OpenThreadTabStrip } from "./chat/OpenThreadTabStrip";
 import { ChatSurfaceHeader } from "./chat/ChatSurfaceHeader";
 import { useAsyncUserInputResponse } from "./chat/useAsyncUserInputResponse";
 import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
@@ -422,6 +423,7 @@ import { Button } from "./ui/button";
 import { SidebarHeaderTrigger } from "./ui/sidebar";
 import { Skeleton } from "./ui/skeleton";
 import { toastManager } from "./ui/toast";
+import { isSidechatThread, isStandaloneSidechatThread } from "@synara/shared/sidechatThread";
 
 // The terminal drawer drags in xterm plus its addons (~223 KB gzip). Both mount points
 // are conditional, so loading it lazily keeps the terminal stack out of the initial
@@ -617,6 +619,7 @@ export default function ChatView({
     gitCreateDetachedWorktreeMutationOptions({ queryClient }),
   );
   const isEditorRail = presentationMode === "editor";
+  const isRailLayout = useSidebarLayout() === "rail";
   const isInactiveSplitPane = surfaceMode === "split" && !isFocusedPane;
   const {
     composerDraft,
@@ -1916,6 +1919,12 @@ export default function ChatView({
     threadDetailHydration === "ready";
   const isEmptyChatLanding =
     isCenteredEmptyLanding && Boolean(homeDir) && isContainerLandingProject;
+  // A standalone side chat asks about one GitHub item from the code review page's narrow dock:
+  // its landing names the item instead of the project, at a size that fits a quarter-width pane.
+  const standaloneSidechatContext =
+    activeThread && isStandaloneSidechatThread(activeThread) ? activeThread.sidechatContext : null;
+  const standaloneSidechatItemNoun =
+    standaloneSidechatContext?.itemKind === "issue" ? "issue" : "pull request";
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
     useTurnDiffSummaries(activeThread);
   const turnDiffSummaryByAssistantMessageId = useMemo(() => {
@@ -2157,7 +2166,7 @@ export default function ChatView({
     selectedSkillCount: selectedComposerSkills.length,
     selectedMentionCount: selectedComposerMentions.length,
     interactionMode,
-    isSidechat: Boolean(activeThread?.sidechatSourceThreadId),
+    isSidechat: activeThread ? isSidechatThread(activeThread) : false,
   } as const;
   const canExecuteSideCommand =
     isServerThread &&
@@ -2291,14 +2300,6 @@ export default function ChatView({
     settings,
     configuredProviderStatuses: serverConfigQuery.data?.providers,
   });
-  const handoffBadgeLabel = useMemo(
-    () => (activeThread ? resolveThreadHandoffBadgeLabel(activeThread) : null),
-    [activeThread],
-  );
-  const handoffBadgeSourceProvider = activeThread?.handoff?.sourceProvider ?? null;
-  const handoffBadgeTargetProvider = activeThread?.handoff
-    ? activeThread.modelSelection.provider
-    : null;
   const handoffTargets = useMemo(
     () =>
       activeThread
@@ -2705,6 +2706,8 @@ export default function ChatView({
   );
   const {
     isVoiceRecording,
+    isVoiceStarting,
+    isVoiceWaitingForAudio,
     isVoiceTranscribing,
     voiceWaveformLevels,
     voiceRecordingDurationLabel,
@@ -2729,6 +2732,19 @@ export default function ChatView({
     },
     onGuardWarning: warnVoiceGuard,
   });
+  // Bumped when Enter finishes a voice note under the "send" setting; the
+  // effect next to the late send handlers sends once the transcript commits.
+  const [voiceAutoSendRequest, setVoiceAutoSendRequest] = useState(0);
+  const finishComposerVoiceRecordingFromEnter = useCallback(() => {
+    const autoSend = settings.voiceEnterBehavior === "send";
+    const promptBeforeTranscript = promptRef.current;
+    void submitComposerVoiceRecording().then((transcribed) => {
+      // An empty transcript leaves the draft untouched; don't send it blind.
+      if (autoSend && transcribed && promptRef.current !== promptBeforeTranscript) {
+        setVoiceAutoSendRequest((current) => current + 1);
+      }
+    });
+  }, [promptRef, settings.voiceEnterBehavior, submitComposerVoiceRecording]);
   const addTerminalContextToDraft = useCallback(
     (selection: TerminalContextSelection) => {
       if (!activeThreadId) {
@@ -3162,8 +3178,9 @@ export default function ChatView({
     onMessagesWheelBase,
   });
 
+  // Runs for unfocused split panes too: they stay visible, and a side chat in a narrow dock is
+  // always one, so skipping the measurement left its footer clipped instead of tiered.
   useLayoutEffect(() => {
-    if (isInactiveSplitPane) return;
     const composerForm = composerFormRef.current;
     if (!composerForm) return;
     const measureComposerFormWidth = () => composerForm.clientWidth;
@@ -3243,7 +3260,9 @@ export default function ChatView({
     composerFormHeightRef,
     activeThread?.id,
     composerFooterHasWideActions,
-    isInactiveSplitPane,
+    // The landing and the transcript mount the composer form in different places, so moving
+    // between them replaces the node the observer watches.
+    isCenteredEmptyLanding,
   ]);
 
   useEffect(() => {
@@ -3751,6 +3770,7 @@ export default function ChatView({
     onBackgroundAllForegroundSubagentStripItems,
     isVoiceRecording,
     isVoiceTranscribing,
+    onVoiceRecordingEnter: finishComposerVoiceRecordingFromEnter,
     isComposerApprovalState,
     terminalState,
     terminalWorkspaceOpen,
@@ -4739,6 +4759,13 @@ export default function ChatView({
     };
   });
 
+  // Runs after the transcript and the cleared transcribing flag have committed,
+  // so the send guard and the live editor snapshot both see the dictated text.
+  useEffect(() => {
+    if (voiceAutoSendRequest === 0) return;
+    void lateComposerSendHandlersRef.current?.send();
+  }, [voiceAutoSendRequest]);
+
   const {
     onSelectComposerItem,
     onComposerMenuItemHighlighted,
@@ -4839,16 +4866,15 @@ export default function ChatView({
     onOpenTurnDiff(activeTurnLiveDiffState.turnId);
   }, [activeTurnLiveDiffState.turnId, onOpenTurnDiff]);
   const onNavigateToThread = useCallback(
-    (nextThreadId: ThreadId) => {
-      void navigate({
+    (nextThreadId: ThreadId) =>
+      navigate({
         to: "/$threadId",
         params: { threadId: nextThreadId },
         search: (previous) =>
           isEditorRail
             ? { ...stripDiffSearchParams(previous), view: "editor" }
             : stripDiffSearchParams(previous),
-      });
-    },
+      }),
     [isEditorRail, navigate],
   );
   const onOpenAutomation = useCallback(
@@ -4894,7 +4920,7 @@ export default function ChatView({
   const onOpenEditorChat = useCallback(
     (nextThreadId: ThreadId) => {
       storeOpenChatThreadPage(nextThreadId);
-      onNavigateToThread(nextThreadId);
+      return onNavigateToThread(nextThreadId);
     },
     [onNavigateToThread, storeOpenChatThreadPage],
   );
@@ -5086,6 +5112,10 @@ export default function ChatView({
     );
   }
 
+  // Open-thread tabs belong to the rail shell's single chat; split panes, the editor rail,
+  // and the classic sidebar keep the plain thread title.
+  const showOpenThreadTabs = isRailLayout && surfaceMode === "single" && !isEditorRail;
+
   const activeThreadDisplayTitle = resolveActiveThreadTitle({
     title: isCoordinatorConversation
       ? resolveGroupCoordinatorDisplayName({
@@ -5217,8 +5247,11 @@ export default function ChatView({
         <span className="min-w-0 truncate">{activeProjectDisplayName}</span>
       </span>
     ) : null;
+  // A standalone side chat runs in its project's own folder, locally, and expires by itself, so
+  // the project, environment, branch, and Temporary controls have nothing to offer there.
   const showEmptyLandingControls =
     isCenteredEmptyLanding &&
+    !standaloneSidechatContext &&
     (isEmptyChatLanding ||
       showEmptyLandingProjectPicker ||
       emptyLandingProjectChip !== null ||
@@ -5231,7 +5264,7 @@ export default function ChatView({
       // both themes (chips float over the page), rounded on top only and flush against
       // the input shell below. No overlap/underlay tricks — in dark mode a slice tucked
       // behind the composer's translucent corners reads as a visible cut along the seam.
-      className="chat-composer-shell mx-auto flex min-h-8 w-full min-w-0 flex-nowrap items-center gap-x-1.5 overflow-hidden !rounded-b-none !rounded-t-[var(--composer-radius)] px-1.5 py-1 transition-colors duration-150 ease-out motion-reduce:transition-none sm:min-h-7"
+      className="chat-composer-shell squircle mx-auto flex min-h-8 w-full min-w-0 flex-nowrap items-center gap-x-1.5 overflow-hidden !rounded-b-none !rounded-t-[var(--composer-radius)] px-1.5 py-1 transition-colors duration-150 ease-out motion-reduce:transition-none sm:min-h-7"
     >
       {showContainerChatWorkspacePicker ? (
         <ProjectPicker
@@ -5346,7 +5379,7 @@ export default function ChatView({
     showGitActions,
     diffOpen: resolvedDiffOpen,
     threadAutomations: threadAutomationItems,
-    sidechats: activeThread.sidechatSourceThreadId
+    sidechats: isSidechatThread(activeThread)
       ? null
       : sourceThreadSidechats.map((sidechat) => ({
           id: sidechat.id,
@@ -5451,15 +5484,21 @@ export default function ChatView({
     traits: composerTraitSelection,
   });
   const startReplacementSidechat = () => {
-    const sourceThreadId = activeThread?.sidechatSourceThreadId;
-    if (!sourceThreadId) return;
-    void waitForSidechatCreator(sourceThreadId)
+    if (!activeThread) return;
+    // A forked sidechat is replaced by its source thread's creator. A standalone one has no
+    // source thread: the inbox that hosts it registers its replacement under its own id.
+    const standalone = isStandaloneSidechatThread(activeThread);
+    const creatorHostId = standalone ? activeThread.id : activeThread.sidechatSourceThreadId;
+    if (!creatorHostId) return;
+    void waitForSidechatCreator(creatorHostId)
       .then((createSidechat) => {
         if (!createSidechat) {
           toastManager.add({
             type: "warning",
             title: "Side chat is unavailable",
-            description: "Open the parent chat before starting a replacement side chat.",
+            description: standalone
+              ? "Open the item in Code review before starting a new side chat."
+              : "Open the parent chat before starting a replacement side chat.",
           });
           return;
         }
@@ -5842,9 +5881,11 @@ export default function ChatView({
                               ? "Message this subagent while it works"
                               : hasLiveTurn
                                 ? "Ask for follow-up changes"
-                                : phase === "disconnected"
-                                  ? "Ask for follow-up changes or attach images"
-                                  : "Ask anything, @tag files/folders, or use / to show available commands"
+                                : standaloneSidechatContext
+                                  ? `Ask about this ${standaloneSidechatItemNoun}`
+                                  : phase === "disconnected"
+                                    ? "Ask for follow-up changes or attach images"
+                                    : "Ask anything, @tag files/folders, or use / to show available commands"
                     }
                     disabled={isComposerEditorDisabled}
                   />
@@ -5912,6 +5953,8 @@ export default function ChatView({
                     voice={{
                       enabled: showVoiceNotesControl,
                       recording: isVoiceRecording,
+                      starting: isVoiceStarting,
+                      waitingForAudio: isVoiceWaitingForAudio,
                       transcribing: isVoiceTranscribing,
                       durationLabel: voiceRecordingDurationLabel,
                       waveformLevels: voiceWaveformLevels,
@@ -6010,7 +6053,17 @@ export default function ChatView({
           {...(isEditorRail
             ? { className: cn(CHAT_SURFACE_HEADER_PADDING_X_CLASS, "h-full") }
             : {})}
-          isSidechat={Boolean(activeThread.sidechatSourceThreadId)}
+          {...(showOpenThreadTabs
+            ? {
+                threadTabs: (
+                  <OpenThreadTabStrip
+                    activeThreadId={activeThread.id}
+                    onRenameActiveThread={() => setRenameDialogOpen(true)}
+                  />
+                ),
+              }
+            : {})}
+          isSidechat={isSidechatThread(activeThread)}
           hideSidebarControls={isEditorRail}
           hideHandoffControls={terminalWorkspaceTerminalTabActive || isEditorRail}
           minimalChrome={isCenteredEmptyLanding}
@@ -6023,13 +6076,10 @@ export default function ChatView({
           keybindings={keybindings}
           availableEditors={availableEditors}
           diffToggleShortcutLabel={diffPanelShortcutLabel}
-          handoffBadgeLabel={handoffBadgeLabel}
           handoffActionLabel={handoffActionLabel}
           handoffDisabled={handoffDisabled}
           handoffActionTargets={handoffTargets}
           showHandoffAction={handoffAvailability.providerHandoff}
-          handoffBadgeSourceProvider={handoffBadgeSourceProvider}
-          handoffBadgeTargetProvider={handoffBadgeTargetProvider}
           gitCwd={threadWorkspaceCwd}
           diffTotals={repoDiffTotals}
           showGitActions={showGitActions && !isEditorRail}
@@ -6183,21 +6233,33 @@ export default function ChatView({
                 <div className="relative flex min-h-0 flex-1 items-center justify-center">
                   {/* Pinned to the top so the heading stays optically centered; hidden on
                       short panes where it would crowd the heading. */}
-                  <div className="absolute inset-x-0 top-4 flex justify-center px-6 [@media(max-height:620px)]:hidden">
-                    <ProjectImportLandingBanner className="w-full max-w-[520px]" />
-                  </div>
+                  {standaloneSidechatContext ? null : (
+                    <div className="absolute inset-x-0 top-4 flex justify-center px-6 [@media(max-height:620px)]:hidden">
+                      <ProjectImportLandingBanner className="w-full max-w-[520px]" />
+                    </div>
+                  )}
                   <div
                     className={cn(
-                      "flex flex-col items-center gap-4 px-6 text-center select-none",
+                      "flex flex-col items-center text-center select-none",
+                      standaloneSidechatContext ? "gap-3 px-4" : "gap-4 px-6",
                       CHAT_COLUMN_FRAME_CLASS_NAME,
                     )}
                   >
-                    <SynaraLogo aria-label="Synara logo" className="size-10" />
+                    <SynaraLogo
+                      aria-label="Synara logo"
+                      className={standaloneSidechatContext ? "size-7" : "size-10"}
+                    />
                     <h2
                       data-testid="empty-landing-heading"
-                      className="text-[26px] font-normal leading-[1.15] tracking-[-0.015em] text-foreground/95 sm:text-[30px]"
+                      className={
+                        standaloneSidechatContext
+                          ? "text-lg font-normal leading-snug text-foreground/95"
+                          : "text-[26px] font-normal leading-[1.15] tracking-[-0.015em] text-foreground/95 sm:text-[30px]"
+                      }
                     >
-                      {isEmptyChatLanding ? (
+                      {standaloneSidechatContext ? (
+                        `Ask about ${standaloneSidechatContext.itemKind === "issue" ? "issue" : "PR"} #${standaloneSidechatContext.number}`
+                      ) : isEmptyChatLanding ? (
                         "What should we work on?"
                       ) : (
                         <>
@@ -6586,7 +6648,7 @@ export default function ChatView({
           action={pendingTranscriptSelectionAction}
           defaultEnvMode={selectionChatEnvMode ?? settings.defaultThreadEnvMode}
           canUseWorktree={isGitRepo && !isContainerLandingProject}
-          canAddToSide={isServerThread && !activeThread.sidechatSourceThreadId}
+          canAddToSide={isServerThread && !isSidechatThread(activeThread)}
           onDismiss={dismissTranscriptSelectionAction}
           onAddToChat={commitTranscriptAssistantSelection}
           onAddToSide={(selection) =>

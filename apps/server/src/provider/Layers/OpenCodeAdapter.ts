@@ -4618,23 +4618,14 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
 
           if (Exit.isSuccess(inventoryExit)) {
             const { inventory, credentialProviderIDs } = inventoryExit.value;
-            const preferredProviderIDs = new Set(
-              resolvePreferredOpenCodeModelProviders({
-                inventory,
-                credentialProviderIDs,
-              }).map((provider) => provider.id),
-            );
             const inventoryModels = flattenOpenCodeModels({
               inventory,
               credentialProviderIDs,
             });
-            const preferredCliModels = cliModels.filter((model) =>
-              preferredProviderIDs.has(model.providerID),
-            );
             const models = mergeOpenCodeCliModelDescriptors({
               inventory,
               models: inventoryModels,
-              cliModels: preferredCliModels.length > 0 ? preferredCliModels : cliModels,
+              cliModels,
             });
             yield* Effect.logDebug(`${adapterConfig.displayName} model discovery resolved`, {
               binaryPath,

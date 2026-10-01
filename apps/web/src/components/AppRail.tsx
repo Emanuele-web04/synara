@@ -74,8 +74,10 @@ export function railProjectGlyphs(
 /** Central glyphs matching the Codex rail for the fixed rail items. */
 const RAIL_ITEM_GLYPH_NAMES: Record<RailItemId, string> = {
   home: "home-roof-door",
+  inbox: "inbox-empty",
   spaces: "folders",
   kanban: "columns-3-wide",
+  tasks: "todos",
   pullRequests: "pull-request",
   automations: "clock",
   studio: "images-1",

@@ -108,8 +108,8 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   {
     id: "general:groups-section",
     section: "general",
-    title: "Groups",
-    keywords: "Show the Groups tab in the sidebar switcher. sidebar section content outbox",
+    title: "Hubs",
+    keywords: "Show the Hubs tab in the sidebar switcher. sidebar section content outbox groups",
   },
   {
     id: "general:automation-run-threads",
@@ -376,6 +376,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: "Automatically open simulator",
     keywords:
       "Disable automatic iOS Simulator device pane opening. Use Simulator.app without the mirrored panel reopening. background launch",
+  },
+  {
+    id: "behavior:include-fork-upstreams",
+    section: "behavior",
+    title: "Include fork upstreams",
+    keywords:
+      "Also list pull requests and issues from each project's other GitHub remotes, such as the repository a fork was made from. code review inbox github upstream remote fork",
   },
   {
     id: "behavior:diff-line-wrapping",

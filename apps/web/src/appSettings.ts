@@ -19,6 +19,7 @@ import {
   ProviderInstanceConfigMap,
   type ProviderDriverKind,
   ProviderInstanceId,
+  GitHubInboxState,
   TrimmedNonEmptyString,
   ProviderKind,
   type GitTextGenerationProvider,
@@ -61,6 +62,7 @@ import {
   RAIL_ORDERABLE_ITEM_IDS,
 } from "./appRail.logic";
 import { ensureNativeApi } from "./nativeApi";
+import { githubInboxQueryKeys } from "./lib/githubInboxQueryOptions";
 import { providerDiscoveryQueryKeys } from "./lib/providerDiscoveryReactQuery";
 import {
   invalidateProviderUsageQueries,
@@ -129,17 +131,69 @@ export const AgentCursorColorMode = Schema.Literals(["stock", "custom"]);
 export type AgentCursorColorMode = typeof AgentCursorColorMode.Type;
 export const DEFAULT_AGENT_CURSOR_COLOR_MODE: AgentCursorColorMode = "stock";
 
-const SidebarNavItemId = Schema.Literals([...SIDEBAR_NAV_ITEM_IDS]);
-const RailOrderableItemId = Schema.Literals([...RAIL_ORDERABLE_ITEM_IDS]);
-/** Classic: one sidebar column. Rail: fixed icon tabs plus a panel (Beta-only, see useSidebarLayout). */
+/**
+ * A persisted id list that keeps the entries this build can resolve (known ids, or a
+ * renamed id's new name) and drops the rest, so an id written by a newer or older build
+ * never fails the whole settings decode and resets every setting.
+ */
+function persistedIdList<Id extends string>(
+  IdSchema: Schema.Codec<Id>,
+  resolve: (value: string) => Id | undefined,
+) {
+  return Schema.Array(Schema.String).pipe(
+    Schema.decodeTo(
+      Schema.Array(IdSchema),
+      SchemaTransformation.transform<ReadonlyArray<Id>, ReadonlyArray<string>>({
+        decode: (values) =>
+          values.flatMap((value) => {
+            const id = resolve(value);
+            return id === undefined ? [] : [id];
+          }),
+        encode: (values) => values,
+      }),
+    ),
+  );
+}
+
+function persistedKnownIdList<const Ids extends ReadonlyArray<string>>(ids: Ids) {
+  const Id = Schema.Literals([...ids]);
+  const isKnownId = Schema.is(Id);
+  return persistedIdList(Id, (value) => (isKnownId(value) ? value : undefined));
+}
+
+const SidebarNavItemIdList = persistedKnownIdList(SIDEBAR_NAV_ITEM_IDS);
+const RailOrderableItemIdList = persistedKnownIdList(RAIL_ORDERABLE_ITEM_IDS);
+/** Where Beta's Tasks entry opens: the to-do list or the Kanban board of chats. */
+export const TasksViewMode = Schema.Literals(["list", "kanban"]);
+export type TasksViewMode = typeof TasksViewMode.Type;
+export const DEFAULT_TASKS_VIEW_MODE: TasksViewMode = "list";
+
+/** Classic: one sidebar column. Rail: fixed icon tabs plus a panel (see useSidebarLayout). */
 export const SidebarLayout = Schema.Literals(["classic", "rail"]);
 export type SidebarLayout = typeof SidebarLayout.Type;
-export const DEFAULT_SIDEBAR_LAYOUT: SidebarLayout = "classic";
+export const DEFAULT_SIDEBAR_LAYOUT: SidebarLayout = "rail";
 export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
 export const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
 export const FollowUpBehavior = Schema.Literals(["queue", "steer"]);
+/** GitHub inbox kind filter: both kinds, or only pull requests or only issues. */
+export const GitHubInboxKindFilter = Schema.Literals(["all", "pullRequest", "issue"]);
+export type GitHubInboxKindFilter = typeof GitHubInboxKindFilter.Type;
+/** GitHub inbox involvement filter, applied on the client over the loaded superset. */
+export const GitHubInboxInvolvementFilter = Schema.Literals([
+  "everything",
+  "involved",
+  "reviewRequested",
+  "authored",
+  "assigned",
+]);
+export type GitHubInboxInvolvementFilter = typeof GitHubInboxInvolvementFilter.Type;
 export type FollowUpBehavior = typeof FollowUpBehavior.Type;
 export const DEFAULT_FOLLOW_UP_BEHAVIOR: FollowUpBehavior = "queue";
+// What plain Enter does while a composer voice note is recording: "stop" only
+// transcribes into the draft, "send" also sends the draft once transcribed.
+export const VoiceEnterBehavior = Schema.Literals(["stop", "send"]);
+export type VoiceEnterBehavior = typeof VoiceEnterBehavior.Type;
+export const DEFAULT_VOICE_ENTER_BEHAVIOR: VoiceEnterBehavior = "stop";
 export const UiDensity = Schema.Literals(UI_DENSITY_MODES);
 export type UiDensity = typeof UiDensity.Type;
 export { DEFAULT_UI_DENSITY };
@@ -247,19 +301,7 @@ function resolvePersistedProviderListEntry(provider: string): ProviderKind | und
   return Schema.is(ProviderKind)(renamed) ? renamed : undefined;
 }
 
-const PersistedProviderKindList = Schema.Array(Schema.String).pipe(
-  Schema.decodeTo(
-    Schema.Array(ProviderKind),
-    SchemaTransformation.transform({
-      decode: (providers): ReadonlyArray<ProviderKind> =>
-        providers.flatMap((provider) => {
-          const resolved = resolvePersistedProviderListEntry(provider);
-          return resolved === undefined ? [] : [resolved];
-        }),
-      encode: (providers) => providers as ReadonlyArray<string>,
-    }),
-  ),
-);
+const PersistedProviderKindList = persistedIdList(ProviderKind, resolvePersistedProviderListEntry);
 
 const PersistedHiddenModels = Schema.Array(
   Schema.Struct({
@@ -335,6 +377,26 @@ export const AppSettingsSchema = Schema.Struct({
   confirmTerminalTabClose: Schema.Boolean.pipe(withDefaults(() => true)),
   diffWordWrap: Schema.Boolean.pipe(withDefaults(() => false)),
   showPullRequestDiffColors: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Local-only GitHub inbox view state: the filters the page reopens with (URL parameters
+  // override them for one visit; search text lives only in the URL). The column widths are not
+  // stored: the page always opens at even fractions.
+  githubInboxKind: GitHubInboxKindFilter.pipe(withDefaults(() => "all" as const)),
+  githubInboxState: GitHubInboxState.pipe(withDefaults(() => "open" as const)),
+  githubInboxInvolvement: GitHubInboxInvolvementFilter.pipe(
+    withDefaults(() => "everything" as const),
+  ),
+  githubInboxProjectIds: Schema.Array(Schema.String.check(Schema.isMaxLength(512))).pipe(
+    withDefaults(() => []),
+  ),
+  githubInboxLabels: Schema.Array(Schema.String.check(Schema.isMaxLength(256))).pipe(
+    withDefaults(() => []),
+  ),
+  // The list sections the user has expanded; the first two start open, the rest collapsed.
+  githubInboxExpandedSections: Schema.Array(
+    Schema.Literals(["authored", "reviewRequested", "involved", "others"]),
+  ).pipe(withDefaults(() => ["authored", "reviewRequested"] as const)),
+  // Server-backed: the inbox also reads each project's other GitHub remotes (fork upstreams).
+  githubInboxIncludeUpstreams: Schema.Boolean.pipe(withDefaults(() => false)),
   // Local-only UI preferences for hiding sidebar surfaces a user doesn't want.
   // `showChatsSection` controls the standalone "Chats" list in the sidebar footer
   // (rootless chats not tied to a project). `showGroupsSection` controls the
@@ -344,17 +406,18 @@ export const AppSettingsSchema = Schema.Struct({
   // Deprecated rename bridge from the Studio surface. Normalization migrates this
   // value onto `showGroupsSection` once and then omits the key.
   showStudioSection: Schema.optionalKey(Schema.Boolean),
-  // Local-only UI preferences for the primary sidebar nav block (New thread, Kanban,
+  // Local-only UI preferences for the primary sidebar nav block (New thread, Kanban or Tasks,
   // Pull requests, Automations): drag-to-reorder order plus explicitly hidden items.
   // An item whose route is currently active stays visible regardless (mirrors
   // `hiddenProviders`), so hiding a surface never strands the user mid-route.
-  sidebarNavOrder: Schema.Array(SidebarNavItemId).pipe(
-    withDefaults(() => [...DEFAULT_SIDEBAR_NAV_ORDER]),
-  ),
-  hiddenSidebarNavItems: Schema.Array(SidebarNavItemId).pipe(withDefaults(() => [])),
+  sidebarNavOrder: SidebarNavItemIdList.pipe(withDefaults(() => [...DEFAULT_SIDEBAR_NAV_ORDER])),
+  hiddenSidebarNavItems: SidebarNavItemIdList.pipe(withDefaults(() => [])),
   // Local-only shell layout, available in Stable and Beta. useSidebarLayout keeps
   // mobile on classic even when the stored preference is "rail".
   sidebarLayout: SidebarLayout.pipe(withDefaults(() => DEFAULT_SIDEBAR_LAYOUT)),
+  // Beta-only: the view the Tasks entry opens, last picked in its List/Kanban switch.
+  // Stable never reads it (Kanban is its only view).
+  tasksViewMode: TasksViewMode.pipe(withDefaults(() => DEFAULT_TASKS_VIEW_MODE)),
   // Rail layout shortcuts the user added from the rail's "…" menu, in rail order:
   // "space:<id>" (the Void key for unfiled) or "project:<id>" (see appRail.logic).
   railShortcuts: Schema.Array(Schema.String.check(Schema.isMaxLength(512))).pipe(
@@ -363,12 +426,8 @@ export const AppSettingsSchema = Schema.Struct({
   // Rail layout's own Customize state (the classic nav block keeps `sidebarNavOrder`):
   // the order of the rail's top items and the ones the user hid. Home never hides, and an
   // active hidden item stays visible (see appRail.logic).
-  railItemOrder: Schema.Array(RailOrderableItemId).pipe(
-    withDefaults(() => [...RAIL_ORDERABLE_ITEM_IDS]),
-  ),
-  hiddenRailItems: Schema.Array(RailOrderableItemId).pipe(
-    withDefaults(() => [...DEFAULT_HIDDEN_RAIL_ITEMS]),
-  ),
+  railItemOrder: RailOrderableItemIdList.pipe(withDefaults(() => [...RAIL_ORDERABLE_ITEM_IDS])),
+  hiddenRailItems: RailOrderableItemIdList.pipe(withDefaults(() => [...DEFAULT_HIDDEN_RAIL_ITEMS])),
   // Whether the per-run threads standalone automations create appear in the sidebar
   // (and the surfaces derived from it: Kanban, Activity, project picker). Runs stay
   // listed on the automation's page and findable via search either way.
@@ -388,6 +447,7 @@ export const AppSettingsSchema = Schema.Struct({
   showEnvironmentInstructions: Schema.Boolean.pipe(withDefaults(() => false)),
   showEnvironmentNotepad: Schema.Boolean.pipe(withDefaults(() => false)),
   followUpBehavior: FollowUpBehavior.pipe(withDefaults(() => DEFAULT_FOLLOW_UP_BEHAVIOR)),
+  voiceEnterBehavior: VoiceEnterBehavior.pipe(withDefaults(() => DEFAULT_VOICE_ENTER_BEHAVIOR)),
   enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => true)),
   // Started threads: show reasoning effort as a stepped slider card in the composer's
   // model menu instead of radio rows. New chats keep the split model/effort pickers.
@@ -1317,6 +1377,7 @@ function serverSettingsToAppSettings(settings: ServerSettingsView): Partial<AppS
     cursorBinaryPath: settings.providers.cursor.binaryPath,
     devinBinaryPath: settings.providers.devin.binaryPath,
     defaultThreadEnvMode: settings.defaultThreadEnvMode,
+    githubInboxIncludeUpstreams: settings.githubInboxIncludeUpstreams,
     enableAssistantStreaming: settings.enableAssistantStreaming,
     enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
     antigravityBinaryPath: settings.providers.antigravity.binaryPath,
@@ -1455,6 +1516,9 @@ export function appSettingsPatchToServerSettingsPatch(
   if (patch.defaultThreadEnvMode === "local" || patch.defaultThreadEnvMode === "worktree") {
     serverPatch.defaultThreadEnvMode = patch.defaultThreadEnvMode;
   }
+  if (hasOwn(patch, "githubInboxIncludeUpstreams")) {
+    serverPatch.githubInboxIncludeUpstreams = Boolean(patch.githubInboxIncludeUpstreams);
+  }
   if (hasOwn(patch, "onboardingCompletedAt")) {
     serverPatch.onboardingCompletedAt = patch.onboardingCompletedAt ?? null;
   }
@@ -1574,7 +1638,9 @@ export function appSettingsPatchToServerSettingsPatch(
         ? { binaryPath: patch.openCodeBinaryPath ?? "" }
         : {}),
       ...(hasOwn(patch, "openCodeExperimentalWebSockets")
-        ? { experimentalWebSockets: Boolean(patch.openCodeExperimentalWebSockets) }
+        ? {
+            experimentalWebSockets: Boolean(patch.openCodeExperimentalWebSockets),
+          }
         : {}),
       ...(hasOwn(patch, "openCodeServerUrl") ? { serverUrl: patch.openCodeServerUrl ?? "" } : {}),
       ...(hasOwn(patch, "openCodeServerPassword")
@@ -1769,7 +1835,9 @@ export function applyLocalAppSettingsPatch(
     ...settings,
     ...localPatch,
     ...(hasOwn(patch, "openCodeServerPassword")
-      ? { openCodeServerPasswordConfigured: Boolean(patch.openCodeServerPassword?.trim()) }
+      ? {
+          openCodeServerPasswordConfigured: Boolean(patch.openCodeServerPassword?.trim()),
+        }
       : {}),
   });
 }
@@ -1928,7 +1996,10 @@ export function getAppModelOptions(
     options.push({
       provider,
       slug: normalizedSelectedModel,
-      name: formatProviderModelOptionName({ provider, slug: normalizedSelectedModel }),
+      name: formatProviderModelOptionName({
+        provider,
+        slug: normalizedSelectedModel,
+      }),
       isCustom: true,
     });
   }
@@ -1982,7 +2053,10 @@ export function getGitTextGenerationModelOptions(
     deduped.push({
       provider: selectedProvider,
       slug: selectedModel,
-      name: formatProviderModelOptionName({ provider: selectedProvider, slug: selectedModel }),
+      name: formatProviderModelOptionName({
+        provider: selectedProvider,
+        slug: selectedModel,
+      }),
       isCustom: true,
     });
   }
@@ -2430,7 +2504,7 @@ export function mergeProviderStartOptions(
 
 /**
  * Single source of truth for mapping the streaming preference onto the orchestration
- * delivery mode used when dispatching turns (composer, chat, and kanban share this).
+ * delivery mode used when dispatching turns (composer, chat, Kanban, and Tasks share this).
  */
 export function resolveAssistantDeliveryMode(
   settings: Pick<AppSettings, "enableAssistantStreaming">,
@@ -2594,7 +2668,9 @@ export function useAppSettings() {
         setSettings((previous) => normalizeStoredAppSettings(previous));
       })
       .catch(() => {
-        void queryClient.invalidateQueries({ queryKey: serverQueryKeys.settings() });
+        void queryClient.invalidateQueries({
+          queryKey: serverQueryKeys.settings(),
+        });
       })
       .finally(() => {
         serverSettingsMigrationInFlight = false;
@@ -2638,6 +2714,12 @@ export function useAppSettings() {
       try {
         const nextSettings = await api.server.updateSettings(serverPatch);
         queryClient.setQueryData(serverQueryKeys.settings(), nextSettings);
+        if (hasOwn(patch, "githubInboxIncludeUpstreams")) {
+          // The repository set changed, so the inbox lists (and the review badge) are stale.
+          await queryClient
+            .invalidateQueries({ queryKey: githubInboxQueryKeys.all })
+            .catch(() => undefined);
+        }
         if (hasOwn(patch, "disabledProviders")) {
           await refreshProvidersAfterEnablementChange();
         } else if (touchesProviderDiscoverySettings(patch)) {

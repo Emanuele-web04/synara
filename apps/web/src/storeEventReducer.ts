@@ -8,6 +8,7 @@ import {
   type ThreadId,
 } from "@synara/contracts";
 import { resolveThreadBranchRegressionGuard } from "@synara/shared/git";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
 import {
   clearRemovedAsyncUserInputResponses,
   mergeAsyncUserInput,
@@ -1219,7 +1220,7 @@ function applyOrchestrationEvent(
             session === thread.session &&
             error === thread.error &&
             latestTurn === thread.latestTurn &&
-            (!thread.sidechatSourceThreadId ||
+            (!isSidechatThread(thread) ||
               thread.sidechatExpiredAt ||
               thread.sidechatLastActivityAt === event.payload.session.updatedAt)
           ) {
@@ -1230,7 +1231,7 @@ function applyOrchestrationEvent(
             session,
             error,
             latestTurn,
-            ...(thread.sidechatSourceThreadId && !thread.sidechatExpiredAt
+            ...(isSidechatThread(thread) && !thread.sidechatExpiredAt
               ? { sidechatLastActivityAt: event.payload.session.updatedAt }
               : {}),
             updatedAt:
@@ -1359,7 +1360,7 @@ function applyOrchestrationEvent(
             thread.runtimeMode === runtimeMode &&
             thread.interactionMode === interactionMode &&
             thread.pendingSourceProposedPlan === event.payload.sourceProposedPlan &&
-            (!thread.sidechatSourceThreadId ||
+            (!isSidechatThread(thread) ||
               thread.sidechatLastActivityAt === event.payload.createdAt) &&
             (thread.updatedAt ?? thread.createdAt) >= event.payload.createdAt
           ) {
@@ -1371,7 +1372,7 @@ function applyOrchestrationEvent(
             runtimeMode,
             interactionMode,
             pendingSourceProposedPlan: event.payload.sourceProposedPlan,
-            ...(thread.sidechatSourceThreadId
+            ...(isSidechatThread(thread)
               ? { sidechatLastActivityAt: event.payload.createdAt }
               : {}),
             updatedAt:

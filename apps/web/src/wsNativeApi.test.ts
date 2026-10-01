@@ -282,6 +282,7 @@ describe("wsNativeApi", () => {
         enableProviderUpdateChecks: true,
         defaultThreadEnvMode: "local",
         addProjectBaseDirectory: "",
+        githubInboxIncludeUpstreams: false,
         textGenerationModelSelection: { provider: "codex", model: "gpt-5.4-mini" },
         providers: {
           codex: {

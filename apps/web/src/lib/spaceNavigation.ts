@@ -11,6 +11,7 @@ import type { ProjectId, SpaceId, ThreadId } from "@synara/contracts";
 import type { ServerWorkspacePaths } from "~/lib/serverWorkspacePaths";
 import { isOrdinarySpaceProject } from "~/lib/spaces";
 import type { Project, SidebarThreadSummary } from "~/types";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
 
 /** Strict membership: a project Spaces organize, filed into `spaceId`. */
 export function isProjectInSpace(
@@ -69,7 +70,7 @@ export function resolveSpaceSelectionTarget(input: {
   const availableThreads = input.threads.filter(
     (thread) =>
       thread.archivedAt == null &&
-      !thread.sidechatSourceThreadId &&
+      !isSidechatThread(thread) &&
       isProjectInSpace(projectById.get(thread.projectId), spaceId, paths),
   );
 

@@ -1,12 +1,12 @@
 ---
 name: verify-library-panel
-description: How to reach and exercise the per-group git-versioned Library panel in an isolated Synara web instance.
+description: How to reach and exercise the per-hub git-versioned Library panel in an isolated Synara web instance.
 ---
 
-# Verifying the group Library panel
+# Verifying the hub Library panel
 
-The Library panel only renders on group-container threads (gated by
-`resolveProjectPanelEnabled` = environmentEnabled && isGroupContainer). Group
+The Library panel only renders on hub-container threads (gated by
+`resolveProjectPanelEnabled` = environmentEnabled && isGroupContainer). Hub
 projects have no list UI, so create them via devtools:
 
 ```js

@@ -366,10 +366,21 @@ describe("isGitTextGenerationSettingsDirty", () => {
   });
 });
 
+describe("removed settings", () => {
+  it("ignores a code review list width stored before widths became fractions", () => {
+    const decoded = Schema.decodeUnknownSync(AppSettingsSchema)({
+      githubInboxListWidth: 420,
+      githubInboxKind: "issue",
+    });
+    expect(decoded).not.toHaveProperty("githubInboxListWidth");
+    expect(decoded.githubInboxKind).toBe("issue");
+  });
+});
+
 describe("sidebar layout", () => {
-  it("decodes settings saved before the layout existed as classic", () => {
+  it("decodes settings without a layout choice as the rail default", () => {
     const decoded = Schema.decodeUnknownSync(AppSettingsSchema)({ showChatsSection: false });
-    expect(normalizeStoredAppSettings(decoded).sidebarLayout).toBe("classic");
+    expect(normalizeStoredAppSettings(decoded).sidebarLayout).toBe("rail");
   });
 });
 
@@ -1671,6 +1682,12 @@ describe("provider-indexed custom model settings", () => {
 });
 
 describe("AppSettingsSchema", () => {
+  it("opens Tasks as the list until the user picks the Kanban view", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+    expect(decode(JSON.stringify({})).tasksViewMode).toBe("list");
+    expect(decode(JSON.stringify({ tasksViewMode: "kanban" })).tasksViewMode).toBe("kanban");
+  });
+
   it("migrates persisted Gemini provider settings to Antigravity", () => {
     const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
     const decoded = decode(
@@ -1736,6 +1753,27 @@ describe("AppSettingsSchema", () => {
     expect(decoded).toMatchObject({
       hiddenProviders: ["codex"],
       providerOrder: ["antigravity", "codex"],
+    });
+  });
+
+  it("drops rail and nav ids this build does not know instead of resetting every setting", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+    const decoded = decode(
+      JSON.stringify({
+        sidebarLayout: "rail",
+        railItemOrder: ["some-future-item", "kanban", "home"],
+        hiddenRailItems: ["some-future-item", "studio"],
+        sidebarNavOrder: ["some-future-item", "kanban"],
+        hiddenSidebarNavItems: ["some-future-item"],
+      }),
+    );
+
+    expect(decoded).toMatchObject({
+      sidebarLayout: "rail",
+      railItemOrder: ["kanban", "home"],
+      hiddenRailItems: ["studio"],
+      sidebarNavOrder: ["kanban"],
+      hiddenSidebarNavItems: [],
     });
   });
 

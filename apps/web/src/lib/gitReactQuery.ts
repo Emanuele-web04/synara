@@ -939,15 +939,17 @@ export function gitPreparePullRequestThreadMutationOptions(input: {
   queryClient: QueryClient;
 }) {
   return makeGitMutationOptions<
-    { reference: string; mode: "local" | "worktree" },
+    // `cwd` targets another checkout of the same repository (a second project on one repo);
+    // the prepare step invalidates every git query, so the cache stays correct either way.
+    { reference: string; mode: "local" | "worktree"; cwd?: string | undefined },
     Awaited<ReturnType<NativeApi["git"]["preparePullRequestThread"]>>
   >({
     cwd: input.cwd,
     queryClient: input.queryClient,
     mutationKey: gitMutationKeys.preparePullRequestThread(input.cwd),
     unavailableMessage: "Pull request thread preparation is unavailable.",
-    run: (api, cwd, { reference, mode }) =>
-      api.git.preparePullRequestThread({ cwd, reference, mode }),
+    run: (api, cwd, { reference, mode, cwd: targetCwd }) =>
+      api.git.preparePullRequestThread({ cwd: targetCwd ?? cwd, reference, mode }),
   });
 }
 

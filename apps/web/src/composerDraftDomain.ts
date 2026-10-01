@@ -21,6 +21,7 @@ import {
 } from "@synara/contracts";
 import * as Equal from "effect/Equal";
 import * as Schema from "effect/Schema";
+import { shallow } from "zustand/vanilla/shallow";
 
 import { normalizeAssistantSelectionAttachment } from "./lib/assistantSelections";
 import { type BrowserAnnotationDraft, normalizeBrowserAnnotations } from "./lib/browserAnnotations";
@@ -908,6 +909,76 @@ export function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     // computer control off in this chat when the new-chat default is on.
     draft.enableComputerControl === undefined &&
     draft.computerControlMode === undefined
+  );
+}
+
+/** Compare cleanup ownership without treating image persistence bookkeeping as an edit. */
+export function composerDraftsMatchForCleanup(
+  current: ComposerThreadDraftState | null | undefined,
+  captured: ComposerThreadDraftState | null | undefined,
+): boolean {
+  if (current === captured) return true;
+  if (!current || !captured) return false;
+  const {
+    persistedAttachments: currentPersisted,
+    nonPersistedImageIds: _currentIds,
+    ...currentState
+  } = current;
+  const {
+    persistedAttachments: capturedPersisted,
+    nonPersistedImageIds: _capturedIds,
+    ...capturedState
+  } = captured;
+  // Keep identities for every actual content field, including File objects, and for
+  // model/runtime/queue changes: failed-create rollback removes the whole draft.
+  if (!shallow(currentState, capturedState)) return false;
+  // Persisted-only images are still recoverable content before hydration. Ignore
+  // metadata churn only for images already represented by the identical live array.
+  const liveImageIds = new Set(captured.images.map((image) => image.id));
+  return shallow(
+    currentPersisted.filter((attachment) => !liveImageIds.has(attachment.id)),
+    capturedPersisted.filter((attachment) => !liveImageIds.has(attachment.id)),
+  );
+}
+
+/** Whether a draft carries anything besides its prompt text that a turn would send. */
+export function composerDraftHasAttachments(
+  draft: Pick<
+    ComposerThreadDraftState,
+    | "files"
+    | "images"
+    | "persistedAttachments"
+    | "terminalContexts"
+    | "assistantSelections"
+    | "fileComments"
+  > &
+    Partial<Pick<ComposerThreadDraftState, "browserAnnotations">>,
+): boolean {
+  return (
+    draft.images.length > 0 ||
+    draft.files.length > 0 ||
+    draft.persistedAttachments.length > 0 ||
+    draft.terminalContexts.some((context) => context.text.trim().length > 0) ||
+    draft.assistantSelections.length > 0 ||
+    (draft.browserAnnotations?.length ?? 0) > 0 ||
+    draft.fileComments.length > 0
+  );
+}
+
+/**
+ * Whether a draft holds anything the user has not sent: text, attachments, collapsed
+ * pasted text, or pull-request context cards. The draft dispatch path does not carry the
+ * last two, so a surface that sends into an existing chat must refuse while they exist.
+ */
+export function composerDraftHasUnsentContent(
+  draft: Parameters<typeof composerDraftHasAttachments>[0] &
+    Pick<ComposerThreadDraftState, "prompt" | "pastedTexts" | "pullRequestContexts">,
+): boolean {
+  return (
+    draft.prompt.trim().length > 0 ||
+    composerDraftHasAttachments(draft) ||
+    draft.pastedTexts.length > 0 ||
+    draft.pullRequestContexts.length > 0
   );
 }
 

@@ -4,6 +4,8 @@ import {
   normalizeSidebarProjectThreadListCwd,
   persistSidebarUiState,
   readSidebarUiState,
+  readSidebarUiStateSnapshot,
+  subscribeSidebarUiStateWrites,
 } from "./Sidebar.uiState";
 
 describe("Sidebar.uiState", () => {
@@ -26,12 +28,36 @@ describe("Sidebar.uiState", () => {
             storage.set(key, value);
           },
         },
+        addEventListener: () => {},
+        removeEventListener: () => {},
       },
     });
   });
 
   afterEach(() => {
     Reflect.deleteProperty(globalThis, "window");
+  });
+
+  it("tells same-tab readers about writes and keeps one snapshot between them", () => {
+    let writes = 0;
+    const unsubscribe = subscribeSidebarUiStateWrites(() => {
+      writes += 1;
+    });
+    const before = readSidebarUiStateSnapshot();
+    expect(readSidebarUiStateSnapshot()).toBe(before);
+
+    persistSidebarUiState({
+      ...readSidebarUiState(),
+      dismissedThreadStatusKeyByThreadId: { "thread-1": "Pending Approval:turn-1" },
+    });
+
+    expect(writes).toBe(1);
+    expect(readSidebarUiStateSnapshot().dismissedThreadStatusKeyByThreadId).toEqual({
+      "thread-1": "Pending Approval:turn-1",
+    });
+    unsubscribe();
+    persistSidebarUiState(readSidebarUiState());
+    expect(writes).toBe(1);
   });
 
   it("defaults collapsed sidebar UI state with no thread list paging", () => {

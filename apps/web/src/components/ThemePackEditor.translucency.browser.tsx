@@ -1,0 +1,78 @@
+import "../index.css";
+
+import { page } from "vitest/browser";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { render } from "vitest-browser-react";
+
+// macOS desktop: the only platform where the translucent shell and desktop blur apply.
+vi.mock("~/env", () => ({ isElectron: true }));
+vi.mock("~/lib/utils", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/lib/utils")>()),
+  isMacNavigatorPlatform: () => true,
+}));
+
+import { ThemePackEditor } from "./ThemePackEditor";
+import { DEFAULT_THEME_STATE, parseStoredThemeState } from "~/theme/theme.logic";
+
+const root = document.documentElement;
+const setWindowMaterial = vi.fn(async () => true);
+let previousTheme: string | null;
+
+beforeEach(() => {
+  previousTheme = localStorage.getItem("synara:theme");
+  setWindowMaterial.mockClear();
+  window.desktopBridge = {
+    setTheme: async () => {},
+    setWindowMaterial,
+  } as unknown as NonNullable<typeof window.desktopBridge>;
+});
+
+afterEach(() => {
+  delete (window as { desktopBridge?: unknown }).desktopBridge;
+  if (previousTheme === null) localStorage.removeItem("synara:theme");
+  else localStorage.setItem("synara:theme", previousTheme);
+  window.dispatchEvent(new StorageEvent("storage", { key: "synara:theme" }));
+});
+
+// Playwright cannot fill range inputs; drive them the way a drag does, through React's
+// value tracker and a native input event.
+function setSliderValue(label: string, value: number) {
+  const input = document.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`);
+  if (!input) throw new Error(`Missing slider ${label}`);
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(
+    input,
+    String(value),
+  );
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+it("tunes sidebar opacity and desktop blur, then switches to a solid sidebar", async () => {
+  localStorage.setItem("synara:theme", JSON.stringify({ ...DEFAULT_THEME_STATE, mode: "dark" }));
+  await render(<ThemePackEditor variant="dark" />);
+  await expect.poll(() => root.getAttribute("data-window-material")).toBe("translucent");
+
+  const opacity = page.getByRole("slider", { name: "Dark theme sidebar opacity" });
+  const blur = page.getByRole("slider", { name: "Dark theme background blur" });
+  await expect.element(opacity).toHaveValue("72");
+  await expect.element(blur).toHaveValue("30");
+
+  setSliderValue("Dark theme sidebar opacity", 0);
+  setSliderValue("Dark theme background blur", 0);
+  await expect
+    .poll(() => root.style.getPropertyValue("--app-sidebar-surface"))
+    .toMatch(/ 0%, transparent\)$/);
+  await expect
+    .poll(() => setWindowMaterial.mock.lastCall)
+    .toEqual([{ material: "translucent", blurRadius: 0 }]);
+  expect(parseStoredThemeState(localStorage.getItem("synara:theme")).translucency.dark).toEqual({
+    opacity: 0,
+    blur: 0,
+  });
+
+  await page.getByRole("radio", { name: "Solid" }).click();
+  await expect.poll(() => root.getAttribute("data-window-material")).toBe("opaque");
+  await expect
+    .poll(() => setWindowMaterial.mock.lastCall)
+    .toEqual([{ material: "opaque", blurRadius: 0 }]);
+  await expect.element(opacity).not.toBeInTheDocument();
+});

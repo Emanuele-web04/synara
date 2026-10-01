@@ -60,6 +60,7 @@ import {
   sendSidechatPrompt,
   type SidechatCreationFlight,
 } from "../lib/sidechatCreation";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
 
 type ComposerSnapshot = {
   value: string;
@@ -526,7 +527,8 @@ export function useComposerSlashCommands(input: {
         !activeProject ||
         !activeThread ||
         !isServerThread ||
-        activeThread.sidechatSourceThreadId
+        // No sidechat of a sidechat, forked or standalone.
+        isSidechatThread(activeThread)
       ) {
         toastManager.add({
           type: "warning",
@@ -617,7 +619,7 @@ export function useComposerSlashCommands(input: {
   // Publish a stable host capability. Composer drafts, attachments, and modes only
   // affect whether `/side` is offered; they must not make the dock action disappear.
   useEffect(() => {
-    if (!activeProject || !activeThread || !isServerThread || activeThread.sidechatSourceThreadId) {
+    if (!activeProject || !activeThread || !isServerThread || isSidechatThread(activeThread)) {
       return;
     }
     return registerSidechatCreator(threadId, createSidechatFromSlashCommand);

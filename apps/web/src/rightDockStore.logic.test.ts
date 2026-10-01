@@ -11,6 +11,7 @@ import {
   sanitizeRightDockStateByThreadId,
   sanitizeRightDockThreadState,
   setDockOpenInState,
+  setSidechatPaneThreadInState,
   updatePaneInState,
 } from "./rightDockStore.logic";
 
@@ -384,5 +385,48 @@ describe("sanitizeRightDockStateByThreadId", () => {
     });
     expect(Object.keys(result)).toEqual(["t1"]);
     expect(result.t1?.panes).toHaveLength(1);
+  });
+});
+
+describe("setSidechatPaneThreadInState", () => {
+  const first = ThreadId.makeUnsafe("sidechat-first");
+  const second = ThreadId.makeUnsafe("sidechat-second");
+
+  it("adds the side chat pane without opening a closed dock", () => {
+    const next = setSidechatPaneThreadInState(createDefaultRightDockState(), {
+      paneId: "pane-1",
+      threadId: first,
+    });
+    expect(next.open).toBe(false);
+    expect(next.panes).toMatchObject([{ id: "pane-1", kind: "sidechat", threadId: first }]);
+    expect(next.activePaneId).toBe("pane-1");
+  });
+
+  it("repoints the existing pane and keeps an open dock open", () => {
+    const opened = setDockOpenInState(
+      setSidechatPaneThreadInState(createDefaultRightDockState(), {
+        paneId: "pane-1",
+        threadId: first,
+      }),
+      true,
+    );
+    const next = setSidechatPaneThreadInState(opened, { paneId: "pane-2", threadId: second });
+    expect(next.open).toBe(true);
+    expect(next.panes).toMatchObject([{ id: "pane-1", threadId: second }]);
+    expect(setSidechatPaneThreadInState(next, { paneId: "pane-3", threadId: second })).toBe(next);
+  });
+
+  it("removes the pane for null and leaves an open dock on its launcher", () => {
+    const opened = setDockOpenInState(
+      setSidechatPaneThreadInState(createDefaultRightDockState(), {
+        paneId: "pane-1",
+        threadId: first,
+      }),
+      true,
+    );
+    const next = setSidechatPaneThreadInState(opened, { paneId: "pane-2", threadId: null });
+    expect(next).toMatchObject({ open: true, panes: [], activePaneId: null });
+    const empty = createDefaultRightDockState();
+    expect(setSidechatPaneThreadInState(empty, { paneId: "p", threadId: null })).toBe(empty);
   });
 });

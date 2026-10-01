@@ -1,12 +1,15 @@
 // FILE: pullRequestStatePresentation.tsx
-// Purpose: Single source of truth for how a pull request's state renders across the app —
+// Purpose: Single source of truth for how a pull request's (and an issue's) state renders —
 //          the sidebar thread badge, kanban card chip, list rows, detail panel, and dock tab
 //          all resolve label, color, and glyph from here so no surface can drift. Icons come
-//          from the same three-node Central "reversed" family (pull-request / draft /
-//          request-closed / merged-simple).
+//          from the three-node Central "reversed" family (pull-request / draft /
+//          request-closed / merge-conflict); merged uses the Hugeicons workflow-circle-06.
 // Layer: Pull request presentation
 // Exports: PrStatePresentation, resolvePrStatePresentation, PR_STATE_PRESENTATION_ICONS,
+//          IssueStatePresentation, resolveIssueStatePresentation, ISSUE_STATE_PRESENTATION_ICONS,
 //          PullRequestConflictIcon
+
+import type { GitHubIssueState, GitHubIssueStateReason } from "@synara/contracts";
 
 import {
   GitMergeConflictIcon,
@@ -14,6 +17,9 @@ import {
   GitPullRequestClosedIcon,
   GitPullRequestDraftIcon,
   GitPullRequestIcon,
+  IssueClosedIcon,
+  IssueNotPlannedIcon,
+  IssueOpenedIcon,
   type LucideIcon,
 } from "~/lib/icons";
 
@@ -81,6 +87,57 @@ export function resolvePrStatePresentation(pr: {
     label: "PR merged",
     colorClass: "text-status-merged",
     iconKind: "merged-simple",
+  };
+}
+
+/** Shared issue-state presentation: the issue counterpart of {@link PrStatePresentation}. */
+export interface IssueStatePresentation {
+  label: "Issue open" | "Issue closed" | "Issue not planned";
+  /** Short visible state word for badges ("Closed"); `label` is the accessible name. */
+  shortLabel: "Open" | "Closed" | "Not planned";
+  colorClass: string;
+  iconKind: "issue-opened" | "issue-closed" | "issue-not-planned";
+}
+
+export const ISSUE_STATE_PRESENTATION_ICONS: Record<
+  IssueStatePresentation["iconKind"],
+  LucideIcon
+> = {
+  "issue-opened": IssueOpenedIcon,
+  "issue-closed": IssueClosedIcon,
+  "issue-not-planned": IssueNotPlannedIcon,
+};
+
+/**
+ * GitHub's issue colors on the pull request tokens: open is the same green as an open pull
+ * request, completed is the merged purple (the work landed), and not planned or duplicate is
+ * the neutral grey of a closed pull request.
+ */
+export function resolveIssueStatePresentation(issue: {
+  state: GitHubIssueState;
+  stateReason: GitHubIssueStateReason | null;
+}): IssueStatePresentation {
+  if (issue.state === "open") {
+    return {
+      label: "Issue open",
+      shortLabel: "Open",
+      colorClass: "text-status-open",
+      iconKind: "issue-opened",
+    };
+  }
+  if (issue.stateReason === "not-planned" || issue.stateReason === "duplicate") {
+    return {
+      label: "Issue not planned",
+      shortLabel: "Not planned",
+      colorClass: "text-status-neutral",
+      iconKind: "issue-not-planned",
+    };
+  }
+  return {
+    label: "Issue closed",
+    shortLabel: "Closed",
+    colorClass: "text-status-merged",
+    iconKind: "issue-closed",
   };
 }
 

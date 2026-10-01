@@ -140,6 +140,10 @@
       "types": "./src/chatThreads.ts",
       "import": "./src/chatThreads.ts"
     },
+    "./todo": {
+      "types": "./src/todo.ts",
+      "import": "./src/todo.ts"
+    },
     "./localServers": {
       "types": "./src/localServers.ts",
       "import": "./src/localServers.ts"
@@ -187,6 +191,10 @@
     "./sidechatExpiry": {
       "types": "./src/sidechatExpiry.ts",
       "import": "./src/sidechatExpiry.ts"
+    },
+    "./sidechatThread": {
+      "types": "./src/sidechatThread.ts",
+      "import": "./src/sidechatThread.ts"
     },
     "./threadSummary": {
       "types": "./src/threadSummary.ts",

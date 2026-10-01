@@ -284,19 +284,27 @@ To put a feature behind the list:
 
 Promote a feature to Stable by deleting its entry; every gate resolves itself.
 
-The list currently contains `omp` (Oh My Pi) and `groups` (Groups), both available
-in Beta and gated off in Stable. The rail sidebar layout is available in both Stable
-and Beta.
+The list currently contains `omp` (Oh My Pi), `groups` (Hubs), `tasks` (Tasks), and `inbox` (Inbox),
+all available in Beta and gated off in Stable. The rail sidebar layout is available in
+both Stable and Beta.
 
-On Stable, Groups is inert rather than hidden data: the server refuses the group
+On Stable, Hubs are inert rather than hidden data: the server refuses the hub
 APIs, Library routes and gateway tools, stops coordinator wakes and monitoring,
-leaves saved Group check-ins and completion evaluations unchanged and unscheduled,
+leaves saved Hub check-ins and completion evaluations unchanged and unscheduled,
 uses ordinary Synara tool approvals for former coordinator chats, and refuses
-creating a group; the web hides the Groups tab, route, setting, and
-thread actions, and shows any existing group folder as an ordinary project so its
+creating a hub; the web hides the Hubs tab, route, setting, and
+thread actions, and shows any existing hub folder as an ordinary project so its
 chats stay reachable. The gate lives in
 `apps/server/src/projectAgent/groupsBetaGate.ts` and `GROUPS_ON` in
 `apps/web/src/betaFeatures.ts`.
+
+`tasks` enables the Tasks list and delegation APIs. In Beta, Tasks takes Kanban's
+navigation slot and preserves its saved order and visibility; Stable keeps Kanban.
+A Beta client connected to a server that refuses Tasks returns to Kanban.
+
+`inbox` is the Inbox page: the server refuses its `stats.getRecap` RPC on Stable, the
+web hides its rail and sidebar entries and redirects the route, and a saved rail or
+sidebar order that mentions it is ignored there.
 
 ## Diagnostics
 

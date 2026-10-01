@@ -469,6 +469,25 @@ const SidechatSourceThreadId = Schema.optional(Schema.NullOr(ThreadId)).pipe(
 const SidechatLifecycleTimestamp = Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
   Schema.withDecodingDefault(() => null),
 );
+/**
+ * What a standalone sidechat is about. A sidechat either forks a source thread
+ * (`sidechatSourceThreadId`) or, with no source thread, carries this context: today only a
+ * GitHub pull request or issue asked about from the inbox. Identifiers only; the item's
+ * title, body and comments reach the provider as untrusted data in the user's own message.
+ */
+export const ThreadSidechatContext = Schema.Struct({
+  kind: Schema.Literal("github-item"),
+  // Same literals as `GitHubInboxItemKind`; importing it here would create a module cycle.
+  itemKind: Schema.Literals(["pullRequest", "issue"]),
+  repository: TrimmedNonEmptyString,
+  number: PositiveInt,
+  url: TrimmedNonEmptyString,
+});
+export type ThreadSidechatContext = typeof ThreadSidechatContext.Type;
+// Absent on every event and projection written before standalone sidechats existed.
+const SidechatContextField = Schema.optional(Schema.NullOr(ThreadSidechatContext)).pipe(
+  Schema.withDecodingDefault(() => null),
+);
 export const ProviderRequestKind = Schema.Literals([
   "command",
   "file-read",
@@ -1064,6 +1083,7 @@ export const OrchestrationThread = Schema.Struct({
     Schema.withDecodingDefault(() => null),
   ),
   sidechatSourceThreadId: SidechatSourceThreadId,
+  sidechatContext: SidechatContextField,
   sidechatLastActivityAt: SidechatLifecycleTimestamp,
   sidechatExpiredAt: SidechatLifecycleTimestamp,
   lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)).pipe(
@@ -1157,6 +1177,7 @@ export const OrchestrationThreadShell = Schema.Struct({
     Schema.withDecodingDefault(() => null),
   ),
   sidechatSourceThreadId: SidechatSourceThreadId,
+  sidechatContext: SidechatContextField,
   sidechatLastActivityAt: SidechatLifecycleTimestamp,
   sidechatExpiredAt: SidechatLifecycleTimestamp,
   lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)).pipe(
@@ -1383,6 +1404,8 @@ const ThreadCreateCommand = Schema.Struct({
   lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
+  /** Makes the thread a standalone sidechat (no source thread). */
+  sidechatContext: Schema.optional(ThreadSidechatContext),
   createdAt: IsoDateTime,
 });
 
@@ -2163,6 +2186,7 @@ export const ThreadCreatedPayload = Schema.Struct({
     Schema.withDecodingDefault(() => null),
   ),
   sidechatSourceThreadId: SidechatSourceThreadId,
+  sidechatContext: SidechatContextField,
   sidechatLastActivityAt: SidechatLifecycleTimestamp,
   sidechatExpiredAt: SidechatLifecycleTimestamp,
   lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)).pipe(

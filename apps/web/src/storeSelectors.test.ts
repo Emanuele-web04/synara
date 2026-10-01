@@ -10,6 +10,7 @@ import {
   createComposerThreadMentionSourcesSelector,
   createProjectLastActivityAtSelector,
   createSidebarDisplayThreadsSelector,
+  createSidechatSummariesForGitHubItemSelector,
   createSidechatSummariesForSourceSelector,
   createSidebarTreeThreadsSelector,
   createThreadExistsSelector,
@@ -217,6 +218,19 @@ describe("sidebar thread visibility", () => {
 
   it("always hides side chats, including pinned side chats", () => {
     expect(isSidebarThreadVisible(sidechatSummary)).toBe(false);
+    const standaloneSidechat = {
+      ...summaryA,
+      id: "thread-standalone-sidechat" as ThreadId,
+      isPinned: true,
+      sidechatContext: {
+        kind: "github-item",
+        itemKind: "issue",
+        repository: "acme/widgets",
+        number: 7,
+        url: "https://github.com/acme/widgets/issues/7",
+      },
+    } as SidebarThreadSummary;
+    expect(isSidebarThreadVisible(standaloneSidechat)).toBe(false);
     expect(isSidebarThreadVisible(sidechatSummary, { hideAutomationRunThreads: true })).toBe(false);
   });
 
@@ -572,5 +586,63 @@ describe("createThreadGitActionsMetadataSelector", () => {
     expect(createThreadGitActionsMetadataSelector(null)(makeState({}))).toBe(
       createThreadGitActionsMetadataSelector(undefined)(makeState({})),
     );
+  });
+});
+
+function githubPullRequestContext(number: number, repository = "Acme/Widgets") {
+  return {
+    kind: "github-item" as const,
+    itemKind: "pullRequest" as const,
+    repository,
+    number,
+    url: `https://github.com/acme/widgets/pull/${number}`,
+  };
+}
+
+describe("createSidechatSummariesForGitHubItemSelector", () => {
+  it("selects one item's standalone side chats in one project, newest first", () => {
+    const projectId = summaryA.projectId;
+    const context = githubPullRequestContext;
+    const older = {
+      ...summaryA,
+      id: "item-older" as ThreadId,
+      sidechatContext: context(7),
+      sidechatLastActivityAt: "2026-09-30T10:00:00.000Z",
+    } as SidebarThreadSummary;
+    const newer = {
+      ...summaryA,
+      id: "item-newer" as ThreadId,
+      sidechatContext: context(7, "acme/widgets"),
+      sidechatLastActivityAt: "2026-09-30T11:00:00.000Z",
+    } as SidebarThreadSummary;
+    const otherItem = {
+      ...summaryA,
+      id: "item-other" as ThreadId,
+      sidechatContext: context(8),
+    } as SidebarThreadSummary;
+    const otherProject = {
+      ...summaryA,
+      id: "item-other-project" as ThreadId,
+      projectId: "project-elsewhere",
+      sidechatContext: context(7),
+    } as SidebarThreadSummary;
+    const archived = {
+      ...summaryA,
+      id: "item-archived" as ThreadId,
+      sidechatContext: context(7),
+      archivedAt: "2026-09-30T12:00:00.000Z",
+    } as SidebarThreadSummary;
+    const threads = [older, newer, otherItem, otherProject, archived];
+    const state = makeState({
+      threadIds: threads.map((thread) => thread.id),
+      sidebarThreadSummaryById: Object.fromEntries(threads.map((thread) => [thread.id, thread])),
+    });
+
+    const select = createSidechatSummariesForGitHubItemSelector({
+      projectId,
+      repository: "acme/widgets",
+      number: 7,
+    });
+    expect(select(state).map((thread) => thread.id)).toEqual([newer.id, older.id]);
   });
 });

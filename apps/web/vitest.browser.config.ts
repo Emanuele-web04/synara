@@ -9,8 +9,8 @@ const srcPath = fileURLToPath(new URL("./src", import.meta.url));
 export default mergeConfig(
   viteConfig,
   defineConfig({
-    // Direct React roots in hook regressions must not trigger a mid-test reload.
-    optimizeDeps: { include: ["react-dom/client"] },
+    // Prebundle direct hook dependencies so restored caches cannot reload tests mid-run.
+    optimizeDeps: { include: ["react-dom/client", "zustand/vanilla/shallow"] },
     resolve: {
       alias: {
         "~": srcPath,

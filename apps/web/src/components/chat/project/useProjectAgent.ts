@@ -382,7 +382,7 @@ export function useProjectAgent(input: {
         return overview;
       } catch (cause) {
         if (projectIdRef.current === projectId) {
-          setError(cause instanceof Error ? cause.message : "Group action failed.");
+          setError(cause instanceof Error ? cause.message : "Hub action failed.");
         }
         return null;
       } finally {
@@ -447,7 +447,7 @@ export function useProjectAgent(input: {
         return result;
       } catch (cause) {
         if (projectIdRef.current === projectId) {
-          setError(cause instanceof Error ? cause.message : "Group action failed.");
+          setError(cause instanceof Error ? cause.message : "Hub action failed.");
         }
         return null;
       } finally {

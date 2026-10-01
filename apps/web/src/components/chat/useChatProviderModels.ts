@@ -9,7 +9,7 @@ import { normalizeModelSlug } from "@synara/shared/model";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
-import { resolveAvailableProviderPreference } from "~/lib/providerAvailability";
+import { resolveUnsentComposerProvider } from "~/lib/providerAvailability";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import {
   hasReconciledServerProviderStatuses,
@@ -88,16 +88,14 @@ export function useChatProviderModels({
     : null;
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const localProviderStatuses = useProviderStatusesForLocalConfig();
-  const preferredDraftProvider =
-    selectedProviderByThreadId ?? threadProvider ?? settings.defaultProvider;
   const providerStatusesReconciled = hasReconciledServerProviderStatuses(queryClient);
   const selectedProvider = useMemo<ProviderKind>(
     () =>
       lockedProvider ??
-      // Keep an unstarted draft pinned to its explicit provider; availability is validated at send time.
-      selectedProviderByThreadId ??
-      resolveAvailableProviderPreference({
-        preferredProvider: preferredDraftProvider,
+      resolveUnsentComposerProvider({
+        explicitProvider: selectedProviderByThreadId,
+        threadProvider,
+        defaultProvider: settings.defaultProvider,
         statuses: providerStatusesReconciled ? localProviderStatuses : EMPTY_PROVIDER_STATUSES,
         providerOrder: settings.providerOrder,
         hiddenProviders: settings.hiddenProviders,
@@ -105,11 +103,12 @@ export function useChatProviderModels({
     [
       localProviderStatuses,
       lockedProvider,
-      preferredDraftProvider,
       providerStatusesReconciled,
       selectedProviderByThreadId,
+      settings.defaultProvider,
       settings.hiddenProviders,
       settings.providerOrder,
+      threadProvider,
     ],
   );
   const sessionInstanceId =

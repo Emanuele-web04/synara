@@ -16,7 +16,9 @@ import {
   ExternalLinkIcon,
   FolderOpenIcon,
   GiftIcon,
+  InboxIcon,
   KanbanIcon,
+  TasksIcon,
   KeyboardIcon,
   BellIcon,
   type LucideIcon,
@@ -37,6 +39,7 @@ import {
 import { createCentralIconComponent } from "~/lib/central-icons";
 import { ThreadPrStatusBadge } from "~/components/pullRequest/ThreadPrStatusBadge";
 import { PinStatusIcon, pinActionLabel } from "~/lib/pin";
+import { useTasksNeedingAttentionCount, useTodoEventSubscription } from "./tasks/useTodos";
 import { THREAD_CONTEXT_MENU_ICONS } from "~/lib/contextMenuIcons";
 import { ensureNativeApi } from "~/nativeApi";
 import { autoAnimate } from "@formkit/auto-animate";
@@ -111,10 +114,13 @@ import {
 import {
   normalizeHiddenSidebarNavItems,
   normalizeSidebarNavOrder,
+  resolveTasksSurfaceSlot,
   type SidebarNavItemId,
 } from "../sidebarNavOrdering";
+import { useTasksSurfaceEnabled } from "../tasksSurface";
 import {
   buildRailItemOrder,
+  isRailItemAvailable,
   buildRailSpacesSections,
   normalizeHiddenRailItems,
   normalizeRailItemOrder,
@@ -159,11 +165,12 @@ import {
   createAllThreadsSelector,
   createProjectLastActivityAtSelector,
   createSidebarDisplayThreadsSelector,
-  createSidebarThreadSummariesSelector,
   createSidebarTreeThreadsSelector,
   isSidebarThreadVisible,
 } from "../storeSelectors";
 import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
+import { useActivityThreads } from "../hooks/useActivityThreads";
+import { countNeedsYouActions } from "./inbox/inbox.logic";
 import { useThreadPullRequests } from "../hooks/useThreadPullRequests";
 import {
   providerComposerCapabilitiesQueryOptions,
@@ -180,8 +187,9 @@ import {
   resolveNewThreadTarget,
 } from "../lib/projectShortcutTargets";
 import {
+  githubInboxQueryKeys,
+  githubInboxReviewBadgeQueryOptions,
   pullRequestQueryKeys,
-  pullRequestReviewRequestCountQueryOptions,
 } from "../lib/pullRequestReactQuery";
 import { prefetchModelsForNewThread } from "../lib/providerModelPrefetch";
 import {
@@ -195,11 +203,7 @@ import {
   readNativeApiServerCapability,
 } from "../nativeApi";
 import { isHomeChatContainerProject, prewarmHomeChatProject } from "../lib/chatProjects";
-import {
-  collectGroupProjectIds,
-  createGroupProject,
-  isGroupContainerProject,
-} from "../lib/groupProjects";
+import { createGroupProject, isGroupContainerProject } from "../lib/groupProjects";
 import { useProjectEnvironmentStore } from "../projectEnvironmentStore";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useLatestProjectStore } from "../latestProjectStore";
@@ -280,7 +284,7 @@ import { EditProjectDialog, type EditProjectValue } from "./EditProjectDialog";
 import { RelocateProjectDialog } from "./RelocateProjectDialog";
 import { RenameThreadDialog } from "./RenameThreadDialog";
 import ReleaseHistoryDialog from "./ReleaseHistoryDialog";
-import { GROUPS_ON, isBetaFeatureOn } from "../betaFeatures";
+import { GROUPS_ON, INBOX_ON, isBetaFeatureOn } from "../betaFeatures";
 import { WHATS_NEW_ENTRIES } from "../whatsNew/entries";
 import { sortEntriesByVersionDesc } from "../whatsNew/logic";
 import { SidebarSearchPalette, type SidebarSearchPaletteMode } from "./SidebarSearchPalette";
@@ -318,6 +322,7 @@ import {
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
 import { Popover, PopoverPopup } from "./ui/popover";
+import { StatusDot } from "./ui/status-chip";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
 import { Input } from "./ui/input";
 import {
@@ -498,6 +503,7 @@ import {
   spaceKey,
   resolveActiveSpaceId,
 } from "../lib/spaceGrouping";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
 
 // Central glyphs for the sidebar section-header buttons (expand/collapse, sort, add).
 const ExpandAllIcon = createCentralIconComponent("expand-45");
@@ -655,13 +661,10 @@ function WorktreeBadgeGlyph({ className }: { className?: string }) {
 /** Pulsing green dot shown before a project name while a dev run is live. */
 function ProjectRunIndicatorDot({ className }: { className?: string }) {
   return (
-    <span
+    <StatusDot
       aria-hidden="true"
       title="Dev server running"
-      className={cn(
-        "size-1.5 shrink-0 rounded-full bg-emerald-400 motion-safe:animate-pulse",
-        className,
-      )}
+      className={cn("bg-emerald-400 motion-safe:animate-pulse", className)}
     />
   );
 }
@@ -697,7 +700,7 @@ function resolveWorktreeBadgeLabel(
 
 /** User message the coordinator receives when a thread is handed to a group. */
 function groupPickupMessageText(sourceThread: Pick<Thread, "id" | "title">): string {
-  return `A thread was handed to this group for you to pick up: "${sourceThread.title ?? "Untitled thread"}" (thread id ${sourceThread.id}). Use synara_read_thread to read it and continue the work it was doing.`;
+  return `A thread was handed to this hub for you to pick up: "${sourceThread.title ?? "Untitled thread"}" (thread id ${sourceThread.id}). Use synara_read_thread to read it and continue the work it was doing.`;
 }
 
 type ThreadMetaChip = {
@@ -1216,7 +1219,7 @@ function SidebarActivityBellButton({
 
 const SIDEBAR_SURFACE_PICKER_COPY: Record<SidebarView, { title: string; description: string }> = {
   threads: { title: "Synara", description: "Build, debug, and ship" },
-  groups: { title: "Groups", description: "Coordinated work across repos" },
+  groups: { title: "Hubs", description: "Coordinated work across repos" },
 };
 
 /**
@@ -1368,10 +1371,12 @@ export default function Sidebar() {
   const isOnSettings = useLocation({
     select: (loc) => loc.pathname === "/settings",
   });
-  const isOnGroupsRoute = pathname.startsWith("/groups");
+  const isOnGroupsRoute = pathname.startsWith("/hubs") || pathname.startsWith("/groups");
   const isOnKanban = pathname.startsWith("/kanban");
+  const isOnTasks = pathname.startsWith("/tasks");
   const isOnAutomations = pathname.startsWith("/automations");
   const isOnPullRequests = pathname.startsWith("/pull-requests");
+  const isOnInbox = pathname.startsWith("/inbox");
   // Lightweight read of automations to drive the sidebar attention badge. Shares the
   // ["automations"] query cache with the Automations route (and its live stream updates).
   const automationListQuery = useQuery({
@@ -1397,6 +1402,20 @@ export default function Sidebar() {
         }
       : null;
   }, [automationListQuery.data]);
+  // Tasks is Beta-only: Stable never subscribes to or reads to-dos (the server refuses them).
+  const tasksSurfaceEnabled = useTasksSurfaceEnabled();
+  useTodoEventSubscription(tasksSurfaceEnabled);
+  const tasksNeedingAttentionCount = useTasksNeedingAttentionCount(tasksSurfaceEnabled);
+  const tasksAttentionBadge = useMemo(
+    () =>
+      tasksNeedingAttentionCount > 0
+        ? {
+            text: String(tasksNeedingAttentionCount),
+            accessibleLabel: `${tasksNeedingAttentionCount} ${pluralize(tasksNeedingAttentionCount, "task needs", "tasks need")} you`,
+          }
+        : null,
+    [tasksNeedingAttentionCount],
+  );
   const pullRequestRepositoryConfig = useMemo(
     () => pullRequestRepositoryConfigFingerprint(projects),
     [projects],
@@ -1405,11 +1424,13 @@ export default function Sidebar() {
   useEffect(() => {
     if (previousPullRequestRepositoryConfigRef.current === pullRequestRepositoryConfig) return;
     previousPullRequestRepositoryConfigRef.current = pullRequestRepositoryConfig;
+    void queryClient.invalidateQueries({ queryKey: githubInboxQueryKeys.all });
     void queryClient.invalidateQueries({ queryKey: pullRequestQueryKeys.all });
   }, [pullRequestRepositoryConfig, queryClient]);
-  // Count-only server query keeps rich pull-request rows off the wire and out of this cache.
+  // The badge observes the open inbox list and shares its server snapshot, so an open inbox makes
+  // it free; with the inbox closed it refreshes every 15 minutes.
   const pullRequestsReviewingQuery = useQuery({
-    ...pullRequestReviewRequestCountQueryOptions({ projectId: null }),
+    ...githubInboxReviewBadgeQueryOptions(),
     enabled: projects.some((project) => project.kind === "project"),
   });
   const pullRequestsReviewBadge = resolvePullRequestReviewBadge(pullRequestsReviewingQuery.data);
@@ -1688,59 +1709,60 @@ export default function Sidebar() {
   const routeActiveSidebarThreadId = routeThreadId;
   const activeSidebarThreadId = optimisticActiveThreadId ?? routeActiveSidebarThreadId;
   const visualActiveSidebarThreadId = optimisticActiveThreadId ?? routeThreadId;
-  const selectSidebarThreads = useMemo(() => createSidebarThreadSummariesSelector(), []);
   const hideAutomationRunThreads = !appSettings.showAutomationRunThreads;
   const selectSidebarTreeThreads = useMemo(
     () => createSidebarTreeThreadsSelector({ hideAutomationRunThreads }),
     [hideAutomationRunThreads],
   );
-  const sidebarThreads = useStore(selectSidebarThreads);
   const sidebarTreeThreads = useStore(selectSidebarTreeThreads);
   const selectProjectLastActivityAt = useMemo(() => createProjectLastActivityAtSelector(), []);
   const projectLastActivityAt = useStore(selectProjectLastActivityAt);
   const { summaryFor, summariesByProjectId, coordinatorThreadIds } = useProjectAgentSummaries();
-  const displaySidebarThreads = useMemo(
-    () => excludeHiddenProjectAgentCoordinatorThreads(sidebarThreads, coordinatorThreadIds),
-    [coordinatorThreadIds, sidebarThreads],
-  );
+  // Activity view + unread bell (and the Inbox) read the same visibility-filtered list,
+  // so the bell can never point at a row the Activity list is hiding.
+  const {
+    sidebarThreads,
+    displaySidebarThreads,
+    groupProjectIdSet,
+    groupThreads: groupSidebarThreads,
+    visibleNonGroupThreads: visibleNonGroupSidebarThreads,
+  } = useActivityThreads({ hideAutomationRunThreads });
   const displaySidebarTreeThreads = useMemo(
     () => excludeHiddenProjectAgentCoordinatorThreads(sidebarTreeThreads, coordinatorThreadIds),
     [coordinatorThreadIds, sidebarTreeThreads],
-  );
-  const groupProjectIdSet = useMemo(
-    () =>
-      collectGroupProjectIds(projects, {
-        homeDir,
-        chatWorkspaceRoot,
-        studioWorkspaceRoot,
-        groupsWorkspaceRoot,
-      }),
-    [chatWorkspaceRoot, groupsWorkspaceRoot, homeDir, projects, studioWorkspaceRoot],
-  );
-  const { nonGroupThreads: nonGroupSidebarThreads, groupThreads: groupSidebarThreads } = useMemo(
-    () => partitionSidebarThreadsByProjectIds(displaySidebarThreads, groupProjectIdSet),
-    [displaySidebarThreads, groupProjectIdSet],
   );
   const { nonGroupThreads: nonGroupSidebarTreeThreads, groupThreads: groupSidebarTreeThreads } =
     useMemo(
       () => partitionSidebarThreadsByProjectIds(displaySidebarTreeThreads, groupProjectIdSet),
       [displaySidebarTreeThreads, groupProjectIdSet],
     );
-  // Activity view + unread bell read the same visibility-filtered list, so the
-  // bell can never point at a row the Activity list is hiding.
-  const visibleNonGroupSidebarThreads = useMemo(
-    () =>
-      nonGroupSidebarThreads.filter((thread) =>
-        isSidebarThreadVisible(thread, { hideAutomationRunThreads }),
-      ),
-    [hideAutomationRunThreads, nonGroupSidebarThreads],
-  );
   // Drives the unread dot on the header Activity bell.
   const hasUnreadActivity = useMemo(
     () =>
       hasUnreadActivityOutsideActiveThread(visibleNonGroupSidebarThreads, activeSidebarThreadId),
     [activeSidebarThreadId, visibleNonGroupSidebarThreads],
   );
+  // Inbox is Beta-only: its rail item and page stay hidden on Stable.
+  const inboxAvailable = INBOX_ON;
+  const inboxBadge = useMemo(() => {
+    if (!inboxAvailable) return null;
+    const count = countNeedsYouActions(
+      visibleNonGroupSidebarThreads,
+      activeSidebarThreadId,
+      dismissedThreadStatusKeyByThreadId,
+    );
+    return count > 0
+      ? {
+          text: String(count),
+          accessibleLabel: `${count} ${pluralize(count, "thread needs", "threads need")} you`,
+        }
+      : null;
+  }, [
+    activeSidebarThreadId,
+    dismissedThreadStatusKeyByThreadId,
+    inboxAvailable,
+    visibleNonGroupSidebarThreads,
+  ]);
   const dismissThreadStatus = useCallback(
     (threadId: ThreadId, statusKey: string | null | undefined) => {
       if (!statusKey) {
@@ -2161,7 +2183,7 @@ export default function Sidebar() {
             (thread) =>
               thread.projectId === projectId &&
               (thread.archivedAt ?? null) === null &&
-              !thread.sidechatSourceThreadId,
+              !isSidechatThread(thread),
           )
           .map((thread) => ({
             id: thread.id,
@@ -2388,10 +2410,10 @@ export default function Sidebar() {
   }, [draftThreadsByThreadId, groupProjectIdSet]);
 
   // Where the Groups segment lands, resolved directly (remembered Groups route, else the latest
-  // group chat) instead of bouncing through the "/groups" splash route — that extra hop +
+  // group chat) instead of bouncing through the "/hubs" splash route — that extra hop +
   // async redirect is what made the segment switch feel sluggish. Mirrors
   // resolveBackToThreadsTarget so both segments restore the thread you were last on.
-  // Archived chats are excluded, matching the /groups landing: the sidebar hides them, so
+  // Archived chats are excluded, matching the /hubs landing: the sidebar hides them, so
   // neither the segment switch nor settings back may resurrect one.
   const activeGroupSidebarThreads = useMemo(
     () => groupSidebarThreads.filter((thread) => (thread.archivedAt ?? null) === null),
@@ -2447,10 +2469,10 @@ export default function Sidebar() {
     lastActiveSidebarSegmentRef.current = isOnGroups ? "groups" : "threads";
   }, [isOnSettings, isOnGroups]);
 
-  // Shared Groups fallback: the /groups index route restores the last group thread or shows
+  // Shared Groups fallback: the /hubs index route restores the last group thread or shows
   // the Groups empty state, so landing there is the no-implicit-creation fallback.
   const openGroupChatFallback = useCallback(() => {
-    void navigate({ to: "/groups" });
+    void navigate({ to: "/hubs" });
   }, [navigate]);
 
   const handleBackToAppFromSettings = useCallback(() => {
@@ -2507,7 +2529,7 @@ export default function Sidebar() {
     ],
   );
 
-  // The `/groups` route owns the hidden-section redirect (a hidden Groups tab
+  // The `/hubs` route owns the hidden-section redirect (a hidden Groups tab
   // also hides the section surface only) — the sidebar must not bounce group
   // threads opened from search, split view, or a link while the tab is hidden.
   useEffect(() => {
@@ -3017,14 +3039,14 @@ export default function Sidebar() {
   const continueThreadAsGroup = useCallback(async (thread: Thread) => {
     const api = readNativeApi();
     if (!api?.projectAgent) return;
-    const groupId = await createGroupProject({ title: thread.title ?? "New group" }).catch(
+    const groupId = await createGroupProject({ title: thread.title ?? "New hub" }).catch(
       () => null,
     );
     if (!groupId) {
       toastManager.add({
         type: "error",
-        title: "Unable to create group",
-        description: "The Groups workspace is not ready yet — try again in a moment.",
+        title: "Unable to create hub",
+        description: "The Hubs workspace is not ready yet — try again in a moment.",
       });
       return;
     }
@@ -3038,8 +3060,8 @@ export default function Sidebar() {
     if (!overview) {
       toastManager.add({
         type: "error",
-        title: "Group created, but the project could not be linked",
-        description: "Link the repository from the group's settings instead.",
+        title: "Hub created, but the project could not be linked",
+        description: "Link the repository from the hub's settings instead.",
       });
     }
     setProjectAgentDialogState({
@@ -3063,8 +3085,8 @@ export default function Sidebar() {
       if (!overview) {
         toastManager.add({
           type: "error",
-          title: "Could not move the thread to the group",
-          description: "The project may already be linked to that group.",
+          title: "Could not move the thread to the hub",
+          description: "The project may already be linked to that hub.",
         });
         return;
       }
@@ -3075,7 +3097,7 @@ export default function Sidebar() {
         toastManager.add({
           type: "info",
           title: "Project linked",
-          description: "Set up the group's coordinator to hand the thread over.",
+          description: "Set up the hub's coordinator to hand the thread over.",
         });
       }
     },
@@ -3189,13 +3211,13 @@ export default function Sidebar() {
             : [
                 {
                   id: "continue-as-group",
-                  label: "Continue as a group",
+                  label: "Continue as a hub",
                   icon: THREAD_CONTEXT_MENU_ICONS.group,
                   separatorBefore: true,
                 },
                 {
                   id: "move-to-group",
-                  label: "Move to group…",
+                  label: "Move to hub…",
                   icon: THREAD_CONTEXT_MENU_ICONS.group,
                 },
               ]),
@@ -3367,8 +3389,8 @@ export default function Sidebar() {
         if (eligibleGroups.length === 0) {
           toastManager.add({
             type: "info",
-            title: "No groups yet",
-            description: "Create a group first, then move this thread into it.",
+            title: "No hubs yet",
+            description: "Create a hub first, then move this thread into it.",
           });
           return;
         }
@@ -3991,12 +4013,22 @@ export default function Sidebar() {
 
   // --- Primary nav customization: persisted order + visibility, edited in a card. ---
   const sidebarNavOrder = useMemo(
-    () => normalizeSidebarNavOrder(appSettings.sidebarNavOrder),
-    [appSettings.sidebarNavOrder],
+    () =>
+      resolveTasksSurfaceSlot(
+        normalizeSidebarNavOrder(appSettings.sidebarNavOrder),
+        tasksSurfaceEnabled,
+      ),
+    [appSettings.sidebarNavOrder, tasksSurfaceEnabled],
   );
   const hiddenSidebarNavItems = useMemo(
-    () => new Set(normalizeHiddenSidebarNavItems(appSettings.hiddenSidebarNavItems)),
-    [appSettings.hiddenSidebarNavItems],
+    () =>
+      new Set(
+        resolveTasksSurfaceSlot(
+          normalizeHiddenSidebarNavItems(appSettings.hiddenSidebarNavItems),
+          tasksSurfaceEnabled,
+        ),
+      ),
+    [appSettings.hiddenSidebarNavItems, tasksSurfaceEnabled],
   );
   const [isCustomizingNav, setIsCustomizingNav] = useState(false);
   // Rail layout: the customize editor opens as a popover beside the rail.
@@ -4021,6 +4053,15 @@ export default function Sidebar() {
         onMouseEnter: prefetchModelsForPrimaryNewThread,
         onFocus: prefetchModelsForPrimaryNewThread,
       },
+      inbox: {
+        icon: InboxIcon,
+        label: "Inbox",
+        active: isOnInbox,
+        badge: inboxBadge,
+        onClick: () => {
+          void navigate({ to: "/inbox" });
+        },
+      },
       kanban: {
         icon: KanbanIcon,
         label: "Kanban",
@@ -4030,16 +4071,24 @@ export default function Sidebar() {
           void navigate({ to: "/kanban" });
         },
       },
+      tasks: {
+        icon: TasksIcon,
+        label: "Tasks",
+        // Beta's Tasks entry stands for both views: the list and the Kanban board.
+        active: isOnTasks || isOnKanban,
+        badge: tasksAttentionBadge,
+        onClick: () => {
+          void navigate({ to: appSettings.tasksViewMode === "kanban" ? "/kanban" : "/tasks" });
+        },
+      },
       pullRequests: {
         icon: IoIosGitCompare,
-        label: "Pull requests",
+        label: "Code review",
         active: isOnPullRequests,
         badge: pullRequestsReviewBadge,
         onClick: () => {
-          void navigate({
-            to: "/pull-requests",
-            search: { involvement: "all", state: "open" },
-          });
+          // No search: the inbox reopens with the filters the user last chose.
+          void navigate({ to: "/pull-requests" });
         },
       },
       automations: {
@@ -4055,43 +4104,54 @@ export default function Sidebar() {
     [
       automationAttentionBadge,
       handlePrimaryNewThread,
+      inboxBadge,
       isOnAutomations,
+      isOnInbox,
       isOnKanban,
       isOnPullRequests,
+      isOnTasks,
+      appSettings.tasksViewMode,
       navigate,
       prefetchModelsForPrimaryNewThread,
       pullRequestsReviewBadge,
+      tasksAttentionBadge,
     ],
+  );
+  // Inbox exists only where it ships (Beta); everything else is always available.
+  const availableSidebarNavIds = useMemo(
+    () => sidebarNavOrder.filter((id) => id !== "inbox" || inboxAvailable),
+    [inboxAvailable, sidebarNavOrder],
   );
   // A hidden item whose route is currently active stays visible so the current
   // surface never loses its sidebar row (mirrors the hidden-provider rule).
   const visibleSidebarNavIds = useMemo(
     () =>
-      sidebarNavOrder.filter(
+      availableSidebarNavIds.filter(
         (id) => !hiddenSidebarNavItems.has(id) || sidebarNavDescriptors[id].active,
       ),
-    [hiddenSidebarNavItems, sidebarNavDescriptors, sidebarNavOrder],
+    [availableSidebarNavIds, hiddenSidebarNavItems, sidebarNavDescriptors],
   );
+  // Reorders only what this build ships: an item it leaves out (Inbox on Stable) stays out
+  // of the saved order, so it joins at its default place once it ships instead of wherever
+  // the user's drags pushed its hidden slot.
   const handleNavOrderReorder = useCallback(
     (activeId: string, overId: string) => {
-      const order = normalizeSidebarNavOrder(appSettings.sidebarNavOrder);
+      const order = availableSidebarNavIds;
       const fromIndex = order.indexOf(activeId as SidebarNavItemId);
       const toIndex = order.indexOf(overId as SidebarNavItemId);
       if (fromIndex < 0 || toIndex < 0) return;
-      updateSettings({ sidebarNavOrder: arrayMove(order, fromIndex, toIndex) });
+      updateSettings({ sidebarNavOrder: arrayMove([...order], fromIndex, toIndex) });
     },
-    [appSettings.sidebarNavOrder, updateSettings],
+    [availableSidebarNavIds, updateSettings],
   );
   const handleNavItemVisibleChange = useCallback(
     (id: string, visible: boolean) => {
       // Ids come from the customize rows, which list SidebarNavItemIds only.
       const navId = id as SidebarNavItemId;
-      const hidden = normalizeHiddenSidebarNavItems(appSettings.hiddenSidebarNavItems).filter(
-        (entry) => entry !== navId,
-      );
+      const hidden = [...hiddenSidebarNavItems].filter((entry) => entry !== navId);
       updateSettings({ hiddenSidebarNavItems: visible ? hidden : [...hidden, navId] });
     },
-    [appSettings.hiddenSidebarNavItems, updateSettings],
+    [hiddenSidebarNavItems, updateSettings],
   );
   const handleNavContextMenu = useCallback((event: MouseEvent) => {
     if (!readNativeApi()) return;
@@ -4322,7 +4382,7 @@ export default function Sidebar() {
           groupProjects,
         });
       if (!targetProjectId) {
-        void navigate({ to: "/groups" });
+        void navigate({ to: "/hubs" });
         return;
       }
       await handleNewGroupChat(targetProjectId, { fresh: true });
@@ -5232,25 +5292,22 @@ export default function Sidebar() {
     );
   }
 
-  // Pull requests / new terminal thread / new thread for one project. Shared by the tree's
+  // Inbox / new terminal thread / new thread for one project. Shared by the tree's
   // hover toolbar and the rail layout's Spaces drill-in header.
   function renderProjectThreadActions(project: (typeof sortedProjects)[number]) {
     return (
       <>
         <SidebarIconButton
           icon={IoIosGitCompare}
-          label={`View pull requests for ${project.name}`}
-          tooltip="Pull requests"
+          label={`Open code review for ${project.name}`}
+          tooltip="Code review"
           tooltipSide="top"
           onClick={(event) => {
             event.preventDefault();
             event.stopPropagation();
-            // Opens the in-app pull requests view scoped to this project (selecting a
-            // row there opens the right-dock detail panel) instead of leaving for GitHub.
-            void navigate({
-              to: "/pull-requests",
-              search: { involvement: "all", state: "open", projectId: project.id },
-            });
+            // Opens the in-app inbox scoped to this project for this visit (the URL
+            // override leaves the saved project filter alone) instead of leaving for GitHub.
+            void navigate({ to: "/pull-requests", search: { projectId: project.id } });
           }}
         />
         <SidebarIconButton
@@ -6410,7 +6467,13 @@ export default function Sidebar() {
   // Rail layout: Home and Spaces switch the panel; route items navigate exactly like their
   // classic nav rows (prewarm included). The store's active item keeps one item selected.
   const isOnThreadsSection =
-    !isOnSettings && !isOnGroups && !isOnKanban && !isOnPullRequests && !isOnAutomations;
+    !isOnSettings &&
+    !isOnGroups &&
+    !isOnKanban &&
+    !isOnTasks &&
+    !isOnPullRequests &&
+    !isOnAutomations &&
+    !isOnInbox;
   // One Help menu wiring for both homes: the classic footer and the rail's bottom cluster.
   const sidebarHelpMenuProps = {
     onOpenShortcuts: () => void navigate({ to: "/settings", search: { section: "shortcuts" } }),
@@ -6439,14 +6502,26 @@ export default function Sidebar() {
         handleSidebarViewChange("groups");
       }
     : null;
+  // Where Tasks takes Kanban's slot it also stands for the board it switches to, so the
+  // Kanban route selects (and keeps visible, even if hidden) the Tasks item.
+  const railSlotActiveItem =
+    tasksSurfaceEnabled && railActiveItem === "kanban" ? "tasks" : railActiveItem;
   // The rail's top items, in the user's Customize order (hidden ones drop out unless active).
-  const railItemOrder = normalizeRailItemOrder(appSettings.railItemOrder);
-  const hiddenRailItems = new Set(normalizeHiddenRailItems(appSettings.hiddenRailItems));
+  const railItemOrder = resolveTasksSurfaceSlot(
+    normalizeRailItemOrder(appSettings.railItemOrder),
+    tasksSurfaceEnabled,
+  );
+  const hiddenRailItems = new Set(
+    resolveTasksSurfaceSlot(
+      normalizeHiddenRailItems(appSettings.hiddenRailItems),
+      tasksSurfaceEnabled,
+    ),
+  );
   const railItemLabel = (id: RailOrderableItemId): string =>
     id === "home" || id === "spaces"
       ? RAIL_PANEL_ITEM_LABELS[id]
       : id === "studio"
-        ? "Groups"
+        ? "Hubs"
         : sidebarNavDescriptors[id].label;
   const railItemFor = (id: RailOrderableItemId): AppRailItem => {
     const base = { id, glyphs: railItemGlyphs(id), label: railItemLabel(id) };
@@ -6476,7 +6551,7 @@ export default function Sidebar() {
     return {
       ...base,
       badge: item.badge,
-      active: railActiveItem === id,
+      active: railSlotActiveItem === id,
       onSelect: () => {
         selectRailRouteItem(id);
         item.onClick();
@@ -6485,11 +6560,12 @@ export default function Sidebar() {
       onFocus: item.onFocus,
     };
   };
+  const railAvailability = { studioAvailable: openRailStudio !== null, inboxAvailable };
   const railVisibleItemIds = buildRailItemOrder({
     order: railItemOrder,
     hidden: hiddenRailItems,
-    activeItem: railActiveItem,
-    studioAvailable: openRailStudio !== null,
+    activeItem: railSlotActiveItem,
+    ...railAvailability,
   });
   const railItems: AppRailItem[] = railVisibleItemIds.map(railItemFor);
   const railShortcutItems: AppRailItem[] = railShortcuts.flatMap((shortcut): AppRailItem[] => {
@@ -6553,8 +6629,9 @@ export default function Sidebar() {
     />
   );
   // Customize rows: the classic card lists the nav block; the rail popover lists the rail's
-  // own items (Groups only while its section is enabled), then its Space/project shortcuts.
-  const sidebarNavCustomizeItems: SidebarCustomizeItem[] = sidebarNavOrder.map((id) => {
+  // own items (Groups only while its section is enabled, Inbox only where it ships), then
+  // its Space/project shortcuts.
+  const sidebarNavCustomizeItems: SidebarCustomizeItem[] = availableSidebarNavIds.map((id) => {
     const item = sidebarNavDescriptors[id];
     return {
       id,
@@ -6565,7 +6642,7 @@ export default function Sidebar() {
     };
   });
   const railCustomizeItems: SidebarCustomizeItem[] = railItemOrder
-    .filter((id) => id !== "studio" || openRailStudio !== null)
+    .filter((id) => isRailItemAvailable(id, railAvailability))
     .map((id) => ({
       id,
       icon: railItemGlyphs(id).idle,
@@ -6574,10 +6651,13 @@ export default function Sidebar() {
       locked: !railItemCanHide(id),
     }));
   const handleRailItemReorder = (activeId: string, overId: string) => {
-    const fromIndex = railItemOrder.indexOf(activeId as RailOrderableItemId);
-    const toIndex = railItemOrder.indexOf(overId as RailOrderableItemId);
+    // Same rule as the nav: an unshipped item (Inbox on Stable) stays out of the saved order.
+    // Groups keeps its slot, since it is only switched off, not missing from the build.
+    const order = railItemOrder.filter((id) => id !== "inbox" || inboxAvailable);
+    const fromIndex = order.indexOf(activeId as RailOrderableItemId);
+    const toIndex = order.indexOf(overId as RailOrderableItemId);
     if (fromIndex < 0 || toIndex < 0) return;
-    updateSettings({ railItemOrder: arrayMove(railItemOrder, fromIndex, toIndex) });
+    updateSettings({ railItemOrder: arrayMove(order, fromIndex, toIndex) });
   };
   const handleRailItemVisibleChange = (id: string, visible: boolean) => {
     // Ids come from the rail customize rows, which list RailOrderableItemIds only.

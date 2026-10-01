@@ -41,7 +41,7 @@ async function writeInstructions(workspaceRoot: string): Promise<void> {
 }
 
 describe("cleanupGroupWorkspaceRoot", () => {
-  it("removes a group folder that only contains the generated instruction files", async () => {
+  it("removes a hub folder that only contains the generated instruction files", async () => {
     const groupsRoot = await makeTempDir();
     const workspaceRoot = path.join(groupsRoot, "alpha");
     await writeInstructions(workspaceRoot);
@@ -57,7 +57,7 @@ describe("cleanupGroupWorkspaceRoot", () => {
     expect((await fs.readdir(groupsRoot)).length).toBe(0);
   });
 
-  it("removes an already-empty group folder", async () => {
+  it("removes an already-empty hub folder", async () => {
     const groupsRoot = await makeTempDir();
     const workspaceRoot = path.join(groupsRoot, "alpha");
     await fs.mkdir(workspaceRoot);
@@ -134,7 +134,7 @@ describe("cleanupGroupWorkspaceRoot", () => {
     expect(await fs.readFile(secretPath, "utf8")).toBe("do not touch");
   });
 
-  it("skips a group folder that is itself a symlink, leaving the target alone", async () => {
+  it("skips a hub folder that is itself a symlink, leaving the target alone", async () => {
     const groupsRoot = await makeTempDir();
     const target = await makeTempDir("synara-target-");
     const workspaceRoot = path.join(groupsRoot, "alpha");
@@ -149,7 +149,7 @@ describe("cleanupGroupWorkspaceRoot", () => {
     expect(await fs.readdir(target)).toEqual([]);
   });
 
-  it("skips the groups root itself and folders outside it", async () => {
+  it("skips the hubs root itself and folders outside it", async () => {
     const groupsRoot = await makeTempDir();
     const outside = await makeTempDir("synara-outside-");
 

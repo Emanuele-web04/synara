@@ -32,6 +32,7 @@ import {
   WorkflowIcon,
   XIcon,
 } from "~/lib/icons";
+import { StatusDot } from "~/components/ui/status-chip";
 import { cn } from "~/lib/utils";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { useNowMs } from "~/hooks/useNowMs";
@@ -229,12 +230,7 @@ function WorkflowAgentRowView({
         aria-expanded={expanded}
         onClick={onToggle}
       >
-        <span
-          className={cn(
-            "size-1.5 shrink-0 rounded-full",
-            subagentStatusDotClassName(agent.statusKind),
-          )}
-        />
+        <StatusDot className={subagentStatusDotClassName(agent.statusKind)} />
         <span className="min-w-0 flex-1 truncate text-ui font-medium text-foreground/85">
           {agent.description}
           {agent.subagentType ? (
@@ -438,9 +434,9 @@ export function WorkflowRunCard({
             title={compact ? "Expand workflow panel" : "Collapse workflow panel"}
           >
             {compact ? (
-              <PanelExpandIcon className="size-3" />
+              <PanelExpandIcon className="size-3" strokeWidth={2} />
             ) : (
-              <PanelCollapseIcon className="size-3" />
+              <PanelCollapseIcon className="size-3" strokeWidth={2} />
             )}
           </Button>
         </div>

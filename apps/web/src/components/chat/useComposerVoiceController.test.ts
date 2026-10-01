@@ -106,6 +106,8 @@ vi.mock("../../lib/voiceRecorder", () => ({
     error instanceof Error && error.name === "VoiceRecordingCancelledError",
   useVoiceRecorder: () => ({
     isRecording: recorder.isRecording,
+    isStarting: false,
+    hasAudioSignal: true,
     durationMs: 0,
     waveformLevels: [],
     startRecording: recorder.startRecording,
@@ -257,7 +259,7 @@ describe("useComposerVoiceController", () => {
       }
 
       transcription.resolve({ text: "stale" });
-      await submission;
+      await expect(submission).resolves.toBe(false);
       render();
 
       expect(options.onTranscriptReady).not.toHaveBeenCalled();
@@ -330,7 +332,7 @@ describe("useComposerVoiceController", () => {
   it("refreshes status for expired auth and keeps the refresh action available", async () => {
     nativeApi.transcribeVoice.mockRejectedValueOnce(new Error("session expired"));
 
-    await result.submitComposerVoiceRecording();
+    await expect(result.submitComposerVoiceRecording()).resolves.toBe(false);
 
     expect(options.refreshVoiceStatus).toHaveBeenCalledTimes(1);
     const failureToast = toast.add.mock.calls.at(-1)?.[0];
@@ -404,7 +406,7 @@ describe("useComposerVoiceController", () => {
 
     firstTranscription.resolve({ text: "stale first transcript" });
     secondTranscription.resolve({ text: "current second transcript" });
-    await Promise.all([firstSubmission, secondSubmission]);
+    await expect(Promise.all([firstSubmission, secondSubmission])).resolves.toEqual([false, true]);
 
     expect(options.onTranscriptReady).toHaveBeenCalledTimes(1);
     expect(options.onTranscriptReady).toHaveBeenCalledWith("current second transcript");
