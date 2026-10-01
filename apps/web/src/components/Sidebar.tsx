@@ -247,7 +247,10 @@ import {
   createThreadHoverCardAnchor,
 } from "./sidebarHoverCardAnchors";
 import { PreviewCard, PreviewCardPopup, PreviewCardTrigger } from "./ui/preview-card";
-import { hasUnreadActivity as hasUnreadActivityOutsideActiveThread } from "./SidebarActivityView.logic";
+import {
+  type ActivityScopeSelection,
+  hasUnreadActivity as hasUnreadActivityOutsideActiveThread,
+} from "./SidebarActivityView.logic";
 import { SidebarActivityView } from "./SidebarActivityView";
 import { SidebarIconButton, sidebarIconButtonSlotClass } from "./SidebarIconButton";
 import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
@@ -1634,6 +1637,11 @@ export default function Sidebar() {
   const [activityViewEnabled, setActivityViewEnabled] = useState(
     () => readSidebarUiState().activityViewEnabled,
   );
+  // Lives here, not in SidebarActivityView, so it survives the view unmounting
+  // (opening Settings swaps the sidebar surface) and reloads.
+  const [activityScope, setActivityScope] = useState<ActivityScopeSelection>(
+    () => readSidebarUiState().activityScope,
+  );
   const [activityVisibleThreadIds, setActivityVisibleThreadIds] = useState<readonly ThreadId[]>([]);
   const handleActivityVisibleThreadIdsChange = useCallback((threadIds: readonly ThreadId[]) => {
     setActivityVisibleThreadIds((current) => {
@@ -1660,6 +1668,7 @@ export default function Sidebar() {
         setDismissedThreadStatusKeyByThreadId(state.dismissedThreadStatusKeyByThreadId);
         setLastThreadRoute(state.lastThreadRoute);
         setActivityViewEnabled(state.activityViewEnabled);
+        setActivityScope(state.activityScope);
       }),
     [],
   );
@@ -3530,9 +3539,11 @@ export default function Sidebar() {
         dismissedThreadStatusKeyByThreadId,
         lastThreadRoute: nextLastThreadRoute,
         activityViewEnabled,
+        activityScope,
       });
     },
     [
+      activityScope,
       activityViewEnabled,
       chatSectionExpanded,
       chatThreadListExtraPages,
@@ -4477,8 +4488,10 @@ export default function Sidebar() {
       dismissedThreadStatusKeyByThreadId,
       lastThreadRoute,
       activityViewEnabled,
+      activityScope,
     });
   }, [
+    activityScope,
     activityViewEnabled,
     chatSectionExpanded,
     chatThreadListExtraPages,
@@ -6828,6 +6841,8 @@ export default function Sidebar() {
                         pinnedThreadIdSet={pinnedThreadIdSet}
                         settledOverrideByThreadId={settledOverrideByThreadId}
                         threadsHydrated={threadsHydrated}
+                        scopeSelection={activityScope}
+                        onScopeSelectionChange={setActivityScope}
                         resolveThreadStatus={resolveThreadStatusForSidebar}
                         onOpenThread={activateThreadFromSidebarIntent}
                         onOpenThreadPullRequest={openThreadPullRequest}
