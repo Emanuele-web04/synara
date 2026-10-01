@@ -360,7 +360,8 @@ export interface ThreadStatusPill {
     | "Completed"
     | "Pending Approval"
     | "Awaiting Input"
-    | "Plan Ready";
+    | "Plan Ready"
+    | "In Background";
   colorClass: string;
   dotClass: string;
   pulse: boolean;
@@ -404,6 +405,7 @@ const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
   Working: 3,
   Connecting: 3,
   "Plan Ready": 2,
+  "In Background": 2,
   Completed: 1,
 };
 
@@ -414,6 +416,7 @@ type ThreadStatusInput = Pick<
   proposedPlans?: Thread["proposedPlans"] | undefined;
   hasActionableProposedPlan?: boolean | undefined;
   hasLiveTailWork?: boolean | undefined;
+  pendingBackgroundWorkCount?: number | undefined;
   dismissedStatusKey?: string | undefined;
 };
 
@@ -672,6 +675,16 @@ export function resolveThreadStatusPill(input: {
       colorClass: "text-sky-600 dark:text-sky-300/80",
       dotClass: "bg-sky-500 dark:bg-sky-300/80",
       pulse: true,
+      dismissible: false,
+    };
+  }
+
+  if (!isThreadActivelyWorking(thread) && (thread.pendingBackgroundWorkCount ?? 0) > 0) {
+    return {
+      label: "In Background",
+      colorClass: "text-sky-600 dark:text-sky-300/80",
+      dotClass: "bg-sky-500 dark:bg-sky-300/80",
+      pulse: false,
       dismissible: false,
     };
   }

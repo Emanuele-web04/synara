@@ -20,7 +20,6 @@ import {
   type ErrorComponentProps,
   useNavigate,
   useParams,
-  useRouterState,
 } from "@tanstack/react-router";
 import {
   Suspense,
@@ -130,6 +129,7 @@ import { coalesceOrchestrationUiEvents } from "../orchestrationEventCoalescing";
 import { isThreadDetailVerifiedInSync } from "../threadDetailCatchupPolicy";
 import { useAppDensity } from "../hooks/useAppDensity";
 import { useChatWidth } from "../hooks/useChatWidth";
+import { useCommittedPathname } from "../hooks/useCommittedPathname";
 import { useDesktopAppIcon } from "../hooks/useDesktopAppIcon";
 import { useAppTypography } from "../hooks/useAppTypography";
 import { usePreloadRouteChunks } from "../hooks/usePreloadRouteChunks";
@@ -1228,7 +1228,7 @@ function EventRouter() {
   const serverThreadIds = useStore((store) => store.threadIds ?? EMPTY_THREAD_IDS);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const pathname = useCommittedPathname();
   const routeThreadId = useParams({
     strict: false,
     select: (params) => (params.threadId ? ThreadId.makeUnsafe(params.threadId) : null),

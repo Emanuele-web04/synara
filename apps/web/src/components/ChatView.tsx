@@ -68,7 +68,13 @@ import {
   gitGithubRepositoryQueryOptions,
   gitStatusQueryOptions,
 } from "~/lib/gitReactQuery";
-import { LoaderCircleIcon, RefreshCwIcon, TemporaryThreadIcon } from "~/lib/icons";
+import {
+  CheckboxCheckedIcon,
+  CheckboxUncheckedIcon,
+  LoaderCircleIcon,
+  RefreshCwIcon,
+  TemporaryThreadIcon,
+} from "~/lib/icons";
 import { getLocalFolderBrowseRootPath } from "~/lib/localFolderMentions";
 import { findProviderStatus, resolveVoiceTranscriptionTarget } from "~/lib/providerAvailability";
 import { resolveProviderInstanceLabel } from "~/lib/providerInstancePresentation";
@@ -183,6 +189,7 @@ import {
   deriveActiveBackgroundTasksState,
   deriveActiveTaskListState,
   deriveActiveWorkStartedAt,
+  derivePendingBackgroundWork,
   derivePhase,
   deriveTimelineEntries,
   findLatestProposedPlan,
@@ -290,6 +297,7 @@ import {
 } from "./chat/ComposerModelPicker";
 import { ProviderInstancePicker } from "./chat/ProviderInstancePicker";
 import { ComposerPendingApprovalPanel } from "./chat/ComposerPendingApprovalPanel";
+import { ComposerPendingBackgroundWorkRow } from "./chat/ComposerPendingBackgroundWorkRow";
 import {
   ComposerClaudeCacheReviewPanel,
   isClaudeCacheReviewPanelVisible,
@@ -375,6 +383,7 @@ import {
   COMPOSER_TOOLBAR_CAPSULE_HOVER_CLASS_NAME,
   COMPOSER_TOOLBAR_TRIGGER_TEXT_CLASS_NAME,
   ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
+  COMPOSER_PLACEHOLDER_TEXT_CLASS_NAME,
 } from "./chat/composerPickerStyles";
 import { getComposerTraitSelection } from "./chat/composerTraits";
 import { AmbientRailSlot } from "./chat/AmbientRailSlot";
@@ -1570,6 +1579,20 @@ export default function ChatView({
         : deriveActiveBackgroundTasksState(threadActivities, activeLatestTurn?.turnId ?? undefined),
     [activeLatestTurn?.turnId, latestTurnSettled, threadActivities],
   );
+  // Once the turn settles, still-running isBackgrounded tasks keep the thread
+  // visibly "waiting on background work" instead of going quiet.
+  const pendingBackgroundWork = useMemo(
+    () =>
+      latestTurnSettled
+        ? derivePendingBackgroundWork({
+            activities: threadActivities,
+            latestTurn: activeLatestTurn,
+            session: activeThread?.session ?? null,
+          })
+        : null,
+    [activeLatestTurn, activeThread?.session, latestTurnSettled, threadActivities],
+  );
+  const pendingBackgroundWorkCount = pendingBackgroundWork?.count ?? 0;
 
   const showPlanFollowUpPrompt =
     pendingUserInputs.length === 0 &&
@@ -5334,6 +5357,7 @@ export default function ChatView({
             {...branchToolbarProps}
             className="mx-0 min-w-0 flex-1 !justify-start !px-0 !pb-0 !pt-0"
             showBranchSelector={isGitRepo}
+            showEnvironmentPicker={false}
           />
         ) : null}
       </div>
@@ -5359,6 +5383,29 @@ export default function ChatView({
         >
           <TemporaryThreadIcon className="size-3.5" />
           <span className="sr-only sm:not-sr-only">Temporary</span>
+        </Button>
+      ) : null}
+      {showEmptyLandingBranchToolbar && (isGitRepo || envMode === "worktree") ? (
+        // Local is the default; ticking this is the same as picking "New worktree".
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          role="checkbox"
+          aria-checked={envMode === "worktree"}
+          data-slot="checkbox"
+          onClick={() => onEnvModeChange(envMode === "worktree" ? "local" : "worktree")}
+          className={cn(
+            "shrink-0 gap-1.5 whitespace-nowrap px-2 sm:px-2.5 [:hover,[data-pressed]]:bg-transparent data-pressed:bg-transparent",
+            COMPOSER_TOOLBAR_TRIGGER_TEXT_CLASS_NAME,
+          )}
+        >
+          Worktree
+          {envMode === "worktree" ? (
+            <CheckboxCheckedIcon className="size-4" />
+          ) : (
+            <CheckboxUncheckedIcon className={cn("size-4", COMPOSER_PLACEHOLDER_TEXT_CLASS_NAME)} />
+          )}
         </Button>
       ) : null}
     </div>
@@ -5648,6 +5695,20 @@ export default function ChatView({
                   showComposerSubagentStrip ||
                   queuedComposerTurns.length > 0 ||
                   showComposerGoalHeader
+                }
+              />
+            ) : null}
+            {pendingBackgroundWorkCount > 0 ? (
+              <ComposerPendingBackgroundWorkRow
+                count={pendingBackgroundWorkCount}
+                attachedToPrevious={
+                  showComposerLiveChangesHeader ||
+                  showComposerActiveTaskListCard ||
+                  showComposerWorkflowRunCard ||
+                  showComposerSubagentStrip ||
+                  queuedComposerTurns.length > 0 ||
+                  showComposerGoalHeader ||
+                  showComposerComputerControlEffortHint
                 }
               />
             ) : null}
@@ -6371,6 +6432,7 @@ export default function ChatView({
                     resolvedTheme={resolvedTheme}
                     chatFontSizePx={settings.chatFontSizePx}
                     timestampFormat={timestampFormat}
+                    messageTrailAudioSource={settings.messageTrailAudioSource}
                     workspaceRoot={threadArtifactWorkspaceRoot ?? undefined}
                     keybindings={keybindings}
                     availableEditors={availableEditors}

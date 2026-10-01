@@ -154,6 +154,18 @@ export const ArrowDataTransferHorizontalIcon = createHugeicon("ArrowDataTransfer
   },
 ]);
 
+const CHECKBOX_SQUARE =
+  "M2.5 12C2.5 7.52166 2.5 5.28249 3.89124 3.89124C5.28249 2.5 7.52166 2.5 12 2.5C16.4783 2.5 18.7175 2.5 20.1088 3.89124C21.5 5.28249 21.5 7.52166 21.5 12C21.5 16.4783 21.5 18.7175 20.1088 20.1088C18.7175 21.5 16.4783 21.5 12 21.5C7.52166 21.5 5.28249 21.5 3.89124 20.1088C2.5 18.7175 2.5 16.4783 2.5 12Z";
+
+/** Unchecked box of an inline toggle such as the composer's Worktree option (`square`). */
+export const SquareIcon = createHugeicon("SquareIcon", [{ d: CHECKBOX_SQUARE }]);
+
+/** Checked twin of SquareIcon (`checkmark-square-02`). */
+export const CheckmarkSquare02Icon = createHugeicon("CheckmarkSquare02Icon", [
+  { d: CHECKBOX_SQUARE },
+  { d: "M8 12.5L10.5 15L16 9", round: true },
+]);
+
 const DASHBOARD_CIRCLE_PATHS: readonly HugeiconPath[] = [
   {
     d: "M21 6.75C21 4.67893 19.3211 3 17.25 3C15.1789 3 13.5 4.67893 13.5 6.75C13.5 8.82107 15.1789 10.5 17.25 10.5C19.3211 10.5 21 8.82107 21 6.75Z",

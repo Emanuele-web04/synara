@@ -17,7 +17,9 @@ import {
 } from "./desktop-bundle-files.ts";
 
 export const MICROPHONE_USAGE_DESCRIPTION =
-  "Synara needs microphone access so you can record voice notes and transcribe them into the chat composer.";
+  "Synara needs microphone access so you can record voice notes and transcribe them into the chat composer, and, if you turn it on, to move the chat message trail with your voice.";
+export const AUDIO_CAPTURE_USAGE_DESCRIPTION =
+  "Synara reads how loud your Mac's audio is to animate the chat message trail. The audio itself is never recorded.";
 export const MAC_ENTITLEMENTS_PATH = "apps/desktop/resources/entitlements.mac.plist";
 export const MAC_INHERITED_ENTITLEMENTS_PATH =
   "apps/desktop/resources/entitlements.mac.inherit.plist";
@@ -138,6 +140,7 @@ export function createDesktopPlatformBuildConfig(
         "Contents/{Helpers/synara-appsnap-helper,Frameworks/synara-window-material.node,Resources/cua-driver/cua-driver}",
       extendInfo: {
         NSMicrophoneUsageDescription: MICROPHONE_USAGE_DESCRIPTION,
+        NSAudioCaptureUsageDescription: AUDIO_CAPTURE_USAGE_DESCRIPTION,
         NSScreenCaptureUsageDescription:
           "Synara captures the windows you authorize for Computer use.",
         NSAccessibilityUsageDescription:

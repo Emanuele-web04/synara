@@ -182,6 +182,20 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     setCursorStyle: (style: DesktopAgentCursorStyle | null) =>
       ipcRenderer.invoke(IPC.computerSetCursorStyle, style),
   },
+  audioLevel: {
+    setSource: (source) => ipcRenderer.invoke(IPC.audioLevel.setSource, source),
+    onLevel: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, level: unknown) => {
+        if (typeof level !== "number" || !Number.isFinite(level)) return;
+        listener(level);
+      };
+
+      ipcRenderer.on(IPC.audioLevel.level, wrappedListener);
+      return () => {
+        ipcRenderer.removeListener(IPC.audioLevel.level, wrappedListener);
+      };
+    },
+  },
   onMenuAction: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, action: unknown) => {
       if (typeof action !== "string") return;

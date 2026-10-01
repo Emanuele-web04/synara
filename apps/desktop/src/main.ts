@@ -323,6 +323,8 @@ import { DESKTOP_IPC_CHANNELS } from "./ipcChannels";
 import { DesktopAppSnapManager } from "./appSnapManager";
 import { notifyBackendComputerEmergencyStop } from "./computerEmergencyStopNotice";
 import { EscapeKillSwitchMonitor } from "./escapeKillSwitchMonitor";
+import { AudioLevelMonitor } from "./audioLevelMonitor";
+import { AUDIO_TRAIL_BETA_FEATURE, isBetaFeatureEnabled } from "@synara/shared/betaFeatures";
 import { hardenBrowserAnnotationWebviewPreferences } from "./browserAnnotations/webviewSecurity";
 import { LOCAL_HTML_PREVIEW_SCHEME } from "./localHtmlPreviewProtocol";
 import {
@@ -3833,6 +3835,12 @@ let cuaDriverHost: CuaDriverHost | undefined;
 let disposeComputerDesktopLifecycle: (() => void) | undefined;
 let cuaHostEndpoint: string | undefined;
 let escapeKillSwitchMonitor: EscapeKillSwitchMonitor | undefined;
+let audioLevelMonitor: AudioLevelMonitor | undefined;
+// Renderers currently subscribed to audio levels, keyed by webContents id.
+const audioLevelSubscribers = new Map<
+  number,
+  { readonly contents: Electron.WebContents; readonly release: () => void }
+>();
 let linuxEscapeKillSwitchMonitor: LinuxEscapeKillSwitchMonitor | undefined;
 
 function stopComputerInputFromEscape(): void {
@@ -4693,6 +4701,9 @@ async function disposeBrowserHostPipeServerForShutdown(reason: string): Promise<
   disposeComputerDesktopLifecycle = undefined;
   escapeKillSwitchMonitor?.dispose();
   escapeKillSwitchMonitor = undefined;
+  audioLevelMonitor?.dispose();
+  audioLevelMonitor = undefined;
+  audioLevelSubscribers.clear();
   linuxEscapeKillSwitchMonitor?.dispose();
   linuxEscapeKillSwitchMonitor = undefined;
   await cuaDriverHost?.dispose();
@@ -5213,6 +5224,46 @@ function registerIpcHandlers(): void {
         safeConsoleError("[desktop] live cursor style push failed", error);
       });
     }
+  });
+
+  ipcMain.removeHandler(IPC.audioLevel.setSource);
+  ipcMain.handle(IPC.audioLevel.setSource, async (event, rawSource: unknown) => {
+    // Authoritative gate: macOS only, and kept out of Stable while Beta-only.
+    if (
+      process.platform !== "darwin" ||
+      !isBetaFeatureEnabled(AUDIO_TRAIL_BETA_FEATURE, desktopFlavor)
+    ) {
+      return "unsupported";
+    }
+    const sender = event.sender;
+    const source =
+      rawSource === "system" || rawSource === "microphone" || rawSource === "both"
+        ? rawSource
+        : null;
+    audioLevelMonitor ??= new AudioLevelMonitor({
+      helperPath: resolveAppSnapHelperPath(),
+      onLevel: (level) => {
+        for (const { contents } of audioLevelSubscribers.values()) {
+          if (!contents.isDestroyed()) contents.send(IPC.audioLevel.level, level);
+        }
+      },
+      onError: (message) => safeConsoleError(`[desktop] Audio level: ${message}`),
+    });
+    if (source && !audioLevelSubscribers.has(sender.id)) {
+      // A closed or reloaded window must not keep the audio tap or microphone alive.
+      const release = () => {
+        sender.off("destroyed", release);
+        sender.off("did-navigate", release);
+        audioLevelSubscribers.delete(sender.id);
+        audioLevelMonitor?.setSubscription(sender.id, null);
+      };
+      sender.once("destroyed", release);
+      sender.once("did-navigate", release);
+      audioLevelSubscribers.set(sender.id, { contents: sender, release });
+    } else if (!source) {
+      audioLevelSubscribers.get(sender.id)?.release();
+    }
+    return audioLevelMonitor.setSubscription(sender.id, source);
   });
 
   const betaChannel = new DesktopBetaChannel({

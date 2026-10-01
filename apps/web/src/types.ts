@@ -374,6 +374,7 @@ export interface SidebarThreadSummary {
   hasPendingUserInput: boolean;
   hasActionableProposedPlan: boolean;
   hasLiveTailWork: boolean;
+  pendingBackgroundWorkCount: number;
   forkSourceThreadId?: ThreadId | null;
   sidechatSourceThreadId?: ThreadId | null;
   sidechatContext?: ThreadSidechatContext | null;

@@ -191,6 +191,52 @@ describe("collectCompletedThreadCandidates", () => {
     ]);
   });
 
+  it("suppresses the completion candidate while background tasks are still running", () => {
+    const previous = [makeThread({})];
+    const next = [
+      makeThread({
+        session: {
+          provider: "codex",
+          status: "ready",
+          orchestrationStatus: "ready",
+          createdAt: "2026-04-05T10:00:00.000Z",
+          updatedAt: "2026-04-05T10:00:05.000Z",
+        },
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("turn-1"),
+          state: "completed",
+          requestedAt: "2026-04-05T10:00:00.000Z",
+          startedAt: "2026-04-05T10:00:00.000Z",
+          completedAt: "2026-04-05T10:00:05.000Z",
+          assistantMessageId: MessageId.makeUnsafe("msg-1"),
+          sourceProposedPlan: undefined,
+        },
+        activities: [
+          {
+            id: EventId.makeUnsafe("activity-task-start-1"),
+            tone: "info",
+            kind: "task.started",
+            summary: "Subagent task started",
+            payload: { taskId: "bg-task-1", taskType: "subagent" },
+            turnId: TurnId.makeUnsafe("turn-1"),
+            createdAt: "2026-04-05T10:00:02.000Z",
+          },
+          {
+            id: EventId.makeUnsafe("activity-task-bg-1"),
+            tone: "info",
+            kind: "task.updated",
+            summary: "Task moved to background",
+            payload: { taskId: "bg-task-1", status: "running", isBackgrounded: true },
+            turnId: TurnId.makeUnsafe("turn-1"),
+            createdAt: "2026-04-05T10:00:03.000Z",
+          },
+        ],
+      }),
+    ];
+
+    expect(collectCompletedThreadCandidates(previous, next)).toEqual([]);
+  });
+
   it("summarizes the turn's final assistant message, not the opening preamble", () => {
     const previous = [makeThread({})];
     const next = [

@@ -13,6 +13,7 @@ import {
   hasUnreadActivity,
   resolveActivityDateBucket,
   resolveActivityScope,
+  resolveActivitySectionRows,
   type ActivityScopeOption,
   splitActivityThreadsByDateBucket,
   splitRecentActivityThreads,
@@ -70,6 +71,7 @@ function makeThread(input: {
     hasPendingUserInput: input.hasPendingUserInput ?? false,
     hasActionableProposedPlan: false,
     hasLiveTailWork: input.hasLiveTailWork ?? false,
+    pendingBackgroundWorkCount: 0,
   } satisfies SidebarThreadSummary;
 }
 
@@ -604,6 +606,70 @@ describe("collectVisibleActivityThreadIds", () => {
         settled: [thread("done")],
       }),
     ).toEqual(["draft", "recent", "today", "yesterday", "earlier-visible"]);
+  });
+
+  it("includes the open thread revealed under a collapsed section", () => {
+    const thread = (id: string) => makeThread({ id });
+    expect(
+      collectVisibleActivityThreadIds({
+        groupMode: "time",
+        pinnedOpen: true,
+        pinned: [],
+        drafts: [],
+        recent: [thread("recent")],
+        today: [],
+        yesterday: [],
+        earlierOpen: false,
+        earlier: [],
+        projectGroups: [],
+        settledOpen: true,
+        settled: [thread("done")],
+        revealed: { pinned: [], earlier: [thread("old-active")], settled: [] },
+      }),
+    ).toEqual(["recent", "old-active", "done"]);
+  });
+});
+
+describe("resolveActivitySectionRows", () => {
+  const rows = ["a", "b", "c", "d"].map((id) => makeThread({ id }));
+  const ids = (threads: readonly SidebarThreadSummary[]) => threads.map((thread) => thread.id);
+
+  it("pages an open section normally when the open thread is on the page", () => {
+    const result = resolveActivitySectionRows(rows, {
+      open: true,
+      previewLimit: 2,
+      activeThreadId: ThreadId.makeUnsafe("b"),
+    });
+    expect(ids(result.visible)).toEqual(["a", "b"]);
+    expect(result.revealed).toEqual([]);
+  });
+
+  it("appends the open thread when it sits past the page cap", () => {
+    const result = resolveActivitySectionRows(rows, {
+      open: true,
+      previewLimit: 2,
+      activeThreadId: ThreadId.makeUnsafe("d"),
+    });
+    expect(ids(result.visible)).toEqual(["a", "b", "d"]);
+    expect(result.revealed).toEqual([]);
+  });
+
+  it("reveals only the open thread under a collapsed header", () => {
+    const result = resolveActivitySectionRows(rows, {
+      open: false,
+      previewLimit: 2,
+      activeThreadId: ThreadId.makeUnsafe("c"),
+    });
+    expect(result.visible).toEqual([]);
+    expect(ids(result.revealed)).toEqual(["c"]);
+  });
+
+  it("reveals nothing when the open thread is not in the section", () => {
+    for (const activeThreadId of [ThreadId.makeUnsafe("elsewhere"), null]) {
+      expect(
+        resolveActivitySectionRows(rows, { open: false, previewLimit: 2, activeThreadId }),
+      ).toEqual({ visible: [], revealed: [] });
+    }
   });
 });
 

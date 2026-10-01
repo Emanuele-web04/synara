@@ -423,3 +423,39 @@ export function clampTooltipTop(
   const half = tooltipH / 2 + margin;
   return clampNumber(centerY, half, Math.max(half, railH - half));
 }
+
+// --- Audio wave --------------------------------------------------------
+
+/** Per-frame audio envelope: rises at once with the sound, falls back gently. */
+export function stepAudioEnvelope(previous: number, target: number, release: number): number {
+  return target >= previous ? target : Math.max(target, previous * release);
+}
+
+/** Fixed per-tick gain in 0.65..1 so the column never moves in lockstep. */
+export function audioTickGain(index: number): number {
+  const noise = Math.sin((index + 1) * 12.9898) * 43758.5453;
+  return 0.65 + 0.35 * (noise - Math.floor(noise));
+}
+
+/**
+ * Tick widths for the audio wave. `history` holds the smoothed level per
+ * frame, newest first. The wave starts at `centerIndex` and travels outward:
+ * each tick reads the level from `framesPerTick` frames earlier than its inner
+ * neighbour, so sound visibly ripples up and down the rail.
+ */
+export function computeAudioTickWidths(input: {
+  count: number;
+  centerIndex: number;
+  history: readonly number[];
+  framesPerTick: number;
+  baseW: number;
+  maxW: number;
+}): number[] {
+  const { count, centerIndex, history, framesPerTick, baseW, maxW } = input;
+  const widths: number[] = [];
+  for (let i = 0; i < count; i += 1) {
+    const level = history[Math.abs(i - centerIndex) * framesPerTick] ?? 0;
+    widths.push(baseW + (maxW - baseW) * clampNumber(level, 0, 1) * audioTickGain(i));
+  }
+  return widths;
+}
