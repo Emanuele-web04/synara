@@ -1512,6 +1512,43 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
+  it.effect(
+    "uses a supplied PR title to publish unstaged changes from main without text generation",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("synara-git-manager-");
+        yield* initRepo(repoDir);
+        const remoteDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+        yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
+        const mainHead = (yield* runGit(repoDir, ["rev-parse", "main"])).stdout.trim();
+        fs.writeFileSync(path.join(repoDir, "README.md"), "hello\nupdated\n");
+        const { manager } = yield* makeManager({
+          textGeneration: {
+            generateCommitMessage: () => Effect.die("Unnecessary commit generation"),
+            generatePrContent: () => Effect.die("Unnecessary PR generation"),
+          },
+        });
+
+        const result = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action: "commit_push_pr",
+          featureBranch: true,
+          prTitle: "Update readme",
+          prBody: "Document the change.",
+        });
+
+        expect(result.pr.status).toBe("created");
+        expect(result.commit.subject).toBe("Update readme");
+        expect(result.branch.name).toBe("feature/update-readme");
+        expect((yield* runGit(repoDir, ["status", "--porcelain"])).stdout.trim()).toBe("");
+        expect((yield* runGit(repoDir, ["rev-parse", "main"])).stdout.trim()).toBe(mainHead);
+        expect((yield* runGit(remoteDir, ["show", "feature/update-readme:README.md"])).stdout).toBe(
+          "hello\nupdated\n",
+        );
+      }),
+  );
+
   it.effect("returns existing PR metadata for commit/push/pr action", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("synara-git-manager-");

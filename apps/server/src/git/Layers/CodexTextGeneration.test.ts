@@ -375,7 +375,7 @@ function makeFakeCodexBinary(dir: string, input: FakeCodexOptions) {
         '  node -e \'const fs=require("node:fs"); fs.writeFileSync(process.argv[1], JSON.stringify(process.argv.slice(2)));\' "$SYNARA_FAKE_CODEX_RESOURCE_MANIFEST" "$CODEX_HOME" "$PWD" "$schema_path" "$output_path"',
         "fi",
         'if [ "$SYNARA_FAKE_CODEX_TRAP_TERM" = "1" ]; then',
-        '  exec node -e \'const fs=require("node:fs"); const [term,pid,ready]=process.argv.slice(1); fs.writeFileSync(pid,String(process.pid)); process.on("SIGTERM",()=>fs.appendFileSync(term,"TERM\\n")); fs.writeFileSync(ready,"ready"); setInterval(()=>{},1000);\' "$SYNARA_FAKE_CODEX_TERM_MARKER" "$SYNARA_FAKE_CODEX_PID_MARKER" "$SYNARA_FAKE_CODEX_READY_MARKER"',
+        '  exec node -e \'const fs=require("node:fs"); const [term,pid,ready,diagnostic]=process.argv.slice(1); fs.writeFileSync(pid,String(process.pid)); process.on("SIGTERM",()=>fs.appendFileSync(term,"TERM\\n")); fs.writeFileSync(ready,"ready"); if(diagnostic){process.stderr.write(diagnostic.slice(0,12)); setTimeout(()=>process.stderr.write(diagnostic.slice(12)+"\\n"),20)} setInterval(()=>{},1000);\' "$SYNARA_FAKE_CODEX_TERM_MARKER" "$SYNARA_FAKE_CODEX_PID_MARKER" "$SYNARA_FAKE_CODEX_READY_MARKER" "$SYNARA_FAKE_CODEX_STDERR"',
         "fi",
         'if [ -n "$SYNARA_FAKE_CODEX_STDERR" ]; then',
         '  printf "%s\\n" "$SYNARA_FAKE_CODEX_STDERR" >&2',
@@ -794,6 +794,8 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
             "  Add important change to the system with too much detail and a trailing period.\nsecondary line",
           body: "\n- added migration\n- updated tests\n",
         }),
+        stderr:
+          "+ERROR: unexpected status 401 Unauthorized\nERROR: unexpected status 429 Too Many Requests",
         stdinMustNotContain: "branch must be a short semantic git branch fragment",
       },
       Effect.gen(function* () {
@@ -2149,3 +2151,53 @@ it.effect("escalates from TERM to KILL when a timed-out child traps TERM", () =>
     Effect.provideService(Clock.Clock, realTestClock),
   ),
 );
+
+for (const diagnostic of [
+  "ERROR: unexpected status 401 Unauthorized: Your login did not make it to this service.",
+  "warning: Falling back from WebSockets to HTTPS transport. workspace routing discovery unauthorized (401)",
+]) {
+  it.effect(`stops authentication retries and cleans up the child: ${diagnostic}`, () =>
+    Effect.gen(function* () {
+      if (process.platform === "win32") return;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const directory = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "synara-codex-auth-failure-",
+      });
+      const pidMarkerPath = `${directory}/pid`;
+      const resourceManifestPath = `${directory}/resources.json`;
+      const error = yield* withFakeCodexEnv(
+        {
+          output: "",
+          stderr: diagnostic,
+          trapTerm: true,
+          termMarkerPath: `${directory}/term`,
+          pidMarkerPath,
+          readyMarkerPath: `${directory}/ready`,
+          resourceManifestPath,
+        },
+        Effect.gen(function* () {
+          const generation = yield* TextGeneration;
+          return yield* generation
+            .generatePrContent({
+              cwd: process.cwd(),
+              baseBranch: "main",
+              headBranch: "feature/auth",
+              commitSummary: "Update readme",
+              diffSummary: "README.md | 1 +",
+              diffPatch: "",
+            })
+            .pipe(Effect.flip);
+        }),
+      );
+      expect(error.detail).toContain("Codex authentication failed (401 Unauthorized)");
+      expect(error.detail).toContain("Settings");
+      const pid = Number(readFileSync(pidMarkerPath, "utf8"));
+      yield* Effect.promise(() => waitForProcessExit(pid));
+      const resourcePaths = JSON.parse(readFileSync(resourceManifestPath, "utf8")) as string[];
+      expect(resourcePaths.filter(existsSync)).toEqual([]);
+    }).pipe(
+      Effect.provide(CodexTextGenerationTimeoutTestLayer),
+      Effect.provideService(Clock.Clock, realTestClock),
+    ),
+  );
+}
