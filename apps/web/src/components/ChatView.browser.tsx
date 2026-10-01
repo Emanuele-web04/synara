@@ -5926,16 +5926,33 @@ describe("ChatView transcript geometry (full app)", () => {
       dispatchComposerPickerShortcut(composerEditor, "e");
 
       await waitForComposerPickerSurfaceOpen();
+      expect(
+        wsRequests.filter(
+          (request) =>
+            request._tag === WS_METHODS.providerListModels && request.provider === "claudeAgent",
+        ),
+      ).toEqual([]);
+      const refreshButton = page.getByRole("button", { name: "Refresh models", exact: true });
+      await expect.element(refreshButton).toBeEnabled();
+      await refreshButton.click();
       await vi.waitFor(() => {
         expect(wsRequests).toEqual(
           expect.arrayContaining([
             expect.objectContaining({
               _tag: WS_METHODS.providerListModels,
-              provider: "claudeAgent",
+              provider: "codex",
+              instanceId: "codex",
+              refresh: "now",
             }),
           ]),
         );
       });
+      expect(
+        wsRequests.filter(
+          (request) =>
+            request._tag === WS_METHODS.providerListModels && request.provider === "claudeAgent",
+        ),
+      ).toEqual([]);
     } finally {
       await mounted.cleanup();
     }

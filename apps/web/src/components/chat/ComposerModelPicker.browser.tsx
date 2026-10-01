@@ -96,6 +96,7 @@ type HarnessProps = {
   >["modelOptionsByProvider"];
   effortControl?: "menu" | "slider";
   onProviderModelChange?: React.ComponentProps<typeof ComposerModelPicker>["onProviderModelChange"];
+  onRefreshModels?: React.ComponentProps<typeof ComposerModelPicker>["onRefreshModels"];
 };
 
 function Harness(props: HarnessProps) {
@@ -124,6 +125,7 @@ function Harness(props: HarnessProps) {
         : {})}
       modelOptionsByProvider={props.modelOptionsByProvider ?? MODEL_OPTIONS_BY_PROVIDER}
       onProviderModelChange={props.onProviderModelChange ?? vi.fn()}
+      {...(props.onRefreshModels ? { onRefreshModels: props.onRefreshModels } : {})}
       threadId={THREAD_ID}
       modelOptions={modelOptions?.codex}
       prompt={prompt}
@@ -155,6 +157,40 @@ function readStoredStars(): unknown {
 }
 
 describe("ComposerModelPicker", () => {
+  it("checks only the viewed account and keeps rows available during manual refresh", async () => {
+    let finish!: () => void;
+    const promise = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const onRefreshModels = vi.fn().mockResolvedValue(undefined);
+    const screen = await mountPicker({ onRefreshModels });
+    await vi.waitFor(() =>
+      expect(onRefreshModels).toHaveBeenCalledExactlyOnceWith("codex", "codex", "if-stale"),
+    );
+    const refreshButton = page.getByRole("button", { name: "Refresh models" });
+    await expect.element(refreshButton).toBeEnabled();
+    onRefreshModels.mockReturnValueOnce(promise);
+    await refreshButton.click();
+    await expect.element(refreshButton).toBeDisabled();
+    await expect.element(page.getByText("Checking for models…")).toBeVisible();
+    await expect.element(page.getByRole("menuitem", { name: /GPT-5.5/u }).first()).toBeVisible();
+    expect(onRefreshModels).toHaveBeenLastCalledWith("codex", "codex", "now");
+    finish();
+    await expect.element(refreshButton).toBeEnabled();
+    onRefreshModels.mockRejectedValueOnce(new Error("offline"));
+    await refreshButton.click();
+    await expect.element(page.getByText("Couldn’t refresh models. Try again.")).toBeVisible();
+    await expect.element(page.getByRole("menuitem", { name: /GPT-5.5/u }).first()).toBeVisible();
+    await page.getByRole("tab", { name: "Claude" }).click();
+    await vi.waitFor(() =>
+      expect(onRefreshModels).toHaveBeenLastCalledWith("claudeAgent", "claudeAgent", "if-stale"),
+    );
+    await page.getByRole("tab", { name: "Starred" }).click();
+    expect(onRefreshModels).toHaveBeenCalledTimes(4);
+    expect(page.getByRole("button", { name: "Refresh models" }).elements()).toHaveLength(0);
+    await screen.unmount();
+  });
+
   afterEach(() => {
     document.body.innerHTML = "";
     localStorage.removeItem(COMPOSER_DRAFT_STORAGE_KEY);

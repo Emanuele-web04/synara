@@ -127,6 +127,70 @@ describe("makeProviderModelDiscoveryCache", () => {
     expect(second.models).toEqual(CATALOG.models);
   });
 
+  it("delivers the refreshed catalog to an interactive reader without a second read", async () => {
+    const clock = makeClock();
+    const cache = makeProviderModelDiscoveryCache<ProviderAdapterRequestError>({ now: clock.now });
+    await Effect.runPromise(cache.lookup(KEY, Effect.succeed(CATALOG)));
+    clock.advance(31 * 60_000);
+    const updated = { ...CATALOG, models: [{ slug: "new-model", name: "New model" }] };
+
+    expect(await Effect.runPromise(cache.lookup(KEY, Effect.succeed(updated), "if-stale"))).toEqual(
+      updated,
+    );
+  });
+
+  it("deduplicates manual refreshes and bounds repeated clicks without deleting the catalog", async () => {
+    const clock = makeClock();
+    const cache = makeProviderModelDiscoveryCache<ProviderAdapterRequestError>({ now: clock.now });
+    await Effect.runPromise(cache.lookup(KEY, Effect.succeed(CATALOG)));
+    clock.advance(61_000);
+    const gate = Deferred.makeUnsafe<void>();
+    const updated = { ...CATALOG, models: [{ slug: "new-model", name: "New model" }] };
+    let calls = 0;
+    const discover = Effect.gen(function* () {
+      calls += 1;
+      yield* Deferred.await(gate);
+      return updated;
+    });
+    const requests = Effect.runPromise(
+      Effect.all([cache.lookup(KEY, discover, "now"), cache.lookup(KEY, discover, "now")], {
+        concurrency: "unbounded",
+      }),
+    );
+    await flush();
+    expect(calls).toBe(1);
+    expect((await Effect.runPromise(cache.lookup(KEY, discover))).models).toEqual(CATALOG.models);
+    Deferred.doneUnsafe(gate, Effect.void);
+    expect((await requests).map((result) => result.models)).toEqual([
+      updated.models,
+      updated.models,
+    ]);
+    await Effect.runPromise(cache.lookup(KEY, discover, "now"));
+    expect(calls).toBe(1);
+    clock.advance(61_000);
+    await Effect.runPromise(cache.lookup(KEY, discover, "now"));
+    expect(calls).toBe(2);
+  });
+
+  it("backs off failed manual refreshes and retains the last good catalog", async () => {
+    const clock = makeClock();
+    const cache = makeProviderModelDiscoveryCache<ProviderAdapterRequestError>({ now: clock.now });
+    await Effect.runPromise(cache.lookup(KEY, Effect.succeed(CATALOG)));
+    clock.advance(61_000);
+    let calls = 0;
+    const discover = Effect.suspend(() => {
+      calls += 1;
+      return Effect.fail(failure("temporarily unavailable"));
+    });
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      expect(Exit.isFailure(await Effect.runPromiseExit(cache.lookup(KEY, discover, "now")))).toBe(
+        true,
+      );
+    }
+    expect(calls).toBe(1);
+    expect((await Effect.runPromise(cache.lookup(KEY, discover))).models).toEqual(CATALOG.models);
+  });
+
   it.each([false, true])("isolates a new cwd for concurrent callers (fails: %s)", async (fails) => {
     const cache = makeProviderModelDiscoveryCache<ProviderAdapterRequestError>();
     await Effect.runPromise(cache.lookup(KEY, Effect.succeed(CATALOG)));
