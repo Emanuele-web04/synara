@@ -312,6 +312,43 @@ describe("useProviderModelCatalog", () => {
     ).toBe(false);
   });
 
+  it("keeps an undiscovered sibling runtime catalog empty beside a warm default", () => {
+    mocks.useAppSettings.mockReturnValue({
+      settings: {
+        ...SETTINGS,
+        providerInstances: {
+          claude_work: {
+            driver: "claudeAgent",
+            displayName: "Work",
+            config: { customModels: ["work-only"] },
+          },
+        },
+      },
+      serverSettings: DEFAULT_SERVER_SETTINGS,
+    });
+    const warmDefault = {
+      ...EMPTY_QUERY,
+      data: {
+        models: [{ slug: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", supportsAutoMode: true }],
+        source: "claude-cli",
+      },
+    };
+    modelQueries.set("claudeAgent", warmDefault);
+    instanceModelQueries.set("claudeAgent", warmDefault);
+    const catalog = readCatalogRenders({
+      selectedProvider: "claudeAgent",
+      discoveryEnabled: true,
+    }).at(-1)!;
+
+    expect(catalog.runtimeModelsByProvider.claudeAgent[0]?.supportsAutoMode).toBe(true);
+    // Consumers may fall back to their provider catalog only for an unknown account;
+    // a configured account without discovery has no known runtime capabilities yet.
+    expect(catalog.runtimeModelsByProviderInstance.claude_work).toEqual([]);
+    expect(
+      catalog.modelOptionsByProviderInstance.claude_work?.map((option) => option.slug),
+    ).toContain("work-only");
+  });
+
   it("discovers core agents only when selected unless eager-core is requested", () => {
     readCatalogRenders({ selectedProvider: "cursor", discoveryEnabled: false });
     expect(readAgentQueryEnabled("claudeAgent")).toBe(false);

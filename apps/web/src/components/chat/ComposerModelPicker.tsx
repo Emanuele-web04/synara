@@ -35,6 +35,8 @@ import {
 import { SearchIcon } from "~/lib/icons";
 import { starredModelInstanceId, starredModelSlotKey } from "~/lib/starredModels";
 import { cn, isMacNavigatorPlatform } from "~/lib/utils";
+import { ProviderAccountAvatar } from "../ProviderAccountMark";
+import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Menu, MenuGroup, MenuGroupLabel } from "../ui/menu";
 import { Skeleton } from "../ui/skeleton";
@@ -75,6 +77,7 @@ import {
   PICKER_PANEL_PLAIN_SEARCH_INPUT_CLASS_NAME,
 } from "./pickerPanelStyles";
 import {
+  AVAILABLE_PROVIDER_OPTIONS,
   type ProviderModelOptionsByProviderInstance,
   type ProviderModelPickerInstance,
   resolveProviderModelLabel,
@@ -169,12 +172,32 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
   const usesEffortSlider = effortControl === "slider";
 
   const { starredModels, toggleStarredModel, unstarModel } = useStarredModels();
-  // A locked thread can only ever run its own provider's presets, and a preset of a
+  const instancesFor = (provider: ProviderKind): ReadonlyArray<ProviderModelPickerInstance> =>
+    (props.providerInstances ?? []).filter((instance) => instance.provider === provider);
+  const selectedInstanceIdFor = (provider: ProviderKind): ProviderInstanceId => {
+    const instances = instancesFor(provider);
+    if (
+      provider === props.provider &&
+      props.selectedProviderInstanceId !== undefined &&
+      instances.some((instance) => instance.instanceId === props.selectedProviderInstanceId)
+    ) {
+      return props.selectedProviderInstanceId;
+    }
+    return (
+      instances.find((instance) => instance.isDefault)?.instanceId ??
+      instances[0]?.instanceId ??
+      provider
+    );
+  };
+  const activeInstanceId = selectedInstanceIdFor(activeProvider);
+
+  // A locked thread can only ever run its own account's presets, and a preset of a
   // removed or disabled account cannot run at all.
   const knownInstances = props.providerInstances;
   const usableStarredModels = starredModels.filter((entry) => {
     if (lockedProvider !== null && entry.provider !== lockedProvider) return false;
     const instanceId = starredModelInstanceId(entry);
+    if (lockedProvider !== null && instanceId !== activeInstanceId) return false;
     return (
       instanceId === entry.provider ||
       knownInstances === undefined ||
@@ -184,20 +207,10 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     );
   });
 
-  const [tab, setTab] = useState<ComposerModelPickerTab>(activeProvider);
+  const [tab, setTab] = useState<ComposerModelPickerTab>(activeInstanceId);
   const [query, setQuery] = useState("");
   const normalizedQuery = useDeferredValue(query).trim().toLowerCase();
   const searchInputRef = useRef<HTMLInputElement | null>(null);
-
-  // Reset to the fastest starting point on every open: presets when the user has any.
-  const [wasMenuOpen, setWasMenuOpen] = useState(isMenuOpen);
-  if (wasMenuOpen !== isMenuOpen) {
-    setWasMenuOpen(isMenuOpen);
-    if (isMenuOpen) {
-      setTab(usableStarredModels.length > 0 ? STARRED_TAB : activeProvider);
-      setQuery("");
-    }
-  }
 
   // A model picked while the panel stays open (slider mode) still owes the composer its
   // focus hand-off; it is paid when the panel finally closes.
@@ -262,68 +275,102 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     props.runtimeModel,
   );
 
-  const providerTabs = resolveComposerModelPickerProviderTabs(
-    resolveVisibleProviderOptions({
-      provider: props.provider,
-      lockedProvider,
-      providers: props.providers,
-      hiddenProviders: props.hiddenProviders,
-      providerOrder: props.providerOrder,
-    }).filter((option) => lockedProvider === null || option.value === lockedProvider),
-    props.providers,
+  const visibleProviderOptions = resolveVisibleProviderOptions({
+    provider: props.provider,
+    lockedProvider,
+    providers: props.providers,
+    hiddenProviders: props.hiddenProviders,
+    providerOrder: props.providerOrder,
+  }).filter((option) => lockedProvider === null || option.value === lockedProvider);
+  // The composer's own provider keeps its tab even when none of its accounts can run,
+  // so the tab can say why instead of the picker listing models that will not start.
+  const activeProviderOption = AVAILABLE_PROVIDER_OPTIONS.find(
+    (option) => option.value === activeProvider,
   );
-
-  const instancesFor = (provider: ProviderKind): ReadonlyArray<ProviderModelPickerInstance> =>
-    (props.providerInstances ?? []).filter((instance) => instance.provider === provider);
-  const selectedInstanceIdFor = (provider: ProviderKind): ProviderInstanceId => {
-    const instances = instancesFor(provider);
-    if (
-      provider === props.provider &&
-      props.selectedProviderInstanceId !== undefined &&
-      instances.some((instance) => instance.instanceId === props.selectedProviderInstanceId)
-    ) {
-      return props.selectedProviderInstanceId;
+  const providerTabs = resolveComposerModelPickerProviderTabs({
+    options:
+      activeProviderOption &&
+      !visibleProviderOptions.some((option) => option.value === activeProvider)
+        ? [activeProviderOption, ...visibleProviderOptions]
+        : visibleProviderOptions,
+    providers: props.providers,
+    providerInstances: props.providerInstances,
+    lockedInstanceId: lockedProvider !== null ? activeInstanceId : null,
+  });
+  const activeProviderTab = providerTabs.find(
+    (providerTab) => providerTab.instanceId === activeInstanceId,
+  );
+  // Reset to the fastest starting point on every open: presets when the user has any,
+  // unless the composer's own account is waiting to be set up.
+  const [wasMenuOpen, setWasMenuOpen] = useState(isMenuOpen);
+  if (wasMenuOpen !== isMenuOpen) {
+    setWasMenuOpen(isMenuOpen);
+    if (isMenuOpen) {
+      setTab(
+        usableStarredModels.length > 0 && !activeProviderTab?.setupMessage
+          ? STARRED_TAB
+          : activeInstanceId,
+      );
+      setQuery("");
     }
-    return (
-      instances.find((instance) => instance.isDefault)?.instanceId ??
-      instances[0]?.instanceId ??
-      provider
-    );
+  }
+
+  // The account a provider tab lists; a tab that is no longer offered falls back to the
+  // composer's own account.
+  const openProviderTab = providerTabs.find((providerTab) => providerTab.instanceId === tab);
+  const tabAccount =
+    tab === STARRED_TAB
+      ? null
+      : (openProviderTab ?? { provider: activeProvider, instanceId: activeInstanceId });
+  const setupMessage = tab === STARRED_TAB ? null : (openProviderTab?.setupMessage ?? null);
+  const openProviderSettings = () => {
+    setMenuOpen(false);
+    appHistory.push("/settings?section=providers");
   };
 
-  const modelOptionsFor = (provider: ProviderKind): ReadonlyArray<ProviderModelOption> =>
-    props.modelOptionsByProviderInstance?.[selectedInstanceIdFor(provider)] ??
+  const modelOptionsFor = (
+    provider: ProviderKind,
+    instanceId: string,
+  ): ReadonlyArray<ProviderModelOption> =>
+    props.modelOptionsByProviderInstance?.[instanceId as ProviderInstanceId] ??
     props.modelOptionsByProvider[provider];
 
-  const accountLabelFor = (instanceId: string) =>
-    (props.providerInstances ?? []).find(
-      (instance) => instance.instanceId === instanceId && !instance.isDefault,
-    )?.label;
+  // Starred presets mix accounts, so each names its own once a provider has several.
+  const accountLabelFor = (instanceId: string) => {
+    const account = (props.providerInstances ?? []).find(
+      (instance) => instance.instanceId === instanceId,
+    );
+    if (!account) return undefined;
+    const hasSiblingAccounts = instancesFor(account.provider).some(
+      (instance) => instance.instanceId !== instanceId && instance.enabled,
+    );
+    return hasSiblingAccounts || !account.isDefault ? account.label : undefined;
+  };
 
   const rows =
-    tab === STARRED_TAB
-      ? buildStarredTabRows({
-          starredModels: usableStarredModels,
-          modelOptionsFor: (provider, instanceId) =>
-            props.modelOptionsByProviderInstance?.[instanceId as ProviderInstanceId] ??
-            props.modelOptionsByProvider[provider],
-          accountLabelFor,
-          query: normalizedQuery,
-          current: {
-            provider: activeProvider,
-            instanceId: selectedInstanceIdFor(activeProvider),
-            model: props.model,
-            ...resolveStarredTraits(currentTraitSelection),
-          },
-          effortLevelsFor: (provider, model) => traitSelectionFor(provider, model).effortLevels,
-        })
-      : buildProviderTabRows({
-          provider: tab,
-          instanceId: selectedInstanceIdFor(tab),
-          options: modelOptionsFor(tab),
-          query: normalizedQuery,
-          selectedModel: tab === activeProvider ? props.model : null,
-        });
+    setupMessage !== null
+      ? []
+      : tabAccount === null
+        ? buildStarredTabRows({
+            starredModels: usableStarredModels,
+            modelOptionsFor,
+            accountLabelFor,
+            query: normalizedQuery,
+            current: {
+              provider: activeProvider,
+              instanceId: activeInstanceId,
+              model: props.model,
+              ...resolveStarredTraits(currentTraitSelection),
+            },
+            effortLevelsFor: (provider, model) => traitSelectionFor(provider, model).effortLevels,
+          })
+        : buildProviderTabRows({
+            provider: tabAccount.provider,
+            instanceId: tabAccount.instanceId,
+            options: modelOptionsFor(tabAccount.provider, tabAccount.instanceId),
+            query: normalizedQuery,
+            selectedModel: tabAccount.instanceId === activeInstanceId ? props.model : null,
+          });
   const starredModelSlots = new Set(starredModels.map(starredModelSlotKey));
 
   // Commit a row: `patch` carries the traits to apply on top of the provider's options.
@@ -334,10 +381,10 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     patch: Record<string, unknown>,
     keepOpen = false,
   ) => {
-    // A starred preset restores its own account; other rows use the tab's account.
-    const instanceId = row.preset
-      ? (starredModelInstanceId(row.preset) as ProviderInstanceId)
-      : selectedInstanceIdFor(row.provider);
+    // A starred preset restores its own account; other rows run in their tab's account.
+    const instanceId = (
+      row.preset ? starredModelInstanceId(row.preset) : (row.instanceId ?? row.provider)
+    ) as ProviderInstanceId;
     if (Object.keys(patch).length > 0) {
       props.onProviderModelChange(row.provider, model, {
         modelOptions: buildNextProviderOptions(
@@ -414,8 +461,8 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
   const openTabs: ComposerModelPickerTab[] = [
     STARRED_TAB,
     ...providerTabs
-      .filter((providerTab) => providerTab.unavailableLabel === null)
-      .map((providerTab) => providerTab.provider),
+      .filter((providerTab) => !providerTab.blocked)
+      .map((providerTab) => providerTab.instanceId),
   ];
   const cycleTab = (direction: 1 | -1) => {
     const index = openTabs.indexOf(tab);
@@ -441,8 +488,11 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
 
   const shortcutModifierLabel = isMacNavigatorPlatform() ? "⌘" : "Ctrl ";
   const isTabLoading =
-    tab !== STARRED_TAB && (props.loadingModelProviders?.[tab] ?? false) && rows.length === 0;
-  const discoveryError = tab === STARRED_TAB ? undefined : props.discoveryErrorsByProvider?.[tab];
+    tabAccount !== null &&
+    (props.loadingModelProviders?.[tabAccount.provider] ?? false) &&
+    rows.length === 0;
+  const discoveryError =
+    tabAccount === null ? undefined : props.discoveryErrorsByProvider?.[tabAccount.provider];
 
   return (
     <Menu
@@ -451,6 +501,10 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     >
       <ComposerModelMenuTrigger
         provider={activeProvider}
+        accountLabel={activeProviderTab?.name ? activeProviderTab.label : null}
+        // The default account is implied; only another one is worth the room.
+        accountName={activeProviderTab?.dotted ? activeProviderTab.name : null}
+        accountAccentColor={activeProviderTab?.accentColor}
         modelLabel={modelLabel}
         statusLabel={resolveComposerTraitStatusLabel(currentTraitSelection)}
         contextWindowLabel={activeProvider === "claudeAgent" ? props.contextWindowLabel : null}
@@ -482,14 +536,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
             tab={tab}
             providerTabs={providerTabs}
             onTabChange={setTab}
-            onAddProviders={
-              lockedProvider === null
-                ? () => {
-                    setMenuOpen(false);
-                    appHistory.push("/settings?section=providers");
-                  }
-                : undefined
-            }
+            onAddProviders={lockedProvider === null ? openProviderSettings : undefined}
           />
           <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 *:min-w-0">
             <SearchIcon aria-hidden="true" className={PICKER_PANEL_PLAIN_SEARCH_ICON_CLASS_NAME} />
@@ -526,12 +573,30 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
               COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME,
             )}
           >
-            {discoveryError ? (
+            {setupMessage !== null ? (
+              <div className="flex flex-col items-center gap-2 px-3 py-4 text-center">
+                {openProviderTab ? (
+                  <ProviderAccountAvatar
+                    provider={openProviderTab.provider}
+                    accentColor={openProviderTab.accentColor}
+                  />
+                ) : null}
+                <span className="text-ui font-medium text-foreground">
+                  {openProviderTab?.label ?? "This account"} needs setup
+                </span>
+                <span className="text-ui-sm leading-snug text-muted-foreground">
+                  {setupMessage}
+                </span>
+                <Button type="button" size="xs" variant="outline" onClick={openProviderSettings}>
+                  Open provider setup
+                </Button>
+              </div>
+            ) : discoveryError ? (
               <div className="px-2 py-1.5 text-ui leading-snug text-destructive">
                 {discoveryError}
               </div>
             ) : null}
-            {isTabLoading ? (
+            {setupMessage !== null ? null : isTabLoading ? (
               <div className="space-y-2 px-2 py-2" aria-label="Loading models">
                 {Array.from({ length: 5 }, (_, index) => (
                   <Skeleton

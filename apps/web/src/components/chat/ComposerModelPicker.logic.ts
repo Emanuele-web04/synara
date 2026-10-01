@@ -3,7 +3,7 @@
 // Layer: Chat composer state helpers
 // Depends on: composer trait resolution and the starred model storage shape.
 
-import type { ModelSlug, ProviderKind } from "@synara/contracts";
+import type { ModelSlug, ProviderInstanceId, ProviderKind } from "@synara/contracts";
 import { resolveSelectableModel } from "@synara/shared/model";
 
 import { type StarredModel, starredModelInstanceId, starredModelKey } from "~/lib/starredModels";
@@ -20,9 +20,11 @@ import {
 
 type ComposerTraitSelection = ReturnType<typeof getComposerTraitSelection>;
 
-/** Tab id of the starred presets list; every other tab id is a provider kind. */
-export const STARRED_TAB = "starred";
-export type ComposerModelPickerTab = typeof STARRED_TAB | ProviderKind;
+/** Tab id of the starred presets list; every other tab id is a provider account
+ *  (instance id; a provider's default account shares the provider id). */
+// The colon keeps it outside the account id alphabet, so no account can claim it.
+export const STARRED_TAB = ":starred";
+export type ComposerModelPickerTab = typeof STARRED_TAB | ProviderInstanceId;
 
 /** Marks the open picker so global mod+digit handlers (thread jump) yield to its rows. */
 export const MODEL_PICKER_POPUP_ATTRIBUTE = "data-model-picker-popup";
@@ -159,7 +161,7 @@ export function buildProviderTabRows(input: {
       : input.options;
   return groupProviderModelOptions(filteredOptions).flatMap((group) =>
     group.options.map((option) => ({
-      key: `${provider}:${option.slug}`,
+      key: `${input.instanceId ?? provider}:${option.slug}`,
       provider,
       ...(input.instanceId && input.instanceId !== provider
         ? { instanceId: input.instanceId }
@@ -183,7 +185,7 @@ export function buildStarredTabRows(input: {
     provider: ProviderKind,
     instanceId: string,
   ) => ReadonlyArray<ProviderModelOption>;
-  /** Display names of non-default accounts. */
+  /** Name of the account a preset runs in; undefined while its provider has only one. */
   accountLabelFor?: (instanceId: string) => string | undefined;
   query: string;
   current: { provider: ProviderKind; instanceId: string; model: string } & Pick<
@@ -198,8 +200,7 @@ export function buildStarredTabRows(input: {
   return input.starredModels.flatMap((entry) => {
     const instanceId = starredModelInstanceId(entry);
     const options = input.modelOptionsFor(entry.provider, instanceId);
-    const accountLabel =
-      instanceId !== entry.provider ? input.accountLabelFor?.(instanceId) : undefined;
+    const accountLabel = input.accountLabelFor?.(instanceId);
     const selectableModel = resolveSelectableModel(entry.provider, entry.model, options);
     const name =
       options.find((option) => option.slug === selectableModel)?.name ??

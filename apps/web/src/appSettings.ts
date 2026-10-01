@@ -18,6 +18,7 @@ import {
   type ProviderInstanceConfig,
   ProviderInstanceConfigMap,
   type ProviderDriverKind,
+  type ProviderInstanceEnvironment,
   ProviderInstanceId,
   GitHubInboxState,
   TrimmedNonEmptyString,
@@ -877,6 +878,8 @@ export interface ProviderInstanceOption {
   readonly provider: ProviderKind;
   readonly driver: ProviderKind;
   readonly label: string;
+  /** User-picked `#rrggbb` marker shown on the account's initials badge. */
+  readonly accentColor?: string;
   readonly enabled: boolean;
   readonly isDefault: boolean;
   readonly supported: true;
@@ -970,7 +973,8 @@ export function getProviderInstanceOptions(
       instanceId,
       provider: "codex",
       driver: "codex",
-      label: account.label,
+      // Like every provider's default account, and like the server names it.
+      label: account.isDefault ? defaultProviderInstanceLabel("codex") : account.label,
       enabled: true,
       isDefault: account.isDefault,
       supported: true,
@@ -982,14 +986,25 @@ export function getProviderInstanceOptions(
       continue;
     }
     const config = isRecord(raw.config) ? raw.config : {};
-    const label = raw.displayName?.trim() || fallbackProviderInstanceLabel(instanceId);
+    const isDefault = instanceId === raw.driver;
+    // An explicit entry for a derived account (a default, a migrated Codex account) may
+    // only carry overrides such as an accent or a switch; it keeps the derived name.
+    const derived = optionsById.get(instanceId);
+    const label =
+      raw.displayName?.trim() ||
+      (derived?.driver === raw.driver ? derived.label : undefined) ||
+      (isDefault
+        ? defaultProviderInstanceLabel(raw.driver)
+        : fallbackProviderInstanceLabel(instanceId));
+    const accentColor = raw.accentColor?.trim();
     optionsById.set(instanceId, {
       instanceId,
       provider: raw.driver,
       driver: raw.driver,
       label,
+      ...(accentColor ? { accentColor } : {}),
       enabled: raw.enabled !== false && config.enabled !== false,
-      isDefault: instanceId === raw.driver,
+      isDefault,
       supported: true,
     });
   }
@@ -1098,6 +1113,98 @@ export function getManageableProviderInstances(
   }
 
   return result;
+}
+
+export interface ProviderInstancePatch {
+  readonly displayName?: string | undefined;
+  /** `null` clears the accent. */
+  readonly accentColor?: string | null | undefined;
+  readonly enabled?: boolean | undefined;
+  readonly environment?: ProviderInstanceEnvironment | undefined;
+  readonly config?: Record<string, unknown> | undefined;
+}
+
+// Settings change for an edit to one account, or null when the account is unknown.
+// `legacyCodexAccountId` marks a Codex account that still lives in codexAccounts.
+export function buildProviderInstanceSettingsPatch(
+  settings: Pick<
+    AppSettings,
+    "codexAccounts" | "codexHomePath" | "providerInstances" | "selectedCodexAccountId"
+  >,
+  instanceId: string,
+  patch: ProviderInstancePatch,
+  legacyCodexAccountId: string | null = null,
+): Pick<AppSettings, "providerInstances"> | Pick<AppSettings, "codexAccounts"> | null {
+  const explicit = settings.providerInstances[instanceId];
+  const legacyAccountPatch = legacyCodexAccountId
+    ? {
+        ...(patch.displayName !== undefined ? { label: patch.displayName } : {}),
+        ...(typeof patch.config?.homePath === "string" ? { homePath: patch.config.homePath } : {}),
+        ...(typeof patch.config?.shadowHomePath === "string"
+          ? { shadowHomePath: patch.config.shadowHomePath }
+          : {}),
+      }
+    : {};
+  if (Object.keys(legacyAccountPatch).length > 0) {
+    // A migrated account keeps its name and homes in codexAccounts. An explicit copy
+    // that drifts from that entry makes the server drop the account's route, so the
+    // edit goes to the entry and any stale explicit copy is cleared.
+    const { displayName: _displayName, ...explicitRest } = explicit ?? { driver: "codex" };
+    const {
+      homePath: _homePath,
+      shadowHomePath: _shadowHomePath,
+      ...explicitConfig
+    } = isRecord(explicit?.config) ? explicit.config : {};
+    return {
+      codexAccounts: normalizeCodexAccounts(
+        settings.codexAccounts.map((account) =>
+          account.id === legacyCodexAccountId ? { ...account, ...legacyAccountPatch } : account,
+        ),
+      ),
+      ...(explicit
+        ? {
+            providerInstances: {
+              ...settings.providerInstances,
+              [instanceId]: { ...explicitRest, config: explicitConfig },
+            } as ProviderInstanceConfigMap,
+          }
+        : {}),
+    };
+  }
+  // A derived account (a default, a migrated Codex account) gets its first explicit
+  // entry here; the server merges it over the derived one key by key.
+  const derived = explicit
+    ? undefined
+    : getProviderInstanceOptions(settings).find((instance) => instance.instanceId === instanceId);
+  const existing: ProviderInstanceConfig | null =
+    explicit ?? (derived ? ({ driver: derived.driver } as ProviderInstanceConfig) : null);
+  if (!existing) return null;
+  const {
+    displayName: existingDisplayName,
+    accentColor: existingAccentColor,
+    environment: existingEnvironment,
+    ...existingRest
+  } = existing;
+  const displayName =
+    patch.displayName !== undefined ? patch.displayName.trim() : existingDisplayName;
+  const accentColor =
+    patch.accentColor !== undefined ? (patch.accentColor ?? undefined) : existingAccentColor;
+  const environment = patch.environment !== undefined ? patch.environment : existingEnvironment;
+  return {
+    providerInstances: {
+      ...settings.providerInstances,
+      [instanceId]: {
+        ...existingRest,
+        ...(displayName ? { displayName } : {}),
+        ...(accentColor ? { accentColor } : {}),
+        ...(environment && environment.length > 0 ? { environment } : {}),
+        ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+        ...(patch.config
+          ? { config: mergeProviderInstanceConfigPatch(existing.config, patch.config) }
+          : {}),
+      },
+    } as ProviderInstanceConfigMap,
+  };
 }
 
 // Removes every app setting keyed by an explicit instance id so a later

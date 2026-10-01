@@ -70,6 +70,8 @@ export const FALLBACK_GROUP_MODEL_SELECTION: ModelSelection = {
 function modelSelectionFingerprint(selection: ModelSelection): string {
   return JSON.stringify({
     provider: selection.provider,
+    // No account means the provider's default one, whose id is the provider's.
+    instanceId: selection.instanceId ?? selection.provider,
     model: selection.model,
     options: selection.options ?? null,
     supportsAutoMode: "supportsAutoMode" in selection ? (selection.supportsAutoMode ?? null) : null,
