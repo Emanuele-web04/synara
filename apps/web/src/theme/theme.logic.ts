@@ -311,10 +311,12 @@ const RAIL_SHELL_OPACITY_RATIO_BY_VARIANT: Record<ThemeVariant, number> = {
   light: 82 / 38,
 };
 
-// Whole-window glass: raised chrome over the transcript (the composer, its stacked rail, the
-// docked side panels) keeps this share of the coat's opacity for its own fill, so it stays one
-// step denser than the window around it at every slider position.
-const RAISED_GLASS_OPACITY_RATIO = 0.5;
+// Whole-window glass: raised chrome (composers, docked panels, cards, controls) is a lighter
+// pane over the body's coat. Light themes lift with this share of the coat's opacity in the
+// elevated tone; dark themes lift with a fixed share of ink, since their elevated tone is as
+// dark as the coat and would only add density.
+const RAISED_GLASS_LIGHT_OPACITY_RATIO = 0.5;
+const RAISED_GLASS_DARK_INK_PERCENT = 7;
 
 export const DEFAULT_THEME_STATE: ThemeState = {
   chromeThemes: {
@@ -884,10 +886,12 @@ export function buildThemeCssVariables(
         : "100%",
     "--app-composer-focus-border": composerFocusBorder,
     // Raised-chrome fill over the body's coat when the whole window is glass. Empty elsewhere,
-    // which leaves the `:root` default in index.css in charge.
-    "--composer-glass-opacity": wholeWindowGlass
-      ? `${Math.round(translucentOpacity * RAISED_GLASS_OPACITY_RATIO)}%`
-      : "",
+    // which leaves each surface's own fill in charge (see `.app-glass-raised` in index.css).
+    "--app-glass-raised-surface": !wholeWindowGlass
+      ? ""
+      : variant === "dark"
+        ? `color-mix(in srgb, var(--foreground) ${RAISED_GLASS_DARK_INK_PERCENT}%, transparent)`
+        : `color-mix(in srgb, var(--popover) ${Math.round(translucentOpacity * RAISED_GLASS_LIGHT_OPACITY_RATIO)}%, transparent)`,
     // Frosted blur only when the shell is translucent (macOS). On an opaque
     // shell this promotes the surface to a GPU layer that Chromium rasterizes at
     // the wrong scale on fractional DPI (Windows), so text reads blurry until a

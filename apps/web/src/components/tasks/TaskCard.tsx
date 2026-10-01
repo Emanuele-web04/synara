@@ -74,7 +74,7 @@ export function TaskCard({
     <section
       aria-label="Task details"
       className={cn(
-        "flex flex-col gap-3.5 overflow-y-auto rounded-3xl bg-popover p-4",
+        "app-glass-raised flex flex-col gap-3.5 overflow-y-auto rounded-3xl bg-popover p-4",
         RAISED_SURFACE_CHROME_CLASS_NAME,
         className,
       )}

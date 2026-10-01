@@ -216,8 +216,8 @@ export const COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME =
   "relative overflow-hidden rounded-2xl border border-border bg-popover text-popover-foreground";
 
 /** Environment panel card. Opaque for the same reason as the command menu (it overlays the
- *  transcript), except on a whole-window glass shell, where it takes the composer's glass
- *  (see `.chat-raised-panel-surface` in index.css).
+ *  transcript), except on a whole-window glass shell, where it takes the shared raised
+ *  tint (see `.app-glass-raised` in index.css).
  *  Docks alongside the composer, so it carries the shared raised-chrome border rather
  *  than plain `border-border`: the two cards sit side by side and must read as one weight. */
 export const ENVIRONMENT_PANEL_SURFACE_CLASS_NAME = `relative overflow-hidden rounded-2xl border ${RAISED_SURFACE_BORDER_CLASS_NAME} chat-raised-panel-surface text-popover-foreground ${COMPOSER_SURFACE_SHADOW_CLASS_NAME}`;
