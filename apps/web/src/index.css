@@ -3040,9 +3040,8 @@ diffs-container {
    pickers are built from, so the composer now lifts off the transcript exactly the
    way they do.
 
-   `--composer-glass-opacity` keeps every composer-family surface on one knob. When the
-   whole window is glass, theme.logic lowers it in step with the window's own opacity: the
-   fill then stacks on the body's coat, and the default would read as a solid slab. */
+   `--composer-glass-opacity` keeps every composer-family surface on one knob. A
+   whole-window glass shell replaces this material entirely; see `.app-glass-raised`. */
 :root {
   --composer-glass-opacity: 55%;
   --composer-glass-stacked-opacity: calc(var(--composer-glass-opacity) / 2);
@@ -3088,21 +3087,71 @@ diffs-container {
 }
 
 /* Raised panels docked over the transcript (Environment, Library, Project). Opaque, so the
-   transcript never bleeds through; when the whole window is glass they take the composer's
-   material instead, since the two cards sit side by side. The panels clip their own
-   overflow, so the blur sits on the element itself. */
+   transcript never bleeds through; a whole-window glass shell swaps the fill below. */
 .chat-raised-panel-surface {
   background: var(--popover);
 }
 
-:root[data-window-translucency="window"] .chat-raised-panel-surface {
-  background: color-mix(
-    in srgb,
-    var(--composer-glass-surface) var(--composer-glass-opacity),
-    transparent
+/* ─── Raised chrome on a whole-window glass shell ─────────────────────────────────
+   The window's fill is the body's translucent coat, and the desktop behind it is blurred
+   natively. Raised surfaces therefore take one sheer tint (`--app-glass-raised-surface`,
+   theme.logic) and NO backdrop-filter: Chromium paints the filtered backdrop over the
+   backdrop it sampled, so a blur here lays a second copy of the coat under the surface
+   and the surface reads as a solid slab (measured: a 30% coat came out at 59%).
+
+   `.app-glass-raised` opts in any other surface that paints an opaque fill of its own:
+   cards, standalone composers, and filled controls. Unlayered, so it wins over the
+   surface's Tailwind fill only while the attribute is set. */
+:root[data-window-translucency="window"]
+  :is(.chat-composer-surface, .chat-raised-panel-surface, .app-glass-raised) {
+  background: var(--app-glass-raised-surface);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+:root[data-window-translucency="window"]
+  :is(.chat-composer-surface, .chat-composer-stacked-top)::before {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* The stacked rail stays the lighter continuation of the input. */
+:root[data-window-translucency="window"] .chat-composer-stacked-top {
+  background: color-mix(in srgb, var(--app-glass-raised-surface) 50%, transparent);
+}
+
+/* Interactive raised surfaces (cards, selects) lift one more step on hover. */
+:root[data-window-translucency="window"] .app-glass-raised:is(button, [role="button"]):hover {
+  background:
+    linear-gradient(var(--app-glass-raised-surface), var(--app-glass-raised-surface)),
+    var(--app-glass-raised-surface);
+}
+
+/* A floating side panel overlays transcript text, and with no blur a sheer tint would
+   leave that text readable through it. It keeps a dense fill; the docked variant insets
+   the transcript, so nothing sits behind it. */
+:root[data-window-translucency="window"]
+  [data-environment-panel-variant="floating"]
+  .chat-raised-panel-surface {
+  background: color-mix(in srgb, var(--popover) 88%, transparent);
+}
+
+/* The composer no longer frosts what scrolls beneath it, so the transcript dissolves
+   across the composer's resting tuck (COMPOSER_OVERLAY_TUCK_PX) instead of running under
+   the editor. `--scroll-edge-fade-inset-b` is the composer's top edge; without it the
+   gradient ends past the viewport and masks nothing. */
+:root[data-window-translucency="window"] .scroll-edge-fade {
+  --scroll-edge-fade-glass: linear-gradient(
+    to bottom,
+    #000 calc(100% - var(--scroll-edge-fade-inset-b, 0px)),
+    transparent calc(100% - var(--scroll-edge-fade-inset-b, 0px) + 20px)
   );
-  -webkit-backdrop-filter: var(--composer-glass-filter);
-  backdrop-filter: var(--composer-glass-filter);
+  -webkit-mask-image:
+    var(--scroll-edge-fade-edges), var(--scroll-edge-fade-layer, linear-gradient(#000, #000)),
+    var(--scroll-edge-fade-glass);
+  mask-image:
+    var(--scroll-edge-fade-edges), var(--scroll-edge-fade-layer, linear-gradient(#000, #000)),
+    var(--scroll-edge-fade-glass);
 }
 
 /* Recessed track: a hairline border + faint inner shadow read the base as a sunken

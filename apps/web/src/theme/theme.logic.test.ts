@@ -383,8 +383,17 @@ describe("window translucency", () => {
     expect(dark.variables["--app-sidebar-chip-surface"]).toBe(
       dark.variables["--app-window-background"],
     );
-    // Raised chrome stacks on the coat, so its own fill thins with it.
-    expect(dark.variables["--composer-glass-opacity"]).toBe("36%");
+    // Raised chrome is a lighter pane over the coat: ink in dark, the elevated tone in light.
+    expect(dark.variables["--app-glass-raised-surface"]).toBe(
+      "color-mix(in srgb, var(--foreground) 7%, transparent)",
+    );
+    const light = buildThemeCssVariables(resolveThemePack(DEFAULT_THEME_STATE, "light"), "light", {
+      ...macDesktop,
+      translucency: { opacity: 38, blur: null, sidebarOnly: false },
+    });
+    expect(light.variables["--app-glass-raised-surface"]).toBe(
+      "color-mix(in srgb, var(--popover) 19%, transparent)",
+    );
   });
 
   it("keeps the content opaque and the shell clear for opaque windows", () => {
@@ -416,7 +425,7 @@ describe("window translucency", () => {
     expect(dark.material).toBe("translucent");
     expect(dark.translucencyScope).toBe("sidebar");
     expect(dark.variables["--app-window-background"]).toBe("transparent");
-    expect(dark.variables["--composer-glass-opacity"]).toBe("");
+    expect(dark.variables["--app-glass-raised-surface"]).toBe("");
     expect(dark.variables["--app-content-surface"]).toBe(
       dark.variables["--color-background-surface"],
     );
