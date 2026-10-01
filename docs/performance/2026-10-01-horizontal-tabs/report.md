@@ -202,5 +202,8 @@ Review also reproduced and fixed queued tab-navigation races: opening a terminal
 closing the pressed chat tab, or committing a later navigation cancels its deferred
 activation. Navigating away and back also clears the old optimistic highlight. Full
 editor-route regressions verify that late animation-frame callbacks and the background
-fallback cannot reopen the chat afterward. Actual activation invokes the router
-synchronously; pending navigation cancellation remains owned by the router.
+fallback cannot reopen the chat afterward. A real-router probe also reproduced a
+newer tab press being discarded between the earlier activation returning and its
+React route commit. While activation is outstanding, the helper now hands that
+newer press directly to the router; only the latest activation can settle the
+optimistic highlight. Navigation cancellation remains owned by the existing router.

@@ -14,7 +14,8 @@ import { useStableCallback } from "./useStableCallback";
  * otherwise `activeKey`. The override is scoped to the key it was pressed from, so any
  * committed change of `activeKey` cancels a queued switch and clears its override. A
  * switch that leaves `activeKey` where it was (a guarded navigation) hands the
- * highlight back once `activate` settles.
+ * highlight back once `activate` settles. A newer press during activation is handed
+ * straight to the router so the earlier commit cannot discard its intent.
  */
 export function useOptimisticTabSelection<Key extends string>(input: {
   activeKey: Key;
@@ -25,6 +26,7 @@ export function useOptimisticTabSelection<Key extends string>(input: {
   const { activeKey, hasTab, activate } = input;
   const [pending, setPending] = useState<{ from: Key; to: Key } | null>(null);
   const cancelPendingRef = useRef<(() => void) | null>(null);
+  const activationRef = useRef<Promise<unknown> | null>(null);
 
   const cancel = useCallback(() => {
     cancelPendingRef.current?.();
@@ -46,7 +48,11 @@ export function useOptimisticTabSelection<Key extends string>(input: {
       cancel();
       return;
     }
-    void activate(key).finally(() => {
+    const activation = activate(key);
+    activationRef.current = activation;
+    void activation.finally(() => {
+      if (activationRef.current !== activation) return;
+      activationRef.current = null;
       setPending((current) => (current?.from === from && current.to === key ? null : current));
     });
   });
@@ -54,6 +60,13 @@ export function useOptimisticTabSelection<Key extends string>(input: {
   const select = (key: Key) => {
     cancelPendingRef.current?.();
     cancelPendingRef.current = null;
+    // Give the router the latest press before an earlier navigation can commit
+    // and cancel a newer after-paint callback. The router owns navigation cancellation.
+    if (activationRef.current) {
+      setPending({ from: activeKey, to: key });
+      activatePending(activeKey, key);
+      return;
+    }
     if (key === activeKey) {
       setPending(null);
       return;

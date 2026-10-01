@@ -9188,7 +9188,7 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it.each(["terminal", "close", "navigation", "navigation-back"] as const)(
+  it.each(["terminal", "close", "navigation", "navigation-back", "inflight"] as const)(
     "cancels a pending editor chat tab switch after %s",
     async (action) => {
       const mounted = await mountChatView({
@@ -9201,7 +9201,8 @@ describe("ChatView transcript geometry (full app)", () => {
       });
       try {
         const laterThreadId = ThreadId.makeUnsafe("editor-tab-later-navigation");
-        const laterNavigation = action === "navigation" || action === "navigation-back";
+        const laterNavigation =
+          action === "navigation" || action === "navigation-back" || action === "inflight";
         if (laterNavigation) {
           useComposerDraftStore.getState().registerDraftThread(laterThreadId, {
             projectId: PROJECT_ID,
@@ -9225,6 +9226,40 @@ describe("ChatView transcript geometry (full app)", () => {
             frames.push(callback);
             return frames.length;
           });
+        let pressedLaterTab = false;
+        let firstNavigation: Promise<void> | null = null;
+        if (action === "inflight") {
+          const navigate = mounted.router.navigate;
+          vi.spyOn(mounted.router, "navigate").mockImplementation((options) => {
+            const result = navigate(options);
+            if (
+              !pressedLaterTab &&
+              options.to === "/$threadId" &&
+              options.params &&
+              typeof options.params === "object" &&
+              "threadId" in options.params &&
+              (options.params as { threadId?: string }).threadId === OTHER_THREAD_ID
+            ) {
+              firstNavigation = result;
+              // The second press happens after activate returns, before React commits
+              // the first route. Use the actual router, without a synthetic loader.
+              queueMicrotask(() => {
+                pressedLaterTab = true;
+                page
+                  .getByRole("button", { name: "Chat 3", exact: true })
+                  .element()
+                  .dispatchEvent(
+                    new PointerEvent("pointerdown", {
+                      bubbles: true,
+                      pointerType: "mouse",
+                      button: 0,
+                    }),
+                  );
+              });
+            }
+            return result;
+          });
+        }
         page
           .getByRole("button", { name: "Chat 2", exact: true })
           .element()
@@ -9237,6 +9272,13 @@ describe("ChatView transcript geometry (full app)", () => {
               .getByRole("button", { name: "Terminal", exact: true })
               .element() as HTMLButtonElement
           ).click();
+        } else if (action === "inflight") {
+          const firstFrames = frames.slice();
+          for (const callback of firstFrames) callback(performance.now());
+          await vi.waitFor(() => expect(pressedLaterTab).toBe(true), { timeout: 2_000 });
+          await firstNavigation;
+          await new Promise((resolve) => window.setTimeout(resolve, 0));
+          frames.splice(0, firstFrames.length);
         } else if (laterNavigation) {
           await mounted.router.navigate({
             to: "/$threadId",
@@ -9269,12 +9311,19 @@ describe("ChatView transcript geometry (full app)", () => {
         for (const callback of frames) callback(performance.now());
         await new Promise((resolve) => window.setTimeout(resolve, 550));
         expect(mounted.router.state.location.pathname).toBe(
-          `/${action === "navigation" ? laterThreadId : THREAD_ID}`,
+          `/${action === "navigation" || action === "inflight" ? laterThreadId : THREAD_ID}`,
         );
         if (action === "terminal") {
           await expect
             .element(page.getByRole("button", { name: "Terminal", exact: true }))
             .toHaveAttribute("aria-pressed", "true");
+        } else if (action === "inflight") {
+          expect(
+            page
+              .getByRole("button", { name: "Chat 3", exact: true })
+              .element()
+              .getAttribute("aria-pressed"),
+          ).toBe("true");
         } else if (action === "navigation-back") {
           expect(
             page
