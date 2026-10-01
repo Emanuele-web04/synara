@@ -351,6 +351,7 @@ export function SurfaceTabChip({
           className={DOCK_TAB_ICON_SLOT_CLASS_NAME}
           aria-label={closeLabel}
           title={closeLabel}
+          onPointerDown={sortable ? (event) => event.stopPropagation() : undefined}
           onClick={handleClose}
         >
           <span
@@ -433,6 +434,7 @@ export function SurfaceTabChip({
           )}
           aria-label={closeLabel}
           title={closeLabel}
+          onPointerDown={sortable ? (event) => event.stopPropagation() : undefined}
           onClick={handleClose}
         >
           <CentralIcon name="cross-small" className="size-4 shrink-0" />

@@ -64,8 +64,8 @@ export function removeOpenThreadTab(
 }
 
 /**
- * Drops a dragged tab onto another tab's slot. Indexed in the full open list, so tabs
- * the strip is not showing (another project's, in the editor view) keep their places.
+ * Drops a dragged tab onto another tab's slot in the full open list, retaining hidden
+ * tabs and their relative order.
  */
 export function moveOpenThreadTab(
   threadIds: readonly ThreadId[],
