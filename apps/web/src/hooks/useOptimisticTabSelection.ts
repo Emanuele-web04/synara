@@ -20,13 +20,19 @@ export function useOptimisticTabSelection<Key extends string>(input: {
   // Whether a key still has a tab to highlight (it may close while its switch is pending).
   hasTab: (key: Key) => boolean;
   activate: (key: Key) => Promise<unknown>;
-}): { shownKey: Key; select: (key: Key) => void } {
+}): { shownKey: Key; select: (key: Key) => void; cancel: () => void } {
   const { activeKey, hasTab, activate } = input;
   const [pending, setPending] = useState<{ from: Key; to: Key } | null>(null);
   const cancelPendingRef = useRef<(() => void) | null>(null);
   useEffect(() => () => cancelPendingRef.current?.(), []);
 
   const shownKey = pending?.from === activeKey && hasTab(pending.to) ? pending.to : activeKey;
+
+  const cancel = () => {
+    cancelPendingRef.current?.();
+    cancelPendingRef.current = null;
+    setPending(null);
+  };
 
   const select = (key: Key) => {
     cancelPendingRef.current?.();
@@ -44,5 +50,5 @@ export function useOptimisticTabSelection<Key extends string>(input: {
     });
   };
 
-  return { shownKey, select };
+  return { shownKey, select, cancel };
 }

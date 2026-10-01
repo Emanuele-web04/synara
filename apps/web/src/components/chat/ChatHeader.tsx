@@ -259,7 +259,11 @@ function EditorRailTabs(props: {
   // and its thread opens after that frame. The terminal tab only flips a surface, so it
   // stays a direct switch.
   const activeTabKey = props.activeSurface === "chat" ? props.activeThreadId : "terminal";
-  const { shownKey: shownTabKey, select: selectChatTab } = useOptimisticTabSelection<string>({
+  const {
+    shownKey: shownTabKey,
+    select: selectChatTab,
+    cancel: cancelChatTabSelection,
+  } = useOptimisticTabSelection<string>({
     activeKey: activeTabKey,
     hasTab: (key) => chatTabs.some((tab) => tab.threadId === key),
     activate: (key) => props.onOpenChat(key as ThreadId),
@@ -280,10 +284,12 @@ function EditorRailTabs(props: {
   const tabCount = chatTabs.length + (terminalTabVisible ? 1 : 0);
   const shouldShowTabs = tabCount > 1;
   const newTerminalTab = () => {
+    cancelChatTabSelection();
     setTerminalTabOpen(true);
     props.onNewTerminal();
   };
   const openTerminalTab = () => {
+    cancelChatTabSelection();
     setTerminalTabOpen(true);
     props.onOpenTerminal();
   };

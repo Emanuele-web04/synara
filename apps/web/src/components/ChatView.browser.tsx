@@ -2967,18 +2967,11 @@ describe("ChatView transcript geometry (full app)", () => {
     }
 
     const medianRatio = ratios.sort((left, right) => left - right)[1]!;
-    // Without owner stacks and after the warm-up, this measured a 2.1x median on
-    // Linux CI (median-of-3 groups 1.85-2.16x) while the shell, chat header and
-    // composer still re-rendered for every live event, and 2.90-3.09x with the work
-    // log derived twice per live activity (the #550 regression). Those no longer
-    // follow live events, which takes the same fixed cost off both cases (locally
-    // 73 -> 39 ms short, 149 -> 108 ms near-cap) and so raises the healthy ratio to
-    // about 2.8x. The regression's extra work is unchanged, which now puts it above
-    // 4.3x.
+    // Preserve the existing Issue #550 regression limit after the performance changes.
     expect(
       medianRatio,
       `Issue #550 benchmark: ${JSON.stringify({ reports, ratios })}`,
-    ).toBeLessThan(3.5);
+    ).toBeLessThan(2.5);
   });
 
   it("cancels a multi-question prompt with choices through the orchestration command", async () => {
@@ -9177,6 +9170,54 @@ describe("ChatView transcript geometry (full app)", () => {
         useComposerDraftStore.getState().getDraftThread(nextPath.slice(1) as ThreadId),
       ).toMatchObject({ envMode: "worktree", worktreePath: null });
     } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps the terminal selected after cancelling a pending editor chat tab switch", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("editor-tab-cancel"),
+        targetText: "Editor chat",
+      }),
+      initialEntry: `/${THREAD_ID}?view=editor`,
+    });
+    try {
+      useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, OTHER_THREAD_ID, {});
+      useOpenThreadTabsStore.setState({ threadIds: [THREAD_ID, OTHER_THREAD_ID] });
+      useTerminalStateStore.getState().setTerminalOpen(THREAD_ID, true);
+      await expect
+        .element(page.getByRole("button", { name: "Terminal", exact: true }))
+        .toBeVisible();
+      await page.getByRole("button", { name: "Chat 1", exact: true }).click();
+      await waitForLayout();
+      // Hold the scheduled chat activation until the later terminal selection has happened.
+      const frames: FrameRequestCallback[] = [];
+      const animationFrame = vi
+        .spyOn(window, "requestAnimationFrame")
+        .mockImplementation((callback) => {
+          frames.push(callback);
+          return frames.length;
+        });
+      page
+        .getByRole("button", { name: "Chat 2", exact: true })
+        .element()
+        .dispatchEvent(
+          new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse", button: 0 }),
+        );
+      (
+        page.getByRole("button", { name: "Terminal", exact: true }).element() as HTMLButtonElement
+      ).click();
+      animationFrame.mockRestore();
+      for (const callback of frames) callback(performance.now());
+      await new Promise((resolve) => window.setTimeout(resolve, 550));
+      expect(mounted.router.state.location.pathname).toBe(`/${THREAD_ID}`);
+      await expect
+        .element(page.getByRole("button", { name: "Terminal", exact: true }))
+        .toHaveAttribute("aria-pressed", "true");
+    } finally {
+      vi.restoreAllMocks();
       await mounted.cleanup();
     }
   });

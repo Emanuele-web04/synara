@@ -158,9 +158,10 @@ profiler attached) measured React render time during streaming at about 920 → 
 the median frame gap at 39 → 23 ms; settings decoding at startup went from 200 → 2 ms.
 
 The same limits apply: development React in headless Chromium, not a production desktop
-build. The issue-550 ratio guard in `ChatView.browser.tsx` was recalibrated from 2.5 to 3.5
-because these commits remove fixed per-update cost from both of its cases; that calibration
-is local and should be watched on CI.
+build. The Issue #550 ratio guard in `ChatView.browser.tsx` remains at 2.5. The initial
+local recalibration to 3.5 was removed during review to preserve the regression
+limit introduced by #1397. Performance claims must satisfy that unchanged workload
+and guard; a smaller short-case denominator alone does not authorize a weaker limit.
 
 After pulling, run `bun install` and clear Vite's dependency cache
 (`apps/web/node_modules/.vite`) so the patched list build is prebundled again.
