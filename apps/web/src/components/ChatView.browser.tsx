@@ -2297,6 +2297,98 @@ describe("ChatView transcript geometry (full app)", () => {
     document.body.innerHTML = "";
   });
 
+  it.each(["user", "assistant"] as const)(
+    "opens the linked PR number from a %s message when the repository path also contains pull",
+    async (role) => {
+      useRightDockStore.setState({ dockStateByThreadId: {} });
+      const url = "https://github.com/pull/123/pull/456";
+      const snapshot = createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("linked-pr"),
+        targetText: url,
+      });
+      const message =
+        role === "user"
+          ? createUserMessage({
+              id: MessageId.makeUnsafe("linked-pr"),
+              text: url,
+              offsetSeconds: 0,
+            })
+          : createAssistantMessage({
+              id: MessageId.makeUnsafe("linked-pr"),
+              text: `[Inspect PR](${url})`,
+              offsetSeconds: 0,
+            });
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: { ...snapshot, threads: [{ ...snapshot.threads[0]!, messages: [message] }] },
+      });
+      const previousNativeApi = window.nativeApi;
+      const api = readNativeApi()!;
+      const repository = { nameWithOwner: "pull/123", url: "https://github.com/pull/123" };
+      Object.defineProperty(window, "nativeApi", {
+        configurable: true,
+        value: {
+          ...api,
+          git: {
+            ...api.git,
+            githubRepository: async () => ({ repository, repositories: [repository] }),
+          },
+        },
+      });
+      try {
+        const link = page.getByRole(role === "user" ? "button" : "link", {
+          name: role === "user" ? "pull/123#456" : "Inspect PR",
+          exact: true,
+        });
+        await link.click({ button: "right" });
+        await expect
+          .element(page.getByRole("button", { name: "Open pull request", exact: true }))
+          .toBeVisible();
+        await expect
+          .element(page.getByRole("button", { name: "Open in browser", exact: true }))
+          .toBeVisible();
+        await expect
+          .element(page.getByRole("button", { name: "Open in external browser", exact: true }))
+          .toBeVisible();
+        await expect
+          .element(page.getByRole("button", { name: "Copy link", exact: true }))
+          .toBeVisible();
+        await page.getByRole("button", { name: "Open pull request", exact: true }).click();
+        await vi.waitFor(() => {
+          expect(useRightDockStore.getState().dockStateByThreadId[THREAD_ID]?.panes).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                kind: "pullRequest",
+                pullRequestProjectId: PROJECT_ID,
+                pullRequestRepository: "pull/123",
+                pullRequestNumber: 456,
+              }),
+            ]),
+          );
+        });
+        useRightDockStore.setState({ dockStateByThreadId: {} });
+        await link.click();
+        await vi.waitFor(() => {
+          expect(useRightDockStore.getState().dockStateByThreadId[THREAD_ID]?.panes).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ kind: "pullRequest", pullRequestNumber: 456 }),
+            ]),
+          );
+        });
+      } finally {
+        if (previousNativeApi) {
+          Object.defineProperty(window, "nativeApi", {
+            configurable: true,
+            value: previousNativeApi,
+          });
+        } else {
+          Reflect.deleteProperty(window, "nativeApi");
+        }
+        await mounted.cleanup();
+      }
+    },
+  );
+
   // #1374: real route, dock and Lexical composers; only the server boundary is
   // simulated. The main agent must keep running while the panel toggles.
   it("opens one sidechat, preserves its draft on toggle, and restores composer focus", async () => {
