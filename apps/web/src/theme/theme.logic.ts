@@ -311,6 +311,11 @@ const RAIL_SHELL_OPACITY_RATIO_BY_VARIANT: Record<ThemeVariant, number> = {
   light: 82 / 38,
 };
 
+// Whole-window glass: raised chrome over the transcript (the composer, its stacked rail, the
+// docked side panels) keeps this share of the coat's opacity for its own fill, so it stays one
+// step denser than the window around it at every slider position.
+const RAISED_GLASS_OPACITY_RATIO = 0.5;
+
 export const DEFAULT_THEME_STATE: ThemeState = {
   chromeThemes: {
     dark: getCodeThemeSeed("codex", "dark"),
@@ -878,6 +883,11 @@ export function buildThemeCssVariables(
         ? `${Math.min(100, Math.round(translucentOpacity * RAIL_SHELL_OPACITY_RATIO_BY_VARIANT[variant]))}%`
         : "100%",
     "--app-composer-focus-border": composerFocusBorder,
+    // Raised-chrome fill over the body's coat when the whole window is glass. Empty elsewhere,
+    // which leaves the `:root` default in index.css in charge.
+    "--composer-glass-opacity": wholeWindowGlass
+      ? `${Math.round(translucentOpacity * RAISED_GLASS_OPACITY_RATIO)}%`
+      : "",
     // Frosted blur only when the shell is translucent (macOS). On an opaque
     // shell this promotes the surface to a GPU layer that Chromium rasterizes at
     // the wrong scale on fractional DPI (Windows), so text reads blurry until a
