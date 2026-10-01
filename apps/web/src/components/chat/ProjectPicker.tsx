@@ -1,3 +1,5 @@
+import { requestCreateProjectDialog } from "../../lib/hosts/workspaceFrame";
+import { readExecutionContext } from "../../lib/hosts/executionContext";
 // FILE: ProjectPicker.tsx
 // Purpose: Folder selector beneath the new-chat composer that groups active folders and home
 //          folders while always creating chats as rows inside the shared Chats container.
@@ -469,6 +471,14 @@ export const ProjectPicker = memo(function ProjectPicker({
 
   const handleAddNewProject = useCallback(async () => {
     if (isPicking) return;
+    if (
+      onCreateProjectFromPath &&
+      readExecutionContext()?.controller.capabilities.remoteConnections === true
+    ) {
+      setOpen(false);
+      requestCreateProjectDialog();
+      return;
+    }
     const api = readNativeApi();
     if (!api) {
       setErrorMessage("App is still connecting. Try again in a moment.");

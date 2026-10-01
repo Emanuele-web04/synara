@@ -868,13 +868,44 @@ function streamedFileResponse(input: {
   readonly path: string;
   readonly sizeBytes: number;
   readonly headers: Record<string, string>;
+  readonly range?: string | undefined;
 }): HttpServerResponse.HttpServerResponse {
-  return HttpServerResponse.stream(input.fileSystem.stream(input.path), {
-    status: 200,
-    contentType: Mime.getType(input.path) ?? "application/octet-stream",
-    contentLength: input.sizeBytes,
-    headers: input.headers,
-  });
+  const headers = { ...input.headers, "Accept-Ranges": "bytes" };
+  let start = 0;
+  let end = input.sizeBytes - 1;
+  if (input.range !== undefined) {
+    const match = /^bytes=(\d*)-(\d*)$/.exec(input.range);
+    if (match && (match[1] || match[2])) {
+      start = match[1] ? Number(match[1]) : Math.max(0, input.sizeBytes - Number(match[2]));
+      end = match[1] && match[2] ? Math.min(Number(match[2]), end) : end;
+    } else start = Number.NaN;
+    if (
+      !Number.isSafeInteger(start) ||
+      !Number.isSafeInteger(end) ||
+      start > end ||
+      start >= input.sizeBytes
+    ) {
+      return HttpServerResponse.empty({
+        status: 416,
+        headers: { ...headers, "Content-Range": `bytes */${input.sizeBytes}` },
+      });
+    }
+  }
+  const length = Math.max(0, end - start + 1);
+  return HttpServerResponse.stream(
+    input.fileSystem.stream(input.path, { offset: start, bytesToRead: length }),
+    {
+      status: input.range === undefined ? 200 : 206,
+      contentType: Mime.getType(input.path) ?? "application/octet-stream",
+      contentLength: length,
+      headers: {
+        ...headers,
+        ...(input.range === undefined
+          ? {}
+          : { "Content-Range": `bytes ${start}-${end}/${input.sizeBytes}` }),
+      },
+    },
+  );
 }
 
 export const localImageEffectRouteLayer = HttpRouter.add(
@@ -953,6 +984,7 @@ export const localImageEffectRouteLayer = HttpRouter.add(
       fileSystem,
       path: previewFile.path,
       sizeBytes: previewFile.sizeBytes,
+      range: request.headers.range,
       headers: {
         "Cache-Control": "private, max-age=60",
         // The PDF viewer fetches bytes from either the desktop app origin or
@@ -988,9 +1020,10 @@ const binaryUploadEffectHandler = Effect.gen(function* () {
   if (request.method !== "POST") {
     return HttpServerResponse.text("Method Not Allowed", { status: 405, headers: corsHeaders });
   }
-  const mutationSession = isLegacyTokenAuthorized({ config, url })
-    ? null
-    : yield* requireAuthenticatedMutationRequest;
+  const mutationSession =
+    !request.headers.authorization && isLegacyTokenAuthorized({ config, url })
+      ? null
+      : yield* requireAuthenticatedMutationRequest;
   const attachmentPrincipal =
     mutationSession === null
       ? LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL
@@ -1418,6 +1451,7 @@ export const attachmentsEffectRouteLayer = HttpRouter.add(
       fileSystem,
       path: filePath,
       sizeBytes: Number(fileInfo.size),
+      range: request.headers.range,
       // Attachment access is session/token gated and attachments are mutable
       // lifecycle resources: deletion or session revocation must take effect on
       // the next request, including when a shared proxy is present.

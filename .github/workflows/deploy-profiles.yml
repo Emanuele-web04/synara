@@ -1,0 +1,63 @@
+name: Deploy Profiles
+
+# Public profiles are an explicit trial; application releases never deploy them.
+on:
+  workflow_dispatch:
+    inputs:
+      account_api_url:
+        description: Verified HTTPS account API for this trial
+        required: true
+        type: string
+
+concurrency:
+  group: deploy-profiles
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Build and deploy to Cloudflare Workers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
+      - name: Cache Bun
+        uses: actions/cache@v5
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build and deploy
+        working-directory: apps/profiles
+        run: |
+          node -e 'const u = new URL(process.env.ACCOUNT_API_URL); if (!/^https:\/\/[a-zA-Z0-9.-]+(?::[0-9]+)?\/?$/.test(process.env.ACCOUNT_API_URL) || u.protocol !== "https:" || u.username || u.password || u.hostname.endsWith(".invalid") || u.pathname !== "/" || u.search || u.hash) throw new Error("Provide an HTTPS account API origin")'
+          node -e 'for (const k of ["CLOUDFLARE_API_TOKEN", "PROFILE_PROXY_SECRET"]) if (!process.env[k]) throw new Error(`Missing deployment secret: ${k}`)'
+          NEXT_PRIVATE_STANDALONE=true bunx next build --webpack
+          bunx opennextjs-cloudflare build --skipNextBuild --config wrangler.trial.jsonc
+          node -e 'process.stdout.write(JSON.stringify({PROFILE_PROXY_SECRET:process.env.PROFILE_PROXY_SECRET}))' | bunx wrangler secret bulk --config wrangler.trial.jsonc
+          bunx opennextjs-cloudflare deploy --config wrangler.trial.jsonc --var "ACCOUNT_API_URL:$ACCOUNT_API_URL"
+        env:
+          ACCOUNT_API_URL: ${{ inputs.account_api_url }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: 56e5b3e566be2fc8ade9b7d0eadf5e35
+          PROFILE_PROXY_SECRET: ${{ secrets.SYNARA_PROFILE_PROXY_SECRET }}

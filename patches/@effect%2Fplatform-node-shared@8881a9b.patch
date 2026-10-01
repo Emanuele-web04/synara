@@ -80,3 +80,27 @@ index dc53baf..110ce95 100644
            }),
            Effect.fnUntraced(function*([childProcess, exitSignal]) {
              const exited = yield* Deferred.isDone(exitSignal)
+diff --git a/dist/NodeRuntime.js b/dist/NodeRuntime.js
+--- a/dist/NodeRuntime.js
++++ b/dist/NodeRuntime.js
+@@ -22,5 +22,6 @@
+   function onSigint() {
++    // Retain ownership while async finalizers run: signal-exit may otherwise
++    // re-raise this same signal after seeing our listener disappear.
++    if (receivedSignal) process.exit(130);
+     receivedSignal = true;
+-    process.removeListener("SIGINT", onSigint);
+-    process.removeListener("SIGTERM", onSigint);
+     fiber.interruptUnsafe(fiber.id);
+diff --git a/src/NodeRuntime.ts b/src/NodeRuntime.ts
+--- a/src/NodeRuntime.ts
++++ b/src/NodeRuntime.ts
+@@ -51,5 +51,6 @@
+   function onSigint() {
++    // Retain ownership while async finalizers run: signal-exit may otherwise
++    // re-raise this same signal after seeing our listener disappear.
++    if (receivedSignal) process.exit(130)
+     receivedSignal = true
+-    process.removeListener("SIGINT", onSigint)
+-    process.removeListener("SIGTERM", onSigint)
+     fiber.interruptUnsafe(fiber.id)

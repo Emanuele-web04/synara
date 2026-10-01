@@ -1,5 +1,8 @@
 import type { AuthClientSession, AuthPairingLink } from "@synara/contracts";
 import { DateTime, Effect, Layer } from "effect";
+import { AuthPairingLinkRepository } from "../../persistence/Services/AuthPairingLinks";
+import { AuthPairingLinkRepositoryLive } from "../../persistence/Layers/AuthPairingLinks";
+import { makeRemotePairingControlPlane } from "./RemotePairingControlPlane";
 
 import { BootstrapCredentialService } from "../Services/BootstrapCredentialService";
 import { SessionCredentialService } from "../Services/SessionCredentialService";
@@ -29,6 +32,7 @@ const toAuthControlPlaneError =
 export const makeAuthControlPlane = Effect.gen(function* () {
   const bootstrapCredentials = yield* BootstrapCredentialService;
   const sessions = yield* SessionCredentialService;
+  const pairingRepository = yield* AuthPairingLinkRepository;
 
   const createPairingLink: AuthControlPlaneShape["createPairingLink"] = (input) =>
     Effect.gen(function* () {
@@ -135,6 +139,7 @@ export const makeAuthControlPlane = Effect.gen(function* () {
       .pipe(Effect.mapError(toAuthControlPlaneError("Failed to revoke other sessions.")));
 
   return {
+    remotePairing: makeRemotePairingControlPlane(pairingRepository.remote),
     createPairingLink,
     listPairingLinks,
     revokePairingLink,
@@ -145,7 +150,9 @@ export const makeAuthControlPlane = Effect.gen(function* () {
   } satisfies AuthControlPlaneShape;
 });
 
-export const AuthControlPlaneLive = Layer.effect(AuthControlPlane, makeAuthControlPlane);
+export const AuthControlPlaneLive = Layer.effect(AuthControlPlane, makeAuthControlPlane).pipe(
+  Layer.provide(AuthPairingLinkRepositoryLive),
+);
 
 export const AuthCoreLive = Layer.mergeAll(
   BootstrapCredentialServiceLive,

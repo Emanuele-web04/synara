@@ -1,0 +1,17 @@
+# Managed Cloudflare transport and account-scoped code pairing
+
+Accepted 2026-09-28. Supersedes the transport/deployment decision in ADR 0008 and the relay-control assumptions of ADRs 0005 and 0009. ADR 0010's attempt-based reachability and ADRs 0011–0015's identity/session ownership remain.
+
+The account API provisions remotely managed Cloudflare tunnels and DNS. It stores allocation intent before external operations, checkpoints resource IDs, and retains retired allocation names for retryable cleanup. Host identity generation fences publication and token delivery. Cloudflare administration never runs on the controller or execution host; only the current host proof can receive its own connector credential. The directory contains the managed HTTPS endpoint, never credentials.
+
+A pinned, SHA256-verified cloudflared connects a dedicated loopback listener to that hostname. Only `/ws/host/v2` and minimal `/health` are public. Public TLS ends at Cloudflare; the opaque binary WebSocket still contains the execution host's pinned TLS 1.3 session. Local administration, provider credentials, controller cookies and bearer tokens never traverse that ingress. Preference is loopback, LAN, Tailscale, SSH, Cloudflare. There is no fallback to the retired Bun relay.
+
+Without the relay control socket, the host polls authenticated authorization snapshots every 10 seconds with ±10% jitter. Device sessions close before durable tombstone writes and acknowledgement. A fresh snapshot, successfully applied, grants a 60-second admission lease; expiration closes active remote streams. Hard host-proof denial or owner removal permanently disables that scope locally. This is bounded periodic revocation, not instantaneous delivery. An offline Mini cannot remain remotely available indefinitely.
+
+A cryptographically random eight-character code locates a ten-minute invitation inside the same account and organization. Atomic redemption requires a registered device proof and consumes the invitation. The code is neither a permanent credential nor an encryption key. The cloud now participates in bootstrap delivery, so the controller must compare the complete root fingerprint on the host before requesting access; the host separately approves the exact requesting device fingerprint. Durable keys and pinned trust authorize subsequent connections.
+
+WorkOS authenticates users; it does not attest a paid subscription. Until an existing commercial entitlement authority is integrated, provisioning, pairing, grants and host authorization require explicit `REMOTE_TEST_USER_IDS` membership. Stable's server gate still rejects remote. This test allowlist is not permission for a customer rollout.
+
+The old relay source, control protocol, ticket issuance and polling feed have been removed alongside its deployment container, Docker workflow and application configuration. Their historical regressions remain in Git history. Live host-session close codes belong to `packages/contracts/src/hostSessions.ts`; current opaque transport and backpressure regressions run against the host gateway and Cloudflare boundary fixture. API and PostgreSQL hosting are separate from the removed traffic relay.
+
+See [operations](../cloudflare-remote.md), [v2 boundaries](../remote-connections-v2.md) and the [T3 compatibility record](../implementation/cloudflare-remote/T3-COMPATIBILITY.md). A fixture proxy, local Electron run or unsigned build is not Cloudflare live qualification.

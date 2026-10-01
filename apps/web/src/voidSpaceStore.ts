@@ -1,3 +1,5 @@
+import { executionKey } from "./lib/hosts/executionContext";
+import { executionStorage } from "./lib/hosts/executionStorage";
 // FILE: voidSpaceStore.ts
 // Purpose: Persists what the user calls the group of projects that are in no Space.
 // Layer: Web UI state
@@ -41,7 +43,7 @@ export function normalizeVoidSpace(value: unknown): VoidSpacePresentation {
 function readPersisted(): VoidSpacePresentation {
   if (typeof window === "undefined") return DEFAULT_VOID_SPACE;
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = executionStorage.getItem(STORAGE_KEY);
     return raw ? normalizeVoidSpace(JSON.parse(raw)) : DEFAULT_VOID_SPACE;
   } catch {
     return DEFAULT_VOID_SPACE;
@@ -54,10 +56,10 @@ function persist(voidSpace: VoidSpacePresentation): void {
     // The default is stored as an absent key, so an install that never renamed Void keeps
     // following the product default if it ever changes.
     if (voidSpace.name === DEFAULT_VOID_SPACE.name && voidSpace.icon === DEFAULT_VOID_SPACE.icon) {
-      window.localStorage.removeItem(STORAGE_KEY);
+      executionStorage.removeItem(STORAGE_KEY);
       return;
     }
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(voidSpace));
+    executionStorage.setItem(STORAGE_KEY, JSON.stringify(voidSpace));
   } catch {
     // A blocked storage API must not make renaming fail; the name still applies this session.
   }
@@ -95,7 +97,7 @@ if (typeof window !== "undefined") {
   // Renaming in one window has to reach the others: every window renders this label in its
   // sidebar, and `storage` only fires in the windows that did not write.
   window.addEventListener("storage", (event) => {
-    if (event.key !== null && event.key !== STORAGE_KEY) return;
+    if (event.key !== null && event.key !== executionKey(STORAGE_KEY)) return;
     useVoidSpaceStore.setState({ voidSpace: readPersisted() });
   });
 }

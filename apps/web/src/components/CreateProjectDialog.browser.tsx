@@ -7,21 +7,65 @@ import { render } from "vitest-browser-react";
 
 const nativeApi = vi.hoisted(() => ({
   onProvisionProgress: vi.fn(() => () => undefined),
+  browse: vi.fn(async () => ({ parentPath: "/workspace", entries: [] })),
 }));
 
-vi.mock("../nativeApi", () => ({
-  readNativeApi: () => ({
-    projects: {
-      onProvisionProgress: nativeApi.onProvisionProgress,
-    },
-  }),
-}));
+vi.mock("../nativeApi", () => {
+  const api = {
+    filesystem: { browse: nativeApi.browse },
+    projects: { onProvisionProgress: nativeApi.onProvisionProgress },
+  };
+  return { readNativeApi: () => api, ensureNativeApi: () => api };
+});
 
+vi.mock("../appNavigation", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../appNavigation")>();
+  const { createMemoryHistory } = await import("@tanstack/react-router");
+  return { ...original, appHistory: createMemoryHistory({ initialEntries: ["/"] }) };
+});
+
+import { appHistory } from "../appNavigation";
 import { CreateProjectDialog } from "./CreateProjectDialog";
 
 describe("CreateProjectDialog GitHub source", () => {
   afterEach(() => {
     nativeApi.onProvisionProgress.mockClear();
+    appHistory.replace("/");
+  });
+
+  it("browses local folders after leaving a remote chat and preserves an explicit name", async () => {
+    appHistory.replace("/local-thread?environment=remote-computer&path=%2Fremote-thread");
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    await render(
+      <CreateProjectDialog
+        open
+        githubProvisioningAvailable
+        spaces={[]}
+        activeSpaceId={null}
+        defaultCloneParent="/workspace"
+        onOpenChange={vi.fn()}
+        onSubmit={onSubmit}
+      />,
+    );
+    expect(
+      (page.getByRole("button", { name: "Add folder", exact: true }).element() as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+    await page.getByLabelText("Project name", { exact: true }).fill("My workspace");
+    await page.getByRole("button", { name: "Add folder", exact: true }).click();
+    await expect
+      .element(page.getByRole("heading", { name: "Choose a folder on This computer" }))
+      .toBeVisible();
+    await page.getByRole("button", { name: "Use folder" }).click();
+    await page.getByRole("button", { name: "Create project", exact: true }).click();
+    await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
+    expect(onSubmit.mock.calls[0]?.[0]).toEqual({
+      source: "local",
+      name: "My workspace",
+      workspaceRoot: "/workspace",
+      createIfMissing: false,
+      spaceId: null,
+    });
   });
 
   it("disables GitHub when the server does not advertise provisioning", async () => {

@@ -31,6 +31,8 @@ export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [
   GROUPS_BETA_FEATURE,
   INBOX_BETA_FEATURE,
   "tasks",
+  "remoteConnections",
+  "accountProfileSync",
 ];
 
 /**
@@ -88,3 +90,6 @@ export function desktopFlavorFromProtocol(
       return "unknown";
   }
 }
+
+/** Deferred features retain their data but have no active consumers. */
+export const HOST_SECRETS_SYNC_ENABLED = false;

@@ -106,14 +106,14 @@ External IP addresses remain redacted and external ports remain distinct.
 ## Transport and storage
 
 Events are buffered to `~/.synara-beta/diagnostics/events.jsonl` and flushed in
-batches as NDJSON over HTTPS to `https://synara-beta-diagnostics.kartik-9f9.workers.dev`
+batches as NDJSON over HTTPS to `https://synara-beta-diagnostics.synara-orgs.workers.dev`
 (override with `SYNARA_BETA_DIAGNOSTICS_URL` for local development; only `https://`
 or loopback targets are accepted). Events land in a Cloudflare D1 database and
-are kept with no expiry date, so crash and error trends can be compared across
-all beta releases. Crash dumps land in the `synara-beta-crash-dumps` R2 bucket
-and are also kept with no expiry date. The ingest worker
-and its private dashboard live outside this repository (they run on the
-maintainers' Cloudflare account). The worker re-runs the same allowlist and
+are retained without automatic expiry so crash and error trends can be compared
+across beta releases. Crash dumps land in the private `synara-beta-crash-dumps`
+R2 bucket and also have no automatic expiry. The ingest worker and its private
+dashboard live outside this repository in the Synara Orgs Cloudflare account.
+The worker re-runs the same allowlist and
 `redactDiagnosticText` and drops unknown events/fields, so the documented
 schema is enforced at the endpoint, not just the client.
 
@@ -127,3 +127,7 @@ If the endpoint is unreachable the queue stays on disk and retries on the next
 flush; if it grows past 1 MiB the client trims it to the newest 512 KiB of
 events rather than letting it grow. Diagnostics never blocks the app: every
 failure is swallowed.
+
+Previously shipped Beta builds still use `https://synara-beta-diagnostics.kartik-9f9.workers.dev`;
+that endpoint forwards ingestion to the new service. The migration preserves
+existing diagnostics and does not change collection or retention.

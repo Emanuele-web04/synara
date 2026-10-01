@@ -1,3 +1,9 @@
+import { readWorkspaceFrame } from "../lib/hosts/workspaceFrame";
+import {
+  WorkspacePanels,
+  WorkspaceFrameNavigation,
+  useWorkspaceSidebarControls,
+} from "../components/hosts/WorkspacePanels";
 import type { ResolvedKeybindingsConfig } from "@synara/contracts";
 import { CHAT_SURFACE_HEADER_HEIGHT_PX } from "@synara/shared/desktopChrome";
 import { useQuery } from "@tanstack/react-query";
@@ -38,6 +44,7 @@ import { resolveGroupChatTargetProjectId } from "../components/SidebarGroupsSurf
 import { isGroupContainerProject } from "../lib/groupProjects";
 import { isOrdinarySpaceProject } from "../lib/spaces";
 import { isKeyboardShortcutsHelpShortcut, resolveShortcutCommand } from "../keybindings";
+import { isModelPickerShortcutScopeActive } from "../components/chat/ComposerModelPicker.logic";
 import { useStore } from "../store";
 import { createProjectLastActivityAtSelector } from "../storeSelectors";
 import { useSpacesUiStore } from "../spacesUiStore";
@@ -365,6 +372,14 @@ function ChatRouteGlobalShortcuts() {
         terminalOpen,
         terminalWorkspaceOpen,
       };
+      const frame = readWorkspaceFrame();
+      if (
+        frame?.controller.sidebarKeydown(event, shortcutContext, isModelPickerShortcutScopeActive())
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
 
       if (recentSwitcherState && event.key === "Escape") {
         event.preventDefault();
@@ -502,9 +517,17 @@ function ChatRouteGlobalShortcuts() {
       void handleNewThread(target.projectId);
     };
 
+    const onWindowKeyUp = (event: KeyboardEvent) =>
+      readWorkspaceFrame()?.controller.sidebarKeyup(event, {
+        terminalFocus: isTerminalFocused(),
+        terminalOpen,
+        terminalWorkspaceOpen,
+      });
     window.addEventListener("keydown", onWindowKeyDown, { capture: true });
+    window.addEventListener("keyup", onWindowKeyUp, { capture: true });
     return () => {
       window.removeEventListener("keydown", onWindowKeyDown, { capture: true });
+      window.removeEventListener("keyup", onWindowKeyUp, { capture: true });
     };
   }, [
     activeDraftThread,
@@ -583,6 +606,7 @@ const SIDEBAR_GAP_CLASS =
 const SIDEBAR_INNER_CLASS = "app-sidebar-surface";
 
 function ChatRouteLayout() {
+  const workspaceSidebarControls = useWorkspaceSidebarControls();
   const isEditorView = useLocation({
     select: (location) => (location.search as { view?: unknown }).view === "editor",
   });
@@ -648,8 +672,25 @@ function ChatRouteLayout() {
         </SidebarInstanceProvider>
       )}
       <Outlet />
+      <WorkspacePanels />
     </div>
   );
+
+  if (readWorkspaceFrame()) {
+    return (
+      <SidebarProvider
+        open={false}
+        controls={workspaceSidebarControls}
+        className="h-svh overflow-hidden bg-background"
+      >
+        <WorkspaceFrameNavigation />
+        <ChatRouteGlobalShortcuts />
+        <div className="relative flex h-svh min-h-0 min-w-0 flex-1">
+          <Outlet />
+        </div>
+      </SidebarProvider>
+    );
+  }
 
   // Rail layout (Codex-style): the left column holds the window-chrome strip over the fixed
   // rail and the off-canvas panel; the route column keeps its own header on the shell band.

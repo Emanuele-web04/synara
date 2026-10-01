@@ -1,3 +1,5 @@
+import { inspectSqliteMigrationBackup } from "./persistence/MigrationBackup";
+import { REMOTE_IMPORT_SUSPENSION_FILE } from "./remoteFeaturePolicy";
 // FILE: betaImport.ts
 // Purpose: Beta-side consumer of the stable app's "Copy my data to Beta" handoff.
 // Layer: Startup hook — runs before the beta server creates/opens its own database.
@@ -40,6 +42,10 @@ import {
 
 /** Entries that describe this install's live runtime, not user data. */
 const EXCLUDED_STATE_ENTRIES = new Set([
+  "environment-id",
+  "remote-trust",
+  "remote-connections.json",
+  REMOTE_IMPORT_SUSPENSION_FILE,
   "logs",
   "diagnostics",
   "server-runtime.json",
@@ -135,7 +141,17 @@ function copyStateEntries(
       cpSync(sourcePath, stagedPath, {
         recursive: true,
         force: true,
-        filter: rejectLinkedEntry,
+        filter: (path) => {
+          const relative = path.slice(sourcePath.length + 1);
+          if (
+            entry === "secrets" &&
+            /^(?:host-identity|device-identity|host-secrets-sync-key|remote-tls|remote-trust)(?:[.\/\-]|$)/.test(
+              relative,
+            )
+          )
+            return false;
+          return rejectLinkedEntry(path);
+        },
       });
     } else if (stats.isFile()) {
       cpSync(sourcePath, stagedPath, { force: true });
@@ -171,26 +187,6 @@ function liveDatabaseSignature(sourceDbPath: string): string {
     // No WAL: nothing to tear against.
   }
   return `${main.size}:${main.mtimeMs}:${walHeader}`;
-}
-
-/** Highest applied migration in a database file, or null without a tracker. */
-async function readMigrationHighWaterMark(dbPath: string): Promise<number | null> {
-  const { DatabaseSync } = await import("node:sqlite");
-  const database = new DatabaseSync(dbPath, { readOnly: true });
-  try {
-    const table = database
-      .prepare(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'",
-      )
-      .get();
-    if (!table) return null;
-    const row = database
-      .prepare("SELECT max(migration_id) AS id FROM effect_sql_migrations")
-      .get() as { id: number | null } | undefined;
-    return typeof row?.id === "number" ? row.id : null;
-  } finally {
-    database.close();
-  }
 }
 
 async function vacuumInto(sourceDbPath: string, targetPath: string): Promise<void> {
@@ -257,11 +253,26 @@ async function snapshotStableDatabase(
       // error instead of landing in the beta home.
       await vacuumInto(stagedDbPath, stagingPath);
     }
-    const sourceMigration = await readMigrationHighWaterMark(stagingPath);
-    if (sourceMigration !== null && sourceMigration > latestMigrationId) {
+    const inspection = await inspectSqliteMigrationBackup(stagingPath);
+    if (inspection.migrationId > latestMigrationId) {
       throw new Error(
         "Synara is newer than this Synara Beta. Update Synara Beta, then copy your data again.",
       );
+    }
+    if (inspection.lineage === "incompatible")
+      throw new Error("Unrecognized migration lineage in Stable data.");
+    const { DatabaseSync } = await import("node:sqlite");
+    const staged = new DatabaseSync(stagingPath);
+    try {
+      const columns = staged.prepare("PRAGMA table_info(account_usage_sync)").all();
+      if (columns.length > 0) {
+        const identity = columns.some((column) => column.name === "account_identity");
+        staged.exec(
+          `UPDATE account_usage_sync SET watermark_minute = NULL, last_failure_at = NULL${identity ? ", account_identity = NULL" : ""}`,
+        );
+      }
+    } finally {
+      staged.close();
     }
     // A leftover WAL from an earlier unclean beta exit is not tied to a
     // database file and would replay old pages over the imported one.
@@ -419,6 +430,12 @@ export async function runBetaImportIfRequested(input: {
         input.latestMigrationId,
       );
       const copiedEntries = copyStateEntries(sourceStateDir, stagedStateDir, input.stateDir);
+      writeFileSync(
+        join(stagedStateDir, REMOTE_IMPORT_SUSPENSION_FILE),
+        JSON.stringify({ version: 1, reason: "stable-import" }),
+        { mode: 0o600 },
+      );
+      copiedEntries.push(REMOTE_IMPORT_SUSPENSION_FILE);
       commitStagedImport(stagedStateDir, input.stateDir, copiedEntries);
     } finally {
       rmSync(stagedRoot, { recursive: true, force: true });

@@ -6,6 +6,8 @@ import type { ComponentType } from "react";
 import type { ProviderKind } from "@synara/contracts";
 import { basenameOfPath } from "../file-icons";
 import type { ProjectAppearance } from "../lib/projectAppearance";
+import type { WorkspaceSession } from "../lib/hosts/workspaceSessions";
+import { isSidebarThreadVisible } from "../storeSelectors";
 import type { ThemeMode, ThemeVariant } from "../theme/theme.logic";
 
 export interface SidebarSearchAction {
@@ -37,6 +39,13 @@ export interface SidebarSearchTheme {
   isActive: boolean;
 }
 
+/** Navigation metadata only; clients and credentials remain in the owning host. */
+export interface SidebarSearchHost {
+  environmentId: string;
+  name: string;
+  unavailable?: boolean;
+}
+
 export interface SidebarSearchProject {
   id: string;
   name: string;
@@ -48,6 +57,7 @@ export interface SidebarSearchProject {
   spaceName: string;
   createdAt?: string | undefined;
   updatedAt?: string | undefined;
+  host?: SidebarSearchHost;
 }
 
 export interface SidebarSearchProjectMatch {
@@ -65,6 +75,7 @@ export interface SidebarSearchThread {
   provider: ProviderKind;
   createdAt: string;
   updatedAt?: string | undefined;
+  host?: SidebarSearchHost;
   messages: readonly {
     text: string;
   }[];
@@ -90,6 +101,9 @@ export function areSidebarSearchThreadListsEqual(
       left.provider !== right.provider ||
       left.createdAt !== right.createdAt ||
       left.updatedAt !== right.updatedAt ||
+      left.host?.environmentId !== right.host?.environmentId ||
+      left.host?.name !== right.host?.name ||
+      left.host?.unavailable !== right.host?.unavailable ||
       left.messages !== right.messages
     ) {
       return false;
@@ -101,9 +115,69 @@ export function areSidebarSearchThreadListsEqual(
 export interface SidebarSearchThreadMatch {
   id: string;
   thread: SidebarSearchThread;
-  matchKind: "message" | "project" | "title";
+  matchKind: "message" | "project" | "title" | "host";
   snippet: string | null;
   messageMatchCount: number;
+}
+
+const EMPTY_REMOTE_MESSAGES: SidebarSearchThread["messages"] = [];
+
+/** Connected computers publish titles and project metadata, never remote transcripts. */
+export function workspaceSidebarSearch(sessions: readonly WorkspaceSession[]): {
+  projects: SidebarSearchProject[];
+  threads: SidebarSearchThread[];
+} {
+  const projects: SidebarSearchProject[] = [];
+  const threads: SidebarSearchThread[] = [];
+  for (const session of sessions) {
+    const host: SidebarSearchHost = {
+      environmentId: session.host.executionScope.environmentId,
+      name: session.host.hostName,
+      unavailable: session.summary?.state !== "open" || !session.navigation || !!session.error,
+    };
+    const projectById = new Map(
+      (session.summary?.projects ?? []).map((project) => [project.id, project]),
+    );
+    for (const project of projectById.values()) {
+      projects.push({
+        id: project.id,
+        name: project.name,
+        remoteName: project.name,
+        folderName: basenameOfPath(project.cwd),
+        localName: null,
+        appearance: project.appearance ?? null,
+        cwd: project.cwd,
+        spaceName: project.section === "projects" ? "" : "Global",
+        createdAt: project.createdAt,
+        updatedAt: project.updatedAt,
+        host,
+      });
+    }
+    for (const thread of session.summary?.threads ?? []) {
+      const project = projectById.get(thread.projectId);
+      if (
+        !project ||
+        thread.parentThreadId ||
+        thread.archivedAt != null ||
+        !isSidebarThreadVisible(thread)
+      )
+        continue;
+      threads.push({
+        id: thread.id,
+        title: thread.title,
+        projectId: thread.projectId,
+        projectName: project.name,
+        projectRemoteName: project.name,
+        spaceName: project.section === "projects" ? "" : "Global",
+        provider: thread.modelSelection.provider,
+        createdAt: thread.createdAt,
+        updatedAt: thread.updatedAt,
+        host,
+        messages: EMPTY_REMOTE_MESSAGES,
+      });
+    }
+  }
+  return { projects, threads };
 }
 
 function normalizeText(value: string): string {
@@ -260,6 +334,7 @@ function scoreProject(project: SidebarSearchProject, query: string): number | nu
   const cwd = normalizeText(project.cwd);
   const folder = normalizeText(project.folderName || basenameOfPath(project.cwd));
   const spaceName = normalizeText(project.spaceName);
+  const hostName = normalizeText(project.host?.name ?? "");
 
   if (name === query) return 150;
   if (remoteName === query) return 150;
@@ -273,6 +348,7 @@ function scoreProject(project: SidebarSearchProject, query: string): number | nu
   if (spaceName === query) return 90;
   if (cwd.includes(query)) return 70;
   if (spaceName.includes(query)) return 60;
+  if (hostName.includes(query)) return 55;
   return null;
 }
 
@@ -333,7 +409,7 @@ export function matchSidebarSearchProjects(
 
   return projects
     .map((project) => ({
-      id: `project:${project.id}`,
+      id: `project:${JSON.stringify([project.host?.environmentId ?? null, project.id])}`,
       project,
       score: scoreProject(project, normalizedQuery),
       recency: Date.parse(project.updatedAt ?? project.createdAt ?? "") || 0,
@@ -359,7 +435,7 @@ export function matchSidebarSearchThreads(
   if (!normalizedQuery) {
     return threads
       .map((thread) => ({
-        id: `thread:${thread.id}`,
+        id: `thread:${JSON.stringify([thread.host?.environmentId ?? null, thread.id])}`,
         thread,
         matchKind: "title" as const,
         snippet: null,
@@ -383,6 +459,7 @@ export function matchSidebarSearchThreads(
       const projectName = normalizeText(thread.projectName);
       const projectRemoteName = normalizeText(thread.projectRemoteName);
       const spaceName = normalizeText(thread.spaceName);
+      const hostName = normalizeText(thread.host?.name ?? "");
       const messageMatch = scoreMessage(thread.messages, normalizedQuery, queryTokens);
       let score: number | null = null;
       let matchKind: SidebarSearchThreadMatch["matchKind"] = "title";
@@ -416,10 +493,13 @@ export function matchSidebarSearchThreads(
       } else if (spaceName.includes(normalizedQuery)) {
         score = 55;
         matchKind = "project";
+      } else if (hostName.includes(normalizedQuery)) {
+        score = 50;
+        matchKind = "host";
       }
 
       return {
-        id: `thread:${thread.id}`,
+        id: `thread:${JSON.stringify([thread.host?.environmentId ?? null, thread.id])}`,
         thread,
         index,
         score,

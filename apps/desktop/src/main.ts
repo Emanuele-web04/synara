@@ -1,3 +1,4 @@
+import { registerRemoteResourceBroker, REMOTE_RESOURCE_SCHEME } from "./remoteResourceBroker";
 import { CuaDriverHost, sweepOrphanedCuaDrivers } from "./cuaDriverHost";
 import { createLinuxCuaDriverHost } from "./linuxCuaDriverHost";
 import { LinuxEscapeKillSwitchMonitor, linuxEscapeSession } from "./linuxEscapeKillSwitchMonitor";
@@ -1172,6 +1173,16 @@ function armInstallWatchdog(): void {
 }
 
 protocol.registerSchemesAsPrivileged([
+  {
+    scheme: REMOTE_RESOURCE_SCHEME,
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+      stream: true,
+    },
+  },
   {
     scheme: DESKTOP_SCHEME,
     privileges: {
@@ -4022,6 +4033,23 @@ function backendEnv(): NodeJS.ProcessEnv {
     SYNARA_HOME: BASE_DIR,
     SYNARA_AUTH_TOKEN: backendAuthToken,
     SYNARA_DESKTOP_SHUTDOWN_TOKEN: DESKTOP_BACKEND_SHUTDOWN_TOKEN,
+    // Remote-host wiring is operator configuration, not app state: the account
+    // service to sign in against and the bundled remote connector. Passed
+    // through only when set so a plain launch keeps the defaults.
+    ...(process.env.SYNARA_ACCOUNT_URL
+      ? { SYNARA_ACCOUNT_URL: process.env.SYNARA_ACCOUNT_URL }
+      : {}),
+    ...(app.isPackaged
+      ? {
+          SYNARA_CLOUDFLARED_PATH: Path.join(
+            process.resourcesPath,
+            "cloudflared",
+            process.platform === "win32" ? "cloudflared.exe" : "cloudflared",
+          ),
+        }
+      : process.env.SYNARA_CLOUDFLARED_PATH
+        ? { SYNARA_CLOUDFLARED_PATH: process.env.SYNARA_CLOUDFLARED_PATH }
+        : {}),
   };
   // The backend runs the same login-shell probe at startup and does not begin listening
   // until it returns, so an unmarked child serializes a second ~1s hydration behind ours.
@@ -5944,6 +5972,15 @@ async function bootstrap(): Promise<void> {
   }
 
   registerIpcHandlers();
+  const disposeRemoteResources = registerRemoteResourceBroker({
+    trustedRenderer: () =>
+      mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null,
+    trustedOrigin: () =>
+      isDevelopment ? process.env.VITE_DEV_SERVER_URL! : desktopIdentity.entryUrl,
+    backendWsUrl: () =>
+      normalizeDesktopWsUrl(backendWsUrl) ?? resolveDesktopWsUrlFromEnv(process.env),
+  });
+  app.once("will-quit", disposeRemoteResources);
   writeDesktopLogHeader("bootstrap ipc handlers registered");
   try {
     await ensureBrowserHostPipeServer();

@@ -19,8 +19,9 @@ const projectFavicon = `data:image/svg+xml,${encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><circle cx="8" cy="8" r="8" fill="red"/></svg>',
 )}`;
 
-vi.mock("~/lib/wsHttpUrl", () => ({
-  resolveWsHttpUrl: () => projectFavicon,
+vi.mock("~/lib/wsHttpUrl", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/lib/wsHttpUrl")>()),
+  resolveExecutionResource: () => projectFavicon,
 }));
 
 const PROJECT_A = ProjectId.makeUnsafe("activity-project-a");
@@ -83,6 +84,10 @@ function renderActivity(input: {
   pinnedThreadIdSet?: ReadonlySet<ThreadId>;
   settledOverrideByThreadId?: ReadonlyMap<ThreadId, boolean>;
   prByThreadId?: ReadonlyMap<ThreadId, OrchestrationThreadPullRequest | null>;
+  externalRows?: ReadonlyMap<
+    ThreadId,
+    { hostName: string; onOpen: () => void; status: ThreadStatusPill | null }
+  >;
   onVisibleThreadIdsChange?: (threadIds: readonly ThreadId[]) => void;
   onOpenThread?: (threadId: ThreadId) => void;
   onSetThreadSettled?: (threadId: ThreadId, settled: boolean) => void;
@@ -98,6 +103,7 @@ function renderActivity(input: {
     <SidebarActivityView
       threads={input.threads}
       projectById={new Map(projects.map((project) => [project.id, project]))}
+      externalRows={input.externalRows}
       activeThreadId={input.activeThreadId ?? null}
       pinnedThreadIdSet={input.pinnedThreadIdSet ?? new Set()}
       settledOverrideByThreadId={input.settledOverrideByThreadId ?? new Map()}
@@ -131,6 +137,56 @@ describe("SidebarActivityView", () => {
     document.body.innerHTML = "";
   });
 
+  it("keeps remote pinned rows in the feed without sending them to local actions", async () => {
+    const local = makeThread(70, { lastVisitedAt: "2026-08-02T09:00:00.000Z" });
+    const remote = makeThread(71, {
+      id: ThreadId.makeUnsafe('workspace:["remote-env","thread-71"]'),
+      projectId: PROJECT_B,
+      lastVisitedAt: "2026-08-02T09:00:00.000Z",
+    });
+    const onRemoteOpen = vi.fn();
+    const onOpenThread = vi.fn();
+    const onMarkThreadRead = vi.fn();
+    const onRenameThread = vi.fn();
+    const onThreadContextMenu = vi.fn();
+    const onVisibleThreadIdsChange = vi.fn();
+    const mounted = await render(
+      renderActivity({
+        threads: [local, remote],
+        projects: [makeProject(PROJECT_A, "Project A"), makeProject(PROJECT_B, "Project B")],
+        pinnedThreadIdSet: new Set([remote.id]),
+        externalRows: new Map([
+          [remote.id, { hostName: "Studio Mac", onOpen: onRemoteOpen, status: null }],
+        ]),
+        onOpenThread,
+        onMarkThreadRead,
+        onRenameThread,
+        onThreadContextMenu,
+        onVisibleThreadIdsChange,
+      }),
+    );
+
+    expect(page.getByRole("button", { name: "Pinned" })).toBeVisible();
+    const remoteRow = page.getByTestId(`activity-thread-${remote.id}`);
+    expect(remoteRow).toHaveAttribute("draggable", "false");
+    expect(remoteRow.element().parentElement?.querySelectorAll("button")).toHaveLength(1);
+    await remoteRow.click();
+    expect(onRemoteOpen).toHaveBeenCalledOnce();
+    expect(onOpenThread).not.toHaveBeenCalled();
+    remoteRow.element().dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    remoteRow.element().dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
+    expect(onRenameThread).not.toHaveBeenCalled();
+    expect(onThreadContextMenu).not.toHaveBeenCalled();
+
+    await page.getByRole("button", { name: "Activity options" }).click();
+    await page.getByRole("menuitem", { name: "Mark all as read" }).click();
+    expect(onMarkThreadRead).toHaveBeenCalledOnce();
+    expect(onMarkThreadRead).toHaveBeenCalledWith(local.id, local.latestTurn?.completedAt);
+    await vi.waitFor(() =>
+      expect(onVisibleThreadIdsChange).toHaveBeenLastCalledWith([remote.id, local.id]),
+    );
+    await mounted.unmount();
+  });
   it.each([
     { name: "favicon", appearance: null },
     { name: "emoji", appearance: { kind: "emoji", emoji: "🚀" } },

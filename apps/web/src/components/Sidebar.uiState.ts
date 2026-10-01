@@ -1,3 +1,4 @@
+import { executionStorage } from "../lib/hosts/executionStorage";
 // FILE: Sidebar.uiState.ts
 // Purpose: Persists sidebar-only UI preferences plus the last chat route for restore flows.
 // Layer: Browser storage helper
@@ -71,7 +72,7 @@ export function readSidebarUiState(): SidebarUiState {
   }
 
   try {
-    const raw = window.localStorage.getItem(SIDEBAR_UI_STATE_STORAGE_KEY);
+    const raw = executionStorage.getItem(SIDEBAR_UI_STATE_STORAGE_KEY);
     if (!raw) {
       return DEFAULT_SIDEBAR_UI_STATE;
     }
@@ -207,7 +208,7 @@ export function persistSidebarUiState(input: SidebarUiState): void {
   }
 
   try {
-    window.localStorage.setItem(
+    executionStorage.setItem(
       SIDEBAR_UI_STATE_STORAGE_KEY,
       JSON.stringify({
         chatSectionExpanded: input.chatSectionExpanded,

@@ -30,6 +30,7 @@ import {
   MAC_WINDOW_MATERIAL_ADDON_STAGE_PATH,
   validateDesktopNativeBuildHost,
 } from "./lib/desktop-platform-build-config.ts";
+import { stageCloudflared } from "./lib/cloudflared.ts";
 import { stageDesktopRuntimeResources } from "./lib/desktop-runtime-resources.ts";
 import {
   SYNARA_PACKAGED_DESKTOP_FLAVORS,
@@ -1298,6 +1299,23 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       ),
     );
   }
+
+  yield* timedBuildStage(
+    "cloudflared-provision",
+    Effect.tryPromise({
+      try: () =>
+        stageCloudflared(
+          path.join(stageResourcesDir, "cloudflared"),
+          options.platform,
+          options.arch,
+        ),
+      catch: (cause) =>
+        new BuildScriptError({
+          message: "Could not stage the verified Cloudflare connector.",
+          cause,
+        }),
+    }),
+  );
 
   yield* stageDesktopRuntimeResources(
     stageResourcesDir,

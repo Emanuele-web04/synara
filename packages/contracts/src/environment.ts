@@ -20,12 +20,17 @@ export const ExecutionEnvironmentPlatform = Schema.Struct({
 export type ExecutionEnvironmentPlatform = typeof ExecutionEnvironmentPlatform.Type;
 
 export const ExecutionEnvironmentCapabilities = Schema.Struct({
+  accountProfileSync: Schema.optional(Schema.Boolean),
+  remoteConnections: Schema.optional(Schema.Boolean),
+  remoteResources: Schema.optional(Schema.Boolean),
+  remoteUnavailableReason: Schema.optional(TrimmedNonEmptyString),
   repositoryIdentity: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 
 export const ExecutionEnvironmentDescriptor = Schema.Struct({
   environmentId: EnvironmentId,
+  channel: Schema.optional(Schema.Literals(["stable", "beta", "canary", "dev"])),
   label: TrimmedNonEmptyString,
   platform: ExecutionEnvironmentPlatform,
   serverVersion: TrimmedNonEmptyString,

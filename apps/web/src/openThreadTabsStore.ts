@@ -1,3 +1,4 @@
+import { executionStorage } from "./lib/hosts/executionStorage";
 // FILE: openThreadTabsStore.ts
 // Purpose: Persist which threads are open as tabs, in tab order. The single source of
 //          truth for "open threads": the chat header strip and the editor rail both read
@@ -31,14 +32,14 @@ const LEGACY_EDITOR_RAIL_CHAT_TABS_STORAGE_KEY = "synara.editor.railChatTabsByPr
 
 function createOpenThreadTabsStorage(): StateStorage {
   return {
-    getItem: (name) => localStorage.getItem(name),
+    getItem: (name) => executionStorage.getItem(name),
     setItem: (name, value) => {
-      localStorage.setItem(name, value);
-      localStorage.removeItem(LEGACY_EDITOR_RAIL_CHAT_TABS_STORAGE_KEY);
+      executionStorage.setItem(name, value);
+      executionStorage.removeItem(LEGACY_EDITOR_RAIL_CHAT_TABS_STORAGE_KEY);
     },
     removeItem: (name) => {
-      localStorage.removeItem(name);
-      localStorage.removeItem(LEGACY_EDITOR_RAIL_CHAT_TABS_STORAGE_KEY);
+      executionStorage.removeItem(name);
+      executionStorage.removeItem(LEGACY_EDITOR_RAIL_CHAT_TABS_STORAGE_KEY);
     },
   };
 }

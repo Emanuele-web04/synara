@@ -1,3 +1,4 @@
+import { readExecutionContext } from "./hosts/executionContext";
 import type { ProviderKind } from "@synara/contracts";
 import { queryOptions } from "@tanstack/react-query";
 
@@ -7,7 +8,7 @@ const OPEN_USAGE_BASE_URL = "http://127.0.0.1:6736";
 const OPEN_USAGE_ENABLED_STORAGE_KEY = "synara.openUsage.enabled";
 
 function isOpenUsagePollingEnabled(): boolean {
-  if (typeof window === "undefined") {
+  if (typeof window === "undefined" || readExecutionContext()?.remote) {
     return false;
   }
   return window.localStorage.getItem(OPEN_USAGE_ENABLED_STORAGE_KEY) === "true";
@@ -34,7 +35,7 @@ export function openUsageProviderSnapshotQueryOptions(
     refetchOnWindowFocus: false,
     retry: false,
     queryFn: async (): Promise<unknown | null> => {
-      if (!providerId) return null;
+      if (!providerId || readExecutionContext()?.remote) return null;
 
       try {
         const response = await fetch(`${OPEN_USAGE_BASE_URL}/v1/usage/${providerId}`);

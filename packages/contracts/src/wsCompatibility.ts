@@ -1,3 +1,4 @@
+import { REMOTE_AGENT_GATEWAY_CAPABILITY } from "./remoteAgentGateway";
 import { Schema } from "effect";
 
 import { NonNegativeInt } from "./baseSchemas";
@@ -56,6 +57,7 @@ export const WS_CLIENT_REQUIRED_CAPABILITIES = [
 ] as const;
 
 export const WS_SERVER_CAPABILITIES = [
+  REMOTE_AGENT_GATEWAY_CAPABILITY,
   ...WS_CLIENT_REQUIRED_CAPABILITIES,
   // Optional feature capability: older servers may omit it without making the
   // rest of a newer client unusable during a staggered rollout.
@@ -79,6 +81,8 @@ export const WsBootstrapNegotiateInput = Schema.Struct({
 export type WsBootstrapNegotiateInput = typeof WsBootstrapNegotiateInput.Type;
 
 export const WsBootstrapNegotiateResult = Schema.Struct({
+  /** Controller reservation for a single remote renderer stream; never a credential. */
+  remoteAttachmentId: Schema.optional(Schema.String),
   protocolEpoch: Schema.Int,
   negotiatedRevision: NonNegativeInt,
   serverBuild: Schema.String,

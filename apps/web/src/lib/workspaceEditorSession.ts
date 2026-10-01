@@ -1,3 +1,4 @@
+import { executionStorage } from "./hosts/executionStorage";
 import type { ProjectReadFileResult } from "@synara/contracts";
 import { isWorkspaceFileWriteConflictError } from "@synara/shared/workspaceFileWrite";
 import type { QueryClient } from "@tanstack/react-query";
@@ -253,4 +254,28 @@ export async function flushWorkspaceEditors(
     ),
   );
   return results.every(Boolean);
+}
+
+export function readWorkspaceEditorDrafts(client: QueryClient) {
+  return [...(sessions.get(client)?.values() ?? [])]
+    .filter((session) => session.dirty || session.saving)
+    .map((session) => ({
+      cwd: session.cwd,
+      relativePath: session.relativePath,
+      snapshot: session.getSnapshot(),
+      savedAt: new Date().toISOString(),
+    }));
+}
+
+/** Capture the latest text before offline escape; no remote writes are issued. */
+export function recoverWorkspaceEditors(client: QueryClient): void {
+  const entries = [...(sessions.get(client)?.values() ?? [])].filter(
+    (session) => session.dirty || session.saving,
+  );
+  if (entries.length === 0) return;
+  const drafts = readWorkspaceEditorDrafts(client);
+  // Do not discard a previous recovery on another failed save/exit.
+  const key = `editor-recovery:${crypto.randomUUID()}`;
+  executionStorage.setItem(key, JSON.stringify(drafts));
+  for (const session of entries) session.pause();
 }

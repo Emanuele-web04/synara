@@ -1,3 +1,5 @@
+import { readWorkspaceFrame } from "../lib/hosts/workspaceFrame";
+import { onControllerStateChange } from "../lib/hosts/connectionClients";
 import { EditorDirtyRouteGuard } from "../components/EditorDirtyRouteGuard";
 import {
   PROVIDER_DISPLAY_NAMES,
@@ -47,6 +49,8 @@ import { ProjectImportAnnouncementDialog } from "../projectImport/ProjectImportA
 import { useProjectImportDialogStore } from "../projectImport/projectImportDialogStore";
 import { SafariAccessOnboarding } from "../components/SafariAccessOnboarding";
 import { QueuedComposerDrainCoordinator } from "../components/QueuedComposerDrainCoordinator";
+import { GlobalAccountDialogs } from "../components/account/GlobalAccountDialogs";
+import { HostDiscoverabilityPrompt } from "../components/hosts/HostDiscoverabilityPrompt";
 import { FeedbackDialog } from "../components/FeedbackDialog";
 import { SETTINGS_TARGETS } from "../settingsNavigation";
 import ShortcutsDialog from "../components/ShortcutsDialog";
@@ -62,6 +66,7 @@ import { useFeatureFlags } from "../featureFlags";
 import { useFocusedChatContext } from "../focusedChatContext";
 import { useFeedbackDialogStore } from "../feedbackDialogStore";
 import type { FeedbackThreadContext } from "../feedback";
+import { invalidateAccountStatus } from "../lib/accountReactQuery";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import {
   invalidateProviderUsageQueries,
@@ -348,15 +353,21 @@ function RootRouteView() {
           <GlobalShortcutsDialog />
           <BrowserVaultDialog />
           <GlobalFeedbackDialog />
-          <GlobalWhatsNewSurface />
+          <GlobalAccountDialogs />
+          {/* Mounted globally because the host it asks about registers itself
+              at sign-in, wherever the user happens to be in the app. */}
+          {!readWorkspaceFrame() && <HostDiscoverabilityPrompt />}
+          {!readWorkspaceFrame() && <GlobalWhatsNewSurface />}
           <TaskCompletionNotifications />
           <QueuedComposerDrainCoordinator />
-          <SafariAccessOnboarding>
-            <AppSnapWelcomeDialog />
-            <BetaWelcomeDialog />
-          </SafariAccessOnboarding>
-          <GlobalOnboardingDialog />
-          <ProjectImportAnnouncementDialog />
+          {!readWorkspaceFrame() && (
+            <SafariAccessOnboarding>
+              <AppSnapWelcomeDialog />
+              <BetaWelcomeDialog />
+            </SafariAccessOnboarding>
+          )}
+          {!readWorkspaceFrame() && <GlobalOnboardingDialog />}
+          {!readWorkspaceFrame() && <ProjectImportAnnouncementDialog />}
           <GlobalProjectImportDialog />
           <AppSnapCoordinator />
           <DesktopProjectBootstrap />
@@ -2464,6 +2475,9 @@ function EventRouter() {
         });
       }
     });
+    const unsubControllerState = onControllerStateChange((state) => {
+      if (state === "open") void invalidateAccountStatus(queryClient).catch(() => undefined);
+    });
     const unsubWsTransportState = addWsTransportStateListener(
       (state) => {
         if (state !== "open") return;
@@ -2619,6 +2633,7 @@ function EventRouter() {
       unsubServerConfigUpdated();
       unsubProviderStatusesUpdated();
       unsubWsTransportState();
+      unsubControllerState();
       unsubServerSettingsUpdated();
     };
   }, [

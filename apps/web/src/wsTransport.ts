@@ -1,3 +1,4 @@
+import { readWorkspaceFrame } from "./lib/hosts/workspaceFrame";
 // FILE: wsTransport.ts
 // Purpose: Browser-side Effect RPC transport over the Synara WebSocket endpoint.
 // Layer: Web transport
@@ -74,8 +75,6 @@ import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import * as Socket from "effect/unstable/socket/Socket";
 
 import { APP_VERSION } from "./branding";
-import { useDeviceStateStore } from "./deviceStateStore";
-import { useComputerStateStore } from "./computerStateStore";
 import {
   getUnaryRpcCapacityRetryDelayMs,
   MAX_UNARY_RPC_CAPACITY_RETRY_ATTEMPTS,
@@ -83,7 +82,6 @@ import {
 import {
   buildThreadSubscribeInput,
   clearThreadDetailResumeCursor,
-  resetThreadDetailResumeCursors,
 } from "./threadDetailResumeCursors";
 import type { WsTransportState } from "./wsTransportEvents";
 
@@ -263,13 +261,18 @@ function delayMs(ms: number, signal: AbortSignal | undefined): Promise<void> {
 
 function resolveRpcUrl(rawUrl: string, path: string): string {
   const url = new URL(rawUrl);
-  url.pathname = path;
+  // The endpoint is captured at construction. No mutable window selection is
+  // consulted here, so controller requests can never inherit a remote prefix.
+  const prefix = url.pathname.endsWith(WS_FEATURE_PATH)
+    ? url.pathname.slice(0, -WS_FEATURE_PATH.length)
+    : url.pathname.replace(/\/$/, "");
+  url.pathname = `${prefix}${path}`;
   return url.toString();
 }
 
-function rawSocketUrl(explicitUrl: string | null): string {
+export function rawSocketUrl(explicitUrl: string | null): string {
   if (explicitUrl) return explicitUrl;
-  const bridgeUrl = window.desktopBridge?.getWsUrl();
+  const bridgeUrl = readWorkspaceFrame()?.controllerWsUrl ?? window.desktopBridge?.getWsUrl();
   const envUrl = import.meta.env.VITE_WS_URL as string | undefined;
   return bridgeUrl && bridgeUrl.length > 0
     ? bridgeUrl
@@ -294,6 +297,8 @@ export function makeFeatureSocketUrl(
     String(compatibility.negotiatedRevision),
   );
   url.searchParams.set(WS_COMPATIBILITY_QUERY.serverInstanceId, compatibility.serverInstanceId);
+  if (compatibility.remoteAttachmentId)
+    url.searchParams.set("remoteAttachment", compatibility.remoteAttachmentId);
   return url.toString();
 }
 
@@ -330,7 +335,8 @@ export async function negotiateOverHttp(
   // never runs and the transport wedges; the legacy socket path got that
   // backstop for free from the browser's WS handshake timeout. The caller's
   // lifetime signal is composed in so disposal aborts the request too.
-  const deadline = AbortSignal.timeout(NEGOTIATE_HTTP_TIMEOUT_MS);
+  const remote = new URL(rawSocketUrl(explicitUrl)).pathname.startsWith("/ws/remote/");
+  const deadline = AbortSignal.timeout(remote ? 60_000 : NEGOTIATE_HTTP_TIMEOUT_MS);
   const signal = lifetimeSignal ? AbortSignal.any([lifetimeSignal, deadline]) : deadline;
   let response: Response;
   try {
@@ -808,8 +814,11 @@ export class WsTransport {
   // cache was cleared by an intervening failure.
   private lastServerInstanceId: string | null = null;
 
-  constructor(url?: string) {
-    this.explicitUrl = url ?? null;
+  constructor(
+    url?: string,
+    private readonly options: { onGenerationChanged?: () => void } = {},
+  ) {
+    this.explicitUrl = rawSocketUrl(url ?? null);
     this.clientPromise = this.createSession().clientPromise;
     void this.clientPromise.catch((error) => {
       if (this.disposed || isTerminalCompatibilityFailure(error)) return;
@@ -1117,6 +1126,8 @@ export class WsTransport {
   private async negotiateCompatibility(): Promise<WsBootstrapNegotiateResult> {
     const httpResult = await negotiateOverHttp(this.explicitUrl, this.lifetime.signal);
     if (httpResult) return httpResult;
+    if (new URL(this.explicitUrl!).pathname.startsWith("/ws/remote/"))
+      throw new Error("Remote host negotiation unavailable");
     // dispose() may have run while the request was in flight; it captured a
     // null runtime and returned, so building one here would strand it.
     if (this.disposed) {
@@ -1156,21 +1167,7 @@ export class WsTransport {
     if (serverIdentityChanged(this.lastServerInstanceId, compatibility.serverInstanceId)) {
       this.latestPushByChannel.clear();
       this.sequence = 0;
-      // A resume cursor is only valid against the journal that issued its
-      // sequences. A new server instance may serve a different journal (fresh
-      // install, restored backup), so every cursor must reset to force full
-      // snapshots. `lastServerInstanceId` survives failed reconnects, unlike
-      // `compatibility`, so an outage longer than the first retry still
-      // detects the change. Interim tradeoff: this also drops resume across
-      // plain restarts of the same journal, acceptable until the protocol
-      // carries a durable journal epoch.
-      resetThreadDetailResumeCursors();
-      // Device thread state is gated on a per-thread version that the server
-      // restarts at 0. A stale higher version would reject the new instance's
-      // snapshots as stragglers and leave the pane showing pre-restart devices
-      // and attachments forever, so the cache is dropped with the cursors.
-      useDeviceStateStore.getState().clear();
-      useComputerStateStore.getState().clear();
+      this.options.onGenerationChanged?.();
     }
     this.lastServerInstanceId = compatibility.serverInstanceId;
     this.setCompatibility(compatibility);
@@ -1206,7 +1203,7 @@ export class WsTransport {
     const sessionVersion = ++this.sessionVersion;
     // Reconnects reuse the cached negotiation while the server generation is
     // unchanged, so a reconnect costs exactly one WebSocket handshake.
-    const cachedCompatibility = this.compatibility;
+    const cachedCompatibility = this.compatibility?.remoteAttachmentId ? null : this.compatibility;
     const clientPromise = (async () => {
       const compatibility = cachedCompatibility ?? (await this.negotiateCompatibility());
       if (this.disposed || this.sessionVersion !== sessionVersion) {

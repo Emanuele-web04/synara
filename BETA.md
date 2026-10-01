@@ -284,7 +284,8 @@ To put a feature behind the list:
 
 Promote a feature to Stable by deleting its entry; every gate resolves itself.
 
-The list currently contains `omp` (Oh My Pi), `groups` (Hubs), `tasks` (Tasks), and `inbox` (Inbox),
+The list currently contains `omp` (Oh My Pi), `groups` (Hubs), `tasks` (Tasks), `inbox` (Inbox),
+`remoteConnections`, and `accountProfileSync`,
 all available in Beta and gated off in Stable. The rail sidebar layout is available in
 both Stable and Beta.
 
@@ -302,9 +303,19 @@ chats stay reachable. The gate lives in
 navigation slot and preserves its saved order and visibility; Stable keeps Kanban.
 A Beta client connected to a server that refuses Tasks returns to Kanban.
 
-`inbox` is the Inbox page: the server refuses its `stats.getRecap` RPC on Stable, the
+`inbox` is the Inbox page: the server refuses its `stats.getRecap` and saved
+account recap RPCs on Stable, the
 web hides its rail and sidebar entries and redirects the route, and a saved rail or
 sidebar order that mentions it is ignored there.
+In Beta, **Save privately** stores an account/workspace-owned snapshot, including
+project names, only on that explicit action. Saved history can be read from the
+account API while its source computers are offline and survives source removal.
+This history is separate from public profile publication and aggregate usage sync.
+
+Account profiles additionally require the server opt-in `SYNARA_ACCOUNT_PROFILE_SYNC=1`;
+it activates historical aggregate usage sync for the signed-in account. The UI reads
+the server capability, and publication remains a separate explicit choice.
+See the [profiles trial guide](apps/profiles/README.md).
 
 ## Diagnostics
 

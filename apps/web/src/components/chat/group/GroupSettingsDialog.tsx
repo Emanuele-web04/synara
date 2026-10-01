@@ -32,7 +32,7 @@ import { useProjectInstructionsAutosave } from "~/components/chat/environment/En
 import { useProjectInstructionsSource } from "~/components/chat/project/useProjectInstructionsSource";
 import { useProjectAgent } from "~/components/chat/project/useProjectAgent";
 import { useProjectAgentSummariesStore } from "~/components/chat/project/useProjectAgentSummaries";
-import { toDisplayName } from "~/components/profile/profileFormatting";
+import { toDisplayName } from "@synara/profile-ui/formatting";
 import { useProfileName } from "~/components/profile/useProfileName";
 import { isDefaultGroupCoordinatorName } from "~/lib/groupCoordinatorName";
 import { cn, newCommandId } from "~/lib/utils";

@@ -1,3 +1,4 @@
+import { executionStorage } from "./lib/hosts/executionStorage";
 // FILE: composerDraftStore.ts
 // Purpose: Public Zustand facade for composer drafts, model choices, attachments, and persistence.
 // Exports: Stable composer draft API, hooks, and promotion helpers.
@@ -73,7 +74,7 @@ export { partializeComposerDraftStoreState } from "./composerDraftPersistence";
 
 const COMPOSER_PERSIST_DEBOUNCE_MS = 300;
 const composerBaseStorage: StateStorage =
-  typeof localStorage !== "undefined" ? localStorage : createMemoryStorage();
+  typeof localStorage !== "undefined" ? executionStorage : createMemoryStorage();
 const composerPersistStorage = createDeferredPersistStorage<
   ComposerDraftStoreState,
   PersistedComposerDraftStoreState

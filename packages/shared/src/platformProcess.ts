@@ -5,13 +5,13 @@
 import { statSync } from "node:fs";
 import { win32 } from "node:path";
 
-import { hasPathSeparator, resolveExecutable } from "./executable";
-import { resolveWindowsPowerShellExecutable } from "./platformEnvironment";
+import { hasPathSeparator, resolveExecutable } from "./executable.ts";
+import { resolveWindowsPowerShellExecutable } from "./platformEnvironment.ts";
 import {
   parseWindowsWslUncPath,
   prepareWindowsSafeProcess,
   type WindowsSafeProcessCommand,
-} from "./windowsProcess";
+} from "./windowsProcess.ts";
 
 export type ProcessExecutionBackend = "native" | "wsl";
 

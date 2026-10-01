@@ -9,6 +9,7 @@ import {
   ThreadId,
   TurnId,
   type ModelSelection,
+  type RemoteAgentCallerPolicy,
   type OrchestrationThreadShell,
   type ProviderInteractionMode,
   type ProviderKind,
@@ -121,6 +122,7 @@ interface CreationCoordinatorDependencies {
 export type GatewayCreationContext =
   | {
       readonly kind: "provider-session";
+      readonly remoteCaller?: RemoteAgentCallerPolicy;
       readonly callerThreadId: string;
       readonly callerTurnId: string | null;
       readonly assertAuthority: () => Effect.Effect<void, GatewayToolError>;
@@ -338,7 +340,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
         );
       }
       if (
-        context.kind !== "provider-session" &&
+        (context.kind !== "provider-session" || context.remoteCaller) &&
         input.threads.some((spec) => spec.notifyCreatorOnComplete)
       ) {
         return yield* Effect.fail(
@@ -351,9 +353,9 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
       const callerTurnId = context.kind === "provider-session" ? context.callerTurnId! : null;
       const caller =
         context.kind === "provider-session"
-          ? yield* requireThreadShell(context.callerThreadId)
+          ? (context.remoteCaller ?? (yield* requireThreadShell(context.callerThreadId)))
           : null;
-      if (authorizeManagedGoalCreation && caller) {
+      if (authorizeManagedGoalCreation && caller && "id" in caller) {
         yield* authorizeManagedGoalCreation({
           callerThreadId: caller.id,
           requestedCount: input.threads.length,
@@ -500,12 +502,15 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
 
       const prepared = yield* Effect.forEach(input.threads, (spec, index) =>
         Effect.gen(function* () {
-          if (context.kind === "external-client" && spec.projectId === undefined) {
+          if (
+            (context.kind === "external-client" || context.remoteCaller) &&
+            spec.projectId === undefined
+          ) {
             return yield* Effect.fail(
-              new ToolInputError("External MCP task creation requires an explicit projectId."),
+              new ToolInputError("Creating on another scope requires an explicit projectId."),
             );
           }
-          const projectId = ProjectId.makeUnsafe(spec.projectId ?? caller!.projectId);
+          const projectId = ProjectId.makeUnsafe((spec.projectId ?? caller?.projectId)!);
           if (context.kind === "external-client" && !context.allowedProjectIds.has(projectId)) {
             return yield* Effect.fail(
               new GatewayToolError(
@@ -1143,7 +1148,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
                       worktreePath,
                       creationSource:
                         context.kind === "external-client" ? "external_mcp" : "synara_mcp",
-                      ...(context.kind === "provider-session"
+                      ...(context.kind === "provider-session" && !context.remoteCaller
                         ? {
                             sourceThreadId: ThreadId.makeUnsafe(context.callerThreadId),
                             sourceTurnId: TurnId.makeUnsafe(callerTurnId!),
@@ -1234,7 +1239,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
           // Once this completes, late cancellation cannot undo the operation.
           yield* operationStore.complete(
             { operationId, resultJson: JSON.stringify(result), now: gatewayIsoNow() },
-            recordManagedWorkerThreads && caller
+            recordManagedWorkerThreads && caller && "id" in caller
               ? recordManagedWorkerThreads({
                   callerThreadId: caller.id,
                   requestId: input.requestId,
@@ -1265,7 +1270,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
 
       if (outcome.kind === "replay") return outcome.result;
       const result = outcome.result;
-      if (context.kind === "provider-session") {
+      if (context.kind === "provider-session" && !context.remoteCaller) {
         yield* appendThreadCreationRecap({
           callerThreadId: context.callerThreadId,
           callerTurnId: callerTurnId!,

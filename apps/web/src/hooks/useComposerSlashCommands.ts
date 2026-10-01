@@ -43,7 +43,7 @@ import { type SplitViewId } from "../splitViewStore";
 import { useRightDockStore } from "../rightDockStore";
 import { registerSidechatCreator } from "../lib/sidechatCreatorRegistry";
 import { downloadUrlAsBlob } from "../lib/browserDownload";
-import { resolveWsHttpUrl } from "../lib/wsHttpUrl";
+import { resolveExecutionResource } from "../lib/wsHttpUrl";
 import { useFeedbackDialogStore } from "../feedbackDialogStore";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useStore } from "../store";
@@ -843,9 +843,8 @@ export function useComposerSlashCommands(input: {
       });
       return;
     }
-    const params = new URLSearchParams({ threadId: threadId });
     void downloadUrlAsBlob({
-      url: resolveWsHttpUrl(`/api/thread-export?${params.toString()}`),
+      url: resolveExecutionResource({ kind: "thread-export", threadId }),
       filename: `synara-thread-${threadId}.zip`,
     }).catch((error: unknown) => {
       toastManager.add({

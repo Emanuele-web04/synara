@@ -275,6 +275,29 @@ describe("localImageEffectRouteLayer", () => {
       expect(previewResponse.status).toBe(200);
       expect(previewResponse.headers.get("content-type")).toContain("image/png");
       expect(previewResponse.headers.get("content-disposition")).toBeNull();
+      expect(Buffer.from(await previewResponse.arrayBuffer())).toEqual(
+        Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+      );
+      for (const [range, bytes] of [
+        ["bytes=1-2", [0x50, 0x4e]],
+        ["bytes=-2", [0x4e, 0x47]],
+        ["bytes=2-", [0x4e, 0x47]],
+      ] as const) {
+        const part = await fetch(`${origin}/api/local-image?${params}`, {
+          headers: { Range: range },
+        });
+        expect(part.status).toBe(206);
+        expect(part.headers.get("accept-ranges")).toBe("bytes");
+        expect(part.headers.get("content-length")).toBe("2");
+        expect(Buffer.from(await part.arrayBuffer())).toEqual(Buffer.from(bytes));
+      }
+      for (const range of ["bytes=10-20", "bytes=3-1", "bytes=-0", "bytes=0-1,2-3", "bytes=a-b"]) {
+        const invalid = await fetch(`${origin}/api/local-image?${params}`, {
+          headers: { Range: range },
+        });
+        expect(invalid.status).toBe(416);
+        expect(invalid.headers.get("content-range")).toBe("bytes */4");
+      }
 
       params.set("download", "1");
       const downloadResponse = await fetch(`${origin}/api/local-image?${params}`);

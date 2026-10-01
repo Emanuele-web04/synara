@@ -51,6 +51,7 @@ export const DESKTOP_IPC_CHANNELS = {
   notificationsShow: "desktop:notifications-show",
   zoomFactor: "desktop:zoom-factor",
   zoomFactorChanged: "desktop:zoom-factor-changed",
+  remoteResourceUrl: "desktop:remote-resource-url",
   wsUrl: "desktop:get-ws-url",
   transcribeVoice: "desktop:server-transcribe-voice",
   computerPreviewFrame: "computerPreview.frame",

@@ -1,3 +1,4 @@
+import { readExecutionContext } from "./hosts/executionContext";
 // FILE: computerProvisioning.ts
 // Purpose: One vocabulary for "set up computer control" — the toasts the chat card
 //          raises, the inline note the settings panel renders, and the rule for what
@@ -31,7 +32,7 @@ import { isLoopbackHostname } from "~/components/Sidebar.logic";
 /** The desktop bridge identifies its live server; remote servers own their own grants. */
 export function readLocalComputerPermissionBridge(): DesktopBridge["appSnap"] | null {
   // An injected NativeApi can target a different host than the desktop bridge.
-  if (globalThis.window?.nativeApi) return null;
+  if (globalThis.window?.nativeApi || readExecutionContext()?.remote) return null;
   const bridge = globalThis.window?.desktopBridge;
   if (!bridge?.appSnap) return null;
   try {

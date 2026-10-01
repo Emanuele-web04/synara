@@ -743,7 +743,7 @@ export function useSidebarThreadActions(input: {
   );
 
   const confirmAndArchiveThread = useCallback(
-    async (threadId: ThreadId) => {
+    async (threadId: ThreadId, isAvailable?: () => boolean) => {
       const thread = sidebarThreadSummaryById[threadId];
       if (!thread) return;
       if (appSettings.confirmThreadArchive) {
@@ -757,6 +757,8 @@ export function useSidebarThreadActions(input: {
           : await showConfirmDialogFallback(confirmationMessage);
         if (!confirmed) return;
       }
+      if (isAvailable && !isAvailable())
+        throw new Error("This computer is no longer available. Reconnect before archiving.");
       await archiveThreadWithUndo(threadId);
     },
     [archiveThreadWithUndo, appSettings.confirmThreadArchive, sidebarThreadSummaryById],
@@ -928,6 +930,7 @@ export function useSidebarThreadActions(input: {
   return {
     pinnedThreadIds,
     pinnedThreadIdSet,
+    setThreadPinned,
     toggleThreadPinned,
     setThreadSettledWithToast,
     settledOverrideByThreadId: optimisticSettledStateByThreadId,

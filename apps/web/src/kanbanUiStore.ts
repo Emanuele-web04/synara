@@ -1,3 +1,4 @@
+import { executionStorage } from "./lib/hosts/executionStorage";
 // FILE: kanbanUiStore.ts
 // Purpose: Persists kanban control-center UI state (manual draft-card order per project)
 //          plus the ephemeral optimistic-dispatch overlay for drag-to-In-Progress drops.
@@ -137,7 +138,7 @@ export const useKanbanUiStore = create<KanbanUiStoreState>()(
     }),
     {
       name: KANBAN_UI_STORAGE_KEY,
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => executionStorage),
       partialize: (state) => ({
         draftOrderByProjectId: state.draftOrderByProjectId,
       }),

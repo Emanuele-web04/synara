@@ -5,13 +5,10 @@
 // Depends on: wsHttpUrl (so desktop requests carry the legacy startup token used by attachments)
 //             and @synara/shared/localPreviewFiles for the canonical route + extension allowlist.
 
-import {
-  LOCAL_IMAGE_ROUTE_PATH,
-  SUPPORTED_LOCAL_IMAGE_EXTENSION_REGEX,
-} from "@synara/shared/localPreviewFiles";
+import { SUPPORTED_LOCAL_IMAGE_EXTENSION_REGEX } from "@synara/shared/localPreviewFiles";
 import { isLocalAbsolutePath, isWindowsAbsolutePath } from "@synara/shared/path";
 
-import { resolveWsHttpUrl } from "./wsHttpUrl";
+import { resolveExecutionResource } from "./wsHttpUrl";
 
 function normalizeMarkdownImagePath(src: string): string {
   const trimmed = src.trim();
@@ -67,23 +64,14 @@ export function buildLocalImageUrl(input: {
   /** Changes the preview URL so an explicit reload bypasses browser caching. */
   readonly cacheKey?: string | number | undefined;
 }): string {
-  const params = new URLSearchParams({ path: normalizeMarkdownImagePath(input.src) });
-  if (input.cwd) {
-    params.set("cwd", input.cwd);
-  }
-  if (input.grant) {
-    params.set("grant", input.grant);
-  }
-  if (input.cacheKey !== undefined) {
-    params.set("v", String(input.cacheKey));
-  }
-  if (input.download) {
-    params.set("download", "1");
-  }
-  // Always route through the WS-derived HTTP origin so desktop builds (custom protocol)
-  // include the same legacy startup token attachments already use; in web/dev (where
-  // the page and server share an origin) this falls back to the same relative path.
-  return resolveWsHttpUrl(`${LOCAL_IMAGE_ROUTE_PATH}?${params.toString()}`);
+  return resolveExecutionResource({
+    kind: "workspace-preview",
+    path: normalizeMarkdownImagePath(input.src),
+    ...(input.cwd ? { cwd: input.cwd } : {}),
+    ...(input.grant ? { grant: input.grant } : {}),
+    ...(input.cacheKey !== undefined ? { revision: String(input.cacheKey) } : {}),
+    ...(input.download ? { download: true } : {}),
+  });
 }
 
 export function localImageFileName(src: string): string {

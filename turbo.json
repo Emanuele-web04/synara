@@ -4,6 +4,7 @@
     "AZURE_TRUSTED_SIGNING_SUBJECT_DN",
     "PORT",
     "VITE_WS_URL",
+    "VITE_PROFILES_PUBLIC_ORIGIN",
     "VITE_DEV_SERVER_URL",
     "ELECTRON_RENDERER_PORT",
     "SYNARA_HOME",
@@ -25,7 +26,9 @@
     "SYNARA_ALLOW_INSECURE_REMOTE",
     "SYNARA_LOG_WS_EVENTS",
     "SYNARA_HOST",
-    "SYNARA_AUTO_BOOTSTRAP_PROJECT_FROM_CWD"
+    "SYNARA_AUTO_BOOTSTRAP_PROJECT_FROM_CWD",
+    "SYNARA_ACCOUNT_URL",
+    "SYNARA_ACCOUNT_PROFILE_SYNC"
   ],
   "tasks": {
     "build": {
@@ -53,6 +56,7 @@
     },
     "test": {
       "cache": false,
+      "passThroughEnv": ["TEST_DATABASE_URL"],
       "outputs": []
     }
   }

@@ -1,4 +1,6 @@
 import { assert, describe, it } from "vitest";
+import { ProjectId, ThreadId } from "@synara/contracts";
+import type { WorkspaceSession } from "../lib/hosts/workspaceSessions";
 
 import {
   areSidebarSearchThreadListsEqual,
@@ -6,6 +8,7 @@ import {
   matchSidebarSearchProjects,
   matchSidebarSearchThemes,
   matchSidebarSearchThreads,
+  workspaceSidebarSearch,
   type SidebarSearchAction,
   type SidebarSearchProject,
   type SidebarSearchTheme,
@@ -224,6 +227,21 @@ describe("SidebarSearchPalette.logic", () => {
     );
   });
 
+  it("qualifies matching and recent result identities when computers share IDs", () => {
+    const host = { environmentId: "mini", name: "Mac mini" };
+    const localProject = projects[0]!;
+    const localThread = threads[0]!;
+    const projectMatches = matchSidebarSearchProjects(
+      [localProject, { ...localProject, host }],
+      "alpha",
+    );
+    assert.equal(new Set(projectMatches.map((match) => match.id)).size, 2);
+    for (const query of ["", "composer"]) {
+      const matches = matchSidebarSearchThreads([localThread, { ...localThread, host }], query);
+      assert.equal(new Set(matches.map((match) => match.id)).size, 2);
+    }
+  });
+
   it("prefers thread title matches and then recency", () => {
     const result = matchSidebarSearchThreads(threads, "comp");
 
@@ -272,6 +290,120 @@ describe("SidebarSearchPalette.logic", () => {
   });
 });
 
+describe("workspaceSidebarSearch", () => {
+  const remoteThread = {
+    id: ThreadId.makeUnsafe("remote-thread"),
+    projectId: ProjectId.makeUnsafe("remote-project"),
+    title: "Fix login flow",
+    modelSelection: { provider: "codex" as const, model: "fixture" },
+    interactionMode: "default" as const,
+    branch: null,
+    worktreePath: null,
+    session: null,
+    createdAt: "2026-09-28T00:00:00Z",
+    latestUserMessageAt: null,
+    latestTurn: null,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    hasActionableProposedPlan: false,
+    hasLiveTailWork: false,
+    status: null,
+  };
+  const session: WorkspaceSession = {
+    host: {
+      hostId: "host-mini",
+      hostName: "Mac mini",
+      wsPath: "/ws/remote/mini",
+      executionScope: {
+        environmentId: "mini",
+        accountAuthority: "https://account.example",
+        userId: "alice",
+        organizationId: "org",
+        channel: "beta",
+      },
+    },
+    summary: {
+      state: "open",
+      path: "/",
+      projects: [
+        {
+          id: remoteThread.projectId,
+          kind: "project",
+          section: "projects",
+          name: "Dashboard",
+          cwd: "/work/dashboard",
+          createdAt: remoteThread.createdAt,
+        },
+      ],
+      threads: [remoteThread],
+    },
+    navigation: {
+      navigate() {},
+      newChat: async () => "",
+      browseFolders: async () => ({ parentPath: "/", entries: [] }),
+      createProject: async () => "",
+      openProject: async () => "",
+      recover() {},
+    },
+  };
+
+  it.each([
+    ["ready", session, false],
+    [
+      "closed transport",
+      { ...session, summary: { ...session.summary!, state: "closed" as const } },
+      true,
+    ],
+    ["no navigation", { ...session, navigation: undefined }, true],
+    ["failed", { ...session, error: "Disconnected" }, true],
+  ] as const)(
+    "keeps %s metadata searchable with its current availability",
+    (_label, current, unavailable) => {
+      const result = workspaceSidebarSearch([current]);
+      const foundThread = matchSidebarSearchThreads(result.threads, "mac mini")[0];
+      const foundProject = matchSidebarSearchProjects(result.projects, "mac mini")[0];
+      assert.equal(foundThread?.thread.id, remoteThread.id);
+      assert.equal(foundProject?.project.id, remoteThread.projectId);
+      assert.equal(foundThread?.thread.host?.unavailable, unavailable);
+      assert.equal(foundProject?.project.host?.unavailable, unavailable);
+      assert.deepEqual(foundThread?.thread.messages, []);
+    },
+  );
+
+  it("applies the same flat search visibility as local threads", () => {
+    const result = workspaceSidebarSearch([
+      {
+        ...session,
+        summary: {
+          ...session.summary!,
+          threads: [
+            remoteThread,
+            {
+              ...remoteThread,
+              id: ThreadId.makeUnsafe("archived"),
+              archivedAt: remoteThread.createdAt,
+            },
+            {
+              ...remoteThread,
+              id: ThreadId.makeUnsafe("subagent"),
+              parentThreadId: remoteThread.id,
+            },
+            {
+              ...remoteThread,
+              id: ThreadId.makeUnsafe("sidechat"),
+              sidechatSourceThreadId: remoteThread.id,
+            },
+          ],
+        },
+      },
+    ]);
+    assert.deepEqual(
+      result.threads.map((thread) => thread.id),
+      [remoteThread.id],
+    );
+  });
+});
+
 describe("areSidebarSearchThreadListsEqual", () => {
   const thread = (overrides: Partial<SidebarSearchThread> = {}): SidebarSearchThread => ({
     id: "thread-1",
@@ -289,7 +421,13 @@ describe("areSidebarSearchThreadListsEqual", () => {
 
   it("treats rebuilt lists with identical fields and message references as equal", () => {
     const messages = [{ text: "hello" }];
-    assert.isTrue(areSidebarSearchThreadListsEqual([thread({ messages })], [thread({ messages })]));
+    const host = { environmentId: "mini", name: "Mac mini", unavailable: false };
+    assert.isTrue(
+      areSidebarSearchThreadListsEqual(
+        [thread({ messages, host })],
+        [thread({ messages, host: { ...host } })],
+      ),
+    );
   });
 
   it("detects a changed field, a changed message array, or a different length", () => {
@@ -307,5 +445,18 @@ describe("areSidebarSearchThreadListsEqual", () => {
       ),
     );
     assert.isFalse(areSidebarSearchThreadListsEqual([thread()], [thread(), thread()]));
+    const host = { environmentId: "mini", name: "Mac mini", unavailable: false };
+    for (const changedHost of [
+      { ...host, environmentId: "other" },
+      { ...host, name: "Renamed computer" },
+      { ...host, unavailable: true },
+    ]) {
+      assert.isFalse(
+        areSidebarSearchThreadListsEqual(
+          [thread({ messages, host })],
+          [thread({ messages, host: changedHost })],
+        ),
+      );
+    }
   });
 });

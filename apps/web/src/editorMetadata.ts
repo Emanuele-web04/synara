@@ -4,7 +4,6 @@
 // Exports: editor option builders used by the chat header and open-in picker.
 
 import { EDITORS, type EditorId } from "@synara/contracts";
-import { EDITOR_ICON_ROUTE_PATH } from "@synara/shared/editorIcons";
 import { createElement, useState } from "react";
 import type { Icon } from "./components/Icons";
 import {
@@ -34,7 +33,7 @@ import {
 import { FolderClosed } from "./components/FolderClosed";
 import { AppsIcon } from "./lib/icons";
 import { isMacPlatform, isWindowsPlatform } from "./lib/utils";
-import { resolveWsHttpUrl } from "./lib/wsHttpUrl";
+import { resolveExecutionResource } from "./lib/wsHttpUrl";
 
 export interface EditorOption {
   readonly value: EditorId;
@@ -77,8 +76,7 @@ const EDITOR_ICONS: Partial<Record<EditorId, Icon>> = {
 const NATIVE_EDITOR_ICON_COMPONENTS = new Map<EditorId, Icon>();
 
 export function resolveEditorNativeIconUrl(editorId: EditorId): string {
-  const params = new URLSearchParams({ id: editorId });
-  return resolveWsHttpUrl(`${EDITOR_ICON_ROUTE_PATH}?${params.toString()}`);
+  return resolveExecutionResource({ kind: "editor-icon", editorId });
 }
 
 function resolveNativeEditorIcon(editorId: EditorId): Icon {

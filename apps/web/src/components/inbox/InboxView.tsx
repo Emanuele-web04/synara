@@ -6,7 +6,12 @@
 // Layer: Inbox route surface
 // Exports: InboxView (default)
 
-import type { ServerProviderUsageSnapshot, StatsGetRecapResult, ThreadId } from "@synara/contracts";
+import type {
+  SavedInboxRecap,
+  ServerProviderUsageSnapshot,
+  StatsGetRecapResult,
+  ThreadId,
+} from "@synara/contracts";
 import {
   providerUsageDisplayName,
   selectVisibleProviderUsageSnapshots,
@@ -41,7 +46,7 @@ import { SETTINGS_PAGE_BACKGROUND_CLASS_NAME } from "~/settingsPanelStyles";
 import { useStore } from "~/store";
 import { createAccountRateLimitThreadsSelector } from "~/storeSelectors";
 import type { Project } from "~/types";
-import { formatNumber } from "../profile/profileFormatting";
+import { formatNumber } from "@synara/profile-ui/formatting";
 import { ProjectSidebarIcon } from "../ProjectSidebarIcon";
 import { ProviderIcon } from "../ProviderIcon";
 import { RouteInsetSurface } from "../RouteInsetSurface";
@@ -73,6 +78,7 @@ import {
   type InboxTone,
 } from "./inboxStories";
 import { InboxTaskList } from "./InboxTaskList";
+import { InboxRecapHistory } from "./InboxRecapHistory";
 
 // A turn finishing refreshes the recap, at most this often, so busy automations cannot
 // keep the server's recap query running back to back.
@@ -230,16 +236,18 @@ function DigestCard({
   slots,
   updatedAt,
   projectById,
+  title = "Your day so far",
 }: {
   sentences: readonly DigestSentence[];
   slots: readonly InboxSlotSummary[];
   updatedAt: string;
   projectById: ReadonlyMap<string, Project>;
+  title?: string;
 }) {
   return (
     <Tile className="flex flex-col gap-5 p-5 @lg:px-7 @lg:py-6">
       <div className="flex items-baseline justify-between gap-3 text-ui-sm text-muted-foreground">
-        <span>Your day so far</span>
+        <span>{title}</span>
         <span className="tabular-nums opacity-80">Updated {updatedAt}</span>
       </div>
       <p className="max-w-[62ch] text-ui-xl leading-relaxed text-pretty text-muted-foreground">
@@ -470,6 +478,68 @@ function RecapDigest({
   );
 }
 
+function SavedRecapDigest({ saved }: { saved: SavedInboxRecap }) {
+  // A saved project's raw ID belongs to its source host, not the current workspace.
+  const projectById: ReadonlyMap<string, Project> = new Map();
+  const hourFormat = new Intl.DateTimeFormat("en", {
+    timeZone: saved.timezone,
+    hour: "numeric",
+    hourCycle: "h23",
+  });
+  const asOfMs = Date.parse(saved.recap.generatedAt);
+  const slots: InboxSlotSummary[] = [];
+  for (const id of ["morning", "afternoon", "evening"] as const) {
+    const buckets = saved.recap.slots.filter((bucket) => {
+      const from = Date.parse(bucket.from);
+      const hour = Number(hourFormat.format(from));
+      const bucketId = hour >= 18 || hour < 4 ? "evening" : hour >= 12 ? "afternoon" : "morning";
+      return bucketId === id && from <= asOfMs;
+    });
+    if (buckets.length === 0) continue;
+    slots.push({
+      id,
+      label: id.charAt(0).toUpperCase() + id.slice(1),
+      status: "done",
+      prompts: buckets.reduce((total, bucket) => total + bucket.prompts, 0),
+      turns: buckets.reduce((total, bucket) => total + bucket.turns, 0),
+      tokens: buckets.reduce((total, bucket) => total + recapTokens(bucket), 0),
+      agentWorkMs: buckets.reduce((total, bucket) => total + bucket.agentWorkMs, 0),
+      hours: buckets.map((bucket) => ({
+        fromMs: Date.parse(bucket.from),
+        tokens: recapTokens(bucket),
+        future: false,
+      })),
+    });
+  }
+  const input = { recap: saved.recap, previousRecap: undefined, yesterdaySoFar: null, slots };
+  const tiles = buildInboxTiles({ ...input, quota: [] });
+  return (
+    <div className="flex flex-col gap-3">
+      <DigestCard
+        title="Saved recap"
+        sentences={buildInboxDigest(input)}
+        slots={slots}
+        updatedAt={new Intl.DateTimeFormat(undefined, {
+          timeZone: saved.timezone,
+          hour: "2-digit",
+          minute: "2-digit",
+        }).format(asOfMs)}
+        projectById={projectById}
+      />
+      <div className="grid grid-cols-2 gap-3 @2xl:grid-cols-6">
+        {tiles.map((tile, index) => (
+          <CompactTile
+            key={tile.id}
+            tile={tile}
+            projectById={projectById}
+            className={tileSpanClassName(index, tiles.length)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function InboxView() {
   const navigate = useNavigate();
   const inboxAvailable = INBOX_ON;
@@ -685,6 +755,10 @@ export default function InboxView() {
                 )}
               </div>
             </div>
+            <InboxRecapHistory
+              recap={recapQuery.data}
+              renderRecap={(saved) => <SavedRecapDigest saved={saved} />}
+            />
           </div>
         </div>
       </div>

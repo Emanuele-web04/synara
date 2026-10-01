@@ -6,7 +6,7 @@
 import type { ReactNode } from "react";
 
 import { ProviderIcon } from "~/components/ProviderIcon";
-import { SynaraLogo } from "~/components/SynaraLogo";
+import { SynaraLogo } from "@synara/profile-ui/logo";
 import { cn } from "~/lib/utils";
 
 type GlyphSize = "md" | "lg";

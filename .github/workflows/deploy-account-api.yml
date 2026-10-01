@@ -1,0 +1,113 @@
+name: Verify and deploy account API to Cloudflare
+
+on:
+  pull_request:
+    paths:
+      - "apps/api/**"
+      - "packages/contracts/**"
+      - "packages/shared/**"
+      - "patches/**"
+      - "package.json"
+      - "bun.lock"
+      - ".dockerignore"
+      - ".github/workflows/deploy-account-api.yml"
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: Publish the verified trial to the Synara Orgs Cloudflare account
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-account-api-trial
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: synara_test
+          POSTGRES_PASSWORD: local-ci-only
+          POSTGRES_DB: synara_api_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U synara_test -d synara_api_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - run: bun run --cwd apps/api typecheck
+      # Initialize once before parallel test files attempt their own migrations.
+      - run: bun run --cwd apps/api db:migrate
+        env:
+          DATABASE_URL: postgres://synara_test:local-ci-only@localhost:5432/synara_api_test
+      - run: bun run --cwd apps/api test
+        env:
+          TEST_DATABASE_URL: postgres://synara_test:local-ci-only@localhost:5432/synara_api_test
+      - name: Build and smoke-test the actual container
+        run: |
+          docker build --platform linux/amd64 -f apps/api/Dockerfile -t synara-account-api:check .
+          docker run -d --name synara-api-check --network host \
+            -e DATABASE_URL=postgres://synara_test:local-ci-only@localhost:5432/synara_api_test \
+            -e WORKOS_API_KEY=ci-placeholder -e WORKOS_CLIENT_ID=ci-placeholder \
+            -e ACCOUNT_BASE_URL=http://localhost:8788 \
+            -e API_PUBLIC_URL=http://localhost:8788/api/v1 \
+            -e API_SIGNING_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA \
+            synara-account-api:check
+          trap 'docker logs synara-api-check; docker rm -f synara-api-check' EXIT
+          ready=false
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://localhost:8788/ > /dev/null; then
+              ready=true
+              break
+            fi
+            sleep 2
+          done
+          test "$ready" = true
+          test "$(curl --silent --output /tmp/profile-response.json --write-out '%{http_code}' http://localhost:8788/api/v1/profiles/cloudflare-ci-missing)" = 404
+
+  deploy:
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CLOUDFLARE_ACCOUNT_ID: 56e5b3e566be2fc8ade9b7d0eadf5e35
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      WRANGLER_SEND_METRICS: false
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - name: Configure account API secrets
+        working-directory: apps/api
+        env:
+          DATABASE_URL: ${{ secrets.SYNARA_API_DATABASE_URL }}
+          WORKOS_API_KEY: ${{ secrets.SYNARA_API_WORKOS_API_KEY }}
+          WORKOS_CLIENT_ID: ${{ secrets.SYNARA_API_WORKOS_CLIENT_ID }}
+          API_SIGNING_KEY: ${{ secrets.SYNARA_API_SIGNING_KEY }}
+          PROFILE_PROXY_SECRET: ${{ secrets.SYNARA_PROFILE_PROXY_SECRET }}
+        run: |
+          node -e 'for (const k of ["CLOUDFLARE_API_TOKEN", "DATABASE_URL", "WORKOS_API_KEY", "WORKOS_CLIENT_ID", "API_SIGNING_KEY", "PROFILE_PROXY_SECRET"]) if (!process.env[k]) throw new Error(`Missing deployment secret: ${k}`)'
+          node -e 'process.stdout.write(JSON.stringify(Object.fromEntries(["DATABASE_URL", "WORKOS_API_KEY", "WORKOS_CLIENT_ID", "API_SIGNING_KEY", "PROFILE_PROXY_SECRET"].map(k => [k, process.env[k]]))))' | bunx wrangler secret bulk
+      - name: Deploy Worker and container
+        run: bun run --cwd apps/api cf:deploy
