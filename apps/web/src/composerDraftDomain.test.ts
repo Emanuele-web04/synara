@@ -58,4 +58,22 @@ describe("composerThreadDraftIsPending", () => {
       }),
     ).toEqual(["a", "b"]);
   });
+
+  it("reveals a draft after leaving its chat and hides it on return without clearing it", () => {
+    const a = ThreadId.makeUnsafe("a");
+    const b = ThreadId.makeUnsafe("b");
+    const empty = createEmptyThreadDraft();
+    const state = {
+      draftsByThreadId: {
+        [a]: { ...empty, prompt: "half-written" },
+        [b]: { ...empty, prompt: "another draft" },
+      },
+    };
+
+    expect(selectThreadIdsWithPendingDraft(state, a)).toEqual(["b"]);
+    expect(selectThreadIdsWithPendingDraft(state, b)).toEqual(["a"]);
+    expect(selectThreadIdsWithPendingDraft(state, null)).toEqual(["a", "b"]);
+    expect(selectThreadIdsWithPendingDraft(state, a)).toEqual(["b"]);
+    expect(state.draftsByThreadId[a]?.prompt).toBe("half-written");
+  });
 });

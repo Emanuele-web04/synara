@@ -626,7 +626,7 @@ export function SidebarActivityView({
     () => new Map(),
   );
 
-  const draftThreadIdSet = useThreadIdsWithPendingDraft();
+  const draftThreadIdSet = useThreadIdsWithPendingDraft(activeThreadId);
   const isRealProject = useCallback(
     (projectId: ProjectId) => projectById.get(projectId)?.kind === "project",
     [projectById],
