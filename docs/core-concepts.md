@@ -37,6 +37,9 @@ using separate worktrees also have separate working directories and branches.
   the view you picked.
 - **Conversation** — user messages, agent responses, plans, tools, approvals, and subagent activity
 - **Composer** — objectives, attachments, provider selection, model selection, and task controls
+  Unsent content marks a chat with a pencil in the sidebar after focus leaves that chat.
+  In Activity, it also moves into Drafts (or leads its project group); returning to the chat
+  hides the marker and restores its normal position while preserving the unsent content.
 - **Terminal** — a real shell opened in the task's working directory
 - **Browser** — a shared live page surface for previews, semantic automation, and page-declared
   WebMCP tools

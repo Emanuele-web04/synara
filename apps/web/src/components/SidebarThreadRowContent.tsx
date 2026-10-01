@@ -253,7 +253,7 @@ export function SidebarThreadRowContent({
             thread.title
           )}
         </span>
-        {hasPendingDraft ? <SidebarDraftGlyph /> : null}
+        {hasPendingDraft && !isActive ? <SidebarDraftGlyph /> : null}
         {!isSubagentThread && pendingStatusColorClass ? (
           <span
             aria-label="Pending approval"

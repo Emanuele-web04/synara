@@ -136,11 +136,15 @@ export function useThreadHasPendingDraft(threadId: ThreadId): boolean {
 }
 
 /**
- * Threads whose composer holds an unsent message. The set only changes identity when
- * a thread gains or loses its draft, not on every keystroke.
+ * Unfocused threads whose composer holds an unsent message. The set only changes
+ * identity when draft visibility changes, not on every keystroke.
  */
-export function useThreadIdsWithPendingDraft(): ReadonlySet<ThreadId> {
-  const threadIds = useComposerDraftStore(useShallow(selectThreadIdsWithPendingDraft));
+export function useThreadIdsWithPendingDraft(
+  focusedThreadId: ThreadId | null = null,
+): ReadonlySet<ThreadId> {
+  const threadIds = useComposerDraftStore(
+    useShallow((state) => selectThreadIdsWithPendingDraft(state, focusedThreadId)),
+  );
   return useMemo(() => new Set(threadIds), [threadIds]);
 }
 

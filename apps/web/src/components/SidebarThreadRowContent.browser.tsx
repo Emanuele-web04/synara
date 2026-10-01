@@ -10,6 +10,7 @@ import { render } from "vitest-browser-react";
 
 import { DEFAULT_INTERACTION_MODE, type SidebarThreadSummary } from "../types";
 import { SidebarThreadRowContent } from "./SidebarThreadRowContent";
+import { useComposerDraftStore } from "../composerDraftStore";
 
 function makeThread(overrides: Partial<SidebarThreadSummary> = {}): SidebarThreadSummary {
   return {
@@ -34,8 +35,37 @@ function makeThread(overrides: Partial<SidebarThreadSummary> = {}): SidebarThrea
 
 describe("SidebarThreadRowContent", () => {
   afterEach(() => {
+    useComposerDraftStore.setState({ draftsByThreadId: {} });
     document.body.innerHTML = "";
   });
+
+  it.each(["pinned", "standard"] as const)(
+    "shows the draft marker only outside the active %s chat",
+    async (variant) => {
+      const thread = makeThread();
+      const row = (isActive: boolean) => (
+        <SidebarThreadRowContent
+          thread={thread}
+          terminalEntryPoint={false}
+          terminalStatus={null}
+          terminalCount={0}
+          isActive={isActive}
+          variant={variant}
+        />
+      );
+      useComposerDraftStore.getState().setPrompt(thread.id, "Keep this draft");
+      const screen = await render(row(true));
+      await expect.element(screen.getByLabelText("Unsent draft")).not.toBeInTheDocument();
+      await screen.rerender(row(false));
+      await expect.element(screen.getByLabelText("Unsent draft")).toBeVisible();
+      await screen.rerender(row(true));
+      await expect.element(screen.getByLabelText("Unsent draft")).not.toBeInTheDocument();
+      expect(useComposerDraftStore.getState().draftsByThreadId[thread.id]?.prompt).toBe(
+        "Keep this draft",
+      );
+      await screen.unmount();
+    },
+  );
 
   it("preserves the pinned title, pending state, terminal count, and suffix", async () => {
     const thread = makeThread();
