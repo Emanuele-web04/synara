@@ -128,9 +128,9 @@
   /* Let the renderer switch between Codex-style translucent and opaque shells
      without duplicating sidebar markup or class strings. */
   .app-sidebar-surface {
+    /* No backdrop-filter: the sidebar sits on the transparent window, so a filter has no
+       page content to frost (the desktop blur is native) and only costs a compositor pass. */
     background: var(--app-sidebar-surface, var(--card));
-    -webkit-backdrop-filter: var(--app-sidebar-backdrop-filter, none);
-    backdrop-filter: var(--app-sidebar-backdrop-filter, none);
   }
 
   /* Small circular icon badges that sit directly on the sidebar surface inside
@@ -518,7 +518,6 @@
      and the dividers between surface tabs share it so they read as the same mark. */
   --app-chrome-divider-height: 1.25rem;
   --app-chrome-divider-color: var(--color-border);
-  --app-sidebar-backdrop-filter: blur(4px) saturate(130%);
   --app-sidebar-surface: color-mix(in srgb, var(--card) 38%, transparent);
   --background: #fcfcfc;
   --foreground: var(--color-neutral-800);
@@ -654,7 +653,6 @@
     --sidebar-accent-foreground: var(--color-text-foreground, var(--foreground));
     --sidebar-border: var(--border);
     --sidebar-ring: var(--ring);
-    --app-sidebar-backdrop-filter: blur(4px) saturate(130%);
     /* Deepened toward black before thinning: a dense charcoal glass that still lets
        the desktop bleed through rather than a thin dark tint. */
     --app-sidebar-surface: color-mix(

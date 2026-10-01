@@ -399,10 +399,12 @@ export type DesktopTheme = "light" | "dark" | "system";
 
 /** Largest desktop blur radius the translucent window shell accepts, in points. */
 export const DESKTOP_WINDOW_BLUR_RADIUS_MAX = 64;
+/** Smallest one: an unblurred desktop behind a clear window reads as a hole, not as glass. */
+export const DESKTOP_WINDOW_BLUR_RADIUS_MIN = 1;
 
 /**
  * Window backing the renderer asks for. `translucent` removes macOS vibrancy and sets the
- * desktop blur to `blurRadius` (0 shows the desktop unblurred); `opaque` restores vibrancy.
+ * desktop blur to `blurRadius`; `opaque` restores vibrancy and ignores `blurRadius`.
  */
 export interface DesktopWindowMaterial {
   material: "opaque" | "translucent";

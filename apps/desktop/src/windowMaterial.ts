@@ -4,7 +4,11 @@
 // Layer: Desktop main process
 // Exports: MAC_WINDOW_VIBRANCY, parseDesktopWindowMaterial, createWindowMaterialApplier
 
-import { DESKTOP_WINDOW_BLUR_RADIUS_MAX, type DesktopWindowMaterial } from "@synara/contracts";
+import {
+  DESKTOP_WINDOW_BLUR_RADIUS_MAX,
+  DESKTOP_WINDOW_BLUR_RADIUS_MIN,
+  type DesktopWindowMaterial,
+} from "@synara/contracts";
 import type { BrowserWindow } from "electron";
 
 export const MAC_WINDOW_VIBRANCY = "under-window";
@@ -20,9 +24,10 @@ export function parseDesktopWindowMaterial(raw: unknown): DesktopWindowMaterial 
   const { material, blurRadius } = raw as Record<string, unknown>;
   if (material !== "opaque" && material !== "translucent") return null;
   if (typeof blurRadius !== "number" || !Number.isFinite(blurRadius)) return null;
+  const min = material === "translucent" ? DESKTOP_WINDOW_BLUR_RADIUS_MIN : 0;
   return {
     material,
-    blurRadius: Math.round(Math.min(DESKTOP_WINDOW_BLUR_RADIUS_MAX, Math.max(0, blurRadius))),
+    blurRadius: Math.round(Math.min(DESKTOP_WINDOW_BLUR_RADIUS_MAX, Math.max(min, blurRadius))),
   };
 }
 

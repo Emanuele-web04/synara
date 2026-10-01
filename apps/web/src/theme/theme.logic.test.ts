@@ -379,7 +379,6 @@ describe("window translucency", () => {
     expect(dark.variables["--app-content-surface"]).toBe("transparent");
     expect(dark.variables["--app-settings-surface"]).toBe("transparent");
     expect(dark.variables["--app-sidebar-surface"]).toBe("transparent");
-    expect(dark.variables["--app-sidebar-backdrop-filter"]).toBe("none");
     expect(dark.variables["--app-rail-shell-opacity"]).toBe("0%");
     expect(dark.variables["--app-sidebar-chip-surface"]).toBe(
       dark.variables["--app-window-background"],
@@ -451,7 +450,14 @@ describe("window translucency", () => {
       blur: -3,
       sidebarOnly: false,
     });
-    expect(edited.translucency.dark).toEqual({ opacity: 100, blur: 0, sidebarOnly: false });
+    expect(edited.translucency.dark).toEqual({ opacity: 100, blur: 1, sidebarOnly: false });
+    // A stored see-through window (no fill, no blur) is repaired to the floors on load.
+    expect(
+      normalizeThemeState({ translucency: { dark: { opacity: 0, blur: 0, sidebarOnly: false } } })
+        .translucency.dark,
+    ).toEqual({ opacity: 15, blur: 1, sidebarOnly: false });
+    // Clearing the blur returns to the vibrancy material.
+    expect(setWindowTranslucency(edited, "dark", { blur: null }).translucency.dark.blur).toBeNull();
     expect(edited.translucency.light).toEqual(DEFAULT_THEME_STATE.translucency.light);
     expect(resetThemeVariant(edited, "dark").translucency.dark).toEqual(
       DEFAULT_THEME_STATE.translucency.dark,
