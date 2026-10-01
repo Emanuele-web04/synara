@@ -68,10 +68,12 @@ it("blocks unlink throughout an in-flight start and restores recovery when its r
         resolveDispatch = resolve;
       }),
   );
+  let prompt = "";
   const hook = await renderHook(
     () => ({
       delegation: useTaskDelegation({
         todo,
+        readPrompt: () => prompt,
         onLinkChat: async () => undefined,
         onDelegated: undefined,
         draft: {
@@ -107,6 +109,9 @@ it("blocks unlink throughout an in-flight start and restores recovery when its r
   let pending: Promise<void> | undefined;
   try {
     expect(hook.result.current.freshCanUnlink).toBe(false);
+    await hook.result.current.delegation.handleStart();
+    expect(transport.dispatch).not.toHaveBeenCalled();
+    prompt = "Latest edited task title and note";
     pending = hook.result.current.delegation.handleStart();
     await vi.waitFor(() => expect(transport.dispatch).toHaveBeenCalledTimes(1));
     await vi.waitFor(() => expect(hook.result.current.oldCanUnlink).toBe(false));
@@ -136,6 +141,7 @@ it.each(
         "unlink-retained",
         "unlink-confirmed",
         "edited-start-failure",
+        "persisted-start-failure",
         "edited-link",
       ] as const
     )
@@ -184,8 +190,11 @@ it.each(
       outcome === "unlink-unconfirmed" ||
       outcome === "unlink-retained" ||
       outcome === "unlink-confirmed" ||
-      outcome === "edited-start-failure";
+      outcome === "edited-start-failure" ||
+      outcome === "persisted-start-failure";
     transport.dispatch.mockImplementation(async () => {
+      if (outcome === "persisted-start-failure")
+        useComposerDraftStore.getState().clearPersistedAttachments(claimedThread!);
       if (outcome === "edited-start-failure") {
         // A user types in the open chat while its dispatch request is pending.
         useComposerDraftStore.getState().setPrompt(claimedThread!, "My next message");
@@ -206,6 +215,7 @@ it.each(
         outcome === "edited-link" ||
         outcome === "unlink-confirmed" ||
         outcome === "edited-start-failure" ||
+        outcome === "persisted-start-failure" ||
         ((outcome === "unlink-unconfirmed" || outcome === "unlink-retained") &&
           input.threadId !== null)
       )
@@ -217,6 +227,7 @@ it.each(
       () => ({
         delegation: useTaskDelegation({
           todo,
+          readPrompt: () => "Keep my task\n\nKeep my notes",
           onLinkChat,
           onDelegated: undefined,
           draft: {
