@@ -321,6 +321,31 @@ export function splitRecentActivityThreads(
 }
 
 /**
+ * Rows a collapsible, paged Activity section mounts. The open thread is always
+ * kept on screen, the way the classic project list reveals it past its page cap:
+ * past the page it joins `visible`, and under a collapsed header it is returned
+ * as `revealed` so the section can show it without expanding. Section state is
+ * untouched, so the row drops back into place once another thread is opened.
+ */
+export function resolveActivitySectionRows<T extends Pick<SidebarThreadSummary, "id">>(
+  rows: readonly T[],
+  options: { open: boolean; previewLimit: number; activeThreadId: ThreadId | null },
+): { visible: T[]; revealed: T[] } {
+  const activeIndex =
+    options.activeThreadId === null
+      ? -1
+      : rows.findIndex((thread) => thread.id === options.activeThreadId);
+  if (!options.open) {
+    const activeRow = rows[activeIndex];
+    return { visible: [], revealed: activeRow ? [activeRow] : [] };
+  }
+  const visible = rows.slice(0, options.previewLimit);
+  const activeRow = rows[activeIndex];
+  if (activeRow && activeIndex >= options.previewLimit) visible.push(activeRow);
+  return { visible, revealed: [] };
+}
+
+/**
  * Computes the rows that are actually mounted in Activity render order. The
  * Sidebar consumes this same list for jump shortcuts, next/previous navigation,
  * prewarming, and live PR refreshes so hidden classic-project state cannot leak
@@ -338,6 +363,8 @@ export function collectVisibleActivityThreadIds(input: {
   projectGroups: readonly (readonly SidebarThreadSummary[])[];
   settledOpen: boolean;
   settled: readonly SidebarThreadSummary[];
+  /** The open thread shown under a collapsed header; mounted whatever the section state. */
+  revealed?: readonly SidebarThreadSummary[];
 }): ThreadId[] {
   const visible: SidebarThreadSummary[] = [];
   if (input.pinnedOpen) visible.push(...input.pinned);
@@ -348,6 +375,7 @@ export function collectVisibleActivityThreadIds(input: {
     if (input.earlierOpen) visible.push(...input.earlier);
   }
   if (input.settledOpen) visible.push(...input.settled);
+  if (input.revealed) visible.push(...input.revealed);
   return [...new Set(visible.map((thread) => thread.id))];
 }
 

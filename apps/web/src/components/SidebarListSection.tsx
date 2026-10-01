@@ -6,7 +6,7 @@
 // Layer: Sidebar UI primitive
 // Exports: SidebarSectionLabel, SidebarCollapsibleSection, SidebarShowMoreRow
 
-import type { MouseEvent, ReactNode } from "react";
+import { Children, type MouseEvent, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
 import { SIDEBAR_ROW_FOCUS_CLASS_NAME, SIDEBAR_SECTION_LABEL_CLASS_NAME } from "~/sidebarRowStyles";
@@ -57,6 +57,7 @@ export function SidebarCollapsibleSection({
   open,
   onToggle,
   children,
+  revealedChildren,
   className,
   headerClassName,
   headingLevel,
@@ -65,6 +66,8 @@ export function SidebarCollapsibleSection({
   open: boolean;
   onToggle: () => void;
   children: ReactNode;
+  /** Rows kept visible under the header while the section is collapsed (the open thread). */
+  revealedChildren?: ReactNode;
   className?: string;
   /** Aligns the label with rows that pad differently from the sidebar's own. */
   headerClassName?: string;
@@ -92,6 +95,9 @@ export function SidebarCollapsibleSection({
       <DisclosureRegion open={open}>
         <div className="flex flex-col gap-0.5 pt-0.5">{children}</div>
       </DisclosureRegion>
+      {Children.count(revealedChildren) > 0 ? (
+        <div className="flex flex-col gap-0.5 pt-0.5">{revealedChildren}</div>
+      ) : null}
     </div>
   );
 }

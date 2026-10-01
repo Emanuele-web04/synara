@@ -524,4 +524,37 @@ describe("SidebarActivityView", () => {
     ).toBeNull();
     await mounted.unmount();
   });
+
+  it("keeps an old open thread on screen under collapsed Earlier until another thread opens", async () => {
+    const recent = makeThread(600);
+    const old = makeThread(601, {
+      latestHumanMessageAt: "2026-05-04T10:00:00.000Z",
+      updatedAt: "2026-05-04T10:00:00.000Z",
+      createdAt: "2026-05-04T09:00:00.000Z",
+    });
+    const onVisibleThreadIdsChange = vi.fn();
+    const oldRows = () => document.querySelectorAll(`[data-testid="activity-thread-${old.id}"]`);
+    const input = { threads: [recent, old], onVisibleThreadIdsChange };
+    const mounted = await render(renderActivity({ ...input, activeThreadId: old.id }));
+
+    const earlier = page.getByRole("button", { name: "Earlier", exact: true });
+    await expect.element(earlier).toHaveAttribute("aria-expanded", "false");
+    await expect.element(page.getByTestId(`activity-thread-${old.id}`)).toBeVisible();
+    expect(oldRows()).toHaveLength(1);
+    await vi.waitFor(() =>
+      expect(onVisibleThreadIdsChange).toHaveBeenLastCalledWith([recent.id, old.id]),
+    );
+
+    // Expanding moves the row into the section instead of rendering it twice.
+    await earlier.click();
+    await expect.element(earlier).toHaveAttribute("aria-expanded", "true");
+    expect(oldRows()).toHaveLength(1);
+    await earlier.click();
+    await expect.element(earlier).toHaveAttribute("aria-expanded", "false");
+
+    await mounted.rerender(renderActivity({ ...input, activeThreadId: recent.id }));
+    await vi.waitFor(() => expect(oldRows()).toHaveLength(0));
+    await vi.waitFor(() => expect(onVisibleThreadIdsChange).toHaveBeenLastCalledWith([recent.id]));
+    await mounted.unmount();
+  });
 });

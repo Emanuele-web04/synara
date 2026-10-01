@@ -57,6 +57,7 @@ import {
   collectActivityScopeOptions,
   collectUnreadActivityThreads,
   collectVisibleActivityThreadIds,
+  resolveActivitySectionRows,
   groupActivityThreadsByProject,
   isThreadSettledForActivity,
   resolveActivityScope,
@@ -598,10 +599,49 @@ export function SidebarActivityView({
     return {
       group,
       paging,
-      threads: group.threads.slice(0, paging.previewLimit),
+      threads: resolveActivitySectionRows(group.threads, {
+        open: true,
+        previewLimit: paging.previewLimit,
+        activeThreadId,
+      }).visible,
     };
   });
-
+  const pinnedRows = useMemo(
+    () =>
+      resolveActivitySectionRows(scopedPinnedThreads, {
+        open: pinnedOpen,
+        previewLimit: scopedPinnedThreads.length,
+        activeThreadId,
+      }),
+    [activeThreadId, pinnedOpen, scopedPinnedThreads],
+  );
+  const earlierRows = useMemo(
+    () =>
+      resolveActivitySectionRows(dateBuckets.earlier, {
+        open: earlierOpen,
+        previewLimit: earlierPaging.previewLimit,
+        activeThreadId,
+      }),
+    [activeThreadId, dateBuckets.earlier, earlierOpen, earlierPaging.previewLimit],
+  );
+  const settledRows = useMemo(
+    () =>
+      resolveActivitySectionRows(model.settled, {
+        open: settledOpen,
+        previewLimit: settledPaging.previewLimit,
+        activeThreadId,
+      }),
+    [activeThreadId, model.settled, settledOpen, settledPaging.previewLimit],
+  );
+  // The open thread stays on screen even when its section is collapsed.
+  const revealedThreads = useMemo(
+    () => [
+      ...pinnedRows.revealed,
+      ...(groupMode === "time" ? earlierRows.revealed : []),
+      ...settledRows.revealed,
+    ],
+    [earlierRows.revealed, groupMode, pinnedRows.revealed, settledRows.revealed],
+  );
   const visibleThreadIds = useMemo(
     () =>
       collectVisibleActivityThreadIds({
@@ -612,25 +652,25 @@ export function SidebarActivityView({
         today: dateBuckets.today,
         yesterday: dateBuckets.yesterday,
         earlierOpen,
-        earlier: dateBuckets.earlier.slice(0, earlierPaging.previewLimit),
+        earlier: earlierRows.visible,
         projectGroups: pagedProjectGroups.map((group) => group.threads),
         settledOpen,
-        settled: model.settled.slice(0, settledPaging.previewLimit),
+        settled: settledRows.visible,
+        revealed: revealedThreads,
       }),
     [
-      dateBuckets.earlier,
       dateBuckets.today,
       dateBuckets.yesterday,
       earlierOpen,
-      earlierPaging.previewLimit,
+      earlierRows.visible,
       groupMode,
-      model.settled,
       pagedProjectGroups,
       pinnedOpen,
       recentThreads,
+      revealedThreads,
       scopedPinnedThreads,
       settledOpen,
-      settledPaging.previewLimit,
+      settledRows.visible,
     ],
   );
   const visibleThreadIdsFingerprint = visibleThreadIds.join("\0");
@@ -710,10 +750,9 @@ export function SidebarActivityView({
           label="Pinned"
           open={pinnedOpen}
           onToggle={() => setPinnedOpen((open) => !open)}
+          revealedChildren={pinnedRows.revealed.map(renderActiveRow)}
         >
-          {scopedPinnedThreads.map((thread) =>
-            renderRow(thread, isThreadSettledForActivity(thread, settledOverrideByThreadId)),
-          )}
+          {scopedPinnedThreads.map(renderActiveRow)}
         </SidebarCollapsibleSection>
       ) : null}
 
@@ -822,8 +861,9 @@ export function SidebarActivityView({
               label="Earlier"
               open={earlierOpen}
               onToggle={() => setEarlierOpen((open) => !open)}
+              revealedChildren={earlierRows.revealed.map(renderActiveRow)}
             >
-              {dateBuckets.earlier.slice(0, earlierPaging.previewLimit).map(renderActiveRow)}
+              {earlierRows.visible.map(renderActiveRow)}
               <SidebarShowMoreRow
                 canShowMore={earlierPaging.canShowMore}
                 canShowLess={earlierPaging.canShowLess}
@@ -842,10 +882,9 @@ export function SidebarActivityView({
           label="Done"
           open={settledOpen}
           onToggle={() => setSettledOpen((open) => !open)}
+          revealedChildren={settledRows.revealed.map((thread) => renderRow(thread, true))}
         >
-          {model.settled
-            .slice(0, settledPaging.previewLimit)
-            .map((thread) => renderRow(thread, true))}
+          {settledRows.visible.map((thread) => renderRow(thread, true))}
           <SidebarShowMoreRow
             canShowMore={settledPaging.canShowMore}
             canShowLess={settledPaging.canShowLess}
