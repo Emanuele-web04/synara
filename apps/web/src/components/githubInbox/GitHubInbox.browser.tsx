@@ -625,11 +625,21 @@ describe("GitHubInbox sections", () => {
 
   it("puts pinned rows first under their own heading", async () => {
     api.list.mockResolvedValue(
-      listResult({ items: [PULL_REQUEST_41, ISSUE_42, { ...ISSUE_43, isPinned: true }] }),
+      listResult({
+        items: [
+          {
+            ...PULL_REQUEST_41,
+            isPinned: true,
+            projectContexts: context(projectA).map((entry) => ({ ...entry, isPinned: true })),
+          },
+          ISSUE_42,
+          ISSUE_43,
+        ],
+      }),
     );
     await mount();
 
-    await expectRows([43, 42, 41]);
+    await expectRows([41, 43, 42]);
     const headers = Array.from(document.querySelectorAll("h2")).map((node) => node.textContent);
     expect(headers).toEqual(["Pinned", "All"]);
   });
