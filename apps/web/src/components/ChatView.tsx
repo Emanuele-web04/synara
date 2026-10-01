@@ -80,6 +80,8 @@ import { resolveProviderInstanceLabel } from "~/lib/providerInstancePresentation
 import { resolveAuxiliaryTextGenerationSelection } from "~/lib/textGenerationCapabilities";
 import { cn, isMacNavigatorPlatform, newCommandId, newThreadId, randomUUID } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
+import { ChatLinkActionsContext, type ChatLinkActions } from "~/lib/linkContextMenu";
+import { parseGitHubRepositoryNameWithOwnerFromPullRequestUrl } from "@synara/shared/githubRepository";
 import {
   mergeProjectInstructionsIntoThreadNotes,
   useProjectInstructionsStore,
@@ -2555,6 +2557,43 @@ export default function ChatView({
       });
     },
     [navigate, onOpenBrowserUrl, threadId],
+  );
+  // Chat links offer the PR pane only for repositories this project owns, matching the
+  // Environment panel; any other pull request falls back to the in-app browser.
+  const openRightDockPane = useRightDockStore((store) => store.openPane);
+  const openPullRequestLink = useCallback(
+    (url: string) => {
+      const repository = parseGitHubRepositoryNameWithOwnerFromPullRequestUrl(url);
+      const number = Number(/\/pull\/(\d+)/i.exec(url)?.[1]);
+      if (!repository || !activeProjectId || !Number.isInteger(number)) {
+        openBrowserUrl(url);
+        return;
+      }
+      void queryClient.fetchQuery(gitGithubRepositoryQueryOptions(gitBranchSourceCwd)).then(
+        (result) => {
+          const belongsToProject = result.repositories.some(
+            (candidate) => candidate.nameWithOwner.toLowerCase() === repository.toLowerCase(),
+          );
+          if (!belongsToProject) {
+            openBrowserUrl(url);
+            return;
+          }
+          openRightDockPane(threadId, {
+            kind: "pullRequest",
+            pullRequestProjectId: activeProjectId,
+            pullRequestRepository: repository,
+            pullRequestNumber: number,
+            pullRequestInitialTab: "summary",
+          });
+        },
+        () => openBrowserUrl(url),
+      );
+    },
+    [activeProjectId, gitBranchSourceCwd, openBrowserUrl, openRightDockPane, queryClient, threadId],
+  );
+  const chatLinkActions = useMemo<ChatLinkActions>(
+    () => ({ openInBrowserPanel: openBrowserUrl, openPullRequest: openPullRequestLink }),
+    [openBrowserUrl, openPullRequestLink],
   );
 
   const envLocked = Boolean(
@@ -6060,7 +6099,7 @@ export default function ChatView({
     </div>
   ) : null;
 
-  return (
+  const chatView = (
     <div
       className={cn(
         "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
@@ -6737,5 +6776,10 @@ export default function ChatView({
         onNavigate={navigateExpandedImage}
       />
     </div>
+  );
+  return (
+    <ChatLinkActionsContext.Provider value={chatLinkActions}>
+      {chatView}
+    </ChatLinkActionsContext.Provider>
   );
 }
