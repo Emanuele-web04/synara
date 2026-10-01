@@ -16,6 +16,7 @@ import {
   MAC_ICON_ASSETS_CAR_STAGE_PATH,
   MAC_INHERITED_ENTITLEMENTS_PATH,
   MAC_WINDOW_MATERIAL_ADDON_ASAR_EXCLUSION,
+  AUDIO_CAPTURE_USAGE_DESCRIPTION,
   MICROPHONE_USAGE_DESCRIPTION,
   validateDesktopNativeBuildHost,
   WINDOWS_INSTALLER_GUID,
@@ -99,6 +100,7 @@ describe("createDesktopPlatformBuildConfig", () => {
     // bundle falls back to the flat ICNS and never gets the glass material.
     assert.equal(extendInfo.CFBundleIconName, MAC_ICON_ASSET_NAME);
     assert.equal(extendInfo.NSMicrophoneUsageDescription, MICROPHONE_USAGE_DESCRIPTION);
+    assert.equal(extendInfo.NSAudioCaptureUsageDescription, AUDIO_CAPTURE_USAGE_DESCRIPTION);
     assert.equal(
       extendInfo.NSScreenCaptureUsageDescription,
       "Synara captures the windows you authorize for Computer use.",

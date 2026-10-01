@@ -26,11 +26,18 @@ export const GROUPS_BETA_FEATURE = "groups";
 /** Inbox: the Inbox page and its `stats.getRecap` RPC. */
 export const INBOX_BETA_FEATURE = "inbox";
 
+/**
+ * Audio trail: the chat message trail moves with the Mac's audio output and/or
+ * the microphone, read by the AppSnap helper's `--audio-level` mode.
+ */
+export const AUDIO_TRAIL_BETA_FEATURE = "audio-trail";
+
 export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [
   "omp",
   GROUPS_BETA_FEATURE,
   INBOX_BETA_FEATURE,
   "tasks",
+  AUDIO_TRAIL_BETA_FEATURE,
 ];
 
 /**

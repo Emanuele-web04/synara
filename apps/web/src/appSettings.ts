@@ -189,6 +189,9 @@ export const GitHubInboxInvolvementFilter = Schema.Literals([
 ]);
 export type GitHubInboxInvolvementFilter = typeof GitHubInboxInvolvementFilter.Type;
 export type FollowUpBehavior = typeof FollowUpBehavior.Type;
+// Sound the chat message trail moves with (Beta desktop on macOS).
+export const MessageTrailAudioSource = Schema.Literals(["off", "system", "microphone", "both"]);
+export type MessageTrailAudioSource = typeof MessageTrailAudioSource.Type;
 export const DEFAULT_FOLLOW_UP_BEHAVIOR: FollowUpBehavior = "queue";
 // What plain Enter does while a composer voice note is recording: "stop" only
 // transcribes into the draft, "send" also sends the draft once transcribed.
@@ -453,6 +456,9 @@ export const AppSettingsSchema = Schema.Struct({
   // Started threads: show reasoning effort as a stepped slider card in the composer's
   // model menu instead of radio rows. New chats keep the split model/effort pickers.
   composerEffortSlider: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Beta desktop on macOS: the message trail moves with the Mac's audio output,
+  // the microphone, or both. Opt-in because the first use asks macOS for access.
+  messageTrailAudioSource: MessageTrailAudioSource.pipe(withDefaults(() => "off" as const)),
   autoOpenDevicePane: Schema.Boolean.pipe(withDefaults(() => true)),
   enableProviderUpdateChecks: Schema.Boolean.pipe(withDefaults(() => true)),
   enableNativeFontSmoothing: Schema.Boolean.pipe(withDefaults(getDefaultNativeFontSmoothing)),

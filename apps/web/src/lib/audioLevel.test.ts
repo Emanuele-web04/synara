@@ -1,0 +1,35 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { AUDIO_LEVEL_SUBSCRIBERS } from "./audioLevel";
+
+vi.mock("~/betaFeatures", () => ({ isBetaFeatureOn: () => true }));
+
+beforeEach(() => vi.useFakeTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
+
+describe("audio level subscription admission", () => {
+  it.each([
+    ["Win32", false],
+    ["Linux x86_64", false],
+    ["MacIntel", true],
+  ])("requests Mac audio only on a supported platform: %s", (platform, supported) => {
+    const setSource = vi.fn().mockResolvedValue("unsupported");
+    vi.stubGlobal("navigator", { platform });
+    vi.stubGlobal("document", {
+      visibilityState: "visible",
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    });
+    vi.stubGlobal("window", {
+      desktopBridge: { audioLevel: { setSource, onLevel: () => () => undefined } },
+    });
+
+    const unsubscribe = AUDIO_LEVEL_SUBSCRIBERS.system(() => undefined);
+    unsubscribe();
+    vi.runAllTimers();
+    expect(setSource.mock.calls).toEqual(supported ? [["system"], [null]] : []);
+  });
+});
