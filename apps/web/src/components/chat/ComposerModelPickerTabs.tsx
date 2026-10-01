@@ -1,18 +1,31 @@
 // FILE: ComposerModelPickerTabs.tsx
 // Purpose: Icon tab strip of the composer model picker — starred presets, one tab per
-//   offered provider, and a shortcut to provider settings.
+//   account of every offered provider, and a shortcut to provider settings.
 // Layer: Chat composer presentation
 // Depends on: provider icons/availability helpers and tooltip primitives.
 
-import { type ProviderKind, type ServerProviderStatus } from "@synara/contracts";
+import {
+  type ProviderInstanceId,
+  type ProviderKind,
+  type ServerProviderStatus,
+} from "@synara/contracts";
 import { type ReactNode } from "react";
 
 import { PlusIcon, StarFilledIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "../ProviderIcon";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { type ComposerModelPickerTab, STARRED_TAB } from "./ComposerModelPicker.logic";
-import { getProviderIconClassName, resolveLiveProviderAvailability } from "./ProviderModelPicker";
+import {
+  type ComposerModelPickerTab,
+  providerAccountInitials,
+  STARRED_TAB,
+} from "./ComposerModelPicker.logic";
+import {
+  findProviderStatusForInstance,
+  getProviderIconClassName,
+  type ProviderModelPickerInstance,
+  resolveLiveProviderAvailability,
+} from "./ProviderModelPicker";
 
 function PickerTabButton(props: {
   label: string;
@@ -52,25 +65,72 @@ function PickerTabButton(props: {
 
 export type ComposerModelPickerProviderTab = {
   provider: ProviderKind;
+  /** Account the tab lists models for; a default account shares the provider id. */
+  instanceId: ProviderInstanceId;
   label: string;
-  /** Null when the provider can be opened; otherwise why not ("Sign in", "Checking"…). */
+  /** Initials telling same-provider accounts apart; null while the provider has one. */
+  badge: string | null;
+  /** Null when the account can be opened; otherwise why not ("Sign in", "Checking"…). */
   unavailableLabel: string | null;
 };
 
-export function resolveComposerModelPickerProviderTabs(
-  options: ReadonlyArray<{ value: ProviderKind; label: string }>,
-  providers: ReadonlyArray<ServerProviderStatus> | undefined,
-): ComposerModelPickerProviderTab[] {
-  return options.map((option) => {
-    const availability = resolveLiveProviderAvailability(
-      providers?.find((entry) => entry.provider === option.value),
+// One tab per enabled account, so a second Codex or Claude account is as reachable as
+// another provider. A started thread stays on its account: siblings are listed but closed.
+export function resolveComposerModelPickerProviderTabs(input: {
+  options: ReadonlyArray<{ value: ProviderKind; label: string }>;
+  providers: ReadonlyArray<ServerProviderStatus> | undefined;
+  providerInstances?: ReadonlyArray<ProviderModelPickerInstance> | undefined;
+  lockedInstanceId?: ProviderInstanceId | null | undefined;
+}): ComposerModelPickerProviderTab[] {
+  return input.options.flatMap((option) => {
+    const accounts = (input.providerInstances ?? []).filter(
+      (instance) => instance.provider === option.value && instance.enabled,
     );
-    return {
-      provider: option.value,
-      label: option.label,
-      unavailableLabel: availability.disabled ? (availability.label ?? "Unavailable") : null,
-    };
+    const hasSiblingAccounts = accounts.length > 1;
+    const tabs = hasSiblingAccounts
+      ? accounts.map((account) => ({
+          instanceId: account.instanceId,
+          label: account.label.toLowerCase().includes(option.label.toLowerCase())
+            ? account.label
+            : `${option.label} · ${account.label}`,
+          badge: providerAccountInitials(account.label),
+        }))
+      : [{ instanceId: accounts[0]?.instanceId ?? option.value, label: option.label, badge: null }];
+    return tabs.map((tab) => {
+      const availability = resolveLiveProviderAvailability(
+        findProviderStatusForInstance({
+          providers: input.providers,
+          provider: option.value,
+          instanceId: tab.instanceId,
+        }),
+      );
+      const lockedToSibling =
+        input.lockedInstanceId != null && tab.instanceId !== input.lockedInstanceId;
+      return {
+        provider: option.value,
+        ...tab,
+        unavailableLabel: lockedToSibling
+          ? "New thread"
+          : availability.disabled
+            ? (availability.label ?? "Unavailable")
+            : null,
+      };
+    });
   });
+}
+
+export function ProviderAccountBadge(props: { initials: string; className?: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={cn(
+        "rounded-sm bg-popover px-0.5 font-medium text-ui-2xs leading-none text-foreground ring-1 ring-border",
+        props.className,
+      )}
+    >
+      {props.initials}
+    </span>
+  );
 }
 
 export function ComposerModelPickerTabs(props: {
@@ -97,20 +157,26 @@ export function ComposerModelPickerTabs(props: {
         const TabIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[providerTab.provider];
         return (
           <PickerTabButton
-            key={providerTab.provider}
+            key={providerTab.instanceId}
             label={
               providerTab.unavailableLabel
                 ? `${providerTab.label} · ${providerTab.unavailableLabel}`
                 : providerTab.label
             }
-            active={props.tab === providerTab.provider}
+            active={props.tab === providerTab.instanceId}
             disabled={providerTab.unavailableLabel !== null}
-            onSelect={() => props.onTabChange(providerTab.provider)}
+            onSelect={() => props.onTabChange(providerTab.instanceId)}
           >
             <TabIcon
               aria-hidden="true"
               className={cn("size-4", getProviderIconClassName(providerTab.provider, ""))}
             />
+            {providerTab.badge ? (
+              <ProviderAccountBadge
+                initials={providerTab.badge}
+                className="absolute -right-1 -bottom-0.5"
+              />
+            ) : null}
           </PickerTabButton>
         );
       })}

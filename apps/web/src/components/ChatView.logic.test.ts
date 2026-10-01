@@ -155,38 +155,20 @@ describe("composer strip work-log derivation", () => {
     expect(deriveParentWorkLogEntries).toHaveBeenCalledOnce();
   });
 
-  it("keeps the account picker visible for a missing profile on every provider", () => {
+  it("shows the standalone account menu only for a missing account", () => {
     expect(
       shouldShowComposerProviderInstancePicker({
-        provider: "cursor",
         selectedProviderInstanceId: "cursor_removed",
         providerInstances: [{ instanceId: "cursor" }],
       }),
     ).toBe(true);
+    // Configured accounts are picked in the model picker's own tabs.
     expect(
       shouldShowComposerProviderInstancePicker({
-        provider: "opencode",
-        selectedProviderInstanceId: "opencode_removed",
-        providerInstances: [{ instanceId: "opencode" }],
-      }),
-    ).toBe(true);
-  });
-
-  it("still hides a redundant single-profile picker when the selection exists", () => {
-    expect(
-      shouldShowComposerProviderInstancePicker({
-        provider: "cursor",
-        selectedProviderInstanceId: "cursor",
-        providerInstances: [{ instanceId: "cursor" }],
+        selectedProviderInstanceId: "codex_work",
+        providerInstances: [{ instanceId: "codex" }, { instanceId: "codex_work" }],
       }),
     ).toBe(false);
-    expect(
-      shouldShowComposerProviderInstancePicker({
-        provider: "codex",
-        selectedProviderInstanceId: "codex",
-        providerInstances: [{ instanceId: "codex" }],
-      }),
-    ).toBe(true);
   });
 
   it("targets collapsed Cursor option resets at the selected non-default instance", () => {

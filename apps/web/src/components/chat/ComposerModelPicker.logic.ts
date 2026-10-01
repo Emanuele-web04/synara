@@ -3,7 +3,7 @@
 // Layer: Chat composer state helpers
 // Depends on: composer trait resolution and the starred model storage shape.
 
-import type { ModelSlug, ProviderKind } from "@synara/contracts";
+import type { ModelSlug, ProviderInstanceId, ProviderKind } from "@synara/contracts";
 import { resolveSelectableModel } from "@synara/shared/model";
 
 import { type StarredModel, starredModelInstanceId, starredModelKey } from "~/lib/starredModels";
@@ -20,9 +20,22 @@ import {
 
 type ComposerTraitSelection = ReturnType<typeof getComposerTraitSelection>;
 
-/** Tab id of the starred presets list; every other tab id is a provider kind. */
+/** Tab id of the starred presets list; every other tab id is a provider account
+ *  (instance id; a provider's default account shares the provider id). */
 export const STARRED_TAB = "starred";
-export type ComposerModelPickerTab = typeof STARRED_TAB | ProviderKind;
+export type ComposerModelPickerTab = typeof STARRED_TAB | ProviderInstanceId;
+
+// Two-letter marker telling same-provider accounts apart on their identical icons:
+// "Work" -> "WO", "Claude 2" -> "C2".
+export function providerAccountInitials(label: string): string {
+  const words = label
+    .trim()
+    .split(/[\s_-]+/u)
+    .filter(Boolean);
+  const initials =
+    words.length > 1 ? `${words[0]![0]}${words[1]![0]}` : (words[0] ?? "").slice(0, 2);
+  return initials.toUpperCase();
+}
 
 /** Marks the open picker so global mod+digit handlers (thread jump) yield to its rows. */
 export const MODEL_PICKER_POPUP_ATTRIBUTE = "data-model-picker-popup";
@@ -159,7 +172,7 @@ export function buildProviderTabRows(input: {
       : input.options;
   return groupProviderModelOptions(filteredOptions).flatMap((group) =>
     group.options.map((option) => ({
-      key: `${provider}:${option.slug}`,
+      key: `${input.instanceId ?? provider}:${option.slug}`,
       provider,
       ...(input.instanceId && input.instanceId !== provider
         ? { instanceId: input.instanceId }

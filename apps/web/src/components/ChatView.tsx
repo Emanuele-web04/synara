@@ -1342,7 +1342,6 @@ export default function ChatView({
     selectedProviderInstanceId,
   );
   const showProviderInstancePicker = shouldShowComposerProviderInstancePicker({
-    provider: selectedProvider,
     selectedProviderInstanceId,
     providerInstances: selectedProviderInstances,
   });
@@ -3644,7 +3643,9 @@ export default function ChatView({
       }
       const resolvedModel = resolveCommittedProviderModel({
         selectedModel: model,
-        availableOptions: modelOptionsByProvider[provider],
+        // Accounts of one provider can expose different catalogs.
+        availableOptions:
+          modelOptionsByProviderInstance[resolvedInstanceId] ?? modelOptionsByProvider[provider],
         fallback: () => resolveAppModelSelection(provider, customModelsByProvider, model),
       });
       const runtimeModel = resolveRuntimeModelDescriptor({

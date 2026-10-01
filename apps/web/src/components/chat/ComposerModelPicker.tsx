@@ -184,7 +184,26 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     );
   });
 
-  const [tab, setTab] = useState<ComposerModelPickerTab>(activeProvider);
+  const instancesFor = (provider: ProviderKind): ReadonlyArray<ProviderModelPickerInstance> =>
+    (props.providerInstances ?? []).filter((instance) => instance.provider === provider);
+  const selectedInstanceIdFor = (provider: ProviderKind): ProviderInstanceId => {
+    const instances = instancesFor(provider);
+    if (
+      provider === props.provider &&
+      props.selectedProviderInstanceId !== undefined &&
+      instances.some((instance) => instance.instanceId === props.selectedProviderInstanceId)
+    ) {
+      return props.selectedProviderInstanceId;
+    }
+    return (
+      instances.find((instance) => instance.isDefault)?.instanceId ??
+      instances[0]?.instanceId ??
+      provider
+    );
+  };
+  const activeInstanceId = selectedInstanceIdFor(activeProvider);
+
+  const [tab, setTab] = useState<ComposerModelPickerTab>(activeInstanceId);
   const [query, setQuery] = useState("");
   const normalizedQuery = useDeferredValue(query).trim().toLowerCase();
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -194,7 +213,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
   if (wasMenuOpen !== isMenuOpen) {
     setWasMenuOpen(isMenuOpen);
     if (isMenuOpen) {
-      setTab(usableStarredModels.length > 0 ? STARRED_TAB : activeProvider);
+      setTab(usableStarredModels.length > 0 ? STARRED_TAB : activeInstanceId);
       setQuery("");
     }
   }
@@ -262,37 +281,36 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     props.runtimeModel,
   );
 
-  const providerTabs = resolveComposerModelPickerProviderTabs(
-    resolveVisibleProviderOptions({
+  const providerTabs = resolveComposerModelPickerProviderTabs({
+    options: resolveVisibleProviderOptions({
       provider: props.provider,
       lockedProvider,
       providers: props.providers,
       hiddenProviders: props.hiddenProviders,
       providerOrder: props.providerOrder,
     }).filter((option) => lockedProvider === null || option.value === lockedProvider),
-    props.providers,
+    providers: props.providers,
+    providerInstances: props.providerInstances,
+    lockedInstanceId: lockedProvider !== null ? activeInstanceId : null,
+  });
+  const activeProviderTab = providerTabs.find(
+    (providerTab) => providerTab.instanceId === activeInstanceId,
   );
+  // The account a provider tab lists; a tab that is no longer offered falls back to the
+  // composer's own account.
+  const tabAccount =
+    tab === STARRED_TAB
+      ? null
+      : (providerTabs.find((providerTab) => providerTab.instanceId === tab) ?? {
+          provider: activeProvider,
+          instanceId: activeInstanceId,
+        });
 
-  const instancesFor = (provider: ProviderKind): ReadonlyArray<ProviderModelPickerInstance> =>
-    (props.providerInstances ?? []).filter((instance) => instance.provider === provider);
-  const selectedInstanceIdFor = (provider: ProviderKind): ProviderInstanceId => {
-    const instances = instancesFor(provider);
-    if (
-      provider === props.provider &&
-      props.selectedProviderInstanceId !== undefined &&
-      instances.some((instance) => instance.instanceId === props.selectedProviderInstanceId)
-    ) {
-      return props.selectedProviderInstanceId;
-    }
-    return (
-      instances.find((instance) => instance.isDefault)?.instanceId ??
-      instances[0]?.instanceId ??
-      provider
-    );
-  };
-
-  const modelOptionsFor = (provider: ProviderKind): ReadonlyArray<ProviderModelOption> =>
-    props.modelOptionsByProviderInstance?.[selectedInstanceIdFor(provider)] ??
+  const modelOptionsFor = (
+    provider: ProviderKind,
+    instanceId: string,
+  ): ReadonlyArray<ProviderModelOption> =>
+    props.modelOptionsByProviderInstance?.[instanceId as ProviderInstanceId] ??
     props.modelOptionsByProvider[provider];
 
   const accountLabelFor = (instanceId: string) =>
@@ -301,28 +319,26 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     )?.label;
 
   const rows =
-    tab === STARRED_TAB
+    tabAccount === null
       ? buildStarredTabRows({
           starredModels: usableStarredModels,
-          modelOptionsFor: (provider, instanceId) =>
-            props.modelOptionsByProviderInstance?.[instanceId as ProviderInstanceId] ??
-            props.modelOptionsByProvider[provider],
+          modelOptionsFor,
           accountLabelFor,
           query: normalizedQuery,
           current: {
             provider: activeProvider,
-            instanceId: selectedInstanceIdFor(activeProvider),
+            instanceId: activeInstanceId,
             model: props.model,
             ...resolveStarredTraits(currentTraitSelection),
           },
           effortLevelsFor: (provider, model) => traitSelectionFor(provider, model).effortLevels,
         })
       : buildProviderTabRows({
-          provider: tab,
-          instanceId: selectedInstanceIdFor(tab),
-          options: modelOptionsFor(tab),
+          provider: tabAccount.provider,
+          instanceId: tabAccount.instanceId,
+          options: modelOptionsFor(tabAccount.provider, tabAccount.instanceId),
           query: normalizedQuery,
-          selectedModel: tab === activeProvider ? props.model : null,
+          selectedModel: tabAccount.instanceId === activeInstanceId ? props.model : null,
         });
   const starredModelSlots = new Set(starredModels.map(starredModelSlotKey));
 
@@ -334,10 +350,10 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     patch: Record<string, unknown>,
     keepOpen = false,
   ) => {
-    // A starred preset restores its own account; other rows use the tab's account.
-    const instanceId = row.preset
-      ? (starredModelInstanceId(row.preset) as ProviderInstanceId)
-      : selectedInstanceIdFor(row.provider);
+    // A starred preset restores its own account; other rows run in their tab's account.
+    const instanceId = (
+      row.preset ? starredModelInstanceId(row.preset) : (row.instanceId ?? row.provider)
+    ) as ProviderInstanceId;
     if (Object.keys(patch).length > 0) {
       props.onProviderModelChange(row.provider, model, {
         modelOptions: buildNextProviderOptions(
@@ -415,7 +431,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     STARRED_TAB,
     ...providerTabs
       .filter((providerTab) => providerTab.unavailableLabel === null)
-      .map((providerTab) => providerTab.provider),
+      .map((providerTab) => providerTab.instanceId),
   ];
   const cycleTab = (direction: 1 | -1) => {
     const index = openTabs.indexOf(tab);
@@ -441,8 +457,11 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
 
   const shortcutModifierLabel = isMacNavigatorPlatform() ? "⌘" : "Ctrl ";
   const isTabLoading =
-    tab !== STARRED_TAB && (props.loadingModelProviders?.[tab] ?? false) && rows.length === 0;
-  const discoveryError = tab === STARRED_TAB ? undefined : props.discoveryErrorsByProvider?.[tab];
+    tabAccount !== null &&
+    (props.loadingModelProviders?.[tabAccount.provider] ?? false) &&
+    rows.length === 0;
+  const discoveryError =
+    tabAccount === null ? undefined : props.discoveryErrorsByProvider?.[tabAccount.provider];
 
   return (
     <Menu
@@ -451,6 +470,8 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     >
       <ComposerModelMenuTrigger
         provider={activeProvider}
+        accountLabel={activeProviderTab?.badge ? activeProviderTab.label : null}
+        accountBadge={activeProviderTab?.badge ?? null}
         modelLabel={modelLabel}
         statusLabel={resolveComposerTraitStatusLabel(currentTraitSelection)}
         contextWindowLabel={activeProvider === "claudeAgent" ? props.contextWindowLabel : null}

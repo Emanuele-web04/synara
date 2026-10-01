@@ -18,12 +18,16 @@ import {
   COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
   COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
 } from "./composerPickerStyles";
+import { ProviderAccountBadge } from "./ComposerModelPickerTabs";
 import { getProviderIconClassName } from "./ProviderModelPicker";
 
 // Must render inside a `Menu`. `hideModelLabel` / `hideStatusLabel` are the narrow-composer
 // degradation steps: the text moves to title/sr-only so assistive tech keeps it.
 export function ComposerModelMenuTrigger(props: {
   provider: ProviderKind;
+  /** Set while the provider has several accounts, to tell which one the composer runs in. */
+  accountLabel?: string | null | undefined;
+  accountBadge?: string | null | undefined;
   modelLabel: string;
   statusLabel: string | null;
   contextWindowLabel?: string | null | undefined;
@@ -59,6 +63,7 @@ export function ComposerModelMenuTrigger(props: {
   if (showsPlaceholder && !hasShownPlaceholder) setHasShownPlaceholder(true);
   const ProviderIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[props.provider];
   const hiddenTriggerTitle = [
+    props.accountLabel,
     props.hideModelLabel ? props.modelLabel : null,
     props.hideStatusLabel ? props.statusLabel : null,
     props.hideStatusLabel ? props.contextWindowLabel : null,
@@ -97,6 +102,12 @@ export function ComposerModelMenuTrigger(props: {
               getProviderIconClassName(props.provider, "text-[var(--color-text-foreground)]"),
             )}
           />
+          {props.accountBadge ? (
+            <>
+              <ProviderAccountBadge initials={props.accountBadge} className="shrink-0" />
+              <span className="sr-only">{props.accountLabel}</span>
+            </>
+          ) : null}
           {props.hideModelLabel ? (
             <span className="sr-only">{label.modelLabel}</span>
           ) : (
