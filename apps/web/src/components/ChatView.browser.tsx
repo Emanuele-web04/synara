@@ -9173,6 +9173,44 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it("closes a worktree handoff dialog when navigating to a draft thread", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("handoff-owner"),
+        targetText: "Saved thread handoff",
+      }),
+    });
+    try {
+      useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, OTHER_THREAD_ID, {});
+      useComposerDraftStore.getState().setPrompt(OTHER_THREAD_ID, "Destination draft");
+      await page.getByRole("button", { name: "Toggle environment panel", exact: true }).click();
+      await expect.element(page.getByRole("button", { name: "Local", exact: true })).toBeVisible();
+      await page.getByRole("button", { name: "Local", exact: true }).click();
+      await expect
+        .element(page.getByRole("menuitem", { name: "Hand off to new worktree" }))
+        .toBeVisible();
+      await page.getByRole("menuitem", { name: "Hand off to new worktree" }).click();
+      await expect
+        .element(page.getByRole("dialog", { name: "Hand off to worktree" }))
+        .toBeVisible();
+      await page.getByRole("textbox", { name: "Worktree name" }).fill("source-thread-worktree");
+      // Browser/history navigation remains possible while the dialog makes background clicks inert.
+      await mounted.router.navigate({ to: "/$threadId", params: { threadId: OTHER_THREAD_ID } });
+      await vi.waitFor(() => {
+        expect(mounted.router.state.location.pathname).toBe(`/${OTHER_THREAD_ID}`);
+        expect(document.querySelector('[contenteditable="true"]')?.textContent).toBe(
+          "Destination draft",
+        );
+      });
+      await expect
+        .element(page.getByRole("dialog", { name: "Hand off to worktree" }), { timeout: 2_000 })
+        .not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it.each(["terminal", "close", "navigation", "navigation-back", "inflight"] as const)(
     "cancels a pending editor chat tab switch after %s",
     async (action) => {

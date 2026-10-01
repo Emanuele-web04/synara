@@ -3330,7 +3330,8 @@ export default function ChatView({
   useLayoutEffect(() => {
     // ChatView stays mounted across thread switches, so clear thread-local overlays before paint.
     setExpandedImage(null);
-  }, [setExpandedImage, threadId]);
+    setWorktreeHandoffDialogOpen(false);
+  }, [setExpandedImage, setWorktreeHandoffDialogOpen, threadId]);
 
   useEffect(() => {
     dragDepthRef.current = 0;
