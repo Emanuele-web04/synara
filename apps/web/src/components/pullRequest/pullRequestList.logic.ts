@@ -203,15 +203,22 @@ export function orderPullRequestEntriesPinnedFirst<T extends { isPinned?: boolea
  * The list as GitHub shows it: pins first, then every other row in one section, keeping the
  * caller's order (newest activity first). Empty sections are dropped.
  */
-export function groupPullRequestEntriesPinnedThenAll<T extends { isPinned?: boolean }>(
+export function groupPullRequestEntriesPinnedThenAll<T extends { isPinned?: boolean | undefined }>(
   entries: readonly T[],
 ): PullRequestListGroup<T>[] {
-  const pinned = entries.filter((entry) => entry.isPinned === true);
-  const rest = entries.filter((entry) => entry.isPinned !== true);
-  return [
-    { key: "pinned" as const, label: GROUP_LABELS.pinned, entries: pinned },
-    { key: "all" as const, label: GROUP_LABELS.all, entries: rest },
-  ].filter((group) => group.entries.length > 0);
+  const groups: PullRequestListGroup<T>[] = [
+    {
+      key: "pinned",
+      label: GROUP_LABELS.pinned,
+      entries: entries.filter((entry) => entry.isPinned === true),
+    },
+    {
+      key: "all",
+      label: GROUP_LABELS.all,
+      entries: entries.filter((entry) => entry.isPinned !== true),
+    },
+  ];
+  return groups.filter((group) => group.entries.length > 0);
 }
 
 /**
