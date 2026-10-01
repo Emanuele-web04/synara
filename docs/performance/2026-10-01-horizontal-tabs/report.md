@@ -122,3 +122,45 @@ mount/scroll ownership, repeat the visibility measurement in an isolated
 production desktop build with representative real histories and capture its
 layout/paint trace. The current evidence does not justify a broader cache or
 virtualizer rewrite.
+
+## Follow-up changes in the same pull request
+
+The sections above describe the first commit only. Four later commits build on it; this
+section records what they change and the same benchmark re-run with all of them applied.
+
+- Tab feedback: the pressed tab reads as selected within one frame, selection starts on
+  mouse press, and the chat renders right after that frame paints.
+- Streaming and startup: the sidebar, tab strip and global shortcuts no longer re-render
+  for every streamed token, and stored settings are decoded once instead of once per
+  subscriber per write.
+- Chat header and composer: props derived from the whole thread object are stable, so the
+  header, model picker, environment panel and message trail stop re-rendering per token
+  and per keystroke.
+- Transcript reveal: the `@legendapp/list` patch now treats being pinned at the scroller's
+  native end as arrival. The list's end target includes the footer and bottom padding and
+  sat past what the scroller can reach, so its arrival check never passed and the rows
+  stayed transparent until a fixed 100 ms fallback. This was the "transcript
+  initialization" bottleneck named above.
+
+Same fixture, machine and session as each other (12 round trips, first discarded, medians
+of two runs); `main` and the first commit were re-measured in that session:
+
+| Warm transition                  |   `main` | First commit | All commits |
+| -------------------------------- | -------: | -----------: | ----------: |
+| Saved → saved, visible           | 169.5 ms |     166.8 ms |     80.0 ms |
+| Draft → saved, visible           | 185.4 ms |     174.0 ms |     76.5 ms |
+| Saved → previously visited draft |  60.1 ms |      62.7 ms |     30.9 ms |
+| First entry into a draft         | 172.9 ms |      66.4 ms |     35.1 ms |
+
+Header and composer stay present on every sampled switch and the unchanged tab list is not
+rewritten, as in the first commit. A separate probe (60 streamed deltas, one per frame, CPU
+profiler attached) measured React render time during streaming at about 920 → 569 ms and
+the median frame gap at 39 → 23 ms; settings decoding at startup went from 200 → 2 ms.
+
+The same limits apply: development React in headless Chromium, not a production desktop
+build. The issue-550 ratio guard in `ChatView.browser.tsx` was recalibrated from 2.5 to 3.5
+because these commits remove fixed per-update cost from both of its cases; that calibration
+is local and should be watched on CI.
+
+After pulling, run `bun install` and clear Vite's dependency cache
+(`apps/web/node_modules/.vite`) so the patched list build is prebundled again.
