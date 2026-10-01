@@ -49,11 +49,14 @@ export interface ThemePack {
 export interface WindowTranslucency {
   /** Glass fill strength, 0 (desktop fully visible) to 100 (solid tint). */
   opacity: number;
-  /** Desktop blur radius behind the window in points, 0 to DESKTOP_WINDOW_BLUR_RADIUS_MAX. */
-  blur: number;
+  /**
+   * Desktop blur radius behind the window in points, 0 to DESKTOP_WINDOW_BLUR_RADIUS_MAX.
+   * `null` keeps the macOS vibrancy material instead of a custom blur.
+   */
+  blur: number | null;
   /**
    * Limit the glass to the sidebar (and the rail layout's shell band) and keep the route
-   * content opaque. Off by default: the whole window shares one translucent fill.
+   * content opaque. On by default; off shares one translucent fill across the whole window.
    */
   sidebarOnly: boolean;
 }
@@ -286,12 +289,16 @@ export const DEFAULT_CHROME_THEME_BY_VARIANT: Record<ThemeVariant, ChromeTheme> 
   },
 };
 
-// Opacity reproduces the sidebar tint the translucent shell has always used; the blur
-// approximates the frosting of the macOS vibrancy material it replaces.
+// Opacity reproduces the sidebar tint the translucent shell has always used, and the
+// unset blur keeps the macOS vibrancy material behind it, so an untouched install looks
+// the way it did before these were adjustable.
 export const DEFAULT_WINDOW_TRANSLUCENCY_BY_VARIANT: Record<ThemeVariant, WindowTranslucency> = {
-  dark: { opacity: 72, blur: 30, sidebarOnly: false },
-  light: { opacity: 38, blur: 30, sidebarOnly: false },
+  dark: { opacity: 72, blur: null, sidebarOnly: true },
+  light: { opacity: 38, blur: null, sidebarOnly: true },
 };
+
+/** Where the blur slider rests while the vibrancy material is in use; roughly its frosting. */
+export const VIBRANCY_EQUIVALENT_BLUR_RADIUS = 30;
 
 // The rail layout's shell tint scales with the sidebar opacity from these defaults
 // (dark 72% -> 64%, light 38% -> 82%), so both surfaces move together.
@@ -393,12 +400,10 @@ export function normalizeWindowTranslucency(
   const translucency = isRecord(value) ? value : {};
   return {
     opacity: normalizeIntegerInRange(translucency.opacity, 0, 100, fallback.opacity),
-    blur: normalizeIntegerInRange(
-      translucency.blur,
-      0,
-      DESKTOP_WINDOW_BLUR_RADIUS_MAX,
-      fallback.blur,
-    ),
+    blur:
+      typeof translucency.blur === "number" && Number.isFinite(translucency.blur)
+        ? normalizeIntegerInRange(translucency.blur, 0, DESKTOP_WINDOW_BLUR_RADIUS_MAX, 0)
+        : fallback.blur,
     sidebarOnly:
       typeof translucency.sidebarOnly === "boolean"
         ? translucency.sidebarOnly

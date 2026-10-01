@@ -38,6 +38,7 @@ import { ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME } from "../surfaceStyles"
 import {
   CODE_THEME_OPTIONS,
   DEFAULT_THEME_STATE,
+  VIBRANCY_EQUIVALENT_BLUR_RADIUS,
   buildThemeCssVariables,
   getAvailableCodeThemes,
   getCodeThemeSeed,
@@ -350,7 +351,8 @@ export function ThemePackEditor({
               </ThemeRow>
               <ThemeRow label="Blur">
                 <ThemeSlider
-                  value={translucency.blur}
+                  value={translucency.blur ?? VIBRANCY_EQUIVALENT_BLUR_RADIUS}
+                  {...(translucency.blur === null ? { valueLabel: "Auto" } : {})}
                   max={DESKTOP_WINDOW_BLUR_RADIUS_MAX}
                   onChange={(next) => setWindowTranslucency(variant, { blur: next })}
                   ariaLabel={`${titleLabel} background blur`}
@@ -620,12 +622,15 @@ function ThemeSlider({
   value,
   max,
   suffix = "",
+  valueLabel,
   onChange,
   ariaLabel,
 }: {
   value: number;
   max: number;
   suffix?: string;
+  /** Shown instead of the number, e.g. while the value is still the automatic default. */
+  valueLabel?: string;
   onChange: (next: number) => void;
   ariaLabel: string;
 }) {
@@ -648,8 +653,7 @@ function ThemeSlider({
         }}
       />
       <span className="w-10 text-right font-chat-code text-ui leading-snug text-muted-foreground tabular-nums">
-        {value}
-        {suffix}
+        {valueLabel ?? `${value}${suffix}`}
       </span>
     </div>
   );

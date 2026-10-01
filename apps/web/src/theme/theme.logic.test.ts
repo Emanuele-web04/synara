@@ -361,12 +361,16 @@ describe("window translucency", () => {
     translucency: { opacity, blur: 0, sidebarOnly: true },
   });
 
-  it("makes the whole window one translucent coat by default", () => {
-    const dark = buildThemeCssVariables(
-      resolveThemePack(DEFAULT_THEME_STATE, "dark"),
-      "dark",
-      macDesktop,
-    );
+  it("limits the glass to the sidebar by default", () => {
+    expect(DEFAULT_THEME_STATE.translucency.dark.sidebarOnly).toBe(true);
+    expect(DEFAULT_THEME_STATE.translucency.light.sidebarOnly).toBe(true);
+  });
+
+  it("makes the whole window one translucent coat when not limited to the sidebar", () => {
+    const dark = buildThemeCssVariables(resolveThemePack(DEFAULT_THEME_STATE, "dark"), "dark", {
+      ...macDesktop,
+      translucency: { opacity: 72, blur: null, sidebarOnly: false },
+    });
     expect(dark.material).toBe("translucent");
     expect(dark.translucencyScope).toBe("window");
     // The body carries the only fill; every surface above it stays clear so nested route
@@ -435,18 +439,19 @@ describe("window translucency", () => {
   it("gives stored states without translucency the defaults and clamps edits", () => {
     const legacy = normalizeThemeState({ mode: "dark" });
     expect(legacy.translucency).toEqual(DEFAULT_THEME_STATE.translucency);
+    expect(legacy.translucency.dark.blur).toBeNull();
 
-    // States saved before the scope existed get whole-window glass, the new default.
+    // States saved before the scope existed keep the sidebar-only glass they had.
     expect(
       normalizeThemeState({ translucency: { dark: { opacity: 50, blur: 10 } } }).translucency.dark,
-    ).toEqual({ opacity: 50, blur: 10, sidebarOnly: false });
+    ).toEqual({ opacity: 50, blur: 10, sidebarOnly: true });
 
     const edited = setWindowTranslucency(legacy, "dark", {
       opacity: 140,
       blur: -3,
-      sidebarOnly: true,
+      sidebarOnly: false,
     });
-    expect(edited.translucency.dark).toEqual({ opacity: 100, blur: 0, sidebarOnly: true });
+    expect(edited.translucency.dark).toEqual({ opacity: 100, blur: 0, sidebarOnly: false });
     expect(edited.translucency.light).toEqual(DEFAULT_THEME_STATE.translucency.light);
     expect(resetThemeVariant(edited, "dark").translucency.dark).toEqual(
       DEFAULT_THEME_STATE.translucency.dark,

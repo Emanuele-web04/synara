@@ -232,9 +232,13 @@ function syncDesktopTheme(theme: ThemeMode) {
 }
 
 // Only the macOS desktop implements this; the material there is "translucent" only on macOS.
-function syncDesktopWindowMaterial(material: WindowMaterial, blurRadius: number) {
+// Without a chosen blur the window keeps vibrancy, which is the desktop's "opaque" backing.
+function syncDesktopWindowMaterial(cssMaterial: WindowMaterial, blur: number | null) {
   const setWindowMaterial =
     typeof window === "undefined" ? undefined : window.desktopBridge?.setWindowMaterial;
+  const material: WindowMaterial =
+    cssMaterial === "translucent" && blur !== null ? "translucent" : "opaque";
+  const blurRadius = material === "translucent" && blur !== null ? blur : 0;
   const key = `${material}:${blurRadius}`;
   if (!setWindowMaterial || lastDesktopWindowMaterial === key) {
     return;

@@ -50,23 +50,27 @@ it("tunes opacity, desktop blur, and scope, then switches to a solid window", as
   localStorage.setItem("synara:theme", JSON.stringify({ ...DEFAULT_THEME_STATE, mode: "dark" }));
   await render(<ThemePackEditor variant="dark" />);
   await expect.poll(() => root.getAttribute("data-window-material")).toBe("translucent");
-  await expect.poll(() => root.getAttribute("data-window-translucency")).toBe("window");
+  await expect.poll(() => root.getAttribute("data-window-translucency")).toBe("sidebar");
 
   const opacity = page.getByRole("slider", { name: "Dark theme translucency opacity" });
   const blur = page.getByRole("slider", { name: "Dark theme background blur" });
   await expect.element(opacity).toHaveValue("72");
   await expect.element(blur).toHaveValue("30");
+  // Untouched defaults keep the system vibrancy material rather than a custom blur.
+  await expect
+    .poll(() => setWindowMaterial.mock.lastCall)
+    .toEqual([{ material: "opaque", blurRadius: 0 }]);
 
   setSliderValue("Dark theme translucency opacity", 0);
   setSliderValue("Dark theme background blur", 0);
   await expect
-    .poll(() => root.style.getPropertyValue("--app-window-background"))
+    .poll(() => root.style.getPropertyValue("--app-sidebar-surface"))
     .toMatch(/ 0%, transparent\)$/);
 
   await page.getByRole("switch", { name: "Dark theme translucent sidebar only" }).click();
-  await expect.poll(() => root.getAttribute("data-window-translucency")).toBe("sidebar");
+  await expect.poll(() => root.getAttribute("data-window-translucency")).toBe("window");
   await expect
-    .poll(() => root.style.getPropertyValue("--app-sidebar-surface"))
+    .poll(() => root.style.getPropertyValue("--app-window-background"))
     .toMatch(/ 0%, transparent\)$/);
   await expect
     .poll(() => setWindowMaterial.mock.lastCall)
@@ -74,7 +78,7 @@ it("tunes opacity, desktop blur, and scope, then switches to a solid window", as
   expect(parseStoredThemeState(localStorage.getItem("synara:theme")).translucency.dark).toEqual({
     opacity: 0,
     blur: 0,
-    sidebarOnly: true,
+    sidebarOnly: false,
   });
 
   await page.getByRole("radio", { name: "Solid" }).click();
