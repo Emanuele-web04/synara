@@ -24,7 +24,6 @@ import { SurfaceTabStrip } from "./chatHeaderControls";
 import { type ComposerModelPickerTab, STARRED_TAB } from "./ComposerModelPicker.logic";
 import {
   findProviderStatusForInstance,
-  getProviderIconClassName,
   type ProviderModelPickerInstance,
   resolveLiveProviderAvailability,
 } from "./ProviderModelPicker";
@@ -240,8 +239,9 @@ export function ComposerModelPickerTabs(props: {
               <TabIcon
                 aria-hidden="true"
                 className={cn(
-                  "size-4",
-                  getProviderIconClassName(providerTab.provider, ""),
+                  // Provider marks are always full-strength, whichever tab is open: the
+                  // marker under the tab shows the selection, so none of them reads as off.
+                  "size-4 text-foreground",
                   providerTab.unavailableLabel !== null && "opacity-40",
                 )}
               />
