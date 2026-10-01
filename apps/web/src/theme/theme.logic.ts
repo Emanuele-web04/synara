@@ -3,7 +3,7 @@
 // Layer: Web appearance domain logic
 // Exports: Theme types, normalization helpers, import/export utilities, and CSS variable builders.
 
-import { DESKTOP_WINDOW_BLUR_RADIUS_MAX } from "@synara/contracts";
+import { DESKTOP_WINDOW_BLUR_RADIUS_MAX, DESKTOP_WINDOW_BLUR_RADIUS_MIN } from "@synara/contracts";
 import { THEME_SEED_CATALOG } from "./theme.seed.generated";
 import {
   normalizeFontFamilyCssValue,
@@ -47,10 +47,11 @@ export interface ThemePack {
  * so Codex share strings keep their format. Only applies when `opaqueWindows` is off.
  */
 export interface WindowTranslucency {
-  /** Glass fill strength, 0 (desktop fully visible) to 100 (solid tint). */
+  /** Glass fill strength, WINDOW_TRANSLUCENCY_OPACITY_MIN to 100 (solid tint). */
   opacity: number;
   /**
-   * Desktop blur radius behind the window in points, 0 to DESKTOP_WINDOW_BLUR_RADIUS_MAX.
+   * Desktop blur radius behind the window in points, DESKTOP_WINDOW_BLUR_RADIUS_MIN to
+   * DESKTOP_WINDOW_BLUR_RADIUS_MAX.
    * `null` keeps the macOS vibrancy material instead of a custom blur.
    */
   blur: number | null;
@@ -297,6 +298,9 @@ export const DEFAULT_WINDOW_TRANSLUCENCY_BY_VARIANT: Record<ThemeVariant, Window
   light: { opacity: 38, blur: null, sidebarOnly: true },
 };
 
+/** Thinnest glass fill: below this the window reads as see-through rather than as glass. */
+export const WINDOW_TRANSLUCENCY_OPACITY_MIN = 15;
+
 /** Where the blur slider rests while the vibrancy material is in use; roughly its frosting. */
 export const VIBRANCY_EQUIVALENT_BLUR_RADIUS = 30;
 
@@ -399,10 +403,20 @@ export function normalizeWindowTranslucency(
   const fallback = DEFAULT_WINDOW_TRANSLUCENCY_BY_VARIANT[variant];
   const translucency = isRecord(value) ? value : {};
   return {
-    opacity: normalizeIntegerInRange(translucency.opacity, 0, 100, fallback.opacity),
+    opacity: normalizeIntegerInRange(
+      translucency.opacity,
+      WINDOW_TRANSLUCENCY_OPACITY_MIN,
+      100,
+      fallback.opacity,
+    ),
     blur:
       typeof translucency.blur === "number" && Number.isFinite(translucency.blur)
-        ? normalizeIntegerInRange(translucency.blur, 0, DESKTOP_WINDOW_BLUR_RADIUS_MAX, 0)
+        ? normalizeIntegerInRange(
+            translucency.blur,
+            DESKTOP_WINDOW_BLUR_RADIUS_MIN,
+            DESKTOP_WINDOW_BLUR_RADIUS_MAX,
+            DESKTOP_WINDOW_BLUR_RADIUS_MIN,
+          )
         : fallback.blur,
     sidebarOnly:
       typeof translucency.sidebarOnly === "boolean"
@@ -875,10 +889,6 @@ export function buildThemeCssVariables(
     "--app-composer-picker-surface": composerPickerMenuSurface,
     "--app-chat-code-surface": chatCodeSurface,
     "--app-user-message-background": chatCodeSurface,
-    // With whole-window glass nothing but the body's own coat sits under the sidebar, so
-    // there is nothing to frost.
-    "--app-sidebar-backdrop-filter":
-      translucencyScope === "sidebar" ? "blur(4px) saturate(130%)" : "none",
     // Settings mirrors the chat surface (opaque --color-background-surface) so every
     // settings element reads as outline-only. With an opaque page there is nothing to
     // frost, so we skip the backdrop blur (and its compositing cost) entirely.
