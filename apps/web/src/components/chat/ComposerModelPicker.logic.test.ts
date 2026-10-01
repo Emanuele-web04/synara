@@ -11,6 +11,8 @@ import {
   buildStarredModelOptionsPatch,
   buildStarredTabRows,
   modelPickerShortcutRowIndex,
+  resolveStarredTraits,
+  starredTraitsMatch,
 } from "./ComposerModelPicker.logic";
 import { getComposerTraitSelection } from "./composerTraits";
 
@@ -106,6 +108,102 @@ describe("account-scoped starred presets", () => {
       ["codex_work", "GPT-5.5 (work)", true],
     ]);
     expect(rows[1]?.detail?.startsWith("Work")).toBe(true);
+  });
+});
+
+describe("starred Devin Fusion presets", () => {
+  const FUSION_RUNTIME_MODEL = {
+    slug: "fusion",
+    name: "Fusion",
+    modelVariants: [
+      {
+        model: "fusion-claude-fable-5-1-high-sidekick-swe-2-medium",
+        label: "Fusion (Claude Fable 5.1 High + SWE-2 Medium)",
+      },
+      {
+        model: "fusion-gpt-6-sol-xhigh-sidekick-glm-5-2",
+        label: "Fusion (GPT-6 Sol Extra High Thinking + GLM-5.2)",
+      },
+    ],
+  };
+  const FUSION_PRESET: StarredModel = {
+    provider: "devin",
+    model: "fusion",
+    effort: null,
+    fastMode: null,
+    thinking: null,
+    modelVariant: "fusion-gpt-6-sol-xhigh-sidekick-glm-5-2",
+    variantLabel: "GPT-6 Sol Extra High Thinking + GLM-5.2",
+  };
+
+  it("pins the concrete pairing UID instead of generic traits", () => {
+    const selection = getComposerTraitSelection(
+      "devin",
+      "fusion",
+      "",
+      { modelVariant: "fusion-gpt-6-sol-xhigh-sidekick-glm-5-2" },
+      FUSION_RUNTIME_MODEL,
+    );
+    expect(resolveStarredTraits(selection)).toEqual({
+      effort: null,
+      fastMode: null,
+      thinking: null,
+      modelVariant: "fusion-gpt-6-sol-xhigh-sidekick-glm-5-2",
+      variantLabel: "GPT-6 Sol Extra High Thinking + GLM-5.2",
+    });
+  });
+
+  it("keys presets by variant so different pairings stay distinct", () => {
+    const otherPairing: StarredModel = {
+      ...FUSION_PRESET,
+      modelVariant: "fusion-claude-fable-5-1-high-sidekick-swe-2-medium",
+      variantLabel: "Claude Fable 5.1 High + SWE-2 Medium",
+    };
+    const both = toggleStarredModel(toggleStarredModel([], FUSION_PRESET), otherPairing);
+    expect(both).toHaveLength(2);
+    expect(toggleStarredModel(both, FUSION_PRESET)).toEqual([otherPairing]);
+  });
+
+  it("restores the pairing through modelVariant and clears competing traits", () => {
+    const selection = getComposerTraitSelection(
+      "devin",
+      "fusion",
+      "",
+      undefined,
+      FUSION_RUNTIME_MODEL,
+    );
+    expect(
+      buildStarredModelOptionsPatch({
+        provider: "devin",
+        selection,
+        starred: FUSION_PRESET,
+      }),
+    ).toEqual({
+      modelVariant: "fusion-gpt-6-sol-xhigh-sidekick-glm-5-2",
+      reasoningEffort: undefined,
+      fastMode: undefined,
+      thinking: undefined,
+      contextWindow: undefined,
+    });
+  });
+
+  it("does not count a preset as current while a different pairing is pinned", () => {
+    expect(
+      starredTraitsMatch(FUSION_PRESET, {
+        effort: null,
+        fastMode: null,
+        thinking: null,
+        modelVariant: "fusion-claude-fable-5-1-high-sidekick-swe-2-medium",
+      }),
+    ).toBe(false);
+    expect(
+      starredTraitsMatch(FUSION_PRESET, {
+        effort: null,
+        fastMode: null,
+        thinking: null,
+        modelVariant: "fusion-gpt-6-sol-xhigh-sidekick-glm-5-2",
+      }),
+    ).toBe(true);
   });
 });
 

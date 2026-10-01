@@ -72,9 +72,14 @@ export function ComposerModelPickerRow(props: {
   // all of its models, so matching them would hide the star of every other preset.
   const starred = row.preset !== null || props.starredModelSlots.has(starredModelSlotKey(row));
   // Starred rows already pin their effort; Ultrathink locks the ladder to the prompt.
+  // Pairing models (Devin Fusion) compose their variant through the footer's
+  // Lead/Effort/Speed/Sidekick rows instead of a per-row effort side block.
   const onSelectEffort = props.onSelectEffort;
   const effortLevels =
-    onSelectEffort !== null && row.preset === null && !selection.ultrathinkPromptControlled
+    onSelectEffort !== null &&
+    row.preset === null &&
+    !selection.ultrathinkPromptControlled &&
+    selection.pairing === null
       ? selection.effortLevels
       : [];
   const RowProviderIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[row.provider];

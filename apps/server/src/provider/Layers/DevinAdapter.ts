@@ -1095,6 +1095,7 @@ export function mergeDevinModelDescriptors(
         const contextWindow = formatDevinContextWindow(variant.maxContextTokens, variant.model);
         return {
           model: variant.model,
+          ...(variant.label?.trim() ? { label: variant.label.trim() } : {}),
           ...(reasoningEffort ? { reasoningEffort } : {}),
           ...(contextWindowValues.length > 0 && contextWindow ? { contextWindow } : {}),
           ...(hasFastMode ? { fastMode: isDevinFastVariant(variant) } : {}),
@@ -1251,6 +1252,9 @@ export function resolveDevinStartModel<E, R>(input: {
     options?.fastMode !== undefined ||
     options?.thinking !== undefined ||
     trimOrNull(options?.contextWindow) !== null;
+  // A pinned variant is validated against discovery too: the option is stored
+  // per provider, not per model, so a Fusion UID can outlive a model switch.
+  const variantPinned = trimOrNull(options?.modelVariant) !== null;
   const resolveVariant = (runtimeModel?: ProviderModelDescriptor) =>
     resolveDevinModelVariant({
       model: modelSelection?.model,
@@ -1263,7 +1267,7 @@ export function resolveDevinStartModel<E, R>(input: {
     });
   const resolve = (runtimeModel?: ProviderModelDescriptor) =>
     resolveVariant(runtimeModel) ?? modelSelection?.model ?? input.explicitModel;
-  if (!modelSelection || !traitsNeedResolution) {
+  if (!modelSelection || (!traitsNeedResolution && !variantPinned)) {
     return Effect.succeed(resolve());
   }
 
@@ -1282,6 +1286,11 @@ export function resolveDevinStartModel<E, R>(input: {
       const resolvedModel = resolveVariant(runtimeModel);
       if (resolvedModel !== undefined) {
         return Effect.succeed(resolvedModel);
+      }
+      if (!traitsNeedResolution) {
+        // Only a stale pin remains unresolved; start the family slug instead of
+        // failing the thread over an option the user never sees.
+        return Effect.succeed(modelSelection.model);
       }
       return Effect.fail(
         new ProviderAdapterValidationError({
