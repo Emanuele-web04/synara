@@ -20,11 +20,10 @@ using separate worktrees also have separate working directories and branches.
 
 ## The main surfaces
 
-- **Sidebar** — projects, spaces, tasks, and activity requiring attention. The default rail layout
+- **Sidebar** — projects, spaces, tasks, and activity requiring attention. The rail
   is a fixed column of icon tabs for Home, Spaces, Kanban (Tasks in Beta), Code review, Automations, Hubs (Beta), and
   Settings, with the thread panel beside it and the route shown as a card inset from the window.
-  Open threads appear as tabs across the top of the chat. The classic single-column sidebar remains
-  available in Settings → General → Sidebar layout.
+  Open threads appear as tabs across the top of the chat.
 - **Code review** — pull requests and issues from the GitHub repositories of your projects, with a
   detail pane and three actions on every item (see [Code review](#code-review))
 - **Tasks** (Beta; Stable keeps Kanban) — a to-do list for anything you need to do, with or without

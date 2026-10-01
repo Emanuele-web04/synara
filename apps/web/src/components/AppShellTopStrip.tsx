@@ -13,7 +13,7 @@ import { SidebarLeadingControls } from "./SidebarHeaderNavigationControls";
 import { useSidebar } from "./ui/sidebar";
 
 export function AppShellTopStrip() {
-  // Like the classic sidebar header: the cluster leaves with the panel, and the route
+  // The cluster leaves with the panel, and the route
   // header's copy (SidebarHeaderNavigationControls) takes over while it is collapsed.
   const { open } = useSidebar();
   return (

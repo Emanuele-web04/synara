@@ -2454,68 +2454,65 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it.each(["classic", "rail"])(
-    "preserves the hidden board slot when Tasks replaces Kanban in the %s sidebar",
-    async (sidebarLayout) => {
-      localStorage.setItem(
-        "synara:app-settings:v1",
-        JSON.stringify({
-          sidebarLayout,
-          hiddenSidebarNavItems: ["kanban"],
-          hiddenRailItems: ["kanban"],
-        }),
-      );
-      const mounted = await mountChatView({
-        viewport: DEFAULT_VIEWPORT,
-        snapshot: createSnapshotForTargetUser({
-          targetMessageId: MessageId.makeUnsafe("hidden-tasks-slot"),
-          targetText: "Hidden Tasks slot",
-        }),
-      });
-      try {
-        await waitForLayout();
-        await expect
-          .element(page.getByRole("button", { name: "Tasks", exact: true }))
-          .not.toBeInTheDocument();
-        if (sidebarLayout === "rail") {
-          await page
-            .getByRole("navigation", { name: "Primary" })
-            .getByRole("button", { name: "More", exact: true })
-            .click();
-          await page.getByRole("menuitem", { name: "Customize…", exact: true }).click();
-        } else {
-          page
-            .getByRole("button", { name: "Code review", exact: true })
-            .element()
-            .dispatchEvent(
-              new MouseEvent("contextmenu", { bubbles: true, clientX: 120, clientY: 160 }),
-            );
-          await page.getByRole("menuitem", { name: "Customize", exact: true }).click();
-        }
-        await page
-          .getByRole("checkbox", { name: "Show Tasks in the sidebar", exact: true })
-          .click();
-        await page.getByRole("button", { name: "Done", exact: true }).click();
-        await expect
-          .element(page.getByRole("button", { name: "Tasks", exact: true }))
-          .toBeVisible();
-        const preference = sidebarLayout === "rail" ? "hiddenRailItems" : "hiddenSidebarNavItems";
-        expect(
-          JSON.parse(localStorage.getItem("synara:app-settings:v1") ?? "{}")[preference],
-        ).toEqual([]);
-      } finally {
-        await mounted.cleanup();
-      }
-    },
-  );
+  it("preserves the hidden board slot when Tasks replaces Kanban in the rail", async () => {
+    localStorage.setItem("synara:app-settings:v1", JSON.stringify({ hiddenRailItems: ["kanban"] }));
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("hidden-tasks-slot"),
+        targetText: "Hidden Tasks slot",
+      }),
+    });
+    try {
+      await waitForLayout();
+      await expect
+        .element(page.getByRole("button", { name: "Tasks", exact: true }))
+        .not.toBeInTheDocument();
+      await page
+        .getByRole("navigation", { name: "Primary" })
+        .getByRole("button", { name: "More", exact: true })
+        .click();
+      await page.getByRole("menuitem", { name: "Customize…", exact: true }).click();
+      await page.getByRole("checkbox", { name: "Show Tasks in the sidebar", exact: true }).click();
+      await page.getByRole("button", { name: "Done", exact: true }).click();
+      await expect.element(page.getByRole("button", { name: "Tasks", exact: true })).toBeVisible();
+      expect(
+        JSON.parse(localStorage.getItem("synara:app-settings:v1") ?? "{}").hiddenRailItems,
+      ).toEqual([]);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("carries the rail inside the sidebar sheet at phone width", async () => {
+    const mounted = await mountChatView({
+      viewport: { ...DEFAULT_VIEWPORT, width: 540 },
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("mobile-rail"),
+        targetText: "Mobile rail",
+      }),
+    });
+    try {
+      await waitForLayout();
+      // The shell keeps no left column on phones, so the rail is absent until the sheet opens.
+      await expect
+        .element(page.getByRole("navigation", { name: "Primary" }))
+        .not.toBeInTheDocument();
+      await page.getByRole("button", { name: "Toggle thread sidebar", exact: true }).click();
+      const rail = page.getByRole("navigation", { name: "Primary" });
+      await expect.element(rail.getByRole("button", { name: "Home", exact: true })).toBeVisible();
+      await expect
+        .element(rail.getByRole("button", { name: "Settings", exact: true }))
+        .toBeVisible();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
 
   it("preserves absent project pins when toggling a rail Space shortcut", async () => {
     localStorage.setItem(
       "synara:app-settings:v1",
-      JSON.stringify({
-        sidebarLayout: "rail",
-        railShortcuts: ["project:temporarily-absent"],
-      }),
+      JSON.stringify({ railShortcuts: ["project:temporarily-absent"] }),
     );
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -2552,10 +2549,7 @@ describe("ChatView transcript geometry (full app)", () => {
     async ({ destination, keepsActivity }) => {
       localStorage.setItem(
         "synara:app-settings:v1",
-        JSON.stringify({
-          sidebarLayout: "rail",
-          railShortcuts: ["project:project-1", "space:void"],
-        }),
+        JSON.stringify({ railShortcuts: ["project:project-1", "space:void"] }),
       );
       const mounted = await mountChatView({
         viewport: DEFAULT_VIEWPORT,
@@ -2601,7 +2595,6 @@ describe("ChatView transcript geometry (full app)", () => {
       targetMessageId: MessageId.makeUnsafe("rail-create"),
       targetText: "Rail create",
     });
-    localStorage.setItem("synara:app-settings:v1", JSON.stringify({ sidebarLayout: "rail" }));
     useSpacesUiStore.getState().setActiveSpaceId(currentSpaceId);
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -7500,8 +7493,8 @@ describe("ChatView transcript geometry (full app)", () => {
       const projectPickerTrigger = page.getByTestId("project-picker-trigger");
       await expect.element(projectPickerTrigger).toBeInTheDocument();
       const resetProjectButton = page.getByTestId("project-picker-reset-trigger");
-      // Re-query on every check: crossing the mobile breakpoint swaps the rail shell for the
-      // classic one, which remounts the composer and detaches any node held from before.
+      // Re-query on every check: crossing the mobile breakpoint can remount the composer and
+      // detach any node held from before.
       const queryFolderIcon = () =>
         projectPickerTrigger.element().querySelector<HTMLElement>("[class*='transition-opacity']");
       expect(queryFolderIcon()).not.toBeNull();
@@ -9178,7 +9171,6 @@ describe("ChatView transcript geometry (full app)", () => {
   it.each(["home", "project"] as const)(
     "closing the last %s tab opens a fresh draft in the same project",
     async (surface) => {
-      localStorage.setItem("synara:app-settings:v1", JSON.stringify({ sidebarLayout: "rail" }));
       useOpenThreadTabsStore.setState({ threadIds: [] });
       const snapshot = createSnapshotForTargetUser({
         targetMessageId: MessageId.makeUnsafe("last-tab-close"),
