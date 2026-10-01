@@ -214,12 +214,7 @@ function normalizeCodexError(
 function codexAuthenticationFailureDetail(output: string): string | undefined {
   const authenticationFailed = output
     .split(/\r?\n/)
-    .some(
-      (line) =>
-        /^(?:ERROR:|warning: Falling back from WebSockets to HTTPS transport\.)/.test(line) &&
-        /\b401\b/.test(line) &&
-        /\bunauthorized\b/i.test(line),
-    );
+    .some((line) => /^ERROR:/.test(line) && /\b401\b/.test(line) && /\bunauthorized\b/i.test(line));
   return authenticationFailed
     ? "Codex authentication failed (401 Unauthorized). Check the selected Codex account or provider credentials in Settings, then retry."
     : undefined;
@@ -297,6 +292,12 @@ const makeCodexTextGeneration = Effect.gen(function* () {
           ),
         ),
         Effect.raceFirst(Deferred.await(authenticationFailure)),
+        Effect.catch((error) =>
+          terminateCodexChild(input.child, timing.killGraceMs, input.operation).pipe(
+            Effect.andThen(Ref.set(cleanupHandled, true)),
+            Effect.andThen(Effect.fail(error)),
+          ),
+        ),
         Effect.timeoutOrElse({
           duration: input.timeoutMs,
           onTimeout: () =>

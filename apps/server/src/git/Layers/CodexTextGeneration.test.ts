@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { Clock, Duration, Effect, FileSystem, Layer, Path } from "effect";
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 
 import {
   resolveCodexHomeOverlayAccountSegment,
@@ -795,7 +795,7 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
           body: "\n- added migration\n- updated tests\n",
         }),
         stderr:
-          "+ERROR: unexpected status 401 Unauthorized\nERROR: unexpected status 429 Too Many Requests",
+          "+ERROR: unexpected status 401 Unauthorized\nERROR: unexpected status 429 Too Many Requests\nwarning: Falling back from WebSockets to HTTPS transport. workspace routing discovery unauthorized (401)",
         stdinMustNotContain: "branch must be a short semantic git branch fragment",
       },
       Effect.gen(function* () {
@@ -813,7 +813,7 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
         expect(generated.body).toBe("- added migration\n- updated tests");
         expect(generated.branch).toBeUndefined();
       }),
-    ),
+    ).pipe(Effect.provideService(Clock.Clock, realTestClock)),
   );
 
   it.effect("generates commit message with branch when includeBranch is true", () =>
@@ -2152,52 +2152,70 @@ it.effect("escalates from TERM to KILL when a timed-out child traps TERM", () =>
   ),
 );
 
-for (const diagnostic of [
-  "ERROR: unexpected status 401 Unauthorized: Your login did not make it to this service.",
-  "warning: Falling back from WebSockets to HTTPS transport. workspace routing discovery unauthorized (401)",
-]) {
-  it.effect(`stops authentication retries and cleans up the child: ${diagnostic}`, () =>
-    Effect.gen(function* () {
-      if (process.platform === "win32") return;
-      const fileSystem = yield* FileSystem.FileSystem;
-      const directory = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "synara-codex-auth-failure-",
-      });
-      const pidMarkerPath = `${directory}/pid`;
-      const resourceManifestPath = `${directory}/resources.json`;
-      const error = yield* withFakeCodexEnv(
-        {
-          output: "",
-          stderr: diagnostic,
-          trapTerm: true,
-          termMarkerPath: `${directory}/term`,
-          pidMarkerPath,
-          readyMarkerPath: `${directory}/ready`,
-          resourceManifestPath,
-        },
-        Effect.gen(function* () {
-          const generation = yield* TextGeneration;
-          return yield* generation
-            .generatePrContent({
-              cwd: process.cwd(),
-              baseBranch: "main",
-              headBranch: "feature/auth",
-              commitSummary: "Update readme",
-              diffSummary: "README.md | 1 +",
-              diffPatch: "",
-            })
-            .pipe(Effect.flip);
-        }),
-      );
-      expect(error.detail).toContain("Codex authentication failed (401 Unauthorized)");
-      expect(error.detail).toContain("Settings");
-      const pid = Number(readFileSync(pidMarkerPath, "utf8"));
-      yield* Effect.promise(() => waitForProcessExit(pid));
-      const resourcePaths = JSON.parse(readFileSync(resourceManifestPath, "utf8")) as string[];
-      expect(resourcePaths.filter(existsSync)).toEqual([]);
-    }).pipe(
-      Effect.provide(CodexTextGenerationTimeoutTestLayer),
-      Effect.provideService(Clock.Clock, realTestClock),
-    ),
+for (const [diagnostic, denyTermination] of [
+  ["ERROR: unexpected status 401 Unauthorized: Your login did not make it to this service.", false],
+  ["ERROR: unexpected status 401 Unauthorized: Your login did not make it to this service.", true],
+] as const) {
+  it.effect(
+    `stops authentication retries and reports cleanup (denied=${denyTermination}): ${diagnostic}`,
+    () =>
+      Effect.gen(function* () {
+        if (process.platform === "win32") return;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const directory = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "synara-codex-auth-failure-",
+        });
+        const pidMarkerPath = `${directory}/pid`;
+        const resourceManifestPath = `${directory}/resources.json`;
+        const error = yield* withFakeCodexEnv(
+          {
+            output: "",
+            stderr: diagnostic,
+            trapTerm: true,
+            termMarkerPath: `${directory}/term`,
+            pidMarkerPath,
+            readyMarkerPath: `${directory}/ready`,
+            resourceManifestPath,
+          },
+          Effect.gen(function* () {
+            if (denyTermination) {
+              const originalKill = process.kill.bind(process);
+              const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+                if (pid < 0 && signal === "SIGTERM" && existsSync(pidMarkerPath)) {
+                  throw Object.assign(new Error("Process group termination denied"), {
+                    code: "EPERM",
+                  });
+                }
+                return originalKill(pid, signal);
+              });
+              yield* Effect.addFinalizer(() => Effect.sync(() => killSpy.mockRestore()));
+            }
+            const generation = yield* TextGeneration;
+            return yield* generation
+              .generatePrContent({
+                cwd: process.cwd(),
+                baseBranch: "main",
+                headBranch: "feature/auth",
+                commitSummary: "Update readme",
+                diffSummary: "README.md | 1 +",
+                diffPatch: "",
+              })
+              .pipe(Effect.flip);
+          }),
+        );
+        if (denyTermination) {
+          expect(error.detail).toContain("Failed to signal the isolated Codex process group");
+        } else {
+          expect(error.detail).toContain("Codex authentication failed (401 Unauthorized)");
+          expect(error.detail).toContain("Settings");
+        }
+        const pid = Number(readFileSync(pidMarkerPath, "utf8"));
+        yield* Effect.promise(() => waitForProcessExit(pid));
+        const resourcePaths = JSON.parse(readFileSync(resourceManifestPath, "utf8")) as string[];
+        expect(resourcePaths.filter(existsSync)).toEqual([]);
+      }).pipe(
+        Effect.provide(CodexTextGenerationTimeoutTestLayer),
+        Effect.provideService(Clock.Clock, realTestClock),
+      ),
   );
 }

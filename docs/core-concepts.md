@@ -202,7 +202,8 @@ When you supply a PR title, Synara also uses it as the commit message unless a s
 message was supplied. Providing both the title and description skips text generation for this flow.
 
 Failed commit, push, and PR actions show the failed step and a copyable error until dismissed.
-Codex text generation stops on an explicit `401 Unauthorized` diagnostic; check the selected
+Codex text generation stops on a terminal `ERROR: ... 401 Unauthorized` diagnostic; transport
+fallback warnings remain recoverable. Check the selected
 account or provider credentials in Settings before retrying. A failed PR step can follow a
 successful commit or push, so inspect the current branch before retrying.
 
