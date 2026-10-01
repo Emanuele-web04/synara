@@ -8150,7 +8150,7 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("keeps the first sent message visible throughout draft promotion", async () => {
+  it("keeps the first sent message and follow-up draft throughout promotion", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
     useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, THREAD_ID);
     const mounted = await mountChatView({
@@ -8182,6 +8182,19 @@ describe("ChatView transcript geometry (full app)", () => {
       };
       await expectTranscript();
 
+      const followUp = "Follow-up written while the first send is pending";
+      await userEvent.click(await waitForComposerEditor());
+      await userEvent.type(await waitForComposerEditor(), followUp);
+      const expectFollowUpDraft = async () => {
+        await vi.waitFor(async () => {
+          expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(
+            followUp,
+          );
+          expect((await waitForComposerEditor()).textContent).toContain(followUp);
+        });
+      };
+      await expectFollowUpDraft();
+
       const createdSnapshot = addThreadToSnapshot(fixture.snapshot, THREAD_ID);
       const createdThread = { ...createdSnapshot.threads[0]!, session: null };
       fixture.snapshot = { ...createdSnapshot, threads: [createdThread] };
@@ -8210,10 +8223,12 @@ describe("ChatView transcript geometry (full app)", () => {
       useStore.getState().syncServerThreadDetailHotPath(startedThread);
       useComposerDraftStore.getState().finalizePromotedDraftThread(THREAD_ID);
       await expectTranscript();
+      await expectFollowUpDraft();
 
       // A creation snapshot can finish after the first message echo.
       useStore.getState().syncServerThreadDetailHotPath(createdThread);
       await expectTranscript();
+      await expectFollowUpDraft();
     } finally {
       await mounted.cleanup();
       restoreNativeApi();
