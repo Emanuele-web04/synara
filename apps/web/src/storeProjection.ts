@@ -362,6 +362,7 @@ function sidebarThreadSummariesEqual(
     left.hasPendingUserInput === right.hasPendingUserInput &&
     left.hasActionableProposedPlan === right.hasActionableProposedPlan &&
     left.hasLiveTailWork === right.hasLiveTailWork &&
+    left.pendingBackgroundWorkCount === right.pendingBackgroundWorkCount &&
     (left.forkSourceThreadId ?? null) === (right.forkSourceThreadId ?? null) &&
     (left.sidechatSourceThreadId ?? null) === (right.sidechatSourceThreadId ?? null) &&
     // The context never changes after creation; its URL identifies the item.
@@ -410,6 +411,7 @@ function buildSidebarThreadSummary(
     hasPendingUserInput: metadata.hasPendingUserInput,
     hasActionableProposedPlan: metadata.hasActionableProposedPlan,
     hasLiveTailWork: metadata.hasLiveTailWork,
+    pendingBackgroundWorkCount: metadata.pendingBackgroundWorkCount,
     forkSourceThreadId: thread.forkSourceThreadId ?? null,
     sidechatSourceThreadId: thread.sidechatSourceThreadId ?? null,
     sidechatContext: thread.sidechatContext ?? null,

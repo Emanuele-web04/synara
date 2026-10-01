@@ -45,6 +45,7 @@ it("blocks unlink throughout an in-flight start and restores recovery when its r
     hasPendingUserInput: false,
     hasActionableProposedPlan: false,
     hasLiveTailWork: false,
+    pendingBackgroundWorkCount: 0,
   };
   const now = new Date();
   const todo: Todo = {
@@ -160,6 +161,7 @@ it.each(
       hasPendingUserInput: false,
       hasActionableProposedPlan: false,
       hasLiveTailWork: false,
+      pendingBackgroundWorkCount: 0,
     };
     let todo: Todo = {
       id: TodoId.makeUnsafe(`unknown-link-${destination}-${outcome}`),

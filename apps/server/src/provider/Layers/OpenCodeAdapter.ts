@@ -20,6 +20,7 @@ import {
   type RuntimeMode,
   RuntimeItemId,
   RuntimeRequestId,
+  RuntimeTaskId,
   type ThreadTokenUsageSnapshot,
   ThreadId,
   type ToolLifecycleItemType,
@@ -90,6 +91,10 @@ import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { canUseDefaultOpenCodeServerPassword } from "../openCodeServerPassword.ts";
 import { extractProposedPlanMarkdown, withProviderPlanModePrompt } from "../planMode.ts";
 import { makeRuntimeTaskListItem, nonEmptyRuntimeTaskListPayload } from "../runtimeTaskList.ts";
+import {
+  detectOpenCodeBackgroundTaskSettlement,
+  detectOpenCodeBackgroundTaskStart,
+} from "../openCodeBackgroundTasks.ts";
 import {
   buildOpenCodeModelContextLimitMap,
   emptyOpenCodeModelInventory,
@@ -221,6 +226,19 @@ interface OpenCodeSessionContext extends OpenCodeMessageState<Part> {
   readonly locallyResolvedPermissionIds: Set<string>;
   readonly pendingQuestions: Map<string, QuestionRequest>;
   readonly relatedSessionIds: Set<string>;
+  // Background subagent tasks launched via OpenCode's task tool (or the retired
+  // delegate plugin). Unlike relatedSessionIds these outlive the owning turn so
+  // child-session lifecycle events keep routing after the parent turn settles.
+  readonly backgroundTasks: Map<
+    string,
+    {
+      readonly childSessionId: string | null;
+      readonly toolUseId: string;
+      settled: boolean;
+      settlementStatus?: "completed" | "failed" | "stopped";
+    }
+  >;
+  readonly backgroundTaskIdBySessionId: Map<string, string>;
   readonly modelContextLimitBySlug: Map<string, number>;
   lastKnownTokenUsage: ThreadTokenUsageSnapshot | undefined;
   lastEmittedTokenUsageKey: string | undefined;
@@ -1122,6 +1140,14 @@ function shouldHandleRelatedOpenCodeSessionEvent(event: OpenCodeSubscribedEvent)
   );
 }
 
+function isOpenCodeBackgroundSessionLifecycleEvent(event: OpenCodeSubscribedEvent): boolean {
+  return (
+    event.type === "session.status" ||
+    event.type === "session.idle" ||
+    event.type === "session.error"
+  );
+}
+
 function shouldHandleSubscribedEvent(
   context: OpenCodeSessionContext,
   event: OpenCodeSubscribedEvent,
@@ -1130,7 +1156,10 @@ function shouldHandleSubscribedEvent(
   if (sessionId !== undefined) {
     return (
       sessionId === context.openCodeSessionId ||
-      (context.relatedSessionIds.has(sessionId) && shouldHandleRelatedOpenCodeSessionEvent(event))
+      (context.relatedSessionIds.has(sessionId) &&
+        shouldHandleRelatedOpenCodeSessionEvent(event)) ||
+      (context.backgroundTaskIdBySessionId.has(sessionId) &&
+        isOpenCodeBackgroundSessionLifecycleEvent(event))
     );
   }
 
@@ -1296,8 +1325,16 @@ function buildOpenCodeThreadSnapshot(input: {
 
 const releaseOpenCodeSessionResources = Effect.fn("releaseOpenCodeSessionResources")(function* (
   context: OpenCodeSessionContext,
+  beforeRelease?: Effect.Effect<void>,
 ) {
-  yield* clearActiveTurnState(context).pipe(
+  yield* Effect.gen(function* () {
+    if (beforeRelease !== undefined) {
+      yield* beforeRelease;
+    }
+    yield* clearActiveTurnState(context);
+    context.backgroundTasks.clear();
+    context.backgroundTaskIdBySessionId.clear();
+  }).pipe(
     Effect.ensuring(
       Scope.close(context.sessionScope, Exit.void).pipe(
         Effect.ensuring(Effect.sync(() => releaseOpenCodeGatewayLease(context))),
@@ -1308,6 +1345,7 @@ const releaseOpenCodeSessionResources = Effect.fn("releaseOpenCodeSessionResourc
 
 const stopOpenCodeContext = Effect.fn("stopOpenCodeContext")(function* (
   context: OpenCodeSessionContext,
+  beforeRelease?: Effect.Effect<void>,
 ) {
   if (yield* Ref.getAndSet(context.stopped, true)) {
     return;
@@ -1317,7 +1355,7 @@ const stopOpenCodeContext = Effect.fn("stopOpenCodeContext")(function* (
     context.client.session.abort({ sessionID: context.openCodeSessionId }),
   ).pipe(Effect.ignore({ log: true }));
 
-  yield* releaseOpenCodeSessionResources(context);
+  yield* releaseOpenCodeSessionResources(context, beforeRelease);
 });
 
 export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
@@ -1375,7 +1413,13 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           sessions.clear();
           yield* Effect.forEach(
             contexts,
-            (context) => Effect.ignoreCause(stopOpenCodeContext(context)),
+            (context) =>
+              Effect.ignoreCause(
+                stopOpenCodeContext(
+                  context,
+                  settleAllOpenCodeBackgroundTasks(context, { status: "stopped" }),
+                ),
+              ),
             { concurrency: "unbounded", discard: true },
           );
           if (managedNativeEventLogger !== undefined) {
@@ -1409,6 +1453,57 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           readonly event: Record<string, unknown>;
         },
       ) => writeNativeEvent(threadId, event).pipe(Effect.catchCause(() => Effect.void));
+
+      const settleOpenCodeBackgroundTask = Effect.fn("settleOpenCodeBackgroundTask")(function* (
+        context: OpenCodeSessionContext,
+        input: {
+          readonly taskId: string;
+          readonly status: "completed" | "failed" | "stopped";
+          readonly summary?: string | undefined;
+          readonly raw?: unknown;
+        },
+      ) {
+        const task = context.backgroundTasks.get(input.taskId);
+        if (
+          task === undefined ||
+          (task.settled && !(task.settlementStatus === "completed" && input.status === "failed"))
+        ) {
+          return false;
+        }
+        // Child idle can precede task.ts checking its final tool result. Keep
+        // a later authoritative failure visible instead of freezing success.
+        task.settled = true;
+        task.settlementStatus = input.status;
+        yield* emit(context, {
+          ...buildEventBase({
+            threadId: context.session.threadId,
+            turnId: context.activeTurnId,
+            raw: input.raw,
+          }),
+          type: "task.completed",
+          payload: {
+            taskId: RuntimeTaskId.makeUnsafe(input.taskId),
+            status: input.status,
+            ...(input.summary !== undefined ? { summary: input.summary } : {}),
+          },
+        });
+        return true;
+      });
+
+      const settleAllOpenCodeBackgroundTasks = (
+        context: OpenCodeSessionContext,
+        input: { readonly status: "stopped" | "failed"; readonly raw?: unknown },
+      ) =>
+        Effect.forEach(
+          context.backgroundTasks.keys(),
+          (taskId) =>
+            settleOpenCodeBackgroundTask(context, {
+              taskId,
+              status: input.status,
+              raw: input.raw,
+            }),
+          { discard: true },
+        );
 
       const emitContextCompactionProgress = Effect.fn("emitContextCompactionProgress")(function* (
         context: OpenCodeSessionContext,
@@ -1494,7 +1589,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             sessionID: context.openCodeSessionId,
           }),
         ).pipe(Effect.ignore({ log: true }));
-        yield* releaseOpenCodeSessionResources(context);
+        yield* releaseOpenCodeSessionResources(
+          context,
+          settleAllOpenCodeBackgroundTasks(context, { status: "stopped" }),
+        );
       });
 
       const emitAssistantTextDelta = Effect.fn("emitAssistantTextDelta")(function* (
@@ -2158,10 +2256,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         context: OpenCodeSessionContext,
         event: OpenCodeSubscribedEvent,
       ) {
+        const eventSessionId = subscribedEventSessionId(event);
         if (!shouldHandleSubscribedEvent(context, event)) {
-          const sessionId = subscribedEventSessionId(event);
           const canBelongToUndiscoveredChild =
-            sessionId !== undefined &&
+            eventSessionId !== undefined &&
             (event.type === "permission.asked" || event.type === "question.asked");
           if (!canBelongToUndiscoveredChild) {
             return;
@@ -2179,6 +2277,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         }
 
         const turnId = context.activeTurnId;
+        const backgroundTaskId =
+          eventSessionId !== undefined
+            ? context.backgroundTaskIdBySessionId.get(eventSessionId)
+            : undefined;
         if (turnId) {
           context.activeTurnEventSerial += 1;
           // User-message echoes should not disable prompt recovery; track provider-side
@@ -2354,6 +2456,21 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             context.partSnapshotKeyById.set(part.id, openCodeSnapshotKey(part));
             const messageRole = messageRoleForPart(context, part);
 
+            // OpenCode injects background-task settlement into the parent
+            // session as a synthetic user text part. Read it before the
+            // synthetic-text filter drops it from the transcript.
+            if (part.type === "text" && part.synthetic === true && messageRole !== "assistant") {
+              const settlement = detectOpenCodeBackgroundTaskSettlement(part.text);
+              if (settlement !== null) {
+                yield* settleOpenCodeBackgroundTask(context, {
+                  taskId: settlement.taskId,
+                  status: settlement.status,
+                  summary: settlement.summary,
+                  raw: event,
+                });
+              }
+            }
+
             if (messageRole === "assistant") {
               if (
                 turnId !== undefined &&
@@ -2370,6 +2487,66 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
 
             if (part.type === "tool") {
               rememberRelatedOpenCodeSession(context, part);
+              const backgroundTaskStart = detectOpenCodeBackgroundTaskStart(part);
+              const previousBackgroundTask =
+                backgroundTaskStart === null
+                  ? undefined
+                  : context.backgroundTasks.get(backgroundTaskStart.taskId);
+              if (
+                backgroundTaskStart !== null &&
+                (previousBackgroundTask === undefined ||
+                  (previousBackgroundTask.settled &&
+                    previousBackgroundTask.toolUseId !== part.callID))
+              ) {
+                context.backgroundTasks.set(backgroundTaskStart.taskId, {
+                  childSessionId: backgroundTaskStart.childSessionId,
+                  toolUseId: part.callID,
+                  settled: false,
+                });
+                if (backgroundTaskStart.childSessionId !== null) {
+                  context.relatedSessionIds.add(backgroundTaskStart.childSessionId);
+                  context.backgroundTaskIdBySessionId.set(
+                    backgroundTaskStart.childSessionId,
+                    backgroundTaskStart.taskId,
+                  );
+                }
+                const backgroundTaskRuntimeId = RuntimeTaskId.makeUnsafe(
+                  backgroundTaskStart.taskId,
+                );
+                yield* emit(context, {
+                  ...buildEventBase({
+                    threadId: context.session.threadId,
+                    turnId,
+                    raw: event,
+                  }),
+                  type: "task.started",
+                  payload: {
+                    taskId: backgroundTaskRuntimeId,
+                    ...(backgroundTaskStart.description !== undefined
+                      ? { description: backgroundTaskStart.description }
+                      : {}),
+                    taskType: "subagent",
+                    ...(backgroundTaskStart.subagentType !== undefined
+                      ? { subagentType: backgroundTaskStart.subagentType }
+                      : {}),
+                    toolUseId: part.callID,
+                  },
+                });
+                yield* emit(context, {
+                  ...buildEventBase({
+                    threadId: context.session.threadId,
+                    turnId,
+                    raw: event,
+                  }),
+                  type: "task.updated",
+                  payload: {
+                    taskId: backgroundTaskRuntimeId,
+                    status: "running",
+                    isBackgrounded: true,
+                    toolUseId: part.callID,
+                  },
+                });
+              }
               const itemType = toToolLifecycleItemType(part.tool);
               const title =
                 part.state.status === "running" ? part.state.title?.trim() || part.tool : part.tool;
@@ -2605,6 +2782,18 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           }
 
           case "session.status": {
+            if (backgroundTaskId !== undefined) {
+              // A background subagent's session going idle means the task is
+              // done; it must never complete the parent turn below.
+              if (event.properties.status.type === "idle") {
+                yield* settleOpenCodeBackgroundTask(context, {
+                  taskId: backgroundTaskId,
+                  status: "completed",
+                  raw: event,
+                });
+              }
+              break;
+            }
             if (event.properties.status.type === "busy") {
               updateProviderSession(context, {
                 status: "running",
@@ -2642,6 +2831,14 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           }
 
           case "session.idle": {
+            if (backgroundTaskId !== undefined) {
+              yield* settleOpenCodeBackgroundTask(context, {
+                taskId: backgroundTaskId,
+                status: "completed",
+                raw: event,
+              });
+              break;
+            }
             if (turnId) {
               if (yield* deferPrematureIdleCompletion(context, turnId, event)) {
                 break;
@@ -3029,6 +3226,15 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           }
 
           case "session.error": {
+            if (backgroundTaskId !== undefined) {
+              yield* settleOpenCodeBackgroundTask(context, {
+                taskId: backgroundTaskId,
+                status: "failed",
+                summary: sessionErrorMessage(event.properties.error),
+                raw: event,
+              });
+              break;
+            }
             const message = sessionErrorMessage(event.properties.error);
             if (isOpenCodeContextOverflowError(event.properties.error)) {
               updateProviderSession(
@@ -3472,7 +3678,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           const persistedHarnessPolicyDelivery = extractHarnessPolicyDelivery(input.resumeCursor);
           const existing = sessions.get(input.threadId);
           if (existing) {
-            yield* stopOpenCodeContext(existing);
+            yield* stopOpenCodeContext(
+              existing,
+              settleAllOpenCodeBackgroundTasks(existing, { status: "stopped" }),
+            );
             sessions.delete(input.threadId);
           }
 
@@ -3736,6 +3945,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   messageSnapshotKeyById: new Map(),
                   completedAssistantPartIds: new Set(),
                   relatedSessionIds: new Set(),
+                  backgroundTasks: new Map(),
+                  backgroundTaskIdBySessionId: new Map(),
                   modelContextLimitBySlug: started.modelContextLimitBySlug,
                   lastKnownTokenUsage: undefined,
                   lastEmittedTokenUsageKey: undefined,
@@ -4169,7 +4380,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           const context = sessions.get(threadId);
           if (!context) return;
           const wasStopped = yield* Ref.get(context.stopped);
-          yield* stopOpenCodeContext(context);
+          yield* stopOpenCodeContext(
+            context,
+            settleAllOpenCodeBackgroundTasks(context, { status: "stopped" }),
+          );
           sessions.delete(threadId);
           if (!wasStopped) {
             yield* emit(context, {
@@ -4761,7 +4975,13 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           sessions.clear();
           yield* Effect.forEach(
             contexts,
-            (context) => Effect.ignoreCause(stopOpenCodeContext(context)),
+            (context) =>
+              Effect.ignoreCause(
+                stopOpenCodeContext(
+                  context,
+                  settleAllOpenCodeBackgroundTasks(context, { status: "stopped" }),
+                ),
+              ),
             { concurrency: "unbounded", discard: true },
           );
         });

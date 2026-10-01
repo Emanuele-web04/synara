@@ -58,6 +58,7 @@ function thread(input: {
     hasPendingUserInput: false,
     hasActionableProposedPlan: false,
     hasLiveTailWork: false,
+    pendingBackgroundWorkCount: 0,
     sidechatSourceThreadId: input.sidechatSourceThreadId ?? null,
   };
 }

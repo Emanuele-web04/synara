@@ -70,6 +70,7 @@ function makeThread(input: {
     hasPendingUserInput: input.hasPendingUserInput ?? false,
     hasActionableProposedPlan: false,
     hasLiveTailWork: input.hasLiveTailWork ?? false,
+    pendingBackgroundWorkCount: 0,
   } satisfies SidebarThreadSummary;
 }
 

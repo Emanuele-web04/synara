@@ -28,6 +28,7 @@ function makeThread(overrides: Partial<SidebarThreadSummary> = {}): SidebarThrea
     hasPendingUserInput: false,
     hasActionableProposedPlan: false,
     hasLiveTailWork: false,
+    pendingBackgroundWorkCount: 0,
     ...overrides,
   };
 }

@@ -72,6 +72,7 @@ function makeThread(
     hasPendingUserInput: false,
     hasActionableProposedPlan: false,
     hasLiveTailWork: false,
+    pendingBackgroundWorkCount: 0,
     ...overrides,
   };
 }
