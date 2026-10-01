@@ -189,6 +189,18 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description: "Focus or blur the chat prompt composer.",
   },
   {
+    command: "composer.voice.toggle",
+    label: "Dictation: start/stop",
+    description:
+      "Press once to record and again to transcribe into the composer. Voice must be available.",
+  },
+  {
+    command: "composer.voice.hold",
+    label: "Dictation: hold to talk",
+    description:
+      "Hold the shortcut to record; release to transcribe into the composer. Voice must be available.",
+  },
+  {
     command: "chat.find",
     label: "Find in thread",
     description: "Search the current transcript and jump to each matching message.",

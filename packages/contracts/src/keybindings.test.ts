@@ -287,3 +287,12 @@ it.effect("drops unknown fields in resolved keybinding rules", () =>
     }),
   ),
 );
+
+it.effect("accepts assignable toggle and hold dictation shortcuts", () =>
+  Effect.gen(function* () {
+    for (const command of ["composer.voice.toggle", "composer.voice.hold"]) {
+      const rule = yield* decode(KeybindingRule, { key: "alt+space", command });
+      assert.strictEqual(rule.command, command);
+    }
+  }),
+);
