@@ -17,6 +17,7 @@ import { createPortal } from "react-dom";
 
 import type { RailItemId } from "~/appRail.logic";
 import { createCentralIconComponent } from "~/lib/central-icons";
+import { HubActiveIcon, HubIcon } from "~/lib/icons";
 import { projectAppearanceKey, type ProjectAppearance } from "~/lib/projectAppearance";
 import { cn } from "~/lib/utils";
 import {
@@ -72,7 +73,7 @@ export function railProjectGlyphs(
 }
 
 /** Central glyphs matching the Codex rail for the fixed rail items. */
-const RAIL_ITEM_GLYPH_NAMES: Record<RailItemId, string> = {
+const RAIL_ITEM_GLYPH_NAMES: Record<Exclude<RailItemId, "studio">, string> = {
   home: "home-roof-door",
   inbox: "inbox-empty",
   spaces: "folders",
@@ -80,11 +81,14 @@ const RAIL_ITEM_GLYPH_NAMES: Record<RailItemId, string> = {
   tasks: "todos",
   pullRequests: "pull-request",
   automations: "clock",
-  studio: "images-1",
   settings: "settings-gear-4",
 };
 
+/** Hubs (stored id "studio"): Hugeicons circles, with their own solid active glyph. */
+const HUB_RAIL_GLYPHS: AppRailGlyphs = { idle: HubIcon, active: HubActiveIcon };
+
 export function railItemGlyphs(id: RailItemId): AppRailGlyphs {
+  if (id === "studio") return HUB_RAIL_GLYPHS;
   return railCentralGlyphs(RAIL_ITEM_GLYPH_NAMES[id]);
 }
 
