@@ -96,6 +96,7 @@ import { resetRetainedThreadDetailSubscriptionsForTests } from "../threadDetailS
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { getWorkspaceEditorSession } from "../lib/workspaceEditorSession";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
+import { useThreadDispatchStore } from "./chat/useChatLocalDispatch";
 // Pre-transform the compiler-heavy component outside the first case's timeout.
 // The router's auto-split route otherwise requests this module on first mount.
 import "./ChatView";
@@ -2224,6 +2225,7 @@ describe("ChatView transcript geometry (full app)", () => {
     localStorage.clear();
     acknowledgeProjectImportAnnouncementForTest(createBaseServerConfig());
     useProjectEnvironmentStore.setState({ envModeByProjectId: {} });
+    useThreadDispatchStore.setState({ threads: {} });
     useLatestProjectStore.setState({ latestProjectId: null });
     useWorkspacePathsStore.setState({
       homeDir: null,
@@ -6792,7 +6794,15 @@ describe("ChatView transcript geometry (full app)", () => {
                 wsRequests.some((request) => request._tag === WS_METHODS.gitCreateDetachedWorktree),
               ).toBe(envMode === "worktree");
               if (envMode === "worktree") {
-                expect(create?.worktreePath).toContain("/repo/.codex/worktrees/");
+                expect(create?.worktreePath).toBeNull();
+                const linkedWorkspace = commands.find(
+                  (command) =>
+                    command.type === "thread.meta.update" &&
+                    command.threadId === create?.threadId &&
+                    typeof command.worktreePath === "string",
+                );
+                expect(linkedWorkspace?.worktreePath).toContain("/repo/.codex/worktrees/");
+                expect(commands.indexOf(linkedWorkspace!)).toBeLessThan(commands.indexOf(send!));
               } else {
                 expect(create?.worktreePath).toBeNull();
               }

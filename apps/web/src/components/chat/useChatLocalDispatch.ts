@@ -24,9 +24,9 @@ interface ThreadDispatchState {
   pendingAction: WorktreeSetupResolutionAction | null;
   serverAcknowledged?: boolean;
 }
-const useThreadDispatchStore = create<{ threads: Partial<Record<ThreadId, ThreadDispatchState>> }>(
-  () => ({ threads: {} }),
-);
+export const useThreadDispatchStore = create<{
+  threads: Partial<Record<ThreadId, ThreadDispatchState>>;
+}>(() => ({ threads: {} }));
 const setupResolutions = new Map<ThreadId, WorktreeSetupResolution>();
 function threadSetupResolutionRef(threadId: ThreadId) {
   return {
