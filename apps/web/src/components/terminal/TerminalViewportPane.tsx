@@ -24,7 +24,11 @@ import {
 } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
-import { DOCK_HEADER_ICON_BUTTON_CLASS, SurfaceTabChip } from "../chat/chatHeaderControls";
+import {
+  DOCK_HEADER_ICON_BUTTON_CLASS,
+  SurfaceTabChip,
+  SurfaceTabStrip,
+} from "../chat/chatHeaderControls";
 import type {
   ThreadTerminalLayoutNode,
   ThreadTerminalPresentationMode,
@@ -141,7 +145,7 @@ export default function TerminalViewportPane({
           }}
         >
           <div className="flex min-h-9 items-center gap-1 bg-[var(--color-background-surface)] px-1.5 py-1">
-            <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <SurfaceTabStrip className="flex-1" activeKey={activePaneTerminalId}>
               {node.terminalIds.map((terminalId) => {
                 const visualIdentity = terminalVisualIdentityById.get(terminalId);
                 const isActiveTab = terminalId === activePaneTerminalId;
@@ -185,7 +189,7 @@ export default function TerminalViewportPane({
                   <Plus className="size-3.5" />
                 </PaneActionButton>
               ) : null}
-            </div>
+            </SurfaceTabStrip>
 
             <div className="flex shrink-0 items-center gap-0.5">
               {canMoveActiveTerminalToGroup ? (

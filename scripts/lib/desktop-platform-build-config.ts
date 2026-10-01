@@ -25,6 +25,12 @@ export const MAC_APPSNAP_HELPER_STAGE_PATH =
   "apps/desktop/native/appsnap/build/synara-appsnap-helper";
 export const MAC_APPSNAP_HELPER_ASAR_EXCLUSION = "!apps/desktop/native/appsnap/build/**";
 export const MAC_APPSNAP_HELPER_BUNDLE_PATH = "Contents/Helpers/synara-appsnap-helper";
+// In-process Node-API addon for the adjustable window blur (apps/desktop/native/window-material).
+export const MAC_WINDOW_MATERIAL_ADDON_STAGE_PATH =
+  "apps/desktop/native/window-material/build/synara-window-material.node";
+export const MAC_WINDOW_MATERIAL_ADDON_ASAR_EXCLUSION = "!apps/desktop/native/window-material/**";
+export const MAC_WINDOW_MATERIAL_ADDON_BUNDLE_PATH =
+  "Contents/Frameworks/synara-window-material.node";
 export const MAC_DEVICE_HELPER_STAGE_PATH = "apps/server/dist/device-helper";
 export const MAC_DEVICE_HELPER_RESOURCE_PATH = "Resources/device-helper";
 export const WINDOWS_INSTALLER_GUID = SYNARA_STABLE_WINDOWS_INSTALLER_GUID;
@@ -121,10 +127,15 @@ export function createDesktopPlatformBuildConfig(
         : {}),
       entitlements: MAC_ENTITLEMENTS_PATH,
       entitlementsInherit: MAC_INHERITED_ENTITLEMENTS_PATH,
-      binaries: [MAC_APPSNAP_HELPER_BUNDLE_PATH, "Contents/Resources/cua-driver/cua-driver"],
-      // The universal build stages the same pre-lipo'd helper in both app trees.
-      // @electron/universal needs this pattern to preserve that existing fat binary.
-      x64ArchFiles: "Contents/{Helpers/synara-appsnap-helper,Resources/cua-driver/cua-driver}",
+      binaries: [
+        MAC_APPSNAP_HELPER_BUNDLE_PATH,
+        MAC_WINDOW_MATERIAL_ADDON_BUNDLE_PATH,
+        "Contents/Resources/cua-driver/cua-driver",
+      ],
+      // The universal build stages the same pre-lipo'd helper and addon in both app trees.
+      // @electron/universal needs this pattern to preserve those existing fat binaries.
+      x64ArchFiles:
+        "Contents/{Helpers/synara-appsnap-helper,Frameworks/synara-window-material.node,Resources/cua-driver/cua-driver}",
       extendInfo: {
         NSMicrophoneUsageDescription: MICROPHONE_USAGE_DESCRIPTION,
         NSScreenCaptureUsageDescription:
@@ -160,12 +171,21 @@ export function createDesktopPlatformBuildConfig(
         // macOS auto-updates use the separately finalized ZIP artifact.
         writeUpdateInfo: false,
       },
-      files: [...files, MAC_APPSNAP_HELPER_ASAR_EXCLUSION, "!apps/desktop/resources/cua-driver/**"],
+      files: [
+        ...files,
+        MAC_APPSNAP_HELPER_ASAR_EXCLUSION,
+        MAC_WINDOW_MATERIAL_ADDON_ASAR_EXCLUSION,
+        "!apps/desktop/resources/cua-driver/**",
+      ],
       extraFiles: [
         { from: "apps/desktop/resources/cua-driver", to: "Resources/cua-driver" },
         {
           from: MAC_APPSNAP_HELPER_STAGE_PATH,
           to: "Helpers/synara-appsnap-helper",
+        },
+        {
+          from: MAC_WINDOW_MATERIAL_ADDON_STAGE_PATH,
+          to: "Frameworks/synara-window-material.node",
         },
         {
           from: MAC_DEVICE_HELPER_STAGE_PATH,

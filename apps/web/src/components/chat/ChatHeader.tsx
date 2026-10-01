@@ -13,34 +13,36 @@ import {
   type ThreadId,
 } from "@synara/contracts";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
-import React, { type Dispatch, type SetStateAction, useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { FiGitBranch } from "react-icons/fi";
 import { HiMiniArrowsPointingOut } from "react-icons/hi2";
 import { TbExchange } from "react-icons/tb";
 import type { ThreadPrimarySurface } from "../../types";
 import GitActionsControl from "../GitActionsControl";
 import {
-  ArrowRightIcon,
   CheckIcon,
+  FoldersIcon,
   HandoffIcon,
   HistoryIcon,
   MessageCircleIcon,
-  PanelRightCloseIcon,
+  LayoutAlignRightIcon,
+  LayoutRightIcon,
   PlusIcon,
   TerminalIcon,
+  WorkflowIcon,
   XIcon,
 } from "~/lib/icons";
 import { formatRelativeTime } from "~/lib/relativeTime";
 import {
   CHAT_HEADER_TOGGLE_CLASS_NAME,
-  ChatHeaderButton,
+  ChatHeaderGroupDivider,
   ChatHeaderIconButton,
   SurfaceChipIcon,
   SurfaceTabChip,
+  SurfaceTabStrip,
 } from "./chatHeaderControls";
 import { DiffStat } from "../ui/diff-stat";
 import { IconButton } from "../ui/icon-button";
-import { Badge } from "../ui/badge";
 import { Menu, MenuItem, MenuTrigger } from "../ui/menu";
 import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
 import { OpenInPicker } from "./OpenInPicker";
@@ -54,16 +56,21 @@ import { useStore } from "../../store";
 import { createSidebarDisplayThreadsSelector } from "../../storeSelectors";
 import { sortThreadsForSidebar } from "../Sidebar.logic";
 import {
-  readEditorRailChatTabs,
-  storeEditorRailChatTabs,
-  type EditorRailChatTabSnapshot,
-} from "../../editorViewState";
+  useOpenThreadTabs,
+  useReadRouteThreadId,
+  useRecordOpenThreadTab,
+} from "../../hooks/useOpenThreadTabs";
+import { createOpenThreadTabCloseQueue } from "../../openThreadTabs.logic";
+import { useOpenThreadTabsStore } from "../../openThreadTabsStore";
+import { StatusDot } from "~/components/ui/status-chip";
 import { cn } from "~/lib/utils";
 import { useOpenFavoriteEditorShortcut } from "~/hooks/useOpenFavoriteEditorShortcut";
 import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { ProviderIcon } from "../ProviderIcon";
 import { ProviderUsageMenuControl } from "../ProviderUsageMenuControl";
 import { EnvironmentToggle, type EnvironmentToggleState } from "./environment/EnvironmentToggle";
+import { SurfacePanelToggle, type SurfacePanelToggleState } from "./chatHeaderControls";
+import type { ThreadHandoffTarget } from "~/lib/threadHandoff";
 
 /**
  * Width (px) below which collapsible header controls drop their text labels and
@@ -83,6 +90,9 @@ interface ChatHeaderProps {
     title: string;
   }>;
   className?: string;
+  // Open-thread tabs rendered in place of the thread title (the rail shell's single chat).
+  // They stay visible on the empty-draft landing so switching threads never loses the row.
+  threadTabs?: React.ReactNode;
   hideSidebarControls?: boolean;
   hideHandoffControls?: boolean;
   // Empty-draft landings hide all thread-scoped chrome (title, Hand off, project
@@ -96,12 +106,12 @@ interface ChatHeaderProps {
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
   diffToggleShortcutLabel: string | null;
-  handoffBadgeLabel: string | null;
   handoffActionLabel: string;
   handoffDisabled: boolean;
-  handoffActionTargetProviders: ReadonlyArray<ProviderKind>;
-  handoffBadgeSourceProvider: ProviderKind | null;
-  handoffBadgeTargetProvider: ProviderKind | null;
+  handoffActionTargets: ReadonlyArray<ThreadHandoffTarget>;
+  // Coordinator threads pass false — a hand-off copy would read as a second
+  // coordinator, so the action itself is hidden rather than disabled.
+  showHandoffAction?: boolean;
   gitCwd: string | null;
   diffTotals: RepoDiffTotals;
   showGitActions?: boolean;
@@ -116,6 +126,8 @@ interface ChatHeaderProps {
   // Open-in-editor + git-actions + diff-toggle cluster into one Environment button that
   // drives the Environment panel; otherwise the legacy cluster is rendered.
   environment?: EnvironmentToggleState | null;
+  projectPanel?: SurfacePanelToggleState | null;
+  libraryPanel?: SurfacePanelToggleState | null;
   chatLayoutAction?: {
     kind: "split" | "maximize";
     label: string;
@@ -135,7 +147,8 @@ interface ChatHeaderProps {
     terminalHasRunningActivity: boolean;
     onNewChat: () => void;
     onNewTerminal: () => void;
-    onOpenChat: (threadId: ThreadId) => void;
+    // Resolves once the navigation settles, so a closed tab can wait for it.
+    onOpenChat: (threadId: ThreadId) => Promise<unknown>;
     onOpenTerminal: () => void;
     onCloseTerminal: () => void;
   } | null;
@@ -145,27 +158,13 @@ interface ChatHeaderProps {
   onDeleteProjectScript: (scriptId: string) => Promise<void>;
   onToggleDiff: () => void;
   onRegisterCommitAndPushTrigger?: (trigger: (() => void) | null) => void;
-  onCreateHandoff: (targetProvider: ProviderKind) => void;
+  onCreateHandoff: (target: ThreadHandoffTarget) => void;
   onNavigateToThread: (threadId: ThreadId) => void;
   onRenameThread: () => void;
   onCloseThreadPane?: () => void;
 }
 
 const EDITOR_CHAT_HISTORY_LIMIT = 30;
-
-type EditorRailChatTab = EditorRailChatTabSnapshot;
-
-function updateStoredEditorRailChatTabs(
-  setOpenChatTabs: Dispatch<SetStateAction<ReadonlyArray<EditorRailChatTab>>>,
-  projectId: ProjectId,
-  updater: (current: ReadonlyArray<EditorRailChatTab>) => ReadonlyArray<EditorRailChatTab>,
-): void {
-  setOpenChatTabs((current) => {
-    const next = updater(current);
-    storeEditorRailChatTabs(projectId, next);
-    return next;
-  });
-}
 
 // Compact recent-chats picker for the editor rail; selecting a thread keeps the
 // editor view because the caller's navigation preserves the `view` search param.
@@ -236,66 +235,28 @@ function EditorChatHistoryMenu(props: {
 function EditorRailTabs(props: {
   projectId: ProjectId;
   activeThreadId: ThreadId;
-  activeThreadTitle: string;
-  activeProvider: ProviderKind;
   activeSurface: "chat" | "terminal";
   terminalAvailable: boolean;
   terminalHasRunningActivity: boolean;
   onNewChat: () => void;
   onNewTerminal: () => void;
-  onOpenChat: (threadId: ThreadId) => void;
+  onOpenChat: (threadId: ThreadId) => Promise<unknown>;
   onOpenTerminal: () => void;
   onCloseTerminal: () => void;
-  onNavigateToThread: (threadId: ThreadId) => void;
 }) {
-  const { settings } = useAppSettings();
-  const [openChatTabs, setOpenChatTabs] = useState<ReadonlyArray<EditorRailChatTab>>(() => {
-    const storedTabs = readEditorRailChatTabs(props.projectId);
-    return storedTabs.length > 0
-      ? storedTabs
-      : [
-          {
-            id: props.activeThreadId,
-            title: props.activeThreadTitle,
-            provider: props.activeProvider,
-          },
-        ];
+  // The rail's chat tabs are this project's slice of the app-wide open threads, so a chat
+  // opened or closed here is opened or closed in the chat header strip too.
+  useRecordOpenThreadTab(props.activeSurface === "chat" ? props.activeThreadId : null);
+  const chatTabs = useOpenThreadTabs({
+    activeThreadId: props.activeThreadId,
+    projectId: props.projectId,
   });
+  const closeThreadTab = useOpenThreadTabsStore((state) => state.closeThreadTab);
+  const readRouteThreadId = useReadRouteThreadId();
+  const [enqueueClose] = useState(createOpenThreadTabCloseQueue);
   const [terminalTabOpen, setTerminalTabOpen] = useState(props.terminalAvailable);
-  const selectDisplayThreads = createSidebarDisplayThreadsSelector({
-    hideAutomationRunThreads: !settings.showAutomationRunThreads,
-  });
-  const displayThreads = useStore(selectDisplayThreads);
-  const currentChatTab: EditorRailChatTab = {
-    id: props.activeThreadId,
-    title: props.activeThreadTitle,
-    provider: props.activeProvider,
-  };
-  const setAndStoreOpenChatTabs = (
-    updater: (current: ReadonlyArray<EditorRailChatTab>) => ReadonlyArray<EditorRailChatTab>,
-  ) => {
-    updateStoredEditorRailChatTabs(setOpenChatTabs, props.projectId, updater);
-  };
-  // Timeout-0 in the three sync effects below keeps every state write
-  // asynchronous (no wasted pre-paint render), which also keeps this component
-  // eligible for React Compiler; tab seeding/mirroring is invisible at a tick.
-  useEffect(() => {
-    const timeoutId = window.setTimeout(() => {
-      const storedTabs = readEditorRailChatTabs(props.projectId);
-      setOpenChatTabs(
-        storedTabs.length > 0
-          ? storedTabs
-          : [
-              {
-                id: props.activeThreadId,
-                title: props.activeThreadTitle,
-                provider: props.activeProvider,
-              },
-            ],
-      );
-    }, 0);
-    return () => window.clearTimeout(timeoutId);
-  }, [props.activeProvider, props.activeThreadId, props.activeThreadTitle, props.projectId]);
+  // Timeout-0 keeps the state write asynchronous (no wasted pre-paint render), which also
+  // keeps this component eligible for React Compiler; the reveal is invisible at a tick.
   useEffect(() => {
     if (!props.terminalAvailable) {
       return;
@@ -305,59 +266,6 @@ function EditorRailTabs(props: {
     }, 0);
     return () => window.clearTimeout(timeoutId);
   }, [props.terminalAvailable]);
-  useEffect(() => {
-    if (props.activeSurface !== "chat") {
-      return;
-    }
-    const timeoutId = window.setTimeout(() => {
-      const activeChatTab: EditorRailChatTab = {
-        id: props.activeThreadId,
-        title: props.activeThreadTitle,
-        provider: props.activeProvider,
-      };
-      updateStoredEditorRailChatTabs(setOpenChatTabs, props.projectId, (current) => {
-        const existingIndex = current.findIndex((thread) => thread.id === activeChatTab.id);
-        if (existingIndex < 0) {
-          return [...current, activeChatTab];
-        }
-        const existing = current[existingIndex];
-        if (
-          existing?.title === activeChatTab.title &&
-          existing.provider === activeChatTab.provider
-        ) {
-          return current;
-        }
-        return current.map((thread) => (thread.id === activeChatTab.id ? activeChatTab : thread));
-      });
-    }, 0);
-    return () => window.clearTimeout(timeoutId);
-  }, [
-    props.activeProvider,
-    props.activeSurface,
-    props.activeThreadId,
-    props.activeThreadTitle,
-    props.projectId,
-  ]);
-  const sortedProjectThreads = sortThreadsForSidebar(
-    displayThreads.filter((thread) => thread.projectId === props.projectId),
-    settings.sidebarThreadSortOrder,
-  );
-  const sidebarThreadById = new Map(
-    sortedProjectThreads.map((thread) => [
-      thread.id,
-      {
-        id: thread.id,
-        title: thread.title,
-        provider: thread.session?.provider ?? thread.modelSelection.provider,
-      },
-    ]),
-  );
-  const activeChatAlreadyOpen = openChatTabs.some((thread) => thread.id === props.activeThreadId);
-  const orderedOpenTabs =
-    props.activeSurface === "chat" && !activeChatAlreadyOpen
-      ? [...openChatTabs, currentChatTab]
-      : openChatTabs;
-  const chatTabs = orderedOpenTabs.map((thread) => sidebarThreadById.get(thread.id) ?? thread);
   const terminalTabVisible = terminalTabOpen || props.terminalAvailable;
   const tabCount = chatTabs.length + (terminalTabVisible ? 1 : 0);
   const shouldShowTabs = tabCount > 1;
@@ -373,34 +281,27 @@ function EditorRailTabs(props: {
     setTerminalTabOpen(false);
     props.onCloseTerminal();
   };
-  const openChatTab = (threadId: ThreadId) => {
-    const sidebarThread = displayThreads.find((thread) => thread.id === threadId);
-    if (sidebarThread) {
-      const nextTab = {
-        id: sidebarThread.id,
-        title: sidebarThread.title,
-        provider: sidebarThread.session?.provider ?? sidebarThread.modelSelection.provider,
-      };
-      setAndStoreOpenChatTabs((current) =>
-        current.some((thread) => thread.id === threadId) ? current : [...current, nextTab],
-      );
-    }
-    props.onOpenChat(threadId);
-  };
   const closeChatTab = (threadId: ThreadId) => {
-    const closingActiveChat = props.activeSurface === "chat" && threadId === props.activeThreadId;
-    const nextChatTab = chatTabs.find((thread) => thread.id !== threadId);
-    setAndStoreOpenChatTabs((current) => current.filter((thread) => thread.id !== threadId));
-    if (!closingActiveChat) {
-      return;
-    }
-    if (nextChatTab) {
-      props.onOpenChat(nextChatTab.id);
-      return;
-    }
-    if (terminalTabVisible) {
-      openTerminalTab();
-    }
+    // Same close flow as the chat header strip: the active chat's tab goes only once the
+    // route has left it, so a guarded navigation keeps it in both places.
+    void enqueueClose(() => {
+      const openThreadIds = useOpenThreadTabsStore.getState().threadIds;
+      return {
+        tabs: chatTabs.filter((tab) => openThreadIds.includes(tab.threadId)),
+        closedThreadId: threadId,
+        activeThreadId: props.activeSurface === "chat" ? readRouteThreadId() : null,
+        closeTab: closeThreadTab,
+        openTab: props.onOpenChat,
+        // The last chat tab gives way to the terminal tab, which keeps the thread's route.
+        replaceLastTab: terminalTabVisible
+          ? async () => {
+              openTerminalTab();
+              return { ok: true, leavesRoute: false };
+            }
+          : undefined,
+        readRouteThreadId,
+      };
+    });
   };
 
   return (
@@ -439,18 +340,21 @@ function EditorRailTabs(props: {
         <EditorChatHistoryMenu
           projectId={props.projectId}
           activeThreadId={props.activeThreadId}
-          onNavigateToThread={openChatTab}
+          onNavigateToThread={props.onOpenChat}
         />
       </div>
       {shouldShowTabs ? (
         // Same chip tabs as the right dock's pane strip so every tab row in the
         // app reads identically. Pushed to the header's right edge (ml-auto) so the
         // title and new/history controls stay grouped on the left.
-        <div className="ml-auto flex min-w-0 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <SurfaceTabStrip
+          className="ml-auto"
+          activeKey={props.activeSurface === "chat" ? props.activeThreadId : "terminal"}
+        >
           {chatTabs.map((thread, index) => (
             <SurfaceTabChip
-              key={thread.id}
-              active={props.activeSurface === "chat" && thread.id === props.activeThreadId}
+              key={thread.threadId}
+              active={props.activeSurface === "chat" && thread.threadId === props.activeThreadId}
               title={thread.title}
               label={`Chat ${index + 1}`}
               labelClassName="max-w-24"
@@ -462,8 +366,8 @@ function EditorRailTabs(props: {
                 />
               }
               closeLabel={`Close ${thread.title}`}
-              onSelect={() => openChatTab(thread.id)}
-              onClose={() => closeChatTab(thread.id)}
+              onSelect={() => props.onOpenChat(thread.threadId)}
+              onClose={() => closeChatTab(thread.threadId)}
             />
           ))}
           {terminalTabVisible ? (
@@ -475,7 +379,7 @@ function EditorRailTabs(props: {
               icon={<TerminalIcon className="size-3 shrink-0 text-[var(--color-text-accent)]" />}
               trailing={
                 props.terminalHasRunningActivity ? (
-                  <span className="size-1.5 shrink-0 rounded-full bg-emerald-500/80" />
+                  <StatusDot className="bg-emerald-500/80" />
                 ) : null
               }
               onSelect={openTerminalTab}
@@ -483,7 +387,7 @@ function EditorRailTabs(props: {
               onClose={closeTerminalTab}
             />
           ) : null}
-        </div>
+        </SurfaceTabStrip>
       ) : null}
     </div>
   );
@@ -509,6 +413,7 @@ export function ChatHeader({
   activeProjectName,
   threadBreadcrumbs,
   className,
+  threadTabs,
   hideSidebarControls: hideSidebarControlsProp,
   hideHandoffControls: hideHandoffControlsProp,
   minimalChrome: minimalChromeProp,
@@ -519,12 +424,10 @@ export function ChatHeader({
   keybindings,
   availableEditors,
   diffToggleShortcutLabel,
-  handoffBadgeLabel,
   handoffActionLabel,
   handoffDisabled,
-  handoffActionTargetProviders,
-  handoffBadgeSourceProvider,
-  handoffBadgeTargetProvider,
+  handoffActionTargets,
+  showHandoffAction: showHandoffActionProp,
   gitCwd,
   diffTotals,
   showGitActions: showGitActionsProp,
@@ -536,6 +439,8 @@ export function ChatHeader({
   surfaceMode: surfaceModeProp,
   isSidechat: isSidechatProp,
   environment: environmentProp,
+  projectPanel = null,
+  libraryPanel = null,
   chatLayoutAction: chatLayoutActionProp,
   changeThreadAction: changeThreadActionProp,
   editorChatControls: editorChatControlsProp,
@@ -552,6 +457,7 @@ export function ChatHeader({
 }: ChatHeaderProps) {
   const hideSidebarControls = hideSidebarControlsProp ?? false;
   const hideHandoffControls = hideHandoffControlsProp ?? false;
+  const showHandoffAction = showHandoffActionProp ?? true;
   const minimalChrome = minimalChromeProp ?? false;
   const showGitActions = showGitActionsProp ?? true;
   const showDiffToggle = showDiffToggleProp ?? true;
@@ -614,6 +520,8 @@ export function ChatHeader({
   // without a multi-pane dock (split/editor surfaces) keep the legacy diff-only
   // behavior until they gain their own launcher surface.
   const togglesRightDock = onToggleRightDock !== undefined;
+  const hasActionControls =
+    !minimalChrome && (!hideHandoffControls || activeProjectScripts !== undefined);
   const rightPanelToggleControl = showDiffToggle ? (
     <Tooltip>
       <TooltipTrigger
@@ -641,7 +549,14 @@ export function ChatHeader({
                 deletions={diffDeletions}
               />
             ) : null}
-            <SurfaceChipIcon icon={PanelRightCloseIcon} className="size-4" />
+            <SurfaceChipIcon
+              icon={
+                (togglesRightDock ? rightDockOpen : diffOpen)
+                  ? LayoutRightIcon
+                  : LayoutAlignRightIcon
+              }
+              className="size-4"
+            />
           </Toggle>
         }
       />
@@ -661,6 +576,19 @@ export function ChatHeader({
     </Tooltip>
   ) : null;
 
+  const breadcrumbLinks = threadBreadcrumbs.map((breadcrumb, index) => (
+    <React.Fragment key={breadcrumb.threadId}>
+      {index > 0 ? <span className="shrink-0 text-muted-foreground/35">/</span> : null}
+      <button
+        type="button"
+        className="min-w-0 truncate transition-colors hover:text-foreground/80"
+        title={breadcrumb.title}
+        onClick={() => onNavigateToThread(breadcrumb.threadId)}
+      >
+        {breadcrumb.title}
+      </button>
+    </React.Fragment>
+  ));
   return (
     <div ref={headerRef} className={cn("flex min-w-0 flex-1 items-center gap-2", className)}>
       <div
@@ -671,161 +599,137 @@ export function ChatHeader({
         )}
       >
         {hideSidebarControls ? null : <SidebarHeaderNavigationControls />}
-        <div
-          className={cn(
-            "flex min-w-0 flex-1 items-center gap-2",
-            editorChatControls && "h-full",
-            minimalChrome && "hidden",
-          )}
-        >
-          <div
-            className={cn(
-              "flex min-w-0 flex-1 flex-col",
-              editorChatControls && "h-full justify-center",
-            )}
-          >
-            {threadBreadcrumbs.length > 0 ? (
-              <div className="flex min-w-0 items-center gap-1 overflow-hidden text-ui-sm text-muted-foreground/55">
-                {threadBreadcrumbs.map((breadcrumb, index) => (
-                  <React.Fragment key={breadcrumb.threadId}>
-                    {index > 0 ? (
-                      <span className="shrink-0 text-muted-foreground/35">/</span>
-                    ) : null}
-                    <button
-                      type="button"
-                      className="min-w-0 truncate transition-colors hover:text-foreground/80"
-                      title={breadcrumb.title}
-                      onClick={() => onNavigateToThread(breadcrumb.threadId)}
-                    >
-                      {breadcrumb.title}
-                    </button>
-                  </React.Fragment>
-                ))}
+        {threadTabs ? (
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            {!minimalChrome && threadBreadcrumbs.length > 0 ? (
+              // Inline lineage for a subagent thread: the tabs own the row, so its
+              // parents sit ahead of them instead of stacked above the title.
+              <div className="flex min-w-0 max-w-[30%] shrink-0 items-center gap-1 overflow-hidden text-ui-sm text-muted-foreground/55">
+                {breadcrumbLinks}
+                <span className="shrink-0 text-muted-foreground/35">/</span>
               </div>
             ) : null}
-            <div className={cn("flex min-w-0 items-center gap-2", editorChatControls && "h-full")}>
+            {threadTabs}
+          </div>
+        ) : (
+          <div
+            className={cn(
+              "flex min-w-0 flex-1 items-center gap-2",
+              editorChatControls && "h-full",
+              minimalChrome && "hidden",
+            )}
+          >
+            <div
+              className={cn(
+                "flex min-w-0 flex-1 flex-col",
+                editorChatControls && "h-full justify-center",
+              )}
+            >
+              {threadBreadcrumbs.length > 0 ? (
+                <div className="flex min-w-0 items-center gap-1 overflow-hidden text-ui-sm text-muted-foreground/55">
+                  {breadcrumbLinks}
+                </div>
+              ) : null}
               <div
-                className={cn(
-                  "flex min-w-0 items-center gap-2",
-                  showSidechatTitleChip &&
-                    "rounded-lg bg-secondary py-1 pl-2 pr-1 text-secondary-foreground",
-                )}
+                className={cn("flex min-w-0 items-center gap-2", editorChatControls && "h-full")}
               >
-                {threadIconKind === "none" ? null : (
-                  <span
-                    className="inline-flex size-3.5 shrink-0 items-center justify-center"
-                    title={
-                      threadIconKind === "terminal"
-                        ? "Terminal"
-                        : PROVIDER_DISPLAY_NAMES[activeProvider]
-                    }
-                  >
-                    {threadIconKind === "terminal" ? (
-                      <TerminalIcon className="size-3.5 text-[var(--color-text-accent)]" />
-                    ) : (
-                      renderProviderIcon(activeProvider, "size-3.5")
-                    )}
-                  </span>
-                )}
-                <h2
-                  className="max-w-[clamp(12rem,42vw,36rem)] truncate font-system-ui text-ui font-normal text-foreground"
-                  title={activeThreadTitle}
-                  onDoubleClick={() => onRenameThread()}
+                <div
+                  className={cn(
+                    "flex min-w-0 items-center gap-2",
+                    showSidechatTitleChip &&
+                      "rounded-lg bg-secondary py-1 pl-2 pr-1 text-secondary-foreground",
+                  )}
                 >
-                  {activeThreadTitle}
-                </h2>
-                {showSidechatTitleChip && onCloseThreadPane ? (
-                  <IconButton
-                    variant="chrome"
-                    size="icon-xs"
-                    label="Close selected Side"
-                    tooltip="Close selected Side"
-                    tooltipSide="bottom"
-                    className="size-5 rounded-lg [-webkit-app-region:no-drag] [&_svg]:size-3"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onCloseThreadPane();
-                    }}
+                  {threadIconKind === "none" ? null : (
+                    <span
+                      className="inline-flex size-3.5 shrink-0 items-center justify-center"
+                      title={
+                        threadIconKind === "terminal"
+                          ? "Terminal"
+                          : PROVIDER_DISPLAY_NAMES[activeProvider]
+                      }
+                    >
+                      {threadIconKind === "terminal" ? (
+                        <TerminalIcon className="size-3.5 text-[var(--color-text-accent)]" />
+                      ) : (
+                        renderProviderIcon(activeProvider, "size-3.5")
+                      )}
+                    </span>
+                  )}
+                  <h2
+                    className="max-w-[clamp(12rem,42vw,36rem)] truncate font-system-ui text-ui font-normal text-foreground"
+                    title={activeThreadTitle}
+                    onDoubleClick={() => onRenameThread()}
                   >
-                    <XIcon />
-                  </IconButton>
+                    {activeThreadTitle}
+                  </h2>
+                  {showSidechatTitleChip && onCloseThreadPane ? (
+                    <IconButton
+                      variant="chrome"
+                      size="icon-xs"
+                      label="Close selected Side"
+                      tooltip="Close selected Side"
+                      tooltipSide="bottom"
+                      className="size-5 rounded-lg [-webkit-app-region:no-drag] [&_svg]:size-3"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onCloseThreadPane();
+                      }}
+                    >
+                      <XIcon />
+                    </IconButton>
+                  ) : null}
+                </div>
+                {editorChatControls ? (
+                  <EditorRailTabs
+                    projectId={editorChatControls.projectId}
+                    activeThreadId={activeThreadId}
+                    activeSurface={editorChatControls.activeSurface}
+                    terminalAvailable={editorChatControls.terminalAvailable}
+                    terminalHasRunningActivity={editorChatControls.terminalHasRunningActivity}
+                    onNewChat={editorChatControls.onNewChat}
+                    onNewTerminal={editorChatControls.onNewTerminal}
+                    onOpenChat={editorChatControls.onOpenChat}
+                    onOpenTerminal={editorChatControls.onOpenTerminal}
+                    onCloseTerminal={editorChatControls.onCloseTerminal}
+                  />
                 ) : null}
               </div>
-              {editorChatControls ? (
-                <EditorRailTabs
-                  projectId={editorChatControls.projectId}
-                  activeThreadId={activeThreadId}
-                  activeThreadTitle={activeThreadTitle}
-                  activeProvider={activeProvider}
-                  activeSurface={editorChatControls.activeSurface}
-                  terminalAvailable={editorChatControls.terminalAvailable}
-                  terminalHasRunningActivity={editorChatControls.terminalHasRunningActivity}
-                  onNewChat={editorChatControls.onNewChat}
-                  onNewTerminal={editorChatControls.onNewTerminal}
-                  onOpenChat={editorChatControls.onOpenChat}
-                  onOpenTerminal={editorChatControls.onOpenTerminal}
-                  onCloseTerminal={editorChatControls.onCloseTerminal}
-                  onNavigateToThread={onNavigateToThread}
-                />
-              ) : null}
-              {!hideHandoffControls && handoffBadgeLabel ? (
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Badge
-                        variant="outline"
-                        className="hidden !h-6 shrink-0 items-center justify-center gap-1 rounded-md px-1.5 text-ui-xs sm:inline-flex"
-                      >
-                        <span className="inline-flex size-4 shrink-0 items-center justify-center">
-                          {renderProviderIcon(handoffBadgeSourceProvider, "size-3")}
-                        </span>
-                        <ArrowRightIcon className="size-2.5 shrink-0 opacity-45" />
-                        <span className="inline-flex size-4 shrink-0 items-center justify-center">
-                          {renderProviderIcon(handoffBadgeTargetProvider, "size-3")}
-                        </span>
-                      </Badge>
-                    }
-                  />
-                  <TooltipPopup side="bottom">{handoffBadgeLabel}</TooltipPopup>
-                </Tooltip>
-              ) : null}
             </div>
           </div>
-        </div>
+        )}
       </div>
       <div className="flex shrink-0 items-center gap-2 [-webkit-app-region:no-drag]">
         {!minimalChrome && !hideHandoffControls && !environment ? (
           <ProviderUsageMenuControl provider={activeProvider} />
         ) : null}
-        {!minimalChrome && !hideHandoffControls ? (
+        {!minimalChrome && !hideHandoffControls && showHandoffAction ? (
           <Menu modal={false}>
             <Tooltip>
               <TooltipTrigger
                 render={
                   <MenuTrigger
                     render={
-                      <ChatHeaderButton
+                      <ChatHeaderIconButton
                         type="button"
-                        tone="outline"
-                        className={compact ? "gap-1" : "gap-1.5"}
-                        aria-label={handoffActionLabel}
-                        disabled={handoffDisabled || handoffActionTargetProviders.length === 0}
+                        tone="surface"
+                        label={handoffActionLabel}
+                        disabled={handoffDisabled || handoffActionTargets.length === 0}
                       />
                     }
                   >
-                    <HandoffIcon className="size-[1em] shrink-0 opacity-80" />
-                    {!compact ? <span className="truncate font-normal">Hand off</span> : null}
+                    <HandoffIcon className="size-4 shrink-0" />
                   </MenuTrigger>
                 }
               />
               <TooltipPopup side="bottom">{handoffActionLabel}</TooltipPopup>
             </Tooltip>
             <ComposerPickerMenuPopup align="end" side="bottom" className="w-48 min-w-48">
-              {handoffActionTargetProviders.map((provider) => (
-                <MenuItem key={provider} onClick={() => onCreateHandoff(provider)}>
+              {handoffActionTargets.map((target) => (
+                <MenuItem key={target.instanceId} onClick={() => onCreateHandoff(target)}>
                   {/* opacity-100 opts brand icons out of the option row's 80% icon dim. */}
-                  {renderProviderIcon(provider, "size-3.5 shrink-0 opacity-100")}
-                  <span>Handoff to {PROVIDER_DISPLAY_NAMES[provider]}</span>
+                  {renderProviderIcon(target.provider, "size-3.5 shrink-0 opacity-100")}
+                  <span>Handoff to {target.label}</span>
                 </MenuItem>
               ))}
             </ComposerPickerMenuPopup>
@@ -836,7 +740,6 @@ export function ChatHeader({
             scripts={activeProjectScripts}
             keybindings={keybindings}
             preferredScriptId={preferredScriptId}
-            hideInlineLabel={compact}
             onRunScript={onRunProjectScript}
             onAddScript={onAddProjectScript}
             onUpdateScript={onUpdateProjectScript}
@@ -848,7 +751,7 @@ export function ChatHeader({
           <GitActionsControl
             gitCwd={gitCwd}
             activeThreadId={activeThreadId}
-            hideQuickActionLabel={compact}
+            hideQuickActionLabel
             visibleWhen="pull-available"
           />
         ) : null}
@@ -895,13 +798,31 @@ export function ChatHeader({
             Falls back to the legacy controls when no environment is resolved. */}
         {environment ? (
           <>
+            {/* Actions on the left, panel toggles on the right. */}
+            {hasActionControls ? <ChatHeaderGroupDivider /> : null}
             <EnvironmentToggle environment={environment} />
+            {projectPanel ? (
+              <SurfacePanelToggle
+                state={projectPanel}
+                icon={WorkflowIcon}
+                ariaLabel="Toggle hub panel"
+                tooltip="Hub"
+              />
+            ) : null}
+            {libraryPanel ? (
+              <SurfacePanelToggle
+                state={libraryPanel}
+                icon={FoldersIcon}
+                ariaLabel="Toggle library panel"
+                tooltip="Library"
+              />
+            ) : null}
             {rightPanelToggleControl}
           </>
         ) : (
           <>
             {/* Open in editor: dedicated split-button with an editor switcher; the project
-                action control now lives beside Hand off as its own project command surface. */}
+                action control sits beside it as its own project command surface. */}
             {!minimalChrome && activeProjectName ? (
               <OpenInPicker
                 keybindings={keybindings}

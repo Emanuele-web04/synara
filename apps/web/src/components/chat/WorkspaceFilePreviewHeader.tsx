@@ -28,6 +28,7 @@ import {
   PencilIcon,
   RefreshCwIcon,
 } from "~/lib/icons";
+import { StatusDot } from "~/components/ui/status-chip";
 import { cn } from "~/lib/utils";
 import { Menu, MenuItem, MenuTrigger } from "../ui/menu";
 import { CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME, ChatHeaderIconButton } from "./chatHeaderControls";
@@ -227,8 +228,8 @@ function CollapsingPathBreadcrumb(props: {
         {fileSegment}
       </span>
       {dirty ? (
-        <span
-          className="ml-1.5 size-1.5 shrink-0 rounded-full bg-foreground/75"
+        <StatusDot
+          className="ml-1.5 bg-foreground/75"
           role="status"
           aria-label="Unsaved changes"
           title="Unsaved changes"

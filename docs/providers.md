@@ -82,15 +82,23 @@ For a release newer than Synara's catalog, the picker shows the concrete ID. Age
 that ID when it resolves to one discovered non-default model; ambiguous IDs require an exact
 advertised alias.
 
+Claude model discovery caches catalogs by the detected CLI version as well as the executable
+path. A detected CLI update refreshes the picker even when the path stays the same, including
+after a restart. Catalog revalidation uses a temporary Claude process because running sessions
+retain the model metadata returned when they initialized. Ordinary picker reads share the
+server cache rather than starting a process each time.
+
 For Codex, successful model discovery determines the built-in choices, including when the returned
 catalog is empty. Models absent from that catalog are not added back from Synara's static list.
 Custom models remain available. Until discovery succeeds, Synara uses a static fallback; a failed
 refresh keeps the last successful catalog. The shared discovery cache refreshes catalogs in the
-background after its ten-minute fresh window.
+background after its thirty-minute fresh window.
 
 The composer model picker has one tab per connected provider and a Starred tab. Starring a model
-saves it together with its current effort and speed, so one click (or `mod+1`…`mod+9` while the
-picker is open) restores the whole combination. A task that has started stays on its provider: only
+saves it together with its current effort, speed, and provider account, so one click (or
+`mod+1`…`mod+9` while the picker is open) restores the whole combination, including the account.
+Presets of a non-default account show the account name; presets of a removed or disabled account
+are hidden. Model cycling prefers the active account's stars. A task that has started stays on its provider: only
 that provider's tab and starred entries are offered. Supported provider executables can be pointed
 at custom binary locations.
 
@@ -225,6 +233,39 @@ Pro, Max, Team, or Enterprise plan, Claude Code 2.1.234 or later, and an organiz
 allows Artifacts. While Artifacts are off or unavailable, the composer marks both commands with a
 warning that explains what is missing. Published pages are hosted on claude.ai; Claude returns the
 link in its reply.
+
+## Provider profiles and terminal commands
+
+Provider settings can define multiple independently routed instances of any supported provider.
+Each enabled instance receives a stable command in newly opened or restarted Synara terminals, for
+example `claude-work`, `codex-personal`, or `pi-team`. The command is an executable shim on `PATH`,
+not a zsh or bash function, so it behaves consistently from zsh, bash, fish, shell scripts, and
+child processes. Bare commands such as `claude` and `codex` keep their existing meaning.
+
+The generated name comes from the provider and stable instance ID. A portable command override can
+be configured without tying terminal behavior to the editable display label. Profile shims are
+scoped to Synara terminals; Synara does not edit `.zshrc`, `.bashrc`, or other global shell files.
+
+Use **Import directory** in the desktop provider settings to reference an existing provider account
+directory. Import is non-destructive: Synara does not move or copy the selected directory. Known
+provider roots use their native setting (`CODEX_HOME`, Claude's config directory, or Pi's agent
+directory); other providers use the profile-directory mapping shown in settings. Remote browser
+sessions can create the same profile manually because a browser cannot safely pick a directory on
+the server machine.
+
+A non-default Oh My Pi instance, or one with its own environment, runs under a private home in the
+Synara state directory and does not inherit ambient provider credentials, like Pi. **Agent
+directory** (or the profile directory) sets `PI_CODING_AGENT_DIR`. Sessions, forks, model and command
+discovery, imported history, and the instance's terminal command all use that account.
+
+With `SYNARA_CLAUDE_KEEPALIVE=1` on macOS, the Claude OAuth keepalive runs `claude auth status` for
+every enabled Claude account in that account's own environment, so each account's Keychain token
+stays fresh.
+
+Sensitive environment values are never serialized into terminal shim files. Directory-backed
+authentication works directly. A profile that depends only on a secret environment credential
+still works for managed Synara runs, but its named terminal command requires that credential to be
+available through a secure runtime mechanism rather than an on-disk shim.
 
 ## Switching providers
 

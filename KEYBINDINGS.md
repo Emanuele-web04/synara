@@ -27,6 +27,7 @@ See the full schema for more details: [`packages/contracts/src/keybindings.ts`](
   { "key": "mod+shift+o", "command": "chat.new", "when": "!terminalFocus" },
   { "key": "mod+shift+n", "command": "chat.newLocal", "when": "!terminalFocus" },
   { "key": "mod+shift+t", "command": "chat.newTerminal", "when": "!terminalFocus" },
+  { "key": "mod+alt+s", "command": "sidechat.toggle", "when": "!terminalFocus || isMac" },
   { "key": "cmd+l", "command": "composer.focus.toggle", "when": "!terminalFocus" },
   { "key": "alt+arrowdown", "command": "diff.change.next", "when": "!terminalFocus" },
   { "key": "alt+arrowup", "command": "diff.change.previous", "when": "!terminalFocus" },
@@ -60,11 +61,16 @@ Invalid rules are ignored. Invalid config files are ignored. Warnings are logged
 - `chat.newTerminal`: create a new terminal-first thread preserving the active thread's branch/worktree state
 - `diff.change.next`: scroll the diff panel to the next changed file (only while the diff panel is open)
 - `diff.change.previous`: scroll the diff panel to the previous changed file (only while the diff panel is open)
+- `sidechat.toggle`: open or hide the active main thread's side chat panel
 - `composer.focus.toggle`: focus or blur the chat prompt composer
 - `thread.copyId`: copy the active thread's ID to the clipboard
 - `editor.openFavorite`: open current project/worktree in the last-used editor
 - `editor.file.save`: write the focused file editor's unsaved changes back to disk (editor view file and diff editors)
 - `script.{id}.run`: run a project script by id (for example `script.test.run`)
+
+`sidechat.toggle` defaults to ⌘⌥S on macOS and Ctrl+Alt+S elsewhere. In the single-chat view, it reopens an existing side chat (or creates one using `/side`) and focuses its composer. Pressing it again hides the panel and focuses the main composer without interrupting either chat. Escape also hides a visible side chat when no menu or dialog needs dismissal; terminal input keeps Escape. The shortcut can be changed in Settings → Keyboard shortcuts.
+
+Enter while a composer voice note is recording is not a configurable command: a plain Enter (no modifiers) finishes the recording instead of sending the typed draft. Settings → Behavior → Enter while dictating decides whether it only transcribes into the composer (the default) or also sends the message once the transcript is in.
 
 ### Key Syntax
 

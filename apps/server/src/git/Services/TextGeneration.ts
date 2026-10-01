@@ -171,6 +171,27 @@ export interface AutomationCompletionEvaluationResult {
   reason: string;
 }
 
+export interface ProjectDigestGenerationInput {
+  cwd: string;
+  previousSummary?: string | undefined;
+  activity: string;
+  coverage: string;
+  pinnedFocus: string;
+  codexHomePath?: string;
+  model?: string;
+  modelSelection?: ModelSelection;
+  providerOptions?: ProviderStartOptions;
+}
+
+export interface ProjectDigestGenerationResult {
+  summary: string;
+  focusItems: ReadonlyArray<{
+    title: string;
+    kind: "task" | "message" | "artifact" | "blocker";
+    source: string;
+  }>;
+}
+
 export type TextGenerationOperation =
   | "generateCommitMessage"
   | "generatePrContent"
@@ -178,6 +199,7 @@ export type TextGenerationOperation =
   | "generateBranchName"
   | "generateThreadTitle"
   | "generateThreadRecap"
+  | "generateProjectDigest"
   | "generateAutomationIntent"
   | "evaluateAutomationCompletion";
 
@@ -226,6 +248,9 @@ export interface TextGenerationShape {
   readonly generateThreadRecap: (
     input: ThreadRecapGenerationInput,
   ) => Effect.Effect<ThreadRecapGenerationResult, TextGenerationError>;
+  readonly generateProjectDigest: (
+    input: ProjectDigestGenerationInput,
+  ) => Effect.Effect<ProjectDigestGenerationResult, TextGenerationError>;
 
   /**
    * Convert a composer automation invocation into a structured creation intent.
@@ -249,6 +274,14 @@ export class CodexTextGeneration extends ServiceMap.Service<
   CodexTextGeneration,
   TextGenerationShape
 >()("synara/git/Services/TextGeneration/CodexTextGeneration") {}
+
+/**
+ * ClaudeTextGeneration - Provider-specific Claude implementation for git text generation.
+ */
+export class ClaudeTextGeneration extends ServiceMap.Service<
+  ClaudeTextGeneration,
+  TextGenerationShape
+>()("synara/git/Services/TextGeneration/ClaudeTextGeneration") {}
 
 /**
  * OpenCodeTextGeneration - Provider-specific OpenCode implementation for git text generation.

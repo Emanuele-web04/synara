@@ -10,6 +10,7 @@ import {
   type OrchestrationThreadPullRequest,
   type ProjectId,
   type ProviderInteractionMode,
+  type ProviderInstanceId,
   type ProviderKind,
   type ProviderMentionReference,
   type ProviderModelOptions,
@@ -20,6 +21,7 @@ import {
 } from "@synara/contracts";
 import * as Equal from "effect/Equal";
 import * as Schema from "effect/Schema";
+import { shallow } from "zustand/vanilla/shallow";
 
 import { normalizeAssistantSelectionAttachment } from "./lib/assistantSelections";
 import { type BrowserAnnotationDraft, normalizeBrowserAnnotations } from "./lib/browserAnnotations";
@@ -118,6 +120,8 @@ export interface ComposerPromptHistorySavedDraft {
 
 export type ComposerAssistantSelectionAttachment = ChatAssistantSelectionAttachment;
 
+export type ModelSelectionByProviderInstance = Partial<Record<ProviderInstanceId, ModelSelection>>;
+
 export interface QueuedComposerChatTurn {
   id: string;
   kind: "chat";
@@ -196,8 +200,11 @@ export interface ComposerThreadDraftState {
   mentions: ProviderMentionReference[];
   queuedTurns: QueuedComposerTurn[];
   restoredSourceProposedPlan?: RestoredComposerSourceProposedPlan | null;
-  modelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>>;
-  activeProvider: ProviderKind | null;
+  modelSelectionByProvider: ModelSelectionByProviderInstance;
+  activeProvider: ProviderInstanceId | null;
+  // Per-thread provider start options staged for dispatch (e.g. a group's worker
+  // routing defaults). Unset means the global settings-derived options apply.
+  providerOptionsForDispatch?: ProviderStartOptions | undefined;
   runtimeMode: RuntimeMode | null;
   interactionMode: ProviderInteractionMode | null;
   enableComputerControl?: boolean | undefined;
@@ -255,8 +262,8 @@ export interface ComposerDraftStoreState {
   draftsByThreadId: Record<ThreadId, ComposerThreadDraftState>;
   draftThreadsByThreadId: Record<ThreadId, DraftThreadState>;
   projectDraftThreadIdByProjectId: Record<string, ThreadId>;
-  stickyModelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>>;
-  stickyActiveProvider: ProviderKind | null;
+  stickyModelSelectionByProvider: ModelSelectionByProviderInstance;
+  stickyActiveProvider: ProviderInstanceId | null;
   getDraftThreadByProjectId: (
     projectId: ProjectId,
     entryPoint?: ThreadPrimarySurface,
@@ -330,7 +337,20 @@ export interface ComposerDraftStoreState {
     threadId: ThreadId,
     modelSelection: ModelSelection | null | undefined,
   ) => void;
+  /**
+   * Records a per-provider default model without switching the draft's active
+   * provider — used for seeds (group worker routing) that must not steal the
+   * composer's provider pick.
+   */
+  seedModelSelection: (
+    threadId: ThreadId,
+    modelSelection: ModelSelection | null | undefined,
+  ) => void;
   setModelSelectionAndSticky: (threadId: ThreadId, modelSelection: ModelSelection) => void;
+  setProviderOptionsForDispatch: (
+    threadId: ThreadId,
+    providerOptions: ProviderStartOptions | null | undefined,
+  ) => void;
   setModelOptions: (
     threadId: ThreadId,
     modelOptions: ProviderModelOptions | null | undefined,
@@ -341,6 +361,7 @@ export interface ComposerDraftStoreState {
     provider: ProviderKind,
     nextProviderOptions: ProviderModelOptions[ProviderKind] | null | undefined,
     options?: {
+      instanceId?: ProviderInstanceId | null;
       model?: string | null;
       persistSticky?: boolean;
     },
@@ -881,12 +902,83 @@ export function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     draft.restoredSourceProposedPlan == null &&
     Object.keys(draft.modelSelectionByProvider).length === 0 &&
     draft.activeProvider === null &&
+    draft.providerOptionsForDispatch == null &&
     draft.runtimeMode === null &&
     draft.interactionMode === null &&
     // An explicit false is still content: it records the user's choice to keep
     // computer control off in this chat when the new-chat default is on.
     draft.enableComputerControl === undefined &&
     draft.computerControlMode === undefined
+  );
+}
+
+/** Compare cleanup ownership without treating image persistence bookkeeping as an edit. */
+export function composerDraftsMatchForCleanup(
+  current: ComposerThreadDraftState | null | undefined,
+  captured: ComposerThreadDraftState | null | undefined,
+): boolean {
+  if (current === captured) return true;
+  if (!current || !captured) return false;
+  const {
+    persistedAttachments: currentPersisted,
+    nonPersistedImageIds: _currentIds,
+    ...currentState
+  } = current;
+  const {
+    persistedAttachments: capturedPersisted,
+    nonPersistedImageIds: _capturedIds,
+    ...capturedState
+  } = captured;
+  // Keep identities for every actual content field, including File objects, and for
+  // model/runtime/queue changes: failed-create rollback removes the whole draft.
+  if (!shallow(currentState, capturedState)) return false;
+  // Persisted-only images are still recoverable content before hydration. Ignore
+  // metadata churn only for images already represented by the identical live array.
+  const liveImageIds = new Set(captured.images.map((image) => image.id));
+  return shallow(
+    currentPersisted.filter((attachment) => !liveImageIds.has(attachment.id)),
+    capturedPersisted.filter((attachment) => !liveImageIds.has(attachment.id)),
+  );
+}
+
+/** Whether a draft carries anything besides its prompt text that a turn would send. */
+export function composerDraftHasAttachments(
+  draft: Pick<
+    ComposerThreadDraftState,
+    | "files"
+    | "images"
+    | "persistedAttachments"
+    | "terminalContexts"
+    | "assistantSelections"
+    | "fileComments"
+  > &
+    Partial<Pick<ComposerThreadDraftState, "browserAnnotations">>,
+): boolean {
+  return (
+    draft.images.length > 0 ||
+    draft.files.length > 0 ||
+    draft.persistedAttachments.length > 0 ||
+    draft.terminalContexts.some((context) => context.text.trim().length > 0) ||
+    draft.assistantSelections.length > 0 ||
+    (draft.browserAnnotations?.length ?? 0) > 0 ||
+    draft.fileComments.length > 0
+  );
+}
+
+/**
+ * Whether a draft holds anything the user has not sent: text, attachments, collapsed
+ * pasted text, or pull-request context cards. The draft dispatch path does not carry the
+ * last two, so a surface that sends into an existing chat must refuse while they exist.
+ */
+export function composerDraftHasUnsentContent(
+  draft: Parameters<typeof composerDraftHasAttachments>[0] &
+    Pick<ComposerThreadDraftState, "prompt" | "pastedTexts" | "pullRequestContexts">,
+): boolean {
+  return (
+    draft.prompt.trim().length > 0 ||
+    composerDraftHasAttachments(draft) ||
+    draft.pastedTexts.length > 0 ||
+    draft.pullRequestContexts.length > 0
   );
 }
 
@@ -919,8 +1011,7 @@ Object.freeze(EMPTY_PULL_REQUEST_CONTEXTS);
 Object.freeze(EMPTY_SKILLS);
 Object.freeze(EMPTY_MENTIONS);
 Object.freeze(EMPTY_QUEUED_TURNS);
-const EMPTY_MODEL_SELECTION_BY_PROVIDER: Partial<Record<ProviderKind, ModelSelection>> =
-  Object.freeze({});
+const EMPTY_MODEL_SELECTION_BY_PROVIDER: ModelSelectionByProviderInstance = Object.freeze({});
 
 const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   prompt: "",

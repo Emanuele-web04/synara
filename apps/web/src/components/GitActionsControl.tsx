@@ -52,6 +52,7 @@ import { formatClockDuration } from "~/session-logic";
 import { Button } from "~/components/ui/button";
 import {
   ChatHeaderButton,
+  ChatHeaderIconButton,
   ChatHeaderSplitDivider,
   ChatHeaderSplitGroup,
   CHAT_HEADER_CONTROL_CLASS_NAME,
@@ -256,13 +257,26 @@ export default function GitActionsControl({
   const createBranchNameFieldId = useId();
   const { settings } = useAppSettings();
   // Manual memoization kept: this file does not compile under React Compiler (see compile-report).
-  const providerOptions = useMemo(() => getProviderStartOptions(settings), [settings]);
+  const providerOptions = useMemo(
+    () =>
+      getProviderStartOptions(
+        settings,
+        settings.textGenerationProviderInstanceId ?? settings.textGenerationProvider ?? "codex",
+      ),
+    [settings],
+  );
   const gitTextGenerationModelSelection = useMemo(
     (): ModelSelection => ({
       provider: settings.textGenerationProvider ?? "codex",
+      instanceId:
+        settings.textGenerationProviderInstanceId ?? settings.textGenerationProvider ?? "codex",
       model: settings.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL,
     }),
-    [settings.textGenerationModel, settings.textGenerationProvider],
+    [
+      settings.textGenerationModel,
+      settings.textGenerationProvider,
+      settings.textGenerationProviderInstanceId,
+    ],
   );
   // Shell-only slice: the full derived Thread gets a new reference on every
   // streamed delta, which re-rendered this always-mounted control per token.
@@ -1452,6 +1466,20 @@ export default function GitActionsControl({
     if (!promotedPull) return null;
     // Pull-only chrome: Environment already owns commit/push/PR dialogs, so this
     // instance must not mount a second copy of them beside the panel control.
+    if (hideQuickActionLabel) {
+      return (
+        <ChatHeaderIconButton
+          type="button"
+          tone="surface"
+          label={promotedPull.label}
+          title={promotedPull.label}
+          disabled={isGitActionRunning}
+          onClick={runSyncWithRemote}
+        >
+          <GitActionGlyph name="sync" />
+        </ChatHeaderIconButton>
+      );
+    }
     return (
       <ChatHeaderButton
         type="button"

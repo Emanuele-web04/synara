@@ -16,9 +16,10 @@ import {
   type DragEndEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import {
+  getProviderInstanceOptions,
   getProviderStartOptions,
   resolveAssistantDeliveryMode,
   useAppSettings,
@@ -27,7 +28,10 @@ import { toastManager } from "~/components/ui/toast";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { resolveProviderSendAvailabilityWithRefresh } from "~/lib/providerAvailability";
-import { dispatchKanbanDraftCard } from "../../lib/kanbanDispatch";
+import {
+  dispatchKanbanDraftCard,
+  resolveKanbanDraftDispatchTarget,
+} from "../../lib/kanbanDispatch";
 import { KanbanCardView, type KanbanCardPrLookup } from "./KanbanCardView";
 import { KanbanColumn, parseKanbanColumnDropId } from "./KanbanColumn";
 import {
@@ -72,7 +76,7 @@ export function KanbanProjectBoardView({
 }) {
   const { settings } = useAppSettings();
   const assistantDeliveryMode = resolveAssistantDeliveryMode(settings);
-  const providerOptionsForDispatch = getProviderStartOptions(settings);
+  const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
   const providerStatuses = useProviderStatusesForLocalConfig();
   const refreshProviderStatuses = useRefreshProviderStatusesNow();
   const setDraftOrder = useKanbanUiStore((state) => state.setDraftOrder);
@@ -94,9 +98,16 @@ export function KanbanProjectBoardView({
   };
 
   const handleDispatchDrop = async (card: KanbanCard) => {
-    const targetProvider = card.provider ?? settings.defaultProvider;
+    const dispatchTarget = resolveKanbanDraftDispatchTarget({
+      threadId: card.threadId,
+      projectId: card.projectId,
+      thread: card.thread,
+      defaultProvider: settings.defaultProvider,
+      providerInstances,
+    });
     const sendAvailability = await resolveProviderSendAvailabilityWithRefresh({
-      provider: targetProvider,
+      provider: dispatchTarget.provider,
+      instanceId: dispatchTarget.instanceId,
       statuses: providerStatuses,
       refreshStatuses: () => refreshProviderStatuses({ silent: true }),
     });
@@ -113,7 +124,8 @@ export function KanbanProjectBoardView({
       card,
       defaultProvider: settings.defaultProvider,
       assistantDeliveryMode,
-      providerOptions: providerOptionsForDispatch,
+      providerOptions: getProviderStartOptions(settings, dispatchTarget.instanceId),
+      providerInstances,
     });
     if (result.kind === "dispatched") {
       toastManager.add({

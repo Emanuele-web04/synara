@@ -32,7 +32,7 @@ const WELCOME_POINTS = [
   { icon: "shield-check", text: "Synara stays separate and untouched." },
   {
     icon: "heart",
-    text: "Beta sends crash reports, app errors, and anonymous usage counts. Crash reports can contain fragments of what's in app memory.",
+    text: "Beta shares crash reports, app errors, and anonymous usage counts. Crash reports may include private information.",
   },
   { icon: "arrow-left-circle", text: "Switch back to Synara any time in Settings." },
 ] as const;
@@ -126,12 +126,7 @@ export function BetaWelcomeDialog() {
   return (
     <AnnouncementSheet
       open={open && !storage.acknowledged}
-      hero={
-        <div className="relative">
-          <div className="absolute -inset-5 rounded-full bg-[radial-gradient(closest-side,color-mix(in_srgb,var(--beta-accent)_45%,transparent),transparent)]" />
-          <img src="/app-icons/beta.png" alt="" className="relative size-16 rounded-2xl" />
-        </div>
-      }
+      hero={<img src="/app-icons/beta.png" alt="" className="size-16 rounded-2xl" />}
       title="Welcome to Synara Beta"
       description="New features land here first, before they reach Synara."
       details={

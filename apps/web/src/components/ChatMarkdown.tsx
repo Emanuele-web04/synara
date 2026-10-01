@@ -13,7 +13,7 @@ import {
   TriangleAlertIcon,
   type LucideIcon,
 } from "~/lib/icons";
-import type { ProviderMentionReference } from "@synara/contracts";
+import { ThreadId, type ProviderMentionReference } from "@synara/contracts";
 import { isLocalAbsolutePath } from "@synara/shared/path";
 import "katex/dist/katex.min.css";
 import { matchWikiLinkAt, remarkWikiLinks } from "../lib/remarkWikiLinks";
@@ -148,6 +148,7 @@ interface ChatMarkdownProps {
   variant?: "assistant" | "user";
   /** Mention metadata for chip icon resolution; only used by the user variant. */
   mentionReferences?: ReadonlyArray<ProviderMentionReference> | undefined;
+  onOpenThread?: ((threadId: ThreadId) => void) | undefined;
   /** Terminal selections rendered as inline chips inside user-message markdown. */
   terminalContexts?: ReadonlyArray<ParsedTerminalContextEntry> | undefined;
   /**
@@ -241,8 +242,21 @@ function restoreLiteralDollarPlaceholders(value: string): string {
     .replaceAll(encodeURIComponent(LITERAL_DOLLAR_PLACEHOLDER), "$");
 }
 
+// synara://thread/<target> links carry an id or title that may be
+// %-encoded; a malformed sequence keeps the raw target instead of throwing.
+function decodeSynaraThreadLinkTarget(target: string): string {
+  try {
+    return decodeURIComponent(target).trim();
+  } catch {
+    return target.trim();
+  }
+}
+
 function markdownUrlTransform(href: string): string {
   const restoredHref = restoreLiteralDollarPlaceholders(href);
+  if (restoredHref.startsWith("thread://") || restoredHref.startsWith("synara://thread/")) {
+    return restoredHref;
+  }
   return rewriteMarkdownFileUriHref(restoredHref) ?? defaultUrlTransform(restoredHref);
 }
 
@@ -1052,6 +1066,7 @@ interface MarkdownRenderContextValue {
   isUserVariant: boolean;
   mentionReferences: ChatMarkdownProps["mentionReferences"];
   onImageExpand: ChatMarkdownProps["onImageExpand"];
+  onOpenThread: ChatMarkdownProps["onOpenThread"];
   onTaskToggle: ChatMarkdownProps["onTaskToggle"];
   resolvedTheme: ReturnType<typeof useTheme>["resolvedTheme"];
   terminalContexts: ChatMarkdownProps["terminalContexts"];
@@ -1086,9 +1101,25 @@ const MARKDOWN_COMPONENTS: Components = {
     );
   },
   a: function MarkdownLink({ node: _node, href, children, ...props }) {
-    const { isUserVariant, cwd, knownAbsoluteFilePaths, resolvedTheme } =
+    const { isUserVariant, cwd, knownAbsoluteFilePaths, resolvedTheme, onOpenThread } =
       useContext(MarkdownRenderContext)!;
     const restoredHref = href ? restoreLiteralDollarPlaceholders(href) : href;
+    const threadHref = restoredHref?.startsWith("thread://")
+      ? restoredHref.slice("thread://".length)
+      : restoredHref?.startsWith("synara://thread/")
+        ? decodeSynaraThreadLinkTarget(restoredHref.slice("synara://thread/".length))
+        : null;
+    if (threadHref && onOpenThread) {
+      return (
+        <button
+          type="button"
+          className="inline p-0 text-inherit underline decoration-foreground/30 underline-offset-2 hover:decoration-foreground/70"
+          onClick={() => onOpenThread(ThreadId.makeUnsafe(threadHref))}
+        >
+          {children}
+        </button>
+      );
+    }
     const isExternalHttp = isExternalHttpHref(restoredHref);
     if (isUserVariant && isExternalHttp) {
       // GFM autolinks a pasted URL before the chips plugin can see it; when the
@@ -1311,6 +1342,7 @@ function ChatMarkdown({
   variant: variantProp,
   mentionReferences,
   terminalContexts,
+  onOpenThread,
 }: ChatMarkdownProps) {
   // Defaults applied with ?? in the body, not in the destructuring: default
   // values in parameter destructuring make React Compiler 1.0.0 bail on the
@@ -1395,6 +1427,7 @@ function ChatMarkdown({
       isUserVariant,
       mentionReferences,
       onImageExpand,
+      onOpenThread,
       onTaskToggle,
       resolvedTheme,
       terminalContexts,
@@ -1408,6 +1441,7 @@ function ChatMarkdown({
       isUserVariant,
       mentionReferences,
       onImageExpand,
+      onOpenThread,
       onTaskToggle,
       resolvedTheme,
       terminalContexts,

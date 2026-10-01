@@ -58,7 +58,42 @@ existing edit-and-resend action is available for a message with no provider turn
 ## Native compaction
 
 Command discovery is local and bounded. Unsupported runtimes leave compaction unavailable. The
-adapter treats discovery failures as pre-dispatch rejections, so they leave the saved send retryable. The
+adapter allows up to five seconds for command discovery, including fresh or resumed processes,
+so initialization does not hold the ordered provider dispatch source for a minute. A timeout reports
+a retryable discovery failure rather than claiming the runtime does not support compaction; the
+same runtime can finish initializing before a retry. A UI stop, interrupt, archive, or delete cancels
+active discovery through a separate local signal, so it does not wait behind discovery in the
+ordered delivery queue. Conversation rollback and edit-and-resend use the same signal before
+changing history.
+The compaction response owns its signal before the provider handoff. Startup replay checks the
+durable journal for cancellations after that response, so an old choice cannot dispatch after an
+interrupt and a later retry remains valid. The signal stays active through preparation until prompt
+enqueue. Direct `/compact` turns use the same request-owned signal before session startup and
+cache preflight, pass it through local dispatch options to the adapter, and fence startup replay
+against later cancellations. The signal is never serialized into provider input or saved history.
+Steered `/compact` requests retain the same signal when a live turn settles during preparation.
+Direct and cache-review compaction also cancel pending session startup and cache preflight, waiting for startup
+cleanup and preserving unproven-exit failures instead of reporting them as safe rejections.
+All native compaction entry points preserve the established model, settings, and permission mode;
+pending selection, access-mode, and Computer profile changes apply to the next ordinary prompt.
+Native compaction does not admit a new Computer intent. Compaction does not wait on model or
+settings control requests or persist an unapplied selection as the active runtime model. Spawn-fixed
+choices are also deferred before session preparation, so native compaction does not restart to apply
+them or change the established session's access mode. The journal fence is refreshed at provider dispatch to cover a delayed live subscriber; the
+adapter checks the signal and enqueues native compaction in one synchronous admission step.
+Cancelled direct compaction defers queue promotion until the ordered cancelling control settles.
+Its optimistic session status is restored from the runtime before interrupt handling, preserving
+an established idle session for retry. Rollback keeps its existing queue policy and does not trigger
+an additional cancellation-recovery drain.
+Session teardown and native interrupts still run in their original order. Compaction reuses its validated command list rather
+than issuing another lookup after turn admission. Cancellation or dispatch interruption during
+runtime-event publication settles the local reservation without dispatching the prompt. An
+adapter-owned producer retains the ordered start, progress, and cancelled terminal events until
+the bounded event queue can accept them. Further dispatch and reconfiguration wait for that
+publication, keeping it bounded. Ordinary sends wait for that producer rather than being rejected;
+another native compaction remains a retryable rejection until publication settles. Stopping the
+session also ends discovery and publication waits immediately.
+The adapter treats discovery failures as pre-dispatch rejections, so they leave the saved send retryable. The
 adapter requires an idle session with no pending interactions or tasks that share the context, and
 rechecks that condition after asynchronous preparation. It preserves the current model, permission
 mode, and settings. Plan and Ultrathink prompt prefixes must not be prepended to a native command.

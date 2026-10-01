@@ -10,6 +10,10 @@ import { getRouter } from "./router";
 import { APP_DISPLAY_NAME } from "./branding";
 import { isElectron } from "./env";
 import { isMacPlatform } from "./lib/utils";
+import { installRendererErrorDiagnostics } from "./lib/rendererErrorDiagnostics";
+
+const disposeRendererDiagnostics = installRendererErrorDiagnostics();
+if (import.meta.hot) import.meta.hot.dispose(() => disposeRendererDiagnostics?.());
 
 const router = getRouter(appHistory);
 

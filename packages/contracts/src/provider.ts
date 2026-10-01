@@ -16,7 +16,6 @@ import {
   ProviderApprovalDecision,
   ProviderApprovalPolicy,
   ProviderInteractionMode,
-  ProviderKind,
   ProviderRequestKind,
   ProviderReviewTarget,
   ProviderSandboxMode,
@@ -24,6 +23,7 @@ import {
   ProviderUserInputAnswers,
   RuntimeMode,
 } from "./orchestration";
+import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance";
 import { ProviderMentionReference, ProviderSkillReference } from "./providerDiscovery";
 
 const ProviderSessionStatus = Schema.Literals([
@@ -35,7 +35,8 @@ const ProviderSessionStatus = Schema.Literals([
 ]);
 
 export const ProviderSession = Schema.Struct({
-  provider: ProviderKind,
+  provider: ProviderDriverKind,
+  providerInstanceId: Schema.optional(ProviderInstanceId),
   status: ProviderSessionStatus,
   runtimeMode: RuntimeMode,
   cwd: Schema.optional(TrimmedNonEmptyString),
@@ -51,8 +52,9 @@ export type ProviderSession = typeof ProviderSession.Type;
 
 export const ProviderSessionStartInput = Schema.Struct({
   threadId: ThreadId,
-  provider: Schema.optional(ProviderKind),
+  provider: Schema.optional(ProviderDriverKind),
   lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
+  providerInstanceId: Schema.optional(ProviderInstanceId),
   cwd: Schema.optional(TrimmedNonEmptyString),
   modelSelection: Schema.optional(ModelSelection),
   resumeCursor: Schema.optional(Schema.Unknown),
@@ -62,6 +64,14 @@ export const ProviderSessionStartInput = Schema.Struct({
   providerOptions: Schema.optional(ProviderStartOptions),
   /** Explicit per-thread provisioning for the Linux computer MCP tools. */
   enableComputerControl: Schema.optional(Schema.Boolean),
+  /**
+   * Pre-approve the Synara group/gateway MCP tools (`mcp__synara__*`,
+   * `synara_*`) for this session even when the runtime mode would normally ask
+   * for approval. The gateway already authorizes them server-side; the
+   * interactive prompt only adds friction for trusted principals such as a
+   * group coordinator. File edits and shell commands still ask.
+   */
+  autoApproveSynaraTools: Schema.optional(Schema.Boolean),
   runtimeMode: RuntimeMode,
 });
 export type ProviderSessionStartInput = typeof ProviderSessionStartInput.Type;
@@ -89,6 +99,7 @@ export const ProviderForkThreadInput = Schema.Struct({
   lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
   /** External imports must pin a completed native transcript boundary. */
   requireCompletedSource: Schema.optional(Schema.Boolean),
+  providerInstanceId: Schema.optional(ProviderInstanceId),
   sourceResumeCursor: Schema.optional(Schema.Unknown),
   sourceCwd: Schema.optional(TrimmedNonEmptyString),
   cwd: Schema.optional(TrimmedNonEmptyString),
@@ -100,6 +111,12 @@ export const ProviderForkThreadInput = Schema.Struct({
    * `computer:control` at the fork boundary.
    */
   enableComputerControl: Schema.optional(Schema.Boolean),
+  /**
+   * Same hand-off as `enableComputerControl`: the gateway-approval fact a
+   * start would carry, so a fork leases the same pre-approved Synara tools as
+   * its source session.
+   */
+  autoApproveSynaraTools: Schema.optional(Schema.Boolean),
   runtimeMode: RuntimeMode,
 });
 export type ProviderForkThreadInput = typeof ProviderForkThreadInput.Type;
@@ -187,7 +204,8 @@ const ProviderEventKind = Schema.Literals(["session", "notification", "request",
 export const ProviderEvent = Schema.Struct({
   id: EventId,
   kind: ProviderEventKind,
-  provider: ProviderKind,
+  provider: ProviderDriverKind,
+  providerInstanceId: Schema.optional(ProviderInstanceId),
   threadId: ThreadId,
   createdAt: IsoDateTime,
   method: TrimmedNonEmptyString,

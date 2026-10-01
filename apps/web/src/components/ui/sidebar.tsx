@@ -2,7 +2,7 @@ import { mergeProps } from "@base-ui/react/merge-props";
 import { useRender } from "@base-ui/react/use-render";
 import { cva, type VariantProps } from "class-variance-authority";
 import * as React from "react";
-import { PanelLeftIcon } from "~/lib/icons";
+import { LayoutAlignLeftIcon, LayoutLeftIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
@@ -21,8 +21,6 @@ import { useIsMobile } from "~/hooks/useMediaQuery";
 import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
 import { Schema } from "effect";
 
-const SIDEBAR_COOKIE_NAME = "sidebar_state";
-const SIDEBAR_COOKIE_MAX_AGE = 60 * 60 * 24 * 7;
 const SIDEBAR_WIDTH = "16rem";
 const SIDEBAR_WIDTH_MOBILE = "calc(100vw - var(--spacing(3)))";
 const SIDEBAR_WIDTH_ICON = "3rem";
@@ -123,21 +121,13 @@ function SidebarProvider({
   const [_open, _setOpen] = React.useState(defaultOpen);
   const open = openProp ?? _open;
   const setOpen = React.useCallback(
-    async (value: boolean | ((value: boolean) => boolean)) => {
+    (value: boolean | ((value: boolean) => boolean)) => {
       const openState = typeof value === "function" ? value(open) : value;
       if (setOpenProp) {
         setOpenProp(openState);
       } else {
         _setOpen(openState);
       }
-
-      // This sets the cookie to keep the sidebar state.
-      await cookieStore.set({
-        expires: Date.now() + SIDEBAR_COOKIE_MAX_AGE * 1000,
-        name: SIDEBAR_COOKIE_NAME,
-        path: "/",
-        value: String(openState),
-      });
     },
     [setOpenProp, open],
   );
@@ -389,7 +379,10 @@ function Sidebar({
 }
 
 function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<typeof Button>) {
-  const { toggleSidebar } = useSidebar();
+  const { toggleSidebar, isMobile, open, openMobile } = useSidebar();
+  // The glyph shows the sidebar's current state: a full left column while it is open, a
+  // slim handle once it is collapsed.
+  const SidebarStateIcon = (isMobile ? openMobile : open) ? LayoutLeftIcon : LayoutAlignLeftIcon;
 
   return (
     <Button
@@ -404,7 +397,7 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
       variant="ghost"
       {...props}
     >
-      <PanelLeftIcon aria-hidden className="size-4" />
+      <SidebarStateIcon aria-hidden className="size-4" />
       <span className="sr-only">Toggle Sidebar</span>
     </Button>
   );

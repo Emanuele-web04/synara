@@ -4,7 +4,9 @@ import {
 } from "../../persistence/messageTextChunks.ts";
 import { ApprovalRequestId, CommandId, type OrchestrationEvent } from "@synara/contracts";
 import { resolveHumanMessageAt } from "@synara/shared/threadSummary";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
 import { clearRemovedAsyncUserInputResponses } from "@synara/shared/asyncUserInput";
+import { isGroupContainerKind } from "@synara/shared/projectContainers";
 import {
   addPinnedMessage,
   removePinnedMessage,
@@ -12,6 +14,7 @@ import {
   setPinnedMessageLabel,
 } from "@synara/shared/pinnedMessages";
 import { createStalePendingInteractionMatcher } from "@synara/shared/pendingInteractions";
+import { resolveModelSelectionInstanceId } from "@synara/shared/providerInstances";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, FileSystem, Layer, Option, Path, Stream } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -87,6 +90,7 @@ import {
   shouldApplyThreadsProjection,
   THREAD_PROJECTION_EVENT_TYPES,
 } from "../threadShellEvents.ts";
+import { canProjectTurnModelSelectionForSession } from "../projector.ts";
 
 export const ORCHESTRATION_PROJECTOR_NAMES = {
   hot: "projection.hot",
@@ -552,7 +556,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           const project = yield* projectionProjectRepository.getById({
             projectId: event.payload.projectId,
           });
-          const isStudio = Option.isSome(project) && project.value.kind === "studio";
+          const isStudio = Option.isSome(project) && isGroupContainerKind(project.value.kind);
           yield* projectionThreadRepository.upsert({
             threadId: event.payload.threadId,
             projectId: event.payload.projectId,
@@ -588,6 +592,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             subagentRole: event.payload.subagentRole ?? null,
             forkSourceThreadId: event.payload.forkSourceThreadId,
             sidechatSourceThreadId: event.payload.sidechatSourceThreadId,
+            sidechatContext: event.payload.sidechatContext,
             sidechatLastActivityAt: event.payload.sidechatLastActivityAt,
             sidechatExpiredAt: event.payload.sidechatExpiredAt,
             lastKnownPr: event.payload.lastKnownPr ?? null,
@@ -622,7 +627,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                 projectId: currentThread.value.projectId,
               })
             : Option.none();
-          const isStudio = Option.isSome(project) && project.value.kind === "studio";
+          const isStudio = Option.isSome(project) && isGroupContainerKind(project.value.kind);
           return yield* updateThreadProjection(event.payload.threadId, (thread) => {
             const nextCreateBranchFlowCompleted =
               event.payload.createBranchFlowCompleted !== undefined
@@ -813,14 +818,37 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               : yield* projectionThreadMessageRepository.listByThreadId({
                   threadId: event.payload.threadId,
                 });
+          // The provider reactor may still reject an instance switch for a
+          // bound thread after this event is projected. Only adopt a selection
+          // routed at another instance on a fresh thread, so a rejected switch
+          // cannot overwrite the thread's working selection.
+          const canAdoptFirstTurnSelection = canAdoptFirstTurnProvider({
+            hasLatestTurn,
+            hasSession,
+            messages,
+          });
+          const requestedModelSelection = event.payload.modelSelection;
+          const requestedInstanceId =
+            requestedModelSelection === undefined
+              ? null
+              : resolveModelSelectionInstanceId(requestedModelSelection);
+          const canAdoptRequestedInstance =
+            requestedModelSelection === undefined ||
+            (requestedInstanceId !== null &&
+              canProjectTurnModelSelectionForSession(
+                Option.getOrNull(session),
+                requestedInstanceId,
+              ) &&
+              (Option.isSome(session) ||
+                requestedInstanceId ===
+                  resolveModelSelectionInstanceId(existingRow.value.modelSelection) ||
+                canAdoptFirstTurnSelection));
           const projectedModelSelection = deriveTurnStartModelSelection({
             currentModelSelection: existingRow.value.modelSelection,
-            requestedModelSelection: event.payload.modelSelection,
-            canAdoptRequestedProvider: canAdoptFirstTurnProvider({
-              hasLatestTurn,
-              hasSession,
-              messages,
-            }),
+            requestedModelSelection: canAdoptRequestedInstance
+              ? requestedModelSelection
+              : undefined,
+            canAdoptRequestedProvider: canAdoptFirstTurnSelection,
           });
           // Automation-dispatched turns run with the automation's modes but must not
           // repaint the thread's persisted modes: on a heartbeat target thread the
@@ -837,7 +865,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
                   interactionMode: event.payload.interactionMode,
                 }
               : {}),
-            ...(existingRow.value.sidechatSourceThreadId
+            ...(isSidechatThread(existingRow.value)
               ? { sidechatLastActivityAt: event.payload.createdAt }
               : {}),
             updatedAt: event.payload.createdAt,
@@ -958,7 +986,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             thread: {
               ...existingRow.value,
               ...(event.type === "thread.session-set" &&
-              existingRow.value.sidechatSourceThreadId &&
+              isSidechatThread(existingRow.value) &&
               !existingRow.value.sidechatExpiredAt
                 ? { sidechatLastActivityAt: event.payload.session.updatedAt }
                 : {}),
@@ -1285,6 +1313,12 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             }),
             projectionThreadRepository.getById({ threadId: event.payload.threadId }),
           ]);
+          const providerInstanceId =
+            Option.getOrNull(thread)?.modelSelection.instanceId ??
+            Option.getOrNull(currentSession)?.providerInstanceId ??
+            event.payload.modelSelection?.instanceId ??
+            Option.getOrNull(thread)?.modelSelection.provider ??
+            event.payload.modelSelection?.provider;
           const turnStartSession = deriveTurnStartSession({
             threadId: event.payload.threadId,
             currentSession: Option.getOrNull(currentSession),
@@ -1293,11 +1327,17 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               Option.getOrNull(currentSession)?.providerName ??
               event.payload.modelSelection?.provider ??
               null,
+            ...(providerInstanceId !== undefined ? { providerInstanceId } : {}),
             requestedRuntimeMode: event.payload.runtimeMode,
             requestedAt: event.payload.createdAt,
           });
           if (turnStartSession !== null) {
-            yield* projectionThreadSessionRepository.upsert(turnStartSession);
+            yield* projectionThreadSessionRepository.upsert({
+              ...turnStartSession,
+              lastActivityAt: event.payload.createdAt,
+              lastProgressAt: event.payload.createdAt,
+              providerInstanceId: turnStartSession.providerInstanceId ?? null,
+            });
           }
           return;
         }
@@ -1307,9 +1347,12 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             threadId: event.payload.threadId,
             status: event.payload.session.status,
             providerName: event.payload.session.providerName,
+            providerInstanceId: event.payload.session.providerInstanceId ?? null,
             runtimeMode: event.payload.session.runtimeMode,
             activeTurnId: event.payload.session.activeTurnId,
             lastError: event.payload.session.lastError,
+            lastActivityAt: event.payload.session.lastActivityAt ?? null,
+            lastProgressAt: event.payload.session.lastProgressAt ?? null,
             updatedAt: event.payload.session.updatedAt,
           });
           return;

@@ -3,6 +3,7 @@
 // Layer: Web appearance domain logic
 // Exports: Theme types, normalization helpers, import/export utilities, and CSS variable builders.
 
+import { DESKTOP_WINDOW_BLUR_RADIUS_MAX } from "@synara/contracts";
 import { THEME_SEED_CATALOG } from "./theme.seed.generated";
 import {
   normalizeFontFamilyCssValue,
@@ -39,12 +40,24 @@ export interface ThemePack {
   theme: ChromeTheme;
 }
 
+/**
+ * How see-through the translucent shell is. Kept beside the theme pack rather than in it,
+ * so Codex share strings keep their format. Only applies when `opaqueWindows` is off.
+ */
+export interface WindowTranslucency {
+  /** Sidebar fill strength, 0 (desktop fully visible) to 100 (solid tint). */
+  opacity: number;
+  /** Desktop blur radius behind the window in points, 0 to DESKTOP_WINDOW_BLUR_RADIUS_MAX. */
+  blur: number;
+}
+
 export interface ThemeState {
   chromeThemes: Record<ThemeVariant, ChromeTheme>;
   codeThemeIds: Record<ThemeVariant, string>;
   mode: ThemeMode;
   /** Ignore the theme pack's custom UI font and let the native system stack apply. */
   systemUiFont: boolean;
+  translucency: Record<ThemeVariant, WindowTranslucency>;
 }
 
 export interface CodeThemeOption {
@@ -265,6 +278,20 @@ export const DEFAULT_CHROME_THEME_BY_VARIANT: Record<ThemeVariant, ChromeTheme> 
   },
 };
 
+// Opacity reproduces the sidebar tint the translucent shell has always used; the blur
+// approximates the frosting of the macOS vibrancy material it replaces.
+export const DEFAULT_WINDOW_TRANSLUCENCY_BY_VARIANT: Record<ThemeVariant, WindowTranslucency> = {
+  dark: { opacity: 72, blur: 30 },
+  light: { opacity: 38, blur: 30 },
+};
+
+// The rail layout's shell tint scales with the sidebar opacity from these defaults
+// (dark 72% -> 64%, light 38% -> 82%), so both surfaces move together.
+const RAIL_SHELL_OPACITY_RATIO_BY_VARIANT: Record<ThemeVariant, number> = {
+  dark: 64 / 72,
+  light: 82 / 38,
+};
+
 export const DEFAULT_THEME_STATE: ThemeState = {
   chromeThemes: {
     dark: getCodeThemeSeed("codex", "dark"),
@@ -276,6 +303,7 @@ export const DEFAULT_THEME_STATE: ThemeState = {
   },
   systemUiFont: true,
   mode: "system",
+  translucency: DEFAULT_WINDOW_TRANSLUCENCY_BY_VARIANT,
 };
 
 // ─── Theme catalog helpers ────────────────────────────────────────────────
@@ -349,6 +377,23 @@ export function normalizeChromeTheme(value: unknown, variant: ThemeVariant): Chr
   };
 }
 
+export function normalizeWindowTranslucency(
+  value: unknown,
+  variant: ThemeVariant,
+): WindowTranslucency {
+  const fallback = DEFAULT_WINDOW_TRANSLUCENCY_BY_VARIANT[variant];
+  const translucency = isRecord(value) ? value : {};
+  return {
+    opacity: normalizeIntegerInRange(translucency.opacity, 0, 100, fallback.opacity),
+    blur: normalizeIntegerInRange(
+      translucency.blur,
+      0,
+      DESKTOP_WINDOW_BLUR_RADIUS_MAX,
+      fallback.blur,
+    ),
+  };
+}
+
 export function normalizeThemePack(value: unknown, variant: ThemeVariant): ThemePack {
   const pack = isRecord(value) ? value : {};
   return {
@@ -378,6 +423,7 @@ export function normalizeThemeState(value: unknown): ThemeState {
   const codeThemeIds = isRecord(state.codeThemeIds) ? state.codeThemeIds : {};
   const chromeThemes = isRecord(state.chromeThemes) ? state.chromeThemes : {};
   const packs = isRecord(state.packs) ? state.packs : {};
+  const translucency = isRecord(state.translucency) ? state.translucency : {};
   const legacyDarkPack = normalizeThemePack(packs.dark, "dark");
   const legacyLightPack = normalizeThemePack(packs.light, "light");
   return {
@@ -402,6 +448,10 @@ export function normalizeThemeState(value: unknown): ThemeState {
     // native stack, while an explicit preference always wins after the first save.
     systemUiFont:
       typeof state.systemUiFont === "boolean" ? state.systemUiFont : !hasStoredCustomUiFont(state),
+    translucency: {
+      dark: normalizeWindowTranslucency(translucency.dark, "dark"),
+      light: normalizeWindowTranslucency(translucency.light, "light"),
+    },
   };
 }
 
@@ -646,7 +696,32 @@ export function resetThemeVariant(state: ThemeState, variant: ThemeVariant): The
       ...state.codeThemeIds,
       [variant]: DEFAULT_THEME_STATE.codeThemeIds[variant],
     },
+    translucency: {
+      ...state.translucency,
+      [variant]: DEFAULT_THEME_STATE.translucency[variant],
+    },
   };
+}
+
+export function setWindowTranslucency(
+  state: ThemeState,
+  variant: ThemeVariant,
+  patch: Partial<WindowTranslucency>,
+): ThemeState {
+  return {
+    ...state,
+    translucency: {
+      ...state.translucency,
+      [variant]: normalizeWindowTranslucency({ ...state.translucency[variant], ...patch }, variant),
+    },
+  };
+}
+
+export function areWindowTranslucenciesEqual(
+  left: WindowTranslucency,
+  right: WindowTranslucency,
+): boolean {
+  return left.opacity === right.opacity && left.blur === right.blur;
 }
 
 export function resolveThemePack(state: ThemeState, variant: ThemeVariant): ThemePack {
@@ -684,7 +759,12 @@ export function resolveThemeVariant(mode: ThemeMode, systemDark: boolean): Theme
 export function buildThemeCssVariables(
   pack: ThemePack,
   variant: ThemeVariant,
-  options?: { electron?: boolean; isMac?: boolean; systemUiFont?: boolean },
+  options?: {
+    electron?: boolean;
+    isMac?: boolean;
+    systemUiFont?: boolean;
+    translucency?: WindowTranslucency;
+  },
 ): ThemeCssVariableBuild {
   const resolvedTokens = buildResolvedThemeTokens(pack, variant);
   const codexVariables = resolvedTokens.codexVariables;
@@ -698,6 +778,9 @@ export function buildThemeCssVariables(
       ? "translucent"
       : "opaque";
   const warningColor = WARNING_COLOR_BY_VARIANT[variant];
+  const translucentOpacity = (
+    options?.translucency ?? DEFAULT_WINDOW_TRANSLUCENCY_BY_VARIANT[variant]
+  ).opacity;
   // Codex paints the app sidebar with the PRIMARY surface (--color-background-surface,
   // mapped through --color-token-side-bar-background), not the darker "under" surface.
   // The under-surface is reserved for the window body behind the content (see
@@ -731,7 +814,11 @@ export function buildThemeCssVariables(
         : readCodexVariable("--color-background-surface-under"),
     // Rail layout shell (top strip + rail): a solid tone on opaque windows, a sheer tint
     // over macOS vibrancy so the glass still shows through (see index.css rail rules).
-    "--app-rail-shell-opacity": material === "translucent" ? "64%" : "100%",
+    // Light keeps a denser tint so the shell stays a light grey over bright wallpapers.
+    "--app-rail-shell-opacity":
+      material === "translucent"
+        ? `${Math.min(100, Math.round(translucentOpacity * RAIL_SHELL_OPACITY_RATIO_BY_VARIANT[variant]))}%`
+        : "100%",
     "--app-composer-focus-border": composerFocusBorder,
     // Frosted blur only when the shell is translucent (macOS). On an opaque
     // shell this promotes the surface to a GPU layer that Chromium rasterizes at
@@ -750,15 +837,15 @@ export function buildThemeCssVariables(
     // settings element reads as outline-only. With an opaque page there is nothing to
     // frost, so we skip the backdrop blur (and its compositing cost) entirely.
     "--app-settings-backdrop-filter": "none",
-    // Translucent shell: a sheer fill so the desktop clearly shows through, paired
-    // with a very light blur that only takes the edge off the backdrop. Dark themes
-    // deepen the fill toward black and keep it denser so the sidebar reads as
-    // charcoal glass. Keep in sync with the `:root` / `.dark` fallbacks in index.css.
+    // Translucent shell: a fill at the chosen opacity so the desktop shows through
+    // (the desktop blur itself is set natively). Dark themes deepen the fill toward
+    // black so the sidebar reads as charcoal glass. Keep the defaults in sync with the
+    // `:root` / `.dark` fallbacks in index.css.
     "--app-sidebar-surface":
       material === "translucent"
         ? variant === "dark"
-          ? `color-mix(in srgb, color-mix(in srgb, ${sidebarSurface} 80%, black) 72%, transparent)`
-          : `color-mix(in srgb, ${sidebarSurface} 38%, transparent)`
+          ? `color-mix(in srgb, color-mix(in srgb, ${sidebarSurface} 80%, black) ${translucentOpacity}%, transparent)`
+          : `color-mix(in srgb, ${sidebarSurface} ${translucentOpacity}%, transparent)`
         : sidebarSurface,
     // Always opaque so the settings page background matches the chat surface exactly,
     // regardless of window material.
@@ -1331,6 +1418,16 @@ function normalizeStoredContrast(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value)
     ? Math.min(100, Math.max(0, Math.round(value)))
     : fallback;
+}
+
+function normalizeIntegerInRange(
+  value: unknown,
+  min: number,
+  max: number,
+  fallback: number,
+): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.round(Math.min(max, Math.max(min, value)));
 }
 
 function normalizeHexColor(value: unknown): string | null {

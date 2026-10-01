@@ -76,12 +76,18 @@ export function useOnboarding(): UseOnboardingResult {
   const homeDir = useWorkspacePathsStore((store) => store.homeDir);
   const chatWorkspaceRoot = useWorkspacePathsStore((store) => store.chatWorkspaceRoot);
   const studioWorkspaceRoot = useWorkspacePathsStore((store) => store.studioWorkspaceRoot);
-  // The Home chat and Studio containers are created automatically, so "no projects yet"
+  const groupsWorkspaceRoot = useWorkspacePathsStore((store) => store.groupsWorkspaceRoot);
+  // The Home chat and Groups containers are created automatically, so "no projects yet"
   // must count ordinary projects only or the tour would never show.
   const projectCount = useStore(
     (store) =>
       store.projects.filter((project) =>
-        isOrdinarySpaceProject(project, { homeDir, chatWorkspaceRoot, studioWorkspaceRoot }),
+        isOrdinarySpaceProject(project, {
+          homeDir,
+          chatWorkspaceRoot,
+          studioWorkspaceRoot,
+          groupsWorkspaceRoot,
+        }),
       ).length,
   );
   const isOpen = useOnboardingDialogStore((store) => store.isOpen);

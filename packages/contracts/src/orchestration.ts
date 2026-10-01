@@ -1,4 +1,4 @@
-import { Option, Schema, SchemaIssue, SchemaTransformation, Struct } from "effect";
+import { Effect, Option, Schema, SchemaIssue, SchemaTransformation, Struct } from "effect";
 import {
   ImportProjectInput,
   ImportProjectResult,
@@ -16,7 +16,9 @@ import {
   OpenCodeModelOptions,
   OmpModelOptions,
   PiModelOptions,
+  DEFAULT_MODEL_BY_PROVIDER,
 } from "./model";
+import { ProviderInstanceId } from "./providerInstance";
 import { ProviderMentionReference, ProviderSkillReference } from "./providerDiscovery";
 import { AsyncUserInput, AsyncUserInputQuestions, AsyncUserInputResponse } from "./asyncUserInput";
 import { ProjectKind } from "./project";
@@ -30,6 +32,7 @@ import {
   MessageId,
   NonNegativeInt,
   PositiveInt,
+  ProcessEnvRecord,
   ProjectId,
   SpaceId,
   ProviderItemId,
@@ -120,8 +123,120 @@ export const ProviderSandboxMode = Schema.Literals([
 ]);
 export type ProviderSandboxMode = typeof ProviderSandboxMode.Type;
 
+const ProviderInstanceIdForDriver = (_provider: ProviderKind) =>
+  Schema.optional(ProviderInstanceId);
+
+const isProviderKindValue = Schema.is(ProviderKind);
+
+function inferProviderFromInstanceId(instanceId: string): ProviderKind | undefined {
+  if (isProviderKindValue(instanceId)) {
+    return instanceId;
+  }
+
+  const lowerInstanceId = instanceId.toLowerCase();
+  if (lowerInstanceId.startsWith("claude")) {
+    return "claudeAgent";
+  }
+  if (lowerInstanceId.startsWith("codex")) {
+    return "codex";
+  }
+  if (lowerInstanceId.startsWith("cursor")) {
+    return "cursor";
+  }
+  if (lowerInstanceId.startsWith("antigravity") || lowerInstanceId.startsWith("gemini")) {
+    return "antigravity";
+  }
+  if (lowerInstanceId.startsWith("grok")) {
+    return "grok";
+  }
+  if (lowerInstanceId.startsWith("droid")) {
+    return "droid";
+  }
+  if (lowerInstanceId.startsWith("kilo")) {
+    return "opencode";
+  }
+  if (lowerInstanceId.startsWith("opencode") || lowerInstanceId.startsWith("open_code")) {
+    return "opencode";
+  }
+  if (lowerInstanceId.startsWith("omp")) {
+    return "omp";
+  }
+  if (lowerInstanceId.startsWith("pi")) {
+    return "pi";
+  }
+  if (lowerInstanceId.startsWith("devin")) {
+    return "devin";
+  }
+  return undefined;
+}
+
+function inferProviderFromModel(model: string): ProviderKind {
+  const lowerModel = model.toLowerCase();
+  if (
+    lowerModel.includes("claude") ||
+    lowerModel.includes("sonnet") ||
+    lowerModel.includes("opus") ||
+    lowerModel.includes("haiku")
+  ) {
+    return "claudeAgent";
+  }
+  if (lowerModel.includes("gemini")) {
+    return "antigravity";
+  }
+  if (lowerModel.includes("grok")) {
+    return "grok";
+  }
+  if (lowerModel.includes("devin")) {
+    return "devin";
+  }
+  if (lowerModel.includes("opencode") || lowerModel.includes("open_code")) {
+    return "opencode";
+  }
+  if (lowerModel.includes("kilo")) {
+    return "opencode";
+  }
+  if (lowerModel.includes("cursor")) {
+    return "cursor";
+  }
+  if (lowerModel.startsWith("pi/") || lowerModel.includes("/pi/")) {
+    return "pi";
+  }
+  return "codex";
+}
+
+function inferProviderForModelSelection(input: {
+  readonly provider?: unknown;
+  readonly instanceId?: unknown;
+  readonly model?: unknown;
+}): ProviderKind | undefined {
+  if (isProviderKindValue(input.provider)) {
+    return input.provider;
+  }
+  if (typeof input.provider === "string") {
+    const migrated = LEGACY_PROVIDER_MIGRATIONS[input.provider];
+    if (migrated) {
+      return migrated;
+    }
+  }
+  if (typeof input.instanceId === "string") {
+    const provider = inferProviderFromInstanceId(input.instanceId);
+    if (provider) {
+      return provider;
+    }
+  }
+  return typeof input.model === "string" ? inferProviderFromModel(input.model) : undefined;
+}
+
+function defaultModelForProvider(provider: ProviderKind): string {
+  // OMP has no static default model; an empty model fails the per-provider
+  // schema below instead of inventing one.
+  if (provider === "omp") return "";
+  return provider === "pi" ? "openai/gpt-5.5" : DEFAULT_MODEL_BY_PROVIDER[provider];
+}
+
 export const CodexModelSelection = Schema.Struct({
   provider: Schema.Literal("codex"),
+  instanceId: ProviderInstanceIdForDriver("codex"),
   model: TrimmedNonEmptyString,
   options: Schema.optional(CodexModelOptions),
 });
@@ -129,6 +244,7 @@ export type CodexModelSelection = typeof CodexModelSelection.Type;
 
 export const ClaudeModelSelection = Schema.Struct({
   provider: Schema.Literal("claudeAgent"),
+  instanceId: ProviderInstanceIdForDriver("claudeAgent"),
   model: TrimmedNonEmptyString,
   options: Schema.optional(ClaudeModelOptions),
   supportsAutoMode: Schema.optional(Schema.Boolean),
@@ -137,6 +253,7 @@ export type ClaudeModelSelection = typeof ClaudeModelSelection.Type;
 
 export const CursorModelSelection = Schema.Struct({
   provider: Schema.Literal("cursor"),
+  instanceId: ProviderInstanceIdForDriver("cursor"),
   model: TrimmedNonEmptyString,
   options: Schema.optional(CursorModelOptions),
 });
@@ -144,6 +261,7 @@ export type CursorModelSelection = typeof CursorModelSelection.Type;
 
 export const AntigravityModelSelection = Schema.Struct({
   provider: Schema.Literal("antigravity"),
+  instanceId: ProviderInstanceIdForDriver("antigravity"),
   model: TrimmedNonEmptyString,
   options: Schema.optional(AntigravityModelOptions),
 });
@@ -151,6 +269,7 @@ export type AntigravityModelSelection = typeof AntigravityModelSelection.Type;
 
 export const GrokModelSelection = Schema.Struct({
   provider: Schema.Literal("grok"),
+  instanceId: ProviderInstanceIdForDriver("grok"),
   model: TrimmedNonEmptyString,
   options: Schema.optional(GrokModelOptions),
 });
@@ -158,6 +277,7 @@ export type GrokModelSelection = typeof GrokModelSelection.Type;
 
 export const DroidModelSelection = Schema.Struct({
   provider: Schema.Literal("droid"),
+  instanceId: ProviderInstanceIdForDriver("droid"),
   model: TrimmedNonEmptyString,
   options: Schema.optional(DroidModelOptions),
 });
@@ -165,6 +285,7 @@ export type DroidModelSelection = typeof DroidModelSelection.Type;
 
 export const OpenCodeModelSelection = Schema.Struct({
   provider: Schema.Literal("opencode"),
+  instanceId: ProviderInstanceIdForDriver("opencode"),
   model: TrimmedNonEmptyString,
   options: Schema.optional(OpenCodeModelOptions),
 });
@@ -172,12 +293,14 @@ export type OpenCodeModelSelection = typeof OpenCodeModelSelection.Type;
 
 export const PiModelSelection = Schema.Struct({
   provider: Schema.Literal("pi"),
+  instanceId: ProviderInstanceIdForDriver("pi"),
   model: TrimmedNonEmptyString,
   options: Schema.optional(PiModelOptions),
 });
 export type PiModelSelection = typeof PiModelSelection.Type;
 export const OmpModelSelection = Schema.Struct({
   provider: Schema.Literal("omp"),
+  instanceId: ProviderInstanceIdForDriver("omp"),
   model: TrimmedNonEmptyString,
   options: Schema.optional(OmpModelOptions),
 });
@@ -185,12 +308,13 @@ export type OmpModelSelection = typeof OmpModelSelection.Type;
 
 export const DevinModelSelection = Schema.Struct({
   provider: Schema.Literal("devin"),
+  instanceId: ProviderInstanceIdForDriver("devin"),
   model: TrimmedNonEmptyString,
   options: Schema.optional(DevinModelOptions),
 });
 export type DevinModelSelection = typeof DevinModelSelection.Type;
 
-export const ModelSelection = Schema.Union([
+const ModelSelectionByProvider = Schema.Union([
   CodexModelSelection,
   ClaudeModelSelection,
   CursorModelSelection,
@@ -202,54 +326,121 @@ export const ModelSelection = Schema.Union([
   PiModelSelection,
   OmpModelSelection,
 ]);
+
+// Keep persisted inputs loose so malformed or mixed legacy drafts reach the
+// transform; the discriminated target union remains the canonical contract.
+const ModelSelectionJsonValue: Schema.Codec<unknown, unknown> = Schema.Json.pipe(
+  Schema.decodeTo(
+    Schema.Unknown,
+    SchemaTransformation.transform({
+      decode: (value): unknown => value,
+      encode: (value): Schema.Json => value as Schema.Json,
+    }),
+  ),
+);
+
+const ModelSelectionSource = Schema.Struct({
+  provider: Schema.optional(ModelSelectionJsonValue),
+  instanceId: Schema.optional(ModelSelectionJsonValue),
+  model: Schema.optional(ModelSelectionJsonValue),
+  options: Schema.optional(ModelSelectionJsonValue),
+  supportsAutoMode: Schema.optional(ModelSelectionJsonValue),
+});
+
+export const ModelSelection: Schema.Codec<typeof ModelSelectionByProvider.Type, unknown> =
+  ModelSelectionSource.pipe(
+    Schema.decodeTo(
+      ModelSelectionByProvider,
+      SchemaTransformation.transformOrFail({
+        decode: (raw) => {
+          const provider = inferProviderForModelSelection(raw) ?? "codex";
+          const model =
+            typeof raw.model === "string" && raw.model.trim().length > 0
+              ? raw.model
+              : defaultModelForProvider(provider);
+          const instanceId =
+            typeof raw.instanceId === "string" && raw.instanceId.trim().length > 0
+              ? raw.instanceId.trim()
+              : provider;
+          const base: Record<string, unknown> = {
+            provider,
+            instanceId,
+            model,
+          };
+          if (raw.options !== undefined) {
+            base.options = raw.options;
+          }
+          if (raw.supportsAutoMode !== undefined) {
+            base.supportsAutoMode = raw.supportsAutoMode;
+          }
+          return Effect.succeed(base as typeof ModelSelectionByProvider.Encoded);
+        },
+        encode: (value) => Effect.succeed(value as typeof ModelSelectionSource.Encoded),
+      }),
+    ),
+  );
 export type ModelSelection = typeof ModelSelection.Type;
 
 export const CodexProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   homePath: Schema.optional(TrimmedNonEmptyString),
+  shadowHomePath: Schema.optional(TrimmedNonEmptyString),
+  accountId: Schema.optional(TrimmedNonEmptyString),
+  environment: Schema.optional(ProcessEnvRecord),
 });
 
 export const ClaudeProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
+  homePath: Schema.optional(TrimmedNonEmptyString),
   permissionMode: Schema.optional(TrimmedNonEmptyString),
   maxThinkingTokens: Schema.optional(NonNegativeInt),
   enableArtifacts: Schema.optional(Schema.Boolean),
+  environment: Schema.optional(ProcessEnvRecord),
 });
 
 export const AntigravityProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
+  environment: Schema.optional(ProcessEnvRecord),
 });
 
 export const CursorProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   apiEndpoint: Schema.optional(TrimmedNonEmptyString),
+  environment: Schema.optional(ProcessEnvRecord),
 });
 
 export const GrokProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
+  environment: Schema.optional(ProcessEnvRecord),
 });
 
 export const DroidProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
+  environment: Schema.optional(ProcessEnvRecord),
 });
 
 export const OpenCodeProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   serverUrl: Schema.optional(TrimmedNonEmptyString),
+  serverPassword: Schema.optional(TrimmedNonEmptyString),
   experimentalWebSockets: Schema.optional(Schema.Boolean),
+  environment: Schema.optional(ProcessEnvRecord),
 });
 
 export const PiProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   agentDir: Schema.optional(TrimmedNonEmptyString),
+  environment: Schema.optional(ProcessEnvRecord),
 });
 export const OmpProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   agentDir: Schema.optional(TrimmedNonEmptyString),
+  environment: Schema.optional(ProcessEnvRecord),
 });
 
 export const DevinProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
+  environment: Schema.optional(ProcessEnvRecord),
 });
 
 export const ProviderStartOptions = Schema.Struct({
@@ -276,6 +467,25 @@ const SidechatSourceThreadId = Schema.optional(Schema.NullOr(ThreadId)).pipe(
   Schema.withDecodingDefault(() => null),
 );
 const SidechatLifecycleTimestamp = Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
+  Schema.withDecodingDefault(() => null),
+);
+/**
+ * What a standalone sidechat is about. A sidechat either forks a source thread
+ * (`sidechatSourceThreadId`) or, with no source thread, carries this context: today only a
+ * GitHub pull request or issue asked about from the inbox. Identifiers only; the item's
+ * title, body and comments reach the provider as untrusted data in the user's own message.
+ */
+export const ThreadSidechatContext = Schema.Struct({
+  kind: Schema.Literal("github-item"),
+  // Same literals as `GitHubInboxItemKind`; importing it here would create a module cycle.
+  itemKind: Schema.Literals(["pullRequest", "issue"]),
+  repository: TrimmedNonEmptyString,
+  number: PositiveInt,
+  url: TrimmedNonEmptyString,
+});
+export type ThreadSidechatContext = typeof ThreadSidechatContext.Type;
+// Absent on every event and projection written before standalone sidechats existed.
+const SidechatContextField = Schema.optional(Schema.NullOr(ThreadSidechatContext)).pipe(
   Schema.withDecodingDefault(() => null),
 );
 export const ProviderRequestKind = Schema.Literals([
@@ -611,9 +821,17 @@ export const OrchestrationSession = Schema.Struct({
   threadId: ThreadId,
   status: OrchestrationSessionStatus,
   providerName: Schema.NullOr(TrimmedNonEmptyString),
+  providerInstanceId: Schema.optional(ProviderInstanceId),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(() => DEFAULT_RUNTIME_MODE)),
   activeTurnId: Schema.NullOr(TurnId),
   lastError: Schema.NullOr(TrimmedNonEmptyString),
+  /** Last provider-runtime activity of any kind observed on the thread
+   * (streamed output, tool lifecycle, messages, requests). Maintained by
+   * runtime ingestion, not by session lifecycle events. */
+  lastActivityAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  /** Last activity that produced real work (agent output, tool lifecycle,
+   * turn boundaries) — a steer/nudge echo does not advance it. */
+  lastProgressAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   updatedAt: IsoDateTime,
 });
 export type OrchestrationSession = typeof OrchestrationSession.Type;
@@ -865,6 +1083,7 @@ export const OrchestrationThread = Schema.Struct({
     Schema.withDecodingDefault(() => null),
   ),
   sidechatSourceThreadId: SidechatSourceThreadId,
+  sidechatContext: SidechatContextField,
   sidechatLastActivityAt: SidechatLifecycleTimestamp,
   sidechatExpiredAt: SidechatLifecycleTimestamp,
   lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)).pipe(
@@ -958,6 +1177,7 @@ export const OrchestrationThreadShell = Schema.Struct({
     Schema.withDecodingDefault(() => null),
   ),
   sidechatSourceThreadId: SidechatSourceThreadId,
+  sidechatContext: SidechatContextField,
   sidechatLastActivityAt: SidechatLifecycleTimestamp,
   sidechatExpiredAt: SidechatLifecycleTimestamp,
   lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)).pipe(
@@ -1184,6 +1404,8 @@ const ThreadCreateCommand = Schema.Struct({
   lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
+  /** Makes the thread a standalone sidechat (no source thread). */
+  sidechatContext: Schema.optional(ThreadSidechatContext),
   createdAt: IsoDateTime,
 });
 
@@ -1964,6 +2186,7 @@ export const ThreadCreatedPayload = Schema.Struct({
     Schema.withDecodingDefault(() => null),
   ),
   sidechatSourceThreadId: SidechatSourceThreadId,
+  sidechatContext: SidechatContextField,
   sidechatLastActivityAt: SidechatLifecycleTimestamp,
   sidechatExpiredAt: SidechatLifecycleTimestamp,
   lastKnownPr: Schema.optional(Schema.NullOr(OrchestrationThreadPullRequest)).pipe(

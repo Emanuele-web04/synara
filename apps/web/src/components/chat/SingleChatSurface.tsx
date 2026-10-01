@@ -14,7 +14,6 @@ import {
   useMemo,
   useRef,
   useState,
-  useSyncExternalStore,
 } from "react";
 import type { EditorLeaveGuard } from "../EditorWorkspaceView";
 
@@ -36,11 +35,7 @@ import {
   buildWhyLinesPrompt,
   type ChatFileReference,
 } from "../../lib/chatReferences";
-import {
-  dockSidechatPaneScopeId,
-  EDITOR_CHAT_PANE_SCOPE_ID,
-  SINGLE_CHAT_PANE_SCOPE_ID,
-} from "../../lib/chatPaneScope";
+import { EDITOR_CHAT_PANE_SCOPE_ID, SINGLE_CHAT_PANE_SCOPE_ID } from "../../lib/chatPaneScope";
 import type { DockPaneRuntimeMode } from "../../lib/dockPaneActivation";
 import type { FileCommentSelection } from "../../lib/fileComments";
 import type { DiffEditBaseRev, DiffFileEditRequest } from "../../lib/diffEditBaseRev";
@@ -48,13 +43,10 @@ import { editorCenterModeFamily, type EditorCenterMode } from "../../lib/editorC
 import { gitBranchesQueryOptions } from "../../lib/gitReactQuery";
 import { canComposerHandlePanelWidth } from "../../lib/panelResize";
 import { projectListDirectoriesQueryOptions } from "../../lib/projectReactQuery";
+import { serverConfigQueryOptions } from "../../lib/serverReactQuery";
+import { useSidechatShortcut } from "./useSidechatShortcut";
 import { waitForSidechatCreator } from "../../lib/sidechatCreatorRegistry";
-import {
-  clearSidechatPaneRetention,
-  getSidechatPaneRetentionVersion,
-  sidechatPaneRetentionRemainingMs,
-  subscribeSidechatPaneRetention,
-} from "../../lib/sidechatCreation";
+import { requestComposerFocus } from "../../composerFocusRequestStore";
 import {
   prefetchWorkspaceFile,
   resolveDockFileOpenTarget,
@@ -67,7 +59,6 @@ import { requestExplorerReveal } from "../../explorerRevealRequestStore";
 import { selectRightDockState, useRightDockStore } from "../../rightDockStore";
 import {
   resolveActivePane,
-  findMissingSidechatPaneIds,
   type RightDockPane,
   type RightDockPaneKind,
 } from "../../rightDockStore.logic";
@@ -81,6 +72,7 @@ import { useStore } from "../../store";
 import {
   createProjectSelector,
   createSidebarThreadSummariesSelector,
+  createSidechatSummariesForSourceSelector,
   createThreadWorkspaceMetadataSelector,
 } from "../../storeSelectors";
 import { sortThreadsForSidebar } from "../Sidebar.logic";
@@ -97,6 +89,7 @@ import { FloatingBrowserPanel } from "./FloatingBrowserPanel";
 import { shouldRenderFloatingBrowserPanel } from "./floatingBrowserPanel.logic";
 import { PanelStateMessage } from "./PanelStateMessage";
 import { RightDock } from "./RightDock";
+import { SidechatDockPane, useSidechatDockPanePruning } from "./SidechatDockPane";
 import {
   buildRightDockPaneLabelOverrides,
   getRightDockPaneMeta,
@@ -184,16 +177,6 @@ function RightDockPanePlaceholder(props: { kind: RightDockPaneKind }) {
   const { label } = getRightDockPaneMeta(props.kind);
   return <PanelStateMessage>{label} panel is coming soon.</PanelStateMessage>;
 }
-
-// Embedded dock chats (side chats) manage their own panels through the dock, so the
-// nested ChatView always renders with a closed, inert panel state.
-const DOCK_EMBEDDED_PANEL_STATE: SplitViewPanePanelState = {
-  panel: null,
-  diffTurnId: null,
-  diffFilePath: null,
-  hasOpenedPanel: false,
-  lastOpenPanel: "browser",
-};
 
 export function SingleChatSurface(props: {
   threadId: ThreadId;
@@ -749,62 +732,17 @@ export function SingleChatSurface(props: {
   // selector, which re-emits on every streaming token of any thread and would
   // otherwise re-render the entire chat surface + right dock + active pane.
   const threadSummaries = useStore(useMemo(() => createSidebarThreadSummariesSelector(), []));
-  const sidechatPaneRetentionVersion = useSyncExternalStore(
-    subscribeSidechatPaneRetention,
-    getSidechatPaneRetentionVersion,
-    getSidechatPaneRetentionVersion,
+  const existingThreadIds = useMemo(
+    () => new Set(threadSummaries.map((thread) => thread.id)),
+    [threadSummaries],
   );
-  useEffect(() => {
-    if (!threadsHydrated) {
-      return;
-    }
-    const existingThreadIds = new Set(threadSummaries.map((thread) => thread.id));
-    for (const pane of dockState.panes) {
-      if (pane.kind === "sidechat" && pane.threadId && existingThreadIds.has(pane.threadId)) {
-        clearSidechatPaneRetention(pane.threadId);
-      }
-    }
-    const missingPaneIds = findMissingSidechatPaneIds(dockState, existingThreadIds);
-    if (missingPaneIds.length === 0) {
-      return;
-    }
-
-    const timerIds: number[] = [];
-    for (const paneId of missingPaneIds) {
-      const pane = dockState.panes.find((candidate) => candidate.id === paneId);
-      const remainingGraceMs = pane?.threadId ? sidechatPaneRetentionRemainingMs(pane.threadId) : 0;
-      if (remainingGraceMs === null) {
-        continue;
-      }
-      if (remainingGraceMs <= 0) {
-        if (pane?.threadId) {
-          clearSidechatPaneRetention(pane.threadId);
-        }
-        closePane(props.threadId, paneId);
-        continue;
-      }
-      timerIds.push(
-        window.setTimeout(() => {
-          if (pane?.threadId) {
-            clearSidechatPaneRetention(pane.threadId);
-          }
-          closePane(props.threadId, paneId);
-        }, remainingGraceMs),
-      );
-    }
-    return () => {
-      for (const timerId of timerIds) {
-        window.clearTimeout(timerId);
-      }
-    };
-  }, [
-    closePane,
+  useSidechatDockPanePruning({
+    hostId: props.threadId,
     dockState,
-    props.threadId,
-    sidechatPaneRetentionVersion,
-    threadSummaries,
+    existingThreadIds,
     threadsHydrated,
-  ]);
+    closePane,
+  });
   const editorProjectOptions = projects.flatMap((project) =>
     project.kind === "project" ? [{ id: project.id, name: project.name }] : [],
   );
@@ -859,35 +797,49 @@ export function SingleChatSurface(props: {
       ? { [pullRequestPane.id]: pullRequestPaneStateIcon }
       : undefined;
 
-  const handleAddDockPane = (kind: RightDockPaneKind) => {
-    requestImmediateDockHydration(kind);
-    if (kind === "sidechat") {
-      // Sidechat spawns a thread; reuse the composer's /side flow (correct model
-      // selection) published via the registry instead of opening an empty pane.
-      void waitForSidechatCreator(props.threadId)
-        .then((createSidechat) => {
-          if (!createSidechat) {
-            toastManager.add({
-              type: "warning",
-              title: "Side chat is unavailable",
-              description: "Open a server-backed main thread before starting a Side chat.",
-            });
-            return;
-          }
-          return createSidechat();
-        })
-        .catch((error) => {
-          toastManager.add({
-            type: "error",
-            title: "Could not start Side chat",
-            description:
-              error instanceof Error
-                ? error.message
-                : "An error occurred while creating Side chat.",
-          });
+  const createDockSidechat = async () => {
+    // Reuse /side so the current model, permissions and workspace stay inherited.
+    requestImmediateDockHydration("sidechat");
+    try {
+      const createSidechat = await waitForSidechatCreator(props.threadId);
+      if (!createSidechat) {
+        toastManager.add({
+          type: "warning",
+          title: "Side chat is unavailable",
+          description: "Open a server-backed main thread before starting a Side chat.",
         });
+        return;
+      }
+      await createSidechat();
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Could not start Side chat",
+        description:
+          error instanceof Error ? error.message : "An error occurred while creating Side chat.",
+      });
+    }
+  };
+  const sourceSidechats = useStore(
+    useMemo(() => createSidechatSummariesForSourceSelector(props.threadId), [props.threadId]),
+  );
+  const shortcutConfig = useQuery(serverConfigQueryOptions());
+  useSidechatShortcut({
+    threadId: props.threadId,
+    enabled: props.search.view !== "editor",
+    keybindings: shortcutConfig.data?.keybindings ?? [],
+    sidechats: sourceSidechats,
+    createSidechat: createDockSidechat,
+    revealSidechat: () => requestImmediateDockHydration("sidechat"),
+    onHidden: () => requestComposerFocus(props.threadId),
+  });
+
+  const handleAddDockPane = (kind: RightDockPaneKind) => {
+    if (kind === "sidechat") {
+      void createDockSidechat();
       return;
     }
+    requestImmediateDockHydration(kind);
     openPane(props.threadId, { kind });
   };
 
@@ -926,6 +878,7 @@ export function SingleChatSurface(props: {
           <Suspense fallback={<PanelStateMessage>Loading pull request...</PanelStateMessage>}>
             <PullRequestDockPane
               pane={pane}
+              hostThreadId={props.threadId}
               pollingEnabled={context.isVisible}
               onClose={() => closePane(props.threadId, pane.id)}
               onSelectPullRequest={(number) =>
@@ -1015,28 +968,11 @@ export function SingleChatSurface(props: {
           </Suspense>
         );
       case "sidechat":
-        if (!pane.threadId) {
-          return <RightDockPanePlaceholder kind="sidechat" />;
-        }
-        if (!threadSummaries.some((thread) => thread.id === pane.threadId)) {
-          return <PanelStateMessage>Loading side chat...</PanelStateMessage>;
-        }
-        if (context.runtimeMode === "preview") {
-          return null;
-        }
         return (
-          <DeferredChatView
-            threadId={pane.threadId}
-            hideHeader
-            paneScopeId={dockSidechatPaneScopeId(pane.id)}
-            deferMount={false}
-            surfaceMode="split"
-            isFocusedPane={false}
-            panelState={DOCK_EMBEDDED_PANEL_STATE}
-            onToggleDiff={noopChatSurfaceAction}
-            onToggleBrowser={noopChatSurfaceAction}
-            onOpenBrowserUrl={noopChatSurfaceAction}
-            onOpenTurnDiff={noopChatSurfaceAction}
+          <SidechatDockPane
+            pane={pane}
+            runtimeMode={context.runtimeMode}
+            threadExists={pane.threadId !== null && existingThreadIds.has(pane.threadId)}
           />
         );
       default:

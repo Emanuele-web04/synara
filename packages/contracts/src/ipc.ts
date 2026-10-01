@@ -48,6 +48,67 @@ import type {
   AutomationUpdateInput,
 } from "./automation";
 import type {
+  Todo,
+  TodoCreateInput,
+  TodoDeleteInput,
+  TodoListResult,
+  TodoStreamEvent,
+  TodoUpdateInput,
+} from "./todo";
+import type {
+  ProjectAgentConfigureInput,
+  ProjectAgentLinkProjectInput,
+  ProjectAgentUnlinkProjectInput,
+  ProjectAgentExportDocumentsInput,
+  ProjectAgentExportDocumentsResult,
+  ProjectAgentGetOverviewInput,
+  ProjectAgentDeleteGroupInput,
+  ProjectAgentGroupControlInput,
+  ProjectAgentDeleteGroupResult,
+  ProjectAgentListSummariesInput,
+  ProjectAgentListSummariesResult,
+  ProjectAgentGoalControlInput,
+  ProjectAgentListActivityInput,
+  ProjectAgentListActivityResult,
+  ProjectAgentListDocumentsInput,
+  ProjectAgentListDocumentsResult,
+  ProjectAgentListTasksInput,
+  ProjectAgentListTasksResult,
+  ProjectAgentOverview,
+  ProjectAgentReadDocumentInput,
+  ProjectAgentReadDocumentResult,
+  ProjectAgentRefreshDigestInput,
+  ProjectAgentStartGoalInput,
+  ProjectAgentStreamEvent,
+  ProjectAgentUpdateGoalInput,
+  ProjectAgentUpdateTaskInput,
+  ProjectAgentWriteDocumentInput,
+  ProjectAgentCreateTaskInput,
+  ProjectAgentExcludeThreadInput,
+  ProjectAgentBackfillInput,
+  ProjectAgentListThreadIndexInput,
+  ProjectAgentListThreadIndexResult,
+  ProjectAgentListEvidenceInput,
+  ProjectAgentListEvidenceResult,
+  ProjectAgentLibraryDeleteInput,
+  ProjectAgentLibraryHistoryInput,
+  ProjectAgentLibraryHistoryResult,
+  ProjectAgentLibraryListInput,
+  ProjectAgentLibraryListResult,
+  ProjectAgentLibraryMkdirInput,
+  ProjectAgentLibraryMutationResult,
+  ProjectAgentLibraryRenameInput,
+  ProjectAgentLibraryRestoreInput,
+  ProjectAgentLibraryStatusInput,
+  ProjectAgentLibraryStatusResult,
+  ProjectAgentResolveWorkerInput,
+  ProjectAgentResolveWorkerResult,
+  ProjectDocumentRevision,
+  ProjectGoal,
+  ProjectTask,
+  ProjectThreadIndexEntry,
+} from "./projectAgent";
+import type {
   GitCheckoutInput,
   GitActionProgressEvent,
   GitWorktreeSetupProgressEvent,
@@ -109,13 +170,17 @@ import type {
   PullRequestDetail,
   PullRequestDetailInput,
   PullRequestDiffResult,
-  PullRequestReviewRequestCountInput,
-  PullRequestReviewRequestCountResult,
   PullRequestSetPinnedInput,
   PullRequestSetPinnedResult,
-  PullRequestsListInput,
-  PullRequestsListResult,
 } from "./pullRequests";
+import type {
+  GitHubInboxListInput,
+  GitHubInboxListResult,
+  GitHubIssueCommentInput,
+  GitHubIssueCommentResult,
+  GitHubIssueDetail,
+  GitHubIssueDetailInput,
+} from "./githubInbox";
 import type {
   ProjectCreateLocalFilePreviewGrantInput,
   ProjectCreateLocalFilePreviewGrantResult,
@@ -298,6 +363,8 @@ import type {
   StatsGetProfileStatsResult,
   StatsGetProfileTokenStatsInput,
   StatsGetProfileTokenStatsResult,
+  StatsGetRecapInput,
+  StatsGetRecapResult,
 } from "./stats";
 import type { BrowserAnnotationMethods } from "./browserAnnotations";
 
@@ -329,6 +396,18 @@ export type DesktopUpdateStatus =
 
 export type DesktopRuntimeArch = "arm64" | "x64" | "other";
 export type DesktopTheme = "light" | "dark" | "system";
+
+/** Largest desktop blur radius the translucent window shell accepts, in points. */
+export const DESKTOP_WINDOW_BLUR_RADIUS_MAX = 64;
+
+/**
+ * Window backing the renderer asks for. `translucent` removes macOS vibrancy and sets the
+ * desktop blur to `blurRadius` (0 shows the desktop unblurred); `opaque` restores vibrancy.
+ */
+export interface DesktopWindowMaterial {
+  material: "opaque" | "translucent";
+  blurRadius: number;
+}
 
 export interface DesktopRuntimeInfo {
   hostArch: DesktopRuntimeArch;
@@ -688,7 +767,7 @@ export interface DesktopCustomTitleBarState {
   restartRequired: boolean;
 }
 
-export const DesktopAppIcon = Schema.Literals(["default", "icon", "dark"]);
+export const DesktopAppIcon = Schema.Literals(["default", "icon", "dark", "beta"]);
 export type DesktopAppIcon = typeof DesktopAppIcon.Type;
 
 export interface SynaraStorageSnapshot {
@@ -724,7 +803,21 @@ export interface DesktopAgentCursorStyle {
   readonly shadow?: string;
 }
 
+export const DESKTOP_RENDERER_ERROR_MESSAGE_MAX_LENGTH = 1024;
+export const DESKTOP_RENDERER_ERROR_STACK_MAX_LENGTH = 8 * 1024;
+
+/** Fixed, bounded exception fields accepted by Beta's diagnostics IPC. */
+export interface DesktopRendererError {
+  readonly message: string;
+  readonly stack?: string | undefined;
+}
+
 export interface DesktopBridge {
+  /** Present only when the desktop main process enables baked-in Beta diagnostics. */
+  betaDiagnostics?: {
+    rendererReady: () => void;
+    reportError: (error: DesktopRendererError) => void;
+  };
   safariAccess?: {
     getInfo: () => Promise<DesktopSafariAccessInfo>;
     openSettings: () => Promise<boolean>;
@@ -744,6 +837,8 @@ export interface DesktopBridge {
   }) => Promise<string | null>;
   confirm: (message: string) => Promise<boolean>;
   setTheme: (theme: DesktopTheme) => Promise<void>;
+  /** macOS only; resolves false when the adjustable blur is unavailable. */
+  setWindowMaterial?: (input: DesktopWindowMaterial) => Promise<boolean>;
   getAppIcon?: () => Promise<DesktopAppIcon>;
   setAppIcon: (icon: DesktopAppIcon) => Promise<void>;
   showContextMenu: <T extends string>(
@@ -1001,11 +1096,12 @@ export interface NativeApi {
       callback: (event: GitWorktreeSetupProgressEvent) => void,
     ) => () => void;
   };
+  githubInbox: {
+    list: (input: GitHubInboxListInput) => Promise<GitHubInboxListResult>;
+    issueDetail: (input: GitHubIssueDetailInput) => Promise<GitHubIssueDetail>;
+    issueComment: (input: GitHubIssueCommentInput) => Promise<GitHubIssueCommentResult>;
+  };
   pullRequests: {
-    list: (input: PullRequestsListInput) => Promise<PullRequestsListResult>;
-    reviewRequestCount: (
-      input: PullRequestReviewRequestCountInput,
-    ) => Promise<PullRequestReviewRequestCountResult>;
     detail: (input: PullRequestDetailInput) => Promise<PullRequestDetail>;
     diff: (input: PullRequestDetailInput) => Promise<PullRequestDiffResult>;
     action: (input: PullRequestActionInput) => Promise<PullRequestActionResult>;
@@ -1081,6 +1177,7 @@ export interface NativeApi {
     getProfileTokenStats: (
       input: StatsGetProfileTokenStatsInput,
     ) => Promise<StatsGetProfileTokenStatsResult>;
+    getRecap: (input: StatsGetRecapInput) => Promise<StatsGetRecapResult>;
   };
   provider: {
     getComposerCapabilities: (
@@ -1136,6 +1233,64 @@ export interface NativeApi {
     onShellEvent: (callback: (event: OrchestrationShellStreamItem) => void) => () => void;
     onThreadEvent: (callback: (event: OrchestrationThreadStreamItem) => void) => () => void;
   };
+  projectAgent: {
+    getOverview: (input: ProjectAgentGetOverviewInput) => Promise<ProjectAgentOverview>;
+    listSummaries: (
+      input?: ProjectAgentListSummariesInput,
+    ) => Promise<ProjectAgentListSummariesResult>;
+    configure: (input: ProjectAgentConfigureInput) => Promise<ProjectAgentOverview>;
+    linkProject: (input: ProjectAgentLinkProjectInput) => Promise<ProjectAgentOverview>;
+    unlinkProject: (input: ProjectAgentUnlinkProjectInput) => Promise<ProjectAgentOverview>;
+    startGoal: (input: ProjectAgentStartGoalInput) => Promise<ProjectGoal>;
+    updateGoal: (input: ProjectAgentUpdateGoalInput) => Promise<ProjectGoal>;
+    pauseGoal: (input: ProjectAgentGoalControlInput) => Promise<ProjectGoal>;
+    resumeGoal: (input: ProjectAgentGoalControlInput) => Promise<ProjectGoal>;
+    stopGoal: (input: ProjectAgentGoalControlInput) => Promise<ProjectGoal>;
+    listTasks: (input: ProjectAgentListTasksInput) => Promise<ProjectAgentListTasksResult>;
+    createTask: (input: ProjectAgentCreateTaskInput) => Promise<ProjectTask>;
+    updateTask: (input: ProjectAgentUpdateTaskInput) => Promise<ProjectTask>;
+    listEvidence: (input: ProjectAgentListEvidenceInput) => Promise<ProjectAgentListEvidenceResult>;
+    listThreadIndex: (
+      input: ProjectAgentListThreadIndexInput,
+    ) => Promise<ProjectAgentListThreadIndexResult>;
+    excludeThread: (input: ProjectAgentExcludeThreadInput) => Promise<ProjectThreadIndexEntry>;
+    backfillSummaries: (input: ProjectAgentBackfillInput) => Promise<ProjectAgentOverview>;
+    listActivity: (input: ProjectAgentListActivityInput) => Promise<ProjectAgentListActivityResult>;
+    listDocuments: (
+      input: ProjectAgentListDocumentsInput,
+    ) => Promise<ProjectAgentListDocumentsResult>;
+    readDocument: (input: ProjectAgentReadDocumentInput) => Promise<ProjectAgentReadDocumentResult>;
+    writeDocument: (input: ProjectAgentWriteDocumentInput) => Promise<ProjectDocumentRevision>;
+    exportDocuments: (
+      input: ProjectAgentExportDocumentsInput,
+    ) => Promise<ProjectAgentExportDocumentsResult>;
+    refreshDigest: (input: ProjectAgentRefreshDigestInput) => Promise<ProjectAgentOverview>;
+    pauseGroup: (input: ProjectAgentGroupControlInput) => Promise<ProjectAgentOverview>;
+    resumeGroup: (input: ProjectAgentGroupControlInput) => Promise<ProjectAgentOverview>;
+    archiveGroup: (input: ProjectAgentGroupControlInput) => Promise<ProjectAgentOverview>;
+    unarchiveGroup: (input: ProjectAgentGroupControlInput) => Promise<ProjectAgentOverview>;
+    restartCoordinator: (input: ProjectAgentGroupControlInput) => Promise<ProjectAgentOverview>;
+    deleteGroup: (input: ProjectAgentDeleteGroupInput) => Promise<ProjectAgentDeleteGroupResult>;
+    resolveWorker: (
+      input: ProjectAgentResolveWorkerInput,
+    ) => Promise<ProjectAgentResolveWorkerResult>;
+    library: {
+      list: (input: ProjectAgentLibraryListInput) => Promise<ProjectAgentLibraryListResult>;
+      mkdir: (input: ProjectAgentLibraryMkdirInput) => Promise<ProjectAgentLibraryMutationResult>;
+      rename: (input: ProjectAgentLibraryRenameInput) => Promise<ProjectAgentLibraryMutationResult>;
+      delete: (input: ProjectAgentLibraryDeleteInput) => Promise<ProjectAgentLibraryMutationResult>;
+      history: (
+        input: ProjectAgentLibraryHistoryInput,
+      ) => Promise<ProjectAgentLibraryHistoryResult>;
+      restore: (
+        input: ProjectAgentLibraryRestoreInput,
+      ) => Promise<ProjectAgentLibraryMutationResult>;
+      status: (input: ProjectAgentLibraryStatusInput) => Promise<ProjectAgentLibraryStatusResult>;
+    };
+    subscribe: (input: { projectId: string }) => Promise<void>;
+    unsubscribe: (input: { projectId: string }) => Promise<void>;
+    onEvent: (callback: (event: ProjectAgentStreamEvent) => void) => () => void;
+  };
   automation: {
     list: (input?: AutomationListInput) => Promise<AutomationListResult>;
     getMemory: (input: AutomationGetMemoryInput) => Promise<AutomationMemory | null>;
@@ -1150,6 +1305,13 @@ export interface NativeApi {
       input: AutomationResolveProposalInput,
     ) => Promise<AutomationResolveProposalResult>;
     onEvent: (callback: (event: AutomationStreamEvent) => void) => () => void;
+  };
+  todo: {
+    list: () => Promise<TodoListResult>;
+    create: (input: TodoCreateInput) => Promise<Todo>;
+    update: (input: TodoUpdateInput) => Promise<Todo>;
+    delete: (input: TodoDeleteInput) => Promise<void>;
+    onEvent: (callback: (event: TodoStreamEvent) => void) => () => void;
   };
   browser: BrowserControlMethods & {
     annotations: BrowserAnnotationMethods;

@@ -94,9 +94,14 @@ describe("desktop bundle file selection", () => {
       ["win", "win32"],
     ] as const) {
       const patterns = createDesktopBundleFilePatterns(platform);
-      for (const icon of ["default", "icon", "dark"] as const) {
+      for (const icon of ["default", "icon", "dark", "beta"] as const) {
         for (const isDarkAppearance of [true, false]) {
-          const name = desktopAppIconResourceName({ platform: host, icon, isDarkAppearance });
+          const name = desktopAppIconResourceName({
+            platform: host,
+            icon,
+            isDarkAppearance,
+            isBetaFlavor: true,
+          });
           expect(
             excluded(`apps/desktop/prod-resources/${name}`, patterns),
             `${platform}/${name}`,

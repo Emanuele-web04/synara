@@ -18,7 +18,11 @@ import { XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { selectRepresentativeTerminalVisualIdentity } from "~/terminalVisualIdentity";
 
-import { DOCK_HEADER_ICON_BUTTON_CLASS, SurfaceTabChip } from "../chat/chatHeaderControls";
+import {
+  DOCK_HEADER_ICON_BUTTON_CLASS,
+  SurfaceTabChip,
+  SurfaceTabStrip,
+} from "../chat/chatHeaderControls";
 import type { ResolvedTerminalGroupLayout } from "./TerminalLayout";
 import TerminalActivityIndicator from "./TerminalActivityIndicator";
 import TerminalIdentityIcon from "./TerminalIdentityIcon";
@@ -74,7 +78,7 @@ export function TerminalWorkspaceTabBar(props: {
   const canCloseGroups = props.terminalGroups.length > 1;
   return (
     <div className="flex min-h-9 min-w-0 items-center gap-1 bg-[var(--color-background-surface)] px-1.5 py-1">
-      <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <SurfaceTabStrip className="flex-1" activeKey={props.activeGroupId}>
         {props.terminalGroups.map((terminalGroup) => {
           const isActive = terminalGroup.id === props.activeGroupId;
           const visualIdentity = selectRepresentativeTerminalVisualIdentity({
@@ -118,7 +122,7 @@ export function TerminalWorkspaceTabBar(props: {
             />
           );
         })}
-      </div>
+      </SurfaceTabStrip>
       <div className="flex shrink-0 items-center">
         <TerminalChromeActions actions={props.actions} variant="workspace" />
       </div>

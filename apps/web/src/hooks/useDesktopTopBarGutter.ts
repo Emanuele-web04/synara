@@ -132,8 +132,9 @@ export function useDesktopTopBarTrafficLightGutterClassName(): string | null {
  * top-right corner (see {@link DesktopWindowControls} mounted in the root route),
  * mirroring how macOS insets its traffic lights at the top-left.
  *
- * Each caption button is 46px wide (matching {@link CHAT_SURFACE_HEADER_HEIGHT_PX}),
- * so the three-button cluster spans 138px. Any top bar that can sit flush against
+ * Each caption button is 46px wide (the native Windows caption-button width) and as
+ * tall as the top bar ({@link CHAT_SURFACE_HEADER_HEIGHT_PX}), so the three-button
+ * cluster spans 138px. Any top bar that can sit flush against
  * the window's right edge reserves that width here so its trailing controls never
  * slide underneath the floating buttons.
  *

@@ -4,6 +4,7 @@
 
 import type { ProjectId, ThreadEnvironmentMode, ThreadId } from "@synara/contracts";
 import { isAutomationRunThread } from "@synara/shared/automationMode";
+import { isSidechatThread, sidechatContextMatchesGitHubItem } from "@synara/shared/sidechatThread";
 
 import type { AppState } from "./storeState";
 import { ACCOUNT_RATE_LIMIT_ACTIVITY_KINDS } from "./lib/rateLimits";
@@ -385,7 +386,7 @@ export function createComposerThreadMentionSourcesSelector(): (
 
     const nextSources = (threadIds ?? []).flatMap((threadId) => {
       const thread = summaryById[threadId];
-      return thread && !thread.sidechatSourceThreadId
+      return thread && !isSidechatThread(thread)
         ? [
             {
               id: thread.id,
@@ -439,14 +440,16 @@ export function isSidebarThreadVisible(
   thread: SidebarThreadSummary,
   options?: SidebarThreadVisibilityOptions,
 ): boolean {
-  if (thread.sidechatSourceThreadId) return false;
+  // Sidechats live in their host's dock (a thread's, or the inbox's for standalone ones).
+  if (isSidechatThread(thread)) return false;
   if (!options?.hideAutomationRunThreads) return true;
   if (thread.isPinned) return true;
   return !isAutomationRunThread(thread);
 }
 
-export function createSidechatSummariesForSourceSelector(
-  sourceThreadId: ThreadId,
+// Newest activity first, so index 0 is the sidechat a host reopens.
+function createSortedSidechatSummariesSelector(
+  matches: (thread: SidebarThreadSummary) => boolean,
 ): (state: AppState) => readonly SidebarThreadSummary[] {
   const selectSidebarSummaries = createSidebarThreadSummariesSelector();
   let previousSummaries: readonly SidebarThreadSummary[] | undefined;
@@ -457,9 +460,7 @@ export function createSidechatSummariesForSourceSelector(
     if (summaries === previousSummaries) return previousSidechats;
     previousSummaries = summaries;
     const nextSidechats = summaries
-      .filter(
-        (thread) => thread.sidechatSourceThreadId === sourceThreadId && thread.archivedAt == null,
-      )
+      .filter((thread) => thread.archivedAt == null && matches(thread))
       .toSorted(
         (left, right) =>
           Date.parse(right.sidechatLastActivityAt ?? right.updatedAt ?? right.createdAt) -
@@ -474,6 +475,27 @@ export function createSidechatSummariesForSourceSelector(
     previousSidechats = nextSidechats;
     return previousSidechats;
   };
+}
+
+export function createSidechatSummariesForSourceSelector(
+  sourceThreadId: ThreadId,
+): (state: AppState) => readonly SidebarThreadSummary[] {
+  return createSortedSidechatSummariesSelector(
+    (thread) => thread.sidechatSourceThreadId === sourceThreadId,
+  );
+}
+
+/** Sidechats for one GitHub item; Ask can scope reuse to its chosen project. */
+export function createSidechatSummariesForGitHubItemSelector(item: {
+  readonly projectId?: ProjectId;
+  readonly repository: string;
+  readonly number: number;
+}): (state: AppState) => readonly SidebarThreadSummary[] {
+  return createSortedSidechatSummariesSelector(
+    (thread) =>
+      (item.projectId === undefined || thread.projectId === item.projectId) &&
+      sidechatContextMatchesGitHubItem(thread.sidechatContext, item),
+  );
 }
 
 export function createSidebarDisplayThreadsSelector(

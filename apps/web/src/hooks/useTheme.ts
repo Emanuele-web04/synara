@@ -14,7 +14,10 @@ import {
   type ThemePack,
   type ThemeState,
   type ThemeVariant,
+  type WindowMaterial,
+  type WindowTranslucency,
   areThemePacksEqual,
+  areWindowTranslucenciesEqual,
   buildThemeCssVariables,
   canParseThemeShareString,
   createThemeShareString,
@@ -25,6 +28,7 @@ import {
   serializeThemeState,
   setThemeCodeThemeId,
   setThemeFonts,
+  setWindowTranslucency as setWindowTranslucencyState,
   updateChromeTheme,
   updateThemePackFromShareString,
 } from "../theme/theme.logic";
@@ -46,6 +50,7 @@ let listeners: Array<() => void> = [];
 // transcript streaming.
 let currentSnapshot: ThemeSnapshot | null = null;
 let lastDesktopTheme: ThemeMode | null = null;
+let lastDesktopWindowMaterial: string | null = null;
 
 // ─── Store wiring ─────────────────────────────────────────────────────────
 
@@ -172,10 +177,12 @@ function applyThemeState(state: ThemeState, suppressTransitions = false) {
 
   const variant = resolveThemeVariant(state.mode, getSystemDark());
   const activeTheme = resolveThemePack(state, variant);
+  const translucency = state.translucency[variant];
   const cssVariableBuild = buildThemeCssVariables(activeTheme, variant, {
     electron: isElectron,
     isMac: isMacNavigatorPlatform(),
     systemUiFont: state.systemUiFont,
+    translucency,
   });
 
   root.classList.toggle("dark", variant === "dark");
@@ -193,6 +200,7 @@ function applyThemeState(state: ThemeState, suppressTransitions = false) {
   }
 
   syncDesktopTheme(state.mode);
+  syncDesktopWindowMaterial(cssVariableBuild.material, translucency.blur);
 
   if (suppressTransitions) {
     // Force a reflow so the no-transitions class takes effect before removal.
@@ -218,6 +226,23 @@ function syncDesktopTheme(theme: ThemeMode) {
   void bridge.setTheme(theme).catch(() => {
     if (lastDesktopTheme === theme) {
       lastDesktopTheme = null;
+    }
+  });
+}
+
+// Only the macOS desktop implements this; the material there is "translucent" only on macOS.
+function syncDesktopWindowMaterial(material: WindowMaterial, blurRadius: number) {
+  const setWindowMaterial =
+    typeof window === "undefined" ? undefined : window.desktopBridge?.setWindowMaterial;
+  const key = `${material}:${blurRadius}`;
+  if (!setWindowMaterial || lastDesktopWindowMaterial === key) {
+    return;
+  }
+
+  lastDesktopWindowMaterial = key;
+  void setWindowMaterial({ material, blurRadius }).catch(() => {
+    if (lastDesktopWindowMaterial === key) {
+      lastDesktopWindowMaterial = null;
     }
   });
 }
@@ -259,6 +284,10 @@ function updateThemeFonts(variant: ThemeVariant, patch: Partial<ThemeFonts>) {
   updateStoredThemeState((state) => setThemeFonts(state, variant, patch));
 }
 
+function setWindowTranslucency(variant: ThemeVariant, patch: Partial<WindowTranslucency>) {
+  updateStoredThemeState((state) => setWindowTranslucencyState(state, variant, patch));
+}
+
 function setCodeThemeId(variant: ThemeVariant, codeThemeId: string) {
   updateStoredThemeState((state) => setThemeCodeThemeId(state, variant, codeThemeId));
 }
@@ -274,7 +303,12 @@ export function useTheme() {
   const darkTheme = resolveThemePack(snapshot.state, "dark");
   const lightTheme = resolveThemePack(snapshot.state, "light");
   const defaultActiveTheme = resolveThemePack(DEFAULT_THEME_STATE, resolvedTheme);
-  const isDefaultActiveTheme = areThemePacksEqual(activeTheme, defaultActiveTheme);
+  const isDefaultActiveTheme =
+    areThemePacksEqual(activeTheme, defaultActiveTheme) &&
+    areWindowTranslucenciesEqual(
+      snapshot.state.translucency[resolvedTheme],
+      DEFAULT_THEME_STATE.translucency[resolvedTheme],
+    );
 
   const canImportThemeString = (value: string, variant: ThemeVariant = resolvedTheme) =>
     canParseThemeShareString(value, variant);
@@ -294,6 +328,10 @@ export function useTheme() {
     areThemePacksEqual(
       resolveThemePack(snapshot.state, variant),
       resolveThemePack(DEFAULT_THEME_STATE, variant),
+    ) &&
+    areWindowTranslucenciesEqual(
+      snapshot.state.translucency[variant],
+      DEFAULT_THEME_STATE.translucency[variant],
     );
 
   // Keep the DOM synced if something bypassed the immediate module-load apply.
@@ -319,11 +357,21 @@ export function useTheme() {
     resolvedTheme,
     setCodeThemeId,
     setTheme,
+    setWindowTranslucency,
     theme,
     themeState: snapshot.state,
+    translucency: snapshot.state.translucency,
     updateThemeFonts,
     updateThemePack,
   } as const;
 }
 
-export type { ChromeTheme, ThemeFonts, ThemeMode, ThemePack, ThemeState, ThemeVariant };
+export type {
+  ChromeTheme,
+  ThemeFonts,
+  ThemeMode,
+  ThemePack,
+  ThemeState,
+  ThemeVariant,
+  WindowTranslucency,
+};

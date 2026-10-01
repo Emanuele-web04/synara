@@ -24,6 +24,17 @@ export interface ThreadModelSummary {
   fastMode: boolean;
 }
 
+/**
+ * The one-line label surfaces render next to the provider icon: model name plus
+ * effort/status, without repeating the provider name the icon already carries
+ * (e.g. "Claude Opus 5.5 · Medium", "SWE 2 · Max").
+ */
+export function formatThreadModelSummaryLabel(summary: ThreadModelSummary): string {
+  return summary.statusLabel === null
+    ? summary.modelLabel
+    : `${summary.modelLabel} · ${summary.statusLabel}`;
+}
+
 export function resolveThreadModelSummary(
   modelSelection: ModelSelection | null | undefined,
 ): ThreadModelSummary | null {

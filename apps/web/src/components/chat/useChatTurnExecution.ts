@@ -1,5 +1,6 @@
 import type {
   ProjectId,
+  ProjectKind,
   ProjectScript,
   ProviderMentionReference,
   ProviderSkillReference,
@@ -77,7 +78,7 @@ interface PreparedChatTurn {
   interactionModeForSend: ProviderInteractionMode;
   nextThreadWorkingDirectory: string | null;
   activeThread: Thread;
-  targetProjectKindForSend: "project" | "chat" | "studio";
+  targetProjectKindForSend: ProjectKind;
   setupScriptForWorktree: ProjectScript | null;
   messageCreatedAt: string;
   turnAttachmentsPromise: ReturnType<typeof stageUploadComposerAttachments>;
@@ -420,6 +421,7 @@ export function useChatTurnExecution({
           selectedModelSelectionForSend.provider === "claudeAgent"
             ? selectedModelSelectionForSend.supportsAutoMode
             : undefined,
+          { instanceId: selectedModelSelectionForSend.instanceId },
         );
 
         if (isLocalDraftThread) {
@@ -591,6 +593,8 @@ export function useChatTurnExecution({
         rememberCustomBinaryPathForDispatch({
           threadId: threadIdForSend,
           provider: dispatchSettings.modelSelection.provider,
+          providerInstanceId:
+            dispatchSettings.modelSelection.instanceId ?? dispatchSettings.modelSelection.provider,
           providerOptions: dispatchSettings.providerOptions,
         });
         await stagedTurnAttachments.runWithDispatch(async (turnAttachments) => {

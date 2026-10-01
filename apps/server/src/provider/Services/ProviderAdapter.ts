@@ -27,6 +27,7 @@ import type {
   ProviderReadPluginResult,
   ProviderListSkillsResult,
   ProviderListSkillsInput,
+  ProviderInstanceId,
   ProviderStartReviewInput,
   ProviderUserInputAnswers,
   ProviderRuntimeEvent,
@@ -43,8 +44,15 @@ import type {
   ProviderTurnStartResult,
   TurnId,
 } from "@synara/contracts";
-import type { Effect } from "effect";
+import type { Deferred, Effect } from "effect";
 import type { Stream } from "effect";
+
+export function resolveProviderSessionInstanceId(
+  input: Pick<ProviderSessionStartInput, "providerInstanceId" | "modelSelection">,
+): ProviderInstanceId | undefined {
+  return input.providerInstanceId ?? input.modelSelection?.instanceId;
+}
+import type { CodexGeneratedImageHomeCandidate } from "../../codexGeneratedImages.ts";
 
 export type ProviderSessionModelSwitchMode = "in-session" | "restart-session" | "unsupported";
 
@@ -65,6 +73,10 @@ export interface ProviderSteerSubagentPayload {
   readonly attachments?: ProviderSendTurnInput["attachments"];
   readonly skills?: ProviderSendTurnInput["skills"];
   readonly mentions?: ProviderSendTurnInput["mentions"];
+}
+/** Local preparation controls; never serialized into provider input or persisted history. */
+export interface ProviderTurnDispatchOptions {
+  readonly claudeCompactionCancellation?: Deferred.Deferred<void>;
 }
 export type ProviderConversationRollbackMode = "native" | "restart-session";
 
@@ -107,6 +119,21 @@ export interface ProviderThreadSnapshot {
   readonly lastUsedModel?: { readonly model: string; readonly thinkingLevel?: string };
 }
 
+export interface ProviderGeneratedImageHomePathsInput {
+  /** When present, live sessions outside this current settings scope are ignored. */
+  readonly enabledProviderInstanceIds?: ReadonlySet<ProviderInstanceId>;
+}
+
+/** Server-internal launch guard; deliberately not part of the public contracts schema. */
+export interface ProviderContinuationLaunchRequirements {
+  readonly expectedCodexContinuationGeneration?: string;
+}
+
+export type ProviderAdapterSessionStartInput = ProviderSessionStartInput &
+  ProviderContinuationLaunchRequirements;
+export type ProviderAdapterForkThreadInput = ProviderForkThreadInput &
+  ProviderContinuationLaunchRequirements;
+
 export interface ProviderAdapterShape<TError> {
   /**
    * Provider kind implemented by this adapter.
@@ -118,7 +145,7 @@ export interface ProviderAdapterShape<TError> {
    * Start a provider-backed session.
    */
   readonly startSession: (
-    input: ProviderSessionStartInput,
+    input: ProviderAdapterSessionStartInput,
   ) => Effect.Effect<ProviderSession, TError>;
 
   /**
@@ -136,6 +163,7 @@ export interface ProviderAdapterShape<TError> {
    */
   readonly sendTurn: (
     input: ProviderSendTurnInput,
+    options?: ProviderTurnDispatchOptions,
   ) => Effect.Effect<ProviderTurnStartResult, TError>;
 
   /**
@@ -143,6 +171,7 @@ export interface ProviderAdapterShape<TError> {
    */
   readonly steerTurn?: (
     input: ProviderSteerTurnInput,
+    options?: ProviderTurnDispatchOptions,
   ) => Effect.Effect<ProviderTurnStartResult, TError>;
 
   /**
@@ -226,6 +255,13 @@ export interface ProviderAdapterShape<TError> {
   readonly listSessions: () => Effect.Effect<ReadonlyArray<ProviderSession>>;
 
   /**
+   * List provider home roots that can contain generated image artifacts for live sessions.
+   */
+  readonly listGeneratedImageHomePaths?: (
+    input?: ProviderGeneratedImageHomePathsInput,
+  ) => Effect.Effect<ReadonlyArray<CodexGeneratedImageHomeCandidate>, TError>;
+
+  /**
    * Check whether this adapter owns an active session id.
    */
   readonly hasSession: (threadId: ThreadId) => Effect.Effect<boolean>;
@@ -241,6 +277,7 @@ export interface ProviderAdapterShape<TError> {
   readonly readExternalThread?: (input: {
     readonly externalThreadId: string;
     readonly cwd?: string;
+    readonly providerInstanceId?: ProviderInstanceId;
     readonly providerOptions?: ProviderStartOptions;
   }) => Effect.Effect<ProviderThreadSnapshot, TError>;
 
@@ -261,7 +298,12 @@ export interface ProviderAdapterShape<TError> {
   readonly startClaudeCompaction?: (input: {
     readonly threadId: ThreadId;
     readonly turnId: TurnId;
+    /** Request-owned cancellation remains valid before adapter discovery is registered. */
+    readonly cancellation?: Deferred.Deferred<void>;
   }) => Effect.Effect<ProviderTurnStartResult, TError>;
+
+  /** Cancel active local compaction preparation before prompt dispatch. */
+  readonly cancelClaudeCompactionDiscovery?: (threadId: ThreadId) => Effect.Effect<void>;
 
   /** Read bounded native/local cache evidence without delivering a model prompt. */
   readonly getClaudeCacheObservation?: (
@@ -275,7 +317,7 @@ export interface ProviderAdapterShape<TError> {
    * conversation-history-only forking.
    */
   readonly forkThread?: (
-    input: ProviderForkThreadInput,
+    input: ProviderAdapterForkThreadInput,
   ) => Effect.Effect<ProviderForkThreadResult, TError>;
 
   /**

@@ -11,6 +11,7 @@ import {
   type GitWorktreeSetupProgressEvent,
   type ModelSelection,
   type ModelSlug,
+  type ProviderInstanceId,
   type ProviderApprovalDecision,
   type ProviderInteractionMode,
   type ProviderKind,
@@ -330,7 +331,7 @@ export function buildTranscriptTailKey(
 }
 
 export function resolveThreadArtifactWorkspaceRoot(input: {
-  readonly isStudioContainer: boolean;
+  readonly isGroupContainer: boolean;
   readonly projectCwd: string | null;
   readonly threadWorkspaceCwd: string | null;
 }): string | null {
@@ -338,9 +339,48 @@ export function resolveThreadArtifactWorkspaceRoot(input: {
     return input.threadWorkspaceCwd;
   }
   // A normal thread can expose project files while a requested worktree is
-  // still being materialized. Studio has no equivalent project-root fallback:
+  // still being materialized. Groups has no equivalent project-root fallback:
   // its selected working directory is the artifact boundary.
-  return input.isStudioContainer ? null : input.projectCwd;
+  return input.isGroupContainer ? null : input.projectCwd;
+}
+
+export function shouldShowComposerProviderInstancePicker(input: {
+  provider: ProviderKind;
+  selectedProviderInstanceId: ProviderInstanceId;
+  providerInstances: ReadonlyArray<{ readonly instanceId: ProviderInstanceId }>;
+}): boolean {
+  const selectedInstanceIsConfigured = input.providerInstances.some(
+    (instance) => instance.instanceId === input.selectedProviderInstanceId,
+  );
+
+  return (
+    input.provider === "codex" ||
+    input.provider === "claudeAgent" ||
+    input.providerInstances.length > 1 ||
+    !selectedInstanceIsConfigured
+  );
+}
+
+export function buildCollapsedCursorModelOptionsReset(input: {
+  provider: ProviderKind;
+  instanceId: ProviderInstanceId;
+  model: ModelSlug;
+  showExpandedCursorModelVariants: boolean;
+}):
+  | {
+      readonly persistSticky: true;
+      readonly instanceId: ProviderInstanceId;
+      readonly model: ModelSlug;
+    }
+  | undefined {
+  if (input.provider !== "cursor" || input.showExpandedCursorModelVariants) {
+    return undefined;
+  }
+  return {
+    persistSticky: true,
+    instanceId: input.instanceId,
+    model: input.model,
+  };
 }
 
 export interface PromptHistoryNavigationState {
@@ -478,6 +518,10 @@ export function resolvePromptHistoryNavigation(input: {
     input.state !== null && (activeEntry === undefined || input.currentPrompt !== activeEntry);
 
   if (input.direction === "older") {
+    // Starting history must never replace text the user is still editing.
+    if (input.state === null && input.currentPrompt.length > 0) {
+      return notHandled(null);
+    }
     if (!isComposerCursorOnFirstLine(input.currentPrompt, input.currentExpandedCursor)) {
       return notHandled(input.state);
     }
@@ -636,13 +680,13 @@ export function resolveEnvironmentPanelVisible(input: {
   return input.environmentEnabled && input.environmentPanelOpen;
 }
 
-// Normal project toolbars stay stable while repository discovery is pending. Studio folders are
+// Normal project toolbars stay stable while repository discovery is pending. Group folders are
 // casual context, however, so they must opt into Git UI only after a positive repository result.
 export function resolveGitRepoUiState(input: {
-  isStudioContainer: boolean;
+  isGroupContainer: boolean;
   queriedIsRepo: boolean | undefined;
 }): boolean {
-  return input.queriedIsRepo ?? !input.isStudioContainer;
+  return input.queriedIsRepo ?? !input.isGroupContainer;
 }
 
 export interface SettledThreadBranchMismatch {
@@ -788,6 +832,11 @@ export function resolveDraftFallbackModelSelection(input: {
   return buildModelSelection(provider, model);
 }
 
+/** Placeholder title for a thread that has not been sent yet (header, open-thread tabs). */
+export function resolveDraftThreadTitle(entryPoint: DraftThreadState["entryPoint"]): string {
+  return entryPoint === "terminal" ? "New terminal" : "New thread";
+}
+
 export function buildLocalDraftThread(
   threadId: ThreadId,
   draftThread: DraftThreadState,
@@ -798,7 +847,7 @@ export function buildLocalDraftThread(
     id: threadId,
     codexThreadId: null,
     projectId: draftThread.projectId,
-    title: draftThread.entryPoint === "terminal" ? "New terminal" : "New thread",
+    title: resolveDraftThreadTitle(draftThread.entryPoint),
     modelSelection: fallbackModelSelection,
     runtimeMode: draftThread.runtimeMode,
     interactionMode: draftThread.interactionMode,
@@ -964,6 +1013,8 @@ export function describeVoiceRecordingStartError(error: unknown): string {
 }
 
 export function deriveComposerVoiceState(input: {
+  enabled: boolean | undefined;
+  available: boolean;
   authStatus: ServerProviderAuthStatus | null | undefined;
   voiceTranscriptionAvailable: boolean | undefined;
   isRecording: boolean;
@@ -973,8 +1024,9 @@ export function deriveComposerVoiceState(input: {
   canStartVoiceNotes: boolean;
   showVoiceNotesControl: boolean;
 } {
-  const canRenderVoiceNotes = input.authStatus !== "unauthenticated";
-  const canStartVoiceNotes = canRenderVoiceNotes && input.voiceTranscriptionAvailable !== false;
+  const canRenderVoiceNotes =
+    input.enabled !== false && input.available && input.authStatus !== "unauthenticated";
+  const canStartVoiceNotes = canRenderVoiceNotes && input.voiceTranscriptionAvailable === true;
 
   return {
     canRenderVoiceNotes,

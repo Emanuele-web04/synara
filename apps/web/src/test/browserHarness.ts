@@ -16,6 +16,8 @@ export function createBrowserTestServerConfig(checkedAt: string): ServerConfig {
     providers: [
       {
         provider: "codex",
+        instanceId: "codex",
+        driver: "codex",
         status: "ready",
         available: true,
         authStatus: "authenticated",

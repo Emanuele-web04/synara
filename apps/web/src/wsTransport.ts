@@ -29,7 +29,9 @@ import {
   WS_METHODS,
   WsCompatibilityError,
   WsFeatureRpcGroup,
+  WsProjectAgentRpcGroup,
   type AutomationStreamEvent,
+  type TodoStreamEvent,
   type GitActionProgressEvent,
   type GitCreateDetachedWorktreeResult,
   type GitRunStackedActionResult,
@@ -39,6 +41,7 @@ import {
   type OrchestrationEvent,
   type OrchestrationShellStreamItem,
   type OrchestrationThreadStreamItem,
+  type ProjectAgentStreamEvent,
   type ProjectDevServerEvent,
   type ProjectFileChangeEvent,
   type ProjectWatchFileInput,
@@ -52,6 +55,7 @@ import {
   type WsPush,
   type WsPushChannel,
   type WsPushMessage,
+  TASKS_UNAVAILABLE_ERROR_CODE,
   ThreadId,
 } from "@synara/contracts";
 import {
@@ -217,7 +221,7 @@ function awaitWithAbort<A>(promise: Promise<A>, signal: AbortSignal | undefined)
 // real RPC error (or an `unsupported-platform` availability) to render its
 // blocked state. Merging here keeps one socket and one client.
 const makeRpcClient = RpcClient.make(
-  WsFeatureRpcGroup.merge(WsDeviceRpcGroup).merge(WsComputerRpcGroup),
+  WsFeatureRpcGroup.merge(WsDeviceRpcGroup).merge(WsComputerRpcGroup).merge(WsProjectAgentRpcGroup),
 );
 const makeBootstrapRpcClient = RpcClient.make(WsBootstrapRpcGroup);
 const REQUEST_TIMEOUT_MS = 60_000;
@@ -382,6 +386,9 @@ const STREAM_ADMISSION_ERROR_CODES = new Set([
   "ORCHESTRATION_RESNAPSHOT_REQUIRED",
   "ORCHESTRATION_SNAPSHOT_STALLED",
   "ORCHESTRATION_PROJECTION_STATE_INCOMPLETE",
+  // A server that does not offer Tasks (Stable) refuses its stream for good;
+  // reconnecting the socket would only be refused again.
+  TASKS_UNAVAILABLE_ERROR_CODE,
 ]);
 
 const RESNAPSHOT_REQUIRED_ERROR_CODE = "ORCHESTRATION_RESNAPSHOT_REQUIRED";
@@ -793,6 +800,7 @@ export class WsTransport {
   private shellSnapshotDelivered = false;
   private readonly threadSubscriptions = new Map<string, unknown>();
   private readonly projectFileSubscriptions = new Map<string, ProjectFileChangeSubscription>();
+  private readonly projectAgentSubscriptions = new Map<string, unknown>();
   private compatibility: WsBootstrapNegotiateResult | null = null;
   private compatibilityIssue: WsCompatibilityError | null = null;
   // Tracks the last server generation this transport observed so cross-restart
@@ -859,6 +867,22 @@ export class WsTransport {
         this.threadSubscriptions.set(threadId, input);
         const client = await awaitWithAbort(this.getClient(), abortScope.signal);
         await this.startThreadStream(client, threadId, input as never, wasSubscribed);
+        return undefined as T;
+      }
+      if (method === WS_METHODS.subscribeProjectAgentEvents) {
+        const projectId = (params as { projectId: string }).projectId;
+        const streamKey = `projectAgent.events:${projectId}`;
+        this.resetStreamCapacityRetry(streamKey);
+        this.resetStreamCompletionRetry(streamKey);
+        this.projectAgentSubscriptions.set(projectId, params);
+        const client = await awaitWithAbort(this.getClient(), abortScope.signal);
+        // An unsubscribe that landed during the connect wait already dropped the
+        // registration (and a resubscribe replaced it) — only stream when this
+        // request is still the registered one.
+        if (this.projectAgentSubscriptions.get(projectId) !== params) {
+          return undefined as T;
+        }
+        this.startProjectAgentEventStream(client, projectId, params);
         return undefined as T;
       }
 
@@ -1075,6 +1099,7 @@ export class WsTransport {
     this.streamCleanups.clear();
     this.activeThreadStreamInputs.clear();
     this.projectFileSubscriptions.clear();
+    this.projectAgentSubscriptions.clear();
     this.threadStreamFailureListeners.clear();
     // Dispose can race with initial connection or reconnect promises. Mark them
     // handled before closing the runtime so test/browser teardown stays quiet.
@@ -1447,6 +1472,9 @@ export class WsTransport {
         for (const [key, subscription] of this.projectFileSubscriptions) {
           this.startProjectFileChangeStream(client, key, subscription);
         }
+        for (const [projectId, params] of this.projectAgentSubscriptions) {
+          this.startProjectAgentEventStream(client, projectId, params);
+        }
         this.reconnectFailures = 0;
         return client;
       } catch (error) {
@@ -1557,6 +1585,14 @@ export class WsTransport {
             (event: AutomationStreamEvent) => this.emit(WS_CHANNELS.automationEvent, event),
             restartChannel,
           );
+        } else if (channel === WS_CHANNELS.todoEvent) {
+          this.startStream(
+            client,
+            "todo.events",
+            client[WS_METHODS.subscribeTodoEvents]({}),
+            (event: TodoStreamEvent) => this.emit(WS_CHANNELS.todoEvent, event),
+            restartChannel,
+          );
         } else if (channel === DEVICE_WS_CHANNELS.event) {
           this.startStream(
             client,
@@ -1606,6 +1642,7 @@ export class WsTransport {
     else if (channel === WS_CHANNELS.terminalEvent) this.stopStream("terminal.events");
     else if (channel === WS_CHANNELS.projectDevServerEvent) this.stopStream("project.devServers");
     else if (channel === WS_CHANNELS.automationEvent) this.stopStream("automation.events");
+    else if (channel === WS_CHANNELS.todoEvent) this.stopStream("todo.events");
     else if (channel === DEVICE_WS_CHANNELS.event) this.stopStream("device.events");
     else if (channel === COMPUTER_WS_CHANNELS.event) this.stopStream("computer.events");
     else if (channel === ORCHESTRATION_WS_CHANNELS.domainEvent)
@@ -1955,6 +1992,43 @@ export class WsTransport {
     );
     this.streamCleanups.set(key, cancel);
     this.streamSettled.set(key, settled);
+  }
+
+  /**
+   * Detach a project-agent event stream entirely: drop the resubscribe-on-reconnect
+   * registration and cancel the live stream scope. `subscribeProjectAgentEvents`
+   * re-registers from scratch when needed.
+   */
+  async unsubscribeProjectAgentEvents(projectId: string): Promise<void> {
+    this.projectAgentSubscriptions.delete(projectId);
+    await this.stopStream(`projectAgent.events:${projectId}`);
+  }
+
+  /**
+   * Start (or restart) a project-agent event stream. The restart closure keeps the
+   * standard stream recovery paths alive — unexpected-completion reconnects and
+   * admission retries run through startStream, and the recursion means a restarted
+   * stream can itself restart instead of dying after one completion.
+   */
+  private startProjectAgentEventStream(
+    client: RpcClientInstance,
+    projectId: string,
+    params: unknown,
+  ): void {
+    const streamKey = `projectAgent.events:${projectId}`;
+    this.startStream<ProjectAgentStreamEvent>(
+      client,
+      streamKey,
+      client[WS_METHODS.subscribeProjectAgentEvents](params as never),
+      (event) => this.emit(WS_CHANNELS.projectAgentEvent, event),
+      () => {
+        if (!this.projectAgentSubscriptions.has(projectId)) return;
+        void this.getClient().then((nextClient) => {
+          if (!this.projectAgentSubscriptions.has(projectId)) return;
+          this.startProjectAgentEventStream(nextClient, projectId, params);
+        });
+      },
+    );
   }
 
   private stopStream(

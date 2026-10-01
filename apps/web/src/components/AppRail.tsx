@@ -6,7 +6,13 @@
 //             items and their handlers and portals the rail into the slot the route shell
 //             places left of the panel, so no handler moves out of ThreadSidebar.
 
-import { type ComponentType, createContext, type ReactNode, useContext } from "react";
+import {
+  type ComponentType,
+  createContext,
+  type MouseEvent,
+  type ReactNode,
+  useContext,
+} from "react";
 import { createPortal } from "react-dom";
 
 import type { RailItemId } from "~/appRail.logic";
@@ -16,7 +22,7 @@ import { cn } from "~/lib/utils";
 import {
   SIDEBAR_ROW_ACTIVE_CLASS_NAME,
   SIDEBAR_ROW_HOVER_CLASS_NAME,
-  SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
+  SIDEBAR_SECTION_LABEL_TONE_CLASS_NAME,
 } from "~/sidebarRowStyles";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import type { SidebarActionBadge } from "./Sidebar.logic";
@@ -68,8 +74,10 @@ export function railProjectGlyphs(
 /** Central glyphs matching the Codex rail for the fixed rail items. */
 const RAIL_ITEM_GLYPH_NAMES: Record<RailItemId, string> = {
   home: "home-roof-door",
+  inbox: "inbox-empty",
   spaces: "folders",
   kanban: "columns-3-wide",
+  tasks: "todos",
   pullRequests: "pull-request",
   automations: "clock",
   studio: "images-1",
@@ -104,18 +112,21 @@ type AppRailProps = {
   bottomItems: ReadonlyArray<AppRailItem>;
   /** Rendered above the bottom items (the Help menu, like Codex's rail). */
   bottomSlot?: ReactNode;
+  /** Right-click on the rail (offers "Customize", like the classic nav block). */
+  onContextMenu?: ((event: MouseEvent) => void) | undefined;
 };
 
 /** Rail glyph size, shared with controls rendered into the rail slot (the Help menu). */
 export const APP_RAIL_GLYPH_CLASS_NAME = "size-5";
 
-/** Rail button box and active/idle tone, shared with controls rendered into the rail slot. */
+/** Rail button box and active/idle tone, shared with controls rendered into the rail slot.
+ *  Idle glyphs rest on the section-label grey; hover and the active item are full ink. */
 export function appRailButtonClassName(active: boolean): string {
   return cn(
     "size-9 rounded-lg",
     active
       ? SIDEBAR_ROW_ACTIVE_CLASS_NAME
-      : cn(SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME),
+      : cn(SIDEBAR_SECTION_LABEL_TONE_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME),
   );
 }
 
@@ -148,10 +159,18 @@ function AppRailButton({ item }: { item: AppRailItem }) {
   );
 }
 
-export function AppRail({ items, shortcuts, moreSlot, bottomItems, bottomSlot }: AppRailProps) {
+export function AppRail({
+  items,
+  shortcuts,
+  moreSlot,
+  bottomItems,
+  bottomSlot,
+  onContextMenu,
+}: AppRailProps) {
   return (
     <nav
       aria-label="Primary"
+      onContextMenu={onContextMenu}
       className="flex w-(--app-rail-width) shrink-0 flex-col items-center gap-1.5 pt-2.5 pb-2.5 font-system-ui"
     >
       {items.map((item) => (
@@ -180,6 +199,11 @@ const AppRailSlotContext = createContext<HTMLElement | null>(null);
 
 /** Provided by the route shell with the element the rail renders into. */
 export const AppRailSlotProvider = AppRailSlotContext.Provider;
+
+/** The element the rail renders into (null in the classic layout); anchors rail popovers. */
+export function useAppRailSlot(): HTMLElement | null {
+  return useContext(AppRailSlotContext);
+}
 
 /** Renders the rail into the shell's slot; nothing when no slot is mounted (classic layout). */
 export function AppRailPortal(props: AppRailProps) {

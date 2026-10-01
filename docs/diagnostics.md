@@ -22,13 +22,33 @@ the same allowlist server-side.
 | `app.start`, `app.exit`                                                                     | `kind: "lifecycle"`; `app.start` also carries `osVersion` (major.minor) and `locale` (language only, e.g. `en`)                                                                                                                        |
 | `app.renderer-crash`, `app.child-process-crash`                                             | `kind: "crash"`, `processType` (Electron enum like `renderer`/`gpu`/`backend`), `reason`, `logTail` (redacted last ~200 lines/16 KiB of the relevant log)                                                                              |
 | `app.error`                                                                                 | `kind: "error"`, `source` (`main`/`renderer`), `message` (redacted, 1 KiB), `stack` (redacted, 8 KiB), `fingerprint` (hash of the redacted text)                                                                                       |
-| `update.check`, `update.available`, `update.downloaded`, `update.installed`, `update.error` | `kind: "update"`, `outcome` (`ok`/`error`), `durationMs`, `errorContext` (`check`/`download`/`install`), `targetVersion` (strict semver)                                                                                               |
+| `update.check`, `update.available`, `update.downloaded`, `update.installed`, `update.error` | `kind: "update"`, `outcome` (`ok`/`error`), `durationMs`, `errorContext` (`check`/`download`/`install`), `targetVersion` (strict semver); `update.error` also carries `message` (redacted, 1 KiB)                                      |
 | `usage.daily`                                                                               | `kind: "usage"`, `providers` (provider name + `threads`/`turns`/`turnsFailed` counts for the last 24h; `turnsFailed` counts turns that ended in `error` — cancelled turns are not failures), `projects`, `activeThreads` — counts only |
 | `beta.installed`, `beta.left`                                                               | `kind: "beta"`, `outcome` (`imported`/`import-failed`/`fresh`, or `trash`/`keep`)                                                                                                                                                      |
 
-`app.error` fires when the main process throws an uncaught exception or a
-renderer logs a console error. The same fingerprint is sent at most once per
-10 minutes and at most 30 errors per hour per session.
+`app.error` fires when the main process throws an uncaught exception, the
+renderer throws an uncaught exception or rejects a promise, or the renderer
+logs a console error. Renderer exceptions retain their original stacks through
+a fixed, bounded IPC payload. The bridge is exposed only when the Beta main
+process enables it, and reports from other windows or subframes are rejected.
+Malformed exception fields produce a generic report without serializing objects.
+Console errors remain a fallback during startup and for browser errors such as
+CORS failures. Once the renderer listeners are ready, their uncaught exceptions
+are not also counted through that fallback. The same fingerprint is sent at
+most once per 10 minutes and at most 30 errors per hour per session. Loopback
+HTTP and WebSocket URL ports are normalized only for fingerprinting; the redacted
+message keeps the original port so it can still help diagnosis.
+
+Crash events exclude clean process exits and known app shutdowns, including
+backend processes deliberately stopped for an updater handoff. An unexpected
+`killed` process remains reportable; a signal alone does not prove shutdown.
+
+`update.check` records the start of a check, not a successful result. Its
+`outcome: "ok"` means the attempt started. Failures emit `update.error` with the
+check/download/install context and a redacted updater message.
+Download and install failures emit this event even when the UI keeps the
+`available` or `downloaded` status so the user can retry. Repeated broadcasts of
+the same failure do not emit another event; a new failed attempt does.
 
 `usage.daily` works differently from the other events: the main process cannot
 read the projection database, so the server writes
@@ -48,7 +68,7 @@ from your hardware, account, or IP.
 Crash dumps: Electron's `crashReporter` uploads minidumps to the diagnostics
 endpoint. Minidumps are memory snapshots of the crashed process and can in
 principle contain fragments of that process's memory; they are stored in R2 and
-can't be redacted, so they are deleted after 90 days by an R2 expiry rule.
+can't be redacted. They are kept with no expiry date.
 
 ## What usage counters do not collect
 
@@ -75,15 +95,23 @@ folder and repository names are not sent. Redaction is best-effort — error
 text can still include fragments of whatever was on screen. The worker runs
 the same redaction again before storing.
 
+Renderer error fields use the same shared redactor before crossing the bounded
+IPC bridge. PEM blocks are removed whole before the field length limit is
+applied, so truncation cannot leave a key fragment for the main process to
+misclassify. The main process redacts these fields again before queueing them.
+Loopback HTTP/WebSocket URL hosts become `localhost`, keeping their ports
+readable and recognizable for fingerprint grouping across both redaction passes.
+External IP addresses remain redacted and external ports remain distinct.
+
 ## Transport and storage
 
 Events are buffered to `~/.synara-beta/diagnostics/events.jsonl` and flushed in
 batches as NDJSON over HTTPS to `https://synara-beta-diagnostics.kartik-9f9.workers.dev`
 (override with `SYNARA_BETA_DIAGNOSTICS_URL` for local development; only `https://`
 or loopback targets are accepted). Events land in a Cloudflare D1 database and
-are kept for one year, then deleted by a daily job, so crash and error trends
-can be compared across many beta releases. Crash dumps land in the
-`synara-beta-crash-dumps` R2 bucket and are deleted after 90 days. The ingest worker
+are kept with no expiry date, so crash and error trends can be compared across
+all beta releases. Crash dumps land in the `synara-beta-crash-dumps` R2 bucket
+and are also kept with no expiry date. The ingest worker
 and its private dashboard live outside this repository (they run on the
 maintainers' Cloudflare account). The worker re-runs the same allowlist and
 `redactDiagnosticText` and drops unknown events/fields, so the documented
@@ -92,8 +120,8 @@ schema is enforced at the endpoint, not just the client.
 Ingest is intentionally open. Beta builds are public binaries, so any token
 baked into them would be public too, and Electron's crash uploader cannot send
 custom headers anyway. Abuse is bounded instead: per-IP rate limits (120
-requests a minute for ingest, 10 for login), request and dump size caps, the
-server-side allowlist and redaction, and the retention windows above.
+requests a minute for ingest, 10 for login), request and dump size caps, and
+the server-side allowlist and redaction.
 
 If the endpoint is unreachable the queue stays on disk and retries on the next
 flush; if it grows past 1 MiB the client trims it to the newest 512 KiB of

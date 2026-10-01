@@ -140,7 +140,7 @@ export const COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME = "mx-auto -mb-px w-14/15 
  *  `relative z-[1]` keeps the full input outline above the inset stacked rail
  *  (`-mb-px`), so the top border is never covered by live-changes / task / queue chrome. */
 export const COMPOSER_INPUT_SHELL_CLASS_NAME =
-  "group relative z-[1] chat-composer-shell transition-colors duration-200";
+  "group relative z-[1] chat-composer-shell squircle transition-colors duration-200";
 
 /** The one border for raised chrome floating over the transcript: composer shell and
  *  its attached banners, the Environment panel, kanban cards. Light and dark values
@@ -159,7 +159,7 @@ export const RAISED_SURFACE_CHROME_CLASS_NAME = `border ${RAISED_SURFACE_BORDER_
 
 /** Composer input shell. Like RAISED_SURFACE_CHROME but keeps a visible border in
  *  dark mode (via `--surface-border`) instead of dropping to shadow-only separation. */
-export const COMPOSER_INPUT_SURFACE_CLASS_NAME = `chat-composer-surface border ${RAISED_SURFACE_BORDER_CLASS_NAME} ${COMPOSER_SURFACE_SHADOW_CLASS_NAME} transition-colors duration-200`;
+export const COMPOSER_INPUT_SURFACE_CLASS_NAME = `chat-composer-surface squircle border ${RAISED_SURFACE_BORDER_CLASS_NAME} ${COMPOSER_SURFACE_SHADOW_CLASS_NAME} transition-colors duration-200`;
 
 /** Shadcn default-translucent shell for floating menus, pickers, and popovers. */
 export const APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME =
@@ -199,6 +199,9 @@ export const COMPOSER_PICKER_MENU_POPUP_VIEWPORT_CLASS_NAME =
  *  instead of sitting brighter and 2px out of alignment. */
 export const COMPOSER_PICKER_MENU_OPTION_CLASS_NAME = `[&>svg,&>[data-slot=central-icon]]:-mx-0.5 flex cursor-default select-none items-center ${COMPOSER_PICKER_OPTION_RADIUS_CLASS_NAME} text-ui text-[var(--color-text-foreground)] outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 [&>svg:not([class*='opacity-']),&>[data-slot=central-icon]:not([class*='opacity-'])]:opacity-80 [&>svg,&>[data-slot=central-icon]]:pointer-events-none [&>svg,&>[data-slot=central-icon]]:shrink-0`;
 
+/** Leading glyph of a menu option: one size for every icon in these popups. */
+export const MENU_ICON_CLASS_NAME = "size-3.5 shrink-0";
+
 /** Same as menu options, adapted for select item grid layout. */
 export const COMPOSER_PICKER_SELECT_OPTION_CLASS_NAME = `${COMPOSER_PICKER_MENU_OPTION_CLASS_NAME} grid in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)]`;
 
@@ -216,13 +219,18 @@ export const COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME =
  *  than plain `border-border`: the two cards sit side by side and must read as one weight. */
 export const ENVIRONMENT_PANEL_SURFACE_CLASS_NAME = `relative overflow-hidden rounded-2xl border ${RAISED_SURFACE_BORDER_CLASS_NAME} bg-popover text-popover-foreground ${COMPOSER_SURFACE_SHADOW_CLASS_NAME}`;
 
-/** Slide + inset timing matched to `SIDEBAR_OFFCANVAS_MOTION_CLASS` (right dock / thread sidebar). */
+/** Top-right overlay host shared by the right-side surface panels (Environment, Group,
+ *  Library). Panels that stack extra chrome (Environment's bottom rail) extend it. */
+export const ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME =
+  "pointer-events-none absolute inset-y-0 right-0 z-20 flex flex-col p-3";
+
+/** Slide + inset timing matched to shared disclosure motion (220ms). */
 export const ENVIRONMENT_PANEL_MOTION_CLASS =
-  "transition-[transform,opacity] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none";
+  "transition-[transform,opacity] duration-220 ease-out motion-reduce:transition-none";
 
 /** Transcript/composer right inset when the docked Environment card opens. */
 export const ENVIRONMENT_CONTENT_INSET_MOTION_CLASS =
-  "transition-[padding-right] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none";
+  "transition-[padding-right] duration-220 ease-out motion-reduce:transition-none";
 
 /** Anchors the command menu above the composer editor without shifting layout. */
 export const COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME =
@@ -245,7 +253,7 @@ export const COMPOSER_COMMAND_MENU_ITEM_CLASS_NAME =
 export const COMPOSER_COMMAND_MENU_ITEM_ACTIVE_CLASS_NAME =
   "bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)]";
 
-export const COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME = `chat-composer-surface-banner border-b ${RAISED_SURFACE_BORDER_CLASS_NAME} bg-[var(--color-background-elevated-secondary)]`;
+export const COMPOSER_INPUT_SURFACE_BANNER_CLASS_NAME = `chat-composer-surface-banner squircle border-b ${RAISED_SURFACE_BORDER_CLASS_NAME} bg-[var(--color-background-elevated-secondary)]`;
 
 /** Compact bordered action pill for inline composer chrome (Review changes, hint
  *  actions). One token so every trailing action in a composer strip reads alike. */

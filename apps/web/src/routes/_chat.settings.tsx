@@ -4,8 +4,9 @@
 // Exports: Settings route component for `/settings`
 
 import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@synara/contracts";
-import { isBetaFeatureOn, VISIBLE_PROVIDER_DESCRIPTORS } from "../betaFeatures";
+import { GROUPS_ON, isBetaFeatureOn, VISIBLE_PROVIDER_DESCRIPTORS } from "../betaFeatures";
 import { sameAppSnapShortcut } from "@synara/shared/appSnapShortcut";
+import { desktopFlavorFromProtocol } from "@synara/shared/betaFeatures";
 import { SafariAccessSetupButton } from "../components/SafariAccessOnboarding";
 import { createFileRoute, useSearch } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
@@ -13,6 +14,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   type AppSettings,
   type FollowUpBehavior,
+  type VoiceEnterBehavior,
   DEFAULT_UI_DENSITY,
   DEFAULT_CHAT_WIDTH,
   type UiDensity,
@@ -21,6 +23,7 @@ import {
   MAX_TERMINAL_FONT_SIZE_PX,
   MIN_CHAT_FONT_SIZE_PX,
   MIN_TERMINAL_FONT_SIZE_PX,
+  defaultDesktopAppIconForFlavor,
   normalizeChatFontSizePx,
   normalizeTerminalFontFamily,
   normalizeTerminalFontSizePx,
@@ -106,7 +109,7 @@ import {
   isWindowsPlatform,
 } from "../lib/utils";
 import { ensureNativeApi, readNativeApi } from "../nativeApi";
-import { sameProviderOrder } from "../providerOrdering";
+import { isProviderKind, sameProviderOrder } from "../providerOrdering";
 import {
   normalizeSettingsSection,
   SETTINGS_NAV_ITEMS,
@@ -190,6 +193,11 @@ const FOLLOW_UP_BEHAVIOR_OPTIONS = [
   { value: "steer", label: "Steer" },
 ] as const satisfies ReadonlyArray<{ value: FollowUpBehavior; label: string }>;
 
+const VOICE_ENTER_BEHAVIOR_OPTIONS = [
+  { value: "stop", label: "Stop" },
+  { value: "send", label: "Stop and send" },
+] as const satisfies ReadonlyArray<{ value: VoiceEnterBehavior; label: string }>;
+
 // ── Settings UI primitives ────────────────────────────────────────────────
 
 // Shared settings controls live in ~/components/settings/SettingControls.
@@ -197,7 +205,6 @@ const FOLLOW_UP_BEHAVIOR_OPTIONS = [
 function isProviderSelectOption(value: string): value is ProviderKind {
   return PROVIDER_SELECT_OPTIONS.includes(value as ProviderKind);
 }
-
 // Keys of AppSettings whose value is a plain boolean — the only ones that can be
 // driven by the shared on/off toggle row below.
 type BooleanSettingKey = {
@@ -210,6 +217,10 @@ function SettingsRouteView() {
   const routeSearch = useSearch({ strict: false }) as Record<string, unknown>;
   const activeSection = normalizeSettingsSection(routeSearch.section);
   const settingsTarget = typeof routeSearch.target === "string" ? routeSearch.target : null;
+  const settingsProviderTarget =
+    typeof routeSearch.provider === "string" && isProviderKind(routeSearch.provider)
+      ? routeSearch.provider
+      : null;
   const activeSectionItem = SETTINGS_NAV_ITEMS.find((item) => item.id === activeSection)!;
 
   const {
@@ -227,6 +238,15 @@ function SettingsRouteView() {
   const [releaseHistoryOpen, setReleaseHistoryOpen] = useState(false);
   const [resetEpoch, setResetEpoch] = useState(0);
   const platform = getNavigatorPlatform();
+  const desktopFlavor = useMemo(
+    () =>
+      desktopFlavorFromProtocol(
+        typeof window === "undefined" ? undefined : window.location?.protocol,
+        import.meta.env.DEV,
+      ),
+    [],
+  );
+  const defaultDesktopAppIcon = defaultDesktopAppIconForFlavor(desktopFlavor);
   const shouldShowFontSmoothing = isMacPlatform(platform);
   const supportsCustomTitleBarSetting =
     isElectron && (isWindowsPlatform(platform) || isLinuxPlatform(platform));
@@ -333,13 +353,15 @@ function SettingsRouteView() {
       ? ["Thread sort order"]
       : []),
     ...(settings.showChatsSection !== defaults.showChatsSection ? ["Chats section"] : []),
-    ...(settings.showStudioSection !== defaults.showStudioSection ? ["Studio section"] : []),
+    ...(GROUPS_ON && settings.showGroupsSection !== defaults.showGroupsSection
+      ? ["Hubs section"]
+      : []),
     ...(settings.showAutomationRunThreads !== defaults.showAutomationRunThreads
       ? ["Automation runs"]
       : []),
     ...(settings.uiDensity !== defaults.uiDensity ? ["UI density"] : []),
     ...(settings.chatWidth !== defaults.chatWidth ? ["Chat width"] : []),
-    ...(settings.desktopAppIcon !== defaults.desktopAppIcon ? ["App icon"] : []),
+    ...(settings.desktopAppIcon !== defaultDesktopAppIcon ? ["App icon"] : []),
     ...(customTitleBarPreferenceDirty ? ["Custom title bar"] : []),
     ...(settings.chatFontSizePx !== defaults.chatFontSizePx ? ["Base font size"] : []),
     ...(settings.terminalFontSizePx !== defaults.terminalFontSizePx ? ["Terminal font size"] : []),
@@ -361,6 +383,9 @@ function SettingsRouteView() {
       : []),
     ...(settings.composerEffortSlider !== defaults.composerEffortSlider ? ["Effort slider"] : []),
     ...(settings.followUpBehavior !== defaults.followUpBehavior ? ["Follow-up behavior"] : []),
+    ...(settings.voiceEnterBehavior !== defaults.voiceEnterBehavior
+      ? ["Enter while dictating"]
+      : []),
     ...(settings.autoOpenDevicePane !== defaults.autoOpenDevicePane
       ? ["Automatically open simulator"]
       : []),
@@ -384,6 +409,9 @@ function SettingsRouteView() {
     ...(settings.diffWordWrap !== defaults.diffWordWrap ? ["Diff line wrapping"] : []),
     ...(settings.showPullRequestDiffColors !== defaults.showPullRequestDiffColors
       ? ["Pull request diff colors"]
+      : []),
+    ...(settings.githubInboxIncludeUpstreams !== defaults.githubInboxIncludeUpstreams
+      ? ["Include fork upstreams"]
       : []),
     ...(settings.confirmThreadDelete !== defaults.confirmThreadDelete
       ? ["Delete confirmation"]
@@ -689,13 +717,15 @@ function SettingsRouteView() {
           ariaLabel: "Show the Chats section in the sidebar",
         })}
 
-        {renderBooleanSettingRow({
-          settingKey: "showStudioSection",
-          title: "Studio",
-          description: "Show the Studio tab in the sidebar switcher.",
-          resetLabel: "studio section",
-          ariaLabel: "Show the Studio section in the sidebar",
-        })}
+        {GROUPS_ON
+          ? renderBooleanSettingRow({
+              settingKey: "showGroupsSection",
+              title: "Hubs",
+              description: "Show the Hubs tab in the sidebar switcher.",
+              resetLabel: "hubs section",
+              ariaLabel: "Show the Hubs section in the sidebar",
+            })
+          : null}
 
         {renderBooleanSettingRow({
           settingKey: "showAutomationRunThreads",
@@ -832,10 +862,10 @@ function SettingsRouteView() {
             title="App icon"
             description="Choose the icon Synara uses in the dock or taskbar."
             resetAction={
-              settings.desktopAppIcon !== defaults.desktopAppIcon ? (
+              settings.desktopAppIcon !== defaultDesktopAppIcon ? (
                 <SettingResetButton
                   label="app icon"
-                  onClick={() => updateSettings({ desktopAppIcon: defaults.desktopAppIcon })}
+                  onClick={() => updateSettings({ desktopAppIcon: defaultDesktopAppIcon })}
                 />
               ) : null
             }
@@ -1209,6 +1239,31 @@ function SettingsRouteView() {
           }
         />
 
+        <SettingsRow
+          title="Enter while dictating"
+          description="Choose what Enter does while a voice note is recording: stop and transcribe into the composer, or stop and send the message once it is transcribed."
+          resetAction={
+            settings.voiceEnterBehavior !== defaults.voiceEnterBehavior ? (
+              <SettingResetButton
+                label="enter while dictating"
+                onClick={() =>
+                  updateSettings({
+                    voiceEnterBehavior: defaults.voiceEnterBehavior,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSegmentedControl
+              value={settings.voiceEnterBehavior}
+              onValueChange={(value) => updateSettings({ voiceEnterBehavior: value })}
+              ariaLabel="Enter while dictating"
+              options={VOICE_ENTER_BEHAVIOR_OPTIONS}
+            />
+          }
+        />
+
         {renderBooleanSettingRow({
           settingKey: "enableAssistantStreaming",
           title: "Assistant output",
@@ -1243,6 +1298,15 @@ function SettingsRouteView() {
           description: "Show additions in green and deletions in red in pull request summaries.",
           resetLabel: "pull request diff colors",
           ariaLabel: "Show pull request diff colors",
+        })}
+
+        {renderBooleanSettingRow({
+          settingKey: "githubInboxIncludeUpstreams",
+          title: "Include fork upstreams",
+          description:
+            "Also list pull requests and issues from each project's other GitHub remotes, such as the repository a fork was made from. Off reads only the project's own repository.",
+          resetLabel: "include fork upstreams",
+          ariaLabel: "Include fork upstreams in code review",
         })}
 
         {renderBooleanSettingRow({
@@ -1407,6 +1471,7 @@ function SettingsRouteView() {
                 />
                 <ProvidersSettingsPanel
                   active={activeSection === "providers"}
+                  providerTarget={settingsProviderTarget}
                   settings={settings}
                   defaults={defaults}
                   updateSettings={updateSettings}

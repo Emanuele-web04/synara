@@ -13,6 +13,7 @@ import {
   buildThreadHandoffImportedActivities,
   buildThreadHandoffImportedMessages,
   resolveAvailableHandoffTargetProviders,
+  resolveThreadHandoffAvailability,
   resolveThreadHandoffModelSelection,
 } from "./threadHandoff";
 import { appendAssistantSelectionsToPrompt } from "./assistantSelections";
@@ -137,6 +138,8 @@ describe("threadHandoff", () => {
       overrides: Partial<ServerProviderStatus> = {},
     ): ServerProviderStatus => ({
       provider,
+      instanceId: provider,
+      driver: provider,
       status: "ready",
       available: true,
       authStatus: "authenticated",
@@ -174,6 +177,8 @@ describe("threadHandoff", () => {
         providerStatuses: [
           {
             provider: "claudeAgent",
+            instanceId: "claudeAgent",
+            driver: "claudeAgent",
             status: "ready",
             available: true,
             authStatus: "authenticated",
@@ -187,6 +192,7 @@ describe("threadHandoff", () => {
   it("prefers sticky model selection for the chosen handoff target", () => {
     const stickySelection = {
       provider: "antigravity",
+      instanceId: "antigravity_work",
       model: "Gemini 3.5 Flash",
     } satisfies ModelSelection;
 
@@ -199,15 +205,66 @@ describe("threadHandoff", () => {
           },
         },
         targetProvider: "antigravity",
+        targetProviderInstanceId: "antigravity_work",
         projectDefaultModelSelection: {
           provider: "antigravity",
           model: "Claude Sonnet 4.6",
         },
         stickyModelSelectionByProvider: {
-          antigravity: stickySelection,
+          antigravity_work: stickySelection,
         },
       }),
     ).toEqual(stickySelection);
+  });
+
+  it("does not borrow provider-only sticky selections for a custom target instance", () => {
+    expect(
+      resolveThreadHandoffModelSelection({
+        sourceThread: {
+          modelSelection: {
+            provider: "claudeAgent",
+            model: "claude-sonnet-4-6",
+          },
+        },
+        targetProvider: "antigravity",
+        targetProviderInstanceId: "antigravity_work",
+        projectDefaultModelSelection: null,
+        stickyModelSelectionByProvider: {
+          antigravity: {
+            provider: "antigravity",
+            model: "Gemini 3.1 Pro",
+          },
+        },
+      }),
+    ).toEqual({
+      provider: "antigravity",
+      instanceId: "antigravity_work",
+      model: "Gemini 3.5 Flash",
+    });
+  });
+
+  it("adds the chosen target instance id to project-default handoff selections", () => {
+    expect(
+      resolveThreadHandoffModelSelection({
+        sourceThread: {
+          modelSelection: {
+            provider: "codex",
+            model: "gpt-5.4",
+          },
+        },
+        targetProvider: "claudeAgent",
+        targetProviderInstanceId: "claude_work",
+        projectDefaultModelSelection: {
+          provider: "claudeAgent",
+          model: "claude-sonnet-4-6",
+        },
+        stickyModelSelectionByProvider: {},
+      }),
+    ).toEqual({
+      provider: "claudeAgent",
+      instanceId: "claude_work",
+      model: "claude-sonnet-4-6",
+    });
   });
 
   it("falls back to the resolved provider default model when no sticky or project default exists", () => {
@@ -220,12 +277,47 @@ describe("threadHandoff", () => {
           },
         },
         targetProvider: "codex",
+        targetProviderInstanceId: "codex_personal",
         projectDefaultModelSelection: null,
         stickyModelSelectionByProvider: {},
       }),
     ).toEqual({
       provider: "codex",
+      instanceId: "codex_personal",
       model: DEFAULT_MODEL_BY_PROVIDER.codex,
     });
+  });
+
+  it("offers provider and workspace handoff for an ordinary project thread", () => {
+    expect(
+      resolveThreadHandoffAvailability({
+        isGroupContainer: false,
+        isCoordinatorThread: false,
+      }),
+    ).toEqual({ providerHandoff: true, workspaceHandoff: true });
+  });
+
+  it("keeps provider handoff for a group chat but hides workspace handoff", () => {
+    expect(
+      resolveThreadHandoffAvailability({
+        isGroupContainer: true,
+        isCoordinatorThread: false,
+      }),
+    ).toEqual({ providerHandoff: true, workspaceHandoff: false });
+  });
+
+  it("hides every handoff action for the coordinator thread", () => {
+    expect(
+      resolveThreadHandoffAvailability({
+        isGroupContainer: true,
+        isCoordinatorThread: true,
+      }),
+    ).toEqual({ providerHandoff: false, workspaceHandoff: false });
+    expect(
+      resolveThreadHandoffAvailability({
+        isGroupContainer: false,
+        isCoordinatorThread: true,
+      }),
+    ).toEqual({ providerHandoff: false, workspaceHandoff: false });
   });
 });

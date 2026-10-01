@@ -24,6 +24,18 @@ function getDesktopWsUrl(): string | null {
   }
 }
 
+function getBetaDiagnosticsBridge(): DesktopBridge["betaDiagnostics"] {
+  try {
+    if (ipcRenderer.sendSync(IPC.betaDiagnostics.enabled) !== true) return undefined;
+    return {
+      rendererReady: () => ipcRenderer.send(IPC.betaDiagnostics.rendererReady),
+      reportError: (error) => ipcRenderer.send(IPC.betaDiagnostics.reportError, error),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 function parseBrowserOpenPanelRequest(payload: unknown): BrowserUseOpenPanelRequest | null {
   if (!payload || typeof payload !== "object") {
     return null;
@@ -95,7 +107,9 @@ function parseBrowserAnnotationEvent(payload: unknown): BrowserAnnotationEvent |
   return payload as BrowserAnnotationEvent;
 }
 
+const betaDiagnosticsBridge = getBetaDiagnosticsBridge();
 contextBridge.exposeInMainWorld("desktopBridge", {
+  ...(betaDiagnosticsBridge ? { betaDiagnostics: betaDiagnosticsBridge } : {}),
   getWsUrl: getDesktopWsUrl,
   // Absolute path for OS-dropped File objects (folders with spaces/parens, etc.).
   getPathForFile: (file: File) => {
@@ -110,6 +124,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   saveFile: (input) => ipcRenderer.invoke(IPC.saveFile, input),
   confirm: (message) => ipcRenderer.invoke(IPC.confirm, message),
   setTheme: (theme) => ipcRenderer.invoke(IPC.setTheme, theme),
+  setWindowMaterial: (input) => ipcRenderer.invoke(IPC.setWindowMaterial, input),
   getAppIcon: () => ipcRenderer.invoke(IPC.getAppIcon),
   setAppIcon: (icon) => ipcRenderer.invoke(IPC.setAppIcon, icon),
   showContextMenu: (items, position) => ipcRenderer.invoke(IPC.contextMenu, items, position),

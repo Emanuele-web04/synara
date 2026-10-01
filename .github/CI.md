@@ -13,6 +13,15 @@ runs only through its dedicated workflow, not on every PR build: it measures
 copied baseline/candidate algorithms and adds no application regression assertion.
 This removes twelve ten-second measurement waits from the blocking build lane.
 
+The desktop build lane also runs the composer-focus Electron regression under
+Xvfb. It covers navigation in previews, visible native views and renderer guests,
+plus popup opener/POST/close behavior and deliberate browser input. The test
+disables host focus emulation and checks focus, draft text and selection before
+sending synthetic input. Run it locally with
+`bun run --cwd apps/web test:electron:e2e visibleBrowserMcp.e2e.ts --grep 'preserves composer keyboard ownership'`
+from an unlocked graphical session. It does not certify physical keyboard or IME
+delivery on macOS or Windows.
+
 Windows checks are grouped by package, removing six separate Vitest startups
 while keeping the same runtime, lifecycle and migration test files. The credential
 reader's filtered compilation test and native Bun PTY probe remain separate.

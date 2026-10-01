@@ -75,7 +75,7 @@ export function useChatTurnSubmission({
   hasNativeUserMessages,
   chatWorkspaceRoot,
   isHomeChatContainer,
-  isStudioContainer,
+  isGroupContainer,
   resolvedThreadWorktreePath,
   resolvedThreadWorkingDirectory,
   currentActiveGitBranch,
@@ -588,6 +588,7 @@ export function useChatTurnSubmission({
       sendPreflightInFlightRef.current = true;
       const sendProviderAvailability = await resolveProviderSendAvailabilityWithRefresh({
         provider: selectedModelSelectionForSend.provider,
+        instanceId: selectedModelSelectionForSend.instanceId,
         statuses: providerStatuses,
         refreshStatuses: () => refreshProviderStatuses({ silent: true }),
       }).finally(() => {
@@ -679,7 +680,7 @@ export function useChatTurnSubmission({
         activeProject,
         chatWorkspaceRoot,
         isHomeChatContainer,
-        isStudioContainer,
+        isGroupContainer,
         resolvedThreadWorktreePath,
         runtimeModeForSend,
         envModeForSend,
@@ -961,7 +962,7 @@ export function useChatTurnSubmission({
       hasNativeUserMessages,
       chatWorkspaceRoot,
       isHomeChatContainer,
-      isStudioContainer,
+      isGroupContainer,
       resolvedThreadWorktreePath,
       resolvedThreadWorkingDirectory,
       currentActiveGitBranch,

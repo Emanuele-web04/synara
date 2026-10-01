@@ -38,6 +38,7 @@ import {
 import { applyOrchestrationEvents, applyOrchestrationEventsHotPath } from "./storeEventReducer";
 import { persistState, readPersistedState, rememberProjectState } from "./storePersistence";
 import { initialState, type AppState } from "./storeState";
+import { persistThreadVisitedState } from "./threadVisitedPersistence";
 import type { Project, ThreadWorkspacePatch } from "./types";
 
 type ReadModelThread = OrchestrationReadModel["threads"][number];
@@ -59,12 +60,18 @@ export {
 } from "./storeProjection";
 export { applyOrchestrationEvents, applyOrchestrationEventsHotPath } from "./storeEventReducer";
 
-const debouncedPersistState = new Debouncer(persistState, { wait: 500 });
+const debouncedPersistState = new Debouncer(
+  (state: AppState) => {
+    persistState(state);
+    persistThreadVisitedState(state);
+  },
+  { wait: 500 },
+);
 
 export function persistAppStateNow(state: AppState = useStore.getState()): void {
   persistState(state);
+  persistThreadVisitedState(state, { force: true });
 }
-
 export function markThreadVisited(
   state: AppState,
   threadId: ThreadId,

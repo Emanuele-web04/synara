@@ -173,9 +173,11 @@ export function modelSelection(
   provider: ModelSelection["provider"],
   model: string,
   options?: ModelSelection["options"],
+  instanceId?: string,
 ): ModelSelection {
   return {
     provider,
+    ...(instanceId ? { instanceId } : {}),
     model,
     ...(options ? { options } : {}),
   } as ModelSelection;

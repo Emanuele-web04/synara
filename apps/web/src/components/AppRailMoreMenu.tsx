@@ -1,6 +1,7 @@
 // FILE: AppRailMoreMenu.tsx
-// Purpose: The rail's "…" menu (as in Codex): open Studio, and choose which Spaces and single
-//          projects sit in the rail as their own shortcuts.
+// Purpose: The rail's "…" menu (as in Codex): open Studio, choose which Spaces and single
+//          projects sit in the rail as their own shortcuts, and open the rail's Customize
+//          editor (order and visibility of every rail item).
 // Layer: App shell component (rendered by ThreadSidebar into the rail)
 
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
@@ -28,6 +29,7 @@ export function AppRailMoreMenu({
   pinnedKeys,
   onToggleShortcut,
   onOpenStudio,
+  onCustomize,
   active,
 }: {
   readonly spaces: ReadonlyArray<AppRailMoreMenuEntry>;
@@ -36,6 +38,8 @@ export function AppRailMoreMenu({
   readonly onToggleShortcut: (key: string) => void;
   /** Null when the Studio section is hidden in Settings. */
   readonly onOpenStudio: (() => void) | null;
+  /** Opens the Customize popover beside the rail. */
+  readonly onCustomize: () => void;
   /** Studio has no rail button of its own, so "…" stands for it while it is open. */
   readonly active: boolean;
 }) {
@@ -59,7 +63,7 @@ export function AppRailMoreMenu({
         {onOpenStudio ? (
           <>
             <MenuGroup>
-              <MenuItem onClick={onOpenStudio}>Studio</MenuItem>
+              <MenuItem onClick={onOpenStudio}>Hubs</MenuItem>
             </MenuGroup>
             <MenuSeparator />
           </>
@@ -92,6 +96,10 @@ export function AppRailMoreMenu({
               </MenuCheckboxItem>
             ))
           )}
+        </MenuGroup>
+        <MenuSeparator />
+        <MenuGroup>
+          <MenuItem onClick={onCustomize}>Customize…</MenuItem>
         </MenuGroup>
       </ComposerPickerMenuPopup>
     </Menu>

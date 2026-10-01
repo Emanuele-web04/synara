@@ -2,7 +2,7 @@
 // Purpose: Pure rules for the rail layout's tab strip: item ids, route item order, and
 //          which item is active for a pathname, plus the Spaces panel's section list.
 // Layer: Web shell logic
-// Exports: rail item ids/types, buildRailRouteItemOrder, railItemForPathname,
+// Exports: rail item ids/types, rail item order and visibility, railItemForPathname,
 //          reconcileActiveRailItem, buildRailSpacesSections
 
 import type { ProjectId, SpaceId } from "@synara/contracts";
@@ -15,6 +15,7 @@ import {
   VOID_SPACE_KEY,
   type VoidSpacePresentation,
 } from "./lib/spaceGrouping";
+import { normalizeIdOrder, normalizeKnownIds, placeNewIdAfter } from "./lib/orderedIds";
 import type { SidebarNavItemId } from "./sidebarNavOrdering";
 import type { Space } from "./types";
 
@@ -25,27 +26,79 @@ export const RAIL_PANEL_ITEM_LABELS: Record<RailPanelItemId, string> = {
   home: "Home",
   spaces: "Spaces",
 };
-/** Rail items that navigate to a route. "New thread" stays in the panel, never the rail. */
+/**
+ * Rail items that navigate to a route. "New thread" stays in the panel, never the rail;
+ * Inbox is Beta-only (see INBOX_ON).
+ */
 export type RailRouteItemId = Exclude<SidebarNavItemId, "newThread"> | "studio" | "settings";
 export type RailItemId = RailPanelItemId | RailRouteItemId;
 
 /**
- * Route items for the top of the rail, in the user's persisted nav order. Hidden items
- * drop out unless their route is active (the same rule the classic nav rows use). Studio
- * lives in the rail's "…" menu and Settings is a bottom item, so neither is listed here.
+ * Rail items the user orders and hides from Customize. Settings stays pinned at the bottom;
+ * Studio is also reachable from the "…" menu, so it starts hidden.
  */
-export function buildRailRouteItemOrder(input: {
-  navOrder: readonly SidebarNavItemId[];
-  hidden: ReadonlySet<SidebarNavItemId>;
-  activeNavId: SidebarNavItemId | null;
-}): Exclude<RailRouteItemId, "settings" | "studio">[] {
-  const items: Exclude<RailRouteItemId, "settings" | "studio">[] = [];
-  for (const id of input.navOrder) {
-    if (id === "newThread") continue;
-    if (input.hidden.has(id) && id !== input.activeNavId) continue;
-    items.push(id);
-  }
-  return items;
+export const RAIL_ORDERABLE_ITEM_IDS = [
+  "home",
+  "inbox",
+  "spaces",
+  "kanban",
+  "tasks",
+  "pullRequests",
+  "automations",
+  "studio",
+] as const;
+export type RailOrderableItemId = (typeof RAIL_ORDERABLE_ITEM_IDS)[number];
+export const DEFAULT_HIDDEN_RAIL_ITEMS: readonly RailOrderableItemId[] = ["studio"];
+
+const RAIL_ORDERABLE_ITEM_ID_SET: ReadonlySet<string> = new Set(RAIL_ORDERABLE_ITEM_IDS);
+
+export function isRailOrderableItemId(value: string): value is RailOrderableItemId {
+  return RAIL_ORDERABLE_ITEM_ID_SET.has(value);
+}
+
+/** Home is the rail's anchor for the panel: it can move but never be hidden. */
+export function railItemCanHide(id: RailOrderableItemId): boolean {
+  return id !== "home";
+}
+
+export function normalizeRailItemOrder(order: readonly string[]): RailOrderableItemId[] {
+  const normalized = normalizeIdOrder(order, RAIL_ORDERABLE_ITEM_IDS, isRailOrderableItemId);
+  // Inbox shipped after users saved an order: it joins next to Home, as by default.
+  return placeNewIdAfter(normalized, order, "inbox", "home");
+}
+
+export function normalizeHiddenRailItems(hidden: readonly string[]): RailOrderableItemId[] {
+  return normalizeKnownIds(hidden, isRailOrderableItemId).filter(railItemCanHide);
+}
+
+export interface RailAvailability {
+  /** Studio needs its section enabled in Settings. */
+  readonly studioAvailable: boolean;
+  /** Inbox ships in Beta only. */
+  readonly inboxAvailable: boolean;
+}
+
+/** Whether an item exists on this host at all: the rail and its Customize list agree. */
+export function isRailItemAvailable(id: RailOrderableItemId, availability: RailAvailability) {
+  if (id === "studio") return availability.studioAvailable;
+  if (id === "inbox") return availability.inboxAvailable;
+  return true;
+}
+
+/**
+ * The rail's top items in the user's order. Hidden items drop out unless they are the
+ * active item, so hiding a section never strands the user in it.
+ */
+export function buildRailItemOrder(
+  input: {
+    order: readonly RailOrderableItemId[];
+    hidden: ReadonlySet<RailOrderableItemId>;
+    activeItem: RailItemId;
+  } & RailAvailability,
+): RailOrderableItemId[] {
+  return input.order.filter(
+    (id) => isRailItemAvailable(id, input) && (!input.hidden.has(id) || id === input.activeItem),
+  );
 }
 
 /** A Space or a single project the user added to the rail from its "…" menu. */
@@ -130,11 +183,11 @@ export function resolveActiveRailShortcutKey(input: {
 /**
  * Whether the panel column shows next to the rail for the active item. Every section either
  * owns a panel (Home/Spaces: projects and threads; Automations, Studio, Settings: their own
- * lists) or takes the full width: Kanban is one board, Pull requests has its own list and
- * detail panes.
+ * lists) or takes the full width: Kanban, Tasks, Pull requests, and Inbox each own
+ * their page layout.
  */
 export function railItemShowsPanel(id: RailItemId): boolean {
-  return id !== "kanban" && id !== "pullRequests";
+  return id !== "kanban" && id !== "tasks" && id !== "pullRequests" && id !== "inbox";
 }
 
 function matchesRoute(pathname: string, route: string): boolean {
@@ -143,10 +196,18 @@ function matchesRoute(pathname: string, route: string): boolean {
 
 /** The route rail item that owns a pathname, or null for thread and chat-index routes. */
 export function railItemForPathname(pathname: string): RailRouteItemId | null {
+  if (matchesRoute(pathname, "/inbox")) return "inbox";
   if (matchesRoute(pathname, "/kanban")) return "kanban";
+  if (matchesRoute(pathname, "/tasks")) return "tasks";
   if (matchesRoute(pathname, "/pull-requests")) return "pullRequests";
   if (matchesRoute(pathname, "/automations")) return "automations";
-  if (matchesRoute(pathname, "/studio")) return "studio";
+  // The rail item keeps its stored id "studio"; Hubs live at /hubs with legacy redirects.
+  if (
+    matchesRoute(pathname, "/hubs") ||
+    matchesRoute(pathname, "/groups") ||
+    matchesRoute(pathname, "/studio")
+  )
+    return "studio";
   if (matchesRoute(pathname, "/settings")) return "settings";
   return null;
 }

@@ -77,6 +77,49 @@ describe("OpenCode permission policy", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("approves Synara group tools once when the session opted in behind a live gateway lease", () => {
+    const base = {
+      runtimeMode: "approval-required" as const,
+      interactionMode: "default" as const,
+      activeTurn: true,
+      computerControlEnabled: false,
+      autoApproveSynaraTools: true,
+      gatewaySessionActive: true,
+      metadata: {} as const,
+    };
+
+    expect(
+      resolveOpenCodePermissionPolicyReply({
+        ...base,
+        permission: "mcp__synara__synara_create_thread",
+      }),
+    ).toBe("once");
+    expect(
+      resolveOpenCodePermissionPolicyReply({
+        ...base,
+        permission: "synara_project_link_repository",
+      }),
+    ).toBe("once");
+    // File edits and shell still ask in approval-required mode.
+    expect(resolveOpenCodePermissionPolicyReply({ ...base, permission: "edit" })).toBeUndefined();
+    expect(resolveOpenCodePermissionPolicyReply({ ...base, permission: "bash" })).toBeUndefined();
+    // The flag is inert without a live gateway session and when not opted in.
+    expect(
+      resolveOpenCodePermissionPolicyReply({
+        ...base,
+        gatewaySessionActive: false,
+        permission: "mcp__synara__synara_create_thread",
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveOpenCodePermissionPolicyReply({
+        ...base,
+        autoApproveSynaraTools: false,
+        permission: "mcp__synara__synara_create_thread",
+      }),
+    ).toBeUndefined();
+  });
 });
 
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
@@ -1084,6 +1127,212 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     expect(runtime.connectCalls[0]).toMatchObject({ cwd: "/repo/model-discovery-config" });
     expect(runtime.cliModelCalls).toHaveLength(1);
     expect(runtime.cliModelCalls[0]).toMatchObject({ cwd: "/repo/model-discovery-config" });
+  });
+
+  it.each([
+    {
+      name: "ambient session then explicit empty discovery",
+      sessionEnvironment: undefined,
+      discoveryEnvironment: {},
+    },
+    {
+      name: "explicit empty session then ambient discovery",
+      sessionEnvironment: {},
+      discoveryEnvironment: undefined,
+    },
+  ])(
+    "does not reuse $name envelopes",
+    async ({ name, sessionEnvironment, discoveryEnvironment }) => {
+      const serverUrl = "http://127.0.0.1:4666";
+      const runtime = createMockOpenCodeRuntime();
+
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* OpenCodeAdapter;
+          const listModels = adapter.listModels;
+          if (!listModels) {
+            throw new Error("Expected OpenCode adapter to support runtime model listing.");
+          }
+
+          yield* adapter.startSession({
+            provider: "opencode",
+            threadId: asThreadId(`thread-${name.replaceAll(" ", "-")}`),
+            cwd: "/repo/discovery-environment-boundary",
+            runtimeMode: "full-access",
+            providerOptions: {
+              opencode: {
+                serverUrl,
+                ...(sessionEnvironment !== undefined ? { environment: sessionEnvironment } : {}),
+              },
+            },
+          });
+
+          return yield* listModels({
+            provider: "opencode",
+            cwd: "/repo/discovery-environment-boundary",
+            serverUrl,
+            ...(discoveryEnvironment !== undefined ? { environment: discoveryEnvironment } : {}),
+          });
+        }).pipe(
+          Effect.provide(
+            makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+              Layer.provideMerge(
+                ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+
+      expect(runtime.connectCalls).toHaveLength(2);
+      expect(runtime.connectCalls.map((call) => call.environment)).toEqual([
+        sessionEnvironment,
+        discoveryEnvironment,
+      ]);
+    },
+  );
+
+  it("passes the resolved nondefault OpenCode instance through external thread reads", async () => {
+    const runtime = createMockOpenCodeRuntime();
+    const providerInstanceId = "opencode_work";
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        if (!adapter.readExternalThread) {
+          throw new Error("Expected OpenCode external thread reads.");
+        }
+        return yield* adapter.readExternalThread({
+          externalThreadId: "external-session",
+          cwd: "/repo/external-import",
+          providerInstanceId,
+        });
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(runtime.connectCalls).toHaveLength(1);
+    expect(runtime.connectCalls[0]).toMatchObject({
+      cwd: "/repo/external-import",
+      instanceId: providerInstanceId,
+    });
+  });
+
+  it("keeps the stopped OpenCode account on a graceful exit after the thread switches accounts", async () => {
+    const runtime = createMockOpenCodeRuntime();
+    const threadId = asThreadId("thread-opencode-account-switch");
+
+    const events = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 5)).pipe(
+          Effect.forkChild,
+        );
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          providerInstanceId: "opencode_account_a",
+          threadId,
+          runtimeMode: "full-access",
+        });
+        yield* adapter.stopSession(threadId);
+        yield* adapter.startSession({
+          provider: "opencode",
+          providerInstanceId: "opencode_account_b",
+          threadId,
+          runtimeMode: "full-access",
+        });
+
+        return Array.from(yield* Fiber.join(eventsFiber));
+      }).pipe(Effect.provide(makeOpenCodeAdapterTestLayer(runtime.runtime))),
+    );
+
+    const exited = events.find((event) => event.type === "session.exited");
+    const rebound = events.filter((event) => event.type === "session.started").at(-1);
+    expect(exited?.providerInstanceId).toBe("opencode_account_a");
+    expect(rebound?.providerInstanceId).toBe("opencode_account_b");
+  });
+
+  it("retains custom CLI models like OmniRoute when connected providers are in server inventory", async () => {
+    const runtime = createMockOpenCodeRuntime({
+      cliModels: [
+        {
+          slug: "opencode/minimax-m2.5-free",
+          providerID: "opencode",
+          modelID: "minimax-m2.5-free",
+          name: "MiniMax M2.5 Free",
+          variants: [],
+          supportedReasoningEfforts: [],
+        },
+        {
+          slug: "omniroute/antigravity/gemini-3.7-flash-high",
+          providerID: "omniroute",
+          modelID: "antigravity/gemini-3.7-flash-high",
+          name: "Gemini 3.7 Flash High",
+          variants: [],
+          supportedReasoningEfforts: [],
+        },
+      ],
+      inventory: {
+        providerList: {
+          connected: ["opencode"],
+          default: {},
+          all: [
+            {
+              id: "opencode",
+              name: "OpenCode",
+              source: "api",
+              models: {
+                "minimax-m2.5-free": {
+                  id: "minimax-m2.5-free",
+                  name: "MiniMax M2.5 Free",
+                },
+              },
+            } as unknown as Provider,
+          ],
+        },
+        agents: [],
+        consoleState: null,
+      },
+    });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const listModels = adapter.listModels;
+        if (!listModels) {
+          throw new Error("Expected OpenCode adapter to support runtime model listing.");
+        }
+        return yield* listModels({
+          provider: "opencode",
+          binaryPath: "opencode",
+          cwd: "/repo/model-discovery-config",
+        });
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(result?.models.map((model) => model.slug)).toEqual([
+      "omniroute/antigravity/gemini-3.7-flash-high",
+      "opencode/minimax-m2.5-free",
+    ]);
   });
 
   it("lists OpenCode CLI models when server inventory discovery fails", async () => {

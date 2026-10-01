@@ -62,7 +62,13 @@ const RULES: ReadonlyArray<Replacement> = [
     replace: (_match, scheme, userinfo, host, path) => {
       const keepPath = typeof scheme === "string" && LOCAL_URL_SCHEME.test(scheme);
       const tail = typeof path === "string" && path !== "/" ? (keepPath ? path : "/…") : "";
-      return `${scheme}://${typeof userinfo === "string" ? "<redacted>@" : ""}${host}${tail}`;
+      // Keep loopback origins recognizable across renderer/main redaction
+      // passes so fingerprinting can still normalize their changing ports.
+      const safeHost =
+        typeof scheme === "string" && /^(?:https?|wss?)$/i.test(scheme) && typeof host === "string"
+          ? host.replace(/^(?:127\.0\.0\.1|\[::1\])(?=:\d{1,5}$|$)/, "localhost")
+          : host;
+      return `${scheme}://${typeof userinfo === "string" ? "<redacted>@" : ""}${safeHost}${tail}`;
     },
   },
   // Email addresses.

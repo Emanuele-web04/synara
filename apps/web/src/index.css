@@ -13,6 +13,8 @@
   /* Font sizes that follow the size chosen in Settings (useAppTypography). */
   --text-ui: var(--app-font-size-ui);
   --text-ui-lg: var(--app-font-size-ui-lg);
+  /* A page's lede and headline figures: one step above ui-lg, still scaled by Settings. */
+  --text-ui-xl: calc(var(--app-font-size-ui-lg) * 1.3);
   --text-ui-sm: var(--app-font-size-ui-sm);
   --text-ui-xs: var(--app-font-size-ui-xs);
   --text-ui-2xs: var(--app-font-size-ui-2xs);
@@ -200,23 +202,21 @@
   /* Rail layout, modeled on Codex. Three tones: the shell (top band + rail) is the lightest
      in dark and a soft grey in light, the thread panel sits a step toward the surface, and
      the route body is the surface itself. Panel, route body, and right dock form one inset
-     block under the top band: 1px border lighter than every tone, rounded corners, and a
+     block under the top band: a hairline border, rounded corners, and a
      small shell gap to the window's right and bottom edges. Route headers keep rendering
      their titles and actions, now on the shell band above the block. */
   [data-sidebar-layout="rail"] {
-    --app-rail-shell-tone: color-mix(in srgb, var(--color-background-surface) 96%, black);
+    --app-rail-shell-tone: color-mix(in srgb, var(--color-background-surface) 97%, black);
     --app-rail-panel-background: var(--color-background-surface);
     --app-rail-shell-background: color-mix(
       in srgb,
       var(--app-rail-shell-tone) var(--app-rail-shell-opacity, 100%),
       transparent
     );
-    --app-rail-inset-border: color-mix(in srgb, black 4%, transparent);
-    /* Soft falloff around the block (Codex's edge is a shadow, not a hard cut); kept barely
-       visible so the block reads as a surface, not a raised card. */
-    --app-rail-inset-shadow:
-      0 1px 2px color-mix(in srgb, black 4%, transparent),
-      0 0 0.5px color-mix(in srgb, black 6%, transparent);
+    /* Real CSS borders at 0.5px (one device pixel on Retina): per-side inset shadows would
+       overlap on the rounded corners and draw them thicker than the straight edges. */
+    --app-rail-inset-border-width: 0.5px;
+    --app-rail-inset-border: color-mix(in srgb, black 10%, transparent);
     --app-rail-inset-radius: calc(var(--radius) * 1.3);
     --app-rail-inset-gap: 3px;
   }
@@ -224,24 +224,16 @@
   .dark [data-sidebar-layout="rail"] {
     --app-rail-shell-tone: color-mix(in srgb, var(--color-background-surface) 95%, white);
     --app-rail-panel-background: color-mix(in srgb, var(--color-background-surface) 98.3%, white);
-    --app-rail-inset-border: color-mix(in srgb, white 4%, transparent);
-    --app-rail-inset-shadow:
-      0 1px 2px color-mix(in srgb, black 22%, transparent),
-      0 0 0.5px color-mix(in srgb, black 30%, transparent);
+    --app-rail-inset-border: color-mix(in srgb, white 9%, transparent);
   }
 
   /* The panel is the block's left end: border on its outer three sides only. */
   .app-rail-panel {
     margin-bottom: var(--app-rail-inset-gap);
     background: var(--app-rail-panel-background);
+    border: var(--app-rail-inset-border-width) solid var(--app-rail-inset-border);
+    border-right-width: 0;
     border-radius: var(--app-rail-inset-radius) 0 0 var(--app-rail-inset-radius);
-    box-shadow:
-      inset 1px 0 0 var(--app-rail-inset-border),
-      inset 0 1px 0 var(--app-rail-inset-border),
-      inset 0 -1px 0 var(--app-rail-inset-border),
-      var(--app-rail-inset-shadow);
-    /* The seam with the route body is a flat line: no shadow cast across it. */
-    clip-path: inset(-8px 0 -8px -8px);
   }
 
   /* No sidebar material sits behind the rail layout's rows, so chips take the panel tone. */
@@ -471,6 +463,9 @@
 :root {
   color-scheme: light;
   --radius: 0.625rem;
+  /* Depth of the fade where scrolling content meets an edge (transcript, sidebar
+     panel, ScrollArea `scrollFade`). */
+  --scroll-edge-fade-size: 1.5rem;
   --radius-user-message: 1rem;
   --font-ui-family: var(
     --theme-font-ui-family,
@@ -497,8 +492,13 @@
   --font-chat-code-family: var(--theme-font-code-family, var(--font-mono-family));
   --terminal-font-family: "JetBrainsMono NFM", "JetBrainsMono NF", "JetBrains Mono", monospace;
   --app-shell-background: transparent;
-  /* Width of the rail layout's fixed icon column (see AppRail). */
-  --app-rail-width: 3.25rem;
+  /* Width of the rail layout's fixed icon column (see AppRail): 36px buttons with 7.5px
+     either side. */
+  --app-rail-width: calc(3.25rem - 1px);
+  /* Short vertical hairline marking a boundary inside a top bar: the rail header divider
+     and the dividers between surface tabs share it so they read as the same mark. */
+  --app-chrome-divider-height: 1.25rem;
+  --app-chrome-divider-color: var(--color-border);
   --app-sidebar-backdrop-filter: blur(4px) saturate(130%);
   --app-sidebar-surface: color-mix(in srgb, var(--card) 38%, transparent);
   --background: #fcfcfc;
@@ -1928,8 +1928,7 @@ label:has(> select#reasoning-effort) select {
    (dist/tailwind.css `@utility scroll-fade`). Same rationale as the shimmer
    block below — importing the full `shadcn` stylesheet would clash with this
    project's custom theme, so the self-contained scroll-fade block lives here.
-   Applied to the transcript scroll container via `scroll-fade-b` so streamed
-   content dissolves toward the composer and the fade clears at the live edge.
+   The transcript's `scroll-edge-fade` (below) builds on these primitives.
    Scroll-aware through `animation-timeline: scroll()`; the `@property`
    initial-values keep it fade-free when the container is not scrollable, and a
    static-fade `@supports` fallback covers browsers without scroll timelines.
@@ -2363,6 +2362,74 @@ label:has(> select#reasoning-effort) select {
   --scroll-fade-mask: none;
 }
 
+/* Scroll edge fade for app chrome scroll areas (the chat transcript), built on the
+   vendored scroll-fade primitives above. Content dissolves to transparent over
+   `--scroll-edge-fade-size` at the top edge and at the bottom edge — or, when
+   `--scroll-edge-fade-inset-b` is set, at that distance above the bottom edge (the
+   floating composer's top) — so the frosted window material shows through instead
+   of a hard cut. Each edge only fades while content is scrolled past it.
+
+   Top: reuses the vendored `--scroll-fade-t` reveal. Bottom: a 0→1 progress slides
+   the whole fade band down past the viewport as the scroll reaches its end, instead
+   of shrinking it in place, so an inset edge never collapses into a hard step over
+   content still passing under the composer. `--scroll-edge-fade-layer` intersects an
+   extra mask (the composer's footer dissolve) with the edges. It is paint-only (no
+   layout or scroll feedback), so it cannot disturb auto-follow or list measurement.
+   ScrollArea's `scrollFade` reads the same `--scroll-edge-fade-size` token. */
+@property --scroll-edge-fade-b-progress {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 0;
+}
+
+@keyframes scroll-edge-fade-reveal-b {
+  from {
+    --scroll-edge-fade-b-progress: 1;
+  }
+  to {
+    --scroll-edge-fade-b-progress: 0;
+  }
+}
+
+@utility scroll-edge-fade {
+  --_scroll-fade-size-t: var(--scroll-edge-fade-size);
+  --_scroll-edge-fade-b-start: calc(
+    100% - (var(--scroll-edge-fade-inset-b, 0px) + var(--scroll-edge-fade-size)) *
+      var(--scroll-edge-fade-b-progress, 0)
+  );
+  --scroll-edge-fade-edges: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--scroll-fade-t, 0px),
+    #000 var(--_scroll-edge-fade-b-start),
+    transparent calc(var(--_scroll-edge-fade-b-start) + var(--scroll-edge-fade-size))
+  );
+  -webkit-mask-image:
+    var(--scroll-edge-fade-edges), var(--scroll-edge-fade-layer, linear-gradient(#000, #000));
+  mask-image:
+    var(--scroll-edge-fade-edges), var(--scroll-edge-fade-layer, linear-gradient(#000, #000));
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation:
+      scroll-fade-reveal-t 1ms ease-in-out,
+      scroll-edge-fade-reveal-b 1ms ease-in-out;
+    animation-timeline: scroll(self y), scroll(self y);
+    animation-range:
+      0 var(--scroll-fade-reveal, calc(var(--spacing) * 24)),
+      calc(100% - var(--scroll-fade-reveal, calc(var(--spacing) * 24))) 100%;
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-t: var(--scroll-edge-fade-size);
+    --scroll-edge-fade-b-progress: 1;
+  }
+}
+
 /* Static end-of-line fade for single-line truncation. Unlike the scroll-fade-*
    family — which reveal/hide the fade based on scroll position and therefore
    need a scrollable container — this is a plain overflow:hidden clip whose
@@ -2710,8 +2777,7 @@ diffs-container {
    gaps, and the card's own bottom radius with its overflow clip rounds whatever the route
    paints there (fixed overlays are unaffected). The block's top corners sit under the band,
    inside the card, so the route wrappers that hold a top bar go transparent (below) and the
-   rounded ::before shows through. The soft outer shadow is a separate layer behind the card
-   (.app-rail-content-shadow), since the card clips its own ink. */
+   rounded ::before shows through. The block has no shadow: its edge is the 1px border. */
 [data-sidebar-layout="rail"] {
   /* Route body corners: square only where the panel joins it. */
   --app-rail-block-radii: 0 var(--app-rail-inset-radius) var(--app-rail-inset-radius) 0;
@@ -2767,50 +2833,54 @@ diffs-container {
   box-shadow: none;
 }
 
-/* Panel open: the block's left edge is the seam with the panel, drawn as the classic thin
-   seam line (hover-highlighted by the content-seam resize rail) instead of the block border. */
+/* The block's hairline border; with the panel open its left edge is the seam with the panel,
+   which draws no right border of its own. */
 [data-sidebar-layout="rail"] .chat-content-card::after {
   z-index: 30;
-  box-shadow:
-    inset 0 1px 0 var(--app-rail-inset-border),
-    inset -1px 0 0 var(--app-rail-inset-border),
-    inset 0 -1px 0 var(--app-rail-inset-border),
-    inset 0.5px 0 0 var(--seam-line);
+  border: var(--app-rail-inset-border-width) solid var(--app-rail-inset-border);
 }
 
+/* Panel collapsed: its zero-width box must not leave a border line next to the rail. */
 [data-sidebar-layout="rail"]:has([data-slot="sidebar"][data-side="left"][data-state="collapsed"])
-  .chat-content-card::after {
-  box-shadow: inset 0 0 0 1px var(--app-rail-inset-border);
-}
-
-/* The block's outer shadow; with the panel open it is clipped at the seam so it does not
-   spill onto the panel and thicken the seam line. */
-[data-sidebar-layout="rail"] .app-rail-content-shadow {
-  position: absolute;
-  inset: var(--app-top-strip-height) var(--app-rail-inset-gap) var(--app-rail-inset-gap) 0;
-  pointer-events: none;
-  border-radius: var(--app-rail-block-radii);
-  box-shadow: var(--app-rail-inset-shadow);
-  clip-path: inset(-8px -8px -8px 0);
-}
-
-[data-sidebar-layout="rail"]:has([data-slot="sidebar"][data-side="left"][data-state="collapsed"])
-  .app-rail-content-shadow {
-  clip-path: none;
+  .app-rail-panel {
+  border-width: 0;
 }
 
 /* Short divider on the shell band above the seam, detached from the band's edges, marking
    where the route header starts next to the panel. Hidden with the panel. */
 [data-sidebar-layout="rail"] .app-rail-header-divider {
   position: absolute;
-  top: calc((var(--app-top-strip-height) - 1.25rem) / 2);
+  top: calc((var(--app-top-strip-height) - var(--app-chrome-divider-height)) / 2);
   left: 0;
   z-index: 30;
   width: 1px;
-  height: 1.25rem;
+  height: var(--app-chrome-divider-height);
   pointer-events: none;
-  background: var(--color-border);
+  background: var(--app-chrome-divider-color);
   transition: opacity 300ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* The same hairline between adjacent tabs of a SurfaceTabStrip with `dividers`, centered in
+   the strip's 4px (gap-1) gutter. It steps aside next to the active or hovered tab, whose
+   own fill already sets it apart, like browser tab strips. */
+.surface-tab-dividers > [data-surface-tab] + [data-surface-tab]::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: calc(-0.125rem - 0.5px);
+  width: 1px;
+  height: var(--app-chrome-divider-height);
+  translate: 0 -50%;
+  pointer-events: none;
+  background: var(--app-chrome-divider-color);
+  transition: opacity 150ms ease-out;
+}
+
+.surface-tab-dividers > [data-surface-tab]:is([data-surface-tab-active], :hover)::before,
+.surface-tab-dividers
+  > [data-surface-tab]:is([data-surface-tab-active], :hover)
+  + [data-surface-tab]::before {
+  opacity: 0;
 }
 
 [data-sidebar-layout="rail"]:has([data-slot="sidebar"][data-side="left"][data-state="collapsed"])
@@ -2842,6 +2912,14 @@ diffs-container {
   height: auto;
 }
 
+/* Collapsed, the dock slides its own width off-screen; the gap above would leave its
+   left border and a sliver of content peeking at the window edge, so it slides the gap too. */
+[data-sidebar-layout="rail"]
+  [data-slot="sidebar"][data-side="right"][data-collapsible="offcanvas"]
+  > [data-slot="sidebar-container"] {
+  translate: calc(100% + var(--app-rail-inset-gap)) 0;
+}
+
 /* Headers right of a collapsed panel clear the traffic lights from the rail's edge, not
    the window's (the strip over rail + panel keeps the full inset). */
 :root[data-runtime="electron"]
@@ -2852,28 +2930,19 @@ diffs-container {
   ) !important;
 }
 
-/* Composer and user bubbles share continuous corners; their radii remain the fallback.
-   Electron smoothing must not stack with browser corner-shape. */
-:root[data-runtime="electron"] .chat-composer-shell,
-:root[data-runtime="electron"] .chat-composer-surface,
-:root[data-runtime="electron"] .chat-composer-stacked-top,
-:root[data-runtime="electron"] .chat-composer-surface-banner,
-:root[data-runtime="electron"] .chat-user-message-bubble,
-:root[data-runtime="electron"] .palette-surface,
-:root[data-runtime="electron"] .palette-row {
-  -electron-corner-smoothing: system-ui;
-}
-
-/* Browser: squircle via corner-shape when supported. */
-@supports (corner-shape: squircle) {
-  :root:not([data-runtime="electron"]) .chat-composer-shell,
-  :root:not([data-runtime="electron"]) .chat-composer-surface,
-  :root:not([data-runtime="electron"]) .chat-composer-stacked-top,
-  :root:not([data-runtime="electron"]) .chat-composer-surface-banner,
-  :root:not([data-runtime="electron"]) .chat-user-message-bubble,
-  :root:not([data-runtime="electron"]) .palette-surface,
-  :root:not([data-runtime="electron"]) .palette-row {
-    corner-shape: squircle;
+/* Continuous ("squircle") corners, opt-in with the `squircle` class (composer, user
+   bubbles, palettes, open-thread tabs). The element's own border-radius stays the geometry
+   and the fallback: Electron smooths it natively, browsers that support corner-shape switch
+   to it, and everything else keeps plain rounded corners. Electron smoothing must not
+   stack with browser corner-shape. */
+@utility squircle {
+  :root[data-runtime="electron"] & {
+    -electron-corner-smoothing: system-ui;
+  }
+  @supports (corner-shape: squircle) {
+    :root:not([data-runtime="electron"]) & {
+      corner-shape: squircle;
+    }
   }
 }
 

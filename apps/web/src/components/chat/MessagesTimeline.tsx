@@ -68,10 +68,11 @@ import {
 import { pinActionLabel } from "~/lib/pin";
 import { syncAnimationsToTimelineOrigin } from "~/lib/animationTimelineSync";
 import { Button } from "../ui/button";
-import { composerOverlayScrollMaskImage } from "./composerOverlay";
+import { composerOverlayScrollFadeVars } from "./composerOverlay";
 import { CrossTaskOriginLabel, type CrossTaskOrigin } from "./CrossTaskOriginLabel";
 import { ForkSourceDivider, type ForkSourceReference } from "./ForkSourceDivider";
 import { SynaraThreadCreationCard } from "./SynaraThreadCreationCard";
+import { WorkerMonitorNoticePill } from "./WorkerMonitorNoticePill";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { DiffStatLabel } from "./DiffStatLabel";
@@ -119,6 +120,7 @@ import {
   resolveThreadFindJumpTarget,
   type StableMessagesTimelineRowsState,
 } from "./MessagesTimeline.logic";
+import { rewriteThreadIdsAsMarkdownLinks } from "./project/projectPanel.logic";
 import { summarizeToolCallGroup } from "./toolCallGroup.logic";
 import { ToolCallGroupSummaryRow } from "./ToolCallGroupSummaryRow";
 import { useTailAnchorScroll } from "./useTailAnchorScroll";
@@ -448,6 +450,8 @@ interface MessagesTimelineProps {
   /** Stable source messages, before plans/tools reshape the presentation rows. */
   messageChangeSignal?: unknown;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
+  /** Coordinator/bot chats hide tool rows and keep a text conversation. */
+  conversationOnly?: boolean;
   nowIso?: string;
   expandedWorkGroups?: Record<string, boolean>;
   onToggleWorkGroup?: (groupId: string) => void;
@@ -542,6 +546,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   timelineEntries,
   messageChangeSignal: messageChangeSignalProp,
   turnDiffSummaryByAssistantMessageId,
+  conversationOnly: conversationOnlyProp,
   nowIso,
   expandedWorkGroups,
   onToggleWorkGroup,
@@ -629,9 +634,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   // any right-edge overlay. Kept stable so LegendList isn't re-rendered on unrelated updates.
   // The bottom inset clears the floating composer the transcript scrolls under; it is
   // padding on the scroll viewport (not a taller footer) so the list's own footer-layout
-  // and initial-scroll machinery is never resized from outside. The mask dissolves rows
-  // as they pass behind the composer's glass so nothing remains visible behind its
-  // footer controls (see composerOverlayScrollMaskImage).
+  // and initial-scroll machinery is never resized from outside. The fade variables move
+  // the list's bottom edge fade up to the composer's top edge and add the dissolve that
+  // keeps content clear of its footer controls (see composerOverlayScrollFadeVars).
   const listScrollStyle = useMemo(() => {
     if (!contentInsetRightPx && !contentInsetBottomPx) {
       return undefined;
@@ -642,14 +647,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     }
     if (contentInsetBottomPx) {
       style.paddingBottom = contentInsetBottomPx;
-      const maskImage = composerOverlayScrollMaskImage(
-        contentInsetBottomPx,
-        contentInsetBottomClearancePx,
+      Object.assign(
+        style,
+        composerOverlayScrollFadeVars(contentInsetBottomPx, contentInsetBottomClearancePx),
       );
-      if (maskImage) {
-        style.maskImage = maskImage;
-        style.WebkitMaskImage = maskImage;
-      }
     }
     return style;
   }, [contentInsetBottomClearancePx, contentInsetBottomPx, contentInsetRightPx]);
@@ -758,6 +759,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   });
 
   const presentedWorktreeSetup = useWorktreeSetupPresentation(worktreeSetup);
+  const conversationOnly = conversationOnlyProp === true;
   const rawRows = useMemo(
     () =>
       deriveMessagesTimelineRows({
@@ -770,6 +772,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         activeTurnStartedAt,
         turnDiffSummaryByAssistantMessageId,
         revertTurnCountByUserMessageId,
+        conversationOnly,
       }),
     [
       timelineEntries,
@@ -780,6 +783,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       activeTurnStartedAt,
       turnDiffSummaryByAssistantMessageId,
       revertTurnCountByUserMessageId,
+      conversationOnly,
     ],
   );
   const rows = useStableRows(rawRows);
@@ -1372,6 +1376,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     >
       {forkDividerBeforeRowId === row.id ? forkSourceDivider : null}
       {row.kind === "work" &&
+        !conversationOnly &&
         (() => {
           const groupId = row.id;
           // Creation milestones are reserved for the end-of-turn recap card.
@@ -1484,6 +1489,35 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   </button>
                 </div>
               )}
+            </div>
+          );
+        })()}
+
+      {row.kind === "work" &&
+        conversationOnly &&
+        (() => {
+          // Server-posted coordinator monitor rows (worker settled / stuck /
+          // batch roll-up) read as part of the coordinator's chat reply —
+          // left-aligned body text in the message column, not centered pills
+          // or work entries.
+          const notices = row.groupedEntries.flatMap((workEntry) =>
+            workEntry.synaraWorkerNotice
+              ? [{ entry: workEntry, notice: workEntry.synaraWorkerNotice }]
+              : [],
+          );
+          if (notices.length === 0) {
+            return null;
+          }
+          return (
+            <div className="chat-message-segment flex w-full flex-col items-start gap-1.5 pl-[2px] pr-[2px]">
+              {notices.map(({ entry, notice }) => (
+                <WorkerMonitorNoticePill
+                  key={`worker-monitor:${entry.id}`}
+                  entry={entry}
+                  notice={notice}
+                  {...(onOpenThread ? { onOpenThread } : {})}
+                />
+              ))}
             </div>
           );
         })()}
@@ -1643,6 +1677,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         <UserMessagePullRequestContextCard
                           key={context.index}
                           scope={context.scope}
+                          itemKind={context.itemKind}
                           title={context.title}
                           subtitle={context.subtitle}
                           text={context.text}
@@ -2170,7 +2205,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   </DisclosureRegion>
                 </div>
               )}
-              {hasCollapsedWork && (
+              {hasCollapsedWork && !conversationOnly && (
                 <div className="mb-3">
                   <Collapsible
                     className="group/collapsed-work"
@@ -2218,7 +2253,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 </div>
               )}
               <div className="group min-w-0 py-0.5">
-                {renderWorkDisplay(leadingWorkDisplay, "leading")}
+                {conversationOnly ? null : renderWorkDisplay(leadingWorkDisplay, "leading")}
                 {row.message.asyncUserInput ? (
                   <AsyncUserInputCard
                     key={row.message.id}
@@ -2232,18 +2267,31 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     data-chat-find-document-id={row.message.id}
                   >
                     <ChatMarkdown
-                      text={messageText}
+                      text={
+                        conversationOnly
+                          ? rewriteThreadIdsAsMarkdownLinks(
+                              messageText,
+                              synaraThreadCreationRecaps.flatMap((creation) =>
+                                creation.threads.map((thread) => ({
+                                  id: thread.threadId,
+                                  title: thread.title,
+                                })),
+                              ),
+                            )
+                          : messageText
+                      }
                       cwd={markdownCwd}
                       isStreaming={Boolean(row.message.streaming)}
                       style={chatTypographyStyle}
                       onImageExpand={onImageExpand}
                       knownAbsoluteFilePaths={knownAbsoluteFilePaths}
+                      {...(conversationOnly && onOpenThread ? { onOpenThread } : {})}
                       {...threadFindMarkdownProps(findHighlight, row.message.id)}
                     />
                   </div>
                 ) : null}
-                {renderWorkDisplay(inlineWorkDisplay, "inline")}
-                {inlineEditedFilesFromTurnSummary.length > 0 && (
+                {conversationOnly ? null : renderWorkDisplay(inlineWorkDisplay, "inline")}
+                {!conversationOnly && inlineEditedFilesFromTurnSummary.length > 0 && (
                   <div className="mt-2 space-y-0.5">
                     {inlineEditedFilesFromTurnSummary.map((file) => (
                       <button
@@ -2280,26 +2328,44 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   </div>
                 ))}
                 {!row.assistantTurnInProgress && row.showAssistantCopyButton
-                  ? synaraThreadCreationRecaps.map((creation) => (
-                      <div key={creation.operationId} className="mt-2 mb-4">
-                        <SynaraThreadCreationCard
-                          creation={creation}
-                          {...(onOpenThread
-                            ? {
-                                onOpenThread: (createdThreadId) =>
-                                  onOpenThread(ThreadId.makeUnsafe(createdThreadId)),
-                              }
-                            : {})}
-                        />
-                      </div>
-                    ))
+                  ? synaraThreadCreationRecaps.map((creation) =>
+                      conversationOnly ? (
+                        <p
+                          key={creation.operationId}
+                          className="mt-2 flex flex-wrap gap-x-2 gap-y-1 text-ui"
+                        >
+                          {creation.threads.map((thread) => (
+                            <button
+                              key={thread.threadId}
+                              type="button"
+                              className="text-foreground underline decoration-foreground/30 underline-offset-2 hover:decoration-foreground/70"
+                              onClick={() => onOpenThread?.(ThreadId.makeUnsafe(thread.threadId))}
+                            >
+                              {thread.title}
+                            </button>
+                          ))}
+                        </p>
+                      ) : (
+                        <div key={creation.operationId} className="mt-2 mb-4">
+                          <SynaraThreadCreationCard
+                            creation={creation}
+                            {...(onOpenThread
+                              ? {
+                                  onOpenThread: (createdThreadId) =>
+                                    onOpenThread(ThreadId.makeUnsafe(createdThreadId)),
+                                }
+                              : {})}
+                          />
+                        </div>
+                      ),
+                    )
                   : null}
                 {(() => {
                   // Hold the end-of-turn changes card (Undo / Review) until the
                   // turn settles. While the turn is live the composer's own
                   // live-changes strip owns this surface; showing the card too
                   // would duplicate it and pre-empt the strip mid-turn.
-                  if (!turnSummary || row.assistantTurnInProgress) return null;
+                  if (conversationOnly || !turnSummary || row.assistantTurnInProgress) return null;
                   const checkpointFiles = turnSummary.files;
                   if (checkpointFiles.length === 0) return null;
                   const fileChangesExpanded =
@@ -2543,7 +2609,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         </div>
       )}
 
-      {row.kind === "working-header" && (
+      {row.kind === "working-header" && !conversationOnly && (
         <div>
           {/* Non-collapsible twin of the settled "Worked for" header: same label
               tone, size, and full-width divider, but counting up live. -ml-0.5
@@ -2647,17 +2713,15 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         onWheel={handleMessagesWheel}
         data-chat-scroll-container="true"
         ListFooterComponent={listFooter}
-        // `scroll-fade-b` (vendored shadcn 4.12.0 util in index.css) masks the bottom
-        // edge so streamed content dissolves toward the composer. It is scroll-aware
-        // via `animation-timeline: scroll()`, so the fade clears at the live edge and a
-        // pinned or non-scrollable transcript stays crisp (no permanent shadow).
-        // With the floating composer the viewport bottom sits *behind* the frosted
-        // surface, so the scroll-aware fade is replaced by the fixed composer mask in
-        // `listScrollStyle`: rows dissolve through the glass over the editor region and
-        // are fully cut before the composer's footer controls.
+        // `scroll-edge-fade` (index.css) dissolves rows under the chat header and toward
+        // the composer instead of cutting them. It is scroll-aware via
+        // `animation-timeline: scroll()` and paint-only, so each edge clears once nothing
+        // is scrolled past it (a pinned or non-scrollable transcript stays crisp) without
+        // feeding back into auto-follow or list measurement. With the floating composer,
+        // `listScrollStyle` moves the bottom fade up to the composer's top edge and
+        // intersects the footer-controls dissolve.
         className={cn(
-          "h-full overflow-x-hidden overscroll-y-contain py-3 [scrollbar-gutter:stable] sm:py-4",
-          contentInsetBottomPx ? null : "scroll-fade-b",
+          "scroll-edge-fade h-full overflow-x-hidden overscroll-y-contain py-3 [scrollbar-gutter:stable] sm:py-4",
           ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
           CHAT_COLUMN_GUTTER_CLASS_NAME,
         )}

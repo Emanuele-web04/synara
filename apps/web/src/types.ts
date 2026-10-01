@@ -17,6 +17,7 @@ import type {
   OrchestrationSessionStatus,
   OrchestrationThreadActivity,
   ThreadHandoff,
+  ThreadSidechatContext,
   ProjectScript as ContractProjectScript,
   ThreadId,
   ProjectId,
@@ -26,6 +27,7 @@ import type {
   MessageId,
   ProviderMentionReference,
   ProviderSkillReference,
+  ProviderInstanceId,
   ProviderKind,
   CheckpointRef,
   ProviderInteractionMode,
@@ -269,6 +271,7 @@ export interface Thread extends ThreadWorkspaceState {
   subagentRole?: string | null;
   forkSourceThreadId?: ThreadId | null;
   sidechatSourceThreadId?: ThreadId | null;
+  sidechatContext?: ThreadSidechatContext | null;
   sidechatLastActivityAt?: string | null;
   sidechatExpiredAt?: string | null;
   handoff?: ThreadHandoff | null;
@@ -318,6 +321,7 @@ export interface ThreadShell extends ThreadWorkspaceState {
   subagentRole?: string | null;
   forkSourceThreadId?: ThreadId | null;
   sidechatSourceThreadId?: ThreadId | null;
+  sidechatContext?: ThreadSidechatContext | null;
   sidechatLastActivityAt?: string | null;
   sidechatExpiredAt?: string | null;
   handoff?: ThreadHandoff | null;
@@ -373,6 +377,7 @@ export interface SidebarThreadSummary {
   pendingBackgroundWorkCount: number;
   forkSourceThreadId?: ThreadId | null;
   sidechatSourceThreadId?: ThreadId | null;
+  sidechatContext?: ThreadSidechatContext | null;
   sidechatLastActivityAt?: string | null;
   sidechatExpiredAt?: string | null;
   handoff?: ThreadHandoff | null;
@@ -393,6 +398,7 @@ export interface ComposerThreadMentionSource {
 
 export interface ThreadSession {
   provider: ProviderKind;
+  providerInstanceId?: ProviderInstanceId;
   status: SessionPhase | "error" | "closed";
   activeTurnId?: TurnId | undefined;
   createdAt: string;

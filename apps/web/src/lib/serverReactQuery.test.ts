@@ -19,6 +19,8 @@ import {
 
 const READY_CODEX_STATUS = {
   provider: "codex",
+  instanceId: "codex",
+  driver: "codex",
   status: "ready",
   available: true,
   authStatus: "authenticated",
@@ -31,6 +33,7 @@ function makeServerConfig(providers: readonly ServerProviderStatus[]): ServerCon
     homeDir: "C:\\Users\\tester",
     chatWorkspaceRoot: "C:\\Users\\tester\\Documents\\Synara",
     studioWorkspaceRoot: "C:\\Users\\tester\\Documents\\Synara\\Studio",
+    groupsWorkspaceRoot: "C:\\Users\\tester\\Documents\\Synara\\Groups",
     worktreesDir: "C:\\SynaraDev\\worktrees",
     keybindingsConfigPath: "C:\\SynaraDev\\keybindings.json",
     keybindings: [],

@@ -218,6 +218,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
       });
       assert.deepStrictEqual(Option.getOrNull(persisted)?.defaultModelSelection, {
         provider: "codex",
+        instanceId: "codex",
         model: "gpt-5.4",
       });
     }),
@@ -285,8 +286,67 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
       });
       assert.deepStrictEqual(Option.getOrNull(persisted)?.modelSelection, {
         provider: "claudeAgent",
+        instanceId: "claudeAgent",
         model: "claude-opus-4-6",
       });
+    }),
+  );
+
+  it.effect("round-trips a standalone sidechat context and reads other threads as null", () =>
+    Effect.gen(function* () {
+      const threads = yield* ProjectionThreadRepository;
+      const context = {
+        kind: "github-item",
+        itemKind: "pullRequest",
+        repository: "octo/repo",
+        number: 7,
+        url: "https://github.com/octo/repo/pull/7",
+      } as const;
+      const base = {
+        projectId: ProjectId.makeUnsafe("project-sidechat-context"),
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        associatedWorktreePath: null,
+        associatedWorktreeBranch: null,
+        associatedWorktreeRef: null,
+        createBranchFlowCompleted: false,
+        lastKnownPr: null,
+        latestTurnId: null,
+        handoff: null,
+        pinnedMessages: null,
+        notes: null,
+        goal: null,
+        latestUserMessageAt: null,
+        pendingApprovalCount: 0,
+        pendingUserInputCount: 0,
+        hasActionableProposedPlan: 0,
+        createdAt: "2026-09-30T10:00:00.000Z",
+        updatedAt: "2026-09-30T10:00:00.000Z",
+        deletedAt: null,
+      } as const;
+      yield* threads.upsert({
+        ...base,
+        threadId: ThreadId.makeUnsafe("thread-standalone-sidechat"),
+        title: "Sidechat: Fix it",
+        sidechatContext: context,
+        sidechatLastActivityAt: base.createdAt,
+      });
+      yield* threads.upsert({
+        ...base,
+        threadId: ThreadId.makeUnsafe("thread-ordinary"),
+        title: "Ordinary",
+      });
+
+      const sidechat = yield* threads.getById({
+        threadId: ThreadId.makeUnsafe("thread-standalone-sidechat"),
+      });
+      const ordinary = yield* threads.getById({ threadId: ThreadId.makeUnsafe("thread-ordinary") });
+      assert.deepStrictEqual(Option.getOrNull(sidechat)?.sidechatContext, context);
+      assert.strictEqual(Option.getOrNull(ordinary)?.sidechatContext ?? null, null);
     }),
   );
 

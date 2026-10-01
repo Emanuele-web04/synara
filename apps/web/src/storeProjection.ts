@@ -105,6 +105,7 @@ function toThreadShell(thread: Thread): ThreadShell {
     subagentRole: thread.subagentRole ?? null,
     forkSourceThreadId: thread.forkSourceThreadId ?? null,
     sidechatSourceThreadId: thread.sidechatSourceThreadId ?? null,
+    sidechatContext: thread.sidechatContext ?? null,
     sidechatLastActivityAt: thread.sidechatLastActivityAt ?? null,
     sidechatExpiredAt: thread.sidechatExpiredAt ?? null,
     lastKnownPr: thread.lastKnownPr ?? null,
@@ -364,6 +365,8 @@ function sidebarThreadSummariesEqual(
     left.pendingBackgroundWorkCount === right.pendingBackgroundWorkCount &&
     (left.forkSourceThreadId ?? null) === (right.forkSourceThreadId ?? null) &&
     (left.sidechatSourceThreadId ?? null) === (right.sidechatSourceThreadId ?? null) &&
+    // The context never changes after creation; its URL identifies the item.
+    (left.sidechatContext?.url ?? null) === (right.sidechatContext?.url ?? null) &&
     (left.sidechatLastActivityAt ?? null) === (right.sidechatLastActivityAt ?? null) &&
     (left.sidechatExpiredAt ?? null) === (right.sidechatExpiredAt ?? null) &&
     deepEqualJson(left.lastKnownPr ?? null, right.lastKnownPr ?? null) &&
@@ -411,6 +414,7 @@ function buildSidebarThreadSummary(
     pendingBackgroundWorkCount: metadata.pendingBackgroundWorkCount,
     forkSourceThreadId: thread.forkSourceThreadId ?? null,
     sidechatSourceThreadId: thread.sidechatSourceThreadId ?? null,
+    sidechatContext: thread.sidechatContext ?? null,
     sidechatLastActivityAt: thread.sidechatLastActivityAt ?? null,
     sidechatExpiredAt: thread.sidechatExpiredAt ?? null,
     lastKnownPr: thread.lastKnownPr ?? null,
@@ -612,6 +616,7 @@ function rebuildThreadShellRecords(
       thread.claudeCacheReview != null || previousThread?.claudeCacheReviewSequence !== undefined
         ? snapshotSequence
         : undefined,
+      { restoringSession: true },
     );
     const threadId = next.shell.id;
 
@@ -1367,7 +1372,9 @@ function syncServerThreadDetailWithOptions(
     commitThreadProjection(
       writeThreadState(
         state,
-        normalizeThreadFromReadModel(nextThreadDetail, previousThread, options?.snapshotSequence),
+        normalizeThreadFromReadModel(nextThreadDetail, previousThread, options?.snapshotSequence, {
+          restoringSession: !state.threadsHydrated,
+        }),
         previousThread,
       ),
       thread.id,
@@ -1432,6 +1439,7 @@ export function applyShellEvent(state: AppState, event: OrchestrationShellStream
           event.thread,
           getThreadFromState(state, event.thread.id),
           event.sequence,
+          { restoringSession: !state.threadsHydrated },
         ),
       );
       return commitThreadProjection(nextState, event.thread.id);
@@ -1486,6 +1494,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
         thread.claudeCacheReview != null || existing?.claudeCacheReviewSequence !== undefined
           ? readModel.snapshotSequence
           : undefined,
+        { restoringSession: true },
       );
     });
   const nextThreadIds = new Set(nextThreads.map((thread) => thread.id));
