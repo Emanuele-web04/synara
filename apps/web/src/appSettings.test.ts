@@ -378,13 +378,6 @@ describe("removed settings", () => {
   });
 });
 
-describe("sidebar layout", () => {
-  it("decodes settings without a layout choice as the rail default", () => {
-    const decoded = Schema.decodeUnknownSync(AppSettingsSchema)({ showChatsSection: false });
-    expect(normalizeStoredAppSettings(decoded).sidebarLayout).toBe("rail");
-  });
-});
-
 describe("environment panel defaults", () => {
   it("starts optional text sections disabled without overriding explicit preferences", () => {
     const defaults = AppSettingsSchema.makeUnsafe({});
@@ -1944,11 +1937,11 @@ describe("AppSettingsSchema", () => {
     });
   });
 
-  it("drops rail and nav ids this build does not know instead of resetting every setting", () => {
+  it("drops rail ids this build does not know and ignores the retired classic-sidebar keys", () => {
     const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
     const decoded = decode(
       JSON.stringify({
-        sidebarLayout: "rail",
+        sidebarLayout: "classic",
         railItemOrder: ["some-future-item", "kanban", "home"],
         hiddenRailItems: ["some-future-item", "studio"],
         sidebarNavOrder: ["some-future-item", "kanban"],
@@ -1957,12 +1950,13 @@ describe("AppSettingsSchema", () => {
     );
 
     expect(decoded).toMatchObject({
-      sidebarLayout: "rail",
       railItemOrder: ["kanban", "home"],
       hiddenRailItems: ["studio"],
-      sidebarNavOrder: ["kanban"],
-      hiddenSidebarNavItems: [],
     });
+    // Settings saved while the classic sidebar existed still decode; its keys are dropped.
+    expect(decoded).not.toHaveProperty("sidebarLayout");
+    expect(decoded).not.toHaveProperty("sidebarNavOrder");
+    expect(decoded).not.toHaveProperty("hiddenSidebarNavItems");
   });
 
   it("defaults the Environment panel closed and preserves an explicit open preference", () => {

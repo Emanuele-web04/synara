@@ -125,14 +125,6 @@
     background: var(--color-background-button-secondary-hover);
   }
 
-  /* Let the renderer switch between Codex-style translucent and opaque shells
-     without duplicating sidebar markup or class strings. */
-  .app-sidebar-surface {
-    /* No backdrop-filter: the sidebar sits on the transparent window, so a filter has no
-       page content to frost (the desktop blur is native) and only costs a compositor pass. */
-    background: var(--app-sidebar-surface, var(--card));
-  }
-
   /* Small circular icon badges that sit directly on the sidebar surface inside
      thread rows — the meta-chip stack, the handoff provider avatar, the terminal
      count badge. They take the SAME material as the sidebar (translucent or
