@@ -9176,6 +9176,174 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it.each(["saved", "draft"] as const)(
+    "switches horizontal tabs without blanking the header or composer (%s)",
+    async (targetKind) => {
+      onTestFinished(skipReactDevOwnerStacks());
+      localStorage.setItem("synara:app-settings:v1", JSON.stringify({ sidebarLayout: "rail" }));
+      useOpenThreadTabsStore.setState({ threadIds: [] });
+      let snapshot = createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("horizontal-tabs"),
+        targetText: "Horizontal tabs conversation",
+      });
+      if (targetKind === "saved") {
+        const source = snapshot.threads[0]!;
+        snapshot = {
+          ...snapshot,
+          threads: [
+            ...snapshot.threads,
+            {
+              ...source,
+              id: OTHER_THREAD_ID,
+              title: "Other tab",
+              session: source.session ? { ...source.session, threadId: OTHER_THREAD_ID } : null,
+              messages: source.messages.map((message) => ({
+                ...message,
+                id: MessageId.makeUnsafe(`other-${message.id}`),
+              })),
+            },
+          ],
+        };
+      }
+      const commits: number[] = [];
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot,
+        onRender: (_id, _phase, duration) => commits.push(duration),
+      });
+      try {
+        if (targetKind === "draft") {
+          useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, OTHER_THREAD_ID, {});
+        }
+        useComposerDraftStore.getState().setPrompt(THREAD_ID, "Draft in first tab");
+        useComposerDraftStore.getState().setPrompt(OTHER_THREAD_ID, "Draft in second tab");
+        useOpenThreadTabsStore.setState({ threadIds: [THREAD_ID, OTHER_THREAD_ID] });
+        await vi.waitFor(() =>
+          expect(document.querySelector('[contenteditable="true"]')?.textContent).toContain(
+            "Draft in first tab",
+          ),
+        );
+        await waitForLayout();
+
+        const samples = [];
+        const storageWrites = vi.spyOn(Storage.prototype, "setItem");
+        onTestFinished(() => storageWrites.mockRestore());
+        // The opt-in runs the same correctness path for longer; do not add a
+        // wall-clock threshold to CI. The first round trip warms both targets.
+        const rounds = import.meta.env.VITE_TAB_SWITCH_BENCHMARK === "1" ? 12 : 2;
+        for (let index = 0; index < rounds * 2; index += 1) {
+          const toSecond = index % 2 === 0;
+          const targetId = toSecond ? OTHER_THREAD_ID : THREAD_ID;
+          const expectedPrompt = toSecond ? "Draft in second tab" : "Draft in first tab";
+          const tabButtons = document.querySelectorAll<HTMLButtonElement>(
+            'nav[aria-label="Open threads"] [data-surface-tab] > button:not([aria-label])',
+          );
+          expect(tabButtons).toHaveLength(2);
+          commits.length = 0;
+          storageWrites.mockClear();
+          const startedAt = performance.now();
+          let missingHeaderFrames = 0;
+          let missingComposerFrames = 0;
+          tabButtons[toSecond ? 1 : 0]!.click();
+          let ready = false;
+          let domReadyMs: number | null = null;
+          while (performance.now() - startedAt < 5_000) {
+            await nextFrame();
+            const activeTab = document.querySelector(
+              'nav[aria-label="Open threads"] button[aria-current="page"]',
+            );
+            const editor = document.querySelector(
+              '[data-chat-composer-form="true"] [contenteditable="true"]',
+            );
+            if (!activeTab) missingHeaderFrames += 1;
+            if (!editor) missingComposerFrames += 1;
+            if (
+              mounted.router.state.location.pathname === `/${targetId}` &&
+              activeTab &&
+              editor?.textContent === expectedPrompt &&
+              ((targetKind === "draft" && toSecond) ||
+                document.querySelector(
+                  `[data-assistant-message-id="${toSecond ? "other-" : ""}msg-assistant-21"]`,
+                ))
+            ) {
+              domReadyMs ??= performance.now() - startedAt;
+              const scrollContainer = document.querySelector<HTMLElement>(
+                '[data-chat-scroll-container="true"]',
+              );
+              // A row in the DOM can still be transparent while LegendList
+              // settles its initial scroll. Include that work in opening time.
+              if (
+                (targetKind === "draft" && toSecond) ||
+                (scrollContainer && isTranscriptContentVisible(scrollContainer))
+              ) {
+                ready = true;
+                break;
+              }
+            }
+          }
+          expect(ready, "Target tab must show its own composer and transcript").toBe(true);
+          samples.push({
+            target: toSecond ? targetKind : "saved",
+            ms: performance.now() - startedAt,
+            domReadyMs,
+            reactMs: commits.reduce((sum, duration) => sum + duration, 0),
+            commits: commits.length,
+            tabWrites: storageWrites.mock.calls.filter(
+              ([key]) => key === "synara:open-thread-tabs:v1",
+            ).length,
+            missingHeaderFrames,
+            missingComposerFrames,
+          });
+          await waitForLayout();
+        }
+        if (import.meta.env.VITE_TAB_SWITCH_BENCHMARK === "1") {
+          console.info(`TAB_SWITCH_BENCHMARK ${JSON.stringify({ targetKind, samples })}`);
+        }
+        expect(samples.every((sample) => sample.missingHeaderFrames === 0)).toBe(true);
+        expect(samples.every((sample) => sample.missingComposerFrames === 0)).toBe(true);
+        expect(samples.every((sample) => sample.tabWrites === 0)).toBe(true);
+        expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(
+          "Draft in first tab",
+        );
+        expect(useComposerDraftStore.getState().draftsByThreadId[OTHER_THREAD_ID]?.prompt).toBe(
+          "Draft in second tab",
+        );
+        // Retaining the surrounding composer must not retain another chat's
+        // Lexical undo history or route its edits into the destination draft.
+        const firstEditor = await waitForComposerEditor();
+        await userEvent.click(firstEditor);
+        await userEvent.keyboard("{End} private text");
+        await vi.waitFor(() =>
+          expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toContain(
+            "private text",
+          ),
+        );
+        const secondTab = document.querySelectorAll<HTMLButtonElement>(
+          'nav[aria-label="Open threads"] [data-surface-tab] > button:not([aria-label])',
+        )[1]!;
+        secondTab.click();
+        await vi.waitFor(() =>
+          expect(document.querySelector('[contenteditable="true"]')?.textContent).toBe(
+            "Draft in second tab",
+          ),
+        );
+        const secondEditor = await waitForComposerEditor();
+        await userEvent.click(secondEditor);
+        await userEvent.keyboard(
+          isMacNavigatorPlatform() ? "{Meta>}z{/Meta}" : "{Control>}z{/Control}",
+        );
+        await waitForLayout();
+        expect(secondEditor.textContent).toBe("Draft in second tab");
+        expect(useComposerDraftStore.getState().draftsByThreadId[OTHER_THREAD_ID]?.prompt).toBe(
+          "Draft in second tab",
+        );
+      } finally {
+        await mounted.cleanup();
+        useOpenThreadTabsStore.setState({ threadIds: [] });
+      }
+    },
+  );
+
   it.each(["home", "project"] as const)(
     "closing the last %s tab opens a fresh draft in the same project",
     async (surface) => {

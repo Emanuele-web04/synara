@@ -87,7 +87,6 @@ describe("composer focus admission", () => {
     expect(
       canApplyComposerFocus({
         windowHasFocus: false,
-        secondaryChromeReady: true,
         editorAvailable: true,
         editorDisabled: false,
       }),
@@ -98,15 +97,6 @@ describe("composer focus admission", () => {
     expect(
       canApplyComposerFocus({
         windowHasFocus: true,
-        secondaryChromeReady: false,
-        editorAvailable: true,
-        editorDisabled: false,
-      }),
-    ).toBe(false);
-    expect(
-      canApplyComposerFocus({
-        windowHasFocus: true,
-        secondaryChromeReady: true,
         editorAvailable: false,
         editorDisabled: false,
       }),
@@ -114,7 +104,6 @@ describe("composer focus admission", () => {
     expect(
       canApplyComposerFocus({
         windowHasFocus: true,
-        secondaryChromeReady: true,
         editorAvailable: true,
         editorDisabled: true,
       }),
@@ -125,7 +114,6 @@ describe("composer focus admission", () => {
     expect(
       canApplyComposerFocus({
         windowHasFocus: true,
-        secondaryChromeReady: true,
         editorAvailable: true,
         editorDisabled: false,
       }),

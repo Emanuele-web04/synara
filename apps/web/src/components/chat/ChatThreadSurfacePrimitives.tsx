@@ -131,24 +131,21 @@ export function DeferredChatView(props: {
   onMounted?: () => void;
 }) {
   const onMounted = props.onMounted ?? noopChatSurfaceAction;
-  const mountKey = `${props.paneScopeId}:${props.threadId}`;
-  const [readyMountKey, setReadyMountKey] = useState<string | null>(() =>
-    props.deferMount ? null : mountKey,
-  );
-  const canMountChatView = !props.deferMount || readyMountKey === mountKey;
+  // Only defer the initial mount. Switching to another draft must not tear
+  // down an already visible chat (including its tab strip) to replay the loader.
+  const [mountPending, setMountPending] = useState(props.deferMount);
+  if (mountPending && !props.deferMount) {
+    // A saved chat reached while the initial draft is still waiting can mount
+    // immediately, and subsequent drafts must not re-arm that initial delay.
+    setMountPending(false);
+  }
+  const canMountChatView = !mountPending || !props.deferMount;
 
   useEffect(() => {
-    if (!props.deferMount) {
-      return;
-    }
-    // readyMountKey is keyed by mountKey, so a changed mountKey already makes
-    // canMountChatView false (loader) without an eager reset here; the double
-    // rAF then stamps the new key once the paint has settled. Chromium can
-    // suppress animation frames while an Electron window is starting or being
-    // background-throttled, so keep a bounded fallback: a deferred draft must
-    // never remain on the mount loader forever just because frames did not run.
-    return scheduleDeferredChatMount(window, () => setReadyMountKey(mountKey));
-  }, [mountKey, props.deferMount]);
+    if (canMountChatView) return;
+    // Keep the bounded fallback for background-throttled Electron windows.
+    return scheduleDeferredChatMount(window, () => setMountPending(false));
+  }, [canMountChatView]);
 
   useEffect(() => {
     if (canMountChatView) {

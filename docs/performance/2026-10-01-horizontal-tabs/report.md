@@ -1,0 +1,124 @@
+# Horizontal chat tab switching — 2026-10-01
+
+Switching tabs now retains the chat surface and composer controls. Draft mount
+scheduling applies only until the first chat is mounted; a saved chat can still
+bypass a pending initial delay. Undo history resets at the editor boundary,
+preserving thread isolation. PR dialogs remain scoped to their originating
+thread. Recording an already-open tab no longer serializes and writes the
+unchanged tab list.
+
+These changes reuse the existing chat surface, editor, and tab store. They do
+not retain hidden chat trees or change transcript scroll ownership, subscription
+retention, provider startup, or initial-draft background-window safeguards.
+
+## Method
+
+- Apple M5 Pro, 48 GiB RAM, macOS 27.0.1 arm64; Node 24.21.0, Bun 1.4.2,
+  Vitest 4.1.10 and bundled Playwright Chromium.
+- Full application router, production CSS, React Compiler and real Lexical
+  editors, with a fixture WebSocket server. Desktop viewport: 960 × 1100.
+- React runs in development mode under Vitest; the existing
+  `skipReactDevOwnerStacks` helper disables owner-stack capture identically in
+  both runs. This is not a production JavaScript build.
+- Two cases: two saved chats with 44 messages each; a saved chat and an unsent
+  draft. Both have distinct composer drafts. Each case performs 12 round trips
+  using the actual horizontal tab buttons. Discard the first round trip for
+  warm statistics: 22 saved-to-saved samples, 11 samples per other direction.
+- Timing starts at the DOM click and ends at the first animation-frame sample
+  showing the destination route, active tab, expected composer text, and the
+  destination transcript's last assistant row with the list's opacity enabled
+  (except the empty draft). `domReadyMs` records the earlier point at which
+  those nodes exist; `clickToReadyMs` also waits for the list to become visible.
+  This distinction matters: LegendList hides rows while settling initial scroll.
+- `reactUntilReadyMs` sums React Profiler durations until that same readiness
+  point; it excludes subsequent settling and is not total CPU time.
+- Missing UI counts sample DOM in requestAnimationFrame, before presentation;
+  they are not exact painted-frame counts or an INP measurement. The readiness
+  metric checks the list's visibility state, not the compositor's presentation.
+- The paired runs use the same finalized measurement instrumentation. Raw
+  samples, including warm-up, are in [measurements.json](measurements.json).
+  Video capture and workspace checks ran separately from the timed pair.
+- Other work was running on this Mac. Wall-clock figures are directional local
+  evidence, not a production guarantee. The lifecycle gaps and unnecessary
+  storage writes reproduced independently of timing variation.
+
+## Paired results
+
+| Warm transition                  | Samples | Visible median before → after |       Change | p95 before → after | React until ready before → after |
+| -------------------------------- | ------: | ----------------------------: | -----------: | -----------------: | -------------------------------: |
+| Saved → saved                    |      22 |              169.5 → 167.3 ms |   1.3% lower |   183.5 → 175.2 ms |                   25.5 → 23.6 ms |
+| Draft → saved                    |      11 |              186.4 → 114.8 ms |  38.4% lower |   202.8 → 118.0 ms |                   30.7 → 32.7 ms |
+| Saved → previously visited draft |      11 |                60.1 → 73.6 ms | 22.5% higher |     61.8 → 77.5 ms |                   17.6 → 19.0 ms |
+
+p95 uses the nearest-rank method. Warm ranges were 166.4–191.7 → 166.0–176.1 ms
+for saved-to-saved; 183.5–202.8 → 105.6–118.0 ms for draft-to-saved; and
+57.8–61.8 → 67.7–77.5 ms for returning to the draft.
+
+Saved-to-saved total opening time is effectively unchanged in this workload.
+Its destination DOM/composer becomes ready earlier (median 86.6 → 78.3 ms),
+but list initialization still dominates full transcript visibility. The return
+to a previously visited draft is 13.5 ms slower in this pair. We retain that
+tradeoff for the consistent header/composer and faster first draft entry,
+without claiming a general latency or CPU reduction. No hidden chat cache or
+retained transcript tree was added.
+
+The first entry into the unsent draft measured 156.4 → 80.8 ms (one sample,
+48.3% lower). That entry previously removed both header and composer for two
+rAF samples; neither was absent after the change. Saved-chat switches previously
+removed the composer for one rAF sample on every switch; all sampled switches
+now retained it. Reopening tabs writes the unchanged tab list zero times,
+previously once per normal switch and twice on the first draft entry.
+The first saved-to-saved sample was 196.1 → 204.7 ms; it does not establish a
+cold-opening improvement. Process startup is outside this fixture's scope.
+
+The new regression fails on the baseline for missing header/composer and passes
+on the optimized code. It also checks destination content, unchanged tab-list
+persistence, and Undo isolation after typing and switching tabs. Existing branch
+selector reset coverage passes with the retained composer controls.
+
+## Rejected list experiments
+
+Two additional changes were measured and removed. Separate row estimates by
+message role increased saved-to-saved median visibility time to 182.5 ms.
+Limiting initial off-screen rendering to 50 px before restoring the default
+produced 166.8 ms, effectively unchanged from 167.3 ms. The latter also reduced
+DOM time in the run, so it did not establish a meaningful gain in the list's
+visibility delay beyond host timing variation. Neither justified introducing
+new scroll initialization behavior. Transcript keys, list configuration, and
+the existing measurement/scroll ownership remain unchanged.
+
+## Verification
+
+- `bun run fmt:check`, `bun run lint`, and `bun run typecheck` passed. Lint
+  reports 793 warnings and zero errors.
+- `bun run test`: 14,355 passing tests, 36 skipped, across all six test workspaces.
+- Browser regression pass: 137 tests across `ChatView.browser.tsx`,
+  `useOpenThreadTabs.browser.tsx`, `MessagesTimeline.tailAnchor.browser.tsx`,
+  and `useTailAnchorScroll.browser.tsx` passed. This covers switching, draft
+  isolation, focus, branch selection, scrolling and tail-anchor behavior.
+- The browser pass emitted two console messages about `ResizeObserver` loops
+  completing with undelivered notifications, without test failures. The baseline benchmark
+  also emitted a router preload error from the fixture; the baseline regression
+  failures were the expected header/composer absence assertions.
+- The benchmark regression subsequently passed with the stricter transcript
+  visibility criterion on the same final production code. No list experiment
+  is included in the final changes.
+
+## Reproduce
+
+```bash
+VITE_TAB_SWITCH_BENCHMARK=1 bun run --cwd apps/web test:browser \
+  src/components/ChatView.browser.tsx -t 'switches horizontal tabs' \
+  --silent=false --reporter=verbose
+```
+
+The opt-in prints `TAB_SWITCH_BENCHMARK` records. Ordinary CI uses two round
+trips and asserts behavior, without noisy wall-clock thresholds. App process
+startup, production Electron, remote-provider/network latency, sustained CPU,
+RAM and GPU use were not measured by this browser fixture.
+
+The remaining bottleneck is transcript initialization. Before changing its
+mount/scroll ownership, repeat the visibility measurement in an isolated
+production desktop build with representative real histories and capture its
+layout/paint trace. The current evidence does not justify a broader cache or
+virtualizer rewrite.
