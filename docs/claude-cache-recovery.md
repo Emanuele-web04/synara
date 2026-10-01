@@ -13,6 +13,13 @@ Main-conversation observations exclude subagent usage.
 
 The lifetime comes from native cache-creation usage, when available. The estimate uses the earliest
 local observation of the request, so streaming a long answer does not keep moving the expiry time.
+Mixed five-minute and one-hour prefixes retain both lifetimes, including when later requests read
+the longer-lived prefix and append a shorter-lived tail. Between those expiry boundaries, overall
+warmth is unknown: partial expiry does not establish a full-context cache miss or require a choice.
+The context meter displays the observed lifetime range. New native response evidence replaces
+older request timing; its request start and lifetime remain unknown until usage supplies them.
+Metadata for the same response retains its known request start, allowing genuine expiry during a
+long response to remain visible.
 An explicit expired observation takes precedence over a local warm estimate. Missing values, old
 sessions without timing evidence, and invalid clocks remain unknown.
 

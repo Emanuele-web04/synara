@@ -77,13 +77,64 @@ describe("Claude native cache observations", () => {
     });
   });
 
-  it("uses the shortest native TTL for mixed cache durations", () => {
-    expect(
-      observedClaudeCacheTtl({
-        cache_creation: { ephemeral_1h_input_tokens: 9000, ephemeral_5m_input_tokens: 1 },
-      }),
-    ).toBe(300);
+  it("retains both expiry boundaries for mixed cache durations and cache-read refreshes", () => {
+    const mixed = claudeCacheFromRequest({
+      observedAt,
+      messageId: "mixed",
+      usage: {
+        input_tokens: 0,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 263000,
+        output_tokens: 0,
+        cache_creation: { ephemeral_1h_input_tokens: 262999, ephemeral_5m_input_tokens: 1 },
+      },
+    });
+    expect(mixed.ttlSeconds).toBe(3600);
+    expect(mixed.partialTtlSeconds).toBe(300);
+    const refreshed = claudeCacheFromRequest({
+      observedAt: "2026-09-16T10:01:00.000Z",
+      messageId: "refreshed",
+      previous: mixed,
+      usage: { cache_read_input_tokens: 263000 },
+    });
+    expect(refreshed.ttlSeconds).toBe(3600);
+    expect(refreshed.partialTtlSeconds).toBe(300);
     expect(observedClaudeCacheTtl({ cache_creation_input_tokens: 9000 })).toBeUndefined();
+  });
+
+  it("does not shorten a read one-hour prefix to a new five-minute tail", () => {
+    const previous = claudeCacheFromRequest({
+      observedAt,
+      messageId: "long-prefix",
+      usage: {
+        cache_creation: { ephemeral_1h_input_tokens: 262999 },
+        cache_creation_input_tokens: 262999,
+      },
+    });
+    const next = claudeCacheFromRequest({
+      observedAt: "2026-09-16T10:01:00.000Z",
+      messageId: "short-tail",
+      previous,
+      usage: {
+        cache_read_input_tokens: 262999,
+        cache_creation_input_tokens: 1,
+        cache_creation: { ephemeral_5m_input_tokens: 1 },
+      },
+    });
+    expect(next.ttlSeconds).toBe(3600);
+    expect(next.partialTtlSeconds).toBe(300);
+    const cold = claudeCacheFromRequest({
+      observedAt: "2026-09-16T11:01:00.000Z",
+      messageId: "cold",
+      previous: next,
+      usage: {
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 263000,
+        cache_creation: { ephemeral_5m_input_tokens: 263000 },
+      },
+    });
+    expect(cold.ttlSeconds).toBe(300);
+    expect(cold.partialTtlSeconds).toBeUndefined();
   });
 
   it("does not reuse a TTL across a native session or model change", () => {
@@ -93,23 +144,23 @@ describe("Claude native cache observations", () => {
       nativeSessionId: "one",
       model: "opus",
       usage: {
-        cache_creation: { ephemeral_1h_input_tokens: 100 },
-        cache_creation_input_tokens: 100,
+        cache_creation: { ephemeral_1h_input_tokens: 100, ephemeral_5m_input_tokens: 1 },
+        cache_creation_input_tokens: 101,
       },
     });
     for (const identity of [
       { nativeSessionId: "two", model: "opus" },
       { nativeSessionId: "one", model: "sonnet" },
     ]) {
-      expect(
-        claudeCacheFromRequest({
-          ...identity,
-          observedAt,
-          messageId: "next",
-          previous,
-          usage: { cache_read_input_tokens: 100 },
-        }).ttlSeconds,
-      ).toBeUndefined();
+      const changed = claudeCacheFromRequest({
+        ...identity,
+        observedAt,
+        messageId: "next",
+        previous,
+        usage: { cache_read_input_tokens: 100 },
+      });
+      expect(changed.ttlSeconds).toBeUndefined();
+      expect(changed.partialTtlSeconds).toBeUndefined();
     }
   });
 
