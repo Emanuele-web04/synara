@@ -463,6 +463,11 @@ export const createComposerDraftStoreState =
       });
     },
     finalizePromotedDraftThread: (threadId) => {
+      const promotedTo = get().draftThreadsByThreadId[threadId]?.promotedTo;
+      if (promotedTo && promotedTo !== threadId) {
+        get().clearDraftThread(threadId);
+        return;
+      }
       set((state) => {
         if (!state.draftThreadsByThreadId[threadId]?.promotedTo) {
           return state;

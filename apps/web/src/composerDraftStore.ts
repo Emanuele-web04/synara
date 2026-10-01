@@ -169,7 +169,8 @@ export function useEffectiveComposerModelState(input: {
   });
 }
 
-// Mark drafts as promoted first; route/composer cleanup happens after the server thread starts.
+// Mark drafts first; registration cleanup happens after the server thread starts.
+// Composer content belongs to the same thread and survives that cleanup.
 export function markPromotedDraftThreads(serverThreadIds: ReadonlySet<ThreadId>): void {
   const store = useComposerDraftStore.getState();
   const draftThreadIds = Object.keys(store.draftThreadsByThreadId) as ThreadId[];
