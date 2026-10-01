@@ -46,18 +46,25 @@ function setSliderValue(label: string, value: number) {
   input.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
-it("tunes sidebar opacity and desktop blur, then switches to a solid sidebar", async () => {
+it("tunes opacity, desktop blur, and scope, then switches to a solid window", async () => {
   localStorage.setItem("synara:theme", JSON.stringify({ ...DEFAULT_THEME_STATE, mode: "dark" }));
   await render(<ThemePackEditor variant="dark" />);
   await expect.poll(() => root.getAttribute("data-window-material")).toBe("translucent");
+  await expect.poll(() => root.getAttribute("data-window-translucency")).toBe("window");
 
-  const opacity = page.getByRole("slider", { name: "Dark theme sidebar opacity" });
+  const opacity = page.getByRole("slider", { name: "Dark theme translucency opacity" });
   const blur = page.getByRole("slider", { name: "Dark theme background blur" });
   await expect.element(opacity).toHaveValue("72");
   await expect.element(blur).toHaveValue("30");
 
-  setSliderValue("Dark theme sidebar opacity", 0);
+  setSliderValue("Dark theme translucency opacity", 0);
   setSliderValue("Dark theme background blur", 0);
+  await expect
+    .poll(() => root.style.getPropertyValue("--app-window-background"))
+    .toMatch(/ 0%, transparent\)$/);
+
+  await page.getByRole("switch", { name: "Dark theme translucent sidebar only" }).click();
+  await expect.poll(() => root.getAttribute("data-window-translucency")).toBe("sidebar");
   await expect
     .poll(() => root.style.getPropertyValue("--app-sidebar-surface"))
     .toMatch(/ 0%, transparent\)$/);
@@ -67,10 +74,12 @@ it("tunes sidebar opacity and desktop blur, then switches to a solid sidebar", a
   expect(parseStoredThemeState(localStorage.getItem("synara:theme")).translucency.dark).toEqual({
     opacity: 0,
     blur: 0,
+    sidebarOnly: true,
   });
 
   await page.getByRole("radio", { name: "Solid" }).click();
   await expect.poll(() => root.getAttribute("data-window-material")).toBe("opaque");
+  expect(root.getAttribute("data-window-translucency")).toBe("none");
   await expect
     .poll(() => setWindowMaterial.mock.lastCall)
     .toEqual([{ material: "opaque", blurRadius: 0 }]);

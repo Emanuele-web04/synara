@@ -13,6 +13,8 @@ import {
 export type ThemeMode = "light" | "dark" | "system";
 export type ThemeVariant = "light" | "dark";
 export type WindowMaterial = "opaque" | "translucent";
+/** Which surfaces a translucent shell lets the desktop through: `none` when it is opaque. */
+export type WindowTranslucencyScope = "none" | "sidebar" | "window";
 
 export interface ThemeFonts {
   ui: string | null;
@@ -45,10 +47,15 @@ export interface ThemePack {
  * so Codex share strings keep their format. Only applies when `opaqueWindows` is off.
  */
 export interface WindowTranslucency {
-  /** Sidebar fill strength, 0 (desktop fully visible) to 100 (solid tint). */
+  /** Glass fill strength, 0 (desktop fully visible) to 100 (solid tint). */
   opacity: number;
   /** Desktop blur radius behind the window in points, 0 to DESKTOP_WINDOW_BLUR_RADIUS_MAX. */
   blur: number;
+  /**
+   * Limit the glass to the sidebar (and the rail layout's shell band) and keep the route
+   * content opaque. Off by default: the whole window shares one translucent fill.
+   */
+  sidebarOnly: boolean;
 }
 
 export interface ThemeState {
@@ -74,6 +81,7 @@ export interface ThemeSharePayload {
 
 export interface ThemeCssVariableBuild {
   material: WindowMaterial;
+  translucencyScope: WindowTranslucencyScope;
   variables: Record<string, string>;
 }
 
@@ -281,8 +289,8 @@ export const DEFAULT_CHROME_THEME_BY_VARIANT: Record<ThemeVariant, ChromeTheme> 
 // Opacity reproduces the sidebar tint the translucent shell has always used; the blur
 // approximates the frosting of the macOS vibrancy material it replaces.
 export const DEFAULT_WINDOW_TRANSLUCENCY_BY_VARIANT: Record<ThemeVariant, WindowTranslucency> = {
-  dark: { opacity: 72, blur: 30 },
-  light: { opacity: 38, blur: 30 },
+  dark: { opacity: 72, blur: 30, sidebarOnly: false },
+  light: { opacity: 38, blur: 30, sidebarOnly: false },
 };
 
 // The rail layout's shell tint scales with the sidebar opacity from these defaults
@@ -391,6 +399,10 @@ export function normalizeWindowTranslucency(
       DESKTOP_WINDOW_BLUR_RADIUS_MAX,
       fallback.blur,
     ),
+    sidebarOnly:
+      typeof translucency.sidebarOnly === "boolean"
+        ? translucency.sidebarOnly
+        : fallback.sidebarOnly,
   };
 }
 
@@ -721,7 +733,11 @@ export function areWindowTranslucenciesEqual(
   left: WindowTranslucency,
   right: WindowTranslucency,
 ): boolean {
-  return left.opacity === right.opacity && left.blur === right.blur;
+  return (
+    left.opacity === right.opacity &&
+    left.blur === right.blur &&
+    left.sidebarOnly === right.sidebarOnly
+  );
 }
 
 export function resolveThemePack(state: ThemeState, variant: ThemeVariant): ThemePack {
@@ -778,9 +794,11 @@ export function buildThemeCssVariables(
       ? "translucent"
       : "opaque";
   const warningColor = WARNING_COLOR_BY_VARIANT[variant];
-  const translucentOpacity = (
-    options?.translucency ?? DEFAULT_WINDOW_TRANSLUCENCY_BY_VARIANT[variant]
-  ).opacity;
+  const translucency = options?.translucency ?? DEFAULT_WINDOW_TRANSLUCENCY_BY_VARIANT[variant];
+  const translucentOpacity = translucency.opacity;
+  const translucencyScope: WindowTranslucencyScope =
+    material === "opaque" ? "none" : translucency.sidebarOnly ? "sidebar" : "window";
+  const wholeWindowGlass = translucencyScope === "window";
   // Codex paints the app sidebar with the PRIMARY surface (--color-background-surface,
   // mapped through --color-token-side-bar-background), not the darker "under" surface.
   // The under-surface is reserved for the window body behind the content (see
@@ -788,6 +806,14 @@ export function buildThemeCssVariables(
   // surface keeps its pure color matching Codex in both light and dark.
   const sidebarSurface = readCodexVariable("--color-background-surface");
   const settingsSurface = readCodexVariable("--color-background-surface");
+  const contentSurface = readCodexVariable("--color-background-surface");
+  // The glass fill at the chosen opacity. Dark themes deepen it toward black so it reads
+  // as charcoal glass. Keep the defaults in sync with the `:root` / `.dark` fallbacks in
+  // index.css.
+  const glassSurface =
+    variant === "dark"
+      ? `color-mix(in srgb, color-mix(in srgb, ${sidebarSurface} 80%, black) ${translucentOpacity}%, transparent)`
+      : `color-mix(in srgb, ${sidebarSurface} ${translucentOpacity}%, transparent)`;
   const composerSurface =
     variant === "dark"
       ? readCodexVariable("--color-background-control-opaque")
@@ -812,11 +838,24 @@ export function buildThemeCssVariables(
       material === "translucent"
         ? "transparent"
         : readCodexVariable("--color-background-surface-under"),
+    // Whole-window glass: the body carries the ONE translucent coat for the entire window,
+    // and the sidebar, rail shell, and route surfaces above it go clear. Painting the fill
+    // per surface instead would stack it wherever surfaces nest (route wrapper + chat view)
+    // and turn those regions nearly opaque.
+    "--app-window-background": wholeWindowGlass
+      ? glassSurface
+      : material === "translucent"
+        ? "transparent"
+        : readCodexVariable("--color-background-surface-under"),
+    // Route content surfaces (chat column, route wrappers, dock body); see
+    // `.app-content-surface` in index.css.
+    "--app-content-surface": wholeWindowGlass ? "transparent" : contentSurface,
     // Rail layout shell (top strip + rail): a solid tone on opaque windows, a sheer tint
     // over macOS vibrancy so the glass still shows through (see index.css rail rules).
     // Light keeps a denser tint so the shell stays a light grey over bright wallpapers.
-    "--app-rail-shell-opacity":
-      material === "translucent"
+    "--app-rail-shell-opacity": wholeWindowGlass
+      ? "0%"
+      : material === "translucent"
         ? `${Math.min(100, Math.round(translucentOpacity * RAIL_SHELL_OPACITY_RATIO_BY_VARIANT[variant]))}%`
         : "100%",
     "--app-composer-focus-border": composerFocusBorder,
@@ -831,25 +870,26 @@ export function buildThemeCssVariables(
     "--app-composer-picker-surface": composerPickerMenuSurface,
     "--app-chat-code-surface": chatCodeSurface,
     "--app-user-message-background": chatCodeSurface,
+    // With whole-window glass nothing but the body's own coat sits under the sidebar, so
+    // there is nothing to frost.
     "--app-sidebar-backdrop-filter":
-      material === "translucent" ? "blur(4px) saturate(130%)" : "none",
+      translucencyScope === "sidebar" ? "blur(4px) saturate(130%)" : "none",
     // Settings mirrors the chat surface (opaque --color-background-surface) so every
     // settings element reads as outline-only. With an opaque page there is nothing to
     // frost, so we skip the backdrop blur (and its compositing cost) entirely.
     "--app-settings-backdrop-filter": "none",
-    // Translucent shell: a fill at the chosen opacity so the desktop shows through
-    // (the desktop blur itself is set natively). Dark themes deepen the fill toward
-    // black so the sidebar reads as charcoal glass. Keep the defaults in sync with the
-    // `:root` / `.dark` fallbacks in index.css.
+    // Sidebar-only glass: the sidebar paints the fill so the desktop shows through it (the
+    // desktop blur itself is set natively). Whole-window glass: the body already paints it.
     "--app-sidebar-surface":
-      material === "translucent"
-        ? variant === "dark"
-          ? `color-mix(in srgb, color-mix(in srgb, ${sidebarSurface} 80%, black) ${translucentOpacity}%, transparent)`
-          : `color-mix(in srgb, ${sidebarSurface} ${translucentOpacity}%, transparent)`
-        : sidebarSurface,
-    // Always opaque so the settings page background matches the chat surface exactly,
-    // regardless of window material.
-    "--app-settings-surface": settingsSurface,
+      translucencyScope === "sidebar"
+        ? glassSurface
+        : wholeWindowGlass
+          ? "transparent"
+          : sidebarSurface,
+    // Sidebar icon chips need a fill of their own so overlapping chips stay separated.
+    "--app-sidebar-chip-surface": translucencyScope === "none" ? sidebarSurface : glassSurface,
+    // Matches the chat surface exactly: opaque unless the whole window is glass.
+    "--app-settings-surface": wholeWindowGlass ? "transparent" : settingsSurface,
     "--background": readCodexVariable("--color-background-surface-under"),
     "--border": readCodexVariable("--color-border"),
     "--card": readCodexVariable("--color-background-panel"),
@@ -894,6 +934,7 @@ export function buildThemeCssVariables(
 
   return {
     material,
+    translucencyScope,
     variables: {
       ...codexVariables,
       ...resolvedTokens.aliases,
