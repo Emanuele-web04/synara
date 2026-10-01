@@ -23,6 +23,7 @@ import { useChatProjectScripts } from "./useChatProjectScripts";
 import { useChatProviderModels } from "./useChatProviderModels";
 import { useChatTerminalController } from "./useChatTerminalController";
 import { useChatWorkLog } from "./useChatWorkLog";
+import { useComposerVoiceShortcut } from "./useComposerVoiceShortcut";
 import { useComposerVoiceController } from "./useComposerVoiceController";
 import { toastManager } from "../ui/toast";
 import type { ComposerModelSelectionOptions } from "./ComposerModelPicker";
@@ -63,6 +64,15 @@ interface ChatKeyboardShortcutsInput {
   isVoiceRecording: ReturnType<typeof useComposerVoiceController>["isVoiceRecording"];
   isVoiceTranscribing: ReturnType<typeof useComposerVoiceController>["isVoiceTranscribing"];
   onVoiceRecordingEnter: () => void;
+  voiceShortcutEnabled: boolean;
+  isVoiceStarting: boolean;
+  startComposerVoiceRecording: () => Promise<void>;
+  submitComposerVoiceRecording: ReturnType<
+    typeof useComposerVoiceController
+  >["submitComposerVoiceRecording"];
+  cancelComposerVoiceRecording: ReturnType<
+    typeof useComposerVoiceController
+  >["cancelComposerVoiceRecording"];
   isComposerApprovalState: boolean;
   terminalState: ReturnType<typeof useChatTerminalController>["terminalState"];
   terminalWorkspaceOpen: ReturnType<typeof useChatTerminalController>["terminalWorkspaceOpen"];
@@ -136,6 +146,11 @@ export function useChatKeyboardShortcuts({
   isVoiceRecording,
   isVoiceTranscribing,
   onVoiceRecordingEnter,
+  voiceShortcutEnabled,
+  isVoiceStarting,
+  startComposerVoiceRecording,
+  submitComposerVoiceRecording,
+  cancelComposerVoiceRecording,
   isComposerApprovalState,
   terminalState,
   terminalWorkspaceOpen,
@@ -176,6 +191,37 @@ export function useChatKeyboardShortcuts({
   runProjectScript,
   activeThread,
 }: ChatKeyboardShortcutsInput) {
+  useComposerVoiceShortcut({
+    enabled:
+      voiceShortcutEnabled &&
+      Boolean(activeThreadId) &&
+      shouldRenderChatPaneContent &&
+      !terminalWorkspaceTerminalTabActive &&
+      !isComposerApprovalState,
+    sessionId: `${activeThreadId}:${selectedProvider}:${selectedProviderInstanceId}`,
+    keybindings,
+    context: {
+      terminalFocus: isTerminalFocused(),
+      terminalOpen: Boolean(terminalState.terminalOpen),
+      terminalWorkspaceOpen,
+      terminalWorkspaceTerminalOnly: terminalState.workspaceLayout === "terminal-only",
+      terminalWorkspaceTerminalTabActive,
+      terminalWorkspaceChatTabActive,
+    },
+    canHandleEvent: (event) =>
+      !isTerminalFocused() &&
+      (surfaceMode !== "split" || isFocusedPane
+        ? canHandleComposerPickerShortcut(event, composerFormRef.current)
+        : eventTargetsComposer(event, composerFormRef.current)),
+    isRecording: isVoiceRecording,
+    isStarting: isVoiceStarting,
+    isTranscribing: isVoiceTranscribing,
+    onStart: startComposerVoiceRecording,
+    onSubmit: () => {
+      void submitComposerVoiceRecording({ source: "shortcut" });
+    },
+    onCancel: () => cancelComposerVoiceRecording({ source: "shortcut" }),
+  });
   useEffect(() => {
     if (surfaceMode === "split" && !isFocusedPane) {
       return;

@@ -329,6 +329,29 @@ describe("useComposerVoiceController", () => {
     expect(options.onGuardWarning).toHaveBeenCalledTimes(2);
   });
 
+  it("allows a shortcut release to finish before the pointer action-arm delay", async () => {
+    vi.spyOn(performance, "now").mockReturnValue(1_000);
+    recorder.isRecording = false;
+    render({ actionArmDelayMs: 250 });
+    await result.startComposerVoiceRecording();
+    recorder.isRecording = true;
+    render();
+    await expect(result.submitComposerVoiceRecording({ source: "shortcut" })).resolves.toBe(true);
+    expect(options.onTranscriptReady).toHaveBeenCalledWith("transcribed once");
+  });
+
+  it("allows shortcut cleanup to cancel immediately after startup", async () => {
+    vi.spyOn(performance, "now").mockReturnValue(1_000);
+    recorder.isRecording = false;
+    render({ actionArmDelayMs: 250 });
+    await result.startComposerVoiceRecording();
+    recorder.isRecording = true;
+    render();
+    recorder.cancelRecording.mockClear();
+    result.cancelComposerVoiceRecording({ source: "shortcut" });
+    expect(recorder.cancelRecording).toHaveBeenCalledOnce();
+  });
+
   it("refreshes status for expired auth and keeps the refresh action available", async () => {
     nativeApi.transcribeVoice.mockRejectedValueOnce(new Error("session expired"));
 
