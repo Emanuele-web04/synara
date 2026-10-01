@@ -40,6 +40,16 @@ export type PullRequestPrimaryAction =
       stackCount: number | null;
     };
 
+/**
+ * Whether the pill is a Merge that cannot run now. A blocked pill and the split chevron beside it
+ * both drop to the neutral chip, so the pair never reads as half disabled.
+ */
+export function isPullRequestPrimaryActionBlocked(
+  action: PullRequestPrimaryAction | null,
+): boolean {
+  return action?.kind === "merge" && action.blockedReason !== null;
+}
+
 export function resolvePullRequestPrimaryAction(
   detail: Pick<PullRequestDetail, "state" | "isDraft" | "stack">,
   input: { mergeBlocker: string | null; allowedMethodCount: number; stackCount: number | null },
@@ -58,7 +68,8 @@ export function resolvePullRequestPrimaryAction(
 /**
  * The primary pill. A blocked Merge uses aria-disabled rather than disabled: Button's disabled
  * state sets `pointer-events-none`, which would swallow the hover its reason tooltip needs, and
- * with no click handler attached there is no action to guard against.
+ * with no click handler attached there is no action to guard against. It renders as the neutral
+ * chip with muted text instead of a faded fill, matching the chevron its host pairs it with.
  */
 export function PullRequestPrimaryButton({
   action,
@@ -100,7 +111,12 @@ export function PullRequestPrimaryButton({
       {stacked ? (
         <>
           <span className={labelClassName}>Merge stack</span>
-          <span className="rounded-full bg-primary-foreground/16 px-1.5 text-ui-xs tabular-nums">
+          <span
+            className={cn(
+              "rounded-full px-1.5 text-ui-xs tabular-nums",
+              action.blockedReason === null ? "bg-primary-foreground/16" : "bg-foreground/10",
+            )}
+          >
             {action.stackCount}
           </span>
         </>
@@ -116,8 +132,12 @@ export function PullRequestPrimaryButton({
           render={
             <Button
               size={size}
+              variant="subtle"
               aria-disabled="true"
-              className={cn("cursor-not-allowed opacity-64", className)}
+              className={cn(
+                "cursor-not-allowed text-[var(--color-text-foreground-secondary)]",
+                className,
+              )}
             />
           }
         >
