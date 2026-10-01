@@ -1761,13 +1761,11 @@ function hasDispatchedCommandType(type: string): boolean {
   return wsRequests.some((request) => readDispatchedCommand(request)?.type === type);
 }
 
-async function waitForEnvironmentModeButton(label: string): Promise<HTMLButtonElement> {
+async function waitForWorktreeCheckbox(): Promise<HTMLElement> {
   return waitForElement(
     () =>
-      Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
-        (button) => button.textContent?.trim() === label,
-      ) ?? null,
-    `Unable to find ${label} environment button.`,
+      document.querySelector<HTMLElement>('[data-empty-landing-controls] [data-slot="checkbox"]'),
+    "Unable to find the Worktree checkbox.",
   );
 }
 
@@ -7645,7 +7643,7 @@ describe("ChatView transcript geometry (full app)", () => {
         { timeout: 8_000, interval: 16 },
       );
       await expect.element(page.getByTestId("project-picker-trigger")).toBeInTheDocument();
-      await expect.element(page.getByRole("button", { name: "Local" })).toBeInTheDocument();
+      await expect.element(page.getByRole("checkbox", { name: "Worktree" })).toBeInTheDocument();
       await new Promise<void>((resolve) => {
         requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
       });
@@ -8062,7 +8060,7 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("remembers Local and New worktree choices for subsequent project chats", async () => {
+  it("remembers the Worktree checkbox choice for subsequent project chats", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotForTargetUser({
@@ -8093,12 +8091,7 @@ describe("ChatView transcript geometry (full app)", () => {
         },
         { timeout: 8_000, interval: 16 },
       );
-      const envPickerTrigger = await waitForEnvironmentModeButton("Local");
-      envPickerTrigger.click();
-
-      const newWorktreeOption = page.getByText("New worktree");
-      await expect.element(newWorktreeOption).toBeInTheDocument();
-      await newWorktreeOption.click();
+      (await waitForWorktreeCheckbox()).click();
 
       await vi.waitFor(
         () => {
@@ -8130,9 +8123,9 @@ describe("ChatView transcript geometry (full app)", () => {
         });
 
         if (expectedMode === "worktree") {
-          const picker = await waitForEnvironmentModeButton("Worktree");
-          picker.click();
-          await page.getByRole("menuitem", { name: "Local project", exact: true }).click();
+          const worktreeCheckbox = await waitForWorktreeCheckbox();
+          expect(worktreeCheckbox.getAttribute("aria-checked")).toBe("true");
+          worktreeCheckbox.click();
           await vi.waitFor(() => {
             expect(useProjectEnvironmentStore.getState().envModeByProjectId[PROJECT_ID]).toBe(
               "local",
@@ -8372,12 +8365,7 @@ describe("ChatView transcript geometry (full app)", () => {
         },
         { timeout: 8_000, interval: 16 },
       );
-      const envPickerTrigger = await waitForEnvironmentModeButton("Local");
-      envPickerTrigger.click();
-
-      const newWorktreeOption = page.getByText("New worktree");
-      await expect.element(newWorktreeOption).toBeInTheDocument();
-      await newWorktreeOption.click();
+      (await waitForWorktreeCheckbox()).click();
 
       await vi.waitFor(
         () => {
@@ -8479,9 +8467,11 @@ describe("ChatView transcript geometry (full app)", () => {
       );
       const newThreadId = newThreadPath.slice(1) as ThreadId;
 
-      const envPickerTrigger = await waitForEnvironmentModeButton("Local");
-      envPickerTrigger.click();
-      await page.getByText("New worktree").click();
+      const worktreeCheckbox = await waitForWorktreeCheckbox();
+      worktreeCheckbox.click();
+      await vi.waitFor(() => {
+        expect(worktreeCheckbox.getAttribute("aria-checked")).toBe("true");
+      });
 
       useComposerDraftStore.getState().setPrompt(newThreadId, "Cancel before upload finishes");
       useComposerDraftStore.getState().addImage(
@@ -8595,12 +8585,7 @@ describe("ChatView transcript geometry (full app)", () => {
         },
         { timeout: 8_000, interval: 16 },
       );
-      const envPickerTrigger = await waitForEnvironmentModeButton("Local");
-      envPickerTrigger.click();
-
-      const newWorktreeOption = page.getByText("New worktree");
-      await expect.element(newWorktreeOption).toBeInTheDocument();
-      await newWorktreeOption.click();
+      (await waitForWorktreeCheckbox()).click();
 
       useComposerDraftStore.getState().setPrompt(newThreadId, "Ship it with setup");
       await vi.waitFor(

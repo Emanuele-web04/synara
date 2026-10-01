@@ -351,6 +351,7 @@ export const FastModeOutlineIcon: LucideIcon = centralIconWrapper("zap");
 // Sidebar and panel toggles, expand/collapse, top-bar add, and handoff (Hugeicons, inlined).
 export {
   ArrowDataTransferHorizontalIcon as HandoffIcon,
+  CheckmarkSquare02Icon as CheckboxCheckedIcon,
   CollapseIcon as PanelCollapseIcon,
   ExpandIcon as PanelExpandIcon,
   LayoutAlignLeftIcon,
@@ -359,6 +360,7 @@ export {
   LayoutRightIcon,
   PanelTopOpenIcon,
   PlusSignIcon,
+  SquareIcon as CheckboxUncheckedIcon,
   // Merged pull requests (the PR-state glyph); merge *actions* keep GitMergeIcon.
   WorkflowCircle06Icon as GitMergedSimpleIcon,
 } from "./hugeicons";

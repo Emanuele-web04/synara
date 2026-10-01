@@ -126,6 +126,8 @@ export interface BranchToolbarProps {
   variant?: BranchSelectorVariant;
   // Keeps the Local/Worktree control visible while hiding Git-only branch UI for non-repo cwd.
   showBranchSelector?: boolean;
+  // The new-chat landing tray swaps the Local/Worktree picker for its own Worktree checkbox.
+  showEnvironmentPicker?: boolean;
   // Group-like containers bind the toolbar to one concrete local folder and
   // must not persist project/worktree metadata from branch selector actions.
   fixedLocalWorkspaceCwd?: string | null;
@@ -267,11 +269,13 @@ export default function BranchToolbar({
   onComposerFocusRequest,
   variant: variantProp,
   showBranchSelector: showBranchSelectorProp,
+  showEnvironmentPicker: showEnvironmentPickerProp,
   fixedLocalWorkspaceCwd,
 }: BranchToolbarProps) {
   const handoffBusy = handoffBusyProp ?? false;
   const variant = variantProp ?? "toolbar";
   const showBranchSelector = showBranchSelectorProp ?? true;
+  const showEnvironmentPicker = showEnvironmentPickerProp ?? true;
   const isPanel = variant === "panel";
   const setThreadWorkspaceAction = useStore((store) => store.setThreadWorkspace);
   const draftThread = useComposerDraftStore((store) => store.getDraftThread(threadId));
@@ -477,7 +481,7 @@ export default function BranchToolbar({
       )}
     >
       <div className={isPanel ? "flex flex-col gap-0.5" : "flex items-center gap-2"}>
-        {showEnvPicker ? (
+        {!showEnvironmentPicker ? null : showEnvPicker ? (
           <ComposerEnvironmentPicker
             environmentPresentation={environmentPresentation}
             onEnvModeChange={onEnvModeChange}

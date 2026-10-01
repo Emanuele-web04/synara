@@ -67,7 +67,13 @@ import {
   gitGithubRepositoryQueryOptions,
   gitStatusQueryOptions,
 } from "~/lib/gitReactQuery";
-import { LoaderCircleIcon, RefreshCwIcon, TemporaryThreadIcon } from "~/lib/icons";
+import {
+  CheckboxCheckedIcon,
+  CheckboxUncheckedIcon,
+  LoaderCircleIcon,
+  RefreshCwIcon,
+  TemporaryThreadIcon,
+} from "~/lib/icons";
 import { getLocalFolderBrowseRootPath } from "~/lib/localFolderMentions";
 import { findProviderStatus, resolveVoiceTranscriptionTarget } from "~/lib/providerAvailability";
 import { resolveProviderInstanceLabel } from "~/lib/providerInstancePresentation";
@@ -374,6 +380,7 @@ import {
   COMPOSER_TOOLBAR_CAPSULE_HOVER_CLASS_NAME,
   COMPOSER_TOOLBAR_TRIGGER_TEXT_CLASS_NAME,
   ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
+  COMPOSER_PLACEHOLDER_TEXT_CLASS_NAME,
 } from "./chat/composerPickerStyles";
 import { getComposerTraitSelection } from "./chat/composerTraits";
 import { AmbientRailSlot } from "./chat/AmbientRailSlot";
@@ -5326,6 +5333,7 @@ export default function ChatView({
             {...branchToolbarProps}
             className="mx-0 min-w-0 flex-1 !justify-start !px-0 !pb-0 !pt-0"
             showBranchSelector={isGitRepo}
+            showEnvironmentPicker={false}
           />
         ) : null}
       </div>
@@ -5351,6 +5359,29 @@ export default function ChatView({
         >
           <TemporaryThreadIcon className="size-3.5" />
           <span className="sr-only sm:not-sr-only">Temporary</span>
+        </Button>
+      ) : null}
+      {showEmptyLandingBranchToolbar && (isGitRepo || envMode === "worktree") ? (
+        // Local is the default; ticking this is the same as picking "New worktree".
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          role="checkbox"
+          aria-checked={envMode === "worktree"}
+          data-slot="checkbox"
+          onClick={() => onEnvModeChange(envMode === "worktree" ? "local" : "worktree")}
+          className={cn(
+            "shrink-0 gap-1.5 whitespace-nowrap px-2 sm:px-2.5 [:hover,[data-pressed]]:bg-transparent data-pressed:bg-transparent",
+            COMPOSER_TOOLBAR_TRIGGER_TEXT_CLASS_NAME,
+          )}
+        >
+          Worktree
+          {envMode === "worktree" ? (
+            <CheckboxCheckedIcon className="size-4" />
+          ) : (
+            <CheckboxUncheckedIcon className={cn("size-4", COMPOSER_PLACEHOLDER_TEXT_CLASS_NAME)} />
+          )}
         </Button>
       ) : null}
     </div>
