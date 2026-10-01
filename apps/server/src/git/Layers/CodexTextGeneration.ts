@@ -292,12 +292,6 @@ const makeCodexTextGeneration = Effect.gen(function* () {
           ),
         ),
         Effect.raceFirst(Deferred.await(authenticationFailure)),
-        Effect.catch((error) =>
-          terminateCodexChild(input.child, timing.killGraceMs, input.operation).pipe(
-            Effect.andThen(Ref.set(cleanupHandled, true)),
-            Effect.andThen(Effect.fail(error)),
-          ),
-        ),
         Effect.timeoutOrElse({
           duration: input.timeoutMs,
           onTimeout: () =>
@@ -313,6 +307,18 @@ const makeCodexTextGeneration = Effect.gen(function* () {
               ),
             ),
         }),
+        Effect.catch((error) =>
+          Ref.get(cleanupHandled).pipe(
+            Effect.flatMap((handled) =>
+              handled
+                ? Effect.fail(error)
+                : terminateCodexChild(input.child, timing.killGraceMs, input.operation).pipe(
+                    Effect.andThen(Ref.set(cleanupHandled, true)),
+                    Effect.andThen(Effect.fail(error)),
+                  ),
+            ),
+          ),
+        ),
       );
 
       const collectOutput = Effect.all(

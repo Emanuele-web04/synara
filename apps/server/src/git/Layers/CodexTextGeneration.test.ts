@@ -42,6 +42,20 @@ const CodexTextGenerationTimeoutTestLayer = makeCodexTextGenerationLive({
   Layer.provideMerge(NodeServices.layer),
 );
 
+const CodexTextGenerationAuthDeadlineTestLayer = makeCodexTextGenerationLive({
+  requestTimeoutMs: 500,
+  killGraceMs: 600,
+  outputDrainMs: 50,
+  finalOutputDrainMs: 100,
+}).pipe(
+  Layer.provideMerge(
+    ServerConfig.layerTest(process.cwd(), {
+      prefix: "synara-codex-text-generation-auth-deadline-test-",
+    }),
+  ),
+  Layer.provideMerge(NodeServices.layer),
+);
+
 const CodexTextGenerationDrainTestLayer = makeCodexTextGenerationLive({
   requestTimeoutMs: 5_000,
   killGraceMs: 100,
@@ -155,6 +169,7 @@ type FakeCodexOptions = {
   requireSecureIsolation?: boolean;
   forbiddenCwd?: string;
   trapTerm?: boolean;
+  exitOnTerm?: boolean;
   termMarkerPath?: string;
   pidMarkerPath?: string;
   readyMarkerPath?: string;
@@ -205,6 +220,7 @@ function makeFakeCodexBinary(dir: string, input: FakeCodexOptions) {
       SYNARA_FAKE_CODEX_REQUIRE_SECURE_ISOLATION: input.requireSecureIsolation ? "1" : "",
       SYNARA_FAKE_CODEX_FORBIDDEN_CWD: input.forbiddenCwd ?? "",
       SYNARA_FAKE_CODEX_TRAP_TERM: input.trapTerm ? "1" : "",
+      SYNARA_FAKE_CODEX_EXIT_ON_TERM: input.exitOnTerm ? "1" : "",
       SYNARA_FAKE_CODEX_TERM_MARKER: input.termMarkerPath ?? "",
       SYNARA_FAKE_CODEX_PID_MARKER: input.pidMarkerPath ?? "",
       SYNARA_FAKE_CODEX_READY_MARKER: input.readyMarkerPath ?? "",
@@ -375,7 +391,7 @@ function makeFakeCodexBinary(dir: string, input: FakeCodexOptions) {
         '  node -e \'const fs=require("node:fs"); fs.writeFileSync(process.argv[1], JSON.stringify(process.argv.slice(2)));\' "$SYNARA_FAKE_CODEX_RESOURCE_MANIFEST" "$CODEX_HOME" "$PWD" "$schema_path" "$output_path"',
         "fi",
         'if [ "$SYNARA_FAKE_CODEX_TRAP_TERM" = "1" ]; then',
-        '  exec node -e \'const fs=require("node:fs"); const [term,pid,ready,diagnostic]=process.argv.slice(1); fs.writeFileSync(pid,String(process.pid)); process.on("SIGTERM",()=>fs.appendFileSync(term,"TERM\\n")); fs.writeFileSync(ready,"ready"); if(diagnostic){process.stderr.write(diagnostic.slice(0,12)); setTimeout(()=>process.stderr.write(diagnostic.slice(12)+"\\n"),20)} setInterval(()=>{},1000);\' "$SYNARA_FAKE_CODEX_TERM_MARKER" "$SYNARA_FAKE_CODEX_PID_MARKER" "$SYNARA_FAKE_CODEX_READY_MARKER" "$SYNARA_FAKE_CODEX_STDERR"',
+        '  exec node -e \'const fs=require("node:fs"); const [term,pid,ready,diagnostic,exitOnTerm]=process.argv.slice(1); fs.writeFileSync(pid,String(process.pid)); process.on("SIGTERM",()=>{fs.appendFileSync(term,"TERM\\n");if(exitOnTerm==="1")setTimeout(()=>process.exit(0),50)}); fs.writeFileSync(ready,"ready"); if(diagnostic){process.stderr.write(diagnostic.slice(0,12)); setTimeout(()=>process.stderr.write(diagnostic.slice(12)+"\\n"),20)} setInterval(()=>{},1000);\' "$SYNARA_FAKE_CODEX_TERM_MARKER" "$SYNARA_FAKE_CODEX_PID_MARKER" "$SYNARA_FAKE_CODEX_READY_MARKER" "$SYNARA_FAKE_CODEX_STDERR" "$SYNARA_FAKE_CODEX_EXIT_ON_TERM"',
         "fi",
         'if [ -n "$SYNARA_FAKE_CODEX_STDERR" ]; then',
         '  printf "%s\\n" "$SYNARA_FAKE_CODEX_STDERR" >&2',
@@ -2152,12 +2168,25 @@ it.effect("escalates from TERM to KILL when a timed-out child traps TERM", () =>
   ),
 );
 
-for (const [diagnostic, denyTermination] of [
-  ["ERROR: unexpected status 401 Unauthorized: Your login did not make it to this service.", false],
-  ["ERROR: unexpected status 401 Unauthorized: Your login did not make it to this service.", true],
+for (const [diagnostic, denyTermination, longCleanup] of [
+  [
+    "ERROR: unexpected status 401 Unauthorized: Your login did not make it to this service.",
+    false,
+    false,
+  ],
+  [
+    "ERROR: unexpected status 401 Unauthorized: Your login did not make it to this service.",
+    true,
+    false,
+  ],
+  [
+    "ERROR: unexpected status 401 Unauthorized: Your login did not make it to this service.",
+    false,
+    true,
+  ],
 ] as const) {
   it.effect(
-    `stops authentication retries and reports cleanup (denied=${denyTermination}): ${diagnostic}`,
+    `stops authentication retries and reports cleanup (denied=${denyTermination}, long=${longCleanup}): ${diagnostic}`,
     () =>
       Effect.gen(function* () {
         if (process.platform === "win32") return;
@@ -2172,6 +2201,7 @@ for (const [diagnostic, denyTermination] of [
             output: "",
             stderr: diagnostic,
             trapTerm: true,
+            exitOnTerm: longCleanup,
             termMarkerPath: `${directory}/term`,
             pidMarkerPath,
             readyMarkerPath: `${directory}/ready`,
@@ -2214,7 +2244,11 @@ for (const [diagnostic, denyTermination] of [
         const resourcePaths = JSON.parse(readFileSync(resourceManifestPath, "utf8")) as string[];
         expect(resourcePaths.filter(existsSync)).toEqual([]);
       }).pipe(
-        Effect.provide(CodexTextGenerationTimeoutTestLayer),
+        Effect.provide(
+          longCleanup
+            ? CodexTextGenerationAuthDeadlineTestLayer
+            : CodexTextGenerationTimeoutTestLayer,
+        ),
         Effect.provideService(Clock.Clock, realTestClock),
       ),
   );

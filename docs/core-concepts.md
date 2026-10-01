@@ -202,10 +202,12 @@ When you supply a PR title, Synara also uses it as the commit message unless a s
 message was supplied. Providing both the title and description skips text generation for this flow.
 
 Failed commit, push, and PR actions show the failed step and a copyable error until dismissed.
+Each action keeps its own error details when you switch workspaces and start another action.
 Codex text generation stops on a terminal `ERROR: ... 401 Unauthorized` diagnostic; transport
-fallback warnings remain recoverable. Check the selected
-account or provider credentials in Settings before retrying. A failed PR step can follow a
-successful commit or push, so inspect the current branch before retrying.
+fallback warnings remain recoverable. Cleanup preserves a recognized authentication error even
+when its grace period extends past the request deadline, and reports termination failures. Check
+the selected account or provider credentials in Settings before retrying. A failed PR step can
+follow a successful commit or push, so inspect the current branch before retrying.
 
 Synara's checkpoint and revert controls can help recover task work, but committed Git history remains
 the strongest boundary for important changes.

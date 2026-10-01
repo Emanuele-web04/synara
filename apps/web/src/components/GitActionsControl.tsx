@@ -781,7 +781,7 @@ export default function GitActionsControl({
           data: threadToastData,
         });
 
-      activeGitActionProgressRef.current = {
+      const actionProgress: ActiveGitActionProgress = {
         toastId: resolvedProgressToastId,
         actionId,
         title: progressStages[0] ?? "Running git action...",
@@ -792,6 +792,7 @@ export default function GitActionsControl({
         currentPhaseLabel: progressStages[0] ?? "Running git action...",
         phase: null,
       };
+      activeGitActionProgressRef.current = actionProgress;
 
       if (progressToastId) {
         toastManager.update(progressToastId, {
@@ -817,7 +818,9 @@ export default function GitActionsControl({
 
       try {
         const result = await promise;
-        activeGitActionProgressRef.current = null;
+        if (activeGitActionProgressRef.current === actionProgress) {
+          activeGitActionProgressRef.current = null;
+        }
         const resultToast = summarizeGitResult(result);
         const persistedPr =
           result.pr.status === "created" || result.pr.status === "opened_existing"
@@ -934,15 +937,16 @@ export default function GitActionsControl({
         });
         afterSuccess?.(result);
       } catch (err) {
-        const progress = activeGitActionProgressRef.current;
-        activeGitActionProgressRef.current = null;
+        if (activeGitActionProgressRef.current === actionProgress) {
+          activeGitActionProgressRef.current = null;
+        }
         toastManager.update(
           resolvedProgressToastId,
           buildGitActionFailureToast({
             message:
-              progress?.failure?.message ??
+              actionProgress.failure?.message ??
               (err instanceof Error ? err.message : "An error occurred."),
-            phase: progress?.failure?.phase ?? progress?.phase ?? null,
+            phase: actionProgress.failure?.phase ?? actionProgress.phase,
             threadId: activeThreadId,
           }),
         );
