@@ -100,6 +100,26 @@ describe("formatProviderModelOptionName", () => {
     ).toBe("Kimi K2.6");
   });
 
+  it("preserves nested OpenCode provider slugs from OmniRoute", () => {
+    const options = mergeDynamicModelOptions({
+      provider: "opencode",
+      staticOptions: [],
+      dynamicModels: [
+        {
+          slug: "omniroute/antigravity/gemini-3.7-flash-high",
+          name: "Gemini 3.7 Flash High",
+        },
+      ],
+    });
+
+    expect(options).toEqual([
+      {
+        slug: "omniroute/antigravity/gemini-3.7-flash-high",
+        name: "Gemini 3.7 Flash High",
+      },
+    ]);
+  });
+
   it("keeps known OpenCode-backed models on their shared display names", () => {
     expect(
       formatProviderModelOptionName({
