@@ -9261,31 +9261,23 @@ describe("ChatView transcript geometry (full app)", () => {
               (options.params as { threadId?: string }).threadId === OTHER_THREAD_ID
             ) {
               firstNavigation = result;
-              // The second press happens after activate returns, before React commits
+              // The second click happens after activate returns, before React commits
               // the first route. Use the actual router, without a synthetic loader.
               queueMicrotask(() => {
                 pressedLaterTab = true;
-                page
-                  .getByRole("button", { name: "Chat 3", exact: true })
-                  .element()
-                  .dispatchEvent(
-                    new PointerEvent("pointerdown", {
-                      bubbles: true,
-                      pointerType: "mouse",
-                      button: 0,
-                    }),
-                  );
+                (
+                  page
+                    .getByRole("button", { name: "Chat 3", exact: true })
+                    .element() as HTMLButtonElement
+                ).click();
               });
             }
             return result;
           });
         }
-        page
-          .getByRole("button", { name: "Chat 2", exact: true })
-          .element()
-          .dispatchEvent(
-            new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse", button: 0 }),
-          );
+        (
+          page.getByRole("button", { name: "Chat 2", exact: true }).element() as HTMLButtonElement
+        ).click();
         if (action === "terminal") {
           (
             page
@@ -9581,7 +9573,7 @@ describe("ChatView transcript geometry (full app)", () => {
     },
   );
 
-  it("pressing a tab marks it current at once and opens its chat without remounting the strip", async () => {
+  it("waits for a completed click before switching tabs without remounting the strip", async () => {
     useOpenThreadTabsStore.setState({ threadIds: [] });
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -9614,11 +9606,21 @@ describe("ChatView transcript geometry (full app)", () => {
         draftTab.dispatchEvent(
           new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse", button: 0 }),
         );
-        // The highlight lands with the press itself; the navigation waits for that frame
-        // to paint, so no frame may pass before both are checked.
+        await waitForLayout();
+        expect(draftTab.getAttribute("aria-current")).toBeNull();
+        expect(mounted.router.state.location.pathname).toBe(`/${THREAD_ID}`);
+
+        draftTab.dispatchEvent(new PointerEvent("pointerout", { bubbles: true }));
+        draftTab.dispatchEvent(
+          new PointerEvent("pointerup", { bubbles: true, pointerType: "mouse", button: 0 }),
+        );
+        await waitForLayout();
+        expect(draftTab.getAttribute("aria-current")).toBeNull();
+        expect(mounted.router.state.location.pathname).toBe(`/${THREAD_ID}`);
+
+        await userEvent.click(draftTab);
         await Promise.resolve();
         expect(draftTab.getAttribute("aria-current")).toBe("page");
-        expect(mounted.router.state.location.pathname).toBe(`/${THREAD_ID}`);
 
         await vi.waitFor(() => expect(mounted.router.state.location.pathname).toBe(`/${draftId}`));
         await waitForElement(

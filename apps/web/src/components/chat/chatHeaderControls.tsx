@@ -231,7 +231,6 @@ export function SurfaceTabChip({
   closeLabel,
   closePlacement,
   selectionAria,
-  selectOnPointerDown,
   onSelect,
   onClose,
   onLabelDoubleClick,
@@ -249,17 +248,11 @@ export function SurfaceTabChip({
   // Tool toggles announce selection as pressed; navigation tabs (one per route) as the
   // current page.
   selectionAria?: "pressed" | "current" | undefined;
-  // Select as the primary mouse button goes down instead of on release, like browser
-  // tabs: the switch starts a whole press earlier. Keyboard and touch still select on
-  // click.
-  selectOnPointerDown?: boolean | undefined;
   onSelect?: (() => void) | undefined;
   onClose?: (() => void) | undefined;
   onLabelDoubleClick?: (() => void) | undefined;
 }) {
   const trailingClose = closePlacement === "trailing";
-  // Set by a pointer-down select so the click that ends the same press does not select again.
-  const selectedByPointerDownRef = useRef(false);
   const handleClose = (event: MouseEvent) => {
     event.stopPropagation();
     onClose?.();
@@ -351,38 +344,8 @@ export function SurfaceTabChip({
           {...(selectionAria === "current"
             ? { "aria-current": active ? ("page" as const) : undefined }
             : { "aria-pressed": active })}
-          onPointerDown={
-            selectOnPointerDown
-              ? (event) => {
-                  if (
-                    event.pointerType !== "mouse" ||
-                    event.button !== 0 ||
-                    event.metaKey ||
-                    event.ctrlKey ||
-                    event.shiftKey ||
-                    event.altKey
-                  ) {
-                    return;
-                  }
-                  selectedByPointerDownRef.current = true;
-                  onSelect();
-                }
-              : undefined
-          }
-          // A press that ends off the tab never clicks; forget it so the next click selects.
-          onPointerLeave={
-            selectOnPointerDown
-              ? () => {
-                  selectedByPointerDownRef.current = false;
-                }
-              : undefined
-          }
           onClick={(event) => {
             event.stopPropagation();
-            if (selectedByPointerDownRef.current) {
-              selectedByPointerDownRef.current = false;
-              return;
-            }
             onSelect();
           }}
           onDoubleClick={onLabelDoubleClick}

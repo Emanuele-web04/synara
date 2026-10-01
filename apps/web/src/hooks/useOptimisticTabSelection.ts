@@ -1,5 +1,5 @@
 // FILE: useOptimisticTabSelection.ts
-// Purpose: Paint a pressed tab as selected at once and run the (expensive) switch after
+// Purpose: Paint a clicked tab as selected at once and run the (expensive) switch after
 //          that frame paints, for tab rows whose switch renders a whole surface.
 // Layer: UI hooks
 // Exports: useOptimisticTabSelection
@@ -10,11 +10,11 @@ import { scheduleAfterNextPaint } from "../components/chat/deferredChatMount";
 import { useStableCallback } from "./useStableCallback";
 
 /**
- * `shownKey` is the tab to draw as selected: the pressed one while its switch is pending,
- * otherwise `activeKey`. The override is scoped to the key it was pressed from, so any
+ * `shownKey` is the tab to draw as selected: the clicked one while its switch is pending,
+ * otherwise `activeKey`. The override is scoped to the key it was clicked from, so any
  * committed change of `activeKey` cancels a queued switch and clears its override. A
  * switch that leaves `activeKey` where it was (a guarded navigation) hands the
- * highlight back once `activate` settles. A newer press during activation is handed
+ * highlight back once `activate` settles. A newer click during activation is handed
  * straight to the router so the earlier commit cannot discard its intent.
  */
 export function useOptimisticTabSelection<Key extends string>(input: {
@@ -34,8 +34,8 @@ export function useOptimisticTabSelection<Key extends string>(input: {
     setPending(null);
   }, []);
 
-  // A committed navigation supersedes the queued press, including navigation
-  // away and back before its fallback fires. Stable deps preserve its own press render.
+  // A committed navigation supersedes the queued click, including navigation
+  // away and back before its fallback fires. Stable deps preserve its own click render.
   useLayoutEffect(() => {
     if (cancelPendingRef.current) cancel();
     return () => cancelPendingRef.current?.();
@@ -60,7 +60,7 @@ export function useOptimisticTabSelection<Key extends string>(input: {
   const select = (key: Key) => {
     cancelPendingRef.current?.();
     cancelPendingRef.current = null;
-    // Give the router the latest press before an earlier navigation can commit
+    // Give the router the latest click before an earlier navigation can commit
     // and cancel a newer after-paint callback. The router owns navigation cancellation.
     if (activationRef.current) {
       setPending({ from: activeKey, to: key });

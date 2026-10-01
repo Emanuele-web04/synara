@@ -58,7 +58,7 @@ export function OpenThreadTabStrip(props: {
   // pointer leaves the strip (like browser tabs), so the next X lands under the cursor
   // instead of the widened neighbour's title.
   const [frozenTabWidthPx, setFrozenTabWidthPx] = useState<number | null>(null);
-  // The tab being switched to paints as active at once, like a pressed sidebar row; the
+  // The clicked tab paints as active at once, like a selected sidebar row; the
   // thread itself (a whole chat to render) follows once that frame is on screen.
   const {
     shownKey: shownThreadId,
@@ -139,7 +139,6 @@ export function OpenThreadTabStrip(props: {
               active={active}
               closePlacement="trailing"
               selectionAria="current"
-              selectOnPointerDown
               className={cn(
                 frozenTabWidthPx === null
                   ? OPEN_THREAD_TAB_SIZE_CLASS_NAME
