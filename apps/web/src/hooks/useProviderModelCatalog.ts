@@ -182,7 +182,9 @@ export function useProviderModelCatalog(input: {
       if (wasFetching) await queryClient.fetchQuery({ ...options, retry: false });
       await queryClient.fetchQuery({
         ...options,
-        staleTime: refresh === "now" || wasFetching ? 0 : 30_000,
+        // A recent client snapshot may still be stale on the server. Explicit
+        // reads must reach its freshness/single-flight gate, which owns reuse.
+        staleTime: 0,
         retry: false,
       });
     },
@@ -594,9 +596,14 @@ export function useProviderModelCatalog(input: {
           ? modelHintByProvider?.[instance.provider]
           : null;
       const staticOptions = getAppModelOptions(instance.provider, customModels, selectedModelHint);
-      const dynamicModels = dynamicModelsByProviderInstance[instance.instanceId]?.models;
+      const discovery = dynamicModelsByProviderInstance[instance.instanceId];
+      const dynamicModels = discovery?.models;
+      const hasCodexCatalog =
+        instance.provider === "codex" &&
+        discovery?.source === "codex-app-server" &&
+        discovery.error === undefined;
       byInstance[instance.instanceId] =
-        dynamicModels && dynamicModels.length > 0
+        dynamicModels && (dynamicModels.length > 0 || hasCodexCatalog)
           ? mergeDynamicModelOptions({
               provider: instance.provider,
               staticOptions,

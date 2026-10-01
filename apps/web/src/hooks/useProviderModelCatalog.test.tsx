@@ -215,15 +215,22 @@ describe("useProviderModelCatalog", () => {
       cwd: "/two",
       discoveryEnabled: false,
     });
+    const queryClient = mocks.useQueryClient() as QueryClient;
+    const options = providerModelsQueryOptions({ provider: "codex", instanceId: "codex" });
+    // Ordinary discovery can cache a stale server snapshot moments before a tab opens.
+    queryClient.setQueryData(options.queryKey, {
+      models: [{ slug: "old-model", name: "Old model" }],
+      source: "codex-app-server",
+      cached: true,
+    });
     await first!.refreshModels("codex", "codex", "if-stale");
     await second!.refreshModels("codex", "codex", "if-stale");
-    expect(listModels).toHaveBeenCalledExactlyOnceWith({
+    expect(listModels).toHaveBeenCalledTimes(2);
+    expect(listModels).toHaveBeenLastCalledWith({
       provider: "codex",
       instanceId: "codex",
       refresh: "if-stale",
     });
-    const queryClient = mocks.useQueryClient() as QueryClient;
-    const options = providerModelsQueryOptions({ provider: "codex", instanceId: "codex" });
     expect(queryClient.getQueryData(options.queryKey)).toMatchObject({
       models: [{ slug: "gpt-6.1-sol" }],
     });
@@ -283,6 +290,10 @@ describe("useProviderModelCatalog", () => {
         ...EMPTY_QUERY,
         data: { models, source: "codex-app-server", cached: false },
       });
+      instanceModelQueries.set("codex", {
+        ...EMPTY_QUERY,
+        data: { models, source: "codex-app-server", cached: false },
+      });
 
       const [catalog] = readCatalogRenders({
         selectedProvider: "codex",
@@ -291,6 +302,10 @@ describe("useProviderModelCatalog", () => {
       });
 
       expect(catalog?.modelOptionsByProvider.codex.map((model) => model.slug)).toEqual([
+        ...models.map((model) => model.slug),
+        "private-model",
+      ]);
+      expect(catalog?.modelOptionsByProviderInstance.codex?.map((model) => model.slug)).toEqual([
         ...models.map((model) => model.slug),
         "private-model",
       ]);
@@ -307,10 +322,14 @@ describe("useProviderModelCatalog", () => {
     },
   ])("keeps the Codex fallback until discovery succeeds: %j", (query) => {
     modelQueries.set("codex", query);
+    instanceModelQueries.set("codex", query);
 
     const [catalog] = readCatalogRenders({ selectedProvider: "codex", discoveryEnabled: true });
 
     expect(catalog?.modelOptionsByProvider.codex.map((model) => model.slug)).toEqual(
+      MODEL_OPTIONS_BY_PROVIDER.codex.map((model) => model.slug),
+    );
+    expect(catalog?.modelOptionsByProviderInstance.codex?.map((model) => model.slug)).toEqual(
       MODEL_OPTIONS_BY_PROVIDER.codex.map((model) => model.slug),
     );
   });
