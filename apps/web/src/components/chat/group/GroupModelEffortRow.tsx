@@ -1,9 +1,19 @@
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
-import type { ModelSelection, ProviderKind, ProviderModelDescriptor } from "@synara/contracts";
+import type {
+  ModelSelection,
+  ProviderInstanceId,
+  ProviderKind,
+  ProviderModelDescriptor,
+} from "@synara/contracts";
 
-import { useAppSettings } from "~/appSettings";
+import {
+  type AppSettings,
+  getProviderInstanceOptions,
+  resolveSelectableProviderInstanceId,
+  useAppSettings,
+} from "~/appSettings";
 import { useProviderModelCatalog } from "~/hooks/useProviderModelCatalog";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
@@ -29,12 +39,14 @@ import {
 
 function useGroupModelCatalog(input: {
   readonly selection: ModelSelection;
+  readonly selectedProviderInstanceId: ProviderInstanceId;
   readonly projectCwd: string;
   readonly pickerOpen: boolean;
 }) {
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   return useProviderModelCatalog({
     selectedProvider: input.selection.provider,
+    selectedProviderInstanceId: input.selectedProviderInstanceId,
     discoveryEnabled: input.pickerOpen,
     // Warm discovery for the row's provider so dynamic effort levels are known
     // even when the model picker itself never opens; an open picker warms
@@ -95,6 +107,17 @@ function carryEffortOverride(input: {
   );
 }
 
+// The account a group role runs in: the one its selection names, else the provider's default.
+function useSelectionProviderInstanceId(
+  settings: AppSettings,
+  selection: ModelSelection,
+): ProviderInstanceId {
+  return useMemo(
+    () => resolveSelectableProviderInstanceId(settings, selection.provider, selection.instanceId),
+    [settings, selection.instanceId, selection.provider],
+  );
+}
+
 function UseDefaultLink(props: { readonly disabled: boolean; readonly onClick: () => void }) {
   return (
     <button
@@ -122,13 +145,17 @@ export function GroupModelRow(props: {
   const { settings } = useAppSettings();
   const providerStatuses = useProviderStatusesForLocalConfig();
   const [pickerOpen, setPickerOpen] = useState(false);
+  const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
+  const selectedProviderInstanceId = useSelectionProviderInstanceId(settings, props.selection);
   const {
     modelOptionsByProvider,
+    modelOptionsByProviderInstance,
     loadingModelProviders,
     discoveryErrorsByProvider,
     runtimeModelsByProvider,
   } = useGroupModelCatalog({
     selection: props.selection,
+    selectedProviderInstanceId,
     projectCwd: props.projectCwd,
     pickerOpen,
   });
@@ -149,13 +176,16 @@ export function GroupModelRow(props: {
             lockedProvider={null}
             providers={providerStatuses}
             modelOptionsByProvider={modelOptionsByProvider}
+            modelOptionsByProviderInstance={modelOptionsByProviderInstance}
+            providerInstances={providerInstances}
+            selectedProviderInstanceId={selectedProviderInstanceId}
             loadingModelProviders={loadingModelProviders}
             discoveryErrorsByProvider={discoveryErrorsByProvider}
             hiddenProviders={settings.hiddenProviders}
             providerOrder={settings.providerOrder}
             open={pickerOpen}
             onOpenChange={setPickerOpen}
-            onProviderModelChange={(provider, model) => {
+            onProviderModelChange={(provider, model, instanceId) => {
               const runtimeModel = resolveRuntimeModelDescriptor({
                 provider,
                 model,
@@ -173,7 +203,9 @@ export function GroupModelRow(props: {
                 runtimeModel,
               });
               props.onChange(
-                buildModelSelection(provider, model, options, runtimeModel?.supportsAutoMode),
+                buildModelSelection(provider, model, options, runtimeModel?.supportsAutoMode, {
+                  instanceId: instanceId ?? provider,
+                }),
               );
             }}
           />
@@ -199,8 +231,11 @@ export function GroupEffortRow(props: {
   readonly projectCwd: string;
   readonly onChange: (next: ModelSelection) => void;
 }) {
+  const { settings } = useAppSettings();
+  const selectedProviderInstanceId = useSelectionProviderInstanceId(settings, props.selection);
   const { runtimeModelsByProvider, selectedProviderModelsLoading } = useGroupModelCatalog({
     selection: props.selection,
+    selectedProviderInstanceId,
     projectCwd: props.projectCwd,
     pickerOpen: false,
   });
@@ -254,6 +289,7 @@ export function GroupEffortRow(props: {
         props.selection.model,
         options,
         "supportsAutoMode" in props.selection ? props.selection.supportsAutoMode : undefined,
+        { instanceId: props.selection.instanceId },
       ),
     );
   };
@@ -269,6 +305,7 @@ export function GroupEffortRow(props: {
         props.selection.model,
         Object.keys(nextOptions).length > 0 ? (nextOptions as typeof options) : undefined,
         "supportsAutoMode" in props.selection ? props.selection.supportsAutoMode : undefined,
+        { instanceId: props.selection.instanceId },
       ),
     );
   };

@@ -25,18 +25,6 @@ type ComposerTraitSelection = ReturnType<typeof getComposerTraitSelection>;
 export const STARRED_TAB = "starred";
 export type ComposerModelPickerTab = typeof STARRED_TAB | ProviderInstanceId;
 
-// Two-letter marker telling same-provider accounts apart on their identical icons:
-// "Work" -> "WO", "Claude 2" -> "C2".
-export function providerAccountInitials(label: string): string {
-  const words = label
-    .trim()
-    .split(/[\s_-]+/u)
-    .filter(Boolean);
-  const initials =
-    words.length > 1 ? `${words[0]![0]}${words[1]![0]}` : (words[0] ?? "").slice(0, 2);
-  return initials.toUpperCase();
-}
-
 /** Marks the open picker so global mod+digit handlers (thread jump) yield to its rows. */
 export const MODEL_PICKER_POPUP_ATTRIBUTE = "data-model-picker-popup";
 
@@ -196,7 +184,7 @@ export function buildStarredTabRows(input: {
     provider: ProviderKind,
     instanceId: string,
   ) => ReadonlyArray<ProviderModelOption>;
-  /** Display names of non-default accounts. */
+  /** Name of the account a preset runs in; undefined while its provider has only one. */
   accountLabelFor?: (instanceId: string) => string | undefined;
   query: string;
   current: { provider: ProviderKind; instanceId: string; model: string } & Pick<
@@ -211,8 +199,7 @@ export function buildStarredTabRows(input: {
   return input.starredModels.flatMap((entry) => {
     const instanceId = starredModelInstanceId(entry);
     const options = input.modelOptionsFor(entry.provider, instanceId);
-    const accountLabel =
-      instanceId !== entry.provider ? input.accountLabelFor?.(instanceId) : undefined;
+    const accountLabel = input.accountLabelFor?.(instanceId);
     const selectableModel = resolveSelectableModel(entry.provider, entry.model, options);
     const name =
       options.find((option) => option.slug === selectableModel)?.name ??

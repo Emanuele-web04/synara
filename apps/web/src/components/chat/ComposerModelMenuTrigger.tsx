@@ -9,6 +9,7 @@ import { useState } from "react";
 
 import { ChevronDownIcon, FastModeIcon, SettingsIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import { ProviderAccountBadge } from "../ProviderAccountBadge";
 import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "../ProviderIcon";
 import { Button } from "../ui/button";
 import { MenuTrigger } from "../ui/menu";
@@ -18,7 +19,6 @@ import {
   COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
   COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
 } from "./composerPickerStyles";
-import { ProviderAccountBadge } from "./ComposerModelPickerTabs";
 import { getProviderIconClassName } from "./ProviderModelPicker";
 
 // Must render inside a `Menu`. `hideModelLabel` / `hideStatusLabel` are the narrow-composer
@@ -28,6 +28,7 @@ export function ComposerModelMenuTrigger(props: {
   /** Set while the provider has several accounts, to tell which one the composer runs in. */
   accountLabel?: string | null | undefined;
   accountBadge?: string | null | undefined;
+  accountAccentColor?: string | undefined;
   modelLabel: string;
   statusLabel: string | null;
   contextWindowLabel?: string | null | undefined;
@@ -104,7 +105,11 @@ export function ComposerModelMenuTrigger(props: {
           />
           {props.accountBadge ? (
             <>
-              <ProviderAccountBadge initials={props.accountBadge} className="shrink-0" />
+              <ProviderAccountBadge
+                initials={props.accountBadge}
+                accentColor={props.accountAccentColor}
+                className="shrink-0"
+              />
               <span className="sr-only">{props.accountLabel}</span>
             </>
           ) : null}

@@ -7,7 +7,6 @@ import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderInstanceConfig,
   type ProviderInstanceConfigMap,
-  type ProviderInstanceEnvironment,
   type ProviderInstanceId,
   type ProviderKind,
   type ServerProviderStatus,
@@ -18,10 +17,7 @@ import {
   normalizeProviderCliAlias,
   providerCliCommandName,
 } from "@synara/shared/providerCliProfiles";
-import {
-  codexAccountInstanceId,
-  providerImportedDirectoryConfig,
-} from "@synara/shared/providerInstances";
+import { providerImportedDirectoryConfig } from "@synara/shared/providerInstances";
 import { pluralize } from "@synara/shared/text";
 import {
   closestCenter,
@@ -51,15 +47,16 @@ import {
 } from "react";
 
 import {
+  buildProviderInstanceSettingsPatch,
   getCodexAccountOptions,
   getManageableProviderInstances,
   getProviderInstanceOptions,
-  mergeProviderInstanceConfigPatch,
-  normalizeCodexAccounts,
   removeManageableProviderInstance,
   type AppSettings,
   type AppSettingsBinding,
   type ManageableProviderInstance,
+  type ProviderInstanceOption,
+  type ProviderInstancePatch,
 } from "~/appSettings";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
@@ -74,7 +71,16 @@ import {
   XIcon,
 } from "~/lib/icons";
 import { copyTextToClipboard } from "~/hooks/useCopyToClipboard";
-import { providerSetupStatusLabel } from "~/lib/providerSetupStatus";
+import {
+  providerAccountInitials,
+  shouldShowProviderAccountBadge,
+} from "~/lib/providerInstancePresentation";
+import {
+  type ProviderAccountStatusSummary,
+  type ProviderAccountStatusTone,
+  providerAccountStatusSummary,
+  providerSetupStatusLabel,
+} from "~/lib/providerSetupStatus";
 import {
   hasReconciledServerProviderStatuses,
   serverConfigQueryOptions,
@@ -110,7 +116,14 @@ import { SelectItem } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
 import { ProviderIcon } from "../ProviderIcon";
+import { ProviderAccountBadge } from "../ProviderAccountBadge";
+import {
+  AddProviderAccountDialog,
+  type AddProviderAccountConfigField,
+  type AddProviderAccountInput,
+} from "./AddProviderAccountDialog";
 import { DebouncedSettingTextInput } from "./DebouncedSettingTextInput";
+import { ProviderAccentColorControl } from "./ProviderAccentColorControl";
 import { ProviderInstanceEnvironmentEditor } from "./ProviderInstanceEnvironmentEditor";
 import {
   SettingResetButton,
@@ -706,31 +719,6 @@ function providerStatusDisplayName(status: ServerProviderStatus): string {
   return isProviderKind(driver) ? PROVIDER_DISPLAY_NAMES[driver] : driver;
 }
 
-function providerInstanceStatusSummary(status: ServerProviderStatus | undefined): {
-  readonly dotClassName: string;
-  readonly label: string;
-} {
-  if (!status) {
-    return { dotClassName: "bg-muted-foreground/40", label: "Not checked yet" };
-  }
-  if (status.authStatus === "unauthenticated") {
-    return { dotClassName: "bg-amber-500", label: "Sign in required" };
-  }
-  if (status.authStatus === "authenticated") {
-    return {
-      dotClassName: status.status === "ready" ? "bg-emerald-500" : "bg-amber-500",
-      label: status.authLabel?.trim() || "Authenticated",
-    };
-  }
-  if (status.status === "error" || !status.available) {
-    return { dotClassName: "bg-red-500", label: status.message?.trim() || "Unavailable" };
-  }
-  return {
-    dotClassName: "bg-muted-foreground/40",
-    label: status.message?.trim() || "Status unknown",
-  };
-}
-
 function ProviderUpdateAction(props: {
   providerStatus: ServerProviderStatus;
   active: boolean;
@@ -912,164 +900,180 @@ function providerInstanceLaunchConfig(
   return result;
 }
 
-function ProviderInstancesControl(props: {
+// Paths that give a new account its own identity; asked for when adding one.
+function providerAccountIdentityFields(
+  provider: ProviderKind,
+): ReadonlyArray<AddProviderAccountConfigField> {
+  if (provider === "codex") {
+    return [
+      {
+        key: "homePath",
+        label: "CODEX_HOME path",
+        placeholder: "~/.codex-work",
+        description: "Leave blank and Synara keeps this account's sign-in in its own folder.",
+      },
+    ];
+  }
+  if (provider === "claudeAgent") {
+    return [
+      {
+        key: "configDir",
+        label: "Claude config directory",
+        placeholder: "~/.claude-work",
+        description:
+          "Leave blank and Synara keeps this account's sign-in in its own folder. " +
+          "Set a directory to use a Claude config folder you already signed in to.",
+      },
+    ];
+  }
+  if (provider === "pi" || provider === "omp") return [];
+  return [
+    {
+      key: "profileDir",
+      label: "Profile directory",
+      placeholder: "Provider account directory",
+      description: "Used as this account's provider config root without changing your shell files.",
+    },
+  ];
+}
+
+const ACCOUNT_STATUS_DOT_CLASS_NAME: Record<ProviderAccountStatusTone, string> = {
+  ready: "bg-emerald-500",
+  warning: "bg-amber-500",
+  error: "bg-red-500",
+  idle: "bg-muted-foreground/40",
+};
+
+function ProviderAccountsControl(props: {
   config: ProviderInstallSettings;
   providerStatusByInstance: ReadonlyMap<string, ServerProviderStatus>;
   settings: AppSettings;
   updateSettings: (patch: Partial<AppSettings>) => void;
 }) {
   const provider = props.config.provider;
-  const instances = getManageableProviderInstances(props.settings, provider);
   const providerLabel = PROVIDER_DISPLAY_NAMES[provider];
-  const terminalCommandCounts = getProviderInstanceOptions(props.settings).reduce(
-    (counts, option) => {
-      const config = props.settings.providerInstances[String(option.instanceId)]?.config;
-      const command = providerCliCommandName({
-        provider: option.provider,
-        instanceId: option.instanceId,
-        config:
-          config && typeof config === "object" && !Array.isArray(config)
-            ? (config as Record<string, unknown>)
-            : undefined,
-      });
-      counts.set(command, (counts.get(command) ?? 0) + 1);
-      return counts;
-    },
-    new Map<string, number>(),
+  const allAccounts = getProviderInstanceOptions(props.settings);
+  // Default first, then the provider's other accounts by name.
+  const accounts = allAccounts.filter((account) => account.provider === provider);
+  const manageableById = new Map(
+    getManageableProviderInstances(props.settings, provider).map((entry) => [
+      String(entry.instanceId),
+      entry,
+    ]),
   );
+  const [selectedAccountId, setSelectedAccountId] = useState<string>(provider);
+  const [addDialogOpen, setAddDialogOpen] = useState(false);
+  const selectedAccount =
+    accounts.find((account) => account.instanceId === selectedAccountId) ?? accounts[0];
 
-  const nextInstanceIdentity = () => {
-    const prefix = provider === "claudeAgent" ? "claude" : provider;
-    const existingIds = new Set(
-      getProviderInstanceOptions(props.settings).map((option) => String(option.instanceId)),
-    );
-    let index = 2;
-    let instanceId = `${prefix}_${index}`;
-    while (existingIds.has(instanceId)) {
-      index += 1;
-      instanceId = `${prefix}_${index}`;
-    }
-    return { index, instanceId };
-  };
+  const terminalCommandCounts = allAccounts.reduce((counts, option) => {
+    const config = props.settings.providerInstances[String(option.instanceId)]?.config;
+    const command = providerCliCommandName({
+      provider: option.provider,
+      instanceId: option.instanceId,
+      config:
+        config && typeof config === "object" && !Array.isArray(config)
+          ? (config as Record<string, unknown>)
+          : undefined,
+    });
+    counts.set(command, (counts.get(command) ?? 0) + 1);
+    return counts;
+  }, new Map<string, number>());
 
   const updateInstances = (next: Record<string, ProviderInstanceConfig>) => {
     props.updateSettings({ providerInstances: next as ProviderInstanceConfigMap });
   };
-  const addInstance = () => {
-    const next = { ...props.settings.providerInstances } as Record<string, ProviderInstanceConfig>;
-    // Derived instances share this namespace with explicit entries. Reusing a
-    // derived id would mutate that account instead of creating a new profile.
-    const { index, instanceId } = nextInstanceIdentity();
-    next[instanceId] = {
-      driver: provider,
-      displayName: `${providerLabel} ${index}`,
-      enabled: true,
-      config: providerInstanceLaunchConfig(props.config, props.settings),
-    };
-    updateInstances(next);
+  const addAccount = (input: AddProviderAccountInput) => {
+    const installConfig = PROVIDER_INSTALL_SETTINGS.find(
+      (entry) => entry.provider === input.provider,
+    );
+    updateInstances({
+      ...props.settings.providerInstances,
+      [input.instanceId]: {
+        driver: input.provider,
+        ...(input.displayName ? { displayName: input.displayName } : {}),
+        ...(input.accentColor ? { accentColor: input.accentColor } : {}),
+        enabled: true,
+        config: {
+          // A new account starts from the provider's own binary and endpoint settings.
+          ...(installConfig ? providerInstanceLaunchConfig(installConfig, props.settings) : {}),
+          ...input.config,
+        },
+      },
+    });
+    if (input.provider === provider) setSelectedAccountId(input.instanceId);
+    toastManager.add({
+      type: "success",
+      title: "Account added",
+      description: `${PROVIDER_DISPLAY_NAMES[input.provider]} account '${
+        input.displayName || input.instanceId
+      }' was added.`,
+    });
+  };
+  const nextImportedInstanceId = () => {
+    const prefix = provider === "claudeAgent" ? "claude" : provider;
+    const existingIds = new Set(allAccounts.map((option) => String(option.instanceId)));
+    let index = 2;
+    while (existingIds.has(`${prefix}_${index}`)) index += 1;
+    return `${prefix}_${index}`;
   };
   const importInstance = async () => {
     const selectedDirectory = await ensureNativeApi().dialogs.pickFolder();
     if (!selectedDirectory) return;
-    const { instanceId } = nextInstanceIdentity();
+    // Derived accounts share this namespace with explicit entries. Reusing a
+    // derived id would mutate that account instead of creating a new one.
+    const instanceId = nextImportedInstanceId();
     const directoryName = selectedDirectory.split(/[\\/]/).filter(Boolean).at(-1);
-    const config = {
-      ...providerInstanceLaunchConfig(props.config, props.settings),
-      ...providerImportedDirectoryConfig(provider, selectedDirectory),
-    };
     updateInstances({
       ...props.settings.providerInstances,
       [instanceId]: {
         driver: provider,
         displayName: directoryName || `${providerLabel} imported`,
         enabled: true,
-        config,
+        config: {
+          ...providerInstanceLaunchConfig(props.config, props.settings),
+          ...providerImportedDirectoryConfig(provider, selectedDirectory),
+        },
       },
     });
+    setSelectedAccountId(instanceId);
     toastManager.add({
       type: "success",
-      title: `${providerLabel} profile imported`,
+      title: `${providerLabel} account imported`,
       description: "Synara references the selected directory; no files were moved or copied.",
     });
   };
   const updateInstance = (
     instanceId: string,
-    patch: {
-      readonly displayName?: string | undefined;
-      readonly enabled?: boolean | undefined;
-      readonly environment?: ProviderInstanceEnvironment | undefined;
-      readonly config?: Record<string, unknown> | undefined;
-    },
+    patch: ProviderInstancePatch,
     legacyCodexAccountId: string | null = null,
   ) => {
-    const explicit = props.settings.providerInstances[instanceId];
-    const legacyAccountPatch = legacyCodexAccountId
-      ? {
-          ...(patch.displayName !== undefined ? { label: patch.displayName } : {}),
-          ...(typeof patch.config?.homePath === "string"
-            ? { homePath: patch.config.homePath }
-            : {}),
-          ...(typeof patch.config?.shadowHomePath === "string"
-            ? { shadowHomePath: patch.config.shadowHomePath }
-            : {}),
-        }
-      : {};
-    if (Object.keys(legacyAccountPatch).length > 0) {
-      // A migrated account keeps its name and homes in codexAccounts. An explicit copy
-      // that drifts from that entry makes the server drop the account's route, so the
-      // edit goes to the entry and any stale explicit copy is cleared.
-      const { displayName: _displayName, ...explicitRest } = explicit ?? { driver: provider };
-      const {
-        homePath: _homePath,
-        shadowHomePath: _shadowHomePath,
-        ...explicitConfig
-      } = (explicit?.config ?? {}) as Record<string, unknown>;
-      props.updateSettings({
-        codexAccounts: normalizeCodexAccounts(
-          props.settings.codexAccounts.map((account) =>
-            account.id === legacyCodexAccountId ? { ...account, ...legacyAccountPatch } : account,
-          ),
-        ),
-        ...(explicit
-          ? {
-              providerInstances: {
-                ...props.settings.providerInstances,
-                [instanceId]: { ...explicitRest, config: explicitConfig },
-              } as ProviderInstanceConfigMap,
-            }
-          : {}),
-      });
-      return;
-    }
-    const existing: ProviderInstanceConfig | null =
-      explicit ??
-      (() => {
-        const derived = getProviderInstanceOptions(props.settings).find(
-          (instance) => instance.instanceId === instanceId,
-        );
-        return derived ? ({ driver: derived.driver } as ProviderInstanceConfig) : null;
-      })();
-    if (!existing) return;
+    const settingsPatch = buildProviderInstanceSettingsPatch(
+      props.settings,
+      instanceId,
+      patch,
+      legacyCodexAccountId,
+    );
+    if (settingsPatch) props.updateSettings(settingsPatch);
+  };
+  // The default account cannot be removed; this drops what was customized on it and
+  // leaves the launch overrides (custom models, environment) that live beside them.
+  const resetDefaultAccount = () => {
+    const explicit = props.settings.providerInstances[provider];
+    if (!explicit) return;
     const {
-      displayName: existingDisplayName,
-      environment: existingEnvironment,
-      ...existingRest
-    } = existing;
-    const displayName =
-      patch.displayName !== undefined ? patch.displayName.trim() : existingDisplayName;
-    const environment = patch.environment !== undefined ? patch.environment : existingEnvironment;
-    updateInstances({
-      ...props.settings.providerInstances,
-      [instanceId]: {
-        ...existingRest,
-        ...(displayName ? { displayName } : {}),
-        ...(environment && environment.length > 0 ? { environment } : {}),
-        ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
-        ...(patch.config
-          ? { config: mergeProviderInstanceConfigPatch(existing.config, patch.config) }
-          : {}),
-      },
-    });
+      displayName: _displayName,
+      accentColor: _accentColor,
+      enabled: _enabled,
+      ...rest
+    } = explicit;
+    const next = { ...props.settings.providerInstances } as Record<string, ProviderInstanceConfig>;
+    if (Object.keys(rest).length > 1) {
+      next[provider] = rest;
+    } else {
+      delete next[provider];
+    }
+    updateInstances(next);
   };
   const readConfigString = (config: unknown, key: string): string => {
     if (!config || typeof config !== "object" || Array.isArray(config)) return "";
@@ -1081,10 +1085,9 @@ function ProviderInstancesControl(props: {
     return (config as Record<string, unknown>)[key] === true;
   };
   const isAccountProvider = provider === "codex" || provider === "claudeAgent";
-  const entryNoun = isAccountProvider ? "account" : "profile";
   const signInCommandSuffix =
     provider === "codex" ? " login" : provider === "claudeAgent" ? " auth login" : null;
-  // Launch details most accounts never touch; kept behind the card's Advanced disclosure.
+  // Launch details most accounts never touch; kept behind the editor's Advanced disclosure.
   const isAdvancedField = (field: ProviderInstallField) =>
     field.kind === "boolean" ||
     providerInstanceConfigKey(field) === "binaryPath" ||
@@ -1157,21 +1160,335 @@ function ProviderInstancesControl(props: {
     );
   };
 
-  const defaultStatus = providerInstanceStatusSummary(props.providerStatusByInstance.get(provider));
+  const renderAccountRuntime = (entry: ManageableProviderInstance, cliCommand: string) => {
+    const { instanceId, instance, legacyCodexAccountId } = entry;
+    const cliAlias = readConfigString(instance.config, "cliAlias");
+    const cliAliasInvalid =
+      cliAlias.length > 0 && normalizeProviderCliAlias(cliAlias) === undefined;
+    const cliCommandConflicts = (terminalCommandCounts.get(cliCommand) ?? 0) > 1;
+    return (
+      <>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <label className="block sm:col-span-2">
+            <span className="block text-ui-sm font-medium text-foreground">Terminal command</span>
+            <div className="mt-1 flex items-center gap-2">
+              <code className="min-w-0 flex-1 truncate rounded-md border border-border/70 bg-background/60 px-2.5 py-1.5 text-ui-sm">
+                {cliCommand}
+              </code>
+              <Button
+                type="button"
+                size="xs"
+                variant="ghost"
+                aria-label={`Copy ${cliCommand}`}
+                onClick={() => void copyTextToClipboard(cliCommand)}
+              >
+                <CopyIcon className="size-3.5" />
+              </Button>
+            </div>
+          </label>
+          {props.config.fields
+            .filter((field) => !isAdvancedField(field))
+            .map((field) => renderField(field, entry))}
+          {provider === "codex" ? (
+            <label className="block">
+              <span className="block text-ui-sm font-medium text-foreground">Shadow auth home</span>
+              <DebouncedSettingTextInput
+                id={`provider-instance-${instanceId}-shadow-home`}
+                size="sm"
+                variant="soft"
+                className="mt-1"
+                value={readConfigString(instance.config, "shadowHomePath")}
+                onCommit={(shadowHomePath) =>
+                  updateInstance(instanceId, { config: { shadowHomePath } }, legacyCodexAccountId)
+                }
+                placeholder="~/.codex_work"
+                spellCheck={false}
+              />
+            </label>
+          ) : null}
+          {provider === "claudeAgent" ? (
+            <label className="block sm:col-span-2">
+              <span className="block text-ui-sm font-medium text-foreground">
+                Claude config directory
+              </span>
+              <DebouncedSettingTextInput
+                id={`provider-instance-${instanceId}-config-dir`}
+                size="sm"
+                variant="soft"
+                className="mt-1"
+                value={readConfigString(instance.config, "configDir")}
+                onCommit={(configDir) => updateInstance(instanceId, { config: { configDir } })}
+                placeholder="~/.claude-work"
+                spellCheck={false}
+              />
+            </label>
+          ) : null}
+          {isAccountProvider ? (
+            <span className="block text-ui-sm text-muted-foreground sm:col-span-2">
+              {provider === "codex"
+                ? "Leave both paths blank and Synara keeps this account's sign-in in its " +
+                  "own folder. Set a shadow auth home to keep only the sign-in elsewhere " +
+                  "while sharing settings and history with the default account, or a " +
+                  "CODEX_HOME to keep everything separate."
+                : "Leave blank and Synara keeps this account's sign-in in its own folder. " +
+                  "Set a directory to use a Claude config folder you already signed in to."}
+            </span>
+          ) : null}
+          {!isAccountProvider && provider !== "pi" && provider !== "omp" ? (
+            <label className="block sm:col-span-2">
+              <span className="block text-ui-sm font-medium text-foreground">
+                Profile directory
+              </span>
+              <DebouncedSettingTextInput
+                id={`provider-instance-${instanceId}-profile-dir`}
+                size="sm"
+                variant="soft"
+                className="mt-1"
+                value={readConfigString(instance.config, "profileDir")}
+                onCommit={(profileDir) => updateInstance(instanceId, { config: { profileDir } })}
+                placeholder="Provider account directory"
+                spellCheck={false}
+              />
+              <span className="mt-1 block text-ui-sm text-muted-foreground">
+                Used as this account&apos;s provider config root without changing your shell files.
+              </span>
+            </label>
+          ) : null}
+        </div>
+        <ProviderInstanceAdvancedSection>
+          <label className="block sm:col-span-2">
+            <span className="block text-ui-sm font-medium text-foreground">Command override</span>
+            <DebouncedSettingTextInput
+              id={`provider-instance-${instanceId}-cli-alias`}
+              size="sm"
+              variant="soft"
+              className="mt-1"
+              value={cliAlias}
+              onCommit={(cliAlias) => updateInstance(instanceId, { config: { cliAlias } })}
+              placeholder={cliCommand}
+              spellCheck={false}
+            />
+            <span
+              className={cn(
+                "mt-1 block text-ui-sm",
+                cliAliasInvalid || cliCommandConflicts
+                  ? "text-destructive"
+                  : "text-muted-foreground",
+              )}
+            >
+              {cliAliasInvalid
+                ? "Use 1–64 letters, numbers, dashes, or underscores; bare provider commands are reserved."
+                : cliCommandConflicts
+                  ? "This command is already assigned to another account. Choose a unique override."
+                  : "Available in Synara terminals for zsh, bash, fish, and scripts."}
+            </span>
+          </label>
+          {props.config.fields.filter(isAdvancedField).map((field) => renderField(field, entry))}
+          {provider === "claudeAgent" ? (
+            <label className="block">
+              <span className="block text-ui-sm font-medium text-foreground">
+                Claude credential directory
+              </span>
+              <DebouncedSettingTextInput
+                id={`provider-instance-${instanceId}-secure-storage-dir`}
+                size="sm"
+                variant="soft"
+                className="mt-1"
+                value={readConfigString(instance.config, "secureStorageDir")}
+                onCommit={(secureStorageDir) =>
+                  updateInstance(instanceId, { config: { secureStorageDir } })
+                }
+                placeholder="Optional shared credential directory"
+                spellCheck={false}
+              />
+              <span className="mt-1 block text-ui-sm text-muted-foreground">
+                Leave blank unless your setup already uses a separate secure-storage directory.
+              </span>
+            </label>
+          ) : null}
+        </ProviderInstanceAdvancedSection>
+      </>
+    );
+  };
+
+  const renderEditor = (account: ProviderInstanceOption) => {
+    const instanceId = String(account.instanceId);
+    const manageable = manageableById.get(instanceId) ?? null;
+    const explicit = props.settings.providerInstances[instanceId];
+    const legacyCodexAccountId = manageable?.legacyCodexAccountId ?? null;
+    const liveStatus = props.providerStatusByInstance.get(instanceId);
+    const status = providerAccountStatusSummary({ status: liveStatus, enabled: account.enabled });
+    const cliCommand = account.isDefault
+      ? provider === "claudeAgent"
+        ? "claude"
+        : provider
+      : providerCliCommandName({
+          provider,
+          instanceId: account.instanceId,
+          config:
+            manageable?.instance.config &&
+            typeof manageable.instance.config === "object" &&
+            !Array.isArray(manageable.instance.config)
+              ? (manageable.instance.config as Record<string, unknown>)
+              : undefined,
+        });
+    const signInCommand =
+      account.enabled &&
+      signInCommandSuffix !== null &&
+      liveStatus?.authStatus === "unauthenticated"
+        ? `${cliCommand}${signInCommandSuffix}`
+        : null;
+    const defaultIsCustomized =
+      account.isDefault &&
+      explicit !== undefined &&
+      (explicit.displayName !== undefined ||
+        explicit.accentColor !== undefined ||
+        explicit.enabled === false);
+    const sectionLabelClassName = "block text-ui-sm font-medium text-foreground";
+    return (
+      <div
+        className={cn(
+          SETTINGS_OUTLINED_SURFACE_CLASS_NAME,
+          SETTINGS_INSET_RADIUS_CLASS_NAME,
+          "min-w-0 flex-1 space-y-3 px-3 py-3",
+        )}
+        // Remount per account so a pending debounced edit can never land on another one.
+        key={instanceId}
+        role="group"
+        aria-label={`${account.label} account`}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <ProviderIcon provider={provider} className="size-4 shrink-0" />
+            <span className="truncate text-ui font-medium text-foreground">{account.label}</span>
+            {account.isDefault ? (
+              <span className="shrink-0 text-ui-xs text-muted-foreground">Default</span>
+            ) : null}
+          </div>
+          {account.isDefault ? (
+            defaultIsCustomized ? (
+              <SettingResetButton
+                label={`${account.label} account`}
+                onClick={resetDefaultAccount}
+              />
+            ) : null
+          ) : (
+            <Button
+              type="button"
+              size="xs"
+              variant="ghost"
+              onClick={() => {
+                props.updateSettings(removeManageableProviderInstance(props.settings, instanceId));
+                setSelectedAccountId(provider);
+              }}
+            >
+              <XIcon className="size-3.5" />
+              Remove
+            </Button>
+          )}
+        </div>
+
+        <div className="space-y-1">
+          <label
+            htmlFor={`provider-instance-${instanceId}-label`}
+            className={sectionLabelClassName}
+          >
+            Display name
+          </label>
+          <ProviderInstanceStatusLine status={status} showDetail />
+          <DebouncedSettingTextInput
+            id={`provider-instance-${instanceId}-label`}
+            size="sm"
+            variant="soft"
+            value={
+              account.isDefault
+                ? (explicit?.displayName ?? "")
+                : (manageable?.instance.displayName ?? "")
+            }
+            onCommit={(displayName) =>
+              updateInstance(instanceId, { displayName }, legacyCodexAccountId)
+            }
+            placeholder={account.isDefault ? providerLabel : "Work"}
+            spellCheck={false}
+          />
+          <ProviderAccentColorControl
+            value={account.accentColor}
+            accountLabel={account.label}
+            onChange={(accentColor) =>
+              updateInstance(instanceId, { accentColor: accentColor ?? null })
+            }
+          />
+        </div>
+
+        {signInCommand ? (
+          <div className="flex items-center gap-2 text-ui-sm text-muted-foreground">
+            <span className="min-w-0">
+              To sign in, run <code className="font-mono text-foreground">{signInCommand}</code> in
+              a Synara terminal, then refresh status.
+            </span>
+            <Button
+              type="button"
+              size="xs"
+              variant="ghost"
+              aria-label={`Copy ${signInCommand}`}
+              onClick={() => void copyTextToClipboard(signInCommand)}
+            >
+              <CopyIcon className="size-3.5" />
+            </Button>
+          </div>
+        ) : null}
+
+        <div className="space-y-2">
+          <span className={sectionLabelClassName}>Runtime</span>
+          {account.isDefault ? (
+            <div className="space-y-3">
+              {props.config.fields.map((field) => (
+                <ProviderInstallFieldControl
+                  key={field.settingsKey}
+                  field={field}
+                  settings={props.settings}
+                  updateSettings={props.updateSettings}
+                />
+              ))}
+              {provider === "codex" && props.settings.codexAccounts.length > 0 ? (
+                <CodexDefaultAccountControl
+                  settings={props.settings}
+                  updateSettings={props.updateSettings}
+                />
+              ) : null}
+            </div>
+          ) : manageable ? (
+            renderAccountRuntime(manageable, cliCommand)
+          ) : null}
+        </div>
+
+        {/* A migrated Codex account is routed by its saved identity; an environment of
+            its own would make the server drop that route, so none is offered. */}
+        {legacyCodexAccountId === null ? (
+          <div className="grid gap-2">
+            <ProviderInstanceEnvironmentEditor
+              instanceId={instanceId}
+              environment={
+                account.isDefault ? explicit?.environment : manageable?.instance.environment
+              }
+              onChange={(environment) => updateInstance(instanceId, { environment })}
+            />
+          </div>
+        ) : null}
+      </div>
+    );
+  };
 
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
           <span className="block text-ui-sm font-medium text-foreground">
-            {isAccountProvider ? `${providerLabel} accounts` : `${providerLabel} profiles`}
+            {providerLabel} accounts
           </span>
           <span className="mt-1 block text-ui-sm text-muted-foreground">
-            {isAccountProvider
-              ? "Each account signs in on its own and gets its own tab in the model picker. " +
-                "A thread stays on the account it started with."
-              : "Each profile launches the CLI with its own paths and environment and gets " +
-                "its own tab in the model picker. A thread stays on the profile it started with."}
+            Each account signs in on its own and gets its own tab in the model picker. A thread
+            stays on the account it started with.
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -1184,311 +1501,120 @@ function ProviderInstancesControl(props: {
             title={
               typeof window === "undefined" || !window.desktopBridge
                 ? "Directory import is available in the Synara desktop app."
-                : `Use an existing ${providerLabel} directory as a new ${entryNoun}, without moving it.`
+                : `Use an existing ${providerLabel} directory as a new account, without moving it.`
             }
           >
             <FolderOpenIcon className="size-3.5" />
             Import directory
           </Button>
-          <Button type="button" size="xs" variant="outline" onClick={addInstance}>
+          <Button type="button" size="xs" variant="outline" onClick={() => setAddDialogOpen(true)}>
             <PlusIcon className="size-3.5" />
-            Add {entryNoun}
+            Add account
           </Button>
         </div>
       </div>
 
-      <div
-        className={cn(
-          SETTINGS_OUTLINED_SURFACE_CLASS_NAME,
-          SETTINGS_INSET_RADIUS_CLASS_NAME,
-          "px-3 py-2.5",
-        )}
-      >
-        <div className="truncate text-ui-sm font-medium text-foreground">Default</div>
-        <div className="truncate text-ui-xs text-muted-foreground">
-          Your regular {providerLabel} sign-in, with the paths set above.
+      <div className="flex flex-col gap-3 md:flex-row md:items-start">
+        <div
+          role="list"
+          aria-label={`${providerLabel} accounts`}
+          className={cn(
+            SETTINGS_INSET_LIST_CLASS_NAME,
+            SETTINGS_STACKED_ROWS_DIVIDER_CLASS_NAME,
+            "shrink-0 md:w-60",
+          )}
+        >
+          {accounts.map((account) => {
+            const selected = account.instanceId === selectedAccount?.instanceId;
+            const status = providerAccountStatusSummary({
+              status: props.providerStatusByInstance.get(account.instanceId),
+              enabled: account.enabled,
+            });
+            return (
+              <div
+                key={account.instanceId}
+                role="listitem"
+                className={cn(
+                  "flex items-center gap-2 px-3 py-2",
+                  selected && "bg-muted/45",
+                  !account.enabled && !selected && "opacity-60",
+                )}
+              >
+                <button
+                  type="button"
+                  aria-label={`Select ${account.label}`}
+                  aria-current={selected ? "true" : undefined}
+                  className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring/60"
+                  onClick={() => setSelectedAccountId(account.instanceId)}
+                >
+                  <span className="relative flex shrink-0">
+                    <ProviderIcon provider={provider} className="size-4" />
+                    {shouldShowProviderAccountBadge(account, allAccounts) ? (
+                      <ProviderAccountBadge
+                        initials={providerAccountInitials(account.label)}
+                        accentColor={account.accentColor}
+                        className="absolute -right-1.5 -bottom-1"
+                      />
+                    ) : null}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-ui-sm font-medium text-foreground">
+                      {account.label}
+                    </span>
+                    <ProviderInstanceStatusLine status={status} />
+                  </span>
+                </button>
+                <Switch
+                  checked={account.enabled}
+                  onCheckedChange={(enabled) =>
+                    updateInstance(account.instanceId, { enabled: Boolean(enabled) })
+                  }
+                  aria-label={`Enable ${account.label}`}
+                />
+              </div>
+            );
+          })}
         </div>
-        <ProviderInstanceStatusLine status={defaultStatus} />
+        {selectedAccount ? renderEditor(selectedAccount) : null}
       </div>
 
-      {instances.map((entry) => {
-        const { instanceId, instance, legacyCodexAccountId } = entry;
-        const cliCommand = providerCliCommandName({
-          provider,
-          instanceId,
-          config:
-            instance.config &&
-            typeof instance.config === "object" &&
-            !Array.isArray(instance.config)
-              ? (instance.config as Record<string, unknown>)
-              : undefined,
-        });
-        const cliAlias = readConfigString(instance.config, "cliAlias");
-        const cliAliasInvalid =
-          cliAlias.length > 0 && normalizeProviderCliAlias(cliAlias) === undefined;
-        const cliCommandConflicts = (terminalCommandCounts.get(cliCommand) ?? 0) > 1;
-        const enabled = instance.enabled !== false;
-        const liveStatus = props.providerStatusByInstance.get(instanceId);
-        const signInCommand =
-          enabled && signInCommandSuffix !== null && liveStatus?.authStatus === "unauthenticated"
-            ? `${cliCommand}${signInCommandSuffix}`
-            : null;
-        return (
-          <div
-            key={instanceId}
-            className={cn(
-              SETTINGS_OUTLINED_SURFACE_CLASS_NAME,
-              SETTINGS_INSET_RADIUS_CLASS_NAME,
-              "px-3 py-3",
-            )}
-          >
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <div className="min-w-0">
-                <div className="truncate text-ui-sm font-medium text-foreground">
-                  {instance.displayName || instanceId}
-                </div>
-                <ProviderInstanceStatusLine
-                  status={
-                    enabled
-                      ? providerInstanceStatusSummary(liveStatus)
-                      : {
-                          dotClassName: "bg-muted-foreground/40",
-                          label: "Off · hidden from the model picker",
-                        }
-                  }
-                />
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
-                <Switch
-                  checked={enabled}
-                  onCheckedChange={(enabled) => updateInstance(instanceId, { enabled })}
-                  aria-label={`Enable ${instance.displayName || instanceId}`}
-                />
-                <Button
-                  type="button"
-                  size="xs"
-                  variant="ghost"
-                  onClick={() => {
-                    props.updateSettings(
-                      removeManageableProviderInstance(props.settings, instanceId),
-                    );
-                  }}
-                >
-                  <XIcon className="size-3.5" />
-                  Remove
-                </Button>
-              </div>
-            </div>
-            {signInCommand ? (
-              <div className="mb-2 flex items-center gap-2 text-ui-sm text-muted-foreground">
-                <span className="min-w-0">
-                  To sign in, run <code className="font-mono text-foreground">
-                    {signInCommand}
-                  </code>{" "}
-                  in a Synara terminal, then refresh status.
-                </span>
-                <Button
-                  type="button"
-                  size="xs"
-                  variant="ghost"
-                  aria-label={`Copy ${signInCommand}`}
-                  onClick={() => void copyTextToClipboard(signInCommand)}
-                >
-                  <CopyIcon className="size-3.5" />
-                </Button>
-              </div>
-            ) : null}
-            <div className="grid gap-2 sm:grid-cols-2">
-              <label className="block">
-                <span className="block text-ui-sm font-medium text-foreground">Label</span>
-                <DebouncedSettingTextInput
-                  id={`provider-instance-${instanceId}-label`}
-                  size="sm"
-                  variant="soft"
-                  className="mt-1"
-                  value={instance.displayName ?? ""}
-                  onCommit={(displayName) =>
-                    updateInstance(instanceId, { displayName }, legacyCodexAccountId)
-                  }
-                  placeholder="Work"
-                  spellCheck={false}
-                />
-              </label>
-              <label className="block">
-                <span className="block text-ui-sm font-medium text-foreground">
-                  Terminal command
-                </span>
-                <div className="mt-1 flex items-center gap-2">
-                  <code className="min-w-0 flex-1 truncate rounded-md border border-border/70 bg-background/60 px-2.5 py-1.5 text-ui-sm">
-                    {cliCommand}
-                  </code>
-                  <Button
-                    type="button"
-                    size="xs"
-                    variant="ghost"
-                    aria-label={`Copy ${cliCommand}`}
-                    onClick={() => void copyTextToClipboard(cliCommand)}
-                  >
-                    <CopyIcon className="size-3.5" />
-                  </Button>
-                </div>
-              </label>
-              {props.config.fields
-                .filter((field) => !isAdvancedField(field))
-                .map((field) => renderField(field, entry))}
-              {provider === "codex" ? (
-                <label className="block">
-                  <span className="block text-ui-sm font-medium text-foreground">
-                    Shadow auth home
-                  </span>
-                  <DebouncedSettingTextInput
-                    id={`provider-instance-${instanceId}-shadow-home`}
-                    size="sm"
-                    variant="soft"
-                    className="mt-1"
-                    value={readConfigString(instance.config, "shadowHomePath")}
-                    onCommit={(shadowHomePath) =>
-                      updateInstance(
-                        instanceId,
-                        { config: { shadowHomePath } },
-                        legacyCodexAccountId,
-                      )
-                    }
-                    placeholder="~/.codex_work"
-                    spellCheck={false}
-                  />
-                </label>
-              ) : null}
-              {provider === "claudeAgent" ? (
-                <label className="block sm:col-span-2">
-                  <span className="block text-ui-sm font-medium text-foreground">
-                    Claude config directory
-                  </span>
-                  <DebouncedSettingTextInput
-                    id={`provider-instance-${instanceId}-config-dir`}
-                    size="sm"
-                    variant="soft"
-                    className="mt-1"
-                    value={readConfigString(instance.config, "configDir")}
-                    onCommit={(configDir) => updateInstance(instanceId, { config: { configDir } })}
-                    placeholder="~/.claude-work"
-                    spellCheck={false}
-                  />
-                </label>
-              ) : null}
-              {isAccountProvider ? (
-                <span className="block text-ui-sm text-muted-foreground sm:col-span-2">
-                  {provider === "codex"
-                    ? "Leave both paths blank and Synara keeps this account's sign-in in its " +
-                      "own folder. Set a shadow auth home to keep only the sign-in elsewhere " +
-                      "while sharing settings and history with the default account, or a " +
-                      "CODEX_HOME to keep everything separate."
-                    : "Leave blank and Synara keeps this account's sign-in in its own folder. " +
-                      "Set a directory to use a Claude config folder you already signed in to."}
-                </span>
-              ) : null}
-              {provider !== "codex" &&
-              provider !== "claudeAgent" &&
-              provider !== "pi" &&
-              provider !== "omp" ? (
-                <label className="block sm:col-span-2">
-                  <span className="block text-ui-sm font-medium text-foreground">
-                    Profile directory
-                  </span>
-                  <DebouncedSettingTextInput
-                    id={`provider-instance-${instanceId}-profile-dir`}
-                    size="sm"
-                    variant="soft"
-                    className="mt-1"
-                    value={readConfigString(instance.config, "profileDir")}
-                    onCommit={(profileDir) =>
-                      updateInstance(instanceId, { config: { profileDir } })
-                    }
-                    placeholder="Provider account directory"
-                    spellCheck={false}
-                  />
-                  <span className="mt-1 block text-ui-sm text-muted-foreground">
-                    Used as this profile's provider config root without changing your shell files.
-                  </span>
-                </label>
-              ) : null}
-            </div>
-            <ProviderInstanceAdvancedSection>
-              <label className="block sm:col-span-2">
-                <span className="block text-ui-sm font-medium text-foreground">
-                  Command override
-                </span>
-                <DebouncedSettingTextInput
-                  id={`provider-instance-${instanceId}-cli-alias`}
-                  size="sm"
-                  variant="soft"
-                  className="mt-1"
-                  value={cliAlias}
-                  onCommit={(cliAlias) => updateInstance(instanceId, { config: { cliAlias } })}
-                  placeholder={cliCommand}
-                  spellCheck={false}
-                />
-                <span
-                  className={cn(
-                    "mt-1 block text-ui-sm",
-                    cliAliasInvalid || cliCommandConflicts
-                      ? "text-destructive"
-                      : "text-muted-foreground",
-                  )}
-                >
-                  {cliAliasInvalid
-                    ? "Use 1–64 letters, numbers, dashes, or underscores; bare provider commands are reserved."
-                    : cliCommandConflicts
-                      ? "This command is already assigned to another profile. Choose a unique override."
-                      : "Available in Synara terminals for zsh, bash, fish, and scripts."}
-                </span>
-              </label>
-              {props.config.fields
-                .filter(isAdvancedField)
-                .map((field) => renderField(field, entry))}
-              {provider === "claudeAgent" ? (
-                <label className="block">
-                  <span className="block text-ui-sm font-medium text-foreground">
-                    Claude credential directory
-                  </span>
-                  <DebouncedSettingTextInput
-                    id={`provider-instance-${instanceId}-secure-storage-dir`}
-                    size="sm"
-                    variant="soft"
-                    className="mt-1"
-                    value={readConfigString(instance.config, "secureStorageDir")}
-                    onCommit={(secureStorageDir) =>
-                      updateInstance(instanceId, { config: { secureStorageDir } })
-                    }
-                    placeholder="Optional shared credential directory"
-                    spellCheck={false}
-                  />
-                  <span className="mt-1 block text-ui-sm text-muted-foreground">
-                    Leave blank unless your setup already uses a separate secure-storage directory.
-                  </span>
-                </label>
-              ) : null}
-              <ProviderInstanceEnvironmentEditor
-                instanceId={instanceId}
-                environment={instance.environment}
-                onChange={(environment) => updateInstance(instanceId, { environment })}
-              />
-            </ProviderInstanceAdvancedSection>
-          </div>
-        );
-      })}
+      <AddProviderAccountDialog
+        open={addDialogOpen}
+        onOpenChange={setAddDialogOpen}
+        providers={PROVIDER_VISIBILITY_OPTIONS.map((option) => ({
+          provider: option.provider,
+          label: option.title,
+        }))}
+        initialProvider={provider}
+        existingIds={new Set(allAccounts.map((option) => String(option.instanceId)))}
+        configFieldsFor={providerAccountIdentityFields}
+        onAdd={addAccount}
+      />
     </div>
   );
 }
 
 function ProviderInstanceStatusLine(props: {
-  status: ReturnType<typeof providerInstanceStatusSummary>;
+  status: ProviderAccountStatusSummary;
+  /** Append the server's diagnosis when the account is not healthy. */
+  showDetail?: boolean;
 }) {
+  const detail =
+    props.showDetail && props.status.tone !== "ready" && props.status.tone !== "idle"
+      ? props.status.detail
+      : null;
   return (
-    <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground">
-      <span className={cn("size-1.5 shrink-0 rounded-full", props.status.dotClassName)} />
-      <span className="truncate">{props.status.label}</span>
-    </div>
+    <span className="flex min-w-0 items-start gap-1.5 text-ui-xs text-muted-foreground">
+      <span
+        className={cn(
+          "mt-1.5 size-1.5 shrink-0 rounded-full",
+          ACCOUNT_STATUS_DOT_CLASS_NAME[props.status.tone],
+        )}
+      />
+      <span className={detail ? "min-w-0" : "truncate"}>
+        {detail ? `${props.status.headline} · ${detail}` : props.status.headline}
+      </span>
+    </span>
   );
 }
 
@@ -1637,21 +1763,7 @@ function ProviderToolRow(props: {
                   />
                 </div>
               ) : null}
-              {props.config.fields.map((field) => (
-                <ProviderInstallFieldControl
-                  key={field.settingsKey}
-                  field={field}
-                  settings={props.settings}
-                  updateSettings={props.updateSettings}
-                />
-              ))}
-              {props.config.provider === "codex" && props.settings.codexAccounts.length > 0 ? (
-                <CodexDefaultAccountControl
-                  settings={props.settings}
-                  updateSettings={props.updateSettings}
-                />
-              ) : null}
-              <ProviderInstancesControl
+              <ProviderAccountsControl
                 config={props.config}
                 providerStatusByInstance={props.providerStatusByInstance}
                 settings={props.settings}

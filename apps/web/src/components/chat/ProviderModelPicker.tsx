@@ -59,7 +59,13 @@ import {
 import { Skeleton } from "../ui/skeleton";
 import { PlusIcon } from "~/lib/icons";
 import { isProviderUsable } from "../../lib/providerAvailability";
-import { MISSING_PROVIDER_INSTANCE_LABEL } from "../../lib/providerInstancePresentation";
+import {
+  MISSING_PROVIDER_INSTANCE_LABEL,
+  providerAccountInitials,
+  providerAccountQualifiedLabel,
+  shouldShowProviderAccountBadge,
+} from "../../lib/providerInstancePresentation";
+import { ProviderAccountBadge } from "../ProviderAccountBadge";
 
 function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): option is {
   value: ProviderKind;
@@ -181,6 +187,7 @@ export interface ProviderModelPickerInstance {
   readonly instanceId: ProviderInstanceId;
   readonly provider: ProviderKind;
   readonly label: string;
+  readonly accentColor?: string | undefined;
   readonly enabled: boolean;
   readonly isDefault: boolean;
 }
@@ -577,7 +584,11 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
     setFavoriteModelSlugs((current) => toggleFavoriteModelKey(current, provider, instanceId, slug));
   };
 
-  const renderModelRadioGroup = (provider: ProviderKind) => {
+  // `instanceId` pins the list to one account; without it the provider's selected one.
+  const renderModelRadioGroup = (
+    provider: ProviderKind,
+    instanceId: ProviderInstanceId = getSelectedInstanceIdForProvider(provider),
+  ) => {
     if (props.loadingModelProviders?.[provider]) {
       return (
         <div className="space-y-2 px-2 py-2" aria-label="Loading models">
@@ -591,10 +602,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
       );
     }
 
-    const providerOptions = getModelOptionsForProviderInstance(
-      provider,
-      getSelectedInstanceIdForProvider(provider),
-    );
+    const providerOptions = getModelOptionsForProviderInstance(provider, instanceId);
     const shouldShowSearch =
       (provider === "opencode" ||
         provider === "cursor" ||
@@ -610,7 +618,9 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
           )
         : providerOptions;
     const favoriteProvider = supportsModelFavorites(provider) ? provider : null;
-    const selectedInstanceId = getSelectedInstanceIdForProvider(provider);
+    const selectedInstanceId = instanceId;
+    const isActiveAccount =
+      activeProvider === provider && instanceId === getSelectedInstanceIdForProvider(provider);
     const favoriteModelKeySet =
       favoriteProvider !== null ? favoriteModelSlugSets[favoriteProvider] : undefined;
     const favoriteModelSlugSet =
@@ -630,16 +640,15 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
       <div className="px-2 py-1.5 text-ui leading-snug text-destructive">{discoveryError}</div>
     ) : null;
 
-    const activeModelSlug =
-      activeProvider === provider
-        ? (resolveSelectableModel(provider, props.model, providerOptions) ?? props.model)
-        : props.model;
+    const activeModelSlug = isActiveAccount
+      ? (resolveSelectableModel(provider, props.model, providerOptions) ?? props.model)
+      : props.model;
 
     const content =
       groupedOptions.length > 0 ? (
         <MenuRadioGroup
-          value={activeProvider === provider ? activeModelSlug : ""}
-          onValueChange={(value) => handleModelChange(provider, value)}
+          value={isActiveAccount ? activeModelSlug : ""}
+          onValueChange={(value) => handleModelChange(provider, value, instanceId)}
         >
           <ProviderModelOptionGroupList
             groupedOptions={groupedOptions}
@@ -730,6 +739,56 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
     <>
       {visibleAvailableProviderOptions.map((option) => {
         const OptionIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[option.value];
+        const accounts = getProviderInstances(option.value).filter((instance) => instance.enabled);
+        if (props.showProviderInstanceChoices !== false && accounts.length > 1) {
+          // Several accounts: each is its own entry, like another provider would be.
+          return accounts.map((account) => {
+            const accountAvailability = resolveInstanceAvailability(account);
+            const accountLabel = providerAccountQualifiedLabel(option.label, account.label);
+            const accountIcon = (
+              <span className="relative flex shrink-0">
+                <OptionIcon
+                  aria-hidden="true"
+                  className={cn(
+                    "size-3 shrink-0",
+                    accountAvailability.disabled && "opacity-80",
+                    providerIconClassName(option.value, "text-muted-foreground/85"),
+                  )}
+                />
+                <ProviderAccountBadge
+                  initials={providerAccountInitials(account.label)}
+                  accentColor={account.accentColor}
+                  className="absolute -right-1.5 -bottom-1"
+                />
+              </span>
+            );
+            if (accountAvailability.disabled) {
+              return (
+                <MenuItem key={account.instanceId} disabled>
+                  {accountIcon}
+                  <span className="truncate">{accountLabel}</span>
+                  <span className="ms-auto text-ui-sm text-muted-foreground/80">
+                    {accountAvailability.label}
+                  </span>
+                </MenuItem>
+              );
+            }
+            return (
+              <MenuSub key={account.instanceId}>
+                <MenuSubTrigger>
+                  {accountIcon}
+                  <span className="truncate">{accountLabel}</span>
+                </MenuSubTrigger>
+                <ComposerPickerMenuSubPopup
+                  fixedWidth
+                  className={COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME}
+                >
+                  {renderModelRadioGroup(option.value, account.instanceId)}
+                </ComposerPickerMenuSubPopup>
+              </MenuSub>
+            );
+          });
+        }
         const availability = resolveProviderOptionAvailability(option.value);
         if (availability.disabled) {
           return (
@@ -886,6 +945,19 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
     ? `${MISSING_PROVIDER_INSTANCE_LABEL} · ${selectedModelLabel}`
     : selectedModelLabel;
   const ProviderIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[activeProvider];
+  const selectedAccount =
+    props.showProviderInstanceChoices === false
+      ? undefined
+      : props.providerInstances?.find(
+          (instance) =>
+            instance.provider === activeProvider &&
+            instance.instanceId === (props.selectedProviderInstanceId ?? activeProvider),
+        );
+  const selectedAccountBadge =
+    selectedAccount &&
+    shouldShowProviderAccountBadge(selectedAccount, props.providerInstances ?? [])
+      ? providerAccountInitials(selectedAccount.label)
+      : null;
 
   const setMenuOpen = (nextOpen: boolean) => {
     if (open === undefined) {
@@ -924,15 +996,27 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
       hideLabel={props.hideLabel ?? false}
       className="text-[var(--color-text-foreground)]"
       icon={
-        <ProviderIcon
-          aria-hidden="true"
-          className={cn(
-            // opacity-100 opts out of the Button base's [&_svg]:opacity-80 dimming.
-            "size-3.5 shrink-0 opacity-100",
-            providerIconClassName(activeProvider, "text-muted-foreground/70"),
-            props.activeProviderIconClassName,
-          )}
-        />
+        <span className="relative flex">
+          <ProviderIcon
+            aria-hidden="true"
+            className={cn(
+              // opacity-100 opts out of the Button base's [&_svg]:opacity-80 dimming.
+              "size-3.5 shrink-0 opacity-100",
+              providerIconClassName(activeProvider, "text-muted-foreground/70"),
+              props.activeProviderIconClassName,
+            )}
+          />
+          {selectedAccount && selectedAccountBadge ? (
+            <>
+              <ProviderAccountBadge
+                initials={selectedAccountBadge}
+                accentColor={selectedAccount.accentColor}
+                className="absolute -right-1.5 -bottom-1"
+              />
+              <span className="sr-only">{selectedAccount.label}</span>
+            </>
+          ) : null}
+        </span>
       }
       label={triggerLabel}
     />

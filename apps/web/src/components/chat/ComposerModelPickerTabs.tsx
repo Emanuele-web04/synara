@@ -16,10 +16,12 @@ import { cn } from "~/lib/utils";
 import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "../ProviderIcon";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
-  type ComposerModelPickerTab,
   providerAccountInitials,
-  STARRED_TAB,
-} from "./ComposerModelPicker.logic";
+  providerAccountQualifiedLabel,
+  shouldShowProviderAccountBadge,
+} from "~/lib/providerInstancePresentation";
+import { ProviderAccountBadge } from "../ProviderAccountBadge";
+import { type ComposerModelPickerTab, STARRED_TAB } from "./ComposerModelPicker.logic";
 import {
   findProviderStatusForInstance,
   getProviderIconClassName,
@@ -29,8 +31,12 @@ import {
 
 function PickerTabButton(props: {
   label: string;
+  /** Defaults to the label; an unavailable account explains itself here instead. */
+  tooltip?: string;
   active: boolean;
   disabled?: boolean;
+  /** Greyed like a disabled tab while staying openable (an account awaiting setup). */
+  dimmed?: boolean;
   onSelect: () => void;
   children: ReactNode;
 }) {
@@ -43,21 +49,26 @@ function PickerTabButton(props: {
             role="tab"
             aria-label={props.label}
             aria-selected={props.active}
-            disabled={props.disabled ?? false}
+            // Not the native attribute: a disabled button swallows the hover that shows
+            // why the tab is closed.
+            aria-disabled={props.disabled ?? false}
             className={cn(
-              "relative flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted-foreground/70 outline-none transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring/60 disabled:cursor-default disabled:opacity-40 disabled:hover:bg-transparent",
+              "relative flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted-foreground/70 outline-none transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring/60 aria-disabled:cursor-default aria-disabled:opacity-40 aria-disabled:hover:bg-transparent aria-disabled:hover:text-muted-foreground/70",
+              props.dimmed && !props.disabled && "opacity-40",
               props.active &&
                 // The accent token is theme-injected; fall back to the icon color without it.
                 "text-foreground after:absolute after:inset-x-1.5 after:-bottom-1 after:h-0.5 after:rounded-full after:bg-[var(--color-text-accent,currentColor)]",
             )}
-            onClick={props.onSelect}
+            onClick={() => {
+              if (!props.disabled) props.onSelect();
+            }}
           />
         }
       >
         {props.children}
       </TooltipTrigger>
       <TooltipPopup side="top" variant="picker">
-        {props.label}
+        {props.tooltip ?? props.label}
       </TooltipPopup>
     </Tooltip>
   );
@@ -68,69 +79,108 @@ export type ComposerModelPickerProviderTab = {
   /** Account the tab lists models for; a default account shares the provider id. */
   instanceId: ProviderInstanceId;
   label: string;
-  /** Initials telling same-provider accounts apart; null while the provider has one. */
+  /** Initials telling same-provider accounts apart; null while the icon is unambiguous. */
   badge: string | null;
-  /** Null when the account can be opened; otherwise why not ("Sign in", "Checking"…). */
+  accentColor?: string | undefined;
+  /** Tooltip sentence explaining why the account cannot run right now; null when it can. */
   unavailableLabel: string | null;
+  /** The tab cannot be opened at all (another account's thread, status still loading). */
+  blocked: boolean;
+  /** Shown in place of the model list when the account still has to be signed in or fixed. */
+  setupMessage: string | null;
 };
+
+// Why an enabled account cannot run, phrased for its tab tooltip.
+function describeUnavailableAccount(label: string, status: ServerProviderStatus): string {
+  const reason =
+    status.status === "error" || !status.available
+      ? "Unavailable"
+      : status.status === "warning"
+        ? "Limited"
+        : "Not ready";
+  return [`${label} — ${reason}.`, status.message?.trim()].filter(Boolean).join(" ");
+}
+
+function resolveAccountTabState(input: {
+  label: string;
+  status: ServerProviderStatus | undefined;
+  lockedToSibling: boolean;
+}): Pick<ComposerModelPickerProviderTab, "unavailableLabel" | "blocked" | "setupMessage"> {
+  const { label, status } = input;
+  if (input.lockedToSibling) {
+    return {
+      unavailableLabel: `${label} is unavailable in this thread. Start a new thread to switch accounts.`,
+      blocked: true,
+      setupMessage: null,
+    };
+  }
+  if (!resolveLiveProviderAvailability(status).disabled) {
+    return { unavailableLabel: null, blocked: false, setupMessage: null };
+  }
+  if (!status) {
+    return { unavailableLabel: `${label} — Checking.`, blocked: true, setupMessage: null };
+  }
+  return {
+    unavailableLabel: describeUnavailableAccount(label, status),
+    blocked: false,
+    setupMessage:
+      status.authStatus === "unauthenticated"
+        ? "Open provider setup to sign in to this account."
+        : (status.message?.trim() ?? `${label} is unavailable right now.`),
+  };
+}
 
 // One tab per enabled account, so a second Codex or Claude account is as reachable as
 // another provider. A started thread stays on its account: siblings are listed but closed.
+// An account that still needs signing in stays openable and invites the user to set it up.
 export function resolveComposerModelPickerProviderTabs(input: {
   options: ReadonlyArray<{ value: ProviderKind; label: string }>;
   providers: ReadonlyArray<ServerProviderStatus> | undefined;
   providerInstances?: ReadonlyArray<ProviderModelPickerInstance> | undefined;
   lockedInstanceId?: ProviderInstanceId | null | undefined;
 }): ComposerModelPickerProviderTab[] {
+  const enabledAccounts = (input.providerInstances ?? []).filter((instance) => instance.enabled);
   return input.options.flatMap((option) => {
-    const accounts = (input.providerInstances ?? []).filter(
-      (instance) => instance.provider === option.value && instance.enabled,
-    );
+    const accounts = enabledAccounts.filter((instance) => instance.provider === option.value);
     const hasSiblingAccounts = accounts.length > 1;
-    const tabs = hasSiblingAccounts
-      ? accounts.map((account) => ({
-          instanceId: account.instanceId,
-          label: account.label.toLowerCase().includes(option.label.toLowerCase())
-            ? account.label
-            : `${option.label} · ${account.label}`,
-          badge: providerAccountInitials(account.label),
-        }))
-      : [{ instanceId: accounts[0]?.instanceId ?? option.value, label: option.label, badge: null }];
+    const tabs =
+      accounts.length > 0
+        ? accounts.map((account) => ({
+            instanceId: account.instanceId,
+            label: hasSiblingAccounts
+              ? providerAccountQualifiedLabel(option.label, account.label)
+              : account.isDefault
+                ? option.label
+                : account.label,
+            badge: shouldShowProviderAccountBadge(account, enabledAccounts)
+              ? providerAccountInitials(account.label)
+              : null,
+            accentColor: account.accentColor,
+          }))
+        : [{ instanceId: option.value, label: option.label, badge: null, accentColor: undefined }];
     return tabs.map((tab) => {
-      const availability = resolveLiveProviderAvailability(
-        findProviderStatusForInstance({
+      const state = resolveAccountTabState({
+        label: tab.label,
+        status: findProviderStatusForInstance({
           providers: input.providers,
           provider: option.value,
           instanceId: tab.instanceId,
         }),
-      );
-      const lockedToSibling =
-        input.lockedInstanceId != null && tab.instanceId !== input.lockedInstanceId;
+        lockedToSibling:
+          input.lockedInstanceId != null && tab.instanceId !== input.lockedInstanceId,
+      });
       return {
         provider: option.value,
-        ...tab,
-        unavailableLabel: lockedToSibling
-          ? "New thread"
-          : availability.disabled
-            ? (availability.label ?? "Unavailable")
-            : null,
+        instanceId: tab.instanceId,
+        label: tab.label,
+        badge: tab.badge,
+        accentColor: tab.accentColor,
+        unavailableLabel: state.unavailableLabel,
+        blocked: state.blocked,
+        setupMessage: state.setupMessage,
       };
     });
   });
-}
-
-export function ProviderAccountBadge(props: { initials: string; className?: string }) {
-  return (
-    <span
-      aria-hidden="true"
-      className={cn(
-        "rounded-sm bg-popover px-0.5 font-medium text-ui-2xs leading-none text-foreground ring-1 ring-border",
-        props.className,
-      )}
-    >
-      {props.initials}
-    </span>
-  );
 }
 
 export function ComposerModelPickerTabs(props: {
@@ -158,13 +208,11 @@ export function ComposerModelPickerTabs(props: {
         return (
           <PickerTabButton
             key={providerTab.instanceId}
-            label={
-              providerTab.unavailableLabel
-                ? `${providerTab.label} · ${providerTab.unavailableLabel}`
-                : providerTab.label
-            }
+            label={providerTab.label}
+            tooltip={providerTab.unavailableLabel ?? providerTab.label}
             active={props.tab === providerTab.instanceId}
-            disabled={providerTab.unavailableLabel !== null}
+            disabled={providerTab.blocked}
+            dimmed={providerTab.unavailableLabel !== null}
             onSelect={() => props.onTabChange(providerTab.instanceId)}
           >
             <TabIcon
@@ -174,6 +222,7 @@ export function ComposerModelPickerTabs(props: {
             {providerTab.badge ? (
               <ProviderAccountBadge
                 initials={providerTab.badge}
+                accentColor={providerTab.accentColor}
                 className="absolute -right-1 -bottom-0.5"
               />
             ) : null}

@@ -3724,6 +3724,7 @@ export default function ChatView({
       customModelsByProvider,
       lockedProvider,
       modelOptionsByProvider,
+      modelOptionsByProviderInstance,
       persistRuntimeModeChange,
       providerStatuses,
       runtimeMode,

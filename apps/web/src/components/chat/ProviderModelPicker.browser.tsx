@@ -292,6 +292,89 @@ describe("ProviderModelPicker", () => {
     }
   });
 
+  it("lists each account of a provider as its own entry with an initials badge", async () => {
+    const mounted = await mountPicker({
+      provider: "codex",
+      model: "gpt-5-codex",
+      lockedProvider: null,
+      selectedProviderInstanceId: "codex_work",
+      providerInstances: [
+        { instanceId: "codex", provider: "codex", label: "Codex", enabled: true, isDefault: true },
+        {
+          instanceId: "codex_work",
+          provider: "codex",
+          label: "Work",
+          accentColor: "#16a34a",
+          enabled: true,
+          isDefault: false,
+        },
+        {
+          instanceId: "codex_side",
+          provider: "codex",
+          label: "Side",
+          enabled: true,
+          isDefault: false,
+        },
+        {
+          instanceId: "codex_old",
+          provider: "codex",
+          label: "Old",
+          enabled: false,
+          isDefault: false,
+        },
+      ],
+      providers: [
+        providerStatus("codex"),
+        providerStatus("codex", { instanceId: "codex_work", displayName: "Work" }),
+        providerStatus("codex", {
+          instanceId: "codex_side",
+          displayName: "Side",
+          authStatus: "unauthenticated",
+        }),
+      ],
+      modelOptionsByProviderInstance: {
+        codex_work: [
+          { slug: "gpt-5-codex", name: "GPT-5 Codex" },
+          { slug: "gpt-5-work-codex", name: "GPT-5 Work Codex" },
+        ],
+      },
+    });
+
+    try {
+      // The trigger marks the account the selection runs in.
+      const triggerBadge = page
+        .getByRole("button")
+        .element()
+        .querySelector<HTMLElement>("[data-accent]");
+      expect(triggerBadge?.textContent).toBe("WO");
+      expect(triggerBadge?.dataset.accent).toBe("#16a34a");
+
+      await page.getByRole("button").click();
+      await expect
+        .element(page.getByRole("menuitem", { name: "Codex", exact: true }))
+        .toBeVisible();
+      const signedOut = page.getByRole("menuitem", { name: /Codex · Side/ });
+      await expect.element(signedOut).toHaveAttribute("aria-disabled", "true");
+      expect(signedOut.element().textContent).toContain("Sign in");
+      // A disabled account is managed in settings, not offered here.
+      expect(document.body.textContent ?? "").not.toContain("Old");
+
+      await page.getByRole("menuitem", { name: /Codex · Work/ }).click();
+      await expect
+        .element(page.getByRole("menuitemradio", { name: "GPT-5 Codex" }))
+        .toHaveAttribute("aria-checked", "true");
+      await page.getByRole("menuitemradio", { name: "GPT-5 Work Codex" }).click();
+
+      expect(mounted.onProviderModelChange).toHaveBeenCalledWith(
+        "codex",
+        "gpt-5-work-codex",
+        "codex_work",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("keeps account choices out of the model picker", async () => {
     const mounted = await mountPicker({
       provider: "codex",
