@@ -72,13 +72,13 @@ export function TaskCardSurface({
   selection,
   now,
   mutations,
-  scrollClassName,
+  className,
   children,
 }: {
   selection: TaskSelection;
   now: Date;
   mutations: Pick<TodoMutations, "updateTodo" | "updateTodoAsync">;
-  scrollClassName?: string;
+  className?: string;
   children: ReactNode;
 }) {
   const { projectNameById, projectCwdById, projectOptions } = useTaskProjects();
@@ -86,7 +86,7 @@ export function TaskCardSurface({
   return (
     // Escape closes the card unless a field or menu inside is handling it.
     <div
-      className="relative min-h-0 flex-1"
+      className={cn("relative min-h-0 flex-1", className)}
       onKeyDown={(event) => {
         if (event.key !== "Escape" || event.defaultPrevented) return;
         const target = event.target;
@@ -99,7 +99,6 @@ export function TaskCardSurface({
         className={cn(
           "h-full overflow-y-auto transition-[padding] duration-200",
           selectedRow && "xl:pr-[24rem]",
-          scrollClassName,
         )}
       >
         {children}

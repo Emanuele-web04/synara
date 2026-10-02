@@ -659,7 +659,7 @@ export default function InboxView() {
           selection={taskSelection}
           now={now}
           mutations={todoMutations}
-          scrollClassName="@container"
+          className="@container"
         >
           {/* Nearly the whole page, with the same room on every side. */}
           <div className="mx-auto flex w-full max-w-[1760px] flex-col gap-5 p-5 @2xl:gap-7 @2xl:p-8 @5xl:p-10">

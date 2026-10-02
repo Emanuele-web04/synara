@@ -40,6 +40,10 @@ is cancelled, the task and its prompt remain available for retry.
   without opening the chat, and show the agent's latest reply for review before you mark it done. A
   List / Kanban switch in the header opens the Kanban board instead, and the Tasks entry remembers
   the view you picked.
+- **Inbox** (Beta) — today’s due and overdue to-dos, tasks with an agent, and tasks finished
+  since the working day began at 4am, beside the day’s agent recap. Add a task here to make it due
+  on today’s calendar date, or select it to edit and delegate through the same card as Tasks.
+  **All tasks** opens the complete backlog.
 - **Conversation** — user messages, agent responses, plans, tools, approvals, and subagent activity
 - **Composer** — objectives, attachments, provider selection, model selection, and task controls
 - **Terminal** — a real shell opened in the task's working directory
