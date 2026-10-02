@@ -805,6 +805,7 @@ layer("GitHubCliLive", (it) => {
           cwd: "/repo",
           repository: "acme/app",
           state: "open",
+          sort: "created",
         });
 
         assert.equal(mockedRunProcess.mock.calls.length, 1);
@@ -844,6 +845,7 @@ layer("GitHubCliLive", (it) => {
         const [command, args, options] = mockedRunProcess.mock.calls[0]!;
         assert.equal(command, "gh");
         const query = (args as string[]).find((arg) => arg.startsWith("query=")) ?? "";
+        expect(query.match(/orderBy: \{field: CREATED_AT, direction: DESC\}/g)).toHaveLength(2);
         expect(query).not.toContain("mine:");
         expect(query).not.toContain("$mineQuery");
         expect((args as string[]).some((arg) => arg.startsWith("mineQuery="))).toBe(false);
@@ -910,7 +912,10 @@ layer("GitHubCliLive", (it) => {
       );
       expect(query).not.toContain("repository(");
       expect(args).toEqual(
-        expect.arrayContaining(["graphql", "mineQuery=repo:acme/app is:closed involves:@me"]),
+        expect.arrayContaining([
+          "graphql",
+          "mineQuery=repo:acme/app is:closed involves:@me sort:updated-desc",
+        ]),
       );
     }),
   );

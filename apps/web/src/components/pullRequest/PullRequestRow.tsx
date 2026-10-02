@@ -6,7 +6,7 @@
 // Layer: Pull request presentation
 // Exports: PullRequestRow, githubInboxItemLabel
 
-import type { GitHubInboxItem } from "@synara/contracts";
+import type { GitHubInboxItem, GitHubInboxSort } from "@synara/contracts";
 import { pullRequestListProjectContexts } from "@synara/shared/githubRepository";
 import type { ReactNode } from "react";
 
@@ -30,6 +30,7 @@ export function githubInboxItemLabel(item: Pick<GitHubInboxItem, "kind" | "numbe
 
 export const PullRequestRow = function PullRequestRow({
   entry,
+  sort = "created",
   selected,
   showProjectTitle: showProjectTitleProp,
   projectIcon,
@@ -37,6 +38,7 @@ export const PullRequestRow = function PullRequestRow({
   onTogglePinned,
 }: {
   entry: GitHubInboxItem;
+  sort?: GitHubInboxSort;
   selected: boolean;
   /** Several projects in view: adds the preferred local context to the second line. */
   showProjectTitle?: boolean;
@@ -46,6 +48,7 @@ export const PullRequestRow = function PullRequestRow({
   onTogglePinned: (entry: GitHubInboxItem) => void;
 }) {
   const showProjectTitle = showProjectTitleProp ?? false;
+  const timestamp = sort === "created" ? entry.createdAt : entry.updatedAt;
   const isPinned = entry.isPinned === true;
   const projectContexts = pullRequestListProjectContexts(entry);
   const projectLabel =
@@ -108,7 +111,13 @@ export const PullRequestRow = function PullRequestRow({
           <span aria-hidden className="shrink-0">
             ·
           </span>
-          <span className="shrink-0 tabular-nums">{formatRelativeTime(entry.updatedAt)}</span>
+          <time
+            dateTime={timestamp}
+            title={sort === "created" ? "Opened" : "Updated"}
+            className="shrink-0 tabular-nums"
+          >
+            {formatRelativeTime(timestamp)}
+          </time>
           <span className="ml-auto shrink-0 pl-1 tabular-nums opacity-80">#{entry.number}</span>
         </span>
       </button>

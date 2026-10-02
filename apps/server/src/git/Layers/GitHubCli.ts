@@ -2,6 +2,7 @@ import { Effect, Layer, Schema } from "effect";
 import {
   PositiveInt,
   TrimmedNonEmptyString,
+  type GitHubInboxSort,
   type GitHubIssueState,
   type GitHubIssueStateReason,
   type GitPullRequestCheck,
@@ -974,19 +975,23 @@ fragment InboxIssueFields on Issue {
 }
 
 /**
- * Lists document for one repository and state: the 50 most recently updated pull requests and
+ * Lists document for one repository, state, and sort: the first 50 pull requests and
  * issues with full row fields, the review-requested numbers and count, the viewer, and the
  * GraphQL budget. Sent together with {@link buildGitHubInboxInvolvementQuery}.
  */
-export function buildGitHubInboxQuery(options: { readonly includeStacks: boolean }): string {
+export function buildGitHubInboxQuery(options: {
+  readonly includeStacks: boolean;
+  readonly sort?: GitHubInboxSort;
+}): string {
+  const orderField = options.sort === "created" ? "CREATED_AT" : "UPDATED_AT";
   return `query($owner: String!, $name: String!, $prStates: [PullRequestState!], $issueStates: [IssueState!], $reviewQuery: String!, $includeReview: Boolean!) {
   viewer { login }
   rateLimit { cost remaining resetAt }
   repository(owner: $owner, name: $name) {
-    pullRequests(states: $prStates, first: ${GITHUB_INBOX_PAGE_SIZE}, orderBy: {field: UPDATED_AT, direction: DESC}) {
+    pullRequests(states: $prStates, first: ${GITHUB_INBOX_PAGE_SIZE}, orderBy: {field: ${orderField}, direction: DESC}) {
       totalCount nodes { ...InboxPullRequestFields }
     }
-    issues(states: $issueStates, first: ${GITHUB_INBOX_PAGE_SIZE}, orderBy: {field: UPDATED_AT, direction: DESC}) {
+    issues(states: $issueStates, first: ${GITHUB_INBOX_PAGE_SIZE}, orderBy: {field: ${orderField}, direction: DESC}) {
       totalCount nodes { ...InboxIssueFields }
     }
   }
@@ -1040,8 +1045,9 @@ ${githubInboxFragments(options)}`;
 export function githubInboxInvolvementQueryVariables(
   repository: string,
   state: "open" | "closed",
+  sort: GitHubInboxSort = "updated",
 ): string[] {
-  return ["-f", `mineQuery=repo:${repository} is:${state} involves:@me`];
+  return ["-f", `mineQuery=repo:${repository} is:${state} involves:@me sort:${sort}-desc`];
 }
 
 /** `gh api graphql` variables for {@link buildGitHubInboxQuery}. The repository must already be
@@ -2137,7 +2143,7 @@ const makeGitHubCli = Effect.gen(function* () {
           runInboxGraphQl(
             input.cwd,
             (includeStacks) => [
-              `query=${buildGitHubInboxQuery({ includeStacks })}`,
+              `query=${buildGitHubInboxQuery({ includeStacks, sort: input.sort ?? "updated" })}`,
               ...githubInboxQueryVariables(repository, input.state),
             ],
             decodeRepositoryInboxJson,
@@ -2151,7 +2157,7 @@ const makeGitHubCli = Effect.gen(function* () {
             input.cwd,
             (includeStacks) => [
               `query=${buildGitHubInboxInvolvementQuery({ includeStacks })}`,
-              ...githubInboxInvolvementQueryVariables(repository, input.state),
+              ...githubInboxInvolvementQueryVariables(repository, input.state, input.sort),
             ],
             decodeRepositoryInvolvementJson,
           ),

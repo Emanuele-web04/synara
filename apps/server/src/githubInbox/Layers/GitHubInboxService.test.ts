@@ -1,4 +1,4 @@
-import { ProjectId, type OrchestrationProject } from "@synara/contracts";
+import { ProjectId, type GitHubInboxSort, type OrchestrationProject } from "@synara/contracts";
 import { Deferred, Effect, Fiber } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -64,7 +64,7 @@ function makePins(
 
 /** A scripted `gh` whose inbox answers and call counts are per repository and state. */
 function makeGitHub(input: {
-  inbox?: (repository: string, state: "open" | "closed") => string;
+  inbox?: (repository: string, state: "open" | "closed", sort?: GitHubInboxSort) => string;
   failInbox?: (repository: string) => GitHubCliError | null;
   failInvolvement?: (repository: string) => GitHubCliError | null;
   /** Wraps every inbox GraphQL call, for timing and concurrency checks. */
@@ -82,26 +82,26 @@ function makeGitHub(input: {
   let etagCounter = 0;
   const github: GitHubCliShape = {
     ...base,
-    listRepositoryInbox: ({ repository, state }) =>
+    listRepositoryInbox: ({ repository, state, sort }) =>
       around(
         Effect.suspend(() => {
           inboxCalls.push(`${repository}:${state}`);
           const failure = input.failInbox?.(repository);
           if (failure) return Effect.fail(failure);
           return decodeRepositoryInboxJson(
-            input.inbox?.(repository, state) ?? fakeInboxGraphQlJson({}),
+            input.inbox?.(repository, state, sort) ?? fakeInboxGraphQlJson({}),
           );
         }),
       ),
     // The same fixture answers the involvement document; its decoder reads only `mine`.
-    listRepositoryInboxInvolvement: ({ repository, state }) =>
+    listRepositoryInboxInvolvement: ({ repository, state, sort }) =>
       around(
         Effect.suspend(() => {
           involvementCalls.push(`${repository}:${state}`);
           const failure = input.failInvolvement?.(repository);
           if (failure) return Effect.fail(failure);
           return decodeRepositoryInvolvementJson(
-            input.inbox?.(repository, state) ?? fakeInboxGraphQlJson({}),
+            input.inbox?.(repository, state, sort) ?? fakeInboxGraphQlJson({}),
           );
         }),
       ),
@@ -170,6 +170,42 @@ function runInbox<A, E>(
 }
 
 describe("GitHubInboxService.list", () => {
+  it("keeps sort snapshots separate and invalidates both after a repository mutation", async () => {
+    const project = makeProject("project-sort", "App");
+    let title = "Before mutation";
+    const { github, inboxCalls } = makeGitHub({
+      inbox: (_repository, _state, sort) =>
+        fakeInboxGraphQlJson({
+          pullRequests: [fakeInboxPullRequestNode(sort === "created" ? 2 : 1, { title })],
+        }),
+      probe: () => ({ changed: false }),
+    });
+    await runInbox(
+      {
+        projects: [project],
+        repositories: new Map([[project.id, ["acme/app"]]]),
+        github,
+      },
+      (service) =>
+        Effect.gen(function* () {
+          const updated = yield* service.list({ state: "open", sort: "updated" });
+          const created = yield* service.list({ state: "open", sort: "created" });
+          const cached = yield* service.list({ state: "open", sort: "updated" });
+          expect(updated.items.map((item) => item.number)).toEqual([1]);
+          expect(created.items.map((item) => item.number)).toEqual([2]);
+          expect(cached.items).toEqual(updated.items);
+          expect(inboxCalls).toHaveLength(2);
+          title = "After mutation";
+          yield* service.invalidateRepository("acme/app");
+          for (const sort of ["created", "updated"] as const) {
+            const refreshed = yield* service.list({ state: "open", sort });
+            expect(refreshed.items[0]?.title).toBe("After mutation");
+          }
+          expect(inboxCalls).toHaveLength(4);
+        }),
+    );
+  });
+
   it("reads each unique repository once and fans shared rows out to every project", async () => {
     const projectA = makeProject("project-a", "App");
     const projectB = makeProject("project-b", "feature-1");

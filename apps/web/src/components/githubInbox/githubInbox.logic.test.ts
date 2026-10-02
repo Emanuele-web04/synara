@@ -317,16 +317,19 @@ describe("selectVisibleInboxItems", () => {
     expect(numbers(filters({ kind: "pullRequest", involvement: "assigned" }))).toEqual([]);
   });
 
-  it("orders rows by latest activity, pull requests and issues interleaved", () => {
+  it.each([
+    { sort: "created" as const, expected: [4, 3, 2, 1] },
+    { sort: "updated" as const, expected: [4, 1, 3, 2] },
+  ])("orders interleaved rows by $sort with pins first", ({ sort, expected }) => {
     const older = items.map((item) =>
       item.number === 1 ? { ...item, updatedAt: "2030-01-01T00:00:00.000Z" } : item,
     );
     const ordered = selectVisibleInboxItems(older, filters(), {
+      sort,
       viewer,
       normalizedQuery: "",
     });
-    // The pinned row still leads; the freshly updated one comes right after it.
-    expect(ordered.map((item) => item.number)).toEqual([4, 1, 3, 2]);
+    expect(ordered.map((item) => item.number)).toEqual(expected);
   });
 
   it("lists pins first, then every other row in one list by latest activity", () => {
@@ -337,6 +340,7 @@ describe("selectVisibleInboxItems", () => {
         : item,
     );
     const visible = selectVisibleInboxItems(ownIsOldest, filters(), {
+      sort: "updated",
       viewer,
       normalizedQuery: "",
     });

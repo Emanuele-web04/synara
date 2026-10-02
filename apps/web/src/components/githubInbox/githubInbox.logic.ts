@@ -12,6 +12,7 @@ import type {
   GitHubInboxListError,
   GitHubInboxRepositoryBatch,
   GitHubInboxState,
+  GitHubInboxSort,
   PullRequestDetailInput,
   ProjectId,
 } from "@synara/contracts";
@@ -333,12 +334,12 @@ export function selectVisibleInboxItems(
   context: {
     viewer: string | null | undefined;
     normalizedQuery: string;
+    sort?: GitHubInboxSort;
     preferredProjectId?: ProjectId | undefined;
   },
 ): GitHubInboxItem[] {
   const labels = new Set(filters.labels.map(normalizeLabelName));
-  // One list, newest activity first, pull requests and issues interleaved, as on GitHub. ISO
-  // timestamps order as strings; the number breaks ties so the order is stable.
+  const timestamp = context.sort === "updated" ? "updatedAt" : "createdAt";
   return orderPullRequestEntriesPinnedFirst(
     filterInboxItemsByInvolvement(
       scopedInboxItems(items, filters, context.preferredProjectId),
@@ -352,7 +353,7 @@ export function selectVisibleInboxItems(
       )
       .toSorted(
         (left, right) =>
-          right.updatedAt.localeCompare(left.updatedAt) || right.number - left.number,
+          right[timestamp].localeCompare(left[timestamp]) || right.number - left.number,
       ),
   );
 }
