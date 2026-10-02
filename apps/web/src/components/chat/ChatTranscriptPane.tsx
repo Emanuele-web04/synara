@@ -42,6 +42,8 @@ interface ChatTranscriptPaneProps {
   activeThreadId: string;
   activeTurnId?: TurnId | null;
   activeTurnInProgress: boolean;
+  subagentsRunning?: boolean;
+  collapseFinishedTurns?: boolean;
   activeTurnStartedAt: string | null;
   agentActivityDetail?: AgentActivityDetail | null;
   contentInsetRightPx?: ComponentProps<typeof MessagesTimeline>["contentInsetRightPx"];
@@ -132,6 +134,8 @@ export function ChatTranscriptPane({
   activeThreadId,
   activeTurnId,
   activeTurnInProgress,
+  subagentsRunning,
+  collapseFinishedTurns,
   activeTurnStartedAt,
   agentActivityDetail,
   contentInsetRightPx,
@@ -324,6 +328,8 @@ export function ChatTranscriptPane({
             {...(onResolveWorktreeSetup ? { onResolveWorktreeSetup } : {})}
             activeTurnId={activeTurnId ?? null}
             activeTurnInProgress={activeTurnInProgress}
+            subagentsRunning={subagentsRunning === true}
+            collapseFinishedTurns={collapseFinishedTurns !== false}
             activeTurnStartedAt={activeTurnStartedAt}
             listRef={listRef}
             {...(timelineControllerRef ? { controllerRef: timelineControllerRef } : {})}
