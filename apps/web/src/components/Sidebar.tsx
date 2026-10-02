@@ -2994,41 +2994,48 @@ export default function Sidebar() {
     async (thread: Thread, target: ForkThreadTarget) => {
       const api = readNativeApi();
       if (!api) return;
-      try {
-        const projectCwd = projectCwdById.get(thread.projectId) ?? null;
-        // Only a thread without its own branch needs the root checkout's branch.
-        const branches =
-          thread.branch || !projectCwd
-            ? null
-            : await queryClient
-                .fetchQuery(gitBranchesQueryOptions(projectCwd))
-                .then((result) => result.branches)
-                .catch(() => null);
-        const nextThreadId = await dispatchThreadFork({
-          api,
-          sourceThread: thread,
-          target,
-          rootBranch: resolveComposerSlashRootBranch({
-            branches,
-            activeProjectCwd: projectCwd,
-            activeThreadBranch: thread.branch,
+      const projectCwd = projectCwdById.get(thread.projectId) ?? null;
+      // Only a thread without its own branch needs the root checkout's branch.
+      const needsRootBranch = !thread.branch && projectCwd !== null;
+      // Promise chains rather than try/catch: React Compiler bails out on value
+      // blocks inside a try statement, and this file has a zero-bailout budget.
+      await (
+        needsRootBranch
+          ? queryClient
+              .fetchQuery(gitBranchesQueryOptions(projectCwd))
+              .then((result) => result.branches)
+              .catch(() => null)
+          : Promise.resolve(null)
+      )
+        .then((branches) =>
+          dispatchThreadFork({
+            api,
+            sourceThread: thread,
+            target,
+            rootBranch: resolveComposerSlashRootBranch({
+              branches,
+              activeProjectCwd: projectCwd,
+              activeThreadBranch: thread.branch,
+            }),
+            modelSelection: thread.modelSelection,
+            runtimeMode: thread.runtimeMode,
+            interactionMode: thread.interactionMode,
           }),
-          modelSelection: thread.modelSelection,
-          runtimeMode: thread.runtimeMode,
-          interactionMode: thread.interactionMode,
+        )
+        .then(async (nextThreadId) => {
+          syncServerShellSnapshot(await api.orchestration.getShellSnapshot());
+          await navigate({ to: "/$threadId", params: { threadId: nextThreadId } });
+        })
+        .catch((error: unknown) => {
+          toastManager.add({
+            type: "error",
+            title: "Could not fork thread",
+            description:
+              error instanceof Error
+                ? error.message
+                : "An error occurred while creating the forked thread.",
+          });
         });
-        syncServerShellSnapshot(await api.orchestration.getShellSnapshot());
-        await navigate({ to: "/$threadId", params: { threadId: nextThreadId } });
-      } catch (error) {
-        toastManager.add({
-          type: "error",
-          title: "Could not fork thread",
-          description:
-            error instanceof Error
-              ? error.message
-              : "An error occurred while creating the forked thread.",
-        });
-      }
     },
     [navigate, projectCwdById, queryClient, syncServerShellSnapshot],
   );
