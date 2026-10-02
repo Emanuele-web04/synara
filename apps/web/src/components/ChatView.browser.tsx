@@ -18,6 +18,7 @@ import {
   DEVICE_WS_METHODS,
   COMPUTER_WS_METHODS,
   ORCHESTRATION_WS_METHODS,
+  OrchestrationProposedPlanId,
   type OrchestrationReadModel,
   type ProjectId,
   type ServerConfig,
@@ -96,6 +97,7 @@ import { resetRetainedThreadDetailSubscriptionsForTests } from "../threadDetailS
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { getWorkspaceEditorSession } from "../lib/workspaceEditorSession";
 import { resetWsNativeApiForTest } from "../wsNativeApi";
+import { useThreadDispatchStore } from "./chat/useChatLocalDispatch";
 // Pre-transform the compiler-heavy component outside the first case's timeout.
 // The router's auto-split route otherwise requests this module on first mount.
 import "./ChatView";
@@ -1314,7 +1316,11 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
   return {};
 }
 
-function installDeterministicSendNativeApi(options?: { rejectTurnStart?: boolean }): () => void {
+function installDeterministicSendNativeApi(options?: {
+  rejectTurnStart?: boolean;
+  beforeWorktreeCreation?: () => Promise<void>;
+  projectThreadCommands?: boolean;
+}): () => void {
   const previousNativeApi = window.nativeApi;
   const wsNativeApi = readNativeApi();
   if (!wsNativeApi) {
@@ -1335,6 +1341,7 @@ function installDeterministicSendNativeApi(options?: { rejectTurnStart?: boolean
             ...input,
           };
           wsRequests.push(request);
+          await options?.beforeWorktreeCreation?.();
           return resolveWsRpc(request) as Awaited<
             ReturnType<typeof wsNativeApi.git.createDetachedWorktree>
           >;
@@ -1368,6 +1375,31 @@ function installDeterministicSendNativeApi(options?: { rejectTurnStart?: boolean
           });
           if (options?.rejectTurnStart && command.type === "thread.turn.start") {
             throw new Error("Turn start failed for test.");
+          }
+          if (options?.projectThreadCommands && command.type === "thread.create") {
+            const snapshot = addThreadToSnapshot(fixture.snapshot, command.threadId);
+            fixture.snapshot = {
+              ...snapshot,
+              threads: snapshot.threads.map((thread) =>
+                thread.id === command.threadId
+                  ? { ...thread, ...command, id: command.threadId, session: null }
+                  : thread,
+              ),
+            };
+            useStore.getState().syncServerReadModel(fixture.snapshot);
+          }
+          if (options?.projectThreadCommands && command.type === "thread.meta.update") {
+            const patch = Object.fromEntries(
+              Object.entries(command).filter(([, value]) => value !== undefined),
+            );
+            fixture.snapshot = {
+              ...fixture.snapshot,
+              snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+              threads: fixture.snapshot.threads.map((thread) =>
+                thread.id === command.threadId ? { ...thread, ...patch } : thread,
+              ),
+            };
+            useStore.getState().syncServerReadModel(fixture.snapshot);
           }
           return { sequence: fixture.snapshot.snapshotSequence + 1 };
         },
@@ -1545,6 +1577,20 @@ function skipReactDevOwnerStacks(): () => void {
 async function nextFrame(): Promise<void> {
   await new Promise<void>((resolve) => {
     window.requestAnimationFrame(() => resolve());
+  });
+}
+
+function mousePointerEvent(type: string, x: number, y: number): PointerEvent {
+  return new PointerEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    pointerType: "mouse",
+    pointerId: 1,
+    isPrimary: true,
+    button: 0,
+    buttons: type === "pointerup" ? 0 : 1,
+    clientX: x,
+    clientY: y,
   });
 }
 
@@ -2194,6 +2240,7 @@ describe("ChatView transcript geometry (full app)", () => {
     localStorage.clear();
     acknowledgeProjectImportAnnouncementForTest(createBaseServerConfig());
     useProjectEnvironmentStore.setState({ envModeByProjectId: {} });
+    useThreadDispatchStore.setState({ threads: {} });
     useLatestProjectStore.setState({ latestProjectId: null });
     useWorkspacePathsStore.setState({
       homeDir: null,
@@ -2249,6 +2296,98 @@ describe("ChatView transcript geometry (full app)", () => {
     resetRetainedThreadDetailSubscriptionsForTests();
     document.body.innerHTML = "";
   });
+
+  it.each(["user", "assistant"] as const)(
+    "opens the linked PR number from a %s message when the repository path also contains pull",
+    async (role) => {
+      useRightDockStore.setState({ dockStateByThreadId: {} });
+      const url = "https://github.com/pull/123/pull/456";
+      const snapshot = createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("linked-pr"),
+        targetText: url,
+      });
+      const message =
+        role === "user"
+          ? createUserMessage({
+              id: MessageId.makeUnsafe("linked-pr"),
+              text: url,
+              offsetSeconds: 0,
+            })
+          : createAssistantMessage({
+              id: MessageId.makeUnsafe("linked-pr"),
+              text: `[Inspect PR](${url})`,
+              offsetSeconds: 0,
+            });
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: { ...snapshot, threads: [{ ...snapshot.threads[0]!, messages: [message] }] },
+      });
+      const previousNativeApi = window.nativeApi;
+      const api = readNativeApi()!;
+      const repository = { nameWithOwner: "pull/123", url: "https://github.com/pull/123" };
+      Object.defineProperty(window, "nativeApi", {
+        configurable: true,
+        value: {
+          ...api,
+          git: {
+            ...api.git,
+            githubRepository: async () => ({ repository, repositories: [repository] }),
+          },
+        },
+      });
+      try {
+        const link = page.getByRole(role === "user" ? "button" : "link", {
+          name: role === "user" ? "pull/123#456" : "Inspect PR",
+          exact: true,
+        });
+        await link.click({ button: "right" });
+        await expect
+          .element(page.getByRole("button", { name: "Open pull request", exact: true }))
+          .toBeVisible();
+        await expect
+          .element(page.getByRole("button", { name: "Open in browser", exact: true }))
+          .toBeVisible();
+        await expect
+          .element(page.getByRole("button", { name: "Open in external browser", exact: true }))
+          .toBeVisible();
+        await expect
+          .element(page.getByRole("button", { name: "Copy link", exact: true }))
+          .toBeVisible();
+        await page.getByRole("button", { name: "Open pull request", exact: true }).click();
+        await vi.waitFor(() => {
+          expect(useRightDockStore.getState().dockStateByThreadId[THREAD_ID]?.panes).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                kind: "pullRequest",
+                pullRequestProjectId: PROJECT_ID,
+                pullRequestRepository: "pull/123",
+                pullRequestNumber: 456,
+              }),
+            ]),
+          );
+        });
+        useRightDockStore.setState({ dockStateByThreadId: {} });
+        await link.click();
+        await vi.waitFor(() => {
+          expect(useRightDockStore.getState().dockStateByThreadId[THREAD_ID]?.panes).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ kind: "pullRequest", pullRequestNumber: 456 }),
+            ]),
+          );
+        });
+      } finally {
+        if (previousNativeApi) {
+          Object.defineProperty(window, "nativeApi", {
+            configurable: true,
+            value: previousNativeApi,
+          });
+        } else {
+          Reflect.deleteProperty(window, "nativeApi");
+        }
+        await mounted.cleanup();
+      }
+    },
+  );
 
   // #1374: real route, dock and Lexical composers; only the server boundary is
   // simulated. The main agent must keep running while the panel toggles.
@@ -5787,16 +5926,33 @@ describe("ChatView transcript geometry (full app)", () => {
       dispatchComposerPickerShortcut(composerEditor, "e");
 
       await waitForComposerPickerSurfaceOpen();
+      expect(
+        wsRequests.filter(
+          (request) =>
+            request._tag === WS_METHODS.providerListModels && request.provider === "claudeAgent",
+        ),
+      ).toEqual([]);
+      const refreshButton = page.getByRole("button", { name: "Refresh models", exact: true });
+      await expect.element(refreshButton).toBeEnabled();
+      await refreshButton.click();
       await vi.waitFor(() => {
         expect(wsRequests).toEqual(
           expect.arrayContaining([
             expect.objectContaining({
               _tag: WS_METHODS.providerListModels,
-              provider: "claudeAgent",
+              provider: "codex",
+              instanceId: "codex",
+              refresh: "now",
             }),
           ]),
         );
       });
+      expect(
+        wsRequests.filter(
+          (request) =>
+            request._tag === WS_METHODS.providerListModels && request.provider === "claudeAgent",
+        ),
+      ).toEqual([]);
     } finally {
       await mounted.cleanup();
     }
@@ -6759,7 +6915,15 @@ describe("ChatView transcript geometry (full app)", () => {
                 wsRequests.some((request) => request._tag === WS_METHODS.gitCreateDetachedWorktree),
               ).toBe(envMode === "worktree");
               if (envMode === "worktree") {
-                expect(create?.worktreePath).toContain("/repo/.codex/worktrees/");
+                expect(create?.worktreePath).toBeNull();
+                const linkedWorkspace = commands.find(
+                  (command) =>
+                    command.type === "thread.meta.update" &&
+                    command.threadId === create?.threadId &&
+                    typeof command.worktreePath === "string",
+                );
+                expect(linkedWorkspace?.worktreePath).toContain("/repo/.codex/worktrees/");
+                expect(commands.indexOf(linkedWorkspace!)).toBeLessThan(commands.indexOf(send!));
               } else {
                 expect(create?.worktreePath).toBeNull();
               }
@@ -8342,6 +8506,192 @@ describe("ChatView transcript geometry (full app)", () => {
     },
   );
 
+  it.each(["success", "failure", "revisit", "cancel"] as const)(
+    "opens another draft during worktree creation and preserves the original send on %s",
+    async (outcome) => {
+      let finishCreation!: () => void;
+      const creationGate = new Promise<void>((resolve) => {
+        finishCreation = resolve;
+      });
+      const restoreNativeApi = installDeterministicSendNativeApi({
+        projectThreadCommands: true,
+        beforeWorktreeCreation: async () => {
+          await creationGate;
+          if (outcome !== "success") throw new Error("Worktree creation failed for test.");
+        },
+      });
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: MessageId.makeUnsafe("worktree-new-thread-shortcut"),
+          targetText: "worktree shortcut",
+        }),
+      });
+
+      try {
+        useProjectEnvironmentStore.getState().setProjectEnvMode(PROJECT_ID, "worktree");
+        await page.getByTestId("new-thread-button").click();
+        const sendingPath = await waitForURL(
+          mounted.router,
+          (path) => UUID_ROUTE_RE.test(path),
+          "Expected a worktree draft.",
+        );
+        const sendingId = sendingPath.slice(1) as ThreadId;
+        useComposerDraftStore.getState().setPrompt(sendingId, "Create while I start another task");
+        await vi.waitFor(() => {
+          expect(useComposerDraftStore.getState().getDraftThread(sendingId)?.branch).toBe("main");
+        });
+        const sendButton = await waitForSendButton();
+        await vi.waitFor(() => expect(sendButton.disabled).toBe(false));
+        sendButton.click();
+        await vi.waitFor(() => {
+          expect(
+            wsRequests.some((request) => request._tag === WS_METHODS.gitCreateDetachedWorktree),
+          ).toBe(true);
+        });
+
+        // The real sidebar must display the durable thread while the git RPC is pending.
+        await vi.waitFor(
+          () => {
+            expect(
+              document.querySelector(
+                '[role="button"][aria-label="Open Create while I start another task"]',
+              ),
+            ).toBeTruthy();
+            expect(
+              document.querySelector('[role="img"][aria-label="Preparing worktree"]'),
+            ).toBeTruthy();
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        expect(
+          wsRequests
+            .map(readDispatchedCommand)
+            .filter((command) => command?.type === "thread.turn.start"),
+        ).toHaveLength(0);
+
+        // Use the actual default mod+N shortcut while the worktree RPC is unresolved.
+        await dispatchConfiguredShortcutWhenReady(window, { key: "n" });
+        const nextPath = await waitForURL(
+          mounted.router,
+          (path) => UUID_ROUTE_RE.test(path) && path !== sendingPath,
+          "New thread must remain available during worktree creation.",
+        );
+        const nextId = nextPath.slice(1) as ThreadId;
+        expect(useComposerDraftStore.getState().getDraftThread(sendingId)).not.toBeNull();
+        expect(
+          useComposerDraftStore.getState().getDraftThreadByProjectId(PROJECT_ID)?.threadId,
+        ).toBe(nextId);
+        useComposerDraftStore.getState().setPrompt(nextId, "Independent draft");
+        const nextPlanSource = {
+          threadId: THREAD_ID,
+          planId: OrchestrationProposedPlanId.makeUnsafe("independent-draft-plan"),
+        };
+        if (outcome === "success") {
+          useComposerDraftStore.getState().setRestoredSourceProposedPlan(nextId, {
+            threadId: nextId,
+            restoredPrompt: "Independent draft",
+            sourceProposedPlan: nextPlanSource,
+          });
+          await vi.waitFor(() =>
+            expect(document.querySelector('[contenteditable="true"]')?.textContent).toContain(
+              "Independent draft",
+            ),
+          );
+        }
+        if (outcome === "revisit" || outcome === "cancel") {
+          await page
+            .getByRole("button", { name: "Open Create while I start another task", exact: true })
+            .click();
+          await vi.waitFor(
+            () =>
+              expect(
+                Array.from(document.querySelectorAll("button")).find(
+                  (button) => button.textContent?.trim() === "Cancel",
+                ),
+              ).toBeTruthy(),
+            { timeout: 8_000 },
+          );
+        }
+        if (outcome === "cancel") {
+          const cancel = Array.from(document.querySelectorAll("button")).find(
+            (button) => button.textContent?.trim() === "Cancel",
+          );
+          cancel?.click();
+          await vi.waitFor(() =>
+            expect(useComposerDraftStore.getState().draftsByThreadId[sendingId]?.prompt).toBe(
+              "Create while I start another task",
+            ),
+          );
+        }
+        if (outcome === "revisit") {
+          await mounted.router.navigate({ to: "/$threadId", params: { threadId: THREAD_ID } });
+          useComposerDraftStore.getState().setPrompt(THREAD_ID, "Existing task draft");
+          await vi.waitFor(() =>
+            expect(document.querySelector('[contenteditable="true"]')?.textContent).toContain(
+              "Existing task draft",
+            ),
+          );
+        }
+        finishCreation();
+
+        await vi.waitFor(
+          () => {
+            if (outcome === "success") {
+              const turns = wsRequests
+                .map(readDispatchedCommand)
+                .filter((command) => command?.type === "thread.turn.start");
+              expect(turns).toHaveLength(1);
+              expect(turns[0]).toMatchObject({ threadId: sendingId });
+            } else {
+              expect(useComposerDraftStore.getState().draftsByThreadId[sendingId]?.prompt).toBe(
+                "Create while I start another task",
+              );
+              expect(
+                wsRequests
+                  .map(readDispatchedCommand)
+                  .filter((command) => command?.type === "thread.turn.start"),
+              ).toHaveLength(0);
+            }
+            expect(mounted.router.state.location.pathname).toBe(
+              outcome === "revisit"
+                ? `/${THREAD_ID}`
+                : outcome === "cancel"
+                  ? sendingPath
+                  : nextPath,
+            );
+            expect(useComposerDraftStore.getState().draftsByThreadId[nextId]?.prompt).toBe(
+              "Independent draft",
+            );
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        if (outcome === "success") {
+          const worktreeCheckbox = await waitForWorktreeCheckbox();
+          worktreeCheckbox.click();
+          await vi.waitFor(() =>
+            expect(worktreeCheckbox.getAttribute("aria-checked")).toBe("false"),
+          );
+          const nextSend = await waitForSendButton();
+          await vi.waitFor(() => expect(nextSend.disabled).toBe(false));
+          nextSend.click();
+          await vi.waitFor(() => {
+            const nextTurn = wsRequests
+              .map(readDispatchedCommand)
+              .find(
+                (command) => command?.type === "thread.turn.start" && command.threadId === nextId,
+              );
+            expect(nextTurn).toMatchObject({ sourceProposedPlan: nextPlanSource });
+          });
+        }
+      } finally {
+        finishCreation();
+        await mounted.cleanup();
+        restoreNativeApi();
+      }
+    },
+  );
+
   it("creates a detached worktree on first send in New worktree mode", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
     const mounted = await mountChatView({
@@ -8433,6 +8783,19 @@ describe("ChatView transcript geometry (full app)", () => {
           );
           expect(createThreadRequest).toBeTruthy();
           expect(createThreadRequest?.command).toMatchObject({
+            envMode: "worktree",
+            branch: "main",
+            worktreePath: null,
+          });
+          const linkedWorkspace = wsRequests
+            .map(readDispatchedCommand)
+            .find(
+              (command) =>
+                command?.type === "thread.meta.update" &&
+                command.threadId === newThreadId &&
+                command.worktreePath === "/repo/.codex/worktrees/generated/synara",
+            );
+          expect(linkedWorkspace).toMatchObject({
             envMode: "worktree",
             branch: temporaryBranch,
             worktreePath: "/repo/.codex/worktrees/generated/synara",
@@ -9208,6 +9571,133 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it.each(["saved", "draft", "terminal"] as const)(
+    "reorders a background horizontal tab across navigation and persists the order (%s)",
+    async (kind) => {
+      const thirdId = ThreadId.makeUnsafe("drag-tab-third");
+      let snapshot = createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("drag-tabs"),
+        targetText: "Drag tabs",
+      });
+      snapshot = addThreadToSnapshot(snapshot, thirdId);
+      if (kind !== "draft") snapshot = addThreadToSnapshot(snapshot, OTHER_THREAD_ID);
+      snapshot = {
+        ...snapshot,
+        threads: snapshot.threads.map((thread) =>
+          thread.id === thirdId ? Object.assign({}, thread, { title: "Destination tab" }) : thread,
+        ),
+      };
+      const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+      try {
+        if (kind === "draft") {
+          useComposerDraftStore.getState().registerDraftThread(OTHER_THREAD_ID, {
+            projectId: PROJECT_ID,
+          });
+        } else if (kind === "terminal") {
+          useTerminalStateStore.getState().openTerminalThreadPage(OTHER_THREAD_ID);
+        }
+        useOpenThreadTabsStore.setState({ threadIds: [THREAD_ID, OTHER_THREAD_ID, thirdId] });
+        await vi.waitFor(() =>
+          expect(
+            document.querySelectorAll('nav[aria-label="Open threads"] [data-surface-tab]'),
+          ).toHaveLength(3),
+        );
+        await waitForLayout();
+        const labels = document.querySelectorAll<HTMLButtonElement>(
+          'nav[aria-label="Open threads"] [data-surface-tab] > button:not([aria-label])',
+        );
+        const source = labels[1]!.getBoundingClientRect();
+        const x = source.left + source.width / 2;
+        const y = source.top + source.height / 2;
+        labels[1]!.dispatchEvent(mousePointerEvent("pointerdown", x, y));
+        document.dispatchEvent(mousePointerEvent("pointermove", x + 8, y));
+        await waitForLayout();
+        expect(mounted.router.state.location.pathname).toBe(`/${THREAD_ID}`);
+        expect(labels[1]!.getAttribute("aria-current")).toBeNull();
+        // Navigation may still arrive while dragging; it must preserve the sortable strip.
+        await mounted.router.navigate({
+          to: "/$threadId",
+          params: { threadId: OTHER_THREAD_ID },
+        });
+        await vi.waitFor(() =>
+          expect(mounted.router.state.location.pathname).toBe(`/${OTHER_THREAD_ID}`),
+        );
+        const currentLabels = document.querySelectorAll<HTMLButtonElement>(
+          'nav[aria-label="Open threads"] [data-surface-tab] > button:not([aria-label])',
+        );
+        const target = currentLabels[2]!.getBoundingClientRect();
+        const targetX = target.left + target.width / 2;
+        document.dispatchEvent(mousePointerEvent("pointermove", targetX, y));
+        await waitForLayout();
+        document.dispatchEvent(mousePointerEvent("pointermove", targetX + 1, y));
+        await nextFrame();
+        document.dispatchEvent(mousePointerEvent("pointerup", targetX + 1, y));
+        await vi.waitFor(() =>
+          expect(useOpenThreadTabsStore.getState().threadIds).toEqual([
+            THREAD_ID,
+            thirdId,
+            OTHER_THREAD_ID,
+          ]),
+        );
+        expect(
+          JSON.parse(localStorage.getItem("synara:open-thread-tabs:v1")!).state.threadIds,
+        ).toEqual([THREAD_ID, thirdId, OTHER_THREAD_ID]);
+        await vi.waitFor(() =>
+          expect(mounted.router.state.location.pathname).toBe(`/${OTHER_THREAD_ID}`),
+        );
+        expect(
+          document.querySelector('nav[aria-label="Open threads"] button[aria-current="page"]')
+            ?.textContent,
+        ).toBe("New thread");
+        expect(
+          [
+            ...document.querySelectorAll(
+              'nav[aria-label="Open threads"] [data-surface-tab] > button:not([aria-label])',
+            ),
+          ].map((label) => label.textContent),
+        ).toEqual([THREAD_TITLE, "Destination tab", "New thread"]);
+      } finally {
+        await mounted.cleanup();
+      }
+    },
+  );
+
+  it("keeps close-button pointer travel from starting a horizontal tab drag", async () => {
+    const snapshot = addThreadToSnapshot(
+      createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("drag-close"),
+        targetText: "Close a tab",
+      }),
+      OTHER_THREAD_ID,
+    );
+    const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+    try {
+      useOpenThreadTabsStore.setState({ threadIds: [THREAD_ID, OTHER_THREAD_ID] });
+      await vi.waitFor(() =>
+        expect(
+          document.querySelectorAll('nav[aria-label="Open threads"] [data-surface-tab]'),
+        ).toHaveLength(2),
+      );
+      const button = document.querySelectorAll<HTMLButtonElement>(
+        'nav[aria-label="Open threads"] button[aria-label^="Close "]',
+      )[0]!;
+      await userEvent.hover(button);
+      await userEvent.dragAndDrop(button, button, {
+        sourcePosition: { x: 12, y: 12 },
+        targetPosition: { x: 19, y: 12 },
+      });
+      await vi.waitFor(
+        () => expect(useOpenThreadTabsStore.getState().threadIds).not.toContain(THREAD_ID),
+        {
+          timeout: 2_000,
+        },
+      );
+      expect(useOpenThreadTabsStore.getState().threadIds).toEqual([OTHER_THREAD_ID]);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it.each(["terminal", "close", "navigation", "navigation-back", "inflight"] as const)(
     "cancels a pending editor chat tab switch after %s",
     async (action) => {
@@ -9261,31 +9751,23 @@ describe("ChatView transcript geometry (full app)", () => {
               (options.params as { threadId?: string }).threadId === OTHER_THREAD_ID
             ) {
               firstNavigation = result;
-              // The second press happens after activate returns, before React commits
+              // The second click happens after activate returns, before React commits
               // the first route. Use the actual router, without a synthetic loader.
               queueMicrotask(() => {
                 pressedLaterTab = true;
-                page
-                  .getByRole("button", { name: "Chat 3", exact: true })
-                  .element()
-                  .dispatchEvent(
-                    new PointerEvent("pointerdown", {
-                      bubbles: true,
-                      pointerType: "mouse",
-                      button: 0,
-                    }),
-                  );
+                (
+                  page
+                    .getByRole("button", { name: "Chat 3", exact: true })
+                    .element() as HTMLButtonElement
+                ).click();
               });
             }
             return result;
           });
         }
-        page
-          .getByRole("button", { name: "Chat 2", exact: true })
-          .element()
-          .dispatchEvent(
-            new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse", button: 0 }),
-          );
+        (
+          page.getByRole("button", { name: "Chat 2", exact: true }).element() as HTMLButtonElement
+        ).click();
         if (action === "terminal") {
           (
             page
@@ -9581,7 +10063,7 @@ describe("ChatView transcript geometry (full app)", () => {
     },
   );
 
-  it("pressing a tab marks it current at once and opens its chat without remounting the strip", async () => {
+  it("waits for a completed click before switching tabs without remounting the strip", async () => {
     useOpenThreadTabsStore.setState({ threadIds: [] });
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
@@ -9614,11 +10096,21 @@ describe("ChatView transcript geometry (full app)", () => {
         draftTab.dispatchEvent(
           new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse", button: 0 }),
         );
-        // The highlight lands with the press itself; the navigation waits for that frame
-        // to paint, so no frame may pass before both are checked.
+        await waitForLayout();
+        expect(draftTab.getAttribute("aria-current")).toBeNull();
+        expect(mounted.router.state.location.pathname).toBe(`/${THREAD_ID}`);
+
+        draftTab.dispatchEvent(new PointerEvent("pointerout", { bubbles: true }));
+        draftTab.dispatchEvent(
+          new PointerEvent("pointerup", { bubbles: true, pointerType: "mouse", button: 0 }),
+        );
+        await waitForLayout();
+        expect(draftTab.getAttribute("aria-current")).toBeNull();
+        expect(mounted.router.state.location.pathname).toBe(`/${THREAD_ID}`);
+
+        await userEvent.click(draftTab);
         await Promise.resolve();
         expect(draftTab.getAttribute("aria-current")).toBe("page");
-        expect(mounted.router.state.location.pathname).toBe(`/${THREAD_ID}`);
 
         await vi.waitFor(() => expect(mounted.router.state.location.pathname).toBe(`/${draftId}`));
         await waitForElement(

@@ -478,6 +478,7 @@ const make = Effect.gen(function* () {
       return yield* modelDiscoveryCache.lookup(
         { ...cacheKey, ...(runtimeVersion !== undefined ? { runtimeVersion } : {}) },
         discover,
+        parsed.refresh,
       );
     });
 

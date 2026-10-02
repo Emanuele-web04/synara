@@ -41,6 +41,10 @@ import { PinStatusIcon, pinActionLabel } from "~/lib/pin";
 import { useTasksNeedingAttentionCount, useTodoEventSubscription } from "./tasks/useTodos";
 import { THREAD_CONTEXT_MENU_ICONS } from "~/lib/contextMenuIcons";
 import { ensureNativeApi } from "~/nativeApi";
+import {
+  getActiveComposerSendThreadIds,
+  subscribeComposerSends,
+} from "~/lib/composerSendOwnership";
 import { autoAnimate } from "@formkit/auto-animate";
 import { FiGitBranch } from "react-icons/fi";
 import { IoIosGitCompare } from "react-icons/io";
@@ -247,7 +251,10 @@ import {
   createThreadHoverCardAnchor,
 } from "./sidebarHoverCardAnchors";
 import { PreviewCard, PreviewCardPopup, PreviewCardTrigger } from "./ui/preview-card";
-import { hasUnreadActivity as hasUnreadActivityOutsideActiveThread } from "./SidebarActivityView.logic";
+import {
+  type ActivityScopeSelection,
+  hasUnreadActivity as hasUnreadActivityOutsideActiveThread,
+} from "./SidebarActivityView.logic";
 import { SidebarActivityView } from "./SidebarActivityView";
 import { SidebarIconButton, sidebarIconButtonSlotClass } from "./SidebarIconButton";
 import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
@@ -1339,6 +1346,11 @@ export default function Sidebar() {
   const openTerminalThreadPage = useTerminalStateStore((state) => state.openTerminalThreadPage);
   const clearProjectDraftThreads = useComposerDraftStore((store) => store.clearProjectDraftThreads);
   const draftThreadsByThreadId = useComposerDraftStore((store) => store.draftThreadsByThreadId);
+  const activeComposerSendThreadIds = useSyncExternalStore(
+    subscribeComposerSends,
+    getActiveComposerSendThreadIds,
+    getActiveComposerSendThreadIds,
+  );
   const temporaryThreadIds = useTemporaryThreadStore((store) => store.temporaryThreadIds);
   const persistedPinnedProjectIds = usePinnedProjectsStore((store) => store.pinnedProjectIds);
   const pinProjectLocally = usePinnedProjectsStore((store) => store.pinProject);
@@ -1634,6 +1646,11 @@ export default function Sidebar() {
   const [activityViewEnabled, setActivityViewEnabled] = useState(
     () => readSidebarUiState().activityViewEnabled,
   );
+  // Lives here, not in SidebarActivityView, so it survives the view unmounting
+  // (opening Settings swaps the sidebar surface) and reloads.
+  const [activityScope, setActivityScope] = useState<ActivityScopeSelection>(
+    () => readSidebarUiState().activityScope,
+  );
   const [activityVisibleThreadIds, setActivityVisibleThreadIds] = useState<readonly ThreadId[]>([]);
   const handleActivityVisibleThreadIdsChange = useCallback((threadIds: readonly ThreadId[]) => {
     setActivityVisibleThreadIds((current) => {
@@ -1660,6 +1677,7 @@ export default function Sidebar() {
         setDismissedThreadStatusKeyByThreadId(state.dismissedThreadStatusKeyByThreadId);
         setLastThreadRoute(state.lastThreadRoute);
         setActivityViewEnabled(state.activityViewEnabled);
+        setActivityScope(state.activityScope);
       }),
     [],
   );
@@ -1787,8 +1805,13 @@ export default function Sidebar() {
         },
         hasPendingApprovals: thread.hasPendingApprovals,
         hasPendingUserInput: thread.hasPendingUserInput,
+        isPreparingWorktree:
+          activeComposerSendThreadIds.has(thread.id) &&
+          thread.envMode === "worktree" &&
+          thread.latestTurn === null &&
+          thread.session === null,
       }),
-    [dismissedThreadStatusKeyByThreadId],
+    [activeComposerSendThreadIds, dismissedThreadStatusKeyByThreadId],
   );
 
   useEffect(() => {
@@ -3530,9 +3553,11 @@ export default function Sidebar() {
         dismissedThreadStatusKeyByThreadId,
         lastThreadRoute: nextLastThreadRoute,
         activityViewEnabled,
+        activityScope,
       });
     },
     [
+      activityScope,
       activityViewEnabled,
       chatSectionExpanded,
       chatThreadListExtraPages,
@@ -4226,7 +4251,8 @@ export default function Sidebar() {
       const tone: SpaceActivityTone =
         status.label === "Working" ||
         status.label === "Connecting" ||
-        status.label === "In Background"
+        status.label === "In Background" ||
+        status.label === "Preparing worktree"
           ? "running"
           : status.label === "Completed"
             ? "completed"
@@ -4477,8 +4503,10 @@ export default function Sidebar() {
       dismissedThreadStatusKeyByThreadId,
       lastThreadRoute,
       activityViewEnabled,
+      activityScope,
     });
   }, [
+    activityScope,
     activityViewEnabled,
     chatSectionExpanded,
     chatThreadListExtraPages,
@@ -6828,6 +6856,8 @@ export default function Sidebar() {
                         pinnedThreadIdSet={pinnedThreadIdSet}
                         settledOverrideByThreadId={settledOverrideByThreadId}
                         threadsHydrated={threadsHydrated}
+                        scopeSelection={activityScope}
+                        onScopeSelectionChange={setActivityScope}
                         resolveThreadStatus={resolveThreadStatusForSidebar}
                         onOpenThread={activateThreadFromSidebarIntent}
                         onOpenThreadPullRequest={openThreadPullRequest}

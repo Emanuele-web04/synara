@@ -80,6 +80,8 @@ import { resolveProviderInstanceLabel } from "~/lib/providerInstancePresentation
 import { resolveAuxiliaryTextGenerationSelection } from "~/lib/textGenerationCapabilities";
 import { cn, isMacNavigatorPlatform, newCommandId, newThreadId, randomUUID } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
+import { ChatLinkActionsContext, type ChatLinkActions } from "~/lib/linkContextMenu";
+import { parseGitHubRepositoryNameWithOwnerFromPullRequestUrl } from "@synara/shared/githubRepository";
 import {
   mergeProjectInstructionsIntoThreadNotes,
   useProjectInstructionsStore,
@@ -885,7 +887,7 @@ export default function ChatView({
   const activeComposerMenuItemRef = useRef<ComposerCommandItem | null>(null);
   const localDirectoryMenuRef = useRef<ComposerLocalDirectoryMenuHandle | null>(null);
 
-  const sendInFlightRef = useRef(false);
+  const sendInFlightRef = useMemo(() => ({ threadId, current: false }), [threadId]);
   const sendPreflightInFlightRef = useRef(false);
   const dragDepthRef = useRef(0);
   const terminalOpenByThreadRef = useRef<Record<string, boolean>>({});
@@ -1351,6 +1353,7 @@ export default function ChatView({
     modelOptionsByProvider,
     modelOptionsByProviderInstance,
     loadingModelProviders,
+    refreshModels,
     discoveryErrorsByProvider,
     runtimeModelsByProvider,
     runtimeModelsByProviderInstance,
@@ -1372,7 +1375,6 @@ export default function ChatView({
     activeProject,
     composerDraft,
     settings,
-    isModelPickerOpen: isComposerModelEffortPickerOpen,
     resolvedThreadWorktreePath,
   });
   const selectedProviderInstances = useMemo(
@@ -1600,7 +1602,6 @@ export default function ChatView({
 
   const {
     localDispatch,
-    setLocalDispatch,
     worktreeSetupResolutionRef,
     worktreeSetupPendingAction,
     setWorktreeSetupPendingAction,
@@ -1617,6 +1618,7 @@ export default function ChatView({
     armLocalDispatchAckFallback,
     scheduleFailedWorktreeSetupDispatchReset,
   } = useChatLocalDispatch({
+    threadId,
     phase,
     activeLatestTurn,
     activeThread,
@@ -2556,6 +2558,41 @@ export default function ChatView({
     },
     [navigate, onOpenBrowserUrl, threadId],
   );
+  // Chat links offer the PR pane only for repositories this project owns, matching the
+  // Environment panel; any other pull request falls back to the in-app browser.
+  // Left to the React Compiler to memoize: manual hooks here cannot be preserved.
+  const openRightDockPane = useRightDockStore((store) => store.openPane);
+  const openPullRequestLink = (url: string) => {
+    const repository = parseGitHubRepositoryNameWithOwnerFromPullRequestUrl(url);
+    const number = repository ? Number(new URL(url).pathname.split("/")[4]) : NaN;
+    if (!repository || !activeProjectId || !Number.isInteger(number)) {
+      openBrowserUrl(url);
+      return;
+    }
+    void queryClient.fetchQuery(gitGithubRepositoryQueryOptions(gitBranchSourceCwd)).then(
+      (result) => {
+        const belongsToProject = result.repositories.some(
+          (candidate) => candidate.nameWithOwner.toLowerCase() === repository.toLowerCase(),
+        );
+        if (!belongsToProject) {
+          openBrowserUrl(url);
+          return;
+        }
+        openRightDockPane(threadId, {
+          kind: "pullRequest",
+          pullRequestProjectId: activeProjectId,
+          pullRequestRepository: repository,
+          pullRequestNumber: number,
+          pullRequestInitialTab: "summary",
+        });
+      },
+      () => openBrowserUrl(url),
+    );
+  };
+  const chatLinkActions: ChatLinkActions = {
+    openInBrowserPanel: openBrowserUrl,
+    openPullRequest: openPullRequestLink,
+  };
 
   const envLocked = Boolean(
     activeThread &&
@@ -3337,7 +3374,6 @@ export default function ChatView({
     // render->effect->render cascade. The expanded image and timeline hook's
     // optimistic messages clear before paint, so these residual resets can wait.
     const settle = window.setTimeout(() => {
-      setLocalDispatch(null);
       setComposerHighlightedItemId(null);
       setComposerCursor(
         collapseExpandedComposerCursor(promptRef.current, promptRef.current.length),
@@ -3353,7 +3389,6 @@ export default function ChatView({
     setIsDragOverComposer,
     setComposerHighlightedItemId,
     dragDepthRef,
-    setLocalDispatch,
     threadId,
   ]);
 
@@ -4522,6 +4557,7 @@ export default function ChatView({
       modelOptionsByProvider={modelOptionsByProvider}
       modelOptionsByProviderInstance={modelOptionsByProviderInstance}
       loadingModelProviders={loadingModelProviders}
+      onRefreshModels={refreshModels}
       discoveryErrorsByProvider={discoveryErrorsByProvider}
       hiddenProviders={settings.hiddenProviders}
       providerOrder={settings.providerOrder}
@@ -5596,6 +5632,9 @@ export default function ChatView({
   const composerSection = shouldRenderChatPaneContent ? (
     <div
       className={cn(isCenteredEmptyLanding ? "w-full overflow-visible" : "contents")}
+      // The transcript dissolves at this composer's top edge, so on a glass window it can
+      // take the sheer raised tint instead of the dense overlay fill (see index.css).
+      data-chat-composer-slot=""
       data-empty-landing-composer-block={isCenteredEmptyLanding ? "true" : undefined}
     >
       <form
@@ -6060,7 +6099,7 @@ export default function ChatView({
     </div>
   ) : null;
 
-  return (
+  const chatView = (
     <div
       className={cn(
         "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
@@ -6737,5 +6776,10 @@ export default function ChatView({
         onNavigate={navigateExpandedImage}
       />
     </div>
+  );
+  return (
+    <ChatLinkActionsContext.Provider value={chatLinkActions}>
+      {chatView}
+    </ChatLinkActionsContext.Provider>
   );
 }

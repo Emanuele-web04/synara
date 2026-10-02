@@ -50,6 +50,11 @@ import { CentralIcon } from "~/lib/central-icons";
 import { isLocalImageMarkdownSrc } from "../lib/localImageUrls";
 import { repairMarkdownTableDelimiters } from "../lib/markdownTableRepair";
 import { showFileReferenceContextMenu } from "../lib/fileReferenceContextMenu";
+import {
+  ChatLinkActionsContext,
+  resolvePullRequestLinkOpener,
+  showLinkContextMenu,
+} from "../lib/linkContextMenu";
 import { useTheme } from "../hooks/useTheme";
 import { useSmoothStreamedText } from "../hooks/useSmoothStreamedText";
 import { useThrottledStreamingValue } from "../hooks/useThrottledStreamingValue";
@@ -1103,6 +1108,7 @@ const MARKDOWN_COMPONENTS: Components = {
   a: function MarkdownLink({ node: _node, href, children, ...props }) {
     const { isUserVariant, cwd, knownAbsoluteFilePaths, resolvedTheme, onOpenThread } =
       useContext(MarkdownRenderContext)!;
+    const linkActions = useContext(ChatLinkActionsContext);
     const restoredHref = href ? restoreLiteralDollarPlaceholders(href) : href;
     const threadHref = restoredHref?.startsWith("thread://")
       ? restoredHref.slice("thread://".length)
@@ -1146,6 +1152,28 @@ const MARKDOWN_COMPONENTS: Components = {
           target="_blank"
           rel="noopener noreferrer"
           className={isExternalHttp ? MARKDOWN_EXTERNAL_LINK_CLASS_NAME : props.className}
+          {...(isExternalHttp
+            ? {
+                // A plain click on a pull request opens it in the app; cmd/ctrl-click
+                // keeps the default external open.
+                onClick: (event: React.MouseEvent) => {
+                  if (event.metaKey || event.ctrlKey) return;
+                  const openPullRequest = resolvePullRequestLinkOpener(restoredHref, linkActions);
+                  if (!openPullRequest) return;
+                  event.preventDefault();
+                  openPullRequest(restoredHref);
+                },
+                onContextMenu: (event: React.MouseEvent) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  void showLinkContextMenu({
+                    url: restoredHref,
+                    position: { x: event.clientX, y: event.clientY },
+                    actions: linkActions,
+                  });
+                },
+              }
+            : {})}
         >
           {isExternalHttp ? (
             <LinkChipIcon url={restoredHref} className={MARKDOWN_EXTERNAL_LINK_ICON_CLASS_NAME} />

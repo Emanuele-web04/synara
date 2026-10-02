@@ -95,12 +95,19 @@ export function composerOverlayScrollMaskImage(
 export function composerOverlayScrollFadeVars(
   bottomInsetPx: number,
   bottomClearancePx = COMPOSER_OVERLAY_BOTTOM_CLEARANCE_PX,
-): { "--scroll-edge-fade-inset-b": string; "--scroll-edge-fade-layer": string } | null {
+): {
+  "--scroll-edge-fade-inset-b": string;
+  "--scroll-edge-fade-layer": string;
+  "--scroll-edge-fade-tuck": string;
+} | null {
   const maskImage = composerOverlayScrollMaskImage(bottomInsetPx, bottomClearancePx);
   if (!maskImage) return null;
   return {
     "--scroll-edge-fade-inset-b": `${composerOverlayHeightFromInsetPx(bottomInsetPx)}px`,
     "--scroll-edge-fade-layer": maskImage,
+    // Read by the whole-window glass rule in index.css, where the transcript dissolves
+    // across the tuck instead of running under the composer.
+    "--scroll-edge-fade-tuck": `${COMPOSER_OVERLAY_TUCK_PX}px`,
   };
 }
 

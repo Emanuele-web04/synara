@@ -12,6 +12,7 @@ import { createJSONStorage, persist, type StateStorage } from "zustand/middlewar
 import { createMemoryStorage } from "./lib/storage";
 import {
   addOpenThreadTab,
+  moveOpenThreadTab,
   normalizeOpenThreadTabIds,
   pruneOpenThreadTabs,
   removeOpenThreadTab,
@@ -21,6 +22,7 @@ interface OpenThreadTabsStoreState {
   threadIds: readonly ThreadId[];
   openThreadTab: (threadId: ThreadId) => void;
   closeThreadTab: (threadId: ThreadId) => void;
+  moveThreadTab: (threadId: ThreadId, overThreadId: ThreadId) => void;
   pruneThreadTabs: (isKept: (threadId: ThreadId) => boolean) => void;
 }
 
@@ -57,6 +59,11 @@ export const useOpenThreadTabsStore = create<OpenThreadTabsStoreState>()(
       closeThreadTab: (threadId) => {
         const current = get().threadIds;
         const threadIds = removeOpenThreadTab(current, threadId);
+        if (threadIds !== current) set({ threadIds });
+      },
+      moveThreadTab: (threadId, overThreadId) => {
+        const current = get().threadIds;
+        const threadIds = moveOpenThreadTab(current, threadId, overThreadId);
         if (threadIds !== current) set({ threadIds });
       },
       pruneThreadTabs: (isKept) => {

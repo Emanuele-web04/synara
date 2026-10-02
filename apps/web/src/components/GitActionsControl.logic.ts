@@ -1,11 +1,36 @@
 import type {
+  GitActionProgressPhase,
   GitRunStackedActionResult,
   GitStackedAction,
   GitStatusResult,
+  ThreadId,
 } from "@synara/contracts";
 import { isTemporaryWorktreeBranch, resolveUniqueSynaraBranchName } from "@synara/shared/git";
 
 export type GitActionIconName = "commit" | "push" | "pr";
+
+export function buildGitActionFailureToast(input: {
+  message: string;
+  phase: GitActionProgressPhase | null;
+  threadId: ThreadId | null;
+}) {
+  const titles: Record<GitActionProgressPhase, string> = {
+    branch: "Branch creation failed",
+    commit: "Commit failed",
+    push: "Push failed",
+    pr: "PR creation failed",
+  };
+  return {
+    type: "error" as const,
+    title: input.phase ? titles[input.phase] : "Git action failed",
+    description: input.message,
+    timeout: 0,
+    data: {
+      ...(input.threadId ? { threadId: input.threadId } : {}),
+      copyText: input.message,
+    },
+  };
+}
 
 /** Every glyph a git affordance can render — see `gitActionGlyphs.tsx` for the map. */
 export type GitGlyphName = GitActionIconName | "sync" | "branch";

@@ -1247,6 +1247,7 @@ export type WorktreeCreationFlowOutcome<Result> =
 export async function runWorktreeCreationFlow<Result extends { worktree: { path: string } }>(
   deps: WorktreeCreationFlowDeps<Result>,
 ): Promise<WorktreeCreationFlowOutcome<Result>> {
+  if (deps.resolution.action !== null) return { outcome: "resolved" };
   const unsubscribe = deps.subscribeToProgress((event) => {
     if (
       event.progressId !== deps.progressId ||
