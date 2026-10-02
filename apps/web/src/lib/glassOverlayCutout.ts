@@ -261,6 +261,7 @@ export function installGlassOverlayCutout(root: HTMLElement): () => void {
       if (!isCoveringOverlay(overlay)) {
         // A kept-mounted overlay can reopen somewhere else; read its backing again then.
         backedOverlays.delete(overlay);
+        overlay.removeAttribute(BACKED_OVERLAY_ATTRIBUTE);
         continue;
       }
       covering.push(overlay);
