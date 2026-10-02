@@ -30,9 +30,9 @@ const CONTENT_TAB_FROZEN_SIZE_CLASS_NAME =
 // dock's panes). The active tab takes the card's own surface, so it reads as the open
 // content rather than as a hovered tab (hover tints with ink; the shared chip's active fill
 // is the same tint in light themes). On a whole-window glass shell the card is clear, and
-// index.css swaps the fill for an ink tint. Its hairline is inset: the tab fills its scroll
-// strip edge to edge, and the strip's overflow and fade mask would crop an outer outline
-// along the top, bottom, and first tab's left.
+// index.css swaps the fill for the raised glass tint (an ink tint in dark). Its hairline is
+// inset: the tab fills its scroll strip edge to edge, and the strip's overflow and fade mask
+// would crop an outer outline along the top, bottom, and first tab's left.
 const CONTENT_TAB_ACTIVE_CLASS_NAME =
   "bg-[var(--app-rail-tab-active-surface,var(--color-background-surface))] hover:bg-[var(--app-rail-tab-active-surface,var(--color-background-surface))] shadow-[inset_0_0_0_0.5px_var(--app-rail-inset-border)]";
 
