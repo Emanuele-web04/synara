@@ -51,6 +51,12 @@ interface ShortcutDefinition {
   description: string;
 }
 
+const EFFORT_CYCLE_DEFINITION: ShortcutDefinition = {
+  command: "model.effort.next",
+  label: "Next model effort",
+  description: "Cycle the model's available effort levels and briefly show the selected level.",
+};
+
 // Space jumps address the switcher's visual tab order, so slot 1 is always Void.
 const SPACE_JUMP_DEFINITIONS: readonly ShortcutDefinition[] = Array.from(
   { length: 9 },
@@ -163,6 +169,7 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     description:
       "Cycle to the previous model for the active provider (favorites first, then remaining models).",
   },
+  EFFORT_CYCLE_DEFINITION,
   {
     command: "traitsPicker.toggle",
     label: "Reasoning picker",
@@ -523,6 +530,24 @@ export function buildShortcutSheetSections(
       description: "Custom shortcuts defined for the active project's scripts.",
       entries: projectScriptEntries,
     });
+  }
+
+  if (!currentEntries.some((entry) => entry.command === EFFORT_CYCLE_DEFINITION.command)) {
+    const composerEntries = definitionsToEntries(
+      [EFFORT_CYCLE_DEFINITION],
+      options.keybindings,
+      options.platform,
+      { ...options.context, composerFocus: true, terminalFocus: false },
+    );
+    if (composerEntries.length > 0) {
+      sections.push({
+        id: "composer-context",
+        title: "In composer",
+        description: "Available while the prompt composer or its effort picker has focus.",
+        tone: "muted",
+        entries: composerEntries,
+      });
+    }
   }
 
   return sections;

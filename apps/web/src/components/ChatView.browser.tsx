@@ -5674,7 +5674,12 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("toggles plan mode with Shift+Tab only while the composer is focused", async () => {
+  it("cycles model effort with Shift+Tab only while the composer is focused", async () => {
+    useComposerDraftStore.getState().setModelSelection(THREAD_ID, {
+      provider: "codex",
+      model: "gpt-5.4",
+      options: { reasoningEffort: "medium", fastMode: true },
+    });
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotForTargetUser({
@@ -5682,13 +5687,22 @@ describe("ChatView transcript geometry (full app)", () => {
         targetText: "hotkey target",
       }),
     });
+    const focusTarget = document.createElement("button");
+    focusTarget.type = "button";
+    focusTarget.textContent = "Focus sink";
+    document.body.appendChild(focusTarget);
 
     try {
+      await waitForServerConfigToApply();
       const readInteractionMode = () =>
         useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.interactionMode ?? "default";
+      const readModelSelection = () =>
+        useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.modelSelectionByProvider
+          .codex;
       expect(readInteractionMode()).toBe("default");
 
-      window.dispatchEvent(
+      focusTarget.focus();
+      focusTarget.dispatchEvent(
         new KeyboardEvent("keydown", {
           key: "Tab",
           shiftKey: true,
@@ -5699,7 +5713,128 @@ describe("ChatView transcript geometry (full app)", () => {
       await waitForLayout();
 
       expect(readInteractionMode()).toBe("default");
+      expect(readModelSelection()).toMatchObject({ options: { reasoningEffort: "medium" } });
+      expect(document.querySelector('[role="slider"][aria-label="Reasoning effort"]')).toBeNull();
 
+      const composerEditor = await waitForComposerEditor();
+      composerEditor.focus();
+      const slider = page.getByRole("slider", { name: "Reasoning effort" });
+      composerEditor.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Tab",
+          shiftKey: true,
+          isComposing: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      await waitForLayout();
+      expect(readModelSelection()).toMatchObject({ options: { reasoningEffort: "medium" } });
+      expect(document.querySelector('[role="slider"][aria-label="Reasoning effort"]')).toBeNull();
+      for (const [effort, label] of [
+        ["high", "High"],
+        ["xhigh", "Extra High"],
+        ["low", "Low"],
+      ] as const) {
+        const event = new KeyboardEvent("keydown", {
+          key: "Tab",
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+        });
+        composerEditor.dispatchEvent(event);
+        await expect.element(slider).toHaveAttribute("aria-valuetext", label);
+        expect(event.defaultPrevented).toBe(true);
+        expect(readModelSelection()).toMatchObject({
+          provider: "codex",
+          model: "gpt-5.4",
+          options: { reasoningEffort: effort, fastMode: true },
+        });
+        expect(readInteractionMode()).toBe("default");
+        expect(document.activeElement).toBe(composerEditor);
+      }
+
+      await vi.waitFor(
+        () => {
+          expect(
+            document.querySelector('[role="slider"][aria-label="Reasoning effort"]'),
+          ).toBeNull();
+        },
+        { timeout: 2_500, interval: 16 },
+      );
+      expect(readModelSelection()).toMatchObject({ options: { reasoningEffort: "low" } });
+      expect(document.activeElement).toBe(composerEditor);
+    } finally {
+      focusTarget.remove();
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps the effort preview open for 1500ms after the latest Shift+Tab press", async () => {
+    useComposerDraftStore.getState().setModelSelection(THREAD_ID, {
+      provider: "codex",
+      model: "gpt-5.4",
+      options: { reasoningEffort: "low" },
+    });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-effort-preview-timer" as MessageId,
+        targetText: "effort preview timer",
+      }),
+    });
+
+    try {
+      await waitForServerConfigToApply();
+      const composerEditor = await waitForComposerEditor();
+      composerEditor.focus();
+      const pressShortcut = () =>
+        composerEditor.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "Tab",
+            shiftKey: true,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      const slider = page.getByRole("slider", { name: "Reasoning effort" });
+      pressShortcut();
+      await expect.element(slider).toHaveAttribute("aria-valuetext", "Medium");
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 900));
+      pressShortcut();
+      await expect.element(slider).toHaveAttribute("aria-valuetext", "High");
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 900));
+      await expect.element(slider).toBeVisible();
+      await vi.waitFor(
+        () => {
+          expect(
+            document.querySelector('[role="slider"][aria-label="Reasoning effort"]'),
+          ).toBeNull();
+        },
+        { timeout: 1_500, interval: 16 },
+      );
+      expect(document.activeElement).toBe(composerEditor);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps a manually opened model picker open after the effort preview expires", async () => {
+    useComposerDraftStore.getState().setModelSelection(THREAD_ID, {
+      provider: "codex",
+      model: "gpt-5.4",
+      options: { reasoningEffort: "medium" },
+    });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-effort-preview-manual-picker" as MessageId,
+        targetText: "manual model picker",
+      }),
+    });
+
+    try {
+      await waitForServerConfigToApply();
       const composerEditor = await waitForComposerEditor();
       composerEditor.focus();
       composerEditor.dispatchEvent(
@@ -5710,33 +5845,13 @@ describe("ChatView transcript geometry (full app)", () => {
           cancelable: true,
         }),
       );
-
-      await vi.waitFor(
-        () => {
-          expect(readInteractionMode()).toBe("plan");
-          const planButton = Array.from(
-            document.querySelectorAll<HTMLButtonElement>("button"),
-          ).find((button) => button.textContent?.trim() === "Plan");
-          expect(planButton?.title).toContain("return to normal build mode");
-        },
-        { timeout: 8_000, interval: 16 },
-      );
-
-      composerEditor.dispatchEvent(
-        new KeyboardEvent("keydown", {
-          key: "Tab",
-          shiftKey: true,
-          bubbles: true,
-          cancelable: true,
-        }),
-      );
-
-      await vi.waitFor(
-        () => {
-          expect(readInteractionMode()).toBe("default");
-        },
-        { timeout: 8_000, interval: 16 },
-      );
+      await expect
+        .element(page.getByRole("slider", { name: "Reasoning effort" }))
+        .toHaveAttribute("aria-valuetext", "High");
+      dispatchComposerPickerShortcut(composerEditor, "m");
+      await waitForComposerPickerSurfaceOpen();
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 1_700));
+      await expect.element(page.getByRole("searchbox", { name: "Search models" })).toBeVisible();
     } finally {
       await mounted.cleanup();
     }

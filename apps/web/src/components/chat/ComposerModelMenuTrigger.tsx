@@ -5,7 +5,7 @@
 // Depends on: menu/tooltip primitives, provider icons, and composer picker text tokens.
 
 import type { ProviderKind } from "@synara/contracts";
-import { useState } from "react";
+import { useState, type Ref } from "react";
 
 import { ChevronDownIcon, FastModeIcon, SettingsIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -25,6 +25,7 @@ import { getProviderIconClassName } from "./ProviderModelPicker";
 // degradation steps: the text moves to title/sr-only so assistive tech keeps it.
 export function ComposerModelMenuTrigger(props: {
   provider: ProviderKind;
+  buttonRef?: Ref<HTMLButtonElement>;
   /** Set while the provider has several accounts, to tell which one the composer runs in. */
   accountLabel?: string | null | undefined;
   /** The account's own name, written before the model while the provider has several. */
@@ -75,6 +76,7 @@ export function ComposerModelMenuTrigger(props: {
 
   const triggerButton = (
     <Button
+      ref={props.buttonRef}
       size="sm"
       variant="chrome"
       disabled={props.disabled ?? false}

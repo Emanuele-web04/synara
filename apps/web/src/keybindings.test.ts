@@ -239,6 +239,11 @@ const DEFAULT_BINDINGS = compile([
     whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
   {
+    shortcut: modShortcut("tab", { shiftKey: true, modKey: false }),
+    command: "model.effort.next",
+    whenAst: whenIdentifier("composerFocus"),
+  },
+  {
     shortcut: modShortcut("e", { shiftKey: true }),
     command: "traitsPicker.toggle",
     whenAst: whenNot(whenIdentifier("terminalFocus")),
@@ -779,6 +784,57 @@ describe("cross-command precedence", () => {
 });
 
 describe("resolveShortcutCommand", () => {
+  it.each(["MacIntel", "Win32", "Linux"])(
+    "cycles effort with Shift+Tab only in the composer on %s",
+    (platform) => {
+      const shortcutEvent = event({ key: "Tab", shiftKey: true });
+      assert.strictEqual(
+        resolveShortcutCommand(shortcutEvent, [], {
+          platform,
+          context: { composerFocus: true },
+        }),
+        "model.effort.next",
+      );
+      assert.isNull(
+        resolveShortcutCommand(shortcutEvent, [], {
+          platform,
+          context: { composerFocus: false },
+        }),
+      );
+      assert.isNull(
+        resolveShortcutCommand(event({ key: "Tab" }), [], {
+          platform,
+          context: { composerFocus: true },
+        }),
+      );
+      assert.strictEqual(
+        resolveShortcutCommand(event({ key: "Tab", ctrlKey: true, shiftKey: true }), [], {
+          platform,
+          context: { composerFocus: true },
+        }),
+        "view.recent.previous",
+      );
+    },
+  );
+
+  it("lets a configured effort shortcut replace the Shift+Tab fallback", () => {
+    const keybindings = compile([
+      {
+        command: "model.effort.next",
+        shortcut: modShortcut("e", { altKey: true, modKey: false }),
+        whenAst: whenIdentifier("composerFocus"),
+      },
+    ]);
+    const options = { platform: "MacIntel", context: { composerFocus: true } };
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "e", altKey: true }), keybindings, options),
+      "model.effort.next",
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "Tab", shiftKey: true }), keybindings, options),
+    );
+  });
+
   it("resolves model cycle commands outside terminal focus", () => {
     assert.strictEqual(
       resolveShortcutCommand(event({ key: "]", altKey: true }), DEFAULT_BINDINGS, {
