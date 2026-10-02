@@ -284,10 +284,9 @@ To put a feature behind the list:
 
 Promote a feature to Stable by deleting its entry; every gate resolves itself.
 
-The list currently contains `omp` (Oh My Pi), `groups` (Hubs), `tasks` (Tasks),
+The list currently contains `groups` (Hubs), `tasks` (Tasks),
 `inbox` (Inbox), and `audio-trail` (message trail sound), all gated off in Stable.
-The rail sidebar layout is available in
-both Stable and Beta.
+Oh My Pi and the rail sidebar layout are available in both Stable and Beta.
 
 On Stable, Hubs are inert rather than hidden data: the server refuses the hub
 APIs, Library routes and gateway tools, stops coordinator wakes and monitoring,

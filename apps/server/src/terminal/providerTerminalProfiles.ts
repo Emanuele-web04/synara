@@ -33,6 +33,8 @@ const GENERIC_DRIVER_BY_PROVIDER = {
 
 const PROFILE_ENVIRONMENT_KEYS = new Set([
   "APPDATA",
+  "AGENT_CLI_CREDENTIAL_STORE",
+  "GEMINI_FORCE_FILE_STORAGE",
   "CLAUDE_CONFIG_DIR",
   "CLAUDE_SECURESTORAGE_CONFIG_DIR",
   "CODEX_HOME",
@@ -61,15 +63,16 @@ function readConfigString(
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function nonSensitiveEnvironment(
+function configuredProfileEnvironment(
   instance: ReturnType<typeof deriveProviderInstances>[number],
+  includeSensitive: boolean,
 ): Record<string, string> {
   return Object.fromEntries(
     (instance.raw.environment ?? []).flatMap((variable) => {
       const name = variable.name.trim();
       return name &&
         typeof variable.value === "string" &&
-        variable.sensitive !== true &&
+        (includeSensitive || variable.sensitive !== true) &&
         variable.valueRedacted !== true
         ? [[name, variable.value ?? ""]]
         : [];
@@ -100,6 +103,9 @@ function binaryPathForProvider(
 
 export async function deriveManagedTerminalProfiles(input: {
   readonly settings: ServerSettings;
+  readonly onlyInstanceId?: string;
+  /** Only for a direct process launch; sensitive values must never reach shim files. */
+  readonly includeSensitiveEnvironment?: boolean;
   readonly baseEnv: NodeJS.ProcessEnv;
   readonly homeDir: string;
   readonly stateDir: string;
@@ -108,7 +114,8 @@ export async function deriveManagedTerminalProfiles(input: {
   const commandNames = new Set<string>();
 
   for (const instance of deriveProviderInstances(input.settings)) {
-    if (!instance.enabled) continue;
+    if (!instance.enabled || (input.onlyInstanceId && instance.instanceId !== input.onlyInstanceId))
+      continue;
     const commandName = providerCliCommandName({
       provider: instance.driver,
       instanceId: instance.instanceId,
@@ -118,7 +125,10 @@ export async function deriveManagedTerminalProfiles(input: {
     const targetPath = binaryPathForProvider(instance.driver, instance.config, input.baseEnv);
     if (!targetPath) continue;
 
-    const configuredEnvironment = nonSensitiveEnvironment(instance);
+    const configuredEnvironment = configuredProfileEnvironment(
+      instance,
+      input.includeSensitiveEnvironment === true,
+    );
     const profileDir = readConfigString(instance.config, "profileDir");
     const profileEnvironment = providerProfileDirectoryEnvironment(
       instance.driver,
@@ -213,14 +223,17 @@ export async function deriveManagedTerminalProfiles(input: {
     }
 
     profiles.push({
+      instanceId: instance.instanceId,
       commandName,
       targetPath,
       environment,
       isolateEnvironment: isolated,
-      omittedSensitiveEnvironmentNames: (instance.raw.environment ?? [])
-        .filter((variable) => variable.sensitive === true || variable.valueRedacted === true)
-        .map((variable) => variable.name.trim())
-        .filter(Boolean),
+      omittedSensitiveEnvironmentNames: input.includeSensitiveEnvironment
+        ? []
+        : (instance.raw.environment ?? [])
+            .filter((variable) => variable.sensitive === true || variable.valueRedacted === true)
+            .map((variable) => variable.name.trim())
+            .filter(Boolean),
     });
     commandNames.add(commandName);
   }

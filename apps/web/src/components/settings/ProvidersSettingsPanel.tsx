@@ -37,6 +37,8 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  lazy,
+  Suspense,
   type CSSProperties,
   type MouseEvent,
   type ReactNode,
@@ -69,6 +71,7 @@ import {
   FolderOpenIcon,
   Loader2Icon,
   PlusIcon,
+  PlayIcon,
   XIcon,
 } from "~/lib/icons";
 import { copyTextToClipboard } from "~/hooks/useCopyToClipboard";
@@ -475,7 +478,7 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
   },
 ];
 
-// Beta-only providers (OMP on Stable) keep their stored install fields but
+// Beta-only providers keep their stored install fields but
 // their install row is hidden.
 const VISIBLE_PROVIDER_INSTALL_SETTINGS = PROVIDER_INSTALL_SETTINGS.filter((config) =>
   isBetaFeatureOn(config.provider),
@@ -955,11 +958,14 @@ const ACCOUNT_STATUS_DOT_CLASS_NAME: Record<ProviderAccountStatusTone, string> =
   idle: "bg-muted-foreground/40",
 };
 
+const ProviderSignInDialog = lazy(() => import("./ProviderSignInDialog"));
+
 function ProviderAccountsControl(props: {
   config: ProviderInstallSettings;
   providerStatusByInstance: ReadonlyMap<string, ServerProviderStatus>;
   settings: AppSettings;
   updateSettings: (patch: Partial<AppSettings>) => void;
+  updateSettingsAndWait: (patch: Partial<AppSettings>) => Promise<void>;
 }) {
   const provider = props.config.provider;
   const providerLabel = PROVIDER_DISPLAY_NAMES[provider];
@@ -974,6 +980,36 @@ function ProviderAccountsControl(props: {
   );
   const [selectedAccountId, setSelectedAccountId] = useState<string>(provider);
   const [addDialogOpen, setAddDialogOpen] = useState(false);
+  const [signInAccount, setSignInAccount] = useState<ProviderInstanceOption | null>(null);
+  const [startingSignIn, setStartingSignIn] = useState(false);
+  const signInPendingRef = useRef(false);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+  const startSignIn = async (account: ProviderInstanceOption) => {
+    if (signInPendingRef.current) return;
+    signInPendingRef.current = true;
+    setStartingSignIn(true);
+    try {
+      // This is queued behind edits already being saved; the server must see
+      // the account's latest settings before it resolves the login environment.
+      await props.updateSettingsAndWait({});
+      if (mountedRef.current) setSignInAccount(account);
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Unable to start sign-in",
+        description: error instanceof Error ? error.message : "Unable to save provider settings.",
+      });
+    } finally {
+      signInPendingRef.current = false;
+      if (mountedRef.current) setStartingSignIn(false);
+    }
+  };
   const selectedAccount =
     accounts.find((account) => account.instanceId === selectedAccountId) ?? accounts[0];
 
@@ -1096,8 +1132,6 @@ function ProviderAccountsControl(props: {
     return (config as Record<string, unknown>)[key] === true;
   };
   const isAccountProvider = provider === "codex" || provider === "claudeAgent";
-  const signInCommandSuffix =
-    provider === "codex" ? " login" : provider === "claudeAgent" ? " auth login" : null;
   // Launch details most accounts never touch; kept behind the editor's Advanced disclosure.
   const isAdvancedField = (field: ProviderInstallField) =>
     field.kind === "boolean" ||
@@ -1343,12 +1377,6 @@ function ProviderAccountsControl(props: {
               ? (manageable.instance.config as Record<string, unknown>)
               : undefined,
         });
-    const signInCommand =
-      account.enabled &&
-      signInCommandSuffix !== null &&
-      liveStatus?.authStatus === "unauthenticated"
-        ? `${cliCommand}${signInCommandSuffix}`
-        : null;
     const defaultIsCustomized =
       account.isDefault &&
       explicit !== undefined &&
@@ -1388,6 +1416,21 @@ function ProviderAccountsControl(props: {
               <span className="truncate">{status.headline}</span>
             </StatusChip>
           </div>
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            disabled={!account.enabled || liveStatus?.available === false || startingSignIn}
+            aria-label={`Sign in to ${account.label}`}
+            onClick={() => void startSignIn(account)}
+          >
+            {startingSignIn ? (
+              <Loader2Icon className="size-3.5 animate-spin" />
+            ) : (
+              <PlayIcon className="size-3.5" />
+            )}
+            Sign in
+          </Button>
           {account.isDefault ? (
             defaultIsCustomized ? (
               <SettingResetButton
@@ -1411,28 +1454,11 @@ function ProviderAccountsControl(props: {
           )}
         </div>
 
-        {signInCommand ? (
-          <div className="flex items-center gap-2 border-b border-amber-500/25 bg-amber-500/8 px-3 py-2 text-ui-sm text-foreground/90">
-            <span className="min-w-0 flex-1">
-              To sign in, run{" "}
-              <code className="rounded-sm bg-background/70 px-1 py-px font-mono text-foreground">
-                {signInCommand}
-              </code>{" "}
-              in a Synara terminal, then refresh status.
-            </span>
-            <Button
-              type="button"
-              size="xs"
-              variant="ghost"
-              aria-label={`Copy ${signInCommand}`}
-              onClick={() => void copyTextToClipboard(signInCommand)}
-            >
-              <CopyIcon className="size-3.5" />
-            </Button>
-          </div>
-        ) : status.detail && status.tone !== "ready" && status.tone !== "idle" ? (
+        {status.detail && status.tone !== "ready" && status.tone !== "idle" ? (
           <div className="border-b border-border/70 px-3 py-2 text-ui-sm text-muted-foreground">
-            {status.detail}
+            {liveStatus?.authStatus === "unauthenticated"
+              ? "Use Sign in to authenticate this account, then complete the provider's prompts."
+              : status.detail}
           </div>
         ) : null}
 
@@ -1616,6 +1642,16 @@ function ProviderAccountsControl(props: {
         {selectedAccount ? renderEditor(selectedAccount) : null}
       </div>
 
+      {signInAccount ? (
+        <Suspense fallback={<p className="text-ui-sm text-muted-foreground">Opening sign-in…</p>}>
+          <ProviderSignInDialog
+            provider={provider}
+            instanceId={String(signInAccount.instanceId)}
+            accountLabel={signInAccount.label}
+            onClose={() => setSignInAccount(null)}
+          />
+        </Suspense>
+      ) : null}
       <AddProviderAccountDialog
         open={addDialogOpen}
         onOpenChange={setAddDialogOpen}
@@ -1695,6 +1731,7 @@ function ProviderToolRow(props: {
   onOpenChange: (open: boolean) => void;
   onUpdate: (provider: ProviderKind, instanceId?: ProviderInstanceId) => void;
   updateSettings: (patch: Partial<AppSettings>) => void;
+  updateSettingsAndWait: (patch: Partial<AppSettings>) => Promise<void>;
 }) {
   const title = PROVIDER_DISPLAY_NAMES[props.config.provider];
   const isDirty = isProviderInstallConfigDirty(props.config, props.settings, props.defaults);
@@ -1811,6 +1848,7 @@ function ProviderToolRow(props: {
                 providerStatusByInstance={props.providerStatusByInstance}
                 settings={props.settings}
                 updateSettings={props.updateSettings}
+                updateSettingsAndWait={props.updateSettingsAndWait}
               />
             </div>
           </div>
@@ -2334,6 +2372,7 @@ export function ProvidersSettingsPanel({
                     }
                     onUpdate={(provider) => void runProviderUpdate(provider)}
                     updateSettings={updateSettings}
+                    updateSettingsAndWait={updateSettingsAndWait}
                   />
                 ))}
               </div>
