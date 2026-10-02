@@ -34,6 +34,7 @@ import React, {
   useRef,
   useState,
   type ReactNode,
+  type SyntheticEvent,
 } from "react";
 import type { Components } from "react-markdown";
 import ReactMarkdown from "react-markdown";
@@ -139,7 +140,9 @@ interface ChatMarkdownProps {
   isStreaming?: boolean;
   className?: string | undefined;
   style?: CSSProperties | undefined;
-  onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
+  onImageExpand?:
+    | ((preview: ExpandedImagePreview, sourceImage?: HTMLImageElement) => void)
+    | undefined;
   /** Case-insensitive substring to wrap while in-thread find is open. */
   findQuery?: string | undefined;
   /** Active occurrence in this markdown body; other hits stay dimmer. */
@@ -1064,6 +1067,7 @@ function UncachedShikiCodeBlock({
 }
 
 interface MarkdownRenderContextValue {
+  isInsideLink: boolean;
   cwd: ChatMarkdownProps["cwd"];
   knownAbsoluteFilePaths: string[] | undefined;
   diffThemeName: DiffThemeName;
@@ -1106,8 +1110,18 @@ const MARKDOWN_COMPONENTS: Components = {
     );
   },
   a: function MarkdownLink({ node: _node, href, children, ...props }) {
-    const { isUserVariant, cwd, knownAbsoluteFilePaths, resolvedTheme, onOpenThread } =
-      useContext(MarkdownRenderContext)!;
+    const context = useContext(MarkdownRenderContext)!;
+    const { isUserVariant, cwd, knownAbsoluteFilePaths, resolvedTheme, onOpenThread } = context;
+    const linkedContext = useMemo(
+      () => ({ ...context, onImageExpand: undefined, isInsideLink: true }),
+      [context],
+    );
+    // Linked images belong to the link, not to the fullscreen gallery.
+    const linkedChildren = (
+      <MarkdownRenderContext.Provider value={linkedContext}>
+        {children}
+      </MarkdownRenderContext.Provider>
+    );
     const linkActions = useContext(ChatLinkActionsContext);
     const restoredHref = href ? restoreLiteralDollarPlaceholders(href) : href;
     const threadHref = restoredHref?.startsWith("thread://")
@@ -1122,7 +1136,7 @@ const MARKDOWN_COMPONENTS: Components = {
           className="inline p-0 text-inherit underline decoration-foreground/30 underline-offset-2 hover:decoration-foreground/70"
           onClick={() => onOpenThread(ThreadId.makeUnsafe(threadHref))}
         >
-          {children}
+          {linkedChildren}
         </button>
       );
     }
@@ -1178,7 +1192,7 @@ const MARKDOWN_COMPONENTS: Components = {
           {isExternalHttp ? (
             <LinkChipIcon url={restoredHref} className={MARKDOWN_EXTERNAL_LINK_ICON_CLASS_NAME} />
           ) : null}
-          {children}
+          {linkedChildren}
         </a>
       );
     }
@@ -1187,7 +1201,7 @@ const MARKDOWN_COMPONENTS: Components = {
       <OpenableFileChip
         targetPath={targetPath}
         theme={resolvedTheme}
-        label={children}
+        label={linkedChildren}
         {...(restoredHref ? { href: restoredHref } : {})}
       />
     );
@@ -1269,7 +1283,7 @@ const MARKDOWN_COMPONENTS: Components = {
     );
   },
   img: function MarkdownImage({ node: _node, src, alt: altProp, ...props }) {
-    const { cwd, onImageExpand } = useContext(MarkdownRenderContext)!;
+    const { cwd, onImageExpand, isInsideLink } = useContext(MarkdownRenderContext)!;
     const alt = altProp ?? "";
     const restoredSrc = src ? restoreLiteralDollarPlaceholders(src) : "";
     if (isLocalImageMarkdownSrc(restoredSrc)) {
@@ -1279,10 +1293,35 @@ const MARKDOWN_COMPONENTS: Components = {
           alt={alt}
           cwd={cwd}
           onImageExpand={onImageExpand}
+          isLinked={isInsideLink}
         />
       );
     }
-    return <img {...props} src={restoredSrc} alt={alt} loading="lazy" />;
+    if (!onImageExpand || !restoredSrc) {
+      return <img {...props} src={restoredSrc} alt={alt} loading="lazy" />;
+    }
+    const expandImage = (event: SyntheticEvent<HTMLImageElement>) => {
+      event.preventDefault();
+      onImageExpand(
+        { images: [{ src: restoredSrc, name: alt || "Image" }], index: 0 },
+        event.currentTarget,
+      );
+    };
+    return (
+      <img
+        {...props}
+        src={restoredSrc}
+        alt={alt}
+        loading="lazy"
+        role="button"
+        tabIndex={0}
+        data-expandable-image=""
+        onClick={expandImage}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") expandImage(event);
+        }}
+      />
+    );
   },
   li: function MarkdownListItem({ node, children, ...props }) {
     // Task items carry their source line down to the checkbox via context.
@@ -1448,6 +1487,7 @@ function ChatMarkdown({
   }, [findActiveRange, findQuery, renderedText]);
   const renderContext = useMemo<MarkdownRenderContextValue>(
     () => ({
+      isInsideLink: false,
       cwd,
       knownAbsoluteFilePaths,
       diffThemeName,
