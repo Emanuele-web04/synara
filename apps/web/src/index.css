@@ -2765,6 +2765,13 @@ diffs-container {
   );
 }
 
+/* Split view: the focused pane is marked by its composer outline alone, tinted toward
+   the accent. Scoped to the composer slot so the pane's other raised chrome keeps the
+   neutral border. */
+[data-split-pane-focused="true"] [data-chat-composer-slot] {
+  --surface-border: color-mix(in srgb, var(--info) 50%, transparent);
+}
+
 /* Composer shell/surface corner geometry — single source of truth so radius
    tweaks are not split across Tailwind utilities (and HMR cannot leave stale rules). */
 :root {

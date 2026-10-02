@@ -238,7 +238,6 @@ function SplitPaneEmbeddedPanel(props: {
 }
 
 function SplitPaneEmptyState(props: {
-  isFocused: boolean;
   onFocus: () => void;
   threads: readonly {
     id: ThreadId;
@@ -255,7 +254,6 @@ function SplitPaneEmptyState(props: {
       className={cn(
         "flex min-h-0 min-w-0 flex-1 flex-col items-center px-6 pt-16",
         CHAT_BACKGROUND_CLASS_NAME,
-        props.isFocused ? "ring-2 ring-inset ring-primary/70" : "",
       )}
       onMouseDown={props.onFocus}
     >
@@ -522,6 +520,9 @@ function SplitPaneSurface(props: {
         "group relative flex min-h-0 min-w-0 flex-1 [contain:layout_style_paint]",
         CHAT_BACKGROUND_CLASS_NAME,
       )}
+      // The focused pane is marked only by its composer's accent border (see index.css);
+      // unfocused panes stay undimmed so they never read as disabled.
+      data-split-pane-focused={props.isFocused ? "true" : undefined}
     >
       <ChatPaneDropOverlay
         paneScopeId={paneScopeId}
@@ -531,10 +532,7 @@ function SplitPaneSurface(props: {
         className="flex min-h-0 min-w-0 flex-1"
       >
         <SidebarInset
-          className={cn(
-            "min-h-0 min-w-0 overflow-hidden overscroll-y-none text-foreground transition-shadow",
-            props.isFocused ? "ring-2 ring-inset ring-primary/70" : "",
-          )}
+          className="min-h-0 min-w-0 overflow-hidden overscroll-y-none text-foreground"
           surfaceClassName={CHAT_BACKGROUND_CLASS_NAME}
           onMouseDown={props.onFocus}
         >
@@ -557,7 +555,6 @@ function SplitPaneSurface(props: {
             />
           ) : (
             <SplitPaneEmptyState
-              isFocused={props.isFocused}
               onFocus={props.onFocus}
               threads={props.threads}
               projects={props.projects}
@@ -587,14 +584,6 @@ function SplitPaneSurface(props: {
         isFocused={props.isFocused}
         onUpdatePanelState={props.onUpdatePanelState}
       />
-      {props.isFocused ? (
-        <div
-          aria-hidden="true"
-          // The accent border alone marks the focused pane; unfocused panes stay
-          // undimmed so they never read as disabled.
-          className="pointer-events-none absolute inset-[0.9px] z-20 border border-[color-mix(in_srgb,var(--info)_45%,transparent)] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--info)_12%,transparent)] transition-opacity duration-150"
-        />
-      ) : null}
     </div>
   );
 }
