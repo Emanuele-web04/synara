@@ -430,7 +430,7 @@ export default function TerminalViewport({
   }, [clearSelectionAction, showSelectionAction, terminalInstance]);
 
   return (
-    <div className="h-full min-h-0 w-full bg-[var(--color-background-surface)] p-3">
+    <div className="h-full min-h-0 w-full app-content-surface p-3">
       <div className="relative h-full min-h-0 w-full overflow-hidden">
         <TerminalSearch
           searchAddon={searchAddonInstance}

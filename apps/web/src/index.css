@@ -1218,7 +1218,7 @@ label:has(> select#reasoning-effort) select {
 }
 
 .editor-file-viewer::-webkit-scrollbar-corner {
-  background: var(--color-background-surface);
+  background: var(--app-code-viewer-surface, var(--color-background-surface));
 }
 
 .editor-file-viewer__plain {
@@ -1407,7 +1407,7 @@ label:has(> select#reasoning-effort) select {
   align-items: center;
   justify-content: center;
   padding: 0;
-  background: var(--color-background-surface);
+  background: var(--app-code-viewer-sticky-surface, var(--color-background-surface));
   cursor: pointer;
 }
 
@@ -1472,7 +1472,7 @@ label:has(> select#reasoning-effort) select {
   height: 1.25rem;
   border-radius: 0.4375rem;
   border: 1px solid color-mix(in srgb, var(--color-border) 75%, transparent);
-  background: var(--color-background-surface);
+  background: var(--app-code-viewer-sticky-surface, var(--color-background-surface));
 }
 
 /* Borderless request field: it blends into the card so the box reads as one
@@ -1498,7 +1498,10 @@ label:has(> select#reasoning-effort) select {
 }
 
 .editor-file-viewer--markdown-preview {
-  background: color-mix(in srgb, var(--background) 96%, var(--card));
+  background: var(
+    --app-code-viewer-surface,
+    color-mix(in srgb, var(--background) 96%, var(--card))
+  );
 }
 
 .editor-markdown-preview {
@@ -2704,14 +2707,17 @@ diffs-container {
 .diff-panel-viewport {
   /* Keep raw patch fallback and any unthemed diff chrome on the coding font stack. */
   font-family: var(--font-chat-code-family);
-  background: color-mix(in srgb, var(--background) 94%, var(--card));
+  background: var(
+    --app-code-viewer-surface,
+    color-mix(in srgb, var(--background) 94%, var(--card))
+  );
 }
 
 .diff-render-file {
   border: 1px solid var(--border);
   border-radius: 0.5rem;
   overflow: clip;
-  background: var(--background);
+  background: var(--app-code-viewer-surface, var(--background));
 }
 
 .diff-render-file [data-diffs-header],
@@ -2845,6 +2851,32 @@ diffs-container {
   [data-dock-maximized]
   [data-slot="sidebar-inner"].app-content-surface {
   background: var(--color-background-surface);
+}
+
+/* Code, diff, and file viewers paint their own fill inside the dock (`--synara-code-surface`
+   in diffRendering.ts). On whole-window glass they go clear like the dock body, so the pane
+   reads as one sheet of glass instead of an opaque slab; only what content scrolls under
+   (sticky diff headers, the gutter once a row scrolls sideways) keeps the composer's dense
+   tint. A maximized dock and the mobile sheet are opaque, so their viewers keep their own fill. */
+:root[data-window-translucency="window"]
+  [data-slot="sidebar-container"]:not([data-dock-maximized])
+  [data-right-dock-content] {
+  --app-code-viewer-surface: transparent;
+  --app-code-viewer-sticky-surface: color-mix(in srgb, var(--popover) 96%, transparent);
+  --app-code-viewer-gutter-animation: synara-code-gutter-backing;
+}
+
+/* Terminals follow the window's glass: xterm resolves its background from this token
+   (terminalRuntimeAppearance.ts) and turns transparent, so the body's coat shows through. Set
+   on the root because the color is resolved once for every terminal, wherever it is mounted;
+   over an opaque parent (maximized dock) the clear terminal simply shows that surface. */
+:root[data-window-translucency="window"] {
+  --app-terminal-surface: transparent;
+}
+
+/* xterm's stylesheet backs the viewport with black, normally hidden under the theme fill. */
+:root[data-window-translucency="window"] .xterm .xterm-viewport {
+  background-color: transparent;
 }
 
 /* The dock's bottom-right corner is the block's corner. */

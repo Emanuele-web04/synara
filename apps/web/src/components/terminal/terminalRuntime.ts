@@ -42,6 +42,7 @@ import {
   getTerminalFontFamily,
   getTerminalFontSizePx,
   getTerminalFontWeight,
+  isTerminalBackgroundTranslucent,
   terminalThemeFromApp,
   writeSystemMessage,
 } from "./terminalRuntimeAppearance";
@@ -521,6 +522,7 @@ function syncTheme(entry: TerminalRuntimeEntry): void {
   entry.wrapper.dataset.themeKey = nextAppearanceKey;
   entry.wrapper.dataset.fontKey = nextFontKey;
   const terminalOptions = entry.terminal.options as SynaraTerminalOptions;
+  terminalOptions.allowTransparency = isTerminalBackgroundTranslucent(nextTheme);
   terminalOptions.theme = nextTheme;
   terminalOptions.fontFamily = nextFontFamily;
   terminalOptions.fontSize = nextFontSize;
@@ -777,6 +779,7 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
   const imageAddon = new ImageAddon();
   const searchAddon = new SearchAddon();
   const unicode11Addon = new Unicode11Addon();
+  const theme = terminalThemeFromApp();
   const terminalOptions: SynaraTerminalOptions = {
     cursorBlink: true,
     fontSize: getTerminalFontSizePx(),
@@ -784,7 +787,7 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
     fontWeightBold: getTerminalBoldFontWeight(),
     scrollback: 5_000,
     fontFamily: getTerminalFontFamily(),
-    theme: terminalThemeFromApp(),
+    theme,
     allowProposedApi: true,
     customGlyphs: true,
     macOptionIsMeta: false,
@@ -792,7 +795,8 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
     cursorInactiveStyle: TERMINAL_INACTIVE_CURSOR_STYLE,
     cursorWidth: TERMINAL_CURSOR_WIDTH,
     screenReaderMode: false,
-    allowTransparency: false,
+    // Off unless the theme background is see-through: transparency costs the renderer.
+    allowTransparency: isTerminalBackgroundTranslucent(theme),
     vtExtensions: { kittyKeyboard: true },
     scrollbar: { showScrollbar: false },
   };

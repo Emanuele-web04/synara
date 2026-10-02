@@ -173,6 +173,12 @@ function resolveTerminalCssColor(
   return toLegacyXtermColor(resolvedColor, fallback);
 }
 
+// A see-through terminal background (whole-window glass) needs xterm's `allowTransparency`;
+// the resolver above serializes any non-opaque color as `rgba(…)`.
+export function isTerminalBackgroundTranslucent(theme: ITheme): boolean {
+  return theme.background?.startsWith("rgba(") ?? false;
+}
+
 export function terminalThemeFromApp(): ITheme {
   const isDark = document.documentElement.classList.contains("dark");
   const fallbackTheme = isDark ? DARK_TERMINAL_THEME_FALLBACK : LIGHT_TERMINAL_THEME_FALLBACK;
@@ -180,7 +186,8 @@ export function terminalThemeFromApp(): ITheme {
 
   return {
     background: resolveTerminalCssColor(
-      "var(--color-token-terminal-background, var(--color-background-surface))",
+      // `--app-terminal-surface` clears the fill on a whole-window glass shell (index.css).
+      "var(--app-terminal-surface, var(--color-token-terminal-background, var(--color-background-surface)))",
       fallbackTheme.background,
       "backgroundColor",
     ),

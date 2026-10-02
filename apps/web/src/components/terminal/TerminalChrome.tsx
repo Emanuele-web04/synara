@@ -77,7 +77,7 @@ export function TerminalWorkspaceTabBar(props: {
 }) {
   const canCloseGroups = props.terminalGroups.length > 1;
   return (
-    <div className="flex min-h-9 min-w-0 items-center gap-1 bg-[var(--color-background-surface)] px-1.5 py-1">
+    <div className="flex min-h-9 min-w-0 items-center gap-1 app-content-surface px-1.5 py-1">
       <SurfaceTabStrip className="flex-1" activeKey={props.activeGroupId}>
         {props.terminalGroups.map((terminalGroup) => {
           const isActive = terminalGroup.id === props.activeGroupId;
@@ -143,7 +143,7 @@ export function TerminalSidebar(props: {
   onCloseTerminal: (terminalId: string) => void;
 }) {
   return (
-    <aside className="flex w-36 min-w-36 flex-col border border-border/70 bg-[var(--color-background-surface)]">
+    <aside className="flex w-36 min-w-36 flex-col border border-border/70 app-content-surface">
       <div className="flex h-[22px] items-stretch justify-end border-b border-border/70">
         <TerminalChromeActions actions={props.actions} variant="sidebar" />
       </div>
