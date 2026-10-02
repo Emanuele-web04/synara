@@ -44,6 +44,7 @@ export interface OpenThreadTabSource {
       }
     | undefined;
   terminalEntryPoint: boolean;
+  isPreparingWorktree?: boolean | undefined;
 }
 
 // The transitions return the input array untouched when nothing changes, so the store
@@ -141,6 +142,7 @@ function resolveOpenThreadTab(source: OpenThreadTabSource): OpenThreadTab | null
           thread: summary,
           hasPendingApprovals: summary.hasPendingApprovals,
           hasPendingUserInput: summary.hasPendingUserInput,
+          isPreparingWorktree: source.isPreparingWorktree,
         })?.pulse === true,
     };
   }
