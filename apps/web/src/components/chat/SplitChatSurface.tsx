@@ -835,12 +835,17 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
       ? threads.find((thread) => thread.id === closingLeaf.threadId)
       : null;
 
-    if (closingThread?.sidechatSourceThreadId) {
+    // Returning to a source discards the entire split. Keep its tree intact until
+    // navigation commits, so publishing leftover leaves cannot race the exit.
+    if (
+      closingThread?.sidechatSourceThreadId ||
+      (closingLeaf?.threadId && closingLeaf.threadId !== activeSplitView.sourceThreadId)
+    ) {
       const decision = resolveSplitPaneCloseDecision({
         splitViewId: activeSplitView.id,
         sourceThreadId: activeSplitView.sourceThreadId,
         closingThreadId: closingLeaf?.threadId ?? null,
-        closingSidechatSourceThreadId: closingThread.sidechatSourceThreadId,
+        closingSidechatSourceThreadId: closingThread?.sidechatSourceThreadId ?? null,
         nextFocusedThreadId: null,
         nextLeafCount: 0,
       });
@@ -877,7 +882,6 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
     });
 
     if (decision.kind === "single-thread") {
-      removeSplitView(decision.splitViewIdToRemove);
       void navigate({
         to: "/$threadId",
         params: { threadId: decision.threadId },
@@ -886,7 +890,7 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
           ...stripDiffSearchParams(previous),
           splitViewId: undefined,
         }),
-      });
+      }).then(() => removeSplitView(decision.splitViewIdToRemove));
       return;
     }
 
