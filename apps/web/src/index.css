@@ -3249,9 +3249,14 @@ diffs-container {
 /* An overlay sitting on another portaled layer (a select or tooltip inside a dialog) has
    nothing cut out from under it: that layer is not the page. The thin fill would leave the
    layer's text readable through it, so it goes near-opaque there (`data-glass-backed`,
-   glassOverlayCutout.ts). */
+   glassOverlayCutout.ts). The same holds for an overlay rendered inside the page instead of
+   portaled (the message trail's turn preview): the cutout cannot remove the page from under
+   something that is part of it. */
 :root[data-window-material="translucent"]
-  :is(.app-popup-surface, .composer-picker-menu-surface)[data-glass-backed] {
+  :is(.app-popup-surface, .composer-picker-menu-surface)[data-glass-backed],
+:root[data-window-material="translucent"]
+  #root
+  :is(.app-popup-surface, .composer-picker-menu-surface) {
   background: color-mix(in srgb, var(--popover) 96%, transparent);
 }
 

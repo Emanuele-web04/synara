@@ -60,7 +60,8 @@ describe("terminalThemeFromApp", () => {
     root.style.setProperty("--app-terminal-surface", "transparent");
     const theme = terminalThemeFromApp();
 
-    expect(theme.background).toBe("rgba(0, 0, 0, 0)");
+    // The theme's own RGB survives: xterm paints reverse-video text in its opaque form.
+    expect(theme.background).toBe("rgba(15, 15, 17, 0)");
     expect(isTerminalBackgroundTranslucent(theme)).toBe(true);
   });
 });

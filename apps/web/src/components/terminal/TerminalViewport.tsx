@@ -75,8 +75,10 @@ function TerminalRuntimeStatusOverlay({ status }: { status: TerminalRuntimeStatu
   return (
     <div
       className={cn(
-        "pointer-events-none absolute left-1 top-1 z-10 inline-flex h-6 max-w-[calc(100%-0.5rem)] items-center gap-1.5 rounded border px-2 text-ui-sm leading-none shadow-sm backdrop-blur",
-        "border-destructive/30 bg-destructive/10 text-destructive",
+        "pointer-events-none absolute left-1 top-1 z-10 inline-flex h-6 max-w-[calc(100%-0.5rem)] items-center gap-1.5 rounded border px-2 text-ui-sm leading-none shadow-sm",
+        // Dense fill: the pill floats over terminal text, and a blur cannot hide it on a
+        // translucent window.
+        "border-destructive/30 bg-[color-mix(in_srgb,var(--destructive)_10%,var(--popover))] text-destructive",
       )}
     >
       <TriangleAlertIcon className="size-3" />

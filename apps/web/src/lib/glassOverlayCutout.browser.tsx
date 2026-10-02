@@ -224,4 +224,22 @@ describe("glass overlay content cutouts", () => {
     expect(getComputedStyle(banner).backgroundColor).toMatch(/color\(srgb 1 0\.95 0\.95\)/);
     expect(getComputedStyle(banner).backdropFilter).not.toBe("none");
   });
+
+  it("backs an overlay rendered inside the page, which cannot be cut out from under itself", async () => {
+    const root = glassRoot();
+    root.id = "root";
+    const portaled = portal(250, 50);
+    const inPage = document.createElement("div");
+    inPage.className = "app-popup-surface";
+    root.append(inPage);
+    for (const surface of [portaled, inPage]) {
+      surface.style.setProperty("--popover", "rgb(255, 255, 255)");
+      surface.style.setProperty("--app-overlay-surface", "rgba(255, 255, 255, 0.3)");
+    }
+    await frames();
+    // The portaled overlay keeps the thin fill: the page is clipped away beneath it.
+    expect(getComputedStyle(portaled).backgroundImage).not.toBe("none");
+    expect(getComputedStyle(inPage).backgroundImage).toBe("none");
+    expect(getComputedStyle(inPage).backgroundColor).toBe("color(srgb 1 1 1 / 0.96)");
+  });
 });

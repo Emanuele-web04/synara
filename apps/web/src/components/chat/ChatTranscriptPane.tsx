@@ -25,7 +25,6 @@ import { type TurnDiffSummary, type WorktreeSetupSnapshot } from "../../types";
 import { ArrowDownIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { AUDIO_LEVEL_SUBSCRIBERS, isAudioLevelAvailable } from "~/lib/audioLevel";
-import { ELEVATED_HOVER_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 import { DISCLOSURE_CONTENT_MOTION_CLASS } from "~/lib/disclosureMotion";
 import { type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ChatEmptyStateHero } from "./ChatEmptyStateHero";
@@ -431,7 +430,10 @@ export function ChatTranscriptPane({
               tabIndex={scrollButtonVisible ? 0 : -1}
               className={cn(
                 "flex size-8 items-center justify-center rounded-full border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] text-[var(--color-text-foreground)] backdrop-blur-md hover:cursor-pointer",
-                ELEVATED_HOVER_SURFACE_CLASS_NAME,
+                // The hover tint is layered over the opaque fill instead of replacing it: the
+                // shared elevated hover is a thin ink wash, which alone would let the
+                // transcript read through the button.
+                "hover:bg-[image:linear-gradient(var(--color-background-elevated-secondary),var(--color-background-elevated-secondary))]",
                 scrollButtonVisible ? "pointer-events-auto" : "pointer-events-none",
               )}
             >
