@@ -30,6 +30,9 @@ is cancelled, the task and its prompt remain available for retry.
   is a fixed column of icon tabs for Home, Spaces, Kanban (Tasks in Beta), Code review, Automations, Hubs (Beta), and
   Settings, with the thread panel beside it and the route shown as a card inset from the window.
   Open threads appear as tabs across the top of the chat.
+  Archiving the open thread or marking it **Done** opens the most recently used unfinished chat
+  across projects, ordered by its last human message (or creation time). If none remains, New
+  thread reopens an unsent draft. Actions on other threads keep the current chat open.
 - **Code review** — pull requests and issues from the GitHub repositories of your projects, with a
   detail pane and three actions on every item (see [Code review](#code-review))
 - **Tasks** (Beta; Stable keeps Kanban) — a to-do list for anything you need to do, with or without
