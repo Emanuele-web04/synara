@@ -74,7 +74,8 @@ import { getRouter } from "../router";
 import { showContextMenuFallback } from "../contextMenuFallback";
 import { useRightDockStore } from "../rightDockStore";
 import { useOpenThreadTabsStore } from "../openThreadTabsStore";
-import { useSplitViewStore } from "../splitViewStore";
+import { resolveSplitViewPaneIdForThread, useSplitViewStore } from "../splitViewStore";
+import { splitViewPaneScopeId } from "../lib/chatPaneScope";
 import { useSpacesUiStore } from "../spacesUiStore";
 import { useRailShellStore } from "../railShellStore";
 import { useStore } from "../store";
@@ -2392,6 +2393,164 @@ describe("ChatView transcript geometry (full app)", () => {
 
   // #1374: real route, dock and Lexical composers; only the server boundary is
   // simulated. The main agent must keep running while the panel toggles.
+  it("keeps the surviving non-route chat mounted when a split collapses", async () => {
+    const snapshot = addThreadToSnapshot(
+      createSnapshotWithLongAssistantResponse(),
+      OTHER_THREAD_ID,
+    );
+    const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+    try {
+      useComposerDraftStore.getState().setPrompt(OTHER_THREAD_ID, "surviving draft");
+      const splitViewId = useSplitViewStore.getState().createFromDrop({
+        sourceThreadId: THREAD_ID,
+        ownerProjectId: PROJECT_ID,
+        droppedThreadId: OTHER_THREAD_ID,
+        direction: "horizontal",
+        side: "second",
+      });
+      await mounted.router.navigate({
+        to: "/$threadId",
+        params: { threadId: THREAD_ID },
+        search: () => ({ splitViewId }),
+      });
+      await vi.waitFor(() =>
+        expect(document.querySelectorAll('[contenteditable="true"]').length).toBe(2),
+      );
+      await waitForLayout();
+      const split = useSplitViewStore.getState().splitViewsById[splitViewId]!;
+      if (
+        split.root.kind !== "split" ||
+        split.root.first.kind !== "leaf" ||
+        split.root.second.kind !== "leaf"
+      )
+        throw new Error("Expected two panes");
+      const scope = splitViewPaneScopeId(splitViewId, split.root.second.id);
+      const survivingEditor = document.querySelector<HTMLElement>(
+        `[data-chat-pane-scope="${scope}"] [contenteditable="true"]`,
+      )!;
+      const survivingChat = survivingEditor.closest("[data-chat-pane-scope]")!;
+      await vi.waitFor(() => expect(survivingEditor.textContent).toContain("surviving draft"));
+      // The public split store publishes the one remaining leaf before the router
+      // commits its new parameter, just as closing the current pane does.
+      useSplitViewStore
+        .getState()
+        .removePaneFromSplitView({ splitViewId, paneId: split.root.first.id });
+      await vi.waitFor(() => {
+        expect(mounted.router.state.location.pathname).toBe(`/${OTHER_THREAD_ID}`);
+        expect(mounted.router.state.location.search.splitViewId).toBeUndefined();
+        expect(document.querySelectorAll('[contenteditable="true"]').length).toBe(1);
+      });
+      expect(document.querySelector('[contenteditable="true"]')).toBe(survivingEditor);
+      expect(document.querySelector("[data-chat-pane-scope]")).toBe(survivingChat);
+      expect(survivingEditor.textContent).toContain("surviving draft");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it.each([
+    { panes: 2, closing: "non-source" },
+    { panes: 3, closing: "non-source" },
+    { panes: 3, closing: "source" },
+  ] as const)("closes a standalone Side in $panes panes ($closing)", async ({ panes, closing }) => {
+    const thirdId = ThreadId.makeUnsafe("third-standalone-grid-chat");
+    const closingThreadId = closing === "source" ? THREAD_ID : OTHER_THREAD_ID;
+    const base = addThreadToSnapshot(
+      addThreadToSnapshot(createSnapshotWithLongAssistantResponse(), OTHER_THREAD_ID),
+      thirdId,
+    );
+    const snapshot = {
+      ...base,
+      threads: base.threads.map((thread) =>
+        thread.id === closingThreadId
+          ? {
+              ...thread,
+              sidechatContext: {
+                kind: "github-item" as const,
+                itemKind: "pullRequest" as const,
+                repository: "acme/widgets",
+                number: 1472,
+                url: "https://github.com/acme/widgets/pull/1472",
+              },
+            }
+          : thread,
+      ),
+    };
+    const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+    try {
+      const splitViewId = useSplitViewStore.getState().createFromDrop({
+        sourceThreadId: THREAD_ID,
+        ownerProjectId: PROJECT_ID,
+        droppedThreadId: OTHER_THREAD_ID,
+        direction: "horizontal",
+        side: "second",
+      });
+      const split = useSplitViewStore.getState().splitViewsById[splitViewId]!;
+      const sourcePaneId = resolveSplitViewPaneIdForThread(split, THREAD_ID)!;
+      if (panes === 3)
+        useSplitViewStore.getState().dropThreadOnPane({
+          splitViewId,
+          targetPaneId: sourcePaneId,
+          threadId: thirdId,
+          direction: "vertical",
+          side: "first",
+        });
+      await mounted.router.navigate({
+        to: "/$threadId",
+        params: { threadId: THREAD_ID },
+        search: () => ({ splitViewId }),
+      });
+      await vi.waitFor(() =>
+        expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(panes),
+      );
+      await waitForLayout();
+      const readySplit = useSplitViewStore.getState().splitViewsById[splitViewId]!;
+      const targetThreadId = closing === "source" ? thirdId : THREAD_ID;
+      const editorForThread = (threadId: ThreadId) => {
+        const scope = splitViewPaneScopeId(
+          splitViewId,
+          resolveSplitViewPaneIdForThread(readySplit, threadId)!,
+        );
+        return document.querySelector<HTMLElement>(
+          `[data-chat-pane-scope="${scope}"] [contenteditable="true"]`,
+        )!;
+      };
+      const retainedEditor = editorForThread(targetThreadId);
+      await userEvent.click(editorForThread(closingThreadId));
+      await vi.waitFor(() =>
+        expect(mounted.router.state.location.pathname).toBe(`/${closingThreadId}`),
+      );
+      const persistedSplit = () =>
+        JSON.parse(localStorage.getItem("synara:split-view-state:v1")!).state.splitViewsById[
+          splitViewId
+        ];
+      expect(persistedSplit()).toBeDefined();
+      await page.getByRole("button", { name: "Close selected Side", exact: true }).click();
+      await vi.waitFor(() => {
+        expect(mounted.router.state.location.pathname).toBe(`/${targetThreadId}`);
+        expect(mounted.router.state.location.search.splitViewId).toBe(
+          closing === "source" ? splitViewId : undefined,
+        );
+        expect(document.querySelectorAll('[contenteditable="true"]')).toHaveLength(
+          closing === "source" ? 2 : 1,
+        );
+        if (closing === "source") {
+          expect(useSplitViewStore.getState().splitViewsById[splitViewId]).toBeDefined();
+          expect(persistedSplit()).toBeDefined();
+          expect(persistedSplit().sourceThreadId).toBe(thirdId);
+        } else {
+          expect(useSplitViewStore.getState().splitViewsById[splitViewId]).toBeUndefined();
+          expect(persistedSplit()).toBeUndefined();
+        }
+      });
+      await waitForLayout();
+      expect(retainedEditor.isConnected).toBe(true);
+      expect(document.querySelectorAll('[contenteditable="true"]')).toContain(retainedEditor);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("opens one sidechat, preserves its draft on toggle, and restores composer focus", async () => {
     useRightDockStore.setState({ dockStateByThreadId: {} });
     const mainSnapshot = createSnapshotForTargetUser({

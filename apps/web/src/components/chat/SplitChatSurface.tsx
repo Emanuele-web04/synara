@@ -14,7 +14,6 @@ import {
 import { Schema } from "effect";
 
 import { ProviderIcon } from "../ProviderIcon";
-import { ChatPaneDropOverlay } from "../chat-drop-overlay/ChatPaneDropOverlay";
 import { PanelStateMessage } from "./PanelStateMessage";
 import {
   ChatMountLoader,
@@ -84,7 +83,7 @@ import {
   DialogPopup,
   DialogTitle,
 } from "../ui/dialog";
-import { SidebarInset } from "../ui/sidebar";
+import { ChatPaneBody, KeptChatPane } from "./ChatPaneKeepAlive";
 import {
   CHAT_BACKGROUND_CLASS_NAME,
   CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME,
@@ -539,17 +538,23 @@ function SplitPaneSurface(props: {
       // unfocused panes stay undimmed so they never read as disabled.
       data-split-pane-focused={props.isFocused ? "true" : undefined}
     >
-      <ChatPaneDropOverlay
-        paneScopeId={paneScopeId}
-        canDropInDirection={props.canDropInDirection}
-        excludedThreadIds={props.excludedThreadIds}
-        onDrop={handleDrop}
-        className="flex min-h-0 min-w-0 flex-1"
-      >
-        <SidebarInset
-          className="min-h-0 min-w-0 overflow-hidden overscroll-y-none text-foreground"
-          surfaceClassName={CHAT_BACKGROUND_CLASS_NAME}
-          onMouseDown={props.onFocus}
+      {/* Kept alive across the swap with SingleChatSurface, and keyed by pane rather than by
+          thread so replacing a pane's thread still reuses its chat. */}
+      <KeptChatPane slotKey={paneScopeId} threadId={props.threadId}>
+        <ChatPaneBody
+          fileOpener={null}
+          dropOverlay={{
+            paneScopeId,
+            canDropInDirection: props.canDropInDirection,
+            excludedThreadIds: props.excludedThreadIds,
+            onDrop: handleDrop,
+            className: "flex min-h-0 min-w-0 flex-1",
+          }}
+          inset={{
+            className: "min-h-0 min-w-0 overflow-hidden overscroll-y-none text-foreground",
+            surfaceClassName: CHAT_BACKGROUND_CLASS_NAME,
+            onMouseDown: props.onFocus,
+          }}
         >
           {props.threadId ? (
             <DeferredChatView
@@ -585,8 +590,8 @@ function SplitPaneSurface(props: {
               onPopToSidebar={props.onPopFloatingBrowser}
             />
           ) : null}
-        </SidebarInset>
-      </ChatPaneDropOverlay>
+        </ChatPaneBody>
+      </KeptChatPane>
       <SplitPaneEmbeddedPanel
         splitViewId={props.splitView.id}
         paneId={props.paneId}
@@ -652,9 +657,9 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
     const leaves = collectLeaves(activeSplitView.root);
     if (leaves.length <= 1) {
       const onlyThreadId = leaves[0]?.threadId ?? null;
-      removeSplitView(activeSplitView.id);
       const fallbackThreadId = onlyThreadId ?? props.routeThreadId;
       if (!fallbackThreadId) {
+        removeSplitView(activeSplitView.id);
         void handleNewChat();
         return;
       }
@@ -666,7 +671,7 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
           ...stripDiffSearchParams(previous),
           splitViewId: undefined,
         }),
-      });
+      }).then(() => removeSplitView(activeSplitView.id));
       return;
     }
 
@@ -807,14 +812,15 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
     });
 
     if (decision) {
-      removeSplitView(decision.splitViewIdToRemove);
+      // Keep the departing split until the route points at the retained thread;
+      // otherwise the single surface can claim a pane using the stale parameter.
       void navigate({
         to: "/$threadId",
         params: { threadId: decision.threadId },
         replace: true,
         search: () =>
           decision.panelState ? normalizeSingleSearchFromPane(decision.panelState) : {},
-      });
+      }).then(() => removeSplitView(decision.splitViewIdToRemove));
       return;
     }
 
@@ -829,12 +835,17 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
       ? threads.find((thread) => thread.id === closingLeaf.threadId)
       : null;
 
-    if (closingThread?.sidechatSourceThreadId) {
+    // Returning to a source discards the entire split. Keep its tree intact until
+    // navigation commits, so publishing leftover leaves cannot race the exit.
+    if (
+      closingThread?.sidechatSourceThreadId ||
+      (closingLeaf?.threadId && closingLeaf.threadId !== activeSplitView.sourceThreadId)
+    ) {
       const decision = resolveSplitPaneCloseDecision({
         splitViewId: activeSplitView.id,
         sourceThreadId: activeSplitView.sourceThreadId,
         closingThreadId: closingLeaf?.threadId ?? null,
-        closingSidechatSourceThreadId: closingThread.sidechatSourceThreadId,
+        closingSidechatSourceThreadId: closingThread?.sidechatSourceThreadId ?? null,
         nextFocusedThreadId: null,
         nextLeafCount: 0,
       });
@@ -871,7 +882,6 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
     });
 
     if (decision.kind === "single-thread") {
-      removeSplitView(decision.splitViewIdToRemove);
       void navigate({
         to: "/$threadId",
         params: { threadId: decision.threadId },
@@ -880,7 +890,7 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
           ...stripDiffSearchParams(previous),
           splitViewId: undefined,
         }),
-      });
+      }).then(() => removeSplitView(decision.splitViewIdToRemove));
       return;
     }
 
