@@ -657,9 +657,9 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
     const leaves = collectLeaves(activeSplitView.root);
     if (leaves.length <= 1) {
       const onlyThreadId = leaves[0]?.threadId ?? null;
-      removeSplitView(activeSplitView.id);
       const fallbackThreadId = onlyThreadId ?? props.routeThreadId;
       if (!fallbackThreadId) {
+        removeSplitView(activeSplitView.id);
         void handleNewChat();
         return;
       }
@@ -671,7 +671,7 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
           ...stripDiffSearchParams(previous),
           splitViewId: undefined,
         }),
-      });
+      }).then(() => removeSplitView(activeSplitView.id));
       return;
     }
 
@@ -812,14 +812,15 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
     });
 
     if (decision) {
-      removeSplitView(decision.splitViewIdToRemove);
+      // Keep the departing split until the route points at the retained thread;
+      // otherwise the single surface can claim a pane using the stale parameter.
       void navigate({
         to: "/$threadId",
         params: { threadId: decision.threadId },
         replace: true,
         search: () =>
           decision.panelState ? normalizeSingleSearchFromPane(decision.panelState) : {},
-      });
+      }).then(() => removeSplitView(decision.splitViewIdToRemove));
       return;
     }
 
@@ -876,7 +877,6 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
     });
 
     if (decision.kind === "single-thread") {
-      removeSplitView(decision.splitViewIdToRemove);
       void navigate({
         to: "/$threadId",
         params: { threadId: decision.threadId },
@@ -885,7 +885,7 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
           ...stripDiffSearchParams(previous),
           splitViewId: undefined,
         }),
-      });
+      }).then(() => removeSplitView(decision.splitViewIdToRemove));
       return;
     }
 

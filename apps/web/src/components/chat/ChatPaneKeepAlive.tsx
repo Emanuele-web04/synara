@@ -39,6 +39,20 @@ interface KeptPane {
   // one. Chromium drops them when a node is moved twice before a layout (slot to parking to
   // slot within one commit), and a plain append drops them always.
   scrollOffsets: ScrollOffsets | null;
+  focus: {
+    element: HTMLElement;
+    selection: {
+      anchorNode: Node;
+      anchorOffset: number;
+      focusNode: Node;
+      focusOffset: number;
+    } | null;
+    inputSelection: {
+      start: number;
+      end: number;
+      direction: "forward" | "backward" | "none";
+    } | null;
+  } | null;
 }
 
 interface ChatPaneKeepAlive {
@@ -138,6 +152,7 @@ export function ChatPaneKeepAliveProvider({ children }: { children: ReactNode })
           listeners: new Set(),
           orphanTimer: null,
           scrollOffsets: null,
+          focus: null,
         };
         panesRef.current.push(pane);
         publish();
@@ -145,15 +160,40 @@ export function ChatPaneKeepAliveProvider({ children }: { children: ReactNode })
       },
       place: (pane, placeholder) => {
         moveInto(placeholder, pane.host);
-        if (!pane.scrollOffsets) {
-          return;
-        }
         // After the commit, so a slot that is released again right away costs no layout.
         queueMicrotask(() => {
-          if (!pane.scrollOffsets || pane.host.parentNode !== placeholder) {
-            return;
+          if (pane.host.parentNode !== placeholder) return;
+          const focus = pane.focus;
+          pane.focus = null;
+          // Parking is inert, and append also blurs on browsers without moveBefore.
+          // Restore only our former focus, without overriding a new focus elsewhere.
+          if (
+            focus &&
+            pane.host.contains(focus.element) &&
+            document.activeElement === document.body
+          ) {
+            focus.element.focus({ preventScroll: true });
+            if (
+              focus.inputSelection &&
+              (focus.element instanceof HTMLInputElement ||
+                focus.element instanceof HTMLTextAreaElement)
+            ) {
+              const { start, end, direction } = focus.inputSelection;
+              focus.element.setSelectionRange(start, end, direction);
+            }
+            if (
+              !focus.inputSelection &&
+              focus.selection &&
+              pane.host.contains(focus.selection.anchorNode) &&
+              pane.host.contains(focus.selection.focusNode)
+            ) {
+              const { anchorNode, anchorOffset, focusNode, focusOffset } = focus.selection;
+              document
+                .getSelection()
+                ?.setBaseAndExtent(anchorNode, anchorOffset, focusNode, focusOffset);
+            }
           }
-          for (const [element, scrollTop, scrollLeft] of pane.scrollOffsets) {
+          for (const [element, scrollTop, scrollLeft] of pane.scrollOffsets ?? []) {
             element.scrollTop = scrollTop;
             element.scrollLeft = scrollLeft;
           }
@@ -164,6 +204,36 @@ export function ChatPaneKeepAliveProvider({ children }: { children: ReactNode })
         // Runs before React removes the surface's DOM, so the host is still attached and
         // can be moved out intact for the next slot to pick up.
         pane.scrollOffsets ??= captureScrollOffsets(pane.host);
+        const activeElement = document.activeElement;
+        if (activeElement instanceof HTMLElement && pane.host.contains(activeElement)) {
+          const currentSelection = document.getSelection();
+          // Range objects are live and append retargets them to the old parent.
+          // Carry the nodes and offsets instead, including backward selections.
+          const selection =
+            currentSelection?.anchorNode &&
+            currentSelection.focusNode &&
+            pane.host.contains(currentSelection.anchorNode) &&
+            pane.host.contains(currentSelection.focusNode)
+              ? {
+                  anchorNode: currentSelection.anchorNode,
+                  anchorOffset: currentSelection.anchorOffset,
+                  focusNode: currentSelection.focusNode,
+                  focusOffset: currentSelection.focusOffset,
+                }
+              : null;
+          const inputSelection =
+            (activeElement instanceof HTMLInputElement ||
+              activeElement instanceof HTMLTextAreaElement) &&
+            activeElement.selectionStart !== null &&
+            activeElement.selectionEnd !== null
+              ? {
+                  start: activeElement.selectionStart,
+                  end: activeElement.selectionEnd,
+                  direction: activeElement.selectionDirection ?? "none",
+                }
+              : null;
+          pane.focus = { element: activeElement, selection, inputSelection };
+        }
         if (parkingRef.current) {
           moveInto(parkingRef.current, pane.host);
         }

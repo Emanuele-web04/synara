@@ -74,6 +74,7 @@ import { showContextMenuFallback } from "../contextMenuFallback";
 import { useRightDockStore } from "../rightDockStore";
 import { useOpenThreadTabsStore } from "../openThreadTabsStore";
 import { useSplitViewStore } from "../splitViewStore";
+import { splitViewPaneScopeId } from "../lib/chatPaneScope";
 import { useSpacesUiStore } from "../spacesUiStore";
 import { useRailShellStore } from "../railShellStore";
 import { useStore } from "../store";
@@ -2391,6 +2392,61 @@ describe("ChatView transcript geometry (full app)", () => {
 
   // #1374: real route, dock and Lexical composers; only the server boundary is
   // simulated. The main agent must keep running while the panel toggles.
+  it("keeps the surviving non-route chat mounted when a split collapses", async () => {
+    const snapshot = addThreadToSnapshot(
+      createSnapshotWithLongAssistantResponse(),
+      OTHER_THREAD_ID,
+    );
+    const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+    try {
+      useComposerDraftStore.getState().setPrompt(OTHER_THREAD_ID, "surviving draft");
+      const splitViewId = useSplitViewStore.getState().createFromDrop({
+        sourceThreadId: THREAD_ID,
+        ownerProjectId: PROJECT_ID,
+        droppedThreadId: OTHER_THREAD_ID,
+        direction: "horizontal",
+        side: "second",
+      });
+      await mounted.router.navigate({
+        to: "/$threadId",
+        params: { threadId: THREAD_ID },
+        search: () => ({ splitViewId }),
+      });
+      await vi.waitFor(() =>
+        expect(document.querySelectorAll('[contenteditable="true"]').length).toBe(2),
+      );
+      await waitForLayout();
+      const split = useSplitViewStore.getState().splitViewsById[splitViewId]!;
+      if (
+        split.root.kind !== "split" ||
+        split.root.first.kind !== "leaf" ||
+        split.root.second.kind !== "leaf"
+      )
+        throw new Error("Expected two panes");
+      const scope = splitViewPaneScopeId(splitViewId, split.root.second.id);
+      const survivingEditor = document.querySelector<HTMLElement>(
+        `[data-chat-pane-scope="${scope}"] [contenteditable="true"]`,
+      )!;
+      const survivingChat = survivingEditor.closest("[data-chat-pane-scope]")!;
+      await vi.waitFor(() => expect(survivingEditor.textContent).toContain("surviving draft"));
+      // The public split store publishes the one remaining leaf before the router
+      // commits its new parameter, just as closing the current pane does.
+      useSplitViewStore
+        .getState()
+        .removePaneFromSplitView({ splitViewId, paneId: split.root.first.id });
+      await vi.waitFor(() => {
+        expect(mounted.router.state.location.pathname).toBe(`/${OTHER_THREAD_ID}`);
+        expect(mounted.router.state.location.search.splitViewId).toBeUndefined();
+        expect(document.querySelectorAll('[contenteditable="true"]').length).toBe(1);
+      });
+      expect(document.querySelector('[contenteditable="true"]')).toBe(survivingEditor);
+      expect(document.querySelector("[data-chat-pane-scope]")).toBe(survivingChat);
+      expect(survivingEditor.textContent).toContain("surviving draft");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("opens one sidechat, preserves its draft on toggle, and restores composer focus", async () => {
     useRightDockStore.setState({ dockStateByThreadId: {} });
     const mainSnapshot = createSnapshotForTargetUser({
