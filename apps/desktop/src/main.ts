@@ -5204,7 +5204,7 @@ function registerIpcHandlers(): void {
 
   ipcMain.removeHandler(IPC.audioLevel.setSource);
   ipcMain.handle(IPC.audioLevel.setSource, async (event, rawSource: unknown) => {
-    // Authoritative gate: macOS only, and kept out of Stable while Beta-only.
+    // Authoritative gate: macOS only; channel availability follows the shared feature list.
     if (
       process.platform !== "darwin" ||
       !isBetaFeatureEnabled(AUDIO_TRAIL_BETA_FEATURE, desktopFlavor)

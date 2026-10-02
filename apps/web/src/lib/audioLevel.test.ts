@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AUDIO_LEVEL_SUBSCRIBERS } from "./audioLevel";
 
-vi.mock("~/betaFeatures", () => ({ isBetaFeatureOn: () => true }));
+vi.mock("~/betaFeatures", async () => {
+  const { isBetaFeatureEnabled } = await import("@synara/shared/betaFeatures");
+  return { isBetaFeatureOn: (feature: string) => isBetaFeatureEnabled(feature, "production") };
+});
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => {
@@ -15,7 +18,7 @@ describe("audio level subscription admission", () => {
     ["Win32", false],
     ["Linux x86_64", false],
     ["MacIntel", true],
-  ])("requests Mac audio only on a supported platform: %s", (platform, supported) => {
+  ])("requests Mac audio in Stable only on a supported platform: %s", (platform, supported) => {
     const setSource = vi.fn().mockResolvedValue("unsupported");
     vi.stubGlobal("navigator", { platform });
     vi.stubGlobal("document", {

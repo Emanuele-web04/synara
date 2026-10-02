@@ -3339,12 +3339,41 @@ describe("ChatView transcript geometry (full app)", () => {
     });
     const previousNativeApi = window.nativeApi;
     const api = readNativeApi()!;
-    const dispatchCommand = vi.fn(async () => {});
+    const subscribeThread = vi.fn(api.orchestration.subscribeThread);
+    const dispatchCommand = vi.fn(
+      async (command: Parameters<typeof api.orchestration.dispatchCommand>[0]) => {
+        if (command.type !== "thread.user-input.respond") {
+          throw new Error("Unexpected command in the cancellation fixture.");
+        }
+        // Model provider-confirmed cancellation in the server fixture. The client
+        // must fetch this settlement; command acceptance alone is not confirmation.
+        fixture.snapshot = {
+          ...fixture.snapshot,
+          snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+          threads: [
+            {
+              ...pendingThread,
+              pendingInteractions: pendingThread.pendingInteractions.map((interaction) =>
+                Object.assign({}, interaction, {
+                  status: "confirmed" as const,
+                  responseCommandId: command.commandId,
+                  responseRequestedAt: command.createdAt,
+                  resolvedAt: NOW_ISO,
+                }),
+              ),
+            },
+          ],
+        };
+        return { sequence: fixture.snapshot.snapshotSequence };
+      },
+    );
     Object.defineProperty(window, "nativeApi", {
       configurable: true,
-      value: { ...api, orchestration: { ...api.orchestration, dispatchCommand } },
+      value: { ...api, orchestration: { ...api.orchestration, dispatchCommand, subscribeThread } },
     });
     try {
+      setThreadDetailResumeCursor(THREAD_ID, snapshot.snapshotSequence);
+      await expect.element(page.getByText("Choose option 1?")).toBeVisible();
       await page.getByRole("button", { name: /Choice 1/ }).click();
       await page.getByRole("button", { name: "Cancel", exact: true }).click();
       await vi.waitFor(() => expect(dispatchCommand).toHaveBeenCalledTimes(1));
@@ -3357,7 +3386,9 @@ describe("ChatView transcript geometry (full app)", () => {
           answers: {},
         }),
       );
+      await vi.waitFor(() => expect(subscribeThread).toHaveBeenCalledWith({ threadId: THREAD_ID }));
       await new Promise((resolve) => setTimeout(resolve, 250));
+      await expect.element(page.getByText("Choose option 1?")).not.toBeInTheDocument();
       await expect.element(page.getByText("Choose option 2?")).not.toBeInTheDocument();
     } finally {
       if (previousNativeApi)
