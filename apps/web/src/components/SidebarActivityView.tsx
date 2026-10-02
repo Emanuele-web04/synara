@@ -464,6 +464,8 @@ export function SidebarActivityView({
   pinnedThreadIdSet,
   settledOverrideByThreadId,
   threadsHydrated,
+  scopeSelection,
+  onScopeSelectionChange,
   resolveThreadStatus,
   onOpenThread,
   onOpenThreadPullRequest,
@@ -487,6 +489,9 @@ export function SidebarActivityView({
   pinnedThreadIdSet: ReadonlySet<ThreadId>;
   settledOverrideByThreadId: ReadonlyMap<ThreadId, boolean>;
   threadsHydrated: boolean;
+  /** Owned by the sidebar so the scope survives this view unmounting (Settings, reloads). */
+  scopeSelection: ActivityScopeSelection;
+  onScopeSelectionChange: (selection: ActivityScopeSelection) => void;
   prByThreadId: ReadonlyMap<ThreadId, OrchestrationThreadPullRequest | null>;
   onVisibleThreadIdsChange: (threadIds: readonly ThreadId[]) => void;
   resolveThreadStatus: (thread: SidebarThreadSummary) => ThreadStatusPill | null;
@@ -517,7 +522,6 @@ export function SidebarActivityView({
   /** Same "Add project" action the Projects section header runs. */
   onAddProject: () => void;
 }) {
-  const [scopeSelection, setScopeSelection] = useState<ActivityScopeSelection>(null);
   const [groupMode, setGroupMode] = useState<ActivityGroupMode>("time");
   const [pinnedOpen, setPinnedOpen] = useState(true);
   const [earlierOpen, setEarlierOpen] = useState(false);
@@ -548,9 +552,11 @@ export function SidebarActivityView({
     scopeSelection,
     scopeOptions,
   );
+  // Before threads hydrate every option is missing, so dropping the selection
+  // then would wipe the remembered scope on every remount.
   useEffect(() => {
-    if (scopeSelection !== activeScope) setScopeSelection(activeScope);
-  }, [activeScope, scopeSelection]);
+    if (threadsHydrated && scopeSelection !== activeScope) onScopeSelectionChange(activeScope);
+  }, [activeScope, onScopeSelectionChange, scopeSelection, threadsHydrated]);
 
   const model = useMemo(
     () =>
@@ -777,7 +783,7 @@ export function SidebarActivityView({
           options={scopeOptions}
           projectById={projectById}
           scopeSelection={activeScope}
-          onChangeScopeSelection={setScopeSelection}
+          onChangeScopeSelection={onScopeSelectionChange}
         />
         <SidebarSectionToolbar revealOnHover className="mr-0">
           <SidebarIconButton

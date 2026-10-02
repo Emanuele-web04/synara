@@ -129,7 +129,7 @@ export function ComposerModelMenuTrigger(props: {
           {label.showsFastBadge ? (
             <FastModeIcon
               aria-hidden="true"
-              className={cn("size-3.5 shrink-0", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)}
+              className="size-3.5 shrink-0 text-[var(--color-text-foreground)] opacity-100"
             />
           ) : null}
           {label.statusLabel ? (
@@ -137,12 +137,20 @@ export function ComposerModelMenuTrigger(props: {
               <>
                 <SettingsIcon
                   aria-hidden="true"
-                  className={cn("size-3.5 shrink-0", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)}
+                  className={cn(
+                    "size-3.5 shrink-0 dark:text-muted-foreground/45",
+                    COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
+                  )}
                 />
                 <span className="sr-only">{label.statusLabel}</span>
               </>
             ) : (
-              <span className={cn("shrink-0", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)}>
+              <span
+                className={cn(
+                  "shrink-0 dark:text-muted-foreground/45",
+                  COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
+                )}
+              >
                 {label.statusLabel}
               </span>
             )

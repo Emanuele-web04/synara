@@ -18,6 +18,12 @@ work** — its conversation, provider session, working environment, tool activit
 A project can contain many tasks. Each task has its own transcript and provider lifecycle. Tasks
 using separate worktrees also have separate working directories and branches.
 
+New thread (⌘N on macOS, Ctrl+N elsewhere) reopens an unsent draft. Once a send is in progress,
+including worktree preparation, it opens another draft while the original send continues.
+The task appears in the sidebar before Git preparation finishes, with a **Preparing worktree**
+indicator. Its provider session starts only after the worktree is ready. If preparation fails or
+is cancelled, the task and its prompt remain available for retry.
+
 ## The main surfaces
 
 - **Sidebar** — projects, spaces, tasks, and activity requiring attention. The rail
@@ -112,8 +118,11 @@ while the page is visible, on window focus, and with the refresh button.
 Every item offers three actions:
 
 - **Send to agent** opens a new draft thread in the item's project with the item attached as a
-  card. For a pull request, Synara first checks out its branch (worktree or local, following
-  **Settings → General → New threads**). You write the instructions and send; nothing starts
+  card. For a pull request, Synara reuses an existing worktree for its branch. Otherwise it
+  checks out the branch using the project's Local/Worktree preference, falling back to
+  **Settings → General → New threads**. If that branch name belongs to a known different
+  fork's worktree, Local reports the conflict; choose Worktree to keep the two separate.
+  You write the instructions and send; nothing starts
   on its own. When the repository belongs to several projects, you pick the project.
 - **Ask** opens a standalone sidechat about the item in a dock beside it, so you never leave
   Code review. Asking again reopens the item's live sidechat; `mod+alt+s` toggles it and Escape closes
@@ -200,6 +209,18 @@ The intended loop is:
 4. Run verification.
 5. Commit only the intended changes.
 6. Push and open a pull request when appropriate.
+
+Create PR can include uncommitted changes and create a feature branch from the default branch.
+When you supply a PR title, Synara also uses it as the commit message unless a separate commit
+message was supplied. Providing both the title and description skips text generation for this flow.
+
+Failed commit, push, and PR actions show the failed step and a copyable error until dismissed.
+Each action keeps its own error details when you switch workspaces and start another action.
+Codex text generation stops on a terminal `ERROR: ... 401 Unauthorized` diagnostic; transport
+fallback warnings remain recoverable. Cleanup preserves a recognized authentication error even
+when its grace period extends past the request deadline, and reports termination failures. Check
+the selected account or provider credentials in Settings before retrying. A failed PR step can
+follow a successful commit or push, so inspect the current branch before retrying.
 
 Synara's checkpoint and revert controls can help recover task work, but committed Git history remains
 the strongest boundary for important changes.

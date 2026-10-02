@@ -491,6 +491,7 @@ export function isInitialModelDiscoveryPending(query: {
 
 export function providerModelsQueryOptions(input: {
   provider: ProviderKind;
+  refresh?: "if-stale" | "now";
   instanceId?: ProviderInstanceId | null;
   binaryPath?: string | null;
   homePath?: string | null;
@@ -530,6 +531,7 @@ export function providerModelsQueryOptions(input: {
           const api = ensureNativeApi();
           const result = await api.provider.listModels({
             provider: input.provider,
+            ...(input.refresh ? { refresh: input.refresh } : {}),
             ...(input.instanceId ? { instanceId: input.instanceId } : {}),
             ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
             ...(input.homePath ? { homePath: input.homePath } : {}),

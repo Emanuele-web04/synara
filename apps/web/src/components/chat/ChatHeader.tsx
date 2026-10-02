@@ -255,7 +255,7 @@ function EditorRailTabs(props: {
   const closeThreadTab = useOpenThreadTabsStore((state) => state.closeThreadTab);
   const readRouteThreadId = useReadRouteThreadId();
   const [enqueueClose] = useState(createOpenThreadTabCloseQueue);
-  // Same press feedback as the chat header strip: the pressed chat tab highlights at once
+  // Same click feedback as the chat header strip: the clicked chat tab highlights at once
   // and its thread opens after that frame. The terminal tab only flips a surface, so it
   // stays a direct switch.
   const activeTabKey = props.activeSurface === "chat" ? props.activeThreadId : "terminal";
@@ -369,7 +369,6 @@ function EditorRailTabs(props: {
             <SurfaceTabChip
               key={thread.threadId}
               active={thread.threadId === shownTabKey}
-              selectOnPointerDown
               title={thread.title}
               label={`Chat ${index + 1}`}
               labelClassName="max-w-24"
