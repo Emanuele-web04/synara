@@ -26,10 +26,7 @@ import { useChatWorkLog } from "./useChatWorkLog";
 import { useComposerVoiceController } from "./useComposerVoiceController";
 import { toastManager } from "../ui/toast";
 import type { ComposerModelSelectionOptions } from "./ComposerModelPicker";
-import {
-  EFFORT_PREVIEW_POPUP_ATTRIBUTE,
-  MODEL_PICKER_POPUP_ATTRIBUTE,
-} from "./ComposerModelPicker.logic";
+import { MODEL_PICKER_POPUP_ATTRIBUTE } from "./ComposerModelPicker.logic";
 function eventTargetsComposer(
   event: globalThis.KeyboardEvent,
   composerForm: HTMLFormElement | null,
@@ -47,6 +44,7 @@ function canHandleComposerPickerShortcut(
   if (eventTargetsComposer(event, composerForm)) return true;
   const target = event.target;
   return (
+    (target instanceof Element && target.closest(`[${MODEL_PICKER_POPUP_ATTRIBUTE}]`) !== null) ||
     target === document.body ||
     target === document.documentElement ||
     document.activeElement === document.body ||
@@ -255,9 +253,7 @@ export function useChatKeyboardShortcuts({
         composerFocus:
           eventTargetsComposer(event, composerFormRef.current) ||
           (event.target instanceof Element &&
-            event.target.closest(
-              `[${MODEL_PICKER_POPUP_ATTRIBUTE}], [${EFFORT_PREVIEW_POPUP_ATTRIBUTE}]`,
-            ) !== null),
+            event.target.closest(`[${MODEL_PICKER_POPUP_ATTRIBUTE}]`) !== null),
         terminalFocus: isTerminalFocused(),
         terminalOpen: Boolean(terminalState.terminalOpen),
         terminalWorkspaceOpen,

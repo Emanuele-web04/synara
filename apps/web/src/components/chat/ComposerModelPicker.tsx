@@ -40,16 +40,13 @@ import { ProviderAccountAvatar } from "../ProviderAccountMark";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Menu, MenuGroup, MenuGroupLabel } from "../ui/menu";
-import { Popover, PopoverPopup } from "../ui/popover";
 import { Skeleton } from "../ui/skeleton";
 import { ComposerModelMenuTrigger } from "./ComposerModelMenuTrigger";
-import { ComposerEffortSliderCard } from "./ComposerEffortSliderCard";
 import { ModelCatalogRefresh } from "./ModelCatalogRefresh";
 import {
   buildProviderTabRows,
   buildStarredModelOptionsPatch,
   buildStarredTabRows,
-  EFFORT_PREVIEW_POPUP_ATTRIBUTE,
   type ComposerModelPickerRow as PickerRow,
   type ComposerModelPickerTab,
   MODEL_PICKER_POPUP_ATTRIBUTE,
@@ -138,8 +135,6 @@ type ComposerModelPickerProps = {
   onPromptChange: (prompt: string) => void;
 
   open?: boolean;
-  /** Brief effort-only preview opened by keyboard cycling. Keeps focus in the composer. */
-  effortPreview?: boolean;
   onOpenChange?: (open: boolean) => void;
   shortcutLabel?: string | null;
 };
@@ -175,8 +170,6 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
   const { onOpenChange, open, lockedProvider, threadId } = props;
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const isMenuOpen = open ?? uncontrolledOpen;
-  const effortPreview = props.effortPreview ?? false;
-  const triggerRef = useRef<HTMLButtonElement | null>(null);
   const activeProvider = lockedProvider ?? props.provider;
   const effortControl = props.effortControl ?? "menu";
   const usesEffortSlider = effortControl === "slider";
@@ -237,10 +230,10 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
   };
 
   useEffect(() => {
-    if (!isMenuOpen || effortPreview) return;
+    if (!isMenuOpen) return;
     const frame = requestAnimationFrame(() => searchInputRef.current?.focus());
     return () => cancelAnimationFrame(frame);
-  }, [isMenuOpen, effortPreview, tab]);
+  }, [isMenuOpen, tab]);
 
   // Options a provider's models would run with: the composer's own for the selected
   // provider, otherwise that provider's draft / sticky selection.
@@ -409,6 +402,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     }
     if (keepOpen) {
       selectionCommittedWhileOpenRef.current = true;
+      setMenuOpen(true);
       return;
     }
     selectionCommittedWhileOpenRef.current = false;
@@ -490,11 +484,11 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     if (row) selectRow(row);
   });
   useEffect(() => {
-    if (!isMenuOpen || effortPreview) return;
+    if (!isMenuOpen) return;
     const listener = (event: KeyboardEvent) => onShortcutKeyDown(event);
     window.addEventListener("keydown", listener, { capture: true });
     return () => window.removeEventListener("keydown", listener, { capture: true });
-  }, [isMenuOpen, effortPreview]);
+  }, [isMenuOpen]);
 
   const shortcutModifierLabel = isMacNavigatorPlatform() ? "⌘" : "Ctrl ";
   const isTabLoading =
@@ -504,13 +498,12 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
   const discoveryError =
     tabAccount === null ? undefined : props.discoveryErrorsByProvider?.[tabAccount.provider];
 
-  const menu = (
+  return (
     <Menu
-      open={isMenuOpen && !effortPreview}
+      open={isMenuOpen}
       onOpenChange={(nextOpen) => setMenuOpen(props.disabled ? false : nextOpen)}
     >
       <ComposerModelMenuTrigger
-        buttonRef={triggerRef}
         provider={activeProvider}
         accountLabel={activeProviderTab?.name ? activeProviderTab.label : null}
         // The default account is implied; only another one is worth the room.
@@ -524,7 +517,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
         hideStatusLabel={props.hideStatusLabel}
         disabled={props.disabled}
         isMenuOpen={isMenuOpen}
-        openPlaceholderLabel={usesEffortSlider || effortPreview ? "Select effort" : null}
+        openPlaceholderLabel={usesEffortSlider ? "Select effort" : null}
         shortcutLabel={props.shortcutLabel}
       />
       <ComposerPickerMenuPopup
@@ -672,34 +665,5 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
         </div>
       </ComposerPickerMenuPopup>
     </Menu>
-  );
-
-  return (
-    <>
-      {menu}
-      <Popover open={isMenuOpen && effortPreview} onOpenChange={setMenuOpen}>
-        <PopoverPopup
-          anchor={triggerRef}
-          side="top"
-          align="start"
-          initialFocus={false}
-          finalFocus={false}
-          aria-label="Model effort"
-          className="w-64 bg-popover/55 [--viewport-inline-padding:--spacing(2)] before:backdrop-blur-3xl before:backdrop-saturate-200 [&_[data-slot=popover-viewport]]:py-2"
-          {...{ [EFFORT_PREVIEW_POPUP_ATTRIBUTE]: "" }}
-        >
-          <ComposerEffortSliderCard
-            provider={props.provider}
-            providerInstanceId={props.selectedProviderInstanceId}
-            threadId={threadId}
-            model={props.model}
-            runtimeModel={props.runtimeModel}
-            modelOptions={props.modelOptions}
-            prompt={props.prompt}
-            onPromptChange={props.onPromptChange}
-          />
-        </PopoverPopup>
-      </Popover>
-    </>
   );
 }

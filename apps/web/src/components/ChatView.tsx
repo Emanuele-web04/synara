@@ -3848,9 +3848,8 @@ export default function ChatView({
     if (!cycleEffort()) return false;
     setIsModelPickerOpen(false);
     setIsTraitsPickerOpen(false);
-    scheduleComposerFocus();
     return true;
-  }, [cycleEffort, scheduleComposerFocus]);
+  }, [cycleEffort]);
 
   useChatKeyboardShortcuts({
     onToggleDevicePanel,
@@ -4625,7 +4624,6 @@ export default function ChatView({
       onProviderModelChange={handleProviderModelChange}
       onSelectionCommitted={scheduleComposerFocus}
       open={isComposerModelEffortPickerOpen}
-      effortPreview={isEffortPreviewOpen}
       onOpenChange={handleComposerModelEffortPickerOpenChange}
       shortcutLabel={modelPickerShortcutLabel}
     />

@@ -65,6 +65,7 @@ import {
 } from "../lib/terminalContext";
 import { extractTrailingBrowserAnnotations } from "../lib/browserAnnotations";
 import { isMacNavigatorPlatform } from "../lib/utils";
+import { STARRED_MODELS_STORAGE_KEY } from "../lib/starredModels";
 import { readNativeApi } from "../nativeApi";
 import { setThreadDetailResumeCursor } from "../threadDetailResumeCursors";
 import { resetHomeChatProjectPrewarmStateForTests } from "../lib/chatProjects";
@@ -5674,7 +5675,14 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("cycles model effort with Shift+Tab only while the composer is focused", async () => {
+  it("cycles model effort with Shift+Tab in the existing model picker", async () => {
+    localStorage.setItem("synara:app-settings:v1", JSON.stringify({ composerEffortSlider: true }));
+    localStorage.setItem(
+      STARRED_MODELS_STORAGE_KEY,
+      JSON.stringify([
+        { provider: "codex", model: "gpt-5.4", effort: "medium", fastMode: true, thinking: null },
+      ]),
+    );
     useComposerDraftStore.getState().setModelSelection(THREAD_ID, {
       provider: "codex",
       model: "gpt-5.4",
@@ -5719,6 +5727,7 @@ describe("ChatView transcript geometry (full app)", () => {
       const composerEditor = await waitForComposerEditor();
       composerEditor.focus();
       const slider = page.getByRole("slider", { name: "Reasoning effort" });
+      const searchbox = page.getByRole("searchbox", { name: "Search models" });
       composerEditor.dispatchEvent(
         new KeyboardEvent("keydown", {
           key: "Tab",
@@ -5731,6 +5740,7 @@ describe("ChatView transcript geometry (full app)", () => {
       await waitForLayout();
       expect(readModelSelection()).toMatchObject({ options: { reasoningEffort: "medium" } });
       expect(document.querySelector('[role="slider"][aria-label="Reasoning effort"]')).toBeNull();
+      let shortcutTarget: HTMLElement = composerEditor;
       for (const [effort, label] of [
         ["high", "High"],
         ["xhigh", "Extra High"],
@@ -5742,7 +5752,16 @@ describe("ChatView transcript geometry (full app)", () => {
           bubbles: true,
           cancelable: true,
         });
-        composerEditor.dispatchEvent(event);
+        shortcutTarget.dispatchEvent(event);
+        await expect.element(searchbox, { timeout: 1_000 }).toBeVisible();
+        await expect.element(page.getByRole("tablist", { name: "Model sources" })).toBeVisible();
+        await expect
+          .element(page.getByRole("tab", { name: "Starred", exact: true }))
+          .toHaveAttribute("aria-selected", "true");
+        await expect.element(page.getByRole("menuitem", { name: /^GPT-5\.4/u })).toBeVisible();
+        expect(
+          page.getByRole("dialog", { name: "Model effort", exact: true }).elements(),
+        ).toHaveLength(0);
         await expect.element(slider).toHaveAttribute("aria-valuetext", label);
         expect(event.defaultPrevented).toBe(true);
         expect(readModelSelection()).toMatchObject({
@@ -5751,26 +5770,26 @@ describe("ChatView transcript geometry (full app)", () => {
           options: { reasoningEffort: effort, fastMode: true },
         });
         expect(readInteractionMode()).toBe("default");
-        expect(document.activeElement).toBe(composerEditor);
+        await vi.waitFor(() => expect(document.activeElement).toBe(searchbox.element()));
+        shortcutTarget = searchbox.element() as HTMLElement;
       }
 
       await vi.waitFor(
         () => {
-          expect(
-            document.querySelector('[role="slider"][aria-label="Reasoning effort"]'),
-          ).toBeNull();
+          expect(document.querySelector('[data-slot="menu-popup"]')).toBeNull();
         },
         { timeout: 2_500, interval: 16 },
       );
       expect(readModelSelection()).toMatchObject({ options: { reasoningEffort: "low" } });
-      expect(document.activeElement).toBe(composerEditor);
+      await vi.waitFor(() => expect(document.activeElement).toBe(composerEditor));
     } finally {
       focusTarget.remove();
       await mounted.cleanup();
     }
   });
 
-  it("keeps the effort preview open for 1500ms after the latest Shift+Tab press", async () => {
+  it("keeps the model picker open for 1500ms after the latest Shift+Tab press", async () => {
+    localStorage.setItem("synara:app-settings:v1", JSON.stringify({ composerEffortSlider: true }));
     useComposerDraftStore.getState().setModelSelection(THREAD_ID, {
       provider: "codex",
       model: "gpt-5.4",
@@ -5788,8 +5807,9 @@ describe("ChatView transcript geometry (full app)", () => {
       await waitForServerConfigToApply();
       const composerEditor = await waitForComposerEditor();
       composerEditor.focus();
+      let shortcutTarget: HTMLElement = composerEditor;
       const pressShortcut = () =>
-        composerEditor.dispatchEvent(
+        shortcutTarget.dispatchEvent(
           new KeyboardEvent("keydown", {
             key: "Tab",
             shiftKey: true,
@@ -5798,8 +5818,12 @@ describe("ChatView transcript geometry (full app)", () => {
           }),
         );
       const slider = page.getByRole("slider", { name: "Reasoning effort" });
+      const searchbox = page.getByRole("searchbox", { name: "Search models" });
       pressShortcut();
+      await expect.element(searchbox, { timeout: 1_000 }).toBeVisible();
       await expect.element(slider).toHaveAttribute("aria-valuetext", "Medium");
+      await vi.waitFor(() => expect(document.activeElement).toBe(searchbox.element()));
+      shortcutTarget = searchbox.element() as HTMLElement;
       await new Promise<void>((resolve) => window.setTimeout(resolve, 900));
       pressShortcut();
       await expect.element(slider).toHaveAttribute("aria-valuetext", "High");
@@ -5807,19 +5831,18 @@ describe("ChatView transcript geometry (full app)", () => {
       await expect.element(slider).toBeVisible();
       await vi.waitFor(
         () => {
-          expect(
-            document.querySelector('[role="slider"][aria-label="Reasoning effort"]'),
-          ).toBeNull();
+          expect(document.querySelector('[data-slot="menu-popup"]')).toBeNull();
         },
         { timeout: 1_500, interval: 16 },
       );
-      expect(document.activeElement).toBe(composerEditor);
+      await vi.waitFor(() => expect(document.activeElement).toBe(composerEditor));
     } finally {
       await mounted.cleanup();
     }
   });
 
-  it("keeps a manually opened model picker open after the effort preview expires", async () => {
+  it("keeps a manually opened model picker open after the effort shortcut timer expires", async () => {
+    localStorage.setItem("synara:app-settings:v1", JSON.stringify({ composerEffortSlider: true }));
     useComposerDraftStore.getState().setModelSelection(THREAD_ID, {
       provider: "codex",
       model: "gpt-5.4",
@@ -5848,10 +5871,118 @@ describe("ChatView transcript geometry (full app)", () => {
       await expect
         .element(page.getByRole("slider", { name: "Reasoning effort" }))
         .toHaveAttribute("aria-valuetext", "High");
-      dispatchComposerPickerShortcut(composerEditor, "m");
+      const searchbox = page.getByRole("searchbox", { name: "Search models" });
+      await expect.element(searchbox, { timeout: 1_000 }).toBeVisible();
+      await vi.waitFor(() => expect(document.activeElement).toBe(searchbox.element()));
+      dispatchComposerPickerShortcut(searchbox.element(), "m");
       await waitForComposerPickerSurfaceOpen();
       await new Promise<void>((resolve) => window.setTimeout(resolve, 1_700));
-      await expect.element(page.getByRole("searchbox", { name: "Search models" })).toBeVisible();
+      await expect
+        .element(page.getByRole("searchbox", { name: "Search models" }), { timeout: 1_000 })
+        .toBeVisible();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps the existing slider menu open when choosing another model after Shift+Tab", async () => {
+    localStorage.setItem("synara:app-settings:v1", JSON.stringify({ composerEffortSlider: true }));
+    useComposerDraftStore.getState().setModelSelection(THREAD_ID, {
+      provider: "codex",
+      model: "gpt-5.4",
+      options: { reasoningEffort: "medium" },
+    });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-effort-shortcut-model-selection" as MessageId,
+        targetText: "choose model from effort shortcut",
+      }),
+    });
+
+    try {
+      await waitForServerConfigToApply();
+      const composerEditor = await waitForComposerEditor();
+      composerEditor.focus();
+      composerEditor.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Tab",
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      const searchbox = page.getByRole("searchbox", { name: "Search models" });
+      const slider = page.getByRole("slider", { name: "Reasoning effort" });
+      await expect.element(searchbox, { timeout: 1_000 }).toBeVisible();
+      await expect.element(slider, { timeout: 1_000 }).toHaveAttribute("aria-valuetext", "High");
+      await page.getByRole("menuitem", { name: /^GPT-5\.5/u }).click();
+      await vi.waitFor(() => {
+        expect(
+          useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.modelSelectionByProvider
+            .codex,
+        ).toMatchObject({ model: "gpt-5.5" });
+      });
+      await waitForLayout();
+      await expect.element(searchbox, { timeout: 1_000 }).toBeVisible();
+      await expect.element(slider, { timeout: 1_000 }).toHaveAttribute("aria-valuetext", "High");
+      slider
+        .element()
+        .dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true, cancelable: true }),
+        );
+      await expect.element(slider, { timeout: 1_000 }).toHaveAttribute("aria-valuetext", "Medium");
+      expect(
+        useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.modelSelectionByProvider
+          .codex,
+      ).toMatchObject({ model: "gpt-5.5", options: { reasoningEffort: "medium" } });
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 1_700));
+      await expect.element(searchbox, { timeout: 1_000 }).toBeVisible();
+      await expect.element(slider, { timeout: 1_000 }).toBeVisible();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("opens the existing model picker effort menu when its slider setting is disabled", async () => {
+    localStorage.setItem("synara:app-settings:v1", JSON.stringify({ composerEffortSlider: false }));
+    useComposerDraftStore.getState().setModelSelection(THREAD_ID, {
+      provider: "codex",
+      model: "gpt-5.4",
+      options: { reasoningEffort: "medium" },
+    });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-effort-shortcut-menu-setting" as MessageId,
+        targetText: "effort menu setting",
+      }),
+    });
+
+    try {
+      await waitForServerConfigToApply();
+      const composerEditor = await waitForComposerEditor();
+      composerEditor.focus();
+      composerEditor.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Tab",
+          shiftKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      expect(
+        useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.modelSelectionByProvider
+          .codex,
+      ).toMatchObject({ options: { reasoningEffort: "high" } });
+      await expect
+        .element(page.getByRole("searchbox", { name: "Search models" }), { timeout: 1_000 })
+        .toBeVisible();
+      await expect.element(page.getByRole("menuitem", { name: /^Effort.*High/u })).toBeVisible();
+      expect(page.getByRole("slider", { name: "Reasoning effort" }).elements()).toHaveLength(0);
+      expect(
+        page.getByRole("dialog", { name: "Model effort", exact: true }).elements(),
+      ).toHaveLength(0);
     } finally {
       await mounted.cleanup();
     }

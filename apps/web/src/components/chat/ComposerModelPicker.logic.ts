@@ -28,8 +28,6 @@ export type ComposerModelPickerTab = typeof STARRED_TAB | ProviderInstanceId;
 
 /** Marks the open picker so global mod+digit handlers (thread jump) yield to its rows. */
 export const MODEL_PICKER_POPUP_ATTRIBUTE = "data-model-picker-popup";
-// The effort preview accepts cycling without claiming the full picker's digit shortcuts.
-export const EFFORT_PREVIEW_POPUP_ATTRIBUTE = "data-effort-preview-popup";
 
 export function isModelPickerShortcutScopeActive(): boolean {
   return (
