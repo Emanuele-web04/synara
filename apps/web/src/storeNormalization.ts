@@ -20,7 +20,11 @@ import { deriveThreadSummaryMetadata } from "@synara/shared/threadSummary";
 
 import { isStalePendingRequestFailureDetail } from "./lib/pendingInteraction";
 import { toAttachmentPreviewUrl } from "./lib/wsHttpUrl";
-import { derivePendingBackgroundWork, hasLiveTurnTailWork } from "./session-logic";
+import {
+  countOutstandingBackgroundWork,
+  derivePendingBackgroundWork,
+  hasLiveTurnTailWork,
+} from "./session-logic";
 import { getRememberedProjectUiState, projectCwdKey } from "./storePersistence";
 import { resolveInitialLastVisitedAt } from "./threadVisitedPersistence";
 import type {
@@ -2122,11 +2126,15 @@ export function resolveThreadSidebarMetadata(
         session: thread.session,
       }),
     ),
-    pendingBackgroundWorkCount:
+    // Thread-wide, so the sidebar keeps showing background work after a
+    // finished subagent wakes the agent into a newer turn.
+    pendingBackgroundWorkCount: Math.max(
       derivePendingBackgroundWork({
         activities: thread.activities,
         latestTurn: thread.latestTurn,
         session: thread.session,
       })?.count ?? 0,
+      countOutstandingBackgroundWork({ activities: thread.activities, session: thread.session }),
+    ),
   };
 }

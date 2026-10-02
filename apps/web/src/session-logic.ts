@@ -447,6 +447,19 @@ export function deriveOutstandingBackgroundTaskIds(
   return [...outstanding];
 }
 
+// Thread-wide count of background tasks still running while their session is
+// alive. A stopped or failed session cannot finish them, so they stop counting.
+export function countOutstandingBackgroundWork(input: {
+  activities: ReadonlyArray<OrchestrationThreadActivity>;
+  session: Pick<ThreadSession, "orchestrationStatus"> | null | undefined;
+}): number {
+  const sessionStatus = input.session?.orchestrationStatus;
+  if (sessionStatus === undefined || sessionStatus === "stopped" || sessionStatus === "error") {
+    return 0;
+  }
+  return deriveOutstandingBackgroundTaskIds(input.activities).length;
+}
+
 // Keeps the UI "working" while the provider still has visible assistant text or
 // background-task updates to finish for the latest turn.
 export function hasLiveTurnTailWork(input: {

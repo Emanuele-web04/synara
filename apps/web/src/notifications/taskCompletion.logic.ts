@@ -12,7 +12,7 @@ import { pendingRequestInstanceKey } from "@synara/shared/threadSummary";
 import type { Thread, ThreadSession } from "../types";
 import {
   derivePendingApprovals,
-  deriveOutstandingBackgroundTaskIds,
+  countOutstandingBackgroundWork,
   derivePendingBackgroundWork,
   derivePendingUserInputs,
   hasLiveLatestTurn,
@@ -572,9 +572,7 @@ export function collectCompletedThreadCandidates(
     }
     if (
       options.waitForSubagents &&
-      thread.session?.orchestrationStatus !== "stopped" &&
-      thread.session?.orchestrationStatus !== "error" &&
-      deriveOutstandingBackgroundTaskIds(thread.activities).length > 0
+      countOutstandingBackgroundWork({ activities: thread.activities, session: thread.session }) > 0
     ) {
       continue;
     }
