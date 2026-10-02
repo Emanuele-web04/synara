@@ -76,7 +76,17 @@ async function renderShell(vertical = false) {
 
 describe("sidebar leading controls dock", () => {
   it("settles header controls, corners, and panel edges immediately with reduced motion", async () => {
-    await cdp().send("Emulation.setEmulatedMedia", {
+    // Vitest's provider-neutral CDP type is empty; type only the Playwright
+    // protocol operation used here without loading its global DOM augmentation.
+    const protocol = cdp() as {
+      send(
+        method: "Emulation.setEmulatedMedia",
+        params: {
+          features: { name: string; value: string }[];
+        },
+      ): Promise<void>;
+    };
+    await protocol.send("Emulation.setEmulatedMedia", {
       features: [{ name: "prefers-reduced-motion", value: "reduce" }],
     });
     await page.viewport(1280, 800);
@@ -111,7 +121,7 @@ describe("sidebar leading controls dock", () => {
       await screen.unmount();
       if (previousRuntime === undefined) delete document.documentElement.dataset.runtime;
       else document.documentElement.dataset.runtime = previousRuntime;
-      await cdp().send("Emulation.setEmulatedMedia", { features: [] });
+      await protocol.send("Emulation.setEmulatedMedia", { features: [] });
     }
   });
 
