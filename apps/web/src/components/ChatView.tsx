@@ -1947,6 +1947,7 @@ export default function ChatView({
       .subscribeThread(buildThreadSubscribeInput(threadId))
       .catch(() => undefined);
   }, [threadId]);
+  const activeThreadIsSidechat = Boolean(activeThread && isSidechatThread(activeThread));
   // Stable identity: this element is forwarded to the memoized MessagesTimeline, so
   // building it inline in JSX would defeat its `memo()` on every keystroke.
   const transcriptEmptyStateContent = useMemo((): ReactNode => {
@@ -1961,8 +1962,14 @@ export default function ChatView({
         />
       );
     }
-    return hasPendingThreadWork ? <span aria-hidden="true" /> : undefined;
-  }, [handleRetryThreadDetailSync, hasPendingThreadWork, isEditorRail, threadDetailHydration]);
+    return hasPendingThreadWork || activeThreadIsSidechat ? <span aria-hidden="true" /> : undefined;
+  }, [
+    activeThreadIsSidechat,
+    handleRetryThreadDetailSync,
+    hasPendingThreadWork,
+    isEditorRail,
+    threadDetailHydration,
+  ]);
   // Empty top-level threads render the centered landing composer instead of the transcript pane.
   // Home-scoped chats get the global "What should we work on?" copy plus the project picker,
   // while project-scoped drafts reuse the same centered layout with folder-specific copy.
@@ -1970,12 +1977,12 @@ export default function ChatView({
     timelineEntries.length === 0 &&
     !hasPendingThreadWork &&
     !activeThread?.parentThreadId &&
+    !activeThreadIsSidechat &&
     !isEditorRail &&
     threadDetailHydration === "ready";
   const isEmptyChatLanding =
     isCenteredEmptyLanding && Boolean(homeDir) && isContainerLandingProject;
-  // A standalone side chat asks about one GitHub item from the code review page's narrow dock:
-  // its landing names the item instead of the project, at a size that fits a quarter-width pane.
+  // Code review sidechats keep an item-specific composer placeholder.
   const standaloneSidechatContext =
     activeThread && isStandaloneSidechatThread(activeThread) ? activeThread.sidechatContext : null;
   const standaloneSidechatItemNoun =
@@ -5280,6 +5287,7 @@ export default function ChatView({
       ? { onCheckoutPullRequestRequest: openPullRequestDialog }
       : {}),
   };
+  const showTrailingBranchToolbar = !activeThreadIsSidechat && isGitRepo && !environmentEnabled;
   const showEmptyLandingBranchToolbar =
     isCenteredEmptyLanding && activeProject?.kind === "project" && !isHomeChatContainer;
   // Temporary is chosen while starting a chat. Draft metadata covers local reloads;
@@ -5312,11 +5320,9 @@ export default function ChatView({
         <span className="min-w-0 truncate">{activeProjectDisplayName}</span>
       </span>
     ) : null;
-  // A standalone side chat runs in its project's own folder, locally, and expires by itself, so
-  // the project, environment, branch, and Temporary controls have nothing to offer there.
+  // Only primary chats offer a new-chat workspace tray.
   const showEmptyLandingControls =
     isCenteredEmptyLanding &&
-    !standaloneSidechatContext &&
     (isEmptyChatLanding ||
       showEmptyLandingProjectPicker ||
       emptyLandingProjectChip !== null ||
@@ -5453,7 +5459,6 @@ export default function ChatView({
 
   // Read from the two inputs it uses, not from the thread object, so the list keeps its
   // identity (and the Environment panel its render) while the thread streams.
-  const activeThreadIsSidechat = isSidechatThread(activeThread);
   const environmentSidechats = activeThreadIsSidechat
     ? null
     : sourceThreadSidechats.map((sidechat) => ({
@@ -5481,7 +5486,7 @@ export default function ChatView({
     sidechats: environmentSidechats,
     diffDisabledReason,
     diffTotals: repoDiffTotals,
-    branchToolbar: branchToolbarProps,
+    branchToolbar: activeThreadIsSidechat ? null : branchToolbarProps,
     recap: threadRecap,
     pinnedMessages,
     pinnedMessageTextById,
@@ -6326,33 +6331,21 @@ export default function ChatView({
                 <div className="relative flex min-h-0 flex-1 items-center justify-center">
                   {/* Pinned to the top so the heading stays optically centered; hidden on
                       short panes where it would crowd the heading. */}
-                  {standaloneSidechatContext ? null : (
-                    <div className="absolute inset-x-0 top-4 flex justify-center px-6 [@media(max-height:620px)]:hidden">
-                      <ProjectImportLandingBanner className="w-full max-w-[520px]" />
-                    </div>
-                  )}
+                  <div className="absolute inset-x-0 top-4 flex justify-center px-6 [@media(max-height:620px)]:hidden">
+                    <ProjectImportLandingBanner className="w-full max-w-[520px]" />
+                  </div>
                   <div
                     className={cn(
-                      "flex flex-col items-center text-center select-none",
-                      standaloneSidechatContext ? "gap-3 px-4" : "gap-4 px-6",
+                      "flex flex-col items-center gap-4 px-6 text-center select-none",
                       CHAT_COLUMN_FRAME_CLASS_NAME,
                     )}
                   >
-                    <SynaraLogo
-                      aria-label="Synara logo"
-                      className={standaloneSidechatContext ? "size-7" : "size-10"}
-                    />
+                    <SynaraLogo aria-label="Synara logo" className="size-10" />
                     <h2
                       data-testid="empty-landing-heading"
-                      className={
-                        standaloneSidechatContext
-                          ? "text-lg font-normal leading-snug text-foreground/95"
-                          : "text-[26px] font-normal leading-[1.15] tracking-[-0.015em] text-foreground/95 sm:text-[30px]"
-                      }
+                      className="text-[26px] font-normal leading-[1.15] tracking-[-0.015em] text-foreground/95 sm:text-[30px]"
                     >
-                      {standaloneSidechatContext ? (
-                        `Ask about ${standaloneSidechatContext.itemKind === "issue" ? "issue" : "PR"} #${standaloneSidechatContext.number}`
-                      ) : isEmptyChatLanding ? (
+                      {isEmptyChatLanding ? (
                         "What should we work on?"
                       ) : (
                         <>
@@ -6555,10 +6548,8 @@ export default function ChatView({
                   </div>
                   {/* A trailing BranchToolbar only renders for legacy git threads; otherwise the
                       composer is the last element, so give it a comfortable bottom margin. */}
-                  <div
-                    className={cn(isGitRepo && !environmentEnabled ? "pt-0.5" : "pt-3 sm:pt-4")}
-                  />
-                  {(isGitRepo && !environmentEnabled) || relocateComposerLeadingControls ? (
+                  <div className={cn(showTrailingBranchToolbar ? "pt-0.5" : "pt-3 sm:pt-4")} />
+                  {showTrailingBranchToolbar || relocateComposerLeadingControls ? (
                     <div className={CHAT_COLUMN_GUTTER_CLASS_NAME}>
                       <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
                         <div className="flex w-full items-center gap-1">
@@ -6567,7 +6558,7 @@ export default function ChatView({
                               {renderComposerLeadingControls({ iconOnly: true })}
                             </div>
                           ) : null}
-                          {isGitRepo && !environmentEnabled ? (
+                          {showTrailingBranchToolbar ? (
                             <BranchToolbar {...branchToolbarProps} className="min-w-0 flex-1" />
                           ) : null}
                         </div>

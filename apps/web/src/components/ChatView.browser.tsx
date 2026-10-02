@@ -2481,6 +2481,13 @@ describe("ChatView transcript geometry (full app)", () => {
         "Sidechat composer missing",
       );
       await vi.waitFor(() => expect(document.activeElement).toBe(sideEditor));
+      const sidechatPane = sideEditor.closest("[data-chat-pane-scope]")!;
+      expect(sidechatPane.querySelector('[data-testid="empty-landing-heading"]')).toBeNull();
+      expect(sidechatPane.querySelector("[data-empty-landing-controls]")).toBeNull();
+      expect(sidechatPane.querySelector('[role="combobox"]')).toBeNull();
+      expect(sidechatPane.textContent).not.toContain("Import your Claude Code");
+      expect(sidechatPane.textContent).not.toContain("Let's build");
+      expect(sidechatPane.textContent).not.toContain("Local");
       await userEvent.type(sideEditor, "Keep this tangent");
       const panes = useRightDockStore.getState().dockStateByThreadId[THREAD_ID]!.panes;
       const livePane = panes.find((pane) => pane.threadId === commands[0]!.threadId)!;
@@ -8381,36 +8388,81 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
-  it("sizes a standalone side chat's empty landing for its item and a narrow dock", async () => {
-    const snapshot = addThreadToSnapshot(createDraftOnlySnapshot(), THREAD_ID);
-    const sidechat = {
-      ...snapshot.threads[0]!,
-      session: null,
-      sidechatContext: {
-        kind: "github-item" as const,
-        itemKind: "pullRequest" as const,
-        repository: "acme/widgets",
-        number: 1368,
-        url: "https://github.com/acme/widgets/pull/1368",
-      },
-    };
-    const mounted = await mountChatView({
-      viewport: DEFAULT_VIEWPORT,
-      snapshot: { ...snapshot, threads: [sidechat] },
-    });
+  it.each([
+    { kind: "forked", envMode: "local", started: false },
+    { kind: "forked", envMode: "worktree", started: false },
+    { kind: "forked", envMode: "local", started: true },
+    { kind: "forked", envMode: "worktree", started: true },
+    { kind: "standalone", envMode: "local", started: false },
+    { kind: "standalone", envMode: "local", started: true },
+  ] as const)(
+    "keeps $kind sidechat composer free of workspace controls ($envMode, started=$started)",
+    async ({ kind, envMode, started }) => {
+      const snapshot = addThreadToSnapshot(createDraftOnlySnapshot(), THREAD_ID);
+      const sidechat = {
+        ...snapshot.threads[0]!,
+        session: null,
+        envMode,
+        worktreePath: envMode === "worktree" ? "/repo-sidechat-worktree" : null,
+        workingDirectory: "/repo-sidechat-worktree/packages",
+        ...(kind === "forked"
+          ? { sidechatSourceThreadId: OTHER_THREAD_ID }
+          : {
+              sidechatContext: {
+                kind: "github-item" as const,
+                itemKind: "pullRequest" as const,
+                repository: "acme/widgets",
+                number: 1368,
+                url: "https://github.com/acme/widgets/pull/1368",
+              },
+            }),
+        messages: started
+          ? [
+              createUserMessage({
+                id: MessageId.makeUnsafe("sidechat-follow-up"),
+                text: "Keep discussing this context",
+                offsetSeconds: 0,
+              }),
+            ]
+          : [],
+      };
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: { ...snapshot, threads: [sidechat] },
+      });
 
-    try {
-      await expect
-        .element(page.getByTestId("empty-landing-heading"))
-        .toHaveTextContent("Ask about PR #1368");
-      // No project, environment, branch, or Temporary tray, and no import banner.
-      expect(document.querySelector('[data-empty-landing-controls="true"]')).toBeNull();
-      expect(document.body.textContent).not.toContain("Import your Claude Code");
-      expect(document.body.innerHTML).toContain("Ask about this pull request");
-    } finally {
-      await mounted.cleanup();
-    }
-  });
+      try {
+        const editor = await waitForComposerEditor();
+        expect(document.querySelector('[data-testid="empty-landing-heading"]')).toBeNull();
+        expect(document.querySelector('[data-empty-landing-controls="true"]')).toBeNull();
+        expect(document.body.textContent).not.toContain("Import your Claude Code");
+        expect(document.body.textContent).not.toContain("Let's build");
+        await expect
+          .element(page.getByRole("button", { name: "Local", exact: true }))
+          .not.toBeInTheDocument();
+        await expect
+          .element(page.getByRole("button", { name: "Temporary chat", exact: true }))
+          .not.toBeInTheDocument();
+        if (kind === "standalone" && !started) {
+          expect(editor.getAttribute("aria-placeholder")).toBe("Ask about this pull request");
+        }
+        if (started) {
+          await expect
+            .element(page.getByText("Keep discussing this context", { exact: true }))
+            .toBeVisible();
+        }
+        await page.getByRole("button", { name: "Toggle environment panel" }).click();
+        await expect
+          .element(page.getByRole("button", { name: "Local", exact: true }))
+          .not.toBeInTheDocument();
+        await expect
+          .element(page.getByRole("combobox", { name: "main", exact: true }))
+          .not.toBeInTheDocument();
+      } finally {
+        await mounted.cleanup();
+      }
+    },
+  );
 
   it("keeps the transcript open while the first turn starts before its message arrives", async () => {
     const snapshot = addThreadToSnapshot(createDraftOnlySnapshot(), THREAD_ID);
