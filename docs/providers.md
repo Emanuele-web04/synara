@@ -97,7 +97,10 @@ checks that catalog on demand and delivers any refreshed list directly to the pi
 are not refreshed just because the picker opens, and there is no periodic timer for these checks.
 Existing models remain visible while a check runs. **Refresh models** requests an earlier check;
 the server shares concurrent requests, reuses successful checks for at least one minute, and backs
-off failures. Failed refreshes retain the last successful catalog. Refreshing does not change the
+off failures. Status text appears only while checking or after a failure; successful checks clear it,
+including when the catalog has not changed. Checks for the viewed account take priority over queued
+background catalog loads.
+Failed refreshes retain the last successful catalog. Refreshing does not change the
 selected model or restart running sessions, and availability still comes from the provider runtime.
 
 The composer model picker has one tab per connected provider and a Starred tab. Starring a model
