@@ -10,6 +10,7 @@ import "../../index.css";
 import {
   DEFAULT_SERVER_SETTINGS_VIEW,
   type GitHubInboxItem,
+  type GitHubInboxListInput,
   type GitHubInboxListResult,
   type GitHubIssueDetail,
   type NativeApi,
@@ -241,7 +242,7 @@ const PULL_REQUEST_41_DETAIL: PullRequestDetail = {
 };
 
 const api = {
-  list: vi.fn<(input: { state: "open" | "closed" }) => Promise<GitHubInboxListResult>>(),
+  list: vi.fn<(input: GitHubInboxListInput) => Promise<GitHubInboxListResult>>(),
   issueDetail: vi.fn(),
   pullRequestDetail: vi.fn(),
   openExternal: vi.fn(),
@@ -345,13 +346,54 @@ afterEach(() => {
 });
 
 describe("GitHubInbox list", () => {
-  it("lists pull requests and issues together by latest activity, as on GitHub", async () => {
+  it("defaults to newest and persists the chosen sort across refresh and remount", async () => {
+    api.list.mockResolvedValue(
+      listResult({
+        items: [
+          { ...PULL_REQUEST_41, createdAt: "2026-09-28T08:00:00.000Z" },
+          { ...ISSUE_42, updatedAt: "2026-09-28T08:00:00.000Z" },
+        ],
+      }),
+    );
+    const first = await mount();
+    await expectRows([42, 41]);
+    expect(
+      document.querySelector('[data-pull-request-number="41"] time')?.getAttribute("datetime"),
+    ).toBe("2026-09-28T08:00:00.000Z");
+    expect(api.list).toHaveBeenCalledWith({ state: "open", sort: "created" });
+    await page.getByRole("button", { name: "Sort: Newest" }).click();
+    await page.getByRole("menuitemradio", { name: "Recently updated" }).click();
+    await closeMenu();
+    await expectRows([41, 42]);
+    expect(
+      document.querySelector('[data-pull-request-number="41"] time')?.getAttribute("datetime"),
+    ).toBe(NOW);
+    expect(api.list).toHaveBeenCalledWith({ state: "open", sort: "updated" });
+    await page.getByRole("button", { name: "More code review actions" }).click();
+    await page.getByRole("menuitem", { name: "Refresh", exact: true }).click();
+    await closeMenu();
+    await expect
+      .poll(() =>
+        api.list.mock.calls.some(
+          ([input]) => input.sort === "updated" && input.forceRefresh === true,
+        ),
+      )
+      .toBe(true);
+    await first.unmount();
+    await mount();
+    await expectRows([41, 42]);
+    await expect
+      .element(page.getByRole("button", { name: "Sort: Recently updated" }))
+      .toBeVisible();
+  });
+
+  it("lists pull requests and issues together, newest first", async () => {
     await mount();
 
     await expectRows([44, 43, 42, 41]);
     await expect.element(page.getByRole("img", { name: "Issue open" }).first()).toBeVisible();
     await expect.element(page.getByText("Select a pull request or issue")).toBeVisible();
-    expect(api.list).toHaveBeenCalledWith({ state: "open" });
+    expect(api.list).toHaveBeenCalledWith({ state: "open", sort: "created" });
   });
 
   it("combines kind, project, involvement, and label filters, then clears them", async () => {
@@ -439,7 +481,7 @@ describe("GitHubInbox list", () => {
     await page.getByRole("button", { name: /^Filter/ }).click();
     await page.getByRole("menuitemradio", { name: "Closed" }).click();
     await expect.element(page.getByText("No pull requests and issues found")).toBeVisible();
-    expect(api.list).toHaveBeenCalledWith({ state: "closed" });
+    expect(api.list).toHaveBeenCalledWith({ state: "closed", sort: "created" });
     await closeMenu();
 
     await page.getByRole("button", { name: "Remove filter: Closed" }).click();
@@ -606,6 +648,7 @@ describe("GitHubInbox states", () => {
 
 describe("GitHubInbox sections", () => {
   it("lists every row by latest activity in one open list, own rows included", async () => {
+    localStorage.setItem("synara:app-settings:v1", JSON.stringify({ githubInboxSort: "updated" }));
     // The viewer's own pull request is the oldest; it sits last, not in a section above the rest.
     api.list.mockResolvedValue(
       listResult({

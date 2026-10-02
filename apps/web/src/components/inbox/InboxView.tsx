@@ -554,7 +554,7 @@ export default function InboxView() {
   );
   // Only asked when there is a GitHub-backed project to ask about.
   const reviewRequestQuery = useQuery({
-    ...githubInboxReviewBadgeQueryOptions(),
+    ...githubInboxReviewBadgeQueryOptions(settings.githubInboxSort),
     enabled: inboxAvailable && projects.some((project) => project.kind === "project"),
   });
   // Shares the ["automations"] cache the sidebar keeps live.

@@ -9,6 +9,7 @@ import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 import type {
   GitHubInboxState,
+  GitHubInboxSort,
   GitHubIssueState,
   GitHubIssueStateReason,
   GitPullRequestCheck,
@@ -229,7 +230,7 @@ export interface GitHubCliShape {
   }) => Effect.Effect<string, GitHubCliError>;
 
   /**
-   * Read a repository's 50 most recently updated pull requests and issues for one state, the
+   * Read a repository's first 50 pull requests and issues for one state and sort, the
    * review-requested numbers and count, and the GraphQL budget in one `gh api graphql` call.
    * A full inbox read sends it together with `listRepositoryInboxInvolvement`.
    */
@@ -237,6 +238,7 @@ export interface GitHubCliShape {
     readonly cwd: string;
     readonly repository: string;
     readonly state: GitHubInboxState;
+    readonly sort?: GitHubInboxSort;
   }) => Effect.Effect<GitHubRepositoryInboxLists, GitHubCliError>;
 
   /**
@@ -247,6 +249,7 @@ export interface GitHubCliShape {
     readonly cwd: string;
     readonly repository: string;
     readonly state: GitHubInboxState;
+    readonly sort?: GitHubInboxSort;
   }) => Effect.Effect<GitHubRepositoryInboxInvolvement, GitHubCliError>;
 
   /**

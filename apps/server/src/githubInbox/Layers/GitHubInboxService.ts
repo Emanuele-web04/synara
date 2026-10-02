@@ -239,6 +239,7 @@ export const makeGitHubInboxService = (
                 cwd: repositoryProjects[0]!.workspaceRoot,
                 repository: repository.nameWithOwner,
                 state: input.state,
+                sort: input.sort ?? "updated",
                 forceRefresh,
               })
               .pipe(

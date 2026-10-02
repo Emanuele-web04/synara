@@ -1435,10 +1435,11 @@ export default function Sidebar() {
     void queryClient.invalidateQueries({ queryKey: githubInboxQueryKeys.all });
     void queryClient.invalidateQueries({ queryKey: pullRequestQueryKeys.all });
   }, [pullRequestRepositoryConfig, queryClient]);
+  const { settings: appSettings, serverSettings, updateSettings } = useAppSettings();
   // The badge observes the open inbox list and shares its server snapshot, so an open inbox makes
   // it free; with the inbox closed it refreshes every 15 minutes.
   const pullRequestsReviewingQuery = useQuery({
-    ...githubInboxReviewBadgeQueryOptions(),
+    ...githubInboxReviewBadgeQueryOptions(appSettings.githubInboxSort),
     enabled: projects.some((project) => project.kind === "project"),
   });
   const pullRequestsReviewBadge = resolvePullRequestReviewBadge(pullRequestsReviewingQuery.data);
@@ -1448,7 +1449,6 @@ export default function Sidebar() {
     () => groupAutomationsByContinuedThread(automationListQuery.data?.definitions ?? []),
     [automationListQuery.data],
   );
-  const { settings: appSettings, serverSettings, updateSettings } = useAppSettings();
   const sidebarProviderInstances = useMemo(
     () => getProviderInstanceOptions(appSettings),
     [appSettings],

@@ -328,9 +328,9 @@ export function GitHubInbox({
   const filters = resolveGitHubInboxFilters(search, settings, existingProjectIds);
   const selection = githubInboxSelection(search);
 
-  // One list per state; kind, project, involvement, label, and text filters apply below, so
+  // One list per state and sort; kind, project, involvement, label, and text filters apply below, so
   // switching them never reaches GitHub.
-  const listQuery = useQuery(githubInboxListQueryOptions(filters.state));
+  const listQuery = useQuery(githubInboxListQueryOptions(filters.state, settings.githubInboxSort));
   const refreshMutation = useMutation(pullRequestsForceRefreshMutationOptions(queryClient));
   const pinMutation = useMutation(pullRequestSetPinnedMutationOptions(queryClient));
   const activeActionCount = useIsMutating({
@@ -345,6 +345,7 @@ export function GitHubInbox({
   const deferredQuery = useDeferredValue(query.trim().toLowerCase());
   const entries = selectVisibleInboxItems(listData?.items ?? [], filters, {
     viewer: listData?.viewer,
+    sort: settings.githubInboxSort,
     normalizedQuery: deferredQuery,
     preferredProjectId: selection?.projectId,
   });
@@ -432,7 +433,7 @@ export function GitHubInbox({
   const refresh = () => {
     if (refreshBlockedReason !== null) return;
     refreshMutation.mutate(
-      { state: filters.state },
+      { state: filters.state, sort: settings.githubInboxSort },
       {
         onError: (error) =>
           toastManager.add({
@@ -527,6 +528,8 @@ export function GitHubInbox({
           <div className="shrink-0">
             <GitHubInboxFilterBar
               filters={filters}
+              sort={settings.githubInboxSort}
+              onSortChange={(sort) => updateSettings({ githubInboxSort: sort })}
               query={query}
               kindCounts={
                 listData
@@ -592,6 +595,7 @@ export function GitHubInbox({
                 </Empty>
               ) : (
                 <PullRequestList
+                  sort={settings.githubInboxSort}
                   groups={groups}
                   isSectionOpen={isSectionOpen}
                   onToggleSection={toggleSection}
@@ -606,8 +610,9 @@ export function GitHubInbox({
               )}
               {truncatedRepositoryCount > 0 ? (
                 <p className={cn(PR_FINE_TEXT_CLASS_NAME, "text-muted-foreground")}>
-                  Showing the 50 most recently updated {noun} per repository.{" "}
-                  {truncatedRepositoryCount}{" "}
+                  Showing the 50{" "}
+                  {settings.githubInboxSort === "created" ? "newest" : "most recently updated"}{" "}
+                  {noun} per repository. {truncatedRepositoryCount}{" "}
                   {truncatedRepositoryCount === 1 ? "repository has" : "repositories have"} more on
                   GitHub.
                 </p>

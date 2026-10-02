@@ -1,4 +1,4 @@
-// Per-(repository, state) inbox snapshots with the request budget rules from the inbox plan:
+// Per-(repository, state, sort) inbox snapshots with the request budget rules from the inbox plan:
 // a short freshness window shared by every caller, a free conditional probe before refetching,
 // a rate-limit gate, and exponential backoff for failing repositories. The last good snapshot is
 // kept so a rate-limited or failing repository still shows its rows with a warning.
@@ -7,7 +7,7 @@
 // viewer's `involves:@me` search. Each takes its own read slot and releases it on completion, so
 // a read never holds one slot while waiting for another.
 
-import type { GitHubInboxRateLimit, GitHubInboxState } from "@synara/contracts";
+import type { GitHubInboxRateLimit, GitHubInboxSort, GitHubInboxState } from "@synara/contracts";
 import { Effect, type Scope } from "effect";
 
 import { GitHubCliError } from "../git/Errors";
@@ -64,6 +64,7 @@ export interface GitHubInboxSnapshotStore {
     readonly cwd: string;
     readonly repository: string;
     readonly state: GitHubInboxState;
+    readonly sort: GitHubInboxSort;
     readonly forceRefresh: boolean;
   }) => Effect.Effect<GitHubInboxSnapshotLoad, GitHubCliError>;
   /** After a mutation: drop in-flight reads and force a full read next time, keeping the old
@@ -72,8 +73,8 @@ export interface GitHubInboxSnapshotStore {
   readonly rateLimit: () => GitHubInboxRateLimit | null;
 }
 
-function snapshotKey(repository: string, state: GitHubInboxState): string {
-  return `${repository.trim().toLowerCase()}\u0000${state}`;
+function snapshotKey(repository: string, state: GitHubInboxState, sort: GitHubInboxSort): string {
+  return `${repository.trim().toLowerCase()}\u0000${state}\u0000${sort}`;
 }
 
 function lowerRemaining(
@@ -184,6 +185,7 @@ export const makeGitHubInboxSnapshotStore = (dependencies: {
       readonly cwd: string;
       readonly repository: string;
       readonly state: GitHubInboxState;
+      readonly sort: GitHubInboxSort;
     }) =>
       dependencies
         .withGitHubRead(
@@ -191,6 +193,7 @@ export const makeGitHubInboxSnapshotStore = (dependencies: {
             cwd: input.cwd,
             repository: input.repository,
             state: input.state,
+            sort: input.sort,
           }),
         )
         .pipe(
@@ -215,6 +218,7 @@ export const makeGitHubInboxSnapshotStore = (dependencies: {
       readonly cwd: string;
       readonly repository: string;
       readonly state: GitHubInboxState;
+      readonly sort: GitHubInboxSort;
       readonly skipProbe: boolean;
     }) =>
       Effect.gen(function* () {
@@ -258,6 +262,7 @@ export const makeGitHubInboxSnapshotStore = (dependencies: {
                 cwd: input.cwd,
                 repository: input.repository,
                 state: input.state,
+                sort: input.sort,
               }),
             ),
             readInvolvement(input),
@@ -302,7 +307,7 @@ export const makeGitHubInboxSnapshotStore = (dependencies: {
 
     const load: GitHubInboxSnapshotStore["load"] = (input) =>
       Effect.gen(function* () {
-        const key = snapshotKey(input.repository, input.state);
+        const key = snapshotKey(input.repository, input.state, input.sort);
         const startedAt = now();
         const generation = (generations.get(key) ?? 0) + (input.forceRefresh ? 1 : 0);
         if (input.forceRefresh) {
@@ -354,6 +359,7 @@ export const makeGitHubInboxSnapshotStore = (dependencies: {
               cwd: input.cwd,
               repository: input.repository,
               state: input.state,
+              sort: input.sort,
               skipProbe: input.forceRefresh,
             }),
           )
@@ -379,10 +385,12 @@ export const makeGitHubInboxSnapshotStore = (dependencies: {
     const invalidateRepository: GitHubInboxSnapshotStore["invalidateRepository"] = (repository) =>
       Effect.gen(function* () {
         for (const state of ["open", "closed"] as const) {
-          const key = snapshotKey(repository, state);
-          generations.set(key, (generations.get(key) ?? 0) + 1);
-          fullReadRequired.add(key);
-          yield* inFlight.invalidate(key);
+          for (const sort of ["created", "updated"] as const) {
+            const key = snapshotKey(repository, state, sort);
+            generations.set(key, (generations.get(key) ?? 0) + 1);
+            fullReadRequired.add(key);
+            yield* inFlight.invalidate(key);
+          }
         }
       });
 
