@@ -174,6 +174,28 @@ describe("glass overlay content cutouts", () => {
     expect(getComputedStyle(composer, "::before").backdropFilter).toBe("none");
   });
 
+  it("drops dialog backing before a kept-mounted overlay fades in over the page", async () => {
+    const root = glassRoot();
+    const dialog = document.createElement("div");
+    dialog.style.cssText =
+      "position:fixed;left:40px;top:40px;width:200px;height:160px;background:white;z-index:150";
+    document.body.append(dialog);
+    disposers.push(() => dialog.remove());
+    const popup = portal(50, 50);
+    await frames();
+    expect(popup.hasAttribute("data-glass-backed")).toBe(true);
+    expect(root.style.clipPath).toBe("");
+    popup.style.opacity = "0";
+    await frames();
+    dialog.remove();
+    popup.style.opacity = "0.25";
+    await frames();
+    expect(popup.hasAttribute("data-glass-backed")).toBe(false);
+    popup.style.opacity = "1";
+    await frames();
+    expect(root.style.clipPath).not.toBe("");
+  });
+
   it("restores an existing inline clip when material becomes opaque or the installer is disposed", async () => {
     const root = glassRoot();
     root.style.clipPath = "inset(2px)";
