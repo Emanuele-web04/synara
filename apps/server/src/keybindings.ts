@@ -120,6 +120,8 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   // Cycle models within the active provider (favorites first, then remaining list).
   { key: "alt+]", command: "model.next", when: "!terminalFocus" },
   { key: "alt+[", command: "model.previous", when: "!terminalFocus" },
+  // Preserve reverse focus navigation outside the composer and its effort picker.
+  { key: "shift+tab", command: "model.effort.next", when: "composerFocus" },
   { key: "mod+shift+e", command: "traitsPicker.toggle", when: "!terminalFocus" },
   { key: "mod+shift+u", command: "settings.usage", when: "!terminalFocus" },
   // New thread (chat.new) is the primary create action; it falls back to the most

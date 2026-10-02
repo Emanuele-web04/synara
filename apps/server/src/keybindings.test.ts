@@ -710,6 +710,46 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }).pipe(Effect.provide(makeKeybindingsLayer())),
   );
 
+  it.effect("syncs the composer effort shortcut into existing user keybindings", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      yield* writeKeybindingsConfig(keybindingsConfigPath, [
+        { key: "mod+g", command: "terminal.toggle" },
+      ]);
+
+      const configState = yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        yield* keybindings.syncDefaultKeybindingsOnStartup;
+        return yield* keybindings.loadConfigState;
+      });
+
+      assert.deepEqual(configState.issues, []);
+      assert.deepEqual(
+        configState.keybindings.find((entry) => entry.command === "model.effort.next"),
+        {
+          command: "model.effort.next",
+          shortcut: {
+            key: "tab",
+            metaKey: false,
+            ctrlKey: false,
+            shiftKey: true,
+            altKey: false,
+            modKey: false,
+          },
+          whenAst: { type: "identifier", name: "composerFocus" },
+        },
+      );
+      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+      assert.includeDeepMembers(
+        [...persisted],
+        [
+          { key: "shift+tab", command: "model.effort.next", when: "composerFocus" },
+          { key: "mod+g", command: "terminal.toggle" },
+        ],
+      );
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
   it.effect("drops retired legacy keybindings without startup issues", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

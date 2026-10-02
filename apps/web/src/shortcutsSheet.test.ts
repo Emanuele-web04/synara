@@ -14,6 +14,64 @@ const PROJECT_SCRIPTS: ProjectScript[] = [
 ];
 
 describe("buildShortcutSheetSections", () => {
+  it("exposes the composer effort shortcut for discovery and customization", () => {
+    const sections = buildShortcutSheetSections({
+      keybindings: [],
+      projectScripts: [],
+      platform: "MacIntel",
+      context: {
+        terminalFocus: false,
+        terminalOpen: false,
+        terminalWorkspaceOpen: false,
+      },
+    });
+
+    expect(sections[0]?.entries.some((entry) => entry.command === "model.effort.next")).toBe(false);
+    const composerSection = sections.find((section) => section.id === "composer-context");
+    expect(
+      composerSection?.entries.find((entry) => entry.command === "model.effort.next"),
+    ).toMatchObject({
+      label: "Next model effort",
+      shortcutLabel: "⇧Tab",
+    });
+    expect(
+      listEditableShortcutDefinitions().find((entry) => entry.command === "model.effort.next"),
+    ).toMatchObject({
+      label: "Next model effort",
+    });
+  });
+
+  it("shows a global custom effort shortcut only once", () => {
+    const sections = buildShortcutSheetSections({
+      keybindings: [
+        {
+          command: "model.effort.next",
+          shortcut: {
+            key: "e",
+            metaKey: false,
+            ctrlKey: false,
+            shiftKey: false,
+            altKey: true,
+            modKey: false,
+          },
+        },
+      ],
+      projectScripts: [],
+      platform: "MacIntel",
+      context: {
+        terminalFocus: false,
+        terminalOpen: false,
+        terminalWorkspaceOpen: false,
+      },
+    });
+
+    expect(
+      sections
+        .flatMap((section) => section.entries)
+        .filter((entry) => entry.command === "model.effort.next"),
+    ).toHaveLength(1);
+  });
+
   it("includes the help shortcut and current thread jumps outside workspace mode", () => {
     const sections = buildShortcutSheetSections({
       keybindings: [

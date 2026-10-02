@@ -16,6 +16,22 @@ const decode = <S extends Schema.Top>(
 
 const decodeResolvedRule = Schema.decodeUnknownEffect(ResolvedKeybindingRule as never);
 
+it.effect("accepts customizable model effort cycling rules", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decode(KeybindingRule, {
+      key: "shift+tab",
+      command: "model.effort.next",
+      when: "composerFocus",
+    });
+
+    assert.deepEqual(parsed, {
+      key: "shift+tab",
+      command: "model.effort.next",
+      when: "composerFocus",
+    });
+  }),
+);
+
 it.effect("parses keybinding rules", () =>
   Effect.gen(function* () {
     const parsed = yield* decode(KeybindingRule, {

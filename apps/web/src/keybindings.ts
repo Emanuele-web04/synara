@@ -176,6 +176,11 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
     whenAst: whenNotTerminalFocus,
   },
   {
+    command: "model.effort.next",
+    shortcut: commandShortcut("tab", { shiftKey: true, modKey: false }),
+    whenAst: whenIdentifier("composerFocus"),
+  },
+  {
     command: "traitsPicker.toggle",
     shortcut: commandShortcut("e", { shiftKey: true }),
     whenAst: whenNotTerminalFocus,

@@ -402,6 +402,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     }
     if (keepOpen) {
       selectionCommittedWhileOpenRef.current = true;
+      setMenuOpen(true);
       return;
     }
     selectionCommittedWhileOpenRef.current = false;

@@ -46,6 +46,7 @@ export const STATIC_KEYBINDING_COMMANDS = [
   "modelPicker.toggle",
   "model.next",
   "model.previous",
+  "model.effort.next",
   "traitsPicker.toggle",
   "settings.usage",
   "chat.new",
