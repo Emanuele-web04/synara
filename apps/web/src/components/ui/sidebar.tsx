@@ -237,6 +237,7 @@ function Sidebar({
   gapClassName,
   innerClassName,
   transparentSurface: transparentSurfaceProp,
+  rail,
   children,
   ...props
 }: React.ComponentProps<"div"> & {
@@ -247,6 +248,8 @@ function Sidebar({
   gapClassName?: string;
   innerClassName?: string;
   transparentSurface?: boolean;
+  /** Desktop rail belongs to the outer shell, outside the clipped content surface. */
+  rail?: React.ReactNode;
 }) {
   const side = sideProp ?? "left";
   const variant = variantProp ?? "sidebar";
@@ -373,6 +376,7 @@ function Sidebar({
           >
             {children}
           </div>
+          {rail}
         </div>
       </div>
     </SidebarInstanceContext.Provider>

@@ -301,6 +301,7 @@ export function RightDock(props: RightDockProps) {
         innerClassName={CHAT_BACKGROUND_CLASS_NAME}
         gapClassName={chromeMotionClass}
         transparentSurface
+        rail={!maximized && <SidebarRail />}
         resizable={{
           minWidth: props.minWidth,
           shouldAcceptWidth: props.shouldAcceptWidth,
@@ -438,7 +439,6 @@ export function RightDock(props: RightDockProps) {
             })}
           </div>
         </div>
-        {!maximized && <SidebarRail />}
       </Sidebar>
     </SidebarProvider>
   );

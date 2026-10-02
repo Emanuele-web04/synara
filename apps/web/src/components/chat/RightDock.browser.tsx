@@ -31,6 +31,61 @@ function renderDock(content: ReactNode) {
   return render(<QueryClientProvider client={client}>{content}</QueryClientProvider>);
 }
 
+it("keeps the resize rail reachable from the chat side in the rail layout", async () => {
+  await page.viewport(1280, 800);
+  const { createDefaultRightDockState, openPaneInState } =
+    await import("../../rightDockStore.logic");
+  const state = openPaneInState(createDefaultRightDockState(), {
+    paneId: "browser",
+    kind: "browser",
+  });
+  const screen = await renderDock(
+    <div data-sidebar-layout="rail" className="flex h-screen w-screen">
+      <div className="min-w-0 flex-1">Chat</div>
+      <RightDock
+        state={state}
+        minWidth={300}
+        defaultWidth="50vw"
+        shouldAcceptWidth={() => true}
+        addMenuKinds={[]}
+        onClosePane={() => {}}
+        onCollapse={() => {}}
+        onOpenChange={() => {}}
+        onAddPane={() => {}}
+        renderPane={() => <div className="h-full w-full">Browser viewport</div>}
+      />
+    </div>,
+  );
+  try {
+    const rail = document.querySelector<HTMLButtonElement>("[data-slot='sidebar-rail']")!;
+    const container = document.querySelector<HTMLElement>("[data-slot='sidebar-container']")!;
+    await expect.poll(() => Math.round(container.getBoundingClientRect().width)).toBe(640);
+    const { left, top, height } = container.getBoundingClientRect();
+    const y = top + height / 2;
+    // This side of the seam is outside Electron's native browser viewport.
+    expect(document.elementFromPoint(left - 4, y)).toBe(rail);
+    const handle = page.getByRole("button", { name: "Resize Sidebar" });
+    await handle.hover({
+      position: { x: 4, y: height / 2 },
+    });
+    expect(rail.matches(":hover")).toBe(true);
+    expect(getComputedStyle(rail).cursor).toMatch(/resize/);
+    for (const delta of [-100, 100]) {
+      const width = container.getBoundingClientRect().width;
+      await handle.dropTo(handle, {
+        sourcePosition: { x: 4, y: height / 2 },
+        targetPosition: { x: 4 + delta, y: height / 2 },
+        force: true,
+      });
+      await expect
+        .poll(() => container.getBoundingClientRect().width)
+        .toBeCloseTo(width - delta, 0);
+    }
+  } finally {
+    await screen.unmount();
+  }
+});
+
 it("maximizes and restores without remounting or resetting document state", async () => {
   await page.viewport(1280, 800);
   const state: RightDockThreadState = {
