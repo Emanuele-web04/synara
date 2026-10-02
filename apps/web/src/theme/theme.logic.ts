@@ -313,9 +313,13 @@ const RAIL_SHELL_OPACITY_RATIO_BY_VARIANT: Record<ThemeVariant, number> = {
 
 // Whole-window glass: raised chrome (composers, docked panels, cards, controls) is a denser
 // pane of the elevated tone over the body's coat. Its fill tracks the coat's opacity from a
-// floor, so it keeps its contrast against the window at every slider position.
-const RAISED_GLASS_OPACITY_FLOOR = 10;
-const RAISED_GLASS_OPACITY_RATIO = 0.5;
+// floor, so it keeps its contrast against the window at every slider position. Light themes
+// run thinner: their elevated tone is white, and a white pane reads as solid at a fill a dark
+// pane of the same strength does not.
+const RAISED_GLASS_OPACITY_BY_VARIANT: Record<ThemeVariant, { floor: number; ratio: number }> = {
+  dark: { floor: 10, ratio: 0.5 },
+  light: { floor: 4, ratio: 0.3 },
+};
 
 // Floating overlays (menus, pickers, popovers, tooltips, toasts) share the composer's material
 // so the whole UI reads as one. Off a whole-window glass shell that is the composer's own fill
@@ -850,7 +854,9 @@ export function buildThemeCssVariables(
       ? readCodexVariable("--color-background-control-opaque")
       : "color-mix(in oklab, var(--color-background-control) 90%, transparent)";
   // Floating surfaces share the composer's fill, tracking the coat on whole-window glass.
-  const raisedGlassSurface = `color-mix(in srgb, var(--popover) ${Math.round(RAISED_GLASS_OPACITY_FLOOR + translucentOpacity * RAISED_GLASS_OPACITY_RATIO)}%, transparent)`;
+  const raisedGlass = RAISED_GLASS_OPACITY_BY_VARIANT[variant];
+  const raisedGlassOpacity = Math.round(raisedGlass.floor + translucentOpacity * raisedGlass.ratio);
+  const raisedGlassSurface = `color-mix(in srgb, var(--popover) ${raisedGlassOpacity}%, transparent)`;
   const overlaySurface = wholeWindowGlass
     ? raisedGlassSurface
     : `color-mix(in srgb, var(--popover) ${OVERLAY_OPACITY}%, transparent)`;

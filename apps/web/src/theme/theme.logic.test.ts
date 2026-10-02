@@ -397,7 +397,7 @@ describe("window translucency", () => {
       translucency: { opacity: 38, blur: null, sidebarOnly: false },
     });
     expect(light.variables["--app-glass-raised-surface"]).toBe(
-      "color-mix(in srgb, var(--popover) 29%, transparent)",
+      "color-mix(in srgb, var(--popover) 15%, transparent)",
     );
   });
 
