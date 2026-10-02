@@ -238,13 +238,7 @@ function requireDiscoveredModels(
   // Initial degraded discovery can still expose an adapter's usable static
   // fallback. During a background refresh, however, keep a previously good
   // dynamic catalog and let React Query retry the transient failure.
-  if (
-    provider === "devin" &&
-    result.error &&
-    previous &&
-    !previous.error &&
-    previous.models.length > 0
-  ) {
+  if (result.error && previous && !previous.error && previous.models.length > 0) {
     throw new Error(result.error);
   }
   const isAuthoritativeEmptyCatalog =

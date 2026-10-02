@@ -5939,9 +5939,9 @@ describe("ChatView transcript geometry (full app)", () => {
             request._tag === WS_METHODS.providerListModels && request.provider === "claudeAgent",
         ),
       ).toEqual([]);
-      const refreshButton = page.getByRole("button", { name: "Refresh models", exact: true });
-      await expect.element(refreshButton).toBeEnabled();
-      await refreshButton.click();
+      expect(
+        page.getByRole("button", { name: "Refresh models", exact: true }).elements(),
+      ).toHaveLength(0);
       await vi.waitFor(() => {
         expect(wsRequests).toEqual(
           expect.arrayContaining([
@@ -5949,7 +5949,7 @@ describe("ChatView transcript geometry (full app)", () => {
               _tag: WS_METHODS.providerListModels,
               provider: "codex",
               instanceId: "codex",
-              refresh: "now",
+              refresh: "if-stale",
             }),
           ]),
         );
