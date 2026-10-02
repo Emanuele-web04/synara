@@ -2122,6 +2122,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           status: "aborted",
         },
         abandonedBy: "turnIdleWatchdog",
+        // Interrupt revokes the bearer even if Codex rejects the request. The
+        // synthetic abort must trigger the same runtime renewal as a native one.
+        ...(context.gatewayCredentialRetired === true
+          ? { [AGENT_GATEWAY_TURN_AUTHORITY_RETIRED]: true }
+          : {}),
       },
     });
   }

@@ -133,6 +133,10 @@ The session may preserve provider-specific behavior such as:
 
 Capabilities vary. Do not assume a control available for one provider exists for all of them.
 
+If a Codex turn is aborted for inactivity and its gateway access was revoked, Synara renews
+the provider runtime and resumes the saved conversation before dispatching another turn.
+You can continue in the same task.
+
 ### Claude Auto / 200k / 1M selection
 
 The auto-compact selector chooses an override, not a measured context limit. Auto leaves the
