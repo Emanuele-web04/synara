@@ -422,6 +422,11 @@ export const AppSettingsSchema = Schema.Struct({
   // also write back here so the last explicit open/close survives reloads.
   environmentPanelDefaultOpen: Schema.Boolean.pipe(withDefaults(() => false)),
   showEnvironmentUsage: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Providers whose usage ring sits at the bottom of the app rail (see AppRailUsage.logic for
+  // the cap). A ring only draws once its provider reports usage.
+  railUsageProviders: Schema.Array(PersistedProviderKind).pipe(
+    withDefaults((): ReadonlyArray<ProviderKind> => ["codex", "claudeAgent"]),
+  ),
   showEnvironmentRepository: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentPullRequest: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentEditor: Schema.Boolean.pipe(withDefaults(() => true)),

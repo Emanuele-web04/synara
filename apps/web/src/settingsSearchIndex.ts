@@ -497,6 +497,14 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     target: null,
   },
 
+  {
+    id: "usage:sidebar-rings",
+    section: "usage",
+    title: "Sidebar usage rings",
+    keywords: "Choose which provider usage rings show at the bottom of the sidebar rail. quota",
+    target: null,
+  },
+
   // ── Advanced ──────────────────────────────────────────────────────────────────
   {
     id: "advanced:keybindings",
