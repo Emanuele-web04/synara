@@ -424,7 +424,7 @@ export const AppSettingsSchema = Schema.Struct({
   showEnvironmentUsage: Schema.Boolean.pipe(withDefaults(() => true)),
   // Providers whose usage ring sits at the bottom of the app rail (see AppRailUsage.logic for
   // the cap). A ring only draws once its provider reports usage.
-  railUsageProviders: Schema.Array(PersistedProviderKind).pipe(
+  railUsageProviders: PersistedProviderKindList.pipe(
     withDefaults((): ReadonlyArray<ProviderKind> => ["codex", "claudeAgent"]),
   ),
   showEnvironmentRepository: Schema.Boolean.pipe(withDefaults(() => true)),

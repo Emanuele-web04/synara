@@ -1928,12 +1928,16 @@ describe("AppSettingsSchema", () => {
       JSON.stringify({
         hiddenProviders: ["some-future-provider", "codex"],
         providerOrder: ["gemini", "codex"],
+        railUsageProviders: ["some-future-provider", "codex", "gemini"],
+        chatFontSizePx: 17,
       }),
     );
 
     expect(decoded).toMatchObject({
       hiddenProviders: ["codex"],
       providerOrder: ["antigravity", "codex"],
+      railUsageProviders: ["codex", "antigravity"],
+      chatFontSizePx: 17,
     });
   });
 
