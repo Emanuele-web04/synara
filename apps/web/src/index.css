@@ -2980,6 +2980,20 @@ diffs-container {
   transition: padding-left 300ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 
+/* Reduced motion keeps the header, reserved controls, and block edges on the same
+   immediate toggle; a delayed gutter would leave the snapped dock off its anchor. */
+@media (prefers-reduced-motion: reduce) {
+  [data-sidebar-layout="rail"] .app-top-bar,
+  [data-sidebar-layout="rail"] .chat-content-card,
+  [data-sidebar-layout="rail"] .chat-content-card::before,
+  [data-sidebar-layout="rail"] .chat-content-card::after,
+  [data-sidebar-layout="rail"] .app-rail-panel,
+  [data-sidebar-layout="rail"]:has([data-slot="sidebar"][data-side="left"][data-state="collapsed"])
+    .app-rail-panel {
+    transition: none;
+  }
+}
+
 /* Right dock: its fixed container keeps the block's gap, and its surface is the card body
    drawn above, so the dock header sits on the shell band like the route header. */
 [data-sidebar-layout="rail"]
