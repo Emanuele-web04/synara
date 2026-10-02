@@ -426,15 +426,34 @@ export function clampTooltipTop(
 
 // --- Audio wave --------------------------------------------------------
 
+// Reported levels are dB-mapped, and how loud speech lands depends on the
+// microphone: a headset sits near 0.7, a laptop microphone near 0.4. The
+// shaper follows the recent peak so either fills the wave, ignores room noise
+// below the knee, and squares the result so only real peaks reach full width.
+const AUDIO_NOISE_KNEE = 0.12;
+const AUDIO_MIN_PEAK = 0.3;
+// Per reported level (~30 Hz): the reference halves in about four seconds.
+const AUDIO_PEAK_RELEASE = 0.995;
+
+/** Stateful level shaper: maps reported 0..1 levels onto wave height with automatic gain. */
+export function createAudioLevelShaper(): (level: number) => number {
+  let peak = AUDIO_MIN_PEAK;
+  return (level) => {
+    peak = Math.max(level, AUDIO_MIN_PEAK, peak * AUDIO_PEAK_RELEASE);
+    const relative = clampNumber((level - AUDIO_NOISE_KNEE) / (peak - AUDIO_NOISE_KNEE), 0, 1);
+    return relative * relative;
+  };
+}
+
 /** Per-frame audio envelope: rises at once with the sound, falls back gently. */
 export function stepAudioEnvelope(previous: number, target: number, release: number): number {
   return target >= previous ? target : Math.max(target, previous * release);
 }
 
-/** Fixed per-tick gain in 0.65..1 so the column never moves in lockstep. */
+/** Fixed per-tick gain in 0.45..1 so the column never moves in lockstep. */
 export function audioTickGain(index: number): number {
   const noise = Math.sin((index + 1) * 12.9898) * 43758.5453;
-  return 0.65 + 0.35 * (noise - Math.floor(noise));
+  return 0.45 + 0.55 * (noise - Math.floor(noise));
 }
 
 /**

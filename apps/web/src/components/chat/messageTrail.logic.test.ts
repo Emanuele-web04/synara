@@ -14,6 +14,7 @@ import {
   type TrailGeometry,
   audioTickGain,
   computeAudioTickWidths,
+  createAudioLevelShaper,
   stepAudioEnvelope,
 } from "./messageTrail.logic";
 
@@ -292,10 +293,23 @@ describe("audio wave", () => {
     expect(stepAudioEnvelope(0.8, 0.75, 0.9)).toBe(0.75);
   });
 
+  it("ignores room noise and scales to the microphone's recent peak", () => {
+    const shape = createAudioLevelShaper();
+    expect(shape(0)).toBe(0);
+    expect(shape(0.1)).toBe(0);
+    // A quiet laptop microphone still reaches full width at its own peak...
+    expect(shape(0.4)).toBe(1);
+    // ...and ordinary syllables below that peak stay clearly lower.
+    expect(shape(0.3)).toBeCloseTo((0.18 / (0.4 * 0.995 - 0.12)) ** 2, 5);
+    // A louder microphone raises the reference at once.
+    expect(shape(0.8)).toBe(1);
+    expect(shape(0.4)).toBeLessThan(0.3);
+  });
+
   it("keeps per-tick gains in a narrow, stable band", () => {
     for (let i = 0; i < 50; i += 1) {
       const gain = audioTickGain(i);
-      expect(gain).toBeGreaterThanOrEqual(0.65);
+      expect(gain).toBeGreaterThanOrEqual(0.45);
       expect(gain).toBeLessThanOrEqual(1);
       expect(audioTickGain(i)).toBe(gain);
     }

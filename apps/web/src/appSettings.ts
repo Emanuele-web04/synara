@@ -462,6 +462,11 @@ export const AppSettingsSchema = Schema.Struct({
   // Desktop on macOS: the message trail moves with the Mac's audio output,
   // the microphone, or both. Opt-in because the first use asks macOS for access.
   messageTrailAudioSource: MessageTrailAudioSource.pipe(withDefaults(() => "off" as const)),
+  // Core Audio UID of the microphone the trail listens to; "" follows the Mac's
+  // default input (which may be a Bluetooth headset).
+  messageTrailMicrophoneId: Schema.String.check(Schema.isMaxLength(512)).pipe(
+    withDefaults(() => ""),
+  ),
   autoOpenDevicePane: Schema.Boolean.pipe(withDefaults(() => true)),
   enableProviderUpdateChecks: Schema.Boolean.pipe(withDefaults(() => true)),
   enableNativeFontSmoothing: Schema.Boolean.pipe(withDefaults(getDefaultNativeFontSmoothing)),

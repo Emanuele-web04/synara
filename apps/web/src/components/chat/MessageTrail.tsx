@@ -37,6 +37,7 @@ import {
   computeTickStyles,
   computeTrailGeometry,
   computeAudioTickWidths,
+  createAudioLevelShaper,
   stepAudioEnvelope,
   type ActiveTrailStore,
   type MessageTrailItem,
@@ -84,8 +85,8 @@ const TICK_ANCHOR_OPACITY = 0.9;
 const TICK_FOCUS_OPACITY = 1;
 // Audio wave: each tick lags its inner neighbour by this many frames, and the
 // envelope keeps this much of its height per frame once the sound drops.
-const AUDIO_FRAMES_PER_TICK = 2;
-const AUDIO_RELEASE_PER_FRAME = 0.9;
+const AUDIO_FRAMES_PER_TICK = 3;
+const AUDIO_RELEASE_PER_FRAME = 0.82;
 const AUDIO_HISTORY_FRAMES = 120;
 const AUDIO_SILENCE_LEVEL = 0.002;
 const TOOLTIP_ESTIMATED_H_PX = 56;
@@ -480,9 +481,11 @@ export function MessageTrail({
     if (!subscribeAudioLevel || !visible || reducedMotionRef.current) {
       return;
     }
+    const shapeLevel = createAudioLevelShaper();
     const unsubscribe = subscribeAudioLevel((level) => {
-      audioTargetRef.current = level;
-      if (audioRafIdRef.current === null && (level > 0 || audioHistoryRef.current.length > 0)) {
+      const target = shapeLevel(level);
+      audioTargetRef.current = target;
+      if (audioRafIdRef.current === null && (target > 0 || audioHistoryRef.current.length > 0)) {
         audioRafIdRef.current = requestAnimationFrame(
           audioFrameHandlersRef.current.renderAudioFrame,
         );
