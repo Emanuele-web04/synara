@@ -248,12 +248,38 @@ export function ProviderUsageSettingsPanel() {
       <SettingsSection title="Usage popovers">
         <SettingsListRow
           title="Show details by default"
-          description="Open reset credits, credits, and token totals below the limits. When off, they stay behind the Details toggle; your last toggle also updates this preference."
+          description="Open the details below the limits. When off, they stay behind the Details toggle; your last toggle also updates this preference."
           actions={
             <Switch
               checked={settings.usageDetailsDefaultOpen}
               onCheckedChange={(next) => updateSettings({ usageDetailsDefaultOpen: Boolean(next) })}
               aria-label="Show usage details by default in usage popovers"
+            />
+          }
+        />
+        <SettingsListRow
+          title="Banked resets"
+          description="Include Codex banked resets in the details."
+          actions={
+            <Switch
+              checked={settings.usagePopoverShowResetCredits}
+              onCheckedChange={(next) =>
+                updateSettings({ usagePopoverShowResetCredits: Boolean(next) })
+              }
+              aria-label="Show banked resets in usage popovers"
+            />
+          }
+        />
+        <SettingsListRow
+          title="Credits and token totals"
+          description="Include credit balances and recent token totals (24h, 7d, 30d) in the details."
+          actions={
+            <Switch
+              checked={settings.usagePopoverShowUsageLines}
+              onCheckedChange={(next) =>
+                updateSettings({ usagePopoverShowUsageLines: Boolean(next) })
+              }
+              aria-label="Show credits and token totals in usage popovers"
             />
           }
         />

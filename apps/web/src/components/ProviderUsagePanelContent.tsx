@@ -48,19 +48,24 @@ export function ProviderUsagePanelContent(props: {
     deriveRateLimitLearnMoreHref(props.rateLimits) ??
     deriveProviderUsageLearnMoreHref(props.provider);
 
-  const resetCredits = props.resetCredits ? (
-    <ProviderUsageResetCredits
-      resetCredits={props.resetCredits}
-      surface={props.resetCreditsSurface ?? "popover"}
-    />
-  ) : null;
+  // Limit rows are what the popover is for; everything else waits behind "Details",
+  // limited to the sections chosen in Settings → Usage. Without limit rows the details
+  // are all there is, so they show directly and the section choices do not apply.
+  const collapseDetails = visibleRows.length > 0;
+  const resetCredits =
+    props.resetCredits && (!collapseDetails || settings.usagePopoverShowResetCredits) ? (
+      <ProviderUsageResetCredits
+        resetCredits={props.resetCredits}
+        surface={props.resetCreditsSurface ?? "popover"}
+      />
+    ) : null;
   const usageLines =
-    props.showUsageLines !== false && props.usageLines && props.usageLines.length > 0 ? (
+    props.showUsageLines !== false &&
+    props.usageLines &&
+    props.usageLines.length > 0 &&
+    (!collapseDetails || settings.usagePopoverShowUsageLines) ? (
       <ProviderUsageLineList lines={props.usageLines} surface="popover" />
     ) : null;
-  // Limit rows are what the popover is for; everything else waits behind "Details".
-  // Without limit rows the details are all there is, so they show directly.
-  const collapseDetails = visibleRows.length > 0;
   const hasDetails = resetCredits !== null || usageLines !== null;
   const detailsOpen = settings.usageDetailsDefaultOpen;
 

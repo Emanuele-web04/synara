@@ -2006,6 +2006,11 @@ describe("AppSettingsSchema", () => {
     const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
 
     expect(decode("{}").usageDetailsDefaultOpen).toBe(false);
+    expect(decode("{}").usagePopoverShowResetCredits).toBe(true);
+    expect(decode("{}").usagePopoverShowUsageLines).toBe(true);
+    expect(
+      decode(JSON.stringify({ usagePopoverShowUsageLines: false })).usagePopoverShowUsageLines,
+    ).toBe(false);
     expect(decode(JSON.stringify({ usageDetailsDefaultOpen: true })).usageDetailsDefaultOpen).toBe(
       true,
     );

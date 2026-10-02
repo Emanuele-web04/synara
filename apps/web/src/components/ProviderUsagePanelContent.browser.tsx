@@ -67,6 +67,26 @@ describe("ProviderUsagePanelContent details", () => {
       .toMatchObject({ usageDetailsDefaultOpen: true });
   });
 
+  it("leaves out the sections turned off in settings", async () => {
+    localStorage.setItem(
+      APP_SETTINGS_STORAGE_KEY,
+      JSON.stringify({ usageDetailsDefaultOpen: true, usagePopoverShowUsageLines: false }),
+    );
+    await mount();
+    await expect.element(page.getByRole("button", { name: "Use reset" })).toBeInTheDocument();
+    expect(page.getByText("942M tokens").elements()).toHaveLength(0);
+  });
+
+  it("drops the Details toggle when every section is turned off", async () => {
+    localStorage.setItem(
+      APP_SETTINGS_STORAGE_KEY,
+      JSON.stringify({ usagePopoverShowResetCredits: false, usagePopoverShowUsageLines: false }),
+    );
+    await mount();
+    await expect.element(page.getByText("Weekly")).toBeInTheDocument();
+    expect(page.getByRole("button", { name: "Details" }).elements()).toHaveLength(0);
+  });
+
   it("shows details directly when there are no limit rows", async () => {
     await mount({ rateLimits: [] });
     await expect.element(page.getByText("942M tokens")).toBeVisible();
