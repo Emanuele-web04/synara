@@ -489,6 +489,66 @@ describe("GitHubInbox list", () => {
     expect(document.querySelector('[aria-label="Active filters"]')).toBeNull();
   });
 
+  it("shares the closed cache with Merged and persists it while URL overrides stay temporary", async () => {
+    api.list.mockImplementation(({ state }) =>
+      Promise.resolve(
+        state === "open"
+          ? listResult()
+          : listResult({
+              repositoryBatches: [
+                {
+                  repository: "acme/widgets",
+                  projectIds: [projectA],
+                  truncatedPullRequests: false,
+                  truncatedIssues: true,
+                  fetchedAt: NOW,
+                },
+              ],
+              items: [
+                { ...PULL_REQUEST_41, state: "merged" },
+                { ...PULL_REQUEST_44, state: "closed" },
+                { ...ISSUE_42, state: "closed" },
+              ],
+            }),
+      ),
+    );
+    const first = await mount();
+    await expectRows([44, 43, 42, 41]);
+    await page.getByRole("button", { name: /^Filter/ }).click();
+    await page.getByRole("menuitemradio", { name: "Closed", exact: true }).click();
+    await closeMenu();
+    await expectRows([44, 42, 41]);
+    const closedReads = api.list.mock.calls.length;
+    await page.getByRole("button", { name: /^Filter/ }).click();
+    await page.getByRole("menuitemradio", { name: "Merged", exact: true }).click();
+    await closeMenu();
+    await expectRows([41]);
+    expect(api.list.mock.calls.length).toBe(closedReads);
+    await expect.element(page.getByText(/^Showing the 50/)).not.toBeInTheDocument();
+    await expect.element(page.getByRole("radio", { name: /^Issues/ })).toHaveTextContent("0");
+    await page.getByRole("button", { name: "More code review actions" }).click();
+    await page.getByRole("menuitem", { name: "Refresh", exact: true }).click();
+    await closeMenu();
+    await expect
+      .poll(() =>
+        api.list.mock.calls.some(
+          ([input]) =>
+            input.state === "closed" && input.sort === "created" && input.forceRefresh === true,
+        ),
+      )
+      .toBe(true);
+    await first.unmount();
+    const second = await mount();
+    await expectRows([41]);
+    await expect.element(page.getByRole("button", { name: "Remove filter: Merged" })).toBeVisible();
+    await second.unmount();
+    await mount({ state: "closed" });
+    await expectRows([44, 42, 41]);
+    expect(
+      JSON.parse(localStorage.getItem("synara:app-settings:v1") ?? "{}").githubInboxState,
+    ).toBe("merged");
+  });
+
   it("moves the kind selection with the arrow keys", async () => {
     await mount();
     await expectRows([44, 43, 42, 41]);

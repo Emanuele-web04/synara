@@ -9,13 +9,7 @@
 // Layer: GitHub inbox presentation
 // Exports: GitHubInbox
 
-import type {
-  GitHubInboxItem,
-  GitHubInboxListError,
-  GitHubInboxState,
-  ProjectId,
-  ThreadId,
-} from "@synara/contracts";
+import type { GitHubInboxItem, GitHubInboxListError, ProjectId, ThreadId } from "@synara/contracts";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   type KeyboardEvent as ReactKeyboardEvent,
@@ -30,6 +24,7 @@ import {
 import {
   type GitHubInboxInvolvementFilter,
   type GitHubInboxKindFilter,
+  type GitHubInboxStateFilter,
   type TimestampFormat,
   useAppSettings,
 } from "~/appSettings";
@@ -86,6 +81,7 @@ import {
   countInboxItemsByKind,
   countTruncatedInboxRepositories,
   githubInboxItemNoun,
+  githubInboxListState,
   githubInboxSelection,
   githubInboxSelectionForItem,
   githubInboxSendTargets,
@@ -327,10 +323,11 @@ export function GitHubInbox({
   );
   const filters = resolveGitHubInboxFilters(search, settings, existingProjectIds);
   const selection = githubInboxSelection(search);
+  const listState = githubInboxListState(filters.state);
 
   // One list per state and sort; kind, project, involvement, label, and text filters apply below, so
   // switching them never reaches GitHub.
-  const listQuery = useQuery(githubInboxListQueryOptions(filters.state, settings.githubInboxSort));
+  const listQuery = useQuery(githubInboxListQueryOptions(listState, settings.githubInboxSort));
   const refreshMutation = useMutation(pullRequestsForceRefreshMutationOptions(queryClient));
   const pinMutation = useMutation(pullRequestSetPinnedMutationOptions(queryClient));
   const activeActionCount = useIsMutating({
@@ -385,7 +382,7 @@ export function GitHubInbox({
     updateSettings({ githubInboxKind: kind });
     if (search.type !== undefined) onSearchChange({ type: undefined });
   };
-  const setState = (state: GitHubInboxState) => {
+  const setState = (state: GitHubInboxStateFilter) => {
     updateSettings({ githubInboxState: state });
     if (search.state !== undefined) onSearchChange({ state: undefined });
   };
@@ -433,7 +430,7 @@ export function GitHubInbox({
   const refresh = () => {
     if (refreshBlockedReason !== null) return;
     refreshMutation.mutate(
-      { state: filters.state, sort: settings.githubInboxSort },
+      { state: listState, sort: settings.githubInboxSort },
       {
         onError: (error) =>
           toastManager.add({
@@ -610,9 +607,12 @@ export function GitHubInbox({
               )}
               {truncatedRepositoryCount > 0 ? (
                 <p className={cn(PR_FINE_TEXT_CLASS_NAME, "text-muted-foreground")}>
-                  Showing the 50{" "}
+                  {filters.state === "merged"
+                    ? "Showing merged pull requests from the 50"
+                    : "Showing the 50"}{" "}
                   {settings.githubInboxSort === "created" ? "newest" : "most recently updated"}{" "}
-                  {noun} per repository. {truncatedRepositoryCount}{" "}
+                  {filters.state === "merged" ? "closed pull requests" : noun} per repository.{" "}
+                  {truncatedRepositoryCount}{" "}
                   {truncatedRepositoryCount === 1 ? "repository has" : "repositories have"} more on
                   GitHub.
                 </p>

@@ -124,6 +124,10 @@ GitHub remotes. Two projects on one repository share one list. Filters (kind, pr
 involvement, labels) stay local and are remembered; GitHub is refreshed about every five minutes
 while the page is visible, on window focus, and with the refresh button.
 
+**Merged** narrows the loaded closed list to merged pull requests. Its counts reflect matching
+loaded rows, and its refresh uses the same closed cache. The first-50 cap applies to closed
+pull requests before this local filter, so it does not fetch a separate page of 50 merged items.
+
 Every item offers three actions:
 
 - **Send to agent** opens a new draft thread in the item's project with the item attached as a
