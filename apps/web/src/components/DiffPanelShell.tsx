@@ -7,6 +7,7 @@ import {
   CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
   CHAT_SURFACE_HEADER_HEIGHT_CLASS,
 } from "./chat/chatHeaderControls";
+import { CHAT_BACKGROUND_CLASS_NAME } from "./chat/composerPickerStyles";
 import { Skeleton } from "./ui/skeleton";
 
 export type DiffPanelMode = "inline" | "sheet" | "sidebar" | "floating";
@@ -33,7 +34,7 @@ export function DiffPanelShell(props: {
     <div
       className={cn(
         "flex h-full min-w-0 flex-col",
-        props.mode === "floating" ? "bg-transparent" : "bg-[var(--color-background-surface)]",
+        props.mode === "floating" ? "bg-transparent" : CHAT_BACKGROUND_CLASS_NAME,
         props.mode === "inline"
           ? "w-[42vw] min-w-[360px] max-w-[560px] shrink-0 border-l border-border"
           : "w-full",

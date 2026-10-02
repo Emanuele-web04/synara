@@ -137,14 +137,14 @@ export default function TerminalViewportPane({
       return (
         <div
           key={node.paneId}
-          className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-[var(--color-background-surface)]"
+          className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden app-content-surface"
           onMouseDown={() => {
             if (!isFocusedPane) {
               onActiveTerminalChange(activePaneTerminalId);
             }
           }}
         >
-          <div className="flex min-h-9 items-center gap-1 bg-[var(--color-background-surface)] px-1.5 py-1">
+          <div className="flex min-h-9 items-center gap-1 app-content-surface px-1.5 py-1">
             <SurfaceTabStrip className="flex-1" activeKey={activePaneTerminalId}>
               {node.terminalIds.map((terminalId) => {
                 const visualIdentity = terminalVisualIdentityById.get(terminalId);
@@ -251,7 +251,7 @@ export default function TerminalViewportPane({
             </div>
           </div>
 
-          <div className="relative min-h-0 min-w-0 flex-1 bg-[var(--color-background-surface)]">
+          <div className="relative min-h-0 min-w-0 flex-1 app-content-surface">
             {node.terminalIds.map((terminalId) => {
               const isActiveTab = terminalId === activePaneTerminalId;
               return (
@@ -348,7 +348,7 @@ export default function TerminalViewportPane({
       <div
         key={node.id}
         className={cn(
-          "flex h-full min-h-0 min-w-0 gap-0 overflow-hidden bg-[var(--color-background-surface)]",
+          "flex h-full min-h-0 min-w-0 gap-0 overflow-hidden app-content-surface",
           node.direction === "horizontal" ? "flex-row" : "flex-col",
         )}
       >
@@ -386,7 +386,7 @@ export default function TerminalViewportPane({
   };
 
   return (
-    <div className="h-full min-h-0 min-w-0 overflow-hidden bg-[var(--color-background-surface)]">
+    <div className="h-full min-h-0 min-w-0 overflow-hidden app-content-surface">
       {renderNode(layout)}
     </div>
   );
