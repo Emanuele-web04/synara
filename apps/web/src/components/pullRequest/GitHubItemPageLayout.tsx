@@ -11,6 +11,7 @@
 //          GitHubItemPageIconActions, GitHubItemAskComposer, GitHubItemPageHost,
 //          PullRequestDetailSkeleton
 
+import { useInPageGlassOverlay } from "~/hooks/useInPageGlassOverlay";
 import type { ProjectId, ThreadId } from "@synara/contracts";
 import { useState, type ReactNode } from "react";
 
@@ -293,9 +294,16 @@ export function GitHubItemDetailPage({
 
 /** Floats the question composer over the bottom right of a tab body. */
 function FloatingComposerSlot({ composer }: { composer: ReactNode }) {
+  // The composer floats over the tab body; on a glass window that body is cut out from under
+  // it, so it can take the same raised tint as the chat composer (see index.css).
+  const glassOverlayRef = useInPageGlassOverlay<HTMLDivElement>(Boolean(composer));
   if (!composer) return null;
   return (
-    <div className="pointer-events-none absolute right-4 bottom-4 left-4 flex justify-end">
+    <div
+      ref={glassOverlayRef}
+      data-glass-cutout=""
+      className="pointer-events-none absolute right-4 bottom-4 left-4 flex justify-end"
+    >
       <div className="pointer-events-auto w-full max-w-[40rem]">{composer}</div>
     </div>
   );

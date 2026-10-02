@@ -311,12 +311,17 @@ const RAIL_SHELL_OPACITY_RATIO_BY_VARIANT: Record<ThemeVariant, number> = {
   light: 82 / 38,
 };
 
-// Whole-window glass: raised chrome (composers, docked panels, cards, controls) is a lighter
-// pane over the body's coat. Light themes lift with this share of the coat's opacity in the
-// elevated tone; dark themes lift with a fixed share of ink, since their elevated tone is as
-// dark as the coat and would only add density.
-const RAISED_GLASS_LIGHT_OPACITY_RATIO = 0.5;
-const RAISED_GLASS_DARK_INK_PERCENT = 7;
+// Whole-window glass: raised chrome (composers, docked panels, cards, controls) is a denser
+// pane of the elevated tone over the body's coat. Its fill tracks the coat's opacity from a
+// floor, so it keeps its contrast against the window at every slider position.
+const RAISED_GLASS_OPACITY_FLOOR = 10;
+const RAISED_GLASS_OPACITY_RATIO = 0.5;
+
+// Floating overlays (menus, pickers, popovers, tooltips, toasts) share the composer's material
+// so the whole UI reads as one. Off a whole-window glass shell that is the composer's own fill
+// (`--composer-glass-opacity` in index.css) over a backdrop blur; on one it is the raised tint,
+// with the page cut out from under the overlay instead of blurred (see glassOverlayCutout.ts).
+const OVERLAY_OPACITY = 55;
 
 export const DEFAULT_THEME_STATE: ThemeState = {
   chromeThemes: {
@@ -844,10 +849,12 @@ export function buildThemeCssVariables(
     variant === "dark"
       ? readCodexVariable("--color-background-control-opaque")
       : "color-mix(in oklab, var(--color-background-control) 90%, transparent)";
-  // Mirrors Codex Electron's [cmdk-root] dropdown shell: thin the dropdown-background
-  // token by 5% in oklab over the existing backdrop blur. Light vs dark is already
-  // handled by --color-background-control-opaque (white in light, dark control in dark).
-  const composerPickerMenuSurface = "color-mix(in oklab, var(--popover) 70%, transparent)";
+  // Floating surfaces share the composer's fill, tracking the coat on whole-window glass.
+  const raisedGlassSurface = `color-mix(in srgb, var(--popover) ${Math.round(RAISED_GLASS_OPACITY_FLOOR + translucentOpacity * RAISED_GLASS_OPACITY_RATIO)}%, transparent)`;
+  const overlaySurface = wholeWindowGlass
+    ? raisedGlassSurface
+    : `color-mix(in srgb, var(--popover) ${OVERLAY_OPACITY}%, transparent)`;
+  const composerPickerMenuSurface = overlaySurface;
   const composerFocusBorder = buildComposerFocusBorder(
     pack,
     variant,
@@ -887,11 +894,7 @@ export function buildThemeCssVariables(
     "--app-composer-focus-border": composerFocusBorder,
     // Raised-chrome fill over the body's coat when the whole window is glass. Empty elsewhere,
     // which leaves each surface's own fill in charge (see `.app-glass-raised` in index.css).
-    "--app-glass-raised-surface": !wholeWindowGlass
-      ? ""
-      : variant === "dark"
-        ? `color-mix(in srgb, var(--foreground) ${RAISED_GLASS_DARK_INK_PERCENT}%, transparent)`
-        : `color-mix(in srgb, var(--popover) ${Math.round(translucentOpacity * RAISED_GLASS_LIGHT_OPACITY_RATIO)}%, transparent)`,
+    "--app-glass-raised-surface": wholeWindowGlass ? raisedGlassSurface : "",
     // Frosted blur only when the shell is translucent (macOS). On an opaque
     // shell this promotes the surface to a GPU layer that Chromium rasterizes at
     // the wrong scale on fractional DPI (Windows), so text reads blurry until a
@@ -901,6 +904,11 @@ export function buildThemeCssVariables(
     // material, so — like the floating menus — it stays on across platforms.
     "--app-composer-picker-backdrop-filter": material === "translucent" ? "blur(32px)" : "none",
     "--app-composer-picker-surface": composerPickerMenuSurface,
+    "--app-overlay-surface": overlaySurface,
+    // The coat an overlay sits on once the page is cut out from under it. Whole-window glass
+    // already paints it on the body; sidebar-only glass has no body coat, so the overlay
+    // carries it itself and looks the same over the sidebar and over the content.
+    "--app-overlay-backing": translucencyScope === "sidebar" ? glassSurface : "",
     "--app-chat-code-surface": chatCodeSurface,
     "--app-user-message-background": chatCodeSurface,
     // Settings mirrors the chat surface (opaque --color-background-surface) so every

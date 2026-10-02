@@ -3094,17 +3094,33 @@ diffs-container {
 
 /* ─── Raised chrome on a whole-window glass shell ─────────────────────────────────
    The window's fill is the body's translucent coat, and the desktop behind it is blurred
-   natively. Raised surfaces therefore take one sheer tint (`--app-glass-raised-surface`,
+   natively. Raised surfaces therefore take one denser tint (`--app-glass-raised-surface`,
    theme.logic) and NO backdrop-filter: Chromium paints the filtered backdrop over the
    backdrop it sampled, so a blur here lays a second copy of the coat under the surface
    and the surface reads as a solid slab (measured: a 30% coat came out at 59%).
 
    `.app-glass-raised` opts in any other surface that paints an opaque fill of its own:
-   cards, standalone composers, and filled controls. Unlayered, so it wins over the
+   cards and filled controls. Unlayered, so it wins over the
    surface's Tailwind fill only while the attribute is set. */
+:root[data-window-translucency="window"] :is(.chat-raised-panel-surface, .app-glass-raised),
+:root[data-window-translucency="window"]
+  :is([data-chat-composer-slot], [data-glass-cutout])
+  .chat-composer-surface {
+  background: var(--app-glass-raised-surface);
+}
+
+/* Composer surfaces are dense by default on a glass shell: one can float over anything, and
+   with no blur the raised tint would leave that content readable through it. A composer
+   takes the tint above only where nothing shows behind it: the chat composer's own slot
+   (`data-chat-composer-slot`, where the transcript dissolves at its top edge, see
+   `.scroll-edge-fade` below) and a slot whose content is cut out from under it
+   (`data-glass-cutout`, see glassOverlayCutout.ts). */
+:root[data-window-translucency="window"] .chat-composer-surface {
+  background: color-mix(in srgb, var(--popover) 96%, transparent);
+}
+
 :root[data-window-translucency="window"]
   :is(.chat-composer-surface, .chat-raised-panel-surface, .app-glass-raised) {
-  background: var(--app-glass-raised-surface);
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
@@ -3127,24 +3143,58 @@ diffs-container {
     var(--app-glass-raised-surface);
 }
 
-/* A floating side panel overlays transcript text, and with no blur a sheer tint would
-   leave that text readable through it. It keeps a dense fill; the docked variant insets
-   the transcript, so nothing sits behind it. */
-:root[data-window-translucency="window"]
-  [data-environment-panel-variant="floating"]
-  .chat-raised-panel-surface {
-  background: color-mix(in srgb, var(--popover) 88%, transparent);
+/* ─── Floating overlays ───────────────────────────────────────────────────────────
+   Menus, pickers, popovers, tooltips, and toasts share the composer's material
+   (`--app-overlay-surface`, theme.logic). What keeps the content behind them from
+   reading through depends on the window:
+     • Opaque window: the backdrop blur on the surface frosts it.
+     • Translucent window: a blur cannot do that. Over a see-through region Chromium
+       composites the blurred copy over the sharp original, so text stays readable.
+       glassOverlayCutout.ts cuts the page out from under each overlay instead, leaving
+       only the window's coat and the natively blurred desktop behind it, and the blur
+       is dropped (it would only lay a second copy of the coat under the fill). The
+       same cutout serves raised surfaces floating inside the page (a floating side
+       panel, the PR composer), which is why they share the docked surfaces' tint.
+   `--app-overlay-backing` is that coat where the body does not paint one. */
+:is(.app-popup-surface, .composer-picker-menu-surface) {
+  background:
+    linear-gradient(var(--app-overlay-surface), var(--app-overlay-surface)),
+    var(--app-overlay-backing, transparent);
+}
+
+:root[data-window-material="translucent"] :is(.app-popup-surface, .composer-picker-menu-surface) {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+:root[data-window-material="translucent"] .app-popup-surface::before {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* A composer portaled next to the app root (the selection composer) is cut out like any
+   other overlay in both translucent modes. Sidebar-only glass also needs the coat backing. */
+:root[data-window-material="translucent"] body > :not(#root) .chat-composer-surface {
+  background:
+    linear-gradient(var(--app-overlay-surface), var(--app-overlay-surface)),
+    var(--app-overlay-backing, transparent);
+}
+
+:root[data-window-material="translucent"] body > :not(#root) .chat-composer-surface::before {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 /* The composer no longer frosts what scrolls beneath it, so the transcript dissolves
-   across the composer's resting tuck (COMPOSER_OVERLAY_TUCK_PX) instead of running under
-   the editor. `--scroll-edge-fade-inset-b` is the composer's top edge; without it the
+   across the composer's resting tuck (`--scroll-edge-fade-tuck`, composerOverlay.ts) instead
+   of running under the editor. `--scroll-edge-fade-inset-b` is the composer's top edge; without it the
    gradient ends past the viewport and masks nothing. */
 :root[data-window-translucency="window"] .scroll-edge-fade {
   --scroll-edge-fade-glass: linear-gradient(
     to bottom,
     #000 calc(100% - var(--scroll-edge-fade-inset-b, 0px)),
-    transparent calc(100% - var(--scroll-edge-fade-inset-b, 0px) + 20px)
+    transparent
+      calc(100% - var(--scroll-edge-fade-inset-b, 0px) + var(--scroll-edge-fade-tuck, 0px))
   );
   -webkit-mask-image:
     var(--scroll-edge-fade-edges), var(--scroll-edge-fade-layer, linear-gradient(#000, #000)),

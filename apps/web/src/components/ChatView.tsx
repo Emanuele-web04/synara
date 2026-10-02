@@ -5632,6 +5632,9 @@ export default function ChatView({
   const composerSection = shouldRenderChatPaneContent ? (
     <div
       className={cn(isCenteredEmptyLanding ? "w-full overflow-visible" : "contents")}
+      // The transcript dissolves at this composer's top edge, so on a glass window it can
+      // take the sheer raised tint instead of the dense overlay fill (see index.css).
+      data-chat-composer-slot=""
       data-empty-landing-composer-block={isCenteredEmptyLanding ? "true" : undefined}
     >
       <form

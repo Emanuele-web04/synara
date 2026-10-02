@@ -60,6 +60,37 @@ it("shows the failed Git step and copyable error until dismissed", async () => {
   expect(document.querySelector('[data-slot="toast-description"]')?.textContent).toBe(message);
 });
 
+it.each(["light", "dark"])("keeps %s error toasts tinted on whole-window glass", (variant) => {
+  const html = document.documentElement;
+  const previousMaterial = html.dataset.windowMaterial;
+  const previousScope = html.dataset.windowTranslucency;
+  const previousDark = html.classList.contains("dark");
+  const previousOverlay = html.style.getPropertyValue("--app-overlay-surface");
+  html.dataset.windowMaterial = "translucent";
+  html.dataset.windowTranslucency = "window";
+  html.classList.toggle("dark", variant === "dark");
+  try {
+    flushSync(() => toastManager.add({ title: "Failure", type: "error", timeout: 0 }));
+    const popup = document.querySelector<HTMLElement>(
+      '[data-slot="toast-viewport"] [data-position]',
+    )!;
+    popup.style.setProperty("--popover", "rgb(255, 255, 255)");
+    popup.style.setProperty("--destructive", "rgb(255, 0, 0)");
+    // A neutral tint must not overwrite the notification's error wash.
+    html.style.setProperty("--app-overlay-surface", "rgb(0, 255, 0)");
+    expect(getComputedStyle(popup).backgroundImage).toContain(
+      variant === "dark" ? "color(srgb 1 0.92 0.92)" : "color(srgb 1 0.95 0.95)",
+    );
+  } finally {
+    html.style.setProperty("--app-overlay-surface", previousOverlay);
+    if (previousMaterial === undefined) delete html.dataset.windowMaterial;
+    else html.dataset.windowMaterial = previousMaterial;
+    if (previousScope === undefined) delete html.dataset.windowTranslucency;
+    else html.dataset.windowTranslucency = previousScope;
+    html.classList.toggle("dark", previousDark);
+  }
+});
+
 beforeEach(() => {
   route.threadId = "toast-thread";
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
