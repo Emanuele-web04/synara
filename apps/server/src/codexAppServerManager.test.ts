@@ -6482,4 +6482,60 @@ describe.skipIf(!process.env.CODEX_BINARY_PATH)("startSession live Codex resume"
       rmSync(workspaceDir, { recursive: true, force: true });
     }
   }, 180_000);
+
+  it("rolls back the latest turn out of the model's context", async () => {
+    const workspaceDir = mkdtempSync(path.join(os.tmpdir(), "codex-live-rollback-"));
+    const manager = new CodexAppServerManager();
+    const threadId = asThreadId("thread-live-rollback");
+    const settledTurns = async (minimum: number) => {
+      await vi.waitFor(
+        async () => {
+          const snapshot = await manager.readThread(threadId);
+          expect(snapshot.turns.length).toBeGreaterThanOrEqual(minimum);
+          expect(snapshot.turns.at(-1)?.status).toBe("completed");
+        },
+        { timeout: 120_000, interval: 1_000 },
+      );
+      return manager.readThread(threadId);
+    };
+
+    try {
+      await manager.startSession({
+        threadId,
+        provider: "codex",
+        cwd: workspaceDir,
+        runtimeMode: "full-access",
+        agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
+        providerOptions: {
+          codex: {
+            ...(process.env.CODEX_BINARY_PATH ? { binaryPath: process.env.CODEX_BINARY_PATH } : {}),
+            ...(process.env.CODEX_HOME_PATH ? { homePath: process.env.CODEX_HOME_PATH } : {}),
+          },
+        },
+      });
+      await manager.sendTurn({ threadId, input: "Reply with exactly the word ALPHA" });
+      await settledTurns(1);
+      await manager.sendTurn({ threadId, input: "Reply with exactly the word BETA" });
+      const beforeRollback = await settledTurns(2);
+
+      await manager.rollbackThread(threadId, 1);
+
+      const afterRollback = await manager.readThread(threadId);
+      expect(afterRollback.turns.map((turn) => turn.id)).toEqual(
+        beforeRollback.turns.slice(0, -1).map((turn) => turn.id),
+      );
+
+      await manager.sendTurn({
+        threadId,
+        input: "List every word I asked you to reply with so far, comma separated, nothing else.",
+      });
+      const recall = (await settledTurns(afterRollback.turns.length + 1)).turns.at(-1);
+      const reply = JSON.stringify(recall?.items ?? []);
+      expect(reply).toContain("ALPHA");
+      expect(reply).not.toContain("BETA");
+    } finally {
+      await manager.stopAll();
+      rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  }, 300_000);
 });
