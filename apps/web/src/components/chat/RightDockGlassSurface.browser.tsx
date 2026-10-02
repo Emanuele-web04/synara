@@ -7,13 +7,21 @@ import { page } from "vitest/browser";
 import { afterEach, expect, it } from "vitest";
 import { render } from "vitest-browser-react";
 
+import { CodeDiffEditorPane } from "../codeEditor/CodeDiffEditorPane";
 import { CodeEditorPane } from "../codeEditor/CodeEditorPane";
 import type { CodeEditHistoryControls } from "../codeEditor/pierreEdit";
 import { DiffPanelShell } from "../DiffPanelShell";
 
 const root = document.documentElement;
 
-afterEach(() => root.removeAttribute("data-window-translucency"));
+const originalRootStyle = root.getAttribute("style");
+const originalRootClassName = root.className;
+afterEach(() => {
+  root.removeAttribute("data-window-translucency");
+  root.className = originalRootClassName;
+  if (originalRootStyle === null) root.removeAttribute("style");
+  else root.setAttribute("style", originalRootStyle);
+});
 
 function mountDockPane(options: { glass: boolean; maximized?: boolean }) {
   if (options.glass) root.setAttribute("data-window-translucency", "window");
@@ -95,4 +103,61 @@ it.each([
   code.scrollLeft = 120;
   expect(getComputedStyle(gutter).animationName).toBe("none");
   await view.unmount();
+});
+
+// Change tint must remain readable independently of the transparent context fill.
+// Exercise actual Pierre split/unified rows, rather than testing CSS source strings.
+it.each([
+  { theme: "light" as const, split: false },
+  { theme: "light" as const, split: true },
+  { theme: "dark" as const, split: false },
+  { theme: "dark" as const, split: true },
+])("keeps $theme changed rows dense in glass diffs (split: $split)", async ({ theme, split }) => {
+  root.classList.toggle("dark", theme === "dark");
+  root.setAttribute("data-window-translucency", "window");
+  const client = new QueryClient({ defaultOptions: { queries: { enabled: false, retry: false } } });
+  const view = await render(
+    <QueryClientProvider client={client}>
+      <div data-slot="sidebar-container">
+        <div data-right-dock-content style={{ width: 600, height: 240, display: "flex" }}>
+          <CodeDiffEditorPane
+            original="const unchanged = 0;\nconst before = 1;\n"
+            originalVersion={0}
+            modified="const unchanged = 0;\nconst after = 2;\n"
+            modifiedVersion={0}
+            fileName="sample.ts"
+            resolvedTheme={theme}
+            renderSideBySide={split}
+            onChange={() => {}}
+            onSave={() => {}}
+          />
+        </div>
+      </div>
+    </QueryClientProvider>,
+  );
+  await expect.element(page.getByRole("textbox")).toBeVisible();
+  const shadow = page.getByRole("textbox").element().getRootNode() as ShadowRoot;
+  const changes = [
+    ...shadow.querySelectorAll<HTMLElement>(
+      '[data-line-type="change-addition"], [data-line-type="change-deletion"]',
+    ),
+  ];
+  expect(changes.length).toBeGreaterThan(0);
+  // Alpha >= 0.9 protects readable tint over arbitrary window backdrops. Context stays clear.
+  for (const row of changes) {
+    const color = getComputedStyle(
+      row,
+      row.hasAttribute("data-line") ? "::after" : null,
+    ).backgroundColor;
+
+    const alpha = color.includes("/")
+      ? Number(color.match(/\/ ([\d.]+)\)$/)?.[1])
+      : color.startsWith("rgba")
+        ? Number(color.match(/, ([\d.]+)\)$/)?.[1])
+        : 1;
+    expect(alpha, color).toBeGreaterThanOrEqual(0.9);
+  }
+  expect(isClear(shadow.querySelector("[data-code]"))).toBe(true);
+  await view.unmount();
+  root.classList.remove("dark");
 });

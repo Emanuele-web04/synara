@@ -54,21 +54,23 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
 
   --diffs-bg-context-override: var(--synara-code-surface) !important;
   --diffs-bg-context-number-override: var(--synara-code-surface) !important;
-  --diffs-bg-hover-override: color-mix(in srgb, var(--synara-code-surface) 96%, var(--foreground)) !important;
-  --diffs-bg-separator-override: color-mix(in srgb, var(--synara-code-surface) 95%, var(--foreground)) !important;
-  --diffs-bg-buffer-override: color-mix(in srgb, var(--synara-code-surface) 92%, var(--foreground)) !important;
+  /* Change/hover tints keep their theme backing: mixing a clear context surface would
+     reduce the accent to a nearly invisible alpha over arbitrary window backdrops. */
+  --diffs-bg-hover-override: color-mix(in srgb, var(--background) 96%, var(--foreground)) !important;
+  --diffs-bg-separator-override: color-mix(in srgb, var(--background) 95%, var(--foreground)) !important;
+  --diffs-bg-buffer-override: color-mix(in srgb, var(--background) 92%, var(--foreground)) !important;
 
-  --diffs-bg-addition-override: color-mix(in srgb, var(--synara-code-surface) 92%, var(--success)) !important;
-  --diffs-bg-addition-number-override: color-mix(in srgb, var(--synara-code-surface) 88%, var(--success)) !important;
-  --diffs-bg-addition-hover-override: color-mix(in srgb, var(--synara-code-surface) 85%, var(--success)) !important;
-  --diffs-bg-addition-emphasis-override: color-mix(in srgb, var(--synara-code-surface) 80%, var(--success)) !important;
+  --diffs-bg-addition-override: color-mix(in srgb, var(--background) 92%, var(--success)) !important;
+  --diffs-bg-addition-number-override: color-mix(in srgb, var(--background) 88%, var(--success)) !important;
+  --diffs-bg-addition-hover-override: color-mix(in srgb, var(--background) 85%, var(--success)) !important;
+  --diffs-bg-addition-emphasis-override: color-mix(in srgb, var(--background) 80%, var(--success)) !important;
 
-  --diffs-bg-deletion-override: color-mix(in srgb, var(--synara-code-surface) 92%, var(--destructive)) !important;
-  --diffs-bg-deletion-number-override: color-mix(in srgb, var(--synara-code-surface) 88%, var(--destructive)) !important;
-  --diffs-bg-deletion-hover-override: color-mix(in srgb, var(--synara-code-surface) 85%, var(--destructive)) !important;
+  --diffs-bg-deletion-override: color-mix(in srgb, var(--background) 92%, var(--destructive)) !important;
+  --diffs-bg-deletion-number-override: color-mix(in srgb, var(--background) 88%, var(--destructive)) !important;
+  --diffs-bg-deletion-hover-override: color-mix(in srgb, var(--background) 85%, var(--destructive)) !important;
   --diffs-bg-deletion-emphasis-override: color-mix(
     in srgb,
-    var(--synara-code-surface) 80%,
+    var(--background) 80%,
     var(--destructive)
   ) !important;
 
@@ -76,20 +78,27 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
      Do not pin --diffs-line-bg on :host — addition/deletion rows set that per line-type. */
   --diffs-bg-context: var(--synara-code-surface) !important;
   --diffs-bg-context-number: var(--synara-code-surface) !important;
-  --diffs-bg-buffer: color-mix(in srgb, var(--synara-code-surface) 92%, var(--foreground)) !important;
-  --diffs-bg-separator: color-mix(in srgb, var(--synara-code-surface) 95%, var(--foreground)) !important;
-  --diffs-bg-addition: color-mix(in srgb, var(--synara-code-surface) 92%, var(--success)) !important;
-  --diffs-bg-addition-number: color-mix(in srgb, var(--synara-code-surface) 88%, var(--success)) !important;
-  --diffs-bg-addition-hover: color-mix(in srgb, var(--synara-code-surface) 85%, var(--success)) !important;
-  --diffs-bg-addition-emphasis: color-mix(in srgb, var(--synara-code-surface) 80%, var(--success)) !important;
-  --diffs-bg-deletion: color-mix(in srgb, var(--synara-code-surface) 92%, var(--destructive)) !important;
-  --diffs-bg-deletion-number: color-mix(in srgb, var(--synara-code-surface) 88%, var(--destructive)) !important;
-  --diffs-bg-deletion-hover: color-mix(in srgb, var(--synara-code-surface) 85%, var(--destructive)) !important;
-  --diffs-bg-deletion-emphasis: color-mix(in srgb, var(--synara-code-surface) 80%, var(--destructive)) !important;
+  --diffs-bg-buffer: color-mix(in srgb, var(--background) 92%, var(--foreground)) !important;
+  --diffs-bg-separator: color-mix(in srgb, var(--background) 95%, var(--foreground)) !important;
+  --diffs-bg-addition: color-mix(in srgb, var(--background) 92%, var(--success)) !important;
+  --diffs-bg-addition-number: color-mix(in srgb, var(--background) 88%, var(--success)) !important;
+  --diffs-bg-addition-hover: color-mix(in srgb, var(--background) 85%, var(--success)) !important;
+  --diffs-bg-addition-emphasis: color-mix(in srgb, var(--background) 80%, var(--success)) !important;
+  --diffs-bg-deletion: color-mix(in srgb, var(--background) 92%, var(--destructive)) !important;
+  --diffs-bg-deletion-number: color-mix(in srgb, var(--background) 88%, var(--destructive)) !important;
+  --diffs-bg-deletion-hover: color-mix(in srgb, var(--background) 85%, var(--destructive)) !important;
+  --diffs-bg-deletion-emphasis: color-mix(in srgb, var(--background) 80%, var(--destructive)) !important;
 
   font-family: var(--font-chat-code-family) !important;
   font-size: var(--app-font-size-chat-code, 11px) !important;
   background-color: var(--synara-code-surface) !important;
+}
+
+/* Pierre blends each changed row against --diffs-bg again. Keep only those rows
+   backed by the theme so their tints survive a clear context surface. */
+[data-line-type="change-addition"],
+[data-line-type="change-deletion"] {
+  --diffs-bg: var(--background) !important;
 }
 
 [data-diffs-header],
