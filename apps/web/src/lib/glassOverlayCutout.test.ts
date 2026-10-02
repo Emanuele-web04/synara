@@ -5,7 +5,9 @@ import { buildCutoutClipPath } from "./glassOverlayCutout";
 describe("buildCutoutClipPath", () => {
   it("returns null when there is nothing to cut", () => {
     expect(buildCutoutClipPath(800, 600, [])).toBeNull();
-    expect(buildCutoutClipPath(800, 600, [{ x: 0, y: 0, width: 0, height: 40, radius: 8 }])).toBeNull();
+    expect(
+      buildCutoutClipPath(800, 600, [{ x: 0, y: 0, width: 0, height: 40, radius: 8 }]),
+    ).toBeNull();
   });
 
   it("cuts one rounded hole per overlay out of the full box", () => {

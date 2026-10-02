@@ -5,7 +5,7 @@ import {
   type ProjectTask,
   type ThreadId,
 } from "@synara/contracts";
-import { useInPageGlassOverlay } from "~/hooks/useInPageGlassOverlay";
+import { SidePanelOverlay } from "~/components/chat/SidePanelOverlay";
 import { PROJECT_CONTEXT_PREVIEW_DOCUMENTS } from "@synara/shared/projectAgent";
 import { resolveGroupCoordinatorStatus } from "@synara/shared/groupThreadState";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
@@ -16,11 +16,6 @@ import { ProviderIcon } from "~/components/ProviderIcon";
 import { DisclosureRegion } from "~/components/ui/DisclosureRegion";
 import { IconButton } from "~/components/ui/icon-button";
 import { Textarea } from "~/components/ui/textarea";
-import {
-  ENVIRONMENT_PANEL_MOTION_CLASS,
-  ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME,
-  ENVIRONMENT_PANEL_SURFACE_CLASS_NAME,
-} from "~/components/chat/composerPickerStyles";
 import { ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME } from "~/components/chat/environment/environmentPanelStyles";
 import { useThreadPullRequests } from "~/hooks/useThreadPullRequests";
 import { resolveGroupCoordinatorDisplayName } from "~/lib/groupCoordinatorName";
@@ -529,30 +524,11 @@ export function ProjectPanel({
     </div>
   );
 
-  // Floating over the transcript: cut that content out from under the card on a glass window.
-  const glassOverlayRef = useInPageGlassOverlay<HTMLDivElement>(open && variant === "floating");
   return (
     <>
-      <div
-        className={ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME}
-        ref={glassOverlayRef}
-        data-environment-panel-variant={variant}
-        aria-hidden={!open}
-        inert={!open}
-      >
-        <div
-          className={cn(
-            ENVIRONMENT_PANEL_SURFACE_CLASS_NAME,
-            ENVIRONMENT_PANEL_MOTION_CLASS,
-            "flex max-h-full w-72 flex-col",
-            open
-              ? "pointer-events-auto translate-x-0 opacity-100"
-              : "pointer-events-none translate-x-full opacity-0",
-          )}
-        >
-          {content}
-        </div>
-      </div>
+      <SidePanelOverlay open={open} variant={variant} cardClassName="max-h-full w-72">
+        {content}
+      </SidePanelOverlay>
       {projectId !== null ? (
         <GroupSettingsDialog
           key={projectId}

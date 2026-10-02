@@ -12,8 +12,10 @@
 // blurred desktop remain. Paint-only: it never changes layout, hit-testing of the overlay, or
 // scroll position.
 
+import { FLOATING_OVERLAY_SURFACE_CLASS_NAME } from "~/surfaceStyles";
+
 /** Portaled overlays (rendered outside the app root): the root is cut out from under them. */
-const OVERLAY_SELECTOR = ".app-popup-surface, .composer-picker-menu-surface, .chat-composer-surface";
+const OVERLAY_SELECTOR = `.${FLOATING_OVERLAY_SURFACE_CLASS_NAME}, .composer-picker-menu-surface, .chat-composer-surface`;
 
 /** An overlay fading in or out is cut out only once it covers more than it reveals. */
 const MIN_OVERLAY_OPACITY = 0.5;
@@ -33,10 +35,14 @@ export interface CutoutRect {
   radius: number;
 }
 
+/** Two decimals: sub-pixel precision without long float tails in the path string. */
+function n(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
 function roundedRectPath(rect: CutoutRect): string {
   const { x, y, width: w, height: h } = rect;
   const r = Math.max(0, Math.min(rect.radius, w / 2, h / 2));
-  const n = (value: number) => Math.round(value * 100) / 100;
   return [
     `M${n(x + r)} ${n(y)}`,
     `H${n(x + w - r)}`,

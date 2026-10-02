@@ -3,6 +3,7 @@
 // Layer: UI styling helper
 // Exports: notification surface class names/tones used by toast and status banners.
 
+import { FLOATING_OVERLAY_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 import { cn } from "~/lib/utils";
 
 // Every notification card shares the same neutral popover chrome; only the
@@ -14,8 +15,7 @@ import { cn } from "~/lib/utils";
 // notably the dismiss "X") clickable in the desktop app. Toasts render at the
 // top edge over Electron's draggable titlebar region; without this the OS
 // captures clicks in that band for window dragging and the X stops working.
-const NOTIFICATION_SURFACE_BASE_CLASS_NAME =
-  "app-popup-surface border border-border bg-popover/94 [--notification-fg:var(--popover-foreground)] text-[var(--notification-fg)] shadow-lg/10 backdrop-blur-xl before:hidden [-webkit-app-region:no-drag] dark:shadow-lg/15";
+const NOTIFICATION_SURFACE_BASE_CLASS_NAME = `${FLOATING_OVERLAY_SURFACE_CLASS_NAME} e border border-border bg-popover/94 [--notification-fg:var(--popover-foreground)] text-[var(--notification-fg)] shadow-lg/10 backdrop-blur-xl before:hidden [-webkit-app-region:no-drag] dark:shadow-lg/15`;
 
 export const COMPACT_NOTIFICATION_SURFACE_CLASS_NAME = `w-max max-w-[min(calc(100vw-2rem),28rem)] rounded-xl ${NOTIFICATION_SURFACE_BASE_CLASS_NAME}`;
 

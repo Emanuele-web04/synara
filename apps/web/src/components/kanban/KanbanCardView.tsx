@@ -4,6 +4,7 @@
 // Layer: UI component (pure; drag wiring lives in KanbanColumn)
 // Exports: KanbanCardView
 
+import { GLASS_RAISED_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 import type { ThreadId } from "@synara/contracts";
 import { GoRepoForked } from "react-icons/go";
 
@@ -144,7 +145,7 @@ function KanbanCardViewComponent({
         "dark:border dark:border-white/[0.05]",
         "hover:bg-card focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none",
         // A dragged card floats over the board, so it keeps its opaque fill on a glass window.
-        isOverlay ? "bg-card shadow-lg dark:shadow-lg" : "app-glass-raised",
+        isOverlay ? "bg-card shadow-lg dark:shadow-lg" : GLASS_RAISED_SURFACE_CLASS_NAME,
         isDragSource && "opacity-40",
       )}
     >

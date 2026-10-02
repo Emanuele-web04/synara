@@ -8,7 +8,7 @@
 //          use floating overlay only. The card surface and content are identical either way.
 // Layer: Environment panel container
 
-import { useInPageGlassOverlay } from "~/hooks/useInPageGlassOverlay";
+import { SidePanelOverlay } from "~/components/chat/SidePanelOverlay";
 import type {
   AutomationDefinition,
   EditorId,
@@ -25,11 +25,6 @@ import type { ReactNode } from "react";
 
 import { useAppSettings } from "~/appSettings";
 import { SETTINGS_TARGETS } from "~/settingsNavigation";
-import {
-  ENVIRONMENT_PANEL_MOTION_CLASS,
-  ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME as BASE_ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME,
-  ENVIRONMENT_PANEL_SURFACE_CLASS_NAME,
-} from "~/components/chat/composerPickerStyles";
 import BranchToolbar, { type BranchToolbarProps } from "~/components/BranchToolbar";
 import ChatMarkdown from "~/components/ChatMarkdown";
 import { FolderClosed } from "~/components/FolderClosed";
@@ -41,7 +36,6 @@ import { isElectron } from "~/env";
 import { basenameOfPath } from "~/file-icons";
 import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { ArrowUpRightIcon, ChangesIcon, GitHubIcon, SettingsIcon } from "~/lib/icons";
-import { cn } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import { revealFolderInShell } from "~/lib/revealFolder";
 import { deleteActiveThreadFromClient } from "~/lib/activeThreadDelete";
@@ -87,11 +81,6 @@ import {
 // the chat content by this amount clears the overlay while leaving the transcript's
 // scrollbar pinned to the viewport's far right.
 export const ENVIRONMENT_DOCKED_CONTENT_INSET_PX = 312;
-
-const ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME = cn(
-  BASE_ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME,
-  "items-end gap-3 overflow-y-auto",
-);
 
 export interface EnvironmentPanelProps {
   /** Drives the slide-in/out transition; the panel stays mounted so CSS can interpolate. */
@@ -549,29 +538,15 @@ export function EnvironmentPanel({
   // Top-right overlay pinned to the chat column with p-3 edge gutters (same footprint in
   // split panes and when the right dock is open). Docked mode additionally insets transcript
   // content; floating overlays only without stealing flex width from the narrow chat pane.
-  // Floating over the transcript: cut that content out from under the card on a glass window.
-  const glassOverlayRef = useInPageGlassOverlay<HTMLDivElement>(open && variant === "floating");
   return (
-    <div
-      className={ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME}
-      ref={glassOverlayRef}
-        data-environment-panel-variant={variant}
-      aria-hidden={!open}
-      inert={!open}
+    <SidePanelOverlay
+      open={open}
+      variant={variant}
+      className="items-end gap-3 overflow-y-auto"
+      cardClassName="max-h-full w-72"
+      trailing={railBottom}
     >
-      <div
-        className={cn(
-          ENVIRONMENT_PANEL_SURFACE_CLASS_NAME,
-          ENVIRONMENT_PANEL_MOTION_CLASS,
-          "flex max-h-full w-72 flex-col",
-          open
-            ? "pointer-events-auto translate-x-0 opacity-100"
-            : "pointer-events-none translate-x-full opacity-0",
-        )}
-      >
-        <div className="min-h-0 overflow-y-auto">{content}</div>
-      </div>
-      {railBottom}
-    </div>
+      <div className="min-h-0 overflow-y-auto">{content}</div>
+    </SidePanelOverlay>
   );
 }
