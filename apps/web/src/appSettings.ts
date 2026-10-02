@@ -167,6 +167,10 @@ export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
 export const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
 export const FollowUpBehavior = Schema.Literals(["queue", "steer"]);
 /** GitHub inbox kind filter: both kinds, or only pull requests or only issues. */
+/** The inbox status filter. Merged is the closed list narrowed to merged pull requests. */
+export const GitHubInboxStateFilter = Schema.Literals(["open", "closed", "merged"]);
+export type GitHubInboxStateFilter = typeof GitHubInboxStateFilter.Type;
+
 export const GitHubInboxKindFilter = Schema.Literals(["all", "pullRequest", "issue"]);
 export type GitHubInboxKindFilter = typeof GitHubInboxKindFilter.Type;
 /** GitHub inbox involvement filter, applied on the client over the loaded superset. */
@@ -383,7 +387,7 @@ export const AppSettingsSchema = Schema.Struct({
   // override them for one visit; search text lives only in the URL). The column widths are not
   // stored: the page always opens at even fractions.
   githubInboxKind: GitHubInboxKindFilter.pipe(withDefaults(() => "all" as const)),
-  githubInboxState: GitHubInboxState.pipe(withDefaults(() => "open" as const)),
+  githubInboxState: GitHubInboxStateFilter.pipe(withDefaults(() => "open" as const)),
   githubInboxSort: GitHubInboxSort.pipe(withDefaults(() => "created" as const)),
   githubInboxInvolvement: GitHubInboxInvolvementFilter.pipe(
     withDefaults(() => "everything" as const),

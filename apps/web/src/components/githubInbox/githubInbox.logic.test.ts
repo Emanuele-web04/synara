@@ -19,6 +19,7 @@ import {
   mergeGitHubInboxSearch,
   parseGitHubInboxSearch,
   resolveGitHubInboxFilters,
+  githubInboxListState,
   selectVisibleInboxItems,
   toggleGitHubInboxLabel,
   type GitHubInboxFilterSettings,
@@ -171,7 +172,7 @@ describe("parseGitHubInboxSearch", () => {
     });
     expect(parseGitHubInboxSearch({ involvement: "reviewing", state: "merged" })).toEqual({
       involvement: "reviewRequested",
-      state: "closed",
+      state: "merged",
     });
     expect(parseGitHubInboxSearch({ involvement: "authored" })).toEqual({
       involvement: "authored",
@@ -353,6 +354,41 @@ describe("selectVisibleInboxItems", () => {
     );
     expect(pinned.map((group) => group.key)).toEqual(["pinned", "all"]);
     expect(pinned[0]?.entries.map((item) => item.number)).toEqual([4]);
+  });
+});
+
+describe("merged state filter", () => {
+  it("reads the closed list and keeps only merged pull requests", () => {
+    const closedList = [
+      pullRequest(1, { state: "merged" }),
+      pullRequest(2, { state: "closed" }),
+      issue(3, { state: "closed" }),
+    ];
+    const merged = filters({ state: "merged" });
+    expect(githubInboxListState("merged")).toBe("closed");
+    expect(
+      selectVisibleInboxItems(closedList, merged, { viewer: "me", normalizedQuery: "" }).map(
+        (item) => item.number,
+      ),
+    ).toEqual([1]);
+    // GitHub's closed totals would overcount, so the tabs count the matching rows.
+    expect(
+      countInboxItemsByKind(closedList, merged, {
+        viewer: "me",
+        normalizedQuery: "",
+        repositoryBatches: [
+          {
+            repository: "acme/widgets",
+            projectIds: [projectA],
+            truncatedPullRequests: false,
+            truncatedIssues: false,
+            totalPullRequests: 40,
+            totalIssues: 9,
+            fetchedAt: "2026-09-01T00:00:00.000Z",
+          },
+        ],
+      }),
+    ).toEqual({ all: 1, pullRequest: 1, issue: 0 });
   });
 });
 

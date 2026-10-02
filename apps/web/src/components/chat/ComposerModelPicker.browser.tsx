@@ -157,40 +157,46 @@ function readStoredStars(): unknown {
 }
 
 describe("ComposerModelPicker", () => {
-  it("checks only the viewed account and keeps rows available during manual refresh", async () => {
+  it("checks the viewed account silently and offers retry only after failure", async () => {
     let finish!: () => void;
     const promise = new Promise<void>((resolve) => {
       finish = resolve;
     });
-    const onRefreshModels = vi.fn().mockResolvedValue(undefined);
+    const onRefreshModels = vi.fn().mockReturnValueOnce(promise);
     const screen = await mountPicker({ onRefreshModels });
-    await vi.waitFor(() =>
-      expect(onRefreshModels).toHaveBeenCalledExactlyOnceWith("codex", "codex", "if-stale"),
-    );
-    const refreshButton = page.getByRole("button", { name: "Refresh models" });
-    await expect.element(refreshButton).toBeEnabled();
-    expect(page.getByRole("status").elements()).toHaveLength(0);
-    onRefreshModels.mockReturnValueOnce(promise);
-    await refreshButton.click();
-    await expect.element(refreshButton).toBeDisabled();
-    await expect.element(page.getByText("Checking for models…")).toBeVisible();
-    await expect.element(page.getByRole("menuitem", { name: /GPT-5.5/u }).first()).toBeVisible();
-    expect(onRefreshModels).toHaveBeenLastCalledWith("codex", "codex", "now");
-    finish();
-    await expect.element(refreshButton).toBeEnabled();
-    expect(page.getByRole("status").elements()).toHaveLength(0);
-    onRefreshModels.mockRejectedValueOnce(new Error("offline"));
-    await refreshButton.click();
-    await expect.element(page.getByText("Couldn’t refresh models. Try again.")).toBeVisible();
-    await expect.element(page.getByRole("menuitem", { name: /GPT-5.5/u }).first()).toBeVisible();
-    await page.getByRole("tab", { name: "Claude" }).click();
-    await vi.waitFor(() =>
-      expect(onRefreshModels).toHaveBeenLastCalledWith("claudeAgent", "claudeAgent", "if-stale"),
-    );
-    await page.getByRole("tab", { name: "Starred" }).click();
-    expect(onRefreshModels).toHaveBeenCalledTimes(4);
-    expect(page.getByRole("button", { name: "Refresh models" }).elements()).toHaveLength(0);
-    await screen.unmount();
+    try {
+      await vi.waitFor(() =>
+        expect(onRefreshModels).toHaveBeenCalledExactlyOnceWith("codex", "codex", "if-stale"),
+      );
+      expect(page.getByRole("button", { name: "Refresh models" }).elements()).toHaveLength(0);
+      expect(page.getByRole("status").elements()).toHaveLength(0);
+      await expect.element(page.getByRole("menuitem", { name: /GPT-5.5/u }).first()).toBeVisible();
+      finish();
+      await promise;
+      expect(page.getByRole("button", { name: "Refresh models" }).elements()).toHaveLength(0);
+
+      onRefreshModels.mockRejectedValueOnce(new Error("offline"));
+      await page.getByRole("tab", { name: "Claude" }).click();
+      await expect.element(page.getByText("Couldn’t update models.")).toBeVisible();
+      expect(onRefreshModels).toHaveBeenLastCalledWith("claudeAgent", "claudeAgent", "if-stale");
+      let finishRetry!: () => void;
+      onRefreshModels.mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          finishRetry = resolve;
+        }),
+      );
+      const retryButton = page.getByRole("button", { name: "Retry" });
+      await retryButton.click();
+      await expect.element(retryButton).toBeDisabled();
+      expect(onRefreshModels).toHaveBeenLastCalledWith("claudeAgent", "claudeAgent", "now");
+      finishRetry();
+      await expect.element(retryButton).not.toBeInTheDocument();
+      expect(page.getByRole("status").elements()).toHaveLength(0);
+      await page.getByRole("tab", { name: "Starred" }).click();
+      expect(onRefreshModels).toHaveBeenCalledTimes(3);
+    } finally {
+      await screen.unmount();
+    }
   });
 
   it("does not restart a pending check when the refresh callback changes", async () => {
@@ -205,9 +211,8 @@ describe("ComposerModelPicker", () => {
     try {
       await vi.waitFor(() => expect(onRefreshModels).toHaveBeenCalledTimes(1));
       await screen.rerender(<Harness onRefreshModels={(...args) => onRefreshModels(...args)} />);
-      await expect.element(page.getByText("Checking for models…")).toBeVisible();
+      expect(page.getByRole("status").elements()).toHaveLength(0);
       finish();
-      await expect.element(page.getByRole("button", { name: "Refresh models" })).toBeEnabled();
       expect(onRefreshModels).toHaveBeenCalledTimes(1);
     } finally {
       await screen.unmount();

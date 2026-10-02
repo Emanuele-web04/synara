@@ -356,51 +356,56 @@ describe("providerModelsQueryOptions", () => {
     expect(queryClient.getQueryData(options.queryKey)).toEqual(catalog);
   });
 
-  it("preserves a cached dynamic catalog when refresh returns a degraded fallback", async () => {
-    const catalog = {
-      models: [{ slug: "custom-devin-model", name: "Custom Devin Model" }],
-      source: "devin-cli",
-      cached: false,
-    };
-    const degraded = {
-      models: [{ slug: "sonnet", name: "Sonnet" }],
-      source: "devin.static",
-      cached: false,
-      error: "Devin CLI temporarily failed",
-    };
-    const listModels = mockListModels(
-      vi.fn().mockResolvedValueOnce(catalog).mockResolvedValueOnce(degraded),
-    );
-    const options = { ...providerModelsQueryOptions({ provider: "devin" }), retry: 0 };
-    const queryClient = new QueryClient();
+  it.each(["devin", "codex", "claudeAgent"] as const)(
+    "preserves a cached %s catalog when refresh returns a degraded fallback",
+    async (provider) => {
+      const catalog = {
+        models: [{ slug: "custom-model", name: "Custom Model" }],
+        source: "runtime",
+        cached: false,
+      };
+      const degraded = {
+        models: [{ slug: "sonnet", name: "Sonnet" }],
+        source: "runtime.static",
+        cached: false,
+        error: "Provider temporarily failed",
+      };
+      const listModels = mockListModels(
+        vi.fn().mockResolvedValueOnce(catalog).mockResolvedValueOnce(degraded),
+      );
+      const options = { ...providerModelsQueryOptions({ provider }), retry: 0 };
+      const queryClient = new QueryClient();
 
-    await expect(queryClient.fetchQuery(options)).resolves.toEqual(catalog);
-    await queryClient.refetchQueries({ queryKey: options.queryKey });
+      await expect(queryClient.fetchQuery(options)).resolves.toEqual(catalog);
+      await queryClient.refetchQueries({ queryKey: options.queryKey });
 
-    expect(listModels).toHaveBeenCalledTimes(2);
-    expect(queryClient.getQueryData(options.queryKey)).toEqual(catalog);
-    expect(queryClient.getQueryState(options.queryKey)?.error).toEqual(
-      new Error("Devin CLI temporarily failed"),
-    );
-    const interval = options.refetchInterval;
-    if (typeof interval !== "function") throw new Error("Expected recovery polling");
-    const query = queryClient
-      .getQueryCache()
-      .get<
-        ProviderListModelsResult,
-        Error,
-        ProviderListModelsResult,
-        Parameters<typeof interval>[0]["queryKey"]
-      >(hashKey(options.queryKey));
-    if (!query) throw new Error("Missing Devin query");
-    expect(interval(query)).toBe(30_000);
-    listModels.mockResolvedValue(catalog);
-    await queryClient.refetchQueries({ queryKey: options.queryKey });
-    expect(queryClient.getQueryData(options.queryKey)).toEqual(catalog);
-    expect(query.state.error).toBeNull();
-    expect(interval(query)).toBe(false);
-    queryClient.clear();
-  });
+      expect(listModels).toHaveBeenCalledTimes(2);
+      expect(queryClient.getQueryData(options.queryKey)).toEqual(catalog);
+      expect(queryClient.getQueryState(options.queryKey)?.error).toEqual(
+        new Error("Provider temporarily failed"),
+      );
+      if (provider === "devin") {
+        const interval = options.refetchInterval;
+        if (typeof interval !== "function") throw new Error("Expected recovery polling");
+        const query = queryClient
+          .getQueryCache()
+          .get<
+            ProviderListModelsResult,
+            Error,
+            ProviderListModelsResult,
+            Parameters<typeof interval>[0]["queryKey"]
+          >(hashKey(options.queryKey));
+        if (!query) throw new Error("Missing Devin query");
+        expect(interval(query)).toBe(30_000);
+        listModels.mockResolvedValue(catalog);
+        await queryClient.refetchQueries({ queryKey: options.queryKey });
+        expect(queryClient.getQueryData(options.queryKey)).toEqual(catalog);
+        expect(query.state.error).toBeNull();
+        expect(interval(query)).toBe(false);
+      }
+      queryClient.clear();
+    },
+  );
 
   it("scopes OMP's model query by cwd so project modelRoles participate", () => {
     const options = providerModelsQueryOptions({

@@ -117,7 +117,7 @@ composer and keeps the workspace assigned by Code review.
 
 ## Code review
 
-Code review lists the open or closed pull requests and issues of the GitHub repositories behind
+Code review lists the open, closed, or merged pull requests and issues of the GitHub repositories behind
 your projects: each project contributes the repository of its current branch remote (or
 `remote.pushDefault`, then `origin`), and **Include fork upstreams** in Settings adds its other
 GitHub remotes. Two projects on one repository share one list. Filters (kind, projects, state,

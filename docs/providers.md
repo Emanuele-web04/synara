@@ -99,11 +99,11 @@ refresh keeps the last successful catalog. The shared discovery cache refreshes 
 background after its thirty-minute fresh window. Opening a provider/account tab in the composer
 checks that catalog on demand and delivers any refreshed list directly to the picker. Other tabs
 are not refreshed just because the picker opens, and there is no periodic timer for these checks.
-Existing models remain visible while a check runs. **Refresh models** requests an earlier check;
-the server shares concurrent requests, reuses successful checks for at least one minute, and backs
-off failures. Status text appears only while checking or after a failure; successful checks clear it,
-including when the catalog has not changed. Checks for the viewed account take priority over queued
-background catalog loads.
+Existing models remain visible while checks run silently, without a persistent refresh row.
+If a check fails, an inline error offers **Retry**; a successful retry removes the entire row,
+including when the catalog has not changed. The server shares concurrent requests, reuses successful
+manual retries for at least one minute, and backs off failures. Checks for the viewed account take
+priority over queued background catalog loads.
 Failed refreshes retain the last successful catalog. Refreshing does not change the
 selected model or restart running sessions, and availability still comes from the provider runtime.
 

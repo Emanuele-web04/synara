@@ -1,5 +1,5 @@
 // FILE: ModelCatalogRefresh.tsx
-// Purpose: Check one visible model catalog on mount and expose an explicit refresh.
+// Purpose: Silently check the visible catalog; expose a retry only after failure.
 // Layer: Chat picker UI
 
 import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
@@ -24,9 +24,9 @@ export function ModelCatalogRefresh(props: {
       inFlight.current = true;
       const currentRequest = ++requestId.current;
       setPending(true);
-      setFailed(false);
       try {
         await onRefresh(provider, instanceId, mode);
+        if (requestId.current === currentRequest) setFailed(false);
       } catch {
         if (requestId.current === currentRequest) setFailed(true);
       } finally {
@@ -48,13 +48,13 @@ export function ModelCatalogRefresh(props: {
     };
   }, [provider, instanceId]);
 
+  if (!failed) return null;
+
   return (
     <div className="flex items-center justify-end gap-2 border-t border-border px-2 py-1">
-      {pending || failed ? (
-        <span role="status" className="mr-auto text-ui-xs text-muted-foreground">
-          {pending ? "Checking for models…" : "Couldn’t refresh models. Try again."}
-        </span>
-      ) : null}
+      <span role="status" className="mr-auto text-ui-xs text-muted-foreground">
+        {pending ? "Checking for models…" : "Couldn’t update models."}
+      </span>
       <Button
         type="button"
         variant="ghost"
@@ -66,7 +66,7 @@ export function ModelCatalogRefresh(props: {
           aria-hidden="true"
           className={pending ? "size-3 motion-safe:animate-spin" : "size-3"}
         />
-        Refresh models
+        Retry
       </Button>
     </div>
   );
