@@ -279,54 +279,56 @@ describe("useProviderModelCatalog", () => {
     queryClient.clear();
   });
 
-  it("checks a queued account before background catalogs even when its prefetch fails", async () => {
-    let finishActive!: () => void;
-    const catalog = { models: [{ slug: "same-model", name: "Same model" }], source: "runtime" };
-    const listModels = vi.fn().mockImplementation(({ provider, refresh }) => {
-      if (provider === "opencode") {
-        return new Promise((resolve) => {
-          finishActive = () => resolve(catalog);
-        });
-      }
-      if (provider === "codex" && !refresh) return Promise.reject(new Error("prefetch failed"));
-      return Promise.resolve(catalog);
-    });
-    vi.spyOn(nativeApi, "ensureNativeApi").mockReturnValue({
-      provider: { listModels },
-    } as unknown as NativeApi);
-    const client = mocks.useQueryClient() as QueryClient;
-    const active = client.fetchQuery(providerModelsQueryOptions({ provider: "opencode" }));
-    await vi.waitFor(() => expect(finishActive).toBeDefined());
-    const background = client.fetchQuery(providerModelsQueryOptions({ provider: "pi" }));
-    const prefetch = client
-      .fetchQuery({
-        ...providerModelsQueryOptions({ provider: "codex", instanceId: "codex_work" }),
-        retry: false,
-      })
-      .catch(() => undefined);
-    const [catalogHook] = readCatalogRenders({
-      selectedProvider: "codex",
-      discoveryEnabled: false,
-    });
-    const refreshed = catalogHook!.refreshModels("codex", "codex_work", "now");
-    const outcome = refreshed.then(
-      () => "completed",
-      () => "failed",
-    );
-    finishActive();
-    await Promise.all([active, background, prefetch]);
-    expect(await outcome).toBe("completed");
-    expect(listModels.mock.calls[1]?.[0]).toMatchObject({
-      provider: "codex",
-      instanceId: "codex_work",
-    });
-    expect(listModels).toHaveBeenCalledWith({
-      provider: "codex",
-      instanceId: "codex_work",
-      refresh: "now",
-    });
-    client.clear();
-  });
+  it.each([false, true])(
+    "keeps an account refresh ahead of background catalogs after a prefetch (fails: %s)",
+    async (prefetchFails) => {
+      let finishActive!: () => void;
+      const catalog = { models: [{ slug: "same-model", name: "Same model" }], source: "runtime" };
+      const listModels = vi.fn().mockImplementation(({ provider, refresh }) => {
+        if (provider === "opencode") {
+          return new Promise((resolve) => {
+            finishActive = () => resolve(catalog);
+          });
+        }
+        if (provider === "codex" && !refresh && prefetchFails) {
+          return Promise.reject(new Error("prefetch failed"));
+        }
+        return Promise.resolve(catalog);
+      });
+      vi.spyOn(nativeApi, "ensureNativeApi").mockReturnValue({
+        provider: { listModels },
+      } as unknown as NativeApi);
+      const client = mocks.useQueryClient() as QueryClient;
+      const active = client.fetchQuery(providerModelsQueryOptions({ provider: "opencode" }));
+      await vi.waitFor(() => expect(finishActive).toBeDefined());
+      const background = client.fetchQuery(providerModelsQueryOptions({ provider: "pi" }));
+      const prefetch = client
+        .fetchQuery({
+          ...providerModelsQueryOptions({ provider: "codex", instanceId: "codex_work" }),
+          retry: false,
+        })
+        .catch(() => undefined);
+      const [catalogHook] = readCatalogRenders({
+        selectedProvider: "codex",
+        discoveryEnabled: false,
+      });
+      const refreshed = catalogHook!.refreshModels("codex", "codex_work", "now");
+      const outcome = refreshed.then(
+        () => "completed",
+        () => "failed",
+      );
+      finishActive();
+      await Promise.all([active, background, prefetch]);
+      expect(await outcome).toBe("completed");
+      expect(listModels.mock.calls.map(([input]) => input)).toEqual([
+        { provider: "opencode" },
+        { provider: "codex", instanceId: "codex_work" },
+        { provider: "codex", instanceId: "codex_work", refresh: "now" },
+        { provider: "pi" },
+      ]);
+      client.clear();
+    },
+  );
 
   it("reports a degraded provider response as a failed refresh", async () => {
     vi.spyOn(nativeApi, "ensureNativeApi").mockReturnValue({
