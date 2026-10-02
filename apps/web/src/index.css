@@ -3173,9 +3173,16 @@ diffs-container {
 }
 
 /* A composer portaled next to the app root (the selection composer) is cut out like any
-   other overlay, so it takes the overlay fill instead of the dense default. */
-:root[data-window-translucency="window"] body > :not(#root) .chat-composer-surface {
-  background: var(--app-overlay-surface);
+   other overlay in both translucent modes. Sidebar-only glass also needs the coat backing. */
+:root[data-window-material="translucent"] body > :not(#root) .chat-composer-surface {
+  background:
+    linear-gradient(var(--app-overlay-surface), var(--app-overlay-surface)),
+    var(--app-overlay-backing, transparent);
+}
+
+:root[data-window-material="translucent"] body > :not(#root) .chat-composer-surface::before {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 /* The composer no longer frosts what scrolls beneath it, so the transcript dissolves

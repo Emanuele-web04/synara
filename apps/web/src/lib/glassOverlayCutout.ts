@@ -3,7 +3,7 @@
 //          translucent menu, picker, tooltip, or toast shows the window's glass rather than
 //          the text it covers.
 // Layer: Desktop window material helper
-// Exports: installGlassOverlayCutout, registerInPageGlassOverlay, buildCutoutClipPath
+// Exports: installGlassOverlayCutout, registerInPageGlassOverlay
 //
 // A backdrop blur cannot hide what sits behind an element over a see-through region:
 // Chromium composites the blurred copy over the sharp original, so text stays readable
@@ -27,7 +27,7 @@ const MIN_OVERLAY_OPACITY = 0.5;
  */
 const IDLE_FRAMES_BEFORE_STOP = 30;
 
-export interface CutoutRect {
+interface CutoutRect {
   x: number;
   y: number;
   width: number;
@@ -57,18 +57,9 @@ function roundedRectPath(rect: CutoutRect): string {
   ].join(" ");
 }
 
-/**
- * Clip path for a `width` x `height` box with one rounded hole per rect, in the box's own
- * coordinates. Null when there is nothing to cut.
- */
-export function buildCutoutClipPath(
-  width: number,
-  height: number,
-  rects: ReadonlyArray<CutoutRect>,
-): string | null {
-  const holes = rects.filter((rect) => rect.width > 0 && rect.height > 0).map(roundedRectPath);
-  if (holes.length === 0) return null;
-  return `path(evenodd, "M0 0 H${Math.ceil(width)} V${Math.ceil(height)} H0 Z ${holes.join(" ")}")`;
+/** Full box with one rounded hole; separate inverse clips are intersected for multiple holes. */
+function inverseRectPath(width: number, height: number, rect: CutoutRect): string {
+  return `M0 0 H${Math.ceil(width)} V${Math.ceil(height)} H0 Z ${roundedRectPath(rect)}`;
 }
 
 function isCoveringOverlay(element: HTMLElement): boolean {
@@ -97,6 +88,7 @@ function cutoutRectWithin(element: HTMLElement, box: DOMRect): CutoutRect {
 const IN_PAGE_SURFACE_SELECTOR = ".chat-raised-panel-surface, .chat-composer-surface";
 
 const inPageOverlayWrappers = new Set<HTMLElement>();
+let cutoutId = 0;
 let scheduleInstalledCutout: (() => void) | null = null;
 
 /**
@@ -105,8 +97,11 @@ let scheduleInstalledCutout: (() => void) | null = null;
  */
 export function registerInPageGlassOverlay(wrapper: HTMLElement): () => void {
   inPageOverlayWrappers.add(wrapper);
+  const observer = new MutationObserver(() => scheduleInstalledCutout?.());
+  observer.observe(wrapper, { attributes: true, childList: true, subtree: true });
   scheduleInstalledCutout?.();
   return () => {
+    observer.disconnect();
     inPageOverlayWrappers.delete(wrapper);
     scheduleInstalledCutout?.();
   };
@@ -120,46 +115,104 @@ export function registerInPageGlassOverlay(wrapper: HTMLElement): () => void {
 export function installGlassOverlayCutout(root: HTMLElement): () => void {
   const documentElement = document.documentElement;
   const observedContainers = new WeakSet<Node>();
-  // Every element currently carrying a cutout, with the clip path it was given.
-  const applied = new Map<HTMLElement, string>();
+  type CutoutBox = { width: number; height: number; rects: CutoutRect[] };
+  const applied = new Map<
+    HTMLElement,
+    {
+      previous: string;
+      signature: string;
+      definitions?: SVGGElement;
+    }
+  >();
+  const svgNamespace = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(svgNamespace, "svg");
+  svg.setAttribute("aria-hidden", "true");
+  svg.style.cssText = "position:fixed;width:0;height:0;pointer-events:none";
+  const defs = document.createElementNS(svgNamespace, "defs");
+  svg.append(defs);
   let frame: number | null = null;
   let idleFrames = 0;
 
-  const applyClipPaths = (next: Map<HTMLElement, string>) => {
-    for (const [element] of applied) {
+  const applyClipPaths = (next: Map<HTMLElement, CutoutBox>) => {
+    for (const [element, state] of applied) {
       if (next.has(element)) continue;
-      element.style.clipPath = "";
+      element.style.clipPath = state.previous;
+      state.definitions?.remove();
       applied.delete(element);
     }
-    for (const [element, clipPath] of next) {
-      if (applied.get(element) === clipPath) continue;
-      element.style.clipPath = clipPath;
-      applied.set(element, clipPath);
+    for (const [element, box] of next) {
+      const signature = JSON.stringify(box);
+      const state = applied.get(element) ?? { previous: element.style.clipPath, signature: "" };
+      if (state.signature === signature) continue;
+      state.signature = signature;
+      state.definitions?.remove();
+      if (box.rects.length === 1) {
+        element.style.clipPath = `path(evenodd, "${inverseRectPath(box.width, box.height, box.rects[0]!)}")`;
+      } else {
+        // Even-odd holes in one path XOR where overlays overlap. Intersect individual
+        // inverse clips instead, so their shared area stays hidden too.
+        if (!svg.isConnected) document.body.append(svg);
+        const group = document.createElementNS(svgNamespace, "g");
+        const prefix = `glass-cutout-${++cutoutId}`;
+        for (const [index, rect] of box.rects.entries()) {
+          const clip = document.createElementNS(svgNamespace, "clipPath");
+          clip.id = `${prefix}-${index}`;
+          clip.setAttribute("clipPathUnits", "userSpaceOnUse");
+          const path = document.createElementNS(svgNamespace, "path");
+          path.setAttribute("clip-rule", "evenodd");
+          path.setAttribute("d", inverseRectPath(box.width, box.height, rect));
+          if (index > 0) path.setAttribute("clip-path", `url(#${prefix}-${index - 1})`);
+          clip.append(path);
+          group.append(clip);
+        }
+        defs.append(group);
+        state.definitions = group;
+        element.style.clipPath = `url(#${prefix}-${box.rects.length - 1})`;
+      }
+      applied.set(element, state);
     }
   };
 
-  const collectPortaledCutouts = (next: Map<HTMLElement, string>): number => {
+  const addCutout = (
+    next: Map<HTMLElement, CutoutBox>,
+    element: HTMLElement,
+    overlays: HTMLElement[],
+  ) => {
+    const box = element.getBoundingClientRect();
+    const rects = overlays
+      .map((overlay) => cutoutRectWithin(overlay, box))
+      .filter(
+        (rect) =>
+          rect.width > 0 &&
+          rect.height > 0 &&
+          rect.x < box.width &&
+          rect.y < box.height &&
+          rect.x + rect.width > 0 &&
+          rect.y + rect.height > 0,
+      );
+    if (rects.length === 0) return;
+    const previous = next.get(element);
+    next.set(element, {
+      width: box.width,
+      height: box.height,
+      rects: [...(previous?.rects ?? []), ...rects],
+    });
+  };
+
+  const collectPortaledCutouts = (next: Map<HTMLElement, CutoutBox>): number => {
     // Only the portal containers are searched: the root holds the whole transcript.
     const overlays: HTMLElement[] = [];
     for (const child of document.body.children) {
-      if (child === root) continue;
+      if (child === root || child === svg) continue;
       if (child.matches(OVERLAY_SELECTOR)) overlays.push(child as HTMLElement);
       overlays.push(...child.querySelectorAll<HTMLElement>(OVERLAY_SELECTOR));
     }
     const covering = overlays.filter(isCoveringOverlay);
-    if (covering.length > 0) {
-      const rootRect = root.getBoundingClientRect();
-      const clipPath = buildCutoutClipPath(
-        rootRect.width,
-        rootRect.height,
-        covering.map((element) => cutoutRectWithin(element, rootRect)),
-      );
-      if (clipPath) next.set(root, clipPath);
-    }
+    addCutout(next, root, covering);
     return covering.length;
   };
 
-  const collectInPageCutouts = (next: Map<HTMLElement, string>): number => {
+  const collectInPageCutouts = (next: Map<HTMLElement, CutoutBox>): number => {
     if (documentElement.dataset.windowTranslucency !== "window") return 0;
     let covering = 0;
     for (const wrapper of inPageOverlayWrappers) {
@@ -167,12 +220,9 @@ export function installGlassOverlayCutout(root: HTMLElement): () => void {
       if (!surface || !wrapper.parentElement || !isCoveringOverlay(surface)) continue;
       covering += 1;
       for (const sibling of wrapper.parentElement.children) {
-        if (sibling === wrapper || !(sibling instanceof HTMLElement)) continue;
-        const box = sibling.getBoundingClientRect();
-        const clipPath = buildCutoutClipPath(box.width, box.height, [
-          cutoutRectWithin(surface, box),
-        ]);
-        if (clipPath) next.set(sibling, clipPath);
+        if (inPageOverlayWrappers.has(sibling as HTMLElement) || !(sibling instanceof HTMLElement))
+          continue;
+        addCutout(next, sibling, [surface]);
       }
     }
     return covering;
@@ -180,7 +230,7 @@ export function installGlassOverlayCutout(root: HTMLElement): () => void {
 
   const tick = () => {
     frame = null;
-    const next = new Map<HTMLElement, string>();
+    const next = new Map<HTMLElement, CutoutBox>();
     const covering =
       documentElement.dataset.windowMaterial === "translucent"
         ? collectPortaledCutouts(next) + collectInPageCutouts(next)
@@ -204,7 +254,7 @@ export function installGlassOverlayCutout(root: HTMLElement): () => void {
   const containerObserver = new MutationObserver(schedule);
   const observeContainers = () => {
     for (const child of document.body.children) {
-      if (child === root || observedContainers.has(child)) continue;
+      if (child === root || child === svg || observedContainers.has(child)) continue;
       observedContainers.add(child);
       // Attributes too: a kept-mounted overlay reopens by flipping its state attributes.
       containerObserver.observe(child, { attributes: true, childList: true, subtree: true });
@@ -232,5 +282,6 @@ export function installGlassOverlayCutout(root: HTMLElement): () => void {
     frame = null;
     scheduleInstalledCutout = null;
     applyClipPaths(new Map());
+    svg.remove();
   };
 }

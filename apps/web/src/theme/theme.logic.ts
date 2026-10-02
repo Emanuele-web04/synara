@@ -849,9 +849,7 @@ export function buildThemeCssVariables(
     variant === "dark"
       ? readCodexVariable("--color-background-control-opaque")
       : "color-mix(in oklab, var(--color-background-control) 90%, transparent)";
-  // Mirrors Codex Electron's [cmdk-root] dropdown shell: thin the dropdown-background
-  // token by 5% in oklab over the existing backdrop blur. Light vs dark is already
-  // handled by --color-background-control-opaque (white in light, dark control in dark).
+  // Floating surfaces share the composer's fill, tracking the coat on whole-window glass.
   const raisedGlassSurface = `color-mix(in srgb, var(--popover) ${Math.round(RAISED_GLASS_OPACITY_FLOOR + translucentOpacity * RAISED_GLASS_OPACITY_RATIO)}%, transparent)`;
   const overlaySurface = wholeWindowGlass
     ? raisedGlassSurface

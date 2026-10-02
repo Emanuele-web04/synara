@@ -26,7 +26,7 @@ export function showContextMenuFallback<T extends string>(
 
     const menu = document.createElement("div");
     menu.dataset.slot = "context-menu-popup";
-    menu.className = `${FLOATING_OVERLAY_SURFACE_CLASS_NAME} rface fixed z-[10000] min-w-[180px] rounded-xl border border-white/[0.08] shadow-xl animate-in fade-in zoom-in-95`;
+    menu.className = `${FLOATING_OVERLAY_SURFACE_CLASS_NAME} fixed z-[10000] min-w-[180px] rounded-xl border border-white/[0.08] shadow-xl animate-in fade-in zoom-in-95`;
 
     const x = position?.x ?? 0;
     const y = position?.y ?? 0;

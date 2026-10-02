@@ -166,7 +166,7 @@ export const COMPOSER_INPUT_SURFACE_CLASS_NAME = `chat-composer-surface squircle
 /** Shell for floating menus, pickers, and popovers: the shared overlay fill over a backdrop
  *  blur. FLOATING_OVERLAY_SURFACE_CLASS_NAME hands the fill to index.css and, on a translucent
  *  window where the blur cannot hide what sits behind the popup, marks it for the cutout. */
-export const APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME = `${FLOATING_OVERLAY_SURFACE_CLASS_NAME} e relative overflow-hidden border border-border bg-popover/70 text-popover-foreground before:pointer-events-none before:absolute before:inset-0 before:-z-1 before:rounded-[inherit] before:backdrop-blur-2xl before:backdrop-saturate-150`;
+export const APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME = `${FLOATING_OVERLAY_SURFACE_CLASS_NAME} relative overflow-hidden border border-border bg-popover/70 text-popover-foreground before:pointer-events-none before:absolute before:inset-0 before:-z-1 before:rounded-[inherit] before:backdrop-blur-2xl before:backdrop-saturate-150`;
 
 /** Default floating popup shell (dropdown menus, selects, popovers). */
 export const APP_TRANSLUCENT_POPUP_SURFACE_CLASS_NAME = `${APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME} rounded-2xl shadow-xl`;

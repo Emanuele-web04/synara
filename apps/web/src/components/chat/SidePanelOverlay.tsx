@@ -39,7 +39,7 @@ export function SidePanelOverlay({
   children,
   trailing,
 }: SidePanelOverlayProps) {
-  const glassOverlayRef = useInPageGlassOverlay<HTMLDivElement>(open && variant === "floating");
+  const glassOverlayRef = useInPageGlassOverlay<HTMLDivElement>(variant === "floating");
   return (
     <div
       ref={glassOverlayRef}
