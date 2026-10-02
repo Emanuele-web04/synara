@@ -237,6 +237,7 @@ import {
   SidebarCustomizeList,
 } from "./SidebarCustomizeList";
 import { AppRailMoreMenu } from "./AppRailMoreMenu";
+import { AppRailUsage } from "./AppRailUsage";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ThreadHoverCardContent } from "./ThreadHoverCardContent";
 import { ProjectHoverCardContent } from "./ProjectHoverCardContent";
@@ -6662,7 +6663,16 @@ export default function Sidebar() {
     shortcuts: railShortcutItems,
     moreSlot: railMoreMenu,
     bottomItems: railBottomItems,
-    bottomSlot: <SidebarHelpMenu inRail {...sidebarHelpMenuProps} />,
+    bottomSlot: (
+      <>
+        <AppRailUsage
+          onOpenUsageSettings={() => {
+            void navigate({ to: "/settings", search: { section: "usage" } });
+          }}
+        />
+        <SidebarHelpMenu inRail {...sidebarHelpMenuProps} />
+      </>
+    ),
     onContextMenu: handleNavContextMenu,
   };
 
