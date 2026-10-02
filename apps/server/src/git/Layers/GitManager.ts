@@ -2716,7 +2716,8 @@ The local stash entry was kept for recovery.`,
             : null;
 
         let branchStep: { status: "created" | "skipped_not_requested"; name?: string };
-        let commitMessageForStep = input.commitMessage;
+        let commitMessageForStep =
+          input.commitMessage?.trim() || (wantsPr ? input.prTitle?.trim() : undefined);
         let preResolvedCommitSuggestion: CommitAndBranchSuggestion | undefined = undefined;
 
         if (input.featureBranch) {
@@ -2729,7 +2730,7 @@ The local stash entry was kept for recovery.`,
           const result = yield* runFeatureBranchStep(
             input.cwd,
             initialStatus.branch,
-            input.commitMessage,
+            commitMessageForStep,
             input.filePaths,
             textGenerationParams,
             {

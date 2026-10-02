@@ -357,6 +357,7 @@ export interface ThreadStatusPill {
   label:
     | "Working"
     | "Connecting"
+    | "Preparing worktree"
     | "Completed"
     | "Pending Approval"
     | "Awaiting Input"
@@ -404,6 +405,7 @@ const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
   "Awaiting Input": 4,
   Working: 3,
   Connecting: 3,
+  "Preparing worktree": 3,
   "Plan Ready": 2,
   "In Background": 2,
   Completed: 1,
@@ -620,6 +622,7 @@ export function resolveThreadStatusPill(input: {
   thread: ThreadStatusInput;
   hasPendingApprovals: boolean;
   hasPendingUserInput: boolean;
+  isPreparingWorktree?: boolean;
 }): ThreadStatusPill | null {
   const { thread } = input;
   // A dead session can't receive approval/input answers anymore — drop the
@@ -672,6 +675,16 @@ export function resolveThreadStatusPill(input: {
   if (thread.session?.status === "connecting") {
     return {
       label: "Connecting",
+      colorClass: "text-sky-600 dark:text-sky-300/80",
+      dotClass: "bg-sky-500 dark:bg-sky-300/80",
+      pulse: true,
+      dismissible: false,
+    };
+  }
+
+  if (input.isPreparingWorktree) {
+    return {
+      label: "Preparing worktree",
       colorClass: "text-sky-600 dark:text-sky-300/80",
       dotClass: "bg-sky-500 dark:bg-sky-300/80",
       pulse: true,

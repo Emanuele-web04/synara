@@ -6,6 +6,7 @@
 import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "@synara/contracts";
 import type {
   GitActionProgressEvent,
+  GitActionProgressPhase,
   GitRunStackedActionResult,
   GitStackedAction,
   GitStatusResult,
@@ -18,6 +19,7 @@ import { ChevronDownIcon, InfoIcon } from "~/lib/icons";
 import { Input } from "~/components/ui/input";
 import {
   buildGitActionProgressStages,
+  buildGitActionFailureToast,
   buildMenuItems,
   type GitDialogContext,
   type GitActionMenuItem,
@@ -144,6 +146,8 @@ interface ActiveGitActionProgress {
   hookName: string | null;
   lastOutputLine: string | null;
   currentPhaseLabel: string | null;
+  phase: GitActionProgressPhase | null;
+  failure?: Extract<GitActionProgressEvent, { kind: "action_failed" }>;
 }
 
 interface RunGitActionWithToastInput {
@@ -505,6 +509,7 @@ export default function GitActionsControl({
           progress.lastOutputLine = null;
           break;
         case "phase_started":
+          progress.phase = event.phase;
           progress.title = event.label;
           progress.currentPhaseLabel = event.label;
           progress.phaseStartedAtMs = now;
@@ -532,8 +537,7 @@ export default function GitActionsControl({
           // Its server-side status refresh is detached, keeping this event-to-response gap short.
           return;
         case "action_failed":
-          // Same reasoning as action_finished — let the HTTP error handler
-          // manage the final toast state to avoid a flash of bare title.
+          progress.failure = event;
           return;
       }
 
@@ -777,7 +781,7 @@ export default function GitActionsControl({
           data: threadToastData,
         });
 
-      activeGitActionProgressRef.current = {
+      const actionProgress: ActiveGitActionProgress = {
         toastId: resolvedProgressToastId,
         actionId,
         title: progressStages[0] ?? "Running git action...",
@@ -786,7 +790,9 @@ export default function GitActionsControl({
         hookName: null,
         lastOutputLine: null,
         currentPhaseLabel: progressStages[0] ?? "Running git action...",
+        phase: null,
       };
+      activeGitActionProgressRef.current = actionProgress;
 
       if (progressToastId) {
         toastManager.update(progressToastId, {
@@ -812,7 +818,9 @@ export default function GitActionsControl({
 
       try {
         const result = await promise;
-        activeGitActionProgressRef.current = null;
+        if (activeGitActionProgressRef.current === actionProgress) {
+          activeGitActionProgressRef.current = null;
+        }
         const resultToast = summarizeGitResult(result);
         const persistedPr =
           result.pr.status === "created" || result.pr.status === "opened_existing"
@@ -929,16 +937,23 @@ export default function GitActionsControl({
         });
         afterSuccess?.(result);
       } catch (err) {
-        activeGitActionProgressRef.current = null;
-        toastManager.update(resolvedProgressToastId, {
-          type: "error",
-          title: "Action failed",
-          description: err instanceof Error ? err.message : "An error occurred.",
-          data: threadToastData,
-        });
+        if (activeGitActionProgressRef.current === actionProgress) {
+          activeGitActionProgressRef.current = null;
+        }
+        toastManager.update(
+          resolvedProgressToastId,
+          buildGitActionFailureToast({
+            message:
+              actionProgress.failure?.message ??
+              (err instanceof Error ? err.message : "An error occurred."),
+            phase: actionProgress.failure?.phase ?? actionProgress.phase,
+            threadId: activeThreadId,
+          }),
+        );
       }
     },
     [
+      activeThreadId,
       defaultBranchName,
       gitStatusForActions,
       hasOriginRemote,
