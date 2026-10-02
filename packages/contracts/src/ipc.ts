@@ -1,5 +1,7 @@
 import { Schema } from "effect";
 import type {
+  LoadProjectImportHistoryInput,
+  LoadProjectImportHistoryResult,
   ImportProjectInput,
   ImportProjectResult,
   ListProjectImportsInput,
@@ -1234,6 +1236,9 @@ export interface NativeApi {
     ) => Promise<OrchestrationImportThreadResult>;
     listProjectImports: (input: ListProjectImportsInput) => Promise<ListProjectImportsResult>;
     importProject: (input: ImportProjectInput) => Promise<ImportProjectResult>;
+    loadProjectImportHistory: (
+      input: LoadProjectImportHistoryInput,
+    ) => Promise<LoadProjectImportHistoryResult>;
     regenerateThreadTitle: (
       input: OrchestrationRegenerateThreadTitleInput,
     ) => Promise<OrchestrationRegenerateThreadTitleResult>;

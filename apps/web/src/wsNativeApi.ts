@@ -811,6 +811,8 @@ export function createWsNativeApi(): NativeApi {
       listProjectImports: (input) =>
         transport.request(ORCHESTRATION_WS_METHODS.listProjectImports, input),
       importProject: (input) => transport.request(ORCHESTRATION_WS_METHODS.importProject, input),
+      loadProjectImportHistory: (input) =>
+        transport.request(ORCHESTRATION_WS_METHODS.loadProjectImportHistory, input),
       regenerateThreadTitle: (input) =>
         transport.request(ORCHESTRATION_WS_METHODS.regenerateThreadTitle, input, {
           timeoutMs: null,

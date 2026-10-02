@@ -30,6 +30,7 @@ import {
   type KeyboardEvent,
   type RefObject,
   type ReactNode,
+  type ReactElement,
   type SetStateAction,
 } from "react";
 import {
@@ -414,6 +415,7 @@ interface MessagesTimelineProps {
   onResolveWorktreeSetup?: (action: WorktreeSetupResolutionAction) => void;
   followLiveOutput?: boolean;
   emptyStateContent?: ReactNode;
+  historyHeader?: ReactElement | undefined;
   listRef?: RefObject<LegendListRef | null>;
   /** Receives the scroll-to-message controller so the Environment panel can jump to a pin. */
   controllerRef?: RefObject<MessagesTimelineController | null>;
@@ -522,6 +524,7 @@ interface MessagesTimelineProps {
 
 export const MessagesTimeline = memo(function MessagesTimeline({
   hasMessages,
+  historyHeader,
   isWorking,
   workingLabel: workingLabelProp,
   activeTurnInProgress,
@@ -2658,14 +2661,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const hasRenderableTranscriptContent =
     hasMessages || rows.length > 0 || canRenderForkSourceDivider;
   if (!hasRenderableTranscriptContent && !isWorking) {
-    if (emptyStateContent) {
-      return <div className="flex h-full items-center justify-center">{emptyStateContent}</div>;
-    }
     return (
-      <div className="flex h-full items-center justify-center">
-        <p className="text-ui leading-snug text-muted-foreground/30">
-          Send a message to start the conversation.
-        </p>
+      <div className="flex h-full flex-col">
+        {historyHeader}
+        <div className="flex flex-1 items-center justify-center">
+          {emptyStateContent ?? (
+            <p className="text-ui leading-snug text-muted-foreground/30">
+              Send a message to start the conversation.
+            </p>
+          )}
+        </div>
       </div>
     );
   }
@@ -2713,6 +2718,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         onWheel={handleMessagesWheel}
         data-chat-scroll-container="true"
         ListFooterComponent={listFooter}
+        ListHeaderComponent={historyHeader}
         // `scroll-edge-fade` (index.css) dissolves rows under the chat header and toward
         // the composer instead of cutting them. It is scroll-aware via
         // `animation-timeline: scroll()` and paint-only, so each edge clears once nothing

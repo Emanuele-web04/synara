@@ -119,6 +119,10 @@ export interface ProviderThreadSnapshot {
   readonly lastUsedModel?: { readonly model: string; readonly thinkingLevel?: string };
 }
 
+export interface ProviderThreadHistoryPage extends ProviderThreadSnapshot {
+  readonly nextCursor: string | null;
+}
+
 export interface ProviderGeneratedImageHomePathsInput {
   /** When present, live sessions outside this current settings scope are ignored. */
   readonly enabledProviderInstanceIds?: ReadonlySet<ProviderInstanceId>;
@@ -280,6 +284,15 @@ export interface ProviderAdapterShape<TError> {
     readonly providerInstanceId?: ProviderInstanceId;
     readonly providerOptions?: ProviderStartOptions;
   }) => Effect.Effect<ProviderThreadSnapshot, TError>;
+
+  /** Display history only; never used to reconstruct native model context. */
+  readonly readExternalThreadPage?: (input: {
+    readonly externalThreadId: string;
+    readonly cursor?: string;
+    readonly cwd?: string;
+    readonly providerOptions?: ProviderStartOptions;
+    readonly providerInstanceId?: ProviderInstanceId;
+  }) => Effect.Effect<ProviderThreadHistoryPage, TError>;
 
   /**
    * Roll back a provider thread by N turns.

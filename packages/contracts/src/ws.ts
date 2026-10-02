@@ -1,5 +1,9 @@
 import { Schema, Struct } from "effect";
-import { ImportProjectInput, ListProjectImportsInput } from "./projectImport";
+import {
+  LoadProjectImportHistoryInput,
+  ImportProjectInput,
+  ListProjectImportsInput,
+} from "./projectImport";
 import { NonNegativeInt, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas";
 
 import {
@@ -436,6 +440,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(ORCHESTRATION_WS_METHODS.importThread, OrchestrationImportThreadInput),
   tagRequestBody(ORCHESTRATION_WS_METHODS.listProjectImports, ListProjectImportsInput),
   tagRequestBody(ORCHESTRATION_WS_METHODS.importProject, ImportProjectInput),
+  tagRequestBody(ORCHESTRATION_WS_METHODS.loadProjectImportHistory, LoadProjectImportHistoryInput),
   tagRequestBody(
     ORCHESTRATION_WS_METHODS.regenerateThreadTitle,
     OrchestrationRegenerateThreadTitleInput,

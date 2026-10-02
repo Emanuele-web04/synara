@@ -1,5 +1,12 @@
 import { Schema } from "effect";
-import { IsoDateTime, ProjectId, SpaceId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas";
+import {
+  IsoDateTime,
+  MessageId,
+  ProjectId,
+  SpaceId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas";
 import { ProviderInstanceId } from "./providerInstance";
 
 export const ProjectImportProvider = Schema.Literals(["codex", "claudeAgent"]);
@@ -66,3 +73,24 @@ export const ImportProjectResult = Schema.Struct({
   status: Schema.Literals(["imported", "already-present", "project-linked"]),
 });
 export type ImportProjectResult = typeof ImportProjectResult.Type;
+
+export const LoadProjectImportHistoryInput = Schema.Struct({
+  threadId: ThreadId,
+  /** Omit to inspect availability; echo the returned cursor to load one older page. */
+  cursor: Schema.optional(TrimmedNonEmptyString),
+});
+export type LoadProjectImportHistoryInput = typeof LoadProjectImportHistoryInput.Type;
+
+export const LoadProjectImportHistoryResult = Schema.Struct({
+  nextCursor: Schema.NullOr(TrimmedNonEmptyString),
+  messages: Schema.Array(
+    Schema.Struct({
+      messageId: MessageId,
+      role: Schema.Literals(["user", "assistant"]),
+      text: Schema.String,
+      createdAt: IsoDateTime,
+      updatedAt: IsoDateTime,
+    }),
+  ),
+});
+export type LoadProjectImportHistoryResult = typeof LoadProjectImportHistoryResult.Type;

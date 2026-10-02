@@ -394,6 +394,15 @@ export const WsListProjectImportsRpc = Rpc.make(ORCHESTRATION_WS_METHODS.listPro
   error: WsRpcError,
 });
 
+export const WsLoadProjectImportHistoryRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.loadProjectImportHistory,
+  {
+    payload: OrchestrationRpcSchemas.loadProjectImportHistory.input,
+    success: OrchestrationRpcSchemas.loadProjectImportHistory.output,
+    error: WsRpcError,
+  },
+);
+
 export const WsImportProjectRpc = Rpc.make(ORCHESTRATION_WS_METHODS.importProject, {
   payload: OrchestrationRpcSchemas.importProject.input,
   success: OrchestrationRpcSchemas.importProject.output,
@@ -1837,6 +1846,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsOrchestrationImportThreadRpc,
   WsListProjectImportsRpc,
   WsImportProjectRpc,
+  WsLoadProjectImportHistoryRpc,
   WsOrchestrationRegenerateThreadTitleRpc,
   WsOrchestrationGetSnapshotRpc,
   WsOrchestrationGetShellSnapshotRpc,
