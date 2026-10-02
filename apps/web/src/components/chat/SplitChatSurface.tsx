@@ -877,6 +877,7 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
     });
 
     if (decision.kind === "single-thread") {
+      removeSplitView(decision.splitViewIdToRemove);
       void navigate({
         to: "/$threadId",
         params: { threadId: decision.threadId },
@@ -885,7 +886,7 @@ export function SplitChatSurface(props: { splitViewId: SplitViewId; routeThreadI
           ...stripDiffSearchParams(previous),
           splitViewId: undefined,
         }),
-      }).then(() => removeSplitView(decision.splitViewIdToRemove));
+      });
       return;
     }
 
