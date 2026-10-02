@@ -4,7 +4,8 @@
 // Layer: Sidebar UI component
 // Exports: ProjectSidebarIcon, ProjectEmojiGlyph
 
-import { useEffect, useState, type CSSProperties } from "react";
+import type { ProjectId } from "@synara/contracts";
+import { useState, type CSSProperties } from "react";
 
 import { CentralIcon } from "~/lib/central-icons";
 import {
@@ -17,10 +18,8 @@ import { cn } from "~/lib/utils";
 import { resolveWsHttpUrl } from "~/lib/wsHttpUrl";
 import { FolderIcon, FolderOpenIcon } from "~/lib/icons";
 
-const projectFaviconPresence = new Map<string, boolean>();
-
-function resolveProjectFaviconUrl(cwd: string): string {
-  const params = new URLSearchParams({ cwd, fallback: "none" });
+function resolveProjectFaviconUrl(projectId: ProjectId): string {
+  const params = new URLSearchParams({ projectId });
   return resolveWsHttpUrl(`/api/project-favicon?${params.toString()}`);
 }
 
@@ -43,13 +42,13 @@ export function ProjectEmojiGlyph({ emoji, className }: { emoji: string; classNa
 }
 
 export function ProjectSidebarIcon({
-  cwd,
+  projectId,
   expanded,
   appearance,
   glyphClassName: glyphClassNameProp,
   presentation = "badge",
 }: {
-  cwd: string;
+  projectId?: ProjectId | null | undefined;
   expanded: boolean;
   appearance?: ProjectAppearance | null | undefined;
   glyphClassName?: string;
@@ -68,13 +67,14 @@ export function ProjectSidebarIcon({
       />
     );
   }
-  if (presentation === "favicon" && appearance?.kind === "icon" && appearance.color) {
+  if (appearance?.kind === "icon" && appearance.color) {
     const FolderGlyph = expanded ? FolderOpenIcon : FolderIcon;
     return <FolderGlyph className={glyphClassName} style={colorStyle(appearance.color)} />;
   }
   return (
     <ProjectFolderIcon
-      cwd={cwd}
+      key={projectId ?? "preview"}
+      projectId={projectId}
       expanded={expanded}
       color={appearance?.color ?? null}
       glyphClassName={glyphClassName}
@@ -84,88 +84,65 @@ export function ProjectSidebarIcon({
 }
 
 function ProjectFolderIcon({
-  cwd,
+  projectId,
   expanded,
   color,
   glyphClassName,
   presentation,
 }: {
-  cwd: string;
+  projectId: ProjectId | null | undefined;
   expanded: boolean;
   color: ProjectColor | null;
   glyphClassName: string;
   presentation: "badge" | "favicon";
 }) {
-  const faviconSrc = resolveProjectFaviconUrl(cwd);
-  // Keyed by src: a cwd change derives back to the cache-seeded default in the
-  // same render, so the probe effect never needs a synchronous setState.
-  const [probe, setProbe] = useState<{ src: string; present: boolean } | null>(() => {
-    const cached = projectFaviconPresence.get(faviconSrc);
-    return cached === undefined ? null : { src: faviconSrc, present: cached };
-  });
-  const hasFavicon = probe !== null && probe.src === faviconSrc && probe.present;
+  const faviconSrc = projectId ? resolveProjectFaviconUrl(projectId) : null;
+  // The source key resets the visible image immediately when the project changes.
+  // Only that image's load event hides the folder; no separate probe can race it.
+  const [imageState, setImageState] = useState<{ src: string; loaded: boolean } | null>(null);
+  const hasFavicon = faviconSrc !== null && imageState?.src === faviconSrc && imageState.loaded;
+  const failed = faviconSrc !== null && imageState?.src === faviconSrc && !imageState.loaded;
   const FolderGlyph = expanded ? FolderOpenIcon : FolderIcon;
 
-  // Probe with Image() so Electron/file-origin behaves like the actual visible
-  // <img>. Runs even on a module-cache hit (the browser cache makes the reload
-  // instant) so the load/error handlers stay the only state writers.
-  useEffect(() => {
-    let cancelled = false;
-    const image = new Image();
-    const handleLoad = () => {
-      projectFaviconPresence.set(faviconSrc, true);
-      if (!cancelled) {
-        setProbe({ src: faviconSrc, present: true });
-      }
-    };
-    const handleError = () => {
-      projectFaviconPresence.set(faviconSrc, false);
-      if (!cancelled) {
-        setProbe({ src: faviconSrc, present: false });
-      }
-    };
-
-    image.addEventListener("load", handleLoad);
-    image.addEventListener("error", handleError);
-
-    image.src = faviconSrc;
-
-    return () => {
-      cancelled = true;
-      image.removeEventListener("load", handleLoad);
-      image.removeEventListener("error", handleError);
-    };
-  }, [faviconSrc]);
-
-  const handleImageError = () => {
-    projectFaviconPresence.set(faviconSrc, false);
-    setProbe({ src: faviconSrc, present: false });
-  };
-
   if (presentation === "favicon") {
-    return hasFavicon ? (
-      <img
-        src={faviconSrc}
-        alt=""
-        aria-hidden="true"
-        className={`${glyphClassName} rounded-[2px] object-contain`}
-        onError={handleImageError}
-      />
-    ) : (
-      <FolderGlyph className={glyphClassName} style={colorStyle(color)} />
+    return (
+      <span
+        className={cn("relative inline-flex shrink-0 items-center justify-center", glyphClassName)}
+      >
+        <FolderGlyph
+          className={cn("absolute inset-0 size-full", hasFavicon && "invisible")}
+          style={colorStyle(color)}
+        />
+        {faviconSrc && !failed ? (
+          <img
+            key={faviconSrc}
+            src={faviconSrc}
+            alt=""
+            aria-hidden="true"
+            className={cn("size-full rounded-[2px] object-contain", !hasFavicon && "opacity-0")}
+            onLoad={() => setImageState({ src: faviconSrc, loaded: true })}
+            onError={() => setImageState({ src: faviconSrc, loaded: false })}
+          />
+        ) : null}
+      </span>
     );
   }
 
   return (
     <>
       <FolderGlyph className={glyphClassName} style={colorStyle(color)} />
-      {hasFavicon ? (
+      {faviconSrc && !failed ? (
         <img
+          key={faviconSrc}
           src={faviconSrc}
           alt=""
           aria-hidden="true"
-          className="absolute -right-1 -bottom-1 size-3 rounded-[4px] object-contain shadow-sm"
-          onError={handleImageError}
+          className={cn(
+            "absolute -right-1 -bottom-1 size-3 rounded-[4px] object-contain shadow-sm",
+            !hasFavicon && "opacity-0",
+          )}
+          onLoad={() => setImageState({ src: faviconSrc, loaded: true })}
+          onError={() => setImageState({ src: faviconSrc, loaded: false })}
         />
       ) : null}
     </>

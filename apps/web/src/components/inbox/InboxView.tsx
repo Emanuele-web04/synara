@@ -163,7 +163,7 @@ function InboxGlyph({
   const project = projectById.get(icon.projectId);
   return project?.cwd ? (
     <ProjectSidebarIcon
-      cwd={project.cwd}
+      projectId={project.id}
       expanded={false}
       appearance={project.appearance}
       glyphClassName={cn("shrink-0", className)}
