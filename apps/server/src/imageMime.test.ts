@@ -1,8 +1,28 @@
 import { describe, expect, it } from "vitest";
 
-import { inferAttachmentExtension, inferImageExtension } from "./imageMime.ts";
+import {
+  getProjectIconContentType,
+  inferAttachmentExtension,
+  inferImageExtension,
+} from "./imageMime.ts";
 
 describe("imageMime", () => {
+  it.each([
+    ["brand.avif", "image/avif"],
+    ["brand.gif", "image/gif"],
+    ["favicon.ico", "image/x-icon"],
+    ["brand.jpg", "image/jpeg"],
+    ["brand.jpeg", "image/jpeg"],
+    ["brand.png", "image/png"],
+    ["brand.SVG", "image/svg+xml"],
+    ["brand.webp", "image/webp"],
+    ["brand.bmp", null],
+    ["brand.html", null],
+    ["brand.svg.txt", null],
+    ["constructor", null],
+  ])("validates project icon content types for %s", (filePath, contentType) => {
+    expect(getProjectIconContentType(filePath)).toBe(contentType);
+  });
   it("does not read inherited keys from mime extension map", () => {
     expect(inferImageExtension({ mimeType: "constructor" })).toBe(".bin");
   });

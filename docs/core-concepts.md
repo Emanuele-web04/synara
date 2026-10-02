@@ -30,6 +30,11 @@ is cancelled, the task and its prompt remain available for retry.
   is a fixed column of icon tabs for Home, Spaces, Kanban (Tasks in Beta), Code review, Automations, Hubs (Beta), and
   Settings, with the thread panel beside it and the route shown as a card inset from the window.
   Open threads appear as tabs across the top of the chat.
+  Project rows use the project's favicon or logo when one is available in its root,
+  framework asset directories, or icon declarations. Synara resolves these images
+  on the server within the project folder; the folder glyph stays visible while an
+  image loads or when no usable image is available. A manually chosen project emoji,
+  icon, or color keeps its existing appearance.
 - **Code review** — pull requests and issues from the GitHub repositories of your projects, with a
   detail pane and three actions on every item (see [Code review](#code-review))
 - **Tasks** (Beta; Stable keeps Kanban) — a to-do list for anything you need to do, with or without

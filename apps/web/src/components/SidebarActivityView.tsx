@@ -226,7 +226,7 @@ function ActivityThreadRow({
           <span className="flex min-w-0 items-center gap-1.5">
             {project?.cwd ? (
               <ProjectSidebarIcon
-                cwd={project.cwd}
+                projectId={project.id}
                 expanded={false}
                 appearance={project.appearance}
                 glyphClassName={sidebarGlyphClass("meta", "text-muted-foreground/70")}
