@@ -246,7 +246,13 @@
      painting their own tones over it. */
   :root[data-window-translucency="window"] [data-sidebar-layout="rail"] {
     --app-rail-panel-background: transparent;
-    /* The card the active tab normally matches is clear, so the tab takes an ink tint. */
+    /* The card the active tab normally matches is clear, so the tab takes the raised tint
+       the composer and the docked panels use, and reads lighter than the coat. */
+    --app-rail-tab-active-surface: var(--app-glass-raised-surface);
+  }
+
+  /* Dark: the raised tint is darker than the coat, so the tab keeps a light ink tint. */
+  :root.dark[data-window-translucency="window"] [data-sidebar-layout="rail"] {
     --app-rail-tab-active-surface: color-mix(in srgb, var(--foreground) 8%, transparent);
   }
 
@@ -3204,6 +3210,15 @@ diffs-container {
 :root[data-window-material="translucent"] :is(.app-popup-surface, .composer-picker-menu-surface) {
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
+}
+
+/* An overlay sitting on another portaled layer (a select or tooltip inside a dialog) has
+   nothing cut out from under it: that layer is not the page. The thin fill would leave the
+   layer's text readable through it, so it goes near-opaque there (`data-glass-backed`,
+   glassOverlayCutout.ts). */
+:root[data-window-material="translucent"]
+  :is(.app-popup-surface, .composer-picker-menu-surface)[data-glass-backed] {
+  background: color-mix(in srgb, var(--popover) 96%, transparent);
 }
 
 :root[data-window-material="translucent"] .app-popup-surface::before {

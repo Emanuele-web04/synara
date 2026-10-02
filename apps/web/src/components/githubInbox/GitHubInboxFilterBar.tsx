@@ -6,7 +6,7 @@
 // Layer: GitHub inbox presentation
 // Exports: GitHubInboxFilterBar
 
-import type { GitHubInboxState, ProjectId } from "@synara/contracts";
+import type { GitHubInboxSort, GitHubInboxState, ProjectId } from "@synara/contracts";
 import type { ReactNode } from "react";
 
 import type { GitHubInboxInvolvementFilter, GitHubInboxKindFilter } from "~/appSettings";
@@ -47,6 +47,7 @@ import {
   IssueClosedIcon,
   IssueOpenedIcon,
   RefreshCwIcon,
+  SortIcon,
   TagIcon,
   XIcon,
 } from "~/lib/icons";
@@ -67,6 +68,11 @@ const STATE_OPTIONS: ReadonlyArray<{
   { value: "open", label: "Open", icon: IssueOpenedIcon },
   // Closed includes merged pull requests.
   { value: "closed", label: "Closed", icon: IssueClosedIcon },
+];
+
+const SORT_OPTIONS: ReadonlyArray<{ value: GitHubInboxSort; label: string }> = [
+  { value: "created", label: "Newest" },
+  { value: "updated", label: "Recently updated" },
 ];
 
 const INVOLVEMENT_OPTIONS: ReadonlyArray<{
@@ -171,6 +177,8 @@ function ActiveFilterChip({
 
 export function GitHubInboxFilterBar({
   filters,
+  sort,
+  onSortChange,
   query,
   kindCounts,
   projectOptions,
@@ -188,6 +196,8 @@ export function GitHubInboxFilterBar({
   onPasteReference,
 }: {
   filters: GitHubInboxFilters;
+  sort: GitHubInboxSort;
+  onSortChange: (sort: GitHubInboxSort) => void;
   query: string;
   /** Rows each kind would show under the other filters; null while the list loads. */
   kindCounts: GitHubInboxKindCounts | null;
@@ -207,6 +217,7 @@ export function GitHubInboxFilterBar({
   /** Opens the item a pasted link or #number names; false leaves the paste as search text. */
   onPasteReference: (text: string) => boolean;
 }) {
+  const sortLabel = SORT_OPTIONS.find((option) => option.value === sort)!.label;
   const involvement =
     INVOLVEMENT_OPTIONS.find((option) => option.value === filters.involvement) ??
     INVOLVEMENT_OPTIONS[0]!;
@@ -228,6 +239,35 @@ export function GitHubInboxFilterBar({
   return (
     <div className="flex flex-col px-2 pt-2">
       <SidebarPanelTitle title="Code review" as="h1">
+        <Menu>
+          <MenuTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                aria-label={`Sort: ${sortLabel}`}
+                title={`Sort: ${sortLabel}`}
+              />
+            }
+          >
+            <SortIcon className="size-3.5" />
+          </MenuTrigger>
+          <ComposerPickerMenuPopup align="end" className="min-w-44">
+            <MenuGroup>
+              <MenuGroupLabel>Sort by</MenuGroupLabel>
+              <MenuRadioGroup
+                value={sort}
+                onValueChange={(value) => onSortChange(value as GitHubInboxSort)}
+              >
+                {SORT_OPTIONS.map((option) => (
+                  <MenuRadioItem key={option.value} value={option.value}>
+                    {option.label}
+                  </MenuRadioItem>
+                ))}
+              </MenuRadioGroup>
+            </MenuGroup>
+          </ComposerPickerMenuPopup>
+        </Menu>
         <Menu>
           <MenuTrigger
             render={

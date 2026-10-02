@@ -16,12 +16,17 @@ import {
 } from "./desktopIdentity";
 
 describe("isBetaFeatureEnabled", () => {
-  it("turns a listed feature off only for the production flavor", () => {
-    expect(BETA_ONLY_FEATURES).toContain("omp");
-    for (const flavor of ["development", "canary", "cua", "beta", "unknown"] as const) {
+  it("enables Oh My Pi in Stable and all other flavors", () => {
+    for (const flavor of [
+      "production",
+      "development",
+      "canary",
+      "cua",
+      "beta",
+      "unknown",
+    ] as const) {
       expect(isBetaFeatureEnabled("omp", flavor)).toBe(true);
     }
-    expect(isBetaFeatureEnabled("omp", "production")).toBe(false);
   });
 
   it("keeps Tasks in Beta while Stable keeps Kanban", () => {

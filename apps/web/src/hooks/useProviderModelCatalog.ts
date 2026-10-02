@@ -176,17 +176,25 @@ export function useProviderModelCatalog(input: {
         enabled: true,
         refresh,
       });
-      // A prefetch already running may return a stale snapshot. Let it finish before
-      // issuing the interactive read, rather than losing refresh intent by joining it.
-      const wasFetching = queryClient.getQueryState(options.queryKey)?.fetchStatus === "fetching";
-      if (wasFetching) await queryClient.fetchQuery({ ...options, retry: false });
-      await queryClient.fetchQuery({
-        ...options,
-        // A recent client snapshot may still be stale on the server. Explicit
-        // reads must reach its freshness/single-flight gate, which owns reuse.
-        staleTime: 0,
-        retry: false,
-      });
+      const releasePriority = prioritizeProviderModelDiscovery(options.queryKey);
+      try {
+        // A prefetch already running may return a stale snapshot or fail. Wait
+        // for it without losing the interactive read's priority or refresh intent.
+        const wasFetching = queryClient.getQueryState(options.queryKey)?.fetchStatus === "fetching";
+        if (wasFetching) {
+          await queryClient.fetchQuery({ ...options, retry: false }).catch(() => undefined);
+        }
+        const result = await queryClient.fetchQuery({
+          ...options,
+          // A recent client snapshot may still be stale on the server. Explicit
+          // reads must reach its freshness/single-flight gate, which owns reuse.
+          staleTime: 0,
+          retry: false,
+        });
+        if (result.error) throw new Error(result.error);
+      } finally {
+        releasePriority?.();
+      }
     },
     [queryClient, settings, discoveryCwd],
   );

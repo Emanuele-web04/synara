@@ -38,7 +38,8 @@ export function disposeAndCloseTerminalSession(input: {
   terminalId: string;
   clearHistoryBeforeClose?: boolean;
   processAlreadyExited?: boolean;
-}): void {
+  requireStructuredClose?: boolean;
+}): Promise<void> {
   const { api, threadId, terminalId } = input;
 
   const fallbackExitWrite = () => {
@@ -50,7 +51,7 @@ export function disposeAndCloseTerminalSession(input: {
 
   // Local disposal stays ordered before the server close, as it was when the
   // registry was imported statically.
-  void (async () => {
+  return (async () => {
     await disposeTerminalRuntime(threadId, terminalId);
 
     if (api && "close" in api.terminal && typeof api.terminal.close === "function") {
@@ -59,12 +60,17 @@ export function disposeAndCloseTerminalSession(input: {
           await api.terminal.clear({ threadId, terminalId }).catch(() => undefined);
         }
         await api.terminal.close({ threadId, terminalId, deleteHistory: true });
-      } catch {
+      } catch (error) {
+        if (input.requireStructuredClose) throw error;
         await fallbackExitWrite();
       }
       return;
     }
 
+    if (input.requireStructuredClose)
+      throw new Error(
+        "Unable to close the authentication process: server connection is unavailable.",
+      );
     await fallbackExitWrite();
   })();
 }

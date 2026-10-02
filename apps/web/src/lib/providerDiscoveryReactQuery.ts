@@ -131,9 +131,19 @@ function drainProviderModelDiscoveryQueue(): void {
     taskSettled = true;
     clearTimeout(timeoutId);
     task.signal.removeEventListener("abort", onTaskAbort);
-    providerModelDiscoveryRunning = false;
     settle();
-    drainProviderModelDiscoveryQueue();
+    const releaseSlot = () => {
+      providerModelDiscoveryRunning = false;
+      drainProviderModelDiscoveryQueue();
+    };
+    // Let React Query settle and enqueue an interactive follow-up before the
+    // next speculative catalog takes the slot. Promise settlement alone is
+    // earlier than the refresh caller's continuation, even on success.
+    if ([...foregroundModelDiscoveryOwners].some((key) => queryKeysMatch(key, task.queryKey))) {
+      setTimeout(releaseSlot, 0);
+    } else {
+      releaseSlot();
+    }
   };
   const onTaskAbort = () => finishTask(() => task.reject(abortReason(task.signal)));
   const timeoutId = setTimeout(

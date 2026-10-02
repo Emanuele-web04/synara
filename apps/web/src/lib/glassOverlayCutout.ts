@@ -3,7 +3,7 @@
 //          translucent menu, picker, tooltip, or toast shows the window's glass rather than
 //          the text it covers.
 // Layer: Desktop window material helper
-// Exports: installGlassOverlayCutout, registerInPageGlassOverlay
+// Exports: installGlassOverlayCutout, registerInPageGlassOverlay, computedColorAlpha
 //
 // A backdrop blur cannot hide what sits behind an element over a see-through region:
 // Chromium composites the blurred copy over the sharp original, so text stays readable
@@ -26,6 +26,52 @@ const MIN_OVERLAY_OPACITY = 0.5;
  * stop anyway, and outlasts a fade so it does not stop halfway through one.
  */
 const IDLE_FRAMES_BEFORE_STOP = 30;
+
+/**
+ * Set on a portaled overlay that sits on another portaled layer instead of on the page: a
+ * select or tooltip inside a dialog, a menu opened from a popover. That layer is not part of
+ * the root, so it cannot be cut out from under the overlay, and the overlay's thin fill would
+ * leave it readable. index.css gives a backed overlay a near-opaque fill instead.
+ */
+const BACKED_OVERLAY_ATTRIBUTE = "data-glass-backed";
+
+/** Backing per showing overlay, read once when it appears rather than every frame. */
+const backedOverlays = new WeakMap<HTMLElement, boolean>();
+
+/** Alpha of a computed CSS color (`rgb()`, `rgba()`, or a `color()`/`oklab()` with `/ a`). */
+export function computedColorAlpha(color: string): number {
+  if (color === "transparent") return 0;
+  const match = color.startsWith("rgba(")
+    ? color.match(/,\s*([\d.]+)\s*\)$/)
+    : color.match(/\/\s*([\d.]+)\s*\)$/);
+  return match ? Number(match[1]) : 1;
+}
+
+/** A layer counts as backing only if it paints: an invisible click-catcher does not. */
+const MIN_BACKING_ALPHA = 0.5;
+
+/**
+ * Whether the first painted thing under the overlay's centre is another portaled layer.
+ * The overlay's own subtree and its ancestors (positioner, portal container) are skipped, and
+ * so is anything unpainted, such as the transparent backdrop a modal menu puts behind itself.
+ */
+function isBackedByPortaledLayer(overlay: HTMLElement, root: HTMLElement): boolean {
+  const rect = overlay.getBoundingClientRect();
+  const stack = document.elementsFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+  for (const element of stack) {
+    // Ancestors include the body, whose coat must never count as a backing layer.
+    if (overlay.contains(element) || element.contains(overlay)) continue;
+    if (root.contains(element)) return false;
+    const style = getComputedStyle(element);
+    if (
+      style.backgroundImage !== "none" ||
+      computedColorAlpha(style.backgroundColor) >= MIN_BACKING_ALPHA
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
 
 interface CutoutRect {
   x: number;
@@ -209,8 +255,27 @@ export function installGlassOverlayCutout(root: HTMLElement): () => void {
       if (child.matches(OVERLAY_SELECTOR)) overlays.push(child as HTMLElement);
       overlays.push(...child.querySelectorAll<HTMLElement>(OVERLAY_SELECTOR));
     }
-    const covering = overlays.filter(isCoveringOverlay);
-    addCutout(next, root, covering);
+    const covering: HTMLElement[] = [];
+    const onPage: HTMLElement[] = [];
+    for (const overlay of overlays) {
+      if (!isCoveringOverlay(overlay)) {
+        // A kept-mounted overlay can reopen somewhere else; read its backing again then.
+        backedOverlays.delete(overlay);
+        overlay.removeAttribute(BACKED_OVERLAY_ATTRIBUTE);
+        continue;
+      }
+      covering.push(overlay);
+      let backed = backedOverlays.get(overlay);
+      if (backed === undefined) {
+        backed = isBackedByPortaledLayer(overlay, root);
+        backedOverlays.set(overlay, backed);
+      }
+      if (overlay.hasAttribute(BACKED_OVERLAY_ATTRIBUTE) !== backed) {
+        overlay.toggleAttribute(BACKED_OVERLAY_ATTRIBUTE, backed);
+      }
+      if (!backed) onPage.push(overlay);
+    }
+    addCutout(next, root, onPage);
     return covering.length;
   };
 

@@ -188,6 +188,9 @@ function buildOpenInput(entry: TerminalRuntimeEntry) {
     cwd: entry.cwd,
     cols: entry.terminal.cols,
     rows: entry.terminal.rows,
+    ...(entry.providerAuthInstanceId
+      ? { providerAuthInstanceId: entry.providerAuthInstanceId }
+      : {}),
     ...(entry.runtimeEnv ? { env: entry.runtimeEnv } : {}),
   };
 }
@@ -696,6 +699,11 @@ function reconcileTerminalSnapshot(entry: TerminalRuntimeEntry): void {
   void api.terminal
     .open(buildOpenInput(entry))
     .then((snapshot) => {
+      if (entry.disposed && entry.providerAuthInstanceId) {
+        void api.terminal
+          .close({ threadId: entry.threadId, terminalId: entry.terminalId, deleteHistory: true })
+          .catch(() => undefined);
+      }
       if (
         entry.disposed ||
         !entry.opened ||
@@ -706,6 +714,16 @@ function reconcileTerminalSnapshot(entry: TerminalRuntimeEntry): void {
       }
 
       if (entry.outputEventVersion !== outputEventVersionAtRequest) {
+        return;
+      }
+      if (snapshot.status === "error" || snapshot.status === "exited") {
+        replaySnapshot(entry, snapshot, () =>
+          setRuntimeStatus(entry, snapshot.status === "error" ? "error" : "exited"),
+        );
+        if (snapshot.status === "exited" && !entry.hasHandledExit) {
+          entry.hasHandledExit = true;
+          entry.callbacks.onSessionExited();
+        }
         return;
       }
 
@@ -747,6 +765,8 @@ export function syncRuntimeConfig(
   } else {
     entry.runtimeEnv = config.runtimeEnv;
   }
+  if (config.providerAuthInstanceId === undefined) delete entry.providerAuthInstanceId;
+  else entry.providerAuthInstanceId = config.providerAuthInstanceId;
   entry.callbacks = config.callbacks;
 }
 
@@ -801,6 +821,9 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
     terminalLabel: config.terminalLabel,
     terminalCliKind: config.terminalCliKind ?? null,
     cwd: config.cwd,
+    ...(config.providerAuthInstanceId
+      ? { providerAuthInstanceId: config.providerAuthInstanceId }
+      : {}),
     callbacks: config.callbacks,
     wrapper,
     container: null,
@@ -1106,7 +1129,23 @@ function openTerminal(entry: TerminalRuntimeEntry): void {
   void api.terminal
     .open(openInput)
     .then((snapshot) => {
-      if (entry.disposed) return;
+      if (entry.disposed) {
+        if (entry.providerAuthInstanceId)
+          void api.terminal
+            .close({ threadId: entry.threadId, terminalId: entry.terminalId, deleteHistory: true })
+            .catch(() => undefined);
+        return;
+      }
+      if (snapshot.status === "error" || snapshot.status === "exited") {
+        replaySnapshot(entry, snapshot, () =>
+          setRuntimeStatus(entry, snapshot.status === "error" ? "error" : "exited"),
+        );
+        if (snapshot.status === "exited" && !entry.hasHandledExit) {
+          entry.hasHandledExit = true;
+          entry.callbacks.onSessionExited();
+        }
+        return;
+      }
       if (
         snapshotHasReplayPayload(snapshot) &&
         entry.outputEventVersion === outputEventVersionAtOpen

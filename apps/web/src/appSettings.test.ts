@@ -367,6 +367,14 @@ describe("isGitTextGenerationSettingsDirty", () => {
   });
 });
 
+describe("code review sort", () => {
+  it("defaults existing settings to newest and preserves a stored activity order", () => {
+    const decode = Schema.decodeUnknownSync(AppSettingsSchema);
+    expect(decode({}).githubInboxSort).toBe("created");
+    expect(decode({ githubInboxSort: "updated" }).githubInboxSort).toBe("updated");
+  });
+});
+
 describe("removed settings", () => {
   it("ignores a code review list width stored before widths became fractions", () => {
     const decoded = Schema.decodeUnknownSync(AppSettingsSchema)({

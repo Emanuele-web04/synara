@@ -124,11 +124,13 @@ describe("pullRequestsForceRefreshMutationOptions", () => {
     await actionPromise;
   });
 
-  it("stores the forced response under its own state only", async () => {
+  it("stores the forced response under its own state and sort only", async () => {
     const queryClient = new QueryClient();
     const projectId = "project-a" as ProjectId;
-    const input = { state: "open" } as const;
-    const refreshedKey = githubInboxQueryKeys.list(input.state);
+    const input = { state: "open", sort: "updated" } as const;
+    const refreshedKey = githubInboxQueryKeys.list(input.state, input.sort);
+    const otherSortKey = githubInboxQueryKeys.list(input.state, "created");
+    queryClient.setQueryData(otherSortKey, { items: [] });
     const otherStateKey = githubInboxQueryKeys.list("closed");
     queryClient.setQueryData(refreshedKey, { items: [] });
     queryClient.setQueryData(otherStateKey, { items: [] });
@@ -143,6 +145,7 @@ describe("pullRequestsForceRefreshMutationOptions", () => {
     expect(queryClient.getQueryData(refreshedKey)).toEqual(fresh);
     expect(queryClient.getQueryState(refreshedKey)?.isInvalidated).toBe(false);
     expect(queryClient.getQueryData(otherStateKey)).toEqual({ items: [] });
+    expect(queryClient.getQueryData(otherSortKey)).toEqual({ items: [] });
     expect(queryClient.getQueryState(otherStateKey)?.isInvalidated).toBe(false);
   });
 

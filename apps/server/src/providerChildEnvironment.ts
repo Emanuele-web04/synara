@@ -74,6 +74,11 @@ const PROVIDER_CREDENTIAL_GRANTS: Record<ProviderChildKind, "all" | ReadonlySet<
   omp: "all",
 };
 
+export function providerCredentialKeysFor(provider: ProviderChildKind): readonly string[] {
+  const grants = PROVIDER_CREDENTIAL_GRANTS[provider];
+  return [...(grants === "all" ? PROVIDER_CREDENTIAL_KEYS : grants)];
+}
+
 const INHERITED_NATIVE_CAPABILITY_KEYS = new Set([
   "BUN_OPTIONS",
   "ELECTRON_RUN_AS_NODE",

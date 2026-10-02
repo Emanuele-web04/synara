@@ -46,6 +46,11 @@ function isImportableThreadMessage(
   return (message.role === "user" || message.role === "assistant") && message.streaming === false;
 }
 
+/** True when a handoff or fork of this thread would carry at least one message. */
+export function hasImportableThreadMessages(thread: Pick<Thread, "messages">): boolean {
+  return thread.messages.some(isImportableThreadMessage);
+}
+
 function isImportableThreadActivity(
   activity: Thread["activities"][number],
 ): activity is OrchestrationThreadActivity {

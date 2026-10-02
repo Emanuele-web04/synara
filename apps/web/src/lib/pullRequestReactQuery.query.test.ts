@@ -18,7 +18,7 @@ describe("GitHub inbox list query options", () => {
   it("polls every five minutes only while the page is visible, and refreshes on focus", () => {
     const options = githubInboxListQueryOptions("open");
 
-    expect(options.queryKey).toEqual(["github-inbox", "list", "open"]);
+    expect(options.queryKey).toEqual(["github-inbox", "list", "open", "created"]);
     expect(options.staleTime).toBe(60_000);
     expect(options.refetchInterval).toBe(5 * 60_000);
     expect(options.refetchIntervalInBackground).toBe(false);
@@ -95,6 +95,8 @@ describe("GitHub issue queries", () => {
       otherDetailKey,
       githubInboxQueryKeys.list("open"),
       githubInboxQueryKeys.list("closed"),
+      githubInboxQueryKeys.list("open", "updated"),
+      githubInboxQueryKeys.list("closed", "updated"),
     ]) {
       queryClient.setQueryData(key, {});
     }
@@ -109,6 +111,11 @@ describe("GitHub issue queries", () => {
       undefined,
     ]);
 
+    for (const state of ["open", "closed"] as const) {
+      expect(
+        queryClient.getQueryState(githubInboxQueryKeys.list(state, "updated"))?.isInvalidated,
+      ).toBe(true);
+    }
     expect(queryClient.getQueryState(detailKey)?.isInvalidated).toBe(true);
     expect(queryClient.getQueryState(otherDetailKey)?.isInvalidated).toBe(false);
     expect(queryClient.getQueryState(githubInboxQueryKeys.list("open"))?.isInvalidated).toBe(true);

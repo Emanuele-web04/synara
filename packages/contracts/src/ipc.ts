@@ -376,12 +376,19 @@ export interface ContextMenuItem<T extends string = string> {
   destructive?: boolean;
   /** Central icon basename from the reversed set (e.g. `"pencil"`) or inline `<svg>` markup. */
   icon?: string;
+  /**
+   * Opens a submenu instead of resolving this row. Related actions (handoff targets, copy
+   * variants, fork targets) belong in one parent row rather than a flat run of siblings.
+   * Only leaf ids are ever returned; the parent `id` just identifies the group.
+   */
+  children?: readonly ContextMenuItem<T>[];
 }
 
 /** Context menu row sent over the desktop bridge with its icon pre-rasterized by the renderer. */
 export interface DesktopContextMenuItem<T extends string = string> extends ContextMenuItem<T> {
   /** `data:image/png;base64,` template image rendered at 2x for a 16pt menu icon. */
   iconDataUrl?: string;
+  children?: readonly DesktopContextMenuItem<T>[];
 }
 
 export type DesktopUpdateStatus =

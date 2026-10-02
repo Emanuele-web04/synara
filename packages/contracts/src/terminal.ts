@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import { ProviderInstanceId } from "./providerInstance";
 import { ProcessEnvRecord, TrimmedNonEmptyString } from "./baseSchemas";
 
 export const DEFAULT_TERMINAL_ID = "default";
@@ -41,6 +42,8 @@ export type TerminalSessionInput = Schema.Codec.Encoded<typeof TerminalSessionIn
 export const TerminalOpenInput = Schema.Struct({
   ...TerminalSessionInput.fields,
   cwd: TrimmedNonEmptyStringSchema,
+  // Runs only the server-selected authentication entry point for this account.
+  providerAuthInstanceId: Schema.optional(ProviderInstanceId),
   cols: Schema.optional(TerminalColsSchema),
   rows: Schema.optional(TerminalRowsSchema),
   env: Schema.optional(TerminalEnvSchema),

@@ -21,6 +21,7 @@ import {
   type ProviderInstanceEnvironment,
   ProviderInstanceId,
   GitHubInboxState,
+  GitHubInboxSort,
   TrimmedNonEmptyString,
   ProviderKind,
   type GitTextGenerationProvider,
@@ -383,6 +384,7 @@ export const AppSettingsSchema = Schema.Struct({
   // stored: the page always opens at even fractions.
   githubInboxKind: GitHubInboxKindFilter.pipe(withDefaults(() => "all" as const)),
   githubInboxState: GitHubInboxState.pipe(withDefaults(() => "open" as const)),
+  githubInboxSort: GitHubInboxSort.pipe(withDefaults(() => "created" as const)),
   githubInboxInvolvement: GitHubInboxInvolvementFilter.pipe(
     withDefaults(() => "everything" as const),
   ),
