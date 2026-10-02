@@ -11,6 +11,7 @@ import {
 } from "../appNavigation";
 import { AppRailSlotProvider } from "../components/AppRail";
 import { AppShellTopStrip } from "../components/AppShellTopStrip";
+import { SidebarLeadingControlsDock } from "../components/SidebarHeaderNavigationControls";
 import { resolveSelectableProviderInstanceId, useAppSettings } from "../appSettings";
 import ShortcutsDialog from "../components/ShortcutsDialog";
 import { RecentViewSwitcher } from "../components/RecentViewSwitcher";
@@ -599,6 +600,8 @@ function ChatRouteLayout() {
   );
   // ThreadSidebar portals its AppRail into this element, left of the panel.
   const [railSlot, setRailSlot] = useState<HTMLDivElement | null>(null);
+  // The route column slides with the panel; the leading controls dock needs it to stay put.
+  const [routeColumn, setRouteColumn] = useState<HTMLDivElement | null>(null);
 
   // The thread sidebar always lives on the left; the right dock is a separate surface.
   // It fills its clipping wrapper and sits on the panel tone.
@@ -624,7 +627,7 @@ function ChatRouteLayout() {
   // would have gotten inside <Sidebar> (otherwise dragging to resize stops working).
   // `data-sidebar-side` on the provider selects the seam geometry.
   const mainContentShell = (
-    <div className="relative flex h-svh min-h-0 min-w-0 flex-1">
+    <div ref={setRouteColumn} className="relative flex h-svh min-h-0 min-w-0 flex-1">
       <div aria-hidden className="app-rail-header-divider" />
       {isEditorView ? null : (
         <SidebarInstanceProvider side="left" resizable={THREAD_SIDEBAR_RESIZABLE}>
@@ -653,22 +656,24 @@ function ChatRouteLayout() {
       <ThreadRetentionMaintenanceToast />
       <ChatRouteGlobalShortcuts />
       <AppRailSlotProvider value={railSlot}>
-        {isMobile ? (
-          // Phones show the sidebar as a sheet that carries its own rail (see ThreadSidebar),
-          // so the shell keeps no left column.
-          sidebarElement
-        ) : (
-          <div className="flex min-h-0 shrink-0 flex-col">
-            <AppShellTopStrip />
-            <div className="flex min-h-0 flex-1">
-              <div ref={setRailSlot} className="flex shrink-0" />
-              <div className="app-rail-panel relative flex shrink-0 overflow-hidden [contain:paint]">
-                {sidebarElement}
+        <SidebarLeadingControlsDock routeColumn={routeColumn} railSlot={railSlot}>
+          {isMobile ? (
+            // Phones show the sidebar as a sheet that carries its own rail (see ThreadSidebar),
+            // so the shell keeps no left column.
+            sidebarElement
+          ) : (
+            <div className="flex min-h-0 shrink-0 flex-col">
+              <AppShellTopStrip />
+              <div className="flex min-h-0 flex-1">
+                <div ref={setRailSlot} className="flex shrink-0" />
+                <div className="app-rail-panel relative flex shrink-0 overflow-hidden [contain:paint]">
+                  {sidebarElement}
+                </div>
               </div>
             </div>
-          </div>
-        )}
-        {mainContentShell}
+          )}
+          {mainContentShell}
+        </SidebarLeadingControlsDock>
       </AppRailSlotProvider>
     </SidebarProvider>
   );
