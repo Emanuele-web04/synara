@@ -14,7 +14,7 @@ import { SidebarProvider, useSidebar } from "./ui/sidebar";
 
 function Shell({ vertical = false }: { vertical?: boolean }) {
   const [rail, setRail] = useState<HTMLDivElement | null>(null);
-  const [route, setRoute] = useState<HTMLDivElement | null>(null);
+  const [route, setRoute] = useState<HTMLElement | null>(null);
   const { open } = useSidebar();
   return (
     <SidebarLeadingControlsDock railSlot={rail} routeColumn={route}>
