@@ -2818,10 +2818,13 @@ diffs-container {
   --app-rail-card-radii: 0 0 var(--app-rail-inset-radius) 0;
 }
 
-/* Panel collapsed: the route body is the whole block, so its left corners round too. */
+/* Panel collapsed: the route body is the whole block, so its left corners round too. They
+   wait for the panel to slide most of the way out, so no notch opens beside it meanwhile;
+   opening squares them at once. */
 [data-sidebar-layout="rail"]:has([data-slot="sidebar"][data-side="left"][data-state="collapsed"]) {
   --app-rail-block-radii: var(--app-rail-inset-radius);
   --app-rail-card-radii: 0 0 var(--app-rail-inset-radius) var(--app-rail-inset-radius);
+  --app-rail-corner-delay: 180ms;
 }
 
 [data-sidebar-layout="rail"] .chat-content-card {
@@ -2829,6 +2832,7 @@ diffs-container {
   margin-bottom: var(--app-rail-inset-gap);
   background: transparent;
   border-radius: var(--app-rail-card-radii);
+  transition: border-radius 120ms ease-out var(--app-rail-corner-delay, 0ms);
 }
 
 [data-sidebar-layout="rail"] .chat-content-card.h-dvh {
@@ -2893,6 +2897,7 @@ diffs-container {
   pointer-events: none;
   opacity: 1;
   border-radius: var(--app-rail-block-radii);
+  transition: border-radius 120ms ease-out var(--app-rail-corner-delay, 0ms);
 }
 
 [data-sidebar-layout="rail"] .chat-content-card::before {
@@ -2908,10 +2913,12 @@ diffs-container {
   border: var(--app-rail-inset-border-width) solid var(--app-rail-inset-border);
 }
 
-/* Panel collapsed: its zero-width box must not leave a border line next to the rail. */
+/* Panel collapsed: its zero-width box must not leave a border line next to the rail. The
+   border stays until the slide ends, so the shrinking panel keeps its edges. */
 [data-sidebar-layout="rail"]:has([data-slot="sidebar"][data-side="left"][data-state="collapsed"])
   .app-rail-panel {
   border-width: 0;
+  transition: border-width 0s linear 300ms;
 }
 
 /* Short divider on the shell band above the seam, detached from the band's edges, marking
@@ -2968,6 +2975,9 @@ diffs-container {
 [data-sidebar-layout="rail"] .app-top-bar {
   background-color: transparent;
   background-image: none;
+  /* The traffic-light gutter (below) arrives with the panel's collapse; ease it on the
+     panel's own curve so the header's content glides instead of stepping. */
+  transition: padding-left 300ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 
 /* Right dock: its fixed container keeps the block's gap, and its surface is the card body

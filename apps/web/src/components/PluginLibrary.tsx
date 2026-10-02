@@ -730,7 +730,7 @@ export function PluginLibrary(props?: {
             desktopTopBarWindowControlsGutterClassName,
           )}
         >
-          <SidebarHeaderNavigationControls />
+          <SidebarHeaderNavigationControls collapsedGapClassName="-me-3" />
           {tabsAndProviderPicker}
         </div>
         {body}

@@ -40,6 +40,35 @@ export function SidebarLeadingControls({ className }: { className?: string }) {
   );
 }
 
+// A route top bar eases its leading padding along with the panel (see `.app-top-bar` in
+// index.css), so a box measured as the toggle lands is still short of where it settles.
+function pendingLeadingPaddingShift(anchor: HTMLElement, boundary: HTMLElement): number {
+  let shift = 0;
+  for (
+    let element = anchor.parentElement;
+    element && element !== boundary;
+    element = element.parentElement
+  ) {
+    for (const animation of element.getAnimations?.() ?? []) {
+      if (
+        !(animation instanceof CSSTransition) ||
+        animation.transitionProperty !== "padding-left" ||
+        !(animation.effect instanceof KeyframeEffect)
+      ) {
+        continue;
+      }
+      const settled = Number.parseFloat(
+        String(animation.effect.getKeyframes().at(-1)?.paddingLeft),
+      );
+      const current = Number.parseFloat(getComputedStyle(element).paddingLeft);
+      if (Number.isFinite(settled) && Number.isFinite(current)) {
+        shift += settled - current;
+      }
+    }
+  }
+  return shift;
+}
+
 type RegisterLeadingControlsAnchor = (element: HTMLElement) => () => void;
 
 const LeadingControlsDockContext = createContext<RegisterLeadingControlsAnchor | null>(null);
@@ -100,7 +129,8 @@ export function SidebarLeadingControlsDock({
         routeColumn && railSlot && routeColumn.contains(anchor)
           ? rect.left -
             routeColumn.getBoundingClientRect().left +
-            railSlot.getBoundingClientRect().right
+            railSlot.getBoundingClientRect().right +
+            pendingLeadingPaddingShift(anchor, routeColumn)
           : rect.left;
       const y = rect.top;
       setPosition((current) =>
@@ -143,9 +173,18 @@ export function SidebarLeadingControlsDock({
 }
 
 // Empty box with the cluster's exact footprint; the dock paints the real cluster over it.
-function SidebarLeadingControlsAnchor({ register }: { register: RegisterLeadingControlsAnchor }) {
+function SidebarLeadingControlsAnchor({
+  register,
+  active = true,
+}: {
+  register: RegisterLeadingControlsAnchor;
+  active?: boolean;
+}) {
   const ref = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => (ref.current ? register(ref.current) : undefined), [register]);
+  useLayoutEffect(
+    () => (active && ref.current ? register(ref.current) : undefined),
+    [active, register],
+  );
 
   return (
     <div ref={ref} aria-hidden className={LEADING_CONTROLS_CLASS}>
@@ -175,15 +214,43 @@ export function SidebarLeadingControlsSlot() {
 
 /**
  * Host-header variant: only appears once the strip over the panel is gone (sidebar
- * collapsed, or mobile where the drawer floats over content). When the sidebar is open on
- * desktop the strip owns the cluster's box, so this renders nothing.
+ * collapsed, or mobile where the drawer floats over content).
+ *
+ * Under a {@link SidebarLeadingControlsDock} the reserved box stays mounted and opens along
+ * the inline axis in step with the panel's slide, so the title next to it glides to its new
+ * offset instead of jumping there on the toggle. `collapsedGapClassName` is the negative
+ * end margin that cancels the host row's flex gap while the box is closed (a zero-width
+ * flex item still takes a gap); `className` pads the open box.
  */
-export function SidebarHeaderNavigationControls() {
+export function SidebarHeaderNavigationControls({
+  className,
+  collapsedGapClassName,
+}: {
+  className?: string;
+  collapsedGapClassName?: string;
+}) {
   const { isMobile, open } = useSidebar();
+  const register = useContext(LeadingControlsDockContext);
+  const shown = isMobile || !open;
 
-  if (!isMobile && open) {
-    return null;
+  if (!register) {
+    return shown ? <SidebarLeadingControls {...(className ? { className } : {})} /> : null;
   }
 
-  return <SidebarLeadingControlsSlot />;
+  return (
+    <div
+      aria-hidden
+      className={cn(
+        "grid shrink-0 transition-[grid-template-columns,margin] motion-reduce:transition-none",
+        SIDEBAR_OFFCANVAS_MOTION_CLASS,
+        shown ? "grid-cols-[1fr]" : cn("grid-cols-[0fr]", collapsedGapClassName),
+      )}
+    >
+      <div className="min-w-0 overflow-hidden">
+        <div className={cn("w-max", className)}>
+          <SidebarLeadingControlsAnchor register={register} active={shown} />
+        </div>
+      </div>
+    </div>
+  );
 }
