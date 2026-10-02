@@ -52,7 +52,7 @@ import { repairMarkdownTableDelimiters } from "../lib/markdownTableRepair";
 import { showFileReferenceContextMenu } from "../lib/fileReferenceContextMenu";
 import {
   ChatLinkActionsContext,
-  resolvePullRequestLinkOpener,
+  resolveGitHubItemClickOpener,
   showLinkContextMenu,
 } from "../lib/linkContextMenu";
 import { useTheme } from "../hooks/useTheme";
@@ -1154,14 +1154,14 @@ const MARKDOWN_COMPONENTS: Components = {
           className={isExternalHttp ? MARKDOWN_EXTERNAL_LINK_CLASS_NAME : props.className}
           {...(isExternalHttp
             ? {
-                // A plain click on a pull request opens it in the app; cmd/ctrl-click
-                // keeps the default external open.
+                // A plain click on a pull request or issue follows the user's setting (in
+                // the app by default); cmd/ctrl-click keeps the default external open.
                 onClick: (event: React.MouseEvent) => {
                   if (event.metaKey || event.ctrlKey) return;
-                  const openPullRequest = resolvePullRequestLinkOpener(restoredHref, linkActions);
-                  if (!openPullRequest) return;
+                  const openGitHubItem = resolveGitHubItemClickOpener(restoredHref, linkActions);
+                  if (!openGitHubItem) return;
                   event.preventDefault();
-                  openPullRequest(restoredHref);
+                  openGitHubItem(restoredHref);
                 },
                 onContextMenu: (event: React.MouseEvent) => {
                   event.preventDefault();

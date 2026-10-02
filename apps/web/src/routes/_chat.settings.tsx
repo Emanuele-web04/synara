@@ -14,6 +14,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   type AppSettings,
   type FollowUpBehavior,
+  type GitHubLinkOpenTarget,
   type MessageTrailAudioSource,
   type VoiceEnterBehavior,
   DEFAULT_UI_DENSITY,
@@ -187,6 +188,12 @@ const FOLLOW_UP_BEHAVIOR_OPTIONS = [
   { value: "queue", label: "Queue" },
   { value: "steer", label: "Steer" },
 ] as const satisfies ReadonlyArray<{ value: FollowUpBehavior; label: string }>;
+
+const GITHUB_LINK_OPEN_TARGET_LABELS = {
+  app: "In Synara",
+  browser: "In-app browser",
+  external: "External browser",
+} as const satisfies Record<GitHubLinkOpenTarget, string>;
 
 const MESSAGE_TRAIL_AUDIO_SOURCE_OPTIONS = [
   { value: "off", label: "Off" },
@@ -409,6 +416,9 @@ function SettingsRouteView() {
       ? ["Provider update checks"]
       : []),
     ...(settings.diffWordWrap !== defaults.diffWordWrap ? ["Diff line wrapping"] : []),
+    ...(settings.githubLinkOpenTarget !== defaults.githubLinkOpenTarget
+      ? ["Open pull requests and issues"]
+      : []),
     ...(settings.showPullRequestDiffColors !== defaults.showPullRequestDiffColors
       ? ["Pull request diff colors"]
       : []),
@@ -1296,6 +1306,49 @@ function SettingsRouteView() {
       </SettingsSection>
 
       <SettingsSection title="Review">
+        <SettingsRow
+          title="Open pull requests and issues"
+          description="Choose where a pull request or issue link in a chat opens: the built-in review view, the in-app browser, or your external browser. Ctrl/Cmd+click always opens the external browser."
+          resetAction={
+            settings.githubLinkOpenTarget !== defaults.githubLinkOpenTarget ? (
+              <SettingResetButton
+                label="open pull requests and issues"
+                onClick={() =>
+                  updateSettings({
+                    githubLinkOpenTarget: defaults.githubLinkOpenTarget,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSelectControl
+              value={settings.githubLinkOpenTarget}
+              onValueChange={(value) => {
+                if (value !== "app" && value !== "browser" && value !== "external") {
+                  return;
+                }
+                updateSettings({
+                  githubLinkOpenTarget: value,
+                });
+              }}
+              ariaLabel="Open pull requests and issues"
+              triggerClassName="w-full sm:w-40"
+              valueContent={GITHUB_LINK_OPEN_TARGET_LABELS[settings.githubLinkOpenTarget]}
+            >
+              <SelectItem hideIndicator value="app">
+                {GITHUB_LINK_OPEN_TARGET_LABELS.app}
+              </SelectItem>
+              <SelectItem hideIndicator value="browser">
+                {GITHUB_LINK_OPEN_TARGET_LABELS.browser}
+              </SelectItem>
+              <SelectItem hideIndicator value="external">
+                {GITHUB_LINK_OPEN_TARGET_LABELS.external}
+              </SelectItem>
+            </SettingsSelectControl>
+          }
+        />
+
         {renderBooleanSettingRow({
           settingKey: "showPullRequestDiffColors",
           title: "Pull request diff colors",
