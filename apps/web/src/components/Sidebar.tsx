@@ -205,7 +205,14 @@ import { createGroupProject, isGroupContainerProject } from "../lib/groupProject
 import { useProjectEnvironmentStore } from "../projectEnvironmentStore";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useLatestProjectStore } from "../latestProjectStore";
-import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
+import {
+  resolveThreadEnvironmentPresentation,
+  type ForkThreadTarget,
+} from "../lib/threadEnvironment";
+import { dispatchThreadFork, FORK_THREAD_TARGET_LABELS } from "../lib/threadFork";
+import { contextMenuGroup } from "../lib/contextMenuGroup";
+import { gitBranchesQueryOptions } from "../lib/gitReactQuery";
+import { resolveComposerSlashRootBranch } from "../composerSlashCommands";
 import { dispatchThreadRename } from "../lib/threadRename";
 import { quotePosixShellArgument } from "../lib/shellQuote";
 import { useStableValue } from "~/hooks/useStableValue";
@@ -2983,6 +2990,49 @@ export default function Sidebar() {
     [createThreadHandoff],
   );
 
+  const forkThread = useCallback(
+    async (thread: Thread, target: ForkThreadTarget) => {
+      const api = readNativeApi();
+      if (!api) return;
+      try {
+        const projectCwd = projectCwdById.get(thread.projectId) ?? null;
+        // Only a thread without its own branch needs the root checkout's branch.
+        const branches =
+          thread.branch || !projectCwd
+            ? null
+            : await queryClient
+                .fetchQuery(gitBranchesQueryOptions(projectCwd))
+                .then((result) => result.branches)
+                .catch(() => null);
+        const nextThreadId = await dispatchThreadFork({
+          api,
+          sourceThread: thread,
+          target,
+          rootBranch: resolveComposerSlashRootBranch({
+            branches,
+            activeProjectCwd: projectCwd,
+            activeThreadBranch: thread.branch,
+          }),
+          modelSelection: thread.modelSelection,
+          runtimeMode: thread.runtimeMode,
+          interactionMode: thread.interactionMode,
+        });
+        syncServerShellSnapshot(await api.orchestration.getShellSnapshot());
+        await navigate({ to: "/$threadId", params: { threadId: nextThreadId } });
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not fork thread",
+          description:
+            error instanceof Error
+              ? error.message
+              : "An error occurred while creating the forked thread.",
+        });
+      }
+    },
+    [navigate, projectCwdById, queryClient, syncServerShellSnapshot],
+  );
+
   // Posts the "pick this thread up" user message to a group's coordinator once
   // its coordinator thread exists (right after onboarding save, or immediately
   // when moving a thread into a configured group).
@@ -3144,17 +3194,87 @@ export default function Sidebar() {
       const handoffTargetById = new Map(
         handoffTargets.map((target) => [`handoff:${target.instanceId}`, target]),
       );
-      const handoffItems = handoffTargets.map((target, index) => ({
-        id: `handoff:${target.instanceId}`,
-        label: `Handoff to ${target.label}`,
-        icon: THREAD_CONTEXT_MENU_ICONS.handoff,
-        separatorBefore: index === 0,
-      }));
+      const handoffItems = contextMenuGroup(
+        { id: "handoff", label: "Handoff", icon: THREAD_CONTEXT_MENU_ICONS.handoff },
+        handoffTargets.map((target) => ({
+          id: `handoff:${target.instanceId}`,
+          label: target.label,
+          standaloneLabel: `Handoff to ${target.label}`,
+          icon: THREAD_CONTEXT_MENU_ICONS.handoff,
+        })),
+      );
+      // Same action as `/fork`. Forking copies the loaded transcript, and a hub or
+      // coordinator thread has no checkout to fork into.
+      const canFork =
+        handoffAvailability.workspaceHandoff &&
+        !thread.parentThreadId &&
+        !isSidechatThread(thread) &&
+        thread.messages.length > 0;
+      const forkItems = canFork
+        ? contextMenuGroup({ id: "fork", label: "Fork", icon: THREAD_CONTEXT_MENU_ICONS.fork }, [
+            {
+              id: "fork:local",
+              label: FORK_THREAD_TARGET_LABELS.local,
+              icon: THREAD_CONTEXT_MENU_ICONS.forkLocal,
+            },
+            {
+              id: "fork:worktree",
+              label: FORK_THREAD_TARGET_LABELS.worktree,
+              icon: THREAD_CONTEXT_MENU_ICONS.forkWorktree,
+            },
+          ])
+        : [];
+      if (forkItems[0] && handoffItems.length === 0) {
+        forkItems[0] = { ...forkItems[0], separatorBefore: true };
+      }
+      if (handoffItems[0]) {
+        handoffItems[0] = { ...handoffItems[0], separatorBefore: true };
+      }
       const threadWorkspacePath = resolveThreadWorkspaceCwd({
         projectCwd: projectCwdById.get(thread.projectId) ?? null,
         envMode: thread.envMode,
         worktreePath: thread.worktreePath,
       });
+      // Group actions only make sense for threads in ordinary (non-group)
+      // projects; group threads already belong to a group.
+      const canUseHubActions =
+        GROUPS_ON && !groupProjectIdSet.has(thread.projectId) && !thread.parentThreadId;
+      // Paused and archived groups can't run a coordinator turn, so they
+      // aren't move targets — the server refuses the turn either way.
+      const eligibleGroups = canUseHubActions
+        ? projects.filter((project) => {
+            const summary = summaryFor(project.id);
+            return (
+              groupProjectIdSet.has(project.id) &&
+              summary?.archivedAt == null &&
+              summary?.pausedAt == null
+            );
+          })
+        : [];
+      const hubItems = canUseHubActions
+        ? contextMenuGroup(
+            {
+              id: "hub",
+              label: "Hub",
+              icon: THREAD_CONTEXT_MENU_ICONS.group,
+              separatorBefore: true,
+            },
+            [
+              {
+                id: "continue-as-group",
+                label: "Continue as a New Hub",
+                standaloneLabel: "Continue as a hub",
+                icon: THREAD_CONTEXT_MENU_ICONS.group,
+              },
+              ...eligibleGroups.map((project, index) => ({
+                id: `move-to-group:${project.id}`,
+                label: `Move to ${project.name}`,
+                icon: THREAD_CONTEXT_MENU_ICONS.group,
+                separatorBefore: index === 0,
+              })),
+            ],
+          )
+        : [];
       const clicked = await api.contextMenu.show(
         [
           { id: "rename", label: "Rename thread", icon: THREAD_CONTEXT_MENU_ICONS.rename },
@@ -3174,12 +3294,29 @@ export default function Sidebar() {
             : []),
           { id: "mark-unread", label: "Mark unread", icon: THREAD_CONTEXT_MENU_ICONS.markUnread },
           ...handoffItems,
-          {
-            id: "copy-path",
-            label: "Copy Path",
-            icon: THREAD_CONTEXT_MENU_ICONS.copy,
-            separatorBefore: true,
-          },
+          ...forkItems,
+          ...contextMenuGroup(
+            {
+              id: "copy",
+              label: "Copy",
+              icon: THREAD_CONTEXT_MENU_ICONS.copy,
+              separatorBefore: true,
+            },
+            [
+              {
+                id: "copy-path",
+                label: "Path",
+                standaloneLabel: "Copy Path",
+                icon: THREAD_CONTEXT_MENU_ICONS.copy,
+              },
+              {
+                id: "copy-thread-id",
+                label: "Thread ID",
+                standaloneLabel: "Copy Thread ID",
+                icon: THREAD_CONTEXT_MENU_ICONS.copy,
+              },
+            ],
+          ),
           ...(threadWorkspacePath
             ? [
                 {
@@ -3189,25 +3326,8 @@ export default function Sidebar() {
                 },
               ]
             : []),
-          { id: "copy-thread-id", label: "Copy Thread ID", icon: THREAD_CONTEXT_MENU_ICONS.copy },
           ...(options?.extraItems ?? []),
-          // Group actions only make sense for threads in ordinary (non-group)
-          // projects; group threads already belong to a group.
-          ...(!GROUPS_ON || groupProjectIdSet.has(thread.projectId) || thread.parentThreadId
-            ? []
-            : [
-                {
-                  id: "continue-as-group",
-                  label: "Continue as a hub",
-                  icon: THREAD_CONTEXT_MENU_ICONS.group,
-                  separatorBefore: true,
-                },
-                {
-                  id: "move-to-group",
-                  label: "Move to hub…",
-                  icon: THREAD_CONTEXT_MENU_ICONS.group,
-                },
-              ]),
+          ...hubItems,
           // Subagent threads are archived and restored through their parent
           // (thread.archive cascades); archiving one alone would strand it with
           // no sidebar or Archived-panel row to restore it from.
@@ -3362,40 +3482,16 @@ export default function Sidebar() {
         await continueThreadAsGroup(thread);
         return;
       }
-      if (clicked === "move-to-group") {
-        // Paused and archived groups can't run a coordinator turn, so they
-        // aren't move targets — the server refuses the turn either way.
-        const eligibleGroups = projects.filter((project) => {
-          const summary = summaryFor(project.id);
-          return (
-            groupProjectIdSet.has(project.id) &&
-            summary?.archivedAt == null &&
-            summary?.pausedAt == null
-          );
-        });
-        if (eligibleGroups.length === 0) {
-          toastManager.add({
-            type: "info",
-            title: "No hubs yet",
-            description: "Create a hub first, then move this thread into it.",
-          });
-          return;
+      if (typeof clicked === "string" && clicked.startsWith("move-to-group:")) {
+        const targetProjectId = clicked.slice("move-to-group:".length);
+        const target = eligibleGroups.find((project) => project.id === targetProjectId);
+        if (target) {
+          await moveThreadToGroup(thread, target.id);
         }
-        const picked = await api.contextMenu.show(
-          eligibleGroups.map((project) => ({
-            id: `move-to-group:${project.id}` as const,
-            label: project.name,
-            icon: THREAD_CONTEXT_MENU_ICONS.group,
-          })),
-          position,
-        );
-        if (typeof picked === "string" && picked.startsWith("move-to-group:")) {
-          const targetProjectId = picked.slice("move-to-group:".length);
-          const target = eligibleGroups.find((project) => project.id === targetProjectId);
-          if (target) {
-            await moveThreadToGroup(thread, target.id);
-          }
-        }
+        return;
+      }
+      if (clicked === "fork:local" || clicked === "fork:worktree") {
+        await forkThread(thread, clicked === "fork:worktree" ? "worktree" : "local");
         return;
       }
       if (clicked === "return-to-single-chat") {
@@ -3419,6 +3515,7 @@ export default function Sidebar() {
       clearDismissedThreadStatus,
       clearThreadNotification,
       continueThreadAsGroup,
+      forkThread,
       groupProjectIdSet,
       handoffThread,
       markThreadUnread,
