@@ -169,6 +169,7 @@ describe("ComposerModelPicker", () => {
     );
     const refreshButton = page.getByRole("button", { name: "Refresh models" });
     await expect.element(refreshButton).toBeEnabled();
+    expect(page.getByRole("status").elements()).toHaveLength(0);
     onRefreshModels.mockReturnValueOnce(promise);
     await refreshButton.click();
     await expect.element(refreshButton).toBeDisabled();
@@ -177,6 +178,7 @@ describe("ComposerModelPicker", () => {
     expect(onRefreshModels).toHaveBeenLastCalledWith("codex", "codex", "now");
     finish();
     await expect.element(refreshButton).toBeEnabled();
+    expect(page.getByRole("status").elements()).toHaveLength(0);
     onRefreshModels.mockRejectedValueOnce(new Error("offline"));
     await refreshButton.click();
     await expect.element(page.getByText("Couldn’t refresh models. Try again.")).toBeVisible();
@@ -189,6 +191,27 @@ describe("ComposerModelPicker", () => {
     expect(onRefreshModels).toHaveBeenCalledTimes(4);
     expect(page.getByRole("button", { name: "Refresh models" }).elements()).toHaveLength(0);
     await screen.unmount();
+  });
+
+  it("does not restart a pending check when the refresh callback changes", async () => {
+    let finish!: () => void;
+    const onRefreshModels = vi.fn().mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const screen = await mountPicker({ onRefreshModels });
+    try {
+      await vi.waitFor(() => expect(onRefreshModels).toHaveBeenCalledTimes(1));
+      await screen.rerender(<Harness onRefreshModels={(...args) => onRefreshModels(...args)} />);
+      await expect.element(page.getByText("Checking for models…")).toBeVisible();
+      finish();
+      await expect.element(page.getByRole("button", { name: "Refresh models" })).toBeEnabled();
+      expect(onRefreshModels).toHaveBeenCalledTimes(1);
+    } finally {
+      await screen.unmount();
+    }
   });
 
   afterEach(() => {

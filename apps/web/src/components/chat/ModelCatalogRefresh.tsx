@@ -2,7 +2,7 @@
 // Purpose: Check one visible model catalog on mount and expose an explicit refresh.
 // Layer: Chat picker UI
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 import type { ProviderInstanceId, ProviderKind } from "@synara/contracts";
 import type { ProviderModelCatalog } from "../../hooks/useProviderModelCatalog";
 import { RefreshCwIcon } from "~/lib/icons";
@@ -39,19 +39,22 @@ export function ModelCatalogRefresh(props: {
     [provider, instanceId, onRefresh],
   );
 
+  const checkOnMount = useEffectEvent(() => void refresh("if-stale"));
   useEffect(() => {
-    void refresh("if-stale");
+    checkOnMount();
     return () => {
       requestId.current += 1;
       inFlight.current = false;
     };
-  }, [refresh]);
+  }, [provider, instanceId]);
 
   return (
-    <div className="flex items-center justify-between gap-2 border-t border-border px-2 py-1">
-      <span role="status" className="text-ui-xs text-muted-foreground">
-        {pending ? "Checking for models…" : failed ? "Couldn’t refresh models. Try again." : null}
-      </span>
+    <div className="flex items-center justify-end gap-2 border-t border-border px-2 py-1">
+      {pending || failed ? (
+        <span role="status" className="mr-auto text-ui-xs text-muted-foreground">
+          {pending ? "Checking for models…" : "Couldn’t refresh models. Try again."}
+        </span>
+      ) : null}
       <Button
         type="button"
         variant="ghost"
