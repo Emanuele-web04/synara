@@ -84,6 +84,9 @@ function authFilePaths(ctx: ProviderUsageContext): string[] {
   if (ctx.env.CODEX_HOME) {
     push(nodePath.join(ctx.env.CODEX_HOME, "auth.json"));
   }
+  if (ctx.isolateCredentials) {
+    return paths;
+  }
   const configHome = ctx.env.XDG_CONFIG_HOME?.trim();
   if (configHome) {
     push(nodePath.join(configHome, "codex", "auth.json"));
@@ -146,10 +149,12 @@ async function resolveCodexAuth(ctx: ProviderUsageContext): Promise<CodexAuth | 
     }
   }
 
-  const keychain = await readKeychainPassword({
-    service: KEYCHAIN_SERVICE,
-    platform: ctx.platform,
-  });
+  const keychain = ctx.isolateCredentials
+    ? null
+    : await readKeychainPassword({
+        service: KEYCHAIN_SERVICE,
+        platform: ctx.platform,
+      });
   if (keychain) {
     const parsed = readCodexAuthRecord(asRecord(decodeKeychainJson(keychain)), {
       kind: "keychain",

@@ -309,6 +309,8 @@ export type ServerConsumeCodexResetCreditResult = typeof ServerConsumeCodexReset
 
 export const ServerProviderUsageSnapshot = Schema.Struct({
   provider: ProviderKind,
+  // Stable provider-account route. Omitted by legacy local/provider-only snapshots.
+  instanceId: Schema.optional(ProviderInstanceId),
   updatedAt: IsoDateTime,
   limits: Schema.Array(ServerProviderUsageLimit),
   usageLines: Schema.Array(ServerProviderUsageLine),
@@ -333,7 +335,7 @@ export const ServerGetProviderUsageSnapshotResult = Schema.NullOr(ServerProvider
 export type ServerGetProviderUsageSnapshotResult = typeof ServerGetProviderUsageSnapshotResult.Type;
 
 // Batch live-usage fetch for supported providers, powering the Settings → Usage section and
-// provider-scoped usage chips. Unfiltered requests return one entry per supported provider
+// provider-scoped usage chips. Unfiltered requests return one entry per enabled supported instance
 // (including needs-auth/error) so the UI can render a row each.
 export const ServerListProviderUsageInput = Schema.Struct({
   forceRefresh: Schema.optional(Schema.Boolean),
