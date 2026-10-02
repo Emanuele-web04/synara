@@ -33,6 +33,7 @@ import {
   GitHubIcon,
   GlobeIcon,
   HammerIcon,
+  HandoffIcon,
   HistoryIcon,
   type LucideIcon,
   McpIcon,
@@ -247,6 +248,9 @@ function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   if (workEntry.activityKind === "context-compaction") return ContextCompactionIcon;
   // "Moved to background" notices read as a tray drop, not a warning check.
   if (workEntry.nativeEventType === "background_tasks_changed") return BackgroundTrayIcon;
+  if (workEntry.providerHandoff) {
+    return workEntry.providerHandoff.status === "failed" ? CircleAlertIcon : HandoffIcon;
+  }
   if (workEntry.providerContextLifecycle) {
     return workEntry.providerContextLifecycle.nativeHistory === "unavailable"
       ? CircleAlertIcon
@@ -591,6 +595,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
     : undefined;
   const hasToolDetails = Boolean(workEntry.toolDetails);
   const providerContextLifecycle = workEntry.providerContextLifecycle;
+  const providerHandoff = workEntry.providerHandoff;
   // File-read rows open the referenced file in the in-app viewer when the
   // hosting surface provides an opener (right-dock file pane / editor pane).
   const opener = useWorkspaceFileOpener();
@@ -669,6 +674,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
     !canOpenAgentActivity &&
     Boolean(
       providerContextLifecycle ||
+      providerHandoff ||
       workEntry.toolDetails ||
       (workEntry.liveActivity && !canOpenReadFile),
     );
@@ -834,6 +840,8 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
                 detailContent={
                   providerContextLifecycle ? (
                     <ProviderContextLifecycleDetails info={providerContextLifecycle} />
+                  ) : providerHandoff ? (
+                    <ProviderHandoffDetails info={providerHandoff} />
                   ) : undefined
                 }
                 compact={compact}
@@ -1020,6 +1028,62 @@ function ProviderContextLifecycleDetails(props: {
               Showing a short preview of the summary sent with your message.
             </p>
           ) : null}
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
+function providerModelLabel(provider: string, model: string): string {
+  const displayName =
+    PROVIDER_DESCRIPTORS.find((descriptor) => descriptor.kind === provider)?.displayName ??
+    provider;
+  return `${displayName} · ${model}`;
+}
+
+function ProviderHandoffDetails(props: {
+  info: NonNullable<TimelineWorkEntry["providerHandoff"]>;
+}) {
+  const { info } = props;
+  return (
+    <div className="space-y-3" data-provider-handoff-details="true">
+      <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1.5 rounded-lg border border-border/45 bg-background/60 px-3 py-2.5 text-ui-sm">
+        <dt className="text-muted-foreground/56">From</dt>
+        <dd className="text-foreground/84">
+          {providerModelLabel(info.sourceProvider, info.sourceModel)}
+        </dd>
+        <dt className="text-muted-foreground/56">To</dt>
+        <dd className="text-foreground/84">
+          {providerModelLabel(info.targetProvider, info.targetModel)}
+        </dd>
+        {info.status === "failed" ? (
+          <>
+            <dt className="text-muted-foreground/56">Error</dt>
+            <dd className="text-foreground/84">
+              {info.failureDetail ?? "The session did not start."}
+            </dd>
+          </>
+        ) : (
+          <>
+            <dt className="text-muted-foreground/56">Context</dt>
+            <dd className="text-foreground/84">
+              {info.contextText ? `${info.contextText.length.toLocaleString()} characters` : "None"}
+            </dd>
+          </>
+        )}
+      </dl>
+      {info.status === "completed" && info.contextText ? (
+        <section className="space-y-2">
+          <h3 className="text-ui-sm font-medium text-muted-foreground/56">Transferred context</h3>
+          <pre
+            className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border/45 bg-background/60 px-3 py-2.5 font-chat-code text-chat-code leading-relaxed text-foreground/84"
+            data-provider-handoff-context="true"
+          >
+            {info.contextText}
+          </pre>
+          <p className="text-ui-xs text-muted-foreground/56">
+            Sent ahead of your next message so the new model can continue this thread.
+          </p>
         </section>
       ) : null}
     </div>

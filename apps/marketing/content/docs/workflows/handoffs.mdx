@@ -15,6 +15,15 @@ A provider handoff changes which provider continues one Synara task. Use it when
 
 A handoff is continuation, not parallelism. Do not leave two providers actively editing the same environment.
 
+## Same thread or new thread
+
+**Hand off thread** offers two destinations for each provider:
+
+- **Continue in this thread** keeps the same task: its ID, visible history, project, and worktree. The receiving provider starts a new session right away, and the timeline records a handoff row showing the source model, the target model, and the context transferred to the target. Earlier messages stay attributed to the provider that wrote them. The receiving provider's next turn includes that context. If the receiving provider cannot start, the task remains on the original provider and the timeline records the failure instead.
+- **Continue in a new thread** creates a separate task with a copy of the transcript, leaving the original task untouched.
+
+Switching between two accounts of the same provider always creates a new thread.
+
 ## Good reasons to hand off
 
 - A different provider has a capability better suited to the next phase

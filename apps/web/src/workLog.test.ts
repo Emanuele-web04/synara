@@ -391,6 +391,63 @@ describe("deriveWorkLogEntries", () => {
     expect(entry?.providerContextLifecycle?.recapPreview?.length).toBeLessThanOrEqual(600);
   });
 
+  it("derives same-thread handoff rows with source, target, and transferred context", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "provider-handoff",
+          kind: "provider.handoff",
+          summary: "Handed off from Codex (gpt-5.4) to Claude (claude-sonnet-4-6)",
+          tone: "info",
+          payload: {
+            sourceProvider: "codex",
+            sourceModel: "gpt-5.4",
+            targetProvider: "claudeAgent",
+            targetModel: "claude-sonnet-4-6",
+            contextText: "User:\nfix the flaky test",
+            contextCharacters: 24,
+          },
+        }),
+        makeActivity({
+          id: "provider-handoff-failed",
+          kind: "provider.handoff.failed",
+          summary: "Handoff to Claude (claude-sonnet-4-6) failed",
+          tone: "error",
+          payload: {
+            sourceProvider: "codex",
+            sourceModel: "gpt-5.4",
+            targetProvider: "claudeAgent",
+            targetModel: "claude-sonnet-4-6",
+            detail: "Claude could not start.",
+          },
+        }),
+      ],
+      TurnId.makeUnsafe("turn-visible"),
+      { visibleTurnIds: new Set([TurnId.makeUnsafe("turn-visible")]) },
+    );
+
+    expect(entries.map((entry) => entry.providerHandoff)).toEqual([
+      {
+        status: "completed",
+        sourceProvider: "codex",
+        sourceModel: "gpt-5.4",
+        targetProvider: "claudeAgent",
+        targetModel: "claude-sonnet-4-6",
+        contextText: "User:\nfix the flaky test",
+        failureDetail: null,
+      },
+      {
+        status: "failed",
+        sourceProvider: "codex",
+        sourceModel: "gpt-5.4",
+        targetProvider: "claudeAgent",
+        targetModel: "claude-sonnet-4-6",
+        contextText: null,
+        failureDetail: "Claude could not start.",
+      },
+    ]);
+  });
+
   it("keeps native-history loss visible when the provider sent no recap", () => {
     const [entry] = deriveWorkLogEntries(
       [

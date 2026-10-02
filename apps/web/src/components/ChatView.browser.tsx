@@ -3408,6 +3408,187 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  describe("provider handoff destination", () => {
+    const withClaudeReady = (nextFixture: TestFixture) => {
+      const providers: ServerConfig["providers"] = [
+        ...nextFixture.serverConfig.providers,
+        {
+          provider: "claudeAgent",
+          instanceId: "claudeAgent",
+          driver: "claudeAgent",
+          status: "ready",
+          available: true,
+          authStatus: "authenticated",
+          checkedAt: NOW_ISO,
+        },
+      ];
+      nextFixture.serverConfig = { ...nextFixture.serverConfig, providers };
+      nextFixture.providerStatusesSnapshot = providers;
+    };
+
+    async function mountWithCapturedCommands(
+      snapshot: OrchestrationReadModel = createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("msg-handoff-destination"),
+        targetText: "Fix the flaky reconnect test",
+      }),
+    ) {
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot,
+        configureFixture: withClaudeReady,
+      });
+      const previousNativeApi = window.nativeApi;
+      const api = readNativeApi()!;
+      const commands: Array<Parameters<typeof api.orchestration.dispatchCommand>[0]> = [];
+      const dispatchCommand = vi.fn(
+        async (command: Parameters<typeof api.orchestration.dispatchCommand>[0]) => {
+          commands.push(command);
+          return { sequence: fixture.snapshot.snapshotSequence };
+        },
+      );
+      Object.defineProperty(window, "nativeApi", {
+        configurable: true,
+        value: { ...api, orchestration: { ...api.orchestration, dispatchCommand } },
+      });
+      await waitForServerConfigToApply();
+      return {
+        commands,
+        cleanup: async () => {
+          if (previousNativeApi)
+            Object.defineProperty(window, "nativeApi", {
+              configurable: true,
+              value: previousNativeApi,
+            });
+          else Reflect.deleteProperty(window, "nativeApi");
+          await mounted.cleanup();
+        },
+      };
+    }
+
+    async function openHandoffMenu() {
+      const trigger = page.getByRole("button", { name: "Hand off thread" });
+      await expect.element(trigger).toBeEnabled();
+      // The first click can land while the chat is still hydrating and the menu
+      // closes again; reopen until the destinations render.
+      await vi.waitFor(
+        async () => {
+          if (!document.querySelector("[data-handoff-destination]")) {
+            await trigger.click();
+          }
+          expect(document.querySelector("[data-handoff-destination]")).not.toBeNull();
+        },
+        { timeout: 10_000, interval: 500 },
+      );
+      await expect.element(page.getByText("Continue in this thread")).toBeVisible();
+      await expect.element(page.getByText("Continue in a new thread")).toBeVisible();
+    }
+
+    it("continues in the same thread by rebinding its provider", async () => {
+      const mounted = await mountWithCapturedCommands();
+      try {
+        await openHandoffMenu();
+        const sameThreadItem = document.querySelector<HTMLElement>(
+          '[data-handoff-destination="this-thread"]',
+        );
+        expect(sameThreadItem?.textContent).toContain("Claude");
+        sameThreadItem!.click();
+        await vi.waitFor(() => expect(mounted.commands).toHaveLength(1));
+        expect(mounted.commands[0]).toMatchObject({
+          type: "thread.meta.update",
+          threadId: THREAD_ID,
+          providerHandoff: true,
+          modelSelection: { provider: "claudeAgent" },
+        });
+        // Same thread: no new thread, and the route stays put.
+        expect(mounted.commands.some((command) => command.type === "thread.handoff.create")).toBe(
+          false,
+        );
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("still hands off to a new thread with the imported transcript", async () => {
+      const mounted = await mountWithCapturedCommands();
+      try {
+        await openHandoffMenu();
+        document.querySelector<HTMLElement>('[data-handoff-destination="new-thread"]')!.click();
+        await vi.waitFor(() =>
+          expect(mounted.commands.some((command) => command.type === "thread.handoff.create")).toBe(
+            true,
+          ),
+        );
+        const create = mounted.commands.find((command) => command.type === "thread.handoff.create");
+        expect(create).toMatchObject({
+          sourceThreadId: THREAD_ID,
+          projectId: PROJECT_ID,
+          modelSelection: { provider: "claudeAgent" },
+        });
+        expect(create && "threadId" in create ? create.threadId : null).not.toBe(THREAD_ID);
+        expect(
+          create && "importedMessages" in create
+            ? create.importedMessages.some((message) =>
+                message.text.includes("Fix the flaky reconnect test"),
+              )
+            : false,
+        ).toBe(true);
+        expect(mounted.commands.some((command) => command.type === "thread.meta.update")).toBe(
+          false,
+        );
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("shows the handoff event with its source, target, and transferred context", async () => {
+      const snapshot = createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("msg-handoff-event"),
+        targetText: "Fix the flaky reconnect test",
+      });
+      const thread = snapshot.threads[0]!;
+      const handedOffThread = {
+        ...thread,
+        modelSelection: { provider: "claudeAgent" as const, model: "claude-sonnet-4-6" },
+        activities: [
+          {
+            id: EventId.makeUnsafe("provider-handoff:event"),
+            createdAt: isoAt(200),
+            kind: "provider.handoff",
+            summary: "Handed off from Codex (gpt-5) to Claude (claude-sonnet-4-6)",
+            tone: "info" as const,
+            turnId: null,
+            sequence: 900,
+            payload: {
+              sourceProvider: "codex",
+              sourceModel: "gpt-5",
+              targetProvider: "claudeAgent",
+              targetModel: "claude-sonnet-4-6",
+              contextText: "Most recent imported messages:\nUser:\nFix the flaky reconnect test",
+              contextCharacters: 66,
+            },
+          },
+        ],
+      };
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: { ...snapshot, threads: [handedOffThread] },
+        configureFixture: withClaudeReady,
+      });
+      try {
+        const row = page.getByText("Handed off from Codex (gpt-5) to Claude (claude-sonnet-4-6)");
+        await expect.element(row).toBeVisible();
+        await row.click();
+        await expect.element(page.getByText("Transferred context", { exact: true })).toBeVisible();
+        const context = document.querySelector('[data-provider-handoff-context="true"]');
+        expect(context?.textContent).toContain("Fix the flaky reconnect test");
+        // The transcript before the handoff stays in place.
+        await expect.element(page.getByText("assistant filler 21")).toBeInTheDocument();
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+  });
+
   it("dispatches a rapid access-mode reversal while the server projection is stale", async () => {
     const baseSnapshot = createSnapshotForTargetUser({
       targetMessageId: "msg-user-runtime-reversal" as MessageId,

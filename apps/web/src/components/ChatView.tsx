@@ -179,6 +179,7 @@ import {
 } from "../lib/threadEnvironment";
 import {
   canCreateThreadHandoff,
+  canContinueThreadHandoff,
   resolveAvailableHandoffTargets,
   resolveThreadHandoffAvailability,
   type ThreadHandoffTarget,
@@ -626,7 +627,7 @@ export default function ChatView({
   const navigate = useNavigate();
   const { handleNewThread } = useHandleNewThread();
   const { handleNewChat } = useHandleNewChat();
-  const { createThreadHandoff } = useThreadHandoff();
+  const { continueThreadHandoff, createThreadHandoff } = useThreadHandoff();
   const rawSearch = useDiffRouteSearch();
   const activeSplitView = useSplitViewStore(
     useMemo(() => selectSplitView(rawSearch.splitViewId ?? null), [rawSearch.splitViewId]),
@@ -2403,6 +2404,18 @@ export default function ChatView({
         : [],
     [activeThreadProvider, activeThreadProviderInstanceId, providerInstances, providerStatuses],
   );
+  const continueHandoffTargets = useMemo(
+    () =>
+      handoffTargets.filter(
+        (target) =>
+          activeThreadProvider !== null &&
+          canContinueThreadHandoff({
+            sourceProvider: activeThreadProvider,
+            targetProvider: target.provider,
+          }),
+      ),
+    [activeThreadProvider, handoffTargets],
+  );
   const sidechatTargetProviders = useMemo(
     () => [...new Set(handoffTargets.map((target) => target.provider))],
     [handoffTargets],
@@ -4152,6 +4165,25 @@ export default function ChatView({
           error instanceof Error
             ? error.message
             : "An error occurred while creating the handoff thread.",
+      });
+    }
+  });
+
+  const onContinueHandoffInThread = useStableCallback(async (target: ThreadHandoffTarget) => {
+    if (!activeThread || handoffDisabled) {
+      return;
+    }
+
+    try {
+      await continueThreadHandoff(activeThread, target.provider, target.instanceId);
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Could not hand off this thread",
+        description:
+          error instanceof Error
+            ? error.message
+            : "An error occurred while handing off the thread.",
       });
     }
   });
@@ -6190,6 +6222,7 @@ export default function ChatView({
           handoffActionLabel={handoffActionLabel}
           handoffDisabled={handoffDisabled}
           handoffActionTargets={handoffTargets}
+          continueHandoffActionTargets={continueHandoffTargets}
           showHandoffAction={handoffAvailability.providerHandoff}
           gitCwd={threadWorkspaceCwd}
           diffTotals={repoDiffTotals}
@@ -6250,6 +6283,7 @@ export default function ChatView({
           onToggleDiff={onToggleDiff}
           onRegisterCommitAndPushTrigger={onRegisterCommitAndPushTrigger}
           onCreateHandoff={onCreateHandoffThread}
+          onContinueHandoff={onContinueHandoffInThread}
           onNavigateToThread={onNavigateToThread}
           onRenameThread={() => setRenameDialogOpen(true)}
           {...(onCloseThreadPane ? { onCloseThreadPane } : {})}

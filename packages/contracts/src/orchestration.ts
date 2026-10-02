@@ -1527,6 +1527,9 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   // Marks the active goal accomplished: the decider records a ThreadGoalAchievement
   // (with pause-adjusted elapsed time) and clears the goal in the same event.
   goalAchieved: Schema.optional(Schema.Boolean),
+  // Applies `modelSelection` as a same-thread provider handoff: the server starts
+  // the target session now and records the handoff (or reverts) in the timeline.
+  providerHandoff: Schema.optional(Schema.Boolean),
 });
 
 const ThreadPinnedMessageAddCommand = Schema.Struct({
@@ -2231,6 +2234,11 @@ export const ThreadUnarchivedPayload = Schema.Struct({
   updatedAt: Schema.optional(IsoDateTime),
 });
 
+export const ThreadProviderHandoff = Schema.Struct({
+  sourceModelSelection: ModelSelection,
+});
+export type ThreadProviderHandoff = typeof ThreadProviderHandoff.Type;
+
 export const ThreadMetaUpdatedPayload = Schema.Struct({
   threadId: ThreadId,
   title: Schema.optional(TrimmedNonEmptyString),
@@ -2258,6 +2266,7 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   goalStartedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   goalPausedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
   goalAchievements: Schema.optional(ThreadGoalAchievements),
+  providerHandoff: Schema.optional(ThreadProviderHandoff),
   updatedAt: IsoDateTime,
 });
 

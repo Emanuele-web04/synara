@@ -12,6 +12,7 @@ import { AppSettingsSchema, getProviderInstanceOptions } from "../appSettings";
 import {
   buildThreadHandoffImportedActivities,
   buildThreadHandoffImportedMessages,
+  canContinueThreadHandoff,
   resolveAvailableHandoffTargets,
   resolveThreadHandoffAvailability,
   resolveThreadHandoffModelSelection,
@@ -24,6 +25,16 @@ import {
 } from "./browserAnnotations";
 
 describe("threadHandoff", () => {
+  it("continues in the same thread only when the provider changes", () => {
+    expect(
+      canContinueThreadHandoff({ sourceProvider: "codex", targetProvider: "claudeAgent" }),
+    ).toBe(true);
+    // Another account of the same provider still needs a new thread.
+    expect(canContinueThreadHandoff({ sourceProvider: "codex", targetProvider: "codex" })).toBe(
+      false,
+    );
+  });
+
   const readyStatus = (
     provider: ProviderKind,
     overrides: Partial<ServerProviderStatus> = {},

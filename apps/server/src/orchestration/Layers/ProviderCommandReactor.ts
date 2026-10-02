@@ -22,6 +22,7 @@ import {
   MessageId,
   type OrchestrationEvent,
   type OrchestrationRegenerateThreadTitleResult,
+  PROVIDER_DISPLAY_NAMES,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   type ProviderMentionReference,
   type ProviderInteractionMode,
@@ -386,6 +387,8 @@ const serverCommandId = (tag: string): CommandId =>
   CommandId.makeUnsafe(`server:${tag}:${crypto.randomUUID()}`);
 
 const PROVIDER_CONTEXT_LIFECYCLE_ACTIVITY_KIND = "provider.context.changed";
+const PROVIDER_HANDOFF_ACTIVITY_KIND = "provider.handoff";
+const PROVIDER_HANDOFF_FAILED_ACTIVITY_KIND = "provider.handoff.failed";
 const SESSION_CONTEXT_RECAP_PREVIEW_MAX_CHARS = 600;
 
 type ProviderContextLifecycleReason =
@@ -6367,6 +6370,96 @@ const make = Effect.gen(function* () {
     });
   });
 
+  // Same-thread Hand off: the stored selection already names the target, so
+  // ensuring the session now is the ordinary provider rebind (fresh session plus
+  // prior-transcript bootstrap on the next turn). Starting eagerly lets the
+  // timeline record the handoff only once the target is actually up, and a
+  // failed start restores the source selection so the thread stays usable.
+  const applyProviderHandoff = Effect.fnUntraced(function* (input: {
+    readonly eventId: EventId;
+    readonly threadId: ThreadId;
+    readonly occurredAt: string;
+    readonly sourceModelSelection: ModelSelection;
+    readonly targetModelSelection: ModelSelection;
+  }) {
+    const thread = yield* resolveThread(input.threadId);
+    if (!thread) {
+      return;
+    }
+    const contextText = buildPriorTranscriptBootstrapText(thread, undefined);
+    const describe = (selection: ModelSelection) =>
+      `${PROVIDER_DISPLAY_NAMES[selection.provider] ?? selection.provider} (${selection.model})`;
+    // An explicit stop discards synthetic context, but a handoff has no other
+    // way to carry the conversation to the new provider.
+    suppressContextBootstrapOnNextStartThreadIds.delete(input.threadId);
+    const cachedProviderOptions = threadProviderOptions.get(input.threadId);
+    const startFailure = yield* ensureSessionForThread(input.threadId, input.occurredAt, {
+      modelSelection: input.targetModelSelection,
+      registerPriorTranscriptBootstrapOnFreshStart: true,
+      ...(cachedProviderOptions !== undefined ? { providerOptions: cachedProviderOptions } : {}),
+    }).pipe(
+      Effect.as(null),
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause) ? Effect.failCause(cause) : Effect.succeed(cause),
+      ),
+    );
+    const createdAt = new Date().toISOString();
+    const payload = {
+      sourceProvider: input.sourceModelSelection.provider,
+      sourceModel: input.sourceModelSelection.model,
+      targetProvider: input.targetModelSelection.provider,
+      targetModel: input.targetModelSelection.model,
+    };
+    if (startFailure === null) {
+      threadSessionModelSelections.set(input.threadId, input.targetModelSelection);
+      yield* orchestrationEngine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe(`server:provider-handoff:${input.eventId}`),
+        threadId: input.threadId,
+        activity: {
+          id: EventId.makeUnsafe(`provider-handoff:${input.eventId}`),
+          tone: "info",
+          kind: PROVIDER_HANDOFF_ACTIVITY_KIND,
+          summary: `Handed off from ${describe(input.sourceModelSelection)} to ${describe(input.targetModelSelection)}`,
+          payload: { ...payload, contextText, contextCharacters: contextText?.length ?? 0 },
+          turnId: null,
+          createdAt,
+        },
+        createdAt,
+      });
+      return;
+    }
+    const detail = Cause.squash(startFailure);
+    yield* Effect.logWarning("provider handoff could not start the target session", {
+      threadId: input.threadId,
+      cause: Cause.pretty(startFailure),
+    });
+    yield* orchestrationEngine.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe(`server:provider-handoff-revert:${input.eventId}`),
+      threadId: input.threadId,
+      modelSelection: input.sourceModelSelection,
+    });
+    yield* orchestrationEngine.dispatch({
+      type: "thread.activity.append",
+      commandId: CommandId.makeUnsafe(`server:provider-handoff-failed:${input.eventId}`),
+      threadId: input.threadId,
+      activity: {
+        id: EventId.makeUnsafe(`provider-handoff-failed:${input.eventId}`),
+        tone: "error",
+        kind: PROVIDER_HANDOFF_FAILED_ACTIVITY_KIND,
+        summary: `Handoff to ${describe(input.targetModelSelection)} failed; the thread stays on ${describe(input.sourceModelSelection)}.`,
+        payload: {
+          ...payload,
+          detail: detail instanceof Error ? detail.message : String(detail),
+        },
+        turnId: null,
+        createdAt,
+      },
+      createdAt,
+    });
+  });
+
   const processSessionStopRequested = (
     event: Extract<ProviderIntentEvent, { type: "thread.session-stop-requested" }>,
   ) =>
@@ -6541,6 +6634,17 @@ const make = Effect.gen(function* () {
             });
           }
           if (event.payload.modelSelection === undefined) {
+            return;
+          }
+
+          if (event.payload.providerHandoff !== undefined) {
+            yield* applyProviderHandoff({
+              eventId: event.eventId,
+              threadId: event.payload.threadId,
+              occurredAt: event.occurredAt,
+              sourceModelSelection: event.payload.providerHandoff.sourceModelSelection,
+              targetModelSelection: event.payload.modelSelection,
+            });
             return;
           }
 

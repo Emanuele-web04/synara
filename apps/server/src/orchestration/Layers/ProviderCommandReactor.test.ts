@@ -14253,6 +14253,233 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.providerName).toBe("claudeAgent");
   });
 
+  describe("same-thread provider handoff", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+
+    async function runFirstGrokTurn(harness: Awaited<ReturnType<typeof createHarness>>) {
+      const now = new Date().toISOString();
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe("cmd-handoff-turn-1"),
+          threadId,
+          message: {
+            messageId: asMessageId("user-message-handoff-1"),
+            role: "user",
+            text: "first turn on grok",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        }),
+      );
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe("cmd-handoff-session-ready"),
+          threadId,
+          session: {
+            threadId,
+            status: "ready",
+            providerName: "grok",
+            runtimeMode: "approval-required",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        }),
+      );
+    }
+
+    const dispatchHandoff = (harness: Awaited<ReturnType<typeof createHarness>>) =>
+      Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.makeUnsafe("cmd-handoff-to-claude"),
+          threadId,
+          modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+          providerHandoff: true,
+        }),
+      );
+
+    const sendSecondTurn = (harness: Awaited<ReturnType<typeof createHarness>>) =>
+      Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.makeUnsafe("cmd-handoff-turn-2"),
+          threadId,
+          message: {
+            messageId: asMessageId("user-message-handoff-2"),
+            role: "user",
+            text: "continue after the handoff",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: new Date().toISOString(),
+        }),
+      );
+
+    it("starts the target in the same thread and records the transferred context", async () => {
+      const harness = await createHarness({
+        threadModelSelection: { provider: "grok", model: "grok-code-fast-1" },
+      });
+      await runFirstGrokTurn(harness);
+      const before = await readHarnessThread(harness);
+
+      await dispatchHandoff(harness);
+
+      // The target session starts now, before any new message is sent.
+      await waitFor(() => harness.startSession.mock.calls.length === 2);
+      expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+        provider: "claudeAgent",
+        modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+      });
+      await waitFor(async () =>
+        Boolean(
+          (await readHarnessThread(harness))?.activities.some(
+            (activity) => activity.kind === "provider.handoff",
+          ),
+        ),
+      );
+
+      const after = await readHarnessThread(harness);
+      const handoffActivity = after?.activities.find(
+        (activity) => activity.kind === "provider.handoff",
+      );
+      expect(handoffActivity?.payload).toMatchObject({
+        sourceProvider: "grok",
+        sourceModel: "grok-code-fast-1",
+        targetProvider: "claudeAgent",
+        targetModel: "claude-sonnet-4-6",
+      });
+      expect((handoffActivity?.payload as { contextText: string }).contextText).toContain(
+        "first turn on grok",
+      );
+      // Same Synara thread: id, transcript, project, and workspace survive.
+      expect(after?.id).toBe(threadId);
+      expect(after?.projectId).toBe(before?.projectId);
+      expect(after?.worktreePath).toBe(before?.worktreePath);
+      expect(after?.branch).toBe(before?.branch);
+      expect(after?.messages.map((message) => [message.id, message.text, message.source])).toEqual(
+        before?.messages.map((message) => [message.id, message.text, message.source]),
+      );
+      expect(after?.modelSelection).toMatchObject({ provider: "claudeAgent" });
+      expect(after?.session?.providerName).toBe("claudeAgent");
+
+      // The next turn runs on the target and carries the prior transcript.
+      await sendSecondTurn(harness);
+      await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+      expect(harness.startSession.mock.calls).toHaveLength(2);
+      expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("<thread_context>");
+      expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("first turn on grok");
+    });
+
+    it("starts the target and carries context when the source session was stopped", async () => {
+      const harness = await createHarness({
+        threadModelSelection: { provider: "grok", model: "grok-code-fast-1" },
+      });
+      await runFirstGrokTurn(harness);
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.stop",
+          commandId: CommandId.makeUnsafe("cmd-handoff-stop"),
+          threadId,
+          createdAt: new Date().toISOString(),
+        }),
+      );
+      await waitFor(async () => (await readHarnessThread(harness))?.session?.status === "stopped");
+
+      await dispatchHandoff(harness);
+      await waitFor(() => harness.startSession.mock.calls.length === 2);
+      expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({ provider: "claudeAgent" });
+
+      await sendSecondTurn(harness);
+      await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+      expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("<thread_context>");
+      expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("first turn on grok");
+    });
+
+    it("restores the source selection and records a failure when the target cannot start", async () => {
+      const harness = await createHarness({
+        threadModelSelection: { provider: "grok", model: "grok-code-fast-1" },
+      });
+      await runFirstGrokTurn(harness);
+      harness.startSession.mockImplementationOnce(() =>
+        Effect.fail(
+          new ProviderAdapterProcessError({
+            provider: "claudeAgent",
+            threadId,
+            reason: "startup-failed",
+            detail: "Claude could not start.",
+          }),
+        ),
+      );
+
+      await dispatchHandoff(harness);
+
+      await waitFor(async () =>
+        Boolean(
+          (await readHarnessThread(harness))?.activities.some(
+            (activity) => activity.kind === "provider.handoff.failed",
+          ),
+        ),
+      );
+      const thread = await readHarnessThread(harness);
+      expect(thread?.modelSelection).toMatchObject({
+        provider: "grok",
+        model: "grok-code-fast-1",
+      });
+      expect(thread?.activities.some((activity) => activity.kind === "provider.handoff")).toBe(
+        false,
+      );
+      expect(
+        thread?.activities.find((activity) => activity.kind === "provider.handoff.failed")?.tone,
+      ).toBe("error");
+
+      // The thread stays usable on the source provider.
+      await sendSecondTurn(harness);
+      await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+      expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("continue after the handoff");
+      expect(harness.sendTurn.mock.calls[1]?.[0].modelSelection).toMatchObject({
+        provider: "grok",
+      });
+    });
+
+    it("refuses a handoff while a turn is running", async () => {
+      const harness = await createHarness({
+        threadModelSelection: { provider: "grok", model: "grok-code-fast-1" },
+      });
+      await runFirstGrokTurn(harness);
+      const now = new Date().toISOString();
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe("cmd-handoff-session-running"),
+          threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "grok",
+            runtimeMode: "approval-required",
+            activeTurnId: asTurnId("turn-handoff-live"),
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        }),
+      );
+
+      await expect(dispatchHandoff(harness)).rejects.toThrow(/still has a running turn/);
+      const thread = await readHarnessThread(harness);
+      expect(thread?.modelSelection).toMatchObject({ provider: "grok" });
+      expect(harness.startSession.mock.calls).toHaveLength(1);
+    });
+  });
+
   it("rejects an explicit turn for a provider that is neither bound nor stored", async () => {
     const harness = await createHarness({
       threadModelSelection: { provider: "grok", model: "grok-code-fast-1" },

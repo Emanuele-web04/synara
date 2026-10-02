@@ -1,5 +1,5 @@
 // FILE: useThreadHandoff.ts
-// Purpose: Creates provider-to-provider handoff threads from the active web state.
+// Purpose: Hands a thread to another provider, in place or in a new thread.
 // Layer: Web hook
 // Exports: useThreadHandoff
 
@@ -11,6 +11,7 @@ import { useRefreshProviderStatusesNow } from "./useProviderStatusRefresh";
 import {
   buildThreadHandoffImportedActivities,
   buildThreadHandoffImportedMessages,
+  canContinueThreadHandoff,
   canCreateThreadHandoff,
   resolveThreadHandoffModelSelection,
   resolveThreadHandoffTitle,
@@ -28,11 +29,13 @@ export function useThreadHandoff() {
   const providerStatuses = useProviderStatusesForLocalConfig();
   const refreshProviderStatuses = useRefreshProviderStatusesNow();
 
-  const createThreadHandoff = async (
+  // Shared by both Hand off destinations: the same preconditions, target
+  // availability check, and target model selection.
+  const prepareThreadHandoff = async (
     thread: Thread,
     targetProvider: ProviderKind,
     targetProviderInstanceId?: ProviderInstanceId,
-  ): Promise<Thread["id"]> => {
+  ) => {
     const api = readNativeApi();
     if (!api) {
       throw new Error("Native API not found");
@@ -71,12 +74,60 @@ export function useThreadHandoff() {
       );
     }
 
+    const modelSelection = resolveThreadHandoffModelSelection({
+      sourceThread: thread,
+      targetProvider,
+      targetProviderInstanceId,
+      projectDefaultModelSelection: project.defaultModelSelection,
+      stickyModelSelectionByProvider:
+        useComposerDraftStore.getState().stickyModelSelectionByProvider,
+    });
+    return { api, modelSelection };
+  };
+
+  // Keeps the thread (id, transcript, project, worktree) and switches who runs
+  // its next turn. The server starts the target session, records the handoff in
+  // the timeline, and restores the source selection if the target cannot start.
+  const continueThreadHandoff = async (
+    thread: Thread,
+    targetProvider: ProviderKind,
+    targetProviderInstanceId?: ProviderInstanceId,
+  ): Promise<void> => {
+    if (
+      !canContinueThreadHandoff({ sourceProvider: thread.modelSelection.provider, targetProvider })
+    ) {
+      throw new Error("Hand off to a new thread to switch between accounts of the same provider.");
+    }
+    const { api, modelSelection } = await prepareThreadHandoff(
+      thread,
+      targetProvider,
+      targetProviderInstanceId,
+    );
+    await api.orchestration.dispatchCommand({
+      type: "thread.meta.update",
+      commandId: newCommandId(),
+      threadId: thread.id,
+      modelSelection,
+      providerHandoff: true,
+    });
+  };
+
+  const createThreadHandoff = async (
+    thread: Thread,
+    targetProvider: ProviderKind,
+    targetProviderInstanceId?: ProviderInstanceId,
+  ): Promise<Thread["id"]> => {
+    const { api, modelSelection } = await prepareThreadHandoff(
+      thread,
+      targetProvider,
+      targetProviderInstanceId,
+    );
+
     const nextThreadId = newThreadId();
     const createdAt = new Date().toISOString();
     const importedMessages = buildThreadHandoffImportedMessages(thread);
     const importedActivities = buildThreadHandoffImportedActivities(thread);
-    const { copyTransferableComposerState, stickyModelSelectionByProvider } =
-      useComposerDraftStore.getState();
+    const { copyTransferableComposerState } = useComposerDraftStore.getState();
 
     await api.orchestration.dispatchCommand({
       type: "thread.handoff.create",
@@ -85,13 +136,7 @@ export function useThreadHandoff() {
       sourceThreadId: thread.id,
       projectId: thread.projectId,
       title: resolveThreadHandoffTitle(thread),
-      modelSelection: resolveThreadHandoffModelSelection({
-        sourceThread: thread,
-        targetProvider,
-        targetProviderInstanceId,
-        projectDefaultModelSelection: project.defaultModelSelection,
-        stickyModelSelectionByProvider,
-      }),
+      modelSelection,
       runtimeMode: thread.runtimeMode,
       interactionMode: thread.interactionMode,
       envMode: thread.envMode ?? (thread.worktreePath ? "worktree" : "local"),
@@ -130,6 +175,7 @@ export function useThreadHandoff() {
   };
 
   return {
+    continueThreadHandoff,
     createThreadHandoff,
   };
 }

@@ -429,6 +429,7 @@ import { createClientPointMenuAnchor } from "~/lib/clientPointMenuAnchor";
 import { resolveThreadModelSummary } from "~/lib/threadModelSummary";
 import {
   canCreateThreadHandoff,
+  canContinueThreadHandoff,
   resolveAvailableHandoffTargets,
   resolveThreadHandoffAvailability,
   resolveThreadHandoffBadgeLabel,
@@ -1461,7 +1462,7 @@ export default function Sidebar() {
   const { handleNewThread } = useHandleNewThread();
   const { handleNewChat } = useHandleNewChat();
   const { handleNewGroupChat } = useHandleNewGroupChat();
-  const { createThreadHandoff } = useThreadHandoff();
+  const { continueThreadHandoff, createThreadHandoff } = useThreadHandoff();
   const routeThreadId = useParams({
     strict: false,
     select: (params) => (params.threadId ? ThreadId.makeUnsafe(params.threadId) : null),
@@ -2992,6 +2993,24 @@ export default function Sidebar() {
     [createThreadHandoff],
   );
 
+  const continueHandoffInThread = useCallback(
+    async (thread: Thread, target: ThreadHandoffTarget) => {
+      try {
+        await continueThreadHandoff(thread, target.provider, target.instanceId);
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not hand off this thread",
+          description:
+            error instanceof Error
+              ? error.message
+              : "An error occurred while handing off the thread.",
+        });
+      }
+    },
+    [continueThreadHandoff],
+  );
+
   const forkThread = useCallback(
     async (thread: Thread, target: ForkThreadTarget) => {
       const api = readNativeApi();
@@ -3200,17 +3219,36 @@ export default function Sidebar() {
             providerStatuses,
           })
         : [];
+      const continueHandoffTargets = handoffTargets.filter((target) =>
+        canContinueThreadHandoff({
+          sourceProvider: thread.modelSelection.provider,
+          targetProvider: target.provider,
+        }),
+      );
       const handoffTargetById = new Map(
         handoffTargets.map((target) => [`handoff:${target.instanceId}`, target]),
       );
+      const continueHandoffTargetById = new Map(
+        continueHandoffTargets.map((target) => [`handoff-here:${target.instanceId}`, target]),
+      );
       const handoffItems = contextMenuGroup(
         { id: "handoff", label: "Handoff", icon: THREAD_CONTEXT_MENU_ICONS.handoff },
-        handoffTargets.map((target) => ({
-          id: `handoff:${target.instanceId}`,
-          label: target.label,
-          standaloneLabel: `Handoff to ${target.label}`,
-          icon: THREAD_CONTEXT_MENU_ICONS.handoff,
-        })),
+        [
+          ...continueHandoffTargets.map((target) => ({
+            id: `handoff-here:${target.instanceId}`,
+            label: `${target.label} in this thread`,
+            standaloneLabel: `Handoff to ${target.label} in this thread`,
+            icon: THREAD_CONTEXT_MENU_ICONS.handoff,
+          })),
+          ...handoffTargets.map((target, index) => ({
+            id: `handoff:${target.instanceId}`,
+            label:
+              continueHandoffTargets.length > 0 ? `${target.label} in a new thread` : target.label,
+            standaloneLabel: `Handoff to ${target.label}`,
+            icon: THREAD_CONTEXT_MENU_ICONS.handoff,
+            ...(index === 0 && continueHandoffTargets.length > 0 ? { separatorBefore: true } : {}),
+          })),
+        ],
       );
       // Same action as `/fork`.
       const canFork = canForkThread({ thread, handoffAvailability });
@@ -3378,6 +3416,13 @@ export default function Sidebar() {
         clearThreadNotification(threadId);
         return;
       }
+      if (typeof clicked === "string" && clicked.startsWith("handoff-here:")) {
+        const target = continueHandoffTargetById.get(clicked);
+        if (target) {
+          await continueHandoffInThread(thread, target);
+        }
+        return;
+      }
       if (typeof clicked === "string" && clicked.startsWith("handoff:")) {
         const target = handoffTargetById.get(clicked);
         if (target) {
@@ -3518,6 +3563,7 @@ export default function Sidebar() {
       copyThreadIdToClipboard,
       clearDismissedThreadStatus,
       clearThreadNotification,
+      continueHandoffInThread,
       continueThreadAsGroup,
       forkThread,
       groupProjectIdSet,
