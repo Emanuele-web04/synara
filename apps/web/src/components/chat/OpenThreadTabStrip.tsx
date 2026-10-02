@@ -226,7 +226,7 @@ export function OpenThreadTabStrip(props: {
                     tab.isTerminal ? (
                       <TerminalIcon className="size-3.5 text-[var(--color-text-accent)]" />
                     ) : (
-                      <ProviderIcon provider={tab.provider} tone="header" className="size-3.5" />
+                      <ProviderIcon provider={tab.provider} className="size-3.5" />
                     )
                   }
                   closeLabel={`Close ${tab.title}`}
