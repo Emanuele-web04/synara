@@ -16,6 +16,11 @@ const MENU_CLASS_NAME = `${FLOATING_OVERLAY_SURFACE_CLASS_NAME} fixed z-[10000] 
 const VIEWPORT_MARGIN = 4;
 /** Small overlap so the pointer never crosses a gap between a row and its submenu. */
 const SUBMENU_OVERLAP = 4;
+/**
+ * Grace period before hovering a sibling row replaces an open submenu, so a diagonal
+ * move from the parent row into its submenu can cross other rows without closing it.
+ */
+const SUBMENU_SWITCH_DELAY_MS = 150;
 
 interface MenuLevel<T extends string> {
   readonly element: HTMLDivElement;
@@ -43,7 +48,15 @@ export function showContextMenuFallback<T extends string>(
     // Stack of open menus: the root first, then each open submenu.
     const levels: MenuLevel<T>[] = [];
 
+    let pendingSwitch: number | undefined;
+
+    function cancelPendingSwitch() {
+      window.clearTimeout(pendingSwitch);
+      pendingSwitch = undefined;
+    }
+
     function cleanup(result: T | null) {
+      cancelPendingSwitch();
       document.removeEventListener("keydown", onKeyDown);
       overlay.remove();
       for (const level of levels) level.element.remove();
@@ -99,6 +112,7 @@ export function showContextMenuFallback<T extends string>(
     }
 
     function onKeyDown(e: KeyboardEvent) {
+      cancelPendingSwitch();
       const depth = levels.length - 1;
       const level = levels[depth];
       if (!level) return;
@@ -143,7 +157,8 @@ export function showContextMenuFallback<T extends string>(
       (menu.style as any).webkitBackdropFilter = "blur(24px)";
 
       const inner = document.createElement("div");
-      inner.className = "p-1";
+      // A submenu taller than the window (many providers or hubs) scrolls in place.
+      inner.className = "max-h-[calc(100vh-8px)] overflow-y-auto p-1";
       menu.appendChild(inner);
 
       const level: MenuLevel<T> = {
@@ -154,6 +169,8 @@ export function showContextMenuFallback<T extends string>(
         openChildIndex: -1,
       };
       levels.push(level);
+      // Reaching a submenu confirms the diagonal move toward it.
+      menu.addEventListener("mouseenter", cancelPendingSwitch);
 
       for (let i = 0; i < levelItems.length; i++) {
         const item = levelItems[i]!;
@@ -189,11 +206,20 @@ export function showContextMenuFallback<T extends string>(
 
         btn.addEventListener("click", () => activate(depth, i));
         btn.addEventListener("mouseenter", () => {
+          cancelPendingSwitch();
           focusItem(depth, i);
-          if (item.children) {
-            openSubmenu(depth, i, false);
+          const applyHover = () => {
+            if (item.children) {
+              openSubmenu(depth, i, false);
+            } else {
+              closeLevelsAfter(depth);
+            }
+          };
+          const replacesOpenSubmenu = level.openChildIndex !== -1 && level.openChildIndex !== i;
+          if (replacesOpenSubmenu) {
+            pendingSwitch = window.setTimeout(applyHover, SUBMENU_SWITCH_DELAY_MS);
           } else {
-            closeLevelsAfter(depth);
+            applyHover();
           }
         });
         btn.addEventListener("mouseleave", () => {

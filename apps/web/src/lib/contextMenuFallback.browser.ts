@@ -50,9 +50,22 @@ describe("showContextMenuFallback submenus", () => {
     await expect.element(page.getByText("Path", { exact: true })).toBeVisible();
     await page.getByText("Archive", { exact: true }).hover();
 
-    expect(page.getByText("Path", { exact: true }).query()).toBeNull();
+    await expect.poll(() => page.getByText("Path", { exact: true }).query()).toBeNull();
     await userEvent.keyboard("{Escape}");
     await expect(result).resolves.toBeNull();
+  });
+
+  it("keeps the submenu open when the pointer crosses a sibling row on its way in", async () => {
+    const result = showContextMenuFallback(ITEMS, { x: 24, y: 24 });
+
+    await page.getByText("Copy", { exact: true }).hover();
+    await page.getByText("Archive", { exact: true }).hover();
+    await page.getByText("Thread ID", { exact: true }).hover();
+    // Longer than the switch delay: the brush over "Archive" must not close it late.
+    await new Promise((resolve) => window.setTimeout(resolve, 250));
+    await page.getByText("Thread ID", { exact: true }).click();
+
+    await expect(result).resolves.toBe("copy-thread-id");
   });
 
   it("drives a submenu from the keyboard", async () => {

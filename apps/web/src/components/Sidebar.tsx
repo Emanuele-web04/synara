@@ -209,7 +209,7 @@ import {
   resolveThreadEnvironmentPresentation,
   type ForkThreadTarget,
 } from "../lib/threadEnvironment";
-import { dispatchThreadFork, FORK_THREAD_TARGET_LABELS } from "../lib/threadFork";
+import { canForkThread, dispatchThreadFork, FORK_THREAD_TARGET_LABELS } from "../lib/threadFork";
 import { contextMenuGroup } from "../lib/contextMenuGroup";
 import { gitBranchesQueryOptions } from "../lib/gitReactQuery";
 import { resolveComposerSlashRootBranch } from "../composerSlashCommands";
@@ -3210,13 +3210,8 @@ export default function Sidebar() {
           icon: THREAD_CONTEXT_MENU_ICONS.handoff,
         })),
       );
-      // Same action as `/fork`. Forking copies the loaded transcript, and a hub or
-      // coordinator thread has no checkout to fork into.
-      const canFork =
-        handoffAvailability.workspaceHandoff &&
-        !thread.parentThreadId &&
-        !isSidechatThread(thread) &&
-        thread.messages.length > 0;
+      // Same action as `/fork`.
+      const canFork = canForkThread({ thread, handoffAvailability });
       const forkItems = canFork
         ? contextMenuGroup({ id: "fork", label: "Fork", icon: THREAD_CONTEXT_MENU_ICONS.fork }, [
             {

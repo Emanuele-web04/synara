@@ -1,7 +1,7 @@
 // FILE: threadFork.ts
 // Purpose: Dispatches the fork command shared by `/fork`, message-footer forks, and thread menus.
 // Layer: Web domain helper
-// Exports: dispatchThreadFork, FORK_THREAD_TARGET_LABELS
+// Exports: canForkThread, dispatchThreadFork, FORK_THREAD_TARGET_LABELS
 
 import type {
   MessageId,
@@ -13,7 +13,12 @@ import type {
 } from "@synara/contracts";
 import type { Thread } from "../types";
 import { resolveForkThreadEnvironment, type ForkThreadTarget } from "./threadEnvironment";
-import { buildThreadHandoffImportedMessages } from "./threadHandoff";
+import { isSidechatThread } from "@synara/shared/sidechatThread";
+import {
+  buildThreadHandoffImportedMessages,
+  hasImportableThreadMessages,
+  type ThreadHandoffAvailability,
+} from "./threadHandoff";
 import { newCommandId, newThreadId } from "./utils";
 
 /** Menu wording for the two fork targets, shared by every fork menu. */
@@ -21,6 +26,24 @@ export const FORK_THREAD_TARGET_LABELS: Record<ForkThreadTarget, string> = {
   local: "Fork Into Local",
   worktree: "Fork Into New Worktree",
 };
+
+/**
+ * Whether a thread menu may offer Fork. A fork copies the settled transcript into a new
+ * checkout-backed thread, so it needs at least one finished message (a first turn still
+ * streaming would fork empty) and a thread that owns a workspace: hub and coordinator
+ * threads have no checkout, and subagents and sidechats live under a parent thread.
+ */
+export function canForkThread(input: {
+  thread: Parameters<typeof isSidechatThread>[0] & Pick<Thread, "messages" | "parentThreadId">;
+  handoffAvailability: ThreadHandoffAvailability;
+}): boolean {
+  return (
+    input.handoffAvailability.workspaceHandoff &&
+    !input.thread.parentThreadId &&
+    !isSidechatThread(input.thread) &&
+    hasImportableThreadMessages(input.thread)
+  );
+}
 
 /**
  * Creates the forked thread on the server and returns its id. Callers own the
