@@ -357,6 +357,8 @@ import {
 } from "./chat/project/coordinatorSuggestions.logic";
 import { ProjectPanel } from "./chat/project/ProjectPanel";
 import { LibraryPanel } from "./chat/group/LibraryPanel";
+import { useHubWorkItems } from "./chat/project/useHubWorkItems";
+import { hubWorkItemsBySourceMessage } from "./chat/project/hubWorkItems";
 import { useProjectAgentSummaries } from "./chat/project/useProjectAgentSummaries";
 import { useProjectAgentSummariesStore } from "./chat/project/useProjectAgentSummaries";
 import { GroupPausedBanner } from "./chat/group/GroupPausedBanner";
@@ -1785,6 +1787,13 @@ export default function ChatView({
     activeThread && coordinatorThreadIds.has(activeThread.id),
   );
   const activeGroupSummary = isCoordinatorConversation ? summaryFor(activeThread?.projectId) : null;
+  const hubWorkItems = useHubWorkItems(
+    isCoordinatorConversation ? (activeThread?.projectId ?? null) : null,
+  );
+  const hubWorkItemsByMessageId = useMemo(
+    () => hubWorkItemsBySourceMessage(hubWorkItems, activeThread?.id),
+    [hubWorkItems, activeThread?.id],
+  );
   // A thread the group coordinator started names the group in its origin label,
   // so the worker reads as part of that group rather than "another thread".
   const crossTaskOriginGroupName =
@@ -5106,9 +5115,12 @@ export default function ChatView({
   // useMemo: the compiler owns this scope (see chatHotPath.compiler.test.ts).
   const projectPanelAttentionGroups = new Map<ProjectId, GroupNeedsAttentionGroup>();
   if (projectPanelEnabled && activeProject) {
+    const summary = summariesByProjectId.get(activeProject.id);
     projectPanelAttentionGroups.set(activeProject.id, {
       projectId: activeProject.id,
-      coordinatorThreadId: summariesByProjectId.get(activeProject.id)?.coordinatorThreadId ?? null,
+      coordinatorThreadId: summary?.coordinatorThreadId ?? null,
+      memberThreadIds: new Set(summary?.memberThreadIds ?? []),
+      needsYouThreadIds: new Set(summary?.needsYouThreadIds ?? []),
     });
   }
   const projectPanelNeedsAttention = useStore(
@@ -6442,6 +6454,7 @@ export default function ChatView({
                     messageChangeSignal={timelineMessages}
                     turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
                     conversationOnly={isCoordinatorConversation}
+                    hubWorkItemsByMessageId={hubWorkItemsByMessageId}
                     threadError={activeThread?.error ?? null}
                     unblockingThread={unblockingActiveThread}
                     onDismissThreadError={dismissActiveThreadError}

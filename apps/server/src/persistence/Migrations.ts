@@ -143,6 +143,7 @@ import Migration0124 from "./Migrations/124_ProjectionTurnsPendingMessageIndex.t
 import Migration0125 from "./Migrations/125_Todos.ts";
 import Migration0126 from "./Migrations/126_ProjectionThreadsSidechatContext.ts";
 import Migration0127 from "./Migrations/127_ProjectImportHistory.ts";
+import Migration0128 from "./Migrations/128_HubWork.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -286,6 +287,7 @@ export const migrationEntries = [
   [125, "Todos", Migration0125],
   [126, "ProjectionThreadsSidechatContext", Migration0126],
   [127, "ProjectImportHistory", Migration0127],
+  [128, "HubWork", Migration0128],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

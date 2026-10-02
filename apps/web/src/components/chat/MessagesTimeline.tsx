@@ -5,6 +5,7 @@
 
 import {
   type EditorId,
+  type HubWorkItem,
   type MessageId,
   type ProviderMentionReference,
   type ResolvedKeybindingsConfig,
@@ -46,6 +47,7 @@ import {
   type WorktreeSetupSnapshot,
   type WorktreeSetupStep,
 } from "../../types";
+import { HubWorkItemCards } from "./group/HubWorkItemCard";
 import { AsyncUserInputCard } from "./AsyncUserInputCard";
 import ChatMarkdown from "../ChatMarkdown";
 import type { WorkingLabel } from "../ChatView.logic";
@@ -451,6 +453,7 @@ interface MessagesTimelineProps {
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
   /** Stable source messages, before plans/tools reshape the presentation rows. */
   messageChangeSignal?: unknown;
+  hubWorkItemsByMessageId?: ReadonlyMap<MessageId, readonly HubWorkItem[]> | undefined;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   /** Coordinator/bot chats hide tool rows and keep a text conversation. */
   conversationOnly?: boolean;
@@ -548,6 +551,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   isTemporaryThread: isTemporaryThreadProp,
   timelineEntries,
   messageChangeSignal: messageChangeSignalProp,
+  hubWorkItemsByMessageId,
   turnDiffSummaryByAssistantMessageId,
   conversationOnly: conversationOnlyProp,
   nowIso,
@@ -905,6 +909,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const enteringMessageRowIds = useMessageSendEnterAnimations(rows, enteringUserMessageIds);
   const timelineExtraData = useMemo(
     () => ({
+      hubWorkItemsByMessageId,
       crossTaskOrigin,
       editingUserMessageId,
       enteringMessageRowIds,
@@ -923,6 +928,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       toolGroupSummaryOverrides,
     }),
     [
+      hubWorkItemsByMessageId,
       crossTaskOrigin,
       editingUserMessageId,
       enteringMessageRowIds,
@@ -1598,6 +1604,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const renderedPullRequestContexts = displayedUserMessage.pullRequestContexts;
           const renderedBrowserAnnotations = displayedUserMessage.browserAnnotations;
           const userMessageText = displayedUserMessage.visibleText;
+          const messageWorkItems = hubWorkItemsByMessageId?.get(row.message.id);
           const userMessageExpanded = expandedUserMessagesById[row.message.id] ?? false;
           const showUserText = userMessageText.trim().length > 0 || terminalContexts.length > 0;
           const canRevertAgentWork = typeof row.revertTurnCount === "number";
@@ -1814,6 +1821,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   )}
                 </div>
               </div>
+              {messageWorkItems?.length ? (
+                <HubWorkItemCards items={messageWorkItems} onOpenThread={onOpenThread} />
+              ) : null}
             </div>
           );
         })()}

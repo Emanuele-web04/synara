@@ -127,9 +127,12 @@ export function SidebarGroupsSurface({
   const attentionGroups = useMemo(() => {
     const groups = new Map<ProjectId, GroupNeedsAttentionGroup>();
     for (const project of groupProjects) {
+      const summary = summariesByProjectId.get(project.id);
       groups.set(project.id, {
         projectId: project.id,
-        coordinatorThreadId: summariesByProjectId.get(project.id)?.coordinatorThreadId ?? null,
+        coordinatorThreadId: summary?.coordinatorThreadId ?? null,
+        memberThreadIds: new Set(summary?.memberThreadIds ?? []),
+        needsYouThreadIds: new Set(summary?.needsYouThreadIds ?? []),
       });
     }
     return groups;

@@ -33,6 +33,7 @@ import {
   EnvironmentPanelTitle,
   EnvironmentRow,
 } from "../environment/EnvironmentRow";
+import { HubWorkItemCards } from "../group/HubWorkItemCard";
 import { GroupSettingsDialog } from "../group/GroupSettingsDialog";
 import type { GroupSettingsSection } from "../group/groupSettingsDialog.logic";
 import {
@@ -134,6 +135,10 @@ export function ProjectPanel({
     [allProjects],
   );
   const coordinatorThreadId = agent.overview?.config?.coordinatorThreadId ?? null;
+  const queuedWorkItems = (agent.overview?.hubWorkItems ?? []).filter(
+    (item) =>
+      item.state === "queued" || (item.state === "starting" && item.workerThreadId === null),
+  );
   const digestFocus = useMemo(
     () => projectDigestFocusRows(agent.overview?.digest?.focusItems ?? []),
     [agent.overview?.digest?.focusItems],
@@ -237,14 +242,18 @@ export function ProjectPanel({
     () => new Set(agent.threads.filter((entry) => entry.archived).map((entry) => entry.threadId)),
     [agent.threads],
   );
+  const summaryNeedsYouThreadIds = projectId
+    ? summariesByProjectId.get(projectId)?.needsYouThreadIds
+    : undefined;
   const needsYouThreadIds = useMemo(
     () =>
       new Set(
-        (agent.overview?.workers ?? [])
-          .filter((worker) => worker.needsYou)
-          .map((worker) => worker.threadId),
+        summaryNeedsYouThreadIds ??
+          (agent.overview?.workers ?? [])
+            .filter((worker) => worker.needsYou)
+            .map((worker) => worker.threadId),
       ),
-    [agent.overview?.workers],
+    [agent.overview?.workers, summaryNeedsYouThreadIds],
   );
 
   const threadRows = useMemo(
@@ -443,6 +452,15 @@ export function ProjectPanel({
                 Blocked: {blocker.title} — {blocker.reason}
               </p>
             ))}
+
+            {queuedWorkItems.length > 0 ? (
+              <section aria-label="Queued work" className="space-y-2 px-2">
+                <p className="text-ui-sm font-medium text-muted-foreground">
+                  Queued work ({queuedWorkItems.length})
+                </p>
+                <HubWorkItemCards items={queuedWorkItems} onOpenThread={onOpenThread} />
+              </section>
+            ) : null}
 
             <GroupThreadsSection
               sections={threadSections}

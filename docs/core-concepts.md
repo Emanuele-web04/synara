@@ -253,7 +253,10 @@ A hub is a coordinated home for related work. You talk to one coordinator conver
 answers directly or starts threads (tasks) that run in parallel — in the hub's own folder or in
 linked repositories. Every thread in the hub receives the hub's instructions and memory, and
 files the threads deliver collect in a Git-versioned Library. A hub needs no repository, so it
-also suits non-code work. Read the [Hubs guide](./hubs.md) to set one up.
+also suits non-code work. Delegations preserve the original request and attachments, and durable
+task cards show their queue state and progress under the request. New Hubs run up to three workers
+at once by default; the General settings allow one to eight. Read the [Hubs guide](./hubs.md) to set
+one up.
 
 ## Parallel work
 

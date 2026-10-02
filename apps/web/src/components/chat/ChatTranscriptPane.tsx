@@ -107,6 +107,7 @@ interface ChatTranscriptPaneProps {
   terminalWorkspaceTerminalTabActive: boolean;
   timelineEntries: ComponentProps<typeof MessagesTimeline>["timelineEntries"];
   messageChangeSignal?: ComponentProps<typeof MessagesTimeline>["messageChangeSignal"];
+  hubWorkItemsByMessageId?: ComponentProps<typeof MessagesTimeline>["hubWorkItemsByMessageId"];
   timestampFormat: TimestampFormat;
   /** Sound the message trail moves with (macOS desktop setting). */
   messageTrailAudioSource?: MessageTrailAudioSource;
@@ -193,6 +194,7 @@ export function ChatTranscriptPane({
   terminalWorkspaceTerminalTabActive,
   timelineEntries,
   messageChangeSignal,
+  hubWorkItemsByMessageId,
   timestampFormat,
   messageTrailAudioSource,
   turnDiffSummaryByAssistantMessageId,
@@ -339,6 +341,7 @@ export function ChatTranscriptPane({
             {...(forkSource ? { forkSource } : {})}
             isTemporaryThread={isTemporaryThread ?? false}
             timelineEntries={visibleTimelineEntries}
+            hubWorkItemsByMessageId={hubWorkItemsByMessageId}
             messageChangeSignal={messageChangeSignal ?? timelineEntries}
             turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
             conversationOnly={conversationOnly === true}
