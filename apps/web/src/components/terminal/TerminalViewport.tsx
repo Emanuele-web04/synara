@@ -238,7 +238,7 @@ export default function TerminalViewport({
     setTerminalInstance(attachedRuntime.terminal);
     setSearchAddonInstance(attachedRuntime.searchAddon);
     runtimeConfigRef.current.callbacks.onTerminalRuntimeStatusChange?.(
-      terminalId,
+      runtimeConfigRef.current.terminalId,
       attachedRuntime.runtimeStatus,
     );
 
