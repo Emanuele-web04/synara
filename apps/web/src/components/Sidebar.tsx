@@ -3197,6 +3197,7 @@ export default function Sidebar() {
             sourceProviderInstanceId:
               thread.session?.providerInstanceId ?? thread.modelSelection.instanceId,
             providerInstances: getProviderInstanceOptions(appSettings),
+            providerStatuses,
           })
         : [];
       const handoffTargetById = new Map(

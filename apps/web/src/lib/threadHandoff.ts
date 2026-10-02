@@ -12,7 +12,6 @@ import {
   type ProviderInstanceId,
   type ProviderKind,
   type ServerProviderStatus,
-  type ServerSettingsView,
   type ThreadHandoffImportedMessage,
 } from "@synara/contracts";
 import { getDefaultModel } from "@synara/shared/model";
@@ -57,44 +56,21 @@ function isImportableThreadActivity(
   return IMPORTABLE_THREAD_ACTIVITY_KINDS.has(activity.kind);
 }
 
-export function isEligibleHandoffTargetProvider(input: {
-  readonly sourceProvider: ProviderKind;
-  readonly targetProvider: ProviderKind;
-  readonly targetProviderEnabled: boolean | null | undefined;
-  readonly targetProviderStatus: ServerProviderStatus | null | undefined;
-}): boolean {
-  return (
-    input.targetProvider !== input.sourceProvider &&
-    input.targetProviderEnabled === true &&
-    input.targetProviderStatus?.provider === input.targetProvider &&
-    isProviderUsable(input.targetProviderStatus)
-  );
-}
-
-export function resolveAvailableHandoffTargetProviders(input: {
-  readonly sourceProvider: ProviderKind;
-  readonly providerSettings: ServerSettingsView["providers"] | null | undefined;
-  readonly providerStatuses: readonly ServerProviderStatus[];
-}): ReadonlyArray<ProviderKind> {
-  return DEFAULT_PROVIDER_ORDER.filter((targetProvider) =>
-    isEligibleHandoffTargetProvider({
-      sourceProvider: input.sourceProvider,
-      targetProvider,
-      targetProviderEnabled: input.providerSettings?.[targetProvider].enabled,
-      targetProviderStatus: findProviderStatus(input.providerStatuses, targetProvider),
-    }),
-  );
-}
-
 export function resolveAvailableHandoffTargets(input: {
   readonly sourceProvider: ProviderKind;
   readonly sourceProviderInstanceId?: ProviderInstanceId | null | undefined;
   readonly providerInstances: ReadonlyArray<ProviderInstanceOption>;
+  readonly providerStatuses: readonly ServerProviderStatus[];
 }): ReadonlyArray<ThreadHandoffTarget> {
   const sourceInstanceId = input.sourceProviderInstanceId ?? input.sourceProvider;
   const providerRank = new Map(DEFAULT_PROVIDER_ORDER.map((provider, index) => [provider, index]));
   return input.providerInstances
     .filter((instance) => instance.enabled)
+    .filter((instance) =>
+      isProviderUsable(
+        findProviderStatus(input.providerStatuses, instance.provider, instance.instanceId),
+      ),
+    )
     .filter(
       (instance) =>
         instance.provider !== input.sourceProvider || instance.instanceId !== sourceInstanceId,
