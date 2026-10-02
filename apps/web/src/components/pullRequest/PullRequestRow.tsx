@@ -13,6 +13,7 @@ import type { ReactNode } from "react";
 import { PinStatusIcon, pinActionLabel } from "~/lib/pin";
 import { formatRelativeTime } from "~/lib/relativeTime";
 import { cn } from "~/lib/utils";
+import { SIDEBAR_ROW_HOVER_CLASS_NAME } from "~/sidebarRowStyles";
 import {
   PR_BODY_TEXT_CLASS_NAME,
   PR_FINE_TEXT_CLASS_NAME,
@@ -63,7 +64,7 @@ export const PullRequestRow = function PullRequestRow({
         "group flex w-full items-stretch rounded-lg text-left transition-colors",
         selected
           ? "bg-[color-mix(in_srgb,var(--color-text-foreground)_7%,transparent)]"
-          : "hover:bg-[color-mix(in_srgb,var(--color-text-foreground)_4%,transparent)] focus-within:bg-[color-mix(in_srgb,var(--color-text-foreground)_4%,transparent)]",
+          : cn(SIDEBAR_ROW_HOVER_CLASS_NAME, "focus-within:bg-[var(--sidebar-accent)]"),
       )}
     >
       <button
@@ -120,7 +121,7 @@ export const PullRequestRow = function PullRequestRow({
               aria-pressed={entry.isPinned}
               onClick={() => onTogglePinned(entry)}
               className={cn(
-                "my-auto mr-1 inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-[color,opacity] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                "mt-1 mr-1 inline-flex size-7 shrink-0 self-start items-center justify-center rounded-md text-muted-foreground transition-[color,opacity] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
                 isPinned
                   ? "text-foreground opacity-100"
                   : "opacity-70 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100",
