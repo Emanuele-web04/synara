@@ -50,10 +50,12 @@ type ThreadToastData = {
   threadId?: ThreadId | null;
   tooltipStyle?: boolean;
   dismissAfterVisibleMs?: number;
+  /** Compact Undo toast for chat actions. Archive links to its Settings list; snooze passes a message. */
   archiveUndo?: {
     onUndo: () => boolean | Promise<boolean>;
-    onViewArchived: () => void | Promise<void>;
+    onViewArchived?: () => void | Promise<void>;
     onNoUndo?: () => void;
+    message?: string;
   };
 };
 
@@ -430,7 +432,7 @@ function ArchiveUndoToastSurface({
   const handleViewArchivedClick = () => {
     if (actionsDisabled) return;
     archiveUndo.onNoUndo?.();
-    void archiveUndo.onViewArchived();
+    void archiveUndo.onViewArchived?.();
   };
 
   return (
@@ -453,6 +455,7 @@ function ArchiveUndoToastSurface({
           data-slot="toast-title"
           render={<div />}
         >
+          {archiveUndo.message ? <>{archiveUndo.message}. </> : null}
           <button
             type="button"
             className={ARCHIVE_UNDO_TOAST_LINK_CLASS_NAME}
@@ -461,16 +464,21 @@ function ArchiveUndoToastSurface({
             onClick={handleUndoClick}
           >
             Undo
-          </button>{" "}
-          or view archived chats in{" "}
-          <Toast.Close
-            className={ARCHIVE_UNDO_TOAST_LINK_CLASS_NAME}
-            data-base-ui-swipe-ignore
-            disabled={actionsDisabled}
-            onClick={handleViewArchivedClick}
-          >
-            Settings
-          </Toast.Close>
+          </button>
+          {archiveUndo.onViewArchived ? (
+            <>
+              {" "}
+              or view archived chats in{" "}
+              <Toast.Close
+                className={ARCHIVE_UNDO_TOAST_LINK_CLASS_NAME}
+                data-base-ui-swipe-ignore
+                disabled={actionsDisabled}
+                onClick={handleViewArchivedClick}
+              >
+                Settings
+              </Toast.Close>
+            </>
+          ) : null}
         </Toast.Title>
         <ToastCloseButton compact disabled={undoPending} onClose={archiveUndo.onNoUndo} />
       </Toast.Content>

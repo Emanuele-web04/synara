@@ -14,6 +14,7 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import { showConfirmDialogFallback } from "../confirmDialogFallback";
 import {
   getFallbackThreadIdAfterDelete,
+  getFallbackThreadIdAfterSnooze,
   derivePinnedThreadIdsForSidebar,
   excludeHiddenProjectAgentCoordinatorThreads,
   isLatestPinnedThreadMutation,
@@ -36,6 +37,12 @@ import {
   isThreadAlreadyUnarchivedError,
   unarchiveThreadFromClient,
 } from "../lib/threadArchive";
+import {
+  dispatchThreadSnoozedUntil,
+  formatSnoozeDeadline,
+  resolveSnoozeDeadline,
+  type SnoozeDuration,
+} from "../lib/threadSnooze";
 import {
   createOptimisticSettledMutation,
   recordOptimisticSettledMutationSequence,
@@ -103,6 +110,10 @@ export function useSidebarThreadActions(input: {
     | "sidebarThreadSortOrder"
   >;
   readonly clearTerminalState: (threadId: ThreadId) => void;
+  /** Limits the post-snooze focus fallback to chats reachable from the active Space. */
+  readonly filterThreadsToActiveSpace?: (
+    threads: readonly SidebarThreadSummary[],
+  ) => readonly SidebarThreadSummary[];
   readonly handleNewChat: (options?: { fresh?: boolean }) => Promise<unknown>;
   readonly projectById: ReadonlyMap<ProjectId, Project>;
   readonly routeSplitViewId: string | null;
@@ -116,6 +127,7 @@ export function useSidebarThreadActions(input: {
     activeSplitView,
     appSettings,
     clearTerminalState,
+    filterThreadsToActiveSpace,
     handleNewChat,
     projectById,
     routeSplitViewId,
@@ -444,42 +456,58 @@ export function useSidebarThreadActions(input: {
     [setThreadSettled],
   );
 
-  const setThreadSnoozedUntil = useCallback((threadId: ThreadId, snoozedUntil: string | null) => {
-    const api = readNativeApi();
-    if (!api) {
-      toastManager.add({ type: "error", title: "Unable to connect to the app server." });
-      return;
-    }
-    // The projection owns visibility: a failed request never hides a row or
-    // replaces a previously scheduled reminder with an optimistic deadline.
-    void api.orchestration
-      .dispatchCommand({
-        type: "thread.meta.update",
-        commandId: newCommandId(),
-        threadId,
-        snoozedUntil,
-      })
-      .catch(() => {
-        toastManager.add({
-          type: "error",
-          title: snoozedUntil === null ? "Unable to return thread" : "Unable to snooze thread",
-        });
-      });
-  }, []);
+  const setThreadSnoozedUntil = dispatchThreadSnoozedUntil;
+
+  // Snooze confirms asynchronously; these refs let the confirmation see the
+  // route and thread list as they are then, not as they were when it started.
+  const routeThreadIdRef = useRef(routeThreadId);
+  const snoozeFallbackThreadsRef = useRef(sidebarThreads);
+  useEffect(() => {
+    routeThreadIdRef.current = routeThreadId;
+    snoozeFallbackThreadsRef.current = filterThreadsToActiveSpace
+      ? filterThreadsToActiveSpace(sidebarThreads)
+      : sidebarThreads;
+  }, [filterThreadsToActiveSpace, routeThreadId, sidebarThreads]);
 
   const snoozeThread = useCallback(
-    (threadId: ThreadId, duration: 30 | 60 | 120 | "tomorrow") => {
-      const nowMs = Date.now();
-      const deadline = new Date(nowMs);
-      if (duration === "tomorrow") {
-        deadline.setDate(deadline.getDate() + 1);
-        deadline.setHours(9, 0, 0, 0);
-      } else {
-        deadline.setTime(nowMs + duration * 60_000);
-      }
-      setThreadSnoozedUntil(threadId, deadline.toISOString());
+    (threadId: ThreadId, duration: SnoozeDuration) => {
+      const deadline = resolveSnoozeDeadline(duration, Date.now());
+      const previousSnoozedUntil = sidebarThreadSummaryById[threadId]?.snoozedUntil ?? null;
+      const leavesFocusedThread =
+        routeThreadIdRef.current === threadId && routeSplitViewId === null;
+      void setThreadSnoozedUntil(threadId, deadline.toISOString()).then((confirmed) => {
+        if (!confirmed) return;
+        // Same compact Undo toast as archive, so chat-level undo reads alike.
+        toastManager.add({
+          id: `snooze-undo:${threadId}:${randomUUID()}`,
+          timeout: 0,
+          data: {
+            allowCrossThreadVisibility: true,
+            dismissAfterVisibleMs: ARCHIVE_UNDO_TOAST_DURATION_MS,
+            archiveUndo: {
+              message: `Snoozed until ${formatSnoozeDeadline(deadline.toISOString())}`,
+              onUndo: () => setThreadSnoozedUntil(threadId, previousSnoozedUntil),
+            },
+          },
+        });
+        // Only move focus if the user is still on the snoozed chat.
+        if (!leavesFocusedThread || routeThreadIdRef.current !== threadId) return;
+        const fallbackThreadId = getFallbackThreadIdAfterSnooze({
+          threads: snoozeFallbackThreadsRef.current,
+          snoozedThreadId: threadId,
+        });
+        if (fallbackThreadId) {
+          void navigate({
+            to: "/$threadId",
+            params: { threadId: fallbackThreadId },
+            replace: true,
+          });
+        } else {
+          void handleNewChat();
+        }
+      });
     },
-    [setThreadSnoozedUntil],
+    [handleNewChat, navigate, routeSplitViewId, setThreadSnoozedUntil, sidebarThreadSummaryById],
   );
 
   // Drop optimistic settle entries once the server-confirmed state agrees, so

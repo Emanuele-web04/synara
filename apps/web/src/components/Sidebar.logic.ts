@@ -26,6 +26,7 @@ import {
   SIDEBAR_ROW_ACTIVE_CLASS_NAME,
   SIDEBAR_ROW_HOVER_CLASS_NAME,
   SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
+  SIDEBAR_ROW_SNOOZE_REMINDER_CLASS_NAME,
   SIDEBAR_THREAD_ROW_BASE_CLASS_NAME,
 } from "../sidebarRowStyles";
 import { isDuplicateProjectCreateError } from "../lib/projectCreateRecovery";
@@ -370,7 +371,8 @@ export interface ThreadStatusPill {
     | "Pending Approval"
     | "Awaiting Input"
     | "Plan Ready"
-    | "In Background";
+    | "In Background"
+    | "Reminder";
   colorClass: string;
   dotClass: string;
   pulse: boolean;
@@ -402,7 +404,7 @@ export function resolveThreadStatusTrailingIndicator(input: {
   if (status === null || input.slotOccupied === true) {
     return null;
   }
-  if (status.label === "Completed" && input.isActive === true) {
+  if ((status.label === "Completed" || status.label === "Reminder") && input.isActive === true) {
     return null;
   }
   return status;
@@ -416,6 +418,7 @@ const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
   "Preparing worktree": 3,
   "Plan Ready": 2,
   "In Background": 2,
+  Reminder: 2,
   Completed: 1,
 };
 
@@ -428,6 +431,8 @@ type ThreadStatusInput = Pick<
   hasLiveTailWork?: boolean | undefined;
   pendingBackgroundWorkCount?: number | undefined;
   dismissedStatusKey?: string | undefined;
+  snoozedUntil?: string | null | undefined;
+  snoozeReminderAt?: string | null | undefined;
 };
 
 function createThreadStatusDismissalKey(
@@ -460,6 +465,20 @@ export function hasUnseenCompletion(thread: Pick<Thread, "latestTurn" | "lastVis
   const lastVisitedAt = Date.parse(thread.lastVisitedAt);
   if (Number.isNaN(lastVisitedAt)) return true;
   return completedAt > lastVisitedAt;
+}
+
+/** A chat that came back from snooze stays unread until it is opened after the reminder. */
+export function hasUnseenSnoozeReturn(thread: {
+  snoozedUntil?: string | null | undefined;
+  snoozeReminderAt?: string | null | undefined;
+  lastVisitedAt?: string | undefined;
+}): boolean {
+  if (thread.snoozedUntil != null || thread.snoozeReminderAt == null) return false;
+  const reminderAt = Date.parse(thread.snoozeReminderAt);
+  if (Number.isNaN(reminderAt)) return false;
+  if (!thread.lastVisitedAt) return true;
+  const lastVisitedAt = Date.parse(thread.lastVisitedAt);
+  return Number.isNaN(lastVisitedAt) || reminderAt > lastVisitedAt;
 }
 
 export function shouldClearThreadSelectionOnMouseDown(target: HTMLElement | null): boolean {
@@ -588,6 +607,7 @@ export function resolveThreadRowTrailingReserveClass(input: {
 export function resolveThreadRowClassName(input: {
   isActive: boolean;
   isSelected: boolean;
+  isSnoozeReminder?: boolean;
 }): string {
   // Trailing reserve for the absolute cluster is applied separately by callers
   // via resolveThreadRowTrailingReserveClass so it can flex with the chip count.
@@ -605,7 +625,12 @@ export function resolveThreadRowClassName(input: {
     return cn(baseClassName, SIDEBAR_ROW_ACTIVE_CLASS_NAME);
   }
 
-  return cn(baseClassName, SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME);
+  return cn(
+    baseClassName,
+    SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
+    SIDEBAR_ROW_HOVER_CLASS_NAME,
+    input.isSnoozeReminder === true && SIDEBAR_ROW_SNOOZE_REMINDER_CLASS_NAME,
+  );
 }
 
 // Single definition of "this thread is actively doing work" shared by the
@@ -732,6 +757,20 @@ export function resolveThreadStatusPill(input: {
       dismissible: true,
       dismissalKey,
     };
+  }
+
+  if (hasUnseenSnoozeReturn(thread)) {
+    const dismissalKey = ["Reminder", thread.snoozeReminderAt].join(":");
+    if (thread.dismissedStatusKey !== dismissalKey) {
+      return {
+        label: "Reminder",
+        colorClass: "text-info",
+        dotClass: "bg-info",
+        pulse: false,
+        dismissible: true,
+        dismissalKey,
+      };
+    }
   }
 
   if (!thread.hasLiveTailWork && hasUnseenCompletion(thread)) {
@@ -1294,10 +1333,13 @@ function isUnseenFinishedThread(thread: SidebarThreadSortInput): boolean {
   if (thread.hasLiveTailWork === true) {
     return false;
   }
-  return hasUnseenCompletion({
-    latestTurn: thread.latestTurn ?? null,
-    lastVisitedAt: thread.lastVisitedAt,
-  });
+  return (
+    hasUnseenSnoozeReturn(thread) ||
+    hasUnseenCompletion({
+      latestTurn: thread.latestTurn ?? null,
+      lastVisitedAt: thread.lastVisitedAt,
+    })
+  );
 }
 
 // Attention groups for the sidebar order: threads doing live work first so you
@@ -1357,6 +1399,41 @@ export function getFallbackThreadIdAfterDelete<
       sortOrder,
     )[0]?.id ?? null
   );
+}
+
+/**
+ * Where focus goes after snoozing the open chat: the most recently visited
+ * eligible chat, then the most recent human activity. Snoozed and archived
+ * chats are skipped; null means the caller should open a new chat.
+ */
+export function getFallbackThreadIdAfterSnooze<
+  T extends {
+    id: ThreadId;
+    createdAt: string;
+    archivedAt?: string | null | undefined;
+    snoozedUntil?: string | null | undefined;
+    lastVisitedAt?: string | undefined;
+    latestHumanMessageAt?: string | null | undefined;
+  },
+>(input: { threads: readonly T[]; snoozedThreadId: ThreadId }): ThreadId | null {
+  let best: { id: ThreadId; visitedAt: number; activityAt: number } | null = null;
+  for (const thread of input.threads) {
+    if (thread.id === input.snoozedThreadId) continue;
+    if (thread.archivedAt != null || thread.snoozedUntil != null) continue;
+    const visitedAt = toSortableTimestamp(thread.lastVisitedAt) ?? Number.NEGATIVE_INFINITY;
+    const activityAt =
+      toSortableTimestamp(thread.latestHumanMessageAt ?? undefined) ??
+      toSortableTimestamp(thread.createdAt) ??
+      Number.NEGATIVE_INFINITY;
+    if (
+      best === null ||
+      visitedAt > best.visitedAt ||
+      (visitedAt === best.visitedAt && activityAt > best.activityAt)
+    ) {
+      best = { id: thread.id, visitedAt, activityAt };
+    }
+  }
+  return best?.id ?? null;
 }
 
 export function getProjectSortTimestamp(

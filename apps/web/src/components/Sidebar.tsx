@@ -302,6 +302,8 @@ import { RenameDialog } from "./RenameDialog";
 import { EditProjectDialog, type EditProjectValue } from "./EditProjectDialog";
 import { RelocateProjectDialog } from "./RelocateProjectDialog";
 import { RenameThreadDialog } from "./RenameThreadDialog";
+import { SnoozeUntilDialog } from "./SnoozeUntilDialog";
+import { SNOOZE_PRESETS } from "../lib/threadSnooze";
 import ReleaseHistoryDialog from "./ReleaseHistoryDialog";
 import { GROUPS_ON, INBOX_ON, isBetaFeatureOn } from "../betaFeatures";
 import { WHATS_NEW_ENTRIES } from "../whatsNew/entries";
@@ -458,6 +460,7 @@ import {
   SIDEBAR_ROW_HOVER_CLASS_NAME,
   SIDEBAR_PROJECT_NAME_CLASS_NAME,
   SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
+  SIDEBAR_ROW_SNOOZE_REMINDER_CLASS_NAME,
   SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
   SIDEBAR_SECTION_LABEL_CLASS_NAME,
 } from "../sidebarRowStyles";
@@ -1607,6 +1610,7 @@ export default function Sidebar() {
   const [searchPaletteMode, setSearchPaletteMode] = useState<SidebarSearchPaletteMode>("search");
   const projectAdditionLockRef = useRef(false);
   const [renameDialogThreadId, setRenameDialogThreadId] = useState<ThreadId | null>(null);
+  const [snoozeDialogThreadId, setSnoozeDialogThreadId] = useState<ThreadId | null>(null);
   const [renameProjectDialogId, setRenameProjectDialogId] = useState<ProjectId | null>(null);
   const [projectAgentDialogState, setProjectAgentDialogState] = useState<{
     projectId: ProjectId;
@@ -1875,6 +1879,10 @@ export default function Sidebar() {
         markThreadVisited(threadId, thread.latestTurn?.completedAt ?? undefined);
         return;
       }
+      if (threadStatus.label === "Reminder") {
+        markThreadVisited(threadId, thread.snoozeReminderAt ?? undefined);
+        return;
+      }
       dismissThreadStatus(threadId, threadStatus.dismissalKey);
     },
     [
@@ -1896,6 +1904,23 @@ export default function Sidebar() {
     () => new Map(projects.map((project) => [project.id, project] as const)),
     [projects],
   );
+  const filterThreadsToActiveSpace = useCallback(
+    (threads: readonly SidebarThreadSummary[]) =>
+      filterSidebarThreadsBySpace({
+        threads,
+        projectById,
+        spaceId: activeSpaceId,
+        paths: { homeDir, chatWorkspaceRoot, studioWorkspaceRoot, groupsWorkspaceRoot },
+      }),
+    [
+      activeSpaceId,
+      chatWorkspaceRoot,
+      groupsWorkspaceRoot,
+      homeDir,
+      projectById,
+      studioWorkspaceRoot,
+    ],
+  );
   const {
     pinnedThreadIds,
     pinnedThreadIdSet,
@@ -1915,6 +1940,7 @@ export default function Sidebar() {
     activeSplitView,
     appSettings,
     clearTerminalState,
+    filterThreadsToActiveSpace,
     handleNewChat,
     projectById,
     routeSplitViewId: routeSearch.splitViewId ?? null,
@@ -3362,10 +3388,12 @@ export default function Sidebar() {
                     separatorBefore: threadSummary?.snoozedUntil == null,
                   },
                   [
-                    { id: "snooze-30", label: "For 30 minutes", icon: "clock" },
-                    { id: "snooze-60", label: "For 1 hour", icon: "clock" },
-                    { id: "snooze-120", label: "For 2 hours", icon: "clock" },
-                    { id: "snooze-tomorrow", label: "Until tomorrow at 9am", icon: "clock" },
+                    ...SNOOZE_PRESETS.map((preset) => ({
+                      id: preset.id,
+                      label: preset.label,
+                      icon: "clock",
+                    })),
+                    { id: "snooze-custom", label: "Pick date & time…", icon: "clock" },
                   ],
                 ),
               ]
@@ -3455,22 +3483,13 @@ export default function Sidebar() {
         setThreadSnoozedUntil(threadId, null);
         return;
       }
-      if (
-        clicked === "snooze-30" ||
-        clicked === "snooze-60" ||
-        clicked === "snooze-120" ||
-        clicked === "snooze-tomorrow"
-      ) {
-        snoozeThread(
-          threadId,
-          clicked === "snooze-tomorrow"
-            ? "tomorrow"
-            : clicked === "snooze-30"
-              ? 30
-              : clicked === "snooze-60"
-                ? 60
-                : 120,
-        );
+      if (clicked === "snooze-custom") {
+        setSnoozeDialogThreadId(threadId);
+        return;
+      }
+      const snoozePreset = SNOOZE_PRESETS.find((preset) => preset.id === clicked);
+      if (snoozePreset) {
+        snoozeThread(threadId, snoozePreset.duration);
         return;
       }
       if (typeof clicked === "string" && clicked.startsWith("handoff:")) {
@@ -5208,7 +5227,11 @@ export default function Sidebar() {
               }),
               isActive
                 ? SIDEBAR_ROW_ACTIVE_CLASS_NAME
-                : cn(SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME, SIDEBAR_ROW_HOVER_CLASS_NAME),
+                : cn(
+                    SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
+                    SIDEBAR_ROW_HOVER_CLASS_NAME,
+                    threadStatus?.label === "Reminder" && SIDEBAR_ROW_SNOOZE_REMINDER_CLASS_NAME,
+                  ),
             )}
             onPointerDown={(event) => primeThreadActivation(event, thread.id)}
             onClick={() => activateThreadFromSidebarIntent(thread.id)}
@@ -5366,6 +5389,7 @@ export default function Sidebar() {
                   resolveThreadRowClassName({
                     isActive,
                     isSelected,
+                    isSnoozeReminder: threadStatus?.label === "Reminder",
                   }),
                   leadingPr ? "pl-8" : topLevel && !isSubagentThread ? "pl-2" : null,
                   isSubagentThread
@@ -7858,6 +7882,20 @@ export default function Sidebar() {
         </DialogPopup>
       </Dialog>
 
+      <SnoozeUntilDialog
+        open={snoozeDialogThreadId !== null}
+        currentSnoozedUntil={
+          snoozeDialogThreadId
+            ? (sidebarThreadSummaryById[snoozeDialogThreadId]?.snoozedUntil ?? null)
+            : null
+        }
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setSnoozeDialogThreadId(null);
+        }}
+        onSnooze={(deadline) => {
+          if (snoozeDialogThreadId !== null) snoozeThread(snoozeDialogThreadId, deadline);
+        }}
+      />
       <RenameThreadDialog
         open={renameDialogThreadId !== null}
         currentTitle={

@@ -287,6 +287,7 @@ function needsYouKind(
   if (status?.label === "Pending Approval") return "approval";
   if (status?.label === "Awaiting Input") return "input";
   if (status?.label === "Plan Ready") return "plan";
+  if (status?.label === "Reminder") return "unread";
   // The sidebar shows a failed turn as a plain completion, so dismissing it hides both.
   if (status?.label === "Completed") return isUnseenFailedThread(thread) ? "failed" : "unread";
   return null;

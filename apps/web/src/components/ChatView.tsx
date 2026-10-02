@@ -80,6 +80,7 @@ import { resolveProviderInstanceLabel } from "~/lib/providerInstancePresentation
 import { resolveAuxiliaryTextGenerationSelection } from "~/lib/textGenerationCapabilities";
 import { cn, isMacNavigatorPlatform, newCommandId, newThreadId, randomUUID } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
+import { dispatchThreadSnoozedUntil, resolveSnoozeDeadline } from "~/lib/threadSnooze";
 import {
   ChatLinkActionsContext,
   parseGitHubItemUrl,
@@ -5871,6 +5872,19 @@ export default function ChatView({
                   pendingAutomationConversation &&
                   pendingAutomationConversation.threadId === threadId
                     ? { onCancel: cancelAutomationConversation }
+                    : null
+                }
+                snooze={
+                  serverThread?.snoozedUntil != null && serverThread.archivedAt == null
+                    ? {
+                        snoozedUntil: serverThread.snoozedUntil,
+                        onReturnNow: () => void dispatchThreadSnoozedUntil(serverThread.id, null),
+                        onReschedule: (duration) =>
+                          void dispatchThreadSnoozedUntil(
+                            serverThread.id,
+                            resolveSnoozeDeadline(duration, Date.now()).toISOString(),
+                          ),
+                      }
                     : null
                 }
               />

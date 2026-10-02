@@ -35,6 +35,7 @@ import {
   SIDEBAR_ROW_FOCUS_CLASS_NAME,
   SIDEBAR_ROW_HOVER_CLASS_NAME,
   SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
+  SIDEBAR_ROW_SNOOZE_REMINDER_CLASS_NAME,
   SIDEBAR_SECTION_LABEL_CLASS_NAME,
   sidebarHoverRevealHideClassName,
 } from "../sidebarRowStyles";
@@ -44,6 +45,7 @@ import type { Project, SidebarThreadSummary } from "../types";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { FolderClosed } from "./FolderClosed";
 import { ProviderIcon } from "./ProviderIcon";
+import { SnoozeCountdown } from "./SnoozeCountdown";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { PrStateChip } from "./pullRequest/PrStateChip";
 import {
@@ -101,12 +103,6 @@ import { Tooltip, TooltipTrigger } from "./ui/tooltip";
 const ACTIVITY_LIST_BASE_LIMIT = 20;
 const ACTIVITY_LIST_PAGE_SIZE = 20;
 const EMPTY_PROJECT_GROUPS: ActivityProjectGroup[] = [];
-const SNOOZE_DATE_FORMAT = new Intl.DateTimeFormat(undefined, {
-  month: "short",
-  day: "numeric",
-  hour: "numeric",
-  minute: "2-digit",
-});
 
 /** Keeps a row action (pin, archive, done) from also opening the thread. */
 function stopRowActivation(event: MouseEvent) {
@@ -206,6 +202,9 @@ export function ActivityThreadRow({
             SIDEBAR_ROW_FOCUS_CLASS_NAME,
             isActive ? SIDEBAR_ROW_ACTIVE_CLASS_NAME : SIDEBAR_ROW_HOVER_CLASS_NAME,
             isSettled && "opacity-55 transition-opacity hover:opacity-85",
+            // Snoozed rows carry a tint on top of the clock line so they read apart at a glance.
+            thread.snoozedUntil != null && !isActive && "bg-info/6",
+            status?.label === "Reminder" && !isActive && SIDEBAR_ROW_SNOOZE_REMINDER_CLASS_NAME,
           )}
         >
           <span
@@ -230,6 +229,12 @@ export function ActivityThreadRow({
             >
               {thread.title}
             </span>
+            {thread.snoozedUntil != null ? (
+              <ClockIcon
+                className={sidebarGlyphClass("meta", "shrink-0 text-info")}
+                aria-label="Scheduled"
+              />
+            ) : null}
             {hasPendingDraft ? <SidebarDraftGlyph /> : null}
           </span>
           <span className="flex min-w-0 items-center gap-1.5">
@@ -274,9 +279,8 @@ export function ActivityThreadRow({
           </span>
           {thread.snoozedUntil != null ? (
             <span className="flex min-w-0 items-center gap-1 text-ui-sm text-muted-foreground/80">
-              <ClockIcon className={sidebarGlyphClass("meta")} aria-hidden />
               <span className="truncate">
-                Returns {SNOOZE_DATE_FORMAT.format(new Date(thread.snoozedUntil))}
+                <SnoozeCountdown snoozedUntil={thread.snoozedUntil} />
               </span>
             </span>
           ) : null}

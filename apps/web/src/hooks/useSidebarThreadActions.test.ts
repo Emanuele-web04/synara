@@ -394,6 +394,65 @@ describe("useSidebarThreadActions", () => {
     expect(sidebarThreads[0]?.snoozedUntil ?? null).toBeNull();
   });
 
+  it("leaves the focused chat only after snooze is confirmed and offers undo", async () => {
+    let confirm!: (value: { sequence: number }) => void;
+    harness.dispatchCommand.mockReturnValueOnce(
+      new Promise((resolve) => {
+        confirm = resolve;
+      }),
+    );
+    const controller = render({ routeThreadId: THREAD_ID });
+    controller.snoozeThread(THREAD_ID, 30);
+    expect(harness.navigate).not.toHaveBeenCalled();
+    confirm({ sequence: 1 });
+    await vi.waitFor(() =>
+      expect(harness.navigate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          params: { threadId: FALLBACK_ID },
+        }),
+      ),
+    );
+    const undoToast = harness.toast.mock.calls.at(-1)?.[0] as {
+      data: { archiveUndo: { message: string; onUndo: () => Promise<boolean> } };
+    };
+    expect(undoToast.data.archiveUndo.message).toMatch(/^Snoozed until /);
+    await expect(undoToast.data.archiveUndo.onUndo()).resolves.toBe(true);
+    expect(harness.dispatchCommand).toHaveBeenLastCalledWith(
+      expect.objectContaining({ threadId: THREAD_ID, snoozedUntil: null }),
+    );
+  });
+
+  it("does not change focus after a failed snooze or a route change during confirmation", async () => {
+    harness.dispatchCommand.mockRejectedValueOnce(new Error("offline"));
+    const controller = render({ routeThreadId: THREAD_ID });
+    controller.snoozeThread(THREAD_ID, 30);
+    await vi.waitFor(() =>
+      expect(harness.toast).toHaveBeenCalledWith(expect.objectContaining({ type: "error" })),
+    );
+    expect(harness.navigate).not.toHaveBeenCalled();
+    let confirm!: (value: { sequence: number }) => void;
+    harness.dispatchCommand.mockReturnValueOnce(
+      new Promise((resolve) => {
+        confirm = resolve;
+      }),
+    );
+    controller.snoozeThread(THREAD_ID, 30);
+    render({ routeThreadId: FALLBACK_ID });
+    confirm({ sequence: 2 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(harness.navigate).not.toHaveBeenCalled();
+  });
+
+  it("opens a new chat if all other chats are snoozed", async () => {
+    sidebarThreads = [
+      makeThread(THREAD_ID),
+      makeThread(FALLBACK_ID, { snoozedUntil: "2026-10-03T12:00:00Z" }),
+    ];
+    render({ routeThreadId: THREAD_ID }).snoozeThread(THREAD_ID, 30);
+    await vi.waitFor(() => expect(harness.handleNewChat).toHaveBeenCalled());
+    expect(harness.navigate).not.toHaveBeenCalled();
+  });
+
   it("pins optimistically and dispatches thread metadata", async () => {
     let controller = render();
 
