@@ -948,6 +948,9 @@ export function gitPreparePullRequestThreadMutationOptions(input: {
     queryClient: input.queryClient,
     mutationKey: gitMutationKeys.preparePullRequestThread(input.cwd),
     unavailableMessage: "Pull request thread preparation is unavailable.",
+    // The result already identifies the prepared checkout. Opening its draft must not
+    // wait for status/diff refreshes in every cached project and worktree.
+    awaitInvalidation: false,
     run: (api, cwd, { reference, mode, cwd: targetCwd }) =>
       api.git.preparePullRequestThread({ cwd: targetCwd ?? cwd, reference, mode }),
   });
