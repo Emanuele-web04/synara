@@ -90,6 +90,9 @@ A turn is one cycle inside that task:
 A long task can contain many turns. Keep follow-ups connected to the same objective; create another
 task when the work needs a different owner, branch, or review boundary.
 
+Turn off **Settings → General → Move sent messages to top** to keep new messages at the bottom
+of the conversation and follow replies as they stream.
+
 For work that should continue across several turns, set a deliberate
 [thread goal](https://www.trysynara.com/docs/features/thread-goals). A goal can continue after a
 clean turn, but queued user work, approvals, questions, interruptions, failures, and pause rules

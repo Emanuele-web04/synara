@@ -3227,6 +3227,11 @@ export default function ChatView({
     composerTranscriptInsetPx,
     isInactiveSplitPane,
   });
+  useLayoutEffect(() => {
+    if (settings.anchorSentMessagesToTop) return;
+    tailAnchorScrollInFlightRef.current = false;
+    setTailAnchor(null);
+  }, [settings.anchorSentMessagesToTop, tailAnchorScrollInFlightRef]);
   const selectionChatEnvMode = useProjectEnvironmentStore((state) =>
     activeProject ? state.envModeByProjectId[activeProject.id] : undefined,
   );
@@ -4435,6 +4440,7 @@ export default function ChatView({
     sendInFlightRef,
     setThreadError,
     setTailAnchor,
+    anchorSentMessagesToTop: settings.anchorSentMessagesToTop,
     turnDispatchSettings,
     computerControlChangeSequence,
     setComposerDraftComputerControlMode,
@@ -6470,7 +6476,9 @@ export default function ChatView({
                     goalAchievements={goalAchievements}
                     enteringUserMessageIds={enteringUserMessageIds}
                     tailAnchorMessageId={
-                      tailAnchor !== null && tailAnchor.threadId === activeThread.id
+                      settings.anchorSentMessagesToTop &&
+                      tailAnchor !== null &&
+                      tailAnchor.threadId === activeThread.id
                         ? tailAnchor.messageId
                         : null
                     }

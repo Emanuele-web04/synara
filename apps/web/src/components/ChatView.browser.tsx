@@ -3815,7 +3815,7 @@ describe("ChatView transcript geometry (full app)", () => {
 
       const sendButton = await waitForSendButton();
       expect(sendButton.disabled).toBe(false);
-      sendButton.click();
+      await userEvent.click(sendButton);
 
       await vi.waitFor(
         async () => {
@@ -3834,6 +3834,142 @@ describe("ChatView transcript geometry (full app)", () => {
       restoreNativeApi();
     }
   });
+
+  it.each(["Enter", "send button", "plan follow-up"])(
+    "keeps sent messages at the bottom with anchoring disabled when using %s, and follows streaming text",
+    async (sendMethod) => {
+      localStorage.setItem(
+        "synara:app-settings:v1",
+        JSON.stringify({ anchorSentMessagesToTop: false }),
+      );
+      const restoreNativeApi = installDeterministicSendNativeApi();
+      let currentSnapshot =
+        sendMethod === "plan follow-up"
+          ? createSnapshotWithSettledPlanAwaitingFollowUp()
+          : createSnapshotForTargetUser({
+              targetMessageId: "msg-user-send-no-anchor" as MessageId,
+              targetText: "Previous conversation message",
+            });
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: currentSnapshot,
+      });
+
+      try {
+        const scrollContainer = await waitForElement(
+          () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
+          "Unable to find message scroll container.",
+        );
+        // Sending must return to the live edge even if the reader was looking at history.
+        scrollContainer.scrollTop = 0;
+        scrollContainer.dispatchEvent(new Event("scroll"));
+        await waitForLayout();
+
+        const prompt = "Keep this message at the bottom";
+        if (sendMethod === "plan follow-up") {
+          useComposerDraftStore.getState().setInteractionMode(THREAD_ID, "plan");
+        }
+        useComposerDraftStore.getState().setPrompt(THREAD_ID, prompt);
+        await vi.waitFor(async () => {
+          expect((await waitForComposerEditor()).textContent).toContain(prompt);
+        });
+        if (sendMethod !== "send button") {
+          await userEvent.click(await waitForComposerEditor());
+          await userEvent.keyboard("{Enter}");
+        } else {
+          const sendButton = await waitForSendButton();
+          expect(sendButton.disabled).toBe(false);
+          await userEvent.click(sendButton);
+        }
+
+        const findSentRow = () =>
+          Array.from(
+            document.querySelectorAll<HTMLElement>("[data-message-id][data-message-role='user']"),
+          ).find((row) => row.textContent?.includes(prompt));
+        await vi.waitFor(
+          () => {
+            const row = findSentRow();
+            expect(row, "sent user message missing").toBeTruthy();
+            expect(
+              row!.getBoundingClientRect().top - scrollContainer.getBoundingClientRect().top,
+              "sent user message moved to the viewport top",
+            ).toBeGreaterThan(scrollContainer.clientHeight / 2);
+            expect(getScrollContainerDistanceFromBottom(scrollContainer)).toBeLessThanOrEqual(2);
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        if (sendMethod !== "plan follow-up") {
+          expect(document.activeElement).toBe(await waitForComposerEditor());
+        }
+
+        const sentMessageId = MessageId.makeUnsafe(findSentRow()!.dataset.messageId!);
+        const activeTurnId = TurnId.makeUnsafe("turn-no-anchor");
+        const streamingId = MessageId.makeUnsafe("msg-assistant-no-anchor");
+        for (const paragraphCount of [1, 20]) {
+          currentSnapshot = {
+            ...currentSnapshot,
+            snapshotSequence: currentSnapshot.snapshotSequence + 1,
+            threads: currentSnapshot.threads.map((thread) =>
+              thread.id !== THREAD_ID
+                ? thread
+                : {
+                    ...thread,
+                    messages: [
+                      ...thread.messages.filter(
+                        (message) => message.id !== streamingId && message.id !== sentMessageId,
+                      ),
+                      {
+                        id: sentMessageId,
+                        role: "user" as const,
+                        text: prompt,
+                        turnId: activeTurnId,
+                        streaming: false,
+                        source: "native" as const,
+                        createdAt: isoAt(1_300),
+                        updatedAt: isoAt(1_300),
+                      },
+                      {
+                        id: streamingId,
+                        role: "assistant" as const,
+                        text: "Streaming response paragraph.\n\n".repeat(paragraphCount),
+                        turnId: activeTurnId,
+                        streaming: true,
+                        source: "native" as const,
+                        createdAt: isoAt(1_302),
+                        updatedAt: isoAt(1_302 + paragraphCount),
+                      },
+                    ],
+                    latestTurn: {
+                      turnId: activeTurnId,
+                      state: "running" as const,
+                      requestedAt: isoAt(1_300),
+                      startedAt: isoAt(1_301),
+                      completedAt: null,
+                      assistantMessageId: streamingId,
+                    },
+                    session: thread.session
+                      ? { ...thread.session, status: "running" as const, activeTurnId }
+                      : null,
+                  },
+            ),
+            updatedAt: isoAt(1_302 + paragraphCount),
+          };
+          fixture = { ...fixture, snapshot: currentSnapshot };
+          useStore.getState().syncServerReadModel(currentSnapshot);
+          await vi.waitFor(
+            () => {
+              expect(document.body.textContent).toContain("Streaming response paragraph.");
+              expect(getScrollContainerDistanceFromBottom(scrollContainer)).toBeLessThanOrEqual(2);
+            },
+            { timeout: 8_000, interval: 16 },
+          );
+        }
+      } finally {
+        await mounted.cleanup();
+        restoreNativeApi();
+      }
+    },
+  );
 
   it("anchors a freshly sent user message at the top of the transcript viewport", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
@@ -4026,6 +4162,26 @@ describe("ChatView transcript geometry (full app)", () => {
         Math.abs(scrollContainer.scrollTop - scrollTopBeforeTurnEnd),
         "scroll position jumped when the turn settled",
       ).toBeLessThanOrEqual(2);
+
+      const anchoredScrollHeight = scrollContainer.scrollHeight;
+      for (const enabled of [false, true]) {
+        const storedSettings = JSON.parse(localStorage.getItem("synara:app-settings:v1") ?? "{}");
+        localStorage.setItem(
+          "synara:app-settings:v1",
+          JSON.stringify({ ...storedSettings, anchorSentMessagesToTop: enabled }),
+        );
+        window.dispatchEvent(new StorageEvent("storage", { key: "synara:app-settings:v1" }));
+        await vi.waitFor(
+          () => {
+            expect(
+              scrollContainer.scrollHeight,
+              "disabling must release the reserve; re-enabling must not resurrect the old anchor",
+            ).toBeLessThan(anchoredScrollHeight - 50);
+          },
+          { timeout: 4_000, interval: 16 },
+        );
+        await waitForLayout();
+      }
     } finally {
       await mounted.cleanup();
       restoreNativeApi();

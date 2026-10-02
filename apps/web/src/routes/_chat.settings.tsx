@@ -349,6 +349,9 @@ function SettingsRouteView() {
     ...(!isDefaultActiveTheme ? [`${resolvedTheme === "dark" ? "Dark" : "Light"} theme pack`] : []),
     ...(settings.defaultProvider !== defaults.defaultProvider ? ["Default provider"] : []),
     ...(settings.defaultThreadEnvMode !== defaults.defaultThreadEnvMode ? ["New thread mode"] : []),
+    ...(settings.anchorSentMessagesToTop !== defaults.anchorSentMessagesToTop
+      ? ["Move sent messages to top"]
+      : []),
     ...(settings.archiveDeletesOrphanedWorktree !== defaults.archiveDeletesOrphanedWorktree
       ? ["Delete worktree on archive"]
       : []),
@@ -601,6 +604,15 @@ function SettingsRouteView() {
             "After Archive's Undo period, remove a clean worktree only if the task has stopped and no other task uses it. Its branch remains available for recovery.",
           resetLabel: "delete worktree on archive",
           ariaLabel: "Delete worktree on archive",
+        })}
+
+        {renderBooleanSettingRow({
+          settingKey: "anchorSentMessagesToTop",
+          title: "Move sent messages to top",
+          description:
+            "Move each sent message to the top of the conversation. Turn off to keep it at the bottom and follow replies as they stream.",
+          resetLabel: "move sent messages to top",
+          ariaLabel: "Move sent messages to top",
         })}
 
         <SettingsRow
