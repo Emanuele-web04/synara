@@ -177,6 +177,11 @@ export const GitHubInboxInvolvementFilter = Schema.Literals([
   "assigned",
 ]);
 export type GitHubInboxInvolvementFilter = typeof GitHubInboxInvolvementFilter.Type;
+/** Where a plain click on a GitHub pull request or issue link opens: the built-in review view,
+ *  the in-app browser, or the system browser. */
+export const GitHubLinkOpenTarget = Schema.Literals(["app", "browser", "external"]);
+export type GitHubLinkOpenTarget = typeof GitHubLinkOpenTarget.Type;
+export const DEFAULT_GITHUB_LINK_OPEN_TARGET: GitHubLinkOpenTarget = "app";
 export type FollowUpBehavior = typeof FollowUpBehavior.Type;
 // Sound the chat message trail moves with (Beta desktop on macOS).
 export const MessageTrailAudioSource = Schema.Literals(["off", "system", "microphone", "both"]);
@@ -370,6 +375,9 @@ export const AppSettingsSchema = Schema.Struct({
   confirmTerminalTabClose: Schema.Boolean.pipe(withDefaults(() => true)),
   diffWordWrap: Schema.Boolean.pipe(withDefaults(() => false)),
   showPullRequestDiffColors: Schema.Boolean.pipe(withDefaults(() => true)),
+  githubLinkOpenTarget: GitHubLinkOpenTarget.pipe(
+    withDefaults(() => DEFAULT_GITHUB_LINK_OPEN_TARGET),
+  ),
   // Local-only GitHub inbox view state: the filters the page reopens with (URL parameters
   // override them for one visit; search text lives only in the URL). The column widths are not
   // stored: the page always opens at even fractions.

@@ -80,8 +80,11 @@ import { resolveProviderInstanceLabel } from "~/lib/providerInstancePresentation
 import { resolveAuxiliaryTextGenerationSelection } from "~/lib/textGenerationCapabilities";
 import { cn, isMacNavigatorPlatform, newCommandId, newThreadId, randomUUID } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
-import { ChatLinkActionsContext, type ChatLinkActions } from "~/lib/linkContextMenu";
-import { parseGitHubRepositoryNameWithOwnerFromPullRequestUrl } from "@synara/shared/githubRepository";
+import {
+  ChatLinkActionsContext,
+  parseGitHubItemUrl,
+  type ChatLinkActions,
+} from "~/lib/linkContextMenu";
 import {
   mergeProjectInstructionsIntoThreadNotes,
   useProjectInstructionsStore,
@@ -2565,17 +2568,18 @@ export default function ChatView({
     },
     [navigate, onOpenBrowserUrl, threadId],
   );
-  // Chat links offer the PR pane only for repositories this project owns, matching the
-  // Environment panel; any other pull request falls back to the in-app browser.
+  // Chat links offer the built-in review view only for repositories this project owns,
+  // matching the Environment panel; any other pull request or issue falls back to the in-app
+  // browser. A pull request opens in the thread's PR pane, an issue in the inbox detail.
   // Left to the React Compiler to memoize: manual hooks here cannot be preserved.
   const openRightDockPane = useRightDockStore((store) => store.openPane);
-  const openPullRequestLink = (url: string) => {
-    const repository = parseGitHubRepositoryNameWithOwnerFromPullRequestUrl(url);
-    const number = repository ? Number(new URL(url).pathname.split("/")[4]) : NaN;
-    if (!repository || !activeProjectId || !Number.isInteger(number)) {
+  const openGitHubItemLink = (url: string) => {
+    const item = parseGitHubItemUrl(url);
+    if (!item || !activeProjectId) {
       openBrowserUrl(url);
       return;
     }
+    const { kind, repository, number } = item;
     void queryClient.fetchQuery(gitGithubRepositoryQueryOptions(gitBranchSourceCwd)).then(
       (result) => {
         const belongsToProject = result.repositories.some(
@@ -2583,6 +2587,18 @@ export default function ChatView({
         );
         if (!belongsToProject) {
           openBrowserUrl(url);
+          return;
+        }
+        if (kind === "issue") {
+          void navigate({
+            to: "/pull-requests",
+            search: {
+              kind,
+              selectedProjectId: activeProjectId,
+              selectedRepo: repository,
+              number,
+            },
+          });
           return;
         }
         openRightDockPane(threadId, {
@@ -2598,7 +2614,8 @@ export default function ChatView({
   };
   const chatLinkActions: ChatLinkActions = {
     openInBrowserPanel: openBrowserUrl,
-    openPullRequest: openPullRequestLink,
+    openGitHubItem: openGitHubItemLink,
+    githubLinkOpenTarget: settings.githubLinkOpenTarget,
   };
 
   const envLocked = Boolean(
