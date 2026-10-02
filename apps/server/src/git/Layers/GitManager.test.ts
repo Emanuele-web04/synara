@@ -2359,43 +2359,52 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
-  it.effect("reuses an existing dedicated worktree for the PR head branch", () =>
-    Effect.gen(function* () {
-      const repoDir = yield* makeTempDir("synara-git-manager-");
-      yield* initRepo(repoDir);
-      yield* runGit(repoDir, ["checkout", "-b", "feature/pr-existing-worktree"]);
-      fs.writeFileSync(path.join(repoDir, "existing.txt"), "existing\n");
-      yield* runGit(repoDir, ["add", "existing.txt"]);
-      yield* runGit(repoDir, ["commit", "-m", "Existing worktree branch"]);
-      yield* runGit(repoDir, ["checkout", "main"]);
-      const worktreePath = path.join(repoDir, "..", `pr-existing-${Date.now()}`);
-      yield* runGit(repoDir, ["worktree", "add", worktreePath, "feature/pr-existing-worktree"]);
+  for (const mode of ["local", "worktree"] as const) {
+    it.effect(`reuses an existing dedicated PR worktree in ${mode} mode`, () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("synara-git-manager-");
+        yield* initRepo(repoDir);
+        yield* runGit(repoDir, ["checkout", "-b", "feature/pr-existing-worktree"]);
+        fs.writeFileSync(path.join(repoDir, "existing.txt"), "existing\n");
+        yield* runGit(repoDir, ["add", "existing.txt"]);
+        yield* runGit(repoDir, ["commit", "-m", "Existing worktree branch"]);
+        yield* runGit(repoDir, ["checkout", "main"]);
+        const worktreePath = path.join(repoDir, "..", `pr-existing-${Date.now()}`);
+        yield* runGit(repoDir, ["worktree", "add", worktreePath, "feature/pr-existing-worktree"]);
+        fs.writeFileSync(path.join(worktreePath, "existing.txt"), "unsent changes\n");
+        const mainHead = (yield* runGit(repoDir, ["rev-parse", "HEAD"])).stdout.trim();
 
-      const { manager } = yield* makeManager({
-        ghScenario: {
-          pullRequest: {
-            number: 78,
-            title: "Existing worktree PR",
-            url: "https://github.com/example-org/sample-repo/pull/78",
-            baseRefName: "main",
-            headRefName: "feature/pr-existing-worktree",
-            state: "open",
+        const { manager } = yield* makeManager({
+          ghScenario: {
+            pullRequest: {
+              number: 78,
+              title: "Existing worktree PR",
+              url: "https://github.com/example-org/sample-repo/pull/78",
+              baseRefName: "main",
+              headRefName: "feature/pr-existing-worktree",
+              state: "open",
+            },
           },
-        },
-      });
+        });
 
-      const result = yield* preparePullRequestThread(manager, {
-        cwd: repoDir,
-        reference: "78",
-        mode: "worktree",
-      });
+        const result = yield* preparePullRequestThread(manager, {
+          cwd: repoDir,
+          reference: "78",
+          mode,
+        });
 
-      expect(result.worktreePath && fs.realpathSync.native(result.worktreePath)).toBe(
-        fs.realpathSync.native(worktreePath),
-      );
-      expect(result.branch).toBe("feature/pr-existing-worktree");
-    }),
-  );
+        expect(result.worktreePath && fs.realpathSync.native(result.worktreePath)).toBe(
+          fs.realpathSync.native(worktreePath),
+        );
+        expect(result.branch).toBe("feature/pr-existing-worktree");
+        expect((yield* runGit(repoDir, ["branch", "--show-current"])).stdout.trim()).toBe("main");
+        expect((yield* runGit(repoDir, ["rev-parse", "HEAD"])).stdout.trim()).toBe(mainHead);
+        expect(fs.readFileSync(path.join(worktreePath, "existing.txt"), "utf8")).toBe(
+          "unsent changes\n",
+        );
+      }),
+    );
+  }
 
   it.effect(
     "does not block fork PR worktree prep when the fork head branch collides with root main",
@@ -2570,6 +2579,84 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       expect(
         (yield* runGit(worktreePath, ["rev-parse", "--abbrev-ref", "@{upstream}"])).stdout.trim(),
       ).toBe("fork-seed/feature/pr-reused-fork");
+    }),
+  );
+
+  it.effect("does not reuse a different fork's worktree when preparing a local PR thread", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("synara-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/shared-name"]);
+      yield* runGit(repoDir, [
+        "remote",
+        "add",
+        "other-fork",
+        "https://github.com/other/sample-repo.git",
+      ]);
+      yield* runGit(repoDir, ["config", "branch.feature/shared-name.remote", "other-fork"]);
+      yield* runGit(repoDir, [
+        "remote",
+        "add",
+        "octocat",
+        "https://github.com/octocat/sample-repo.git",
+      ]);
+      yield* runGit(repoDir, ["update-ref", "refs/remotes/octocat/feature/shared-name", "HEAD"]);
+      yield* runGit(repoDir, [
+        "config",
+        "branch.feature/shared-name.merge",
+        "refs/heads/feature/shared-name",
+      ]);
+      yield* runGit(repoDir, ["checkout", "main"]);
+      const worktreePath = path.join(repoDir, "collision-worktree");
+      yield* runGit(repoDir, ["worktree", "add", worktreePath, "feature/shared-name"]);
+      fs.writeFileSync(path.join(worktreePath, "README.md"), "unsent other-fork work\n");
+      const worktreeHead = (yield* runGit(worktreePath, ["rev-parse", "HEAD"])).stdout.trim();
+
+      const { manager, ghCalls } = yield* makeManager({
+        ghScenario: {
+          pullRequest: {
+            number: 84,
+            title: "Different fork PR",
+            url: "https://github.com/example-org/sample-repo/pull/84",
+            baseRefName: "main",
+            headRefName: "feature/shared-name",
+            state: "open",
+            isCrossRepository: true,
+            headRepositoryNameWithOwner: "octocat/sample-repo",
+            headRepositoryOwnerLogin: "octocat",
+          },
+          repositoryCloneUrls: {
+            "octocat/sample-repo": {
+              url: "https://github.com/octocat/sample-repo.git",
+              sshUrl: "git@github.com:octocat/sample-repo.git",
+            },
+          },
+        },
+      });
+
+      const result = yield* preparePullRequestThread(manager, {
+        cwd: repoDir,
+        reference: "84",
+        mode: "local",
+      }).pipe(Effect.exit);
+
+      expect(
+        (yield* runGit(worktreePath, [
+          "config",
+          "--get",
+          "branch.feature/shared-name.remote",
+        ])).stdout.trim(),
+      ).toBe("other-fork");
+      expect(Exit.isFailure(result)).toBe(true);
+      expect(String(Exit.isFailure(result) ? result.cause : "")).toContain(
+        "different GitHub repository",
+      );
+      expect(ghCalls.some((call) => call.startsWith("pr checkout"))).toBe(false);
+      expect((yield* runGit(repoDir, ["branch", "--show-current"])).stdout.trim()).toBe("main");
+      expect((yield* runGit(worktreePath, ["rev-parse", "HEAD"])).stdout.trim()).toBe(worktreeHead);
+      expect(fs.readFileSync(path.join(worktreePath, "README.md"), "utf8")).toBe(
+        "unsent other-fork work\n",
+      );
     }),
   );
 

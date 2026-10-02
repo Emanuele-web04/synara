@@ -109,6 +109,23 @@ afterEach(() => {
 });
 
 describe("toast focus and visible lifetime", () => {
+  it("shows the failure reason on an error toast without actions", () => {
+    flushSync(() =>
+      toastManager.add({
+        type: "error",
+        title: "Could not send the pull request to an agent",
+        description: "This PR branch is already checked out in another worktree.",
+        timeout: 0,
+      }),
+    );
+    const description = document.querySelector<HTMLElement>('[data-slot="toast-description"]');
+    expect(description).not.toBeNull();
+    expect(description?.textContent).toBe(
+      "This PR branch is already checked out in another worktree.",
+    );
+    expect(description!.getBoundingClientRect().height).toBeGreaterThan(0);
+  });
+
   it("pauses while a toast control has focus and resumes the remaining visible time", async () => {
     const onClose = vi.fn();
     addTimedToast(onClose);
