@@ -824,7 +824,7 @@ const threadExportEffectRouteLayer = HttpRouter.add(
         status: 200,
         contentType: "application/zip",
         headers: {
-          "Content-Disposition": `attachment; filename="${fileName.replaceAll('"', "")}"`,
+          "Content-Disposition": attachmentContentDisposition(fileName),
           "Cache-Control": "no-store",
           ...corsHeaders,
           "Access-Control-Expose-Headers": "Content-Disposition",
@@ -856,6 +856,25 @@ export const editorIconEffectRouteLayer = HttpRouter.add(
     return toEffectHttpResponse(payload);
   }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
 );
+
+// Node rejects header values outside Latin-1 (ERR_INVALID_CHAR) inside the
+// platform's writeHead, which leaves the response hanging. Printable ASCII names
+// keep the quoted form. Anything else goes only in the RFC 5987 `filename*` form,
+// because browserDownload.ts reads only `filename=` and would prefer a lossy
+// ASCII fallback over the full name the web client already has.
+function attachmentContentDisposition(fileName: string): string {
+  const safeFileName = fileName.replaceAll('"', "");
+  if (/^[\x20-\x7e]*$/.test(safeFileName)) {
+    return `attachment; filename="${safeFileName}"`;
+  }
+  // encodeURIComponent throws on lone surrogates and leaves `'()*` bare, which
+  // RFC 5987 does not allow unencoded.
+  const encoded = encodeURIComponent(safeFileName.replace(/\p{Cs}/gu, "\uFFFD")).replace(
+    /['()*]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `attachment; filename*=UTF-8''${encoded}`;
+}
 
 // Streams a disk file as the response body instead of buffering it in memory:
 // preview files can be large (PDFs especially), and a full-file buffer per
@@ -947,7 +966,6 @@ export const localImageEffectRouteLayer = HttpRouter.add(
     // Etag.Generator/Path services and was failing with a 500 here).
     const fileSystem = yield* FileSystem.FileSystem;
     const isDownload = url.searchParams.get("download") === "1";
-    const safeFileName = previewFile.fileName.replaceAll('"', "");
     const isSvg = nodePath.extname(previewFile.path).toLowerCase() === ".svg";
     return streamedFileResponse({
       fileSystem,
@@ -964,7 +982,9 @@ export const localImageEffectRouteLayer = HttpRouter.add(
         // browser second-guess the declared content type.
         "X-Content-Type-Options": "nosniff",
         ...(isSvg ? SVG_DOCUMENT_SECURITY_HEADERS : {}),
-        ...(isDownload ? { "Content-Disposition": `attachment; filename="${safeFileName}"` } : {}),
+        ...(isDownload
+          ? { "Content-Disposition": attachmentContentDisposition(previewFile.fileName) }
+          : {}),
       },
     });
   }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
