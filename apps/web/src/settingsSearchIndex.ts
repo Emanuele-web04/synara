@@ -429,7 +429,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: "shortcuts",
     title: "Keybindings",
     keywords:
-      "Every keyboard shortcut available in Synara, grouped by context. keybindings hotkeys key combo cmd ctrl reference",
+      "Every keyboard shortcut available in Synara: change, add, remove, or reset them. keybindings hotkeys key combo cmd ctrl customize rebind unassigned reset defaults",
     target: null,
   },
 

@@ -775,6 +775,7 @@ export function createWsNativeApi(): NativeApi {
         }
       },
       upsertKeybinding: (input) => transport.request(WS_METHODS.serverUpsertKeybinding, input),
+      editKeybindings: (input) => transport.request(WS_METHODS.serverEditKeybindings, input),
     },
     stats: {
       getProfileStats: (input) => transport.request(WS_METHODS.statsGetProfileStats, input),

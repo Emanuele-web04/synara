@@ -7,7 +7,7 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas";
-import { KeybindingRule, ResolvedKeybindingsConfig } from "./keybindings";
+import { KeybindingCommand, KeybindingRule, ResolvedKeybindingsConfig } from "./keybindings";
 import { EditorId } from "./editor";
 import { ModelSelection, ProviderKind, ProviderStartOptions } from "./orchestration";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance";
@@ -218,6 +218,9 @@ export const ServerConfig = Schema.Struct({
   worktreesDir: TrimmedNonEmptyString,
   keybindingsConfigPath: TrimmedNonEmptyString,
   keybindings: ResolvedKeybindingsConfig,
+  // The shipped bindings, so the shortcut editor can tell customized commands from
+  // untouched ones and give a new binding its command's default condition.
+  defaultKeybindings: Schema.optional(ResolvedKeybindingsConfig),
   issues: ServerConfigIssues,
   providers: ServerProviderStatuses,
   availableEditors: Schema.Array(EditorId),
@@ -533,6 +536,37 @@ export const ServerUpsertKeybindingResult = Schema.Struct({
   issues: ServerConfigIssues,
 });
 export type ServerUpsertKeybindingResult = typeof ServerUpsertKeybindingResult.Type;
+
+export const MAX_KEYBINDING_EDITS = 64;
+
+/**
+ * One step of a shortcut-editor change. `set` adds a binding (replacing exactly
+ * `replacing` when given, leaving the command's other bindings alone), `remove` drops
+ * one binding and leaves the command unassigned when it was the last, and `reset`
+ * restores the shipped bindings for one command or, without `command`, for every
+ * built-in command.
+ */
+export const ServerKeybindingEdit = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("set"),
+    rule: KeybindingRule,
+    replacing: Schema.optional(KeybindingRule),
+  }),
+  Schema.Struct({ type: Schema.Literal("remove"), rule: KeybindingRule }),
+  Schema.Struct({ type: Schema.Literal("reset"), command: Schema.optional(KeybindingCommand) }),
+]);
+export type ServerKeybindingEdit = typeof ServerKeybindingEdit.Type;
+
+export const ServerEditKeybindingsInput = Schema.Struct({
+  edits: Schema.Array(ServerKeybindingEdit).check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(MAX_KEYBINDING_EDITS),
+  ),
+});
+export type ServerEditKeybindingsInput = typeof ServerEditKeybindingsInput.Type;
+
+export const ServerEditKeybindingsResult = ServerUpsertKeybindingResult;
+export type ServerEditKeybindingsResult = typeof ServerEditKeybindingsResult.Type;
 
 export const ServerConfigUpdatedPayload = Schema.Struct({
   issues: ServerConfigIssues,

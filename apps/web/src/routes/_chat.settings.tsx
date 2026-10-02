@@ -52,7 +52,10 @@ import {
 } from "~/components/settings/ProvidersSettingsPanel";
 import { ProviderOptionLabel } from "../components/ProviderIcon";
 import ReleaseHistoryDialog from "../components/ReleaseHistoryDialog";
-import { KeyboardShortcutsSettingsPanel } from "../components/settings/KeyboardShortcutsSettingsPanel";
+import {
+  KeyboardShortcutsResetButton,
+  KeyboardShortcutsSettingsPanel,
+} from "../components/settings/KeyboardShortcutsSettingsPanel";
 import { ProfileSettingsPanel } from "../components/settings/ProfileSettingsPanel";
 import { ProviderUsageSettingsPanel } from "../components/settings/ProviderUsageSettingsPanel";
 import { ExternalMcpSettingsPanel } from "../components/settings/ExternalMcpSettingsPanel";
@@ -1494,16 +1497,20 @@ function SettingsRouteView() {
                       {activeSectionItem.description}
                     </p>
                   </div>
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    className="shrink-0"
-                    disabled={changedSettingLabels.length === 0}
-                    onClick={() => void restoreDefaults()}
-                  >
-                    <ResetIcon className="size-3.5" />
-                    Restore defaults
-                  </Button>
+                  {activeSection === "shortcuts" ? (
+                    <KeyboardShortcutsResetButton />
+                  ) : (
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      className="shrink-0"
+                      disabled={changedSettingLabels.length === 0}
+                      onClick={() => void restoreDefaults()}
+                    >
+                      <ResetIcon className="size-3.5" />
+                      Restore defaults
+                    </Button>
+                  )}
                 </div>
               ) : null}
 

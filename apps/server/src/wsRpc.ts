@@ -131,7 +131,7 @@ import {
   gitHandoffMetadataCommand,
   recordGitHandoffResult,
 } from "./gitHandoffOperations";
-import { Keybindings } from "./keybindings";
+import { DEFAULT_RESOLVED_KEYBINDINGS, Keybindings } from "./keybindings";
 import { createLocalPreviewGrant } from "./localImageFiles";
 import { listLocalServers, stopLocalServer } from "./localServerMonitor";
 import {
@@ -920,6 +920,7 @@ const makeWsRpcHandlersLayer = () =>
           worktreesDir: config.worktreesDir,
           keybindingsConfigPath: config.keybindingsConfigPath,
           keybindings: keybindingsConfig.keybindings,
+          defaultKeybindings: DEFAULT_RESOLVED_KEYBINDINGS,
           issues: keybindingsConfig.issues,
           providers: providerStatuses,
           availableEditors: resolveAvailableEditors(),
@@ -2370,6 +2371,15 @@ const makeWsRpcHandlersLayer = () =>
                 Effect.map((keybindingsConfig) => ({ keybindings: keybindingsConfig, issues: [] })),
               ),
             "Failed to update keybinding",
+          ),
+        [WS_METHODS.serverEditKeybindings]: (input) =>
+          rpcEffect(
+            keybindings
+              .editKeybindings(input.edits)
+              .pipe(
+                Effect.map((keybindingsConfig) => ({ keybindings: keybindingsConfig, issues: [] })),
+              ),
+            "Failed to update keybindings",
           ),
         [WS_METHODS.subscribeServerLifecycle]: (_, { clientId }) =>
           streamAdmission.guard(

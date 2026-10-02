@@ -38,7 +38,11 @@ import { startFreshChatForActiveSurface } from "../lib/startContainerChat";
 import { resolveGroupChatTargetProjectId } from "../components/SidebarGroupsSurface.logic";
 import { isGroupContainerProject } from "../lib/groupProjects";
 import { isOrdinarySpaceProject } from "../lib/spaces";
-import { isKeyboardShortcutsHelpShortcut, resolveShortcutCommand } from "../keybindings";
+import {
+  isKeyboardShortcutsHelpShortcut,
+  isShortcutDispatchSuspended,
+  resolveShortcutCommand,
+} from "../keybindings";
 import { useStore } from "../store";
 import { createProjectLastActivityAtSelector } from "../storeSelectors";
 import { useSpacesUiStore } from "../spacesUiStore";
@@ -360,7 +364,9 @@ function ChatRouteGlobalShortcuts() {
 
   useEffect(() => {
     const onWindowKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
+      // The shortcut recorder owns the keyboard while it is open, including the fixed
+      // chords below that no keybinding lookup would catch.
+      if (event.defaultPrevented || isShortcutDispatchSuspended()) return;
       const shortcutContext = {
         terminalFocus: isTerminalFocused(),
         terminalOpen,

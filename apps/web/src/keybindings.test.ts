@@ -17,6 +17,7 @@ import {
   shouldShowThreadJumpHints,
   shortcutLabelForCommand,
   spaceJumpIndexFromCommand,
+  suspendShortcutDispatch,
   terminalNavigationShortcutData,
   threadJumpCommandForIndex,
   threadJumpIndexFromCommand,
@@ -1024,5 +1025,74 @@ describe("plus key parsing", () => {
       }),
       "terminal.toggle",
     );
+  });
+});
+
+describe("unassigned commands", () => {
+  // What the server sends for a command whose shortcut the user removed.
+  const unassignedNewThread = compile([
+    { shortcut: modShortcut("unassigned", { modKey: false }), command: "chat.new" },
+  ]);
+
+  it("does not bring the shipped shortcut back through the fallback table", () => {
+    const options = {
+      platform: "MacIntel",
+      context: { terminalFocus: false, terminalOpen: false },
+    };
+
+    assert.equal(
+      resolveShortcutCommand(event({ key: "n", metaKey: true }), [], options),
+      "chat.new",
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "n", metaKey: true }), unassignedNewThread, options),
+    );
+  });
+
+  it("has no shortcut to show", () => {
+    assert.isNull(shortcutLabelForCommand(unassignedNewThread, "chat.new", "MacIntel"));
+    assert.isNull(
+      resolveKeybindingForCommand(unassignedNewThread, "chat.new", { platform: "MacIntel" }),
+    );
+  });
+});
+
+describe("option-modified keys", () => {
+  it("matches Option+Space by its physical key on macOS", () => {
+    const bindings = compile([
+      { shortcut: modShortcut(" ", { modKey: false, altKey: true }), command: "terminal.toggle" },
+    ]);
+
+    assert.equal(
+      resolveShortcutCommand(event({ key: "\u00a0", code: "Space", altKey: true }), bindings, {
+        platform: "MacIntel",
+      }),
+      "terminal.toggle",
+    );
+  });
+});
+
+describe("suspendShortcutDispatch", () => {
+  it("stops every shortcut from resolving until each holder resumes", () => {
+    const pressed = event({ key: "j", metaKey: true });
+    const options = { platform: "MacIntel" };
+    const resumeFirst = suspendShortcutDispatch();
+    const resumeSecond = suspendShortcutDispatch();
+
+    assert.isNull(resolveShortcutCommand(pressed, DEFAULT_BINDINGS, options));
+    assert.isFalse(
+      isKeyboardShortcutsHelpShortcut(
+        event({ metaKey: true, key: "/", code: "Slash" }),
+        "MacIntel",
+      ),
+    );
+
+    resumeFirst();
+    // Resuming twice must not release the other holder's suspension.
+    resumeFirst();
+    assert.isNull(resolveShortcutCommand(pressed, DEFAULT_BINDINGS, options));
+
+    resumeSecond();
+    assert.equal(resolveShortcutCommand(pressed, DEFAULT_BINDINGS, options), "terminal.toggle");
   });
 });

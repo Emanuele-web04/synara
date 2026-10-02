@@ -15,6 +15,20 @@ The file must be a JSON array of rules:
 
 See the full schema for more details: [`packages/contracts/src/keybindings.ts`](packages/contracts/src/keybindings.ts)
 
+## Editing in Settings
+
+Settings → Keybindings lists every built-in command with its shortcuts and writes the same file:
+
+- The pencil opens the recorder: press the new keys, then Save (or Enter). Escape cancels. A shortcut needs ⌘, ⌥ or ⌃ (Ctrl or Alt elsewhere) unless it is an F-key, and the chords for Copy, Paste, Cut, Select All, Undo, Redo, Settings, the keybindings sheet, and (on macOS) Quit, Hide, and Minimize cannot be taken.
+- When the keys already run another command in a context that can overlap, the recorder names it and saving moves the shortcut over. If it has no other shortcuts, the other command is left unassigned.
+- The plus adds another shortcut to a command, and the trash removes one. A command with none left shows as Unassigned.
+- "Jump to visible thread 1–9" and "Jump to space 1–9" are each rebound as one modifier combination across the number keys. Rebind a single number in the file and the list shows the nine commands separately.
+- "Reset to default" in the recorder restores one command, and "Reset all to defaults" restores every built-in command. Project script shortcuts are kept.
+
+A new shortcut takes the `when` condition its command ships with. Edit the file to change a condition.
+
+Desktop menu accelerators are currently fixed: for example, removing or moving Toggle sidebar does not disable the menu’s Cmd+B accelerator. The recorder suspends web shortcut dispatch; native menu accelerators are not customized by this editor.
+
 ## Defaults
 
 ```json
@@ -49,6 +63,16 @@ Each entry supports:
 - `when` (optional): boolean expression controlling when the shortcut is active
 
 Invalid rules are ignored. Invalid config files are ignored. Warnings are logged by the server.
+
+### Unassigned Commands
+
+A command with a default shortcut gets it back whenever the file has no rule for it. To leave such a command without a shortcut, give it the key `unassigned`:
+
+```json
+[{ "key": "unassigned", "command": "terminal.toggle" }]
+```
+
+Removing a command's last shortcut in Settings writes this rule. It never matches a key press, and adding a shortcut to the command in Settings replaces it.
 
 ### Available Commands
 

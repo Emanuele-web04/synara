@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { buildShortcutSheetSections, listEditableShortcutDefinitions } from "./shortcutsSheet";
+import { STATIC_KEYBINDING_COMMANDS } from "@synara/contracts";
+
+import { buildShortcutSheetSections, listShortcutEditorDefinitions } from "./shortcutsSheet";
 import type { ProjectScript } from "./types";
 
 const PROJECT_SCRIPTS: ProjectScript[] = [
@@ -35,7 +37,7 @@ describe("buildShortcutSheetSections", () => {
       shortcutLabel: "⇧Tab",
     });
     expect(
-      listEditableShortcutDefinitions().find((entry) => entry.command === "model.effort.next"),
+      listShortcutEditorDefinitions().find((entry) => entry.commands.includes("model.effort.next")),
     ).toMatchObject({
       label: "Next model effort",
     });
@@ -210,17 +212,33 @@ describe("buildShortcutSheetSections", () => {
   });
 });
 
-describe("listEditableShortcutDefinitions", () => {
+describe("listShortcutEditorDefinitions", () => {
   it("shows a friendly label instead of the raw command id for every built-in command", () => {
-    const definitions = listEditableShortcutDefinitions();
-    const unlabeledCommands = definitions
+    const unlabeledCommands = listShortcutEditorDefinitions()
       .filter(
         (definition) =>
-          definition.label === definition.command ||
+          definition.label === definition.commands[0] ||
           definition.description === "Assign a shortcut to this built-in command.",
       )
-      .map((definition) => definition.command);
+      .flatMap((definition) => definition.commands);
 
     expect(unlabeledCommands).toEqual([]);
+  });
+
+  it("lists every built-in command exactly once", () => {
+    const listed = listShortcutEditorDefinitions().flatMap((definition) => definition.commands);
+
+    expect(listed.toSorted()).toEqual([...STATIC_KEYBINDING_COMMANDS].toSorted());
+  });
+
+  it("gives each numbered family one member per number key", () => {
+    const families = listShortcutEditorDefinitions().filter((definition) => definition.members);
+
+    expect(families.map((family) => family.id)).toEqual(["thread.jump", "space.jump"]);
+    for (const family of families) {
+      expect(family.members?.map((member) => member.commands)).toEqual(
+        family.commands.map((command) => [command]),
+      );
+    }
   });
 });
