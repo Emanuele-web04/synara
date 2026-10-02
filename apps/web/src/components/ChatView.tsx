@@ -2387,9 +2387,10 @@ export default function ChatView({
             sourceProvider: activeThreadProvider,
             sourceProviderInstanceId: activeThreadProviderInstanceId,
             providerInstances,
+            providerStatuses,
           })
         : [],
-    [activeThreadProvider, activeThreadProviderInstanceId, providerInstances],
+    [activeThreadProvider, activeThreadProviderInstanceId, providerInstances, providerStatuses],
   );
   const sidechatTargetProviders = useMemo(
     () => [...new Set(handoffTargets.map((target) => target.provider))],
