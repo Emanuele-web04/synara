@@ -1,6 +1,11 @@
 import "../../index.css";
 
-import type { ServerProviderStatus, TerminalEvent, TerminalOpenInput } from "@synara/contracts";
+import {
+  ThreadId,
+  type ServerProviderStatus,
+  type TerminalEvent,
+  type TerminalOpenInput,
+} from "@synara/contracts";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import { page, userEvent } from "vitest/browser";
 import { beforeEach, expect, it, vi } from "vitest";
@@ -55,6 +60,8 @@ vi.mock("~/nativeApi", () => ({
 
 import { AppSettingsSchema } from "~/appSettings";
 import { ProvidersSettingsPanel } from "./ProvidersSettingsPanel";
+import TerminalViewport from "../terminal/TerminalViewport";
+import { terminalRuntimeRegistry } from "../terminal/terminalRuntimeRegistry";
 
 const defaults = AppSettingsSchema.makeUnsafe({});
 const props = {
@@ -435,3 +442,57 @@ it("closes a late authentication open after the settings dialog is cancelled", a
   });
   await expect.poll(() => harness.api.terminal.close.mock.calls.length).toBeGreaterThan(beforeLate);
 });
+
+it.each(["ready", "error", "exited"] as const)(
+  "reports a retained %s authentication terminal when its viewport remounts",
+  async (status) => {
+    const threadId = ThreadId.makeUnsafe(`provider-auth-remount-${status}`);
+    const terminalId = "sign-in";
+    const onRuntimeStatusChange = vi.fn();
+    const viewport = (
+      <TerminalViewport
+        threadId={threadId}
+        terminalId={terminalId}
+        terminalLabel="Sign in"
+        cwd="/tmp"
+        providerAuthInstanceId="pi_work"
+        onRuntimeStatusChange={onRuntimeStatusChange}
+        onSessionExited={() => {}}
+        onTerminalMetadataChange={() => {}}
+        onTerminalActivityChange={() => {}}
+        focusRequestId={0}
+        autoFocus={false}
+        isVisible
+      />
+    );
+    try {
+      const mounted = await render(viewport);
+      await expect.poll(() => onRuntimeStatusChange.mock.calls.at(-1)?.[0]).toBe("ready");
+      await mounted.unmount();
+      if (status === "error") {
+        harness.terminalListener?.({
+          type: "error",
+          threadId,
+          terminalId,
+          message: "Authentication failed",
+          createdAt: "2026-10-02T12:00:00Z",
+        });
+      } else if (status === "exited") {
+        harness.terminalListener?.({
+          type: "exited",
+          threadId,
+          terminalId,
+          exitCode: 0,
+          exitSignal: null,
+          createdAt: "2026-10-02T12:00:00Z",
+        });
+      }
+      onRuntimeStatusChange.mockClear();
+      const reopened = await render(viewport);
+      await expect.poll(() => onRuntimeStatusChange.mock.calls.at(-1)?.[0]).toBe(status);
+      await reopened.unmount();
+    } finally {
+      terminalRuntimeRegistry.disposeTerminal(threadId, terminalId);
+    }
+  },
+);

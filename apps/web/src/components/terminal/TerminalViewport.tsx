@@ -237,7 +237,10 @@ export default function TerminalViewport({
     terminalRef.current = attachedRuntime.terminal;
     setTerminalInstance(attachedRuntime.terminal);
     setSearchAddonInstance(attachedRuntime.searchAddon);
-    setRuntimeStatus(attachedRuntime.runtimeStatus);
+    runtimeConfigRef.current.callbacks.onTerminalRuntimeStatusChange?.(
+      terminalId,
+      attachedRuntime.runtimeStatus,
+    );
 
     return () => {
       if (selectionActionTimerRef.current !== null) {

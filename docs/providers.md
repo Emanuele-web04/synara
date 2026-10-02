@@ -323,7 +323,7 @@ providers without a verifiable login-status probe can continue to show an unknow
 Entry points checked against provider documentation and the installed Pi CLI source on 2026-10-02:
 [Codex](https://developers.openai.com/codex/cli/reference#codex-login),
 [Claude](https://code.claude.com/docs/en/cli-reference),
-[Cursor](https://docs.cursor.com/en/cli/reference/authentication),
+[Cursor](https://cursor.com/docs/cli/reference/authentication),
 [Devin](https://docs.devin.ai/cli/enterprise/devin-auth),
 [Antigravity](https://www.antigravity.google/docs/cli/install/),
 [Grok](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md),
