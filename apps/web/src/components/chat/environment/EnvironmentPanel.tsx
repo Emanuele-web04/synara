@@ -8,6 +8,7 @@
 //          use floating overlay only. The card surface and content are identical either way.
 // Layer: Environment panel container
 
+import { useInPageGlassOverlay } from "~/hooks/useInPageGlassOverlay";
 import type {
   AutomationDefinition,
   EditorId,
@@ -548,10 +549,13 @@ export function EnvironmentPanel({
   // Top-right overlay pinned to the chat column with p-3 edge gutters (same footprint in
   // split panes and when the right dock is open). Docked mode additionally insets transcript
   // content; floating overlays only without stealing flex width from the narrow chat pane.
+  // Floating over the transcript: cut that content out from under the card on a glass window.
+  const glassOverlayRef = useInPageGlassOverlay<HTMLDivElement>(open && variant === "floating");
   return (
     <div
       className={ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME}
-      data-environment-panel-variant={variant}
+      ref={glassOverlayRef}
+        data-environment-panel-variant={variant}
       aria-hidden={!open}
       inert={!open}
     >

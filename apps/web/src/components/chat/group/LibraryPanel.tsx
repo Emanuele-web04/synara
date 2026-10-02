@@ -7,6 +7,7 @@
 //          status pill.
 // Layer: Chat UI component
 
+import { useInPageGlassOverlay } from "~/hooks/useInPageGlassOverlay";
 import type { LibraryCommit, LibraryEntry, ProjectId } from "@synara/contracts";
 import { formatBytes } from "@synara/shared/formatBytes";
 import {
@@ -636,6 +637,8 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
     </div>
   );
 
+  // Floating over the transcript: cut that content out from under the card on a glass window.
+  const glassOverlayRef = useInPageGlassOverlay<HTMLDivElement>(open && variant === "floating");
   return (
     <>
       <div
@@ -645,6 +648,7 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
           // max width is measured against the column, never the window.
           fullHeight ? "left-0 items-end" : null,
         )}
+        ref={glassOverlayRef}
         data-environment-panel-variant={variant}
         aria-hidden={!open}
         inert={!open}

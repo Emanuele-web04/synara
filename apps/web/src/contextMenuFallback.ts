@@ -32,7 +32,6 @@ export function showContextMenuFallback<T extends string>(
     const y = position?.y ?? 0;
     menu.style.top = `${y}px`;
     menu.style.left = `${x}px`;
-    menu.style.backgroundColor = `color-mix(in srgb, var(--popover) 90%, transparent)`;
     menu.style.backdropFilter = "blur(24px)";
     (menu.style as any).webkitBackdropFilter = "blur(24px)";
 

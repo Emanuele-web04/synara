@@ -5,6 +5,7 @@ import {
   type ProjectTask,
   type ThreadId,
 } from "@synara/contracts";
+import { useInPageGlassOverlay } from "~/hooks/useInPageGlassOverlay";
 import { PROJECT_CONTEXT_PREVIEW_DOCUMENTS } from "@synara/shared/projectAgent";
 import { resolveGroupCoordinatorStatus } from "@synara/shared/groupThreadState";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
@@ -528,10 +529,13 @@ export function ProjectPanel({
     </div>
   );
 
+  // Floating over the transcript: cut that content out from under the card on a glass window.
+  const glassOverlayRef = useInPageGlassOverlay<HTMLDivElement>(open && variant === "floating");
   return (
     <>
       <div
         className={ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME}
+        ref={glassOverlayRef}
         data-environment-panel-variant={variant}
         aria-hidden={!open}
         inert={!open}
