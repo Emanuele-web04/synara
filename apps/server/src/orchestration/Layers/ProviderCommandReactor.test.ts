@@ -14350,6 +14350,8 @@ describe("ProviderCommandReactor", () => {
       const handoffActivity = after?.activities.find(
         (activity) => activity.kind === "provider.handoff",
       );
+      // Keyed by the requesting command so the client can await this outcome.
+      expect(handoffActivity?.id).toBe("provider-handoff:cmd-handoff-to-claude");
       expect(handoffActivity?.payload).toMatchObject({
         sourceProvider: "grok",
         sourceModel: "grok-code-fast-1",
@@ -14437,8 +14439,8 @@ describe("ProviderCommandReactor", () => {
         false,
       );
       expect(
-        thread?.activities.find((activity) => activity.kind === "provider.handoff.failed")?.tone,
-      ).toBe("error");
+        thread?.activities.find((activity) => activity.kind === "provider.handoff.failed"),
+      ).toMatchObject({ id: "provider-handoff-failed:cmd-handoff-to-claude", tone: "error" });
 
       // The thread stays usable on the source provider.
       await sendSecondTurn(harness);

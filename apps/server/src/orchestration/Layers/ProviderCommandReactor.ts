@@ -6376,7 +6376,9 @@ const make = Effect.gen(function* () {
   // timeline record the handoff only once the target is actually up, and a
   // failed start restores the source selection so the thread stays usable.
   const applyProviderHandoff = Effect.fnUntraced(function* (input: {
-    readonly eventId: EventId;
+    // The requesting command id when there is one, so the client that asked
+    // can wait for exactly this handoff's outcome row.
+    readonly handoffKey: string;
     readonly threadId: ThreadId;
     readonly occurredAt: string;
     readonly sourceModelSelection: ModelSelection;
@@ -6414,10 +6416,10 @@ const make = Effect.gen(function* () {
       threadSessionModelSelections.set(input.threadId, input.targetModelSelection);
       yield* orchestrationEngine.dispatch({
         type: "thread.activity.append",
-        commandId: CommandId.makeUnsafe(`server:provider-handoff:${input.eventId}`),
+        commandId: CommandId.makeUnsafe(`server:provider-handoff:${input.handoffKey}`),
         threadId: input.threadId,
         activity: {
-          id: EventId.makeUnsafe(`provider-handoff:${input.eventId}`),
+          id: EventId.makeUnsafe(`provider-handoff:${input.handoffKey}`),
           tone: "info",
           kind: PROVIDER_HANDOFF_ACTIVITY_KIND,
           summary: `Handed off from ${describe(input.sourceModelSelection)} to ${describe(input.targetModelSelection)}`,
@@ -6436,16 +6438,16 @@ const make = Effect.gen(function* () {
     });
     yield* orchestrationEngine.dispatch({
       type: "thread.meta.update",
-      commandId: CommandId.makeUnsafe(`server:provider-handoff-revert:${input.eventId}`),
+      commandId: CommandId.makeUnsafe(`server:provider-handoff-revert:${input.handoffKey}`),
       threadId: input.threadId,
       modelSelection: input.sourceModelSelection,
     });
     yield* orchestrationEngine.dispatch({
       type: "thread.activity.append",
-      commandId: CommandId.makeUnsafe(`server:provider-handoff-failed:${input.eventId}`),
+      commandId: CommandId.makeUnsafe(`server:provider-handoff-failed:${input.handoffKey}`),
       threadId: input.threadId,
       activity: {
-        id: EventId.makeUnsafe(`provider-handoff-failed:${input.eventId}`),
+        id: EventId.makeUnsafe(`provider-handoff-failed:${input.handoffKey}`),
         tone: "error",
         kind: PROVIDER_HANDOFF_FAILED_ACTIVITY_KIND,
         summary: `Handoff to ${describe(input.targetModelSelection)} failed; the thread stays on ${describe(input.sourceModelSelection)}.`,
@@ -6639,7 +6641,7 @@ const make = Effect.gen(function* () {
 
           if (event.payload.providerHandoff !== undefined) {
             yield* applyProviderHandoff({
-              eventId: event.eventId,
+              handoffKey: event.commandId ?? event.eventId,
               threadId: event.payload.threadId,
               occurredAt: event.occurredAt,
               sourceModelSelection: event.payload.providerHandoff.sourceModelSelection,

@@ -61,6 +61,12 @@ export interface LateComposerSendHandlers {
 export interface ChatTurnSubmissionInput {
   threadId: ThreadId;
   hasLiveTurn: boolean;
+  /**
+   * Runs before a live send. When the composer picked another provider it hands
+   * the thread off in place and resolves false if that failed, so the message
+   * stays in the composer instead of reaching the wrong provider.
+   */
+  prepareProviderHandoffForSend?: () => Promise<boolean>;
   lateComposerSendHandlersRef: RefObject<LateComposerSendHandlers | null>;
   activeThread: Thread | undefined;
   isConnecting: boolean;

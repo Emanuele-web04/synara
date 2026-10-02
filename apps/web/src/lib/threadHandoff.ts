@@ -238,6 +238,51 @@ export function canContinueThreadHandoff(input: {
   return input.targetProvider !== input.sourceProvider;
 }
 
+// Mirrors the outcome rows ProviderCommandReactor appends for a same-thread
+// handoff, keyed by the requesting command so the caller can await its result.
+export function providerHandoffOutcomeActivityIds(commandId: string): {
+  readonly completed: string;
+  readonly failed: string;
+} {
+  return {
+    completed: `provider-handoff:${commandId}`,
+    failed: `provider-handoff-failed:${commandId}`,
+  };
+}
+
+export type ProviderHandoffOutcome =
+  | { readonly status: "completed" }
+  | { readonly status: "failed"; readonly detail: string }
+  | { readonly status: "pending" };
+
+/**
+ * Reads a same-thread handoff's outcome from the thread's activities. The
+ * failure row carries the target's start error; "pending" means neither row
+ * has arrived yet.
+ */
+export function resolveProviderHandoffOutcome(
+  thread: Pick<Thread, "activities"> | undefined,
+  commandId: string,
+): ProviderHandoffOutcome {
+  const ids = providerHandoffOutcomeActivityIds(commandId);
+  for (const activity of thread?.activities ?? []) {
+    if (activity.id === ids.completed) {
+      return { status: "completed" };
+    }
+    if (activity.id === ids.failed) {
+      const payload =
+        activity.payload && typeof activity.payload === "object"
+          ? (activity.payload as { detail?: unknown })
+          : null;
+      return {
+        status: "failed",
+        detail: typeof payload?.detail === "string" ? payload.detail : activity.summary,
+      };
+    }
+  }
+  return { status: "pending" };
+}
+
 export interface ThreadHandoffAvailability {
   // "Hand off thread" — create a new thread on another provider.
   readonly providerHandoff: boolean;

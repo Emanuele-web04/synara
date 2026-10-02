@@ -3431,6 +3431,12 @@ describe("ChatView transcript geometry (full app)", () => {
         targetMessageId: MessageId.makeUnsafe("msg-handoff-destination"),
         targetText: "Fix the flaky reconnect test",
       }),
+      // Models the server's reaction to a dispatched command.
+      respond?: (
+        command: Parameters<
+          NonNullable<typeof window.nativeApi>["orchestration"]["dispatchCommand"]
+        >[0],
+      ) => void,
     ) {
       const mounted = await mountChatView({
         viewport: DEFAULT_VIEWPORT,
@@ -3443,6 +3449,7 @@ describe("ChatView transcript geometry (full app)", () => {
       const dispatchCommand = vi.fn(
         async (command: Parameters<typeof api.orchestration.dispatchCommand>[0]) => {
           commands.push(command);
+          if (respond) setTimeout(() => respond(command), 50);
           return { sequence: fixture.snapshot.snapshotSequence };
         },
       );
@@ -3535,6 +3542,138 @@ describe("ChatView transcript geometry (full app)", () => {
         expect(mounted.commands.some((command) => command.type === "thread.meta.update")).toBe(
           false,
         );
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    // Server reaction to a same-thread handoff: the outcome row keyed by the
+    // command, plus (on success) the thread rebound to the target provider.
+    const respondToHandoff =
+      (outcome: "completed" | "failed") =>
+      (
+        command: Parameters<
+          NonNullable<typeof window.nativeApi>["orchestration"]["dispatchCommand"]
+        >[0],
+      ) => {
+        if (command.type !== "thread.meta.update" || command.providerHandoff !== true) return;
+        const { commandId } = command;
+        fixture.snapshot = {
+          ...fixture.snapshot,
+          snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+          threads: fixture.snapshot.threads.map((thread) =>
+            thread.id !== THREAD_ID
+              ? thread
+              : {
+                  ...thread,
+                  ...(outcome === "completed"
+                    ? {
+                        modelSelection: {
+                          provider: "claudeAgent" as const,
+                          model: "claude-sonnet-4-6",
+                        },
+                        session: {
+                          threadId: THREAD_ID,
+                          status: "ready" as const,
+                          providerName: "claudeAgent",
+                          providerInstanceId: "claudeAgent",
+                          runtimeMode: "full-access" as const,
+                          activeTurnId: null,
+                          lastError: null,
+                          updatedAt: NOW_ISO,
+                        },
+                      }
+                    : {}),
+                  activities: [
+                    ...thread.activities,
+                    {
+                      id: EventId.makeUnsafe(
+                        outcome === "completed"
+                          ? `provider-handoff:${commandId}`
+                          : `provider-handoff-failed:${commandId}`,
+                      ),
+                      createdAt: NOW_ISO,
+                      kind:
+                        outcome === "completed" ? "provider.handoff" : "provider.handoff.failed",
+                      summary: outcome === "completed" ? "Handed off" : "Handoff failed",
+                      tone: outcome === "completed" ? ("info" as const) : ("error" as const),
+                      turnId: null,
+                      sequence: 950,
+                      payload:
+                        outcome === "completed" ? {} : { detail: "Claude CLI is not signed in." },
+                    },
+                  ],
+                },
+          ),
+        };
+        useStore.getState().syncServerReadModel(fixture.snapshot);
+      };
+
+    async function pickClaudeAndSend(text: string) {
+      useComposerDraftStore.getState().setModelSelectionAndSticky(THREAD_ID, {
+        provider: "claudeAgent",
+        model: "claude-sonnet-4-6",
+      });
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, text);
+      const composerEditor = await waitForComposerEditor();
+      await vi.waitFor(() => expect(composerEditor.textContent ?? "").toContain(text), {
+        timeout: 8_000,
+        interval: 16,
+      });
+      const sendButton = await waitForSendButton();
+      await vi.waitFor(() => expect(sendButton.disabled).toBe(false), {
+        timeout: 8_000,
+        interval: 16,
+      });
+      sendButton.click();
+      return composerEditor;
+    }
+
+    it("hands the thread off before sending when the composer picks another provider", async () => {
+      const mounted = await mountWithCapturedCommands(undefined, respondToHandoff("completed"));
+      try {
+        await pickClaudeAndSend("Review the reconnect fix");
+        await vi.waitFor(
+          () =>
+            expect(mounted.commands.some((command) => command.type === "thread.turn.start")).toBe(
+              true,
+            ),
+          { timeout: 8_000, interval: 16 },
+        );
+        const handoffIndex = mounted.commands.findIndex(
+          (command) => command.type === "thread.meta.update" && "providerHandoff" in command,
+        );
+        const turnStartIndex = mounted.commands.findIndex(
+          (command) => command.type === "thread.turn.start",
+        );
+        expect(mounted.commands[handoffIndex]).toMatchObject({
+          threadId: THREAD_ID,
+          providerHandoff: true,
+          modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+        });
+        // The message only goes out once the target is up, and to the target.
+        expect(turnStartIndex).toBeGreaterThan(handoffIndex);
+        expect(mounted.commands[turnStartIndex]).toMatchObject({
+          threadId: THREAD_ID,
+          modelSelection: { provider: "claudeAgent" },
+        });
+        expect(mounted.commands.some((command) => command.type === "thread.handoff.create")).toBe(
+          false,
+        );
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("keeps the message in the composer when the picked provider cannot start", async () => {
+      const mounted = await mountWithCapturedCommands(undefined, respondToHandoff("failed"));
+      try {
+        const composerEditor = await pickClaudeAndSend("Review the reconnect fix");
+        await expect.element(page.getByText("Could not switch to Claude")).toBeVisible();
+        expect(mounted.commands.some((command) => command.type === "thread.turn.start")).toBe(
+          false,
+        );
+        expect(composerEditor.textContent ?? "").toContain("Review the reconnect fix");
       } finally {
         await mounted.cleanup();
       }

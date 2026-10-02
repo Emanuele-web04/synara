@@ -147,6 +147,8 @@ export function resolveComposerModelPickerProviderTabs(input: {
   providers: ReadonlyArray<ServerProviderStatus> | undefined;
   providerInstances?: ReadonlyArray<ProviderModelPickerInstance> | undefined;
   lockedInstanceId?: ProviderInstanceId | null | undefined;
+  // Locks only this provider's sibling accounts; other providers stay pickable.
+  lockedInstanceProvider?: ProviderKind | null | undefined;
 }): ComposerModelPickerProviderTab[] {
   return input.options.flatMap((option) => {
     const accounts = (input.providerInstances ?? []).filter(
@@ -184,7 +186,9 @@ export function resolveComposerModelPickerProviderTabs(input: {
           instanceId: tab.instanceId,
         }),
         lockedToSibling:
-          input.lockedInstanceId != null && tab.instanceId !== input.lockedInstanceId,
+          input.lockedInstanceId != null &&
+          tab.instanceId !== input.lockedInstanceId &&
+          (input.lockedInstanceProvider == null || option.value === input.lockedInstanceProvider),
       });
       return {
         provider: option.value,
