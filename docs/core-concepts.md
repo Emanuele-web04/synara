@@ -117,12 +117,16 @@ composer and keeps the workspace assigned by Code review.
 
 ## Code review
 
-Code review lists the open, closed, or merged pull requests and issues of the GitHub repositories behind
+Code review lists the open or closed pull requests and issues of the GitHub repositories behind
 your projects: each project contributes the repository of its current branch remote (or
 `remote.pushDefault`, then `origin`), and **Include fork upstreams** in Settings adds its other
 GitHub remotes. Two projects on one repository share one list. Filters (kind, projects, state,
 involvement, labels) stay local and are remembered; GitHub is refreshed about every five minutes
 while the page is visible, on window focus, and with the refresh button.
+
+**Merged** narrows the loaded closed list to merged pull requests. Its counts reflect matching
+loaded rows, and its refresh uses the same closed cache. The first-50 cap applies to closed
+pull requests before this local filter, so it does not fetch a separate page of 50 merged items.
 
 Every item offers three actions:
 

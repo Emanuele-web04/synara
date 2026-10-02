@@ -607,9 +607,12 @@ export function GitHubInbox({
               )}
               {truncatedRepositoryCount > 0 ? (
                 <p className={cn(PR_FINE_TEXT_CLASS_NAME, "text-muted-foreground")}>
-                  Showing the 50{" "}
+                  {filters.state === "merged"
+                    ? "Showing merged pull requests from the 50"
+                    : "Showing the 50"}{" "}
                   {settings.githubInboxSort === "created" ? "newest" : "most recently updated"}{" "}
-                  {noun} per repository. {truncatedRepositoryCount}{" "}
+                  {filters.state === "merged" ? "closed pull requests" : noun} per repository.{" "}
+                  {truncatedRepositoryCount}{" "}
                   {truncatedRepositoryCount === 1 ? "repository has" : "repositories have"} more on
                   GitHub.
                 </p>

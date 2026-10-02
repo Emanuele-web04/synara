@@ -541,13 +541,13 @@ function inProjectScope(projectIds: ReadonlyArray<ProjectId>, filter: ReadonlyAr
 /** Repositories in scope whose list for the shown kind was cut at the per-repository cap. */
 export function countTruncatedInboxRepositories(
   batches: ReadonlyArray<GitHubInboxRepositoryBatch>,
-  filters: Pick<GitHubInboxFilters, "kind" | "projectIds">,
+  filters: Pick<GitHubInboxFilters, "kind" | "state" | "projectIds">,
 ): number {
   return batches.filter(
     (batch) =>
       inProjectScope(batch.projectIds, filters.projectIds) &&
       ((filters.kind !== "issue" && batch.truncatedPullRequests) ||
-        (filters.kind !== "pullRequest" && batch.truncatedIssues)),
+        (filters.state !== "merged" && filters.kind !== "pullRequest" && batch.truncatedIssues)),
   ).length;
 }
 
