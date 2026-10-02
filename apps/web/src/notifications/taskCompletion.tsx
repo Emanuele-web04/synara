@@ -217,10 +217,9 @@ export function TaskCompletionNotifications() {
       return;
     }
 
-    const completions = collectCompletedThreadCandidates(
-      previousThreadsRef.current,
-      threads,
-    ).filter(
+    const completions = collectCompletedThreadCandidates(previousThreadsRef.current, threads, {
+      waitForSubagents: settings.notifyAfterSubagentsFinish,
+    }).filter(
       (candidate) =>
         isNotificationRuntimeFreshTimestamp(candidate.completedAt, runtimeStartedAtMs) &&
         !notifiedCompletionKeysRef.current.has(completedThreadNotificationKey(candidate)),
@@ -328,6 +327,7 @@ export function TaskCompletionNotifications() {
     navigate,
     settings.enableSystemTaskCompletionNotifications,
     settings.enableTaskCompletionToasts,
+    settings.notifyAfterSubagentsFinish,
     terminalStateByThreadId,
     threads,
     threadsHydrated,

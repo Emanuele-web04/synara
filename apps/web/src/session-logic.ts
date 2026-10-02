@@ -396,6 +396,57 @@ export function derivePendingBackgroundWork(input: {
   return taskIds.length > 0 ? { count: taskIds.length, taskIds } : null;
 }
 
+// Background tasks still running anywhere in the thread. Unlike
+// derivePendingBackgroundWork this is not scoped to the latest turn: once a
+// finished subagent wakes the agent into a new turn, the subagents launched by
+// the earlier turn are still outstanding. Claude announces backgrounded work
+// with a "Moved to background" notice, so both that notice and an
+// isBackgrounded patch count.
+export function deriveOutstandingBackgroundTaskIds(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): string[] {
+  const outstanding = new Set<string>();
+  for (const activity of orderedActivities(activities)) {
+    const payload =
+      activity.payload && typeof activity.payload === "object"
+        ? (activity.payload as Record<string, unknown>)
+        : null;
+    if (activity.kind === "runtime.warning") {
+      if (payload?.nativeEventType !== "background_tasks_changed") continue;
+      const data =
+        payload.data && typeof payload.data === "object"
+          ? (payload.data as Record<string, unknown>)
+          : null;
+      if (!Array.isArray(data?.tasks)) continue;
+      for (const task of data.tasks) {
+        const taskId =
+          task && typeof task === "object" ? (task as Record<string, unknown>).task_id : null;
+        if (typeof taskId === "string") outstanding.add(taskId);
+      }
+      continue;
+    }
+    const taskId = payload && typeof payload.taskId === "string" ? payload.taskId : null;
+    if (!taskId) continue;
+    if (activity.kind === "task.completed") {
+      outstanding.delete(taskId);
+    } else if (activity.kind === "task.updated") {
+      const status = typeof payload?.status === "string" ? payload.status : undefined;
+      if (
+        status === "completed" ||
+        status === "failed" ||
+        status === "killed" ||
+        status === "paused" ||
+        payload?.isBackgrounded === false
+      ) {
+        outstanding.delete(taskId);
+      } else if (payload?.isBackgrounded === true) {
+        outstanding.add(taskId);
+      }
+    }
+  }
+  return [...outstanding];
+}
+
 // Keeps the UI "working" while the provider still has visible assistant text or
 // background-task updates to finish for the latest turn.
 export function hasLiveTurnTailWork(input: {

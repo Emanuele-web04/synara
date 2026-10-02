@@ -12,6 +12,7 @@ import { pendingRequestInstanceKey } from "@synara/shared/threadSummary";
 import type { Thread, ThreadSession } from "../types";
 import {
   derivePendingApprovals,
+  deriveOutstandingBackgroundTaskIds,
   derivePendingBackgroundWork,
   derivePendingUserInputs,
   hasLiveLatestTurn,
@@ -522,11 +523,23 @@ function isCompletionNotificationSettled(thread: Thread | undefined): boolean {
 export function collectCompletedThreadCandidates(
   previousThreads: readonly Thread[],
   nextThreads: readonly Thread[],
+  options: {
+    /**
+     * Notify once the agent and every background subagent it launched have
+     * finished, instead of each time the agent or one of its subagents stops.
+     */
+    readonly waitForSubagents?: boolean;
+  } = {},
 ): CompletedThreadCandidate[] {
   const previousById = new Map(previousThreads.map((thread) => [thread.id, thread] as const));
   const candidates: CompletedThreadCandidate[] = [];
 
   for (const thread of nextThreads) {
+    // A subagent's own thread finishing is a step of its parent's work, and
+    // its result reaches the parent thread anyway.
+    if (options.waitForSubagents && thread.parentThreadId) {
+      continue;
+    }
     const previousThread = previousById.get(thread.id);
     if (!previousThread) {
       continue;
@@ -554,6 +567,14 @@ export function collectCompletedThreadCandidates(
         latestTurn: thread.latestTurn,
         session: thread.session,
       })?.count ?? 0) > 0
+    ) {
+      continue;
+    }
+    if (
+      options.waitForSubagents &&
+      thread.session?.orchestrationStatus !== "stopped" &&
+      thread.session?.orchestrationStatus !== "error" &&
+      deriveOutstandingBackgroundTaskIds(thread.activities).length > 0
     ) {
       continue;
     }

@@ -390,6 +390,9 @@ function SettingsRouteView() {
     defaults.enableSystemTaskCompletionNotifications
       ? ["Desktop notifications"]
       : []),
+    ...(settings.notifyAfterSubagentsFinish !== defaults.notifyAfterSubagentsFinish
+      ? ["Wait for subagents"]
+      : []),
     ...(settings.enableAssistantStreaming !== defaults.enableAssistantStreaming
       ? ["Assistant output"]
       : []),

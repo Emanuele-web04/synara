@@ -237,6 +237,99 @@ describe("collectCompletedThreadCandidates", () => {
     expect(collectCompletedThreadCandidates(previous, next)).toEqual([]);
   });
 
+  describe("waiting for subagents", () => {
+    // The agent launched one subagent in turn-1 and was woken into turn-2 when
+    // another one finished. Shapes follow Claude's real activity stream.
+    const movedToBackground = (taskId: string) => ({
+      id: EventId.makeUnsafe(`moved-${taskId}`),
+      tone: "info" as const,
+      kind: "runtime.warning",
+      summary: "Moved to background",
+      payload: {
+        message: taskId,
+        nativeEventType: "background_tasks_changed",
+        data: { tasks: [{ task_id: taskId, task_type: "local_agent", description: taskId }] },
+      },
+      turnId: TurnId.makeUnsafe("turn-1"),
+      createdAt: "2026-04-05T10:00:01.000Z",
+    });
+    const taskCompleted = (taskId: string, createdAt: string) => ({
+      id: EventId.makeUnsafe(`done-${taskId}`),
+      tone: "info" as const,
+      kind: "task.completed",
+      summary: "Task completed",
+      payload: { taskId, status: "completed" },
+      turnId: null,
+      createdAt,
+    });
+    const wokenTurnThread = (overrides: Partial<Thread>) =>
+      makeThread({
+        session: {
+          provider: "claudeAgent",
+          status: "ready",
+          orchestrationStatus: "ready",
+          createdAt: "2026-04-05T10:00:00.000Z",
+          updatedAt: "2026-04-05T10:02:05.000Z",
+        },
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("turn-2"),
+          state: "completed",
+          requestedAt: "2026-04-05T10:02:00.000Z",
+          startedAt: "2026-04-05T10:02:00.000Z",
+          completedAt: "2026-04-05T10:02:05.000Z",
+          assistantMessageId: MessageId.makeUnsafe("msg-2"),
+          sourceProposedPlan: undefined,
+        },
+        ...overrides,
+      });
+    const previous = [makeThread({})];
+
+    it("holds the alert while a subagent launched by an earlier turn is still running", () => {
+      const next = [
+        wokenTurnThread({
+          activities: [
+            movedToBackground("agent-a"),
+            movedToBackground("agent-b"),
+            taskCompleted("agent-a", "2026-04-05T10:01:59.000Z"),
+          ],
+        }),
+      ];
+
+      expect(collectCompletedThreadCandidates(previous, next, { waitForSubagents: true })).toEqual(
+        [],
+      );
+      expect(collectCompletedThreadCandidates(previous, next)).toHaveLength(1);
+    });
+
+    it("alerts once every background subagent has finished", () => {
+      const next = [
+        wokenTurnThread({
+          activities: [
+            movedToBackground("agent-a"),
+            movedToBackground("agent-b"),
+            taskCompleted("agent-a", "2026-04-05T10:01:00.000Z"),
+            taskCompleted("agent-b", "2026-04-05T10:01:59.000Z"),
+          ],
+        }),
+      ];
+
+      expect(
+        collectCompletedThreadCandidates(previous, next, { waitForSubagents: true }),
+      ).toHaveLength(1);
+    });
+
+    it("does not alert for a subagent's own thread", () => {
+      const parentThreadId = ThreadId.makeUnsafe("parent-thread");
+      const next = [wokenTurnThread({ parentThreadId })];
+      const previousChild = [makeThread({ parentThreadId })];
+
+      expect(
+        collectCompletedThreadCandidates(previousChild, next, { waitForSubagents: true }),
+      ).toEqual([]);
+      expect(collectCompletedThreadCandidates(previousChild, next)).toHaveLength(1);
+    });
+  });
+
   it("summarizes the turn's final assistant message, not the opening preamble", () => {
     const previous = [makeThread({})];
     const next = [

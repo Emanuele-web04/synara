@@ -472,6 +472,9 @@ export const AppSettingsSchema = Schema.Struct({
   useCustomTitleBar: Schema.Boolean.pipe(withDefaults(() => true)),
   enableTaskCompletionToasts: Schema.Boolean.pipe(withDefaults(() => true)),
   enableSystemTaskCompletionNotifications: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Finished-work alerts wait for the agent's background subagents too, and a
+  // subagent's own thread never alerts. Off alerts every time any of them stops.
+  notifyAfterSubagentsFinish: Schema.Boolean.pipe(withDefaults(() => true)),
   // Local desktop preference. Native capability/permission state remains owned by Electron.
   // AppSnap is opt-in because enabling its Settings toggle requests macOS
   // Input Monitoring and Screen Recording permissions.
