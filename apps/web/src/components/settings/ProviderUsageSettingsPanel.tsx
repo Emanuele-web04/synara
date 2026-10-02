@@ -245,6 +245,19 @@ export function ProviderUsageSettingsPanel() {
           }
         />
       </SettingsSection>
+      <SettingsSection title="Usage popovers">
+        <SettingsListRow
+          title="Show details by default"
+          description="Open reset credits, credits, and token totals below the limits. When off, they stay behind the Details toggle; your last toggle also updates this preference."
+          actions={
+            <Switch
+              checked={settings.usageDetailsDefaultOpen}
+              onCheckedChange={(next) => updateSettings({ usageDetailsDefaultOpen: Boolean(next) })}
+              aria-label="Show usage details by default in usage popovers"
+            />
+          }
+        />
+      </SettingsSection>
       <SettingsSectionShell
         title="Provider usage"
         action={

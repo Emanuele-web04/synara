@@ -446,6 +446,10 @@ export const AppSettingsSchema = Schema.Struct({
     withDefaults((): ReadonlyArray<ProviderKind> => ["codex", "claudeAgent"]),
   ),
   railUsageWindow: RailUsageWindow.pipe(withDefaults(() => DEFAULT_RAIL_USAGE_WINDOW)),
+  // Usage popovers (rail rings, chat header, branch toolbar) open on the limit rows only;
+  // reset credits, credits, and token totals sit behind a "Details" toggle. The toggle
+  // writes back here, so the last choice sticks; Settings → Usage exposes it too.
+  usageDetailsDefaultOpen: Schema.Boolean.pipe(withDefaults(() => false)),
   showEnvironmentRepository: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentPullRequest: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentEditor: Schema.Boolean.pipe(withDefaults(() => true)),

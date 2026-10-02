@@ -2002,6 +2002,15 @@ describe("AppSettingsSchema", () => {
     ).toBe(true);
   });
 
+  it("keeps usage popover details collapsed by default and preserves an explicit choice", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+
+    expect(decode("{}").usageDetailsDefaultOpen).toBe(false);
+    expect(decode(JSON.stringify({ usageDetailsDefaultOpen: true })).usageDetailsDefaultOpen).toBe(
+      true,
+    );
+  });
+
   it("preserves a disabled simulator auto-open preference across settings persistence", () => {
     const codec = Schema.fromJsonString(AppSettingsSchema);
     const decode = Schema.decodeSync(codec);
