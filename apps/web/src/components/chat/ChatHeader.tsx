@@ -60,7 +60,7 @@ import {
   useRecordOpenThreadTab,
 } from "../../hooks/useOpenThreadTabs";
 import { useOptimisticTabSelection } from "../../hooks/useOptimisticTabSelection";
-import { createOpenThreadTabCloseQueue } from "../../openThreadTabs.logic";
+import { closeOpenThreadTab, createOpenThreadTabCloseQueue } from "../../openThreadTabs.logic";
 import { useOpenThreadTabsStore } from "../../openThreadTabsStore";
 import { StatusDot } from "~/components/ui/status-chip";
 import { cn } from "~/lib/utils";
@@ -302,7 +302,7 @@ function EditorRailTabs(props: {
     // route has left it, so a guarded navigation keeps it in both places.
     void enqueueClose(() => {
       const openThreadIds = useOpenThreadTabsStore.getState().threadIds;
-      return {
+      return closeOpenThreadTab({
         tabs: chatTabs.filter((tab) => openThreadIds.includes(tab.threadId)),
         closedThreadId: threadId,
         activeThreadId: props.activeSurface === "chat" ? readRouteThreadId() : null,
@@ -316,7 +316,7 @@ function EditorRailTabs(props: {
             }
           : undefined,
         readRouteThreadId,
-      };
+      });
     });
   };
 

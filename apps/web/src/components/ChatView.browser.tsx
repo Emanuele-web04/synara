@@ -541,6 +541,13 @@ function findThreadDetailFromFixtureSnapshot(
   return fixture.snapshot.threads.find((entry) => entry.id === threadId) ?? null;
 }
 
+/** The rows of the open fallback context menu. */
+function contextMenuRows() {
+  return Array.from(
+    document.querySelectorAll<HTMLButtonElement>('[data-slot="context-menu-popup"] button'),
+  );
+}
+
 function addThreadToSnapshot(
   snapshot: OrchestrationReadModel,
   threadId: ThreadId,
@@ -10337,6 +10344,55 @@ describe("ChatView transcript geometry (full app)", () => {
         },
       );
       expect(useOpenThreadTabsStore.getState().threadIds).toEqual([OTHER_THREAD_ID]);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("opens the thread menu on a tab right-click and closes the tabs its close row names", async () => {
+    const thirdId = ThreadId.makeUnsafe("tab-menu-third");
+    const snapshot = addThreadToSnapshot(
+      addThreadToSnapshot(
+        createSnapshotForTargetUser({
+          targetMessageId: MessageId.makeUnsafe("tab-menu"),
+          targetText: "Tab menu",
+        }),
+        OTHER_THREAD_ID,
+      ),
+      thirdId,
+    );
+    const mounted = await mountChatView({ viewport: DEFAULT_VIEWPORT, snapshot });
+    try {
+      useOpenThreadTabsStore.setState({ threadIds: [THREAD_ID, OTHER_THREAD_ID, thirdId] });
+      await vi.waitFor(() =>
+        expect(
+          document.querySelectorAll('nav[aria-label="Open threads"] [data-surface-tab]'),
+        ).toHaveLength(3),
+      );
+      // The last tab, while the first one is on screen.
+      document
+        .querySelectorAll('nav[aria-label="Open threads"] [data-surface-tab]')[2]!
+        .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 320, clientY: 24 }));
+      await vi.waitFor(() =>
+        expect(contextMenuRows().map((row) => row.textContent)).toEqual(
+          expect.arrayContaining(["Rename thread", "Pin thread", "Archive", "Delete"]),
+        ),
+      );
+      // Nothing sits to the right of the last tab, so that row is left out.
+      expect(
+        contextMenuRows()
+          .map((row) => row.textContent)
+          .filter((label) => label?.startsWith("Close ")),
+      ).toEqual(["Close Tabs to the Left", "Close Other Tabs"]);
+      contextMenuRows()
+        .find((row) => row.textContent === "Close Tabs to the Left")!
+        .click();
+
+      // The thread on screen was among the closed tabs, so the kept tab takes over.
+      await vi.waitFor(() =>
+        expect(useOpenThreadTabsStore.getState().threadIds).toEqual([thirdId]),
+      );
+      expect(mounted.router.state.location.pathname).toBe(`/${thirdId}`);
     } finally {
       await mounted.cleanup();
     }

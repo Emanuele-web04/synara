@@ -11,7 +11,14 @@ import { DndContext, PointerSensor, closestCenter, useSensor, useSensors } from 
 import { restrictToFirstScrollableAncestor, restrictToHorizontalAxis } from "@dnd-kit/modifiers";
 import { SortableContext, horizontalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { type ComponentProps, type CSSProperties, type ReactNode, useRef, useState } from "react";
+import {
+  type ComponentProps,
+  type CSSProperties,
+  type PointerEvent,
+  type ReactNode,
+  useRef,
+  useState,
+} from "react";
 
 import { DragHandleIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -46,6 +53,8 @@ export interface SurfaceContentTab<Key extends string> {
   /** Omitted for a tab that cannot close: no X, and a middle click does nothing. */
   onClose?: (() => void) | undefined;
   onTitleDoubleClick?: (() => void) | undefined;
+  /** Opens the tab's context menu at the pointer. Omitted, the tab has none. */
+  onContextMenu?: ((position: { x: number; y: number }) => void) | undefined;
 }
 
 function SortableSurfaceTabChip({
@@ -91,7 +100,14 @@ function SortableSurfaceTabChip({
           // The dragged tab rides above the neighbours sliding out of its way.
           ...(sortable.isDragging ? { zIndex: 1 } : {}),
         },
-        listeners: sortable.listeners,
+        listeners: sortable.listeners && {
+          ...sortable.listeners,
+          // Ctrl+click is the context click on macOS: it opens the tab's menu, which
+          // swallows the pointer release, so it must not arm a drag that never ends.
+          onPointerDown: (event: PointerEvent) => {
+            if (!event.ctrlKey) sortable.listeners?.onPointerDown?.(event);
+          },
+        },
       }}
     />
   );
@@ -150,6 +166,7 @@ export function SurfaceContentTabs<Key extends string>(props: {
               }
             : undefined,
           onLabelDoubleClick: tab.onTitleDoubleClick,
+          onContextMenu: tab.onContextMenu,
         } satisfies ComponentProps<typeof SurfaceTabChip>;
         return onMove ? (
           <SortableSurfaceTabChip key={tab.key} sortableId={tab.key} {...chipProps} />

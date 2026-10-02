@@ -238,6 +238,7 @@ export function SurfaceTabChip({
   onSelect,
   onClose,
   onLabelDoubleClick,
+  onContextMenu,
   sortable,
 }: {
   icon: ReactNode;
@@ -256,6 +257,8 @@ export function SurfaceTabChip({
   onSelect?: (() => void) | undefined;
   onClose?: (() => void) | undefined;
   onLabelDoubleClick?: (() => void) | undefined;
+  /** Opens the tab's own menu at the pointer, in place of the default context menu. */
+  onContextMenu?: ((position: { x: number; y: number }) => void) | undefined;
   // Pointer activators only: dnd-kit's `attributes` would put a second role and tab stop
   // on a chip whose buttons already carry them, and advertise a keyboard drag.
   sortable?:
@@ -334,6 +337,14 @@ export function SurfaceTabChip({
               if (event.button !== 1) return;
               event.preventDefault();
               handleClose(event);
+            }
+          : undefined
+      }
+      onContextMenu={
+        onContextMenu
+          ? (event) => {
+              event.preventDefault();
+              onContextMenu({ x: event.clientX, y: event.clientY });
             }
           : undefined
       }

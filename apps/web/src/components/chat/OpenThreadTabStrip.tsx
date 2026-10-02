@@ -1,9 +1,11 @@
 // FILE: OpenThreadTabStrip.tsx
 // Purpose: Browser-style tabs for the open threads, shown in the chat header in place of
 //          the thread title. Owns what is specific to threads: which tabs exist, the close
-//          queue, the optimistic selection, and renaming the active thread.
+//          queue, the optimistic selection, renaming the active thread, and the tab's
+//          context menu (the sidebar's thread menu plus the tab's own close actions).
 // Layer: Chat header UI
-// Depends on: open-thread tab hooks/store and the shared SurfaceContentTabs.
+// Depends on: open-thread tab hooks/store, the shared SurfaceContentTabs, and the sidebar's
+//             thread context menu.
 
 import type { ProjectId, ThreadId } from "@synara/contracts";
 import { useState } from "react";
@@ -17,13 +19,30 @@ import {
 } from "~/hooks/useOpenThreadTabs";
 import { useOptimisticTabSelection } from "~/hooks/useOptimisticTabSelection";
 import { TerminalIcon } from "~/lib/icons";
-import { createOpenThreadTabCloseQueue, replaceLastTabWithFreshChat } from "~/openThreadTabs.logic";
+import { showThreadContextMenu } from "~/lib/threadContextMenu";
+import { readNativeApi } from "~/nativeApi";
+import {
+  closeOpenThreadTab,
+  closeOpenThreadTabs,
+  createOpenThreadTabCloseQueue,
+  type OpenThreadTab,
+  type OpenThreadTabCloseScope,
+  replaceLastTabWithFreshChat,
+  resolveOpenThreadTabsInCloseScope,
+} from "~/openThreadTabs.logic";
 import { useOpenThreadTabsStore } from "~/openThreadTabsStore";
 
 import { ProviderIcon } from "../ProviderIcon";
 import { ThreadRunningSpinner } from "../ThreadRunningSpinner";
 import { toastManager } from "../ui/toast";
 import { SurfaceContentTabs } from "./SurfaceContentTabs";
+
+const CLOSE_TABS_MENU_ID_PREFIX = "close-tabs:";
+const CLOSE_TABS_MENU_ROWS: readonly { scope: OpenThreadTabCloseScope; label: string }[] = [
+  { scope: "left", label: "Close Tabs to the Left" },
+  { scope: "right", label: "Close Tabs to the Right" },
+  { scope: "others", label: "Close Other Tabs" },
+];
 
 export function OpenThreadTabStrip(props: {
   activeThreadId: ThreadId;
@@ -33,6 +52,7 @@ export function OpenThreadTabStrip(props: {
   useRecordOpenThreadTab(activeThreadId);
   const tabs = useOpenThreadTabs({ activeThreadId });
   const closeThreadTab = useOpenThreadTabsStore((state) => state.closeThreadTab);
+  const pruneThreadTabs = useOpenThreadTabsStore((state) => state.pruneThreadTabs);
   const moveThreadTab = useOpenThreadTabsStore((state) => state.moveThreadTab);
   const activateThreadTab = useActivateThreadTab();
   const { handleNewThread, projects } = useHandleNewThread();
@@ -54,7 +74,7 @@ export function OpenThreadTabStrip(props: {
     cancelTabSelection();
     void enqueueClose(() => {
       const openThreadIds = useOpenThreadTabsStore.getState().threadIds;
-      return {
+      return closeOpenThreadTab({
         // The tabs as clicked, minus any an earlier queued close has since dropped.
         tabs: tabs.filter((tab) => openThreadIds.includes(tab.threadId)),
         closedThreadId: threadId,
@@ -73,7 +93,7 @@ export function OpenThreadTabStrip(props: {
           });
         }),
         readRouteThreadId,
-      };
+      });
     }).then((result) => {
       if (!result.ok) {
         toastManager.add({
@@ -82,6 +102,61 @@ export function OpenThreadTabStrip(props: {
           description: result.error,
         });
       }
+    });
+  };
+
+  const closeTabsInScope = (anchorThreadId: ThreadId, scope: OpenThreadTabCloseScope) => {
+    cancelTabSelection();
+    void enqueueClose(() => {
+      const openThreadIds = useOpenThreadTabsStore.getState().threadIds;
+      return closeOpenThreadTabs({
+        closedThreadIds: resolveOpenThreadTabsInCloseScope(
+          // The tabs as right-clicked, minus any an earlier queued close has since dropped.
+          tabs.filter((tab) => openThreadIds.includes(tab.threadId)),
+          anchorThreadId,
+          scope,
+        ),
+        keptThreadId: anchorThreadId,
+        activeThreadId: readRouteThreadId(),
+        closeTabs: (threadIds) => pruneThreadTabs((threadId) => !threadIds.includes(threadId)),
+        openTab: activateThreadTab,
+        readRouteThreadId,
+      });
+    });
+  };
+
+  const openTabContextMenu = (tab: OpenThreadTab, position: { x: number; y: number }) => {
+    // Plain rows in a group of their own, like a browser's tab menu. Only the scopes that
+    // have tabs in them are listed: none on a lone tab, and no left (or right) row on the
+    // first (or last) tab.
+    const closeItems = CLOSE_TABS_MENU_ROWS.filter(
+      (row) => resolveOpenThreadTabsInCloseScope(tabs, tab.threadId, row.scope).length > 0,
+    ).map((row, index) => ({
+      id: `${CLOSE_TABS_MENU_ID_PREFIX}${row.scope}`,
+      label: row.label,
+      separatorBefore: index === 0,
+    }));
+    const onCloseAction = (itemId: string) => {
+      const row = CLOSE_TABS_MENU_ROWS.find(
+        (candidate) => itemId === `${CLOSE_TABS_MENU_ID_PREFIX}${candidate.scope}`,
+      );
+      if (row) closeTabsInScope(tab.threadId, row.scope);
+    };
+    if (
+      !tab.isDraft &&
+      showThreadContextMenu(tab.threadId, position, {
+        extraItems: closeItems,
+        onExtraAction: onCloseAction,
+      })
+    ) {
+      return;
+    }
+    // An unsent draft has no thread actions yet (and a phone's closed sidebar sheet cannot
+    // show them): the menu is just the tab's close rows.
+    const api = readNativeApi();
+    if (!api || closeItems.length === 0) return;
+    void api.contextMenu.show(closeItems, position).then((itemId) => {
+      if (itemId) onCloseAction(itemId);
     });
   };
 
@@ -116,6 +191,7 @@ export function OpenThreadTabStrip(props: {
           onClose: closable ? () => closeTab(tab.threadId, tab.projectId) : undefined,
           onTitleDoubleClick:
             tab.threadId === activeThreadId ? props.onRenameActiveThread : undefined,
+          onContextMenu: (position) => openTabContextMenu(tab, position),
         };
       })}
     />
