@@ -14,7 +14,6 @@ import {
 import { Schema } from "effect";
 
 import { ProviderIcon } from "../ProviderIcon";
-import { ChatPaneDropOverlay } from "../chat-drop-overlay/ChatPaneDropOverlay";
 import { PanelStateMessage } from "./PanelStateMessage";
 import {
   ChatMountLoader,
@@ -84,7 +83,7 @@ import {
   DialogPopup,
   DialogTitle,
 } from "../ui/dialog";
-import { SidebarInset } from "../ui/sidebar";
+import { ChatPaneBody, KeptChatPane } from "./ChatPaneKeepAlive";
 import {
   CHAT_BACKGROUND_CLASS_NAME,
   CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME,
@@ -539,17 +538,23 @@ function SplitPaneSurface(props: {
       // unfocused panes stay undimmed so they never read as disabled.
       data-split-pane-focused={props.isFocused ? "true" : undefined}
     >
-      <ChatPaneDropOverlay
-        paneScopeId={paneScopeId}
-        canDropInDirection={props.canDropInDirection}
-        excludedThreadIds={props.excludedThreadIds}
-        onDrop={handleDrop}
-        className="flex min-h-0 min-w-0 flex-1"
-      >
-        <SidebarInset
-          className="min-h-0 min-w-0 overflow-hidden overscroll-y-none text-foreground"
-          surfaceClassName={CHAT_BACKGROUND_CLASS_NAME}
-          onMouseDown={props.onFocus}
+      {/* Kept alive across the swap with SingleChatSurface, and keyed by pane rather than by
+          thread so replacing a pane's thread still reuses its chat. */}
+      <KeptChatPane slotKey={paneScopeId} threadId={props.threadId}>
+        <ChatPaneBody
+          fileOpener={null}
+          dropOverlay={{
+            paneScopeId,
+            canDropInDirection: props.canDropInDirection,
+            excludedThreadIds: props.excludedThreadIds,
+            onDrop: handleDrop,
+            className: "flex min-h-0 min-w-0 flex-1",
+          }}
+          inset={{
+            className: "min-h-0 min-w-0 overflow-hidden overscroll-y-none text-foreground",
+            surfaceClassName: CHAT_BACKGROUND_CLASS_NAME,
+            onMouseDown: props.onFocus,
+          }}
         >
           {props.threadId ? (
             <DeferredChatView
@@ -585,8 +590,8 @@ function SplitPaneSurface(props: {
               onPopToSidebar={props.onPopFloatingBrowser}
             />
           ) : null}
-        </SidebarInset>
-      </ChatPaneDropOverlay>
+        </ChatPaneBody>
+      </KeptChatPane>
       <SplitPaneEmbeddedPanel
         splitViewId={props.splitView.id}
         paneId={props.paneId}
