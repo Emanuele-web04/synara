@@ -142,7 +142,7 @@ function resolveOpenThreadTab(source: OpenThreadTabSource): OpenThreadTab | null
           thread: summary,
           hasPendingApprovals: summary.hasPendingApprovals,
           hasPendingUserInput: summary.hasPendingUserInput,
-          isPreparingWorktree: source.isPreparingWorktree,
+          isPreparingWorktree: source.isPreparingWorktree ?? false,
         })?.pulse === true,
     };
   }
