@@ -106,7 +106,7 @@ interface ChatTranscriptPaneProps {
   timelineEntries: ComponentProps<typeof MessagesTimeline>["timelineEntries"];
   messageChangeSignal?: ComponentProps<typeof MessagesTimeline>["messageChangeSignal"];
   timestampFormat: TimestampFormat;
-  /** Sound the message trail moves with (Beta desktop setting). */
+  /** Sound the message trail moves with (macOS desktop setting). */
   messageTrailAudioSource?: MessageTrailAudioSource;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   conversationOnly?: boolean;

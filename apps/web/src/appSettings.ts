@@ -187,7 +187,7 @@ export const GitHubLinkOpenTarget = Schema.Literals(["app", "browser", "external
 export type GitHubLinkOpenTarget = typeof GitHubLinkOpenTarget.Type;
 export const DEFAULT_GITHUB_LINK_OPEN_TARGET: GitHubLinkOpenTarget = "app";
 export type FollowUpBehavior = typeof FollowUpBehavior.Type;
-// Sound the chat message trail moves with (Beta desktop on macOS).
+// Sound the chat message trail moves with (desktop on macOS).
 export const MessageTrailAudioSource = Schema.Literals(["off", "system", "microphone", "both"]);
 export type MessageTrailAudioSource = typeof MessageTrailAudioSource.Type;
 export const DEFAULT_FOLLOW_UP_BEHAVIOR: FollowUpBehavior = "queue";
@@ -454,7 +454,7 @@ export const AppSettingsSchema = Schema.Struct({
   // Started threads: show reasoning effort as a stepped slider card in the composer's
   // model menu instead of radio rows. New chats keep the split model/effort pickers.
   composerEffortSlider: Schema.Boolean.pipe(withDefaults(() => true)),
-  // Beta desktop on macOS: the message trail moves with the Mac's audio output,
+  // Desktop on macOS: the message trail moves with the Mac's audio output,
   // the microphone, or both. Opt-in because the first use asks macOS for access.
   messageTrailAudioSource: MessageTrailAudioSource.pipe(withDefaults(() => "off" as const)),
   autoOpenDevicePane: Schema.Boolean.pipe(withDefaults(() => true)),

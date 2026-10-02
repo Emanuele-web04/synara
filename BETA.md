@@ -284,9 +284,9 @@ To put a feature behind the list:
 
 Promote a feature to Stable by deleting its entry; every gate resolves itself.
 
-The list currently contains `groups` (Hubs), `tasks` (Tasks),
-`inbox` (Inbox), and `audio-trail` (message trail sound), all gated off in Stable.
-Oh My Pi and the rail sidebar layout are available in both Stable and Beta.
+The list currently contains `groups` (Hubs), `tasks` (Tasks), and `inbox` (Inbox),
+all gated off in Stable. Oh My Pi, the rail sidebar layout, and message trail
+sound are available in both Stable and Beta.
 
 On Stable, Hubs are inert rather than hidden data: the server refuses the hub
 APIs, Library routes and gateway tools, stops coordinator wakes and monitoring,
@@ -306,12 +306,12 @@ A Beta client connected to a server that refuses Tasks returns to Kanban.
 web hides its rail and sidebar entries and redirects the route, and a saved rail or
 sidebar order that mentions it is ignored there.
 
-`audio-trail` is opt-in under **Settings → Chat → Message trail sound** on macOS
-desktop. It follows system audio (macOS 14.2+), the microphone, or both. The
-desktop IPC handler is authoritative and refuses Stable and other platforms;
-the web hides the selector there and leaves saved preferences inert. Only
-loudness levels are sent to the trail, and the reader stops when the visible
-trail no longer subscribes. First use can request macOS audio access.
+Message trail sound is opt-in under **Settings → Chat → Message trail sound**
+on macOS desktop in both Stable and Beta. It follows system audio (macOS 14.2+),
+the microphone, or both. The desktop IPC handler refuses other platforms,
+and the web hides the selector on hosts without a supported desktop bridge.
+Only loudness levels are sent to the trail, and the reader stops when the
+visible trail no longer subscribes. First use can request macOS audio access.
 
 ## Diagnostics
 

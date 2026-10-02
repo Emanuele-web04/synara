@@ -47,6 +47,11 @@ describe("isBetaFeatureEnabled", () => {
     expect(isBetaFeatureEnabled("sidebarV2", "production")).toBe(true);
   });
 
+  it("enables audio-driven message trails in both Beta and Stable", () => {
+    expect(isBetaFeatureEnabled("audio-trail", "beta")).toBe(true);
+    expect(isBetaFeatureEnabled("audio-trail", "production")).toBe(true);
+  });
+
   it("leaves unlisted features enabled everywhere", () => {
     // The list is the whole gate: a feature not present is enabled everywhere,
     // which is also the steady state once a feature is promoted to Stable.
