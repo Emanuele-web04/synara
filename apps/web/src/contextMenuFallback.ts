@@ -113,18 +113,26 @@ export function showContextMenuFallback<T extends string>(
 
     function onKeyDown(e: KeyboardEvent) {
       cancelPendingSwitch();
-      const depth = levels.length - 1;
+      // A hovered flyout can be visible while keyboard focus is still on its
+      // parent or a sibling. Route keys to that focused menu, not the flyout.
+      const focusedDepth = levels.findIndex((level) =>
+        level.buttons.some((button) => button === document.activeElement),
+      );
+      const depth = focusedDepth === -1 ? levels.length - 1 : focusedDepth;
       const level = levels[depth];
       if (!level) return;
+      if (level.focusedIndex !== level.openChildIndex) closeLevelsAfter(depth);
       const count = level.buttons.length;
       if (e.key === "Escape") {
         e.preventDefault();
         cleanup(null);
       } else if (e.key === "ArrowDown") {
         e.preventDefault();
+        closeLevelsAfter(depth);
         focusItem(depth, level.focusedIndex < count - 1 ? level.focusedIndex + 1 : 0);
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
+        closeLevelsAfter(depth);
         focusItem(depth, level.focusedIndex > 0 ? level.focusedIndex - 1 : count - 1);
       } else if (e.key === "ArrowRight") {
         e.preventDefault();

@@ -27,6 +27,7 @@ describe("showContextMenuFallback submenus", () => {
   });
 
   afterEach(() => {
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     document.body.innerHTML = "";
   });
 
@@ -76,6 +77,38 @@ describe("showContextMenuFallback submenus", () => {
 
     await expect(result).resolves.toBe("copy-thread-id");
   });
+
+  it.each([
+    { hoveredRow: "Archive", keys: ["Enter"] },
+    { hoveredRow: "Copy", keys: ["ArrowDown", "Enter"] },
+  ])(
+    "keeps keyboard selection in the hovered parent menu ($hoveredRow)",
+    async ({ hoveredRow, keys }) => {
+      const result = showContextMenuFallback(ITEMS, { x: 24, y: 24 });
+
+      if (hoveredRow !== "Copy") await page.getByText("Copy", { exact: true }).hover();
+      const row = page.getByText(hoveredRow, { exact: true });
+      let hadOpenSubmenu = false;
+      row
+        .element()
+        .closest("button")!
+        .addEventListener(
+          "mouseenter",
+          () => {
+            // Press in the hover event's turn, before the diagonal-hover grace period
+            // can expire. The flyout is visible but the root row owns keyboard focus.
+            hadOpenSubmenu = page.getByText("Path", { exact: true }).query() !== null;
+            for (const key of keys) document.dispatchEvent(new KeyboardEvent("keydown", { key }));
+          },
+          { once: true },
+        );
+      await row.hover();
+
+      expect(hadOpenSubmenu).toBe(true);
+      expect(document.querySelector('[data-slot^="context-menu"]')).toBeNull();
+      await expect(result).resolves.toBe("archive");
+    },
+  );
 
   it("returns to the parent menu on ArrowLeft without dismissing it", async () => {
     const result = showContextMenuFallback(ITEMS, { x: 24, y: 24 });
