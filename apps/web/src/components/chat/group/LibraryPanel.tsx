@@ -453,7 +453,7 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
               type="button"
               aria-label={`Back to library from ${previewPath}`}
               title="Back to library"
-              className="flex min-w-0 flex-1 items-center gap-1 rounded-md px-1.5 py-0.5 text-left text-ui-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+              className="flex min-w-0 flex-1 items-center gap-1 rounded-md px-1.5 py-0.5 text-left text-ui-sm text-muted-foreground transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
               onClick={() => setPreviewPath(null)}
             >
               <ArrowLeftIcon className="size-3.5 shrink-0" />
@@ -478,7 +478,7 @@ export function LibraryPanel({ open, variant, projectId, onClose }: LibraryPanel
               type="button"
               aria-label="Back to library from history"
               title="Back to library"
-              className="flex min-w-0 flex-1 items-center gap-1 rounded-md px-1.5 py-0.5 text-left text-ui-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+              className="flex min-w-0 flex-1 items-center gap-1 rounded-md px-1.5 py-0.5 text-left text-ui-sm text-muted-foreground transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
               onClick={() => {
                 setHistoryPath(null);
                 setHistoryCommits(null);
