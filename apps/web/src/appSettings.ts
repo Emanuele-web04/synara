@@ -191,6 +191,10 @@ export type FollowUpBehavior = typeof FollowUpBehavior.Type;
 export const MessageTrailAudioSource = Schema.Literals(["off", "system", "microphone", "both"]);
 export type MessageTrailAudioSource = typeof MessageTrailAudioSource.Type;
 export const DEFAULT_FOLLOW_UP_BEHAVIOR: FollowUpBehavior = "queue";
+/** Which account windows each app-rail usage ring draws: both, or only one of them. */
+export const RailUsageWindow = Schema.Literals(["both", "fiveHour", "weekly"]);
+export type RailUsageWindow = typeof RailUsageWindow.Type;
+export const DEFAULT_RAIL_USAGE_WINDOW: RailUsageWindow = "both";
 // What plain Enter does while a composer voice note is recording: "stop" only
 // transcribes into the draft, "send" also sends the draft once transcribed.
 export const VoiceEnterBehavior = Schema.Literals(["stop", "send"]);
@@ -441,6 +445,7 @@ export const AppSettingsSchema = Schema.Struct({
   railUsageProviders: PersistedProviderKindList.pipe(
     withDefaults((): ReadonlyArray<ProviderKind> => ["codex", "claudeAgent"]),
   ),
+  railUsageWindow: RailUsageWindow.pipe(withDefaults(() => DEFAULT_RAIL_USAGE_WINDOW)),
   showEnvironmentRepository: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentPullRequest: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentEditor: Schema.Boolean.pipe(withDefaults(() => true)),
