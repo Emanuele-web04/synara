@@ -231,7 +231,7 @@ export const ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME =
 
 /** Slide + inset timing matched to shared disclosure motion (220ms). */
 export const ENVIRONMENT_PANEL_MOTION_CLASS =
-  "transition-[transform,opacity] duration-220 ease-out motion-reduce:transition-none";
+  "transition-[translate,opacity] duration-220 ease-out motion-reduce:transition-none";
 
 /** Transcript/composer right inset when the docked Environment card opens. */
 export const ENVIRONMENT_CONTENT_INSET_MOTION_CLASS =
