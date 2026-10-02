@@ -2545,6 +2545,84 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
+  it.effect("does not reuse a different fork's worktree when preparing a local PR thread", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("synara-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/shared-name"]);
+      yield* runGit(repoDir, [
+        "remote",
+        "add",
+        "other-fork",
+        "https://github.com/other/sample-repo.git",
+      ]);
+      yield* runGit(repoDir, ["config", "branch.feature/shared-name.remote", "other-fork"]);
+      yield* runGit(repoDir, [
+        "remote",
+        "add",
+        "octocat",
+        "https://github.com/octocat/sample-repo.git",
+      ]);
+      yield* runGit(repoDir, ["update-ref", "refs/remotes/octocat/feature/shared-name", "HEAD"]);
+      yield* runGit(repoDir, [
+        "config",
+        "branch.feature/shared-name.merge",
+        "refs/heads/feature/shared-name",
+      ]);
+      yield* runGit(repoDir, ["checkout", "main"]);
+      const worktreePath = path.join(repoDir, "collision-worktree");
+      yield* runGit(repoDir, ["worktree", "add", worktreePath, "feature/shared-name"]);
+      fs.writeFileSync(path.join(worktreePath, "README.md"), "unsent other-fork work\n");
+      const worktreeHead = (yield* runGit(worktreePath, ["rev-parse", "HEAD"])).stdout.trim();
+
+      const { manager, ghCalls } = yield* makeManager({
+        ghScenario: {
+          pullRequest: {
+            number: 84,
+            title: "Different fork PR",
+            url: "https://github.com/example-org/sample-repo/pull/84",
+            baseRefName: "main",
+            headRefName: "feature/shared-name",
+            state: "open",
+            isCrossRepository: true,
+            headRepositoryNameWithOwner: "octocat/sample-repo",
+            headRepositoryOwnerLogin: "octocat",
+          },
+          repositoryCloneUrls: {
+            "octocat/sample-repo": {
+              url: "https://github.com/octocat/sample-repo.git",
+              sshUrl: "git@github.com:octocat/sample-repo.git",
+            },
+          },
+        },
+      });
+
+      const result = yield* preparePullRequestThread(manager, {
+        cwd: repoDir,
+        reference: "84",
+        mode: "local",
+      }).pipe(Effect.exit);
+
+      expect(
+        (yield* runGit(worktreePath, [
+          "config",
+          "--get",
+          "branch.feature/shared-name.remote",
+        ])).stdout.trim(),
+      ).toBe("other-fork");
+      expect(Exit.isFailure(result)).toBe(true);
+      expect(String(Exit.isFailure(result) ? result.cause : "")).toContain(
+        "different GitHub repository",
+      );
+      expect(ghCalls.some((call) => call.startsWith("pr checkout"))).toBe(false);
+      expect((yield* runGit(repoDir, ["branch", "--show-current"])).stdout.trim()).toBe("main");
+      expect((yield* runGit(worktreePath, ["rev-parse", "HEAD"])).stdout.trim()).toBe(worktreeHead);
+      expect(fs.readFileSync(path.join(worktreePath, "README.md"), "utf8")).toBe(
+        "unsent other-fork work\n",
+      );
+    }),
+  );
+
   it.effect("rejects worktree prep when the PR head branch is checked out in the main repo", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("synara-git-manager-");

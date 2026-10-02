@@ -1606,28 +1606,47 @@ export const makeGitManager = Effect.gen(function* () {
         resolvePullRequestWorktreeLocalBranchName(pullRequestWithRemoteInfo);
 
       const findLocalHeadBranch = (cwd: string) =>
-        gitCore.listBranches({ cwd }).pipe(
-          Effect.map((result) => {
-            const localBranch = result.branches.find(
-              (branch) => !branch.isRemote && branch.name === localPullRequestBranch,
-            );
-            if (localBranch) {
-              return localBranch;
+        Effect.gen(function* () {
+          const result = yield* gitCore.listBranches({ cwd });
+          const localBranch = result.branches.find(
+            (branch) => !branch.isRemote && branch.name === localPullRequestBranch,
+          );
+          if (localBranch) {
+            return localBranch;
+          }
+          if (localPullRequestBranch === pullRequest.headBranch) {
+            return null;
+          }
+          const candidate =
+            result.branches.find(
+              (branch) =>
+                !branch.isRemote &&
+                branch.name === pullRequest.headBranch &&
+                branch.worktreePath !== null &&
+                canonicalizeExistingPath(branch.worktreePath) !== rootWorktreePath,
+            ) ?? null;
+          if (!candidate) return null;
+          const remoteName = yield* readConfigValueNullable(cwd, `branch.${candidate.name}.remote`);
+          const remote = yield* resolveRemoteRepositoryContext(cwd, remoteName);
+          const expectedRepository = normalizeOptionalRepositoryNameWithOwner(
+            resolveHeadRepositoryNameWithOwner(pullRequestWithRemoteInfo),
+          );
+          const actualRepository = normalizeOptionalRepositoryNameWithOwner(
+            remote.repositoryNameWithOwner,
+          );
+          // A shared branch name does not identify a fork. Preserve unset-upstream
+          // recovery, but never retarget a worktree that belongs to a known other fork.
+          if (expectedRepository && actualRepository && expectedRepository !== actualRepository) {
+            if (input.mode === "local") {
+              return yield* gitManagerError(
+                "preparePullRequestThread",
+                "This branch is checked out in a worktree for a different GitHub repository. Use Worktree to prepare this pull request separately.",
+              );
             }
-            if (localPullRequestBranch === pullRequest.headBranch) {
-              return null;
-            }
-            return (
-              result.branches.find(
-                (branch) =>
-                  !branch.isRemote &&
-                  branch.name === pullRequest.headBranch &&
-                  branch.worktreePath !== null &&
-                  canonicalizeExistingPath(branch.worktreePath) !== rootWorktreePath,
-              ) ?? null
-            );
-          }),
-        );
+            return null;
+          }
+          return candidate;
+        });
 
       const existingBranchBeforeFetch = yield* findLocalHeadBranch(input.cwd);
       const existingBranchBeforeFetchPath = existingBranchBeforeFetch?.worktreePath
