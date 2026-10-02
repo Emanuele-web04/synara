@@ -246,7 +246,13 @@
      painting their own tones over it. */
   :root[data-window-translucency="window"] [data-sidebar-layout="rail"] {
     --app-rail-panel-background: transparent;
-    /* The card the active tab normally matches is clear, so the tab takes an ink tint. */
+    /* The card the active tab normally matches is clear, so the tab takes the raised tint
+       the composer and the docked panels use, and reads lighter than the coat. */
+    --app-rail-tab-active-surface: var(--app-glass-raised-surface);
+  }
+
+  /* Dark: the raised tint is darker than the coat, so the tab keeps a light ink tint. */
+  :root.dark[data-window-translucency="window"] [data-sidebar-layout="rail"] {
     --app-rail-tab-active-surface: color-mix(in srgb, var(--foreground) 8%, transparent);
   }
 
