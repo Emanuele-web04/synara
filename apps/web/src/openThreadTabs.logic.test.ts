@@ -106,6 +106,31 @@ describe("buildOpenThreadTabs", () => {
     ]);
   });
 
+  it("marks a tab as running while its thread works, not while it waits on the user", () => {
+    const tabs = buildOpenThreadTabs({
+      activeThreadId: null,
+      sources: [
+        serverSource("idle"),
+        serverSource("working", { hasLiveTailWork: true }),
+        serverSource("connecting", {
+          session: { status: "connecting" } as SidebarThreadSummary["session"],
+        }),
+        serverSource("approval", {
+          hasLiveTailWork: true,
+          hasPendingApprovals: true,
+          session: { status: "running" } as SidebarThreadSummary["session"],
+        }),
+      ],
+    });
+
+    expect(tabs.map((tab) => [tab.threadId, tab.isRunning])).toEqual([
+      ["idle", false],
+      ["working", true],
+      ["connecting", true],
+      ["approval", false],
+    ]);
+  });
+
   it("names a subagent tab from its parent's activity when its own metadata is a placeholder", () => {
     const parentId = ThreadId.makeUnsafe("parent");
     const tabs = buildOpenThreadTabs({

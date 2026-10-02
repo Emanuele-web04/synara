@@ -10,6 +10,7 @@ import { arrayMove } from "@dnd-kit/sortable";
 import { isSidechatThread } from "@synara/shared/sidechatThread";
 
 import { resolveDraftThreadTitle } from "./components/ChatView.logic";
+import { resolveThreadStatusPill } from "./components/Sidebar.logic";
 import { resolveSubagentPresentationForThread } from "./lib/subagentPresentation";
 import { resolveTabAfterClose } from "./lib/tabStrip";
 import type { SidebarThreadSummary, Thread, ThreadPrimarySurface } from "./types";
@@ -23,6 +24,8 @@ export interface OpenThreadTab {
   isTerminal: boolean;
   // Not sent yet: exists only as a local composer draft.
   isDraft: boolean;
+  // Working or connecting: the tab spins where the sidebar row does.
+  isRunning: boolean;
 }
 
 /** Everything the tab derivation needs to know about one open thread id. */
@@ -41,6 +44,7 @@ export interface OpenThreadTabSource {
       }
     | undefined;
   terminalEntryPoint: boolean;
+  isPreparingWorktree?: boolean | undefined;
 }
 
 // The transitions return the input array untouched when nothing changes, so the store
@@ -132,6 +136,14 @@ function resolveOpenThreadTab(source: OpenThreadTabSource): OpenThreadTab | null
       provider: summary.session?.provider ?? summary.modelSelection.provider,
       isTerminal: source.terminalEntryPoint,
       isDraft: false,
+      // The sidebar row's own status, so a tab and its row never disagree.
+      isRunning:
+        resolveThreadStatusPill({
+          thread: summary,
+          hasPendingApprovals: summary.hasPendingApprovals,
+          hasPendingUserInput: summary.hasPendingUserInput,
+          isPreparingWorktree: source.isPreparingWorktree ?? false,
+        })?.pulse === true,
     };
   }
   if (draft) {
@@ -142,6 +154,7 @@ function resolveOpenThreadTab(source: OpenThreadTabSource): OpenThreadTab | null
       provider: draft.provider,
       isTerminal: source.terminalEntryPoint || draft.entryPoint === "terminal",
       isDraft: true,
+      isRunning: false,
     };
   }
   return null;

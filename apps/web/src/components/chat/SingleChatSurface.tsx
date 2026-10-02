@@ -192,6 +192,7 @@ export function SingleChatSurface(props: {
   const openPane = useRightDockStore((store) => store.openPane);
   const toggleSingletonPane = useRightDockStore((store) => store.toggleSingletonPane);
   const closePane = useRightDockStore((store) => store.closePane);
+  const movePane = useRightDockStore((store) => store.movePane);
   const setActivePane = useRightDockStore((store) => store.setActivePane);
   const setDockOpen = useRightDockStore((store) => store.setDockOpen);
   const updatePane = useRightDockStore((store) => store.updatePane);
@@ -1201,6 +1202,7 @@ export function SingleChatSurface(props: {
               if (saved) closePane(props.threadId, paneId);
             });
           }}
+          onMovePane={(paneId, overPaneId) => movePane(props.threadId, paneId, overPaneId)}
           onCollapse={() => setDockOpen(props.threadId, false)}
           onOpenChange={(open) => setDockOpen(props.threadId, open)}
           onAddPane={handleAddDockPane}
