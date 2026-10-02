@@ -25,7 +25,8 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),
   useNavigate: () => fixture.navigate,
 }));
-vi.mock("~/nativeApi", () => ({
+vi.mock("~/nativeApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/nativeApi")>()),
   ensureNativeApi: () => ({ stats: { getRecap: fixture.getRecap } }),
 }));
 vi.mock("~/hooks/useActivityThreads", () => ({ useActivityThreads: fixture.activity }));

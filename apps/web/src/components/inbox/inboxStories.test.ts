@@ -84,6 +84,36 @@ const track = (remainingPercent: number) => ({
 });
 
 describe("buildInboxDigest", () => {
+  it("closes with today's to-dos, and says nothing when there are none", () => {
+    const tasksSentence = (tasks: { open: number; done: number; overdue: number }) => {
+      const sentence = buildInboxDigest({ ...input, tasks }).find((item) => item.id === "tasks");
+      return sentence ? plain(sentence) : null;
+    };
+
+    expect(tasksSentence({ open: 0, done: 0, overdue: 0 })).toBeNull();
+    expect(tasksSentence({ open: 3, done: 0, overdue: 0 })).toBe("You have 3 tasks to do today.");
+    expect(tasksSentence({ open: 2, done: 1, overdue: 1 })).toBe(
+      "You finished 1 task today, 2 to go, 1 overdue.",
+    );
+    expect(tasksSentence({ open: 0, done: 3, overdue: 0 })).toBe(
+      "You finished all 3 tasks for today.",
+    );
+    expect(tasksSentence({ open: 0, done: 1, overdue: 0 })).toBe(
+      "You finished your 1 task for today.",
+    );
+    expect(buildInboxDigest(input).some((item) => item.id === "tasks")).toBe(false);
+    // A quiet day still tells the to-dos.
+    expect(
+      buildInboxDigest({
+        recap: recap(),
+        previousRecap: undefined,
+        yesterdaySoFar: null,
+        slots: [],
+        tasks: { open: 1, done: 0, overdue: 0 },
+      }).map(plain),
+    ).toEqual(["You have 1 task to do today."]);
+  });
+
   it("tells the day in a few sentences with the facts marked", () => {
     const digest = buildInboxDigest(input);
 
