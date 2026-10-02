@@ -1,5 +1,5 @@
 // FILE: useSidebarThreadActions.ts
-// Purpose: Owns Sidebar thread pinning, archive/undo, deletion, and project-batch actions.
+// Purpose: Owns Sidebar thread pinning, snooze, archive/undo, deletion, and project-batch actions.
 // Layer: Web Sidebar controller hook
 // Exports: useSidebarThreadActions
 
@@ -442,6 +442,44 @@ export function useSidebarThreadActions(input: {
       });
     },
     [setThreadSettled],
+  );
+
+  const setThreadSnoozedUntil = useCallback((threadId: ThreadId, snoozedUntil: string | null) => {
+    const api = readNativeApi();
+    if (!api) {
+      toastManager.add({ type: "error", title: "Unable to connect to the app server." });
+      return;
+    }
+    // The projection owns visibility: a failed request never hides a row or
+    // replaces a previously scheduled reminder with an optimistic deadline.
+    void api.orchestration
+      .dispatchCommand({
+        type: "thread.meta.update",
+        commandId: newCommandId(),
+        threadId,
+        snoozedUntil,
+      })
+      .catch(() => {
+        toastManager.add({
+          type: "error",
+          title: snoozedUntil === null ? "Unable to return thread" : "Unable to snooze thread",
+        });
+      });
+  }, []);
+
+  const snoozeThread = useCallback(
+    (threadId: ThreadId, duration: 30 | 60 | 120 | "tomorrow") => {
+      const nowMs = Date.now();
+      const deadline = new Date(nowMs);
+      if (duration === "tomorrow") {
+        deadline.setDate(deadline.getDate() + 1);
+        deadline.setHours(9, 0, 0, 0);
+      } else {
+        deadline.setTime(nowMs + duration * 60_000);
+      }
+      setThreadSnoozedUntil(threadId, deadline.toISOString());
+    },
+    [setThreadSnoozedUntil],
   );
 
   // Drop optimistic settle entries once the server-confirmed state agrees, so
@@ -1016,6 +1054,8 @@ export function useSidebarThreadActions(input: {
     pinnedThreadIdSet,
     toggleThreadPinned,
     setThreadSettledWithToast,
+    setThreadSnoozedUntil,
+    snoozeThread,
     settledOverrideByThreadId: optimisticSettledStateByThreadId,
     deleteThread,
     confirmAndDeleteThread,

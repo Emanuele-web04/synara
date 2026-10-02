@@ -339,6 +339,61 @@ beforeEach(() => {
 });
 
 describe("useSidebarThreadActions", () => {
+  it("uses elapsed durations and tomorrow at 9am in the user's local calendar", async () => {
+    const now = new Date(2026, 9, 2, 23, 45);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now.getTime());
+    try {
+      const controller = render();
+      controller.snoozeThread(THREAD_ID, 30);
+      controller.snoozeThread(THREAD_ID, 60);
+      controller.snoozeThread(THREAD_ID, 120);
+      controller.snoozeThread(THREAD_ID, "tomorrow");
+      await vi.waitFor(() => expect(harness.dispatchCommand).toHaveBeenCalledTimes(4));
+      expect(harness.dispatchCommand.mock.calls.map(([command]) => command.snoozedUntil)).toEqual([
+        new Date(2026, 9, 3, 0, 15).toISOString(),
+        new Date(2026, 9, 3, 0, 45).toISOString(),
+        new Date(2026, 9, 3, 1, 45).toISOString(),
+        new Date(2026, 9, 3, 9, 0).toISOString(),
+      ]);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("schedules and cancels snooze through thread metadata without navigating", async () => {
+    const controller = render();
+    controller.setThreadSnoozedUntil(THREAD_ID, "2026-10-02T12:00:00.000Z");
+    await vi.waitFor(() =>
+      expect(harness.dispatchCommand).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "thread.meta.update",
+          threadId: THREAD_ID,
+          snoozedUntil: "2026-10-02T12:00:00.000Z",
+        }),
+      ),
+    );
+    controller.setThreadSnoozedUntil(THREAD_ID, null);
+    await vi.waitFor(() =>
+      expect(harness.dispatchCommand).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "thread.meta.update",
+          threadId: THREAD_ID,
+          snoozedUntil: null,
+        }),
+      ),
+    );
+    expect(harness.navigate).not.toHaveBeenCalled();
+  });
+
+  it("reports snooze failures without hiding the server-confirmed row", async () => {
+    harness.dispatchCommand.mockRejectedValueOnce(new Error("offline"));
+    render().setThreadSnoozedUntil(THREAD_ID, "2026-10-02T12:00:00.000Z");
+    await vi.waitFor(() =>
+      expect(harness.toast).toHaveBeenCalledWith(expect.objectContaining({ type: "error" })),
+    );
+    expect(sidebarThreads[0]?.snoozedUntil ?? null).toBeNull();
+  });
+
   it("pins optimistically and dispatches thread metadata", async () => {
     let controller = render();
 

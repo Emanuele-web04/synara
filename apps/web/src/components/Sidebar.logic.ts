@@ -2,7 +2,12 @@
 // Purpose: Shared sidebar sorting and status helpers used by the thread list UI.
 // Exports: Sidebar row state derivation, add-project error helpers, sort utilities, and visibility helpers.
 
-import { MAX_PINNED_PROJECTS, type ProjectId, type ThreadId } from "@synara/contracts";
+import {
+  MAX_PINNED_PROJECTS,
+  type ProjectId,
+  type SpaceId,
+  type ThreadId,
+} from "@synara/contracts";
 import { pluralize } from "@synara/shared/text";
 import { resolveThreadEnvironmentMode } from "@synara/shared/threadEnvironment";
 import { isWorkspaceRootWithin, workspaceRootsEqual } from "@synara/shared/threadWorkspace";
@@ -24,6 +29,8 @@ import {
   SIDEBAR_THREAD_ROW_BASE_CLASS_NAME,
 } from "../sidebarRowStyles";
 import { isDuplicateProjectCreateError } from "../lib/projectCreateRecovery";
+import { isThreadReachableFromSpace } from "../lib/spaceNavigation";
+import type { ServerWorkspacePaths } from "../lib/serverWorkspacePaths";
 import {
   canSessionAnswerPendingRequests,
   hasLiveLatestTurn,
@@ -180,6 +187,7 @@ type SidebarThreadSortInput = {
   createdAt: string;
   updatedAt?: string | undefined;
   latestUserMessageAt?: string | null | undefined;
+  snoozeReminderAt?: string | null | undefined;
   messages?: ReadonlyArray<Pick<ChatMessage, "role" | "createdAt">> | undefined;
   // Present on real thread summaries; lets finished-but-unseen threads float to
   // the top of the sort (see sortThreadsForSidebar). Optional so minimal test
@@ -1270,10 +1278,12 @@ function getThreadSortTimestamp(
   thread: SidebarThreadSortInput,
   sortOrder: SidebarThreadSortOrder | Exclude<SidebarProjectSortOrder, "manual">,
 ): number {
+  const reminderAt =
+    toSortableTimestamp(thread.snoozeReminderAt ?? undefined) ?? Number.NEGATIVE_INFINITY;
   if (sortOrder === "created_at") {
-    return toSortableTimestamp(thread.createdAt) ?? Number.NEGATIVE_INFINITY;
+    return Math.max(reminderAt, toSortableTimestamp(thread.createdAt) ?? Number.NEGATIVE_INFINITY);
   }
-  return getLatestUserMessageTimestamp(thread);
+  return Math.max(reminderAt, getLatestUserMessageTimestamp(thread));
 }
 
 // A finished chat the user hasn't opened yet floats above the plain timestamp
@@ -1463,6 +1473,25 @@ export function partitionSidebarThreadsByProjectIds<
     }
   }
   return { groupThreads, nonGroupThreads };
+}
+
+/** Classic thread sections share the active Space; container chats remain global. */
+export function filterSidebarThreadsBySpace<
+  T extends Pick<SidebarThreadSummary, "projectId">,
+>(input: {
+  readonly threads: readonly T[];
+  readonly projectById: ReadonlyMap<ProjectId, Project>;
+  readonly spaceId: SpaceId | null;
+  readonly paths: ServerWorkspacePaths;
+}): T[] {
+  return input.threads.filter((thread) => {
+    const project = input.projectById.get(thread.projectId);
+    // Preserve the sidebar's existing rows while their projects hydrate.
+    return (
+      project === undefined ||
+      isThreadReachableFromSpace({ project, spaceId: input.spaceId, paths: input.paths })
+    );
+  });
 }
 
 // A thread's projectId says where it runs; a group's member set says who it

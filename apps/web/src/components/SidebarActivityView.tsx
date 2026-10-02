@@ -2,7 +2,7 @@
 // Purpose: Task-feed sidebar surface — every thread is a 2-line task row
 //          (provider + title / project + branch) grouped by status, with settle.
 // Layer: Sidebar UI component
-// Exports: SidebarActivityView
+// Exports: SidebarActivityView, ActivityThreadRow, SidebarSnoozedThreadsSection
 
 import {
   useCallback,
@@ -21,6 +21,7 @@ import { resolveThreadEnvironmentMode } from "@synara/shared/threadEnvironment";
 import {
   AddPlusIcon,
   CircleCheckIcon,
+  ClockIcon,
   GitBranchIcon,
   NewThreadIcon,
   SortIcon,
@@ -100,6 +101,12 @@ import { Tooltip, TooltipTrigger } from "./ui/tooltip";
 const ACTIVITY_LIST_BASE_LIMIT = 20;
 const ACTIVITY_LIST_PAGE_SIZE = 20;
 const EMPTY_PROJECT_GROUPS: ActivityProjectGroup[] = [];
+const SNOOZE_DATE_FORMAT = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+});
 
 /** Keeps a row action (pin, archive, done) from also opening the thread. */
 function stopRowActivation(event: MouseEvent) {
@@ -107,7 +114,7 @@ function stopRowActivation(event: MouseEvent) {
   event.stopPropagation();
 }
 
-function ActivityThreadRow({
+export function ActivityThreadRow({
   thread,
   project,
   isActive,
@@ -119,6 +126,7 @@ function ActivityThreadRow({
   onOpen,
   onOpenPullRequest,
   onSetSettled,
+  onReturnSnoozed,
   onTogglePinned,
   onArchive,
   onRename,
@@ -137,6 +145,7 @@ function ActivityThreadRow({
   onOpen: () => void;
   onOpenPullRequest: (event: MouseEvent<HTMLElement>, pr: OrchestrationThreadPullRequest) => void;
   onSetSettled: (settled: boolean) => void;
+  onReturnSnoozed: () => void;
   onTogglePinned: () => void;
   onArchive: () => void;
   onRename: (threadId: ThreadId) => void;
@@ -263,6 +272,14 @@ function ActivityThreadRow({
               ) : null}
             </span>
           </span>
+          {thread.snoozedUntil != null ? (
+            <span className="flex min-w-0 items-center gap-1 text-ui-sm text-muted-foreground/80">
+              <ClockIcon className={sidebarGlyphClass("meta")} aria-hidden />
+              <span className="truncate">
+                Returns {SNOOZE_DATE_FORMAT.format(new Date(thread.snoozedUntil))}
+              </span>
+            </span>
+          ) : null}
         </button>
         {trailingStatus ? (
           <span
@@ -298,21 +315,74 @@ function ActivityThreadRow({
             onArchive={onArchive}
           />
           <SidebarIconButton
-            icon={isSettled ? Undo2Icon : CircleCheckIcon}
-            label={isSettled ? "Undo" : "Done"}
-            title={isSettled ? "Undo" : "Done"}
+            icon={thread.snoozedUntil != null || isSettled ? Undo2Icon : CircleCheckIcon}
+            label={thread.snoozedUntil != null ? "Return now" : isSettled ? "Undo" : "Done"}
+            title={thread.snoozedUntil != null ? "Return now" : isSettled ? "Undo" : "Done"}
             iconClassName={SIDEBAR_TRAILING_ICON_CLASS}
             className={cn("hover:text-foreground/89", actionToneClassName)}
             onMouseDown={stopRowActivation}
             onClick={(event) => {
               stopRowActivation(event);
-              onSetSettled(!isSettled);
+              if (thread.snoozedUntil != null) onReturnSnoozed();
+              else onSetSettled(!isSettled);
             }}
           />
         </span>
       </TooltipTrigger>
       {renderHoverCard(hoverAnchorId)}
     </Tooltip>
+  );
+}
+
+/** The same accessible Snoozed section serves Activity and the classic sidebar. */
+export function SidebarSnoozedThreadsSection({
+  threads,
+  renderThreadRow,
+  onVisibleThreadIdsChange,
+}: {
+  threads: readonly SidebarThreadSummary[];
+  renderThreadRow: (thread: SidebarThreadSummary) => ReactNode;
+  onVisibleThreadIdsChange?: (threadIds: readonly ThreadId[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [extraPages, setExtraPages] = useState(0);
+  const paging = resolveSidebarThreadListPaging({
+    totalCount: threads.length,
+    baseLimit: ACTIVITY_LIST_BASE_LIMIT,
+    pageSize: ACTIVITY_LIST_PAGE_SIZE,
+    requestedExtraPages: extraPages,
+  });
+  const visibleThreadIds = useMemo(
+    () => (open ? threads.slice(0, paging.previewLimit).map((thread) => thread.id) : []),
+    [open, paging.previewLimit, threads],
+  );
+  const visibleThreadIdsFingerprint = visibleThreadIds.join("\0");
+  const visibleThreadIdsRef = useRef(visibleThreadIds);
+  visibleThreadIdsRef.current = visibleThreadIds;
+  useEffect(() => {
+    onVisibleThreadIdsChange?.(visibleThreadIdsRef.current);
+  }, [onVisibleThreadIdsChange, visibleThreadIdsFingerprint]);
+  useEffect(
+    () => () => {
+      onVisibleThreadIdsChange?.([]);
+    },
+    [onVisibleThreadIdsChange],
+  );
+  if (threads.length === 0) return null;
+  return (
+    <SidebarCollapsibleSection
+      label="Snoozed"
+      open={open}
+      onToggle={() => setOpen((current) => !current)}
+    >
+      {threads.slice(0, paging.previewLimit).map(renderThreadRow)}
+      <SidebarShowMoreRow
+        canShowMore={paging.canShowMore}
+        canShowLess={paging.canShowLess}
+        onShowMore={() => setExtraPages(paging.effectiveExtraPages + 1)}
+        onShowLess={() => setExtraPages(Math.max(0, paging.effectiveExtraPages - 1))}
+      />
+    </SidebarCollapsibleSection>
   );
 }
 
@@ -470,6 +540,7 @@ export function SidebarActivityView({
   onOpenThread,
   onOpenThreadPullRequest,
   onSetThreadSettled,
+  onReturnSnoozedThread,
   onToggleThreadPinned,
   onArchiveThread,
   onMarkThreadRead,
@@ -503,6 +574,7 @@ export function SidebarActivityView({
     pr: OrchestrationThreadPullRequest,
   ) => void;
   onSetThreadSettled: (threadId: ThreadId, settled: boolean) => void;
+  onReturnSnoozedThread: (threadId: ThreadId) => void;
   onToggleThreadPinned: (threadId: ThreadId) => void;
   onArchiveThread: (threadId: ThreadId) => void;
   /** Records a completion as seen (the classic sidebar's markThreadVisited). */
@@ -528,6 +600,7 @@ export function SidebarActivityView({
   const [earlierExtraPages, setEarlierExtraPages] = useState(0);
   const [settledOpen, setSettledOpen] = useState(false);
   const [settledExtraPages, setSettledExtraPages] = useState(0);
+  const [snoozedVisibleThreadIds, setSnoozedVisibleThreadIds] = useState<readonly ThreadId[]>([]);
   const [projectExtraPagesByKey, setProjectExtraPagesByKey] = useState<ReadonlyMap<string, number>>(
     () => new Map(),
   );
@@ -657,8 +730,8 @@ export function SidebarActivityView({
     [earlierRows.revealed, groupMode, pinnedRows.revealed, settledRows.revealed],
   );
   const visibleThreadIds = useMemo(
-    () =>
-      collectVisibleActivityThreadIds({
+    () => [
+      ...collectVisibleActivityThreadIds({
         groupMode,
         pinnedOpen,
         pinned: scopedPinnedThreads,
@@ -673,6 +746,8 @@ export function SidebarActivityView({
         settled: settledRows.visible,
         revealed: revealedThreads,
       }),
+      ...snoozedVisibleThreadIds,
+    ],
     [
       dateBuckets.today,
       dateBuckets.yesterday,
@@ -687,6 +762,7 @@ export function SidebarActivityView({
       scopedPinnedThreads,
       settledOpen,
       settledRows.visible,
+      snoozedVisibleThreadIds,
     ],
   );
   const visibleThreadIdsFingerprint = visibleThreadIds.join("\0");
@@ -737,6 +813,7 @@ export function SidebarActivityView({
         if (settled) onMarkThreadRead(thread.id, thread.latestTurn?.completedAt ?? undefined);
         onSetThreadSettled(thread.id, settled);
       }}
+      onReturnSnoozed={() => onReturnSnoozedThread(thread.id)}
       onTogglePinned={() => onToggleThreadPinned(thread.id)}
       onArchive={() => onArchiveThread(thread.id)}
       onRename={onRenameThread}
@@ -755,6 +832,7 @@ export function SidebarActivityView({
     model.active.length === 0 &&
     model.settled.length === 0 &&
     draftThreads.length === 0 &&
+    model.snoozed.length === 0 &&
     scopedPinnedThreads.length === 0;
   const emptyLabel =
     activeScope === null
@@ -921,6 +999,11 @@ export function SidebarActivityView({
           />
         </SidebarCollapsibleSection>
       ) : null}
+      <SidebarSnoozedThreadsSection
+        threads={model.snoozed}
+        renderThreadRow={(thread) => renderRow(thread, false)}
+        onVisibleThreadIdsChange={setSnoozedVisibleThreadIds}
+      />
     </div>
   );
 }

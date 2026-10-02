@@ -323,7 +323,6 @@ function ToastActions({
       ))}
       {actionProps && (
         <Toast.Action
-          {...actionProps}
           className={cn(
             buttonVariants({
               size: TOAST_ACTION_BUTTON_SIZE,
@@ -556,7 +555,6 @@ function ToastSurface({
 
       {compactContextual && toast.actionProps ? (
         <Toast.Action
-          {...toast.actionProps}
           className={cn(
             "mt-0.5 shrink-0 rounded-md px-1.5 py-0.5 font-medium text-[var(--notification-fg)]/76 transition-colors hover:bg-[var(--notification-fg)]/10 hover:text-[var(--notification-fg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--notification-fg)]/35",
             toast.actionProps.className,
