@@ -33,6 +33,7 @@ import { selectRightDockState, useRightDockStore } from "~/rightDockStore";
 import { GITHUB_INBOX_DOCK_HOST_ID } from "~/rightDockStore.logic";
 import { useStore } from "~/store";
 import { initialState } from "~/storeState";
+import { useProjectEnvironmentStore } from "~/projectEnvironmentStore";
 import type { Project } from "~/types";
 
 const handleNewThread = vi.fn();
@@ -395,6 +396,7 @@ function shownSidechat(): string | null {
 
 beforeEach(async () => {
   localStorage.clear();
+  useProjectEnvironmentStore.setState({ envModeByProjectId: {} });
   createdSidechats.length = 0;
   expiredSidechatIds.clear();
   dispatchCommand.mockClear();
@@ -459,32 +461,36 @@ describe("Send to agent", () => {
     expect(dispatchCommand).not.toHaveBeenCalled();
   });
 
-  it("prepares a pull request's branch before opening its thread", async () => {
-    await mount(PULL_REQUEST_SEARCH);
-    await expect.element(page.getByRole("heading", { name: "Fix login redirect" })).toBeVisible();
+  it.each(["local", "worktree"] as const)(
+    "prepares the PR using the project's %s preference and opens the prepared worktree",
+    async (mode) => {
+      useProjectEnvironmentStore.getState().setProjectEnvMode(projectA, mode);
+      await mount(PULL_REQUEST_SEARCH);
+      await expect.element(page.getByRole("heading", { name: "Fix login redirect" })).toBeVisible();
 
-    await page.getByRole("button", { name: "Send to agent", exact: true }).click();
+      await page.getByRole("button", { name: "Send to agent", exact: true }).click();
 
-    await expect.poll(() => handleNewThread.mock.calls.length).toBe(1);
-    expect(preparePullRequestThread).toHaveBeenCalledWith({
-      cwd: "/work/alpha",
-      reference: "https://github.com/acme/widgets/pull/41",
-      mode: "local",
-    });
-    expect(handleNewThread).toHaveBeenCalledWith(projectA, {
-      branch: "fix/login",
-      worktreePath: "/work/alpha-wt",
-      envMode: "local",
-      fresh: true,
-    });
-    await expect
-      .poll(
-        () =>
-          useComposerDraftStore.getState().draftsByThreadId["draft-thread" as ThreadId]
-            ?.pullRequestContexts[0]?.text,
-      )
-      .toContain("currently checked-out branch");
-  });
+      await expect.poll(() => handleNewThread.mock.calls.length).toBe(1);
+      expect(preparePullRequestThread).toHaveBeenCalledWith({
+        cwd: "/work/alpha",
+        reference: "https://github.com/acme/widgets/pull/41",
+        mode,
+      });
+      expect(handleNewThread).toHaveBeenCalledWith(projectA, {
+        branch: "fix/login",
+        worktreePath: "/work/alpha-wt",
+        envMode: "worktree",
+        fresh: true,
+      });
+      await expect
+        .poll(
+          () =>
+            useComposerDraftStore.getState().draftsByThreadId["draft-thread" as ThreadId]
+              ?.pullRequestContexts[0]?.text,
+        )
+        .toContain("currently checked-out branch");
+    },
+  );
 });
 
 describe("Ask", () => {

@@ -108,8 +108,9 @@ while the page is visible, on window focus, and with the refresh button.
 Every item offers three actions:
 
 - **Send to agent** opens a new draft thread in the item's project with the item attached as a
-  card. For a pull request, Synara first checks out its branch (worktree or local, following
-  **Settings → General → New threads**). You write the instructions and send; nothing starts
+  card. For a pull request, Synara reuses an existing worktree for its branch. Otherwise it
+  checks out the branch using the project's Local/Worktree preference, falling back to
+  **Settings → General → New threads**. You write the instructions and send; nothing starts
   on its own. When the repository belongs to several projects, you pick the project.
 - **Ask** opens a standalone sidechat about the item in a dock beside it, so you never leave
   Code review. Asking again reopens the item's live sidechat; `mod+alt+s` toggles it and Escape closes

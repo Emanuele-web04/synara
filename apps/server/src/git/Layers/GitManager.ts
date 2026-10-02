@@ -1585,28 +1585,6 @@ export const makeGitManager = Effect.gen(function* () {
       });
       const pullRequest = toResolvedPullRequest(pullRequestSummary);
 
-      if (input.mode === "local") {
-        yield* gitHubCli.checkoutPullRequest({
-          cwd: input.cwd,
-          reference: normalizedReference,
-          force: true,
-        });
-        const details = yield* gitCore.statusDetails(input.cwd);
-        yield* configurePullRequestHeadUpstream(
-          input.cwd,
-          {
-            ...pullRequest,
-            ...toPullRequestHeadRemoteInfo(pullRequestSummary),
-          },
-          details.branch ?? pullRequest.headBranch,
-        );
-        return {
-          pullRequest,
-          branch: details.branch ?? pullRequest.headBranch,
-          worktreePath: null,
-        };
-      }
-
       const ensureExistingWorktreeUpstream = (worktreePath: string) =>
         Effect.gen(function* () {
           const details = yield* gitCore.statusDetails(worktreePath);
@@ -1662,10 +1640,30 @@ export const makeGitManager = Effect.gen(function* () {
         yield* ensureExistingWorktreeUpstream(existingBranchBeforeFetch.worktreePath);
         return {
           pullRequest,
-          branch: localPullRequestBranch,
+          branch: existingBranchBeforeFetch.name,
           worktreePath: existingBranchBeforeFetch.worktreePath,
         };
       }
+
+      if (input.mode === "local") {
+        yield* gitHubCli.checkoutPullRequest({
+          cwd: input.cwd,
+          reference: normalizedReference,
+          force: true,
+        });
+        const details = yield* gitCore.statusDetails(input.cwd);
+        yield* configurePullRequestHeadUpstream(
+          input.cwd,
+          pullRequestWithRemoteInfo,
+          details.branch ?? pullRequest.headBranch,
+        );
+        return {
+          pullRequest,
+          branch: details.branch ?? pullRequest.headBranch,
+          worktreePath: null,
+        };
+      }
+
       if (existingBranchBeforeFetchPath === rootWorktreePath) {
         return yield* gitManagerError(
           "preparePullRequestThread",

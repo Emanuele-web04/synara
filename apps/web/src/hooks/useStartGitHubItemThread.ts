@@ -17,6 +17,7 @@ import { addChatPullRequestContext } from "~/lib/chatReferences";
 import { gitPreparePullRequestThreadMutationOptions } from "~/lib/gitReactQuery";
 import type { PullRequestContextDraft } from "~/lib/pullRequestContext";
 import { useStore } from "~/store";
+import { useProjectEnvironmentStore } from "~/projectEnvironmentStore";
 import { useHandleNewThread } from "./useHandleNewThread";
 
 export type GitHubItemThreadAction = "send" | "findings" | "conflicts";
@@ -50,7 +51,9 @@ export function useStartGitHubItemThread(input: {
   const start = (request: StartGitHubItemThreadRequest) => {
     if (pendingAction !== null) return;
     setPendingAction(request.action);
-    const mode = settings.defaultThreadEnvMode;
+    const mode =
+      useProjectEnvironmentStore.getState().envModeByProjectId[request.projectId] ??
+      settings.defaultThreadEnvMode;
     const pullRequestUrl = request.pullRequestUrl;
     const targetCwd =
       useStore.getState().projects.find((project) => project.id === request.projectId)?.cwd ??
@@ -67,7 +70,7 @@ export function useStartGitHubItemThread(input: {
               handleNewThread(request.projectId, {
                 branch: prepared.branch,
                 worktreePath: prepared.worktreePath,
-                envMode: mode,
+                envMode: prepared.worktreePath ? "worktree" : "local",
                 // An explicit handoff from the GitHub surface. Reusing the project's existing
                 // draft can leave the user on this route and insert the card into a hidden
                 // composer, making the button appear inert.

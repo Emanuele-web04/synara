@@ -2322,43 +2322,52 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
-  it.effect("reuses an existing dedicated worktree for the PR head branch", () =>
-    Effect.gen(function* () {
-      const repoDir = yield* makeTempDir("synara-git-manager-");
-      yield* initRepo(repoDir);
-      yield* runGit(repoDir, ["checkout", "-b", "feature/pr-existing-worktree"]);
-      fs.writeFileSync(path.join(repoDir, "existing.txt"), "existing\n");
-      yield* runGit(repoDir, ["add", "existing.txt"]);
-      yield* runGit(repoDir, ["commit", "-m", "Existing worktree branch"]);
-      yield* runGit(repoDir, ["checkout", "main"]);
-      const worktreePath = path.join(repoDir, "..", `pr-existing-${Date.now()}`);
-      yield* runGit(repoDir, ["worktree", "add", worktreePath, "feature/pr-existing-worktree"]);
+  for (const mode of ["local", "worktree"] as const) {
+    it.effect(`reuses an existing dedicated PR worktree in ${mode} mode`, () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("synara-git-manager-");
+        yield* initRepo(repoDir);
+        yield* runGit(repoDir, ["checkout", "-b", "feature/pr-existing-worktree"]);
+        fs.writeFileSync(path.join(repoDir, "existing.txt"), "existing\n");
+        yield* runGit(repoDir, ["add", "existing.txt"]);
+        yield* runGit(repoDir, ["commit", "-m", "Existing worktree branch"]);
+        yield* runGit(repoDir, ["checkout", "main"]);
+        const worktreePath = path.join(repoDir, "..", `pr-existing-${Date.now()}`);
+        yield* runGit(repoDir, ["worktree", "add", worktreePath, "feature/pr-existing-worktree"]);
+        fs.writeFileSync(path.join(worktreePath, "existing.txt"), "unsent changes\n");
+        const mainHead = (yield* runGit(repoDir, ["rev-parse", "HEAD"])).stdout.trim();
 
-      const { manager } = yield* makeManager({
-        ghScenario: {
-          pullRequest: {
-            number: 78,
-            title: "Existing worktree PR",
-            url: "https://github.com/example-org/sample-repo/pull/78",
-            baseRefName: "main",
-            headRefName: "feature/pr-existing-worktree",
-            state: "open",
+        const { manager } = yield* makeManager({
+          ghScenario: {
+            pullRequest: {
+              number: 78,
+              title: "Existing worktree PR",
+              url: "https://github.com/example-org/sample-repo/pull/78",
+              baseRefName: "main",
+              headRefName: "feature/pr-existing-worktree",
+              state: "open",
+            },
           },
-        },
-      });
+        });
 
-      const result = yield* preparePullRequestThread(manager, {
-        cwd: repoDir,
-        reference: "78",
-        mode: "worktree",
-      });
+        const result = yield* preparePullRequestThread(manager, {
+          cwd: repoDir,
+          reference: "78",
+          mode,
+        });
 
-      expect(result.worktreePath && fs.realpathSync.native(result.worktreePath)).toBe(
-        fs.realpathSync.native(worktreePath),
-      );
-      expect(result.branch).toBe("feature/pr-existing-worktree");
-    }),
-  );
+        expect(result.worktreePath && fs.realpathSync.native(result.worktreePath)).toBe(
+          fs.realpathSync.native(worktreePath),
+        );
+        expect(result.branch).toBe("feature/pr-existing-worktree");
+        expect((yield* runGit(repoDir, ["branch", "--show-current"])).stdout.trim()).toBe("main");
+        expect((yield* runGit(repoDir, ["rev-parse", "HEAD"])).stdout.trim()).toBe(mainHead);
+        expect(fs.readFileSync(path.join(worktreePath, "existing.txt"), "utf8")).toBe(
+          "unsent changes\n",
+        );
+      }),
+    );
+  }
 
   it.effect(
     "does not block fork PR worktree prep when the fork head branch collides with root main",
