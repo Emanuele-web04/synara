@@ -434,7 +434,7 @@ function paneRectStyle(rect: PaneRect): CSSProperties {
 }
 
 // Every leaf is a sibling keyed by its pane id and placed by absolute box, so adding, moving,
-// or closing a pane only restyles the others; nesting the tree would change their parent and
+// or closing a pane keeps the others mounted; nesting the tree would change their parent and
 // remount their chats (see layoutSplitPanes). Each split node gets a frame over its own box
 // that holds the divider, which reads that frame to turn a drag into a ratio.
 function PaneRenderer(props: {

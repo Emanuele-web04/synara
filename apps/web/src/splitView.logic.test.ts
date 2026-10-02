@@ -194,26 +194,19 @@ describe("layoutSplitPanes", () => {
     ]);
   });
 
-  it("keeps existing leaves in the same sibling order when the tree is rearranged", () => {
+  it("lists leaves in tree order so siblings follow the panes on screen", () => {
     const leafA = makeLeaf("leaf-a", THREAD_A);
     const leafB = makeLeaf("leaf-b", THREAD_B);
     const leafC = makeLeaf("leaf-c", THREAD_C);
-    const before = makeSplit({ id: "root", direction: "horizontal", first: leafC, second: leafA });
-    const after = makeSplit({
-      id: "root-2",
+    const root = makeSplit({
+      id: "root",
       direction: "vertical",
-      first: makeSplit({ id: "inner", direction: "horizontal", first: leafA, second: leafB }),
-      second: leafC,
+      first: makeSplit({ id: "inner", direction: "horizontal", first: leafC, second: leafA }),
+      second: leafB,
     });
 
-    expect(layoutSplitPanes(before).leaves.map(({ leaf }) => leaf.id)).toEqual([
-      "leaf-a",
-      "leaf-c",
-    ]);
-    expect(layoutSplitPanes(after).leaves.map(({ leaf }) => leaf.id)).toEqual([
-      "leaf-a",
-      "leaf-b",
-      "leaf-c",
-    ]);
+    expect(layoutSplitPanes(root).leaves.map(({ leaf }) => leaf.id)).toEqual(
+      collectLeaves(root).map((leaf) => leaf.id),
+    );
   });
 });

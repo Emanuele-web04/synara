@@ -86,7 +86,8 @@ export interface SplitPaneLayout {
 // Resolves the tree into absolute boxes so the surface can render every leaf as a sibling
 // keyed by its id. Rendering the tree as nested elements instead changes a leaf's parent
 // whenever a pane is added, moved, or closed, which remounts the chat inside it. Leaves come
-// back sorted by id: a stable sibling order means the DOM nodes are never moved either.
+// back in tree order (the same as collectLeaves), so DOM and tab order follow the panes on
+// screen and the first leaf is the leading one.
 export function layoutSplitPanes(root: Pane): SplitPaneLayout {
   const layout: SplitPaneLayout = { leaves: [], splits: [] };
   const visit = (pane: Pane, rect: PaneRect) => {
@@ -114,7 +115,6 @@ export function layoutSplitPanes(root: Pane): SplitPaneLayout {
     });
   };
   visit(root, { left: 0, top: 0, width: 1, height: 1 });
-  layout.leaves.sort((a, b) => (a.leaf.id < b.leaf.id ? -1 : a.leaf.id > b.leaf.id ? 1 : 0));
   return layout;
 }
 
