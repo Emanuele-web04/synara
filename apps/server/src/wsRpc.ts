@@ -1889,11 +1889,16 @@ const makeWsRpcHandlersLayer = () =>
             ),
             { label: "git.stacked-action" },
           ),
+        // Summary lookups gate cache misses inside GitHubCli so fresh badge data stays available.
         [WS_METHODS.gitResolvePullRequest]: (input) =>
-          rpcEffect(gitManager.resolvePullRequest(input), "Failed to resolve pull request"),
+          rpcEffect(
+            gitManager.resolvePullRequest(input, { background: true }),
+            "Failed to resolve pull request",
+          ),
+        // Uncached snapshot polling shares the inbox read queue and rate-limit pause.
         [WS_METHODS.gitPullRequestSnapshot]: (input) =>
           rpcEffect(
-            gitManager.pullRequestSnapshot(input),
+            github.withRead(gitManager.pullRequestSnapshot(input)),
             "Failed to load pull request checks and comments",
           ),
         [WS_METHODS.gitPreparePullRequestThread]: (input) =>

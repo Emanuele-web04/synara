@@ -4,7 +4,9 @@ import path from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { Effect, Exit, FileSystem, Layer, PlatformError, Scope } from "effect";
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
+import * as processRunner from "../../processRunner";
+import { GitHubCliLive } from "./GitHubCli";
 import type { GitActionProgressEvent } from "@synara/contracts";
 import type {
   GitPullRequestCheck,
@@ -15,7 +17,11 @@ import type {
 
 import { GitCommandError, GitHubCliError, TextGenerationError } from "../Errors.ts";
 import { type GitManagerShape } from "../Services/GitManager.ts";
-import { GitHubCli, PULL_REQUEST_SUMMARY_JSON_FIELDS } from "../Services/GitHubCli.ts";
+import {
+  GitHubCli,
+  type GitHubCliShape,
+  PULL_REQUEST_SUMMARY_JSON_FIELDS,
+} from "../Services/GitHubCli.ts";
 import {
   type AutomationIntentGenerationInput,
   type AutomationIntentGenerationResult,
@@ -372,6 +378,7 @@ function handoffThread(
 
 function makeManager(input?: {
   ghScenario?: FakeGhScenario;
+  github?: GitHubCliShape;
   textGeneration?: Partial<FakeGitTextGeneration>;
 }) {
   const { service: gitHubCli, ghCalls } = createGitHubCliWithFakeGh(input?.ghScenario);
@@ -386,7 +393,7 @@ function makeManager(input?: {
   );
 
   const managerLayer = Layer.mergeAll(
-    Layer.succeed(GitHubCli, gitHubCli),
+    Layer.succeed(GitHubCli, input?.github ?? gitHubCli),
     Layer.succeed(TextGeneration, textGeneration),
     gitCoreLayer,
   ).pipe(Layer.provideMerge(NodeServices.layer));
@@ -1995,6 +2002,44 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       );
       expect(errorMessage).toContain("GitHub CLI (`gh`) is required");
     }),
+  );
+
+  it.effect("keeps direct PR resolution available during a polling pause", () =>
+    Effect.gen(function* () {
+      const gh = yield* GitHubCli;
+      const runProcessSpy = vi
+        .spyOn(processRunner, "runProcess")
+        .mockImplementation(async (_command, args) => {
+          if (args[0] === "api") throw new Error("gh: API rate limit exceeded (HTTP 403)");
+          return {
+            stdout: JSON.stringify({
+              number: 42,
+              title: "Agent association",
+              url: "https://github.com/acme/app/pull/42",
+              baseRefName: "main",
+              headRefName: "feature",
+              state: "OPEN",
+            }),
+            stderr: "",
+            code: 0,
+            signal: null,
+            timedOut: false,
+          };
+        });
+      yield* Effect.addFinalizer(() => Effect.sync(() => runProcessSpy.mockRestore()));
+      const { manager } = yield* makeManager({ github: gh });
+      yield* gh.execute({ cwd: "/agent-association", args: ["api", "user"] }).pipe(Effect.flip);
+      const result = yield* manager.resolvePullRequest({
+        cwd: "/agent-association",
+        reference: "#42",
+      });
+      expect(result.pullRequest.number).toBe(42);
+      const poll = yield* manager
+        .resolvePullRequest({ cwd: "/agent-association", reference: "#43" }, { background: true })
+        .pipe(Effect.result);
+      expect(poll._tag).toBe("Failure");
+      expect(runProcessSpy).toHaveBeenCalledTimes(2);
+    }).pipe(Effect.provide(GitHubCliLive)),
   );
 
   it.effect("resolves pull requests from #number references", () =>

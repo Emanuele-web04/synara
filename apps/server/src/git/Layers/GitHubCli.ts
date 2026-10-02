@@ -1,4 +1,4 @@
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Layer, Option, Schema } from "effect";
 import {
   PositiveInt,
   TrimmedNonEmptyString,
@@ -26,6 +26,7 @@ import {
 import { runProcess } from "../../processRunner";
 import { makeKeyedSingleFlightCache } from "../../pullRequests/KeyedSingleFlightCache";
 import { GitHubCliError } from "../Errors.ts";
+import { makeGitHubReadGate } from "../githubReadGate.ts";
 import {
   GitHubCli,
   PULL_REQUEST_SUMMARY_JSON_FIELDS,
@@ -1747,6 +1748,8 @@ const makeGitHubCli = Effect.gen(function* () {
     { discard: true },
   );
 
+  const readGate = makeGitHubReadGate();
+
   // Flipped once if GitHub ever rejects the optional stack fields, so later inbox reads skip them
   // instead of failing and retrying on every poll.
   let inboxStackFieldsSupported = true;
@@ -1771,7 +1774,8 @@ const makeGitHubCli = Effect.gen(function* () {
           ...(input.onStderrChunk !== undefined ? { onStderrChunk: input.onStderrChunk } : {}),
         }),
       catch: (error) => normalizeGitHubCliError("execute", error),
-    });
+      // Every command reports here, mutations included, so a limit hit by any of them pauses reads.
+    }).pipe(Effect.tapError((error) => Effect.sync(() => readGate.noteFailure(error))));
 
   const PULL_REQUEST_DIFF_TOO_LARGE_PATTERN = /exceeded the maximum number of files|too_large/i;
   const PULL_REQUEST_DIFF_MISSING_OBJECT_PATTERN =
@@ -2117,7 +2121,7 @@ const makeGitHubCli = Effect.gen(function* () {
     );
   };
 
-  const service = {
+  const service: Omit<GitHubCliShape, "withRead"> = {
     execute,
     getViewerLogin: (input) =>
       execute({
@@ -2705,22 +2709,30 @@ const makeGitHubCli = Effect.gen(function* () {
         cwd: input.cwd,
         args: ["pr", "checkout", input.reference, ...(input.force ? ["--force"] : [])],
       }).pipe(Effect.asVoid),
-  } satisfies GitHubCliShape;
+  };
 
-  // `listOpenPullRequests` stays uncached: it backs the create-PR flow, which must observe the
-  // pull request it just created.
+  // `listOpenPullRequests` stays uncached and ungated: it backs the create-PR flow, which must
+  // observe the pull request it just created. `listPullRequests` only serves background lookups
+  // (git status, thread metadata), so a cache miss waits for a read slot and honours the pause.
   return {
     ...service,
+    withRead: readGate.withRead,
     listPullRequests: (input) =>
       pullRequestHeadListCache.get(
         [input.cwd, input.headSelector, input.limit ?? ""].join("\u0000"),
-        service.listPullRequests(input),
+        readGate.withRead(service.listPullRequests(input)),
       ),
     getPullRequest: (input) =>
-      pullRequestLookupCache.get(
-        [input.cwd, input.reference].join("\u0000"),
-        service.getPullRequest(input),
-      ),
+      Effect.gen(function* () {
+        const key = [input.cwd, input.reference].join("\u0000");
+        const lookup = pullRequestLookupCache.get(key, service.getPullRequest(input));
+        if (!input.background) return yield* lookup;
+        const cached = yield* pullRequestLookupCache.getCached(key);
+        if (Option.isSome(cached)) return cached.value;
+        // Admission belongs to this polling caller, not the shared remote computation.
+        // A mutation may start or join the actual lookup without waiting for a read slot.
+        return yield* readGate.withRead(lookup);
+      }),
     runPullRequestAction: (input) =>
       service.runPullRequestAction(input).pipe(Effect.ensuring(invalidatePullRequestLookups)),
     createPullRequest: (input) =>

@@ -3,6 +3,8 @@ import type { OrchestrationProject } from "@synara/contracts";
 import { Deferred, Effect, Fiber } from "effect";
 import { describe, expect, it } from "vitest";
 
+import { GitHubCliError } from "../../git/Errors";
+import { makeGitHubReadGate } from "../../git/githubReadGate";
 import { decodeRepositoryInboxJson } from "../../git/Layers/GitHubCli";
 import type { GitHubCliShape, GitHubPullRequestDetailData } from "../../git/Services/GitHubCli";
 import {
@@ -137,6 +139,48 @@ function countingGitHub(overrides: Partial<GitHubCliShape> = {}) {
 }
 
 describe("PullRequestService", () => {
+  it.each([false, true])(
+    "keeps merge prerequisites outside a read pause (cached capabilities: %s)",
+    async (warmCapabilities) => {
+      const project = makeProject("project-paused-merge", "Merge", "/tmp/paused-merge");
+      const gate = makeGitHubReadGate();
+      const { service: base, ghCalls } = createGitHubCliWithFakeGh({
+        pullRequestDetail: makeDetail(42, "acme/app"),
+      });
+      await runServices(
+        {
+          projects: [project],
+          repositories: new Map([[project.id, "acme/app"]]),
+          github: { ...base, withRead: gate.withRead },
+        },
+        ({ pullRequests }) =>
+          Effect.gen(function* () {
+            if (warmCapabilities)
+              yield* pullRequests.detail({
+                projectId: project.id,
+                repository: "acme/app",
+                number: 42,
+              });
+            gate.noteFailure(
+              new GitHubCliError({
+                operation: "execute",
+                detail: "GitHub rate limit",
+                reason: "rate-limited",
+              }),
+            );
+            yield* pullRequests.action({
+              projectId: project.id,
+              repository: "acme/app",
+              number: 42,
+              action: "merge",
+              mergeMethod: "squash",
+            });
+          }),
+      );
+      expect(ghCalls.some((call) => call.includes("pr action merge"))).toBe(true);
+    },
+  );
+
   it("allows clearing a pin after its repository remote was removed", async () => {
     const project = makeProject("project-orphan", "Orphan", "/tmp/orphan");
     const writes: Array<{ repositoryKey: string; isPinned: boolean }> = [];

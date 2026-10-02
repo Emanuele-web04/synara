@@ -23,6 +23,7 @@ import type {
 import { makeKeyedSingleFlightCache } from "../pullRequests/KeyedSingleFlightCache";
 import { isGlobalGitHubCliError } from "../pullRequests/projectRepositoryAccess";
 import {
+  GITHUB_INBOX_FORCE_REFRESH_COOLDOWN_MS,
   GITHUB_INBOX_MAX_PROBE_EXTENSION_MS,
   GITHUB_INBOX_RATE_LIMIT_FALLBACK_PAUSE_MS,
   GITHUB_INBOX_RATE_LIMIT_FLOOR,
@@ -114,7 +115,7 @@ export function mergeRepositoryInbox(
 
 export const makeGitHubInboxSnapshotStore = (dependencies: {
   readonly github: GitHubCliShape;
-  readonly withGitHubRead: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+  readonly withGitHubRead: GitHubCliShape["withRead"];
   /** Injectable for tests; defaults to `Date.now`. */
   readonly now?: () => number;
 }): Effect.Effect<GitHubInboxSnapshotStore, never, Scope.Scope> =>
@@ -309,16 +310,26 @@ export const makeGitHubInboxSnapshotStore = (dependencies: {
       Effect.gen(function* () {
         const key = snapshotKey(input.repository, input.state, input.sort);
         const startedAt = now();
-        const generation = (generations.get(key) ?? 0) + (input.forceRefresh ? 1 : 0);
-        if (input.forceRefresh) {
+        const existing = entries.get(key) ?? null;
+        // Repeated clicks on refresh share the full read the first one made. A mutation in
+        // between sets `fullReadRequired`, so the click after an action still reads GitHub.
+        const forceRefresh =
+          input.forceRefresh &&
+          !(
+            existing &&
+            existing.involvementError === null &&
+            !fullReadRequired.has(key) &&
+            startedAt - existing.fetchedAt < GITHUB_INBOX_FORCE_REFRESH_COOLDOWN_MS
+          );
+        const generation = (generations.get(key) ?? 0) + (forceRefresh ? 1 : 0);
+        if (forceRefresh) {
           generations.set(key, generation);
           failures.delete(key);
           yield* inFlight.invalidate(key);
         }
 
-        const existing = entries.get(key) ?? null;
         if (
-          !input.forceRefresh &&
+          !forceRefresh &&
           existing &&
           existing.involvementError === null &&
           !fullReadRequired.has(key) &&
@@ -328,7 +339,7 @@ export const makeGitHubInboxSnapshotStore = (dependencies: {
         }
 
         const failure = failures.get(key);
-        if (!input.forceRefresh && failure && failure.retryAt > startedAt) {
+        if (!forceRefresh && failure && failure.retryAt > startedAt) {
           return {
             _tag: "stale",
             entry: existing,
@@ -360,7 +371,7 @@ export const makeGitHubInboxSnapshotStore = (dependencies: {
               repository: input.repository,
               state: input.state,
               sort: input.sort,
-              skipProbe: input.forceRefresh,
+              skipProbe: forceRefresh,
             }),
           )
           .pipe(

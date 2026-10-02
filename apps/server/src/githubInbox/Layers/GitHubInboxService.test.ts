@@ -21,6 +21,7 @@ import type {
 import { PULL_REQUEST_PIN_RECOVERY_LIMIT } from "../../pullRequests/pullRequestPinRecovery";
 import {
   GITHUB_INBOX_FAILURE_BACKOFF_BASE_MS,
+  GITHUB_INBOX_FORCE_REFRESH_COOLDOWN_MS,
   GITHUB_INBOX_MAX_PROBE_EXTENSION_MS,
   GITHUB_INBOX_SNAPSHOT_TTL_MS,
 } from "../githubInbox.logic";
@@ -652,6 +653,42 @@ describe("GitHubInboxService.list", () => {
     expect(first.callsAfterBackoff).toBe(2);
     expect(first.callsDuringDoubledBackoff).toBe(2);
     expect(first.callsAfterForce).toBe(3);
+  });
+
+  it("reuses the last full read for repeated manual refreshes", async () => {
+    const project = makeProject("project-cooldown", "App");
+    const clock = { value: Date.parse(now) };
+    const { github, inboxCalls, probeCalls } = makeGitHub({});
+    const calls = await runInbox(
+      { projects: [project], repositories: new Map([[project.id, ["acme/app"]]]), github, clock },
+      (service) =>
+        Effect.gen(function* () {
+          const refresh = service.list({ state: "open", forceRefresh: true });
+          yield* refresh;
+          clock.value += GITHUB_INBOX_FORCE_REFRESH_COOLDOWN_MS - 1;
+          yield* refresh;
+          const duringCooldown = inboxCalls.length;
+          const probesDuringCooldown = probeCalls.length;
+          // An action in between still makes the next refresh read GitHub.
+          yield* service.invalidateRepository("acme/app");
+          yield* refresh;
+          const afterMutation = inboxCalls.length;
+          clock.value += GITHUB_INBOX_FORCE_REFRESH_COOLDOWN_MS;
+          yield* refresh;
+          return {
+            duringCooldown,
+            probesDuringCooldown,
+            afterMutation,
+            afterCooldown: inboxCalls.length,
+          };
+        }),
+    );
+    expect(calls).toEqual({
+      duringCooldown: 1,
+      probesDuringCooldown: 1,
+      afterMutation: 2,
+      afterCooldown: 3,
+    });
   });
 
   it("fails the whole request on gh setup errors", async () => {
