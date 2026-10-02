@@ -64,11 +64,29 @@ export function SidebarLeadingControlsDock({
   children: ReactNode;
 }) {
   const { isMobile } = useSidebar();
+  const anchors = useRef(new Set<HTMLElement>());
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const [position, setPosition] = useState<{ x: number; y: number; animate: boolean } | null>(null);
   const registerAnchor = useCallback<RegisterLeadingControlsAnchor>((element) => {
-    setAnchor(element);
-    return () => setAnchor((current) => (current === element ? null : current));
+    const selectLeadingAnchor = () => {
+      // Split panes reserve several boxes; shell chrome belongs to the first header.
+      let leading: HTMLElement | null = null;
+      for (const candidate of anchors.current) {
+        if (
+          !leading ||
+          candidate.compareDocumentPosition(leading) & Node.DOCUMENT_POSITION_FOLLOWING
+        ) {
+          leading = candidate;
+        }
+      }
+      setAnchor(leading);
+    };
+    anchors.current.add(element);
+    selectLeadingAnchor();
+    return () => {
+      anchors.current.delete(element);
+      selectLeadingAnchor();
+    };
   }, []);
 
   useLayoutEffect(() => {
@@ -102,7 +120,7 @@ export function SidebarLeadingControlsDock({
 
   return (
     <LeadingControlsDockContext.Provider value={contextValue}>
-      {children}
+      {/* Fixed painting must not put the leading controls after route content in tab order. */}
       {!isMobile && position ? (
         <div
           className={cn(
@@ -119,6 +137,7 @@ export function SidebarLeadingControlsDock({
           <SidebarLeadingControls />
         </div>
       ) : null}
+      {children}
     </LeadingControlsDockContext.Provider>
   );
 }
