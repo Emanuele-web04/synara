@@ -240,6 +240,8 @@ export function ChatTranscriptPane({
     timelineControllerRef?.current?.scrollToMessage(messageId);
   };
 
+  const agentDetailOpen = Boolean(agentActivityDetail && onCloseAgentActivityDetail);
+
   return (
     <div
       data-chat-transcript-pane="true"
@@ -263,17 +265,14 @@ export function ChatTranscriptPane({
       ) : null}
 
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-        {agentActivityDetail && onCloseAgentActivityDetail ? (
-          <AgentActivityDetailView
-            detail={agentActivityDetail}
-            chatFontSizePx={chatFontSizePx}
-            contentInsetRightPx={contentInsetRightPx}
-            markdownCwd={markdownCwd}
-            onBack={onCloseAgentActivityDetail}
-            onImageExpand={onExpandTimelineImage}
-            timestampFormat={timestampFormat}
-          />
-        ) : (
+        {/* The timeline stays mounted under the agent detail: unmounting it would rebuild
+            every row and lose the scroll position on Back. The wrapper has no box of its own
+            (`contents`), so the timeline's layout and measurement are the same either way. */}
+        <div
+          className={cn("contents", agentDetailOpen && "pointer-events-none invisible")}
+          aria-hidden={agentDetailOpen || undefined}
+          inert={agentDetailOpen}
+        >
           <MessagesTimeline
             key={activeThreadId}
             hasMessages={hasMessages}
@@ -351,7 +350,20 @@ export function ChatTranscriptPane({
             {...(expandedWorkGroups ? { expandedWorkGroups } : {})}
             {...(onToggleWorkGroup ? { onToggleWorkGroup } : {})}
           />
-        )}
+        </div>
+        {agentActivityDetail && onCloseAgentActivityDetail ? (
+          <div className="absolute inset-0">
+            <AgentActivityDetailView
+              detail={agentActivityDetail}
+              chatFontSizePx={chatFontSizePx}
+              contentInsetRightPx={contentInsetRightPx}
+              markdownCwd={markdownCwd}
+              onBack={onCloseAgentActivityDetail}
+              onImageExpand={onExpandTimelineImage}
+              timestampFormat={timestampFormat}
+            />
+          </div>
+        ) : null}
 
         {!agentActivityDetail ? (
           <div
