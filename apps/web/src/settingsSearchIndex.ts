@@ -79,6 +79,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "After Archive's Undo period, remove a clean worktree only when its task has stopped and no other task uses it. Keep its branch for recovery. worktree archive cleanup disk space remove delete",
   },
   {
+    id: "general:move-sent-messages-to-top",
+    section: "general",
+    title: "Move sent messages to top",
+    keywords:
+      "Move each sent message to the top of the conversation. Turn off to keep it at the bottom and follow replies as they stream. chat enter send scroll anchor",
+  },
+  {
     id: "general:welcome-tour",
     section: "general",
     title: "Welcome tour",

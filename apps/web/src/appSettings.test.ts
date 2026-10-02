@@ -1871,6 +1871,28 @@ describe("provider-indexed custom model settings", () => {
 });
 
 describe("AppSettingsSchema", () => {
+  it("keeps sent-message anchoring enabled for settings saved before the preference existed", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+
+    expect(decode(JSON.stringify({ chatFontSizePx: 17 }))).toMatchObject({
+      anchorSentMessagesToTop: true,
+      chatFontSizePx: 17,
+    });
+  });
+
+  it("preserves disabled sent-message anchoring across persistence until defaults are restored", () => {
+    const codec = Schema.fromJsonString(AppSettingsSchema);
+    const decode = Schema.decodeSync(codec);
+    const defaults = decode("{}");
+    const settings = applyLocalAppSettingsPatch(defaults, { anchorSentMessagesToTop: false });
+    const restored = decode(Schema.encodeSync(codec)(settings));
+
+    expect(restored).toMatchObject({ anchorSentMessagesToTop: false });
+    expect(applyLocalAppSettingsPatch(restored, defaults)).toMatchObject({
+      anchorSentMessagesToTop: true,
+    });
+  });
+
   it("opens Tasks as the list until the user picks the Kanban view", () => {
     const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
     expect(decode(JSON.stringify({})).tasksViewMode).toBe("list");
