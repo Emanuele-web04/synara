@@ -3592,8 +3592,9 @@ export default function Sidebar() {
           if (!confirmed) return;
         }
 
+        const excludedThreadIds = new Set<ThreadId>(ids);
         for (const id of archiveIds) {
-          await archiveThread(id);
+          await archiveThread(id, { excludedThreadIds });
         }
         removeFromSelection(ids);
         return;
