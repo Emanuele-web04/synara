@@ -3120,6 +3120,16 @@ diffs-container {
   --composer-glass-surface: var(--popover);
 }
 
+/* Sidebar-only glass still uses a translucent native macOS window behind the opaque
+   chat column. Avoid adding a second backdrop layer when its composer mounts: use
+   dense fills to keep the transcript from reading through without a CSS blur.
+   Whole-window glass keeps its shared raised tint and overlay cutouts below. */
+:root[data-window-transparent="true"][data-window-material="translucent"][data-window-translucency="sidebar"] {
+  --composer-glass-filter: none;
+  --composer-glass-opacity: 92%;
+  --composer-glass-stacked-opacity: 80%;
+}
+
 .chat-composer-surface,
 .chat-composer-stacked-top {
   position: relative;
