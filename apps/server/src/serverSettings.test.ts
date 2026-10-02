@@ -12,6 +12,7 @@ import {
   providerStartOptionsFromInstance,
 } from "@synara/shared/providerInstances";
 import { Effect, FileSystem, Layer } from "effect";
+import { isBetaFeatureEnabled } from "@synara/shared/betaFeatures";
 import { describe, expect, it } from "vitest";
 import { providerDisabledSettingsMessage } from "./provider/enabledProviderAdapter";
 import { ServerConfig } from "./config";
@@ -734,6 +735,7 @@ describe("ServerSettingsService", () => {
 });
 
 const ompGatedOff = (feature: string) => feature !== "omp";
+const stableFeatureEnabled = (feature: string) => isBetaFeatureEnabled(feature, "production");
 
 describe("gateBetaOnlyProviders", () => {
   const withOmpEnabled: ServerSettings = {
@@ -752,8 +754,20 @@ describe("gateBetaOnlyProviders", () => {
     expect(withOmpEnabled.providers.omp.enabled).toBe(true);
   });
 
-  it("returns the same object when nothing is gated", () => {
-    expect(gateBetaOnlyProviders(withOmpEnabled, () => true)).toBe(withOmpEnabled);
+  it("preserves enabled Oh My Pi accounts in Stable", () => {
+    const settings: ServerSettings = {
+      ...withOmpEnabled,
+      providerInstances: {
+        omp_work: { driver: "omp", enabled: true, config: {} },
+      },
+    };
+    const gated = gateBetaOnlyProviders(settings, stableFeatureEnabled);
+    expect(gated).toBe(settings);
+    expect(gated.providers.omp.enabled).toBe(true);
+    expect(gated.providerInstances.omp_work?.enabled).toBe(true);
+    expect(providerDisabledSettingsMessage("omp", stableFeatureEnabled)).toBe(
+      "Oh My Pi is disabled in Settings > Providers.",
+    );
   });
 
   it("gates custom instances of a Beta-only driver", () => {

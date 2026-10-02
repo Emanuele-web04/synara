@@ -35,11 +35,11 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
       },
       {
         id: "omp-beta",
-        title: "Oh My Pi in Beta",
+        title: "Oh My Pi",
         description:
-          "Synara Beta can connect to an installed Oh My Pi (OMP) runtime as a provider, with its discovered models and per-model thinking levels.",
+          "Synara can connect to an installed Oh My Pi (OMP) runtime as a provider in Stable and Beta, with its discovered models and per-model thinking levels.",
         details:
-          "Install and authenticate OMP separately, then select it in Beta provider settings. OMP is gated off in Stable for now; model availability depends on your OMP configuration and account.",
+          "Install and authenticate OMP, then select it in provider settings. Model availability depends on your OMP configuration and account.",
       },
       {
         id: "computer-approval",
