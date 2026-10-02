@@ -96,6 +96,10 @@ the conversation or split from one exact turn. Use a
 [handoff](https://www.trysynara.com/docs/workflows/handoffs) when another provider should continue
 the same task and ownership boundary.
 
+Sidechats keep the source chat's project, folder, branch, and Local/Worktree environment. Their
+empty view shows the composer without the new-chat welcome screen or independent project, folder,
+branch, Local/Worktree, or Temporary controls.
+
 Sidechats inherit the source chat's selected permissions, including Full access. Approve for me
 is preserved when the selected provider and model support it; otherwise the sidechat uses Ask for
 approval. You can change a sidechat's permissions independently after creating it.
@@ -104,7 +108,8 @@ A sidechat can also stand alone, with no source chat: **Ask** on a Code review i
 that pull request or issue. It has no transcript to import and no permissions to inherit, so it
 starts in Ask for approval, runs in the project's own checkout without switching branches, and
 is told to treat the item's text as untrusted reference data. Like any sidechat it stays out of
-the thread list and expires after an hour of inactivity.
+the thread list and expires after an hour of inactivity. Its empty view likewise shows only the
+composer and keeps the workspace assigned by Code review.
 
 ## Code review
 
