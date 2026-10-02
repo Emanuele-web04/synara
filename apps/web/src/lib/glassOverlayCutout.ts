@@ -98,7 +98,9 @@ let scheduleInstalledCutout: (() => void) | null = null;
 export function registerInPageGlassOverlay(wrapper: HTMLElement): () => void {
   inPageOverlayWrappers.add(wrapper);
   const observer = new MutationObserver(() => scheduleInstalledCutout?.());
-  observer.observe(wrapper, { attributes: true, childList: true, subtree: true });
+  // Side-panel visibility changes on the host. Hidden Git/preview content updates
+  // must not restart the frame loop; visible surfaces are already measured every frame.
+  observer.observe(wrapper, { attributes: true, attributeFilter: ["aria-hidden"] });
   scheduleInstalledCutout?.();
   return () => {
     observer.disconnect();
@@ -220,7 +222,10 @@ export function installGlassOverlayCutout(root: HTMLElement): () => void {
       if (!surface || !wrapper.parentElement || !isCoveringOverlay(surface)) continue;
       covering += 1;
       for (const sibling of wrapper.parentElement.children) {
-        if (inPageOverlayWrappers.has(sibling as HTMLElement) || !(sibling instanceof HTMLElement))
+        if (!(sibling instanceof HTMLElement) || sibling === wrapper) continue;
+        // A closed Environment card can leave its preview rail visible. That chrome
+        // still needs cutting out under the open panel, while open surfaces stay intact.
+        if (inPageOverlayWrappers.has(sibling) && sibling.getAttribute("aria-hidden") !== "true")
           continue;
         addCutout(next, sibling, [surface]);
       }

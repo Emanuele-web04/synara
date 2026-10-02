@@ -4,6 +4,7 @@ import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
+import { AmbientRailSlot } from "~/components/chat/AmbientRailSlot";
 import { SidePanelOverlay } from "~/components/chat/SidePanelOverlay";
 import { notificationSurfaceClassName } from "~/components/ui/notificationSurface";
 import { installGlassOverlayCutout } from "./glassOverlayCutout";
@@ -17,8 +18,7 @@ function glassRoot() {
   document.documentElement.dataset.windowMaterial = "translucent";
   document.documentElement.dataset.windowTranslucency = "window";
   const root = document.createElement("div");
-  root.style.cssText =
-    "position:fixed;left:0;top:0;width:700px;height:500px;background:red;z-index:100";
+  root.style.cssText = `position:fixed;left:0;top:0;width:${Math.min(700, window.innerWidth)}px;height:500px;background:red;z-index:100`;
   document.body.append(root);
   disposers.push(() => root.remove());
   disposers.push(installGlassOverlayCutout(root));
@@ -92,6 +92,8 @@ describe("glass overlay content cutouts", () => {
     const requestFrame = vi.spyOn(window, "requestAnimationFrame");
     try {
       content.append(document.createTextNode("More transcript content"));
+      surface.setAttribute("data-git-status", "updated");
+      surface.append(document.createTextNode("Hidden status update"));
       await new Promise((resolve) => setTimeout(resolve, 100));
       expect(requestFrame).not.toHaveBeenCalled();
     } finally {
@@ -99,6 +101,56 @@ describe("glass overlay content cutouts", () => {
     }
     toggle.click();
     await expect.poll(() => content.style.clipPath).not.toBe("");
+    await screen.unmount();
+  });
+
+  it("cuts a closed Environment panel's visible preview rail out from under the open sibling panel", async () => {
+    const root = glassRoot();
+    const screen = await render(
+      <>
+        <SidePanelOverlay
+          open={false}
+          variant="floating"
+          className="items-end gap-3 overflow-y-auto"
+          cardClassName="h-60 w-72"
+          trailing={
+            <AmbientRailSlot envOpen={false}>
+              <div
+                data-preview=""
+                style={{ width: 288, height: 180, background: "red", pointerEvents: "auto" }}
+              >
+                Preview
+              </div>
+            </AmbientRailSlot>
+          }
+        >
+          Hidden environment
+        </SidePanelOverlay>
+        <SidePanelOverlay open variant="floating" cardClassName="h-60 w-72">
+          Project
+        </SidePanelOverlay>
+      </>,
+      { container: root },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await frames();
+    const preview = root.querySelector<HTMLElement>("[data-preview]")!;
+    const closed = root.querySelector<HTMLElement>('[aria-hidden="true"]')!;
+    const openSurface = root.querySelector<HTMLElement>(
+      '[aria-hidden="false"] .chat-raised-panel-surface',
+    )!;
+    // Make the clipped paint region inspectable by native hit testing. This only removes
+    // the closed host's interaction gate and the foreground card's hit target, not its geometry.
+    closed.inert = false;
+    openSurface.style.pointerEvents = "none";
+    const rect = preview.getBoundingClientRect();
+    const cover = openSurface.getBoundingClientRect();
+    expect(rect.top).toBeLessThan(cover.bottom);
+    expect(rect.x + 100).toBeLessThan(window.innerWidth);
+    expect(Math.max(rect.y, cover.y) + 30).toBeLessThan(window.innerHeight);
+    expect(document.elementFromPoint(rect.x + 100, Math.max(rect.y, cover.y) + 30)).not.toBe(
+      preview,
+    );
     await screen.unmount();
   });
 
