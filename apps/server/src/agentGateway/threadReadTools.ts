@@ -4,6 +4,7 @@ import {
   TurnId,
   type OrchestrationThreadShell,
   type ProviderKind,
+  type ServerAgentProviderUsage,
 } from "@synara/contracts";
 import { Effect, Option } from "effect";
 
@@ -14,6 +15,7 @@ import {
 import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type { ProjectionTurnRepositoryShape } from "../persistence/Services/ProjectionTurns.ts";
 import type { ProviderDiscoveryServiceShape } from "../provider/Services/ProviderDiscoveryService.ts";
+import { summarizeProviderUsageForAgent } from "../providerUsage/agent.ts";
 import { SYNARA_HARNESS_POLICY_VERSION } from "./harnessPolicy.ts";
 import { mcpToolResultError, mcpToolResultJson } from "./protocol.ts";
 import {
@@ -64,6 +66,9 @@ export interface ThreadReadToolsInput {
     threadId: string,
   ) => Effect.Effect<OrchestrationThreadShell, unknown, never>;
   readonly workspacePaths: SpaceAssignmentWorkspacePaths;
+  readonly loadProviderUsage: (
+    provider: ProviderKind,
+  ) => Effect.Effect<ReadonlyArray<ServerAgentProviderUsage>, unknown, never>;
 }
 
 export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<ToolEntry> {
@@ -74,6 +79,7 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
     loadProviderAvailabilities,
     requireThreadShell,
     workspacePaths,
+    loadProviderUsage,
   } = input;
 
   const contextTool: ToolEntry = {
@@ -81,7 +87,7 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
     definition: {
       name: "synara_context",
       description:
-        "Inspect the current Synara harness identity, caller thread/turn, and authorized coordination capabilities.",
+        "Inspect the current Synara harness identity, caller thread/turn, authorized coordination capabilities, and caller provider quota. Only fresh, available quotaWindows represent actionable remaining account quota.",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
       annotations: {
         title: "Synara context",
@@ -95,6 +101,21 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
       Effect.gen(function* () {
         const caller = yield* requireThreadShell(context.callerThreadId);
         const turnId = caller.latestTurn?.state === "running" ? caller.latestTurn.turnId : null;
+        const usageRead = context.callerCapabilities.has("usage:read");
+        const usage = usageRead
+          ? yield* loadProviderUsage(context.callerProvider).pipe(
+              Effect.match({
+                onFailure: () =>
+                  summarizeProviderUsageForAgent({
+                    provider: context.callerProvider,
+                    enabled: true,
+                    snapshot: null,
+                    unavailableReason: "provider-error",
+                  }),
+                onSuccess: (results) => results[0] ?? null,
+              }),
+            )
+          : null;
         return mcpToolResultJson({
           harness: { name: "Synara", policyVersion: SYNARA_HARNESS_POLICY_VERSION },
           caller: {
@@ -108,8 +129,28 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
             threadCreate: turnId !== null && context.callerCapabilities.has("thread:write"),
             threadWait: context.callerCapabilities.has("thread:read"),
             diagnostics: context.callerCapabilities.has("diagnostics:read"),
+            usageRead,
             automations: turnId !== null && context.callerCapabilities.has("automation:write"),
           },
+          usage:
+            usage === null
+              ? {
+                  provider: context.callerProvider,
+                  availability: "unavailable",
+                  unavailableReason: usageRead ? "missing-snapshot" : "not-authorized",
+                }
+              : {
+                  provider: usage.provider,
+                  availability: usage.availability,
+                  ...(usage.unavailableReason
+                    ? { unavailableReason: usage.unavailableReason }
+                    : {}),
+                  checkedAt: usage.checkedAt,
+                  freshness: usage.freshness,
+                  ...(usage.snapshot?.planName ? { planName: usage.snapshot.planName } : {}),
+                  ...(usage.snapshot?.source ? { source: usage.snapshot.source } : {}),
+                  quotaWindows: usage.quotaWindows,
+                },
         });
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
   };
