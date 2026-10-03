@@ -269,6 +269,34 @@ it("edits the selected account beside the list and offers one-click sign-in", as
   expect(Object.keys(removal.providerInstances)).toEqual(["codex_old"]);
 });
 
+it("leaves Artifacts to the default Claude account and keeps another account's binary path", async () => {
+  harness.statuses = [
+    ...harness.statuses,
+    { ...WORK_STATUS, provider: "claudeAgent", instanceId: "claude_work", driver: "claudeAgent" },
+  ];
+  const { props: panelProps } = accountProps({
+    claudeEnableArtifacts: true,
+    providerInstances: {
+      claude_work: {
+        driver: "claudeAgent",
+        displayName: "Work",
+        enabled: true,
+        config: { binaryPath: "/opt/claude-2.1/bin/claude" },
+      },
+    },
+  });
+  await render(<ProvidersSettingsPanel {...panelProps} providerTarget="claudeAgent" />);
+
+  await page.getByRole("button", { name: "Select Work", exact: true }).click();
+  const editor = page.getByRole("group", { name: "Work account", exact: true });
+  await editor.getByRole("button", { name: "Advanced" }).click();
+  await expect
+    .element(editor.getByRole("textbox", { name: "Claude binary path" }))
+    .toHaveValue("/opt/claude-2.1/bin/claude");
+  // The server reads Artifacts from the Claude provider setting for every account.
+  expect(editor.getByRole("switch", { name: /^Artifacts/u }).elements()).toHaveLength(0);
+});
+
 it("adds an account from a dialog that derives its id from the label", async () => {
   const { props: panelProps, updateSettings } = accountProps();
   await render(<ProvidersSettingsPanel {...panelProps} />);

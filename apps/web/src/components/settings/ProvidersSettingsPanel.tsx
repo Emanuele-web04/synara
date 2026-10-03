@@ -855,7 +855,8 @@ function CodexDefaultAccountControl(props: {
   );
 }
 
-function providerInstanceConfigKey(field: ProviderInstallField): string {
+// Null for a provider-wide setting that no account config carries.
+function providerInstanceConfigKey(field: ProviderInstallField): string | null {
   switch (field.settingsKey) {
     case "codexHomePath":
     case "claudeHomePath":
@@ -868,6 +869,10 @@ function providerInstanceConfigKey(field: ProviderInstallField): string {
       return "serverPassword";
     case "openCodeExperimentalWebSockets":
       return "experimentalWebSockets";
+    // Every Claude account's sessions read Artifacts from the Claude provider setting,
+    // never from an account's config, so the switch lives on the default account only.
+    case "claudeEnableArtifacts":
+      return null;
     case "piAgentDir":
     case "ompAgentDir":
       return "agentDir";
@@ -892,6 +897,7 @@ function providerInstanceLaunchConfig(
   const result: Record<string, unknown> = {};
   for (const field of config.fields) {
     const key = providerInstanceConfigKey(field);
+    if (key === null) continue;
     const value = settings[field.settingsKey];
     if (typeof value === "boolean") {
       if (value) result[key] = true;
@@ -1143,6 +1149,7 @@ function ProviderAccountsControl(props: {
     { instanceId, instance, legacyCodexAccountId }: ManageableProviderInstance,
   ) => {
     const configKey = providerInstanceConfigKey(field);
+    if (configKey === null) return null;
     if (field.kind === "boolean") {
       return (
         <label
