@@ -106,6 +106,16 @@ the conversation or split from one exact turn. Use a
 [handoff](https://www.trysynara.com/docs/workflows/handoffs) when another provider should continue
 the same task and ownership boundary.
 
+Use **Snooze** in a thread's context menu to return to it in 30 minutes, 1 hour,
+2 hours, or tomorrow at 9am. It moves to **Snoozed** and leaves ordinary thread lists
+and attention badges until the reminder is due. **Return now** cancels the snooze;
+choosing another time reschedules it. Snoozing preserves any running agent work.
+Sending a new message also returns the thread to the list.
+
+When due, the thread returns to recent activity and Synara shows a reminder using
+your notification settings. If Synara and its server are closed, the overdue
+reminder is recovered when they start again.
+
 Sidechats keep the source chat's project, folder, branch, and Local/Worktree environment. Their
 empty view shows the composer without the new-chat welcome screen or independent project, folder,
 branch, Local/Worktree, or Temporary controls.

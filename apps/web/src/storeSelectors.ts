@@ -5,6 +5,7 @@
 import type { ProjectId, ThreadEnvironmentMode, ThreadId } from "@synara/contracts";
 import { isAutomationRunThread } from "@synara/shared/automationMode";
 import { isSidechatThread, sidechatContextMatchesGitHubItem } from "@synara/shared/sidechatThread";
+import { collectSubagentDescendants } from "@synara/shared/threadHierarchy";
 
 import type { AppState } from "./storeState";
 import { ACCOUNT_RATE_LIMIT_ACTIVITY_KINDS } from "./lib/rateLimits";
@@ -463,6 +464,22 @@ export function createComposerThreadMentionSourcesSelector(): (
 export interface SidebarThreadVisibilityOptions {
   /** Drop the per-run threads standalone automations create (pinned ones stay). */
   readonly hideAutomationRunThreads?: boolean;
+  /** Explicit access for Snoozed sections and user-initiated search. */
+  readonly includeSnoozed?: boolean;
+}
+
+/** A snoozed task also hides its subagent subtree, including pinned children. */
+export function collectSnoozedThreadIds(
+  threads: readonly Pick<SidebarThreadSummary, "id" | "parentThreadId" | "snoozedUntil">[],
+): ReadonlySet<ThreadId> {
+  const snoozed = threads.filter((thread) => thread.snoozedUntil != null);
+  const ids = new Set(snoozed.map((thread) => thread.id));
+  for (const thread of snoozed) {
+    for (const descendant of collectSubagentDescendants(threads, thread.id)) {
+      ids.add(descendant.id);
+    }
+  }
+  return ids;
 }
 
 /**
@@ -476,6 +493,7 @@ export function isSidebarThreadVisible(
 ): boolean {
   // Sidechats live in their host's dock (a thread's, or the inbox's for standalone ones).
   if (isSidechatThread(thread)) return false;
+  if (thread.snoozedUntil != null && !options?.includeSnoozed) return false;
   if (!options?.hideAutomationRunThreads) return true;
   if (thread.isPinned) return true;
   return !isAutomationRunThread(thread);
@@ -574,8 +592,14 @@ export function createSidebarTreeThreadsSelector(
     }
 
     previousSummaries = sidebarSummaries;
+    const snoozedThreadIds = options?.includeSnoozed
+      ? null
+      : collectSnoozedThreadIds(sidebarSummaries);
     previousTreeSummaries = sidebarSummaries.filter(
-      (thread) => thread.archivedAt == null && isSidebarThreadVisible(thread, options),
+      (thread) =>
+        thread.archivedAt == null &&
+        !snoozedThreadIds?.has(thread.id) &&
+        isSidebarThreadVisible(thread, options),
     );
     return previousTreeSummaries;
   };

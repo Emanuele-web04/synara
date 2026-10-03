@@ -7,6 +7,7 @@ import {
   deriveSidebarProjectData,
   describeAddProjectError,
   excludeHiddenProjectAgentCoordinatorThreads,
+  filterSidebarThreadsBySpace,
   findDeepestWorkspaceRootMatch,
   findWorkspaceRootMatch,
   getFallbackThreadIdAfterDelete,
@@ -49,7 +50,8 @@ import {
   sortProjectsForSidebar,
   sortThreadsForSidebar,
 } from "./Sidebar.logic";
-import { ProjectId, ThreadId } from "@synara/contracts";
+import { ProjectId, SpaceId, ThreadId } from "@synara/contracts";
+import { buildActivityViewModel } from "./SidebarActivityView.logic";
 import {
   DEFAULT_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
@@ -93,6 +95,59 @@ describe("isProjectsSidebarSurface", () => {
     expect(isProjectsSidebarSurface({ isOnSettings: false, isOnGroups: false })).toBe(true);
     expect(isProjectsSidebarSurface({ isOnSettings: false, isOnGroups: true })).toBe(false);
     expect(isProjectsSidebarSurface({ isOnSettings: true, isOnGroups: false })).toBe(false);
+  });
+});
+
+describe("sidebar Space thread lists", () => {
+  it("scopes pins and snoozed projects to the selected Space while keeping chats global", () => {
+    const spaceA = SpaceId.makeUnsafe("space-a");
+    const spaceB = SpaceId.makeUnsafe("space-b");
+    const projects = [
+      makeProject({ id: ProjectId.makeUnsafe("project-a"), spaceId: spaceA }),
+      makeProject({ id: ProjectId.makeUnsafe("project-b"), spaceId: spaceB }),
+      makeProject({ id: ProjectId.makeUnsafe("project-void"), spaceId: null }),
+      makeProject({ id: ProjectId.makeUnsafe("chat"), kind: "chat" }),
+    ];
+    const projectById = new Map(projects.map((project) => [project.id, project]));
+    const threads = projects.map((project) =>
+      makeSidebarThreadSummary({
+        id: ThreadId.makeUnsafe(`thread-${project.id}`),
+        projectId: project.id,
+        snoozedUntil:
+          project.kind === "chat" ? "2026-10-03T10:00:00.000Z" : "2026-10-03T09:00:00.000Z",
+      }),
+    );
+    const pinnedThreadIds = threads.map((thread) => thread.id);
+    const paths = {
+      homeDir: null,
+      chatWorkspaceRoot: null,
+      studioWorkspaceRoot: null,
+      groupsWorkspaceRoot: null,
+    };
+
+    for (const [spaceId, projectId] of [
+      [spaceA, projects[0]!.id],
+      [spaceB, projects[1]!.id],
+      [null, projects[2]!.id],
+    ] as const) {
+      const expected = [`thread-${projectId}`, "thread-chat"];
+      const snoozed = buildActivityViewModel({
+        threads: filterSidebarThreadsBySpace({ threads, projectById, spaceId, paths }),
+        pinnedThreadIdSet: new Set(pinnedThreadIds),
+      });
+      expect(snoozed.snoozed.map((thread) => thread.id)).toEqual(expected);
+      expect(snoozed.pinned).toEqual([]);
+      const pins = getPinnedThreadsForSidebar(
+        filterSidebarThreadsBySpace({
+          threads: threads.map((thread) => Object.assign({}, thread, { snoozedUntil: null })),
+          projectById,
+          spaceId,
+          paths,
+        }),
+        pinnedThreadIds,
+      );
+      expect(pins.map((thread) => thread.id)).toEqual(expected);
+    }
   });
 });
 
@@ -1775,6 +1830,26 @@ describe("deriveSidebarProjectData", () => {
 });
 
 describe("sortThreadsForSidebar", () => {
+  it.each(["updated_at", "created_at"] as const)(
+    "surfaces a reminder ahead of newer chats with %s ordering",
+    (sortOrder) => {
+      const reminded = makeThread({
+        id: ThreadId.makeUnsafe("reminded"),
+        createdAt: "2026-01-01T10:00:00.000Z",
+        updatedAt: "2026-01-01T10:00:00.000Z",
+        snoozeReminderAt: "2026-10-02T12:00:00.000Z",
+      });
+      const newer = makeThread({
+        id: ThreadId.makeUnsafe("newer"),
+        createdAt: "2026-10-02T11:00:00.000Z",
+        updatedAt: "2026-10-02T11:00:00.000Z",
+      });
+      expect(
+        sortThreadsForSidebar([newer, reminded], sortOrder).map((thread) => thread.id),
+      ).toEqual(["reminded", "newer"]);
+    },
+  );
+
   it("sorts threads by the latest user message in recency mode", () => {
     const sorted = sortThreadsForSidebar(
       [

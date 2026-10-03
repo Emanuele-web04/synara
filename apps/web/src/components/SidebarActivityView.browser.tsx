@@ -20,7 +20,8 @@ const projectFavicon = `data:image/svg+xml,${encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><circle cx="8" cy="8" r="8" fill="red"/></svg>',
 )}`;
 
-vi.mock("~/lib/wsHttpUrl", () => ({
+vi.mock("~/lib/wsHttpUrl", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/wsHttpUrl")>()),
   resolveWsHttpUrl: () => projectFavicon,
 }));
 
@@ -88,6 +89,7 @@ function renderActivity(input: {
   onVisibleThreadIdsChange?: (threadIds: readonly ThreadId[]) => void;
   onOpenThread?: (threadId: ThreadId) => void;
   onSetThreadSettled?: (threadId: ThreadId, settled: boolean) => void;
+  onReturnSnoozedThread?: (threadId: ThreadId) => void;
   onMarkThreadRead?: (threadId: ThreadId, completedAt?: string) => void;
   onRenameThread?: (threadId: ThreadId) => void;
   onThreadRenamePointerUp?: (event: ReactPointerEvent<HTMLElement>, threadId: ThreadId) => void;
@@ -123,6 +125,7 @@ function ActivityHarness(input: Parameters<typeof renderActivity>[0]) {
       onOpenThread={input.onOpenThread ?? (() => {})}
       onOpenThreadPullRequest={() => {}}
       onSetThreadSettled={input.onSetThreadSettled ?? (() => {})}
+      onReturnSnoozedThread={input.onReturnSnoozedThread ?? (() => {})}
       onToggleThreadPinned={() => {}}
       onArchiveThread={() => {}}
       onMarkThreadRead={input.onMarkThreadRead ?? (() => {})}
@@ -144,6 +147,42 @@ describe("SidebarActivityView", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     document.body.innerHTML = "";
+  });
+
+  it("keeps a snoozed pin out of normal rows and returns it through its own section", async () => {
+    const thread = makeThread(40, { snoozedUntil: "2026-08-02T13:00:00.000Z" });
+    const onReturnSnoozedThread = vi.fn();
+    const onVisibleThreadIdsChange = vi.fn();
+    const onOpenThread = vi.fn();
+    const mounted = await render(
+      renderActivity({
+        threads: [thread],
+        pinnedThreadIdSet: new Set([thread.id]),
+        onReturnSnoozedThread,
+        onVisibleThreadIdsChange,
+        onOpenThread,
+      }),
+    );
+    await expect
+      .element(mounted.getByRole("button", { name: "Snoozed", exact: true }))
+      .toBeVisible();
+    await expect
+      .element(mounted.getByRole("button", { name: "Pinned", exact: true }))
+      .not.toBeInTheDocument();
+    await expect.poll(() => onVisibleThreadIdsChange.mock.calls.at(-1)?.[0]).toEqual([]);
+    await mounted.getByRole("button", { name: "Snoozed", exact: true }).click();
+    await expect.element(mounted.getByTestId(`activity-thread-${thread.id}`)).toBeVisible();
+    await expect.element(mounted.getByText(/^Returns /)).toBeVisible();
+    await expect.poll(() => onVisibleThreadIdsChange.mock.calls.at(-1)?.[0]).toEqual([thread.id]);
+    // Scoping must not repeatedly report the same rows as its filter Set changes.
+    await page.getByRole("button", { name: "Filter activity by project" }).click();
+    await page.getByRole("menuitemradio", { name: /Project A/u }).click();
+    await expect.element(mounted.getByTestId(`activity-thread-${thread.id}`)).toBeVisible();
+    await userEvent.keyboard("{Escape}");
+    await mounted.getByRole("button", { name: "Return now", exact: true }).click();
+    expect(onReturnSnoozedThread).toHaveBeenCalledWith(thread.id);
+    expect(onOpenThread).not.toHaveBeenCalled();
+    await mounted.unmount();
   });
 
   it.each([

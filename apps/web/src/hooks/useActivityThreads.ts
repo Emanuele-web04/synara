@@ -26,6 +26,8 @@ interface ActivityThreads {
   /** Activity, its unread bell, and the Inbox read this list, so a badge can never point
    *  at a row the lists are hiding. */
   readonly visibleNonGroupThreads: readonly SidebarThreadSummary[];
+  /** Activity keeps snoozed rows accessible in its separate section. */
+  readonly activityNonGroupThreads: readonly SidebarThreadSummary[];
 }
 
 type ActivityThreadInputs = readonly [
@@ -83,6 +85,9 @@ function deriveActivityThreads(inputs: ActivityThreadInputs): ActivityThreads {
     groupThreads,
     visibleNonGroupThreads: nonGroupThreads.filter((thread) =>
       isSidebarThreadVisible(thread, { hideAutomationRunThreads }),
+    ),
+    activityNonGroupThreads: nonGroupThreads.filter((thread) =>
+      isSidebarThreadVisible(thread, { hideAutomationRunThreads, includeSnoozed: true }),
     ),
   };
   lastDerived = { inputs, result };

@@ -13,6 +13,7 @@ import {
   buildTaskCompletionCopy,
   collectCompletedThreadCandidates,
   collectInputNeededThreadCandidates,
+  collectSnoozeReminderCandidates,
   completedThreadNotificationKey,
   isNotificationRuntimeFreshTimestamp,
   shouldAttemptSystemTaskNotification,
@@ -57,6 +58,70 @@ function makeThread(overrides: Partial<Thread>): Thread {
     ...overrides,
   };
 }
+
+describe("snooze notification candidates", () => {
+  it("catches up unseen reminders on initial hydration without requiring a lifecycle transition", () => {
+    const thread = makeThread({ snoozeReminderAt: "2026-10-02T10:30:00.000Z" });
+    expect(collectSnoozeReminderCandidates([thread])).toEqual([
+      {
+        threadId: thread.id,
+        title: "Polish notifications",
+        reminderAt: "2026-10-02T10:30:00.000Z",
+      },
+    ]);
+  });
+
+  it("ignores cancelled, resnoozed and archived reminders", () => {
+    expect(
+      collectSnoozeReminderCandidates([
+        makeThread({ snoozeReminderAt: null }),
+        makeThread({ snoozeReminderAt: "invalid" }),
+        makeThread({
+          snoozeReminderAt: "2026-10-02T10:30:00.000Z",
+          snoozedUntil: "2026-10-02T11:00:00.000Z",
+        }),
+        makeThread({
+          snoozeReminderAt: "2026-10-02T10:30:00.000Z",
+          archivedAt: "2026-10-02T10:00:00.000Z",
+        }),
+      ]),
+    ).toEqual([]);
+  });
+
+  it("suppresses normal completion notifications while a thread is snoozed", () => {
+    const before = makeThread({});
+    const completed = makeThread({
+      snoozedUntil: "2026-10-02T11:00:00.000Z",
+      session: { ...before.session!, status: "ready", orchestrationStatus: "ready" },
+      latestTurn: {
+        ...before.latestTurn!,
+        state: "completed",
+        completedAt: "2026-04-05T10:01:00.000Z",
+      },
+    });
+    expect(collectCompletedThreadCandidates([before], [completed])).toEqual([]);
+  });
+
+  it("suppresses input-needed notifications while snoozed", () => {
+    const before = makeThread({});
+    const after = makeThread({
+      snoozedUntil: "2026-10-02T11:00:00.000Z",
+      hasPendingApprovals: true,
+      activities: [
+        {
+          id: EventId.makeUnsafe("new-approval"),
+          turnId: TurnId.makeUnsafe("turn-1"),
+          kind: "approval.requested",
+          summary: "Approval needed",
+          createdAt: "2026-04-05T10:00:04.000Z",
+          tone: "approval",
+          payload: { requestId: "request-new", requestKind: "command" },
+        },
+      ],
+    });
+    expect(collectInputNeededThreadCandidates([before], [after])).toEqual([]);
+  });
+});
 
 function makeInteraction(
   interactionKind: OrchestrationPendingInteraction["interactionKind"],

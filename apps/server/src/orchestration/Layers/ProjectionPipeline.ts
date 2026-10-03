@@ -613,6 +613,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             updatedAt: event.payload.updatedAt,
             archivedAt: null,
             settledAt: null,
+            snoozedUntil: null,
+            snoozeReminderAt: null,
             deletedAt: null,
           });
           return;
@@ -688,6 +690,12 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               ...(event.payload.isPinned !== undefined ? { isPinned: event.payload.isPinned } : {}),
               ...(event.payload.settledAt !== undefined
                 ? { settledAt: event.payload.settledAt }
+                : {}),
+              ...(event.payload.snoozedUntil !== undefined
+                ? { snoozedUntil: event.payload.snoozedUntil }
+                : {}),
+              ...(event.payload.snoozeReminderAt !== undefined
+                ? { snoozeReminderAt: event.payload.snoozeReminderAt }
                 : {}),
               ...(event.payload.parentThreadId !== undefined
                 ? { parentThreadId: event.payload.parentThreadId }
@@ -888,6 +896,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           return yield* updateThreadProjection(event.payload.threadId, (thread) => ({
             ...thread,
             deletedAt: event.payload.deletedAt,
+            snoozedUntil: null,
+            snoozeReminderAt: null,
             updatedAt: event.payload.deletedAt,
           }));
         }
@@ -898,6 +908,8 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           return yield* updateThreadProjection(event.payload.threadId, (thread) => ({
             ...thread,
             archivedAt,
+            snoozedUntil: null,
+            snoozeReminderAt: null,
             updatedAt: event.payload.updatedAt ?? archivedAt,
           }));
         }

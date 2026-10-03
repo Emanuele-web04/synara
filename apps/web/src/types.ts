@@ -252,6 +252,8 @@ export interface Thread extends ThreadWorkspaceState {
   createdAt: string;
   archivedAt?: string | null;
   settledAt?: string | null;
+  snoozedUntil?: string | null;
+  snoozeReminderAt?: string | null;
   updatedAt?: string | undefined;
   isPinned?: boolean;
   pinnedMessages?: PinnedMessage[];
@@ -278,6 +280,8 @@ export interface Thread extends ThreadWorkspaceState {
   claudeCacheReview?: PendingClaudeCacheReview | null;
   /** Client projection cursor shared by shell and detail cache-review updates. */
   claudeCacheReviewSequence?: number;
+  /** Last snapshot/event sequence carrying snooze metadata. */
+  snoozeSequence?: number;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
   latestUserMessageAt?: string | null;
   latestHumanMessageAt?: string | null;
@@ -301,6 +305,8 @@ export interface ThreadShell extends ThreadWorkspaceState {
   createdAt: string;
   archivedAt?: string | null;
   settledAt?: string | null;
+  snoozedUntil?: string | null;
+  snoozeReminderAt?: string | null;
   updatedAt?: string | undefined;
   isPinned?: boolean;
   // Per-thread workspace annotations carried through the normalized projection so
@@ -327,6 +333,8 @@ export interface ThreadShell extends ThreadWorkspaceState {
   handoff?: ThreadHandoff | null;
   claudeCacheReview?: PendingClaudeCacheReview | null;
   claudeCacheReviewSequence?: number;
+  /** Last snapshot/event sequence carrying snooze metadata. */
+  snoozeSequence?: number;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
   latestUserMessageAt?: string | null;
   latestHumanMessageAt?: string | null;
@@ -359,6 +367,8 @@ export interface SidebarThreadSummary {
   createdAt: string;
   archivedAt?: string | null;
   settledAt?: string | null;
+  snoozedUntil?: string | null;
+  snoozeReminderAt?: string | null;
   updatedAt?: string | undefined;
   isPinned?: boolean;
   latestTurn: OrchestrationLatestTurn | null;
