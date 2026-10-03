@@ -290,6 +290,18 @@ interface JsonRpcNotification {
   params?: unknown;
 }
 
+/**
+ * Whether the app-server rejected `method` itself as unknown. Codex answers an
+ * unknown method with "unknown variant `<method>`, expected one of …", and that
+ * list names every other method, so only the rejected variant is compared.
+ */
+export function isUnsupportedCodexMethodError(error: unknown, method: string): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  const rejectedVariant = /unknown variant `([^`]+)`/i.exec(message)?.[1];
+  if (rejectedVariant !== undefined) return rejectedVariant === method;
+  return /method not found/i.test(message);
+}
+
 function shouldRetrySkillsListWithCwdFallback(error: unknown): boolean {
   const message = error instanceof Error ? error.message.toLowerCase() : "";
   return (
@@ -2566,15 +2578,84 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       throw new Error("numTurns must be an integer >= 1.");
     }
 
-    const response = await this.sendRequest(context, "thread/rollback", {
-      threadId: providerThreadId,
-      numTurns,
-    });
+    const response = await this.revertProviderThread(context, providerThreadId, numTurns);
     this.updateSession(context, {
       status: "ready",
       activeTurnId: undefined,
     });
-    return this.parseThreadSnapshot("thread/rollback", response);
+    return this.parseThreadSnapshot("thread/revert", response);
+  }
+
+  /**
+   * Codex 0.156 replaced count-based `thread/rollback` with `thread/revert`,
+   * which cuts paginated history before a turn id. App-servers that predate
+   * either method keep the count-based request.
+   */
+  private async revertProviderThread(
+    context: CodexSessionContext,
+    providerThreadId: string,
+    numTurns: number,
+  ): Promise<unknown> {
+    const rollback = () =>
+      this.sendRequest(context, "thread/rollback", { threadId: providerThreadId, numTurns });
+    let beforeTurnId: string | undefined;
+    try {
+      beforeTurnId = await this.findRevertBoundaryTurnId(context, providerThreadId, numTurns);
+    } catch (error) {
+      if (!isUnsupportedCodexMethodError(error, "thread/turns/list")) throw error;
+      return rollback();
+    }
+    if (beforeTurnId === undefined) {
+      return this.sendRequest(context, "thread/read", {
+        threadId: providerThreadId,
+        includeTurns: false,
+      });
+    }
+    try {
+      return await this.sendRequest(context, "thread/revert", {
+        threadId: providerThreadId,
+        beforeTurnId,
+      });
+    } catch (error) {
+      if (!isUnsupportedCodexMethodError(error, "thread/revert")) throw error;
+      return rollback();
+    }
+  }
+
+  /** The oldest of the newest `numTurns` turns: reverting before it drops all of them. */
+  private async findRevertBoundaryTurnId(
+    context: CodexSessionContext,
+    providerThreadId: string,
+    numTurns: number,
+  ): Promise<string | undefined> {
+    let remaining = numTurns;
+    let beforeTurnId: string | undefined;
+    let cursor: string | undefined;
+    const seenCursors = new Set<string>();
+    while (remaining > 0) {
+      const response = await this.sendRequest(context, "thread/turns/list", {
+        threadId: providerThreadId,
+        itemsView: "notLoaded",
+        sortDirection: "desc",
+        limit: Math.min(remaining, 100),
+        ...(cursor !== undefined ? { cursor } : {}),
+      });
+      const record = this.readObject(response);
+      const data = this.readArray(record, "data");
+      if (!data) throw new Error("Codex returned an invalid history page.");
+      for (const turn of data) {
+        const turnId = this.readString(this.readObject(turn), "id");
+        if (!turnId) throw new Error("Codex returned a history turn without an id.");
+        beforeTurnId = turnId;
+        remaining -= 1;
+        if (remaining === 0) break;
+      }
+      cursor = this.readString(record, "nextCursor");
+      if (!cursor || data.length === 0) break;
+      if (seenCursors.has(cursor)) throw new Error("Codex repeated a conversation history cursor.");
+      seenCursors.add(cursor);
+    }
+    return beforeTurnId;
   }
 
   async compactThread(threadId: ThreadId): Promise<void> {
