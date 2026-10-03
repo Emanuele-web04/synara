@@ -991,13 +991,16 @@ export function composerThreadDraftIsPending(draft: ComposerThreadDraftState): b
   return composerDraftHasUnsentContent(draft.promptHistorySavedDraft ?? draft);
 }
 
-/** Thread ids with a pending draft, sorted so shallow selectors stay stable while typing. */
+/** Pending drafts outside the focused chat, sorted to stay stable while typing. */
 export function selectThreadIdsWithPendingDraft(
   state: Pick<ComposerDraftStoreState, "draftsByThreadId">,
+  focusedThreadId: ThreadId | null = null,
 ): ThreadId[] {
   const threadIds: ThreadId[] = [];
   for (const [threadId, draft] of Object.entries(state.draftsByThreadId)) {
-    if (composerThreadDraftIsPending(draft)) threadIds.push(threadId as ThreadId);
+    if (threadId !== focusedThreadId && composerThreadDraftIsPending(draft)) {
+      threadIds.push(threadId as ThreadId);
+    }
   }
   return threadIds.toSorted();
 }

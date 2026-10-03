@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import type { Project, SidebarThreadSummary } from "../types";
+import { useComposerDraftStore } from "../composerDraftStore";
 import { DEFAULT_PROJECT_ICON, type ProjectAppearance } from "../lib/projectAppearance";
 import type { ThreadStatusPill } from "./Sidebar.logic";
 import { SidebarActivityView } from "./SidebarActivityView";
@@ -142,8 +143,49 @@ describe("SidebarActivityView", () => {
     vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-08-02T12:00:00.000Z"));
   });
   afterEach(() => {
+    useComposerDraftStore.setState({ draftsByThreadId: {} });
     vi.restoreAllMocks();
     document.body.innerHTML = "";
+  });
+
+  it("moves an unsent chat into Drafts only after focus leaves and restores it on return", async () => {
+    const older = makeThread(400, { latestHumanMessageAt: "2026-08-02T09:00:00.000Z" });
+    const newer = makeThread(401, { latestHumanMessageAt: "2026-08-02T11:00:00.000Z" });
+    const input = { threads: [older, newer] };
+    const mounted = await render(renderActivity({ ...input, activeThreadId: older.id }));
+    const order = () =>
+      [...document.querySelectorAll('[data-testid^="activity-thread-"]')].map((row) =>
+        row.getAttribute("data-testid"),
+      );
+
+    useComposerDraftStore.getState().setPrompt(older.id, "Finish the review");
+    await vi.waitFor(() => {
+      expect(document.querySelector('[aria-label="Unsent draft"]')).toBeNull();
+      expect(order()).toEqual([`activity-thread-${newer.id}`, `activity-thread-${older.id}`]);
+      expect(document.body.textContent).not.toContain("Drafts");
+    });
+
+    await mounted.rerender(renderActivity({ ...input, activeThreadId: newer.id }));
+    await expect.element(page.getByLabelText("Unsent draft")).toBeVisible();
+    expect(order()).toEqual([`activity-thread-${older.id}`, `activity-thread-${newer.id}`]);
+    await expect.element(page.getByText("Drafts", { exact: true })).toBeVisible();
+
+    await mounted.rerender(renderActivity({ ...input, activeThreadId: older.id }));
+    await vi.waitFor(() => {
+      expect(document.querySelector('[aria-label="Unsent draft"]')).toBeNull();
+      expect(order()).toEqual([`activity-thread-${newer.id}`, `activity-thread-${older.id}`]);
+    });
+    expect(useComposerDraftStore.getState().draftsByThreadId[older.id]?.prompt).toBe(
+      "Finish the review",
+    );
+
+    await mounted.rerender(renderActivity({ ...input, activeThreadId: null }));
+    await expect.element(page.getByLabelText("Unsent draft")).toBeVisible();
+    useComposerDraftStore.getState().setPrompt(older.id, "");
+    await vi.waitFor(() =>
+      expect(document.querySelector('[aria-label="Unsent draft"]')).toBeNull(),
+    );
+    await mounted.unmount();
   });
 
   it.each([
