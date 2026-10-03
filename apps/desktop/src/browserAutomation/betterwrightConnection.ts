@@ -12,6 +12,7 @@ export async function openBetterwrightConnection(
   uploadFiles: readonly string[] = [],
   cookieImport = false,
   expectAgentInput?: BrowserAutomationVisibleRuntime["expectAgentInput"],
+  retainFocusAfterInput?: BrowserAutomationVisibleRuntime["retainFocusAfterInput"],
 ) {
   if (!contents.debugger.isAttached()) contents.debugger.attach("1.3");
   const { targetInfo } = (await contents.debugger.sendCommand("Target.getTargetInfo")) as {
@@ -57,6 +58,7 @@ export async function openBetterwrightConnection(
           backendSessionId,
           cookieImport,
           expectAgentInput,
+          retainFocusAfterInput,
         );
       } catch {
         // The lease never came up: release the backend session and transport,

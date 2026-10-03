@@ -119,9 +119,13 @@ describe("DesktopBrowserManager automation runtime boundary", () => {
       manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds });
       expect(view.setBounds).toHaveBeenLastCalledWith(bounds);
       expect(parent.addChildView).toHaveBeenLastCalledWith(view);
-      expect(manager.getVisibleAutomationRuntime(input).webContents).toBe(contents);
+      const visible = manager.getVisibleAutomationRuntime(input);
+      expect(visible.webContents).toBe(contents);
+      expect(visible.retainFocusAfterInput?.()).toBe(true);
       expect(contents.loadURL).toHaveBeenCalledTimes(loads);
       expect(await manager.capturePreview(input)).toBeNull();
+      manager.setPanelBounds({ threadId: THREAD_ID, surface: "native", bounds: null });
+      expect(visible.retainFocusAfterInput?.()).toBe(false);
       expect(contents.close).not.toHaveBeenCalled();
     } finally {
       manager.dispose();

@@ -5,12 +5,14 @@ import type { WebContents } from "electron";
 export async function withRendererGuestFocus<T>(
   contents: WebContents,
   operation: () => Promise<T>,
+  retainFocusAfterInput?: () => boolean,
 ): Promise<T> {
   if (contents.getType() !== "webview") return operation();
   const host = contents.hostWebContents;
   if (!host || host.isDestroyed() || !Number.isSafeInteger(contents.id))
     throw new Error("Browser focus unavailable.");
   const key = JSON.stringify(`synara-browser-focus-${randomUUID()}`);
+  let completed = false;
   try {
     // Never interpolate model input into the privileged renderer. The only
     // arguments are a native WebContents ID and a one-use restoration key.
@@ -32,10 +34,16 @@ export async function withRendererGuestFocus<T>(
     })()`);
     if (focused !== true || contents.isDestroyed() || contents.hostWebContents !== host)
       throw new Error("Browser focus unavailable.");
-    return await operation();
+    const result = await operation();
+    completed = true;
+    return result;
   } finally {
-    if (!host.isDestroyed())
+    if (!host.isDestroyed()) {
       // Cleanup must never mask the operation's own error or lease diagnostics.
-      await host.executeJavaScript(`globalThis[${key}]?.()`).catch(() => {});
+      const restore = !completed || !retainFocusAfterInput?.();
+      await host
+        .executeJavaScript(restore ? `globalThis[${key}]?.()` : `delete globalThis[${key}]`)
+        .catch(() => {});
+    }
   }
 }

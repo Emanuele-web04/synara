@@ -28,8 +28,8 @@ function fixture() {
     hostWebContents: host,
     isDestroyed: vi.fn(() => false),
   };
-  const run = <T>(operation: () => Promise<T>) =>
-    withRendererGuestFocus(contents as unknown as WebContents, operation);
+  const run = <T>(operation: () => Promise<T>, retainFocusAfterInput?: () => boolean) =>
+    withRendererGuestFocus(contents as unknown as WebContents, operation, retainFocusAfterInput);
   return { previous, document, guest, context, host, contents, run };
 }
 
@@ -44,6 +44,19 @@ describe("renderer guest focus", () => {
     expect(f.document.activeElement).toBe(f.previous);
     expect(f.previous.focus).toHaveBeenCalledOnce();
     expect(f.host.executeJavaScript).toHaveBeenCalledTimes(2);
+    expect(Object.keys(f.context)).toEqual(["document"]);
+  });
+
+  it("keeps successful input focused in a visible guest", async () => {
+    const f = fixture();
+    await f.run(
+      async () => {
+        expect(f.document.activeElement).toBe(f.guest);
+      },
+      () => true,
+    );
+    expect(f.document.activeElement).toBe(f.guest);
+    expect(f.previous.focus).not.toHaveBeenCalled();
     expect(Object.keys(f.context)).toEqual(["document"]);
   });
 
@@ -79,9 +92,12 @@ describe("renderer guest focus", () => {
   it("restores focus after dispatch fails", async () => {
     const f = fixture();
     await expect(
-      f.run(async () => {
-        throw new Error("dispatch failed");
-      }),
+      f.run(
+        async () => {
+          throw new Error("dispatch failed");
+        },
+        () => true,
+      ),
     ).rejects.toThrow("dispatch failed");
     expect(f.document.activeElement).toBe(f.previous);
     expect(Object.keys(f.context)).toEqual(["document"]);
