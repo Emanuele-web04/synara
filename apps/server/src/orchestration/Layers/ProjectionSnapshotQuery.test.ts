@@ -2073,6 +2073,13 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       if (threadShell._tag === "Some") {
         assert.deepEqual(threadShell.value, shellSnapshot.threads[0]);
       }
+
+      // Regression: the batched session lookup must select provider_instance_id
+      // so threads with a session row decode (Hub work reconcile relies on it).
+      const shellsByIds = yield* snapshotQuery.getThreadShellsByIds([
+        ThreadId.makeUnsafe("thread-shell"),
+      ]);
+      assert.deepEqual(shellsByIds, shellSnapshot.threads);
     }),
   );
 
