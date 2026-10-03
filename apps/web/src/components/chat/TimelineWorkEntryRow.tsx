@@ -3,7 +3,7 @@
 // Layer: Web chat presentation component
 // Exports: TimelineWorkEntryRow, EditedFileRowContent, prefersCompactWorkEntryRow
 
-import type { TurnId } from "@synara/contracts";
+import type { ModelSelection, TurnId } from "@synara/contracts";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import {
   createElement,
@@ -47,6 +47,7 @@ import {
 import { describeLinkChip } from "~/lib/linkChips";
 import { computerToolName, describeComputerToolCall } from "~/lib/computerToolPresentation";
 import { cn } from "~/lib/utils";
+import { formatThreadModelSummaryLabel, resolveThreadModelSummary } from "~/lib/threadModelSummary";
 
 import { isFileChangeWorkLogEntry, type WorkLogEntry } from "../../session-logic";
 import {
@@ -1034,14 +1035,18 @@ function ProviderContextLifecycleDetails(props: {
   );
 }
 
-function providerModelLabel(provider: string, model: string): string {
+function providerModelLabel(selection: ModelSelection): string {
   const displayName =
-    PROVIDER_DESCRIPTORS.find((descriptor) => descriptor.kind === provider)?.displayName ??
-    provider;
-  return `${displayName} · ${model}`;
+    PROVIDER_DESCRIPTORS.find((descriptor) => descriptor.kind === selection.provider)
+      ?.displayName ?? selection.provider;
+  const summary = resolveThreadModelSummary(selection);
+  const modelLabel = summary
+    ? `${formatThreadModelSummaryLabel(summary)}${summary.fastMode ? " · Fast" : ""}`
+    : selection.model;
+  return `${displayName} · ${modelLabel}`;
 }
 
-function ProviderHandoffDetails(props: {
+export function ProviderHandoffDetails(props: {
   info: NonNullable<TimelineWorkEntry["providerHandoff"]>;
 }) {
   const { info } = props;
@@ -1049,13 +1054,9 @@ function ProviderHandoffDetails(props: {
     <div className="space-y-3" data-provider-handoff-details="true">
       <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1.5 rounded-lg border border-border/45 bg-background/60 px-3 py-2.5 text-ui-sm">
         <dt className="text-muted-foreground/56">From</dt>
-        <dd className="text-foreground/84">
-          {providerModelLabel(info.sourceProvider, info.sourceModel)}
-        </dd>
+        <dd className="text-foreground/84">{providerModelLabel(info.sourceModelSelection)}</dd>
         <dt className="text-muted-foreground/56">To</dt>
-        <dd className="text-foreground/84">
-          {providerModelLabel(info.targetProvider, info.targetModel)}
-        </dd>
+        <dd className="text-foreground/84">{providerModelLabel(info.targetModelSelection)}</dd>
         {info.status === "failed" ? (
           <>
             <dt className="text-muted-foreground/56">Error</dt>

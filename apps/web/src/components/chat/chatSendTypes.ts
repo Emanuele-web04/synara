@@ -62,11 +62,17 @@ export interface ChatTurnSubmissionInput {
   threadId: ThreadId;
   hasLiveTurn: boolean;
   /**
-   * Runs before a live send. When the composer picked another provider it hands
-   * the thread off in place and resolves false if that failed, so the message
-   * stays in the composer instead of reaching the wrong provider.
+   * Refuses a live send up front (before the message is shown) when the
+   * composer picked another provider but the thread cannot hand off yet.
    */
-  prepareProviderHandoffForSend?: () => Promise<boolean>;
+  canSendWithProviderHandoff?: (() => boolean) | undefined;
+  /**
+   * Runs right before the turn is dispatched, once the message is already on
+   * screen. When the composer picked another provider it hands the thread off
+   * in place first, and throws if that failed so the send rolls back and the
+   * message returns to the composer instead of reaching the wrong provider.
+   */
+  prepareProviderHandoffForSend?: (() => Promise<void>) | undefined;
   lateComposerSendHandlersRef: RefObject<LateComposerSendHandlers | null>;
   activeThread: Thread | undefined;
   isConnecting: boolean;

@@ -59,6 +59,7 @@ import { getThreadFromState } from "../../threadDerivation";
 export function useChatTurnSubmission({
   threadId,
   hasLiveTurn,
+  canSendWithProviderHandoff,
   prepareProviderHandoffForSend,
   lateComposerSendHandlersRef,
   activeThread,
@@ -194,6 +195,7 @@ export function useChatTurnSubmission({
   }, [settings.anchorSentMessagesToTop]);
 
   const executePreparedTurn = useChatTurnExecution({
+    prepareProviderHandoffForSend,
     activeThreadIdRef,
     isServerThread,
     setStoreThreadWorkspace,
@@ -288,12 +290,8 @@ export function useChatTurnSubmission({
         await waitForPendingComposerImages();
         sendPreflightInFlightRef.current = false;
       }
-      if (!queuedTurn && !activePendingProgress && prepareProviderHandoffForSend) {
-        sendPreflightInFlightRef.current = true;
-        const handedOff = await prepareProviderHandoffForSend().finally(() => {
-          sendPreflightInFlightRef.current = false;
-        });
-        if (!handedOff) return false;
+      if (!queuedTurn && !activePendingProgress && canSendWithProviderHandoff?.() === false) {
+        return false;
       }
       if (hasPendingCacheReview()) return false;
       if (activePendingProgress) {
@@ -1045,7 +1043,7 @@ export function useChatTurnSubmission({
       providerStatuses,
       setOptimisticUserMessages,
       executePreparedTurn,
-      prepareProviderHandoffForSend,
+      canSendWithProviderHandoff,
     ],
   );
   return { onSend };

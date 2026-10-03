@@ -3437,6 +3437,7 @@ describe("ChatView transcript geometry (full app)", () => {
           NonNullable<typeof window.nativeApi>["orchestration"]["dispatchCommand"]
         >[0],
       ) => void,
+      respondDelayMs = 50,
     ) {
       const mounted = await mountChatView({
         viewport: DEFAULT_VIEWPORT,
@@ -3449,7 +3450,7 @@ describe("ChatView transcript geometry (full app)", () => {
       const dispatchCommand = vi.fn(
         async (command: Parameters<typeof api.orchestration.dispatchCommand>[0]) => {
           commands.push(command);
-          if (respond) setTimeout(() => respond(command), 50);
+          if (respond) setTimeout(() => respond(command), respondDelayMs);
           return { sequence: fixture.snapshot.snapshotSequence };
         },
       );
@@ -3630,9 +3631,26 @@ describe("ChatView transcript geometry (full app)", () => {
     }
 
     it("hands the thread off before sending when the composer picks another provider", async () => {
-      const mounted = await mountWithCapturedCommands(undefined, respondToHandoff("completed"));
+      // The target takes a while to start; the message must show meanwhile.
+      const mounted = await mountWithCapturedCommands(
+        undefined,
+        respondToHandoff("completed"),
+        1_500,
+      );
       try {
         await pickClaudeAndSend("Review the reconnect fix");
+        await vi.waitFor(
+          () =>
+            expect(
+              [...document.querySelectorAll('[data-message-role="user"]')].some((row) =>
+                (row.textContent ?? "").includes("Review the reconnect fix"),
+              ),
+            ).toBe(true),
+          { timeout: 1_000, interval: 16 },
+        );
+        expect(mounted.commands.some((command) => command.type === "thread.turn.start")).toBe(
+          false,
+        );
         await vi.waitFor(
           () =>
             expect(mounted.commands.some((command) => command.type === "thread.turn.start")).toBe(
@@ -3669,11 +3687,21 @@ describe("ChatView transcript geometry (full app)", () => {
       const mounted = await mountWithCapturedCommands(undefined, respondToHandoff("failed"));
       try {
         const composerEditor = await pickClaudeAndSend("Review the reconnect fix");
-        await expect.element(page.getByText("Could not switch to Claude")).toBeVisible();
+        await expect
+          .element(page.getByText("Claude could not start: Claude CLI is not signed in."))
+          .toBeVisible();
         expect(mounted.commands.some((command) => command.type === "thread.turn.start")).toBe(
           false,
         );
-        expect(composerEditor.textContent ?? "").toContain("Review the reconnect fix");
+        // The send rolled back: the message left the transcript for the composer.
+        await vi.waitFor(() =>
+          expect(composerEditor.textContent ?? "").toContain("Review the reconnect fix"),
+        );
+        expect(
+          [...document.querySelectorAll('[data-message-role="user"]')].some((row) =>
+            (row.textContent ?? "").includes("Review the reconnect fix"),
+          ),
+        ).toBe(false);
       } finally {
         await mounted.cleanup();
       }
@@ -3691,7 +3719,9 @@ describe("ChatView transcript geometry (full app)", () => {
         activities: [
           {
             id: EventId.makeUnsafe("provider-handoff:event"),
-            createdAt: isoAt(200),
+            // Mid-conversation: after an assistant reply, before the next user
+            // message, where it used to fold into the settled turn's work group.
+            createdAt: isoAt(124),
             kind: "provider.handoff",
             summary: "Handed off from Codex (gpt-5) to Claude (claude-sonnet-4-6)",
             tone: "info" as const,
@@ -3699,10 +3729,20 @@ describe("ChatView transcript geometry (full app)", () => {
             sequence: 900,
             payload: {
               sourceProvider: "codex",
-              sourceModel: "gpt-5",
+              sourceModel: "gpt-5.5",
               targetProvider: "claudeAgent",
               targetModel: "claude-sonnet-4-6",
               contextText: "Most recent imported messages:\nUser:\nFix the flaky reconnect test",
+              sourceModelSelection: {
+                provider: "codex",
+                model: "gpt-5.5",
+                options: { reasoningEffort: "high", fastMode: true },
+              },
+              targetModelSelection: {
+                provider: "claudeAgent",
+                model: "claude-sonnet-4-6",
+                options: { effort: "medium" },
+              },
               contextCharacters: 66,
             },
           },
@@ -3714,9 +3754,22 @@ describe("ChatView transcript geometry (full app)", () => {
         configureFixture: withClaudeReady,
       });
       try {
-        const row = page.getByText("Handed off from Codex (gpt-5) to Claude (claude-sonnet-4-6)");
-        await expect.element(row).toBeVisible();
-        await row.click();
+        // A transcript boundary of its own, naming both models, not a work row.
+        const divider = await vi.waitFor(() => {
+          const element = document.querySelector<HTMLElement>(
+            '[data-provider-handoff-divider="true"]',
+          );
+          expect(element).not.toBeNull();
+          return element!;
+        });
+        expect(divider.textContent).toContain("Context handoff");
+        expect(divider.textContent).toContain("GPT-5.5");
+        expect(divider.textContent).toContain("Claude Sonnet 4.6");
+        // Effort and fast mode read like the composer's model trigger.
+        expect(divider.textContent).toContain("High");
+        expect(divider.textContent).toContain("Medium");
+        expect(divider.querySelector('[aria-label="Fast mode"]')).not.toBeNull();
+        divider.querySelector("button")!.click();
         await expect.element(page.getByText("Transferred context", { exact: true })).toBeVisible();
         const context = document.querySelector('[data-provider-handoff-context="true"]');
         expect(context?.textContent).toContain("Fix the flaky reconnect test");

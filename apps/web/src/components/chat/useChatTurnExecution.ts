@@ -109,6 +109,7 @@ interface PreparedChatTurn {
 }
 type ChatTurnExecutionInput = Pick<
   ChatTurnSubmissionInput,
+  | "prepareProviderHandoffForSend"
   | "isServerThread"
   | "setStoreThreadWorkspace"
   | "clearLocalDispatchWorktreeSetup"
@@ -153,6 +154,7 @@ type ChatTurnExecutionInput = Pick<
 >;
 
 export function useChatTurnExecution({
+  prepareProviderHandoffForSend,
   isServerThread,
   setStoreThreadWorkspace,
   clearLocalDispatchWorktreeSetup,
@@ -567,6 +569,12 @@ export function useChatTurnExecution({
         // turn. Once they settle, consume the last possible choice before the
         // card advances to the non-resolvable "Starting session" step.
         await consumeWorktreeSetupResolution();
+        // A provider picked over the thread's own one: hand off in place while
+        // the message already shows. A failure throws into the rollback below,
+        // which returns the message to the composer.
+        if (queuedChatTurn === null && prepareProviderHandoffForSend) {
+          await prepareProviderHandoffForSend();
+        }
         // Carry the expected message id so a snapshot rebuilt after an interim
         // reset (thread switch, ack effect) keeps the message-echo ack signal.
         beginLocalDispatch({
@@ -924,6 +932,7 @@ export function useChatTurnExecution({
       worktreeSetupResolutionRef,
       scheduleFailedWorktreeSetupDispatchReset,
       resetLocalDispatch,
+      prepareProviderHandoffForSend,
     ],
   );
   return useCallback(

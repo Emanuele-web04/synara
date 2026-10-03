@@ -4298,45 +4298,39 @@ export default function ChatView({
 
   // A provider picked in the composer over the thread's own one hands the
   // thread off in place before the message is sent (same path as "Continue in
-  // this thread"). Any failure keeps the message in the composer.
-  const prepareProviderHandoffForSend = useStableCallback(async (): Promise<boolean> => {
-    if (!activeThread || boundProvider === null || selectedProvider === boundProvider) {
+  // this thread"). The send refuses up front while the thread is busy; once the
+  // message shows, a failed handoff rolls the send back into the composer.
+  const providerHandoffPendingForSend =
+    activeThread !== undefined && boundProvider !== null && selectedProvider !== boundProvider;
+  const canSendWithProviderHandoff = useStableCallback((): boolean => {
+    if (!providerHandoffPendingForSend || !handoffDisabled) {
       return true;
     }
     const targetName = PROVIDER_DISPLAY_NAMES[selectedProvider] ?? selectedProvider;
-    if (handoffDisabled) {
-      toastManager.add({
-        type: "error",
-        title: `Cannot switch to ${targetName} yet`,
-        description:
-          "Wait for the current turn to finish and answer any pending request, then send again.",
-      });
-      return false;
+    toastManager.add({
+      type: "error",
+      title: `Cannot switch to ${targetName} yet`,
+      description:
+        "Wait for the current turn to finish and answer any pending request, then send again.",
+    });
+    return false;
+  });
+  const prepareProviderHandoffForSend = useStableCallback(async (): Promise<void> => {
+    if (!activeThread || !providerHandoffPendingForSend) {
+      return;
     }
-    try {
-      await continueThreadHandoff(
-        activeThread,
-        selectedProvider,
-        selectedProviderInstanceId,
-        selectedModelSelection,
-      );
-      return true;
-    } catch (error) {
-      toastManager.add({
-        type: "error",
-        title: `Could not switch to ${targetName}`,
-        description:
-          error instanceof Error
-            ? error.message
-            : "An error occurred while handing off the thread.",
-      });
-      return false;
-    }
+    await continueThreadHandoff(
+      activeThread,
+      selectedProvider,
+      selectedProviderInstanceId,
+      selectedModelSelection,
+    );
   });
 
   const { onSend } = useChatTurnSubmission({
     threadId,
     hasLiveTurn,
+    canSendWithProviderHandoff,
     prepareProviderHandoffForSend,
     lateComposerSendHandlersRef,
     activeThread,

@@ -14332,8 +14332,13 @@ describe("ProviderCommandReactor", () => {
 
       await dispatchHandoff(harness);
 
-      // The target session starts now, before any new message is sent.
+      // The target session starts now, before any new message is sent, and only
+      // after the source's protected native continuation was reset.
       await waitFor(() => harness.startSession.mock.calls.length === 2);
+      expect(harness.clearSessionResumeCursor).toHaveBeenCalledWith({ threadId });
+      expect(harness.clearSessionResumeCursor.mock.invocationCallOrder.at(-1)).toBeLessThan(
+        harness.startSession.mock.invocationCallOrder[1]!,
+      );
       expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
         provider: "claudeAgent",
         modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
@@ -14371,6 +14376,13 @@ describe("ProviderCommandReactor", () => {
       );
       expect(after?.modelSelection).toMatchObject({ provider: "claudeAgent" });
       expect(after?.session?.providerName).toBe("claudeAgent");
+      // Same "handed off from" metadata a new-thread handoff carries.
+      await waitFor(async () => (await readHarnessThread(harness))?.handoff !== null);
+      expect((await readHarnessThread(harness))?.handoff).toMatchObject({
+        sourceThreadId: threadId,
+        sourceProvider: "grok",
+        bootstrapStatus: "completed",
+      });
 
       // The next turn runs on the target and carries the prior transcript.
       await sendSecondTurn(harness);
@@ -14378,6 +14390,13 @@ describe("ProviderCommandReactor", () => {
       expect(harness.startSession.mock.calls).toHaveLength(2);
       expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("<thread_context>");
       expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("first turn on grok");
+      // The handoff divider explains the fresh session; no lost-history notice.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(
+        (await readHarnessThread(harness))?.activities.some(
+          (activity) => activity.kind === "provider.context.changed",
+        ),
+      ).toBe(false);
     });
 
     it("starts the target and carries context when the source session was stopped", async () => {
@@ -14446,6 +14465,10 @@ describe("ProviderCommandReactor", () => {
       await sendSecondTurn(harness);
       await waitFor(() => harness.sendTurn.mock.calls.length === 2);
       expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("continue after the handoff");
+      // The source restarts fresh (its continuation was reset), so the turn
+      // carries the transcript instead of losing the conversation.
+      expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("<thread_context>");
+      expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("first turn on grok");
       expect(harness.sendTurn.mock.calls[1]?.[0].modelSelection).toMatchObject({
         provider: "grok",
       });

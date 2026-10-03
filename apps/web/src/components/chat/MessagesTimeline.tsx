@@ -74,6 +74,7 @@ import { Button } from "../ui/button";
 import { composerOverlayScrollFadeVars } from "./composerOverlay";
 import { CrossTaskOriginLabel, type CrossTaskOrigin } from "./CrossTaskOriginLabel";
 import { ForkSourceDivider, type ForkSourceReference } from "./ForkSourceDivider";
+import { ProviderHandoffDivider } from "./ProviderHandoffDivider";
 import { SynaraThreadCreationCard } from "./SynaraThreadCreationCard";
 import { WorkerMonitorNoticePill } from "./WorkerMonitorNoticePill";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
@@ -1385,13 +1386,23 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     >
       {forkDividerBeforeRowId === row.id ? forkSourceDivider : null}
       {row.kind === "work" &&
+        row.groupedEntries.map((workEntry) =>
+          workEntry.providerHandoff ? (
+            <ProviderHandoffDivider
+              key={`provider-handoff:${workEntry.id}`}
+              info={workEntry.providerHandoff}
+            />
+          ) : null,
+        )}
+      {row.kind === "work" &&
         !conversationOnly &&
         (() => {
           const groupId = row.id;
           // Creation milestones are reserved for the end-of-turn recap card.
           // The provider's actual Synara MCP tool rows remain visible here.
+          // Handoff boundaries render as the divider above, not as work rows.
           const groupedEntries = row.groupedEntries.filter(
-            (workEntry) => !workEntry.synaraThreadCreation,
+            (workEntry) => !workEntry.synaraThreadCreation && !workEntry.providerHandoff,
           );
           if (groupedEntries.length === 0) {
             return null;

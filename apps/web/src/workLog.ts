@@ -4,6 +4,7 @@ import {
   COMPUTER_CONTROL_DENIED_ACTIVITY_KIND,
   COMPUTER_SETUP_REQUIRED_ACTIVITY_KIND,
   isToolLifecycleItemType,
+  type ModelSelection,
   STUDIO_OUTPUTS_ACTIVITY_KIND,
   type OrchestrationLatestTurnState,
   type OrchestrationThreadActivity,
@@ -65,6 +66,9 @@ export interface ProviderHandoffInfo {
   sourceModel: string;
   targetProvider: ProviderKind;
   targetModel: string;
+  /** Full selections (effort, fast mode); rebuilt from provider + model when absent. */
+  sourceModelSelection: ModelSelection;
+  targetModelSelection: ModelSelection;
   /** Prior-transcript context the target receives with its first turn. */
   contextText: string | null;
   /** Why the target could not start; only set on failure. */
@@ -697,6 +701,19 @@ function asProviderKind(value: unknown): ProviderKind | undefined {
   return PROVIDER_DESCRIPTORS.find((descriptor) => descriptor.kind === value)?.kind;
 }
 
+function asHandoffModelSelection(
+  value: unknown,
+  fallback: { provider: ProviderKind; model: string },
+): ModelSelection {
+  if (value && typeof value === "object") {
+    const candidate = value as { provider?: unknown; model?: unknown };
+    if (candidate.provider === fallback.provider && candidate.model === fallback.model) {
+      return value as ModelSelection;
+    }
+  }
+  return fallback as ModelSelection;
+}
+
 function extractProviderHandoffInfo(
   payload: Record<string, unknown> | null,
   status: ProviderHandoffInfo["status"],
@@ -714,6 +731,14 @@ function extractProviderHandoffInfo(
     sourceModel,
     targetProvider,
     targetModel,
+    sourceModelSelection: asHandoffModelSelection(payload?.sourceModelSelection, {
+      provider: sourceProvider,
+      model: sourceModel,
+    }),
+    targetModelSelection: asHandoffModelSelection(payload?.targetModelSelection, {
+      provider: targetProvider,
+      model: targetModel,
+    }),
     contextText: asTrimmedString(payload?.contextText),
     failureDetail: asTrimmedString(payload?.detail),
   };

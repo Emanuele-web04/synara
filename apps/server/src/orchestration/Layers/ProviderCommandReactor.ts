@@ -389,6 +389,11 @@ const serverCommandId = (tag: string): CommandId =>
 const PROVIDER_CONTEXT_LIFECYCLE_ACTIVITY_KIND = "provider.context.changed";
 const PROVIDER_HANDOFF_ACTIVITY_KIND = "provider.handoff";
 const PROVIDER_HANDOFF_FAILED_ACTIVITY_KIND = "provider.handoff.failed";
+
+// Activity payloads are plain JSON; a model selection already is, so a JSON
+// round-trip only drops absent optional fields for the payload's Json type.
+const modelSelectionJson = (selection: ModelSelection): typeof Schema.Json.Type =>
+  JSON.parse(JSON.stringify(selection));
 const SESSION_CONTEXT_RECAP_PREVIEW_MAX_CHARS = 600;
 
 type ProviderContextLifecycleReason =
@@ -1019,6 +1024,10 @@ const make = Effect.gen(function* () {
   // Providers without native rewind restart after rollback and receive the
   // retained projection transcript once on their next prompt.
   const rollbackContextBootstrapThreadIds = new Set<string>();
+  // Threads whose next turn follows a same-thread provider handoff. The handoff
+  // divider already records the context the new provider receives, so that
+  // turn's fresh-session recap is expected, not a lost-history incident.
+  const providerHandoffContextThreadIds = new Set<string>();
   // Keep observed context loss until recovery is accepted: a failed dispatch
   // can leave a replacement runtime alive without its previous history.
   type PendingInterruptEscalation = { evidence: ProviderContextLifecycleEvidence | null };
@@ -3199,7 +3208,9 @@ const make = Effect.gen(function* () {
           : freshSessionContextBootstrapThreadIds.has(input.threadId)
             ? "fresh-session"
             : "native-history-unavailable";
+    const followsProviderHandoff = providerHandoffContextThreadIds.delete(input.threadId);
     let providerContextLifecycleEvidence: ProviderContextLifecycleEvidence | null =
+      !followsProviderHandoff &&
       input.reviewTarget === undefined &&
       input.dispatchMode !== "steer" &&
       !shouldBootstrapHandoff &&
@@ -6395,11 +6406,22 @@ const make = Effect.gen(function* () {
     // way to carry the conversation to the new provider.
     suppressContextBootstrapOnNextStartThreadIds.delete(input.threadId);
     const cachedProviderOptions = threadProviderOptions.get(input.threadId);
-    const startFailure = yield* ensureSessionForThread(input.threadId, input.occurredAt, {
-      modelSelection: input.targetModelSelection,
-      registerPriorTranscriptBootstrapOnFreshStart: true,
-      ...(cachedProviderOptions !== undefined ? { providerOptions: cachedProviderOptions } : {}),
-    }).pipe(
+    // The source's native continuation (e.g. a Codex resume cursor) is
+    // protected: ProviderService refuses another provider on the thread until
+    // the handoff explicitly abandons it. This also stops the source runtime.
+    const resetSourceContinuation = providerService.clearSessionResumeCursor
+      ? providerService.clearSessionResumeCursor({ threadId: input.threadId })
+      : providerService.stopSession({ threadId: input.threadId });
+    const startFailure = yield* resetSourceContinuation.pipe(
+      Effect.andThen(
+        ensureSessionForThread(input.threadId, input.occurredAt, {
+          modelSelection: input.targetModelSelection,
+          registerPriorTranscriptBootstrapOnFreshStart: true,
+          ...(cachedProviderOptions !== undefined
+            ? { providerOptions: cachedProviderOptions }
+            : {}),
+        }),
+      ),
       Effect.as(null),
       Effect.catchCause((cause) =>
         Cause.hasInterruptsOnly(cause) ? Effect.failCause(cause) : Effect.succeed(cause),
@@ -6411,9 +6433,28 @@ const make = Effect.gen(function* () {
       sourceModel: input.sourceModelSelection.model,
       targetProvider: input.targetModelSelection.provider,
       targetModel: input.targetModelSelection.model,
+      // Full selections (effort, fast mode, …) so the divider reads like the
+      // composer's model trigger for both sides.
+      sourceModelSelection: modelSelectionJson(input.sourceModelSelection),
+      targetModelSelection: modelSelectionJson(input.targetModelSelection),
     };
     if (startFailure === null) {
       threadSessionModelSelections.set(input.threadId, input.targetModelSelection);
+      providerHandoffContextThreadIds.add(input.threadId);
+      // Same metadata a new-thread handoff carries, so surfaces that already
+      // show "handed off from <provider>" (the sidebar avatar pair) show it here.
+      // "completed": the context travels through the prior-transcript bootstrap.
+      yield* orchestrationEngine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe(`server:provider-handoff-meta:${input.handoffKey}`),
+        threadId: input.threadId,
+        handoff: {
+          sourceThreadId: input.threadId,
+          sourceProvider: input.sourceModelSelection.provider,
+          importedAt: new Date().toISOString(),
+          bootstrapStatus: "completed",
+        },
+      });
       yield* orchestrationEngine.dispatch({
         type: "thread.activity.append",
         commandId: CommandId.makeUnsafe(`server:provider-handoff:${input.handoffKey}`),
@@ -6431,6 +6472,9 @@ const make = Effect.gen(function* () {
       });
       return;
     }
+    // The source's native history was abandoned above, so its next fresh
+    // session must carry the transcript the same way the target would have.
+    freshSessionContextBootstrapThreadIds.add(input.threadId);
     const detail = Cause.squash(startFailure);
     yield* Effect.logWarning("provider handoff could not start the target session", {
       threadId: input.threadId,
