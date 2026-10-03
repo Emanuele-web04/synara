@@ -3746,6 +3746,461 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  describe("provider handoff destination", () => {
+    const withClaudeReady = (nextFixture: TestFixture) => {
+      const providers: ServerConfig["providers"] = [
+        ...nextFixture.serverConfig.providers,
+        {
+          provider: "claudeAgent",
+          instanceId: "claudeAgent",
+          driver: "claudeAgent",
+          status: "ready",
+          available: true,
+          authStatus: "authenticated",
+          checkedAt: NOW_ISO,
+        },
+      ];
+      nextFixture.serverConfig = { ...nextFixture.serverConfig, providers };
+      nextFixture.providerStatusesSnapshot = providers;
+    };
+
+    async function mountWithCapturedCommands(
+      snapshot: OrchestrationReadModel = createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("msg-handoff-destination"),
+        targetText: "Fix the flaky reconnect test",
+      }),
+      // Models the server's reaction to a dispatched command.
+      respond?: (
+        command: Parameters<
+          NonNullable<typeof window.nativeApi>["orchestration"]["dispatchCommand"]
+        >[0],
+      ) => void,
+      respondDelayMs = 50,
+    ) {
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot,
+        configureFixture: withClaudeReady,
+      });
+      const previousNativeApi = window.nativeApi;
+      const api = readNativeApi()!;
+      const commands: Array<Parameters<typeof api.orchestration.dispatchCommand>[0]> = [];
+      const dispatchCommand = vi.fn(
+        async (command: Parameters<typeof api.orchestration.dispatchCommand>[0]) => {
+          commands.push(command);
+          if (respond) setTimeout(() => respond(command), respondDelayMs);
+          return { sequence: fixture.snapshot.snapshotSequence };
+        },
+      );
+      Object.defineProperty(window, "nativeApi", {
+        configurable: true,
+        value: { ...api, orchestration: { ...api.orchestration, dispatchCommand } },
+      });
+      await waitForServerConfigToApply();
+      return {
+        commands,
+        cleanup: async () => {
+          if (previousNativeApi)
+            Object.defineProperty(window, "nativeApi", {
+              configurable: true,
+              value: previousNativeApi,
+            });
+          else Reflect.deleteProperty(window, "nativeApi");
+          await mounted.cleanup();
+        },
+      };
+    }
+
+    async function openHandoffMenu() {
+      const trigger = page.getByRole("button", { name: "Hand off thread" });
+      await expect.element(trigger).toBeEnabled();
+      // The first click can land while the chat is still hydrating and the menu
+      // closes again; reopen until the destinations render.
+      await vi.waitFor(
+        async () => {
+          if (!document.querySelector("[data-handoff-destination]")) {
+            await trigger.click();
+          }
+          expect(document.querySelector("[data-handoff-destination]")).not.toBeNull();
+        },
+        { timeout: 10_000, interval: 500 },
+      );
+      await expect.element(page.getByText("Continue in this thread")).toBeVisible();
+      await expect.element(page.getByText("Continue in a new thread")).toBeVisible();
+    }
+
+    it("continues in the same thread by rebinding its provider", async () => {
+      const mounted = await mountWithCapturedCommands();
+      try {
+        await openHandoffMenu();
+        const sameThreadItem = document.querySelector<HTMLElement>(
+          '[data-handoff-destination="this-thread"]',
+        );
+        expect(sameThreadItem?.textContent).toContain("Claude");
+        sameThreadItem!.click();
+        await vi.waitFor(() => expect(mounted.commands).toHaveLength(1));
+        expect(mounted.commands[0]).toMatchObject({
+          type: "thread.meta.update",
+          threadId: THREAD_ID,
+          providerHandoff: true,
+          modelSelection: { provider: "claudeAgent" },
+        });
+        // Same thread: no new thread, and the route stays put.
+        expect(mounted.commands.some((command) => command.type === "thread.handoff.create")).toBe(
+          false,
+        );
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("still hands off to a new thread with the imported transcript", async () => {
+      const mounted = await mountWithCapturedCommands();
+      try {
+        await openHandoffMenu();
+        document.querySelector<HTMLElement>('[data-handoff-destination="new-thread"]')!.click();
+        await vi.waitFor(() =>
+          expect(mounted.commands.some((command) => command.type === "thread.handoff.create")).toBe(
+            true,
+          ),
+        );
+        const create = mounted.commands.find((command) => command.type === "thread.handoff.create");
+        expect(create).toMatchObject({
+          sourceThreadId: THREAD_ID,
+          projectId: PROJECT_ID,
+          modelSelection: { provider: "claudeAgent" },
+        });
+        expect(create && "threadId" in create ? create.threadId : null).not.toBe(THREAD_ID);
+        expect(
+          create && "importedMessages" in create
+            ? create.importedMessages.some((message) =>
+                message.text.includes("Fix the flaky reconnect test"),
+              )
+            : false,
+        ).toBe(true);
+        expect(mounted.commands.some((command) => command.type === "thread.meta.update")).toBe(
+          false,
+        );
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    // Server reaction to a same-thread handoff: the outcome row keyed by the
+    // command, plus (on success) the thread rebound to the target provider.
+    const respondToHandoff =
+      (outcome: "completed" | "failed") =>
+      (
+        command: Parameters<
+          NonNullable<typeof window.nativeApi>["orchestration"]["dispatchCommand"]
+        >[0],
+      ) => {
+        if (command.type !== "thread.meta.update" || command.providerHandoff !== true) return;
+        const { commandId } = command;
+        fixture.snapshot = {
+          ...fixture.snapshot,
+          snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+          threads: fixture.snapshot.threads.map((thread) =>
+            thread.id !== THREAD_ID
+              ? thread
+              : {
+                  ...thread,
+                  ...(outcome === "completed"
+                    ? {
+                        modelSelection: {
+                          provider: "claudeAgent" as const,
+                          model: "claude-sonnet-4-6",
+                        },
+                        session: {
+                          threadId: THREAD_ID,
+                          status: "ready" as const,
+                          providerName: "claudeAgent",
+                          providerInstanceId: "claudeAgent",
+                          runtimeMode: "full-access" as const,
+                          activeTurnId: null,
+                          lastError: null,
+                          updatedAt: NOW_ISO,
+                        },
+                      }
+                    : {}),
+                  activities: [
+                    ...thread.activities,
+                    {
+                      id: EventId.makeUnsafe(
+                        outcome === "completed"
+                          ? `provider-handoff:${commandId}`
+                          : `provider-handoff-failed:${commandId}`,
+                      ),
+                      createdAt: NOW_ISO,
+                      kind:
+                        outcome === "completed" ? "provider.handoff" : "provider.handoff.failed",
+                      summary: outcome === "completed" ? "Handed off" : "Handoff failed",
+                      tone: outcome === "completed" ? ("info" as const) : ("error" as const),
+                      turnId: null,
+                      sequence: 950,
+                      payload:
+                        outcome === "completed" ? {} : { detail: "Claude CLI is not signed in." },
+                    },
+                  ],
+                },
+          ),
+        };
+        useStore.getState().syncServerReadModel(fixture.snapshot);
+      };
+
+    async function pickClaudeAndSend(text: string) {
+      useComposerDraftStore.getState().setModelSelectionAndSticky(THREAD_ID, {
+        provider: "claudeAgent",
+        model: "claude-sonnet-4-6",
+      });
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, text);
+      const composerEditor = await waitForComposerEditor();
+      await vi.waitFor(() => expect(composerEditor.textContent ?? "").toContain(text), {
+        timeout: 8_000,
+        interval: 16,
+      });
+      const sendButton = await waitForSendButton();
+      await vi.waitFor(() => expect(sendButton.disabled).toBe(false), {
+        timeout: 8_000,
+        interval: 16,
+      });
+      sendButton.click();
+      return composerEditor;
+    }
+
+    it("hands the thread off before sending when the composer picks another provider", async () => {
+      // The target takes a while to start; the message must show meanwhile.
+      const mounted = await mountWithCapturedCommands(
+        undefined,
+        respondToHandoff("completed"),
+        1_500,
+      );
+      try {
+        await pickClaudeAndSend("Review the reconnect fix");
+        await vi.waitFor(
+          () =>
+            expect(
+              [...document.querySelectorAll('[data-message-role="user"]')].some((row) =>
+                (row.textContent ?? "").includes("Review the reconnect fix"),
+              ),
+            ).toBe(true),
+          { timeout: 1_000, interval: 16 },
+        );
+        expect(mounted.commands.some((command) => command.type === "thread.turn.start")).toBe(
+          false,
+        );
+        await vi.waitFor(
+          () =>
+            expect(mounted.commands.some((command) => command.type === "thread.turn.start")).toBe(
+              true,
+            ),
+          { timeout: 8_000, interval: 16 },
+        );
+        const handoffIndex = mounted.commands.findIndex(
+          (command) => command.type === "thread.meta.update" && "providerHandoff" in command,
+        );
+        const turnStartIndex = mounted.commands.findIndex(
+          (command) => command.type === "thread.turn.start",
+        );
+        expect(mounted.commands[handoffIndex]).toMatchObject({
+          threadId: THREAD_ID,
+          providerHandoff: true,
+          modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+        });
+        // The message only goes out once the target is up, and to the target.
+        expect(turnStartIndex).toBeGreaterThan(handoffIndex);
+        expect(mounted.commands[turnStartIndex]).toMatchObject({
+          threadId: THREAD_ID,
+          modelSelection: { provider: "claudeAgent" },
+        });
+        expect(mounted.commands.some((command) => command.type === "thread.handoff.create")).toBe(
+          false,
+        );
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("never persists a provider switch before its explicit handoff", async () => {
+      const mounted = await mountWithCapturedCommands(undefined, respondToHandoff("completed"));
+      try {
+        await pickClaudeAndSend("Continue on the selected provider");
+        await vi.waitFor(() =>
+          expect(mounted.commands.some((command) => command.type === "thread.turn.start")).toBe(
+            true,
+          ),
+        );
+        // An ordinary metadata update changes the durable provider immediately.
+        // Persisting Claude first makes the real decider refuse the later
+        // explicit handoff as a same-provider switch, and loses source provenance.
+        const providerUpdates = mounted.commands.filter(
+          (command) =>
+            command.type === "thread.meta.update" &&
+            command.modelSelection?.provider === "claudeAgent",
+        );
+        expect(providerUpdates[0]).toMatchObject({ providerHandoff: true });
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("hands off the captured selection when the picker changes during attachment upload", async () => {
+      let releaseUpload = () => {};
+      attachmentUploadBarrier = new Promise<void>((resolve) => {
+        releaseUpload = resolve;
+      });
+      const mounted = await mountWithCapturedCommands(undefined, respondToHandoff("completed"));
+      try {
+        useComposerDraftStore.getState().addImage(
+          THREAD_ID,
+          createComposerImage({
+            id: "handoff-upload-image",
+            previewUrl: "blob:handoff-upload-image",
+          }),
+        );
+        await pickClaudeAndSend("Continue after uploading");
+        // The optimistic row proves this send captured Claude and is now waiting
+        // on its real attachment route, before preparing the provider handoff.
+        await vi.waitFor(() =>
+          expect(
+            [...document.querySelectorAll('[data-message-role="user"]')].some((row) =>
+              (row.textContent ?? "").includes("Continue after uploading"),
+            ),
+          ).toBe(true),
+        );
+        useComposerDraftStore.getState().setModelSelectionAndSticky(THREAD_ID, {
+          provider: "codex",
+          model: "gpt-5.5",
+        });
+        await vi.waitFor(() =>
+          expect(
+            [...document.querySelectorAll("button")].some((button) =>
+              (button.textContent ?? "").includes("GPT-5.5"),
+            ),
+          ).toBe(true),
+        );
+        releaseUpload();
+        await vi.waitFor(() =>
+          expect(mounted.commands.some((command) => command.type === "thread.turn.start")).toBe(
+            true,
+          ),
+        );
+        expect(
+          mounted.commands.find(
+            (command) => command.type === "thread.meta.update" && command.providerHandoff === true,
+          ),
+        ).toMatchObject({
+          threadId: THREAD_ID,
+          modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+        });
+        expect(
+          mounted.commands.find((command) => command.type === "thread.turn.start"),
+        ).toMatchObject({ modelSelection: { provider: "claudeAgent" } });
+      } finally {
+        releaseUpload();
+        attachmentUploadBarrier = null;
+        await mounted.cleanup();
+      }
+    });
+
+    it("keeps the message in the composer when the picked provider cannot start", async () => {
+      const mounted = await mountWithCapturedCommands(undefined, respondToHandoff("failed"));
+      try {
+        const composerEditor = await pickClaudeAndSend("Review the reconnect fix");
+        await expect
+          .element(page.getByText("Claude could not start: Claude CLI is not signed in."))
+          .toBeVisible();
+        expect(mounted.commands.some((command) => command.type === "thread.turn.start")).toBe(
+          false,
+        );
+        // The send rolled back: the message left the transcript for the composer.
+        await vi.waitFor(() =>
+          expect(composerEditor.textContent ?? "").toContain("Review the reconnect fix"),
+        );
+        expect(
+          [...document.querySelectorAll('[data-message-role="user"]')].some((row) =>
+            (row.textContent ?? "").includes("Review the reconnect fix"),
+          ),
+        ).toBe(false);
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("shows the handoff event with its source, target, and transferred context", async () => {
+      const snapshot = createSnapshotForTargetUser({
+        targetMessageId: MessageId.makeUnsafe("msg-handoff-event"),
+        targetText: "Fix the flaky reconnect test",
+      });
+      const thread = snapshot.threads[0]!;
+      const handedOffThread = {
+        ...thread,
+        modelSelection: { provider: "claudeAgent" as const, model: "claude-sonnet-4-6" },
+        activities: [
+          {
+            id: EventId.makeUnsafe("provider-handoff:event"),
+            // Mid-conversation: after an assistant reply, before the next user
+            // message, where it used to fold into the settled turn's work group.
+            createdAt: isoAt(124),
+            kind: "provider.handoff",
+            summary: "Handed off from Codex (gpt-5) to Claude (claude-sonnet-4-6)",
+            tone: "info" as const,
+            turnId: null,
+            sequence: 900,
+            payload: {
+              sourceProvider: "codex",
+              sourceModel: "gpt-5.5",
+              targetProvider: "claudeAgent",
+              targetModel: "claude-sonnet-4-6",
+              contextText: "Most recent imported messages:\nUser:\nFix the flaky reconnect test",
+              sourceModelSelection: {
+                provider: "codex",
+                model: "gpt-5.5",
+                options: { reasoningEffort: "high", fastMode: true },
+              },
+              targetModelSelection: {
+                provider: "claudeAgent",
+                model: "claude-sonnet-4-6",
+                options: { effort: "medium" },
+              },
+              contextCharacters: 66,
+            },
+          },
+        ],
+      };
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: { ...snapshot, threads: [handedOffThread] },
+        configureFixture: withClaudeReady,
+      });
+      try {
+        // A transcript boundary of its own, naming both models, not a work row.
+        const divider = await vi.waitFor(() => {
+          const element = document.querySelector<HTMLElement>(
+            '[data-provider-handoff-divider="true"]',
+          );
+          expect(element).not.toBeNull();
+          return element!;
+        });
+        expect(divider.textContent).toContain("Context handoff");
+        expect(divider.textContent).toContain("GPT-5.5");
+        expect(divider.textContent).toContain("Claude Sonnet 4.6");
+        // Effort and fast mode read like the composer's model trigger.
+        expect(divider.textContent).toContain("High");
+        expect(divider.textContent).toContain("Medium");
+        expect(divider.querySelector('[aria-label="Fast mode"]')).not.toBeNull();
+        divider.querySelector("button")!.click();
+        await expect.element(page.getByText("Transferred context", { exact: true })).toBeVisible();
+        const context = document.querySelector('[data-provider-handoff-context="true"]');
+        expect(context?.textContent).toContain("Fix the flaky reconnect test");
+        // The transcript before the handoff stays in place.
+        await expect.element(page.getByText("assistant filler 21")).toBeInTheDocument();
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+  });
+
   it("dispatches a rapid access-mode reversal while the server projection is stale", async () => {
     const baseSnapshot = createSnapshotForTargetUser({
       targetMessageId: "msg-user-runtime-reversal" as MessageId,

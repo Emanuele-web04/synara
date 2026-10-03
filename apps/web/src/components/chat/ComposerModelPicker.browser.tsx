@@ -91,6 +91,7 @@ type HarnessProps = {
     typeof ComposerModelPicker
   >["modelOptionsByProviderInstance"];
   lockedProvider?: ProviderKind | null;
+  boundProviderInstance?: React.ComponentProps<typeof ComposerModelPicker>["boundProviderInstance"];
   modelOptionsByProvider?: React.ComponentProps<
     typeof ComposerModelPicker
   >["modelOptionsByProvider"];
@@ -114,6 +115,7 @@ function Harness(props: HarnessProps) {
       provider="codex"
       model={(selectedModel ?? GPT_5_5) as ModelSlug}
       lockedProvider={props.lockedProvider ?? null}
+      boundProviderInstance={props.boundProviderInstance ?? null}
       effortControl={props.effortControl ?? "menu"}
       providers={props.providers ?? [readyProvider("codex"), readyProvider("claudeAgent")]}
       {...(props.providerInstances ? { providerInstances: props.providerInstances } : {})}
@@ -657,6 +659,25 @@ describe("ComposerModelPicker with several accounts", () => {
         .element(page.getByRole("tab", { name: "Codex", exact: true }))
         .toHaveAttribute("aria-selected", "true");
       expect(page.getByRole("tab", { name: "Claude" }).elements()).toHaveLength(0);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("opens other providers for a handoff but keeps the thread's account", async () => {
+    const screen = await mountPicker({
+      ...multiAccount,
+      boundProviderInstance: { provider: "codex", instanceId: "codex" },
+    });
+    try {
+      // Another provider is pickable: choosing it hands the thread off.
+      await expect
+        .element(page.getByRole("tab", { name: "Claude" }))
+        .not.toHaveAttribute("aria-disabled", "true");
+      // A sibling account of the thread's own provider stays closed.
+      await expect
+        .element(page.getByRole("tab", { name: "Codex · Work", exact: true }))
+        .toHaveAttribute("aria-disabled", "true");
     } finally {
       await screen.unmount();
     }

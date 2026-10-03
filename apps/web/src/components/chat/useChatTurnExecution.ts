@@ -51,6 +51,7 @@ import {
   revokeUserMessagePreviewUrls,
   runWorktreeCreationFlow,
   threadSettingsDispatchFields,
+  threadHasProviderLockingActivity,
   turnStartDispatchFields,
   type TurnDispatchSettings,
 } from "../ChatView.logic";
@@ -109,6 +110,7 @@ interface PreparedChatTurn {
 }
 type ChatTurnExecutionInput = Pick<
   ChatTurnSubmissionInput,
+  | "prepareProviderHandoffForSend"
   | "isServerThread"
   | "setStoreThreadWorkspace"
   | "clearLocalDispatchWorktreeSetup"
@@ -153,6 +155,7 @@ type ChatTurnExecutionInput = Pick<
 >;
 
 export function useChatTurnExecution({
+  prepareProviderHandoffForSend,
   isServerThread,
   setStoreThreadWorkspace,
   clearLocalDispatchWorktreeSetup,
@@ -525,9 +528,21 @@ export function useChatTurnExecution({
         // script ran (the creation-step race above only guards the first step).
         await consumeWorktreeSetupResolution();
 
+        const needsProviderHandoff =
+          isServerThread &&
+          queuedChatTurn === null &&
+          threadHasProviderLockingActivity(activeThread) &&
+          dispatchSettings.modelSelection.provider !== activeThread.modelSelection.provider;
         if (isServerThread) {
           await persistThreadSettingsForNextTurn({
-            ...threadSettingsDispatchFields(dispatchSettings),
+            // The explicit handoff owns a provider switch. An ordinary metadata
+            // update first would erase its source and make the server reject it.
+            ...(needsProviderHandoff
+              ? {
+                  runtimeMode: dispatchSettings.runtimeMode,
+                  interactionMode: dispatchSettings.interactionMode,
+                }
+              : threadSettingsDispatchFields(dispatchSettings)),
             threadId: threadIdForSend,
             createdAt: messageCreatedAt,
           });
@@ -567,6 +582,12 @@ export function useChatTurnExecution({
         // turn. Once they settle, consume the last possible choice before the
         // card advances to the non-resolvable "Starting session" step.
         await consumeWorktreeSetupResolution();
+        // A provider picked over the thread's own one: hand off in place while
+        // the message already shows. A failure throws into the rollback below,
+        // which returns the message to the composer.
+        if (needsProviderHandoff && prepareProviderHandoffForSend) {
+          await prepareProviderHandoffForSend(activeThread, dispatchSettings.modelSelection);
+        }
         // Carry the expected message id so a snapshot rebuilt after an interim
         // reset (thread switch, ack effect) keeps the message-echo ack signal.
         beginLocalDispatch({
@@ -924,6 +945,7 @@ export function useChatTurnExecution({
       worktreeSetupResolutionRef,
       scheduleFailedWorktreeSetupDispatchReset,
       resetLocalDispatch,
+      prepareProviderHandoffForSend,
     ],
   );
   return useCallback(

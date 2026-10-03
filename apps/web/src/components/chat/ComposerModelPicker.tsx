@@ -98,6 +98,12 @@ type ComposerModelPickerProps = {
   provider: ProviderKind;
   model: ModelSlug;
   lockedProvider: ProviderKind | null;
+  // Set when other providers are open for a same-thread handoff: the thread's
+  // own provider still cannot switch to a sibling account.
+  boundProviderInstance?: {
+    readonly provider: ProviderKind;
+    readonly instanceId: ProviderInstanceId;
+  } | null;
   providers?: ReadonlyArray<ServerProviderStatus>;
   modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
   loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
@@ -201,6 +207,10 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     if (lockedProvider !== null && entry.provider !== lockedProvider) return false;
     const instanceId = starredModelInstanceId(entry);
     if (lockedProvider !== null && instanceId !== activeInstanceId) return false;
+    const bound = props.boundProviderInstance;
+    if (bound && entry.provider === bound.provider && instanceId !== bound.instanceId) {
+      return false;
+    }
     return (
       instanceId === entry.provider ||
       knownInstances === undefined ||
@@ -298,7 +308,12 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
         : visibleProviderOptions,
     providers: props.providers,
     providerInstances: props.providerInstances,
-    lockedInstanceId: lockedProvider !== null ? activeInstanceId : null,
+    lockedInstanceId:
+      lockedProvider !== null
+        ? activeInstanceId
+        : (props.boundProviderInstance?.instanceId ?? null),
+    lockedInstanceProvider:
+      lockedProvider === null ? (props.boundProviderInstance?.provider ?? null) : null,
   });
   const activeProviderTab = providerTabs.find(
     (providerTab) => providerTab.instanceId === activeInstanceId,

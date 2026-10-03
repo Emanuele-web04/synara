@@ -1638,6 +1638,49 @@ it.effect(
 );
 
 routing.layer("ProviderServiceLive routing", (it) => {
+  it.effect("starts another provider on a Codex thread only after a continuation reset", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-provider-handoff-reset");
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* provider.stopSession({ threadId });
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      // Codex's native continuation is protected: a different provider cannot
+      // silently take over a thread that still holds a Codex resume cursor.
+      const refused = yield* Effect.exit(
+        provider.startSession(threadId, {
+          provider: "claudeAgent",
+          threadId,
+          runtimeMode: "full-access",
+        }),
+      );
+      assert.isTrue(Exit.isFailure(refused));
+      assert.include(
+        String(Cause.squash((refused as Exit.Failure<unknown, unknown>).cause)),
+        "native session storage is incompatible",
+      );
+
+      // A same-thread provider handoff requests the reset explicitly first.
+      yield* provider.clearSessionResumeCursor!({ threadId });
+      const handedOff = yield* provider.startSession(threadId, {
+        provider: "claudeAgent",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      assert.equal(handedOff.provider, "claudeAgent");
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+
   it.effect("retries runtime cleanup after the adapter becomes non-routable", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;

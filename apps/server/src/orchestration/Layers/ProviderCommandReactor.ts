@@ -22,6 +22,7 @@ import {
   MessageId,
   type OrchestrationEvent,
   type OrchestrationRegenerateThreadTitleResult,
+  PROVIDER_DISPLAY_NAMES,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   type ProviderMentionReference,
   type ProviderInteractionMode,
@@ -88,7 +89,7 @@ import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts
 import { AgentGatewayOperationRepository } from "../../agentGateway/Services/AgentGatewayOperationRepository.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import {
-  type ProviderAdapterProcessError,
+  ProviderAdapterProcessError,
   ProviderAdapterRequestError,
   ProviderAdapterValidationError,
   ProviderServiceError,
@@ -386,6 +387,13 @@ const serverCommandId = (tag: string): CommandId =>
   CommandId.makeUnsafe(`server:${tag}:${crypto.randomUUID()}`);
 
 const PROVIDER_CONTEXT_LIFECYCLE_ACTIVITY_KIND = "provider.context.changed";
+const PROVIDER_HANDOFF_ACTIVITY_KIND = "provider.handoff";
+const PROVIDER_HANDOFF_FAILED_ACTIVITY_KIND = "provider.handoff.failed";
+
+// Activity payloads are plain JSON; a model selection already is, so a JSON
+// round-trip only drops absent optional fields for the payload's Json type.
+const modelSelectionJson = (selection: ModelSelection): typeof Schema.Json.Type =>
+  JSON.parse(JSON.stringify(selection));
 const SESSION_CONTEXT_RECAP_PREVIEW_MAX_CHARS = 600;
 
 type ProviderContextLifecycleReason =
@@ -1016,6 +1024,10 @@ const make = Effect.gen(function* () {
   // Providers without native rewind restart after rollback and receive the
   // retained projection transcript once on their next prompt.
   const rollbackContextBootstrapThreadIds = new Set<string>();
+  // Threads whose next turn follows a same-thread provider handoff. The handoff
+  // divider already records the context the new provider receives, so that
+  // turn's fresh-session recap is expected, not a lost-history incident.
+  const providerHandoffContextThreadIds = new Set<string>();
   // Keep observed context loss until recovery is accepted: a failed dispatch
   // can leave a replacement runtime alive without its previous history.
   type PendingInterruptEscalation = { evidence: ProviderContextLifecycleEvidence | null };
@@ -3196,7 +3208,9 @@ const make = Effect.gen(function* () {
           : freshSessionContextBootstrapThreadIds.has(input.threadId)
             ? "fresh-session"
             : "native-history-unavailable";
+    const followsProviderHandoff = providerHandoffContextThreadIds.delete(input.threadId);
     let providerContextLifecycleEvidence: ProviderContextLifecycleEvidence | null =
+      !followsProviderHandoff &&
       input.reviewTarget === undefined &&
       input.dispatchMode !== "steer" &&
       !shouldBootstrapHandoff &&
@@ -6367,6 +6381,161 @@ const make = Effect.gen(function* () {
     });
   });
 
+  // Same-thread Hand off: the stored selection already names the target, so
+  // ensuring the session now is the ordinary provider rebind (fresh session plus
+  // prior-transcript bootstrap on the next turn). Starting eagerly lets the
+  // timeline record the handoff only once the target is actually up, and a
+  // failed start restores the source selection so the thread stays usable.
+  const applyProviderHandoff = Effect.fnUntraced(function* (input: {
+    // The requesting command id when there is one, so the client that asked
+    // can wait for exactly this handoff's outcome row.
+    readonly handoffKey: string;
+    readonly threadId: ThreadId;
+    readonly occurredAt: string;
+    readonly sourceModelSelection: ModelSelection;
+    readonly targetModelSelection: ModelSelection;
+  }) {
+    const thread = yield* resolveThread(input.threadId);
+    if (!thread) {
+      return;
+    }
+    const contextText = buildPriorTranscriptBootstrapText(thread, undefined);
+    const describe = (selection: ModelSelection) =>
+      `${PROVIDER_DISPLAY_NAMES[selection.provider] ?? selection.provider} (${selection.model})`;
+    // An explicit stop discards synthetic context, but a handoff has no other
+    // way to carry the conversation to the new provider.
+    suppressContextBootstrapOnNextStartThreadIds.delete(input.threadId);
+    const cachedProviderOptions = threadProviderOptions.get(input.threadId);
+    // The source's native continuation (e.g. a Codex resume cursor) is
+    // protected: ProviderService refuses another provider on the thread until
+    // the handoff explicitly abandons it. This also stops the source runtime.
+    let sourceContinuationReset = false;
+    const startOutcome = yield* runBoundedProviderCall({
+      label: "The provider handoff",
+      // Reserve the remaining command budget for the durable source restore
+      // and outcome. The generic outer deadline otherwise interrupts those
+      // writes and advances past a handoff that the client can never settle.
+      timeout: Duration.millis(Duration.toMillis(commandEventTimeout) * 0.9),
+      call: Effect.gen(function* () {
+        // A settled foreground turn may still share its runtime with background
+        // tasks. Keep that owner alive until its tasks finish or are stopped.
+        if (
+          providerService.hasLiveRuntimeTasks &&
+          (yield* providerService.hasLiveRuntimeTasks({ threadId: input.threadId }))
+        ) {
+          return yield* new ProviderAdapterValidationError({
+            provider: input.sourceModelSelection.provider,
+            operation: "thread.meta.update",
+            issue: "Finish or stop this thread's background tasks before handing it off.",
+          });
+        }
+        yield* providerService.clearSessionResumeCursor
+          ? providerService.clearSessionResumeCursor({ threadId: input.threadId })
+          : providerService.stopSession({ threadId: input.threadId });
+        sourceContinuationReset = true;
+        yield* ensureSessionForThread(input.threadId, input.occurredAt, {
+          modelSelection: input.targetModelSelection,
+          registerPriorTranscriptBootstrapOnFreshStart: true,
+          ...(cachedProviderOptions !== undefined
+            ? { providerOptions: cachedProviderOptions }
+            : {}),
+        });
+      }),
+    });
+    const startFailure =
+      startOutcome._tag === "ok"
+        ? null
+        : startOutcome._tag === "failed"
+          ? startOutcome.cause
+          : Cause.fail(
+              new ProviderAdapterProcessError({
+                provider: input.targetModelSelection.provider,
+                threadId: input.threadId,
+                reason: "startup-failed",
+                detail: startOutcome.detail,
+              }),
+            );
+    const createdAt = new Date().toISOString();
+    const payload = {
+      sourceProvider: input.sourceModelSelection.provider,
+      sourceModel: input.sourceModelSelection.model,
+      targetProvider: input.targetModelSelection.provider,
+      targetModel: input.targetModelSelection.model,
+      // Full selections (effort, fast mode, …) so the divider reads like the
+      // composer's model trigger for both sides.
+      sourceModelSelection: modelSelectionJson(input.sourceModelSelection),
+      targetModelSelection: modelSelectionJson(input.targetModelSelection),
+    };
+    if (startFailure === null) {
+      threadSessionModelSelections.set(input.threadId, input.targetModelSelection);
+      providerHandoffContextThreadIds.add(input.threadId);
+      // Same metadata a new-thread handoff carries, so surfaces that already
+      // show "handed off from <provider>" (the sidebar avatar pair) show it here.
+      // "completed": the context travels through the prior-transcript bootstrap.
+      yield* orchestrationEngine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe(`server:provider-handoff-meta:${input.handoffKey}`),
+        threadId: input.threadId,
+        handoff: {
+          sourceThreadId: input.threadId,
+          sourceProvider: input.sourceModelSelection.provider,
+          importedAt: new Date().toISOString(),
+          bootstrapStatus: "completed",
+        },
+      });
+      yield* orchestrationEngine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.makeUnsafe(`server:provider-handoff:${input.handoffKey}`),
+        threadId: input.threadId,
+        activity: {
+          id: EventId.makeUnsafe(`provider-handoff:${input.handoffKey}`),
+          tone: "info",
+          kind: PROVIDER_HANDOFF_ACTIVITY_KIND,
+          summary: `Handed off from ${describe(input.sourceModelSelection)} to ${describe(input.targetModelSelection)}`,
+          payload: { ...payload, contextText, contextCharacters: contextText?.length ?? 0 },
+          turnId: null,
+          createdAt,
+        },
+        createdAt,
+      });
+      return;
+    }
+    // The source's native history was abandoned above, so its next fresh
+    // session must carry the transcript the same way the target would have.
+    if (sourceContinuationReset) {
+      freshSessionContextBootstrapThreadIds.add(input.threadId);
+    }
+    const detail = Cause.squash(startFailure);
+    yield* Effect.logWarning("provider handoff could not start the target session", {
+      threadId: input.threadId,
+      cause: Cause.pretty(startFailure),
+    });
+    yield* orchestrationEngine.dispatch({
+      type: "thread.meta.update",
+      commandId: CommandId.makeUnsafe(`server:provider-handoff-revert:${input.handoffKey}`),
+      threadId: input.threadId,
+      modelSelection: input.sourceModelSelection,
+    });
+    yield* orchestrationEngine.dispatch({
+      type: "thread.activity.append",
+      commandId: CommandId.makeUnsafe(`server:provider-handoff-failed:${input.handoffKey}`),
+      threadId: input.threadId,
+      activity: {
+        id: EventId.makeUnsafe(`provider-handoff-failed:${input.handoffKey}`),
+        tone: "error",
+        kind: PROVIDER_HANDOFF_FAILED_ACTIVITY_KIND,
+        summary: `Handoff to ${describe(input.targetModelSelection)} failed; the thread stays on ${describe(input.sourceModelSelection)}.`,
+        payload: {
+          ...payload,
+          detail: detail instanceof Error ? detail.message : String(detail),
+        },
+        turnId: null,
+        createdAt,
+      },
+      createdAt,
+    });
+  });
+
   const processSessionStopRequested = (
     event: Extract<ProviderIntentEvent, { type: "thread.session-stop-requested" }>,
   ) =>
@@ -6541,6 +6710,17 @@ const make = Effect.gen(function* () {
             });
           }
           if (event.payload.modelSelection === undefined) {
+            return;
+          }
+
+          if (event.payload.providerHandoff !== undefined) {
+            yield* applyProviderHandoff({
+              handoffKey: event.commandId ?? event.eventId,
+              threadId: event.payload.threadId,
+              occurredAt: event.occurredAt,
+              sourceModelSelection: event.payload.providerHandoff.sourceModelSelection,
+              targetModelSelection: event.payload.modelSelection,
+            });
             return;
           }
 

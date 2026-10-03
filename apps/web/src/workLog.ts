@@ -4,6 +4,7 @@ import {
   COMPUTER_CONTROL_DENIED_ACTIVITY_KIND,
   COMPUTER_SETUP_REQUIRED_ACTIVITY_KIND,
   isToolLifecycleItemType,
+  type ModelSelection,
   STUDIO_OUTPUTS_ACTIVITY_KIND,
   type OrchestrationLatestTurnState,
   type OrchestrationThreadActivity,
@@ -55,6 +56,24 @@ export type WorkLogRequestKind = ApprovalRequestKind;
 const CHECKPOINT_REVERT_FAILED_ACTIVITY_KIND = "checkpoint.revert.failed";
 export const PROVIDER_CONTEXT_LIFECYCLE_ACTIVITY_KIND = "provider.context.changed";
 const SESSION_CONTEXT_RECAP_PREVIEW_MAX_CHARS = 600;
+// Mirror the same-thread Hand off activities in ProviderCommandReactor.ts.
+export const PROVIDER_HANDOFF_ACTIVITY_KIND = "provider.handoff";
+export const PROVIDER_HANDOFF_FAILED_ACTIVITY_KIND = "provider.handoff.failed";
+
+export interface ProviderHandoffInfo {
+  status: "completed" | "failed";
+  sourceProvider: ProviderKind;
+  sourceModel: string;
+  targetProvider: ProviderKind;
+  targetModel: string;
+  /** Full selections (effort, fast mode); rebuilt from provider + model when absent. */
+  sourceModelSelection: ModelSelection;
+  targetModelSelection: ModelSelection;
+  /** Prior-transcript context the target receives with its first turn. */
+  contextText: string | null;
+  /** Why the target could not start; only set on failure. */
+  failureDetail: string | null;
+}
 
 export type ProviderContextLifecycleReason =
   | "conversation-rebuilt"
@@ -132,6 +151,7 @@ export interface WorkLogEntry {
   computerControlDenied?: WorkLogComputerControlDenied;
   computerSetupRequired?: WorkLogComputerSetupRequired;
   providerContextLifecycle?: ProviderContextLifecycleInfo;
+  providerHandoff?: ProviderHandoffInfo;
   // Source activity kind, kept so the timeline can pick a kind-specific icon
   // (e.g. user-input.requested -> question glyph) instead of the generic
   // tone fallback. Same rationale as `toolName` below.
@@ -475,7 +495,11 @@ function shouldKeepActivityForWorkLog(
 ): boolean {
   // Context lifecycle evidence must survive message visibility filters. It is
   // the durable explanation for why a turn may behave differently after reload.
-  if (activity.kind === PROVIDER_CONTEXT_LIFECYCLE_ACTIVITY_KIND) {
+  if (
+    activity.kind === PROVIDER_CONTEXT_LIFECYCLE_ACTIVITY_KIND ||
+    activity.kind === PROVIDER_HANDOFF_ACTIVITY_KIND ||
+    activity.kind === PROVIDER_HANDOFF_FAILED_ACTIVITY_KIND
+  ) {
     return true;
   }
 
@@ -741,6 +765,53 @@ function isProviderContextLifecycleReason(value: unknown): value is ProviderCont
   );
 }
 
+function asProviderKind(value: unknown): ProviderKind | undefined {
+  return PROVIDER_DESCRIPTORS.find((descriptor) => descriptor.kind === value)?.kind;
+}
+
+function asHandoffModelSelection(
+  value: unknown,
+  fallback: { provider: ProviderKind; model: string },
+): ModelSelection {
+  if (value && typeof value === "object") {
+    const candidate = value as { provider?: unknown; model?: unknown };
+    if (candidate.provider === fallback.provider && candidate.model === fallback.model) {
+      return value as ModelSelection;
+    }
+  }
+  return fallback as ModelSelection;
+}
+
+function extractProviderHandoffInfo(
+  payload: Record<string, unknown> | null,
+  status: ProviderHandoffInfo["status"],
+): ProviderHandoffInfo | null {
+  const sourceProvider = asProviderKind(payload?.sourceProvider);
+  const targetProvider = asProviderKind(payload?.targetProvider);
+  const sourceModel = asTrimmedString(payload?.sourceModel);
+  const targetModel = asTrimmedString(payload?.targetModel);
+  if (!sourceProvider || !targetProvider || !sourceModel || !targetModel) {
+    return null;
+  }
+  return {
+    status,
+    sourceProvider,
+    sourceModel,
+    targetProvider,
+    targetModel,
+    sourceModelSelection: asHandoffModelSelection(payload?.sourceModelSelection, {
+      provider: sourceProvider,
+      model: sourceModel,
+    }),
+    targetModelSelection: asHandoffModelSelection(payload?.targetModelSelection, {
+      provider: targetProvider,
+      model: targetModel,
+    }),
+    contextText: asTrimmedString(payload?.contextText),
+    failureDetail: asTrimmedString(payload?.detail),
+  };
+}
+
 function extractProviderContextLifecycleInfo(
   payload: Record<string, unknown> | null,
 ): ProviderContextLifecycleInfo | null {
@@ -950,6 +1021,18 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     const providerContextLifecycle = extractProviderContextLifecycleInfo(payload);
     if (providerContextLifecycle) {
       entry.providerContextLifecycle = providerContextLifecycle;
+    }
+  }
+  if (
+    activity.kind === PROVIDER_HANDOFF_ACTIVITY_KIND ||
+    activity.kind === PROVIDER_HANDOFF_FAILED_ACTIVITY_KIND
+  ) {
+    const providerHandoff = extractProviderHandoffInfo(
+      payload,
+      activity.kind === PROVIDER_HANDOFF_ACTIVITY_KIND ? "completed" : "failed",
+    );
+    if (providerHandoff) {
+      entry.providerHandoff = providerHandoff;
     }
   }
   const computerToolDescription = deriveComputerToolDescription({

@@ -43,7 +43,7 @@ import {
 } from "./chatHeaderControls";
 import { DiffStat } from "../ui/diff-stat";
 import { IconButton } from "../ui/icon-button";
-import { Menu, MenuItem, MenuTrigger } from "../ui/menu";
+import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuSeparator, MenuTrigger } from "../ui/menu";
 import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
 import { OpenInPicker } from "./OpenInPicker";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -109,6 +109,8 @@ interface ChatHeaderProps {
   handoffActionLabel: string;
   handoffDisabled: boolean;
   handoffActionTargets: ReadonlyArray<ThreadHandoffTarget>;
+  /** Subset of `handoffActionTargets` that can continue in this same thread. */
+  continueHandoffActionTargets: ReadonlyArray<ThreadHandoffTarget>;
   // Coordinator threads pass false — a hand-off copy would read as a second
   // coordinator, so the action itself is hidden rather than disabled.
   showHandoffAction?: boolean;
@@ -159,6 +161,7 @@ interface ChatHeaderProps {
   onToggleDiff: () => void;
   onRegisterCommitAndPushTrigger?: (trigger: (() => void) | null) => void;
   onCreateHandoff: (target: ThreadHandoffTarget) => void;
+  onContinueHandoff: (target: ThreadHandoffTarget) => void;
   onNavigateToThread: (threadId: ThreadId) => void;
   onRenameThread: () => void;
   onCloseThreadPane?: () => void;
@@ -440,6 +443,7 @@ export function ChatHeader({
   handoffActionLabel,
   handoffDisabled,
   handoffActionTargets,
+  continueHandoffActionTargets,
   showHandoffAction: showHandoffActionProp,
   gitCwd,
   diffTotals,
@@ -464,6 +468,7 @@ export function ChatHeader({
   onToggleDiff,
   onRegisterCommitAndPushTrigger,
   onCreateHandoff,
+  onContinueHandoff,
   onNavigateToThread,
   onRenameThread,
   onCloseThreadPane,
@@ -742,14 +747,39 @@ export function ChatHeader({
               />
               <TooltipPopup side="bottom">{handoffActionLabel}</TooltipPopup>
             </Tooltip>
-            <ComposerPickerMenuPopup align="end" side="bottom" className="w-48 min-w-48">
-              {handoffActionTargets.map((target) => (
-                <MenuItem key={target.instanceId} onClick={() => onCreateHandoff(target)}>
-                  {/* opacity-100 opts brand icons out of the option row's 80% icon dim. */}
-                  {renderProviderIcon(target.provider, "size-3.5 shrink-0 opacity-100")}
-                  <span>Handoff to {target.label}</span>
-                </MenuItem>
-              ))}
+            <ComposerPickerMenuPopup align="end" side="bottom" className="w-56 min-w-56">
+              {continueHandoffActionTargets.length > 0 ? (
+                <>
+                  <MenuGroup>
+                    <MenuGroupLabel>Continue in this thread</MenuGroupLabel>
+                    {continueHandoffActionTargets.map((target) => (
+                      <MenuItem
+                        key={target.instanceId}
+                        data-handoff-destination="this-thread"
+                        onClick={() => onContinueHandoff(target)}
+                      >
+                        {/* opacity-100 opts brand icons out of the option row's 80% icon dim. */}
+                        {renderProviderIcon(target.provider, "size-3.5 shrink-0 opacity-100")}
+                        <span>{target.label}</span>
+                      </MenuItem>
+                    ))}
+                  </MenuGroup>
+                  <MenuSeparator />
+                </>
+              ) : null}
+              <MenuGroup>
+                <MenuGroupLabel>Continue in a new thread</MenuGroupLabel>
+                {handoffActionTargets.map((target) => (
+                  <MenuItem
+                    key={target.instanceId}
+                    data-handoff-destination="new-thread"
+                    onClick={() => onCreateHandoff(target)}
+                  >
+                    {renderProviderIcon(target.provider, "size-3.5 shrink-0 opacity-100")}
+                    <span>{target.label}</span>
+                  </MenuItem>
+                ))}
+              </MenuGroup>
             </ComposerPickerMenuPopup>
           </Menu>
         ) : null}
