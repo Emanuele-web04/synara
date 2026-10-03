@@ -14474,6 +14474,64 @@ describe("ProviderCommandReactor", () => {
       });
     });
 
+    it("settles a timed-out target start and keeps the thread usable", async () => {
+      const harness = await createHarness({
+        threadModelSelection: { provider: "grok", model: "grok-code-fast-1" },
+        commandEventTimeout: Duration.millis(300),
+      });
+      await runFirstGrokTurn(harness);
+      harness.startSession.mockImplementationOnce(() => Effect.never);
+
+      const handoff = await dispatchHandoff(harness);
+      await waitFor(async () => {
+        const cursor = await Effect.runPromise(
+          harness.deliveryRepository.getConsumerState("provider-command-reactor.v1"),
+        );
+        return (Option.getOrUndefined(cursor)?.lastAckedSequence ?? 0) >= handoff.sequence;
+      });
+      expect(
+        (await readHarnessThread(harness))?.activities.some(
+          (activity) => activity.kind === "provider.handoff.failed",
+        ),
+      ).toBe(true);
+      expect((await readHarnessThread(harness))?.modelSelection.provider).toBe("grok");
+      await sendSecondTurn(harness);
+      await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+      expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("<thread_context>");
+      expect(harness.sendTurn.mock.calls[1]?.[0].input).toContain("first turn on grok");
+    });
+
+    it("keeps the source runtime while background tasks are still active", async () => {
+      const harness = await createHarness({
+        threadModelSelection: { provider: "grok", model: "grok-code-fast-1" },
+      });
+      await runFirstGrokTurn(harness);
+      harness.hasLiveRuntimeTasks.mockReturnValue(Effect.succeed(true));
+
+      await dispatchHandoff(harness);
+      await waitFor(async () =>
+        Boolean(
+          (await readHarnessThread(harness))?.activities.some(
+            (activity) =>
+              activity.kind === "provider.handoff.failed" || activity.kind === "provider.handoff",
+          ),
+        ),
+      );
+
+      const thread = await readHarnessThread(harness);
+      expect(
+        thread?.activities.find((activity) => activity.kind.startsWith("provider.handoff"))?.kind,
+      ).toBe("provider.handoff.failed");
+      expect(thread?.modelSelection).toMatchObject({ provider: "grok" });
+      expect(thread?.session?.providerName).toBe("grok");
+      expect(harness.clearSessionResumeCursor).not.toHaveBeenCalled();
+      expect(harness.stopSession).not.toHaveBeenCalled();
+      expect(harness.startSession.mock.calls).toHaveLength(1);
+      expect(
+        thread?.activities.find((activity) => activity.kind === "provider.handoff.failed"),
+      ).toMatchObject({ payload: { detail: expect.stringMatching(/background tasks/) } });
+    });
+
     it("refuses a handoff while a turn is running", async () => {
       const harness = await createHarness({
         threadModelSelection: { provider: "grok", model: "grok-code-fast-1" },

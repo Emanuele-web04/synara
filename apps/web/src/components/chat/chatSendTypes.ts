@@ -1,4 +1,4 @@
-import type { MessageId, ProviderKind, ThreadId } from "@synara/contracts";
+import type { MessageId, ModelSelection, ProviderKind, ThreadId } from "@synara/contracts";
 import type { QueryClient, UseMutationResult } from "@tanstack/react-query";
 import type { Dispatch, RefObject, SetStateAction } from "react";
 import type { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
@@ -72,7 +72,9 @@ export interface ChatTurnSubmissionInput {
    * in place first, and throws if that failed so the send rolls back and the
    * message returns to the composer instead of reaching the wrong provider.
    */
-  prepareProviderHandoffForSend?: (() => Promise<void>) | undefined;
+  prepareProviderHandoffForSend?:
+    | ((thread: Thread, modelSelection: ModelSelection) => Promise<void>)
+    | undefined;
   lateComposerSendHandlersRef: RefObject<LateComposerSendHandlers | null>;
   activeThread: Thread | undefined;
   isConnecting: boolean;

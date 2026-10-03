@@ -22,7 +22,7 @@ A handoff is continuation, not parallelism. Do not leave two providers actively 
 - **Continue in this thread** keeps the same task: its ID, visible history, project, and worktree. The receiving provider starts a new session right away, and the timeline records a handoff row showing the source model, the target model, and the context transferred to the target. Earlier messages stay attributed to the provider that wrote them. The receiving provider's next turn includes that context. If the receiving provider cannot start, the task remains on the original provider and the timeline records the failure instead.
 - **Continue in a new thread** creates a separate task with a copy of the transcript, leaving the original task untouched.
 
-You can also pick another provider in the composer's model picker. Choosing it changes nothing until you send: the next message hands the task off in this thread first and is then sent to the new provider. If the new provider cannot start, the message stays in the composer and the task keeps its original provider. Switching providers waits until the current turn has finished and any pending request is answered.
+You can also pick another provider in the composer's model picker. Choosing it changes nothing until you send: the next message hands the task off in this thread first and is then sent to the new provider. If the new provider cannot start, the message stays in the composer and the task keeps its original provider. Switching providers waits until the current turn and background tasks have finished and any pending request is answered.
 
 Switching between two accounts of the same provider always creates a new thread.
 

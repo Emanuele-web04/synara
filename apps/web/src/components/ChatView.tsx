@@ -4315,17 +4315,18 @@ export default function ChatView({
     });
     return false;
   });
-  const prepareProviderHandoffForSend = useStableCallback(async (): Promise<void> => {
-    if (!activeThread || !providerHandoffPendingForSend) {
-      return;
-    }
-    await continueThreadHandoff(
-      activeThread,
-      selectedProvider,
-      selectedProviderInstanceId,
-      selectedModelSelection,
-    );
-  });
+  const prepareProviderHandoffForSend = useStableCallback(
+    async (threadForSend: Thread, selectionForSend: ModelSelection): Promise<void> => {
+      // A send owns the thread and model captured before attachment/setup waits.
+      // Later picker changes or navigation belong to the next send.
+      await continueThreadHandoff(
+        threadForSend,
+        selectionForSend.provider,
+        selectionForSend.instanceId,
+        selectionForSend,
+      );
+    },
+  );
 
   const { onSend } = useChatTurnSubmission({
     threadId,

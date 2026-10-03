@@ -89,7 +89,7 @@ import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts
 import { AgentGatewayOperationRepository } from "../../agentGateway/Services/AgentGatewayOperationRepository.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import {
-  type ProviderAdapterProcessError,
+  ProviderAdapterProcessError,
   ProviderAdapterRequestError,
   ProviderAdapterValidationError,
   ProviderServiceError,
@@ -6409,24 +6409,52 @@ const make = Effect.gen(function* () {
     // The source's native continuation (e.g. a Codex resume cursor) is
     // protected: ProviderService refuses another provider on the thread until
     // the handoff explicitly abandons it. This also stops the source runtime.
-    const resetSourceContinuation = providerService.clearSessionResumeCursor
-      ? providerService.clearSessionResumeCursor({ threadId: input.threadId })
-      : providerService.stopSession({ threadId: input.threadId });
-    const startFailure = yield* resetSourceContinuation.pipe(
-      Effect.andThen(
-        ensureSessionForThread(input.threadId, input.occurredAt, {
+    let sourceContinuationReset = false;
+    const startOutcome = yield* runBoundedProviderCall({
+      label: "The provider handoff",
+      // Reserve the remaining command budget for the durable source restore
+      // and outcome. The generic outer deadline otherwise interrupts those
+      // writes and advances past a handoff that the client can never settle.
+      timeout: Duration.millis(Duration.toMillis(commandEventTimeout) * 0.9),
+      call: Effect.gen(function* () {
+        // A settled foreground turn may still share its runtime with background
+        // tasks. Keep that owner alive until its tasks finish or are stopped.
+        if (
+          providerService.hasLiveRuntimeTasks &&
+          (yield* providerService.hasLiveRuntimeTasks({ threadId: input.threadId }))
+        ) {
+          return yield* new ProviderAdapterValidationError({
+            provider: input.sourceModelSelection.provider,
+            operation: "thread.meta.update",
+            issue: "Finish or stop this thread's background tasks before handing it off.",
+          });
+        }
+        yield* providerService.clearSessionResumeCursor
+          ? providerService.clearSessionResumeCursor({ threadId: input.threadId })
+          : providerService.stopSession({ threadId: input.threadId });
+        sourceContinuationReset = true;
+        yield* ensureSessionForThread(input.threadId, input.occurredAt, {
           modelSelection: input.targetModelSelection,
           registerPriorTranscriptBootstrapOnFreshStart: true,
           ...(cachedProviderOptions !== undefined
             ? { providerOptions: cachedProviderOptions }
             : {}),
-        }),
-      ),
-      Effect.as(null),
-      Effect.catchCause((cause) =>
-        Cause.hasInterruptsOnly(cause) ? Effect.failCause(cause) : Effect.succeed(cause),
-      ),
-    );
+        });
+      }),
+    });
+    const startFailure =
+      startOutcome._tag === "ok"
+        ? null
+        : startOutcome._tag === "failed"
+          ? startOutcome.cause
+          : Cause.fail(
+              new ProviderAdapterProcessError({
+                provider: input.targetModelSelection.provider,
+                threadId: input.threadId,
+                reason: "startup-failed",
+                detail: startOutcome.detail,
+              }),
+            );
     const createdAt = new Date().toISOString();
     const payload = {
       sourceProvider: input.sourceModelSelection.provider,
@@ -6474,7 +6502,9 @@ const make = Effect.gen(function* () {
     }
     // The source's native history was abandoned above, so its next fresh
     // session must carry the transcript the same way the target would have.
-    freshSessionContextBootstrapThreadIds.add(input.threadId);
+    if (sourceContinuationReset) {
+      freshSessionContextBootstrapThreadIds.add(input.threadId);
+    }
     const detail = Cause.squash(startFailure);
     yield* Effect.logWarning("provider handoff could not start the target session", {
       threadId: input.threadId,

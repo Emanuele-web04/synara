@@ -3683,6 +3683,88 @@ describe("ChatView transcript geometry (full app)", () => {
       }
     });
 
+    it("never persists a provider switch before its explicit handoff", async () => {
+      const mounted = await mountWithCapturedCommands(undefined, respondToHandoff("completed"));
+      try {
+        await pickClaudeAndSend("Continue on the selected provider");
+        await vi.waitFor(() =>
+          expect(mounted.commands.some((command) => command.type === "thread.turn.start")).toBe(
+            true,
+          ),
+        );
+        // An ordinary metadata update changes the durable provider immediately.
+        // Persisting Claude first makes the real decider refuse the later
+        // explicit handoff as a same-provider switch, and loses source provenance.
+        const providerUpdates = mounted.commands.filter(
+          (command) =>
+            command.type === "thread.meta.update" &&
+            command.modelSelection?.provider === "claudeAgent",
+        );
+        expect(providerUpdates[0]).toMatchObject({ providerHandoff: true });
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("hands off the captured selection when the picker changes during attachment upload", async () => {
+      let releaseUpload = () => {};
+      attachmentUploadBarrier = new Promise<void>((resolve) => {
+        releaseUpload = resolve;
+      });
+      const mounted = await mountWithCapturedCommands(undefined, respondToHandoff("completed"));
+      try {
+        useComposerDraftStore.getState().addImage(
+          THREAD_ID,
+          createComposerImage({
+            id: "handoff-upload-image",
+            previewUrl: "blob:handoff-upload-image",
+          }),
+        );
+        await pickClaudeAndSend("Continue after uploading");
+        // The optimistic row proves this send captured Claude and is now waiting
+        // on its real attachment route, before preparing the provider handoff.
+        await vi.waitFor(() =>
+          expect(
+            [...document.querySelectorAll('[data-message-role="user"]')].some((row) =>
+              (row.textContent ?? "").includes("Continue after uploading"),
+            ),
+          ).toBe(true),
+        );
+        useComposerDraftStore.getState().setModelSelectionAndSticky(THREAD_ID, {
+          provider: "codex",
+          model: "gpt-5.5",
+        });
+        await vi.waitFor(() =>
+          expect(
+            [...document.querySelectorAll("button")].some((button) =>
+              (button.textContent ?? "").includes("GPT-5.5"),
+            ),
+          ).toBe(true),
+        );
+        releaseUpload();
+        await vi.waitFor(() =>
+          expect(mounted.commands.some((command) => command.type === "thread.turn.start")).toBe(
+            true,
+          ),
+        );
+        expect(
+          mounted.commands.find(
+            (command) => command.type === "thread.meta.update" && command.providerHandoff === true,
+          ),
+        ).toMatchObject({
+          threadId: THREAD_ID,
+          modelSelection: { provider: "claudeAgent", model: "claude-sonnet-4-6" },
+        });
+        expect(
+          mounted.commands.find((command) => command.type === "thread.turn.start"),
+        ).toMatchObject({ modelSelection: { provider: "claudeAgent" } });
+      } finally {
+        releaseUpload();
+        attachmentUploadBarrier = null;
+        await mounted.cleanup();
+      }
+    });
+
     it("keeps the message in the composer when the picked provider cannot start", async () => {
       const mounted = await mountWithCapturedCommands(undefined, respondToHandoff("failed"));
       try {
