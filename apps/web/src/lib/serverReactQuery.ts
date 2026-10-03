@@ -430,7 +430,7 @@ export function serverRecapQueryOptions(
 
 // Live remaining-usage for every provider. Always fetches the full batch under a single query
 // key so every surface (settings panel, header chips, branch toolbar) shares one cache entry
-// and one request cycle; the server caches per-provider snapshots, so the batch is cheap.
+// and one request cycle; the server caches per-account snapshots, so the batch is cheap.
 export function serverAllProviderUsageQueryOptions(
   input:
     | boolean

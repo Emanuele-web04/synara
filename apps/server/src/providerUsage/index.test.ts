@@ -20,6 +20,11 @@ import type { ProviderUsageContext, ProviderUsageFetcher } from "./types";
 
 const fetchMock = vi.fn<(ctx: ProviderUsageContext) => Promise<ServerProviderUsageSnapshot>>();
 const cacheKeyMock = vi.fn<(ctx: ProviderUsageContext) => Promise<string>>();
+const localUsageLinesMock = vi.fn();
+
+vi.mock("../providerUsageSnapshot", () => ({
+  loadLocalProviderUsageLines: (input: unknown) => localUsageLinesMock(input),
+}));
 
 vi.mock("./registry", () => ({
   PROVIDER_USAGE_FETCHERS: {
@@ -58,10 +63,13 @@ beforeEach(() => {
   fetchMock.mockReset();
   cacheKeyMock.mockReset();
   cacheKeyMock.mockImplementation(async (ctx) => ctx.env.TEST_USAGE_ACCOUNT ?? "account-a");
+  localUsageLinesMock.mockReset();
+  localUsageLinesMock.mockResolvedValue([]);
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe("collectProviderUsageSnapshots caching", () => {
@@ -246,5 +254,194 @@ describe("collectProviderUsageSnapshots caching", () => {
     expect(result.disabled).toEqual([]);
     expect(result.reenabled).toHaveLength(1);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+function usageTestLayer() {
+  const configLayer = ServerConfig.layerTest(process.cwd(), process.cwd()).pipe(
+    Layer.provide(NodeServices.layer),
+  );
+  return Layer.mergeAll(NodeServices.layer, configLayer, ServerSettingsService.layerTest());
+}
+
+describe("listProviderUsage account routing", () => {
+  it.each(["same-source", "environment-only"] as const)(
+    "reads the private Codex account overlay for a %s account",
+    async (kind) => {
+      vi.stubEnv("CODEX_HOME", "/accounts/personal");
+      fetchMock.mockImplementation(async (ctx) => okSnapshot(ctx.nowMs, ctx.env.CODEX_HOME));
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          const settings = yield* ServerSettingsService;
+          yield* settings.updateSettings({
+            providerInstances: {
+              codex_work: {
+                driver: "codex",
+                ...(kind === "same-source"
+                  ? { config: { homePath: "/accounts/personal" } }
+                  : { environment: [{ name: "CODEX_HOME", value: "/accounts/personal" }] }),
+              },
+            },
+          });
+          return yield* listProviderUsage({});
+        }).pipe(Effect.provide(usageTestLayer()), Effect.scoped),
+      );
+      const work = result.find((snapshot) => snapshot.instanceId === "codex_work");
+      expect(work?.source).toMatch(/\/codex-home-overlay\/accounts\/codex_work-[a-f0-9]{12}$/u);
+      expect(work?.source).not.toBe("/accounts/personal");
+    },
+  );
+
+  it("refreshes the same account when its launch context changes without a credential change", async () => {
+    fetchMock.mockImplementation(async (ctx) => okSnapshot(ctx.nowMs, ctx.env.TEST_USAGE_CONTEXT));
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const settings = yield* ServerSettingsService;
+        yield* settings.updateSettings({
+          providerInstances: {
+            codex_work: {
+              driver: "codex",
+              environment: [{ name: "TEST_USAGE_CONTEXT", value: "before" }],
+              config: { homePath: "/accounts/work" },
+            },
+          },
+        });
+        yield* listProviderUsage({});
+        yield* settings.updateSettings({
+          providerInstances: {
+            codex_work: {
+              driver: "codex",
+              environment: [{ name: "TEST_USAGE_CONTEXT", value: "after" }],
+              config: { homePath: "/accounts/work" },
+            },
+          },
+        });
+        return yield* listProviderUsage({});
+      }).pipe(Effect.provide(usageTestLayer()), Effect.scoped),
+    );
+    expect(result.find((snapshot) => snapshot.instanceId === "codex_work")?.source).toBe("after");
+  });
+
+  it("returns both configured accounts with their own homes and cached quotas", async () => {
+    fetchMock.mockImplementation(async (ctx) => ({
+      ...okSnapshot(ctx.nowMs, ctx.env.CODEX_HOME),
+      limits: [{ window: "5h", usedPercent: ctx.env.CODEX_HOME === "/accounts/work" ? 72 : 21 }],
+      resetCredits: { availableCount: 1, canUse: true },
+    }));
+    localUsageLinesMock.mockResolvedValue([{ label: "Tokens", value: "default total" }]);
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const settings = yield* ServerSettingsService;
+        yield* settings.updateSettings({
+          providerInstances: {
+            codex: { driver: "codex", config: { homePath: "/accounts/personal" } },
+            codex_work: { driver: "codex", config: { homePath: "/accounts/work" } },
+          },
+        });
+        const first = yield* listProviderUsage({});
+        const cached = yield* listProviderUsage({});
+        return { first, cached };
+      }).pipe(Effect.provide(usageTestLayer()), Effect.scoped),
+    );
+
+    expect(result.first).toMatchObject([
+      { instanceId: "codex", source: "/accounts/personal", limits: [{ usedPercent: 21 }] },
+      {
+        instanceId: "codex_work",
+        source: "/accounts/work",
+        limits: [{ usedPercent: 72 }],
+        resetCredits: { canUse: false },
+        usageLines: [],
+      },
+    ]);
+    expect(result.cached).toEqual(result.first);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(localUsageLinesMock).toHaveBeenCalledWith({
+      provider: "codex",
+      homeDir: expect.any(String),
+      homePath: "/accounts/personal",
+    });
+  });
+
+  it("retains enabled siblings when the default account is disabled", async () => {
+    fetchMock.mockImplementation(async (ctx) => okSnapshot(ctx.nowMs, ctx.env.CODEX_HOME));
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const settings = yield* ServerSettingsService;
+        yield* settings.updateSettings({
+          providers: { codex: { enabled: false } },
+          providerInstances: {
+            codex_work: { driver: "codex", config: { homePath: "/accounts/work" } },
+          },
+        });
+        return yield* listProviderUsage({ provider: "codex" });
+      }).pipe(Effect.provide(usageTestLayer()), Effect.scoped),
+    );
+    expect(result).toMatchObject([{ instanceId: "codex_work", source: "/accounts/work" }]);
+    expect(result).toHaveLength(1);
+  });
+
+  it.each(["disabled", "removed"] as const)(
+    "drops the cached quota for a %s account before it is enabled again",
+    async (action) => {
+      let workUsedPercent = 72;
+      fetchMock.mockImplementation(async (ctx) => ({
+        ...okSnapshot(ctx.nowMs),
+        limits: [{ window: "5h", usedPercent: workUsedPercent }],
+      }));
+      const result = await Effect.runPromise(
+        Effect.gen(function* () {
+          const settings = yield* ServerSettingsService;
+          const account = { driver: "codex", config: { homePath: "/accounts/work" } };
+          yield* settings.updateSettings({ providerInstances: { codex_work: account } });
+          yield* listProviderUsage({});
+          yield* settings.updateSettings({
+            providerInstances:
+              action === "removed" ? {} : { codex_work: { ...account, enabled: false } },
+          });
+          const absent = yield* listProviderUsage({});
+          workUsedPercent = 18;
+          yield* settings.updateSettings({ providerInstances: { codex_work: account } });
+          const restored = yield* listProviderUsage({});
+          return { absent, restored };
+        }).pipe(Effect.provide(usageTestLayer()), Effect.scoped),
+      );
+      expect(result.absent.map((snapshot) => snapshot.instanceId)).toEqual(["codex"]);
+      expect(
+        result.restored.find((snapshot) => snapshot.instanceId === "codex_work")?.limits,
+      ).toEqual([{ window: "5h", usedPercent: 18 }]);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    },
+  );
+
+  it("uses the selected shadow home and expands account environment paths", async () => {
+    fetchMock.mockImplementation(async (ctx) => ({
+      ...okSnapshot(ctx.nowMs, ctx.env.CODEX_HOME),
+      usageLines: [{ label: "Marker", value: ctx.env.TEST_USAGE_ACCOUNT ?? "missing" }],
+    }));
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const settings = yield* ServerSettingsService;
+        const config = yield* ServerConfig;
+        yield* settings.updateSettings({
+          providerInstances: {
+            codex_shadow: {
+              driver: "codex",
+              environment: [{ name: "TEST_USAGE_ACCOUNT", value: "shadow" }],
+              config: { homePath: "/shared/config", shadowHomePath: "~/accounts/shadow" },
+            },
+          },
+        });
+        const snapshots = yield* listProviderUsage({});
+        return { snapshots, homeDir: config.homeDir };
+      }).pipe(Effect.provide(usageTestLayer()), Effect.scoped),
+    );
+    expect(
+      result.snapshots.find((snapshot) => snapshot.instanceId === "codex_shadow"),
+    ).toMatchObject({
+      source: `${result.homeDir}/accounts/shadow`,
+      usageLines: [{ label: "Marker", value: "shadow" }],
+    });
   });
 });

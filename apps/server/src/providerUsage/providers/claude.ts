@@ -11,6 +11,7 @@
 // invalidate the on-disk/keychain login and force the user to re-authenticate.
 
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import nodePath from "node:path";
 import { promisify } from "node:util";
 
@@ -108,10 +109,20 @@ function readClaudeCreds(
 async function resolveClaudeCredCandidates(ctx: ProviderUsageContext): Promise<ClaudeCreds[]> {
   const candidates: ClaudeCreds[] = [];
   const paths: string[] = [];
-  if (ctx.env.CLAUDE_CONFIG_DIR) {
+  const secureStorageDir = ctx.env.CLAUDE_SECURESTORAGE_CONFIG_DIR;
+  const strictCredentials = ctx.isolateCredentials || secureStorageDir !== undefined;
+  if (strictCredentials) {
+    const credentialDir =
+      secureStorageDir !== undefined
+        ? secureStorageDir || nodePath.join(ctx.homeDir, ".claude")
+        : (ctx.env.CLAUDE_CONFIG_DIR ?? nodePath.join(ctx.homeDir, ".claude"));
+    paths.push(nodePath.join(credentialDir.normalize("NFC"), ".credentials.json"));
+  } else if (ctx.env.CLAUDE_CONFIG_DIR) {
     paths.push(nodePath.join(ctx.env.CLAUDE_CONFIG_DIR, ".credentials.json"));
   }
-  paths.push(nodePath.join(ctx.homeDir, ".claude", ".credentials.json"));
+  if (!strictCredentials) {
+    paths.push(nodePath.join(ctx.homeDir, ".claude", ".credentials.json"));
+  }
 
   for (const path of paths) {
     const record = asRecord(await readJsonFile(path));
@@ -121,19 +132,29 @@ async function resolveClaudeCredCandidates(ctx: ProviderUsageContext): Promise<C
     }
   }
 
+  // Claude keys custom secure/config directories by the first eight SHA-256 hex
+  // characters of their NFC spelling. HOME alone does not scope its Keychain item.
+  const keychainDirectory =
+    secureStorageDir !== undefined ? secureStorageDir : ctx.env.CLAUDE_CONFIG_DIR;
+  if (strictCredentials && keychainDirectory === undefined) {
+    return candidates;
+  }
+  const keychainService = keychainDirectory
+    ? `${KEYCHAIN_SERVICE}-${createHash("sha256").update(keychainDirectory.normalize("NFC")).digest("hex").slice(0, 8)}`
+    : KEYCHAIN_SERVICE;
   const keychainAccount = asString(ctx.env.USER) ?? asString(ctx.env.LOGNAME);
   const accountKeychain =
     keychainAccount === undefined
       ? null
       : await readKeychainPassword({
-          service: KEYCHAIN_SERVICE,
+          service: keychainService,
           account: keychainAccount,
           platform: ctx.platform,
         });
   const keychain =
     accountKeychain ??
     (await readKeychainPassword({
-      service: KEYCHAIN_SERVICE,
+      service: keychainService,
       platform: ctx.platform,
     }));
   if (keychain) {
