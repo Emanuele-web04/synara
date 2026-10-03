@@ -47,6 +47,7 @@ import {
   Option,
   PubSub,
   Scope,
+  Semaphore,
   Stream,
 } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -66,7 +67,7 @@ import {
   type ComputerServiceShape,
 } from "../../computer/Services/ComputerService.ts";
 import { deriveServerPaths, ServerConfig } from "../../config.ts";
-import { TextGenerationError } from "../../git/Errors.ts";
+import { GitCommandError, TextGenerationError } from "../../git/Errors.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -617,8 +618,10 @@ describe("ProviderCommandReactor", () => {
             : "renamed-branch",
       }),
     );
-    const publishBranch = vi.fn(() => Effect.void);
-    const withMutation: GitCoreShape["withMutation"] = (_cwd, effect) => effect;
+    const publishBranch = vi.fn<GitCoreShape["publishBranch"]>(() => Effect.void);
+    const mutationLock = await Effect.runPromise(Semaphore.make(1));
+    const withMutation: GitCoreShape["withMutation"] = (_cwd, effect) =>
+      mutationLock.withPermit(effect);
     const generateBranchName = vi.fn<TextGenerationShape["generateBranchName"]>(() =>
       Effect.fail(
         new TextGenerationError({
@@ -923,6 +926,7 @@ describe("ProviderCommandReactor", () => {
       clearSessionResumeCursor,
       renameBranch,
       publishBranch,
+      withMutation,
       generateBranchName,
       generateThreadTitle,
       captureStudioOutputBaseline,
@@ -11510,6 +11514,86 @@ describe("ProviderCommandReactor", () => {
       associatedWorktreeBranch: "synara/app-startup-crash",
       associatedWorktreeRef: "synara/app-startup-crash",
     });
+  });
+
+  it("releases the repository lock and updates metadata while automatic publication is stalled", async () => {
+    const harness = await createHarness();
+    const publishGate = await Effect.runPromise(Deferred.make<void>());
+    let publicationSettled = false;
+    harness.generateBranchName.mockImplementation(() =>
+      Effect.succeed({ branch: "slow-publication" }),
+    );
+    harness.publishBranch.mockImplementation(() =>
+      Deferred.await(publishGate).pipe(
+        Effect.andThen(
+          Effect.fail(
+            new GitCommandError({
+              operation: "GitCore.publishBranch",
+              command: "git push",
+              cwd: "/tmp/provider-project/.worktrees/slow",
+              detail: "git push timed out",
+            }),
+          ),
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            publicationSettled = true;
+          }),
+        ),
+      ),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-slow-publication-bootstrap"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        envMode: "worktree",
+        branch: "synara/cb661f0d",
+        worktreePath: "/tmp/provider-project/.worktrees/slow",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-slow-publication-turn"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-slow-publication"),
+          role: "user",
+          text: "Fix slow worktree creation",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: new Date().toISOString(),
+      }),
+    );
+    await waitFor(() => harness.publishBranch.mock.calls.length === 1);
+    let localMutationCompleted = false;
+    const localMutation = Effect.runPromise(
+      harness.withMutation(
+        "/tmp/provider-project",
+        Effect.sync(() => {
+          localMutationCompleted = true;
+        }),
+      ),
+    );
+    try {
+      await waitFor(() => localMutationCompleted);
+      await waitFor(async () => {
+        const thread = await readHarnessThread(harness);
+        return (
+          thread?.branch === "synara/slow-publication" &&
+          thread.associatedWorktreeBranch === "synara/slow-publication"
+        );
+      });
+      expect(publicationSettled).toBe(false);
+    } finally {
+      await Effect.runPromise(Deferred.succeed(publishGate, undefined));
+      await localMutation;
+    }
+    await waitFor(() => publicationSettled);
+    expect((await readHarnessThread(harness))?.branch).toBe("synara/slow-publication");
   });
 
   it("waits for gateway operation completion before renaming its temporary branch", async () => {
