@@ -119,6 +119,89 @@ afterEach(() => {
 });
 
 describe("claudeUsageFetcher", () => {
+  it("honors an inherited secure-storage directory before default file credentials", async () => {
+    const { homeDir } = makeClaudeHome({
+      accessToken: "personal-token",
+      expiresAt: NOW_MS + 60 * 60 * 1000,
+    });
+    const { configDir: secureStorageDir } = makeClaudeConfigDir({
+      accessToken: "secure-token",
+      expiresAt: NOW_MS + 60 * 60 * 1000,
+    });
+    stubOutboundFetch(async (_url, init) =>
+      jsonResponse({
+        five_hour: {
+          utilization:
+            new Headers(init?.headers).get("Authorization") === "Bearer secure-token" ? 31 : 9,
+        },
+      }),
+    );
+    const snapshot = await claudeUsageFetcher.fetch({
+      homeDir,
+      env: { CLAUDE_SECURESTORAGE_CONFIG_DIR: secureStorageDir },
+      platform: "linux",
+      nowMs: NOW_MS,
+    });
+    expect(snapshot.limits).toMatchObject([{ usedPercent: 31 }]);
+  });
+
+  it("reads the selected macOS account's hashed Keychain service", async () => {
+    const homeDir = mkdtempSync(nodePath.join(os.tmpdir(), "synara-claude-keychain-"));
+    tempDirs.push(homeDir);
+    readKeychainPasswordMock.mockImplementation(async (input) =>
+      input.service === "Claude Code-credentials-c3c34646"
+        ? JSON.stringify({
+            claudeAiOauth: {
+              accessToken: "work-token",
+              expiresAt: NOW_MS + 60 * 60 * 1000,
+            },
+          })
+        : null,
+    );
+    const fetchMock = vi.fn(async (_url, init) => {
+      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer work-token");
+      return jsonResponse({ five_hour: { utilization: 31 } });
+    });
+    stubOutboundFetch(fetchMock);
+
+    const snapshot = await claudeUsageFetcher.fetch({
+      homeDir,
+      env: { CLAUDE_CONFIG_DIR: "/accounts/claude-work", USER: "current-user" },
+      platform: "darwin",
+      nowMs: NOW_MS,
+      isolateCredentials: true,
+    });
+    expect(snapshot.status).toBe("ok");
+    expect(snapshot.limits).toMatchObject([{ usedPercent: 31 }]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not replace a rejected selected credential with the default account", async () => {
+    const { homeDir } = makeClaudeHome({
+      accessToken: "personal-token",
+      expiresAt: NOW_MS + 60 * 60 * 1000,
+    });
+    const { configDir } = makeClaudeConfigDir({
+      accessToken: "work-token",
+      expiresAt: NOW_MS + 60 * 60 * 1000,
+    });
+    stubAuthNudge();
+    stubOutboundFetch(async (_url, init) =>
+      new Headers(init?.headers).get("Authorization") === "Bearer work-token"
+        ? jsonResponse({}, 401)
+        : jsonResponse({ five_hour: { utilization: 9 } }),
+    );
+
+    const snapshot = await claudeUsageFetcher.fetch({
+      homeDir,
+      env: { CLAUDE_CONFIG_DIR: configDir },
+      platform: "linux",
+      nowMs: NOW_MS,
+      isolateCredentials: true,
+    });
+    expect(snapshot.status).toBe("needs-auth");
+  });
+
   it("prefers the current macOS account before the service-only keychain fallback", async () => {
     const homeDir = mkdtempSync(nodePath.join(os.tmpdir(), "synara-claude-keychain-"));
     tempDirs.push(homeDir);

@@ -45,6 +45,7 @@ import {
   classifyCodexStderrLine,
   formatCodexThreadResumeError,
   isRecoverableThreadResumeError,
+  isUnsupportedCodexMethodError,
   normalizeCodexModelSlug,
   readCodexAccountSnapshot,
   resolveCodexModelForAccount,
@@ -4168,21 +4169,28 @@ describe("thread checkpoint control", () => {
     },
   );
 
-  it("rolls back turns via thread/rollback and resets session running state", async () => {
+  it("reverts before the oldest rolled-back turn and resets session running state", async () => {
     const { manager, context, sendRequest, updateSession } = createThreadControlHarness();
-    sendRequest.mockResolvedValue({
-      thread: {
-        id: "thread_1",
-        turns: [],
-      },
+    sendRequest.mockImplementation(async (_context: unknown, method: unknown) => {
+      if (method === "thread/turns/list") {
+        return { data: [{ id: "turn_3" }, { id: "turn_2" }], nextCursor: "older" };
+      }
+      return { thread: { id: "thread_1", turns: [] } };
     });
 
     const result = await manager.rollbackThread(asThreadId("thread_1"), 2);
 
-    expect(sendRequest).toHaveBeenCalledWith(context, "thread/rollback", {
+    expect(sendRequest).toHaveBeenCalledWith(context, "thread/turns/list", {
       threadId: "thread_1",
-      numTurns: 2,
+      itemsView: "notLoaded",
+      sortDirection: "desc",
+      limit: 2,
     });
+    expect(sendRequest).toHaveBeenCalledWith(context, "thread/revert", {
+      threadId: "thread_1",
+      beforeTurnId: "turn_2",
+    });
+    expect(sendRequest.mock.calls.some(([, method]) => method === "thread/rollback")).toBe(false);
     expect(updateSession).toHaveBeenCalledWith(context, {
       status: "ready",
       activeTurnId: undefined,
@@ -4192,6 +4200,89 @@ describe("thread checkpoint control", () => {
       cwd: null,
       turns: [],
     });
+  });
+
+  it("pages history to find the revert boundary", async () => {
+    const { manager, context, sendRequest } = createThreadControlHarness();
+    sendRequest.mockImplementation(async (_context: unknown, method: unknown, params: unknown) => {
+      if (method === "thread/turns/list") {
+        const { cursor } = params as { cursor?: string };
+        return cursor === undefined
+          ? { data: [{ id: "turn_5" }, { id: "turn_4" }], nextCursor: "page_2" }
+          : { data: [{ id: "turn_3" }, { id: "turn_2" }], nextCursor: "page_3" };
+      }
+      return { thread: { id: "thread_1", turns: [] } };
+    });
+
+    await manager.rollbackThread(asThreadId("thread_1"), 3);
+
+    expect(sendRequest).toHaveBeenCalledWith(context, "thread/turns/list", {
+      threadId: "thread_1",
+      itemsView: "notLoaded",
+      sortDirection: "desc",
+      limit: 1,
+      cursor: "page_2",
+    });
+    expect(sendRequest).toHaveBeenCalledWith(context, "thread/revert", {
+      threadId: "thread_1",
+      beforeTurnId: "turn_3",
+    });
+  });
+
+  it("falls back to thread/rollback on app-servers without thread/revert", async () => {
+    const { manager, context, sendRequest } = createThreadControlHarness();
+    sendRequest.mockImplementation(async (_context: unknown, method: unknown) => {
+      if (method === "thread/turns/list") return { data: [{ id: "turn_1" }] };
+      if (method === "thread/revert") {
+        throw new Error(
+          "thread/revert failed: Invalid request: unknown variant `thread/revert`, expected one of `thread/rollback`, `thread/turns/list`",
+        );
+      }
+      return { thread: { id: "thread_1", turns: [] } };
+    });
+
+    await manager.rollbackThread(asThreadId("thread_1"), 1);
+
+    expect(sendRequest).toHaveBeenCalledWith(context, "thread/rollback", {
+      threadId: "thread_1",
+      numTurns: 1,
+    });
+  });
+
+  it("does not mistake the method list in an unknown-variant error for support", () => {
+    const error = new Error(
+      "thread/rollback failed: Invalid request: unknown variant `thread/rollback`, expected one of `thread/revert`, `thread/turns/list`",
+    );
+    expect(isUnsupportedCodexMethodError(error, "thread/rollback")).toBe(true);
+    expect(isUnsupportedCodexMethodError(error, "thread/revert")).toBe(false);
+    expect(
+      isUnsupportedCodexMethodError(new Error("x failed: Method not found"), "thread/revert"),
+    ).toBe(true);
+    expect(
+      isUnsupportedCodexMethodError(
+        new Error("thread/revert failed: ephemeral threads do not support thread/revert"),
+        "thread/revert",
+      ),
+    ).toBe(false);
+  });
+
+  it("reads the thread instead of reverting when Codex has no turns", async () => {
+    const { manager, context, sendRequest } = createThreadControlHarness();
+    sendRequest.mockImplementation(async (_context: unknown, method: unknown) =>
+      method === "thread/turns/list" ? { data: [] } : { thread: { id: "thread_1", turns: [] } },
+    );
+
+    await manager.rollbackThread(asThreadId("thread_1"), 1);
+
+    expect(sendRequest).toHaveBeenCalledWith(context, "thread/read", {
+      threadId: "thread_1",
+      includeTurns: false,
+    });
+    expect(
+      sendRequest.mock.calls.some(
+        ([, method]) => method === "thread/revert" || method === "thread/rollback",
+      ),
+    ).toBe(false);
   });
 
   it("retries review interrupt with the latest review turn from thread/read after timeout", async () => {
@@ -6391,4 +6482,60 @@ describe.skipIf(!process.env.CODEX_BINARY_PATH)("startSession live Codex resume"
       rmSync(workspaceDir, { recursive: true, force: true });
     }
   }, 180_000);
+
+  it("rolls back the latest turn out of the model's context", async () => {
+    const workspaceDir = mkdtempSync(path.join(os.tmpdir(), "codex-live-rollback-"));
+    const manager = new CodexAppServerManager();
+    const threadId = asThreadId("thread-live-rollback");
+    const settledTurns = async (minimum: number) => {
+      await vi.waitFor(
+        async () => {
+          const snapshot = await manager.readThread(threadId);
+          expect(snapshot.turns.length).toBeGreaterThanOrEqual(minimum);
+          expect(snapshot.turns.at(-1)?.status).toBe("completed");
+        },
+        { timeout: 120_000, interval: 1_000 },
+      );
+      return manager.readThread(threadId);
+    };
+
+    try {
+      await manager.startSession({
+        threadId,
+        provider: "codex",
+        cwd: workspaceDir,
+        runtimeMode: "full-access",
+        agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
+        providerOptions: {
+          codex: {
+            ...(process.env.CODEX_BINARY_PATH ? { binaryPath: process.env.CODEX_BINARY_PATH } : {}),
+            ...(process.env.CODEX_HOME_PATH ? { homePath: process.env.CODEX_HOME_PATH } : {}),
+          },
+        },
+      });
+      await manager.sendTurn({ threadId, input: "Reply with exactly the word ALPHA" });
+      await settledTurns(1);
+      await manager.sendTurn({ threadId, input: "Reply with exactly the word BETA" });
+      const beforeRollback = await settledTurns(2);
+
+      await manager.rollbackThread(threadId, 1);
+
+      const afterRollback = await manager.readThread(threadId);
+      expect(afterRollback.turns.map((turn) => turn.id)).toEqual(
+        beforeRollback.turns.slice(0, -1).map((turn) => turn.id),
+      );
+
+      await manager.sendTurn({
+        threadId,
+        input: "List every word I asked you to reply with so far, comma separated, nothing else.",
+      });
+      const recall = (await settledTurns(afterRollback.turns.length + 1)).turns.at(-1);
+      const reply = JSON.stringify(recall?.items ?? []);
+      expect(reply).toContain("ALPHA");
+      expect(reply).not.toContain("BETA");
+    } finally {
+      await manager.stopAll();
+      rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  }, 300_000);
 });

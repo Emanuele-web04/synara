@@ -1546,6 +1546,30 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      const expectedSnoozedUntil = command.expectedSnoozedUntil;
+      const expiresSnooze = expectedSnoozedUntil !== undefined;
+      if (command.snoozedUntil != null || expiresSnooze) {
+        yield* requireThreadNotArchived({ readModel, command, threadId: command.threadId });
+      }
+      if (expectedSnoozedUntil !== undefined) {
+        if (
+          command.snoozedUntil !== null ||
+          expectedSnoozedUntil === null ||
+          thread.snoozedUntil == null ||
+          Date.parse(thread.snoozedUntil) !== Date.parse(expectedSnoozedUntil)
+        ) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Thread '${command.threadId}' snooze deadline changed before expiry.`,
+          });
+        }
+        if (Date.parse(thread.snoozedUntil) > Date.now()) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Thread '${command.threadId}' snooze reminder is not due.`,
+          });
+        }
+      }
       const project = readModel.projects.find((candidate) => candidate.id === thread.projectId);
       // Provider-native threads: see thread.create — the selection mirrors the
       // provider's own subagent, so the Auto-mode capability check doesn't apply.
@@ -1572,6 +1596,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.isSettled !== undefined
             ? { settledAt: command.isSettled ? occurredAt : null }
             : {}),
+          ...(command.snoozedUntil !== undefined
+            ? { snoozedUntil: command.snoozedUntil, snoozeReminderAt: null }
+            : {}),
+          ...(expiresSnooze ? { snoozeReminderAt: occurredAt, settledAt: null } : {}),
           ...(command.parentThreadId !== undefined
             ? { parentThreadId: command.parentThreadId }
             : {}),
@@ -1883,6 +1911,27 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         (targetThread.claudeCacheReview != null ||
           (isThreadRunning &&
             (dispatchMode === "queue" || !providerSupportsNativeTurnSteering(activeProvider))));
+      const snoozeEvents: Array<Omit<OrchestrationEvent, "sequence">> =
+        (command.dispatchOrigin ?? "user") === "user" &&
+        (targetThread.snoozedUntil != null || targetThread.snoozeReminderAt != null)
+          ? [
+              {
+                ...withEventBase({
+                  aggregateKind: "thread",
+                  aggregateId: command.threadId,
+                  occurredAt: command.createdAt,
+                  commandId: command.commandId,
+                }),
+                type: "thread.meta-updated",
+                payload: {
+                  threadId: command.threadId,
+                  snoozedUntil: null,
+                  snoozeReminderAt: null,
+                  updatedAt: command.createdAt,
+                },
+              },
+            ]
+          : [];
       const userMessageEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
@@ -1944,6 +1993,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
       if (shouldQueue && dispatchMode === "steer" && targetThread.claudeCacheReview == null) {
         return [
+          ...snoozeEvents,
           userMessageEvent,
           queuedEvent,
           {
@@ -1965,6 +2015,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       }
       if (questionResponse && questionMessage?.asyncUserInput) {
         return [
+          ...snoozeEvents,
           {
             ...withEventBase({
               aggregateKind: "thread",
@@ -1986,7 +2037,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           queuedEvent,
         ];
       }
-      return [userMessageEvent, queuedEvent];
+      return [...snoozeEvents, userMessageEvent, queuedEvent];
     }
 
     case "thread.claude-cache.set": {

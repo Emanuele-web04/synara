@@ -803,7 +803,10 @@ export function projectProviderRuntimeActivities(
         event.provider === "pi" &&
         raw?.method === "extension/ui/notify" &&
         asObject(event.payload.detail)?.type === "info";
-      const message = truncateDetail(event.payload.message);
+      // The row already clips the notice to one line via CSS; the hover card can
+      // only reveal what the server stored, so keep the full message (bounded by
+      // the shared activity-data cap) instead of pre-truncating it to fit the row.
+      const message = truncateDetail(event.payload.message, MAX_ACTIVITY_DATA_STRING_CHARS);
       return [
         {
           id: event.eventId,

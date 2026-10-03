@@ -2299,7 +2299,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
 
       return Effect.tryPromise({
         try: () => manager.rollbackThread(threadId, numTurns),
-        catch: (cause) => toRequestError(threadId, "thread/rollback", cause),
+        catch: (cause) => toRequestError(threadId, "thread/revert", cause),
       }).pipe(
         Effect.map((snapshot) => ({
           threadId,

@@ -36,6 +36,12 @@ Synara provides the shared operating surface around each provider:
 - Provider handoffs
 - Usage information where the provider exposes it
 
+The Environment panel's Usage section shows enabled provider accounts, with a separate
+row and detail menu for each account. Providers with multiple accounts show account names
+beside the provider label. Settings → Usage uses the same account-specific snapshots.
+Usage checks follow each account's configured credentials; unassigned thread telemetry and
+provider-wide local totals are not used as a fallback for an individual account.
+
 ## What remains provider-owned
 
 The provider still controls:

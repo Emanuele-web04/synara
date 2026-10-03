@@ -104,6 +104,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           updated_at,
           archived_at,
           settled_at,
+          snoozed_until,
+          snooze_reminder_at,
           deleted_at
         )
         VALUES (
@@ -155,6 +157,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.updatedAt},
           ${row.archivedAt ?? null},
           ${row.settledAt ?? null},
+          ${row.snoozedUntil ?? null},
+          ${row.snoozeReminderAt ?? null},
           ${row.deletedAt}
         )
         ON CONFLICT (thread_id)
@@ -213,6 +217,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           updated_at = excluded.updated_at,
           archived_at = excluded.archived_at,
           settled_at = excluded.settled_at,
+          snoozed_until = excluded.snoozed_until,
+          snooze_reminder_at = excluded.snooze_reminder_at,
           deleted_at = excluded.deleted_at
       `,
   });
@@ -271,6 +277,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
           settled_at AS "settledAt",
+          snoozed_until AS "snoozedUntil",
+          snooze_reminder_at AS "snoozeReminderAt",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE thread_id = ${threadId}
@@ -331,6 +339,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
           settled_at AS "settledAt",
+          snoozed_until AS "snoozedUntil",
+          snooze_reminder_at AS "snoozeReminderAt",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE project_id = ${projectId}
