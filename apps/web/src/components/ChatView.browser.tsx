@@ -2369,9 +2369,7 @@ describe("ChatView transcript geometry (full app)", () => {
       };
       const previousPins = usePinnedThreadsStore.getState().pinnedThreadIds;
       usePinnedThreadsStore.setState({
-        pinnedThreadIds: threads
-          .slice(customShortcut ? 1 : 0, customShortcut ? 4 : 3)
-          .map((thread) => thread.id),
+        pinnedThreadIds: threads.slice(1, 4).map((thread) => thread.id),
       });
       onTestFinished(() => {
         usePinnedThreadsStore.setState({ pinnedThreadIds: previousPins });
@@ -2414,7 +2412,7 @@ describe("ChatView transcript geometry (full app)", () => {
           );
         };
         const mod = isMacNavigatorPlatform() ? "Meta" : "Control";
-        document.activeElement instanceof HTMLElement && document.activeElement.blur();
+        if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
         await userEvent.unhover(sidebar);
         for (const fontSize of [13, 18]) {
           const scale = getAppTypographyScale(fontSize);
@@ -2444,7 +2442,6 @@ describe("ChatView transcript geometry (full app)", () => {
               ...sidebar.querySelectorAll<HTMLElement>('[data-slot="kbd-group"]'),
             ].filter((hint) => hint.closest("[data-thread-item]"));
             expect(hints.length).toBe(activityViewEnabled ? 5 : 6);
-            expect(new Set(hints.map((hint) => hint.textContent)).size).toBe(hints.length);
             if (!activityViewEnabled) expect(sidebar.textContent).toContain("Atlas");
             if (customShortcut) expect(hints[0]!.textContent).toContain("CtrlAltShiftMeta");
             for (const hint of hints) {

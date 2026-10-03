@@ -5077,7 +5077,13 @@ export default function Sidebar() {
               }
               suffix={
                 projectLabel ? (
-                  <span className="min-w-0 max-w-[40%] shrink truncate text-right text-ui-meta text-muted-foreground/38">
+                  // While shortcut hints show, the project name yields width before the title.
+                  <span
+                    className={cn(
+                      "min-w-0 max-w-[40%] truncate text-right text-ui-meta text-muted-foreground/38",
+                      threadJumpLabel ? "shrink-[2]" : "shrink-0",
+                    )}
+                  >
                     {projectLabel}
                   </span>
                 ) : null
@@ -5150,11 +5156,7 @@ export default function Sidebar() {
     const subagentIndentPx = Math.max(0, Math.min(depth - 1, 3) * 10);
     const showCompactMeta = !isSubagentThread;
     const showTemporaryThreadIcon = showCompactMeta && isTemporaryThread;
-    // An active pinned thread can also appear in its project tree. Show its
-    // shortcut once, at the pinned row that owns its place in the jump order.
-    const threadJumpLabel = isPinned
-      ? null
-      : (visibleThreadJumpLabelByThreadId.get(thread.id) ?? null);
+    const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
     const hoverAnchorId = createSidebarThreadHoverAnchorId({
       scope: topLevel ? "chat" : "project",
       threadId: thread.id,

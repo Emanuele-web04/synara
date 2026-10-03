@@ -236,7 +236,9 @@ export function SidebarThreadRowContent({
       >
         <span
           className={cn(
-            "min-w-0 flex-1 truncate-fade text-ui",
+            // Pinned rows size the title from its text so the suffix yields width first.
+            "min-w-0 truncate-fade text-ui",
+            variant === "pinned" ? "flex-auto" : "flex-1",
             isActive ? "text-foreground" : SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
             variant === "standard" && isSubagentThread
               ? "leading-[18px] text-foreground/80"
@@ -262,8 +264,9 @@ export function SidebarThreadRowContent({
             Pending
           </span>
         ) : null}
+        {variant === "pinned" ? suffix : null}
       </div>
-      {suffix}
+      {variant === "pinned" ? null : suffix}
     </>
   );
 }
