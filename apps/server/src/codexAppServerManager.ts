@@ -2122,6 +2122,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           status: "aborted",
         },
         abandonedBy: "turnIdleWatchdog",
+        // Interrupt revokes the bearer even if Codex rejects the request. The
+        // synthetic abort must trigger the same runtime renewal as a native one.
+        ...(context.gatewayCredentialRetired === true
+          ? { [AGENT_GATEWAY_TURN_AUTHORITY_RETIRED]: true }
+          : {}),
       },
     });
   }
@@ -2151,6 +2156,95 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ? await this.getOrCreateDiscoverySession(input.cwd?.trim() || process.cwd(), codexOptions)
         : await this.resolveContextForDiscovery(undefined, input.cwd);
     return this.readThreadSnapshot(context, input.externalThreadId);
+  }
+
+  /** Page display summaries without transferring tool output or the full rollout. */
+  async readExternalThreadPage(input: {
+    externalThreadId: string;
+    cursor?: string;
+    cwd?: string;
+    codexOptions?: CodexDiscoveryOptions;
+  }): Promise<CodexThreadSnapshot & { nextCursor: string | null }> {
+    const context = await this.getOrCreateDiscoverySession(
+      input.cwd?.trim() || process.cwd(),
+      normalizeCodexDiscoveryOptions(input.codexOptions),
+    );
+    const turns: CodexThreadTurnSnapshot[] = [];
+    let cursor = input.cursor;
+    let bytes = 0;
+    const seen = new Set(cursor ? [cursor] : []);
+    // One summary at a time also handles turns containing megabytes of tool output.
+    for (let count = 0; count < 10; count += 1) {
+      const page = await this.readImportTurnsPage(
+        context,
+        input.externalThreadId,
+        cursor,
+        "summary",
+      );
+      const size = Buffer.byteLength(JSON.stringify(page.turns));
+      if (size > 1024 * 1024) {
+        throw new Error(
+          "A Codex message is too large to display during import (over 1 MiB). The native conversation has not been truncated.",
+        );
+      }
+      if (turns.length > 0 && bytes + size > 1024 * 1024) break;
+      turns.push(...page.turns);
+      bytes += size;
+      cursor = page.nextCursor ?? undefined;
+      if (!cursor) break;
+      if (seen.has(cursor)) throw new Error("Codex repeated a conversation history cursor.");
+      seen.add(cursor);
+    }
+    return { threadId: input.externalThreadId, turns: turns.reverse(), nextCursor: cursor ?? null };
+  }
+
+  private async readImportTurnsPage(
+    context: CodexSessionContext,
+    threadId: string,
+    cursor: string | undefined,
+    itemsView: "summary" | "notLoaded",
+  ): Promise<CodexThreadSnapshot & { nextCursor: string | null }> {
+    let response: unknown;
+    try {
+      response = await this.sendRequest(context, "thread/turns/list", {
+        threadId,
+        itemsView,
+        sortDirection: "desc",
+        limit: 1,
+        ...(cursor !== undefined ? { cursor } : {}),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (
+        /method not found|unknown (?:method|variant)|unsupported|invalid.*itemsView/i.test(message)
+      ) {
+        throw new Error(
+          "This Codex version cannot page imported history. Update the configured Codex CLI and retry.",
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+    const record = this.readObject(response);
+    const data = this.readArray(record, "data");
+    if (!data || data.length > 1) throw new Error("Codex returned an invalid history page.");
+    if (
+      data.some((turn) => {
+        const view = this.readString(this.readObject(turn), "itemsView");
+        return view !== undefined && view !== itemsView;
+      })
+    )
+      throw new Error(
+        "This Codex version ignored the requested history view. Update the configured Codex CLI and retry.",
+      );
+    const nextCursor = this.readString(record, "nextCursor") ?? null;
+    if (nextCursor && (nextCursor === cursor || data.length === 0)) {
+      throw new Error("Codex did not advance the conversation history cursor.");
+    }
+    return {
+      ...this.parseThreadSnapshot("thread/turns/list", { threadId, turns: data }),
+      nextCursor,
+    };
   }
 
   private async readThreadSnapshot(
@@ -2358,7 +2452,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       signal?.throwIfAborted();
       let lastTurnId: TurnId | undefined;
       if (input.requireCompletedSource) {
-        const source = await this.readThreadSnapshot(context, sourceProviderThreadId);
+        const source = await this.readImportTurnsPage(
+          context,
+          sourceProviderThreadId,
+          undefined,
+          "notLoaded",
+        );
         const lastTurn = source.turns.at(-1);
         // Historical payloads can omit status. Require affirmative completion
         // evidence instead of treating missing metadata as an idle source.
@@ -2395,7 +2494,17 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         `Forking Codex thread ${sourceProviderThreadId}.`,
       );
       signal?.throwIfAborted();
-      const response = await this.sendThreadOpenRequest(context, "thread/fork", forkParams);
+      const response = await this.sendThreadOpenRequest(context, "thread/fork", forkParams).catch(
+        (error: unknown) => {
+          if (error instanceof Error && /identifies an in-progress turn/i.test(error.message)) {
+            throw new Error(
+              "Codex still reports this conversation's turn as in progress. Finish or stop it in Codex, then retry the import.",
+              { cause: error },
+            );
+          }
+          throw error;
+        },
+      );
       const forkedProviderThreadId = this.readThreadIdFromResponse("thread/fork", response);
 
       this.markSessionReadyAfterThreadOpen(context, {

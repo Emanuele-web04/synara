@@ -109,6 +109,34 @@ Pick any other model in the composer for that chat. If the default provider is n
 signed in, the composer keeps a model that works, so sending is never blocked. The chat still
 receives the hub's instructions and memory.
 
+## Delegated requests and the work queue
+
+A delegated task stores the original human text and attachment references alongside the coordinator's
+brief. The server resolves those originals from the conversation. Workers receive the Hub's shared
+instructions and memory; the Playbook and monitoring reports belong to the coordinator. Keep source
+messages with files until queued tasks start: deleting or reverting a source message can remove an
+attachment before it is copied to the worker, causing that task to fail explicitly.
+
+Task cards appear below the original request. They show queued, starting, working, waiting, idle,
+completed, failed, or cancelled work and open the worker conversation once it exists. A worker can
+publish a checklist that survives reloads and restarts. Checking every step does not by itself mark
+the task complete. Queued and starting tasks also appear in the Hubs panel.
+
+New Hubs run **3 workers at once**. Change **Parallel threads** in Hub settings → **General** to
+choose a limit from 1 to 8. Existing Hubs retain their saved limit, with an effective ceiling of 8. Excess new tasks wait in a
+persistent queue and start as slots become available. Pausing or archiving a Hub stops new queue
+starts. Cancelling queued work through the coordinator prevents it from starting.
+
+Repository tasks default to isolated worktrees; general Hub work and non-Git folders use the local
+workspace. An explicit environment choice still applies. Repeating the same delegation after a
+coordinator wake reuses its saved task cards. An interrupted creation is reconciled conservatively;
+a failed creation remains visible instead of silently spawning a replacement. If cleanup cannot
+finish, the task retains its reserved slot until startup recovery confirms cleanup.
+
+The sidebar's attention indicator includes the Hub's owned workers in linked repositories and
+workers whose recovery needs your help. For a closed Hub, recovery attention refreshes on return
+to the window and within 30 seconds while the window is visible.
+
 ## How monitoring works
 
 Monitoring is done by the Synara server, by fixed rules. It does not depend on the model

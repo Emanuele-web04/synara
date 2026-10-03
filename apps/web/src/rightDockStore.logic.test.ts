@@ -6,6 +6,7 @@ import {
   createDefaultRightDockState,
   findMissingSidechatPaneIds,
   isRightDockPaneKind,
+  movePaneInState,
   openPaneInState,
   resolveVisibleDockSidechatThreadIds,
   sanitizeRightDockStateByThreadId,
@@ -370,6 +371,26 @@ describe("file panes", () => {
     });
     expect(state.panes[0]?.kind).toBe("file");
     expect(state.panes[0]?.filePath).toBe("src/page.tsx");
+  });
+});
+
+describe("movePaneInState", () => {
+  it("moves a dragged tab into the slot of the tab it is dropped on", () => {
+    const state = ["a.md", "b.md", "c.md"].reduce(
+      (current, filePath) => openPaneInState(current, { paneId: filePath, kind: "file", filePath }),
+      createDefaultRightDockState(),
+    );
+    const moved = movePaneInState(state, "a.md", "c.md");
+    expect(moved.panes.map((pane) => pane.id)).toEqual(["b.md", "c.md", "a.md"]);
+    // Reordering is not a selection: the active pane stays the one last opened.
+    expect(moved.activePaneId).toBe("c.md");
+    expect(movePaneInState(state, "c.md", "a.md").panes.map((pane) => pane.id)).toEqual([
+      "c.md",
+      "a.md",
+      "b.md",
+    ]);
+    expect(movePaneInState(state, "b.md", "b.md")).toBe(state);
+    expect(movePaneInState(state, "b.md", "missing")).toBe(state);
   });
 });
 

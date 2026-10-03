@@ -9,13 +9,17 @@
 import type { ProjectId, ThreadId } from "@synara/contracts";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouter } from "@tanstack/react-router";
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { getProviderInstanceOptions, useAppSettings } from "../appSettings";
 import { resolveDraftFallbackModelSelection } from "../components/ChatView.logic";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { stripDiffSearchParams } from "../diffRouteSearch";
+import {
+  getActiveComposerSendThreadIds,
+  subscribeComposerSends,
+} from "../lib/composerSendOwnership";
 import { resolveUnsentComposerProvider } from "../lib/providerAvailability";
 import { hasReconciledServerProviderStatuses } from "../lib/serverReactQuery";
 import {
@@ -46,6 +50,11 @@ export function useOpenThreadTabs(input: {
   const threadIds = useOpenThreadTabsStore((state) => state.threadIds);
   const pruneThreadTabs = useOpenThreadTabsStore((state) => state.pruneThreadTabs);
   const threadsHydrated = useStore((state) => state.threadsHydrated);
+  const activeComposerSendThreadIds = useSyncExternalStore(
+    subscribeComposerSends,
+    getActiveComposerSendThreadIds,
+    getActiveComposerSendThreadIds,
+  );
   // Per-id slices compared element-wise, so unrelated thread or composer churn (streaming,
   // typing) does not re-render the strip.
   const summaries = useStore(
@@ -142,6 +151,11 @@ export function useOpenThreadTabs(input: {
           }
         : undefined,
       terminalEntryPoint: terminalEntryPoints[index] ?? false,
+      isPreparingWorktree:
+        activeComposerSendThreadIds.has(threadId) &&
+        summary?.envMode === "worktree" &&
+        summary.latestTurn === null &&
+        summary.session === null,
     };
   });
 

@@ -31,6 +31,7 @@ export interface ManagedTerminalWrapperState {
 }
 
 export interface ManagedTerminalProfile {
+  readonly instanceId?: string;
   readonly commandName: string;
   readonly targetPath: string;
   readonly environment: Readonly<Record<string, string>>;
@@ -246,6 +247,12 @@ const PROFILE_INHERITED_ENV_KEYS = [
   "ALL_PROXY",
   "CURL_CA_BUNDLE",
   "COLORTERM",
+  "COMSPEC",
+  "SYSTEMROOT",
+  "WINDIR",
+  "PATHEXT",
+  "TEMP",
+  "TMP",
   "FORCE_COLOR",
   "GIT_SSL_CAINFO",
   "HTTP_PROXY",
@@ -270,6 +277,20 @@ const PROFILE_INHERITED_ENV_KEYS = [
   "TZ",
   "XDG_RUNTIME_DIR",
 ] as const;
+
+export function buildProviderProfileProcessEnv(
+  profile: ManagedTerminalProfile,
+  baseEnv: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  const inherited = profile.isolateEnvironment
+    ? Object.fromEntries(
+        Object.entries(baseEnv).filter(([key]) =>
+          PROFILE_INHERITED_ENV_KEYS.some((allowed) => allowed.toUpperCase() === key.toUpperCase()),
+        ),
+      )
+    : baseEnv;
+  return { ...inherited, ...profile.environment };
+}
 
 export function buildProviderProfileWrapperScript(profile: ManagedTerminalProfile): string {
   const fixedEnvironment = Object.entries(profile.environment).toSorted(([left], [right]) =>

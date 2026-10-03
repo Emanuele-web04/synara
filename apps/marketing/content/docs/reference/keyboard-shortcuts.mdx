@@ -41,8 +41,14 @@ description: The full default keymap, verified against the Synara source, plus J
 | `cmd+l`           | Focus or blur the composer         |
 | `mod+shift+m`     | Toggle the model picker            |
 | `alt+]` / `alt+[` | Cycle the active provider's models |
+| `shift+tab`       | Cycle model effort in the composer |
 | `mod+shift+e`     | Toggle the reasoning/effort picker |
 | `mod+shift+u`     | Open usage settings                |
+
+With the composer or its model picker focused, `shift+tab` advances through the
+current model's supported effort levels. The existing model picker opens to show
+the selection and closes automatically 1.5 seconds after the last shortcut press.
+Models without effort controls keep normal keyboard focus navigation.
 
 ## Panels and terminals
 
@@ -84,4 +90,4 @@ The file contains an ordered JSON array. The last matching rule whose `when` exp
 ]
 ```
 
-Supported context keys currently include `terminalFocus` and `terminalOpen`. Expressions support `!`, `&&`, `||`, and parentheses. Invalid rules are ignored and logged by the local server.
+Supported context keys currently include `terminalFocus`, `terminalOpen`, and `composerFocus`. Expressions support `!`, `&&`, `||`, and parentheses. Invalid rules are ignored and logged by the local server.

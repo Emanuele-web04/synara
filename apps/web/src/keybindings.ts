@@ -8,6 +8,7 @@ import {
   type SpaceJumpKeybindingCommand,
   THREAD_JUMP_KEYBINDING_COMMANDS,
   type ThreadJumpKeybindingCommand,
+  UNASSIGNED_KEYBINDING_KEY,
 } from "@synara/contracts";
 import { isKeyboardShortcutsHelpChord } from "@synara/shared/browserShortcuts";
 import { isMacPlatform, isWindowsPlatform } from "./lib/utils";
@@ -176,6 +177,11 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
     whenAst: whenNotTerminalFocus,
   },
   {
+    command: "model.effort.next",
+    shortcut: commandShortcut("tab", { shiftKey: true, modKey: false }),
+    whenAst: whenIdentifier("composerFocus"),
+  },
+  {
     command: "traitsPicker.toggle",
     shortcut: commandShortcut("e", { shiftKey: true }),
     whenAst: whenNotTerminalFocus,
@@ -308,6 +314,7 @@ const TERMINAL_WORD_FORWARD = "\u001bf";
 const TERMINAL_LINE_START = "\u0001";
 const TERMINAL_LINE_END = "\u0005";
 const EVENT_CODE_KEY_ALIASES: Readonly<Record<string, readonly string[]>> = {
+  // Option+Space reports a non-breaking space on macOS, so match it by physical key.
   Space: [" "],
   BracketLeft: ["["],
   BracketRight: ["]"],
@@ -348,6 +355,45 @@ const EVENT_CODE_KEY_ALIASES: Readonly<Record<string, readonly string[]>> = {
   KeyY: ["y"],
   KeyZ: ["z"],
 };
+
+/**
+ * The layout-independent key a physical key matches as, or null for keys that are
+ * only matched by the character they produce.
+ */
+export function shortcutKeyFromEventCode(code: string | undefined): string | null {
+  return (code ? EVENT_CODE_KEY_ALIASES[code]?.[0] : undefined) ?? null;
+}
+
+/**
+ * A rule that only records that its command was left without a shortcut. It keeps the
+ * command "configured" so the fallback table below does not bring a default back, and
+ * it is never a binding itself.
+ */
+export function isUnassignedKeybinding(binding: Pick<ResolvedKeybindingRule, "shortcut">): boolean {
+  return binding.shortcut.key === UNASSIGNED_KEYBINDING_KEY;
+}
+
+let dispatchSuspensions = 0;
+
+/**
+ * Stops every shortcut from resolving until the returned function is called. The
+ * shortcut recorder holds this while open, so the keys being recorded reach it instead
+ * of running the command they are currently bound to.
+ */
+export function suspendShortcutDispatch(): () => void {
+  dispatchSuspensions += 1;
+  let resumed = false;
+  return () => {
+    if (resumed) return;
+    resumed = true;
+    dispatchSuspensions -= 1;
+  };
+}
+
+/** True while a shortcut recorder holds the keyboard. */
+export function isShortcutDispatchSuspended(): boolean {
+  return dispatchSuspensions > 0;
+}
 
 function normalizeEventKey(key: string): string {
   const normalized = key.toLowerCase();
@@ -409,7 +455,10 @@ function resolveContext(options: ShortcutMatchOptions | undefined): ShortcutMatc
   };
 }
 
-function evaluateWhenNode(node: KeybindingWhenNode, context: ShortcutMatchContext): boolean {
+export function evaluateWhenNode(
+  node: KeybindingWhenNode,
+  context: Readonly<Record<string, boolean>>,
+): boolean {
   switch (node.type) {
     case "identifier":
       if (node.name === "true") return true;
@@ -432,7 +481,11 @@ function matchesWhenClause(
   return evaluateWhenNode(whenAst, context);
 }
 
-function shortcutConflictKey(shortcut: KeybindingShortcut, platform = navigator.platform): string {
+/** Identity of the physical chord a shortcut resolves to on `platform`. */
+export function shortcutConflictKey(
+  shortcut: KeybindingShortcut,
+  platform = navigator.platform,
+): string {
   const useMetaForMod = isMacPlatform(platform);
   const metaKey = shortcut.metaKey || (shortcut.modKey && useMetaForMod);
   const ctrlKey = shortcut.ctrlKey || (shortcut.modKey && !useMetaForMod);
@@ -465,7 +518,7 @@ export function findEffectiveKeybindingForCommand(
 
   for (let index = keybindings.length - 1; index >= 0; index -= 1) {
     const binding = keybindings[index];
-    if (!binding) continue;
+    if (!binding || isUnassignedKeybinding(binding)) continue;
     if (!matchesWhenClause(binding.whenAst, context)) continue;
 
     const conflictKey = shortcutConflictKey(binding.shortcut, platform);
@@ -526,7 +579,7 @@ function resolveShortcutCommandFromBindings(
 
   for (let index = keybindings.length - 1; index >= 0; index -= 1) {
     const binding = keybindings[index];
-    if (!binding) continue;
+    if (!binding || isUnassignedKeybinding(binding)) continue;
     if (!matchesWhenClause(binding.whenAst, context)) continue;
     if (!matchesShortcut(event, binding.shortcut, platform)) continue;
     return binding.command;
@@ -547,6 +600,7 @@ export function resolveShortcutCommand(
   keybindings: ResolvedKeybindingsConfig,
   options?: ShortcutMatchOptions,
 ): string | null {
+  if (dispatchSuspensions > 0) return null;
   const explicitCommand = resolveShortcutCommandFromBindings(event, keybindings, options);
   if (explicitCommand !== null) {
     return explicitCommand;
@@ -641,7 +695,7 @@ export function shortcutLabelForCommand(
     // (e.g. terminal-only) still surface a label in chrome affordances.
     for (let index = keybindings.length - 1; index >= 0; index -= 1) {
       const binding = keybindings[index];
-      if (!binding || binding.command !== command) continue;
+      if (!binding || binding.command !== command || isUnassignedKeybinding(binding)) continue;
       return formatShortcutLabel(binding.shortcut, platform);
     }
     for (const binding of getFallbackBindings(keybindings)) {
@@ -687,6 +741,7 @@ export function shouldShowThreadJumpHints(
   keybindings: ResolvedKeybindingsConfig,
   options?: ShortcutMatchOptions,
 ): boolean {
+  if (dispatchSuspensions > 0) return false;
   const platform = resolvePlatform(options);
   const fallbackBindings = getFallbackBindings(keybindings);
 
@@ -733,6 +788,7 @@ export function isKeyboardShortcutsHelpShortcut(
   event: ShortcutEventLike,
   platform = navigator.platform,
 ): boolean {
+  if (dispatchSuspensions > 0) return false;
   return isKeyboardShortcutsHelpChord(
     {
       key: event.key,

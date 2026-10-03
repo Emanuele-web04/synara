@@ -446,7 +446,7 @@ function AutomationDetailView() {
             </div>
           </RouteSurfaceHeader>
 
-          <main className="min-h-0 flex-1 overflow-y-auto px-6 py-8 sm:px-8">
+          <main className="min-h-0 flex-1 overflow-y-auto px-6 pt-12 pb-8 sm:px-8">
             <div className="max-w-3xl space-y-4">
               <AutomationNameField
                 value={definition.name}

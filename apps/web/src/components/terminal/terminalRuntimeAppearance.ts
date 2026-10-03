@@ -173,17 +173,40 @@ function resolveTerminalCssColor(
   return toLegacyXtermColor(resolvedColor, fallback);
 }
 
+// A see-through terminal background (whole-window glass) needs xterm's `allowTransparency`.
+export function isTerminalBackgroundTranslucent(theme: ITheme): boolean {
+  return theme.background?.startsWith("rgba(") ?? false;
+}
+
+// The terminal's background color: `--app-terminal-surface: transparent` (whole-window glass,
+// index.css) clears it. The cleared color keeps the theme's RGB at zero alpha rather than
+// becoming transparent black: xterm paints reverse-video text in the opaque form of the theme
+// background, which would otherwise be black on any theme.
+function resolveTerminalBackground(fallback: string): string {
+  const background = resolveTerminalCssColor(
+    "var(--color-token-terminal-background, var(--color-background-surface))",
+    fallback,
+    "backgroundColor",
+  );
+  const surface = resolveTerminalCssColor(
+    "var(--app-terminal-surface, black)",
+    "black",
+    "backgroundColor",
+  );
+  if (!/^rgba\(.*,\s*0\)$/.test(surface)) {
+    return background;
+  }
+  const channels = background.match(/^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})/);
+  return channels ? `rgba(${channels[1]}, ${channels[2]}, ${channels[3]}, 0)` : "rgba(0, 0, 0, 0)";
+}
+
 export function terminalThemeFromApp(): ITheme {
   const isDark = document.documentElement.classList.contains("dark");
   const fallbackTheme = isDark ? DARK_TERMINAL_THEME_FALLBACK : LIGHT_TERMINAL_THEME_FALLBACK;
   const foregroundFallback = fallbackTheme.foreground;
 
   return {
-    background: resolveTerminalCssColor(
-      "var(--color-token-terminal-background, var(--color-background-surface))",
-      fallbackTheme.background,
-      "backgroundColor",
-    ),
+    background: resolveTerminalBackground(fallbackTheme.background),
     black: resolveTerminalCssColor(
       "var(--color-token-terminal-ansi-black, var(--color-text-foreground-tertiary))",
       fallbackTheme.black,

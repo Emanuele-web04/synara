@@ -79,6 +79,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "After Archive's Undo period, remove a clean worktree only when its task has stopped and no other task uses it. Keep its branch for recovery. worktree archive cleanup disk space remove delete",
   },
   {
+    id: "general:move-sent-messages-to-top",
+    section: "general",
+    title: "Move sent messages to top",
+    keywords:
+      "Move each sent message to the top of the conversation. Turn off to keep it at the bottom and follow replies as they stream. chat enter send scroll anchor",
+  },
+  {
     id: "general:welcome-tour",
     section: "general",
     title: "Welcome tour",
@@ -378,6 +385,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       "Disable automatic iOS Simulator device pane opening. Use Simulator.app without the mirrored panel reopening. background launch",
   },
   {
+    id: "behavior:github-link-destination",
+    section: "behavior",
+    title: "Open pull requests and issues",
+    keywords:
+      "Choose where GitHub links in chats open. built-in review view in-app browser external browser destination pr issue",
+  },
+  {
     id: "behavior:include-fork-upstreams",
     section: "behavior",
     title: "Include fork upstreams",
@@ -415,7 +429,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: "shortcuts",
     title: "Keybindings",
     keywords:
-      "Every keyboard shortcut available in Synara, grouped by context. keybindings hotkeys key combo cmd ctrl reference",
+      "Every keyboard shortcut available in Synara: change, add, remove, or reset them. keybindings hotkeys key combo cmd ctrl customize rebind unassigned reset defaults",
     target: null,
   },
 
@@ -494,6 +508,14 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: "usage",
     title: "Usage and billing",
     keywords: "Remaining quota and credits for each signed-in provider. limits credits",
+    target: null,
+  },
+
+  {
+    id: "usage:sidebar-rings",
+    section: "usage",
+    title: "Sidebar usage rings",
+    keywords: "Choose which provider usage rings show at the bottom of the sidebar rail. quota",
     target: null,
   },
 

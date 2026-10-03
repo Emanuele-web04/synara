@@ -3,7 +3,7 @@
 // Layer: Web appearance domain logic
 // Exports: Theme types, normalization helpers, import/export utilities, and CSS variable builders.
 
-import { DESKTOP_WINDOW_BLUR_RADIUS_MAX } from "@synara/contracts";
+import { DESKTOP_WINDOW_BLUR_RADIUS_MAX, DESKTOP_WINDOW_BLUR_RADIUS_MIN } from "@synara/contracts";
 import { THEME_SEED_CATALOG } from "./theme.seed.generated";
 import {
   normalizeFontFamilyCssValue,
@@ -47,10 +47,11 @@ export interface ThemePack {
  * so Codex share strings keep their format. Only applies when `opaqueWindows` is off.
  */
 export interface WindowTranslucency {
-  /** Glass fill strength, 0 (desktop fully visible) to 100 (solid tint). */
+  /** Glass fill strength, WINDOW_TRANSLUCENCY_OPACITY_MIN to 100 (solid tint). */
   opacity: number;
   /**
-   * Desktop blur radius behind the window in points, 0 to DESKTOP_WINDOW_BLUR_RADIUS_MAX.
+   * Desktop blur radius behind the window in points, DESKTOP_WINDOW_BLUR_RADIUS_MIN to
+   * DESKTOP_WINDOW_BLUR_RADIUS_MAX.
    * `null` keeps the macOS vibrancy material instead of a custom blur.
    */
   blur: number | null;
@@ -297,6 +298,9 @@ export const DEFAULT_WINDOW_TRANSLUCENCY_BY_VARIANT: Record<ThemeVariant, Window
   light: { opacity: 38, blur: null, sidebarOnly: true },
 };
 
+/** Thinnest glass fill: below this the window reads as see-through rather than as glass. */
+export const WINDOW_TRANSLUCENCY_OPACITY_MIN = 15;
+
 /** Where the blur slider rests while the vibrancy material is in use; roughly its frosting. */
 export const VIBRANCY_EQUIVALENT_BLUR_RADIUS = 30;
 
@@ -306,6 +310,22 @@ const RAIL_SHELL_OPACITY_RATIO_BY_VARIANT: Record<ThemeVariant, number> = {
   dark: 64 / 72,
   light: 82 / 38,
 };
+
+// Whole-window glass: raised chrome (composers, docked panels, cards, controls) is a denser
+// pane of the elevated tone over the body's coat. Its fill tracks the coat's opacity from a
+// floor, so it keeps its contrast against the window at every slider position. Light themes
+// run thinner: their elevated tone is white, and a white pane reads as solid at a fill a dark
+// pane of the same strength does not.
+const RAISED_GLASS_OPACITY_BY_VARIANT: Record<ThemeVariant, { floor: number; ratio: number }> = {
+  dark: { floor: 10, ratio: 0.5 },
+  light: { floor: 4, ratio: 0.3 },
+};
+
+// Floating overlays (menus, pickers, popovers, tooltips, toasts) share the composer's material
+// so the whole UI reads as one. Off a whole-window glass shell that is the composer's own fill
+// (`--composer-glass-opacity` in index.css) over a backdrop blur; on one it is the raised tint,
+// with the page cut out from under the overlay instead of blurred (see glassOverlayCutout.ts).
+const OVERLAY_OPACITY = 55;
 
 export const DEFAULT_THEME_STATE: ThemeState = {
   chromeThemes: {
@@ -399,10 +419,20 @@ export function normalizeWindowTranslucency(
   const fallback = DEFAULT_WINDOW_TRANSLUCENCY_BY_VARIANT[variant];
   const translucency = isRecord(value) ? value : {};
   return {
-    opacity: normalizeIntegerInRange(translucency.opacity, 0, 100, fallback.opacity),
+    opacity: normalizeIntegerInRange(
+      translucency.opacity,
+      WINDOW_TRANSLUCENCY_OPACITY_MIN,
+      100,
+      fallback.opacity,
+    ),
     blur:
       typeof translucency.blur === "number" && Number.isFinite(translucency.blur)
-        ? normalizeIntegerInRange(translucency.blur, 0, DESKTOP_WINDOW_BLUR_RADIUS_MAX, 0)
+        ? normalizeIntegerInRange(
+            translucency.blur,
+            DESKTOP_WINDOW_BLUR_RADIUS_MIN,
+            DESKTOP_WINDOW_BLUR_RADIUS_MAX,
+            DESKTOP_WINDOW_BLUR_RADIUS_MIN,
+          )
         : fallback.blur,
     sidebarOnly:
       typeof translucency.sidebarOnly === "boolean"
@@ -823,10 +853,14 @@ export function buildThemeCssVariables(
     variant === "dark"
       ? readCodexVariable("--color-background-control-opaque")
       : "color-mix(in oklab, var(--color-background-control) 90%, transparent)";
-  // Mirrors Codex Electron's [cmdk-root] dropdown shell: thin the dropdown-background
-  // token by 5% in oklab over the existing backdrop blur. Light vs dark is already
-  // handled by --color-background-control-opaque (white in light, dark control in dark).
-  const composerPickerMenuSurface = "color-mix(in oklab, var(--popover) 70%, transparent)";
+  // Floating surfaces share the composer's fill, tracking the coat on whole-window glass.
+  const raisedGlass = RAISED_GLASS_OPACITY_BY_VARIANT[variant];
+  const raisedGlassOpacity = Math.round(raisedGlass.floor + translucentOpacity * raisedGlass.ratio);
+  const raisedGlassSurface = `color-mix(in srgb, var(--popover) ${raisedGlassOpacity}%, transparent)`;
+  const overlaySurface = wholeWindowGlass
+    ? raisedGlassSurface
+    : `color-mix(in srgb, var(--popover) ${OVERLAY_OPACITY}%, transparent)`;
+  const composerPickerMenuSurface = overlaySurface;
   const composerFocusBorder = buildComposerFocusBorder(
     pack,
     variant,
@@ -864,6 +898,9 @@ export function buildThemeCssVariables(
         ? `${Math.min(100, Math.round(translucentOpacity * RAIL_SHELL_OPACITY_RATIO_BY_VARIANT[variant]))}%`
         : "100%",
     "--app-composer-focus-border": composerFocusBorder,
+    // Raised-chrome fill over the body's coat when the whole window is glass. Empty elsewhere,
+    // which leaves each surface's own fill in charge (see `.app-glass-raised` in index.css).
+    "--app-glass-raised-surface": wholeWindowGlass ? raisedGlassSurface : "",
     // Frosted blur only when the shell is translucent (macOS). On an opaque
     // shell this promotes the surface to a GPU layer that Chromium rasterizes at
     // the wrong scale on fractional DPI (Windows), so text reads blurry until a
@@ -873,12 +910,13 @@ export function buildThemeCssVariables(
     // material, so — like the floating menus — it stays on across platforms.
     "--app-composer-picker-backdrop-filter": material === "translucent" ? "blur(32px)" : "none",
     "--app-composer-picker-surface": composerPickerMenuSurface,
+    "--app-overlay-surface": overlaySurface,
+    // The coat an overlay sits on once the page is cut out from under it. Whole-window glass
+    // already paints it on the body; sidebar-only glass has no body coat, so the overlay
+    // carries it itself and looks the same over the sidebar and over the content.
+    "--app-overlay-backing": translucencyScope === "sidebar" ? glassSurface : "",
     "--app-chat-code-surface": chatCodeSurface,
     "--app-user-message-background": chatCodeSurface,
-    // With whole-window glass nothing but the body's own coat sits under the sidebar, so
-    // there is nothing to frost.
-    "--app-sidebar-backdrop-filter":
-      translucencyScope === "sidebar" ? "blur(4px) saturate(130%)" : "none",
     // Settings mirrors the chat surface (opaque --color-background-surface) so every
     // settings element reads as outline-only. With an opaque page there is nothing to
     // frost, so we skip the backdrop blur (and its compositing cost) entirely.

@@ -1,28 +1,50 @@
 import "../../index.css";
 
-import type { ServerProviderStatus } from "@synara/contracts";
+import {
+  ThreadId,
+  type ServerProviderStatus,
+  type TerminalEvent,
+  type TerminalOpenInput,
+} from "@synara/contracts";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import { page, userEvent } from "vitest/browser";
 import { beforeEach, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
+import { StrictMode } from "react";
 
 const harness = vi.hoisted(() => ({
   statuses: [] as ServerProviderStatus[],
   reconciled: true,
   refresh: vi.fn(),
+  invalidate: vi.fn(async () => {}),
+  terminalListener: null as ((event: TerminalEvent) => void) | null,
+  api: {
+    terminal: {
+      open: vi.fn(),
+      write: vi.fn(async () => {}),
+      resize: vi.fn(async () => {}),
+      ackOutput: vi.fn(async () => {}),
+      close: vi.fn(async () => {}),
+      onEvent: vi.fn(),
+    },
+    shell: { openExternal: vi.fn(async () => {}) },
+  },
 }));
 
-vi.mock("@tanstack/react-query", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@tanstack/react-query")>()),
-  useQueryClient: () => ({}),
-  useQuery: () => ({ data: { providers: harness.statuses }, isPending: false }),
-}));
+vi.mock("@tanstack/react-query", async (importOriginal) => {
+  const queryClient = { invalidateQueries: harness.invalidate };
+  return {
+    ...(await importOriginal<typeof import("@tanstack/react-query")>()),
+    useQueryClient: () => queryClient,
+    useQuery: () => ({ data: { providers: harness.statuses, cwd: "/tmp" }, isPending: false }),
+  };
+});
 vi.mock("~/lib/serverReactQuery", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/lib/serverReactQuery")>()),
   serverConfigQueryOptions: () => ({}),
   serverSettingsQueryOptions: () => ({}),
   hasReconciledServerProviderStatuses: () => harness.reconciled,
-  serverQueryKeys: { config: () => ["config"] },
+  serverQueryKeys: { config: () => ["config"], settings: () => ["settings"] },
 }));
 vi.mock("~/hooks/useProviderStatusesForLocalConfig", () => ({
   useProviderStatusesForLocalConfig: () => harness.statuses,
@@ -31,8 +53,15 @@ vi.mock("~/hooks/useProviderStatusRefresh", () => ({
   useRefreshProviderStatusesNow: () => harness.refresh,
 }));
 
+vi.mock("~/nativeApi", () => ({
+  readNativeApi: () => harness.api,
+  ensureNativeApi: () => harness.api,
+}));
+
 import { AppSettingsSchema } from "~/appSettings";
 import { ProvidersSettingsPanel } from "./ProvidersSettingsPanel";
+import TerminalViewport from "../terminal/TerminalViewport";
+import { terminalRuntimeRegistry } from "../terminal/terminalRuntimeRegistry";
 
 const defaults = AppSettingsSchema.makeUnsafe({});
 const props = {
@@ -47,6 +76,23 @@ const props = {
 beforeEach(() => {
   harness.reconciled = true;
   harness.refresh.mockReset();
+  harness.api.terminal.open.mockReset().mockImplementation(async (input: TerminalOpenInput) => ({
+    ...input,
+    status: "running",
+    history: "",
+    pid: 1234,
+    exitCode: null,
+    exitSignal: null,
+    updatedAt: "2026-10-02T12:00:00Z",
+  }));
+  harness.api.terminal.write.mockClear();
+  harness.api.terminal.close.mockReset().mockResolvedValue(undefined);
+  harness.api.terminal.onEvent.mockImplementation((listener: (event: TerminalEvent) => void) => {
+    harness.terminalListener = listener;
+    return () => {
+      harness.terminalListener = null;
+    };
+  });
   harness.statuses = PROVIDER_DESCRIPTORS.map(({ kind }) => ({
     provider: kind,
     instanceId: kind,
@@ -197,7 +243,7 @@ it("lists every account of a provider, default included, with a status title and
   expect(editor.getByRole("button", { name: "Remove" }).elements()).toHaveLength(0);
 });
 
-it("edits the selected account beside the list and offers its sign-in command", async () => {
+it("edits the selected account beside the list and offers one-click sign-in", async () => {
   harness.statuses = [...harness.statuses, WORK_STATUS];
   const { props: panelProps, updateSettings } = accountProps();
   await render(<ProvidersSettingsPanel {...panelProps} />);
@@ -205,8 +251,10 @@ it("edits the selected account beside the list and offers its sign-in command", 
   await page.getByRole("button", { name: "Select Work", exact: true }).click();
   const editor = page.getByRole("group", { name: "Work account", exact: true });
   await expect.element(editor.getByText("Not authenticated", { exact: true })).toBeVisible();
-  await expect.element(editor.getByText(/To sign in, run/u)).toBeVisible();
-  await expect.element(editor.getByRole("button", { name: /^Copy .* login$/u })).toBeVisible();
+  await expect.element(editor.getByText(/Use Sign in to authenticate/u)).toBeVisible();
+  await expect
+    .element(editor.getByRole("button", { name: "Sign in to Work", exact: true }))
+    .toBeVisible();
   await expect.element(editor.getByText("Environment variables")).toBeVisible();
 
   await page.getByRole("switch", { name: "Enable Work", exact: true }).click();
@@ -281,3 +329,170 @@ it("routes a migrated Codex account's rename to its saved account entry", async 
   // Its route depends on that entry, so it gets no environment of its own.
   expect(editor.getByText("Environment variables").elements()).toHaveLength(0);
 });
+
+it("survives StrictMode, waits for account edits, and verifies selected-account auth rather than trusting CLI exit", async () => {
+  harness.statuses = [...harness.statuses, WORK_STATUS];
+  let finishSave!: () => void;
+  const save = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        finishSave = resolve;
+      }),
+  );
+  await render(
+    <StrictMode>
+      <ProvidersSettingsPanel {...accountProps().props} updateSettingsAndWait={save} />
+    </StrictMode>,
+  );
+  await page.getByRole("button", { name: "Select Work", exact: true }).click();
+  const signIn = page.getByRole("button", { name: "Sign in to Work", exact: true });
+  await signIn.click();
+  await expect.element(signIn).toBeDisabled();
+  expect(harness.api.terminal.open).not.toHaveBeenCalled();
+  finishSave();
+  const dialog = page.getByRole("dialog", { name: "Sign in to Work" });
+  await expect.element(dialog).toBeVisible();
+  await expect.poll(() => harness.api.terminal.open.mock.calls.length).toBeGreaterThan(0);
+  const input = harness.api.terminal.open.mock.calls[0]![0] as TerminalOpenInput;
+  expect(input.providerAuthInstanceId).toBe("codex_work");
+  expect(input.env).toBeUndefined();
+  await expect.poll(() => dialog.element().querySelector(".xterm-screen")).not.toBeNull();
+  expect(harness.api.terminal.close).not.toHaveBeenCalledWith(
+    expect.objectContaining({ threadId: input.threadId }),
+  );
+  harness.refresh.mockResolvedValue([WORK_STATUS]);
+  harness.terminalListener?.({
+    type: "exited",
+    threadId: input.threadId,
+    terminalId: input.terminalId ?? "sign-in",
+    exitCode: 0,
+    exitSignal: null,
+    createdAt: "2026-10-02T12:00:00Z",
+  });
+  await expect.element(dialog.getByText(/This account is not authenticated yet/u)).toBeVisible();
+  harness.refresh.mockResolvedValue([{ ...WORK_STATUS, authStatus: "authenticated" }]);
+  await dialog.getByRole("button", { name: "Check authentication" }).click();
+  await expect.element(dialog.getByText("Authenticated. You can close this window.")).toBeVisible();
+  await dialog.getByRole("button", { name: "Close", exact: true }).click();
+  await expect.poll(() => harness.api.terminal.close.mock.calls.length).toBeGreaterThan(0);
+  expect(harness.api.terminal.close).toHaveBeenCalledWith({
+    threadId: input.threadId,
+    terminalId: input.terminalId,
+    deleteHistory: true,
+  });
+});
+
+it("sends Pi's login selector only after startup and keeps cancellation failures visible", async () => {
+  const instanceId = "pi_work";
+  const panelProps = {
+    ...props,
+    providerTarget: "pi" as const,
+    settings: {
+      ...defaults,
+      providerInstances: { [instanceId]: { driver: "pi", displayName: "Pi work", config: {} } },
+    },
+  };
+  await render(<ProvidersSettingsPanel {...panelProps} />);
+  await page.getByRole("button", { name: "Select Pi work", exact: true }).click();
+  await page.getByRole("button", { name: "Sign in to Pi work", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Sign in to Pi work" });
+  const options = dialog.getByRole("button", { name: "Sign-in options" });
+  await expect.element(options).toBeEnabled();
+  expect(harness.api.terminal.write).not.toHaveBeenCalled();
+  await options.click();
+  expect(harness.api.terminal.write).toHaveBeenCalledWith(
+    expect.objectContaining({ data: "/login\r" }),
+  );
+  await expect.element(options).toBeDisabled();
+  harness.api.terminal.close.mockRejectedValueOnce(new Error("Server disconnected; retry closing"));
+  await dialog.getByRole("button", { name: "Cancel / close" }).click();
+  await expect.element(dialog.getByText("Server disconnected; retry closing")).toBeVisible();
+  expect(harness.api.terminal.write).not.toHaveBeenCalledWith(
+    expect.objectContaining({ data: "exit\n" }),
+  );
+  await dialog.getByRole("button", { name: "Cancel / close" }).click();
+  await expect.element(dialog).not.toBeInTheDocument();
+});
+
+it("closes a late authentication open after the settings dialog is cancelled", async () => {
+  harness.statuses = [...harness.statuses, WORK_STATUS];
+  let finishOpen!: (snapshot: unknown) => void;
+  harness.api.terminal.open.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finishOpen = resolve;
+      }),
+  );
+  await render(<ProvidersSettingsPanel {...accountProps().props} />);
+  await page.getByRole("button", { name: "Select Work", exact: true }).click();
+  await page.getByRole("button", { name: "Sign in to Work", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Sign in to Work" });
+  await expect.poll(() => harness.api.terminal.open.mock.calls.length).toBeGreaterThan(0);
+  const input = harness.api.terminal.open.mock.calls[0]![0] as TerminalOpenInput;
+  await dialog.getByRole("button", { name: "Cancel / close" }).click();
+  await expect.element(dialog).not.toBeInTheDocument();
+  const beforeLate = harness.api.terminal.close.mock.calls.length;
+  finishOpen({
+    ...input,
+    status: "running",
+    history: "",
+    pid: 1234,
+    exitCode: null,
+    exitSignal: null,
+  });
+  await expect.poll(() => harness.api.terminal.close.mock.calls.length).toBeGreaterThan(beforeLate);
+});
+
+it.each(["ready", "error", "exited"] as const)(
+  "reports a retained %s authentication terminal when its viewport remounts",
+  async (status) => {
+    const threadId = ThreadId.makeUnsafe(`provider-auth-remount-${status}`);
+    const terminalId = "sign-in";
+    const onRuntimeStatusChange = vi.fn();
+    const viewport = (
+      <TerminalViewport
+        threadId={threadId}
+        terminalId={terminalId}
+        terminalLabel="Sign in"
+        cwd="/tmp"
+        providerAuthInstanceId="pi_work"
+        onRuntimeStatusChange={onRuntimeStatusChange}
+        onSessionExited={() => {}}
+        onTerminalMetadataChange={() => {}}
+        onTerminalActivityChange={() => {}}
+        focusRequestId={0}
+        autoFocus={false}
+        isVisible
+      />
+    );
+    try {
+      const mounted = await render(viewport);
+      await expect.poll(() => onRuntimeStatusChange.mock.calls.at(-1)?.[0]).toBe("ready");
+      await mounted.unmount();
+      if (status === "error") {
+        harness.terminalListener?.({
+          type: "error",
+          threadId,
+          terminalId,
+          message: "Authentication failed",
+          createdAt: "2026-10-02T12:00:00Z",
+        });
+      } else if (status === "exited") {
+        harness.terminalListener?.({
+          type: "exited",
+          threadId,
+          terminalId,
+          exitCode: 0,
+          exitSignal: null,
+          createdAt: "2026-10-02T12:00:00Z",
+        });
+      }
+      onRuntimeStatusChange.mockClear();
+      const reopened = await render(viewport);
+      await expect.poll(() => onRuntimeStatusChange.mock.calls.at(-1)?.[0]).toBe(status);
+      await reopened.unmount();
+    } finally {
+      terminalRuntimeRegistry.disposeTerminal(threadId, terminalId);
+    }
+  },
+);

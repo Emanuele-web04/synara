@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { ProjectId, ThreadId } from "@synara/contracts";
+import { ProjectId, ThreadId, TodoId, type Todo } from "@synara/contracts";
 
 import type { SidebarThreadSummary, ThreadSession } from "../../types";
 import { resolveThreadStatusPill } from "../Sidebar.logic";
+import { toLocalDueDate, type TaskRowModel, type TaskStatusKind } from "../tasks/tasks.logic";
 import type { StatsGetRecapResult } from "@synara/contracts";
 
 import {
@@ -15,6 +16,7 @@ import {
   recapInputForRange,
   previousDayCutoffMs,
   resolveInboxDay,
+  selectInboxTasks,
   sumRecapBefore,
   summarizeInboxSlots,
   type InboxDayRange,
@@ -352,5 +354,50 @@ describe("groupInboxThreads", () => {
     expect(groups.working.map((thread) => thread.id)).toEqual(["working"]);
     expect(groups.finished.map((thread) => thread.id)).toEqual(["unread"]);
     expect(groups.failed).toEqual([]);
+  });
+});
+
+describe("selectInboxTasks", () => {
+  const nowMs = local(9, 30, 13);
+  const day = resolveInboxDay(nowMs);
+  const due = (month: number, date: number) => toLocalDueDate(new Date(2026, month - 1, date));
+  const row = (id: string, kind: TaskStatusKind, overrides: Partial<Todo> = {}): TaskRowModel => ({
+    todo: {
+      id: TodoId.makeUnsafe(id),
+      title: id,
+      notes: "",
+      priority: "none",
+      projectId: null,
+      dueDate: null,
+      threadId: null,
+      delegationBaseTurnId: null,
+      linkedAt: null,
+      completedAt: null,
+      createdAt: "2026-09-27T10:00:00.000Z",
+      updatedAt: "2026-09-27T10:00:00.000Z",
+      ...overrides,
+    },
+    thread: null,
+    status: { kind, label: kind } as TaskRowModel["status"],
+  });
+
+  it("keeps what counts today and leaves the backlog out", () => {
+    const tasks = selectInboxTasks(
+      [
+        row("backlog", "todo"),
+        row("later", "todo", { dueDate: due(10, 2) }),
+        row("today", "todo", { dueDate: due(9, 30) }),
+        row("overdue", "todo", { dueDate: due(9, 28) }),
+        row("with-agent", "running"),
+        row("done-today", "done", { completedAt: new Date(local(9, 30, 9)).toISOString() }),
+        row("done-before", "done", { completedAt: new Date(local(9, 29, 9)).toISOString() }),
+      ],
+      day,
+      nowMs,
+    );
+
+    expect(tasks.open.map((item) => item.todo.id)).toEqual(["with-agent", "overdue", "today"]);
+    expect(tasks.doneToday.map((item) => item.todo.id)).toEqual(["done-today"]);
+    expect(tasks.overdue).toBe(1);
   });
 });

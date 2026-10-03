@@ -11,6 +11,7 @@ import { THREAD_ARCHIVE_ICON } from "~/components/ThreadArchiveActionButton";
 import {
   BELL_ICON_NAME,
   COPY_ICON_NAME,
+  DeviceLaptopIcon,
   EYE_OPEN_ICON_NAME,
   HandoffIcon,
   PENCIL_ICON_NAME,
@@ -26,6 +27,10 @@ export const THREAD_CONTEXT_MENU_ICONS = {
   markUnread: EYE_OPEN_ICON_NAME,
   // Same glyph as the chat header's Hand off button.
   handoff: renderToStaticMarkup(<HandoffIcon />),
+  // Fork shares the branch glyph (see GitForkIcon); its targets match the env-mode glyphs.
+  fork: "branch",
+  forkLocal: renderToStaticMarkup(<DeviceLaptopIcon />),
+  forkWorktree: "arrow-split-right",
   group: "folder-open-front",
   copy: COPY_ICON_NAME,
   openInTerminal: TERMINAL_ICON_NAME,

@@ -1,4 +1,6 @@
 import {
+  DEFAULT_PROJECT_AGENT_LIMITS,
+  NEW_HUB_MAX_CONCURRENT_WORKERS,
   type ModelSelection,
   PROJECT_AGENT_RESERVED_PATHS,
   type ProviderKind,
@@ -56,6 +58,7 @@ export interface GroupSettingsDraft {
   readonly coordinatorModelSelection: ModelSelection;
   readonly workerModelSelection: ModelSelection;
   readonly workerEnvironment: "local" | "worktree";
+  readonly maxConcurrentWorkers: number;
   readonly autoMemoryEnabled: boolean;
   readonly libraryPath: string;
   readonly libraryRemoteUrl: string;
@@ -111,6 +114,7 @@ export function buildGroupSettingsDraft(input: {
     coordinatorModelSelection: config?.coordinatorModelSelection ?? fallbackSelection,
     workerModelSelection: config?.workerRouting?.modelSelection ?? fallbackSelection,
     workerEnvironment: config?.workerRouting?.environment ?? "local",
+    maxConcurrentWorkers: config?.limits.maxConcurrentWorkers ?? NEW_HUB_MAX_CONCURRENT_WORKERS,
     autoMemoryEnabled: config?.autoMemoryEnabled ?? true,
     libraryPath: config?.libraryPath ?? "",
     libraryRemoteUrl: config?.libraryRemoteUrl ?? "",
@@ -154,7 +158,8 @@ export function groupSettingsDirtySections(
     draft.coordinatorIcon !== baseline.coordinatorIcon ||
     draft.coordinatorColor !== baseline.coordinatorColor ||
     !modelSelectionsEqual(draft.coordinatorModelSelection, baseline.coordinatorModelSelection) ||
-    !modelSelectionsEqual(draft.workerModelSelection, baseline.workerModelSelection)
+    !modelSelectionsEqual(draft.workerModelSelection, baseline.workerModelSelection) ||
+    draft.maxConcurrentWorkers !== baseline.maxConcurrentWorkers
   ) {
     dirty.add("general");
   }
@@ -233,7 +238,10 @@ export function buildGroupConfigureInput(input: {
     ...(config?.coordinatorProviderOptions
       ? { coordinatorProviderOptions: config.coordinatorProviderOptions }
       : {}),
-    ...(config?.limits ? { limits: config.limits } : {}),
+    limits: {
+      ...(config?.limits ?? DEFAULT_PROJECT_AGENT_LIMITS),
+      maxConcurrentWorkers: draft.maxConcurrentWorkers,
+    },
     ...(config ? { captureEnabled: config.captureEnabled } : {}),
     ...(input.expectedRevision !== undefined ? { expectedRevision: input.expectedRevision } : {}),
     ...(input.importedInstructions?.trim()

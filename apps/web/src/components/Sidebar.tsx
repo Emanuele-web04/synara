@@ -27,7 +27,6 @@ import {
   PinIcon,
   PlayIcon,
   SearchIcon,
-  SettingsIcon,
   StopFilledIcon,
   TemporaryThreadIcon,
   TerminalIcon,
@@ -42,6 +41,10 @@ import { PinStatusIcon, pinActionLabel } from "~/lib/pin";
 import { useTasksNeedingAttentionCount, useTodoEventSubscription } from "./tasks/useTodos";
 import { THREAD_CONTEXT_MENU_ICONS } from "~/lib/contextMenuIcons";
 import { ensureNativeApi } from "~/nativeApi";
+import {
+  getActiveComposerSendThreadIds,
+  subscribeComposerSends,
+} from "~/lib/composerSendOwnership";
 import { autoAnimate } from "@formkit/auto-animate";
 import { FiGitBranch } from "react-icons/fi";
 import { IoIosGitCompare } from "react-icons/io";
@@ -111,12 +114,7 @@ import {
   type ProviderInstanceOption,
   useAppSettings,
 } from "../appSettings";
-import {
-  normalizeHiddenSidebarNavItems,
-  normalizeSidebarNavOrder,
-  resolveTasksSurfaceSlot,
-  type SidebarNavItemId,
-} from "../sidebarNavOrdering";
+import { resolveTasksSurfaceSlot, type SidebarNavItemId } from "../sidebarNavOrdering";
 import { useTasksSurfaceEnabled } from "../tasksSurface";
 import {
   buildRailItemOrder,
@@ -134,7 +132,6 @@ import {
   toggleRailShortcutKey,
 } from "../appRail.logic";
 import { useRailShellStore } from "../railShellStore";
-import { useSidebarLayout } from "../hooks/useSidebarLayout";
 import { isElectron } from "../env";
 import { formatRelativeTime } from "../lib/relativeTime";
 import {
@@ -208,7 +205,15 @@ import { createGroupProject, isGroupContainerProject } from "../lib/groupProject
 import { useProjectEnvironmentStore } from "../projectEnvironmentStore";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useLatestProjectStore } from "../latestProjectStore";
-import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
+import {
+  resolveThreadEnvironmentPresentation,
+  type ForkThreadTarget,
+} from "../lib/threadEnvironment";
+import { canForkThread, dispatchThreadFork, FORK_THREAD_TARGET_LABELS } from "../lib/threadFork";
+import { contextMenuGroup } from "../lib/contextMenuGroup";
+import { registerThreadContextMenu, type ThreadContextMenuOptions } from "../lib/threadContextMenu";
+import { gitBranchesQueryOptions } from "../lib/gitReactQuery";
+import { resolveComposerSlashRootBranch } from "../composerSlashCommands";
 import { dispatchThreadRename } from "../lib/threadRename";
 import { quotePosixShellArgument } from "../lib/shellQuote";
 import { useStableValue } from "~/hooks/useStableValue";
@@ -220,12 +225,12 @@ import {
   formatCadence,
   groupAutomationsByContinuedThread,
 } from "../routes/-automations.shared";
+import { useIsMobile } from "../hooks/useMediaQuery";
 import { shouldRenderTerminalWorkspace } from "./ChatView.logic";
-import { CHAT_SURFACE_HEADER_HEIGHT_CLASS } from "./chat/chatHeaderControls";
 import { isModelPickerShortcutScopeActive } from "./chat/ComposerModelPicker.logic";
-import { SidebarLeadingControls } from "./SidebarHeaderNavigationControls";
 import {
   APP_RAIL_GLYPH_CLASS_NAME,
+  AppRail,
   AppRailPortal,
   appRailButtonClassName,
   railCentralGlyphs,
@@ -240,6 +245,7 @@ import {
   SidebarCustomizeList,
 } from "./SidebarCustomizeList";
 import { AppRailMoreMenu } from "./AppRailMoreMenu";
+import { AppRailUsage } from "./AppRailUsage";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ThreadHoverCardContent } from "./ThreadHoverCardContent";
 import { ProjectHoverCardContent } from "./ProjectHoverCardContent";
@@ -254,7 +260,10 @@ import {
   createThreadHoverCardAnchor,
 } from "./sidebarHoverCardAnchors";
 import { PreviewCard, PreviewCardPopup, PreviewCardTrigger } from "./ui/preview-card";
-import { hasUnreadActivity as hasUnreadActivityOutsideActiveThread } from "./SidebarActivityView.logic";
+import {
+  type ActivityScopeSelection,
+  hasUnreadActivity as hasUnreadActivityOutsideActiveThread,
+} from "./SidebarActivityView.logic";
 import { SidebarActivityView } from "./SidebarActivityView";
 import { SidebarIconButton, sidebarIconButtonSlotClass } from "./SidebarIconButton";
 import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
@@ -352,14 +361,12 @@ import {
   SidebarContent,
   SidebarFooter,
   SidebarGroup,
-  SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarMenuSub,
   SidebarMenuSubButton,
   SidebarMenuSubItem,
-  SidebarTrigger,
 } from "./ui/sidebar";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import {
@@ -412,7 +419,6 @@ import {
 } from "./Sidebar.logic";
 import type { LastThreadRoute } from "../chatRouteRestore";
 import { useCopyPathToClipboard, useCopyThreadIdToClipboard } from "~/hooks/useCopyToClipboard";
-import { DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS } from "~/hooks/useDesktopTopBarGutter";
 import { cn } from "~/lib/utils";
 import {
   disclosureContentClassName,
@@ -450,7 +456,6 @@ import {
   ComposerPickerMenuPopup,
   ComposerPickerMenuSubPopup,
 } from "./chat/ComposerPickerMenuPopup";
-import { ENVIRONMENT_PANEL_SURFACE_CLASS_NAME } from "./chat/composerPickerStyles";
 import { selectSplitView, useSplitViewStore } from "../splitViewStore";
 import { useRightDockStore } from "../rightDockStore";
 import { useTemporaryThreadStore } from "../temporaryThreadStore";
@@ -1319,9 +1324,9 @@ export default function Sidebar() {
   );
   const activeSpaceId = resolveActiveSpaceId(storedActiveSpaceId, spaces, pendingActiveSpaceId);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
-  // Rail layout: nav destinations move to the rail (portaled next to this panel) and the
-  // panel shows Home or Spaces. Classic renders exactly as before.
-  const isRailLayout = useSidebarLayout() === "rail";
+  // Nav destinations live in the rail (portaled next to this panel) and the panel shows
+  // Home or Spaces.
+  const isMobile = useIsMobile();
   const railActiveItem = useRailShellStore((store) => store.activeItem);
   const railPanelView = useRailShellStore((store) => store.panelView);
   const railSpacesProjectId = useRailShellStore((store) => store.spacesProjectId);
@@ -1350,6 +1355,11 @@ export default function Sidebar() {
   const openTerminalThreadPage = useTerminalStateStore((state) => state.openTerminalThreadPage);
   const clearProjectDraftThreads = useComposerDraftStore((store) => store.clearProjectDraftThreads);
   const draftThreadsByThreadId = useComposerDraftStore((store) => store.draftThreadsByThreadId);
+  const activeComposerSendThreadIds = useSyncExternalStore(
+    subscribeComposerSends,
+    getActiveComposerSendThreadIds,
+    getActiveComposerSendThreadIds,
+  );
   const temporaryThreadIds = useTemporaryThreadStore((store) => store.temporaryThreadIds);
   const persistedPinnedProjectIds = usePinnedProjectsStore((store) => store.pinnedProjectIds);
   const pinProjectLocally = usePinnedProjectsStore((store) => store.pinProject);
@@ -1426,10 +1436,11 @@ export default function Sidebar() {
     void queryClient.invalidateQueries({ queryKey: githubInboxQueryKeys.all });
     void queryClient.invalidateQueries({ queryKey: pullRequestQueryKeys.all });
   }, [pullRequestRepositoryConfig, queryClient]);
+  const { settings: appSettings, serverSettings, updateSettings } = useAppSettings();
   // The badge observes the open inbox list and shares its server snapshot, so an open inbox makes
   // it free; with the inbox closed it refreshes every 15 minutes.
   const pullRequestsReviewingQuery = useQuery({
-    ...githubInboxReviewBadgeQueryOptions(),
+    ...githubInboxReviewBadgeQueryOptions(appSettings.githubInboxSort),
     enabled: projects.some((project) => project.kind === "project"),
   });
   const pullRequestsReviewBadge = resolvePullRequestReviewBadge(pullRequestsReviewingQuery.data);
@@ -1439,7 +1450,6 @@ export default function Sidebar() {
     () => groupAutomationsByContinuedThread(automationListQuery.data?.definitions ?? []),
     [automationListQuery.data],
   );
-  const { settings: appSettings, serverSettings, updateSettings } = useAppSettings();
   const sidebarProviderInstances = useMemo(
     () => getProviderInstanceOptions(appSettings),
     [appSettings],
@@ -1645,6 +1655,11 @@ export default function Sidebar() {
   const [activityViewEnabled, setActivityViewEnabled] = useState(
     () => readSidebarUiState().activityViewEnabled,
   );
+  // Lives here, not in SidebarActivityView, so it survives the view unmounting
+  // (opening Settings swaps the sidebar surface) and reloads.
+  const [activityScope, setActivityScope] = useState<ActivityScopeSelection>(
+    () => readSidebarUiState().activityScope,
+  );
   const [activityVisibleThreadIds, setActivityVisibleThreadIds] = useState<readonly ThreadId[]>([]);
   const handleActivityVisibleThreadIdsChange = useCallback((threadIds: readonly ThreadId[]) => {
     setActivityVisibleThreadIds((current) => {
@@ -1671,6 +1686,7 @@ export default function Sidebar() {
         setDismissedThreadStatusKeyByThreadId(state.dismissedThreadStatusKeyByThreadId);
         setLastThreadRoute(state.lastThreadRoute);
         setActivityViewEnabled(state.activityViewEnabled);
+        setActivityScope(state.activityScope);
       }),
     [],
   );
@@ -1798,8 +1814,13 @@ export default function Sidebar() {
         },
         hasPendingApprovals: thread.hasPendingApprovals,
         hasPendingUserInput: thread.hasPendingUserInput,
+        isPreparingWorktree:
+          activeComposerSendThreadIds.has(thread.id) &&
+          thread.envMode === "worktree" &&
+          thread.latestTurn === null &&
+          thread.session === null,
       }),
-    [dismissedThreadStatusKeyByThreadId],
+    [activeComposerSendThreadIds, dismissedThreadStatusKeyByThreadId],
   );
 
   useEffect(() => {
@@ -1930,13 +1951,12 @@ export default function Sidebar() {
       groupsWorkspaceRoot,
     });
   useEffect(() => {
-    if (!isRailLayout) return;
     reconcileRailShell({
       pathname,
       onStudioSurface: isOnGroups,
       projectIds: threadsHydrated ? new Set(projects.map((project) => project.id)) : null,
     });
-  }, [isOnGroups, isRailLayout, pathname, projects, reconcileRailShell, threadsHydrated]);
+  }, [isOnGroups, pathname, projects, reconcileRailShell, threadsHydrated]);
   const ordinarySpaceProjects = useMemo(
     () =>
       projects.filter((project) =>
@@ -2474,29 +2494,6 @@ export default function Sidebar() {
     void navigate({ to: "/hubs" });
   }, [navigate]);
 
-  const handleBackToAppFromSettings = useCallback(() => {
-    const fromGroups = lastActiveSidebarSegmentRef.current === "groups";
-    const target = fromGroups ? resolveBackToGroupsTarget() : resolveBackToThreadsTarget();
-
-    if (navigateToBackTarget(target)) {
-      return;
-    }
-
-    // Segment-appropriate fallback, matching handleSidebarViewChange: leaving Settings from the
-    // Groups segment with nothing restorable lands back in Groups, not on a fresh home draft.
-    if (fromGroups) {
-      openGroupChatFallback();
-      return;
-    }
-    void navigate({ to: "/" });
-  }, [
-    navigate,
-    navigateToBackTarget,
-    openGroupChatFallback,
-    resolveBackToGroupsTarget,
-    resolveBackToThreadsTarget,
-  ]);
-
   const handleSidebarViewChange = useCallback(
     (view: SidebarView) => {
       if (view === "groups") {
@@ -2995,6 +2992,56 @@ export default function Sidebar() {
     [createThreadHandoff],
   );
 
+  const forkThread = useCallback(
+    async (thread: Thread, target: ForkThreadTarget) => {
+      const api = readNativeApi();
+      if (!api) return;
+      const projectCwd = projectCwdById.get(thread.projectId) ?? null;
+      // Only a thread without its own branch needs the root checkout's branch.
+      const needsRootBranch = !thread.branch && projectCwd !== null;
+      // Promise chains rather than try/catch: React Compiler bails out on value
+      // blocks inside a try statement, and this file has a zero-bailout budget.
+      await (
+        needsRootBranch
+          ? queryClient
+              .fetchQuery(gitBranchesQueryOptions(projectCwd))
+              .then((result) => result.branches)
+              .catch(() => null)
+          : Promise.resolve(null)
+      )
+        .then((branches) =>
+          dispatchThreadFork({
+            api,
+            sourceThread: thread,
+            target,
+            rootBranch: resolveComposerSlashRootBranch({
+              branches,
+              activeProjectCwd: projectCwd,
+              activeThreadBranch: thread.branch,
+            }),
+            modelSelection: thread.modelSelection,
+            runtimeMode: thread.runtimeMode,
+            interactionMode: thread.interactionMode,
+          }),
+        )
+        .then(async (nextThreadId) => {
+          syncServerShellSnapshot(await api.orchestration.getShellSnapshot());
+          await navigate({ to: "/$threadId", params: { threadId: nextThreadId } });
+        })
+        .catch((error: unknown) => {
+          toastManager.add({
+            type: "error",
+            title: "Could not fork thread",
+            description:
+              error instanceof Error
+                ? error.message
+                : "An error occurred while creating the forked thread.",
+          });
+        });
+    },
+    [navigate, projectCwdById, queryClient, syncServerShellSnapshot],
+  );
+
   // Posts the "pick this thread up" user message to a group's coordinator once
   // its coordinator thread exists (right after onboarding save, or immediately
   // when moving a thread into a configured group).
@@ -3107,18 +3154,17 @@ export default function Sidebar() {
     async (
       threadId: ThreadId,
       position: { x: number; y: number },
-      options?: {
-        extraItems?: Array<{
-          id: "return-to-single-chat";
-          label: string;
-        }>;
-        onExtraAction?: (itemId: "return-to-single-chat") => Promise<void> | void;
-      },
+      options?: ThreadContextMenuOptions,
     ) => {
       const api = readNativeApi();
       if (!api) return;
       const thread = getThreadFromState(useStore.getState(), threadId);
       if (!thread) return;
+      const extraItems = options?.extraItems ?? [];
+      // Only leaf rows resolve the menu; a parent row just opens its submenu.
+      const extraItemIds = new Set(
+        extraItems.flatMap((item) => item.children?.map((child) => child.id) ?? [item.id]),
+      );
       const threadSummary = sidebarThreadSummaryById[threadId];
       const isPinned = pinnedThreadIdSet.has(threadId);
       const hasPendingApprovals =
@@ -3151,22 +3197,88 @@ export default function Sidebar() {
             sourceProviderInstanceId:
               thread.session?.providerInstanceId ?? thread.modelSelection.instanceId,
             providerInstances: getProviderInstanceOptions(appSettings),
+            providerStatuses,
           })
         : [];
       const handoffTargetById = new Map(
         handoffTargets.map((target) => [`handoff:${target.instanceId}`, target]),
       );
-      const handoffItems = handoffTargets.map((target, index) => ({
-        id: `handoff:${target.instanceId}`,
-        label: `Handoff to ${target.label}`,
-        icon: THREAD_CONTEXT_MENU_ICONS.handoff,
-        separatorBefore: index === 0,
-      }));
+      const handoffItems = contextMenuGroup(
+        { id: "handoff", label: "Handoff", icon: THREAD_CONTEXT_MENU_ICONS.handoff },
+        handoffTargets.map((target) => ({
+          id: `handoff:${target.instanceId}`,
+          label: target.label,
+          standaloneLabel: `Handoff to ${target.label}`,
+          icon: THREAD_CONTEXT_MENU_ICONS.handoff,
+        })),
+      );
+      // Same action as `/fork`.
+      const canFork = canForkThread({ thread, handoffAvailability });
+      const forkItems = canFork
+        ? contextMenuGroup({ id: "fork", label: "Fork", icon: THREAD_CONTEXT_MENU_ICONS.fork }, [
+            {
+              id: "fork:local",
+              label: FORK_THREAD_TARGET_LABELS.local,
+              icon: THREAD_CONTEXT_MENU_ICONS.forkLocal,
+            },
+            {
+              id: "fork:worktree",
+              label: FORK_THREAD_TARGET_LABELS.worktree,
+              icon: THREAD_CONTEXT_MENU_ICONS.forkWorktree,
+            },
+          ])
+        : [];
+      if (forkItems[0] && handoffItems.length === 0) {
+        forkItems[0] = { ...forkItems[0], separatorBefore: true };
+      }
+      if (handoffItems[0]) {
+        handoffItems[0] = { ...handoffItems[0], separatorBefore: true };
+      }
       const threadWorkspacePath = resolveThreadWorkspaceCwd({
         projectCwd: projectCwdById.get(thread.projectId) ?? null,
         envMode: thread.envMode,
         worktreePath: thread.worktreePath,
       });
+      // Group actions only make sense for threads in ordinary (non-group)
+      // projects; group threads already belong to a group.
+      const canUseHubActions =
+        GROUPS_ON && !groupProjectIdSet.has(thread.projectId) && !thread.parentThreadId;
+      // Paused and archived groups can't run a coordinator turn, so they
+      // aren't move targets — the server refuses the turn either way.
+      const eligibleGroups = canUseHubActions
+        ? projects.filter((project) => {
+            const summary = summaryFor(project.id);
+            return (
+              groupProjectIdSet.has(project.id) &&
+              summary?.archivedAt == null &&
+              summary?.pausedAt == null
+            );
+          })
+        : [];
+      const hubItems = canUseHubActions
+        ? contextMenuGroup(
+            {
+              id: "hub",
+              label: "Hub",
+              icon: THREAD_CONTEXT_MENU_ICONS.group,
+              separatorBefore: true,
+            },
+            [
+              {
+                id: "continue-as-group",
+                label: "Continue as a New Hub",
+                standaloneLabel: "Continue as a hub",
+                icon: THREAD_CONTEXT_MENU_ICONS.group,
+              },
+              ...eligibleGroups.map((project, index) => ({
+                id: `move-to-group:${project.id}`,
+                label: `Move to ${project.name}`,
+                icon: THREAD_CONTEXT_MENU_ICONS.group,
+                separatorBefore: index === 0,
+              })),
+            ],
+          )
+        : [];
       const clicked = await api.contextMenu.show(
         [
           { id: "rename", label: "Rename thread", icon: THREAD_CONTEXT_MENU_ICONS.rename },
@@ -3186,12 +3298,29 @@ export default function Sidebar() {
             : []),
           { id: "mark-unread", label: "Mark unread", icon: THREAD_CONTEXT_MENU_ICONS.markUnread },
           ...handoffItems,
-          {
-            id: "copy-path",
-            label: "Copy Path",
-            icon: THREAD_CONTEXT_MENU_ICONS.copy,
-            separatorBefore: true,
-          },
+          ...forkItems,
+          ...contextMenuGroup(
+            {
+              id: "copy",
+              label: "Copy",
+              icon: THREAD_CONTEXT_MENU_ICONS.copy,
+              separatorBefore: true,
+            },
+            [
+              {
+                id: "copy-path",
+                label: "Path",
+                standaloneLabel: "Copy Path",
+                icon: THREAD_CONTEXT_MENU_ICONS.copy,
+              },
+              {
+                id: "copy-thread-id",
+                label: "Thread ID",
+                standaloneLabel: "Copy Thread ID",
+                icon: THREAD_CONTEXT_MENU_ICONS.copy,
+              },
+            ],
+          ),
           ...(threadWorkspacePath
             ? [
                 {
@@ -3201,25 +3330,8 @@ export default function Sidebar() {
                 },
               ]
             : []),
-          { id: "copy-thread-id", label: "Copy Thread ID", icon: THREAD_CONTEXT_MENU_ICONS.copy },
-          ...(options?.extraItems ?? []),
-          // Group actions only make sense for threads in ordinary (non-group)
-          // projects; group threads already belong to a group.
-          ...(!GROUPS_ON || groupProjectIdSet.has(thread.projectId) || thread.parentThreadId
-            ? []
-            : [
-                {
-                  id: "continue-as-group",
-                  label: "Continue as a hub",
-                  icon: THREAD_CONTEXT_MENU_ICONS.group,
-                  separatorBefore: true,
-                },
-                {
-                  id: "move-to-group",
-                  label: "Move to hub…",
-                  icon: THREAD_CONTEXT_MENU_ICONS.group,
-                },
-              ]),
+          ...extraItems,
+          ...hubItems,
           // Subagent threads are archived and restored through their parent
           // (thread.archive cascades); archiving one alone would strand it with
           // no sidebar or Archived-panel row to restore it from.
@@ -3244,6 +3356,10 @@ export default function Sidebar() {
         position,
       );
 
+      if (clicked !== null && extraItemIds.has(clicked)) {
+        await options?.onExtraAction?.(clicked);
+        return;
+      }
       if (clicked === "rename") {
         openRenameThreadDialog(threadId);
         return;
@@ -3374,44 +3490,16 @@ export default function Sidebar() {
         await continueThreadAsGroup(thread);
         return;
       }
-      if (clicked === "move-to-group") {
-        // Paused and archived groups can't run a coordinator turn, so they
-        // aren't move targets — the server refuses the turn either way.
-        const eligibleGroups = projects.filter((project) => {
-          const summary = summaryFor(project.id);
-          return (
-            groupProjectIdSet.has(project.id) &&
-            summary?.archivedAt == null &&
-            summary?.pausedAt == null
-          );
-        });
-        if (eligibleGroups.length === 0) {
-          toastManager.add({
-            type: "info",
-            title: "No hubs yet",
-            description: "Create a hub first, then move this thread into it.",
-          });
-          return;
-        }
-        const picked = await api.contextMenu.show(
-          eligibleGroups.map((project) => ({
-            id: `move-to-group:${project.id}` as const,
-            label: project.name,
-            icon: THREAD_CONTEXT_MENU_ICONS.group,
-          })),
-          position,
-        );
-        if (typeof picked === "string" && picked.startsWith("move-to-group:")) {
-          const targetProjectId = picked.slice("move-to-group:".length);
-          const target = eligibleGroups.find((project) => project.id === targetProjectId);
-          if (target) {
-            await moveThreadToGroup(thread, target.id);
-          }
+      if (typeof clicked === "string" && clicked.startsWith("move-to-group:")) {
+        const targetProjectId = clicked.slice("move-to-group:".length);
+        const target = eligibleGroups.find((project) => project.id === targetProjectId);
+        if (target) {
+          await moveThreadToGroup(thread, target.id);
         }
         return;
       }
-      if (clicked === "return-to-single-chat") {
-        await options?.onExtraAction?.("return-to-single-chat");
+      if (clicked === "fork:local" || clicked === "fork:worktree") {
+        await forkThread(thread, clicked === "fork:worktree" ? "worktree" : "local");
         return;
       }
       if (clicked === "archive") {
@@ -3431,6 +3519,7 @@ export default function Sidebar() {
       clearDismissedThreadStatus,
       clearThreadNotification,
       continueThreadAsGroup,
+      forkThread,
       groupProjectIdSet,
       handoffThread,
       markThreadUnread,
@@ -3448,6 +3537,8 @@ export default function Sidebar() {
       toggleThreadPinned,
     ],
   );
+  // The open-thread tabs open this same menu for their thread, with their close rows added.
+  useEffect(() => registerThreadContextMenu(handleThreadContextMenu), [handleThreadContextMenu]);
   const handleMultiSelectContextMenu = useCallback(
     async (position: { x: number; y: number }) => {
       const api = readNativeApi();
@@ -3504,8 +3595,9 @@ export default function Sidebar() {
           if (!confirmed) return;
         }
 
+        const excludedThreadIds = new Set<ThreadId>(ids);
         for (const id of archiveIds) {
-          await archiveThread(id);
+          await archiveThread(id, { excludedThreadIds });
         }
         removeFromSelection(ids);
         return;
@@ -3565,9 +3657,11 @@ export default function Sidebar() {
         dismissedThreadStatusKeyByThreadId,
         lastThreadRoute: nextLastThreadRoute,
         activityViewEnabled,
+        activityScope,
       });
     },
     [
+      activityScope,
       activityViewEnabled,
       chatSectionExpanded,
       chatThreadListExtraPages,
@@ -4010,28 +4104,13 @@ export default function Sidebar() {
     animatedProjectListsRef.current.add(node);
   }, []);
 
-  // --- Primary nav customization: persisted order + visibility, edited in a card. ---
-  const sidebarNavOrder = useMemo(
-    () =>
-      resolveTasksSurfaceSlot(
-        normalizeSidebarNavOrder(appSettings.sidebarNavOrder),
-        tasksSurfaceEnabled,
-      ),
-    [appSettings.sidebarNavOrder, tasksSurfaceEnabled],
-  );
-  const hiddenSidebarNavItems = useMemo(
-    () =>
-      new Set(
-        resolveTasksSurfaceSlot(
-          normalizeHiddenSidebarNavItems(appSettings.hiddenSidebarNavItems),
-          tasksSurfaceEnabled,
-        ),
-      ),
-    [appSettings.hiddenSidebarNavItems, tasksSurfaceEnabled],
-  );
+  // --- Rail customization: the editor opens as a popover beside the rail. ---
   const [isCustomizingNav, setIsCustomizingNav] = useState(false);
-  // Rail layout: the customize editor opens as a popover beside the rail.
   const railSlot = useAppRailSlot();
+  // Phones have no shell slot: the rail rides inside the sidebar sheet, so its own wrapper
+  // anchors the editor there.
+  const [mobileRailElement, setMobileRailElement] = useState<HTMLDivElement | null>(null);
+  const railCustomizeAnchor = railSlot ?? mobileRailElement;
   const [navCustomizeMenuPosition, setNavCustomizeMenuPosition] = useState<{
     x: number;
     y: number;
@@ -4115,42 +4194,6 @@ export default function Sidebar() {
       pullRequestsReviewBadge,
       tasksAttentionBadge,
     ],
-  );
-  // Inbox exists only where it ships (Beta); everything else is always available.
-  const availableSidebarNavIds = useMemo(
-    () => sidebarNavOrder.filter((id) => id !== "inbox" || inboxAvailable),
-    [inboxAvailable, sidebarNavOrder],
-  );
-  // A hidden item whose route is currently active stays visible so the current
-  // surface never loses its sidebar row (mirrors the hidden-provider rule).
-  const visibleSidebarNavIds = useMemo(
-    () =>
-      availableSidebarNavIds.filter(
-        (id) => !hiddenSidebarNavItems.has(id) || sidebarNavDescriptors[id].active,
-      ),
-    [availableSidebarNavIds, hiddenSidebarNavItems, sidebarNavDescriptors],
-  );
-  // Reorders only what this build ships: an item it leaves out (Inbox on Stable) stays out
-  // of the saved order, so it joins at its default place once it ships instead of wherever
-  // the user's drags pushed its hidden slot.
-  const handleNavOrderReorder = useCallback(
-    (activeId: string, overId: string) => {
-      const order = availableSidebarNavIds;
-      const fromIndex = order.indexOf(activeId as SidebarNavItemId);
-      const toIndex = order.indexOf(overId as SidebarNavItemId);
-      if (fromIndex < 0 || toIndex < 0) return;
-      updateSettings({ sidebarNavOrder: arrayMove([...order], fromIndex, toIndex) });
-    },
-    [availableSidebarNavIds, updateSettings],
-  );
-  const handleNavItemVisibleChange = useCallback(
-    (id: string, visible: boolean) => {
-      // Ids come from the customize rows, which list SidebarNavItemIds only.
-      const navId = id as SidebarNavItemId;
-      const hidden = [...hiddenSidebarNavItems].filter((entry) => entry !== navId);
-      updateSettings({ hiddenSidebarNavItems: visible ? hidden : [...hidden, navId] });
-    },
-    [hiddenSidebarNavItems, updateSettings],
   );
   const handleNavContextMenu = useCallback((event: MouseEvent) => {
     if (!readNativeApi()) return;
@@ -4312,7 +4355,8 @@ export default function Sidebar() {
       const tone: SpaceActivityTone =
         status.label === "Working" ||
         status.label === "Connecting" ||
-        status.label === "In Background"
+        status.label === "In Background" ||
+        status.label === "Preparing worktree"
           ? "running"
           : status.label === "Completed"
             ? "completed"
@@ -4459,33 +4503,27 @@ export default function Sidebar() {
   // whatever its folder state in the Home tree, so it derives as expanded.
   const railSpacesSections = useMemo(
     () =>
-      isRailLayout
-        ? buildRailSpacesSections({
-            items: allStandardProjectsBase,
-            spaces,
-            activeSpaceId,
-            spaceIdOf: (project) => project.spaceId ?? null,
-            voidSpace,
-          })
-        : [],
-    [activeSpaceId, allStandardProjectsBase, isRailLayout, spaces, voidSpace],
+      buildRailSpacesSections({
+        items: allStandardProjectsBase,
+        spaces,
+        activeSpaceId,
+        spaceIdOf: (project) => project.spaceId ?? null,
+        voidSpace,
+      }),
+    [activeSpaceId, allStandardProjectsBase, spaces, voidSpace],
   );
   // Rail layout: Spaces and single projects the user added to the rail from its "…" menu.
   const railShortcuts = useMemo(
     () =>
-      isRailLayout
-        ? resolveRailShortcuts({
-            keys: appSettings.railShortcuts,
-            spaceIds: new Set(spaces.map((space) => space.id)),
-            projectIds: new Set(allStandardProjectsBase.map((project) => project.id)),
-          })
-        : [],
-    [allStandardProjectsBase, appSettings.railShortcuts, isRailLayout, spaces],
+      resolveRailShortcuts({
+        keys: appSettings.railShortcuts,
+        spaceIds: new Set(spaces.map((space) => space.id)),
+        projectIds: new Set(allStandardProjectsBase.map((project) => project.id)),
+      }),
+    [allStandardProjectsBase, appSettings.railShortcuts, spaces],
   );
   const railSpacesProject =
-    isRailLayout && railSpacesProjectId !== null
-      ? (projectById.get(railSpacesProjectId) ?? null)
-      : null;
+    railSpacesProjectId !== null ? (projectById.get(railSpacesProjectId) ?? null) : null;
   const railSpacesProjectSidebarData = useMemo(() => {
     if (!railSpacesProject) {
       return null;
@@ -4569,8 +4607,10 @@ export default function Sidebar() {
       dismissedThreadStatusKeyByThreadId,
       lastThreadRoute,
       activityViewEnabled,
+      activityScope,
     });
   }, [
+    activityScope,
     activityViewEnabled,
     chatSectionExpanded,
     chatThreadListExtraPages,
@@ -6437,19 +6477,6 @@ export default function Sidebar() {
     setAllProjectsExpanded(true);
   }, [allProjectsExpanded, collapseProjectsExcept, focusedProjectId, setAllProjectsExpanded]);
 
-  // Only macOS draws the traffic lights in the renderer's top-left, so only there
-  // does the open-sidebar header need to reserve the gutter (mirrors the mac guard
-  // in useDesktopTopBarTrafficLightGutterClassName used by the closed-state surfaces).
-  const isMacDesktop = isMacNavigatorPlatform();
-
-  // Open-sidebar (in-sidebar) and non-electron wordmark clusters share the one
-  // SidebarLeadingControls primitive with the closed-state host headers, so the
-  // toggle + arrows look identical whether the sidebar is open or collapsed; only
-  // the wrapper layout differs per host.
-  const titlebarControls = <SidebarLeadingControls className="hidden md:flex" />;
-
-  const headerControls = <SidebarLeadingControls className="ml-auto hidden md:flex" />;
-
   const betaBadge = isBetaDesktopFlavor ? (
     <span
       aria-label="Synara Beta"
@@ -6459,14 +6486,8 @@ export default function Sidebar() {
     </span>
   ) : null;
 
-  const wordmark = (
-    <div className="flex w-full items-center gap-1.5">
-      <SidebarTrigger className="shrink-0 text-muted-foreground/75 hover:text-foreground md:hidden" />
-      {headerControls}
-    </div>
-  );
-  // Rail layout: Home and Spaces switch the panel; route items navigate exactly like their
-  // classic nav rows (prewarm included). The store's active item keeps one item selected.
+  // Home and Spaces switch the panel; route items navigate (prewarm included). The store's
+  // active item keeps one item selected.
   const isOnThreadsSection =
     !isOnSettings &&
     !isOnGroups &&
@@ -6475,18 +6496,11 @@ export default function Sidebar() {
     !isOnPullRequests &&
     !isOnAutomations &&
     !isOnInbox;
-  // One Help menu wiring for both homes: the classic footer and the rail's bottom cluster.
   const sidebarHelpMenuProps = {
     onOpenShortcuts: () => void navigate({ to: "/settings", search: { section: "shortcuts" } }),
     onOpenFeedback: openFeedbackDialog,
-    // The rail customizes from its "…" menu; the classic card lives in the thread view's
-    // nav block.
-    onCustomizeSidebar:
-      isRailLayout || isOnGroups || isOnSettings
-        ? null
-        : () => {
-            setIsCustomizingNav(true);
-          },
+    // The rail customizes from its "…" menu.
+    onCustomizeSidebar: null,
   };
   // A pinned Space or project stands for what the panel shows, so Home/Spaces step back.
   const activeRailShortcutKey = resolveActiveRailShortcutKey({
@@ -6631,19 +6645,8 @@ export default function Sidebar() {
       active={railActiveItem === "studio" && !railVisibleItemIds.includes("studio")}
     />
   );
-  // Customize rows: the classic card lists the nav block; the rail popover lists the rail's
-  // own items (Groups only while its section is enabled, Inbox only where it ships), then
-  // its Space/project shortcuts.
-  const sidebarNavCustomizeItems: SidebarCustomizeItem[] = availableSidebarNavIds.map((id) => {
-    const item = sidebarNavDescriptors[id];
-    return {
-      id,
-      icon: item.icon,
-      iconClassName: item.iconClassName,
-      label: item.label,
-      visible: !hiddenSidebarNavItems.has(id),
-    };
-  });
+  // Customize rows: the rail popover lists the rail's own items (Groups only while its
+  // section is enabled, Inbox only where it ships), then its Space/project shortcuts.
   const railCustomizeItems: SidebarCustomizeItem[] = railItemOrder
     .filter((id) => isRailItemAvailable(id, railAvailability))
     .map((id) => ({
@@ -6701,17 +6704,11 @@ export default function Sidebar() {
   ];
   // The rail owns the route destinations, so the panel keeps only "New thread": always
   // there, since the rail's Customize has no New thread row to bring it back.
-  const panelSidebarNavIds: readonly SidebarNavItemId[] = isRailLayout
-    ? ["newThread"]
-    : visibleSidebarNavIds;
-  // Rail layout: Automations owns its panel (its list), like Settings and Groups do.
-  const showRailAutomationsPanel = isRailLayout && isOnAutomations;
+  const panelSidebarNavIds: readonly SidebarNavItemId[] = ["newThread"];
+  // Automations owns its panel (its list), like Settings and Groups do.
+  const showRailAutomationsPanel = isOnAutomations;
   const showRailSpacesPanel =
-    isRailLayout &&
-    railPanelView === "spaces" &&
-    !isOnGroups &&
-    !isOnSettings &&
-    !activityViewEnabled;
+    railPanelView === "spaces" && !isOnGroups && !isOnSettings && !activityViewEnabled;
   // Switching Home/Spaces or the Spaces level replays the surface enter animation.
   const sidebarSurfaceKey = showRailSpacesPanel
     ? `spaces:${railSpacesProject?.id ?? ""}`
@@ -6764,19 +6761,28 @@ export default function Sidebar() {
   const projectContextMenuHasOpenServer =
     projectContextMenuServer !== null && firstLocalServerUrl(projectContextMenuServer) !== null;
 
+  const appRailProps = {
+    items: railItems,
+    shortcuts: railShortcutItems,
+    moreSlot: railMoreMenu,
+    bottomItems: railBottomItems,
+    bottomSlot: (
+      <>
+        <AppRailUsage
+          onOpenUsageSettings={() => {
+            void navigate({ to: "/settings", search: { section: "usage" } });
+          }}
+        />
+        <SidebarHelpMenu inRail {...sidebarHelpMenuProps} />
+      </>
+    ),
+    onContextMenu: handleNavContextMenu,
+  };
+
   return (
     <>
-      {isRailLayout ? (
-        <AppRailPortal
-          items={railItems}
-          shortcuts={railShortcutItems}
-          moreSlot={railMoreMenu}
-          bottomItems={railBottomItems}
-          bottomSlot={<SidebarHelpMenu inRail {...sidebarHelpMenuProps} />}
-          onContextMenu={handleNavContextMenu}
-        />
-      ) : null}
-      {isRailLayout && railSlot ? (
+      {isMobile ? null : <AppRailPortal {...appRailProps} />}
+      {railCustomizeAnchor ? (
         <Popover
           open={isCustomizingNav}
           onOpenChange={(open) => {
@@ -6784,7 +6790,7 @@ export default function Sidebar() {
           }}
         >
           <PopoverPopup
-            anchor={railSlot}
+            anchor={railCustomizeAnchor}
             side="right"
             align="start"
             sideOffset={8}
@@ -6812,535 +6818,497 @@ export default function Sidebar() {
           </PopoverPopup>
         </Popover>
       ) : null}
-      {isRailLayout ? null : isElectron ? (
-        <>
-          <SidebarHeader
-            className={cn(
-              "drag-region flex-row items-center gap-2 py-0 ps-4 pe-3 font-system-ui",
-              CHAT_SURFACE_HEADER_HEIGHT_CLASS,
-              isMacDesktop && DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS,
-            )}
-          >
-            {titlebarControls}
-          </SidebarHeader>
-        </>
-      ) : (
-        <SidebarHeader className="gap-3 px-3 py-2.5 font-system-ui sm:gap-2.5 sm:px-4 sm:py-3">
-          {wordmark}
-        </SidebarHeader>
-      )}
-
-      <SidebarContent className="gap-0 font-system-ui">
-        {showArm64IntelBuildWarning && arm64IntelBuildWarningDescription ? (
-          <SidebarGroup className="px-2 pt-2 pb-0">
-            <Alert variant="warning" className="rounded-2xl border-warning/40 bg-warning/8">
-              <TriangleAlertIcon />
-              <AlertTitle>Intel build on Apple Silicon</AlertTitle>
-              <AlertDescription>{arm64IntelBuildWarningDescription}</AlertDescription>
-              {desktopUpdateButtonAction !== "none" ? (
-                <AlertAction>
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    disabled={desktopUpdateButtonDisabled}
-                    onClick={handleDesktopUpdateButtonClick}
-                  >
-                    {desktopUpdateButtonAction === "download"
-                      ? "Preparing ARM build"
-                      : desktopUpdateButtonAction === "install"
-                        ? "Update ARM build"
-                        : "Check for ARM build update"}
-                  </Button>
-                </AlertAction>
-              ) : null}
-            </Alert>
-          </SidebarGroup>
+      {/* Phones show the sidebar as a sheet over the shell, so the rail rides inside it,
+          beside the panel. On desktop both wrappers vanish (`contents`) and the rail is
+          portaled into the shell instead. */}
+      <div className={isMobile ? "flex min-h-0 flex-1" : "contents"}>
+        {isMobile ? (
+          <div ref={setMobileRailElement} className="flex shrink-0">
+            <AppRail {...appRailProps} />
+          </div>
         ) : null}
-        {isOnSettings ? (
-          <SidebarGroup className="p-0">
-            {isRailLayout ? (
-              // The rail is the way back, so the panel opens on its title like every section.
-              <SidebarPanelTitle title="Settings" />
+        <div className={isMobile ? "flex min-h-0 min-w-0 flex-1 flex-col" : "contents"}>
+          <SidebarContent className="gap-0 font-system-ui">
+            {showArm64IntelBuildWarning && arm64IntelBuildWarningDescription ? (
+              <SidebarGroup className="px-2 pt-2 pb-0">
+                <Alert variant="warning" className="rounded-2xl border-warning/40 bg-warning/8">
+                  <TriangleAlertIcon />
+                  <AlertTitle>Intel build on Apple Silicon</AlertTitle>
+                  <AlertDescription>{arm64IntelBuildWarningDescription}</AlertDescription>
+                  {desktopUpdateButtonAction !== "none" ? (
+                    <AlertAction>
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        disabled={desktopUpdateButtonDisabled}
+                        onClick={handleDesktopUpdateButtonClick}
+                      >
+                        {desktopUpdateButtonAction === "download"
+                          ? "Preparing ARM build"
+                          : desktopUpdateButtonAction === "install"
+                            ? "Update ARM build"
+                            : "Check for ARM build update"}
+                      </Button>
+                    </AlertAction>
+                  ) : null}
+                </Alert>
+              </SidebarGroup>
             ) : null}
-            <SettingsSidebarNav
-              activeSection={activeSettingsSection}
-              onBack={isRailLayout ? null : handleBackToAppFromSettings}
-              onSelectSection={(section, options) => {
-                void navigate({
-                  to: "/settings",
-                  search: (previous) => ({
-                    ...previous,
-                    section: section === "general" ? undefined : section,
-                    target: options?.target,
-                  }),
-                });
-              }}
-            />
-          </SidebarGroup>
-        ) : showRailAutomationsPanel ? (
-          <RailAutomationsPanel />
-        ) : (
-          <>
-            <div
-              className={cn(
-                "flex items-center gap-1 pt-0 pb-1 pr-2.5 pl-1.5",
-                // Rail layout: the panel has no header above it, so the title row gets
-                // breathing room from the panel's top edge. pt-1.5 puts the title's cap
-                // height as far from the top edge as its first letter is from the side.
-                isRailLayout && "pt-1.5",
-              )}
-            >
-              <SidebarSurfacePicker
-                views={["threads", ...(groupsSectionVisible ? (["groups"] as const) : [])]}
-                activeView={isOnGroups ? "groups" : "threads"}
-                onSelectView={handleSidebarViewChange}
-                onPrewarmView={prewarmSidebarViewTarget}
-              />
-              <div className="ml-auto flex items-center gap-1.5">
-                <SidebarIconButton
-                  icon={SearchIcon}
-                  label="Search"
-                  glyph="leading"
-                  size="header"
-                  tooltip={searchShortcutLabel ? `Search (${searchShortcutLabel})` : "Search"}
-                  tooltipSide="bottom"
-                  onClick={() => {
-                    setSearchPaletteOpen(true);
+            {isOnSettings ? (
+              <SidebarGroup className="p-0">
+                {/* The rail is the way back, so the panel opens on its title like every section. */}
+                <SidebarPanelTitle title="Settings" />
+                <SettingsSidebarNav
+                  activeSection={activeSettingsSection}
+                  onSelectSection={(section, options) => {
+                    void navigate({
+                      to: "/settings",
+                      search: (previous) => ({
+                        ...previous,
+                        section: section === "general" ? undefined : section,
+                        target: options?.target,
+                      }),
+                    });
                   }}
                 />
-                {!isOnGroups ? (
-                  <SidebarActivityBellButton
-                    active={activityViewEnabled}
-                    showUnreadDot={hasUnreadActivity}
-                    shortcutLabel={activityShortcutLabel}
-                    onClick={() => setActivityViewEnabledSmoothly(!activityViewEnabled)}
+              </SidebarGroup>
+            ) : showRailAutomationsPanel ? (
+              <RailAutomationsPanel />
+            ) : (
+              <>
+                <div
+                  // The panel has no header above it, so the title row gets breathing room from
+                  // the panel's top edge. pt-1.5 puts the title's cap height as far from the top
+                  // edge as its first letter is from the side.
+                  className="flex items-center gap-1 pt-1.5 pb-1 pr-2.5 pl-1.5"
+                >
+                  <SidebarSurfacePicker
+                    views={["threads", ...(groupsSectionVisible ? (["groups"] as const) : [])]}
+                    activeView={isOnGroups ? "groups" : "threads"}
+                    onSelectView={handleSidebarViewChange}
+                    onPrewarmView={prewarmSidebarViewTarget}
                   />
-                ) : null}
-                {betaBadge}
-              </div>
-            </div>
-            {/* The keyed content remounts with a short enter animation while the picker
-                stays mounted so its thumb can glide between Projects and Groups. */}
-            <div key={sidebarSurfaceKey} className="sidebar-surface-enter">
-              {/* Primary sidebar actions stay limited to features we currently ship. */}
-              {!isOnGroups && isCustomizingNav && !isRailLayout ? (
-                <SidebarGroup className="px-1.5 pt-1 pb-1.5">
-                  {/* Customize mode: the nav block lifts into a raised card (same chrome as
-                      the Environment panel/composer) with per-item visibility + reorder. */}
-                  <div className={cn(ENVIRONMENT_PANEL_SURFACE_CLASS_NAME, "p-1.5")}>
-                    <SidebarCustomizeHeader onDone={() => setIsCustomizingNav(false)} />
-                    <SidebarCustomizeList
-                      items={sidebarNavCustomizeItems}
-                      onReorder={handleNavOrderReorder}
-                      onVisibleChange={handleNavItemVisibleChange}
+                  <div className="ml-auto flex items-center gap-1.5">
+                    <SidebarIconButton
+                      icon={SearchIcon}
+                      label="Search"
+                      glyph="leading"
+                      size="header"
+                      tooltip={searchShortcutLabel ? `Search (${searchShortcutLabel})` : "Search"}
+                      tooltipSide="bottom"
+                      onClick={() => {
+                        setSearchPaletteOpen(true);
+                      }}
                     />
+                    {!isOnGroups ? (
+                      <SidebarActivityBellButton
+                        active={activityViewEnabled}
+                        showUnreadDot={hasUnreadActivity}
+                        shortcutLabel={activityShortcutLabel}
+                        onClick={() => setActivityViewEnabledSmoothly(!activityViewEnabled)}
+                      />
+                    ) : null}
+                    {betaBadge}
                   </div>
-                </SidebarGroup>
-              ) : !isOnGroups ? (
-                <SidebarGroup className="px-1.5 pt-1 pb-1.5" onContextMenu={handleNavContextMenu}>
-                  <SidebarMenu className="gap-0.5">
-                    {panelSidebarNavIds.map((id) => {
-                      const item = sidebarNavDescriptors[id];
-                      return (
-                        <SidebarPrimaryAction
-                          key={id}
-                          icon={item.icon}
-                          {...(item.iconClassName ? { iconClassName: item.iconClassName } : {})}
-                          label={item.label}
-                          active={item.active}
-                          badge={item.badge}
-                          onClick={item.onClick}
-                          {...(item.onMouseEnter ? { onMouseEnter: item.onMouseEnter } : {})}
-                          {...(item.onFocus ? { onFocus: item.onFocus } : {})}
-                        />
-                      );
-                    })}
-                  </SidebarMenu>
-                </SidebarGroup>
-              ) : null}
+                </div>
+                {/* The keyed content remounts with a short enter animation while the picker
+                stays mounted so its thumb can glide between Projects and Groups. */}
+                <div key={sidebarSurfaceKey} className="sidebar-surface-enter">
+                  {/* Primary sidebar actions stay limited to features we currently ship. */}
+                  {!isOnGroups ? (
+                    <SidebarGroup
+                      className="px-1.5 pt-1 pb-1.5"
+                      onContextMenu={handleNavContextMenu}
+                    >
+                      <SidebarMenu className="gap-0.5">
+                        {panelSidebarNavIds.map((id) => {
+                          const item = sidebarNavDescriptors[id];
+                          return (
+                            <SidebarPrimaryAction
+                              key={id}
+                              icon={item.icon}
+                              {...(item.iconClassName ? { iconClassName: item.iconClassName } : {})}
+                              label={item.label}
+                              active={item.active}
+                              badge={item.badge}
+                              onClick={item.onClick}
+                              {...(item.onMouseEnter ? { onMouseEnter: item.onMouseEnter } : {})}
+                              {...(item.onFocus ? { onFocus: item.onFocus } : {})}
+                            />
+                          );
+                        })}
+                      </SidebarMenu>
+                    </SidebarGroup>
+                  ) : null}
 
-              {isOnGroups ? (
-                <SidebarGroupsSurface
-                  groupProjects={groupProjects}
-                  projectSidebarDataById={groupProjectSidebarDataById}
-                  threadsHydrated={threadsHydrated}
-                  visualActiveThreadId={visualActiveSidebarThreadId}
-                  threadSortOrder={appSettings.sidebarThreadSortOrder}
-                  onThreadSortOrderChange={(sortOrder) => {
-                    updateSettings({ sidebarThreadSortOrder: sortOrder });
-                  }}
-                  renderThreadRow={renderThreadRow}
-                  renderListSectionHeader={renderListSectionHeader}
-                  renderPinnedThreadsSection={renderPinnedThreadsSection}
-                  onOpenThread={activateThreadFromSidebarIntent}
-                  onOpenGroupSettings={(projectId, mode, options) => {
-                    setProjectAgentDialogState({ projectId, mode, ...options });
-                  }}
-                  onProjectContextMenu={handleProjectContextMenu}
-                />
-              ) : activityViewEnabled ? (
-                <SidebarGroup className="px-1.5 py-1.5">
-                  <SidebarActivityView
-                    threads={visibleNonGroupSidebarThreads}
-                    projectById={projectById}
-                    activeThreadId={visualActiveSidebarThreadId}
-                    pinnedThreadIdSet={pinnedThreadIdSet}
-                    settledOverrideByThreadId={settledOverrideByThreadId}
-                    threadsHydrated={threadsHydrated}
-                    resolveThreadStatus={resolveThreadStatusForSidebar}
-                    onOpenThread={activateThreadFromSidebarIntent}
-                    onOpenThreadPullRequest={openThreadPullRequest}
-                    onSetThreadSettled={setThreadSettledWithToast}
-                    onToggleThreadPinned={toggleThreadPinned}
-                    onArchiveThread={(threadId) => void archiveThreadWithUndo(threadId)}
-                    onMarkThreadRead={markThreadVisited}
-                    onRenameThread={openRenameThreadDialog}
-                    onThreadRenamePointerUp={handleThreadRenamePointerUp}
-                    onThreadContextMenu={(threadId, position) => {
-                      void handleThreadContextMenu(threadId, position);
-                    }}
-                    onProjectContextMenu={handleProjectContextMenu}
-                    prByThreadId={prByThreadId}
-                    onVisibleThreadIdsChange={handleActivityVisibleThreadIdsChange}
-                    renderThreadHoverCard={(thread, anchorId) =>
-                      renderThreadHoverCardPopup(
-                        thread,
-                        anchorId,
-                        visualActiveSidebarThreadId === thread.id,
-                      )
-                    }
-                    onCreateChat={handlePrimaryNewThread}
-                    onAddProject={handleStartAddProject}
-                  />
-                </SidebarGroup>
-              ) : showRailSpacesPanel ? (
-                renderRailSpacesPanel()
-              ) : (
-                <SidebarGroup className="px-1.5 py-1.5">
-                  <SpaceSwitcher
-                    spaces={spaces}
-                    activeSpaceId={activeSpaceId}
-                    activityBySpaceId={spaceActivityById}
-                    voidSpace={voidSpace}
-                    onSelect={handleSelectSpace}
-                    onCreate={() => openSpaceCreator()}
-                    onEdit={(space) => openSpaceEditor(space.id)}
-                    onDelete={(space) => void handleDeleteSpace(space.id)}
-                    onReorder={handleReorderSpaces}
-                    onRenameSpace={(space, name) => void handleRenameSpace(space, name)}
-                    onEditVoid={openVoidEditor}
-                    onRenameVoid={handleRenameVoid}
-                    onResetVoid={resetVoidSpace}
-                    onDropProject={(projectId, spaceId) =>
-                      void handleMoveProjectToSpace(projectId, spaceId)
-                    }
-                    jumpShortcutLabelForTab={jumpShortcutLabelForSpaceTab}
-                  />
-                  {renderPinnedThreadsSection()}
-                  {renderListSectionHeader(
-                    "Projects",
-                    <>
-                      {standardProjects.length > 0 ? (
-                        <SidebarIconButton
-                          icon={allProjectsExpanded ? CollapseAllIcon : ExpandAllIcon}
-                          label={
-                            allProjectsExpanded
-                              ? focusedProjectId
-                                ? "Collapse all projects except the active project"
-                                : "Collapse all projects"
-                              : "Expand all projects"
-                          }
-                          className="disabled:cursor-default disabled:opacity-45"
-                          onClick={handleToggleProjects}
-                          tooltip={
-                            allProjectsExpanded
-                              ? focusedProjectId
-                                ? "Collapse all projects except the active chat's project"
-                                : "Collapse all projects"
-                              : "Expand all projects"
-                          }
-                          tooltipSide="bottom"
-                        />
-                      ) : null}
-                      <ProjectSortMenu
-                        projectSortOrder={appSettings.sidebarProjectSortOrder}
-                        threadSortOrder={appSettings.sidebarThreadSortOrder}
-                        onProjectSortOrderChange={(sortOrder) => {
-                          updateSettings({ sidebarProjectSortOrder: sortOrder });
+                  {isOnGroups ? (
+                    <SidebarGroupsSurface
+                      groupProjects={groupProjects}
+                      projectSidebarDataById={groupProjectSidebarDataById}
+                      threadsHydrated={threadsHydrated}
+                      visualActiveThreadId={visualActiveSidebarThreadId}
+                      threadSortOrder={appSettings.sidebarThreadSortOrder}
+                      onThreadSortOrderChange={(sortOrder) => {
+                        updateSettings({ sidebarThreadSortOrder: sortOrder });
+                      }}
+                      renderThreadRow={renderThreadRow}
+                      renderListSectionHeader={renderListSectionHeader}
+                      renderPinnedThreadsSection={renderPinnedThreadsSection}
+                      onOpenThread={activateThreadFromSidebarIntent}
+                      onOpenGroupSettings={(projectId, mode, options) => {
+                        setProjectAgentDialogState({ projectId, mode, ...options });
+                      }}
+                      onProjectContextMenu={handleProjectContextMenu}
+                    />
+                  ) : activityViewEnabled ? (
+                    <SidebarGroup className="px-1.5 py-1.5">
+                      <SidebarActivityView
+                        threads={visibleNonGroupSidebarThreads}
+                        projectById={projectById}
+                        activeThreadId={visualActiveSidebarThreadId}
+                        pinnedThreadIdSet={pinnedThreadIdSet}
+                        settledOverrideByThreadId={settledOverrideByThreadId}
+                        threadsHydrated={threadsHydrated}
+                        scopeSelection={activityScope}
+                        onScopeSelectionChange={setActivityScope}
+                        resolveThreadStatus={resolveThreadStatusForSidebar}
+                        onOpenThread={activateThreadFromSidebarIntent}
+                        onOpenThreadPullRequest={openThreadPullRequest}
+                        onSetThreadSettled={setThreadSettledWithToast}
+                        onToggleThreadPinned={toggleThreadPinned}
+                        onArchiveThread={(threadId) => void archiveThreadWithUndo(threadId)}
+                        onMarkThreadRead={markThreadVisited}
+                        onRenameThread={openRenameThreadDialog}
+                        onThreadRenamePointerUp={handleThreadRenamePointerUp}
+                        onThreadContextMenu={(threadId, position) => {
+                          void handleThreadContextMenu(threadId, position);
                         }}
+                        onProjectContextMenu={handleProjectContextMenu}
+                        prByThreadId={prByThreadId}
+                        onVisibleThreadIdsChange={handleActivityVisibleThreadIdsChange}
+                        renderThreadHoverCard={(thread, anchorId) =>
+                          renderThreadHoverCardPopup(
+                            thread,
+                            anchorId,
+                            visualActiveSidebarThreadId === thread.id,
+                          )
+                        }
+                        onCreateChat={handlePrimaryNewThread}
+                        onAddProject={handleStartAddProject}
+                      />
+                    </SidebarGroup>
+                  ) : showRailSpacesPanel ? (
+                    renderRailSpacesPanel()
+                  ) : (
+                    <SidebarGroup className="px-1.5 py-1.5">
+                      <SpaceSwitcher
+                        spaces={spaces}
+                        activeSpaceId={activeSpaceId}
+                        activityBySpaceId={spaceActivityById}
+                        voidSpace={voidSpace}
+                        onSelect={handleSelectSpace}
+                        onCreate={() => openSpaceCreator()}
+                        onEdit={(space) => openSpaceEditor(space.id)}
+                        onDelete={(space) => void handleDeleteSpace(space.id)}
+                        onReorder={handleReorderSpaces}
+                        onRenameSpace={(space, name) => void handleRenameSpace(space, name)}
+                        onEditVoid={openVoidEditor}
+                        onRenameVoid={handleRenameVoid}
+                        onResetVoid={resetVoidSpace}
+                        onDropProject={(projectId, spaceId) =>
+                          void handleMoveProjectToSpace(projectId, spaceId)
+                        }
+                        jumpShortcutLabelForTab={jumpShortcutLabelForSpaceTab}
+                      />
+                      {renderPinnedThreadsSection()}
+                      {renderListSectionHeader(
+                        "Projects",
+                        <>
+                          {standardProjects.length > 0 ? (
+                            <SidebarIconButton
+                              icon={allProjectsExpanded ? CollapseAllIcon : ExpandAllIcon}
+                              label={
+                                allProjectsExpanded
+                                  ? focusedProjectId
+                                    ? "Collapse all projects except the active project"
+                                    : "Collapse all projects"
+                                  : "Expand all projects"
+                              }
+                              className="disabled:cursor-default disabled:opacity-45"
+                              onClick={handleToggleProjects}
+                              tooltip={
+                                allProjectsExpanded
+                                  ? focusedProjectId
+                                    ? "Collapse all projects except the active chat's project"
+                                    : "Collapse all projects"
+                                  : "Expand all projects"
+                              }
+                              tooltipSide="bottom"
+                            />
+                          ) : null}
+                          <ProjectSortMenu
+                            projectSortOrder={appSettings.sidebarProjectSortOrder}
+                            threadSortOrder={appSettings.sidebarThreadSortOrder}
+                            onProjectSortOrderChange={(sortOrder) => {
+                              updateSettings({ sidebarProjectSortOrder: sortOrder });
+                            }}
+                            onThreadSortOrderChange={(sortOrder) => {
+                              updateSettings({ sidebarThreadSortOrder: sortOrder });
+                            }}
+                          />
+                          <SidebarIconButton
+                            icon={AddPlusIcon}
+                            label="Add project"
+                            onClick={handleStartAddProject}
+                            tooltip="Add project"
+                            tooltipSide="right"
+                          />
+                        </>,
+                      )}
+
+                      {isManualProjectSorting ? (
+                        <DndContext
+                          sensors={projectDnDSensors}
+                          collisionDetection={projectCollisionDetection}
+                          modifiers={[restrictToVerticalAxis, restrictToFirstScrollableAncestor]}
+                          onDragStart={handleProjectDragStart}
+                          onDragEnd={handleProjectDragEnd}
+                          onDragCancel={handleProjectDragCancel}
+                        >
+                          <SidebarMenu className="gap-3">
+                            <SortableContext
+                              items={standardProjects.map((project) => project.id)}
+                              strategy={verticalListSortingStrategy}
+                            >
+                              {standardProjects.map((project) => (
+                                <SortableProjectItem key={project.id} projectId={project.id}>
+                                  {(dragHandleProps) => renderProjectItem(project, dragHandleProps)}
+                                </SortableProjectItem>
+                              ))}
+                            </SortableContext>
+                          </SidebarMenu>
+                        </DndContext>
+                      ) : (
+                        <SidebarMenu ref={attachProjectListAutoAnimateRef} className="gap-3">
+                          {standardProjects.map((project) => (
+                            <SidebarMenuItem key={project.id} className="rounded-md">
+                              {renderProjectItem(project, null)}
+                            </SidebarMenuItem>
+                          ))}
+                        </SidebarMenu>
+                      )}
+
+                      {projectEmptyState === "loading" && (
+                        <div
+                          className="space-y-2 px-2 pt-4"
+                          aria-live="polite"
+                          aria-label="Loading projects"
+                        >
+                          <div className="text-center text-ui text-muted-foreground/58">
+                            Loading projects...
+                          </div>
+                          <div className="mx-auto grid w-full max-w-42 gap-1.5 opacity-70">
+                            <div className="h-2 rounded-full bg-muted/55 animate-pulse" />
+                            <div className="mx-auto h-2 w-4/5 rounded-full bg-muted/40 animate-pulse" />
+                            <div className="mx-auto h-2 w-3/5 rounded-full bg-muted/30 animate-pulse" />
+                          </div>
+                        </div>
+                      )}
+
+                      {projectEmptyState === "empty" && (
+                        <SpaceEmptyState
+                          space={activeSpace}
+                          hasProjectsElsewhere={allStandardProjectsBase.length > 0}
+                          onMoveProjects={() => {
+                            if (activeSpace) openSpaceProjectPicker(activeSpace.id);
+                          }}
+                        />
+                      )}
+                    </SidebarGroup>
+                  )}
+                </div>
+              </>
+            )}
+            {!isOnSettings &&
+            !isOnGroups &&
+            !activityViewEnabled &&
+            !showRailSpacesPanel &&
+            !showRailAutomationsPanel &&
+            chatsSectionVisible ? (
+              // sidebar-surface-enter: mounts on the Groups -> Projects switch, so it
+              // animates in step with the keyed surface wrapper above.
+              <SidebarGroup className="sidebar-surface-enter px-1.5 pt-1 pb-2">
+                <div className="group/collapsible">
+                  <div className="group/project-header relative">
+                    <SidebarMenuButton
+                      size="sm"
+                      aria-expanded={chatSectionExpanded}
+                      className={cn(
+                        SIDEBAR_HEADER_ROW_CLASS_NAME,
+                        SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
+                        SIDEBAR_ROW_HOVER_CLASS_NAME,
+                        "cursor-pointer",
+                      )}
+                      onClick={() => setChatSectionExpanded((current) => !current)}
+                      onKeyDown={(event) => {
+                        if (event.key !== "Enter" && event.key !== " ") return;
+                        event.preventDefault();
+                        setChatSectionExpanded((current) => !current);
+                      }}
+                    >
+                      <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
+                        <span className="truncate font-system-ui text-ui font-normal text-muted-foreground/79">
+                          Chats
+                        </span>
+                        <DisclosureChevron
+                          open={chatSectionExpanded}
+                          className="text-muted-foreground/79"
+                        />
+                      </div>
+                    </SidebarMenuButton>
+                    <SidebarSectionToolbar placement="overlay" revealOnHover>
+                      <ChatSortMenu
+                        threadSortOrder={appSettings.sidebarThreadSortOrder}
                         onThreadSortOrderChange={(sortOrder) => {
                           updateSettings({ sidebarThreadSortOrder: sortOrder });
                         }}
                       />
                       <SidebarIconButton
-                        icon={AddPlusIcon}
-                        label="Add project"
-                        onClick={handleStartAddProject}
-                        tooltip="Add project"
-                        tooltipSide="right"
+                        icon={NewThreadIcon}
+                        label="Open new chat home"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          void handleCreateHomeChat();
+                        }}
+                        tooltip={
+                          newChatShortcutLabel ? `New chat (${newChatShortcutLabel})` : "New chat"
+                        }
+                        tooltipSide="top"
                       />
-                    </>,
-                  )}
-
-                  {isManualProjectSorting ? (
-                    <DndContext
-                      sensors={projectDnDSensors}
-                      collisionDetection={projectCollisionDetection}
-                      modifiers={[restrictToVerticalAxis, restrictToFirstScrollableAncestor]}
-                      onDragStart={handleProjectDragStart}
-                      onDragEnd={handleProjectDragEnd}
-                      onDragCancel={handleProjectDragCancel}
-                    >
-                      <SidebarMenu className="gap-3">
-                        <SortableContext
-                          items={standardProjects.map((project) => project.id)}
-                          strategy={verticalListSortingStrategy}
-                        >
-                          {standardProjects.map((project) => (
-                            <SortableProjectItem key={project.id} projectId={project.id}>
-                              {(dragHandleProps) => renderProjectItem(project, dragHandleProps)}
-                            </SortableProjectItem>
-                          ))}
-                        </SortableContext>
-                      </SidebarMenu>
-                    </DndContext>
-                  ) : (
-                    <SidebarMenu ref={attachProjectListAutoAnimateRef} className="gap-3">
-                      {standardProjects.map((project) => (
-                        <SidebarMenuItem key={project.id} className="rounded-md">
-                          {renderProjectItem(project, null)}
-                        </SidebarMenuItem>
-                      ))}
-                    </SidebarMenu>
-                  )}
-
-                  {projectEmptyState === "loading" && (
-                    <div
-                      className="space-y-2 px-2 pt-4"
-                      aria-live="polite"
-                      aria-label="Loading projects"
-                    >
-                      <div className="text-center text-ui text-muted-foreground/58">
-                        Loading projects...
-                      </div>
-                      <div className="mx-auto grid w-full max-w-42 gap-1.5 opacity-70">
-                        <div className="h-2 rounded-full bg-muted/55 animate-pulse" />
-                        <div className="mx-auto h-2 w-4/5 rounded-full bg-muted/40 animate-pulse" />
-                        <div className="mx-auto h-2 w-3/5 rounded-full bg-muted/30 animate-pulse" />
-                      </div>
-                    </div>
-                  )}
-
-                  {projectEmptyState === "empty" && (
-                    <SpaceEmptyState
-                      space={activeSpace}
-                      hasProjectsElsewhere={allStandardProjectsBase.length > 0}
-                      onMoveProjects={() => {
-                        if (activeSpace) openSpaceProjectPicker(activeSpace.id);
-                      }}
-                    />
-                  )}
-                </SidebarGroup>
-              )}
-            </div>
-          </>
-        )}
-        {!isOnSettings &&
-        !isOnGroups &&
-        !activityViewEnabled &&
-        !showRailSpacesPanel &&
-        !showRailAutomationsPanel &&
-        chatsSectionVisible ? (
-          // sidebar-surface-enter: mounts on the Groups -> Projects switch, so it
-          // animates in step with the keyed surface wrapper above.
-          <SidebarGroup className="sidebar-surface-enter px-1.5 pt-1 pb-2">
-            <div className="group/collapsible">
-              <div className="group/project-header relative">
-                <SidebarMenuButton
-                  size="sm"
-                  aria-expanded={chatSectionExpanded}
-                  className={cn(
-                    SIDEBAR_HEADER_ROW_CLASS_NAME,
-                    SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
-                    SIDEBAR_ROW_HOVER_CLASS_NAME,
-                    "cursor-pointer",
-                  )}
-                  onClick={() => setChatSectionExpanded((current) => !current)}
-                  onKeyDown={(event) => {
-                    if (event.key !== "Enter" && event.key !== " ") return;
-                    event.preventDefault();
-                    setChatSectionExpanded((current) => !current);
-                  }}
-                >
-                  <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
-                    <span className="truncate font-system-ui text-ui font-normal text-muted-foreground/79">
-                      Chats
-                    </span>
-                    <DisclosureChevron
-                      open={chatSectionExpanded}
-                      className="text-muted-foreground/79"
-                    />
+                    </SidebarSectionToolbar>
                   </div>
-                </SidebarMenuButton>
-                <SidebarSectionToolbar placement="overlay" revealOnHover>
-                  <ChatSortMenu
-                    threadSortOrder={appSettings.sidebarThreadSortOrder}
-                    onThreadSortOrderChange={(sortOrder) => {
-                      updateSettings({ sidebarThreadSortOrder: sortOrder });
-                    }}
-                  />
-                  <SidebarIconButton
-                    icon={NewThreadIcon}
-                    label="Open new chat home"
-                    onClick={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      void handleCreateHomeChat();
-                    }}
-                    tooltip={
-                      newChatShortcutLabel ? `New chat (${newChatShortcutLabel})` : "New chat"
-                    }
-                    tooltipSide="top"
-                  />
-                </SidebarSectionToolbar>
-              </div>
 
-              <div className={cn(disclosureShellClassName(chatSectionExpanded), "pt-1")}>
-                <div className={DISCLOSURE_INNER_CLASS}>
-                  <SidebarMenu
-                    className={cn("gap-1", disclosureContentClassName(chatSectionExpanded))}
-                  >
-                    {visibleChatThreadRows.length > 0 ? (
-                      renderedChatEntries.map((entry) =>
-                        renderThreadRow(
-                          entry.row.thread,
-                          visibleChatThreadIds,
-                          entry.row.depth,
-                          true,
-                        ),
-                      )
-                    ) : (
-                      <div className="px-2 py-2 text-ui text-muted-foreground/48">No chats yet</div>
-                    )}
-                    {canShowMoreChatThreads || canShowLessChatThreads ? (
-                      <SidebarMenuItem className="w-full">
-                        <div className="flex w-full items-center gap-1">
-                          {canShowMoreChatThreads ? (
-                            <SidebarMenuButton
-                              size="sm"
-                              className="h-7 flex-1 justify-start rounded-lg pr-2 pl-8 text-left text-ui font-normal text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground"
-                              onMouseDown={preventFocusOnMouseDown}
-                              onClick={() =>
-                                setChatThreadListExtraPages(chatThreadListEffectiveExtraPages + 1)
-                              }
-                            >
-                              <span>Show more</span>
-                            </SidebarMenuButton>
-                          ) : null}
-                          {canShowLessChatThreads ? (
-                            <SidebarMenuButton
-                              size="sm"
-                              className={cn(
-                                "h-7 justify-start rounded-lg text-left text-ui font-normal text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground",
-                                // Keep the left indent when "Show less" is the only affordance left.
-                                canShowMoreChatThreads
-                                  ? "w-auto flex-none px-2"
-                                  : "flex-1 pr-2 pl-8",
-                              )}
-                              onMouseDown={preventFocusOnMouseDown}
-                              onClick={() =>
-                                setChatThreadListExtraPages(
-                                  Math.max(0, chatThreadListEffectiveExtraPages - 1),
-                                )
-                              }
-                            >
-                              <span>Show less</span>
-                            </SidebarMenuButton>
-                          ) : null}
-                        </div>
-                      </SidebarMenuItem>
-                    ) : null}
-                  </SidebarMenu>
+                  <div className={cn(disclosureShellClassName(chatSectionExpanded), "pt-1")}>
+                    <div className={DISCLOSURE_INNER_CLASS}>
+                      <SidebarMenu
+                        className={cn("gap-1", disclosureContentClassName(chatSectionExpanded))}
+                      >
+                        {visibleChatThreadRows.length > 0 ? (
+                          renderedChatEntries.map((entry) =>
+                            renderThreadRow(
+                              entry.row.thread,
+                              visibleChatThreadIds,
+                              entry.row.depth,
+                              true,
+                            ),
+                          )
+                        ) : (
+                          <div className="px-2 py-2 text-ui text-muted-foreground/48">
+                            No chats yet
+                          </div>
+                        )}
+                        {canShowMoreChatThreads || canShowLessChatThreads ? (
+                          <SidebarMenuItem className="w-full">
+                            <div className="flex w-full items-center gap-1">
+                              {canShowMoreChatThreads ? (
+                                <SidebarMenuButton
+                                  size="sm"
+                                  className="h-7 flex-1 justify-start rounded-lg pr-2 pl-8 text-left text-ui font-normal text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground"
+                                  onMouseDown={preventFocusOnMouseDown}
+                                  onClick={() =>
+                                    setChatThreadListExtraPages(
+                                      chatThreadListEffectiveExtraPages + 1,
+                                    )
+                                  }
+                                >
+                                  <span>Show more</span>
+                                </SidebarMenuButton>
+                              ) : null}
+                              {canShowLessChatThreads ? (
+                                <SidebarMenuButton
+                                  size="sm"
+                                  className={cn(
+                                    "h-7 justify-start rounded-lg text-left text-ui font-normal text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground",
+                                    // Keep the left indent when "Show less" is the only affordance left.
+                                    canShowMoreChatThreads
+                                      ? "w-auto flex-none px-2"
+                                      : "flex-1 pr-2 pl-8",
+                                  )}
+                                  onMouseDown={preventFocusOnMouseDown}
+                                  onClick={() =>
+                                    setChatThreadListExtraPages(
+                                      Math.max(0, chatThreadListEffectiveExtraPages - 1),
+                                    )
+                                  }
+                                >
+                                  <span>Show less</span>
+                                </SidebarMenuButton>
+                              ) : null}
+                            </div>
+                          </SidebarMenuItem>
+                        ) : null}
+                      </SidebarMenu>
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </div>
-          </SidebarGroup>
-        ) : null}
-      </SidebarContent>
+              </SidebarGroup>
+            ) : null}
+          </SidebarContent>
 
-      <SidebarFooter
-        className={cn(
-          "gap-2 border-sidebar-border border-t p-2 font-system-ui",
-          // Rail layout: Help lives in the rail, so the footer only carries the update pill.
-          isRailLayout && "border-t-0 pt-0",
-        )}
-      >
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <div className="flex flex-col gap-1">
-              {DebugFeatureFlagsMenu && showDebugFeatureFlagsMenu && !isOnSettings ? (
-                <Suspense fallback={null}>
-                  <DebugFeatureFlagsMenu />
-                </Suspense>
-              ) : null}
-              <div className="flex items-center gap-2">
-                {!isOnSettings && !isRailLayout && (
-                  <SidebarMenuButton
-                    size="sm"
-                    className={cn(
-                      SIDEBAR_HEADER_ROW_CLASS_NAME,
-                      SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
-                      SIDEBAR_ROW_HOVER_CLASS_NAME,
-                      "flex-1",
-                    )}
-                    onClick={() => void navigate({ to: "/settings" })}
-                  >
-                    <SidebarLeadingIcon size="sm" tone={SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME}>
-                      <SidebarGlyph icon={SettingsIcon} variant="leading" />
-                    </SidebarLeadingIcon>
-                    <span>Settings</span>
-                  </SidebarMenuButton>
-                )}
-                {showDesktopUpdateButton ? (
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <button
-                          type="button"
-                          aria-label={desktopUpdateTooltip}
-                          aria-disabled={desktopUpdateButtonDisabled || undefined}
-                          disabled={desktopUpdateButtonDisabled}
-                          className={desktopUpdateRowButtonClasses}
-                          onClick={handleDesktopUpdateButtonClick}
-                        >
-                          <span className="flex min-w-0 flex-1 items-center justify-between gap-1.5 leading-tight">
-                            <span className="min-w-0 truncate text-center">
-                              {desktopUpdateButtonPresentation.label}
-                            </span>
-                            {desktopUpdateButtonPresentation.secondaryLabel ? (
-                              <span className="min-w-0 truncate text-center text-ui-xs text-white/80">
-                                {desktopUpdateButtonPresentation.secondaryLabel}
+          <SidebarFooter
+            // Help lives in the rail, so the footer only carries the update pill.
+            className="gap-2 border-sidebar-border border-t-0 p-2 pt-0 font-system-ui"
+          >
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <div className="flex flex-col gap-1">
+                  {DebugFeatureFlagsMenu && showDebugFeatureFlagsMenu && !isOnSettings ? (
+                    <Suspense fallback={null}>
+                      <DebugFeatureFlagsMenu />
+                    </Suspense>
+                  ) : null}
+                  <div className="flex items-center gap-2">
+                    {showDesktopUpdateButton ? (
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <button
+                              type="button"
+                              aria-label={desktopUpdateTooltip}
+                              aria-disabled={desktopUpdateButtonDisabled || undefined}
+                              disabled={desktopUpdateButtonDisabled}
+                              className={desktopUpdateRowButtonClasses}
+                              onClick={handleDesktopUpdateButtonClick}
+                            >
+                              <span className="flex min-w-0 flex-1 items-center justify-between gap-1.5 leading-tight">
+                                <span className="min-w-0 truncate text-center">
+                                  {desktopUpdateButtonPresentation.label}
+                                </span>
+                                {desktopUpdateButtonPresentation.secondaryLabel ? (
+                                  <span className="min-w-0 truncate text-center text-ui-xs text-white/80">
+                                    {desktopUpdateButtonPresentation.secondaryLabel}
+                                  </span>
+                                ) : null}
                               </span>
-                            ) : null}
-                          </span>
-                          {desktopUpdateDownloadPercent !== null ? (
-                            <span className="rounded-full bg-white/20 px-1.5 py-0.5 text-ui-2xs font-semibold tabular-nums text-white/95">
-                              {desktopUpdateDownloadPercent}%
-                            </span>
-                          ) : null}
-                        </button>
-                      }
-                    />
-                    <TooltipPopup side="top">{desktopUpdateTooltip}</TooltipPopup>
-                  </Tooltip>
-                ) : isRailLayout ? null : (
-                  <SidebarHelpMenu {...sidebarHelpMenuProps} />
-                )}
-              </div>
-            </div>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarFooter>
+                              {desktopUpdateDownloadPercent !== null ? (
+                                <span className="rounded-full bg-white/20 px-1.5 py-0.5 text-ui-2xs font-semibold tabular-nums text-white/95">
+                                  {desktopUpdateDownloadPercent}%
+                                </span>
+                              ) : null}
+                            </button>
+                          }
+                        />
+                        <TooltipPopup side="top">{desktopUpdateTooltip}</TooltipPopup>
+                      </Tooltip>
+                    ) : null}
+                  </div>
+                </div>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarFooter>
+        </div>
+      </div>
 
       <CreateProjectDialog
         open={createProjectDialogOpen}

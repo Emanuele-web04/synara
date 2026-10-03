@@ -10,6 +10,7 @@ import type {
 import { Schema, ServiceMap } from "effect";
 import type { Effect } from "effect";
 
+import type { GitHubCliShape } from "../../git/Services/GitHubCli";
 import type { GitHubRepositoryInventory } from "../../pullRequests/repositoryResolution";
 
 /** Every repository the inbox needs is rate-limited and nothing is cached to show instead. */
@@ -32,7 +33,7 @@ export interface GitHubInboxSharedReads {
   readonly resolveProjectRepositories: (
     project: OrchestrationProject,
   ) => Effect.Effect<GitHubRepositoryInventory, unknown>;
-  readonly withGitHubRead: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+  readonly withGitHubRead: GitHubCliShape["withRead"];
   /** Called after any mutation on the repository so the next list reads it in full. */
   readonly invalidateRepository: (repository: string) => Effect.Effect<void>;
 }

@@ -191,7 +191,7 @@ function PullRequestRow({
       target="_blank"
       rel="noopener noreferrer"
       aria-label={`#${pr.number} ${presentation.label}: ${pr.title}`}
-      className={`${META_ROW_CLASS_NAME} cursor-pointer outline-hidden hover:bg-accent/50 focus-visible:ring-1 focus-visible:ring-ring`}
+      className={`${META_ROW_CLASS_NAME} cursor-pointer outline-hidden hover:bg-[var(--color-background-button-secondary-hover)] focus-visible:ring-1 focus-visible:ring-ring`}
       onClick={(event) => onOpen(event, pr.url)}
       onAuxClick={(event) => {
         if (event.button === 1) onOpen(event, pr.url);

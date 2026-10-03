@@ -1,3 +1,8 @@
+import { ProjectionThreadMessageRepositoryLive } from "./persistence/Layers/ProjectionThreadMessages";
+import { OrchestrationCommandReceiptRepositoryLive } from "./persistence/Layers/OrchestrationCommandReceipts";
+import { QueuedTurnPromotionRepositoryLive } from "./persistence/Layers/QueuedTurnPromotions";
+import { HubWorkRepositoryLive } from "./persistence/Layers/HubWorkRepository";
+import { ManagedAttachmentRepositoryLive } from "./persistence/Layers/ManagedAttachments";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Layer } from "effect";
 
@@ -126,6 +131,7 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(runtimeServicesLayer),
   );
   const projectAgentServiceLayer = ProjectAgentServiceLive.pipe(
+    Layer.provideMerge(HubWorkRepositoryLive),
     Layer.provideMerge(ProjectAgentRepositoryLive),
     Layer.provideMerge(automationServiceLayer),
     Layer.provideMerge(TextGenerationLayerLive),
@@ -225,6 +231,16 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(providerHealthLayer),
   );
   const agentGatewayLayer = AgentGatewayLive.pipe(
+    Layer.provideMerge(
+      Layer.mergeAll(
+        ProjectionThreadMessageRepositoryLive,
+        OrchestrationCommandReceiptRepositoryLive,
+      ),
+    ),
+    Layer.provideMerge(QueuedTurnPromotionRepositoryLive),
+    Layer.provideMerge(HubWorkRepositoryLive),
+    Layer.provideMerge(ProjectAgentRepositoryLive),
+    Layer.provideMerge(ManagedAttachmentRepositoryLive),
     Layer.provideMerge(agentGatewayCredentialsLayer),
     Layer.provideMerge(automationServiceLayer),
     Layer.provideMerge(projectAgentServiceLayer),

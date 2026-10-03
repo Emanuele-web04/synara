@@ -56,7 +56,6 @@ import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useIsMobile } from "~/hooks/useMediaQuery";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { useRepoDiffTotals } from "~/hooks/useRepoDiffTotals";
-import { useSidebarLayout } from "~/hooks/useSidebarLayout";
 import { useStableCallback } from "~/hooks/useStableCallback";
 import { useThreadRecap } from "~/hooks/useThreadRecap";
 import { SINGLE_CHAT_PANE_SCOPE_ID } from "~/lib/chatPaneScope";
@@ -81,6 +80,11 @@ import { resolveProviderInstanceLabel } from "~/lib/providerInstancePresentation
 import { resolveAuxiliaryTextGenerationSelection } from "~/lib/textGenerationCapabilities";
 import { cn, isMacNavigatorPlatform, newCommandId, newThreadId, randomUUID } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
+import {
+  ChatLinkActionsContext,
+  parseGitHubItemUrl,
+  type ChatLinkActions,
+} from "~/lib/linkContextMenu";
 import {
   mergeProjectInstructionsIntoThreadNotes,
   useProjectInstructionsStore,
@@ -179,6 +183,7 @@ import {
   resolveThreadHandoffAvailability,
   type ThreadHandoffTarget,
 } from "../lib/threadHandoff";
+import { FORK_THREAD_TARGET_LABELS } from "../lib/threadFork";
 import { buildDraftThreadRenameCreateInput, dispatchThreadRename } from "../lib/threadRename";
 import { useProjectEnvironmentStore } from "../projectEnvironmentStore";
 import { proposedPlanTitle } from "../proposedPlan";
@@ -321,6 +326,7 @@ import {
 import { ContextWindowMeter } from "./chat/ContextWindowMeter";
 import { ExpandedImageOverlay } from "./chat/ExpandedImageOverlay";
 import { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
+import { useExpandedImagePreview } from "./chat/useExpandedImagePreview";
 import { ExpiredSidechatNotice } from "./chat/ExpiredSidechatNotice";
 import type { MessagesTimelineController } from "./chat/MessagesTimeline";
 import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimeline.logic";
@@ -351,6 +357,8 @@ import {
 } from "./chat/project/coordinatorSuggestions.logic";
 import { ProjectPanel } from "./chat/project/ProjectPanel";
 import { LibraryPanel } from "./chat/group/LibraryPanel";
+import { useHubWorkItems } from "./chat/project/useHubWorkItems";
+import { hubWorkItemsBySourceMessage } from "./chat/project/hubWorkItems";
 import { useProjectAgentSummaries } from "./chat/project/useProjectAgentSummaries";
 import { useProjectAgentSummariesStore } from "./chat/project/useProjectAgentSummaries";
 import { GroupPausedBanner } from "./chat/group/GroupPausedBanner";
@@ -405,6 +413,7 @@ import { useChatComposerCommands } from "./chat/useChatComposerCommands";
 import { useChatComposerDraft } from "./chat/useChatComposerDraft";
 import { useChatComposerEditing } from "./chat/useChatComposerEditing";
 import { useChatKeyboardShortcuts } from "./chat/useChatKeyboardShortcuts";
+import { useComposerEffortCycle } from "./chat/useComposerEffortCycle";
 import { useChatLocalDispatch } from "./chat/useChatLocalDispatch";
 import { useChatPendingInteractions } from "./chat/useChatPendingInteractions";
 import { useChatProjectScripts } from "./chat/useChatProjectScripts";
@@ -629,7 +638,6 @@ export default function ChatView({
     gitCreateDetachedWorktreeMutationOptions({ queryClient }),
   );
   const isEditorRail = presentationMode === "editor";
-  const isRailLayout = useSidebarLayout() === "rail";
   const isInactiveSplitPane = surfaceMode === "split" && !isFocusedPane;
   const {
     composerDraft,
@@ -777,7 +785,8 @@ export default function ChatView({
   );
 
   const [isDragOverComposer, setIsDragOverComposer] = useState(false);
-  const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
+  const { expandedImage, setExpandedImage, closeExpandedImage, navigateExpandedImage } =
+    useExpandedImagePreview();
 
   const [localDraftErrorsByThreadId, setLocalDraftErrorsByThreadId] = useState<
     Record<ThreadId, string | null>
@@ -826,7 +835,6 @@ export default function ChatView({
   );
   const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
   const [isTraitsPickerOpen, setIsTraitsPickerOpen] = useState(false);
-  const isComposerModelEffortPickerOpen = isModelPickerOpen || isTraitsPickerOpen;
   const legendListRef = useRef<LegendListRef | null>(null);
   const timelineControllerRef = useRef<MessagesTimelineController | null>(null);
   const [threadFindOpen, setThreadFindOpen] = useState(false);
@@ -887,7 +895,7 @@ export default function ChatView({
   const activeComposerMenuItemRef = useRef<ComposerCommandItem | null>(null);
   const localDirectoryMenuRef = useRef<ComposerLocalDirectoryMenuHandle | null>(null);
 
-  const sendInFlightRef = useRef(false);
+  const sendInFlightRef = useMemo(() => ({ threadId, current: false }), [threadId]);
   const sendPreflightInFlightRef = useRef(false);
   const dragDepthRef = useRef(0);
   const terminalOpenByThreadRef = useRef<Record<string, boolean>>({});
@@ -1353,6 +1361,7 @@ export default function ChatView({
     modelOptionsByProvider,
     modelOptionsByProviderInstance,
     loadingModelProviders,
+    refreshModels,
     discoveryErrorsByProvider,
     runtimeModelsByProvider,
     runtimeModelsByProviderInstance,
@@ -1374,7 +1383,6 @@ export default function ChatView({
     activeProject,
     composerDraft,
     settings,
-    isModelPickerOpen: isComposerModelEffortPickerOpen,
     resolvedThreadWorktreePath,
   });
   const selectedProviderInstances = useMemo(
@@ -1602,7 +1610,6 @@ export default function ChatView({
 
   const {
     localDispatch,
-    setLocalDispatch,
     worktreeSetupResolutionRef,
     worktreeSetupPendingAction,
     setWorktreeSetupPendingAction,
@@ -1619,6 +1626,7 @@ export default function ChatView({
     armLocalDispatchAckFallback,
     scheduleFailedWorktreeSetupDispatchReset,
   } = useChatLocalDispatch({
+    threadId,
     phase,
     activeLatestTurn,
     activeThread,
@@ -1779,6 +1787,13 @@ export default function ChatView({
     activeThread && coordinatorThreadIds.has(activeThread.id),
   );
   const activeGroupSummary = isCoordinatorConversation ? summaryFor(activeThread?.projectId) : null;
+  const hubWorkItems = useHubWorkItems(
+    isCoordinatorConversation ? (activeThread?.projectId ?? null) : null,
+  );
+  const hubWorkItemsByMessageId = useMemo(
+    () => hubWorkItemsBySourceMessage(hubWorkItems, activeThread?.id),
+    [hubWorkItems, activeThread?.id],
+  );
   // A thread the group coordinator started names the group in its origin label,
   // so the worker reads as part of that group rather than "another thread".
   const crossTaskOriginGroupName =
@@ -1947,6 +1962,7 @@ export default function ChatView({
       .subscribeThread(buildThreadSubscribeInput(threadId))
       .catch(() => undefined);
   }, [threadId]);
+  const activeThreadIsSidechat = Boolean(activeThread && isSidechatThread(activeThread));
   // Stable identity: this element is forwarded to the memoized MessagesTimeline, so
   // building it inline in JSX would defeat its `memo()` on every keystroke.
   const transcriptEmptyStateContent = useMemo((): ReactNode => {
@@ -1961,8 +1977,14 @@ export default function ChatView({
         />
       );
     }
-    return hasPendingThreadWork ? <span aria-hidden="true" /> : undefined;
-  }, [handleRetryThreadDetailSync, hasPendingThreadWork, isEditorRail, threadDetailHydration]);
+    return hasPendingThreadWork || activeThreadIsSidechat ? <span aria-hidden="true" /> : undefined;
+  }, [
+    activeThreadIsSidechat,
+    handleRetryThreadDetailSync,
+    hasPendingThreadWork,
+    isEditorRail,
+    threadDetailHydration,
+  ]);
   // Empty top-level threads render the centered landing composer instead of the transcript pane.
   // Home-scoped chats get the global "What should we work on?" copy plus the project picker,
   // while project-scoped drafts reuse the same centered layout with folder-specific copy.
@@ -1970,12 +1992,12 @@ export default function ChatView({
     timelineEntries.length === 0 &&
     !hasPendingThreadWork &&
     !activeThread?.parentThreadId &&
+    !activeThreadIsSidechat &&
     !isEditorRail &&
     threadDetailHydration === "ready";
   const isEmptyChatLanding =
     isCenteredEmptyLanding && Boolean(homeDir) && isContainerLandingProject;
-  // A standalone side chat asks about one GitHub item from the code review page's narrow dock:
-  // its landing names the item instead of the project, at a size that fits a quarter-width pane.
+  // Code review sidechats keep an item-specific composer placeholder.
   const standaloneSidechatContext =
     activeThread && isStandaloneSidechatThread(activeThread) ? activeThread.sidechatContext : null;
   const standaloneSidechatItemNoun =
@@ -2188,6 +2210,17 @@ export default function ChatView({
   );
   const supportsFastSlashCommand = selectedModelCaps.supportsFastMode;
   const currentProviderModelOptions = composerModelOptions?.[selectedProvider];
+  const { isEffortPreviewOpen, cycleEffort, dismissEffortPreview } = useComposerEffortCycle({
+    threadId,
+    provider: selectedProvider,
+    providerInstanceId: selectedProviderInstanceId,
+    model: selectedModel,
+    runtimeModel: selectedRuntimeModel,
+    modelOptions: currentProviderModelOptions,
+    prompt,
+  });
+  const isComposerModelEffortPickerOpen =
+    isModelPickerOpen || isTraitsPickerOpen || isEffortPreviewOpen;
   const fastModeEnabled =
     supportsFastSlashCommand &&
     (currentProviderModelOptions as { fastMode?: boolean } | undefined)?.fastMode === true;
@@ -2274,14 +2307,14 @@ export default function ChatView({
           id: "fork-target:worktree",
           type: "fork-target" as const,
           target: "worktree" as const,
-          label: "Fork Into New Worktree",
+          label: FORK_THREAD_TARGET_LABELS.worktree,
           description: "Continue in a new worktree",
         },
         {
           id: "fork-target:local",
           type: "fork-target" as const,
           target: "local" as const,
-          label: "Fork Into Local",
+          label: FORK_THREAD_TARGET_LABELS.local,
           description:
             activeThread?.worktreePath || activeThread?.envMode === "worktree"
               ? "Continue in this local worktree"
@@ -2365,9 +2398,10 @@ export default function ChatView({
             sourceProvider: activeThreadProvider,
             sourceProviderInstanceId: activeThreadProviderInstanceId,
             providerInstances,
+            providerStatuses,
           })
         : [],
-    [activeThreadProvider, activeThreadProviderInstanceId, providerInstances],
+    [activeThreadProvider, activeThreadProviderInstanceId, providerInstances, providerStatuses],
   );
   const sidechatTargetProviders = useMemo(
     () => [...new Set(handoffTargets.map((target) => target.provider))],
@@ -2558,6 +2592,55 @@ export default function ChatView({
     },
     [navigate, onOpenBrowserUrl, threadId],
   );
+  // Chat links offer the built-in review view only for repositories this project owns,
+  // matching the Environment panel; any other pull request or issue falls back to the in-app
+  // browser. A pull request opens in the thread's PR pane, an issue in the inbox detail.
+  // Left to the React Compiler to memoize: manual hooks here cannot be preserved.
+  const openRightDockPane = useRightDockStore((store) => store.openPane);
+  const openGitHubItemLink = (url: string) => {
+    const item = parseGitHubItemUrl(url);
+    if (!item || !activeProjectId) {
+      openBrowserUrl(url);
+      return;
+    }
+    const { kind, repository, number } = item;
+    void queryClient.fetchQuery(gitGithubRepositoryQueryOptions(gitBranchSourceCwd)).then(
+      (result) => {
+        const belongsToProject = result.repositories.some(
+          (candidate) => candidate.nameWithOwner.toLowerCase() === repository.toLowerCase(),
+        );
+        if (!belongsToProject) {
+          openBrowserUrl(url);
+          return;
+        }
+        if (kind === "issue") {
+          void navigate({
+            to: "/pull-requests",
+            search: {
+              kind,
+              selectedProjectId: activeProjectId,
+              selectedRepo: repository,
+              number,
+            },
+          });
+          return;
+        }
+        openRightDockPane(threadId, {
+          kind: "pullRequest",
+          pullRequestProjectId: activeProjectId,
+          pullRequestRepository: repository,
+          pullRequestNumber: number,
+          pullRequestInitialTab: "summary",
+        });
+      },
+      () => openBrowserUrl(url),
+    );
+  };
+  const chatLinkActions: ChatLinkActions = {
+    openInBrowserPanel: openBrowserUrl,
+    openGitHubItem: openGitHubItemLink,
+    githubLinkOpenTarget: settings.githubLinkOpenTarget,
+  };
 
   const envLocked = Boolean(
     activeThread &&
@@ -2693,21 +2776,23 @@ export default function ChatView({
   // Keep the two composer picker menus mutually exclusive so shortcuts always open one surface.
   const handleModelPickerOpenChange = useCallback(
     (open: boolean) => {
+      dismissEffortPreview();
       setIsModelPickerOpen(open);
       if (open) {
         setIsTraitsPickerOpen(false);
       }
     },
-    [setIsModelPickerOpen, setIsTraitsPickerOpen],
+    [dismissEffortPreview, setIsModelPickerOpen, setIsTraitsPickerOpen],
   );
   const handleTraitsPickerOpenChange = useCallback(
     (open: boolean) => {
+      dismissEffortPreview();
       setIsTraitsPickerOpen(open);
       if (open) {
         setIsModelPickerOpen(false);
       }
     },
-    [setIsModelPickerOpen, setIsTraitsPickerOpen],
+    [dismissEffortPreview, setIsModelPickerOpen, setIsTraitsPickerOpen],
   );
   const appendVoiceTranscriptToComposer = useCallback(
     (transcript: string) => {
@@ -3097,7 +3182,6 @@ export default function ChatView({
     persistRuntimeModeChange,
     handleRuntimeModeChange,
     handleInteractionModeChange,
-    toggleInteractionMode,
     resetInteractionMode,
     persistThreadSettingsForNextTurn,
   } = useChatRuntimeModes({
@@ -3155,6 +3239,11 @@ export default function ChatView({
     composerTranscriptInsetPx,
     isInactiveSplitPane,
   });
+  useLayoutEffect(() => {
+    if (settings.anchorSentMessagesToTop) return;
+    tailAnchorScrollInFlightRef.current = false;
+    setTailAnchor(null);
+  }, [settings.anchorSentMessagesToTop, tailAnchorScrollInFlightRef]);
   const selectionChatEnvMode = useProjectEnvironmentStore((state) =>
     activeProject ? state.envModeByProjectId[activeProject.id] : undefined,
   );
@@ -3339,7 +3428,6 @@ export default function ChatView({
     // render->effect->render cascade. The expanded image and timeline hook's
     // optimistic messages clear before paint, so these residual resets can wait.
     const settle = window.setTimeout(() => {
-      setLocalDispatch(null);
       setComposerHighlightedItemId(null);
       setComposerCursor(
         collapseExpandedComposerCursor(promptRef.current, promptRef.current.length),
@@ -3355,60 +3443,8 @@ export default function ChatView({
     setIsDragOverComposer,
     setComposerHighlightedItemId,
     dragDepthRef,
-    setLocalDispatch,
     threadId,
   ]);
-
-  const closeExpandedImage = useCallback(() => {
-    setExpandedImage(null);
-  }, [setExpandedImage]);
-  const navigateExpandedImage = useCallback(
-    (direction: -1 | 1) => {
-      setExpandedImage((existing) => {
-        if (!existing || existing.images.length <= 1) {
-          return existing;
-        }
-        const nextIndex =
-          (existing.index + direction + existing.images.length) % existing.images.length;
-        if (nextIndex === existing.index) {
-          return existing;
-        }
-        return { ...existing, index: nextIndex };
-      });
-    },
-    [setExpandedImage],
-  );
-
-  useEffect(() => {
-    if (!expandedImage) {
-      return;
-    }
-
-    const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        event.stopPropagation();
-        closeExpandedImage();
-        return;
-      }
-      if (expandedImage.images.length <= 1) {
-        return;
-      }
-      if (event.key === "ArrowLeft") {
-        event.preventDefault();
-        event.stopPropagation();
-        navigateExpandedImage(-1);
-        return;
-      }
-      if (event.key !== "ArrowRight") return;
-      event.preventDefault();
-      event.stopPropagation();
-      navigateExpandedImage(1);
-    };
-
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [closeExpandedImage, expandedImage, navigateExpandedImage]);
 
   useEffect(() => {
     if (!composerMenuOpen) {
@@ -3774,6 +3810,13 @@ export default function ChatView({
 
   const copyThreadIdToClipboard = useCopyThreadIdToClipboard();
 
+  const handleCycleEffort = useCallback(() => {
+    if (!cycleEffort()) return false;
+    setIsModelPickerOpen(false);
+    setIsTraitsPickerOpen(false);
+    return true;
+  }, [cycleEffort]);
+
   useChatKeyboardShortcuts({
     onToggleDevicePanel,
     onSplitSurface,
@@ -3812,6 +3855,7 @@ export default function ChatView({
     selectedModel,
     onProviderModelSelect,
     handleTraitsPickerOpenChange,
+    cycleEffort: handleCycleEffort,
     toggleTerminalVisibility,
     setTerminalOpen,
     splitTerminalRight,
@@ -4362,6 +4406,7 @@ export default function ChatView({
     sendInFlightRef,
     setThreadError,
     setTailAnchor,
+    anchorSentMessagesToTop: settings.anchorSentMessagesToTop,
     turnDispatchSettings,
     computerControlChangeSequence,
     setComposerDraftComputerControlMode,
@@ -4500,11 +4545,17 @@ export default function ChatView({
       if (open) {
         handleModelPickerOpenChange(true);
       } else {
+        dismissEffortPreview();
         setIsModelPickerOpen(false);
         setIsTraitsPickerOpen(false);
       }
     },
-    [setIsModelPickerOpen, setIsTraitsPickerOpen, handleModelPickerOpenChange],
+    [
+      dismissEffortPreview,
+      setIsModelPickerOpen,
+      setIsTraitsPickerOpen,
+      handleModelPickerOpenChange,
+    ],
   );
   // Event handlers handed to children below. Their closures read live thread and draft
   // state, so they are recreated with every streamed token and keystroke; one identity
@@ -4529,6 +4580,7 @@ export default function ChatView({
       modelOptionsByProvider={modelOptionsByProvider}
       modelOptionsByProviderInstance={modelOptionsByProviderInstance}
       loadingModelProviders={loadingModelProviders}
+      onRefreshModels={refreshModels}
       discoveryErrorsByProvider={discoveryErrorsByProvider}
       hiddenProviders={settings.hiddenProviders}
       providerOrder={settings.providerOrder}
@@ -4834,7 +4886,6 @@ export default function ChatView({
     setComposerCursor,
     setComposerTrigger,
     clearComposerSlashDraft,
-    toggleInteractionMode,
     composerMenuOpenRef,
     onSend,
     settings,
@@ -5069,9 +5120,12 @@ export default function ChatView({
   // useMemo: the compiler owns this scope (see chatHotPath.compiler.test.ts).
   const projectPanelAttentionGroups = new Map<ProjectId, GroupNeedsAttentionGroup>();
   if (projectPanelEnabled && activeProject) {
+    const summary = summariesByProjectId.get(activeProject.id);
     projectPanelAttentionGroups.set(activeProject.id, {
       projectId: activeProject.id,
-      coordinatorThreadId: summariesByProjectId.get(activeProject.id)?.coordinatorThreadId ?? null,
+      coordinatorThreadId: summary?.coordinatorThreadId ?? null,
+      memberThreadIds: new Set(summary?.memberThreadIds ?? []),
+      needsYouThreadIds: new Set(summary?.needsYouThreadIds ?? []),
     });
   }
   const projectPanelNeedsAttention = useStore(
@@ -5144,9 +5198,9 @@ export default function ChatView({
     );
   }
 
-  // Open-thread tabs belong to the rail shell's single chat; split panes, the editor rail,
-  // and the classic sidebar keep the plain thread title.
-  const showOpenThreadTabs = isRailLayout && surfaceMode === "single" && !isEditorRail;
+  // Open-thread tabs belong to the single chat on desktop; split panes, the editor rail, and
+  // phone-width headers keep the plain thread title.
+  const showOpenThreadTabs = !isMobileViewport && surfaceMode === "single" && !isEditorRail;
 
   const activeThreadDisplayTitle = resolveActiveThreadTitle({
     title: isCoordinatorConversation
@@ -5251,6 +5305,7 @@ export default function ChatView({
       ? { onCheckoutPullRequestRequest: openPullRequestDialog }
       : {}),
   };
+  const showTrailingBranchToolbar = !activeThreadIsSidechat && isGitRepo && !environmentEnabled;
   const showEmptyLandingBranchToolbar =
     isCenteredEmptyLanding && activeProject?.kind === "project" && !isHomeChatContainer;
   // Temporary is chosen while starting a chat. Draft metadata covers local reloads;
@@ -5283,11 +5338,9 @@ export default function ChatView({
         <span className="min-w-0 truncate">{activeProjectDisplayName}</span>
       </span>
     ) : null;
-  // A standalone side chat runs in its project's own folder, locally, and expires by itself, so
-  // the project, environment, branch, and Temporary controls have nothing to offer there.
+  // Only primary chats offer a new-chat workspace tray.
   const showEmptyLandingControls =
     isCenteredEmptyLanding &&
-    !standaloneSidechatContext &&
     (isEmptyChatLanding ||
       showEmptyLandingProjectPicker ||
       emptyLandingProjectChip !== null ||
@@ -5424,7 +5477,6 @@ export default function ChatView({
 
   // Read from the two inputs it uses, not from the thread object, so the list keeps its
   // identity (and the Environment panel its render) while the thread streams.
-  const activeThreadIsSidechat = isSidechatThread(activeThread);
   const environmentSidechats = activeThreadIsSidechat
     ? null
     : sourceThreadSidechats.map((sidechat) => ({
@@ -5452,7 +5504,7 @@ export default function ChatView({
     sidechats: environmentSidechats,
     diffDisabledReason,
     diffTotals: repoDiffTotals,
-    branchToolbar: branchToolbarProps,
+    branchToolbar: activeThreadIsSidechat ? null : branchToolbarProps,
     recap: threadRecap,
     pinnedMessages,
     pinnedMessageTextById,
@@ -5603,6 +5655,9 @@ export default function ChatView({
   const composerSection = shouldRenderChatPaneContent ? (
     <div
       className={cn(isCenteredEmptyLanding ? "w-full overflow-visible" : "contents")}
+      // The transcript dissolves at this composer's top edge, so on a glass window it can
+      // take the sheer raised tint instead of the dense overlay fill (see index.css).
+      data-chat-composer-slot=""
       data-empty-landing-composer-block={isCenteredEmptyLanding ? "true" : undefined}
     >
       <form
@@ -6067,7 +6122,7 @@ export default function ChatView({
     </div>
   ) : null;
 
-  return (
+  const chatView = (
     <div
       className={cn(
         "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
@@ -6294,33 +6349,21 @@ export default function ChatView({
                 <div className="relative flex min-h-0 flex-1 items-center justify-center">
                   {/* Pinned to the top so the heading stays optically centered; hidden on
                       short panes where it would crowd the heading. */}
-                  {standaloneSidechatContext ? null : (
-                    <div className="absolute inset-x-0 top-4 flex justify-center px-6 [@media(max-height:620px)]:hidden">
-                      <ProjectImportLandingBanner className="w-full max-w-[520px]" />
-                    </div>
-                  )}
+                  <div className="absolute inset-x-0 top-4 flex justify-center px-6 [@media(max-height:620px)]:hidden">
+                    <ProjectImportLandingBanner className="w-full max-w-[520px]" />
+                  </div>
                   <div
                     className={cn(
-                      "flex flex-col items-center text-center select-none",
-                      standaloneSidechatContext ? "gap-3 px-4" : "gap-4 px-6",
+                      "flex flex-col items-center gap-4 px-6 text-center select-none",
                       CHAT_COLUMN_FRAME_CLASS_NAME,
                     )}
                   >
-                    <SynaraLogo
-                      aria-label="Synara logo"
-                      className={standaloneSidechatContext ? "size-7" : "size-10"}
-                    />
+                    <SynaraLogo aria-label="Synara logo" className="size-10" />
                     <h2
                       data-testid="empty-landing-heading"
-                      className={
-                        standaloneSidechatContext
-                          ? "text-lg font-normal leading-snug text-foreground/95"
-                          : "text-[26px] font-normal leading-[1.15] tracking-[-0.015em] text-foreground/95 sm:text-[30px]"
-                      }
+                      className="text-[26px] font-normal leading-[1.15] tracking-[-0.015em] text-foreground/95 sm:text-[30px]"
                     >
-                      {standaloneSidechatContext ? (
-                        `Ask about ${standaloneSidechatContext.itemKind === "issue" ? "issue" : "PR"} #${standaloneSidechatContext.number}`
-                      ) : isEmptyChatLanding ? (
+                      {isEmptyChatLanding ? (
                         "What should we work on?"
                       ) : (
                         <>
@@ -6402,7 +6445,9 @@ export default function ChatView({
                     goalAchievements={goalAchievements}
                     enteringUserMessageIds={enteringUserMessageIds}
                     tailAnchorMessageId={
-                      tailAnchor !== null && tailAnchor.threadId === activeThread.id
+                      settings.anchorSentMessagesToTop &&
+                      tailAnchor !== null &&
+                      tailAnchor.threadId === activeThread.id
                         ? tailAnchor.messageId
                         : null
                     }
@@ -6414,6 +6459,7 @@ export default function ChatView({
                     messageChangeSignal={timelineMessages}
                     turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
                     conversationOnly={isCoordinatorConversation}
+                    hubWorkItemsByMessageId={hubWorkItemsByMessageId}
                     threadError={activeThread?.error ?? null}
                     unblockingThread={unblockingActiveThread}
                     onDismissThreadError={dismissActiveThreadError}
@@ -6523,10 +6569,8 @@ export default function ChatView({
                   </div>
                   {/* A trailing BranchToolbar only renders for legacy git threads; otherwise the
                       composer is the last element, so give it a comfortable bottom margin. */}
-                  <div
-                    className={cn(isGitRepo && !environmentEnabled ? "pt-0.5" : "pt-3 sm:pt-4")}
-                  />
-                  {(isGitRepo && !environmentEnabled) || relocateComposerLeadingControls ? (
+                  <div className={cn(showTrailingBranchToolbar ? "pt-0.5" : "pt-3 sm:pt-4")} />
+                  {showTrailingBranchToolbar || relocateComposerLeadingControls ? (
                     <div className={CHAT_COLUMN_GUTTER_CLASS_NAME}>
                       <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
                         <div className="flex w-full items-center gap-1">
@@ -6535,7 +6579,7 @@ export default function ChatView({
                               {renderComposerLeadingControls({ iconOnly: true })}
                             </div>
                           ) : null}
-                          {isGitRepo && !environmentEnabled ? (
+                          {showTrailingBranchToolbar ? (
                             <BranchToolbar {...branchToolbarProps} className="min-w-0 flex-1" />
                           ) : null}
                         </div>
@@ -6744,5 +6788,10 @@ export default function ChatView({
         onNavigate={navigateExpandedImage}
       />
     </div>
+  );
+  return (
+    <ChatLinkActionsContext.Provider value={chatLinkActions}>
+      {chatView}
+    </ChatLinkActionsContext.Provider>
   );
 }

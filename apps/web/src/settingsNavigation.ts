@@ -108,7 +108,7 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     id: "shortcuts",
     group: "personal",
     label: "Keybindings",
-    description: "Capture, customize, and add shortcuts for every Synara command.",
+    description: "Change, add, or remove the shortcut for every Synara command.",
     icon: "shortcut",
     eyebrow: "Key bindings",
   },

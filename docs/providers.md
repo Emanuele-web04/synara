@@ -6,17 +6,18 @@ consistent workspace.
 
 ## Supported providers
 
-| Provider                                                                | What Synara connects to                                      |
-| ----------------------------------------------------------------------- | ------------------------------------------------------------ |
-| [Claude Code](https://www.trysynara.com/docs/providers/claude-code)     | Your installed Claude Code runtime and authenticated account |
-| [Codex](https://www.trysynara.com/docs/providers/codex)                 | Your installed and authenticated Codex CLI                   |
-| [OpenCode](https://www.trysynara.com/docs/providers/opencode)           | Your local OpenCode runtime and configured model providers   |
-| [Cursor](https://www.trysynara.com/docs/providers/cursor)               | Your local Cursor agent runtime and account                  |
-| [Devin](https://docs.devin.ai)                                          | Your installed and authenticated Devin CLI                   |
-| [Antigravity](https://www.trysynara.com/docs/providers/antigravity)     | Your installed and authenticated Antigravity CLI             |
-| [Grok Build](https://www.trysynara.com/docs/providers/grok)             | Your configured Grok Build runtime and access                |
-| [Pi](https://www.trysynara.com/docs/providers/pi)                       | Pi and the model providers configured through it             |
-| [Factory Droid](https://www.trysynara.com/docs/providers/factory-droid) | Your installed and authenticated Droid runtime               |
+| Provider                                                                | What Synara connects to                                        |
+| ----------------------------------------------------------------------- | -------------------------------------------------------------- |
+| [Claude Code](https://www.trysynara.com/docs/providers/claude-code)     | Your installed Claude Code runtime and authenticated account   |
+| [Codex](https://www.trysynara.com/docs/providers/codex)                 | Your installed and authenticated Codex CLI                     |
+| [OpenCode](https://www.trysynara.com/docs/providers/opencode)           | Your local OpenCode runtime and configured model providers     |
+| [Cursor](https://www.trysynara.com/docs/providers/cursor)               | Your local Cursor agent runtime and account                    |
+| [Devin](https://docs.devin.ai)                                          | Your installed and authenticated Devin CLI                     |
+| [Antigravity](https://www.trysynara.com/docs/providers/antigravity)     | Your installed and authenticated Antigravity CLI               |
+| [Grok Build](https://www.trysynara.com/docs/providers/grok)             | Your configured Grok Build runtime and access                  |
+| [Pi](https://www.trysynara.com/docs/providers/pi)                       | Pi and the model providers configured through it               |
+| [Oh My Pi](https://www.trysynara.com/docs/providers/omp)                | Your installed Oh My Pi runtime and configured model providers |
+| [Factory Droid](https://www.trysynara.com/docs/providers/factory-droid) | Your installed and authenticated Droid runtime                 |
 
 Provider availability can differ between the current stable release and development builds. Use the
 provider settings in your installed Synara version as the authoritative list for that build.
@@ -54,10 +55,13 @@ provider feature is supported through Synara.
 ## Connect a provider
 
 1. **Install the official runtime.** Use the provider's official installation instructions.
-2. **Authenticate outside Synara.** Complete the provider's normal sign-in or credential setup.
-   Verify the runtime from a fresh terminal.
-3. **Open Synara provider settings.** Confirm that the provider is detected and enabled. When
-   necessary, configure a custom path to the provider executable.
+2. **Open Settings → Providers.** Confirm that the provider is detected and enabled, then select
+   its account and choose **Sign in**. Synara starts the provider's authentication flow in the
+   account environment. Complete any browser, Apple, enterprise, device-code, or credential prompts.
+3. **Check authentication.** Synara rechecks provider status when the login process exits; for
+   interactive CLIs, choose **Check authentication** after completing the prompts. A successful
+   process exit alone does not establish authentication. A custom executable path is only needed
+   when the installation cannot be discovered automatically.
 4. **Check model discovery.** Open the model picker and confirm that the expected models and options
    appear. Synara discovers many provider capabilities at runtime; the result can depend on the
    installed CLI version, account, subscription, and provider configuration.
@@ -92,7 +96,16 @@ For Codex, successful model discovery determines the built-in choices, including
 catalog is empty. Models absent from that catalog are not added back from Synara's static list.
 Custom models remain available. Until discovery succeeds, Synara uses a static fallback; a failed
 refresh keeps the last successful catalog. The shared discovery cache refreshes catalogs in the
-background after its thirty-minute fresh window.
+background after its thirty-minute fresh window. Opening a provider/account tab in the composer
+checks that catalog on demand and delivers any refreshed list directly to the picker. Other tabs
+are not refreshed just because the picker opens, and there is no periodic timer for these checks.
+Existing models remain visible while checks run silently, without a persistent refresh row.
+If a check fails, an inline error offers **Retry**; a successful retry removes the entire row,
+including when the catalog has not changed. The server shares concurrent requests, reuses successful
+manual retries for at least one minute, and backs off failures. Checks for the viewed account take
+priority over queued background catalog loads.
+Failed refreshes retain the last successful catalog. Refreshing does not change the
+selected model or restart running sessions, and availability still comes from the provider runtime.
 
 The composer model picker has one tab per connected provider and a Starred tab. Starring a model
 saves it together with its current effort, speed, and provider account, so one click (or
@@ -126,6 +139,10 @@ The session may preserve provider-specific behavior such as:
 - Provider-native subagents or workflows
 
 Capabilities vary. Do not assume a control available for one provider exists for all of them.
+
+If a Codex turn is aborted for inactivity and its gateway access was revoked, Synara renews
+the provider runtime and resumes the saved conversation before dispatching another turn.
+You can continue in the same task.
 
 ### Claude Auto / 200k / 1M selection
 
@@ -266,6 +283,59 @@ Sensitive environment values are never serialized into terminal shim files. Dire
 authentication works directly. A profile that depends only on a secret environment credential
 still works for managed Synara runs, but its named terminal command requires that credential to be
 available through a secure runtime mechanism rather than an on-disk shim.
+
+### Sign in from account settings
+
+**Sign in** opens Synara's existing interactive terminal in a settings dialog. It launches the
+resolved provider executable directly with the account environment; it does not rely on a profile
+shim being available in an external shell. Account edits already being saved settle before launch.
+The login runs in an empty directory on the Synara server machine, rather than in your project.
+Browser/remote clients still need to complete the provider's browser or device authorization on the
+appropriate machine. Synara never submits browser credentials or accepts consent prompts for you.
+
+| Provider      | Entry point                     | Human steps                                                 |
+| ------------- | ------------------------------- | ----------------------------------------------------------- |
+| Codex         | `codex login`                   | Browser/account authorization                               |
+| Claude        | `claude auth login`             | Login method, browser/Apple/organization authorization      |
+| Cursor        | `cursor-agent login`            | Cursor browser authorization                                |
+| Devin         | `devin auth login`              | Devin/Windsurf/enterprise login selection and authorization |
+| Antigravity   | `agy`                           | Startup sign-in and any system credential-store consent     |
+| Grok          | `grok login`                    | Browser or displayed authorization steps                    |
+| Factory Droid | `droid`                         | Startup prompts and browser/device pairing                  |
+| OpenCode      | `opencode auth login`           | Model provider selection and OAuth or API-key onboarding    |
+| Pi            | `pi`, then **Sign-in options**  | Startup prompts followed by model provider selection        |
+| Oh My Pi      | `omp`, then **Sign-in options** | Startup prompts followed by OAuth/key selection             |
+
+Pi-family **Sign-in options** sends the native `/login` TUI command after you have completed startup
+prompts. It is never passed as a model prompt. OpenCode accounts configured for an external server
+must authenticate on that server; Synara reports this instead of changing a local account.
+
+For non-default native Devin, Antigravity, and Droid accounts, the first launch saves isolated home
+and credential-directory environment settings so later managed sessions and health checks use the
+same account as the login. Imported directories and explicit environment values retain precedence.
+These account environments block ambient API credentials; explicitly configured secrets remain
+available to managed sessions and the selected login process, and are never written into terminal shims.
+
+**Cancel / close** stops the login process and deletes its terminal history. Sign-in output is kept
+in memory while the window is active and is not persisted as a terminal log. Cancellation does not
+log out or remove credentials already saved by the provider. Closing errors stay visible and can be
+retried. Reconnecting to a completed attempt does not launch it again; use a new **Sign in** attempt
+to retry. Synara only reports **Authenticated** when the account's server health check confirms it;
+providers without a verifiable login-status probe can continue to show an unknown status.
+
+Entry points checked against provider documentation and the installed Pi CLI source on 2026-10-02:
+[Codex](https://developers.openai.com/codex/cli/reference#codex-login),
+[Claude](https://code.claude.com/docs/en/cli-reference),
+[Cursor](https://cursor.com/docs/cli/reference/authentication),
+[Devin](https://docs.devin.ai/cli/enterprise/devin-auth),
+[Antigravity](https://www.antigravity.google/docs/cli/install/),
+[Grok](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md),
+[Droid](https://docs.factory.com/droid-cli/quickstart),
+[OpenCode](https://opencode.ai/docs/cli/),
+[Pi](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/README.md),
+[Oh My Pi](https://github.com/can1357/oh-my-pi/blob/main/docs/providers.md).
+Actual provider authentication and packaged Windows behavior require separate qualification; the
+launch tests use disposable CLI fixtures and do not authenticate personal accounts.
 
 ## Switching providers
 

@@ -7,6 +7,14 @@ export const MAX_WHEN_EXPRESSION_DEPTH = 64;
 export const MAX_SCRIPT_ID_LENGTH = 24;
 export const MAX_KEYBINDINGS_COUNT = 256;
 
+/**
+ * Key value marking a command as intentionally left without a shortcut. A rule carrying
+ * it keeps the command "configured", so neither the server's default backfill nor the
+ * web fallback table re-adds a binding the user removed, and it can never match a key
+ * event because no key reports this name.
+ */
+export const UNASSIGNED_KEYBINDING_KEY = "unassigned";
+
 export const STATIC_KEYBINDING_COMMANDS = [
   "sidebar.toggle",
   "sidebar.search",
@@ -48,6 +56,7 @@ export const STATIC_KEYBINDING_COMMANDS = [
   "modelPicker.toggle",
   "model.next",
   "model.previous",
+  "model.effort.next",
   "traitsPicker.toggle",
   "settings.usage",
   "chat.new",

@@ -158,7 +158,6 @@ export function DeferredChatView(props: {
 
   return (
     <ChatView
-      key={props.paneScopeId}
       threadId={props.threadId}
       hideHeader={props.hideHeader ?? false}
       paneScopeId={props.paneScopeId}

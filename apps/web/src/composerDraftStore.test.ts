@@ -1,6 +1,7 @@
 import { ProjectId, ThreadId } from "@synara/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { selectComposerThreadDraft } from "./composerDraftDomain";
+import { runComposerSendOnce } from "./lib/composerSendOwnership";
 import {
   finalizePromotedDraftThreads,
   markPromotedDraftThreads,
@@ -274,6 +275,48 @@ describe("composerDraftStore project draft thread mapping", () => {
     );
     expect(useComposerDraftStore.getState().getDraftThread(threadId)).toBeNull();
     expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
+  });
+
+  it("keeps a promoted task's retry prompt when another draft takes its project slot", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectId, threadId);
+    store.setPrompt(threadId, "retry failed preparation");
+    store.markDraftThreadPromoting(threadId);
+    store.setProjectDraftThreadId(projectId, otherThreadId);
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.prompt).toBe(
+      "retry failed preparation",
+    );
+    store.finalizePromotedDraftThread(threadId);
+    expect(useComposerDraftStore.getState().getDraftThread(threadId)).toBeNull();
+  });
+
+  it("keeps a sending draft and its attachments when a new draft takes the project slot", async () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectId, threadId);
+    store.setPrompt(threadId, "retryable prompt");
+    store.enqueueQueuedTurn(
+      threadId,
+      makeQueuedChatTurn(
+        "sending-kept-thread",
+        makeImage({ id: "sending-image", previewUrl: "blob:sending" }),
+      ),
+    );
+    await runComposerSendOnce(threadId, async () => {
+      store.setProjectDraftThreadId(projectId, otherThreadId);
+      expect(useComposerDraftStore.getState().getDraftThread(threadId)).not.toBeNull();
+      expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.prompt).toBe(
+        "retryable prompt",
+      );
+      expect(revokeSpy).not.toHaveBeenCalledWith("blob:sending");
+      expect(useComposerDraftStore.getState().getDraftThreadByProjectId(projectId)?.threadId).toBe(
+        otherThreadId,
+      );
+      return false;
+    });
+    expect(useComposerDraftStore.getState().getDraftThread(threadId)).not.toBeNull();
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.queuedTurns).toHaveLength(
+      1,
+    );
   });
 
   it("keeps composer drafts when the thread is still mapped by another project", () => {

@@ -6,6 +6,7 @@ import { Effect, FileSystem, Layer, Logger, Path, Result, Schema } from "effect"
 import { ServerConfig } from "./config";
 
 import {
+  applyKeybindingEdits,
   DEFAULT_KEYBINDINGS,
   Keybindings,
   KeybindingsConfigError,
@@ -710,6 +711,46 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }).pipe(Effect.provide(makeKeybindingsLayer())),
   );
 
+  it.effect("syncs the composer effort shortcut into existing user keybindings", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      yield* writeKeybindingsConfig(keybindingsConfigPath, [
+        { key: "mod+g", command: "terminal.toggle" },
+      ]);
+
+      const configState = yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        yield* keybindings.syncDefaultKeybindingsOnStartup;
+        return yield* keybindings.loadConfigState;
+      });
+
+      assert.deepEqual(configState.issues, []);
+      assert.deepEqual(
+        configState.keybindings.find((entry) => entry.command === "model.effort.next"),
+        {
+          command: "model.effort.next",
+          shortcut: {
+            key: "tab",
+            metaKey: false,
+            ctrlKey: false,
+            shiftKey: true,
+            altKey: false,
+            modKey: false,
+          },
+          whenAst: { type: "identifier", name: "composerFocus" },
+        },
+      );
+      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+      assert.includeDeepMembers(
+        [...persisted],
+        [
+          { key: "shift+tab", command: "model.effort.next", when: "composerFocus" },
+          { key: "mod+g", command: "terminal.toggle" },
+        ],
+      );
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
   it.effect("drops retired legacy keybindings without startup issues", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -1081,5 +1122,222 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
         assert.isTrue(persistedCommands.has(command), `expected persisted command ${command}`);
       }
     }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
+  it.effect("leaves a command unassigned when its last binding is removed", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      yield* writeKeybindingsConfig(keybindingsConfigPath, [
+        { key: "mod+j", command: "terminal.toggle" },
+      ]);
+
+      const resolved = yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        return yield* keybindings.editKeybindings([
+          { type: "remove", rule: { key: "mod+j", command: "terminal.toggle" } },
+        ]);
+      });
+
+      assert.deepEqual(yield* readKeybindingsConfig(keybindingsConfigPath), [
+        { key: "unassigned", command: "terminal.toggle" },
+      ]);
+      // The marker is the command's only resolved rule: the shipped Mod+J is not merged
+      // back in, and the web fallback table sees the command as configured.
+      assert.deepEqual(
+        resolved
+          .filter((entry) => entry.command === "terminal.toggle")
+          .map((entry) => entry.shortcut.key),
+        ["unassigned"],
+      );
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
+  it.effect("keeps an unassigned command unassigned across startup", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      yield* writeKeybindingsConfig(keybindingsConfigPath, [
+        { key: "unassigned", command: "terminal.toggle" },
+      ]);
+
+      const configState = yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        yield* keybindings.syncDefaultKeybindingsOnStartup;
+        return yield* keybindings.loadConfigState;
+      });
+
+      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+      assert.deepEqual(
+        persisted.filter((entry) => entry.command === "terminal.toggle"),
+        [{ key: "unassigned", command: "terminal.toggle" }],
+      );
+      assert.isFalse(
+        configState.keybindings.some(
+          (entry) => entry.command === "terminal.toggle" && entry.shortcut.key === "j",
+        ),
+      );
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
+  it.effect("moves a shortcut between commands in one write", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      yield* writeKeybindingsConfig(keybindingsConfigPath, [
+        { key: "mod+j", command: "terminal.toggle" },
+        { key: "mod+shift+b", command: "browser.toggle", when: "!terminalFocus" },
+      ]);
+
+      yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        return yield* keybindings.editKeybindings([
+          { type: "remove", rule: { key: "mod+j", command: "terminal.toggle" } },
+          {
+            type: "set",
+            rule: { key: "mod+j", command: "browser.toggle", when: "!terminalFocus" },
+            replacing: { key: "mod+shift+b", command: "browser.toggle", when: "!terminalFocus" },
+          },
+        ]);
+      });
+
+      assert.deepEqual(yield* readKeybindingsConfig(keybindingsConfigPath), [
+        { key: "unassigned", command: "terminal.toggle" },
+        { key: "mod+j", command: "browser.toggle", when: "!terminalFocus" },
+      ]);
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
+  it.effect("rejects an edit batch without writing any of it", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      const existing = [{ key: "mod+j", command: "terminal.toggle" }] as const;
+      yield* writeKeybindingsConfig(keybindingsConfigPath, existing);
+
+      const result = yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        return yield* keybindings.editKeybindings([
+          { type: "remove", rule: { key: "mod+j", command: "terminal.toggle" } },
+          { type: "set", rule: { key: "mod+shift+d+o", command: "browser.toggle" } },
+        ]);
+      }).pipe(toDetailResult);
+
+      assertFailure(result, "invalid shortcut or condition expression");
+      assert.deepEqual(yield* readKeybindingsConfig(keybindingsConfigPath), existing);
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
+  it.effect("clears the unassigned marker when a command gets a binding again", () =>
+    Effect.sync(() => {
+      const unassigned = [{ key: "unassigned", command: "terminal.toggle" }] as const;
+
+      assert.deepEqual(
+        applyKeybindingEdits(unassigned, [
+          { type: "set", rule: { key: "mod+g", command: "terminal.toggle" } },
+        ]),
+        { _tag: "success", rules: [{ key: "mod+g", command: "terminal.toggle" }] },
+      );
+      // The marker itself is not a shortcut a command can be given.
+      assert.deepEqual(
+        applyKeybindingEdits(
+          [],
+          [{ type: "set", rule: { key: "unassigned", command: "terminal.toggle" } }],
+        ),
+        { _tag: "failure", detail: "invalid shortcut or condition expression" },
+      );
+    }),
+  );
+
+  it.effect("adds a second binding without touching the first", () =>
+    Effect.sync(() => {
+      assert.deepEqual(
+        applyKeybindingEdits(
+          [{ key: "mod+j", command: "terminal.toggle" }],
+          [{ type: "set", rule: { key: "ctrl+`", command: "terminal.toggle" } }],
+        ),
+        {
+          _tag: "success",
+          rules: [
+            { key: "mod+j", command: "terminal.toggle" },
+            { key: "ctrl+`", command: "terminal.toggle" },
+          ],
+        },
+      );
+    }),
+  );
+
+  it.effect("writes out a command's shipped bindings before editing one of them", () =>
+    Effect.sync(() => {
+      // Startup can leave a shipped command off disk; it is still live through the merge
+      // with the defaults, so removing one binding must not take its sibling along.
+      const result = applyKeybindingEdits(
+        [],
+        [{ type: "remove", rule: { key: "meta+k", command: "sidebar.search" } }],
+      );
+
+      assert.deepEqual(result, {
+        _tag: "success",
+        rules: [{ key: "ctrl+k", command: "sidebar.search", when: "!isMac" }],
+      });
+    }),
+  );
+
+  it.effect("does not mark a command without shipped bindings as unassigned", () =>
+    Effect.sync(() => {
+      assert.deepEqual(
+        applyKeybindingEdits(
+          [{ key: "mod+shift+r", command: "script.run-tests.run" }],
+          [{ type: "remove", rule: { key: "mod+shift+r", command: "script.run-tests.run" } }],
+        ),
+        { _tag: "success", rules: [] },
+      );
+    }),
+  );
+
+  it.effect("resets one command to its shipped position", () =>
+    Effect.sync(() => {
+      // Mod+W closes a terminal tab or the workspace panel depending on which rule is
+      // last; restoring the first must not move it after the second.
+      const result = applyKeybindingEdits(
+        [
+          {
+            key: "mod+w",
+            command: "terminal.workspace.closeActive",
+            when: "terminalWorkspaceOpen",
+          },
+          { key: "mod+shift+r", command: "script.run-tests.run" },
+          { key: "mod+alt+w", command: "terminal.close", when: "terminalFocus" },
+        ],
+        [{ type: "reset", command: "terminal.close" }],
+      );
+
+      assert.deepEqual(result, {
+        _tag: "success",
+        rules: [
+          { key: "mod+w", command: "terminal.close", when: "terminalFocus" },
+          {
+            key: "mod+w",
+            command: "terminal.workspace.closeActive",
+            when: "terminalWorkspaceOpen",
+          },
+          { key: "mod+shift+r", command: "script.run-tests.run" },
+        ],
+      });
+    }),
+  );
+
+  it.effect("resets every built-in command and keeps project script shortcuts", () =>
+    Effect.sync(() => {
+      const result = applyKeybindingEdits(
+        [
+          { key: "unassigned", command: "terminal.toggle" },
+          { key: "mod+shift+r", command: "script.run-tests.run" },
+          { key: "mod+alt+w", command: "terminal.close", when: "terminalFocus" },
+        ],
+        [{ type: "reset" }],
+      );
+
+      assert.deepEqual(result, {
+        _tag: "success",
+        rules: [...DEFAULT_KEYBINDINGS, { key: "mod+shift+r", command: "script.run-tests.run" }],
+      });
+    }),
   );
 });

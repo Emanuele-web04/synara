@@ -5,7 +5,7 @@
 import "../index.css";
 
 import { ProjectId, ThreadId, type OrchestrationThreadPullRequest } from "@synara/contracts";
-import type { PointerEvent as ReactPointerEvent } from "react";
+import { useState, type PointerEvent as ReactPointerEvent } from "react";
 import { page, userEvent } from "vitest/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
@@ -14,6 +14,7 @@ import type { Project, SidebarThreadSummary } from "../types";
 import { DEFAULT_PROJECT_ICON, type ProjectAppearance } from "../lib/projectAppearance";
 import type { ThreadStatusPill } from "./Sidebar.logic";
 import { SidebarActivityView } from "./SidebarActivityView";
+import type { ActivityScopeSelection } from "./SidebarActivityView.logic";
 
 const projectFavicon = `data:image/svg+xml,${encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><circle cx="8" cy="8" r="8" fill="red"/></svg>',
@@ -93,8 +94,19 @@ function renderActivity(input: {
   onThreadContextMenu?: (threadId: ThreadId, position: { x: number; y: number }) => void;
   onProjectContextMenu?: (projectId: ProjectId, position: { x: number; y: number }) => void;
   resolveThreadStatus?: (thread: SidebarThreadSummary) => ThreadStatusPill | null;
+  threadsHydrated?: boolean;
+  /** Controlled scope (the sidebar's role); omitted, the harness keeps it in local state. */
+  scope?: {
+    selection: ActivityScopeSelection;
+    onChange: (selection: ActivityScopeSelection) => void;
+  };
 }) {
+  return <ActivityHarness {...input} />;
+}
+
+function ActivityHarness(input: Parameters<typeof renderActivity>[0]) {
   const projects = input.projects ?? [makeProject(PROJECT_A, "Project A")];
+  const [localScope, setLocalScope] = useState<ActivityScopeSelection>(null);
   return (
     <SidebarActivityView
       threads={input.threads}
@@ -102,7 +114,9 @@ function renderActivity(input: {
       activeThreadId={input.activeThreadId ?? null}
       pinnedThreadIdSet={input.pinnedThreadIdSet ?? new Set()}
       settledOverrideByThreadId={input.settledOverrideByThreadId ?? new Map()}
-      threadsHydrated
+      threadsHydrated={input.threadsHydrated ?? true}
+      scopeSelection={input.scope ? input.scope.selection : localScope}
+      onScopeSelectionChange={input.scope ? input.scope.onChange : setLocalScope}
       prByThreadId={input.prByThreadId ?? new Map()}
       onVisibleThreadIdsChange={input.onVisibleThreadIdsChange ?? (() => {})}
       resolveThreadStatus={input.resolveThreadStatus ?? (() => null)}
@@ -484,6 +498,60 @@ describe("SidebarActivityView", () => {
     await expect
       .element(page.getByRole("button", { name: "Filter activity by project" }))
       .toHaveTextContent("All activity");
+    await mounted.unmount();
+  });
+
+  it("keeps a remembered project scope when the view remounts", async () => {
+    const projectA = makeProject(PROJECT_A, "Project A");
+    const projectB = makeProject(PROJECT_B, "Project B");
+    const threads = [makeThread(210), makeThread(211, { projectId: PROJECT_B })];
+    const projects = [projectA, projectB];
+    // Stands in for the sidebar, which owns the scope across Settings round-trips.
+    let selection: ActivityScopeSelection = null;
+    const scope = () => ({
+      selection,
+      onChange: (next: ActivityScopeSelection) => {
+        selection = next;
+      },
+    });
+    const first = await render(renderActivity({ threads, projects, scope: scope() }));
+    await page.getByRole("button", { name: "Filter activity by project" }).click();
+    await page.getByRole("menuitemradio", { name: /Project B/u }).click();
+    expect(selection).toBe(PROJECT_B);
+    await first.unmount();
+
+    const second = await render(renderActivity({ threads, projects, scope: scope() }));
+    await expect
+      .element(page.getByRole("button", { name: "Filter activity by project" }))
+      .toHaveTextContent("Project B");
+    await second.unmount();
+  });
+
+  it("does not drop a remembered scope while threads are still hydrating", async () => {
+    const projectA = makeProject(PROJECT_A, "Project A");
+    const onChange = vi.fn();
+    const mounted = await render(
+      renderActivity({
+        threads: [],
+        projects: [projectA],
+        threadsHydrated: false,
+        scope: { selection: PROJECT_A, onChange },
+      }),
+    );
+    await expect.element(page.getByText("Loading activity...")).toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalled();
+
+    await mounted.rerender(
+      renderActivity({
+        threads: [makeThread(220)],
+        projects: [projectA],
+        scope: { selection: PROJECT_A, onChange },
+      }),
+    );
+    await expect
+      .element(page.getByRole("button", { name: "Filter activity by project" }))
+      .toHaveTextContent("Project A");
+    expect(onChange).not.toHaveBeenCalled();
     await mounted.unmount();
   });
 

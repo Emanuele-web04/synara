@@ -130,6 +130,9 @@ section records what they change and the same benchmark re-run with all of them 
 
 - Tab feedback: the pressed tab reads as selected within one frame, selection starts on
   mouse press, and the chat renders right after that frame paints.
+  A subsequent interaction fix restores normal completed-click selection in both chat
+  tab strips: holding the mouse button or releasing outside the tab does not switch chats.
+  Optimistic highlighting and deferred rendering still start immediately after the click.
 - Streaming and startup: the sidebar, tab strip and global shortcuts no longer re-render
   for every streamed token, and stored settings are decoded once instead of once per
   subscriber per write.

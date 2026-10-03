@@ -57,6 +57,7 @@ import {
 } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from "./ui/input-group";
+import { CHAT_BACKGROUND_CLASS_NAME } from "./chat/composerPickerStyles";
 import { SidebarInset } from "./ui/sidebar";
 import { SidebarHeaderNavigationControls } from "./SidebarHeaderNavigationControls";
 import {
@@ -716,7 +717,10 @@ export function PluginLibrary(props?: {
       {body}
     </div>
   ) : (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden isolate">
+    <SidebarInset
+      className="h-dvh min-h-0 overflow-hidden isolate"
+      surfaceClassName={CHAT_BACKGROUND_CLASS_NAME}
+    >
       <div className="flex h-full flex-col">
         {/* ── Top nav ───────────────────────────────────────────────────── */}
         <div
@@ -726,7 +730,7 @@ export function PluginLibrary(props?: {
             desktopTopBarWindowControlsGutterClassName,
           )}
         >
-          <SidebarHeaderNavigationControls />
+          <SidebarHeaderNavigationControls collapsedGapClassName="-me-3" />
           {tabsAndProviderPicker}
         </div>
         {body}

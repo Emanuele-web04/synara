@@ -8,7 +8,7 @@
 // Layer: Pull request presentation
 // Exports: PullRequestList
 
-import type { GitHubInboxItem, ProjectId } from "@synara/contracts";
+import type { GitHubInboxItem, GitHubInboxSort, ProjectId } from "@synara/contracts";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { resolveSidebarThreadListPaging } from "~/components/Sidebar.logic";
@@ -36,6 +36,7 @@ const LIST_INSET_CLASS_NAME = "px-3";
 
 export const PullRequestList = function PullRequestList({
   groups,
+  sort,
   isSelected,
   isSectionOpen,
   onToggleSection,
@@ -45,6 +46,7 @@ export const PullRequestList = function PullRequestList({
   onTogglePinned,
 }: {
   groups: ReadonlyArray<PullRequestListGroup>;
+  sort: GitHubInboxSort;
   isSelected: (entry: GitHubInboxItem) => boolean;
   /** Whether a collapsible section is expanded. Pinned and All are always open. */
   isSectionOpen: (key: PullRequestListGroupKey) => boolean;
@@ -78,6 +80,7 @@ export const PullRequestList = function PullRequestList({
     <PullRequestRow
       key={pullRequestListEntryKey(entry)}
       entry={entry}
+      sort={sort}
       showProjectTitle={showProjectTitle}
       {...(showProjectTitle && projectIconFor
         ? { projectIcon: projectIconFor(entry.projectId) }

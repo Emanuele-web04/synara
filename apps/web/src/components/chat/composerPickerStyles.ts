@@ -3,6 +3,7 @@
 // Layer: UI styling helper
 // Exports: surface/option/radius tokens; open panels via ComposerPickerMenuPopup / ComposerPickerSelectPopup
 
+import { FLOATING_OVERLAY_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 import { MUTED_LABEL_TEXT_CLASS_NAME } from "~/surfaceStyles";
 
 export { COMPOSER_PICKER_SIZE, type ComposerPickerSize } from "./composerPickerSize";
@@ -162,9 +163,10 @@ export const RAISED_SURFACE_CHROME_CLASS_NAME = `border ${RAISED_SURFACE_BORDER_
  *  dark mode (via `--surface-border`) instead of dropping to shadow-only separation. */
 export const COMPOSER_INPUT_SURFACE_CLASS_NAME = `chat-composer-surface squircle border ${RAISED_SURFACE_BORDER_CLASS_NAME} ${COMPOSER_SURFACE_SHADOW_CLASS_NAME} transition-colors duration-200`;
 
-/** Shadcn default-translucent shell for floating menus, pickers, and popovers. */
-export const APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME =
-  "relative overflow-hidden border border-border bg-popover/70 text-popover-foreground before:pointer-events-none before:absolute before:inset-0 before:-z-1 before:rounded-[inherit] before:backdrop-blur-2xl before:backdrop-saturate-150";
+/** Shell for floating menus, pickers, and popovers: the shared overlay fill over a backdrop
+ *  blur. FLOATING_OVERLAY_SURFACE_CLASS_NAME hands the fill to index.css and, on a translucent
+ *  window where the blur cannot hide what sits behind the popup, marks it for the cutout. */
+export const APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME = `${FLOATING_OVERLAY_SURFACE_CLASS_NAME} relative overflow-hidden border border-border bg-popover/70 text-popover-foreground before:pointer-events-none before:absolute before:inset-0 before:-z-1 before:rounded-[inherit] before:backdrop-blur-2xl before:backdrop-saturate-150`;
 
 /** Default floating popup shell (dropdown menus, selects, popovers). */
 export const APP_TRANSLUCENT_POPUP_SURFACE_CLASS_NAME = `${APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME} rounded-2xl shadow-xl`;
@@ -215,10 +217,12 @@ export const COMPOSER_PICKER_TOOLTIP_SURFACE_CLASS_NAME = `${COMPOSER_PICKER_MEN
 export const COMPOSER_COMMAND_MENU_SURFACE_CLASS_NAME =
   "relative overflow-hidden rounded-2xl border border-border bg-popover text-popover-foreground";
 
-/** Opaque Environment panel card — same rationale as the command menu (overlays transcript).
+/** Environment panel card. Opaque for the same reason as the command menu (it overlays the
+ *  transcript), except on a whole-window glass shell, where it takes the shared raised
+ *  tint (see `.app-glass-raised` in index.css).
  *  Docks alongside the composer, so it carries the shared raised-chrome border rather
  *  than plain `border-border`: the two cards sit side by side and must read as one weight. */
-export const ENVIRONMENT_PANEL_SURFACE_CLASS_NAME = `relative overflow-hidden rounded-2xl border ${RAISED_SURFACE_BORDER_CLASS_NAME} bg-popover text-popover-foreground ${COMPOSER_SURFACE_SHADOW_CLASS_NAME}`;
+export const ENVIRONMENT_PANEL_SURFACE_CLASS_NAME = `relative overflow-hidden rounded-2xl border ${RAISED_SURFACE_BORDER_CLASS_NAME} chat-raised-panel-surface text-popover-foreground ${COMPOSER_SURFACE_SHADOW_CLASS_NAME}`;
 
 /** Top-right overlay host shared by the right-side surface panels (Environment, Group,
  *  Library). Panels that stack extra chrome (Environment's bottom rail) extend it. */
@@ -227,7 +231,7 @@ export const ENVIRONMENT_PANEL_OVERLAY_WRAPPER_CLASS_NAME =
 
 /** Slide + inset timing matched to shared disclosure motion (220ms). */
 export const ENVIRONMENT_PANEL_MOTION_CLASS =
-  "transition-[transform,opacity] duration-220 ease-out motion-reduce:transition-none";
+  "transition-[translate,opacity] duration-220 ease-out motion-reduce:transition-none";
 
 /** Transcript/composer right inset when the docked Environment card opens. */
 export const ENVIRONMENT_CONTENT_INSET_MOTION_CLASS =

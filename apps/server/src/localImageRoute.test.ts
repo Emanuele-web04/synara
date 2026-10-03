@@ -279,7 +279,50 @@ describe("localImageEffectRouteLayer", () => {
       params.set("download", "1");
       const downloadResponse = await fetch(`${origin}/api/local-image?${params}`);
       expect(downloadResponse.status).toBe(200);
-      expect(downloadResponse.headers.get("content-disposition")).toContain("hero.png");
+      expect(downloadResponse.headers.get("content-disposition")).toBe(
+        'attachment; filename="hero.png"',
+      );
+    });
+  });
+
+  it("downloads files whose names are not plain ASCII through an RFC 5987 filename", async () => {
+    const workspace = makeTempDir("synara-effect-image-unicode-name-");
+    writeFileSync(path.join(workspace, ".git"), "gitdir: .git");
+    const config = makeServerConfig({ cwd: workspace });
+    const files = [
+      { fileName: "报告.pdf", bytes: Buffer.from("%PDF-1.4"), encoded: "%E6%8A%A5%E5%91%8A.pdf" },
+      // macOS screenshots carry a narrow no-break space (U+202F) before AM/PM.
+      {
+        fileName: "Screenshot 2026-04-03 at 9.27.45\u202fPM.png",
+        bytes: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+        encoded: "Screenshot%202026-04-03%20at%209.27.45%E2%80%AFPM.png",
+      },
+      // RFC 5987 does not allow ' ( ) * unencoded, and encodeURIComponent leaves them.
+      {
+        fileName: "l'été (1).png",
+        bytes: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+        encoded: "l%27%C3%A9t%C3%A9%20%281%29.png",
+      },
+    ];
+    for (const { fileName, bytes } of files) writeFileSync(path.join(workspace, fileName), bytes);
+
+    await withEffectServer(config, localImageEffectRouteLayer, async (origin) => {
+      for (const { fileName, bytes, encoded } of files) {
+        const params = new URLSearchParams({
+          path: path.join(workspace, fileName),
+          cwd: workspace,
+          download: "1",
+        });
+        // A route that rejects the header never ends the response; bound the wait.
+        const response = await fetch(`${origin}/api/local-image?${params}`, {
+          signal: AbortSignal.timeout(5_000),
+        });
+        expect(response.status).toBe(200);
+        expect(response.headers.get("content-disposition")).toBe(
+          `attachment; filename*=UTF-8''${encoded}`,
+        );
+        expect(Buffer.from(await response.arrayBuffer())).toEqual(bytes);
+      }
     });
   });
 

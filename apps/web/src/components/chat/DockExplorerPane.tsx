@@ -25,7 +25,7 @@ import { WorkspaceExplorerSidebar } from "./workspaceExplorer";
 // to a stacked block here). With the activity rail gone, the search box sits at
 // the top of this column and the freed width goes to the file viewer.
 const DOCK_EXPLORER_SIDEBAR_CLASS =
-  "flex h-full min-h-0 w-60 shrink-0 flex-col border-r border-border/65 bg-[var(--color-background-surface)]";
+  "flex h-full min-h-0 w-60 shrink-0 flex-col border-r border-border/65 app-content-surface";
 
 export const DockExplorerPane = function DockExplorerPane(props: {
   threadId: ThreadId;

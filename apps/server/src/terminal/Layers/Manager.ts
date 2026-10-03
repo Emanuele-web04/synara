@@ -44,6 +44,12 @@ import {
   prepareManagedTerminalAgentWrappers,
   type ManagedTerminalProfile,
 } from "../managedTerminalWrappers";
+import { prepareProcess } from "@synara/shared/platformProcess";
+import {
+  prepareProviderAuthenticationSettings,
+  resolveProviderAuthenticationLaunch,
+  type ProviderAuthenticationLaunch,
+} from "../providerAuthentication";
 import { deriveManagedTerminalProfiles } from "../providerTerminalProfiles";
 import {
   ShellCandidate,
@@ -756,6 +762,7 @@ interface TerminalManagerOptions {
   processKillGraceMs?: number;
   maxRetainedInactiveSessions?: number;
   managedProfileResolver?: () => Promise<ReadonlyArray<ManagedTerminalProfile>>;
+  providerAuthResolver?: (instanceId: string) => Promise<ProviderAuthenticationLaunch>;
 }
 
 interface KillEscalationHandle {
@@ -804,6 +811,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   private readonly managedProfileResolver:
     | (() => Promise<ReadonlyArray<ManagedTerminalProfile>>)
     | undefined;
+  private readonly providerAuthResolver: TerminalManagerOptions["providerAuthResolver"];
   private managedProfileRefresh: Promise<void> | null = null;
 
   constructor(options: TerminalManagerOptions) {
@@ -838,6 +846,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     this.maxRetainedInactiveSessions =
       options.maxRetainedInactiveSessions ?? DEFAULT_MAX_RETAINED_INACTIVE_SESSIONS;
     this.managedProfileResolver = options.managedProfileResolver;
+    this.providerAuthResolver = options.providerAuthResolver;
     ensurePrivateDirectorySync(this.logsDir);
     if (this.managedWrapperBinDir) {
       try {
@@ -905,7 +914,9 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       const existing = this.sessions.get(sessionKey);
       if (!existing) {
         await this.flushPersistQueue(input.threadId, input.terminalId);
-        const history = await this.readHistory(input.threadId, input.terminalId);
+        const history = input.providerAuthInstanceId
+          ? ""
+          : await this.readHistory(input.threadId, input.terminalId);
         const cols = input.cols ?? DEFAULT_OPEN_COLS;
         const rows = input.rows ?? DEFAULT_OPEN_ROWS;
         const openedAt = new Date().toISOString();
@@ -933,6 +944,9 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           managedAgentState: null,
           managedAgentObserved: false,
           runtimeEnv: normalizedRuntimeEnv(input.env),
+          ...(input.providerAuthInstanceId
+            ? { providerAuthInstanceId: input.providerAuthInstanceId }
+            : {}),
           pendingInputBuffer: "",
           modeReplayTracker: null,
           pendingOutputChunks: [],
@@ -955,7 +969,19 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         return this.snapshot(session);
       }
 
+      if (existing.providerAuthInstanceId !== input.providerAuthInstanceId) {
+        throw new Error("A terminal cannot switch its authentication account.");
+      }
       existing.lastOpenedAt = new Date().toISOString();
+      // Reconnect preserves a finished login; it must never start another login.
+      if (existing.providerAuthInstanceId) {
+        if (existing.process) {
+          existing.cols = input.cols ?? existing.cols;
+          existing.rows = input.rows ?? existing.rows;
+          existing.process.resize(existing.cols, existing.rows);
+        }
+        return this.snapshot(existing);
+      }
       // A re-open may flip headless mode (e.g. a viewer attaching later); honor it
       // when explicitly provided, otherwise keep the session's current mode.
       if (input.streamOutput !== undefined) {
@@ -1118,6 +1144,8 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
 
       const sessionKey = toSessionKey(input.threadId, input.terminalId);
       let session = this.sessions.get(sessionKey);
+      if (session?.providerAuthInstanceId)
+        throw new Error("Close this authentication window and start a new sign-in attempt.");
       if (!session) {
         const cols = input.cols ?? DEFAULT_OPEN_COLS;
         const rows = input.rows ?? DEFAULT_OPEN_ROWS;
@@ -1315,11 +1343,28 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     let ptyProcess: PtyProcess | null = null;
     let startedShell: string | null = null;
     try {
-      const shellCandidates = resolveShellCandidates(this.shellResolver);
-      const terminalEnv = createTerminalSpawnEnv(process.env, session.runtimeEnv, {
-        binDir: this.managedWrapperBinDir,
-        zshDir: this.managedWrapperZshDir,
-      });
+      let shellCandidates: ShellCandidate[];
+      let terminalEnv: NodeJS.ProcessEnv;
+      let windowsVerbatimArguments: true | undefined;
+      if (session.providerAuthInstanceId) {
+        if (!this.providerAuthResolver) throw new Error("Provider authentication is unavailable.");
+        const launch = await this.providerAuthResolver(session.providerAuthInstanceId);
+        const plan = prepareProcess(launch.command, launch.args, {
+          env: launch.env,
+          cwd: launch.cwd,
+          requireExecutable: true,
+        });
+        shellCandidates = [{ shell: plan.command, args: plan.args }];
+        windowsVerbatimArguments = plan.windowsVerbatimArguments;
+        terminalEnv = launch.env;
+        session.cwd = launch.cwd;
+      } else {
+        shellCandidates = resolveShellCandidates(this.shellResolver);
+        terminalEnv = createTerminalSpawnEnv(process.env, session.runtimeEnv, {
+          binDir: this.managedWrapperBinDir,
+          zshDir: this.managedWrapperZshDir,
+        });
+      }
       let lastSpawnError: unknown = null;
 
       const spawnWithCandidate = (candidate: ShellCandidate) =>
@@ -1327,6 +1372,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           this.ptyAdapter.spawn({
             shell: candidate.shell,
             ...(candidate.args ? { args: candidate.args } : {}),
+            ...(windowsVerbatimArguments ? { windowsVerbatimArguments } : {}),
             cwd: session.cwd,
             cols: session.cols,
             rows: session.rows,
@@ -1843,7 +1889,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
 
   private evictInactiveSessionsIfNeeded(): void {
     const inactiveSessions = [...this.sessions.values()].filter(
-      (session) => session.status !== "running",
+      (session) => session.status !== "running" && !session.providerAuthInstanceId,
     );
     if (inactiveSessions.length <= this.maxRetainedInactiveSessions) {
       return;
@@ -1883,6 +1929,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
    * always persists the latest content, even after the session is removed.
    */
   private queuePersist(session: TerminalSessionState): void {
+    if (session.providerAuthInstanceId) return;
     const persistenceKey = toSessionKey(session.threadId, session.terminalId);
     this.pendingPersistHistory.set(persistenceKey, () => session.history.toString());
     this.schedulePersist(session.threadId, session.terminalId);
@@ -1893,6 +1940,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     terminalId: string,
     history: string,
   ): Promise<void> {
+    if (this.sessions.get(toSessionKey(threadId, terminalId))?.providerAuthInstanceId) return;
     const persistenceKey = toSessionKey(threadId, terminalId);
     this.clearPersistTimer(threadId, terminalId);
     this.pendingPersistHistory.delete(persistenceKey);
@@ -2424,6 +2472,35 @@ export const TerminalManagerLive = Layer.effect(
           new TerminalManagerRuntime({
             logsDir: terminalLogsDir,
             ptyAdapter,
+            providerAuthResolver: async (instanceId) => {
+              let settings = await Effect.runPromise(serverSettings.getSettings);
+              const patch = prepareProviderAuthenticationSettings({
+                settings,
+                instanceId,
+                homeDir,
+                stateDir,
+              });
+              if (patch)
+                settings = await Effect.runPromise(
+                  serverSettings.updateSettings(
+                    patch,
+                    (current) =>
+                      prepareProviderAuthenticationSettings({
+                        settings: current,
+                        instanceId,
+                        homeDir,
+                        stateDir,
+                      }) ?? {},
+                  ),
+                );
+              return resolveProviderAuthenticationLaunch({
+                settings,
+                instanceId,
+                homeDir,
+                stateDir,
+                baseEnv: process.env,
+              });
+            },
             managedProfileResolver: async () =>
               deriveManagedTerminalProfiles({
                 settings: await Effect.runPromise(serverSettings.getSettings),

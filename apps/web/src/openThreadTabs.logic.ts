@@ -6,9 +6,11 @@
 // Exports: open-list transitions, persisted-list normalization, tab derivation, close flow
 
 import type { ProjectId, ProviderKind, ThreadId } from "@synara/contracts";
+import { arrayMove } from "@dnd-kit/sortable";
 import { isSidechatThread } from "@synara/shared/sidechatThread";
 
 import { resolveDraftThreadTitle } from "./components/ChatView.logic";
+import { resolveThreadStatusPill } from "./components/Sidebar.logic";
 import { resolveSubagentPresentationForThread } from "./lib/subagentPresentation";
 import { resolveTabAfterClose } from "./lib/tabStrip";
 import type { SidebarThreadSummary, Thread, ThreadPrimarySurface } from "./types";
@@ -22,6 +24,8 @@ export interface OpenThreadTab {
   isTerminal: boolean;
   // Not sent yet: exists only as a local composer draft.
   isDraft: boolean;
+  // Working or connecting: the tab spins where the sidebar row does.
+  isRunning: boolean;
 }
 
 /** Everything the tab derivation needs to know about one open thread id. */
@@ -40,6 +44,7 @@ export interface OpenThreadTabSource {
       }
     | undefined;
   terminalEntryPoint: boolean;
+  isPreparingWorktree?: boolean | undefined;
 }
 
 // The transitions return the input array untouched when nothing changes, so the store
@@ -60,6 +65,22 @@ export function removeOpenThreadTab(
   return threadIds.includes(threadId)
     ? threadIds.filter((candidate) => candidate !== threadId)
     : threadIds;
+}
+
+/**
+ * Drops a dragged tab onto another tab's slot in the full open list, retaining hidden
+ * tabs and their relative order.
+ */
+export function moveOpenThreadTab(
+  threadIds: readonly ThreadId[],
+  threadId: ThreadId,
+  overThreadId: ThreadId,
+): readonly ThreadId[] {
+  const fromIndex = threadIds.indexOf(threadId);
+  const toIndex = threadIds.indexOf(overThreadId);
+  return fromIndex < 0 || toIndex < 0 || fromIndex === toIndex
+    ? threadIds
+    : arrayMove([...threadIds], fromIndex, toIndex);
 }
 
 export function pruneOpenThreadTabs(
@@ -115,6 +136,14 @@ function resolveOpenThreadTab(source: OpenThreadTabSource): OpenThreadTab | null
       provider: summary.session?.provider ?? summary.modelSelection.provider,
       isTerminal: source.terminalEntryPoint,
       isDraft: false,
+      // The sidebar row's own status, so a tab and its row never disagree.
+      isRunning:
+        resolveThreadStatusPill({
+          thread: summary,
+          hasPendingApprovals: summary.hasPendingApprovals,
+          hasPendingUserInput: summary.hasPendingUserInput,
+          isPreparingWorktree: source.isPreparingWorktree ?? false,
+        })?.pulse === true,
     };
   }
   if (draft) {
@@ -125,6 +154,7 @@ function resolveOpenThreadTab(source: OpenThreadTabSource): OpenThreadTab | null
       provider: draft.provider,
       isTerminal: source.terminalEntryPoint || draft.entryPoint === "terminal",
       isDraft: true,
+      isRunning: false,
     };
   }
   return null;
@@ -245,18 +275,68 @@ export async function closeOpenThreadTab(
   return { ok: true };
 }
 
+/** Which neighbours of a tab its context menu closes; the tab itself always stays. */
+export type OpenThreadTabCloseScope = "left" | "right" | "others";
+
+/**
+ * The tabs a scoped close removes, in tab order. Empty when the scope has nothing in it
+ * (no tabs on that side, or the anchor is the only tab), which is also when its menu row
+ * is left out.
+ */
+export function resolveOpenThreadTabsInCloseScope(
+  tabs: readonly Pick<OpenThreadTab, "threadId">[],
+  anchorThreadId: ThreadId,
+  scope: OpenThreadTabCloseScope,
+): ThreadId[] {
+  const anchorIndex = tabs.findIndex((tab) => tab.threadId === anchorThreadId);
+  if (anchorIndex < 0) {
+    return [];
+  }
+  return tabs
+    .filter((_, index) =>
+      scope === "left"
+        ? index < anchorIndex
+        : scope === "right"
+          ? index > anchorIndex
+          : index !== anchorIndex,
+    )
+    .map((tab) => tab.threadId);
+}
+
+/**
+ * Closes several tabs around one that stays. When the thread on screen is among them the
+ * kept tab takes over first, and (as with a single close) a thread the route could not
+ * leave keeps its tab.
+ */
+export async function closeOpenThreadTabs(input: {
+  closedThreadIds: readonly ThreadId[];
+  keptThreadId: ThreadId;
+  activeThreadId: ThreadId | null;
+  closeTabs: (threadIds: readonly ThreadId[]) => void;
+  openTab: (threadId: ThreadId) => Promise<unknown>;
+  readRouteThreadId: () => string | null;
+}): Promise<void> {
+  if (input.activeThreadId !== null && input.closedThreadIds.includes(input.activeThreadId)) {
+    await input.openTab(input.keptThreadId);
+  }
+  const routeThreadId = input.readRouteThreadId();
+  const closedThreadIds = input.closedThreadIds.filter((threadId) => threadId !== routeThreadId);
+  if (closedThreadIds.length > 0) {
+    input.closeTabs(closedThreadIds);
+  }
+}
+
 /**
  * Runs tab closes one at a time, each reading its input when it starts rather than when
  * its X was clicked. A second close clicked while the first is still navigating must see
  * where that navigation lands: with the old active thread it would take the successor
  * for a background tab and drop it, and the landing thread would then reopen it.
  */
-export function createOpenThreadTabCloseQueue(): (
-  readInput: () => CloseOpenThreadTabInput,
-) => Promise<CloseOpenThreadTabResult> {
+export function createOpenThreadTabCloseQueue(): <Result>(
+  run: () => Promise<Result>,
+) => Promise<Result> {
   let queue: Promise<unknown> = Promise.resolve();
-  return (readInput) => {
-    const run = () => closeOpenThreadTab(readInput());
+  return (run) => {
     const queued = queue.then(run, run);
     queue = queued.then(
       () => undefined,

@@ -41,6 +41,7 @@ import { Data, Effect, Option } from "effect";
 import { resolveThreadWorkspaceCwd } from "../checkpointing/Utils";
 import type { ServerConfigShape } from "../config";
 import { loadClaudeAgentSdk } from "../provider/claudeAgentSdk.ts";
+import { selectClaudeHistoryPage, type ClaudeHistoryPage } from "../provider/claudeHistoryPage.ts";
 import { buildClaudeInstanceProcessEnv } from "../provider/claudeEnvironment.ts";
 import { ensureProviderEnabled } from "../provider/enabledProviderAdapter";
 import type { OrchestrationEngineShape } from "./Services/OrchestrationEngine";
@@ -90,14 +91,21 @@ function providerResumeCursorForImport(provider: ProviderKind, externalId: strin
 const CLAUDE_SESSION_QUERY_SCRIPT = `const [moduleUrl, method, sessionId, optionsJson] = process.argv.slice(2);
 const sdk = await import(moduleUrl);
 const options = JSON.parse(optionsJson);
+const selectPage = ${selectClaudeHistoryPage.toString()};
 const result =
   method === "listSessions"
     ? await sdk.listSessions(options ?? undefined)
+    : method === "getSessionMessagePage"
+      ? selectPage(await sdk.getSessionMessages(sessionId, options?.dir ? { dir: options.dir } : undefined), options?.before)
     : await sdk[method](sessionId, options ?? undefined);
 process.stdout.write(JSON.stringify(result ?? null));
 `;
 
-type ClaudeSessionQueryMethod = "getSessionInfo" | "getSessionMessages" | "listSessions";
+type ClaudeSessionQueryMethod =
+  | "getSessionInfo"
+  | "getSessionMessages"
+  | "listSessions"
+  | "getSessionMessagePage";
 
 export function claudeHistoricalSessionChildEnvironment(
   environment: NodeJS.ProcessEnv,
@@ -110,6 +118,7 @@ async function runClaudeSessionQueryInChildProcess<T>(input: {
   readonly sessionId: string;
   readonly dir: string | undefined;
   readonly environment: NodeJS.ProcessEnv;
+  readonly before?: string;
 }): Promise<T> {
   const moduleUrl = pathToFileURL(
     createRequire(import.meta.url).resolve("@anthropic-ai/claude-agent-sdk"),
@@ -126,7 +135,10 @@ async function runClaudeSessionQueryInChildProcess<T>(input: {
           moduleUrl,
           input.method,
           input.sessionId,
-          JSON.stringify(input.dir ? { dir: input.dir } : null),
+          JSON.stringify({
+            ...(input.dir ? { dir: input.dir } : {}),
+            ...(input.before ? { before: input.before } : {}),
+          }),
         ],
         {
           env: claudeHistoricalSessionChildEnvironment(input.environment),
@@ -146,6 +158,18 @@ async function runClaudeSessionQueryInChildProcess<T>(input: {
   } finally {
     await fsPromises.rm(scriptDir, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+export function readClaudeSessionMessagePageInEnvironment(input: {
+  readonly sessionId: string;
+  readonly dir: string | undefined;
+  readonly environment: NodeJS.ProcessEnv | undefined;
+  readonly before?: string;
+}): Promise<ClaudeHistoryPage> {
+  return queryClaudeHistoricalSession<ClaudeHistoryPage>({
+    method: "getSessionMessagePage",
+    ...input,
+  });
 }
 
 /** Lists one Claude account's sessions without touching the server's process.env. */
@@ -177,6 +201,7 @@ async function queryClaudeHistoricalSession<T>(input: {
   readonly sessionId: string;
   readonly dir: string | undefined;
   readonly environment: NodeJS.ProcessEnv | undefined;
+  readonly before?: string;
 }): Promise<T> {
   if (input.environment && Object.keys(input.environment).length > 0) {
     return runClaudeSessionQueryInChildProcess<T>({
@@ -184,6 +209,7 @@ async function queryClaudeHistoricalSession<T>(input: {
       sessionId: input.sessionId,
       dir: input.dir,
       environment: input.environment,
+      ...(input.before ? { before: input.before } : {}),
     });
   }
   const options = input.dir ? { dir: input.dir } : undefined;
@@ -193,7 +219,11 @@ async function queryClaudeHistoricalSession<T>(input: {
       ? sdk.listSessions(options)
       : input.method === "getSessionInfo"
         ? sdk.getSessionInfo(input.sessionId, options)
-        : sdk.getSessionMessages(input.sessionId, options)
+        : input.method === "getSessionMessagePage"
+          ? sdk
+              .getSessionMessages(input.sessionId, options)
+              .then((messages) => selectClaudeHistoryPage(messages, input.before))
+          : sdk.getSessionMessages(input.sessionId, options)
   ) as Promise<T>;
 }
 

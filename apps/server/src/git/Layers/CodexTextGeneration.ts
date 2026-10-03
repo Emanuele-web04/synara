@@ -3,6 +3,7 @@
 // Layer: Git and orchestration text-generation service.
 
 import {
+  Deferred,
   Effect,
   Fiber,
   FileSystem,
@@ -210,6 +211,15 @@ function normalizeCodexError(
   });
 }
 
+function codexAuthenticationFailureDetail(output: string): string | undefined {
+  const authenticationFailed = output
+    .split(/\r?\n/)
+    .some((line) => /^ERROR:/.test(line) && /\b401\b/.test(line) && /\bunauthorized\b/i.test(line));
+  return authenticationFailed
+    ? "Codex authentication failed (401 Unauthorized). Check the selected Codex account or provider credentials in Settings, then retry."
+    : undefined;
+}
+
 const makeCodexTextGeneration = Effect.gen(function* () {
   const timingOption = yield* Effect.serviceOption(CodexTextGenerationTimingConfig);
   const timing = Option.getOrElse(timingOption, () => DEFAULT_CODEX_TEXT_GENERATION_TIMING);
@@ -220,14 +230,17 @@ const makeCodexTextGeneration = Effect.gen(function* () {
   const readStreamAsString = <E>(
     operation: string,
     stream: Stream.Stream<Uint8Array, E>,
+    onLine?: (line: string) => Effect.Effect<void>,
   ): Effect.Effect<string, TextGenerationError> =>
     Effect.gen(function* () {
       let text = "";
-      yield* Stream.runForEach(stream, (chunk) =>
-        Effect.sync(() => {
-          text += Buffer.from(chunk).toString("utf8");
+      yield* stream.pipe(
+        Stream.decodeText,
+        Stream.splitLines,
+        Stream.runForEach((line) => {
+          text += `${line}\n`;
+          return onLine?.(line) ?? Effect.void;
         }),
-      ).pipe(
         Effect.mapError((cause) =>
           normalizeCodexError("codex", operation, cause, "Failed to collect process output"),
         ),
@@ -244,6 +257,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       const cleanupHandled = yield* Ref.make(false);
+      const authenticationFailure = yield* Deferred.make<never, TextGenerationError>();
       yield* Effect.addFinalizer(() =>
         Ref.get(cleanupHandled).pipe(
           Effect.flatMap((handled) =>
@@ -258,9 +272,15 @@ const makeCodexTextGeneration = Effect.gen(function* () {
       const stdoutFiber = yield* readStreamAsString(input.operation, input.child.stdout).pipe(
         Effect.forkScoped,
       );
-      const stderrFiber = yield* readStreamAsString(input.operation, input.child.stderr).pipe(
-        Effect.forkScoped,
-      );
+      const stderrFiber = yield* readStreamAsString(input.operation, input.child.stderr, (line) => {
+        const detail = codexAuthenticationFailureDetail(line);
+        return detail
+          ? Deferred.fail(
+              authenticationFailure,
+              new TextGenerationError({ operation: input.operation, detail }),
+            ).pipe(Effect.asVoid)
+          : Effect.void;
+      }).pipe(Effect.forkScoped);
       const exitCode = yield* input.child.exitCode.pipe(
         Effect.map((value) => Number(value)),
         Effect.mapError((cause) =>
@@ -271,6 +291,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
             "Failed to read Codex CLI exit code",
           ),
         ),
+        Effect.raceFirst(Deferred.await(authenticationFailure)),
         Effect.timeoutOrElse({
           duration: input.timeoutMs,
           onTimeout: () =>
@@ -286,6 +307,18 @@ const makeCodexTextGeneration = Effect.gen(function* () {
               ),
             ),
         }),
+        Effect.catch((error) =>
+          Ref.get(cleanupHandled).pipe(
+            Effect.flatMap((handled) =>
+              handled
+                ? Effect.fail(error)
+                : terminateCodexChild(input.child, timing.killGraceMs, input.operation).pipe(
+                    Effect.andThen(Ref.set(cleanupHandled, true)),
+                    Effect.andThen(Effect.fail(error)),
+                  ),
+            ),
+          ),
+        ),
       );
 
       const collectOutput = Effect.all(
@@ -714,9 +747,10 @@ const makeCodexTextGeneration = Effect.gen(function* () {
             return yield* new TextGenerationError({
               operation,
               detail:
-                detail.length > 0
+                codexAuthenticationFailureDetail(detail) ??
+                (detail.length > 0
                   ? `Codex CLI command failed: ${detail}`
-                  : `Codex CLI command failed with code ${exitCode}.`,
+                  : `Codex CLI command failed with code ${exitCode}.`),
             });
           }
         });

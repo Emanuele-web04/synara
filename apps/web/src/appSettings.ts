@@ -20,7 +20,7 @@ import {
   type ProviderDriverKind,
   type ProviderInstanceEnvironment,
   ProviderInstanceId,
-  GitHubInboxState,
+  GitHubInboxSort,
   TrimmedNonEmptyString,
   ProviderKind,
   type GitTextGenerationProvider,
@@ -50,12 +50,6 @@ import {
   normalizeHiddenProviders,
   normalizeProviderOrder,
 } from "./providerOrdering";
-import {
-  DEFAULT_SIDEBAR_NAV_ORDER,
-  normalizeHiddenSidebarNavItems,
-  normalizeSidebarNavOrder,
-  SIDEBAR_NAV_ITEM_IDS,
-} from "./sidebarNavOrdering";
 import {
   DEFAULT_HIDDEN_RAIL_ITEMS,
   normalizeHiddenRailItems,
@@ -162,20 +156,19 @@ function persistedKnownIdList<const Ids extends ReadonlyArray<string>>(ids: Ids)
   return persistedIdList(Id, (value) => (isKnownId(value) ? value : undefined));
 }
 
-const SidebarNavItemIdList = persistedKnownIdList(SIDEBAR_NAV_ITEM_IDS);
 const RailOrderableItemIdList = persistedKnownIdList(RAIL_ORDERABLE_ITEM_IDS);
 /** Where Beta's Tasks entry opens: the to-do list or the Kanban board of chats. */
 export const TasksViewMode = Schema.Literals(["list", "kanban"]);
 export type TasksViewMode = typeof TasksViewMode.Type;
 export const DEFAULT_TASKS_VIEW_MODE: TasksViewMode = "list";
 
-/** Classic: one sidebar column. Rail: fixed icon tabs plus a panel (see useSidebarLayout). */
-export const SidebarLayout = Schema.Literals(["classic", "rail"]);
-export type SidebarLayout = typeof SidebarLayout.Type;
-export const DEFAULT_SIDEBAR_LAYOUT: SidebarLayout = "rail";
 export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
 export const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
 export const FollowUpBehavior = Schema.Literals(["queue", "steer"]);
+/** The inbox status filter. Merged is the closed list narrowed to merged pull requests. */
+export const GitHubInboxStateFilter = Schema.Literals(["open", "closed", "merged"]);
+export type GitHubInboxStateFilter = typeof GitHubInboxStateFilter.Type;
+
 /** GitHub inbox kind filter: both kinds, or only pull requests or only issues. */
 export const GitHubInboxKindFilter = Schema.Literals(["all", "pullRequest", "issue"]);
 export type GitHubInboxKindFilter = typeof GitHubInboxKindFilter.Type;
@@ -188,11 +181,20 @@ export const GitHubInboxInvolvementFilter = Schema.Literals([
   "assigned",
 ]);
 export type GitHubInboxInvolvementFilter = typeof GitHubInboxInvolvementFilter.Type;
+/** Where a plain click on a GitHub pull request or issue link opens: the built-in review view,
+ *  the in-app browser, or the system browser. */
+export const GitHubLinkOpenTarget = Schema.Literals(["app", "browser", "external"]);
+export type GitHubLinkOpenTarget = typeof GitHubLinkOpenTarget.Type;
+export const DEFAULT_GITHUB_LINK_OPEN_TARGET: GitHubLinkOpenTarget = "app";
 export type FollowUpBehavior = typeof FollowUpBehavior.Type;
-// Sound the chat message trail moves with (Beta desktop on macOS).
+// Sound the chat message trail moves with (desktop on macOS).
 export const MessageTrailAudioSource = Schema.Literals(["off", "system", "microphone", "both"]);
 export type MessageTrailAudioSource = typeof MessageTrailAudioSource.Type;
 export const DEFAULT_FOLLOW_UP_BEHAVIOR: FollowUpBehavior = "queue";
+/** Which account windows each app-rail usage ring draws: both, or only one of them. */
+export const RailUsageWindow = Schema.Literals(["both", "fiveHour", "weekly"]);
+export type RailUsageWindow = typeof RailUsageWindow.Type;
+export const DEFAULT_RAIL_USAGE_WINDOW: RailUsageWindow = "both";
 // What plain Enter does while a composer voice note is recording: "stop" only
 // transcribes into the draft, "send" also sends the draft once transcribed.
 export const VoiceEnterBehavior = Schema.Literals(["stop", "send"]);
@@ -372,6 +374,7 @@ export const AppSettingsSchema = Schema.Struct({
   openCodeServerPasswordConfigured: Schema.Boolean.pipe(withDefaults(() => false)),
   openCodeExperimentalWebSockets: Schema.Boolean.pipe(withDefaults(() => false)),
   defaultThreadEnvMode: EnvMode.pipe(withDefaults(() => "local" as const satisfies EnvMode)),
+  anchorSentMessagesToTop: Schema.Boolean.pipe(withDefaults(() => true)),
   confirmThreadDelete: Schema.Boolean.pipe(withDefaults(() => true)),
   // Opt-in: archiving a task also releases its worktree when nothing else uses it.
   archiveDeletesOrphanedWorktree: Schema.Boolean.pipe(withDefaults(() => false)),
@@ -381,11 +384,15 @@ export const AppSettingsSchema = Schema.Struct({
   confirmTerminalTabClose: Schema.Boolean.pipe(withDefaults(() => true)),
   diffWordWrap: Schema.Boolean.pipe(withDefaults(() => false)),
   showPullRequestDiffColors: Schema.Boolean.pipe(withDefaults(() => true)),
+  githubLinkOpenTarget: GitHubLinkOpenTarget.pipe(
+    withDefaults(() => DEFAULT_GITHUB_LINK_OPEN_TARGET),
+  ),
   // Local-only GitHub inbox view state: the filters the page reopens with (URL parameters
   // override them for one visit; search text lives only in the URL). The column widths are not
   // stored: the page always opens at even fractions.
   githubInboxKind: GitHubInboxKindFilter.pipe(withDefaults(() => "all" as const)),
-  githubInboxState: GitHubInboxState.pipe(withDefaults(() => "open" as const)),
+  githubInboxState: GitHubInboxStateFilter.pipe(withDefaults(() => "open" as const)),
+  githubInboxSort: GitHubInboxSort.pipe(withDefaults(() => "created" as const)),
   githubInboxInvolvement: GitHubInboxInvolvementFilter.pipe(
     withDefaults(() => "everything" as const),
   ),
@@ -410,25 +417,15 @@ export const AppSettingsSchema = Schema.Struct({
   // Deprecated rename bridge from the Studio surface. Normalization migrates this
   // value onto `showGroupsSection` once and then omits the key.
   showStudioSection: Schema.optionalKey(Schema.Boolean),
-  // Local-only UI preferences for the primary sidebar nav block (New thread, Kanban or Tasks,
-  // Pull requests, Automations): drag-to-reorder order plus explicitly hidden items.
-  // An item whose route is currently active stays visible regardless (mirrors
-  // `hiddenProviders`), so hiding a surface never strands the user mid-route.
-  sidebarNavOrder: SidebarNavItemIdList.pipe(withDefaults(() => [...DEFAULT_SIDEBAR_NAV_ORDER])),
-  hiddenSidebarNavItems: SidebarNavItemIdList.pipe(withDefaults(() => [])),
-  // Local-only shell layout, available in Stable and Beta. useSidebarLayout keeps
-  // mobile on classic even when the stored preference is "rail".
-  sidebarLayout: SidebarLayout.pipe(withDefaults(() => DEFAULT_SIDEBAR_LAYOUT)),
   // Beta-only: the view the Tasks entry opens, last picked in its List/Kanban switch.
   // Stable never reads it (Kanban is its only view).
   tasksViewMode: TasksViewMode.pipe(withDefaults(() => DEFAULT_TASKS_VIEW_MODE)),
-  // Rail layout shortcuts the user added from the rail's "…" menu, in rail order:
+  // Rail shortcuts the user added from the rail's "…" menu, in rail order:
   // "space:<id>" (the Void key for unfiled) or "project:<id>" (see appRail.logic).
   railShortcuts: Schema.Array(Schema.String.check(Schema.isMaxLength(512))).pipe(
     withDefaults(() => []),
   ),
-  // Rail layout's own Customize state (the classic nav block keeps `sidebarNavOrder`):
-  // the order of the rail's top items and the ones the user hid. Home never hides, and an
+  // The rail's Customize state: the order of the rail's top items and the ones the user hid. Home never hides, and an
   // active hidden item stays visible (see appRail.logic).
   railItemOrder: RailOrderableItemIdList.pipe(withDefaults(() => [...RAIL_ORDERABLE_ITEM_IDS])),
   hiddenRailItems: RailOrderableItemIdList.pipe(withDefaults(() => [...DEFAULT_HIDDEN_RAIL_ITEMS])),
@@ -443,6 +440,12 @@ export const AppSettingsSchema = Schema.Struct({
   // also write back here so the last explicit open/close survives reloads.
   environmentPanelDefaultOpen: Schema.Boolean.pipe(withDefaults(() => false)),
   showEnvironmentUsage: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Providers whose usage ring sits at the bottom of the app rail (see AppRailUsage.logic for
+  // the cap). A ring only draws once its provider reports usage.
+  railUsageProviders: PersistedProviderKindList.pipe(
+    withDefaults((): ReadonlyArray<ProviderKind> => ["codex", "claudeAgent"]),
+  ),
+  railUsageWindow: RailUsageWindow.pipe(withDefaults(() => DEFAULT_RAIL_USAGE_WINDOW)),
   showEnvironmentRepository: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentPullRequest: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentEditor: Schema.Boolean.pipe(withDefaults(() => true)),
@@ -456,7 +459,7 @@ export const AppSettingsSchema = Schema.Struct({
   // Started threads: show reasoning effort as a stepped slider card in the composer's
   // model menu instead of radio rows. New chats keep the split model/effort pickers.
   composerEffortSlider: Schema.Boolean.pipe(withDefaults(() => true)),
-  // Beta desktop on macOS: the message trail moves with the Mac's audio output,
+  // Desktop on macOS: the message trail moves with the Mac's audio output,
   // the microphone, or both. Opt-in because the first use asks macOS for access.
   messageTrailAudioSource: MessageTrailAudioSource.pipe(withDefaults(() => "off" as const)),
   autoOpenDevicePane: Schema.Boolean.pipe(withDefaults(() => true)),
@@ -1440,8 +1443,6 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     hiddenProviders: normalizeHiddenProviders(settings.hiddenProviders),
     disabledProviders: normalizeHiddenProviders(settings.disabledProviders),
     providerOrder: normalizeProviderOrder(settings.providerOrder),
-    sidebarNavOrder: normalizeSidebarNavOrder(settings.sidebarNavOrder),
-    hiddenSidebarNavItems: normalizeHiddenSidebarNavItems(settings.hiddenSidebarNavItems),
     railItemOrder: normalizeRailItemOrder(settings.railItemOrder),
     hiddenRailItems: normalizeHiddenRailItems(settings.hiddenRailItems),
     hiddenModels: [],

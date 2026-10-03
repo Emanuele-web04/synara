@@ -76,7 +76,6 @@ import {
   createThreadWorkspaceMetadataSelector,
 } from "../../storeSelectors";
 import { sortThreadsForSidebar } from "../Sidebar.logic";
-import { ChatPaneDropOverlay } from "../chat-drop-overlay/ChatPaneDropOverlay";
 import {
   ChatMountLoader,
   DeferredChatView,
@@ -99,6 +98,7 @@ import {
   CHAT_BACKGROUND_CLASS_NAME,
   CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME,
   CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME,
+  CHAT_ROUTE_INSET_SHELL_CLASS_NAME,
 } from "./composerPickerStyles";
 import { routeSingleDockPaneOpenRequest } from "./dockPaneOpenRequest";
 import {
@@ -110,7 +110,7 @@ import {
   pullRequestPaneTabLabel,
 } from "../pullRequest/pullRequestDetail.logic";
 import { usePullRequestPaneStateIcon } from "../pullRequest/usePullRequestPaneStateIcon";
-import { RouteInsetSurface } from "../RouteInsetSurface";
+import { ChatPaneBody, KeptChatPane } from "./ChatPaneKeepAlive";
 import { SidebarInset } from "../ui/sidebar";
 import { toastManager } from "../ui/toast";
 import { WorkspaceSearchPalette, type WorkspaceSearchPaletteMode } from "../WorkspaceSearchPalette";
@@ -192,6 +192,7 @@ export function SingleChatSurface(props: {
   const openPane = useRightDockStore((store) => store.openPane);
   const toggleSingletonPane = useRightDockStore((store) => store.toggleSingletonPane);
   const closePane = useRightDockStore((store) => store.closePane);
+  const movePane = useRightDockStore((store) => store.movePane);
   const setActivePane = useRightDockStore((store) => store.setActivePane);
   const setDockOpen = useRightDockStore((store) => store.setDockOpen);
   const updatePane = useRightDockStore((store) => store.updatePane);
@@ -1134,13 +1135,22 @@ export function SingleChatSurface(props: {
       <div
         className={cn(CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME, CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME)}
       >
-        <ChatPaneDropOverlay
-          canDropInDirection={allowAnySplitDirection}
-          excludedThreadIds={excludedThreadIds}
-          onDrop={handleDropThread}
-          className="flex h-full min-h-0 min-w-0 flex-1"
-        >
-          <RouteInsetSurface surfaceClassName={CHAT_BACKGROUND_CLASS_NAME}>
+        {/* Kept alive across the swap with SplitChatSurface: the pane showing this thread
+            there takes the same chat over instead of mounting a new one. */}
+        <KeptChatPane slotKey={SINGLE_CHAT_PANE_SCOPE_ID} threadId={props.threadId}>
+          <ChatPaneBody
+            fileOpener={dockFileOpener}
+            dropOverlay={{
+              canDropInDirection: allowAnySplitDirection,
+              excludedThreadIds,
+              onDrop: handleDropThread,
+              className: "flex h-full min-h-0 min-w-0 flex-1",
+            }}
+            inset={{
+              className: CHAT_ROUTE_INSET_SHELL_CLASS_NAME,
+              surfaceClassName: CHAT_BACKGROUND_CLASS_NAME,
+            }}
+          >
             <DeferredChatView
               threadId={props.threadId}
               paneScopeId={SINGLE_CHAT_PANE_SCOPE_ID}
@@ -1173,8 +1183,8 @@ export function SingleChatSurface(props: {
                 }}
               />
             ) : null}
-          </RouteInsetSurface>
-        </ChatPaneDropOverlay>
+          </ChatPaneBody>
+        </KeptChatPane>
         <RightDock
           state={dockState}
           minWidth={SINGLE_PANEL_MIN_WIDTH}
@@ -1201,6 +1211,7 @@ export function SingleChatSurface(props: {
               if (saved) closePane(props.threadId, paneId);
             });
           }}
+          onMovePane={(paneId, overPaneId) => movePane(props.threadId, paneId, overPaneId)}
           onCollapse={() => setDockOpen(props.threadId, false)}
           onOpenChange={(open) => setDockOpen(props.threadId, open)}
           onAddPane={handleAddDockPane}

@@ -325,6 +325,8 @@ import {
   ServerStopLocalServerResult,
   ServerUpdateSettingsInput,
   ServerUpdateSettingsResult,
+  ServerEditKeybindingsInput,
+  ServerEditKeybindingsResult,
   ServerUpsertKeybindingInput,
   ServerUpsertKeybindingResult,
   ServerVoicePrewarmInput,
@@ -393,6 +395,15 @@ export const WsListProjectImportsRpc = Rpc.make(ORCHESTRATION_WS_METHODS.listPro
   success: OrchestrationRpcSchemas.listProjectImports.output,
   error: WsRpcError,
 });
+
+export const WsLoadProjectImportHistoryRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.loadProjectImportHistory,
+  {
+    payload: OrchestrationRpcSchemas.loadProjectImportHistory.input,
+    success: OrchestrationRpcSchemas.loadProjectImportHistory.output,
+    error: WsRpcError,
+  },
+);
 
 export const WsImportProjectRpc = Rpc.make(ORCHESTRATION_WS_METHODS.importProject, {
   payload: OrchestrationRpcSchemas.importProject.input,
@@ -1446,6 +1457,12 @@ export const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybi
   error: WsRpcError,
 });
 
+export const WsServerEditKeybindingsRpc = Rpc.make(WS_METHODS.serverEditKeybindings, {
+  payload: ServerEditKeybindingsInput,
+  success: ServerEditKeybindingsResult,
+  error: WsRpcError,
+});
+
 export const WsSubscribeServerLifecycleRpc = Rpc.make(WS_METHODS.subscribeServerLifecycle, {
   payload: Schema.Struct({}),
   success: ServerLifecycleStreamEvent,
@@ -1837,6 +1854,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsOrchestrationImportThreadRpc,
   WsListProjectImportsRpc,
   WsImportProjectRpc,
+  WsLoadProjectImportHistoryRpc,
   WsOrchestrationRegenerateThreadTitleRpc,
   WsOrchestrationGetSnapshotRpc,
   WsOrchestrationGetShellSnapshotRpc,
@@ -1942,6 +1960,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsServerGenerateThreadRecapRpc,
   WsServerGenerateAutomationIntentRpc,
   WsServerUpsertKeybindingRpc,
+  WsServerEditKeybindingsRpc,
   WsSubscribeServerLifecycleRpc,
   WsSubscribeServerConfigRpc,
   WsSubscribeServerProviderStatusesRpc,

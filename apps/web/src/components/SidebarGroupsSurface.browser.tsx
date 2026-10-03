@@ -412,6 +412,55 @@ describe("SidebarGroupsSurface", () => {
     });
   });
 
+  it.each(["approval", "recovery"] as const)(
+    "tracks %s attention from owned workers in linked repositories",
+    async (attention) => {
+      const group = makeGroupProject({
+        id: GROUP_A_ID,
+        kind: "group",
+        name: "Team Alpha",
+        cwd: `${GROUPS_ROOT}/team-alpha`,
+      });
+      const repoId = ProjectId.makeUnsafe("linked-repository");
+      const workerId = ThreadId.makeUnsafe("linked-worker");
+      const worker = makeThreadSummary(workerId, repoId, "Fix login");
+      worker.hasPendingApprovals = attention === "approval";
+      const unrelated = makeThreadSummary(THREAD_A, repoId, "Unrelated work");
+      unrelated.hasPendingApprovals = true;
+      harness.listSummaries.mockResolvedValue({
+        summaries: [
+          {
+            projectId: GROUP_A_ID,
+            configured: true,
+            coordinatorName: "Team Alpha",
+            coordinatorThreadId: ThreadId.makeUnsafe("coordinator-thread"),
+            coordinatorIcon: null,
+            coordinatorColor: null,
+            coordinatorStatus: "idle",
+            revision: 1,
+            memberThreadIds: [workerId],
+            needsYouThreadIds: attention === "recovery" ? [workerId] : [],
+          },
+        ],
+      });
+      useStore.setState({
+        sidebarThreadSummaryById: { [workerId]: worker, [THREAD_A]: unrelated },
+      });
+      await mount({ projects: [group], threadsHydrated: true });
+      await waitForText("A thread needs you");
+
+      useStore.setState({
+        sidebarThreadSummaryById: {
+          [workerId]: { ...worker, archivedAt: "2026-01-02T00:00:00.000Z" },
+          [THREAD_A]: unrelated,
+        },
+      });
+      await vi.waitFor(() => {
+        expect(document.querySelector('[title="A thread needs you"]')).toBeNull();
+      });
+    },
+  );
+
   it("re-lists summaries when a coordinator automation event lands while closed", async () => {
     const group = makeGroupProject({
       id: GROUP_A_ID,

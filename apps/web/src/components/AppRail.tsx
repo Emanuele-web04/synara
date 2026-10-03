@@ -114,9 +114,9 @@ type AppRailProps = {
   /** The "…" menu trigger, after the shortcuts. */
   moreSlot?: ReactNode;
   bottomItems: ReadonlyArray<AppRailItem>;
-  /** Rendered above the bottom items (the Help menu, like Codex's rail). */
+  /** Rendered above the bottom items (the usage rings, then the Help menu like Codex's rail). */
   bottomSlot?: ReactNode;
-  /** Right-click on the rail (offers "Customize", like the classic nav block). */
+  /** Right-click on the rail (offers "Customize"). */
   onContextMenu?: ((event: MouseEvent) => void) | undefined;
 };
 
@@ -204,12 +204,12 @@ const AppRailSlotContext = createContext<HTMLElement | null>(null);
 /** Provided by the route shell with the element the rail renders into. */
 export const AppRailSlotProvider = AppRailSlotContext.Provider;
 
-/** The element the rail renders into (null in the classic layout); anchors rail popovers. */
+/** The element the rail renders into (null until the shell mounts); anchors rail popovers. */
 export function useAppRailSlot(): HTMLElement | null {
   return useContext(AppRailSlotContext);
 }
 
-/** Renders the rail into the shell's slot; nothing when no slot is mounted (classic layout). */
+/** Renders the rail into the shell's slot; nothing until the slot is mounted. */
 export function AppRailPortal(props: AppRailProps) {
   const slot = useContext(AppRailSlotContext);
   return slot ? createPortal(<AppRail {...props} />, slot) : null;

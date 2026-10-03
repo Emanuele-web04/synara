@@ -143,6 +143,40 @@ function createSyntheticCodexAppServer(options?: { readonly forceFullHistoryResp
           respond({});
         } else if (request.method === "account/read") {
           respond({ account: { type: "apiKey" } });
+        } else if (request.method === "thread/turns/list") {
+          const offset = Number(request.params?.cursor ?? 0);
+          const turn = 11 - offset;
+          if (request.params?.itemsView === "full") {
+            queueMicrotask(() =>
+              stdout.write(buildFullHistoryFrame(request.id!, "provider-thread")),
+            );
+          } else {
+            respond({
+              data:
+                turn < 0
+                  ? []
+                  : [
+                      {
+                        id: `turn-${turn}`,
+                        status: "completed",
+                        itemsView: request.params?.itemsView,
+                        items:
+                          request.params?.itemsView === "notLoaded"
+                            ? []
+                            : [
+                                {
+                                  id: `reply-${turn}`,
+                                  type: "agentMessage",
+                                  text: `Reply ${turn}`,
+                                },
+                              ],
+                      },
+                    ],
+              nextCursor: turn > 0 ? String(offset + 1) : null,
+            });
+          }
+        } else if (request.method === "thread/read") {
+          queueMicrotask(() => stdout.write(buildFullHistoryFrame(request.id!, "provider-thread")));
         } else if (request.method === "thread/resume" || request.method === "thread/fork") {
           const providerThreadId = String(request.params?.threadId ?? "provider-thread");
           if (options?.forceFullHistoryResponse === true || request.params?.excludeTurns !== true) {
@@ -193,6 +227,50 @@ function createSyntheticCodexAppServer(options?: { readonly forceFullHistoryResp
 // Synthetic managers stub process-env construction, so a pinned generation is
 // accepted without the overlay files a real launch would verify.
 const SYNTHETIC_CONTINUATION_GENERATION = "00000000-0000-4000-8000-000000000001";
+
+it("reads recent and older Codex summaries through bounded JSONL frames without full-history reads", async () => {
+  const fake = createSyntheticCodexAppServer();
+  const { manager } = createSyntheticCodexManager(fake);
+  const cwd = mkdtempSync(path.join(os.tmpdir(), "synara-codex-history-pages-"));
+  const authTracking = prepareCodexAuthTracking({ env: { ...process.env }, homePath: cwd });
+  vi.spyOn(
+    manager as unknown as { buildSessionProcessEnv: () => Promise<unknown> },
+    "buildSessionProcessEnv",
+  ).mockResolvedValue({
+    env: {},
+    authTracking,
+    authFingerprint: readCodexPreparedAuthTrackingFingerprint(authTracking),
+  });
+  const original = fake.historyFingerprint();
+  try {
+    const recent = await manager.readExternalThreadPage({
+      externalThreadId: "provider-thread",
+      cwd,
+      codexOptions: { homePath: cwd },
+    });
+    expect(recent.turns.map((turn) => turn.id)).toEqual(
+      Array.from({ length: 10 }, (_, index) => `turn-${index + 2}`),
+    );
+    expect(recent.nextCursor).toBe("10");
+    const older = await manager.readExternalThreadPage({
+      externalThreadId: "provider-thread",
+      cwd,
+      codexOptions: { homePath: cwd },
+      cursor: recent.nextCursor!,
+    });
+    expect(older.turns.map((turn) => turn.id)).toEqual(["turn-0", "turn-1"]);
+    expect(older.nextCursor).toBeNull();
+    expect(fake.historyFingerprint()).toBe(original);
+    expect(
+      fake.requests.some(
+        (request) => request.method === "thread/read" || request.method === "turn/start",
+      ),
+    ).toBe(false);
+  } finally {
+    await manager.stopAll();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
 
 function createSyntheticCodexManager(fake: ReturnType<typeof createSyntheticCodexAppServer>) {
   const teardownProcessTree = vi.fn(async () => ({ escalated: false, signalErrors: [] }));
@@ -3998,24 +4076,24 @@ describe("thread checkpoint control", () => {
         manager as unknown as { assertSupportedCodexCliVersion: () => Promise<void> },
         "assertSupportedCodexCliVersion",
       ).mockResolvedValue(undefined);
-      sendRequest.mockResolvedValue({
-        thread: {
-          id: "thread_forked",
-          turns:
-            sourceStatus === "empty"
-              ? []
-              : [
-                  {
-                    id: "completed-source-turn",
-                    ...(sourceStatus.startsWith("legacy-")
-                      ? {}
-                      : { status: sourceStatus === "ordinary" ? "completed" : sourceStatus }),
-                    ...(sourceStatus === "legacy-completed" ? { completedAt: 1700000005 } : {}),
-                    ...(sourceStatus === "legacy-invalid-date" ? { completedAt: "invalid" } : {}),
-                    items: [],
-                  },
-                ],
-        },
+      const sourceTurns =
+        sourceStatus === "empty"
+          ? []
+          : [
+              {
+                id: "completed-source-turn",
+                ...(sourceStatus.startsWith("legacy-")
+                  ? {}
+                  : { status: sourceStatus === "ordinary" ? "completed" : sourceStatus }),
+                ...(sourceStatus === "legacy-completed" ? { completedAt: 1700000005 } : {}),
+                ...(sourceStatus === "legacy-invalid-date" ? { completedAt: "invalid" } : {}),
+                items: [],
+              },
+            ];
+      sendRequest.mockImplementation(async (_context, method) => {
+        if (method === "thread/read") throw new Error("Full history exceeds 16 MiB");
+        if (method === "thread/turns/list") return { data: sourceTurns, nextCursor: null };
+        return { thread: { id: "thread_forked", turns: [] } };
       });
 
       try {
@@ -4233,6 +4311,83 @@ describe("thread checkpoint control", () => {
       turnId: "turn-child",
     });
   });
+
+  it.each([
+    { gateway: true, interruptFails: false },
+    { gateway: true, interruptFails: true },
+    { gateway: false, interruptFails: true },
+  ])(
+    "announces gateway retirement after a watchdog abort (gateway=$gateway, interruptFails=$interruptFails)",
+    async ({ gateway, interruptFails }) => {
+      const { manager, context, sendRequest, updateSession, emitEvent } =
+        createThreadControlHarness();
+      const threadId = asThreadId("thread_1");
+      const turnId = TurnId.makeUnsafe("stalled-turn");
+      const release = vi.fn();
+      const cancelTurn = vi.fn(() => Promise.resolve());
+      const sessionContext = Object.assign(context, {
+        gatewayCredentialRetired: false,
+        ...(gateway
+          ? {
+              gatewaySessionLease: {
+                connection: { url: "http://127.0.0.1:48123/mcp", bearerToken: "gateway-token" },
+                cancelTurn,
+                retireTurn: vi.fn(() => Promise.resolve()),
+                release,
+              },
+            }
+          : {}),
+      });
+      const sessions = (manager as unknown as { sessions: Map<ThreadId, typeof sessionContext> })
+        .sessions;
+      sessions.set(threadId, sessionContext);
+      context.session.status = "running";
+      context.session.activeTurnId = turnId;
+      updateSession.mockRestore();
+      if (interruptFails) {
+        sendRequest.mockRejectedValue(
+          new Error(
+            "turn/interrupt failed: expected active turn id stalled-turn but found older-turn",
+          ),
+        );
+      } else {
+        // An acknowledgement alone does not supply the missing terminal event.
+        sendRequest.mockResolvedValue({});
+      }
+
+      try {
+        await manager.abandonTurn(threadId, turnId, "Codex stopped responding.");
+
+        expect(release).toHaveBeenCalledTimes(gateway ? 1 : 0);
+        expect(cancelTurn.mock.calls).toEqual(gateway ? [[turnId]] : []);
+        expect(sessionContext.gatewayCredentialRetired).toBe(gateway);
+        expect(context.session.status).toBe("ready");
+        expect(manager.isTurnActive(threadId, turnId)).toBe(false);
+        expect(emitEvent).toHaveBeenCalledOnce();
+        expect(emitEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            method: "turn/aborted",
+            threadId,
+            turnId,
+            lifecycleGeneration: "generation-request-a",
+            payload: {
+              turn: { id: turnId, status: "aborted" },
+              abandonedBy: "turnIdleWatchdog",
+              ...(gateway ? { [AGENT_GATEWAY_TURN_AUTHORITY_RETIRED]: true } : {}),
+            },
+          }),
+        );
+        if (gateway) {
+          await expect(manager.sendTurn({ threadId, input: "continue?" })).rejects.toThrow(
+            "gateway authority is retired",
+          );
+        }
+        expect(sendRequest).toHaveBeenCalledOnce();
+      } finally {
+        sessions.clear();
+      }
+    },
+  );
 
   it("settles review interrupt when thread/read already shows exited review mode", async () => {
     const { manager, context, sendRequest, updateSession } = createThreadControlHarness();

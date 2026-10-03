@@ -16,12 +16,17 @@ import {
 } from "./desktopIdentity";
 
 describe("isBetaFeatureEnabled", () => {
-  it("turns a listed feature off only for the production flavor", () => {
-    expect(BETA_ONLY_FEATURES).toContain("omp");
-    for (const flavor of ["development", "canary", "cua", "beta", "unknown"] as const) {
+  it("enables Oh My Pi in Stable and all other flavors", () => {
+    for (const flavor of [
+      "production",
+      "development",
+      "canary",
+      "cua",
+      "beta",
+      "unknown",
+    ] as const) {
       expect(isBetaFeatureEnabled("omp", flavor)).toBe(true);
     }
-    expect(isBetaFeatureEnabled("omp", "production")).toBe(false);
   });
 
   it("keeps Tasks in Beta while Stable keeps Kanban", () => {
@@ -40,6 +45,11 @@ describe("isBetaFeatureEnabled", () => {
   it("enables the rail sidebar layout in both Beta and Stable", () => {
     expect(isBetaFeatureEnabled("sidebarV2", "beta")).toBe(true);
     expect(isBetaFeatureEnabled("sidebarV2", "production")).toBe(true);
+  });
+
+  it("enables audio-driven message trails in both Beta and Stable", () => {
+    expect(isBetaFeatureEnabled("audio-trail", "beta")).toBe(true);
+    expect(isBetaFeatureEnabled("audio-trail", "production")).toBe(true);
   });
 
   it("leaves unlisted features enabled everywhere", () => {

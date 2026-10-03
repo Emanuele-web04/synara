@@ -3,6 +3,7 @@
 // Layer: UI state helpers
 // Exports: dock pane types, default-state factory, and immutable open/close/activate helpers.
 
+import { arrayMove } from "@dnd-kit/sortable";
 import type { ProjectId, ThreadId, TurnId } from "@synara/contracts";
 import { resolveTabAfterClose } from "./lib/tabStrip";
 import { isPlainObject, sanitizeStringKeyedRecord } from "./persistedRecord";
@@ -310,6 +311,19 @@ export function closePaneInState(
     panes: nextPanes,
     activePaneId: nextActiveId,
   };
+}
+
+/** Drops a dragged tab onto another tab's slot; the active pane and the dock stay as they are. */
+export function movePaneInState(
+  state: RightDockThreadState,
+  paneId: string,
+  overPaneId: string,
+): RightDockThreadState {
+  const fromIndex = state.panes.findIndex((pane) => pane.id === paneId);
+  const toIndex = state.panes.findIndex((pane) => pane.id === overPaneId);
+  return fromIndex < 0 || toIndex < 0 || fromIndex === toIndex
+    ? state
+    : { ...state, panes: arrayMove(state.panes, fromIndex, toIndex) };
 }
 
 export function setActivePaneInState(

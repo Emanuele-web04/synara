@@ -1,5 +1,7 @@
 import { Effect, Option, Schema, SchemaIssue, SchemaTransformation, Struct } from "effect";
 import {
+  LoadProjectImportHistoryInput,
+  LoadProjectImportHistoryResult,
   ImportProjectInput,
   ImportProjectResult,
   ListProjectImportsInput,
@@ -49,6 +51,7 @@ export const ORCHESTRATION_WS_METHODS = {
   importThread: "orchestration.importThread",
   listProjectImports: "orchestration.listProjectImports",
   importProject: "orchestration.importProject",
+  loadProjectImportHistory: "orchestration.loadProjectImportHistory",
   regenerateThreadTitle: "orchestration.regenerateThreadTitle",
   repairState: "orchestration.repairState",
   getTurnDiff: "orchestration.getTurnDiff",
@@ -3011,6 +3014,10 @@ export const OrchestrationRpcSchemas = {
   },
   listProjectImports: { input: ListProjectImportsInput, output: ListProjectImportsResult },
   importProject: { input: ImportProjectInput, output: ImportProjectResult },
+  loadProjectImportHistory: {
+    input: LoadProjectImportHistoryInput,
+    output: LoadProjectImportHistoryResult,
+  },
   regenerateThreadTitle: {
     input: OrchestrationRegenerateThreadTitleInput,
     output: OrchestrationRegenerateThreadTitleResult,

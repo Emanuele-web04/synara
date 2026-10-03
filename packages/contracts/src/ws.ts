@@ -1,5 +1,9 @@
 import { Schema, Struct } from "effect";
-import { ImportProjectInput, ListProjectImportsInput } from "./projectImport";
+import {
+  LoadProjectImportHistoryInput,
+  ImportProjectInput,
+  ListProjectImportsInput,
+} from "./projectImport";
 import { NonNegativeInt, ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas";
 
 import {
@@ -160,6 +164,7 @@ import { COMPUTER_WS_CHANNELS, ComputerEvent } from "./computer";
 import { OpenInEditorInput } from "./editor";
 import {
   ServerConfigUpdatedPayload,
+  ServerEditKeybindingsInput,
   ServerReadThreadDiagnosticsInput,
   ServerGenerateAutomationIntentInput,
   ServerGenerateThreadRecapInput,
@@ -318,6 +323,7 @@ export const WS_METHODS = {
   serverGenerateThreadRecap: "server.generateThreadRecap",
   serverGenerateAutomationIntent: "server.generateAutomationIntent",
   serverUpsertKeybinding: "server.upsertKeybinding",
+  serverEditKeybindings: "server.editKeybindings",
   subscribeServerLifecycle: "server.subscribeLifecycle",
   subscribeServerConfig: "server.subscribeConfig",
   subscribeServerProviderStatuses: "server.subscribeProviderStatuses",
@@ -436,6 +442,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(ORCHESTRATION_WS_METHODS.importThread, OrchestrationImportThreadInput),
   tagRequestBody(ORCHESTRATION_WS_METHODS.listProjectImports, ListProjectImportsInput),
   tagRequestBody(ORCHESTRATION_WS_METHODS.importProject, ImportProjectInput),
+  tagRequestBody(ORCHESTRATION_WS_METHODS.loadProjectImportHistory, LoadProjectImportHistoryInput),
   tagRequestBody(
     ORCHESTRATION_WS_METHODS.regenerateThreadTitle,
     OrchestrationRegenerateThreadTitleInput,
@@ -591,6 +598,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.serverGenerateThreadRecap, ServerGenerateThreadRecapInput),
   tagRequestBody(WS_METHODS.serverGenerateAutomationIntent, ServerGenerateAutomationIntentInput),
   tagRequestBody(WS_METHODS.serverUpsertKeybinding, KeybindingRule),
+  tagRequestBody(WS_METHODS.serverEditKeybindings, ServerEditKeybindingsInput),
 
   // Provider discovery
   tagRequestBody(WS_METHODS.providerGetComposerCapabilities, ProviderGetComposerCapabilitiesInput),

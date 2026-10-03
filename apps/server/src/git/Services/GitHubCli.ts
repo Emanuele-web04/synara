@@ -9,6 +9,7 @@ import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 import type {
   GitHubInboxState,
+  GitHubInboxSort,
   GitHubIssueState,
   GitHubIssueStateReason,
   GitPullRequestCheck,
@@ -208,6 +209,15 @@ export interface GitHubPullRequestDetailData {
  */
 export interface GitHubCliShape {
   /**
+   * Run a background read through the server-wide GitHub read queue. Fails fast with a
+   * `rate-limited` error while GitHub is limiting the account. User-initiated mutations and the
+   * reads they depend on call the methods below directly instead.
+   */
+  readonly withRead: <A, E, R>(
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E | GitHubCliError, R>;
+
+  /**
    * Execute a GitHub CLI command and return full process output.
    */
   readonly execute: (input: {
@@ -229,7 +239,7 @@ export interface GitHubCliShape {
   }) => Effect.Effect<string, GitHubCliError>;
 
   /**
-   * Read a repository's 50 most recently updated pull requests and issues for one state, the
+   * Read a repository's first 50 pull requests and issues for one state and sort, the
    * review-requested numbers and count, and the GraphQL budget in one `gh api graphql` call.
    * A full inbox read sends it together with `listRepositoryInboxInvolvement`.
    */
@@ -237,6 +247,7 @@ export interface GitHubCliShape {
     readonly cwd: string;
     readonly repository: string;
     readonly state: GitHubInboxState;
+    readonly sort?: GitHubInboxSort;
   }) => Effect.Effect<GitHubRepositoryInboxLists, GitHubCliError>;
 
   /**
@@ -247,6 +258,7 @@ export interface GitHubCliShape {
     readonly cwd: string;
     readonly repository: string;
     readonly state: GitHubInboxState;
+    readonly sort?: GitHubInboxSort;
   }) => Effect.Effect<GitHubRepositoryInboxInvolvement, GitHubCliError>;
 
   /**
@@ -351,6 +363,8 @@ export interface GitHubCliShape {
   readonly getPullRequest: (input: {
     readonly cwd: string;
     readonly reference: string;
+    /** Gate cache misses for polling; mutation-required lookups remain ungated. */
+    readonly background?: boolean;
   }) => Effect.Effect<GitHubPullRequestSummary, GitHubCliError>;
 
   /**

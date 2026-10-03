@@ -6,13 +6,14 @@
 // Layer: Pull request presentation
 // Exports: PullRequestRow, githubInboxItemLabel
 
-import type { GitHubInboxItem } from "@synara/contracts";
+import type { GitHubInboxItem, GitHubInboxSort } from "@synara/contracts";
 import { pullRequestListProjectContexts } from "@synara/shared/githubRepository";
 import type { ReactNode } from "react";
 
 import { PinStatusIcon, pinActionLabel } from "~/lib/pin";
 import { formatRelativeTime } from "~/lib/relativeTime";
 import { cn } from "~/lib/utils";
+import { SIDEBAR_ROW_HOVER_CLASS_NAME } from "~/sidebarRowStyles";
 import {
   PR_BODY_TEXT_CLASS_NAME,
   PR_FINE_TEXT_CLASS_NAME,
@@ -29,6 +30,7 @@ export function githubInboxItemLabel(item: Pick<GitHubInboxItem, "kind" | "numbe
 
 export const PullRequestRow = function PullRequestRow({
   entry,
+  sort = "created",
   selected,
   showProjectTitle: showProjectTitleProp,
   projectIcon,
@@ -36,6 +38,7 @@ export const PullRequestRow = function PullRequestRow({
   onTogglePinned,
 }: {
   entry: GitHubInboxItem;
+  sort?: GitHubInboxSort;
   selected: boolean;
   /** Several projects in view: adds the preferred local context to the second line. */
   showProjectTitle?: boolean;
@@ -45,6 +48,7 @@ export const PullRequestRow = function PullRequestRow({
   onTogglePinned: (entry: GitHubInboxItem) => void;
 }) {
   const showProjectTitle = showProjectTitleProp ?? false;
+  const timestamp = sort === "created" ? entry.createdAt : entry.updatedAt;
   const isPinned = entry.isPinned === true;
   const projectContexts = pullRequestListProjectContexts(entry);
   const projectLabel =
@@ -63,7 +67,7 @@ export const PullRequestRow = function PullRequestRow({
         "group flex w-full items-stretch rounded-lg text-left transition-colors",
         selected
           ? "bg-[color-mix(in_srgb,var(--color-text-foreground)_7%,transparent)]"
-          : "hover:bg-[color-mix(in_srgb,var(--color-text-foreground)_4%,transparent)] focus-within:bg-[color-mix(in_srgb,var(--color-text-foreground)_4%,transparent)]",
+          : cn(SIDEBAR_ROW_HOVER_CLASS_NAME, "focus-within:bg-[var(--sidebar-accent)]"),
       )}
     >
       <button
@@ -107,7 +111,13 @@ export const PullRequestRow = function PullRequestRow({
           <span aria-hidden className="shrink-0">
             ·
           </span>
-          <span className="shrink-0 tabular-nums">{formatRelativeTime(entry.updatedAt)}</span>
+          <time
+            dateTime={timestamp}
+            title={sort === "created" ? "Opened" : "Updated"}
+            className="shrink-0 tabular-nums"
+          >
+            {formatRelativeTime(timestamp)}
+          </time>
           <span className="ml-auto shrink-0 pl-1 tabular-nums opacity-80">#{entry.number}</span>
         </span>
       </button>
@@ -120,7 +130,7 @@ export const PullRequestRow = function PullRequestRow({
               aria-pressed={entry.isPinned}
               onClick={() => onTogglePinned(entry)}
               className={cn(
-                "my-auto mr-1 inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-[color,opacity] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                "mt-1 mr-1 inline-flex size-7 shrink-0 self-start items-center justify-center rounded-md text-muted-foreground transition-[color,opacity] hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
                 isPinned
                   ? "text-foreground opacity-100"
                   : "opacity-70 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100",

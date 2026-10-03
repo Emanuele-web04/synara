@@ -17,6 +17,7 @@ import {
   shouldShowThreadJumpHints,
   shortcutLabelForCommand,
   spaceJumpIndexFromCommand,
+  suspendShortcutDispatch,
   terminalNavigationShortcutData,
   threadJumpCommandForIndex,
   threadJumpIndexFromCommand,
@@ -237,6 +238,11 @@ const DEFAULT_BINDINGS = compile([
     shortcut: modShortcut("[", { altKey: true, modKey: false }),
     command: "model.previous",
     whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
+  {
+    shortcut: modShortcut("tab", { shiftKey: true, modKey: false }),
+    command: "model.effort.next",
+    whenAst: whenIdentifier("composerFocus"),
   },
   {
     shortcut: modShortcut("e", { shiftKey: true }),
@@ -779,6 +785,57 @@ describe("cross-command precedence", () => {
 });
 
 describe("resolveShortcutCommand", () => {
+  it.each(["MacIntel", "Win32", "Linux"])(
+    "cycles effort with Shift+Tab only in the composer on %s",
+    (platform) => {
+      const shortcutEvent = event({ key: "Tab", shiftKey: true });
+      assert.strictEqual(
+        resolveShortcutCommand(shortcutEvent, [], {
+          platform,
+          context: { composerFocus: true },
+        }),
+        "model.effort.next",
+      );
+      assert.isNull(
+        resolveShortcutCommand(shortcutEvent, [], {
+          platform,
+          context: { composerFocus: false },
+        }),
+      );
+      assert.isNull(
+        resolveShortcutCommand(event({ key: "Tab" }), [], {
+          platform,
+          context: { composerFocus: true },
+        }),
+      );
+      assert.strictEqual(
+        resolveShortcutCommand(event({ key: "Tab", ctrlKey: true, shiftKey: true }), [], {
+          platform,
+          context: { composerFocus: true },
+        }),
+        "view.recent.previous",
+      );
+    },
+  );
+
+  it("lets a configured effort shortcut replace the Shift+Tab fallback", () => {
+    const keybindings = compile([
+      {
+        command: "model.effort.next",
+        shortcut: modShortcut("e", { altKey: true, modKey: false }),
+        whenAst: whenIdentifier("composerFocus"),
+      },
+    ]);
+    const options = { platform: "MacIntel", context: { composerFocus: true } };
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "e", altKey: true }), keybindings, options),
+      "model.effort.next",
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "Tab", shiftKey: true }), keybindings, options),
+    );
+  });
+
   it("resolves model cycle commands outside terminal focus", () => {
     assert.strictEqual(
       resolveShortcutCommand(event({ key: "]", altKey: true }), DEFAULT_BINDINGS, {
@@ -992,4 +1049,73 @@ it("matches physical Option+Space with a layout-dependent key value", () => {
     ),
     "composer.voice.toggle",
   );
+});
+
+describe("unassigned commands", () => {
+  // What the server sends for a command whose shortcut the user removed.
+  const unassignedNewThread = compile([
+    { shortcut: modShortcut("unassigned", { modKey: false }), command: "chat.new" },
+  ]);
+
+  it("does not bring the shipped shortcut back through the fallback table", () => {
+    const options = {
+      platform: "MacIntel",
+      context: { terminalFocus: false, terminalOpen: false },
+    };
+
+    assert.equal(
+      resolveShortcutCommand(event({ key: "n", metaKey: true }), [], options),
+      "chat.new",
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "n", metaKey: true }), unassignedNewThread, options),
+    );
+  });
+
+  it("has no shortcut to show", () => {
+    assert.isNull(shortcutLabelForCommand(unassignedNewThread, "chat.new", "MacIntel"));
+    assert.isNull(
+      resolveKeybindingForCommand(unassignedNewThread, "chat.new", { platform: "MacIntel" }),
+    );
+  });
+});
+
+describe("option-modified keys", () => {
+  it("matches Option+Space by its physical key on macOS", () => {
+    const bindings = compile([
+      { shortcut: modShortcut(" ", { modKey: false, altKey: true }), command: "terminal.toggle" },
+    ]);
+
+    assert.equal(
+      resolveShortcutCommand(event({ key: "\u00a0", code: "Space", altKey: true }), bindings, {
+        platform: "MacIntel",
+      }),
+      "terminal.toggle",
+    );
+  });
+});
+
+describe("suspendShortcutDispatch", () => {
+  it("stops every shortcut from resolving until each holder resumes", () => {
+    const pressed = event({ key: "j", metaKey: true });
+    const options = { platform: "MacIntel" };
+    const resumeFirst = suspendShortcutDispatch();
+    const resumeSecond = suspendShortcutDispatch();
+
+    assert.isNull(resolveShortcutCommand(pressed, DEFAULT_BINDINGS, options));
+    assert.isFalse(
+      isKeyboardShortcutsHelpShortcut(
+        event({ metaKey: true, key: "/", code: "Slash" }),
+        "MacIntel",
+      ),
+    );
+
+    resumeFirst();
+    // Resuming twice must not release the other holder's suspension.
+    resumeFirst();
+    assert.isNull(resolveShortcutCommand(pressed, DEFAULT_BINDINGS, options));
+
+    resumeSecond();
+    assert.equal(resolveShortcutCommand(pressed, DEFAULT_BINDINGS, options), "terminal.toggle");
+  });
 });

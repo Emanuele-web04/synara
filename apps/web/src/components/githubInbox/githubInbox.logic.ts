@@ -12,6 +12,7 @@ import type {
   GitHubInboxListError,
   GitHubInboxRepositoryBatch,
   GitHubInboxState,
+  GitHubInboxSort,
   PullRequestDetailInput,
   ProjectId,
 } from "@synara/contracts";
@@ -24,6 +25,7 @@ import type {
   AppSettings,
   GitHubInboxInvolvementFilter,
   GitHubInboxKindFilter,
+  GitHubInboxStateFilter,
 } from "~/appSettings";
 import {
   filterInboxItemsByInvolvement,
@@ -45,7 +47,7 @@ import {
  */
 export interface GitHubInboxSearch {
   type?: GitHubInboxKindFilter;
-  state?: GitHubInboxState;
+  state?: GitHubInboxStateFilter;
   involvement?: GitHubInboxInvolvementFilter;
   projectId?: ProjectId;
   q?: string;
@@ -83,13 +85,10 @@ function nonEmptyString(value: unknown): string | undefined {
 export function parseGitHubInboxSearch(raw: Record<string, unknown>): GitHubInboxSearch {
   const type =
     raw.type === "all" || raw.type === "pullRequest" || raw.type === "issue" ? raw.type : undefined;
-  // Merged pull requests live under Closed.
   const state =
-    raw.state === "open"
-      ? "open"
-      : raw.state === "closed" || raw.state === "merged"
-        ? "closed"
-        : undefined;
+    raw.state === "open" || raw.state === "closed" || raw.state === "merged"
+      ? raw.state
+      : undefined;
   const involvement = parseInvolvement(raw.involvement);
   const projectId = nonEmptyString(raw.projectId) as ProjectId | undefined;
   const q = nonEmptyString(raw.q)?.slice(0, SEARCH_QUERY_MAX_LENGTH);
@@ -228,7 +227,7 @@ export function githubInboxSendTargets(
 
 export interface GitHubInboxFilters {
   kind: GitHubInboxKindFilter;
-  state: GitHubInboxState;
+  state: GitHubInboxStateFilter;
   involvement: GitHubInboxInvolvementFilter;
   /** Empty means every project. */
   projectIds: ProjectId[];
@@ -285,6 +284,11 @@ export function resolveGitHubInboxFilters(
   };
 }
 
+/** The server list a status filter reads. Merged pull requests live in the closed list. */
+export function githubInboxListState(state: GitHubInboxStateFilter): GitHubInboxState {
+  return state === "open" ? "open" : "closed";
+}
+
 /** Filters away from their default (kind, closed state, involvement, projects, labels, text).
  *  Each one is what the filter bar marks as changed and what "Clear filters" resets. */
 export function countActiveGitHubInboxFilters(filters: GitHubInboxFilters, query: string): number {
@@ -308,6 +312,11 @@ function itemMatchesKind(item: GitHubInboxItem, kind: GitHubInboxKindFilter): bo
   return kind === "all" || item.kind === kind;
 }
 
+/** Merged narrows the closed list to merged pull requests; the other states are whole lists. */
+function itemMatchesState(item: GitHubInboxItem, state: GitHubInboxStateFilter): boolean {
+  return state !== "merged" || (item.kind === "pullRequest" && item.state === "merged");
+}
+
 function itemMatchesLabels(item: GitHubInboxItem, labels: ReadonlySet<string>): boolean {
   return (
     labels.size === 0 || item.labels.some((label) => labels.has(normalizeLabelName(label.name)))
@@ -317,13 +326,13 @@ function itemMatchesLabels(item: GitHubInboxItem, labels: ReadonlySet<string>): 
 /** Rows before the involvement, label, and text filters: one per remote item, in scope. */
 function scopedInboxItems(
   items: ReadonlyArray<GitHubInboxItem>,
-  filters: Pick<GitHubInboxFilters, "kind" | "projectIds">,
+  filters: Pick<GitHubInboxFilters, "kind" | "state" | "projectIds">,
   preferredProjectId: ProjectId | undefined,
 ): GitHubInboxItem[] {
   return scopeInboxItemsToProjects(
     coalescePullRequestListEntries(items, { preferredProjectId }),
     filters.projectIds,
-  ).filter((item) => itemMatchesKind(item, filters.kind));
+  ).filter((item) => itemMatchesKind(item, filters.kind) && itemMatchesState(item, filters.state));
 }
 
 /** The rows the list shows, pinned first, from the list superset of the current state. */
@@ -333,12 +342,12 @@ export function selectVisibleInboxItems(
   context: {
     viewer: string | null | undefined;
     normalizedQuery: string;
+    sort?: GitHubInboxSort;
     preferredProjectId?: ProjectId | undefined;
   },
 ): GitHubInboxItem[] {
   const labels = new Set(filters.labels.map(normalizeLabelName));
-  // One list, newest activity first, pull requests and issues interleaved, as on GitHub. ISO
-  // timestamps order as strings; the number breaks ties so the order is stable.
+  const timestamp = context.sort === "updated" ? "updatedAt" : "createdAt";
   return orderPullRequestEntriesPinnedFirst(
     filterInboxItemsByInvolvement(
       scopedInboxItems(items, filters, context.preferredProjectId),
@@ -352,7 +361,7 @@ export function selectVisibleInboxItems(
       )
       .toSorted(
         (left, right) =>
-          right.updatedAt.localeCompare(left.updatedAt) || right.number - left.number,
+          right[timestamp].localeCompare(left[timestamp]) || right.number - left.number,
       ),
   );
 }
@@ -365,14 +374,19 @@ export interface GitHubInboxKindCounts {
 
 /**
  * GitHub's own totals for the repositories in scope, or null when a filter the server does not
- * apply (involvement, labels, text) narrows the view or a repository did not report its totals.
+ * apply (merged, involvement, labels, text) narrows the view or a repository did not report its totals.
  */
 function repositoryKindTotals(
   batches: ReadonlyArray<GitHubInboxRepositoryBatch>,
   filters: GitHubInboxFilters,
   normalizedQuery: string,
 ): GitHubInboxKindCounts | null {
-  if (filters.involvement !== "everything" || filters.labels.length > 0 || normalizedQuery) {
+  if (
+    filters.state === "merged" ||
+    filters.involvement !== "everything" ||
+    filters.labels.length > 0 ||
+    normalizedQuery
+  ) {
     return null;
   }
   const inScope = batches.filter((batch) => inProjectScope(batch.projectIds, filters.projectIds));
@@ -527,13 +541,13 @@ function inProjectScope(projectIds: ReadonlyArray<ProjectId>, filter: ReadonlyAr
 /** Repositories in scope whose list for the shown kind was cut at the per-repository cap. */
 export function countTruncatedInboxRepositories(
   batches: ReadonlyArray<GitHubInboxRepositoryBatch>,
-  filters: Pick<GitHubInboxFilters, "kind" | "projectIds">,
+  filters: Pick<GitHubInboxFilters, "kind" | "state" | "projectIds">,
 ): number {
   return batches.filter(
     (batch) =>
       inProjectScope(batch.projectIds, filters.projectIds) &&
       ((filters.kind !== "issue" && batch.truncatedPullRequests) ||
-        (filters.kind !== "pullRequest" && batch.truncatedIssues)),
+        (filters.state !== "merged" && filters.kind !== "pullRequest" && batch.truncatedIssues)),
   ).length;
 }
 

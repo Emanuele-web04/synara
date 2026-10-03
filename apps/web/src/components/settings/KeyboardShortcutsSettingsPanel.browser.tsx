@@ -7,8 +7,11 @@ import { KeyboardShortcutsSettingsPanel } from "./KeyboardShortcutsSettingsPanel
 import { createBrowserTestServerConfig } from "../../test/browserHarness";
 import { serverQueryKeys } from "../../lib/serverReactQuery";
 
-const server = vi.hoisted(() => ({ upsertKeybinding: vi.fn() }));
-vi.mock("../../nativeApi", () => ({ ensureNativeApi: () => ({ server }) }));
+const server = vi.hoisted(() => ({ editKeybindings: vi.fn() }));
+vi.mock("../../nativeApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../nativeApi")>()),
+  ensureNativeApi: () => ({ server }),
+}));
 let screen: Awaited<ReturnType<typeof render>>;
 afterEach(async () => {
   await screen?.unmount();
@@ -23,7 +26,7 @@ it.each([
     serverQueryKeys.config(),
     createBrowserTestServerConfig("2026-10-01T00:00:00Z"),
   );
-  server.upsertKeybinding.mockResolvedValue({
+  server.editKeybindings.mockResolvedValue({
     keybindings: [
       {
         command,
@@ -44,12 +47,10 @@ it.each([
       <KeyboardShortcutsSettingsPanel />
     </QueryClientProvider>,
   );
-  await page.getByRole("button", { name: "Set keybinding", exact: true }).click();
-  await page.getByRole("combobox", { name: "Command for new keybinding" }).selectOptions(command);
-  const input = document.querySelector<HTMLInputElement>(
-    'input[aria-label="Press a key or combination"]',
-  )!;
-  input.dispatchEvent(
+  await page.getByRole("searchbox", { name: "Search shortcuts" }).fill(label);
+  await page.getByRole("button", { name: `Set a shortcut for ${label}`, exact: true }).click();
+  await expect.element(page.getByRole("dialog")).toBeVisible();
+  window.dispatchEvent(
     new KeyboardEvent("keydown", {
       key: "\u00a0",
       code: "Space",
@@ -58,10 +59,15 @@ it.each([
       cancelable: true,
     }),
   );
-  await expect.poll(() => input.value).toBe("alt+space");
-  await page.getByRole("button", { name: "Save keybinding", exact: true }).click();
-  await expect.element(page.getByText(label, { exact: true })).toBeVisible();
-  expect(server.upsertKeybinding).toHaveBeenLastCalledWith({ rule: { command, key: "alt+space" } });
-  await page.getByRole("searchbox", { name: "Search shortcuts" }).fill(label);
-  await expect.element(page.getByRole("button", { name: "Edit", exact: true })).toBeVisible();
+  await expect.element(page.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+  expect(server.editKeybindings).toHaveBeenLastCalledWith({
+    edits: [{ type: "set", rule: { command, key: "alt+space" } }],
+  });
+  await expect
+    .element(
+      page.getByRole("button", { name: new RegExp(`^Change the shortcut .* for ${label}$`) }),
+    )
+    .toBeVisible();
 });

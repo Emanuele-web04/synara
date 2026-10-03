@@ -5,11 +5,14 @@ import {
   addOpenThreadTab,
   buildOpenThreadTabs,
   closeOpenThreadTab,
+  closeOpenThreadTabs,
   createOpenThreadTabCloseQueue,
+  moveOpenThreadTab,
   replaceLastTabWithFreshChat,
   normalizeOpenThreadTabIds,
   type OpenThreadTabSource,
   resolveOpenThreadTabCloseTarget,
+  resolveOpenThreadTabsInCloseScope,
 } from "./openThreadTabs.logic";
 import type { SidebarThreadSummary, Thread } from "./types";
 
@@ -52,6 +55,17 @@ describe("open thread tab list", () => {
     expect(addOpenThreadTab(open, ThreadId.makeUnsafe("d"))).toEqual([...open, "d"]);
   });
 
+  it("moves a dragged tab into the slot of the tab it is dropped on", () => {
+    const open = ["a", "b", "c", "d"].map((id) => ThreadId.makeUnsafe(id));
+    const move = (from: string, to: string) =>
+      moveOpenThreadTab(open, ThreadId.makeUnsafe(from), ThreadId.makeUnsafe(to));
+
+    expect(move("a", "c")).toEqual(["b", "c", "a", "d"]);
+    expect(move("d", "b")).toEqual(["a", "d", "b", "c"]);
+    expect(move("b", "b")).toBe(open);
+    expect(move("b", "missing")).toBe(open);
+  });
+
   it("restores a persisted list without duplicates or malformed entries", () => {
     expect(normalizeOpenThreadTabIds(["a", " b ", "a", "", 3, null, "c"])).toEqual(["a", "b", "c"]);
     expect(normalizeOpenThreadTabIds({ threadIds: ["a"] })).toEqual([]);
@@ -91,6 +105,31 @@ describe("buildOpenThreadTabs", () => {
         isTerminal: true,
         isDraft: true,
       }),
+    ]);
+  });
+
+  it("marks a tab as running while its thread works, not while it waits on the user", () => {
+    const tabs = buildOpenThreadTabs({
+      activeThreadId: null,
+      sources: [
+        serverSource("idle"),
+        serverSource("working", { hasLiveTailWork: true }),
+        serverSource("connecting", {
+          session: { status: "connecting" } as SidebarThreadSummary["session"],
+        }),
+        serverSource("approval", {
+          hasLiveTailWork: true,
+          hasPendingApprovals: true,
+          session: { status: "running" } as SidebarThreadSummary["session"],
+        }),
+      ],
+    });
+
+    expect(tabs.map((tab) => [tab.threadId, tab.isRunning])).toEqual([
+      ["idle", false],
+      ["working", true],
+      ["connecting", true],
+      ["approval", false],
     ]);
   });
 
@@ -283,6 +322,87 @@ describe("closeOpenThreadTab", () => {
   });
 });
 
+describe("resolveOpenThreadTabsInCloseScope", () => {
+  const inScope = (tabs: readonly string[], anchor: string) => ({
+    left: resolveOpenThreadTabsInCloseScope(tabIds(tabs), ThreadId.makeUnsafe(anchor), "left"),
+    right: resolveOpenThreadTabsInCloseScope(tabIds(tabs), ThreadId.makeUnsafe(anchor), "right"),
+    others: resolveOpenThreadTabsInCloseScope(tabIds(tabs), ThreadId.makeUnsafe(anchor), "others"),
+  });
+
+  it("splits the neighbours of a middle tab by side and never includes the tab itself", () => {
+    expect(inScope(["a", "b", "c", "d"], "b")).toEqual({
+      left: ["a"],
+      right: ["c", "d"],
+      others: ["a", "c", "d"],
+    });
+  });
+
+  it("has nothing on the outer side of the first and last tab", () => {
+    expect(inScope(["a", "b", "c"], "a")).toEqual({
+      left: [],
+      right: ["b", "c"],
+      others: ["b", "c"],
+    });
+    expect(inScope(["a", "b", "c"], "c")).toEqual({
+      left: ["a", "b"],
+      right: [],
+      others: ["a", "b"],
+    });
+  });
+
+  it("has nothing to close around a lone tab or a tab that is no longer open", () => {
+    expect(inScope(["a"], "a")).toEqual({ left: [], right: [], others: [] });
+    expect(inScope(["a", "b"], "gone")).toEqual({ left: [], right: [], others: [] });
+  });
+});
+
+describe("closeOpenThreadTabs", () => {
+  // A route that follows successful navigations, unless a guard blocks leaving it.
+  function harness(input: { active: string; blocked?: boolean }) {
+    let route: string = input.active;
+    const closeTabs = vi.fn();
+    const openTab = vi.fn(async (threadId: string) => {
+      if (!input.blocked) route = threadId;
+    });
+    const close = (closed: readonly string[], kept: string) =>
+      closeOpenThreadTabs({
+        closedThreadIds: closed.map((id) => ThreadId.makeUnsafe(id)),
+        keptThreadId: ThreadId.makeUnsafe(kept),
+        activeThreadId: ThreadId.makeUnsafe(input.active),
+        closeTabs,
+        openTab,
+        readRouteThreadId: () => route,
+      });
+    return { close, closeTabs, openTab };
+  }
+
+  it("closes background tabs together without navigating", async () => {
+    const { close, closeTabs, openTab } = harness({ active: "a" });
+
+    await close(["b", "c"], "a");
+    expect(openTab).not.toHaveBeenCalled();
+    expect(closeTabs).toHaveBeenCalledExactlyOnceWith(["b", "c"]);
+  });
+
+  it("moves to the kept tab before closing the thread on screen", async () => {
+    const { close, closeTabs, openTab } = harness({ active: "c" });
+
+    await close(["b", "c"], "a");
+    expect(openTab).toHaveBeenCalledExactlyOnceWith("a");
+    expect(closeTabs).toHaveBeenCalledExactlyOnceWith(["b", "c"]);
+    expect(openTab.mock.invocationCallOrder[0]).toBeLessThan(
+      closeTabs.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("keeps the tab of a thread the route could not leave", async () => {
+    const { close, closeTabs } = harness({ active: "c", blocked: true });
+
+    await close(["b", "c"], "a");
+    expect(closeTabs).toHaveBeenCalledExactlyOnceWith(["b"]);
+  });
+});
+
 describe("createOpenThreadTabCloseQueue", () => {
   it("closes the successor when its X is clicked while the first close is still navigating", async () => {
     // Live app state: the persisted open ids and the route. A thread the route lands on
@@ -297,14 +417,16 @@ describe("createOpenThreadTabCloseQueue", () => {
     const renderedTabs = tabIds(["a", "b", "c"]);
     const enqueueClose = createOpenThreadTabCloseQueue();
     const close = (closed: string) =>
-      enqueueClose(() => ({
-        tabs: renderedTabs.filter((tab) => open.includes(tab.threadId)),
-        closedThreadId: ThreadId.makeUnsafe(closed),
-        activeThreadId: route,
-        closeTab: (threadId) => open.splice(open.indexOf(threadId), 1),
-        openTab,
-        readRouteThreadId: () => route,
-      }));
+      enqueueClose(() =>
+        closeOpenThreadTab({
+          tabs: renderedTabs.filter((tab) => open.includes(tab.threadId)),
+          closedThreadId: ThreadId.makeUnsafe(closed),
+          activeThreadId: route,
+          closeTab: (threadId) => open.splice(open.indexOf(threadId), 1),
+          openTab,
+          readRouteThreadId: () => route,
+        }),
+      );
 
     // Both X clicks land before the first navigation settles.
     await Promise.all([close("a"), close("b")]);
@@ -320,18 +442,20 @@ describe("createOpenThreadTabCloseQueue", () => {
     const replaceLastTab = vi.fn(async () => ({ ok: true as const, leavesRoute: false }));
     const enqueueClose = createOpenThreadTabCloseQueue();
     const close = (closed: string) =>
-      enqueueClose(() => ({
-        tabs: tabIds(["a", "b"]).filter((tab) => open.includes(tab.threadId)),
-        closedThreadId: ThreadId.makeUnsafe(closed),
-        activeThreadId: route,
-        closeTab: (threadId) => open.splice(open.indexOf(threadId), 1),
-        openTab: async (threadId) => {
-          await new Promise((resolve) => setTimeout(resolve, 0));
-          route = threadId;
-        },
-        replaceLastTab,
-        readRouteThreadId: () => route,
-      }));
+      enqueueClose(() =>
+        closeOpenThreadTab({
+          tabs: tabIds(["a", "b"]).filter((tab) => open.includes(tab.threadId)),
+          closedThreadId: ThreadId.makeUnsafe(closed),
+          activeThreadId: route,
+          closeTab: (threadId) => open.splice(open.indexOf(threadId), 1),
+          openTab: async (threadId) => {
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            route = threadId;
+          },
+          replaceLastTab,
+          readRouteThreadId: () => route,
+        }),
+      );
 
     await Promise.all([close("a"), close("b")]);
 

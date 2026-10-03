@@ -725,7 +725,10 @@ export function createGitHubItemContextDraft(
     pr: { number: item.number, url: item.url },
     title: `#${item.number} ${item.title}`,
     subtitle: `${item.itemKind === "issue" ? "Issue" : "Pull request"} in ${item.repository}`,
-    text: buildGitHubItemReferencePrompt(item, options),
+    // The PR URL is the reference; let the agent read current GitHub details as needed.
+    // Keep the title/subtitle for the card without copying the discussion into the prompt.
+    text:
+      item.itemKind === "pullRequest" ? item.url : buildGitHubItemReferencePrompt(item, options),
   });
   return item.itemKind === "issue" ? { ...draft, itemKind: "issue" } : draft;
 }

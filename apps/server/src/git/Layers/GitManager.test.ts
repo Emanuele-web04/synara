@@ -4,7 +4,9 @@ import path from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { Effect, Exit, FileSystem, Layer, PlatformError, Scope } from "effect";
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
+import * as processRunner from "../../processRunner";
+import { GitHubCliLive } from "./GitHubCli";
 import type { GitActionProgressEvent } from "@synara/contracts";
 import type {
   GitPullRequestCheck,
@@ -15,7 +17,11 @@ import type {
 
 import { GitCommandError, GitHubCliError, TextGenerationError } from "../Errors.ts";
 import { type GitManagerShape } from "../Services/GitManager.ts";
-import { GitHubCli, PULL_REQUEST_SUMMARY_JSON_FIELDS } from "../Services/GitHubCli.ts";
+import {
+  GitHubCli,
+  type GitHubCliShape,
+  PULL_REQUEST_SUMMARY_JSON_FIELDS,
+} from "../Services/GitHubCli.ts";
 import {
   type AutomationIntentGenerationInput,
   type AutomationIntentGenerationResult,
@@ -372,6 +378,7 @@ function handoffThread(
 
 function makeManager(input?: {
   ghScenario?: FakeGhScenario;
+  github?: GitHubCliShape;
   textGeneration?: Partial<FakeGitTextGeneration>;
 }) {
   const { service: gitHubCli, ghCalls } = createGitHubCliWithFakeGh(input?.ghScenario);
@@ -386,7 +393,7 @@ function makeManager(input?: {
   );
 
   const managerLayer = Layer.mergeAll(
-    Layer.succeed(GitHubCli, gitHubCli),
+    Layer.succeed(GitHubCli, input?.github ?? gitHubCli),
     Layer.succeed(TextGeneration, textGeneration),
     gitCoreLayer,
   ).pipe(Layer.provideMerge(NodeServices.layer));
@@ -1512,6 +1519,43 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
+  it.effect(
+    "uses a supplied PR title to publish unstaged changes from main without text generation",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("synara-git-manager-");
+        yield* initRepo(repoDir);
+        const remoteDir = yield* createBareRemote();
+        yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+        yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
+        const mainHead = (yield* runGit(repoDir, ["rev-parse", "main"])).stdout.trim();
+        fs.writeFileSync(path.join(repoDir, "README.md"), "hello\nupdated\n");
+        const { manager } = yield* makeManager({
+          textGeneration: {
+            generateCommitMessage: () => Effect.die("Unnecessary commit generation"),
+            generatePrContent: () => Effect.die("Unnecessary PR generation"),
+          },
+        });
+
+        const result = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action: "commit_push_pr",
+          featureBranch: true,
+          prTitle: "Update readme",
+          prBody: "Document the change.",
+        });
+
+        expect(result.pr.status).toBe("created");
+        expect(result.commit.subject).toBe("Update readme");
+        expect(result.branch.name).toBe("feature/update-readme");
+        expect((yield* runGit(repoDir, ["status", "--porcelain"])).stdout.trim()).toBe("");
+        expect((yield* runGit(repoDir, ["rev-parse", "main"])).stdout.trim()).toBe(mainHead);
+        expect((yield* runGit(remoteDir, ["show", "feature/update-readme:README.md"])).stdout).toBe(
+          "hello\nupdated\n",
+        );
+      }),
+  );
+
   it.effect("returns existing PR metadata for commit/push/pr action", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("synara-git-manager-");
@@ -1960,6 +2004,44 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
+  it.effect("keeps direct PR resolution available during a polling pause", () =>
+    Effect.gen(function* () {
+      const gh = yield* GitHubCli;
+      const runProcessSpy = vi
+        .spyOn(processRunner, "runProcess")
+        .mockImplementation(async (_command, args) => {
+          if (args[0] === "api") throw new Error("gh: API rate limit exceeded (HTTP 403)");
+          return {
+            stdout: JSON.stringify({
+              number: 42,
+              title: "Agent association",
+              url: "https://github.com/acme/app/pull/42",
+              baseRefName: "main",
+              headRefName: "feature",
+              state: "OPEN",
+            }),
+            stderr: "",
+            code: 0,
+            signal: null,
+            timedOut: false,
+          };
+        });
+      yield* Effect.addFinalizer(() => Effect.sync(() => runProcessSpy.mockRestore()));
+      const { manager } = yield* makeManager({ github: gh });
+      yield* gh.execute({ cwd: "/agent-association", args: ["api", "user"] }).pipe(Effect.flip);
+      const result = yield* manager.resolvePullRequest({
+        cwd: "/agent-association",
+        reference: "#42",
+      });
+      expect(result.pullRequest.number).toBe(42);
+      const poll = yield* manager
+        .resolvePullRequest({ cwd: "/agent-association", reference: "#43" }, { background: true })
+        .pipe(Effect.result);
+      expect(poll._tag).toBe("Failure");
+      expect(runProcessSpy).toHaveBeenCalledTimes(2);
+    }).pipe(Effect.provide(GitHubCliLive)),
+  );
+
   it.effect("resolves pull requests from #number references", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("synara-git-manager-");
@@ -2322,43 +2404,52 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
-  it.effect("reuses an existing dedicated worktree for the PR head branch", () =>
-    Effect.gen(function* () {
-      const repoDir = yield* makeTempDir("synara-git-manager-");
-      yield* initRepo(repoDir);
-      yield* runGit(repoDir, ["checkout", "-b", "feature/pr-existing-worktree"]);
-      fs.writeFileSync(path.join(repoDir, "existing.txt"), "existing\n");
-      yield* runGit(repoDir, ["add", "existing.txt"]);
-      yield* runGit(repoDir, ["commit", "-m", "Existing worktree branch"]);
-      yield* runGit(repoDir, ["checkout", "main"]);
-      const worktreePath = path.join(repoDir, "..", `pr-existing-${Date.now()}`);
-      yield* runGit(repoDir, ["worktree", "add", worktreePath, "feature/pr-existing-worktree"]);
+  for (const mode of ["local", "worktree"] as const) {
+    it.effect(`reuses an existing dedicated PR worktree in ${mode} mode`, () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("synara-git-manager-");
+        yield* initRepo(repoDir);
+        yield* runGit(repoDir, ["checkout", "-b", "feature/pr-existing-worktree"]);
+        fs.writeFileSync(path.join(repoDir, "existing.txt"), "existing\n");
+        yield* runGit(repoDir, ["add", "existing.txt"]);
+        yield* runGit(repoDir, ["commit", "-m", "Existing worktree branch"]);
+        yield* runGit(repoDir, ["checkout", "main"]);
+        const worktreePath = path.join(repoDir, "..", `pr-existing-${Date.now()}`);
+        yield* runGit(repoDir, ["worktree", "add", worktreePath, "feature/pr-existing-worktree"]);
+        fs.writeFileSync(path.join(worktreePath, "existing.txt"), "unsent changes\n");
+        const mainHead = (yield* runGit(repoDir, ["rev-parse", "HEAD"])).stdout.trim();
 
-      const { manager } = yield* makeManager({
-        ghScenario: {
-          pullRequest: {
-            number: 78,
-            title: "Existing worktree PR",
-            url: "https://github.com/example-org/sample-repo/pull/78",
-            baseRefName: "main",
-            headRefName: "feature/pr-existing-worktree",
-            state: "open",
+        const { manager } = yield* makeManager({
+          ghScenario: {
+            pullRequest: {
+              number: 78,
+              title: "Existing worktree PR",
+              url: "https://github.com/example-org/sample-repo/pull/78",
+              baseRefName: "main",
+              headRefName: "feature/pr-existing-worktree",
+              state: "open",
+            },
           },
-        },
-      });
+        });
 
-      const result = yield* preparePullRequestThread(manager, {
-        cwd: repoDir,
-        reference: "78",
-        mode: "worktree",
-      });
+        const result = yield* preparePullRequestThread(manager, {
+          cwd: repoDir,
+          reference: "78",
+          mode,
+        });
 
-      expect(result.worktreePath && fs.realpathSync.native(result.worktreePath)).toBe(
-        fs.realpathSync.native(worktreePath),
-      );
-      expect(result.branch).toBe("feature/pr-existing-worktree");
-    }),
-  );
+        expect(result.worktreePath && fs.realpathSync.native(result.worktreePath)).toBe(
+          fs.realpathSync.native(worktreePath),
+        );
+        expect(result.branch).toBe("feature/pr-existing-worktree");
+        expect((yield* runGit(repoDir, ["branch", "--show-current"])).stdout.trim()).toBe("main");
+        expect((yield* runGit(repoDir, ["rev-parse", "HEAD"])).stdout.trim()).toBe(mainHead);
+        expect(fs.readFileSync(path.join(worktreePath, "existing.txt"), "utf8")).toBe(
+          "unsent changes\n",
+        );
+      }),
+    );
+  }
 
   it.effect(
     "does not block fork PR worktree prep when the fork head branch collides with root main",
@@ -2533,6 +2624,84 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       expect(
         (yield* runGit(worktreePath, ["rev-parse", "--abbrev-ref", "@{upstream}"])).stdout.trim(),
       ).toBe("fork-seed/feature/pr-reused-fork");
+    }),
+  );
+
+  it.effect("does not reuse a different fork's worktree when preparing a local PR thread", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("synara-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/shared-name"]);
+      yield* runGit(repoDir, [
+        "remote",
+        "add",
+        "other-fork",
+        "https://github.com/other/sample-repo.git",
+      ]);
+      yield* runGit(repoDir, ["config", "branch.feature/shared-name.remote", "other-fork"]);
+      yield* runGit(repoDir, [
+        "remote",
+        "add",
+        "octocat",
+        "https://github.com/octocat/sample-repo.git",
+      ]);
+      yield* runGit(repoDir, ["update-ref", "refs/remotes/octocat/feature/shared-name", "HEAD"]);
+      yield* runGit(repoDir, [
+        "config",
+        "branch.feature/shared-name.merge",
+        "refs/heads/feature/shared-name",
+      ]);
+      yield* runGit(repoDir, ["checkout", "main"]);
+      const worktreePath = path.join(repoDir, "collision-worktree");
+      yield* runGit(repoDir, ["worktree", "add", worktreePath, "feature/shared-name"]);
+      fs.writeFileSync(path.join(worktreePath, "README.md"), "unsent other-fork work\n");
+      const worktreeHead = (yield* runGit(worktreePath, ["rev-parse", "HEAD"])).stdout.trim();
+
+      const { manager, ghCalls } = yield* makeManager({
+        ghScenario: {
+          pullRequest: {
+            number: 84,
+            title: "Different fork PR",
+            url: "https://github.com/example-org/sample-repo/pull/84",
+            baseRefName: "main",
+            headRefName: "feature/shared-name",
+            state: "open",
+            isCrossRepository: true,
+            headRepositoryNameWithOwner: "octocat/sample-repo",
+            headRepositoryOwnerLogin: "octocat",
+          },
+          repositoryCloneUrls: {
+            "octocat/sample-repo": {
+              url: "https://github.com/octocat/sample-repo.git",
+              sshUrl: "git@github.com:octocat/sample-repo.git",
+            },
+          },
+        },
+      });
+
+      const result = yield* preparePullRequestThread(manager, {
+        cwd: repoDir,
+        reference: "84",
+        mode: "local",
+      }).pipe(Effect.exit);
+
+      expect(
+        (yield* runGit(worktreePath, [
+          "config",
+          "--get",
+          "branch.feature/shared-name.remote",
+        ])).stdout.trim(),
+      ).toBe("other-fork");
+      expect(Exit.isFailure(result)).toBe(true);
+      expect(String(Exit.isFailure(result) ? result.cause : "")).toContain(
+        "different GitHub repository",
+      );
+      expect(ghCalls.some((call) => call.startsWith("pr checkout"))).toBe(false);
+      expect((yield* runGit(repoDir, ["branch", "--show-current"])).stdout.trim()).toBe("main");
+      expect((yield* runGit(worktreePath, ["rev-parse", "HEAD"])).stdout.trim()).toBe(worktreeHead);
+      expect(fs.readFileSync(path.join(worktreePath, "README.md"), "utf8")).toBe(
+        "unsent other-fork work\n",
+      );
     }),
   );
 

@@ -605,18 +605,19 @@ describe("GitHub item cards (Send to agent / Ask)", () => {
     expect(prompt).toContain("Earlier comments are omitted here");
   });
 
-  it("says whether a pull request's branch is the checked-out one", () => {
+  it("attaches only the PR link regardless of checkout, body, or discussion size", () => {
     const pullRequest = itemCardSource({
       itemKind: "pullRequest",
       url: "https://github.com/o/r/pull/42",
       branches: { head: "fix/crash", base: "main" },
+      body: "Long PR description".repeat(1_000),
+      comments: Array.from({ length: 100 }, (_, index) => itemComment(index)),
     });
-    expect(buildGitHubItemReferencePrompt(pullRequest, { checkedOut: true })).toContain(
-      "currently checked-out branch",
-    );
-    expect(buildGitHubItemReferencePrompt(pullRequest, { checkedOut: false })).toContain(
-      "may not be checked out",
-    );
+    for (const checkedOut of [true, false]) {
+      expect(createGitHubItemContextDraft(pullRequest, { checkedOut }).text).toBe(
+        "https://github.com/o/r/pull/42",
+      );
+    }
   });
 
   it("builds a reference card marked as an issue, or unmarked for a pull request", () => {

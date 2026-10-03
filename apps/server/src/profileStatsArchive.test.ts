@@ -629,6 +629,10 @@ describe("ProfileStatsArchive", () => {
         const archive = yield* ProfileStatsArchive;
 
         yield* seedTwoThreadsWithActivity;
+        yield* sql`
+          INSERT INTO project_import_history (thread_id, revision, state_json)
+          VALUES ('thread-purge', 1, '{"messages":["cached imported text"]}')
+        `;
         yield* acknowledgeProviderCommandJournal(sql);
         yield* sql`
           INSERT INTO external_mcp_integrations (
@@ -693,6 +697,7 @@ describe("ProfileStatsArchive", () => {
           readonly threads: number;
           readonly messages: number;
           readonly turns: number;
+          readonly importedHistory: number;
         }>`
           SELECT
             (SELECT COUNT(*) FROM projection_threads WHERE thread_id = 'thread-purge') AS threads,
@@ -701,9 +706,15 @@ describe("ProfileStatsArchive", () => {
               FROM projection_thread_messages
               WHERE thread_id = 'thread-purge'
             ) AS messages,
-            (SELECT COUNT(*) FROM projection_turns WHERE thread_id = 'thread-purge') AS turns
+            (SELECT COUNT(*) FROM projection_turns WHERE thread_id = 'thread-purge') AS turns,
+            (SELECT COUNT(*) FROM project_import_history WHERE thread_id = 'thread-purge') AS "importedHistory"
         `;
-        expect(remaining[0]).toMatchObject({ threads: 0, messages: 0, turns: 0 });
+        expect(remaining[0]).toMatchObject({
+          threads: 0,
+          messages: 0,
+          turns: 0,
+          importedHistory: 0,
+        });
         expect(
           yield* sql<{ readonly status: string; readonly activeClaims: number }>`
             SELECT

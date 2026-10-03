@@ -106,4 +106,10 @@ export function formatProfileUsageBasis(metric: "tokens" | "turns"): string {
 }
 
 const WHOLE_NUMBER_FORMATTER = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
-const MONTH_DAY_FORMATTER = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
+// formatShortDate turns a day key into UTC midnight, so format in UTC or viewers
+// west of UTC see the previous day.
+const MONTH_DAY_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  timeZone: "UTC",
+});

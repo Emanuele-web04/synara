@@ -12,7 +12,6 @@ import { useLayoutEffect } from "react";
 import { isElectron } from "~/env";
 import { useSidebar } from "~/components/ui/sidebar";
 import { useDesktopCustomTitleBarActive } from "~/hooks/useDesktopCustomTitleBar";
-import { useSidebarLayout } from "~/hooks/useSidebarLayout";
 import { readDesktopZoomFactor, subscribeDesktopZoomFactor } from "~/lib/desktopZoom";
 import { isMacNavigatorPlatform } from "~/lib/utils";
 
@@ -23,17 +22,13 @@ import { isMacNavigatorPlatform } from "~/lib/utils";
 export const DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS = "desktop-top-bar-traffic-light-gutter";
 
 /**
- * Marks a route's top bar in the rail layout, where route headers sit on the shell band
+ * Marks a route's top bar: route headers sit on the shell band
  * above the inset content block (`index.css` paints them in the shell tone). Every top bar
  * already takes one of the gutter class names below, so the gutter hooks carry the marker.
  */
 export const RAIL_LAYOUT_TOP_BAR_CLASS = "app-top-bar";
 
-function withRailLayoutTopBarClass(
-  gutterClassName: string | null,
-  isRailLayout: boolean,
-): string | null {
-  if (!isRailLayout) return gutterClassName;
+function withTopBarClass(gutterClassName: string | null): string {
   return gutterClassName
     ? `${RAIL_LAYOUT_TOP_BAR_CLASS} ${gutterClassName}`
     : RAIL_LAYOUT_TOP_BAR_CLASS;
@@ -108,9 +103,8 @@ export function useSyncDesktopTopBarTrafficLightGutterZoom(): void {
  * Use this for any chrome surface whose top bar can sit flush against the
  * window's left edge: chat header, settings header, workspace header, etc.
  */
-export function useDesktopTopBarTrafficLightGutterClassName(): string | null {
+export function useDesktopTopBarTrafficLightGutterClassName(): string {
   const { isMobile, open } = useSidebar();
-  const isRailLayout = useSidebarLayout() === "rail";
   const isMacDesktop = isMacNavigatorPlatform();
   const gutterClassName = shouldReserveDesktopTopBarTrafficLightGutter({
     isElectron,
@@ -120,7 +114,7 @@ export function useDesktopTopBarTrafficLightGutterClassName(): string | null {
   })
     ? DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CLASS
     : null;
-  return withRailLayoutTopBarClass(gutterClassName, isRailLayout);
+  return withTopBarClass(gutterClassName);
 }
 
 /**
@@ -166,14 +160,13 @@ export function shouldReserveDesktopTopBarWindowControlsGutter(input: {
  * Use this for any chrome surface whose top bar can sit flush against the window's
  * right edge: chat header, workspace header, plugin nav, the right dock header, etc.
  */
-export function useDesktopTopBarWindowControlsGutterClassName(): string | null {
+export function useDesktopTopBarWindowControlsGutterClassName(): string {
   const customTitleBarActive = useDesktopCustomTitleBarActive();
-  const isRailLayout = useSidebarLayout() === "rail";
   const gutterClassName = shouldReserveDesktopTopBarWindowControlsGutter({
     isElectron,
     customTitleBarActive,
   })
     ? DESKTOP_TOP_BAR_WINDOW_CONTROLS_GUTTER_CLASS
     : null;
-  return withRailLayoutTopBarClass(gutterClassName, isRailLayout);
+  return withTopBarClass(gutterClassName);
 }

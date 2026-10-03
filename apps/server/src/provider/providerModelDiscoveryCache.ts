@@ -16,6 +16,7 @@ import { ProviderAdapterRequestError } from "./Errors.ts";
 
 /** A successful catalog is served without touching the adapter for this long. */
 export const PROVIDER_MODEL_DISCOVERY_FRESH_TTL_MS = 30 * 60_000;
+const MANUAL_REFRESH_MIN_INTERVAL_MS = 60_000;
 /**
  * After the fresh window a catalog is still served immediately (marked
  * `cached: true`) while a background revalidation runs. Entries older than
@@ -85,6 +86,7 @@ export interface ProviderModelDiscoveryCache<E> {
   readonly lookup: (
     key: ProviderModelDiscoveryCacheKey,
     discover: Effect.Effect<ProviderListModelsResult, E>,
+    refresh?: ProviderListModelsInput["refresh"],
   ) => Effect.Effect<ProviderListModelsResult, E | ProviderAdapterRequestError>;
   /** Forget every entry (settings changes, tests). */
   readonly clear: () => void;
@@ -334,12 +336,22 @@ export function makeProviderModelDiscoveryCache<E>(options?: {
       E | ProviderAdapterRequestError
     >;
 
-  const lookup: ProviderModelDiscoveryCache<E>["lookup"] = (key, discover) =>
+  const lookup: ProviderModelDiscoveryCache<E>["lookup"] = (key, discover, refresh) =>
     Effect.gen(function* () {
       const serialized = serializeProviderModelDiscoveryCacheKey(key);
       const at = now();
       const entry = readCatalog(serialized, at);
       const failure = readFailure(serialized, at);
+      if (refresh !== undefined) {
+        const pending = inflight.get(serialized);
+        if (pending !== undefined) return yield* awaitDiscovery(pending);
+        if (failure !== undefined) return yield* failure.exit as DiscoveryExit<E>;
+        const freshWindow = refresh === "now" ? MANUAL_REFRESH_MIN_INTERVAL_MS : freshTtlMs;
+        if (entry !== undefined && at - entry.storedAt <= freshWindow) {
+          return { ...entry.result, cached: true };
+        }
+        return yield* awaitDiscovery(yield* startDiscovery(key, serialized, discover));
+      }
       if (entry !== undefined) {
         if (at - entry.storedAt <= freshTtlMs) {
           return { ...entry.result, cached: true };

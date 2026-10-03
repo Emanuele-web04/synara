@@ -43,12 +43,34 @@ worktree. Import does not submit a model turn, and a copied Codex goal is not au
 The importer checks native IDs already owned by Synara and saves durable import provenance. Repeating
 an import skips completed copies that still exist, including archived conversations. Deleting an
 imported conversation or its destination project makes the source available to import again; the
-next import creates a new independent copy. An interrupted import can reuse its copy and continue materializing
-history in the destination chosen for the first attempt. Pending imports cannot accept new messages
-until they finish successfully.
+next import creates a new independent copy. An interrupted import reuses its copy and the saved initial display page in the destination chosen
+for the first attempt. Pending imports cannot accept new messages until the native copy, initial
+page, and runtime cleanup finish successfully.
 
-Native copies preserve provider conversation context. Synara's imported history currently displays
-supported user and assistant text, with original timestamps where available and stable ordering.
+Native copies preserve provider conversation context independently of the messages displayed in
+Synara. Import does not force compaction or replace native context with a summary. Initially, Codex
+imports display up to ten recent turn summaries (the user message and final assistant reply), and
+Claude imports display up to twenty recent text messages from the SDK-selected conversation chain.
+Original timestamps are retained where available; older pages stay ordered before newer messages.
+
+Choose **Load earlier messages** at the top of the transcript to read previous pages. These are
+read-only display history: loading them does not send a model turn, add messages to the live session,
+or change its activity time. They do not expose actions that require a Synara message, such as pinning
+or forking, and are not added to Synara's searchable message store. Reopening a chat starts with its recent messages again; fetched pages are cached durably
+and reused on retry, including after a server restart. Unfetched pages require the original import
+account's storage location and the native copy to remain available. Existing fully imported chats
+are unchanged. Interrupted imports from before paginated history finish their original full
+transcript: the already saved messages stay intact, and missing messages are read in bounded
+provider pages and saved for retry before being appended. This compatibility recovery gathers
+the remaining display history before completing, so unusually large legacy imports can still
+require more memory than new imports.
+
+Codex must support `thread/turns/list` with lightweight item views. Older incompatible CLI versions
+are reported with an upgrade instruction instead of falling back to an unbounded full-history read.
+Each display page is bounded to 1 MiB, below the transport envelope limit. A single oversized display
+message or unavailable native history produces an explicit error; Synara never silently truncates
+native context or treats a failed initial import as complete.
+
 Historical tool activity, reasoning, plans, and attachments are not reconstructed as interactive UI
 items. Subagent transcripts are not listed as separate ordinary conversations. Active Codex turns
 must finish or be stopped before importing. Claude conversations need a settled assistant response

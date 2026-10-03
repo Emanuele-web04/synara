@@ -11,6 +11,7 @@ import {
 } from "../appNavigation";
 import { AppRailSlotProvider } from "../components/AppRail";
 import { AppShellTopStrip } from "../components/AppShellTopStrip";
+import { SidebarLeadingControlsDock } from "../components/SidebarHeaderNavigationControls";
 import { resolveSelectableProviderInstanceId, useAppSettings } from "../appSettings";
 import ShortcutsDialog from "../components/ShortcutsDialog";
 import { RecentViewSwitcher } from "../components/RecentViewSwitcher";
@@ -18,11 +19,11 @@ import { shouldRenderTerminalWorkspace } from "../components/ChatView.logic";
 import ThreadSidebar from "../components/Sidebar";
 import { isElectron } from "../env";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
+import { useIsMobile } from "../hooks/useMediaQuery";
 import { useHandleNewGroupChat } from "../hooks/useHandleNewGroupChat";
 import { useTemporaryThreadLifecycle } from "../hooks/useTemporaryThreadLifecycle";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useRecentViewSwitcher } from "../hooks/useRecentViewSwitcher";
-import { useSidebarLayout } from "../hooks/useSidebarLayout";
 import { useLatestProjectStore } from "../latestProjectStore";
 import {
   resolveCurrentProjectTargetId,
@@ -37,7 +38,11 @@ import { startFreshChatForActiveSurface } from "../lib/startContainerChat";
 import { resolveGroupChatTargetProjectId } from "../components/SidebarGroupsSurface.logic";
 import { isGroupContainerProject } from "../lib/groupProjects";
 import { isOrdinarySpaceProject } from "../lib/spaces";
-import { isKeyboardShortcutsHelpShortcut, resolveShortcutCommand } from "../keybindings";
+import {
+  isKeyboardShortcutsHelpShortcut,
+  isShortcutDispatchSuspended,
+  resolveShortcutCommand,
+} from "../keybindings";
 import { useStore } from "../store";
 import { createProjectLastActivityAtSelector } from "../storeSelectors";
 import { useSpacesUiStore } from "../spacesUiStore";
@@ -359,7 +364,9 @@ function ChatRouteGlobalShortcuts() {
 
   useEffect(() => {
     const onWindowKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
+      // The shortcut recorder owns the keyboard while it is open, including the fixed
+      // chords below that no keybinding lookup would catch.
+      if (event.defaultPrevented || isShortcutDispatchSuspended()) return;
       const shortcutContext = {
         terminalFocus: isTerminalFocused(),
         terminalOpen,
@@ -573,31 +580,21 @@ function ChatRouteGlobalShortcuts() {
   );
 }
 
-/** Subtle top-corner sheen on the sidebar gap. The sidebar always sits on the left, so
- *  the radial highlight is anchored to the top-left corner. */
-const SIDEBAR_GAP_CLASS =
-  "overflow-hidden before:absolute before:inset-0 before:bg-[radial-gradient(90%_75%_at_0%_0%,rgba(255,255,255,0.06),transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.025),rgba(255,255,255,0.008))] dark:before:bg-[radial-gradient(90%_75%_at_0%_0%,rgba(255,255,255,0.04),transparent_58%),linear-gradient(180deg,rgba(255,255,255,0.018),rgba(255,255,255,0.006))]";
-
-/** No inline-start/end border: the chat content card provides the edge (rounded + overlap).
- *  A sidebar border here draws a full-height vertical line through the titlebar seam. */
-const SIDEBAR_INNER_CLASS = "app-sidebar-surface";
-
 function ChatRouteLayout() {
   const isEditorView = useLocation({
     select: (location) => (location.search as { view?: unknown }).view === "editor",
   });
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const isRailLayout = useSidebarLayout() === "rail";
-  // Rail layout: Kanban, Pull requests, and Automations take the full width; the panel
+  const isMobile = useIsMobile();
+  // Kanban, Pull requests, and Automations take the full width; the panel
   // (Home/Spaces lists) only shows for the items that own one. Forced closed like the
   // editor view, so the route header takes over the toggle and traffic-light gutter.
   const railActiveItem = useRailShellStore((store) => store.activeItem);
   const railPanelView = useRailShellStore((store) => store.panelView);
   const selectRailPanelItem = useRailShellStore((store) => store.selectPanelItem);
-  const railHidesPanel = isRailLayout && !railItemShowsPanel(railActiveItem);
+  const railHidesPanel = !railItemShowsPanel(railActiveItem);
   const resolvedSidebarOpen = isEditorView || railHidesPanel ? false : sidebarOpen;
-  // Toggling the panel open on a full-width route brings back the current panel item
-  // (never true in the classic layout, where this is a plain setter).
+  // Toggling the panel open on a full-width route brings back the current panel item.
   const handleSidebarOpenChange = useCallback(
     (open: boolean) => {
       if (open && railHidesPanel) {
@@ -607,25 +604,21 @@ function ChatRouteLayout() {
     },
     [railHidesPanel, railPanelView, selectRailPanelItem],
   );
-  // Rail layout: ThreadSidebar portals its AppRail into this element, left of the panel.
+  // ThreadSidebar portals its AppRail into this element, left of the panel.
   const [railSlot, setRailSlot] = useState<HTMLDivElement | null>(null);
+  // The route column slides with the panel; the leading controls dock needs it to stay put.
+  const [routeColumn, setRouteColumn] = useState<HTMLDivElement | null>(null);
 
   // The thread sidebar always lives on the left; the right dock is a separate surface.
-  // In the rail layout it fills its clipping wrapper and sits on the panel tone, so it drops
-  // the classic gap sheen and translucent sidebar material.
+  // It fills its clipping wrapper and sits on the panel tone.
   const sidebarElement = (
     <Sidebar
       side="left"
       collapsible="offcanvas"
       // Match the right dock's soft drawer slide (shared token) instead of the
       // shell's default `ease-linear`. Applied to the container + gap in lockstep.
-      className={cn(isRailLayout && "h-full", "text-foreground", SIDEBAR_OFFCANVAS_MOTION_CLASS)}
-      gapClassName={
-        isRailLayout
-          ? SIDEBAR_OFFCANVAS_MOTION_CLASS
-          : cn(SIDEBAR_GAP_CLASS, SIDEBAR_OFFCANVAS_MOTION_CLASS)
-      }
-      {...(isRailLayout ? {} : { innerClassName: SIDEBAR_INNER_CLASS })}
+      className={cn("h-full text-foreground", SIDEBAR_OFFCANVAS_MOTION_CLASS)}
+      gapClassName={SIDEBAR_OFFCANVAS_MOTION_CLASS}
       transparentSurface
       resizable={THREAD_SIDEBAR_RESIZABLE}
     >
@@ -640,8 +633,8 @@ function ChatRouteLayout() {
   // would have gotten inside <Sidebar> (otherwise dragging to resize stops working).
   // `data-sidebar-side` on the provider selects the seam geometry.
   const mainContentShell = (
-    <div className="relative flex h-svh min-h-0 min-w-0 flex-1">
-      {isRailLayout ? <div aria-hidden className="app-rail-header-divider" /> : null}
+    <div ref={setRouteColumn} className="relative flex h-svh min-h-0 min-w-0 flex-1">
+      <div aria-hidden className="app-rail-header-divider" />
       {isEditorView ? null : (
         <SidebarInstanceProvider side="left" resizable={THREAD_SIDEBAR_RESIZABLE}>
           <SidebarRail placement="content-seam" />
@@ -651,52 +644,43 @@ function ChatRouteLayout() {
     </div>
   );
 
-  // Rail layout (Codex-style): the left column holds the window-chrome strip over the fixed
+  // The shell (Codex-style): the left column holds the window-chrome strip over the fixed
   // rail and the off-canvas panel; the route column keeps its own header on the shell band.
   // The panel's wrapper is its fixed container's containing block (paint containment), so
   // the existing <Sidebar> offcanvas slide and resize run unchanged below the strip and are
   // clipped at the rail. The strip height reaches CSS as a variable (see index.css).
-  if (isRailLayout) {
-    return (
-      <SidebarProvider
-        defaultOpen
-        open={resolvedSidebarOpen}
-        onOpenChange={handleSidebarOpenChange}
-        className="h-svh overflow-hidden bg-[var(--app-rail-shell-background)]"
-        style={{ "--app-top-strip-height": `${CHAT_SURFACE_HEADER_HEIGHT_PX}px` } as CSSProperties}
-        data-sidebar-side="left"
-        data-sidebar-layout="rail"
-      >
-        <ThreadRetentionMaintenanceToast />
-        <ChatRouteGlobalShortcuts />
-        <AppRailSlotProvider value={railSlot}>
-          <div className="flex min-h-0 shrink-0 flex-col">
-            <AppShellTopStrip />
-            <div className="flex min-h-0 flex-1">
-              <div ref={setRailSlot} className="flex shrink-0" />
-              <div className="app-rail-panel relative flex shrink-0 overflow-hidden [contain:paint]">
-                {sidebarElement}
-              </div>
-            </div>
-          </div>
-          {mainContentShell}
-        </AppRailSlotProvider>
-      </SidebarProvider>
-    );
-  }
-
   return (
     <SidebarProvider
       defaultOpen
       open={resolvedSidebarOpen}
       onOpenChange={handleSidebarOpenChange}
-      className="bg-[var(--app-shell-background)]"
+      className="h-svh overflow-hidden bg-[var(--app-rail-shell-background)]"
+      style={{ "--app-top-strip-height": `${CHAT_SURFACE_HEADER_HEIGHT_PX}px` } as CSSProperties}
       data-sidebar-side="left"
+      data-sidebar-layout="rail"
     >
       <ThreadRetentionMaintenanceToast />
       <ChatRouteGlobalShortcuts />
-      {sidebarElement}
-      {mainContentShell}
+      <AppRailSlotProvider value={railSlot}>
+        <SidebarLeadingControlsDock routeColumn={routeColumn} railSlot={railSlot}>
+          {isMobile ? (
+            // Phones show the sidebar as a sheet that carries its own rail (see ThreadSidebar),
+            // so the shell keeps no left column.
+            sidebarElement
+          ) : (
+            <div className="flex min-h-0 shrink-0 flex-col">
+              <AppShellTopStrip />
+              <div className="flex min-h-0 flex-1">
+                <div ref={setRailSlot} className="flex shrink-0" />
+                <div className="app-rail-panel relative flex shrink-0 overflow-hidden [contain:paint]">
+                  {sidebarElement}
+                </div>
+              </div>
+            </div>
+          )}
+          {mainContentShell}
+        </SidebarLeadingControlsDock>
+      </AppRailSlotProvider>
     </SidebarProvider>
   );
 }

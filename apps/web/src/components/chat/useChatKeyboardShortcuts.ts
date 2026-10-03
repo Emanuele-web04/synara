@@ -27,6 +27,7 @@ import { useComposerVoiceShortcut } from "./useComposerVoiceShortcut";
 import { useComposerVoiceController } from "./useComposerVoiceController";
 import { toastManager } from "../ui/toast";
 import type { ComposerModelSelectionOptions } from "./ComposerModelPicker";
+import { MODEL_PICKER_POPUP_ATTRIBUTE } from "./ComposerModelPicker.logic";
 function eventTargetsComposer(
   event: globalThis.KeyboardEvent,
   composerForm: HTMLFormElement | null,
@@ -44,6 +45,7 @@ function canHandleComposerPickerShortcut(
   if (eventTargetsComposer(event, composerForm)) return true;
   const target = event.target;
   return (
+    (target instanceof Element && target.closest(`[${MODEL_PICKER_POPUP_ATTRIBUTE}]`) !== null) ||
     target === document.body ||
     target === document.documentElement ||
     document.activeElement === document.body ||
@@ -102,6 +104,7 @@ interface ChatKeyboardShortcutsInput {
     selectionOptions?: ComposerModelSelectionOptions,
   ) => Promise<void>;
   handleTraitsPickerOpenChange: (open: boolean) => void;
+  cycleEffort: () => boolean;
   toggleTerminalVisibility: ReturnType<
     typeof useChatTerminalController
   >["toggleTerminalVisibility"];
@@ -170,6 +173,7 @@ export function useChatKeyboardShortcuts({
   selectedModel,
   onProviderModelSelect,
   handleTraitsPickerOpenChange,
+  cycleEffort,
   toggleTerminalVisibility,
   setTerminalOpen,
   splitTerminalRight,
@@ -292,6 +296,10 @@ export function useChatKeyboardShortcuts({
         !isComposerApprovalState &&
         canHandleComposerPickerShortcut(event, composerFormRef.current);
       const shortcutContext = {
+        composerFocus:
+          eventTargetsComposer(event, composerFormRef.current) ||
+          (event.target instanceof Element &&
+            event.target.closest(`[${MODEL_PICKER_POPUP_ATTRIBUTE}]`) !== null),
         terminalFocus: isTerminalFocused(),
         terminalOpen: Boolean(terminalState.terminalOpen),
         terminalWorkspaceOpen,
@@ -304,6 +312,22 @@ export function useChatKeyboardShortcuts({
         context: shortcutContext,
       });
       if (!command) return;
+
+      if (command === "model.effort.next") {
+        if (
+          !shortcutContext.composerFocus ||
+          isTerminalFocused() ||
+          isVoiceRecording ||
+          isVoiceTranscribing ||
+          isComposerApprovalState ||
+          event.isComposing
+        )
+          return;
+        if (!cycleEffort()) return;
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
 
       if (command === "composer.focus.toggle") {
         if (isComposerApprovalState || isVoiceRecording || isVoiceTranscribing) return;
@@ -573,6 +597,7 @@ export function useChatKeyboardShortcuts({
     hasLiveTurn,
     handleModelPickerOpenChange,
     handleTraitsPickerOpenChange,
+    cycleEffort,
     shouldRenderChatPaneContent,
     isComposerApprovalState,
     isVoiceRecording,

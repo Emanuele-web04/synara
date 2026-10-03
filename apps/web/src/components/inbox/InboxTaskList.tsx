@@ -3,7 +3,7 @@
 //          groups of threads (plus pull requests and automation runs waiting on the user).
 //          Empty groups never render; the column is left out entirely when all are empty.
 // Layer: Inbox UI
-// Exports: InboxTaskList
+// Exports: InboxTaskList, Group
 
 import type { ThreadId } from "@synara/contracts";
 import { pluralize } from "@synara/shared/text";
@@ -112,17 +112,31 @@ function TaskRow({
   );
 }
 
-function Group({ label, count, children }: { label: string; count: number; children: ReactNode }) {
+export function Group({
+  label,
+  count,
+  action,
+  children,
+}: {
+  label: string;
+  count: number;
+  /** A quiet control at the end of the heading row. */
+  action?: ReactNode;
+  children: ReactNode;
+}) {
   const headingId = useId();
   return (
     <section aria-labelledby={headingId} className="flex flex-col">
-      <h2
-        id={headingId}
-        className="flex h-7 items-center gap-1.5 px-3 text-ui-sm font-normal text-muted-foreground"
-      >
-        {label}
-        <span className="text-muted-foreground/60 tabular-nums">{count}</span>
-      </h2>
+      <div className="flex h-7 items-center justify-between gap-3 px-3">
+        <h2
+          id={headingId}
+          className="flex items-center gap-1.5 text-ui-sm font-normal text-muted-foreground"
+        >
+          {label}
+          <span className="text-muted-foreground/60 tabular-nums">{count}</span>
+        </h2>
+        {action}
+      </div>
       {children}
     </section>
   );

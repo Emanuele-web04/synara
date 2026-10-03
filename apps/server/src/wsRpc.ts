@@ -131,7 +131,7 @@ import {
   gitHandoffMetadataCommand,
   recordGitHandoffResult,
 } from "./gitHandoffOperations";
-import { Keybindings } from "./keybindings";
+import { DEFAULT_RESOLVED_KEYBINDINGS, Keybindings } from "./keybindings";
 import { createLocalPreviewGrant } from "./localImageFiles";
 import { listLocalServers, stopLocalServer } from "./localServerMonitor";
 import {
@@ -920,6 +920,7 @@ const makeWsRpcHandlersLayer = () =>
           worktreesDir: config.worktreesDir,
           keybindingsConfigPath: config.keybindingsConfigPath,
           keybindings: keybindingsConfig.keybindings,
+          defaultKeybindings: DEFAULT_RESOLVED_KEYBINDINGS,
           issues: keybindingsConfig.issues,
           providers: providerStatuses,
           availableEditors: resolveAvailableEditors(),
@@ -1279,6 +1280,11 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(importThread(input), "Failed to import thread"),
         [ORCHESTRATION_WS_METHODS.listProjectImports]: (input) =>
           rpcEffect(projectImports.listProjectImports(input), "Failed to find local projects"),
+        [ORCHESTRATION_WS_METHODS.loadProjectImportHistory]: (input) =>
+          rpcEffect(
+            projectImports.loadProjectImportHistory(input),
+            "Failed to load imported history",
+          ),
         [ORCHESTRATION_WS_METHODS.importProject]: (input) =>
           rpcEffect(projectImports.importProject(input), "Failed to import project"),
         [ORCHESTRATION_WS_METHODS.regenerateThreadTitle]: (input) =>
@@ -1883,11 +1889,16 @@ const makeWsRpcHandlersLayer = () =>
             ),
             { label: "git.stacked-action" },
           ),
+        // Summary lookups gate cache misses inside GitHubCli so fresh badge data stays available.
         [WS_METHODS.gitResolvePullRequest]: (input) =>
-          rpcEffect(gitManager.resolvePullRequest(input), "Failed to resolve pull request"),
+          rpcEffect(
+            gitManager.resolvePullRequest(input, { background: true }),
+            "Failed to resolve pull request",
+          ),
+        // Uncached snapshot polling shares the inbox read queue and rate-limit pause.
         [WS_METHODS.gitPullRequestSnapshot]: (input) =>
           rpcEffect(
-            gitManager.pullRequestSnapshot(input),
+            github.withRead(gitManager.pullRequestSnapshot(input)),
             "Failed to load pull request checks and comments",
           ),
         [WS_METHODS.gitPreparePullRequestThread]: (input) =>
@@ -2365,6 +2376,15 @@ const makeWsRpcHandlersLayer = () =>
                 Effect.map((keybindingsConfig) => ({ keybindings: keybindingsConfig, issues: [] })),
               ),
             "Failed to update keybinding",
+          ),
+        [WS_METHODS.serverEditKeybindings]: (input) =>
+          rpcEffect(
+            keybindings
+              .editKeybindings(input.edits)
+              .pipe(
+                Effect.map((keybindingsConfig) => ({ keybindings: keybindingsConfig, issues: [] })),
+              ),
+            "Failed to update keybindings",
           ),
         [WS_METHODS.subscribeServerLifecycle]: (_, { clientId }) =>
           streamAdmission.guard(

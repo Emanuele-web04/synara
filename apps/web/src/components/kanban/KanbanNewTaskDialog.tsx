@@ -59,8 +59,8 @@ import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
 import { type ComposerFileAttachment, type DraftThreadEnvMode } from "../../composerDraftStore";
-import { type ExpandedImagePreview } from "../chat/ExpandedImagePreview";
 import { ExpandedImageOverlay } from "../chat/ExpandedImageOverlay";
+import { useExpandedImagePreview } from "../chat/useExpandedImagePreview";
 import { useStore } from "../../store";
 import { DEFAULT_INTERACTION_MODE } from "../../types";
 import { appendKanbanTaskTranscript, buildKanbanTaskPreview } from "./KanbanNewTaskDialog.logic";
@@ -157,7 +157,8 @@ export function KanbanNewTaskDialog({
   // the task parks in Draft — matching where the user clicked.
   const [sendAsDraft, setSendAsDraft] = useState(initialSendAsDraft);
   const [isDragOverComposer, setIsDragOverComposer] = useState(false);
-  const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
+  const { expandedImage, setExpandedImage, closeExpandedImage, navigateExpandedImage } =
+    useExpandedImagePreview();
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === selectedProjectId) ?? null,
     [projects, selectedProjectId],
@@ -362,21 +363,6 @@ export function KanbanNewTaskDialog({
     },
     [addComposerImages, scheduleComposerFocus],
   );
-  const closeExpandedImage = useCallback(() => {
-    setExpandedImage(null);
-  }, []);
-  const navigateExpandedImage = useCallback((direction: -1 | 1) => {
-    setExpandedImage((existing) => {
-      if (!existing || existing.images.length <= 1) {
-        return existing;
-      }
-      return {
-        ...existing,
-        index: (existing.index + direction + existing.images.length) % existing.images.length,
-      };
-    });
-  }, []);
-
   return (
     <Dialog open onOpenChange={onOpenChange}>
       <DialogPopup className="max-w-3xl rounded-3xl" onKeyDown={handleSubmitShortcut}>

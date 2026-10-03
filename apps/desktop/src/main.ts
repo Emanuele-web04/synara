@@ -63,7 +63,7 @@ import {
   type UpdateDownloadedEvent,
 } from "electron-updater";
 
-import type { DesktopContextMenuItem } from "@synara/contracts";
+import { buildContextMenuTemplate } from "./contextMenuTemplate";
 import { isKeyboardShortcutsHelpChord } from "@synara/shared/browserShortcuts";
 import { getMacTrafficLightPosition } from "@synara/shared/desktopChrome";
 import { DEVICE_HELPER_SOURCE_DIR_ENV } from "@synara/shared/deviceHelperCache";
@@ -5017,20 +5017,7 @@ function registerIpcHandlers(): void {
   ipcMain.removeHandler(IPC.contextMenu);
   ipcMain.handle(
     IPC.contextMenu,
-    async (_event, items: DesktopContextMenuItem[], position?: { x: number; y: number }) => {
-      const normalizedItems = items
-        .filter((item) => typeof item.id === "string" && typeof item.label === "string")
-        .map((item) => ({
-          id: item.id,
-          label: item.label,
-          separatorBefore: item.separatorBefore === true,
-          destructive: item.destructive === true,
-          icon: createContextMenuIcon(item.iconDataUrl),
-        }));
-      if (normalizedItems.length === 0) {
-        return null;
-      }
-
+    async (_event, items: unknown, position?: { x: number; y: number }) => {
       const popupPosition =
         position &&
         Number.isFinite(position.x) &&
@@ -5047,30 +5034,19 @@ function registerIpcHandlers(): void {
       if (!window) return null;
 
       return new Promise<string | null>((resolve) => {
-        const template: MenuItemConstructorOptions[] = [];
-        let hasInsertedDestructiveSeparator = false;
-        for (const item of normalizedItems) {
-          const shouldInsertSeparator =
-            item.separatorBefore ||
-            (item.destructive && !hasInsertedDestructiveSeparator && template.length > 0);
-          if (shouldInsertSeparator && template.length > 0) {
-            template.push({ type: "separator" });
-          }
-          if (item.destructive) {
-            hasInsertedDestructiveSeparator = true;
-          }
-          const itemOption: MenuItemConstructorOptions = {
-            label:
-              process.platform === "darwin"
-                ? `${item.label}${MAC_CONTEXT_MENU_LABEL_TRAILING_PADDING}`
-                : item.label,
-            click: () => resolve(item.id),
-          };
-          const icon = item.icon ?? (item.destructive ? getDestructiveMenuIcon() : undefined);
-          if (icon) {
-            itemOption.icon = icon;
-          }
-          template.push(itemOption);
+        const template = buildContextMenuTemplate(items, {
+          decorateLabel: (label) =>
+            process.platform === "darwin"
+              ? `${label}${MAC_CONTEXT_MENU_LABEL_TRAILING_PADDING}`
+              : label,
+          resolveIcon: (item) =>
+            createContextMenuIcon(item.iconDataUrl) ??
+            (item.destructive === true ? getDestructiveMenuIcon() : undefined),
+          onSelect: resolve,
+        });
+        if (template.length === 0) {
+          resolve(null);
+          return;
         }
 
         const menu = Menu.buildFromTemplate(template);
@@ -5228,7 +5204,7 @@ function registerIpcHandlers(): void {
 
   ipcMain.removeHandler(IPC.audioLevel.setSource);
   ipcMain.handle(IPC.audioLevel.setSource, async (event, rawSource: unknown) => {
-    // Authoritative gate: macOS only, and kept out of Stable while Beta-only.
+    // Authoritative gate: macOS only; channel availability follows the shared feature list.
     if (
       process.platform !== "darwin" ||
       !isBetaFeatureEnabled(AUDIO_TRAIL_BETA_FEATURE, desktopFlavor)

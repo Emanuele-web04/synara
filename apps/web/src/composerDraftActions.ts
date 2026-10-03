@@ -14,6 +14,7 @@ import { getDefaultModel, normalizeModelSlug } from "@synara/shared/model";
 import * as Equal from "effect/Equal";
 import * as Schema from "effect/Schema";
 import type { StateCreator } from "zustand";
+import { hasActiveComposerSend } from "./lib/composerSendOwnership";
 
 import {
   normalizePullRequestContext,
@@ -101,6 +102,8 @@ function removeDraftThreadIfUnmapped(input: {
 } {
   if (
     !input.threadId ||
+    hasActiveComposerSend(input.threadId) ||
+    input.draftThreadsByThreadId[input.threadId]?.promotedTo !== undefined ||
     Object.values(input.projectDraftThreadIdByProjectId).includes(input.threadId)
   ) {
     return {

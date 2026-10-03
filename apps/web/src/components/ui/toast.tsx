@@ -101,7 +101,7 @@ function toastRootClassName(
   tone: NotificationTone,
 ): string {
   return cn(
-    notificationSurfaceClassName({ compact, tone }),
+    notificationSurfaceClassName({ compact, tone, floating: true }),
     position.includes("center") ? "mx-auto" : compact ? "" : "w-full",
   );
 }
@@ -794,7 +794,11 @@ function AnchoredToasts() {
                     "relative text-balance transition-[scale,opacity] data-ending-style:scale-98 data-starting-style:scale-98 data-ending-style:opacity-0 data-starting-style:opacity-0",
                     tooltipStyle
                       ? "rounded-lg border bg-popover text-popover-foreground text-ui leading-snug shadow-md/5 [-webkit-app-region:no-drag] before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-lg)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] dark:before:shadow-[0_-1px_--theme(--color-white/6%)]"
-                      : notificationSurfaceClassName({ compact, tone: toastTone(toast.type) }),
+                      : notificationSurfaceClassName({
+                          compact,
+                          tone: toastTone(toast.type),
+                          floating: true,
+                        }),
                   )}
                   data-slot="toast-popup"
                   toast={toast}

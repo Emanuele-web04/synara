@@ -27,6 +27,7 @@ import {
 import { appHistory } from "../../appNavigation";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { useStarredModels } from "../../hooks/useStarredModels";
+import type { ProviderModelCatalog } from "../../hooks/useProviderModelCatalog";
 import {
   buildNextProviderOptions,
   type ProviderModelOption,
@@ -41,6 +42,7 @@ import { Input } from "../ui/input";
 import { Menu, MenuGroup, MenuGroupLabel } from "../ui/menu";
 import { Skeleton } from "../ui/skeleton";
 import { ComposerModelMenuTrigger } from "./ComposerModelMenuTrigger";
+import { ModelCatalogRefresh } from "./ModelCatalogRefresh";
 import {
   buildProviderTabRows,
   buildStarredModelOptionsPatch,
@@ -99,6 +101,7 @@ type ComposerModelPickerProps = {
   providers?: ReadonlyArray<ServerProviderStatus>;
   modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
   loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
+  onRefreshModels?: ProviderModelCatalog["refreshModels"];
   discoveryErrorsByProvider?: Partial<Record<ProviderKind, string | undefined>>;
   hiddenProviders?: ReadonlyArray<ProviderKind>;
   providerOrder?: ReadonlyArray<ProviderKind>;
@@ -399,6 +402,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     }
     if (keepOpen) {
       selectionCommittedWhileOpenRef.current = true;
+      setMenuOpen(true);
       return;
     }
     selectionCommittedWhileOpenRef.current = false;
@@ -638,6 +642,14 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
               </div>
             )}
           </div>
+          {isMenuOpen && tabAccount && !setupMessage && props.onRefreshModels ? (
+            <ModelCatalogRefresh
+              key={tabAccount.instanceId}
+              provider={tabAccount.provider}
+              instanceId={tabAccount.instanceId}
+              onRefresh={props.onRefreshModels}
+            />
+          ) : null}
           <ComposerModelPickerTraitRows
             provider={props.provider}
             providerInstanceId={props.selectedProviderInstanceId}

@@ -12,7 +12,8 @@ import {
 } from "react-icons/pi";
 
 import type { ActiveTaskListState } from "../../session-logic";
-import { BotIcon, CheckIcon, LoaderIcon } from "~/lib/icons";
+import { TaskProgressSteps } from "./TaskProgressSteps";
+import { BotIcon, LoaderIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import {
@@ -35,17 +36,6 @@ interface ActiveTaskListCardProps {
   compact?: boolean;
   onCompactChange: (compact: boolean) => void;
   onOpenSidebar: () => void;
-}
-
-// Maps task state to the compact status glyph shown in the activity list.
-function taskStatusIcon(status: ActiveTaskListState["tasks"][number]["status"]) {
-  if (status === "completed") {
-    return <CheckIcon className="size-3" />;
-  }
-  if (status === "inProgress") {
-    return <LoaderIcon className="size-3 animate-spin" />;
-  }
-  return <span className="block size-[7px] rounded-full border border-current" />;
 }
 
 export function ActiveTaskListCard({
@@ -107,46 +97,18 @@ export function ActiveTaskListCard({
 
       {compact ? null : (
         <>
-          <ol
+          <TaskProgressSteps
+            textClassName="text-ui-lg"
             className={cn(
-              "space-y-0",
               COMPOSER_STACKED_PANEL_BODY_PADDING_CLASS_NAME,
               COMPOSER_STACKED_PANEL_SCROLL_REGION_CLASS_NAME,
             )}
-          >
-            {activeTaskList.tasks.map((task, index) => {
+            steps={activeTaskList.tasks.map((task) => {
               const occurrence = (taskOccurrenceCount.get(task.task) ?? 0) + 1;
               taskOccurrenceCount.set(task.task, occurrence);
-
-              return (
-                <li key={`${task.task}:${occurrence}`} className="flex items-start gap-2 py-1">
-                  <div
-                    className={cn(
-                      "mt-[3px] flex min-w-0 shrink-0 items-center gap-1.5 text-ui",
-                      task.status === "completed"
-                        ? "text-muted-foreground/45"
-                        : task.status === "inProgress"
-                          ? "text-foreground/80"
-                          : "text-muted-foreground/60",
-                    )}
-                  >
-                    <span className="flex size-3.5 items-center justify-center">
-                      {taskStatusIcon(task.status)}
-                    </span>
-                    <span className="tabular-nums">{index + 1}.</span>
-                  </div>
-                  <p
-                    className={cn(
-                      "min-w-0 flex-1 text-ui-lg leading-5 text-foreground/85",
-                      task.status === "completed" && "text-muted-foreground/50 line-through",
-                    )}
-                  >
-                    {task.task}
-                  </p>
-                </li>
-              );
+              return { id: `${task.task}:${occurrence}`, text: task.task, status: task.status };
             })}
-          </ol>
+          />
 
           {backgroundTaskCount > 0 ? (
             <div

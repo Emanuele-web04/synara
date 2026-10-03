@@ -15,7 +15,10 @@ import {
   MAX_WHEN_EXPRESSION_DEPTH,
   ResolvedKeybindingRule,
   ResolvedKeybindingsConfig,
+  STATIC_KEYBINDING_COMMANDS,
+  UNASSIGNED_KEYBINDING_KEY,
   type ServerConfigIssue,
+  type ServerKeybindingEdit,
 } from "@synara/contracts";
 import { Mutable } from "effect/Types";
 import {
@@ -120,6 +123,8 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   // Cycle models within the active provider (favorites first, then remaining list).
   { key: "alt+]", command: "model.next", when: "!terminalFocus" },
   { key: "alt+[", command: "model.previous", when: "!terminalFocus" },
+  // Preserve reverse focus navigation outside the composer and its effort picker.
+  { key: "shift+tab", command: "model.effort.next", when: "composerFocus" },
   { key: "mod+shift+e", command: "traitsPicker.toggle", when: "!terminalFocus" },
   { key: "mod+shift+u", command: "settings.usage", when: "!terminalFocus" },
   // New thread (chat.new) is the primary create action; it falls back to the most
@@ -539,7 +544,137 @@ function encodeWhenAst(node: KeybindingWhenNode): string {
   }
 }
 
-const DEFAULT_RESOLVED_KEYBINDINGS = compileResolvedKeybindingsConfig(DEFAULT_KEYBINDINGS);
+export const DEFAULT_RESOLVED_KEYBINDINGS = compileResolvedKeybindingsConfig(DEFAULT_KEYBINDINGS);
+
+const BUILT_IN_KEYBINDING_COMMANDS: ReadonlySet<string> = new Set(STATIC_KEYBINDING_COMMANDS);
+const DEFAULT_KEYBINDING_COMMANDS: ReadonlySet<string> = new Set(
+  DEFAULT_KEYBINDINGS.map((rule) => rule.command),
+);
+
+function isUnassignedKeybindingRule(rule: KeybindingRule): boolean {
+  return rule.key.toLowerCase() === UNASSIGNED_KEYBINDING_KEY;
+}
+
+const SHIPPED_KEYBINDING_RULE_INDEX_BY_IDENTITY = new Map(
+  DEFAULT_KEYBINDINGS.flatMap((rule, index) => {
+    const identity = resolvedKeybindingRuleIdentity(rule);
+    return identity === null ? [] : [[identity, index] as const];
+  }),
+);
+
+function shippedKeybindingRuleIndex(rule: KeybindingRule): number {
+  const identity = resolvedKeybindingRuleIdentity(rule);
+  return identity === null ? -1 : (SHIPPED_KEYBINDING_RULE_INDEX_BY_IDENTITY.get(identity) ?? -1);
+}
+
+// Later rules win, and a few shipped bindings share a key on purpose (Cmd+W closes a
+// terminal tab or the workspace panel depending on which rule comes last). A rule that
+// matches a shipped one therefore goes back before the shipped rules that follow it, so
+// restoring a command never reorders those pairs. Anything else is appended and wins.
+function insertKeybindingRule(
+  rules: readonly KeybindingRule[],
+  rule: KeybindingRule,
+): KeybindingRule[] {
+  const shippedIndex = shippedKeybindingRuleIndex(rule);
+  const insertAt =
+    shippedIndex === -1
+      ? -1
+      : rules.findIndex((existing) => shippedKeybindingRuleIndex(existing) > shippedIndex);
+  const next = [...rules];
+  next.splice(insertAt === -1 ? next.length : insertAt, 0, rule);
+  return next;
+}
+
+function insertShippedKeybindingRules(
+  rules: readonly KeybindingRule[],
+  command: KeybindingRule["command"],
+): KeybindingRule[] {
+  return DEFAULT_KEYBINDINGS.filter((rule) => rule.command === command).reduce(
+    (next, rule) => insertKeybindingRule(next, { ...rule }),
+    [...rules],
+  );
+}
+
+// Startup skips writing a shipped rule whose key another command already holds, so a
+// command can be live with nothing on disk. Write its shipped rules out before editing
+// one of them; otherwise the edit would silently drop the command's other bindings.
+function materializeShippedKeybindingRules(
+  rules: readonly KeybindingRule[],
+  command: KeybindingRule["command"],
+): KeybindingRule[] {
+  return rules.some((rule) => rule.command === command)
+    ? [...rules]
+    : insertShippedKeybindingRules(rules, command);
+}
+
+export type KeybindingEditsResult =
+  | { readonly _tag: "success"; readonly rules: readonly KeybindingRule[] }
+  | { readonly _tag: "failure"; readonly detail: string };
+
+function isValidAssignableKeybindingRule(rule: KeybindingRule): boolean {
+  return !isUnassignedKeybindingRule(rule) && compileResolvedKeybindingRule(rule) !== null;
+}
+
+/** @internal - Exported for testing */
+export function applyKeybindingEdits(
+  rules: readonly KeybindingRule[],
+  edits: readonly ServerKeybindingEdit[],
+): KeybindingEditsResult {
+  let next: KeybindingRule[] = [...rules];
+  for (const edit of edits) {
+    switch (edit.type) {
+      case "set": {
+        const { rule, replacing } = edit;
+        if (!isValidAssignableKeybindingRule(rule)) {
+          return { _tag: "failure", detail: "invalid shortcut or condition expression" };
+        }
+        if (replacing && replacing.command !== rule.command) {
+          return { _tag: "failure", detail: "a shortcut can only replace one of its own command" };
+        }
+        next = materializeShippedKeybindingRules(next, rule.command).filter(
+          (existing) =>
+            !(existing.command === rule.command && isUnassignedKeybindingRule(existing)) &&
+            !(replacing && isSameResolvedKeybindingRule(existing, replacing)) &&
+            !isSameResolvedKeybindingRule(existing, rule),
+        );
+        next = insertKeybindingRule(next, rule);
+        break;
+      }
+      case "remove": {
+        const { rule } = edit;
+        next = materializeShippedKeybindingRules(next, rule.command).filter(
+          (existing) => !isSameResolvedKeybindingRule(existing, rule),
+        );
+        // Only shipped commands need the marker: nothing would re-add a binding for a
+        // command that has no default.
+        if (
+          DEFAULT_KEYBINDING_COMMANDS.has(rule.command) &&
+          !next.some((existing) => existing.command === rule.command)
+        ) {
+          next.push({ key: UNASSIGNED_KEYBINDING_KEY, command: rule.command });
+        }
+        break;
+      }
+      case "reset": {
+        const { command } = edit;
+        if (command === undefined) {
+          // Project script shortcuts are owned by their project, not by this reset.
+          next = [
+            ...DEFAULT_KEYBINDINGS.map((rule) => ({ ...rule })),
+            ...next.filter((rule) => !BUILT_IN_KEYBINDING_COMMANDS.has(rule.command)),
+          ];
+          break;
+        }
+        next = insertShippedKeybindingRules(
+          next.filter((rule) => rule.command !== command),
+          command,
+        );
+        break;
+      }
+    }
+  }
+  return { _tag: "success", rules: next };
+}
 
 /**
  * Result of normalizing the raw on-disk keybindings config into a list of entries.
@@ -909,6 +1044,14 @@ export interface KeybindingsShape {
   readonly upsertKeybindingRule: (
     rule: KeybindingRule,
     replacing?: KeybindingRule,
+  ) => Effect.Effect<ResolvedKeybindingsConfig, KeybindingsConfigError>;
+
+  /**
+   * Apply shortcut-editor changes in order and persist the result in one write, so a
+   * change that moves a shortcut between commands is never observed half done.
+   */
+  readonly editKeybindings: (
+    edits: readonly ServerKeybindingEdit[],
   ) => Effect.Effect<ResolvedKeybindingsConfig, KeybindingsConfigError>;
 }
 
@@ -1320,10 +1463,41 @@ const makeKeybindings = Effect.gen(function* () {
     existingRule: KeybindingRule,
     rule: KeybindingRule,
     replacing: KeybindingRule | undefined,
-  ) =>
-    replacing
+  ) => {
+    // A command that gains a binding is no longer unassigned.
+    if (existingRule.command === rule.command && isUnassignedKeybindingRule(existingRule)) {
+      return false;
+    }
+    return replacing
       ? !isSameResolvedKeybindingRule(existingRule, replacing)
       : existingRule.command !== rule.command;
+  };
+
+  const persistCustomKeybindings = Effect.fn(function* (nextConfig: readonly KeybindingRule[]) {
+    const cappedConfig =
+      nextConfig.length > MAX_KEYBINDINGS_COUNT
+        ? nextConfig.slice(-MAX_KEYBINDINGS_COUNT)
+        : nextConfig;
+    if (nextConfig.length > MAX_KEYBINDINGS_COUNT) {
+      yield* Effect.logWarning("truncating keybindings config to max entries", {
+        path: keybindingsConfigPath,
+        maxEntries: MAX_KEYBINDINGS_COUNT,
+      });
+    }
+    yield* writeConfigAtomically(cappedConfig);
+    const nextResolved = mergeWithDefaultKeybindings(
+      compileResolvedKeybindingsConfig(cappedConfig),
+    );
+    yield* Cache.set(resolvedConfigCache, resolvedConfigCacheKey, {
+      keybindings: nextResolved,
+      issues: [],
+    });
+    yield* emitChange({
+      keybindings: nextResolved,
+      issues: [],
+    });
+    return nextResolved;
+  });
 
   return {
     start,
@@ -1340,33 +1514,24 @@ const makeKeybindings = Effect.gen(function* () {
           yield* validateUpsertRule(rule);
           if (replacing) yield* validateUpsertRule(replacing);
           const customConfig = yield* loadWritableCustomKeybindingsConfig();
-          const nextConfig = [
+          return yield* persistCustomKeybindings([
             ...customConfig.filter((entry) => keepExistingRuleDuringUpsert(entry, rule, replacing)),
             rule,
-          ];
-          const cappedConfig =
-            nextConfig.length > MAX_KEYBINDINGS_COUNT
-              ? nextConfig.slice(-MAX_KEYBINDINGS_COUNT)
-              : nextConfig;
-          if (nextConfig.length > MAX_KEYBINDINGS_COUNT) {
-            yield* Effect.logWarning("truncating keybindings config to max entries", {
-              path: keybindingsConfigPath,
-              maxEntries: MAX_KEYBINDINGS_COUNT,
+          ]);
+        }),
+      ),
+    editKeybindings: (edits) =>
+      upsertSemaphore.withPermits(1)(
+        Effect.gen(function* () {
+          const customConfig = yield* loadWritableCustomKeybindingsConfig();
+          const result = applyKeybindingEdits(customConfig, edits);
+          if (result._tag === "failure") {
+            return yield* new KeybindingsConfigError({
+              configPath: keybindingsConfigPath,
+              detail: result.detail,
             });
           }
-          yield* writeConfigAtomically(cappedConfig);
-          const nextResolved = mergeWithDefaultKeybindings(
-            compileResolvedKeybindingsConfig(cappedConfig),
-          );
-          yield* Cache.set(resolvedConfigCache, resolvedConfigCacheKey, {
-            keybindings: nextResolved,
-            issues: [],
-          });
-          yield* emitChange({
-            keybindings: nextResolved,
-            issues: [],
-          });
-          return nextResolved;
+          return yield* persistCustomKeybindings(result.rules);
         }),
       ),
   } satisfies KeybindingsShape;

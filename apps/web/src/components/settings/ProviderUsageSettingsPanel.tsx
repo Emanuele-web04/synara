@@ -13,13 +13,25 @@ import {
 import { useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { useAppSettings } from "~/appSettings";
+import { useAppSettings, type RailUsageWindow } from "~/appSettings";
+import {
+  MAX_RAIL_USAGE_PROVIDERS,
+  resolveRailUsageProviders,
+  toggleRailUsageProvider,
+} from "~/components/AppRailUsage.logic";
 import { ProviderIcon } from "~/components/ProviderIcon";
 import { ProviderUsageLimitRows } from "~/components/ProviderUsageLimitRows";
 import { ProviderUsageLineList } from "~/components/ProviderUsageLineList";
 import { ProviderUsageResetCredits } from "~/components/ProviderUsageResetCredits";
-import { SettingsCard, SettingsSectionShell } from "~/components/settings/SettingsPanelPrimitives";
+import {
+  SettingsCard,
+  SettingsListRow,
+  SettingsSection,
+  SettingsSectionShell,
+} from "~/components/settings/SettingsPanelPrimitives";
+import { SettingsSegmentedControl } from "~/components/settings/SettingControls";
 import { Button } from "~/components/ui/button";
+import { Switch } from "~/components/ui/switch";
 import { useProviderUsageSummary } from "~/hooks/useProviderUsageSummary";
 import { RotateCcwIcon, TriangleAlertIcon } from "~/lib/icons";
 import { deriveProviderUsageDisplayRows } from "~/lib/providerUsageDisplay";
@@ -32,6 +44,12 @@ import {
 import { cn } from "~/lib/utils";
 import { useStore } from "~/store";
 import { createAllThreadsSelector } from "~/storeSelectors";
+
+const RAIL_USAGE_WINDOW_OPTIONS = [
+  { value: "both", label: "Both" },
+  { value: "fiveHour", label: "5h" },
+  { value: "weekly", label: "Weekly" },
+] as const satisfies ReadonlyArray<{ value: RailUsageWindow; label: string }>;
 
 const PILL_CLASS_NAME = "shrink-0 rounded-full px-2 py-1 text-ui-sm font-medium leading-none";
 
@@ -154,7 +172,9 @@ function mergeProviderUsageRefresh(
 
 export function ProviderUsageSettingsPanel() {
   const queryClient = useQueryClient();
-  const { settings } = useAppSettings();
+  const { settings, updateSettings } = useAppSettings();
+  const railUsageProviders = resolveRailUsageProviders(settings.railUsageProviders);
+  const railUsageFull = railUsageProviders.length >= MAX_RAIL_USAGE_PROVIDERS;
   const codexHomePath = settings.codexHomePath || null;
   const threads = useStore(useMemo(() => createAllThreadsSelector(), []));
   // Account/thread fallback rows are shared by every provider card; derive them once per panel.
@@ -179,46 +199,93 @@ export function ProviderUsageSettingsPanel() {
   const isRefreshing = usageQuery.isFetching || refreshMutation.isPending;
 
   return (
-    <SettingsSectionShell
-      title="Provider usage"
-      action={
-        <Button
-          size="xs"
-          variant="outline"
-          className="shrink-0"
-          disabled={isRefreshing}
-          onClick={() => refreshMutation.mutate()}
-        >
-          <RotateCcwIcon className={cn("size-3.5", isRefreshing && "animate-spin")} />
-          Refresh
-        </Button>
-      }
-    >
-      {showInitialLoading ? (
-        <SettingsCard>
-          <div className="px-4 py-3.5 text-ui leading-snug text-muted-foreground">
-            Loading provider usage…
-          </div>
-        </SettingsCard>
-      ) : (
-        <div className="flex flex-col gap-3">
-          {cards.map((snapshot) => (
-            <ProviderUsageCard
-              key={snapshot.provider}
-              snapshot={snapshot}
-              threadRateLimits={threadRateLimits}
-              codexHomePath={codexHomePath}
+    <>
+      <SettingsSection title={`Sidebar · up to ${MAX_RAIL_USAGE_PROVIDERS}`}>
+        {PROVIDER_USAGE_PROVIDERS.map((provider) => {
+          const checked = railUsageProviders.includes(provider);
+          const name = providerUsageDisplayName(provider);
+          return (
+            <SettingsListRow
+              key={provider}
+              title={
+                <span className="flex items-center gap-2">
+                  <ProviderIcon provider={provider} className="size-4 shrink-0" />
+                  <span className="truncate">{name}</span>
+                </span>
+              }
+              actions={
+                <Switch
+                  checked={checked}
+                  disabled={!checked && railUsageFull}
+                  onCheckedChange={(next) =>
+                    updateSettings({
+                      railUsageProviders: toggleRailUsageProvider(
+                        railUsageProviders,
+                        provider,
+                        Boolean(next),
+                      ),
+                    })
+                  }
+                  aria-label={`Show ${name} usage at the bottom of the sidebar`}
+                />
+              }
             />
-          ))}
-        </div>
-      )}
+          );
+        })}
+        <SettingsListRow
+          title="Ring"
+          description="Show both limits as two rings, or a single ring for one of them."
+          actions={
+            <SettingsSegmentedControl
+              value={settings.railUsageWindow}
+              onValueChange={(value) => updateSettings({ railUsageWindow: value })}
+              ariaLabel="Sidebar usage ring"
+              options={RAIL_USAGE_WINDOW_OPTIONS}
+            />
+          }
+        />
+      </SettingsSection>
+      <SettingsSectionShell
+        title="Provider usage"
+        action={
+          <Button
+            size="xs"
+            variant="outline"
+            className="shrink-0"
+            disabled={isRefreshing}
+            onClick={() => refreshMutation.mutate()}
+          >
+            <RotateCcwIcon className={cn("size-3.5", isRefreshing && "animate-spin")} />
+            Refresh
+          </Button>
+        }
+      >
+        {showInitialLoading ? (
+          <SettingsCard>
+            <div className="px-4 py-3.5 text-ui leading-snug text-muted-foreground">
+              Loading provider usage…
+            </div>
+          </SettingsCard>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {cards.map((snapshot) => (
+              <ProviderUsageCard
+                key={snapshot.provider}
+                snapshot={snapshot}
+                threadRateLimits={threadRateLimits}
+                codexHomePath={codexHomePath}
+              />
+            ))}
+          </div>
+        )}
 
-      <p className="px-2 text-ui-sm leading-relaxed text-muted-foreground">
-        Usage is read locally from each provider CLI&apos;s stored credentials and fetched directly
-        from the provider. The list follows whatever you are signed into; unsigned providers stay
-        visible until any account is connected, then drop away. Short-lived tokens are refreshed
-        through the provider&apos;s own CLI or official token endpoint.
-      </p>
-    </SettingsSectionShell>
+        <p className="px-2 text-ui-sm leading-relaxed text-muted-foreground">
+          Usage is read locally from each provider CLI&apos;s stored credentials and fetched
+          directly from the provider. The list follows whatever you are signed into; unsigned
+          providers stay visible until any account is connected, then drop away. Short-lived tokens
+          are refreshed through the provider&apos;s own CLI or official token endpoint.
+        </p>
+      </SettingsSectionShell>
+    </>
   );
 }

@@ -1,12 +1,14 @@
 // FILE: OpenThreadTabStrip.tsx
 // Purpose: Browser-style tabs for the open threads, shown in the chat header in place of
-//          the thread title. Tabs are comfortable while few are open, shrink together as
-//          more open, and scroll behind an edge fade once they reach their minimum width.
+//          the thread title. Owns what is specific to threads: which tabs exist, the close
+//          queue, the optimistic selection, renaming the active thread, and the tab's
+//          context menu (the sidebar's thread menu plus the tab's own close actions).
 // Layer: Chat header UI
-// Depends on: open-thread tab hooks/store and the shared SurfaceTabStrip + SurfaceTabChip.
+// Depends on: open-thread tab hooks/store, the shared SurfaceContentTabs, and the sidebar's
+//             thread context menu.
 
 import type { ProjectId, ThreadId } from "@synara/contracts";
-import { type CSSProperties, useRef, useState } from "react";
+import { useState } from "react";
 
 import { useHandleNewThread } from "~/hooks/useHandleNewThread";
 import {
@@ -17,29 +19,30 @@ import {
 } from "~/hooks/useOpenThreadTabs";
 import { useOptimisticTabSelection } from "~/hooks/useOptimisticTabSelection";
 import { TerminalIcon } from "~/lib/icons";
-import { cn } from "~/lib/utils";
-import { createOpenThreadTabCloseQueue, replaceLastTabWithFreshChat } from "~/openThreadTabs.logic";
+import { showThreadContextMenu } from "~/lib/threadContextMenu";
+import { readNativeApi } from "~/nativeApi";
+import {
+  closeOpenThreadTab,
+  closeOpenThreadTabs,
+  createOpenThreadTabCloseQueue,
+  type OpenThreadTab,
+  type OpenThreadTabCloseScope,
+  replaceLastTabWithFreshChat,
+  resolveOpenThreadTabsInCloseScope,
+} from "~/openThreadTabs.logic";
 import { useOpenThreadTabsStore } from "~/openThreadTabsStore";
 
 import { ProviderIcon } from "../ProviderIcon";
+import { ThreadRunningSpinner } from "../ThreadRunningSpinner";
 import { toastManager } from "../ui/toast";
-import { SurfaceTabChip, SurfaceTabStrip } from "./chatHeaderControls";
+import { SurfaceContentTabs } from "./SurfaceContentTabs";
 
-// Tab width in `em` of the chip's own UI font, so it scales with the font size chosen in
-// Settings: every tab starts at a comfortable basis and shrinks evenly with the rest down
-// to a floor that still fits the icon, a few characters, and the close button. Past the
-// floor the strip scrolls instead of crushing the tabs further. The floor never exceeds
-// the strip itself, so a strip squeezed by a narrow window still shows one whole tab.
-const OPEN_THREAD_TAB_SIZE_CLASS_NAME = "min-w-[min(9em,100%)] grow-0 shrink basis-[18em]";
-const OPEN_THREAD_TAB_FROZEN_SIZE_CLASS_NAME =
-  "min-w-0 grow-0 shrink-0 basis-[var(--open-thread-tab-frozen-width)]";
-// The strip sits on the rail's shell band, above the chat card. The active tab takes the
-// card's own surface, so it reads as the open thread rather than as a hovered tab (hover
-// tints with ink; the shared chip's active fill is the same tint in light themes). Its
-// hairline is inset: the tab fills its scroll strip edge to edge, and the strip's overflow
-// and fade mask would crop an outer outline along the top, bottom, and first tab's left.
-const OPEN_THREAD_TAB_ACTIVE_CLASS_NAME =
-  "bg-[var(--color-background-surface)] hover:bg-[var(--color-background-surface)] shadow-[inset_0_0_0_0.5px_var(--app-rail-inset-border)]";
+const CLOSE_TABS_MENU_ID_PREFIX = "close-tabs:";
+const CLOSE_TABS_MENU_ROWS: readonly { scope: OpenThreadTabCloseScope; label: string }[] = [
+  { scope: "left", label: "Close Tabs to the Left" },
+  { scope: "right", label: "Close Tabs to the Right" },
+  { scope: "others", label: "Close Other Tabs" },
+];
 
 export function OpenThreadTabStrip(props: {
   activeThreadId: ThreadId;
@@ -49,16 +52,13 @@ export function OpenThreadTabStrip(props: {
   useRecordOpenThreadTab(activeThreadId);
   const tabs = useOpenThreadTabs({ activeThreadId });
   const closeThreadTab = useOpenThreadTabsStore((state) => state.closeThreadTab);
+  const pruneThreadTabs = useOpenThreadTabsStore((state) => state.pruneThreadTabs);
+  const moveThreadTab = useOpenThreadTabsStore((state) => state.moveThreadTab);
   const activateThreadTab = useActivateThreadTab();
   const { handleNewThread, projects } = useHandleNewThread();
   const readRouteThreadId = useReadRouteThreadId();
   const [enqueueClose] = useState(createOpenThreadTabCloseQueue);
-  const navRef = useRef<HTMLElement>(null);
-  // Closing tabs with the pointer keeps the survivors at their current width until the
-  // pointer leaves the strip (like browser tabs), so the next X lands under the cursor
-  // instead of the widened neighbour's title.
-  const [frozenTabWidthPx, setFrozenTabWidthPx] = useState<number | null>(null);
-  // The tab being switched to paints as active at once, like a pressed sidebar row; the
+  // The clicked tab paints as active at once, like a selected sidebar row; the
   // thread itself (a whole chat to render) follows once that frame is on screen.
   const {
     shownKey: shownThreadId,
@@ -70,21 +70,11 @@ export function OpenThreadTabStrip(props: {
     activate: activateThreadTab,
   });
 
-  const freezeTabWidths = () => {
-    const nav = navRef.current;
-    // Every tab shares one width (same basis and floor), so any of them measures it.
-    const tab = nav?.querySelector<HTMLElement>("[data-surface-tab]");
-    if (nav?.matches(":hover") && tab) {
-      setFrozenTabWidthPx(tab.getBoundingClientRect().width);
-    }
-  };
-
   const closeTab = (threadId: ThreadId, projectId: ProjectId) => {
     cancelTabSelection();
-    freezeTabWidths();
     void enqueueClose(() => {
       const openThreadIds = useOpenThreadTabsStore.getState().threadIds;
-      return {
+      return closeOpenThreadTab({
         // The tabs as clicked, minus any an earlier queued close has since dropped.
         tabs: tabs.filter((tab) => openThreadIds.includes(tab.threadId)),
         closedThreadId: threadId,
@@ -103,7 +93,7 @@ export function OpenThreadTabStrip(props: {
           });
         }),
         readRouteThreadId,
-      };
+      });
     }).then((result) => {
       if (!result.ok) {
         toastManager.add({
@@ -115,58 +105,95 @@ export function OpenThreadTabStrip(props: {
     });
   };
 
+  const closeTabsInScope = (anchorThreadId: ThreadId, scope: OpenThreadTabCloseScope) => {
+    cancelTabSelection();
+    void enqueueClose(() => {
+      const openThreadIds = useOpenThreadTabsStore.getState().threadIds;
+      return closeOpenThreadTabs({
+        closedThreadIds: resolveOpenThreadTabsInCloseScope(
+          // The tabs as right-clicked, minus any an earlier queued close has since dropped.
+          tabs.filter((tab) => openThreadIds.includes(tab.threadId)),
+          anchorThreadId,
+          scope,
+        ),
+        keptThreadId: anchorThreadId,
+        activeThreadId: readRouteThreadId(),
+        closeTabs: (threadIds) => pruneThreadTabs((threadId) => !threadIds.includes(threadId)),
+        openTab: activateThreadTab,
+        readRouteThreadId,
+      });
+    });
+  };
+
+  const openTabContextMenu = (tab: OpenThreadTab, position: { x: number; y: number }) => {
+    // Plain rows in a group of their own, like a browser's tab menu. Only the scopes that
+    // have tabs in them are listed: none on a lone tab, and no left (or right) row on the
+    // first (or last) tab.
+    const closeItems = CLOSE_TABS_MENU_ROWS.filter(
+      (row) => resolveOpenThreadTabsInCloseScope(tabs, tab.threadId, row.scope).length > 0,
+    ).map((row, index) => ({
+      id: `${CLOSE_TABS_MENU_ID_PREFIX}${row.scope}`,
+      label: row.label,
+      separatorBefore: index === 0,
+    }));
+    const onCloseAction = (itemId: string) => {
+      const row = CLOSE_TABS_MENU_ROWS.find(
+        (candidate) => itemId === `${CLOSE_TABS_MENU_ID_PREFIX}${candidate.scope}`,
+      );
+      if (row) closeTabsInScope(tab.threadId, row.scope);
+    };
+    if (
+      !tab.isDraft &&
+      showThreadContextMenu(tab.threadId, position, {
+        extraItems: closeItems,
+        onExtraAction: onCloseAction,
+      })
+    ) {
+      return;
+    }
+    // An unsent draft has no thread actions yet (and a phone's closed sidebar sheet cannot
+    // show them): the menu is just the tab's close rows.
+    const api = readNativeApi();
+    if (!api || closeItems.length === 0) return;
+    void api.contextMenu.show(closeItems, position).then((itemId) => {
+      if (itemId) onCloseAction(itemId);
+    });
+  };
+
   return (
-    <nav
-      ref={navRef}
-      aria-label="Open threads"
-      className="flex min-w-0 flex-1"
-      style={
-        frozenTabWidthPx === null
-          ? undefined
-          : ({ "--open-thread-tab-frozen-width": `${frozenTabWidthPx}px` } as CSSProperties)
-      }
-      onPointerLeave={() => setFrozenTabWidthPx(null)}
-    >
-      <SurfaceTabStrip activeKey={shownThreadId} dividers className="flex-1">
-        {tabs.map((tab) => {
-          const active = tab.threadId === shownThreadId;
-          // A lone unsent draft has nowhere to go: closing it would land on a new chat
-          // that is the same draft again.
-          const closable = tabs.length > 1 || !tab.isDraft;
-          return (
-            <SurfaceTabChip
-              key={tab.threadId}
-              active={active}
-              closePlacement="trailing"
-              selectionAria="current"
-              selectOnPointerDown
-              className={cn(
-                frozenTabWidthPx === null
-                  ? OPEN_THREAD_TAB_SIZE_CLASS_NAME
-                  : OPEN_THREAD_TAB_FROZEN_SIZE_CLASS_NAME,
-                active && OPEN_THREAD_TAB_ACTIVE_CLASS_NAME,
-              )}
-              title={tab.title}
-              label={tab.title}
-              icon={
-                tab.isTerminal ? (
-                  <TerminalIcon className="size-3.5 text-[var(--color-text-accent)]" />
-                ) : (
-                  <ProviderIcon provider={tab.provider} tone="header" className="size-3.5" />
-                )
-              }
-              closeLabel={`Close ${tab.title}`}
-              onSelect={() => {
-                if (!active) selectTab(tab.threadId);
-              }}
-              onClose={closable ? () => closeTab(tab.threadId, tab.projectId) : undefined}
-              onLabelDoubleClick={
-                tab.threadId === activeThreadId ? props.onRenameActiveThread : undefined
-              }
-            />
-          );
-        })}
-      </SurfaceTabStrip>
-    </nav>
+    <SurfaceContentTabs
+      ariaLabel="Open threads"
+      activeKey={shownThreadId}
+      selectionAria="current"
+      onMove={moveThreadTab}
+      tabs={tabs.map((tab) => {
+        const active = tab.threadId === shownThreadId;
+        // A lone unsent draft has nowhere to go: closing it would land on a new chat
+        // that is the same draft again.
+        const closable = tabs.length > 1 || !tab.isDraft;
+        return {
+          key: tab.threadId,
+          title: tab.title,
+          icon:
+            // A running thread spins in place of its glyph, like its sidebar row.
+            tab.isRunning ? (
+              <span role="img" aria-label="Working" className="inline-flex">
+                <ThreadRunningSpinner className="size-3.5" />
+              </span>
+            ) : tab.isTerminal ? (
+              <TerminalIcon className="size-3.5 text-[var(--color-text-accent)]" />
+            ) : (
+              <ProviderIcon provider={tab.provider} className="size-3.5" />
+            ),
+          onSelect: () => {
+            if (!active) selectTab(tab.threadId);
+          },
+          onClose: closable ? () => closeTab(tab.threadId, tab.projectId) : undefined,
+          onTitleDoubleClick:
+            tab.threadId === activeThreadId ? props.onRenameActiveThread : undefined,
+          onContextMenu: (position) => openTabContextMenu(tab, position),
+        };
+      })}
+    />
   );
 }

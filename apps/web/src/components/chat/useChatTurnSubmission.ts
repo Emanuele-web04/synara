@@ -4,7 +4,8 @@ import {
   prepareComputerPermissionGuide,
   readLocalComputerPermissionBridge,
 } from "~/lib/computerProvisioning";
-import { useCallback } from "react";
+import { useCallback, useLayoutEffect, useRef } from "react";
+import { hasActiveComposerSend } from "~/lib/composerSendOwnership";
 import {
   filterPromptProviderMentionReferences,
   filterPromptSkillReferences,
@@ -186,7 +187,13 @@ export function useChatTurnSubmission({
   runProjectScript,
   persistThreadSettingsForNextTurn,
 }: ChatTurnSubmissionInput) {
+  const anchorSentMessagesToTopRef = useRef(settings.anchorSentMessagesToTop);
+  useLayoutEffect(() => {
+    anchorSentMessagesToTopRef.current = settings.anchorSentMessagesToTop;
+  }, [settings.anchorSentMessagesToTop]);
+
   const executePreparedTurn = useChatTurnExecution({
+    activeThreadIdRef,
     isServerThread,
     setStoreThreadWorkspace,
     clearLocalDispatchWorktreeSetup,
@@ -209,14 +216,6 @@ export function useChatTurnSubmission({
     failLocalDispatchWorktreeSetup,
     setOptimisticUserMessages,
     promptRef,
-    composerImagesRef,
-    composerFilesRef,
-    composerAssistantSelectionsRef,
-    composerBrowserAnnotationsRef,
-    composerFileCommentsRef,
-    composerTerminalContextsRef,
-    composerPastedTextsRef,
-    composerPullRequestContextsRef,
     setPrompt,
     setComposerCursor,
     addComposerImagesToDraft,
@@ -256,6 +255,7 @@ export function useChatTurnSubmission({
         !api ||
         !lateSendHandlers ||
         !activeThread ||
+        hasActiveComposerSend(activeThread.id) ||
         activeThread.claudeCacheReview != null ||
         activeThread.sidechatExpiredAt ||
         isSendBusy ||
@@ -849,13 +849,16 @@ export function useChatTurnSubmission({
           source: "native",
         },
       ]);
-      // Mark the transcript as anchored before the optimistic row lands. The tail
-      // anchor sizes the spacer that lets this message sit at the viewport top,
-      // and its hook owns the slide; auto-follow stays armed for bookkeeping but
-      // pauses until the in-flight flag clears.
+      // Always follow the sent message. When anchoring is enabled, its hook owns
+      // the slide to the top; otherwise normal auto-follow keeps the tail visible.
+      // Read the current preference after async preflight so toggling it during
+      // preparation cannot leave an invisible anchor owning the scroll.
       armTranscriptAutoFollow(threadIdForSend, true);
-      tailAnchorScrollInFlightRef.current = true;
-      setTailAnchor({ threadId: threadIdForSend, messageId: messageIdForSend });
+      const anchorSentMessage = anchorSentMessagesToTopRef.current;
+      tailAnchorScrollInFlightRef.current = anchorSentMessage;
+      setTailAnchor(
+        anchorSentMessage ? { threadId: threadIdForSend, messageId: messageIdForSend } : null,
+      );
 
       setThreadError(threadIdForSend, null);
       if (expiredTerminalContextCount > 0) {

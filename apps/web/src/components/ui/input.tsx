@@ -4,7 +4,7 @@ import { Input as InputPrimitive } from "@base-ui/react/input";
 import { forwardRef, type ComponentPropsWithoutRef } from "react";
 
 import { cn } from "~/lib/utils";
-import { SOFT_SURFACE_FILL_CLASS_NAME } from "~/surfaceStyles";
+import { SOFT_SURFACE_FILL_CLASS_NAME, GLASS_RAISED_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 
 type InputProps = Omit<ComponentPropsWithoutRef<typeof InputPrimitive>, "size"> & {
   size?: "sm" | "default" | "lg" | number;
@@ -46,7 +46,7 @@ const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
   // wrapper renders without a `class` attribute at all (unstyled callers).
   const controlClassName = cn(
     !unstyled &&
-      "relative inline-flex w-full min-h-9 items-center rounded-lg border border-border bg-background text-ui text-foreground has-aria-invalid:border-destructive/30 has-focus-visible:has-aria-invalid:border-destructive/50 has-focus-visible:border-foreground/30 has-autofill:bg-foreground/4 has-disabled:opacity-64 sm:min-h-8 sm:text-ui dark:bg-input/32 dark:has-autofill:bg-foreground/8",
+      `${GLASS_RAISED_SURFACE_CLASS_NAME} relative inline-flex w-full min-h-9 items-center rounded-lg border border-border bg-background text-ui text-foreground has-aria-invalid:border-destructive/30 has-focus-visible:has-aria-invalid:border-destructive/50 has-focus-visible:border-foreground/30 has-autofill:bg-foreground/4 has-disabled:opacity-64 sm:min-h-8 sm:text-ui dark:bg-input/32 dark:has-autofill:bg-foreground/8`,
     size === "sm" && "min-h-8 sm:min-h-7",
     size === "lg" && "min-h-10 sm:min-h-9",
     variant === "soft" && SOFT_SURFACE_FILL_CLASS_NAME,

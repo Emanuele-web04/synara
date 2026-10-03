@@ -1,5 +1,7 @@
 import { Schema } from "effect";
 import type {
+  LoadProjectImportHistoryInput,
+  LoadProjectImportHistoryResult,
   ImportProjectInput,
   ImportProjectResult,
   ListProjectImportsInput,
@@ -293,6 +295,8 @@ import type {
   ServerStopLocalServerResult,
   ServerUpdateSettingsInput,
   ServerUpdateSettingsResult,
+  ServerEditKeybindingsInput,
+  ServerEditKeybindingsResult,
   ServerUpsertKeybindingInput,
   ServerUpsertKeybindingResult,
   ServerVoicePrewarmInput,
@@ -376,12 +380,19 @@ export interface ContextMenuItem<T extends string = string> {
   destructive?: boolean;
   /** Central icon basename from the reversed set (e.g. `"pencil"`) or inline `<svg>` markup. */
   icon?: string;
+  /**
+   * Opens a submenu instead of resolving this row. Related actions (handoff targets, copy
+   * variants, fork targets) belong in one parent row rather than a flat run of siblings.
+   * Only leaf ids are ever returned; the parent `id` just identifies the group.
+   */
+  children?: readonly ContextMenuItem<T>[];
 }
 
 /** Context menu row sent over the desktop bridge with its icon pre-rasterized by the renderer. */
 export interface DesktopContextMenuItem<T extends string = string> extends ContextMenuItem<T> {
   /** `data:image/png;base64,` template image rendered at 2x for a 16pt menu icon. */
   iconDataUrl?: string;
+  children?: readonly DesktopContextMenuItem<T>[];
 }
 
 export type DesktopUpdateStatus =
@@ -399,10 +410,12 @@ export type DesktopTheme = "light" | "dark" | "system";
 
 /** Largest desktop blur radius the translucent window shell accepts, in points. */
 export const DESKTOP_WINDOW_BLUR_RADIUS_MAX = 64;
+/** Smallest one: an unblurred desktop behind a clear window reads as a hole, not as glass. */
+export const DESKTOP_WINDOW_BLUR_RADIUS_MIN = 1;
 
 /**
  * Window backing the renderer asks for. `translucent` removes macOS vibrancy and sets the
- * desktop blur to `blurRadius` (0 shows the desktop unblurred); `opaque` restores vibrancy.
+ * desktop blur to `blurRadius`; `opaque` restores vibrancy and ignores `blurRadius`.
  */
 export interface DesktopWindowMaterial {
   material: "opaque" | "translucent";
@@ -797,7 +810,7 @@ export type DesktopAudioLevelSource = "system" | "microphone" | "both";
 
 /**
  * Whether the desktop is reading audio levels. "unsupported" means this host
- * can never provide them (not macOS, or a Stable build); "unavailable" means
+ * can never provide them (not macOS); "unavailable" means
  * the reader failed, for example on macOS before 14.2 or without microphone
  * access.
  */
@@ -900,9 +913,9 @@ export interface DesktopBridge {
   };
   /**
    * Loudness of the Mac's audio output and/or the microphone, in 0..1, for the
-   * message trail. Beta desktop on macOS only; the main process refuses it
-   * elsewhere. Levels stream only while this window has a source set (`null`
-   * stops), and silence arrives once as 0.
+   * message trail. Desktop on macOS only, in Stable and Beta; the main process
+   * refuses it elsewhere. Levels stream only while this window has a source set
+   * (`null` stops), and silence arrives once as 0.
    */
   audioLevel?: {
     setSource: (source: DesktopAudioLevelSource | null) => Promise<DesktopAudioLevelStatus>;
@@ -1192,6 +1205,7 @@ export interface NativeApi {
       input: ServerVoiceTranscriptionInput,
     ) => Promise<ServerVoiceTranscriptionResult>;
     upsertKeybinding: (input: ServerUpsertKeybindingInput) => Promise<ServerUpsertKeybindingResult>;
+    editKeybindings: (input: ServerEditKeybindingsInput) => Promise<ServerEditKeybindingsResult>;
   };
   stats: {
     getProfileStats: (input: StatsGetProfileStatsInput) => Promise<StatsGetProfileStatsResult>;
@@ -1225,6 +1239,9 @@ export interface NativeApi {
     ) => Promise<OrchestrationImportThreadResult>;
     listProjectImports: (input: ListProjectImportsInput) => Promise<ListProjectImportsResult>;
     importProject: (input: ImportProjectInput) => Promise<ImportProjectResult>;
+    loadProjectImportHistory: (
+      input: LoadProjectImportHistoryInput,
+    ) => Promise<LoadProjectImportHistoryResult>;
     regenerateThreadTitle: (
       input: OrchestrationRegenerateThreadTitleInput,
     ) => Promise<OrchestrationRegenerateThreadTitleResult>;

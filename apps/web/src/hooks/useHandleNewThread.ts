@@ -9,6 +9,7 @@ import {
   useAppSettings,
 } from "../appSettings";
 import { prefetchModelsForNewThread } from "../lib/providerModelPrefetch";
+import { hasActiveComposerSend } from "../lib/composerSendOwnership";
 import { useProviderStatusesForLocalConfig } from "../hooks/useProviderStatusesForLocalConfig";
 import {
   hasReconciledServerProviderStatuses,
@@ -192,12 +193,14 @@ export function useHandleNewThread() {
     const storedDraftThread =
       !shouldForceFreshThread &&
       !wantsTemporaryThread &&
+      !(storedDraftThreadCandidate && hasActiveComposerSend(storedDraftThreadCandidate.threadId)) &&
       storedDraftThreadCandidate?.isTemporary !== true
         ? storedDraftThreadCandidate
         : null;
     const latestActiveDraftThread: DraftThreadState | null =
       !shouldForceFreshThread &&
       !wantsTemporaryThread &&
+      !(focusedThreadId && hasActiveComposerSend(focusedThreadId)) &&
       latestActiveDraftThreadCandidate?.isTemporary !== true
         ? latestActiveDraftThreadCandidate
         : null;

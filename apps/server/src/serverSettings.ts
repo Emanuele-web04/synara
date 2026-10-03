@@ -66,6 +66,8 @@ export interface ServerSettingsShape {
   readonly getSnapshot: Effect.Effect<ServerSettingsSnapshot, ServerSettingsError>;
   readonly updateSettings: (
     patch: ServerSettingsPatch,
+    // Server-owned preparation may derive its patch inside the write lock.
+    derivePatch?: (current: ServerSettings) => ServerSettingsPatch,
   ) => Effect.Effect<ServerSettings, ServerSettingsError>;
   readonly updateSettingsView: (
     patch: ServerSettingsPatch,
@@ -143,10 +145,17 @@ export class ServerSettingsService extends ServiceMap.Service<
         const projectSettings = (settings: ServerSettings) =>
           resolveTextGenerationProvider(gateBetaOnlyProviders(settings));
         const getSettings = Ref.get(currentSettingsRef).pipe(Effect.map(projectSettings));
-        const updateSettings = (patch: ServerSettingsPatch) =>
+        const updateSettings = (
+          patch: ServerSettingsPatch,
+          derivePatch?: (current: ServerSettings) => ServerSettingsPatch,
+        ) =>
           Ref.get(currentSettingsRef).pipe(
             Effect.flatMap((currentSettings) =>
-              normalizeSettings("<memory>", currentSettings, patch),
+              normalizeSettings(
+                "<memory>",
+                currentSettings,
+                derivePatch?.(projectSettings(currentSettings)) ?? patch,
+              ),
             ),
             Effect.tap((nextSettings) => Ref.set(currentSettingsRef, nextSettings)),
             Effect.tap(() => Ref.update(revisionRef, (revision) => revision + 1)),
@@ -1158,7 +1167,10 @@ const makeServerSettings = Effect.gen(function* () {
   const projectSettings = (settings: ServerSettings) =>
     resolveTextGenerationProvider(gateBetaOnlyProviders(settings));
   const getSettings = Ref.get(settingsRef).pipe(Effect.map(projectSettings));
-  const updateSettings = (patch: ServerSettingsPatch) =>
+  const updateSettings = (
+    initialPatch: ServerSettingsPatch,
+    derivePatch?: (current: ServerSettings) => ServerSettingsPatch,
+  ) =>
     writeSemaphore.withPermits(1)(
       Effect.gen(function* () {
         const providerSecretSnapshots: ProviderSecretSnapshots = new Map();
@@ -1167,6 +1179,7 @@ const makeServerSettings = Effect.gen(function* () {
           Effect.gen(function* () {
             const disk = yield* loadSettingsFromDisk(providerPasswordSnapshots);
             const current = disk.settings;
+            const patch = derivePatch?.(projectSettings(current)) ?? initialPatch;
             for (const provider of EXTERNAL_SERVER_PROVIDERS) {
               const password = patch.providers?.[provider]?.serverPassword;
               if (password !== undefined) {

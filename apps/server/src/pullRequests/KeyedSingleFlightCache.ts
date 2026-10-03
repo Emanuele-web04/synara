@@ -1,4 +1,4 @@
-import { Deferred, Effect, Exit, Fiber, Scope, Semaphore } from "effect";
+import { Deferred, Effect, Exit, Fiber, Option, Scope, Semaphore } from "effect";
 
 export interface KeyedSingleFlightCacheOptions<A> {
   readonly maxEntries: number;
@@ -11,6 +11,8 @@ export interface KeyedSingleFlightCache<A, E> {
    * Cancelling one caller only cancels the computation when it was the final waiter.
    */
   readonly get: <R>(key: string, load: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+  /** Returns only an already fresh value; never starts or joins remote work. */
+  readonly getCached: (key: string) => Effect.Effect<Option.Option<A>>;
   /** Invalidates one key without allowing older work to repopulate it. */
   readonly invalidate: (key: string) => Effect.Effect<void>;
   /** Invalidates only matching keys, including keys which currently have in-flight work. */
@@ -152,22 +154,26 @@ export const makeKeyedSingleFlightCache = <A, E>(
         )
         .pipe(Effect.flatMap((fiber) => (fiber === null ? Effect.void : Fiber.interrupt(fiber))));
 
+    const readCached = (key: string): Option.Option<A> => {
+      const cached = cache.get(key);
+      if (cached && cached.expiresAt <= Date.now()) {
+        deleteCached(key);
+      } else if (cached && generations.get(key) === cached.generation) {
+        // Touch on read so the bounded map behaves as a tiny LRU.
+        cache.delete(key);
+        cache.set(key, cached);
+        return Option.some(cached.value);
+      }
+      return Option.none();
+    };
+
     const get: KeyedSingleFlightCache<A, E>["get"] = (key, load) =>
       Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           const selection = yield* lock.withPermits(1)(
             Effect.gen(function* () {
-              const now = Date.now();
-              const cached = cache.get(key);
-              if (cached && cached.expiresAt <= now) {
-                deleteCached(key);
-              } else if (cached && generations.get(key) === cached.generation) {
-                // Touch on read so the bounded map behaves as a tiny LRU rather than evicting a
-                // frequently used key solely because it was inserted early.
-                cache.delete(key);
-                cache.set(key, cached);
-                return { _tag: "cached" as const, value: cached.value };
-              }
+              const cached = readCached(key);
+              if (Option.isSome(cached)) return { _tag: "cached" as const, value: cached.value };
 
               const generation = generationFor(key);
               const inFlightKey = `${generation}\u0000${key}`;
@@ -233,6 +239,7 @@ export const makeKeyedSingleFlightCache = <A, E>(
 
     return {
       get,
+      getCached: (key) => lock.withPermits(1)(Effect.sync(() => readCached(key))),
       invalidate,
       invalidateWhere,
       invalidateAll: lock.withPermits(1)(

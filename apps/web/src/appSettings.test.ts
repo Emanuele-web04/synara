@@ -367,6 +367,14 @@ describe("isGitTextGenerationSettingsDirty", () => {
   });
 });
 
+describe("code review sort", () => {
+  it("defaults existing settings to newest and preserves a stored activity order", () => {
+    const decode = Schema.decodeUnknownSync(AppSettingsSchema);
+    expect(decode({}).githubInboxSort).toBe("created");
+    expect(decode({ githubInboxSort: "updated" }).githubInboxSort).toBe("updated");
+  });
+});
+
 describe("removed settings", () => {
   it("ignores a code review list width stored before widths became fractions", () => {
     const decoded = Schema.decodeUnknownSync(AppSettingsSchema)({
@@ -375,13 +383,6 @@ describe("removed settings", () => {
     });
     expect(decoded).not.toHaveProperty("githubInboxListWidth");
     expect(decoded.githubInboxKind).toBe("issue");
-  });
-});
-
-describe("sidebar layout", () => {
-  it("decodes settings without a layout choice as the rail default", () => {
-    const decoded = Schema.decodeUnknownSync(AppSettingsSchema)({ showChatsSection: false });
-    expect(normalizeStoredAppSettings(decoded).sidebarLayout).toBe("rail");
   });
 });
 
@@ -1870,6 +1871,28 @@ describe("provider-indexed custom model settings", () => {
 });
 
 describe("AppSettingsSchema", () => {
+  it("keeps sent-message anchoring enabled for settings saved before the preference existed", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+
+    expect(decode(JSON.stringify({ chatFontSizePx: 17 }))).toMatchObject({
+      anchorSentMessagesToTop: true,
+      chatFontSizePx: 17,
+    });
+  });
+
+  it("preserves disabled sent-message anchoring across persistence until defaults are restored", () => {
+    const codec = Schema.fromJsonString(AppSettingsSchema);
+    const decode = Schema.decodeSync(codec);
+    const defaults = decode("{}");
+    const settings = applyLocalAppSettingsPatch(defaults, { anchorSentMessagesToTop: false });
+    const restored = decode(Schema.encodeSync(codec)(settings));
+
+    expect(restored).toMatchObject({ anchorSentMessagesToTop: false });
+    expect(applyLocalAppSettingsPatch(restored, defaults)).toMatchObject({
+      anchorSentMessagesToTop: true,
+    });
+  });
+
   it("opens Tasks as the list until the user picks the Kanban view", () => {
     const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
     expect(decode(JSON.stringify({})).tasksViewMode).toBe("list");
@@ -1935,20 +1958,24 @@ describe("AppSettingsSchema", () => {
       JSON.stringify({
         hiddenProviders: ["some-future-provider", "codex"],
         providerOrder: ["gemini", "codex"],
+        railUsageProviders: ["some-future-provider", "codex", "gemini"],
+        chatFontSizePx: 17,
       }),
     );
 
     expect(decoded).toMatchObject({
       hiddenProviders: ["codex"],
       providerOrder: ["antigravity", "codex"],
+      railUsageProviders: ["codex", "antigravity"],
+      chatFontSizePx: 17,
     });
   });
 
-  it("drops rail and nav ids this build does not know instead of resetting every setting", () => {
+  it("drops rail ids this build does not know and ignores the retired classic-sidebar keys", () => {
     const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
     const decoded = decode(
       JSON.stringify({
-        sidebarLayout: "rail",
+        sidebarLayout: "classic",
         railItemOrder: ["some-future-item", "kanban", "home"],
         hiddenRailItems: ["some-future-item", "studio"],
         sidebarNavOrder: ["some-future-item", "kanban"],
@@ -1957,12 +1984,13 @@ describe("AppSettingsSchema", () => {
     );
 
     expect(decoded).toMatchObject({
-      sidebarLayout: "rail",
       railItemOrder: ["kanban", "home"],
       hiddenRailItems: ["studio"],
-      sidebarNavOrder: ["kanban"],
-      hiddenSidebarNavItems: [],
     });
+    // Settings saved while the classic sidebar existed still decode; its keys are dropped.
+    expect(decoded).not.toHaveProperty("sidebarLayout");
+    expect(decoded).not.toHaveProperty("sidebarNavOrder");
+    expect(decoded).not.toHaveProperty("hiddenSidebarNavItems");
   });
 
   it("defaults the Environment panel closed and preserves an explicit open preference", () => {

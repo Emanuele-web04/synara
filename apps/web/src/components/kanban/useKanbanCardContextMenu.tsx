@@ -16,6 +16,7 @@ import { RenameThreadDialog } from "~/components/RenameThreadDialog";
 import { useCopyPathToClipboard, useCopyThreadIdToClipboard } from "~/hooks/useCopyToClipboard";
 import { deleteActiveThreadFromClient } from "~/lib/activeThreadDelete";
 import { gitRemoveWorktreeMutationOptions } from "~/lib/gitReactQuery";
+import { contextMenuGroup } from "~/lib/contextMenuGroup";
 import { THREAD_CONTEXT_MENU_ICONS } from "~/lib/contextMenuIcons";
 import { pinActionLabel } from "~/lib/pin";
 import { releaseOrphanedWorktreeAfterArchive } from "~/lib/archiveThreadWorktreeCleanup";
@@ -159,25 +160,36 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
                 },
               ]
             : []),
-          ...(workspacePath
-            ? [
-                {
-                  id: "copy-path",
-                  label: "Copy Path",
-                  icon: THREAD_CONTEXT_MENU_ICONS.copy,
-                  separatorBefore: true,
-                },
-              ]
-            : []),
-          ...(isThreadBacked
-            ? [
-                {
-                  id: "copy-thread-id",
-                  label: "Copy Thread ID",
-                  icon: THREAD_CONTEXT_MENU_ICONS.copy,
-                },
-              ]
-            : []),
+          ...contextMenuGroup(
+            {
+              id: "copy",
+              label: "Copy",
+              icon: THREAD_CONTEXT_MENU_ICONS.copy,
+              separatorBefore: true,
+            },
+            [
+              ...(workspacePath
+                ? [
+                    {
+                      id: "copy-path",
+                      label: "Path",
+                      standaloneLabel: "Copy Path",
+                      icon: THREAD_CONTEXT_MENU_ICONS.copy,
+                    },
+                  ]
+                : []),
+              ...(isThreadBacked
+                ? [
+                    {
+                      id: "copy-thread-id",
+                      label: "Thread ID",
+                      standaloneLabel: "Copy Thread ID",
+                      icon: THREAD_CONTEXT_MENU_ICONS.copy,
+                    },
+                  ]
+                : []),
+            ],
+          ),
           ...(isThreadActionCard
             ? [
                 {

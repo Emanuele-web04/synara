@@ -775,6 +775,7 @@ export function createWsNativeApi(): NativeApi {
         }
       },
       upsertKeybinding: (input) => transport.request(WS_METHODS.serverUpsertKeybinding, input),
+      editKeybindings: (input) => transport.request(WS_METHODS.serverEditKeybindings, input),
     },
     stats: {
       getProfileStats: (input) => transport.request(WS_METHODS.statsGetProfileStats, input),
@@ -811,6 +812,8 @@ export function createWsNativeApi(): NativeApi {
       listProjectImports: (input) =>
         transport.request(ORCHESTRATION_WS_METHODS.listProjectImports, input),
       importProject: (input) => transport.request(ORCHESTRATION_WS_METHODS.importProject, input),
+      loadProjectImportHistory: (input) =>
+        transport.request(ORCHESTRATION_WS_METHODS.loadProjectImportHistory, input),
       regenerateThreadTitle: (input) =>
         transport.request(ORCHESTRATION_WS_METHODS.regenerateThreadTitle, input, {
           timeoutMs: null,

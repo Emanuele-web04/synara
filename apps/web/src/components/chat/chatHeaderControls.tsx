@@ -11,9 +11,11 @@
 //      the chrome here keeps the row visually coherent and lets new controls opt in
 //      with one import instead of re-deriving the magic classes.
 
+import type { DraggableSyntheticListeners } from "@dnd-kit/core";
 import {
   forwardRef,
   type ComponentProps,
+  type CSSProperties,
   type MouseEvent,
   type ReactNode,
   useEffect,
@@ -218,6 +220,8 @@ const SURFACE_TAB_ACTIVE_SELECTOR = "[data-surface-tab-active]";
  *
  * `leading`/`trailing` flank the truncating label (e.g. an activity indicator or a
  * tab count badge); `labelClassName` lets a call site cap the label width.
+ *
+ * `sortable` makes the chip a drag-to-reorder item of a dnd-kit sortable strip.
  */
 export function SurfaceTabChip({
   icon,
@@ -231,10 +235,11 @@ export function SurfaceTabChip({
   closeLabel,
   closePlacement,
   selectionAria,
-  selectOnPointerDown,
   onSelect,
   onClose,
   onLabelDoubleClick,
+  onContextMenu,
+  sortable,
 }: {
   icon: ReactNode;
   label: ReactNode;
@@ -249,22 +254,30 @@ export function SurfaceTabChip({
   // Tool toggles announce selection as pressed; navigation tabs (one per route) as the
   // current page.
   selectionAria?: "pressed" | "current" | undefined;
-  // Select as the primary mouse button goes down instead of on release, like browser
-  // tabs: the switch starts a whole press earlier. Keyboard and touch still select on
-  // click.
-  selectOnPointerDown?: boolean | undefined;
   onSelect?: (() => void) | undefined;
   onClose?: (() => void) | undefined;
   onLabelDoubleClick?: (() => void) | undefined;
+  /** Opens the tab's own menu at the pointer, in place of the default context menu. */
+  onContextMenu?: ((position: { x: number; y: number }) => void) | undefined;
+  // Pointer activators only: dnd-kit's `attributes` would put a second role and tab stop
+  // on a chip whose buttons already carry them, and advertise a keyboard drag.
+  sortable?:
+    | {
+        setNodeRef: (node: HTMLElement | null) => void;
+        style: CSSProperties;
+        listeners: DraggableSyntheticListeners;
+      }
+    | undefined;
 }) {
   const trailingClose = closePlacement === "trailing";
-  // Set by a pointer-down select so the click that ends the same press does not select again.
-  const selectedByPointerDownRef = useRef(false);
   const handleClose = (event: MouseEvent) => {
     event.stopPropagation();
     onClose?.();
   };
-  const glyph = <span className="flex size-4 shrink-0 items-center justify-center">{icon}</span>;
+  // `relative` lets a call site overlay a second glyph on the slot (the reorder grip).
+  const glyph = (
+    <span className="relative flex size-4 shrink-0 items-center justify-center">{icon}</span>
+  );
   const labelClassNames = cn(
     "flex min-w-0 items-center gap-1.5 text-left",
     // Content tabs carry a title rather than a tool name, so they get a roomier chip.
@@ -293,6 +306,9 @@ export function SurfaceTabChip({
 
   return (
     <div
+      ref={sortable?.setNodeRef}
+      style={sortable?.style}
+      {...sortable?.listeners}
       data-surface-tab=""
       data-surface-tab-active={active ? "" : undefined}
       className={cn(
@@ -324,6 +340,14 @@ export function SurfaceTabChip({
             }
           : undefined
       }
+      onContextMenu={
+        onContextMenu
+          ? (event) => {
+              event.preventDefault();
+              onContextMenu({ x: event.clientX, y: event.clientY });
+            }
+          : undefined
+      }
     >
       {trailingClose ? null : onClose ? (
         <button
@@ -331,6 +355,7 @@ export function SurfaceTabChip({
           className={DOCK_TAB_ICON_SLOT_CLASS_NAME}
           aria-label={closeLabel}
           title={closeLabel}
+          onPointerDown={sortable ? (event) => event.stopPropagation() : undefined}
           onClick={handleClose}
         >
           <span
@@ -351,38 +376,8 @@ export function SurfaceTabChip({
           {...(selectionAria === "current"
             ? { "aria-current": active ? ("page" as const) : undefined }
             : { "aria-pressed": active })}
-          onPointerDown={
-            selectOnPointerDown
-              ? (event) => {
-                  if (
-                    event.pointerType !== "mouse" ||
-                    event.button !== 0 ||
-                    event.metaKey ||
-                    event.ctrlKey ||
-                    event.shiftKey ||
-                    event.altKey
-                  ) {
-                    return;
-                  }
-                  selectedByPointerDownRef.current = true;
-                  onSelect();
-                }
-              : undefined
-          }
-          // A press that ends off the tab never clicks; forget it so the next click selects.
-          onPointerLeave={
-            selectOnPointerDown
-              ? () => {
-                  selectedByPointerDownRef.current = false;
-                }
-              : undefined
-          }
           onClick={(event) => {
             event.stopPropagation();
-            if (selectedByPointerDownRef.current) {
-              selectedByPointerDownRef.current = false;
-              return;
-            }
             onSelect();
           }}
           onDoubleClick={onLabelDoubleClick}
@@ -413,6 +408,7 @@ export function SurfaceTabChip({
           )}
           aria-label={closeLabel}
           title={closeLabel}
+          onPointerDown={sortable ? (event) => event.stopPropagation() : undefined}
           onClick={handleClose}
         >
           <CentralIcon name="cross-small" className="size-4 shrink-0" />
@@ -472,20 +468,20 @@ export function SurfaceTabStrip({
   }, [activeKey]);
 
   // Wheel mice only emit vertical deltas; route them sideways while the strip overflows.
-  // Registered natively because React's wheel listener is passive and cannot cancel the
-  // page scroll.
+  // The listener stays passive: a cancelable one makes every wheel event, sideways trackpad
+  // swipes included, wait for the main thread, so the strip stalls whenever a chat is
+  // rendering. Events that carry a sideways delta are a trackpad gesture the browser is
+  // already scrolling; adding their vertical drift on top would fight it.
   useEffect(() => {
     const strip = stripRef.current;
     if (!strip) {
       return;
     }
     const onWheel = (event: WheelEvent) => {
-      if (event.ctrlKey || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
-      if (strip.scrollWidth <= strip.clientWidth) return;
-      event.preventDefault();
+      if (event.ctrlKey || event.deltaX !== 0 || event.deltaY === 0) return;
       strip.scrollLeft += event.deltaY;
     };
-    strip.addEventListener("wheel", onWheel, { passive: false });
+    strip.addEventListener("wheel", onWheel, { passive: true });
     return () => strip.removeEventListener("wheel", onWheel);
   }, []);
 
@@ -494,7 +490,7 @@ export function SurfaceTabStrip({
       ref={stripRef}
       {...props}
       className={cn(
-        "flex min-w-0 items-center gap-1 overflow-x-auto overflow-y-hidden overscroll-x-contain [scrollbar-width:none] scroll-fade-x [--scroll-fade-size:1.5rem] [&::-webkit-scrollbar]:hidden",
+        "flex min-w-0 items-center gap-1 overflow-x-auto overflow-y-hidden overscroll-contain [scrollbar-width:none] scroll-fade-x [--scroll-fade-size:1.5rem] [&::-webkit-scrollbar]:hidden",
         dividers && "surface-tab-dividers",
         className,
       )}

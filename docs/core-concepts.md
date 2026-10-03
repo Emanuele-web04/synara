@@ -18,13 +18,21 @@ work** — its conversation, provider session, working environment, tool activit
 A project can contain many tasks. Each task has its own transcript and provider lifecycle. Tasks
 using separate worktrees also have separate working directories and branches.
 
+New thread (⌘N on macOS, Ctrl+N elsewhere) reopens an unsent draft. Once a send is in progress,
+including worktree preparation, it opens another draft while the original send continues.
+The task appears in the sidebar before Git preparation finishes, with a **Preparing worktree**
+indicator. Its provider session starts only after the worktree is ready. If preparation fails or
+is cancelled, the task and its prompt remain available for retry.
+
 ## The main surfaces
 
-- **Sidebar** — projects, spaces, tasks, and activity requiring attention. The default rail layout
+- **Sidebar** — projects, spaces, tasks, and activity requiring attention. The rail
   is a fixed column of icon tabs for Home, Spaces, Kanban (Tasks in Beta), Code review, Automations, Hubs (Beta), and
   Settings, with the thread panel beside it and the route shown as a card inset from the window.
-  Open threads appear as tabs across the top of the chat. The classic single-column sidebar remains
-  available in Settings → General → Sidebar layout.
+  Open threads appear as tabs across the top of the chat.
+  Archiving the open thread or marking it **Done** opens the most recently used unfinished chat
+  across projects, ordered by its last human message (or creation time). If none remains, New
+  thread reopens an unsent draft. Actions on other threads keep the current chat open.
 - **Code review** — pull requests and issues from the GitHub repositories of your projects, with a
   detail pane and three actions on every item (see [Code review](#code-review))
 - **Tasks** (Beta; Stable keeps Kanban) — a to-do list for anything you need to do, with or without
@@ -35,6 +43,10 @@ using separate worktrees also have separate working directories and branches.
   without opening the chat, and show the agent's latest reply for review before you mark it done. A
   List / Kanban switch in the header opens the Kanban board instead, and the Tasks entry remembers
   the view you picked.
+- **Inbox** (Beta) — today’s due and overdue to-dos, tasks with an agent, and tasks finished
+  since the working day began at 4am, beside the day’s agent recap. Add a task here to make it due
+  on today’s calendar date, or select it to edit and delegate through the same card as Tasks.
+  **All tasks** opens the complete backlog.
 - **Conversation** — user messages, agent responses, plans, tools, approvals, and subagent activity
 - **Composer** — objectives, attachments, provider selection, model selection, and task controls
 - **Terminal** — a real shell opened in the task's working directory
@@ -49,6 +61,10 @@ running, what changed, whether the UI works, or whether the task is safe to ship
 ## Projects
 
 A project is the folder Synara works with.
+
+The project picker shows registered projects and local folders. Creating a task worktree does not
+add another project entry. If the current draft already uses an unregistered folder, the picker keeps
+that folder visible with its path.
 
 Git repositories unlock the complete delivery workflow:
 
@@ -77,6 +93,9 @@ A turn is one cycle inside that task:
 A long task can contain many turns. Keep follow-ups connected to the same objective; create another
 task when the work needs a different owner, branch, or review boundary.
 
+Turn off **Settings → General → Move sent messages to top** to keep new messages at the bottom
+of the conversation and follow replies as they stream.
+
 For work that should continue across several turns, set a deliberate
 [thread goal](https://www.trysynara.com/docs/features/thread-goals). A goal can continue after a
 clean turn, but queued user work, approvals, questions, interruptions, failures, and pause rules
@@ -87,6 +106,10 @@ the conversation or split from one exact turn. Use a
 [handoff](https://www.trysynara.com/docs/workflows/handoffs) when another provider should continue
 the same task and ownership boundary.
 
+Sidechats keep the source chat's project, folder, branch, and Local/Worktree environment. Their
+empty view shows the composer without the new-chat welcome screen or independent project, folder,
+branch, Local/Worktree, or Temporary controls.
+
 Sidechats inherit the source chat's selected permissions, including Full access. Approve for me
 is preserved when the selected provider and model support it; otherwise the sidechat uses Ask for
 approval. You can change a sidechat's permissions independently after creating it.
@@ -95,7 +118,8 @@ A sidechat can also stand alone, with no source chat: **Ask** on a Code review i
 that pull request or issue. It has no transcript to import and no permissions to inherit, so it
 starts in Ask for approval, runs in the project's own checkout without switching branches, and
 is told to treat the item's text as untrusted reference data. Like any sidechat it stays out of
-the thread list and expires after an hour of inactivity.
+the thread list and expires after an hour of inactivity. Its empty view likewise shows only the
+composer and keeps the workspace assigned by Code review.
 
 ## Code review
 
@@ -106,12 +130,22 @@ GitHub remotes. Two projects on one repository share one list. Filters (kind, pr
 involvement, labels) stay local and are remembered; GitHub is refreshed about every five minutes
 while the page is visible, on window focus, and with the refresh button.
 
+**Merged** narrows the loaded closed list to merged pull requests. Its counts reflect matching
+loaded rows, and its refresh uses the same closed cache. The first-50 cap applies to closed
+pull requests before this local filter, so it does not fetch a separate page of 50 merged items.
+
 Every item offers three actions:
 
 - **Send to agent** opens a new draft thread in the item's project with the item attached as a
-  card. For a pull request, Synara first checks out its branch (worktree or local, following
-  **Settings → General → New threads**). You write the instructions and send; nothing starts
-  on its own. When the repository belongs to several projects, you pick the project.
+  card. A pull request card passes its URL to the agent, without copying its description or
+  discussion into the prompt. Synara reuses an existing worktree for its branch. Otherwise it
+  checks out the branch using the project's Local/Worktree preference, falling back to
+  **Settings → General → New threads**. If that branch name belongs to a known different
+  fork's worktree, Local reports the conflict; choose Worktree to keep the two separate.
+  A progress notification shows checkout preparation and chat opening; background Git
+  refreshes do not delay the prepared draft. You write the instructions and send; nothing
+  starts on its own. When the repository belongs to several projects, you pick the project.
+
 - **Ask** opens a standalone sidechat about the item in a dock beside it, so you never leave
   Code review. Asking again reopens the item's live sidechat; `mod+alt+s` toggles it and Escape closes
   it. In a chat thread's pull request panel, Ask uses that thread's own sidechat instead.
@@ -198,6 +232,18 @@ The intended loop is:
 5. Commit only the intended changes.
 6. Push and open a pull request when appropriate.
 
+Create PR can include uncommitted changes and create a feature branch from the default branch.
+When you supply a PR title, Synara also uses it as the commit message unless a separate commit
+message was supplied. Providing both the title and description skips text generation for this flow.
+
+Failed commit, push, and PR actions show the failed step and a copyable error until dismissed.
+Each action keeps its own error details when you switch workspaces and start another action.
+Codex text generation stops on a terminal `ERROR: ... 401 Unauthorized` diagnostic; transport
+fallback warnings remain recoverable. Cleanup preserves a recognized authentication error even
+when its grace period extends past the request deadline, and reports termination failures. Check
+the selected account or provider credentials in Settings before retrying. A failed PR step can
+follow a successful commit or push, so inspect the current branch before retrying.
+
 Synara's checkpoint and revert controls can help recover task work, but committed Git history remains
 the strongest boundary for important changes.
 
@@ -207,7 +253,10 @@ A hub is a coordinated home for related work. You talk to one coordinator conver
 answers directly or starts threads (tasks) that run in parallel — in the hub's own folder or in
 linked repositories. Every thread in the hub receives the hub's instructions and memory, and
 files the threads deliver collect in a Git-versioned Library. A hub needs no repository, so it
-also suits non-code work. Read the [Hubs guide](./hubs.md) to set one up.
+also suits non-code work. Delegations preserve the original request and attachments, and durable
+task cards show their queue state and progress under the request. New Hubs run up to three workers
+at once by default; the General settings allow one to eight. Read the [Hubs guide](./hubs.md) to set
+one up.
 
 ## Parallel work
 

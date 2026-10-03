@@ -27,7 +27,7 @@ export function makePullRequestOperations(dependencies: {
     cwd: string,
     repository: string,
   ) => Effect.Effect<PullRequestDetail["mergeCapabilities"], unknown>;
-  withGitHubRead: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+  withGitHubRead: GitHubCliShape["withRead"];
   /** Short server cache around a validated detail read; honours `forceRefresh`. */
   cacheDetail: (
     input: { projectId: string; repository: string; number: number; forceRefresh: boolean },
@@ -156,22 +156,21 @@ export function makePullRequestOperations(dependencies: {
       const repository = yield* dependencies.validateProjectRepository(project, input.repository);
       if (input.action === "merge") {
         const mergeMethod = input.mergeMethod ?? "merge";
-        const capabilities = yield* dependencies.loadMergeCapabilities(
-          project.workspaceRoot,
+        // These reads authorize a user mutation, so they bypass the background pause.
+        const capabilities = yield* dependencies.github.getRepositoryMergeCapabilities({
+          cwd: project.workspaceRoot,
           repository,
-        );
+        });
         if (!isPullRequestMergeMethodAllowed(capabilities, mergeMethod)) {
           return yield* Effect.fail(
             new Error(`The repository does not allow the ${mergeMethod} merge method.`),
           );
         }
-        yield* dependencies.withGitHubRead(
-          dependencies.github.getPullRequestStack({
-            cwd: project.workspaceRoot,
-            repository,
-            number: input.number,
-          }),
-        );
+        yield* dependencies.github.getPullRequestStack({
+          cwd: project.workspaceRoot,
+          repository,
+          number: input.number,
+        });
       }
       const result = yield* dependencies.github
         .runPullRequestAction({

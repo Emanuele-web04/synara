@@ -1,5 +1,6 @@
 import type { KeybindingShortcut } from "@synara/contracts";
 
+import { shortcutKeyFromEventCode } from "~/keybindings";
 import { getNavigatorPlatform, isMacPlatform } from "~/lib/utils";
 
 /**
@@ -68,6 +69,52 @@ export function keybindingFromKeyboardEvent(
   parts.push(keyToken);
 
   return parts.length <= 3 ? parts.join("+") : null;
+}
+
+/**
+ * The shortcut a keydown stands for, or null while only modifiers are down or the key
+ * has no name in the keybindings config.
+ *
+ * The typed character wins when it is a plain letter or digit, so the binding shows the
+ * key the user's layout prints. Anything else falls back to the physical key: holding
+ * Option on macOS turns S into "ß" and Space into a non-breaking space, and Shift turns
+ * 1 into "!", none of which is what the user means to bind.
+ */
+export function shortcutFromKeyboardEvent(
+  event: Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "shiftKey" | "altKey"> &
+    Partial<Pick<KeyboardEvent, "code">>,
+  platform = getNavigatorPlatform(),
+): KeybindingShortcut | null {
+  const typedKey = event.key.toLowerCase();
+  const key = /^[a-z0-9]$/.test(typedKey)
+    ? typedKey
+    : (shortcutKeyFromEventCode(event.code) ?? shortcutKeyFromToken(event.key));
+  if (!key) return null;
+
+  return { key, ...shortcutModifiersFromKeyboardEvent(event, platform) };
+}
+
+/** The modifiers held during a key event, with the platform's primary one as `mod`. */
+export function shortcutModifiersFromKeyboardEvent(
+  event: Pick<KeyboardEvent, "ctrlKey" | "metaKey" | "shiftKey" | "altKey">,
+  platform = getNavigatorPlatform(),
+): Omit<KeybindingShortcut, "key"> {
+  const isMac = isMacPlatform(platform);
+  return {
+    modKey: isMac ? event.metaKey : event.ctrlKey,
+    metaKey: isMac ? false : event.metaKey,
+    ctrlKey: isMac ? event.ctrlKey : false,
+    altKey: event.altKey,
+    shiftKey: event.shiftKey,
+  };
+}
+
+// Resolved shortcuts spell these two keys out; the config syntax abbreviates them.
+function shortcutKeyFromToken(key: string): string | null {
+  const token = normalizeShortcutKeyToken(key);
+  if (token === "space") return " ";
+  if (token === "esc") return "escape";
+  return token;
 }
 
 export function keybindingValueFromShortcut(shortcut: KeybindingShortcut): string {

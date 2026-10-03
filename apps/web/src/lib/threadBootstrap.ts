@@ -284,6 +284,7 @@ export function shouldReuseActiveDraftThread(input: {
 } {
   return Boolean(
     input.draftThread &&
+    input.draftThread.promotedTo === undefined &&
     input.routeThreadId &&
     input.draftThread.projectId === input.projectId &&
     input.draftThread.entryPoint === input.entryPoint,
