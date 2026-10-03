@@ -45,8 +45,8 @@ show their attempt count and reported delay. Authentication displays its latest 
 between turns, with a Settings hint when attention is required; raw login output is not shown.
 These rows use events already supplied by the provider and do not trigger extra model requests.
 
-The Environment panel's Usage section shows enabled provider accounts, with a separate
-row and detail menu for each account. Providers with multiple accounts show account names
+The Environment panel's Usage section shows enabled accounts for the active provider, with a
+separate row and detail menu for each account. Providers with multiple accounts show account names
 beside the provider label. Settings → Usage uses the same account-specific snapshots.
 Usage checks follow each account's configured credentials; unassigned thread telemetry and
 provider-wide local totals are not used as a fallback for an individual account.

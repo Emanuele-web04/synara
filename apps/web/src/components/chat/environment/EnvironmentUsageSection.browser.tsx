@@ -76,7 +76,7 @@ describe("EnvironmentUsageSection", () => {
     expect(page.getByText("40% left", { exact: true }).query()).toBeNull();
   });
 
-  it("renders all providers with every reported usage window", async () => {
+  it("shows only the active provider's usage and updates when the provider changes", async () => {
     const queryClient = createQueryClient();
     queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
       snapshot("codex", [
@@ -87,7 +87,7 @@ describe("EnvironmentUsageSection", () => {
     ]);
     queryClient.setQueryData(serverQueryKeys.settings(), DEFAULT_SERVER_SETTINGS_VIEW);
 
-    await render(
+    const screen = await render(
       <QueryClientProvider client={queryClient}>
         <EnvironmentUsageSection provider="codex" />
       </QueryClientProvider>,
@@ -97,13 +97,7 @@ describe("EnvironmentUsageSection", () => {
       name: "Codex usage: 5h 95% remaining, Weekly 82% remaining",
     });
     await expect.element(codex).toBeVisible();
-    await expect
-      .element(
-        page.getByRole("button", {
-          name: "Claude usage: Weekly 46% remaining",
-        }),
-      )
-      .toBeVisible();
+    expect(page.getByRole("button", { name: /Claude usage:/ }).query()).toBeNull();
     await expect.element(page.getByText("5h", { exact: true })).toBeVisible();
     await expect.element(codex.getByText("Weekly", { exact: true })).toBeVisible();
 
@@ -111,13 +105,25 @@ describe("EnvironmentUsageSection", () => {
 
     await expect.element(page.getByText("95% left", { exact: true })).toBeVisible();
     await expect.element(page.getByText("82% left", { exact: true })).toBeVisible();
+
+    await userEvent.keyboard("{Escape}");
+    await screen.rerender(
+      <QueryClientProvider client={queryClient}>
+        <EnvironmentUsageSection provider="claudeAgent" />
+      </QueryClientProvider>,
+    );
+    await expect
+      .element(page.getByRole("button", { name: "Claude usage: Weekly 46% remaining" }))
+      .toBeVisible();
+    expect(page.getByRole("button", { name: /Codex usage:/ }).query()).toBeNull();
   });
 
-  it("hides the section while no provider has anything displayable", async () => {
+  it("hides the section when only another provider has usage", async () => {
     const queryClient = createQueryClient();
-    // Batch resolved but the provider's live fetch was dropped (e.g. errored server-side) and no
-    // local/thread fallback produced rows: nothing renders until some source yields data.
-    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), []);
+    // Another provider's cached usage must not make the active provider's section appear.
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
+      snapshot("codex", [{ window: "Weekly", usedPercent: 18 }]),
+    ]);
     queryClient.setQueryData(serverQueryKeys.settings(), DEFAULT_SERVER_SETTINGS_VIEW);
 
     await render(
@@ -262,6 +268,7 @@ describe("EnvironmentUsageSection", () => {
     const queryClient = createQueryClient();
     queryClient.setQueryData(serverQueryKeys.allProviderUsage(), [
       snapshot("cursor", [{ window: "Current", usedPercent: 30 }]),
+      snapshot("codex", [{ window: "Weekly", usedPercent: 18 }]),
     ]);
     queryClient.setQueryData(serverQueryKeys.settings(), {
       ...DEFAULT_SERVER_SETTINGS_VIEW,
@@ -278,5 +285,6 @@ describe("EnvironmentUsageSection", () => {
     );
 
     expect(document.querySelector('button[aria-label^="Cursor usage:"]')).toBeNull();
+    expect(page.getByText("Usage", { exact: true }).query()).toBeNull();
   });
 });

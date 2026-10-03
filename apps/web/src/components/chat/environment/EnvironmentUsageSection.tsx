@@ -1,5 +1,5 @@
 // FILE: EnvironmentUsageSection.tsx
-// Purpose: "Usage" section of the Environment panel — a compact menu per provider account.
+// Purpose: "Usage" section of the Environment panel — a compact menu per account of the active provider.
 
 import {
   DEFAULT_SERVER_SETTINGS_VIEW,
@@ -10,7 +10,7 @@ import {
   deriveProviderInstances,
   type ResolvedProviderInstance,
 } from "@synara/shared/providerInstances";
-import { PROVIDER_USAGE_PROVIDERS, providerUsageDisplayName } from "@synara/shared/providerUsage";
+import { providerUsageDisplayName } from "@synara/shared/providerUsage";
 import { useQuery } from "@tanstack/react-query";
 
 import {
@@ -106,49 +106,43 @@ function EnvironmentUsageAccountRow({
 export function EnvironmentUsageSection({ provider }: { provider: ProviderKind }) {
   const usageQuery = useQuery(serverAllProviderUsageQueryOptions());
   const settingsQuery = useQuery(serverSettingsQueryOptions());
-  const instances = deriveProviderInstances(
+  const providerInstances = deriveProviderInstances(
     settingsQuery.data ?? DEFAULT_SERVER_SETTINGS_VIEW,
-  ).filter((instance) => instance.enabled);
-  const providers = [provider, ...PROVIDER_USAGE_PROVIDERS.filter((entry) => entry !== provider)];
-  const accounts = providers.flatMap((driver) => {
-    const providerInstances = instances.filter((instance) => instance.driver === driver);
-    return providerInstances.flatMap((instance) => {
-      const snapshot = usageQuery.data?.find(
-        (entry) =>
-          entry.provider === driver && (entry.instanceId ?? entry.provider) === instance.instanceId,
-      );
-      if (!snapshot) return [];
-      const hasUsage =
-        snapshot.limits.length > 0 ||
-        snapshot.usageLines.length > 0 ||
-        (snapshot.resetCredits?.availableCount ?? 0) > 0;
-      // Unused default providers should not crowd the panel. Configured extra
-      // accounts stay visible so an expired login or failed usage check is clear.
-      if (
-        instance.isDefault &&
-        providerInstances.length === 1 &&
-        !instance.raw.displayName &&
-        !hasUsage &&
-        (snapshot.status === "needs-auth" || (snapshot.status ?? "ok") === "ok")
-      )
-        return [];
-      const providerName = providerUsageDisplayName(driver);
-      const showAccountName =
-        !instance.isDefault ||
-        providerInstances.length > 1 ||
-        instance.displayName !== providerName;
-      const accountName =
-        instance.isDefault && instance.displayName === providerName
-          ? "Default"
-          : instance.displayName;
-      return [
-        {
-          instance,
-          snapshot,
-          label: showAccountName ? `${providerName} · ${accountName}` : providerName,
-        },
-      ];
-    });
+  ).filter((instance) => instance.enabled && instance.driver === provider);
+  const accounts = providerInstances.flatMap((instance) => {
+    const snapshot = usageQuery.data?.find(
+      (entry) =>
+        entry.provider === provider && (entry.instanceId ?? entry.provider) === instance.instanceId,
+    );
+    if (!snapshot) return [];
+    const hasUsage =
+      snapshot.limits.length > 0 ||
+      snapshot.usageLines.length > 0 ||
+      (snapshot.resetCredits?.availableCount ?? 0) > 0;
+    // Unused default providers should not crowd the panel. Configured extra
+    // accounts stay visible so an expired login or failed usage check is clear.
+    if (
+      instance.isDefault &&
+      providerInstances.length === 1 &&
+      !instance.raw.displayName &&
+      !hasUsage &&
+      (snapshot.status === "needs-auth" || (snapshot.status ?? "ok") === "ok")
+    )
+      return [];
+    const providerName = providerUsageDisplayName(provider);
+    const showAccountName =
+      !instance.isDefault || providerInstances.length > 1 || instance.displayName !== providerName;
+    const accountName =
+      instance.isDefault && instance.displayName === providerName
+        ? "Default"
+        : instance.displayName;
+    return [
+      {
+        instance,
+        snapshot,
+        label: showAccountName ? `${providerName} · ${accountName}` : providerName,
+      },
+    ];
   });
 
   if (accounts.length === 0) return null;
