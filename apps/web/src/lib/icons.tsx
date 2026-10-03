@@ -348,13 +348,15 @@ export const FastModeIcon: LucideIcon = centralIconWrapper("zap", "fill");
 // Outline twin of FastModeIcon (Central reversed set) for the inactive toggle state.
 export const FastModeOutlineIcon: LucideIcon = centralIconWrapper("zap");
 
-// Sidebar and panel toggles, expand/collapse, top-bar add, handoff, and Hubs (Hugeicons, inlined).
+// Sidebar and panel toggles, expand/collapse, top-bar add, handoff, Hubs, and the rail's update
+// button (Hugeicons, inlined).
 export {
   ArrowDataTransferHorizontalIcon as HandoffIcon,
   CheckmarkSquare02Icon as CheckboxCheckedIcon,
   CollapseIcon as PanelCollapseIcon,
   DashboardCircleIcon as HubIcon,
   DashboardCircleSolidIcon as HubActiveIcon,
+  Download01Icon as UpdateDownloadIcon,
   ExpandIcon as PanelExpandIcon,
   LayoutAlignLeftIcon,
   LayoutAlignRightIcon,

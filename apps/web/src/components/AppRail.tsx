@@ -138,7 +138,7 @@ function AppRailButton({ item }: { item: AppRailItem }) {
   const label = item.badge ? `${item.label} · ${item.badge.accessibleLabel}` : item.label;
   const glyphs = item.glyphs;
   return (
-    <div className="relative">
+    <div className="relative shrink-0">
       <SidebarIconButton
         icon={item.active ? glyphs.active : glyphs.idle}
         iconClassName={APP_RAIL_GLYPH_CLASS_NAME}
@@ -177,19 +177,24 @@ export function AppRail({
       onContextMenu={onContextMenu}
       className="flex w-(--app-rail-width) shrink-0 flex-col items-center gap-1.5 pt-2.5 pb-2.5 font-system-ui"
     >
-      {items.map((item) => (
-        <AppRailButton key={item.id} item={item} />
-      ))}
-      {shortcuts.length > 0 ? (
-        <>
-          <div aria-hidden className="my-0.5 h-px w-5 bg-[var(--app-rail-inset-border)]" />
-          {shortcuts.map((item) => (
-            <AppRailButton key={item.id} item={item} />
-          ))}
-        </>
-      ) : null}
-      {moreSlot}
-      <div className="mt-auto flex flex-col items-center gap-1.5">
+      <div className="flex min-h-0 w-full flex-1 flex-col items-center gap-1.5 overflow-y-auto [scrollbar-width:none]">
+        {items.map((item) => (
+          <AppRailButton key={item.id} item={item} />
+        ))}
+        {shortcuts.length > 0 ? (
+          <>
+            <div
+              aria-hidden
+              className="my-0.5 h-px w-5 shrink-0 bg-[var(--app-rail-inset-border)]"
+            />
+            {shortcuts.map((item) => (
+              <AppRailButton key={item.id} item={item} />
+            ))}
+          </>
+        ) : null}
+        {moreSlot}
+      </div>
+      <div className="flex shrink-0 flex-col items-center gap-1.5">
         {bottomSlot}
         {bottomItems.map((item) => (
           <AppRailButton key={item.id} item={item} />

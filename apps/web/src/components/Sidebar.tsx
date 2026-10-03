@@ -273,6 +273,7 @@ import {
   SidebarActivityView,
   SidebarSnoozedThreadsSection,
 } from "./SidebarActivityView";
+import { DesktopUpdateRailButton } from "./DesktopUpdateRailButton";
 import { SidebarIconButton, sidebarIconButtonSlotClass } from "./SidebarIconButton";
 import { SidebarLeadingIcon } from "./SidebarLeadingIcon";
 import { SidebarPrimaryAction } from "./SidebarPrimaryAction";
@@ -327,9 +328,6 @@ import {
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateActionError,
   getDesktopUpdateAlreadyCurrentNotice,
-  getDesktopUpdateButtonPresentation,
-  getDesktopUpdateButtonTooltip,
-  getDesktopUpdateDownloadPercent,
   getDesktopUpdateErrorSignature,
   isDesktopUpdateButtonDisabled,
   isDesktopUpdateInstallInFlight,
@@ -6278,38 +6276,17 @@ export default function Sidebar() {
   const showDesktopUpdateButton = isElectron && shouldShowDesktopUpdateButton(desktopUpdateState);
   const isBetaDesktopFlavor = desktopUpdateState?.flavor === "beta";
 
-  const desktopUpdateTooltip = desktopUpdateState
-    ? getDesktopUpdateButtonTooltip(desktopUpdateState, {
-        installing: installingDesktopUpdate,
-      })
-    : "Update available";
-
   const desktopUpdateButtonDisabled =
     isDesktopUpdateButtonDisabled(desktopUpdateState) || installingDesktopUpdate;
   const desktopUpdateButtonAction = desktopUpdateState
     ? resolveDesktopUpdateButtonAction(desktopUpdateState)
     : "none";
-  const desktopUpdateButtonPresentation = getDesktopUpdateButtonPresentation(desktopUpdateState, {
-    installing: installingDesktopUpdate,
-  });
   const showArm64IntelBuildWarning =
     isElectron && shouldShowArm64IntelBuildWarning(desktopUpdateState);
   const arm64IntelBuildWarningDescription =
     desktopUpdateState && showArm64IntelBuildWarning
       ? getArm64IntelBuildWarningDescription(desktopUpdateState)
       : null;
-  const desktopUpdateButtonInteractivityClasses = desktopUpdateButtonDisabled
-    ? "cursor-not-allowed opacity-60"
-    : "hover:brightness-110";
-  const desktopUpdateButtonHasSecondaryLabel =
-    desktopUpdateButtonPresentation.secondaryLabel !== null;
-  const desktopUpdateDownloadPercent = getDesktopUpdateDownloadPercent(desktopUpdateState);
-  const desktopUpdateRowButtonClasses = cn(
-    "inline-flex h-6 shrink-0 items-center justify-center gap-1.5 rounded-full px-2.5 font-system-ui text-ui-xs font-medium leading-none text-white transition-colors",
-    isBetaDesktopFlavor ? "bg-[image:var(--beta-gradient)]" : "bg-[var(--info)]",
-    desktopUpdateButtonHasSecondaryLabel && "min-h-6 py-0.5",
-    desktopUpdateButtonInteractivityClasses,
-  );
   const searchPaletteProjects = useMemo<SidebarSearchProject[]>(
     () =>
       projects.map((project) => ({
@@ -6945,6 +6922,13 @@ export default function Sidebar() {
           }}
         />
         <SidebarHelpMenu inRail {...sidebarHelpMenuProps} />
+        {showDesktopUpdateButton && desktopUpdateState ? (
+          <DesktopUpdateRailButton
+            state={desktopUpdateState}
+            installing={installingDesktopUpdate}
+            onClick={handleDesktopUpdateButtonClick}
+          />
+        ) : null}
       </>
     ),
     onContextMenu: handleNavContextMenu,
@@ -7444,7 +7428,7 @@ export default function Sidebar() {
           </SidebarContent>
 
           <SidebarFooter
-            // Help lives in the rail, so the footer only carries the update pill.
+            // Help and the update button live in the rail; the footer only carries debug tools.
             className="gap-2 border-sidebar-border border-t-0 p-2 pt-0 font-system-ui"
           >
             <SidebarMenu>
@@ -7455,41 +7439,6 @@ export default function Sidebar() {
                       <DebugFeatureFlagsMenu />
                     </Suspense>
                   ) : null}
-                  <div className="flex items-center gap-2">
-                    {showDesktopUpdateButton ? (
-                      <Tooltip>
-                        <TooltipTrigger
-                          render={
-                            <button
-                              type="button"
-                              aria-label={desktopUpdateTooltip}
-                              aria-disabled={desktopUpdateButtonDisabled || undefined}
-                              disabled={desktopUpdateButtonDisabled}
-                              className={desktopUpdateRowButtonClasses}
-                              onClick={handleDesktopUpdateButtonClick}
-                            >
-                              <span className="flex min-w-0 flex-1 items-center justify-between gap-1.5 leading-tight">
-                                <span className="min-w-0 truncate text-center">
-                                  {desktopUpdateButtonPresentation.label}
-                                </span>
-                                {desktopUpdateButtonPresentation.secondaryLabel ? (
-                                  <span className="min-w-0 truncate text-center text-ui-xs text-white/80">
-                                    {desktopUpdateButtonPresentation.secondaryLabel}
-                                  </span>
-                                ) : null}
-                              </span>
-                              {desktopUpdateDownloadPercent !== null ? (
-                                <span className="rounded-full bg-white/20 px-1.5 py-0.5 text-ui-2xs font-semibold tabular-nums text-white/95">
-                                  {desktopUpdateDownloadPercent}%
-                                </span>
-                              ) : null}
-                            </button>
-                          }
-                        />
-                        <TooltipPopup side="top">{desktopUpdateTooltip}</TooltipPopup>
-                      </Tooltip>
-                    ) : null}
-                  </div>
                 </div>
               </SidebarMenuItem>
             </SidebarMenu>
