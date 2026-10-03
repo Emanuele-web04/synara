@@ -18,6 +18,7 @@ import { RecentViewSwitcher } from "../components/RecentViewSwitcher";
 import { shouldRenderTerminalWorkspace } from "../components/ChatView.logic";
 import ThreadSidebar from "../components/Sidebar";
 import { isElectron } from "../env";
+import { matchesFixedShortcut } from "../fixedShortcuts";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useIsMobile } from "../hooks/useMediaQuery";
 import { useHandleNewGroupChat } from "../hooks/useHandleNewGroupChat";
@@ -65,7 +66,7 @@ import {
   useSidebar,
 } from "~/components/ui/sidebar";
 import type { SidebarResizableOptions } from "~/components/ui/sidebar";
-import { cn, getNavigatorPlatform, isMacPlatform } from "~/lib/utils";
+import { cn, getNavigatorPlatform } from "~/lib/utils";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_SIDEBAR_WIDTH_STORAGE_KEY = "chat_thread_sidebar_width";
@@ -184,31 +185,8 @@ function resolveBrowserNavigationShortcut(
   event: KeyboardEvent,
   platform: string,
 ): "back" | "forward" | null {
-  const isMac = isMacPlatform(platform);
-  const key = event.key.toLowerCase();
-
-  if (
-    isMac &&
-    event.metaKey &&
-    !event.ctrlKey &&
-    !event.altKey &&
-    !event.shiftKey &&
-    (key === "[" || key === "]")
-  ) {
-    return key === "[" ? "back" : "forward";
-  }
-
-  if (
-    !isMac &&
-    event.altKey &&
-    !event.metaKey &&
-    !event.ctrlKey &&
-    !event.shiftKey &&
-    (event.key === "ArrowLeft" || event.key === "ArrowRight")
-  ) {
-    return event.key === "ArrowLeft" ? "back" : "forward";
-  }
-
+  if (matchesFixedShortcut(event, "navigation.back", platform)) return "back";
+  if (matchesFixedShortcut(event, "navigation.forward", platform)) return "forward";
   return null;
 }
 

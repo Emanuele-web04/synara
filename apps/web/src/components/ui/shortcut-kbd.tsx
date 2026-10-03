@@ -22,7 +22,7 @@ export function ShortcutKbd(props: {
     return (
       <Kbd
         className={cn(
-          "h-6 gap-0.5 rounded-full bg-foreground/8 px-2.5 text-foreground/80",
+          "h-5 gap-0.5 rounded-full bg-foreground/5 px-2 text-foreground/80 dark:bg-foreground/12",
           props.groupClassName,
           props.className,
         )}

@@ -131,6 +131,7 @@ import { useAppDensity } from "../hooks/useAppDensity";
 import { useChatWidth } from "../hooks/useChatWidth";
 import { useCommittedPathname } from "../hooks/useCommittedPathname";
 import { useDesktopAppIcon } from "../hooks/useDesktopAppIcon";
+import { useDesktopMenuShortcuts } from "../hooks/useDesktopMenuShortcuts";
 import { useAppTypography } from "../hooks/useAppTypography";
 import { usePreloadRouteChunks } from "../hooks/usePreloadRouteChunks";
 import { useSyncDesktopTopBarTrafficLightGutterZoom } from "../hooks/useDesktopTopBarGutter";
@@ -801,6 +802,7 @@ function GlobalShortcutsDialog() {
   const [open, setOpen] = useState(false);
   const { focusedThreadId, activeProject } = useFocusedChatContext();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  useDesktopMenuShortcuts(serverConfigQuery.data?.keybindings);
   const keybindings = serverConfigQuery.data?.keybindings ?? [];
   const platform = getNavigatorPlatform();
   const activeThreadTerminalState = useTerminalStateStore((state) =>

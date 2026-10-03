@@ -26,19 +26,23 @@ const SOURCE: ShortcutEditorSource = {
   platform: "Linux x86_64",
 };
 
-function targetFor(rowId: string): ShortcutRecorderTarget {
-  const row = buildShortcutEditorRows(SOURCE).find((candidate) => candidate.id === rowId);
+let session = 0;
+
+function targetFor(rowId: string, source = SOURCE): ShortcutRecorderTarget {
+  const row = buildShortcutEditorRows(source).find((candidate) => candidate.id === rowId);
   if (!row) throw new Error(`no row ${rowId}`);
-  return { row, binding: row.bindings[0] ?? null, source: SOURCE };
+  session += 1;
+  return { row, binding: row.bindings[0] ?? null, session };
 }
 
-async function renderRecorder(rowId: string) {
+async function renderRecorder(rowId: string, source = SOURCE) {
   const onApply = vi.fn(async (_edits: ServerKeybindingEdit[]) => true);
   const onOpenChange = vi.fn();
   await render(
     <ShortcutRecorderDialog
       open
-      target={targetFor(rowId)}
+      target={targetFor(rowId, source)}
+      source={source}
       onOpenChange={onOpenChange}
       onApply={onApply}
     />,
@@ -107,12 +111,14 @@ it("holds shortcuts while recording and resumes them after Escape cancels", asyn
   expect(resolveShortcutCommand(pressed, KEYBINDINGS, options)).toBe("terminal.toggle");
 
   const onApply = vi.fn(async () => true);
+  const target = targetFor("terminal.toggle");
   function RecorderHarness() {
     const [open, setOpen] = useState(true);
     return (
       <ShortcutRecorderDialog
         open={open}
-        target={targetFor("terminal.toggle")}
+        target={target}
+        source={SOURCE}
         onOpenChange={setOpen}
         onApply={onApply}
       />
@@ -128,4 +134,130 @@ it("holds shortcuts while recording and resumes them after Escape cancels", asyn
   await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
   expect(onApply).not.toHaveBeenCalled();
   expect(resolveShortcutCommand(pressed, KEYBINDINGS, options)).toBe("terminal.toggle");
+});
+
+it("starts fresh when reopened while it is still closing, and frees the keys at once", async () => {
+  const pressed = { key: "j", ctrlKey: true, metaKey: false, shiftKey: false, altKey: false };
+  const options = { platform: SOURCE.platform };
+  const props = { source: SOURCE, onOpenChange: () => {}, onApply: async () => true };
+  const first = targetFor("terminal.toggle");
+  const screen = await render(<ShortcutRecorderDialog open target={first} {...props} />);
+  await userEvent.keyboard("{Control>}k{/Control}");
+  await expect.element(page.getByRole("status")).toHaveTextContent("Ctrl+K is available.");
+
+  // Closing hands the keyboard back before the closing animation ends.
+  await screen.rerender(<ShortcutRecorderDialog open={false} target={first} {...props} />);
+  expect(resolveShortcutCommand(pressed, KEYBINDINGS, options)).toBe("terminal.toggle");
+
+  await screen.rerender(
+    <ShortcutRecorderDialog open target={targetFor("sidebar.toggle")} {...props} />,
+  );
+  await expect.element(page.getByRole("dialog")).toHaveTextContent("Toggle sidebar");
+  await expect.element(page.getByRole("status")).not.toHaveTextContent("Ctrl+K");
+  await expect.element(page.getByRole("button", { name: "Save" })).toBeDisabled();
+});
+
+it("stops a save when the shortcut changed elsewhere while it was open", async () => {
+  const props = { onOpenChange: () => {}, onApply: vi.fn(async () => true) };
+  const target = targetFor("terminal.toggle");
+  const screen = await render(
+    <ShortcutRecorderDialog open target={target} source={SOURCE} {...props} />,
+  );
+  await userEvent.keyboard("{Control>}k{/Control}");
+  await expect.element(page.getByRole("button", { name: "Save" })).toBeEnabled();
+
+  const changed = { ...SOURCE, keybindings: [modRule("terminal.toggle", "l"), KEYBINDINGS[1]!] };
+  await screen.rerender(
+    <ShortcutRecorderDialog open target={target} source={changed} {...props} />,
+  );
+
+  await expect
+    .element(page.getByRole("status"))
+    .toHaveTextContent("This shortcut changed while the dialog was open.");
+  await expect.element(page.getByRole("button", { name: "Save" })).toBeDisabled();
+  expect(props.onApply).not.toHaveBeenCalled();
+});
+
+it("does not call a refetch of the same bindings a change", async () => {
+  const props = { onOpenChange: () => {}, onApply: vi.fn(async () => true) };
+  const target = targetFor("terminal.toggle");
+  const screen = await render(
+    <ShortcutRecorderDialog open target={target} source={SOURCE} {...props} />,
+  );
+  await userEvent.keyboard("{Control>}k{/Control}");
+
+  const refetched = structuredClone(SOURCE);
+  await screen.rerender(
+    <ShortcutRecorderDialog open target={target} source={refetched} {...props} />,
+  );
+
+  await expect.element(page.getByRole("status")).toHaveTextContent("Ctrl+K is available.");
+  await expect.element(page.getByRole("button", { name: "Save" })).toBeEnabled();
+});
+
+it("does not close a newer dialog when an earlier save finishes late", async () => {
+  let finishSave: (applied: boolean) => void = () => {};
+  const onApply = vi.fn(
+    () =>
+      new Promise<boolean>((resolve) => {
+        finishSave = resolve;
+      }),
+  );
+  const onOpenChange = vi.fn();
+  const props = { source: SOURCE, onOpenChange, onApply };
+  const first = targetFor("terminal.toggle");
+  const screen = await render(<ShortcutRecorderDialog open target={first} {...props} />);
+  await userEvent.keyboard("{Control>}k{/Control}");
+  await userEvent.keyboard("{Enter}");
+  await vi.waitFor(() => expect(onApply).toHaveBeenCalledTimes(1));
+
+  // Escape closed it mid-save, and the user opened another row.
+  await screen.rerender(<ShortcutRecorderDialog open={false} target={first} {...props} />);
+  await screen.rerender(
+    <ShortcutRecorderDialog open target={targetFor("sidebar.toggle")} {...props} />,
+  );
+  finishSave(true);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  expect(onOpenChange).not.toHaveBeenCalled();
+  await expect.element(page.getByRole("dialog")).toHaveTextContent("Toggle sidebar");
+});
+
+it("says which shortcut a reset takes back before doing it", async () => {
+  // Toggle sidebar picked up Toggle terminal's shipped Ctrl+J, leaving it unassigned.
+  const unassigned = modRule("terminal.toggle", "unassigned");
+  const moved: ShortcutEditorSource = {
+    ...SOURCE,
+    keybindings: [
+      modRule("sidebar.toggle", "j"),
+      { ...unassigned, shortcut: { ...unassigned.shortcut, modKey: false } },
+    ],
+  };
+  const { onApply } = await renderRecorder("terminal.toggle", moved);
+
+  await page.getByRole("button", { name: "Reset to default" }).click();
+  await expect
+    .element(page.getByRole("status"))
+    .toHaveTextContent("Resetting takes back Ctrl+J from “Toggle sidebar”.");
+  expect(onApply).not.toHaveBeenCalled();
+
+  await page.getByRole("button", { name: "Reset anyway" }).click();
+  await vi.waitFor(() => expect(onApply).toHaveBeenCalledTimes(1));
+  expect(onApply.mock.calls[0]?.[0]).toEqual([
+    { type: "remove", rule: { command: "sidebar.toggle", key: "mod+j" } },
+    { type: "reset", command: "terminal.toggle" },
+  ]);
+});
+
+it("warns when the chord types a character on the user's keyboard", async () => {
+  await renderRecorder("terminal.toggle");
+
+  // AltGr+Q types "@" on a German keyboard; the shortcut is recorded on the Q key.
+  window.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "@", code: "KeyQ", ctrlKey: true, altKey: true }),
+  );
+  await expect
+    .element(page.getByRole("status"))
+    .toHaveTextContent("On your keyboard, Ctrl+Alt+Q types “@”.");
+  await expect.element(page.getByRole("button", { name: "Save" })).toBeEnabled();
 });

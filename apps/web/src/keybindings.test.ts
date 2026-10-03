@@ -17,6 +17,7 @@ import {
   shouldShowThreadJumpHints,
   shortcutLabelForCommand,
   spaceJumpIndexFromCommand,
+  splitShortcutLabel,
   suspendShortcutDispatch,
   terminalNavigationShortcutData,
   threadJumpCommandForIndex,
@@ -44,6 +45,54 @@ describe("editable keybinding resolution", () => {
 
     assert.isNotNull(binding);
     assert.equal(formatKeybindingWhenExpression(binding?.whenAst), "(!(terminalFocus) || isMac)");
+  });
+});
+
+describe("layout-aware matching", () => {
+  const rules = (...entries: Array<[KeybindingCommand, string]>): ResolvedKeybindingsConfig =>
+    entries.map(([command, key]) => ({
+      command,
+      shortcut: {
+        key,
+        modKey: true,
+        metaKey: false,
+        ctrlKey: false,
+        altKey: false,
+        shiftKey: true,
+      },
+    }));
+  const options = { platform: "MacIntel", context: { terminalFocus: false, terminalOpen: false } };
+
+  it("matches a typed letter only as that letter, not also as its physical key", () => {
+    // AZERTY: the key in QWERTY's Q position types "a".
+    const press = event({ key: "a", code: "KeyQ", metaKey: true, shiftKey: true });
+    const bindings = rules(["chat.new", "q"], ["terminal.toggle", "a"]);
+
+    assert.equal(resolveShortcutCommand(press, bindings, options), "terminal.toggle");
+    assert.isNull(resolveShortcutCommand(press, rules(["chat.new", "q"]), options));
+  });
+
+  it("falls back to the physical key when the layout types something else", () => {
+    // Option on macOS and Shift on the number row change the character, not the key.
+    const optionS = event({ key: "ß", code: "KeyS", metaKey: true, shiftKey: true });
+    const shiftOne = event({ key: "!", code: "Digit1", metaKey: true, shiftKey: true });
+
+    assert.equal(resolveShortcutCommand(optionS, rules(["chat.new", "s"]), options), "chat.new");
+    assert.equal(resolveShortcutCommand(shiftOne, rules(["chat.new", "1"]), options), "chat.new");
+  });
+});
+
+describe("splitShortcutLabel", () => {
+  it("keeps the plus key as a key of its own", () => {
+    assert.deepEqual(splitShortcutLabel("Ctrl++"), ["Ctrl", "+"]);
+    assert.deepEqual(splitShortcutLabel("Ctrl+Shift++"), ["Ctrl", "Shift", "+"]);
+    assert.deepEqual(splitShortcutLabel("⌘+"), ["⌘", "+"]);
+    assert.deepEqual(splitShortcutLabel("+"), ["+"]);
+  });
+
+  it("splits ordinary labels as before", () => {
+    assert.deepEqual(splitShortcutLabel("Ctrl+Shift+K"), ["Ctrl", "Shift", "K"]);
+    assert.deepEqual(splitShortcutLabel("⇧⌘Right"), ["⇧", "⌘", "Right"]);
   });
 });
 

@@ -6,12 +6,16 @@ import type {
 } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
+import { fixedShortcutsForPlatform } from "./fixedShortcuts";
+import { DEFAULT_SHORTCUT_FALLBACKS, shortcutConflictKey } from "./keybindings";
+
 import {
   buildShortcutEditorRows,
   evaluateRecordedShortcut,
   filterShortcutEditorRows,
   shortcutRemoveEdits,
   shortcutResetEdits,
+  shortcutResetTakeovers,
   shortcutSaveEdits,
   whenConditionsCanHoldTogether,
   type ShortcutEditorSource,
@@ -121,6 +125,15 @@ describe("whenConditionsCanHoldTogether", () => {
     expect(whenConditionsCanHoldTogether([undefined, not(id("terminalFocus"))], {})).toBe(true);
   });
 
+  it("never has two surfaces focused at once", () => {
+    expect(whenConditionsCanHoldTogether([id("composerFocus"), id("terminalFocus")], {})).toBe(
+      false,
+    );
+    expect(whenConditionsCanHoldTogether([id("composerFocus"), not(id("terminalFocus"))], {})).toBe(
+      true,
+    );
+  });
+
   it("treats the platform as fixed", () => {
     const macOnly = and(not(id("terminalFocus")), id("isMac"));
 
@@ -222,6 +235,67 @@ describe("evaluateRecordedShortcut", () => {
       record(source, "terminal.toggle", shortcut("c", { modKey: true, shiftKey: true })).recording
         .status,
     ).toBe("ready");
+  });
+
+  it("refuses the chords Synara handles before any binding", () => {
+    const source = sourceWith();
+
+    expect(record(source, "terminal.toggle", shortcut("p", { modKey: true })).recording).toEqual({
+      status: "problem",
+      message: "⌘P always opens file search. Try another.",
+    });
+    expect(record(source, "terminal.toggle", shortcut("[", { modKey: true })).recording).toEqual({
+      status: "problem",
+      message: "⌘[ always goes back in the desktop app. Try another.",
+    });
+    const linux = sourceWith(SHIPPED, LINUX);
+    expect(
+      record(linux, "terminal.toggle", shortcut("arrowleft", { altKey: true })).recording.status,
+    ).toBe("problem");
+  });
+
+  it("refuses the terminal's search chord only where the terminal can have focus", () => {
+    const anywhere = sourceWith();
+    expect(record(anywhere, "terminal.toggle", shortcut("f", { modKey: true })).recording).toEqual({
+      status: "problem",
+      message: "⌘F searches the terminal while it has focus. Try another.",
+    });
+
+    const outsideTerminal = rule("chat.new", "n", { modKey: true }, not(id("terminalFocus")));
+    const source = { ...sourceWith([outsideTerminal]), defaultKeybindings: [outsideTerminal] };
+    expect(record(source, "chat.new", shortcut("f", { modKey: true })).recording.status).toBe(
+      "ready",
+    );
+  });
+
+  it("ships no default on a fixed chord", () => {
+    for (const platform of [MAC, LINUX]) {
+      const facts = { isMac: platform === MAC };
+      const taken = DEFAULT_SHORTCUT_FALLBACKS.filter((binding) =>
+        fixedShortcutsForPlatform(platform).some(
+          (entry) =>
+            shortcutConflictKey(entry.shortcut, platform) ===
+              shortcutConflictKey(binding.shortcut, platform) &&
+            whenConditionsCanHoldTogether([entry.whenAst, binding.whenAst], facts),
+        ),
+      );
+      expect(taken.map((binding) => binding.command)).toEqual([]);
+    }
+  });
+
+  it("does not take a key from a command whose surface cannot have focus at the same time", () => {
+    const effort = rule("model.effort.next", "e", { modKey: true }, id("composerFocus"));
+    const source = {
+      ...sourceWith([...SHIPPED, effort]),
+      defaultKeybindings: [...SHIPPED, effort],
+    };
+    const { recording } = record(source, "model.effort.next", shortcut("d", { modKey: true }));
+
+    expect(recording.status).toBe("ready");
+    if (recording.status !== "ready") return;
+    // Toggle diff (outside the terminal) can still fire from the composer; Split terminal
+    // (inside it) never can.
+    expect(recording.conflicts.map((conflict) => conflict.rule.command)).toEqual(["diff.toggle"]);
   });
 
   it("has nothing to save while the recorded keys are the current ones", () => {
@@ -394,9 +468,23 @@ describe("shortcut edits", () => {
       rule("diff.toggle", "j", { modKey: true }, not(id("terminalFocus"))),
     ]);
 
-    expect(shortcutResetEdits(source, rowFor(source, "terminal.toggle"))).toEqual([
+    const row = rowFor(source, "terminal.toggle");
+
+    expect(shortcutResetTakeovers(source, row).map((takeover) => takeover.label)).toEqual([
+      "Toggle diff",
+    ]);
+    expect(shortcutResetEdits(source, row)).toEqual([
       { type: "remove", rule: { command: "diff.toggle", key: "mod+j", when: "!terminalFocus" } },
       { type: "reset", command: "terminal.toggle" },
     ]);
+  });
+
+  it("takes nothing back when the shipped keys are free", () => {
+    const source = sourceWith([
+      ...SHIPPED.filter((entry) => entry.command !== "terminal.toggle"),
+      rule("terminal.toggle", "k", { modKey: true }),
+    ]);
+
+    expect(shortcutResetTakeovers(source, rowFor(source, "terminal.toggle"))).toEqual([]);
   });
 });

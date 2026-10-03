@@ -5,15 +5,17 @@
 // Depends on: the shortcut editor model, key capture, the shared dialog, and Keycap.
 
 import type { KeybindingShortcut, ServerKeybindingEdit } from "@synara/contracts";
-import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useId, useRef, useState } from "react";
 
 import { Button } from "~/components/ui/button";
 import { Dialog, DialogDescription, DialogPopup, DialogTitle } from "~/components/ui/dialog";
 import { Keycap } from "~/components/ui/keycap";
 import {
+  buildShortcutEditorRows,
   evaluateRecordedShortcut,
   shortcutModifierHint,
   shortcutResetEdits,
+  shortcutResetTakeovers,
   shortcutSaveEdits,
   type ShortcutEditorBinding,
   type ShortcutEditorRow,
@@ -26,14 +28,22 @@ import {
   shortcutFromKeyboardEvent,
   shortcutModifiersFromKeyboardEvent,
 } from "~/lib/keybindingCapture";
-import { cn } from "~/lib/utils";
+import { cn, isMacPlatform } from "~/lib/utils";
 
 export interface ShortcutRecorderTarget {
+  /** The row as it was when the dialog opened; the live one is looked up by its id. */
   row: ShortcutEditorRow;
   /** The binding being changed, or null when the command gains a new one. */
   binding: ShortcutEditorBinding | null;
-  /** Bindings as they were when the dialog opened, so a save does not re-judge itself. */
+  /** Differs on every open, so a dialog reopened while it is still closing starts fresh. */
+  session: number;
+}
+
+/** What the recording is judged against: the live bindings, or the ones a save started from. */
+interface RecorderView {
   source: ShortcutEditorSource;
+  row: ShortcutEditorRow;
+  binding: ShortcutEditorBinding | null;
 }
 
 type ShortcutModifiers = Omit<KeybindingShortcut, "key">;
@@ -58,21 +68,46 @@ function hasModifier(modifiers: ShortcutModifiers): boolean {
   );
 }
 
+/**
+ * The character the chord types on the user's keyboard, when it is one people need:
+ * Option on macOS, and AltGr (Ctrl+Alt) elsewhere, type "@", "{" or "|" on many
+ * layouts, and a shortcut on that chord takes the character away from every field.
+ */
+function typedCharacter(
+  event: KeyboardEvent,
+  shortcut: KeybindingShortcut,
+  platform: string,
+): string | null {
+  // Shift alone changes "1" to "!" on every layout; that is not a character the
+  // chord takes away.
+  const charChord = isMacPlatform(platform)
+    ? event.altKey && !event.metaKey && !event.ctrlKey && !event.shiftKey
+    : event.altKey && event.ctrlKey && !event.metaKey && !event.shiftKey;
+  if (!charChord || !/^[\x21-\x7e]$/.test(event.key)) return null;
+  return event.key.toLowerCase() === shortcut.key ? null : event.key;
+}
+
+function joinPhrases(phrases: readonly string[]): string {
+  return phrases.length <= 2
+    ? phrases.join(" and ")
+    : `${phrases.slice(0, 2).join(", ")} and ${phrases.length - 2} more`;
+}
+
 function joinLabels(labels: readonly string[]): string {
-  const quoted = labels.map((label) => `“${label}”`);
-  return quoted.length <= 2
-    ? quoted.join(" and ")
-    : `${quoted.slice(0, 2).join(", ")} and ${quoted.length - 2} more`;
+  return joinPhrases(labels.map((label) => `“${label}”`));
 }
 
 export function ShortcutRecorderDialog({
   open,
   target,
+  source,
   onOpenChange,
   onApply,
 }: {
   open: boolean;
   target: ShortcutRecorderTarget | null;
+  /** The live bindings. */
+  source: ShortcutEditorSource;
   onOpenChange: (open: boolean) => void;
   /** Sends the edits; resolves false when the server rejected them. */
   onApply: (edits: ServerKeybindingEdit[]) => Promise<boolean>;
@@ -81,11 +116,15 @@ export function ShortcutRecorderDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogPopup className="max-w-[380px]" showCloseButton={false} initialFocus={keyWellRef}>
-        {/* Recording state lives below DialogPopup, which unmounts its children on
-            close: every open starts from the binding being edited. */}
+        {/* Recording state lives below DialogPopup, which unmounts its children once
+            closed. A reopen during the closing animation keeps them mounted, so the
+            session key starts every open from the binding being edited. */}
         {target ? (
           <ShortcutRecorder
+            key={target.session}
             target={target}
+            source={source}
+            active={open}
             keyWellRef={keyWellRef}
             onClose={() => onOpenChange(false)}
             onApply={onApply}
@@ -98,20 +137,44 @@ export function ShortcutRecorderDialog({
 
 function ShortcutRecorder({
   target,
+  source: liveSource,
+  active,
   keyWellRef,
   onClose,
   onApply,
 }: {
   target: ShortcutRecorderTarget;
+  source: ShortcutEditorSource;
+  /** False while the dialog closes: keys go back to the app at once. */
+  active: boolean;
   keyWellRef: React.RefObject<HTMLDivElement | null>;
   onClose: () => void;
   onApply: (edits: ServerKeybindingEdit[]) => Promise<boolean>;
 }) {
-  const { row, binding, source } = target;
+  const statusId = useId();
+  // Judge against the live bindings, so a change made elsewhere while the dialog is open
+  // (another window, keybindings.json) is never overwritten from an old copy. Once a
+  // save starts, hold the view it started from: the save itself changes the bindings.
+  const liveRow =
+    buildShortcutEditorRows(liveSource).find((candidate) => candidate.id === target.row.id) ?? null;
+  const liveBinding = target.binding
+    ? (liveRow?.bindings.find((candidate) => candidate.id === target.binding?.id) ?? null)
+    : null;
+  const [frozenView, setFrozenView] = useState<RecorderView | null>(null);
+  const stale = frozenView === null && (!liveRow || (target.binding !== null && !liveBinding));
+  const view: RecorderView = frozenView ?? {
+    source: liveSource,
+    row: liveRow ?? target.row,
+    binding: target.binding ? (liveBinding ?? target.binding) : null,
+  };
+  const { row, binding, source } = view;
   const { platform } = source;
   const [recorded, setRecorded] = useState<KeybindingShortcut | null>(
-    binding?.rules[0]?.shortcut ?? null,
+    target.binding?.rules[0]?.shortcut ?? null,
   );
+  const [character, setCharacter] = useState<string | null>(null);
+  const [confirmingReset, setConfirmingReset] = useState(false);
+  const liveRef = useRef(true);
   const [heldModifiers, setHeldModifiers] = useState<ShortcutModifiers>(NO_MODIFIERS);
   // Held modifiers preview the next shortcut until a key lands; after that the recorded
   // keys stay up while the modifiers are still down.
@@ -127,8 +190,11 @@ function ShortcutRecorder({
     replacing: binding,
     shortcut: recorded,
   });
-  const canSave = recording.status === "ready" && !unsupportedKey && !isSaving;
-  const canReset = !row.isDefault && source.defaultKeybindings !== undefined;
+  const canSave = recording.status === "ready" && !unsupportedKey && !isSaving && !stale;
+  const canReset = !row.isDefault && source.defaultKeybindings !== undefined && !stale;
+  const resetTakeovers = canReset ? shortcutResetTakeovers(source, row) : [];
+  // Only while there is still something to warn about: the bindings can change under it.
+  const confirmReset = confirmingReset && resetTakeovers.length > 0;
   const isPreviewing = hasModifier(heldModifiers) && !capturedSinceModifiers;
 
   const shortcutLabel = (shortcut: KeybindingShortcut) =>
@@ -139,14 +205,29 @@ function ShortcutRecorder({
   const apply = async (edits: ServerKeybindingEdit[]) => {
     if (isSaving) return;
     setIsSaving(true);
-    if (await onApply(edits)) {
+    setFrozenView(view);
+    const applied = await onApply(edits);
+    // Closed (Escape) or replaced by a newer open while the save was in flight: that
+    // dialog is no longer this one to close or update.
+    if (!liveRef.current) return;
+    if (applied) {
       onClose();
       return;
     }
+    setFrozenView(null);
     setIsSaving(false);
+    setConfirmingReset(false);
   };
   const save = () => {
     if (recording.status === "ready" && canSave) void apply(shortcutSaveEdits(recording, binding));
+  };
+  // Resetting can take a shortcut from another command; say so once before doing it.
+  const reset = () => {
+    if (resetTakeovers.length > 0 && !confirmReset) {
+      setConfirmingReset(true);
+      return;
+    }
+    void apply(shortcutResetEdits(source, row));
   };
 
   const handleModifierChange = useEffectEvent((event: KeyboardEvent) => {
@@ -178,8 +259,10 @@ function ShortcutRecorder({
     const shortcut = shortcutFromKeyboardEvent(event, platform);
     setCapturedSinceModifiers(true);
     setUnsupportedKey(shortcut === null);
+    setConfirmingReset(false);
     if (!shortcut) return;
     setRecorded(shortcut);
+    setCharacter(typedCharacter(event, shortcut, platform));
     setPressed(true);
     if (pressTimeoutRef.current !== null) window.clearTimeout(pressTimeoutRef.current);
     pressTimeoutRef.current = window.setTimeout(() => setPressed(false), KEY_PRESS_MS);
@@ -189,6 +272,14 @@ function ShortcutRecorder({
   });
 
   useEffect(() => {
+    liveRef.current = active;
+    return () => {
+      liveRef.current = false;
+    };
+  }, [active]);
+
+  useEffect(() => {
+    if (!active) return;
     // While recording, no shortcut fires, so every key reaches the recorder.
     const resume = suspendShortcutDispatch();
     const onKeyDown = (event: KeyboardEvent) => handleKeyDown(event);
@@ -204,20 +295,34 @@ function ShortcutRecorder({
       if (pressTimeoutRef.current !== null) window.clearTimeout(pressTimeoutRef.current);
       resume();
     };
-  }, []);
+  }, [active]);
 
-  const problem = unsupportedKey
-    ? "That key can't be used in a shortcut. Try another."
-    : recording.status === "problem"
-      ? recording.message
-      : null;
+  const problem = stale
+    ? "This shortcut changed while the dialog was open. Close it and try again."
+    : unsupportedKey
+      ? "That key can't be used in a shortcut. Try another."
+      : recording.status === "problem"
+        ? recording.message
+        : null;
   const conflicts = recording.status === "ready" && !unsupportedKey ? recording.conflicts : [];
+  const resetWarning =
+    confirmReset && !problem
+      ? `Resetting takes back ${joinPhrases(
+          resetTakeovers.map(
+            ({ rule, label }) => `${formatShortcutLabel(rule.shortcut, platform)} from “${label}”`,
+          ),
+        )}.`
+      : null;
+  const caution =
+    recording.status === "ready" && recorded && character
+      ? `On your keyboard, ${shortcutLabel(recorded)} types “${character}”. Saving it stops those keys from typing it.`
+      : null;
 
   return (
-    <div className="flex flex-col gap-3.5 px-5 pt-5 pb-4">
+    <div className="flex flex-col gap-3 px-4 pt-4 pb-3">
       <div className="flex items-center gap-3">
-        <div className="flex size-10 shrink-0 items-center justify-center rounded-[9px] border border-[color:var(--color-border)] bg-muted text-foreground">
-          <CentralIcon name="shortcut" className="size-5" />
+        <div className="flex size-9 shrink-0 items-center justify-center rounded-[9px] border border-[color:var(--color-border)] bg-muted text-foreground">
+          <CentralIcon name="shortcut" className="size-4.5" />
         </div>
         <div className="min-w-0 space-y-0.5">
           <DialogTitle className="truncate text-[15px]">{row.label}</DialogTitle>
@@ -231,7 +336,10 @@ function ShortcutRecorder({
       <div
         ref={keyWellRef}
         tabIndex={-1}
-        className="flex min-h-[104px] items-center justify-center gap-2 rounded-xl border border-[color:var(--color-border)] bg-muted px-3 shadow-[inset_0_1px_3px_rgba(0,0,0,0.12)] outline-none dark:shadow-[inset_0_1px_3px_rgba(0,0,0,0.5)]"
+        role="group"
+        aria-label={recorded ? `Shortcut ${shortcutLabel(recorded)}` : "Type a shortcut"}
+        aria-describedby={statusId}
+        className="flex min-h-[88px] items-center justify-center gap-2 rounded-xl border border-[color:var(--color-border)] bg-muted px-3 shadow-[inset_0_1px_3px_rgba(0,0,0,0.12)] outline-none dark:shadow-[inset_0_1px_3px_rgba(0,0,0,0.5)]"
       >
         {isPreviewing ? (
           <>
@@ -244,7 +352,6 @@ function ShortcutRecorder({
           </>
         ) : recorded ? (
           <>
-            <span className="sr-only">Shortcut {shortcutLabel(recorded)}</span>
             {splitShortcutLabel(shortcutLabel(recorded)).map((label) => (
               <Keycap key={label} label={label} pressed={pressed} />
             ))}
@@ -255,12 +362,13 @@ function ShortcutRecorder({
       </div>
 
       <div
+        id={statusId}
         role="status"
         className={cn(
-          "flex min-h-[30px] items-start gap-1.5 text-ui-sm leading-snug",
+          "flex min-h-[2lh] items-start gap-1.5 text-ui-sm leading-snug",
           problem
             ? "text-destructive"
-            : conflicts.length > 0
+            : resetWarning || conflicts.length > 0 || caution
               ? "text-warning"
               : "text-muted-foreground",
         )}
@@ -270,14 +378,23 @@ function ShortcutRecorder({
             <TriangleAlertIcon className="mt-px size-3.5 shrink-0" />
             <span>{problem}</span>
           </>
+        ) : resetWarning ? (
+          <>
+            <TriangleAlertIcon className="mt-px size-3.5 shrink-0" />
+            <span>{resetWarning}</span>
+          </>
         ) : recording.status === "ready" && recorded ? (
-          conflicts.length > 0 ? (
+          conflicts.length > 0 || caution ? (
             <>
               <TriangleAlertIcon className="mt-px size-3.5 shrink-0" />
               <span>
-                {shortcutLabel(recorded)} already runs{" "}
-                {joinLabels([...new Set(conflicts.map((conflict) => conflict.label))])}. Saving
-                moves it here.
+                {conflicts.length > 0
+                  ? `${shortcutLabel(recorded)} already runs ${joinLabels([
+                      ...new Set(conflicts.map((conflict) => conflict.label)),
+                    ])}. Saving moves it here.`
+                  : null}
+                {conflicts.length > 0 && caution ? " " : null}
+                {caution}
               </span>
             </>
           ) : (
@@ -302,9 +419,12 @@ function ShortcutRecorder({
             variant="ghost"
             className="-ml-2 font-normal"
             disabled={isSaving}
-            onClick={() => void apply(shortcutResetEdits(source, row))}
+            // A double click would land its second click on "Reset anyway".
+            onClick={(event) => {
+              if (event.detail <= 1) reset();
+            }}
           >
-            Reset to default
+            {confirmReset ? "Reset anyway" : "Reset to default"}
           </Button>
         ) : null}
         <div className="flex-1" />

@@ -120,6 +120,8 @@ import {
   resolveRoutePanelBootstrap,
   stripEditorViewSearchParams,
 } from "../../routes/-chatThreadRoute.logic";
+import { matchesFixedShortcut } from "~/fixedShortcuts";
+import { isShortcutDispatchSuspended } from "~/keybindings";
 import { cn } from "~/lib/utils";
 
 const PullRequestDockPane = lazy(() => import("../pullRequest/PullRequestDockPane"));
@@ -391,16 +393,16 @@ export function SingleChatSurface(props: {
     if (editorViewActive) return;
 
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.repeat || event.altKey) return;
-      const isPrimaryModifier = event.ctrlKey || event.metaKey;
-      if (!isPrimaryModifier) return;
-      const key = event.key.toLowerCase();
-      if (key !== "p" && key !== "f") return;
-      if (key === "f" && !event.shiftKey) return;
-      if (key === "p" && event.shiftKey) return;
+      if (event.repeat || isShortcutDispatchSuspended()) return;
+      const mode = matchesFixedShortcut(event, "search.files")
+        ? "files"
+        : matchesFixedShortcut(event, "search.content")
+          ? "snippets"
+          : null;
+      if (!mode) return;
       event.preventDefault();
       event.stopPropagation();
-      setSearchPaletteMode(key === "p" ? "files" : "snippets");
+      setSearchPaletteMode(mode);
       setSearchPaletteOpen(true);
     };
     window.addEventListener("keydown", onKeyDown, { capture: true });

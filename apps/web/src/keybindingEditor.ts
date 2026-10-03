@@ -5,7 +5,6 @@
 // Depends on: the shortcut definitions, the keybinding matcher, and key capture.
 
 import {
-  UNASSIGNED_KEYBINDING_KEY,
   type KeybindingCommand,
   type KeybindingRule,
   type KeybindingShortcut,
@@ -14,10 +13,15 @@ import {
   type ResolvedKeybindingsConfig,
   type ServerKeybindingEdit,
 } from "@synara/contracts";
+import {
+  encodeKeybindingRule,
+  encodeKeybindingWhen,
+  resolvedKeybindingRuleIdentity,
+} from "@synara/shared/keybindingRules";
 
+import { fixedShortcutsForPlatform } from "./fixedShortcuts";
 import {
   evaluateWhenNode,
-  formatKeybindingWhenExpression,
   formatShortcutLabel,
   isUnassignedKeybinding,
   shortcutConflictKey,
@@ -82,6 +86,12 @@ function platformFacts(platform: string): Record<string, boolean> {
   return { isMac: isMacPlatform(platform) };
 }
 
+// Only one thing has keyboard focus at a time, so conditions on two different focused
+// surfaces never hold together.
+function isFocusName(name: string): boolean {
+  return name.endsWith("Focus");
+}
+
 function collectWhenNames(node: KeybindingWhenNode, names: Set<string>): void {
   switch (node.type) {
     case "identifier":
@@ -102,7 +112,7 @@ function collectWhenNames(node: KeybindingWhenNode, names: Set<string>): void {
  * Whether some app state makes every condition true at once, given `facts` that never
  * change at runtime (the platform). Two bindings on the same key only collide when
  * their conditions can hold together: Mod+D splits a focused terminal and toggles the
- * diff panel otherwise, and those never meet.
+ * diff panel otherwise, and those never meet. At most one `…Focus` name is true at once.
  */
 export function whenConditionsCanHoldTogether(
   conditions: ReadonlyArray<KeybindingWhenNode | undefined>,
@@ -113,8 +123,14 @@ export function whenConditionsCanHoldTogether(
   for (const node of nodes) collectWhenNames(node, names);
   const free = [...names].filter((name) => !(name in facts));
   if (free.length > MAX_WHEN_NAMES) return true;
+  const focusMask = free.reduce(
+    (mask, name, index) => (isFocusName(name) ? mask | (1 << index) : mask),
+    0,
+  );
 
   for (let mask = 0; mask < 2 ** free.length; mask += 1) {
+    const focused = mask & focusMask;
+    if ((focused & (focused - 1)) !== 0) continue;
     const context: Record<string, boolean> = { ...facts };
     free.forEach((name, index) => {
       context[name] = (mask & (1 << index)) !== 0;
@@ -124,18 +140,10 @@ export function whenConditionsCanHoldTogether(
   return false;
 }
 
-function ruleIdentity(rule: ResolvedKeybindingRule): string {
-  const { shortcut } = rule;
-  return [
-    rule.command,
-    shortcut.key,
-    shortcut.modKey,
-    shortcut.metaKey,
-    shortcut.ctrlKey,
-    shortcut.altKey,
-    shortcut.shiftKey,
-    formatKeybindingWhenExpression(rule.whenAst),
-  ].join("\u0000");
+const ruleIdentity = resolvedKeybindingRuleIdentity;
+
+function whenText(node: KeybindingWhenNode | undefined): string {
+  return node ? encodeKeybindingWhen(node) : "";
 }
 
 function isShippedRule(source: ShortcutEditorSource, rule: ResolvedKeybindingRule): boolean {
@@ -209,12 +217,11 @@ function numberedFamilyBindings(
         rule !== undefined &&
         rule.shortcut.key === NUMBER_KEYS[index] &&
         sameModifiers(rule.shortcut, lead.shortcut) &&
-        formatKeybindingWhenExpression(rule.whenAst) ===
-          formatKeybindingWhenExpression(lead.whenAst),
+        whenText(rule.whenAst) === whenText(lead.whenAst),
     );
     if (!uniform) return null;
     bindings.push({
-      id: `${commands[0]}:${slot}`,
+      id: `${commands[0]}:${slot}:${ruleIdentity(lead)}`,
       label: `${formatShortcutLabel(lead.shortcut, source.platform)}–9`,
       rules: rules as ResolvedKeybindingRule[],
     });
@@ -358,40 +365,25 @@ function collidingRules(
   );
 }
 
-interface ReservedShortcut {
-  key: string;
-  shiftKey?: boolean;
-  macOnly?: boolean;
-  reason: string;
-}
-
-// Chords the app cannot hand to a command: binding them would take text editing away
-// from every input, or the system or Synara's own fixed shortcuts get the key first.
-const RESERVED_PRIMARY_SHORTCUTS: readonly ReservedShortcut[] = [
-  { key: "c", reason: "is reserved for Copy" },
-  { key: "v", reason: "is reserved for Paste" },
-  { key: "x", reason: "is reserved for Cut" },
-  { key: "a", reason: "is reserved for Select All" },
-  { key: "z", reason: "is reserved for Undo" },
-  { key: "z", shiftKey: true, reason: "is reserved for Redo" },
-  { key: ",", reason: "always opens Settings" },
-  { key: "/", reason: "always opens the keybindings sheet" },
-  { key: "q", macOnly: true, reason: "is reserved by macOS for Quit" },
-  { key: "h", macOnly: true, reason: "is reserved by macOS for Hide" },
-  { key: "m", macOnly: true, reason: "is reserved by macOS for Minimize" },
-];
-
-function reservedReason(shortcut: KeybindingShortcut, platform: string): string | null {
-  const isMac = isMacPlatform(platform);
-  const primaryOnly = shortcut.modKey && !shortcut.altKey && !shortcut.metaKey && !shortcut.ctrlKey;
-  if (!primaryOnly) return null;
-  const reserved = RESERVED_PRIMARY_SHORTCUTS.find(
-    (entry) =>
-      entry.key === shortcut.key &&
-      (entry.shiftKey ?? false) === shortcut.shiftKey &&
-      (!entry.macOnly || isMac),
-  );
-  return reserved?.reason ?? null;
+/**
+ * Why the first of `candidates` that lands on a fixed chord cannot have it: text
+ * editing, the system, or one of Synara's own shortcuts takes that key first.
+ */
+function fixedShortcutReason(
+  source: ShortcutEditorSource,
+  candidates: readonly ResolvedKeybindingRule[],
+): string | null {
+  const facts = platformFacts(source.platform);
+  for (const candidate of candidates) {
+    const key = shortcutConflictKey(candidate.shortcut, source.platform);
+    const fixed = fixedShortcutsForPlatform(source.platform).find(
+      (entry) =>
+        shortcutConflictKey(entry.shortcut, source.platform) === key &&
+        whenConditionsCanHoldTogether([entry.whenAst, candidate.whenAst], facts),
+    );
+    if (fixed) return `${formatShortcutLabel(candidate.shortcut, source.platform)} ${fixed.reason}`;
+  }
+  return null;
 }
 
 function isFunctionKey(key: string): boolean {
@@ -442,8 +434,8 @@ export function evaluateRecordedShortcut(input: {
         : "Add Ctrl or Alt to that key, or use an F-key on its own.",
     };
   }
-  const reserved = reservedReason(shortcut, source.platform);
-  if (reserved) return { status: "problem", message: `${label} ${reserved}. Try another.` };
+  const fixed = fixedShortcutReason(source, candidates);
+  if (fixed) return { status: "problem", message: `${fixed}. Try another.` };
 
   const colliding = collidingRules(source, candidates, replaced);
   if (colliding.some((rule) => row.commands.includes(rule.command))) {
@@ -463,40 +455,14 @@ export function evaluateRecordedShortcut(input: {
   };
 }
 
-const WHEN_PRECEDENCE = { or: 1, and: 2, not: 3, identifier: 4 } as const;
-
-// Writes a condition the way a person would type it into keybindings.json. Parentheses
-// stay wherever dropping them would regroup the expression, so the text parses back to
-// this exact tree and still identifies the rule it came from.
-function whenExpression(node: KeybindingWhenNode): string {
-  const operand = (child: KeybindingWhenNode, needsParens: boolean) =>
-    needsParens ? `(${whenExpression(child)})` : whenExpression(child);
-  const precedence = WHEN_PRECEDENCE[node.type];
-  switch (node.type) {
-    case "identifier":
-      return node.name;
-    case "not":
-      return `!${operand(node.node, WHEN_PRECEDENCE[node.node.type] < precedence)}`;
-    case "and":
-    case "or":
-      return [
-        operand(node.left, WHEN_PRECEDENCE[node.left.type] < precedence),
-        node.type === "and" ? "&&" : "||",
-        operand(node.right, WHEN_PRECEDENCE[node.right.type] <= precedence),
-      ].join(" ");
-  }
-}
-
 function keybindingRule(rule: ResolvedKeybindingRule): KeybindingRule {
-  const when = rule.whenAst ? whenExpression(rule.whenAst) : "";
-  return {
-    command: rule.command,
-    key:
-      rule.shortcut.key === UNASSIGNED_KEYBINDING_KEY
-        ? UNASSIGNED_KEYBINDING_KEY
-        : keybindingValueFromShortcut(rule.shortcut),
-    ...(when ? { when } : {}),
-  };
+  return (
+    encodeKeybindingRule(rule) ?? {
+      command: rule.command,
+      key: keybindingValueFromShortcut(rule.shortcut),
+      ...(rule.whenAst ? { when: encodeKeybindingWhen(rule.whenAst) } : {}),
+    }
+  );
 }
 
 /** Takes the shortcut from whoever holds it, then gives it to the row. */
@@ -524,24 +490,32 @@ export function shortcutRemoveEdits(binding: ShortcutEditorBinding): ServerKeybi
 }
 
 /**
- * Restores the row's shipped bindings, first taking their keys back from any other
- * command that picked them up in the meantime. Project script shortcuts are left
- * alone: they are edited with their project, and they keep winning the key.
+ * Bindings of other commands that resetting `row` takes back, because they now sit on
+ * one of its shipped shortcuts. Each of those commands loses that shortcut, and is left
+ * unassigned when it was its only one. Project script shortcuts are left alone: they are
+ * edited with their project, and they keep winning the key.
  */
-export function shortcutResetEdits(
+export function shortcutResetTakeovers(
   source: ShortcutEditorSource,
   row: ShortcutEditorRow,
-): ServerKeybindingEdit[] {
+): ShortcutEditorConflict[] {
   const shipped = (source.defaultKeybindings ?? []).filter(
     (rule) => row.commands.includes(rule.command) && appliesOnPlatform(source, rule),
   );
   const ownRules = source.keybindings.filter((rule) => row.commands.includes(rule.command));
-  const takenBack = collidingRules(source, shipped, ownRules).filter(
-    (rule) => !isProjectScriptCommand(rule.command),
-  );
+  return collidingRules(source, shipped, ownRules)
+    .filter((rule) => !isProjectScriptCommand(rule.command))
+    .map((rule) => ({ rule, label: commandLabel(rule.command) }));
+}
+
+/** Restores the row's shipped bindings, taking back {@link shortcutResetTakeovers} first. */
+export function shortcutResetEdits(
+  source: ShortcutEditorSource,
+  row: ShortcutEditorRow,
+): ServerKeybindingEdit[] {
   return [
-    ...takenBack.map(
-      (rule): ServerKeybindingEdit => ({ type: "remove", rule: keybindingRule(rule) }),
+    ...shortcutResetTakeovers(source, row).map(
+      ({ rule }): ServerKeybindingEdit => ({ type: "remove", rule: keybindingRule(rule) }),
     ),
     ...row.commands.map((command): ServerKeybindingEdit => ({ type: "reset", command })),
   ];
