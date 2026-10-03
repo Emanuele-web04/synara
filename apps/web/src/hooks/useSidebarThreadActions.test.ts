@@ -443,6 +443,62 @@ describe("useSidebarThreadActions", () => {
     expect(harness.navigate).not.toHaveBeenCalled();
   });
 
+  it.each(["open-split", "leave-and-return"] as const)(
+    "keeps newer navigation when snooze confirmation follows %s",
+    async (navigation) => {
+      let confirm!: (value: { sequence: number }) => void;
+      harness.dispatchCommand.mockReturnValueOnce(
+        new Promise((resolve) => {
+          confirm = resolve;
+        }),
+      );
+      const controller = render({ routeThreadId: THREAD_ID });
+      controller.snoozeThread(THREAD_ID, 30);
+      if (navigation === "open-split") {
+        render({
+          routeThreadId: THREAD_ID,
+          activeSplitView: { id: "split-snooze" } as never,
+          routeSplitViewId: "split-snooze",
+        });
+      } else {
+        render({ routeThreadId: FALLBACK_ID });
+        render({ routeThreadId: THREAD_ID });
+      }
+      confirm({ sequence: 1 });
+      await flushActionResponses();
+
+      expect(harness.navigate).not.toHaveBeenCalled();
+      expect(harness.handleNewChat).not.toHaveBeenCalled();
+      expect(harness.toast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ archiveUndo: expect.any(Object) }),
+        }),
+      );
+    },
+  );
+
+  it("returns focus to an ordinary visible chat rather than a dock chat or subagent", async () => {
+    const dockChat = makeThread(ThreadId.makeUnsafe("dock-chat"), {
+      lastVisitedAt: "2026-10-03T12:00:00.000Z",
+    });
+    const child = makeThread(ThreadId.makeUnsafe("visible-subagent"), {
+      parentThreadId: FALLBACK_ID,
+      lastVisitedAt: "2026-10-03T11:00:00.000Z",
+    });
+    const focused = makeThread(THREAD_ID);
+    const fallback = makeThread(FALLBACK_ID);
+    sidebarThreads = [focused, fallback, dockChat, child];
+    render({
+      routeThreadId: THREAD_ID,
+      sidebarTreeThreads: [focused, fallback, child],
+    }).snoozeThread(THREAD_ID, 30);
+    await flushActionResponses();
+
+    expect(harness.navigate).toHaveBeenCalledWith(
+      expect.objectContaining({ params: { threadId: FALLBACK_ID } }),
+    );
+  });
+
   it("opens a new chat if all other chats are snoozed", async () => {
     sidebarThreads = [
       makeThread(THREAD_ID),

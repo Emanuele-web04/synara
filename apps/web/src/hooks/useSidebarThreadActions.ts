@@ -460,21 +460,23 @@ export function useSidebarThreadActions(input: {
 
   // Snooze confirms asynchronously; these refs let the confirmation see the
   // route and thread list as they are then, not as they were when it started.
-  const routeThreadIdRef = useRef(routeThreadId);
-  const snoozeFallbackThreadsRef = useRef(sidebarThreads);
+  const snoozeFallbackThreadsRef = useRef(sidebarTreeThreads);
   useEffect(() => {
-    routeThreadIdRef.current = routeThreadId;
     snoozeFallbackThreadsRef.current = filterThreadsToActiveSpace
-      ? filterThreadsToActiveSpace(sidebarThreads)
-      : sidebarThreads;
-  }, [filterThreadsToActiveSpace, routeThreadId, sidebarThreads]);
+      ? filterThreadsToActiveSpace(sidebarTreeThreads)
+      : sidebarTreeThreads;
+  }, [filterThreadsToActiveSpace, sidebarTreeThreads]);
 
   const snoozeThread = useCallback(
     (threadId: ThreadId, duration: SnoozeDuration) => {
       const deadline = resolveSnoozeDeadline(duration, Date.now());
       const previousSnoozedUntil = sidebarThreadSummaryById[threadId]?.snoozedUntil ?? null;
-      const leavesFocusedThread =
-        routeThreadIdRef.current === threadId && routeSplitViewId === null;
+      const navigationAtDispatch = closeNavigationInputRef.current;
+      const routeVersionAtDispatch =
+        navigationAtDispatch.routeThreadId === threadId &&
+        navigationAtDispatch.routeSplitViewId === null
+          ? navigationAtDispatch.routeVersion
+          : null;
       void setThreadSnoozedUntil(threadId, deadline.toISOString()).then((confirmed) => {
         if (!confirmed) return;
         // Same compact Undo toast as archive, so chat-level undo reads alike.
@@ -490,10 +492,20 @@ export function useSidebarThreadActions(input: {
             },
           },
         });
-        // Only move focus if the user is still on the snoozed chat.
-        if (!leavesFocusedThread || routeThreadIdRef.current !== threadId) return;
+        // A split opening or an away-and-back visit is newer navigation too.
+        const currentNavigation = closeNavigationInputRef.current;
+        if (
+          routeVersionAtDispatch === null ||
+          currentNavigation.routeVersion !== routeVersionAtDispatch ||
+          currentNavigation.routeThreadId !== threadId ||
+          currentNavigation.routeSplitViewId !== null
+        )
+          return;
         const fallbackThreadId = getFallbackThreadIdAfterSnooze({
-          threads: snoozeFallbackThreadsRef.current,
+          threads: excludeHiddenProjectAgentCoordinatorThreads(
+            snoozeFallbackThreadsRef.current,
+            hiddenCoordinatorThreadIds(),
+          ).filter((thread) => !thread.parentThreadId),
           snoozedThreadId: threadId,
         });
         if (fallbackThreadId) {
@@ -507,7 +519,7 @@ export function useSidebarThreadActions(input: {
         }
       });
     },
-    [handleNewChat, navigate, routeSplitViewId, setThreadSnoozedUntil, sidebarThreadSummaryById],
+    [handleNewChat, navigate, setThreadSnoozedUntil, sidebarThreadSummaryById],
   );
 
   // Drop optimistic settle entries once the server-confirmed state agrees, so
