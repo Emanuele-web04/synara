@@ -5043,6 +5043,7 @@ export default function Sidebar() {
         isActive={visualActiveSidebarThreadId === thread.id}
         isSettled={false}
         isPinned={pinnedThreadIdSet.has(thread.id)}
+        threadJumpLabel={visibleThreadJumpLabelByThreadId.get(thread.id) ?? null}
         hasPendingDraft={draftThreadIdSet.has(thread.id)}
         pr={
           prByThreadId.has(thread.id)
