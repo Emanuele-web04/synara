@@ -432,14 +432,19 @@ export function clampTooltipTop(
 // below the knee, and squares the result so only real peaks reach full width.
 const AUDIO_NOISE_KNEE = 0.12;
 const AUDIO_MIN_PEAK = 0.3;
-// Per reported level (~30 Hz): the reference halves in about four seconds.
-const AUDIO_PEAK_RELEASE = 0.995;
+// Silence is emitted only once, so decay by elapsed time rather than report count.
+const AUDIO_PEAK_HALF_LIFE_MS = 4_000;
 
 /** Stateful level shaper: maps reported 0..1 levels onto wave height with automatic gain. */
 export function createAudioLevelShaper(): (level: number) => number {
   let peak = AUDIO_MIN_PEAK;
+  let lastReportedAt = performance.now();
   return (level) => {
-    peak = Math.max(level, AUDIO_MIN_PEAK, peak * AUDIO_PEAK_RELEASE);
+    const reportedAt = performance.now();
+    const elapsed = Math.max(0, reportedAt - lastReportedAt);
+    lastReportedAt = reportedAt;
+    const release = 0.5 ** (elapsed / AUDIO_PEAK_HALF_LIFE_MS);
+    peak = Math.max(level, AUDIO_MIN_PEAK, peak * release);
     const relative = clampNumber((level - AUDIO_NOISE_KNEE) / (peak - AUDIO_NOISE_KNEE), 0, 1);
     return relative * relative;
   };
