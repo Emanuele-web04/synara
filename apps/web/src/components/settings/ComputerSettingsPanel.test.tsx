@@ -66,9 +66,12 @@ function render(input: {
   readonly status?: ComputerStatusResult;
   readonly active?: boolean;
   readonly settings?: Partial<AppSettings>;
+  readonly platform?: string;
 }) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   if (input.status) queryClient.setQueryData(serverQueryKeys.computerStatus(), input.status);
+  if (input.platform)
+    queryClient.setQueryData(serverQueryKeys.environment(), { platform: { os: input.platform } });
   return renderToStaticMarkup(
     <QueryClientProvider client={queryClient}>
       <ComputerSettingsPanel {...binding(input.settings)} active={input.active ?? true} />
@@ -77,6 +80,17 @@ function render(input: {
 }
 
 describe("ComputerSettingsPanel", () => {
+  it("labels Windows as beta and explains interruption limits without promising Mac safeguards", () => {
+    const markup = render({
+      status: status({ availability: { kind: "available", backend: "cua" } }),
+      platform: "windows",
+    });
+    expect(markup).toContain("Computer control (Windows beta)");
+    expect(markup).toContain("stopping an action already in progress is not yet reliable");
+    expect(markup).not.toContain("shares your Mac desktop");
+    expect(markup).not.toContain("Input Monitoring is granted");
+  });
+
   it("renders nothing while the panel is not the active one", () => {
     // The status query is gated on the same flag; a panel nobody is looking at
     // must not poll a backend awake.

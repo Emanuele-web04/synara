@@ -106,6 +106,12 @@ const text = (value: unknown, max = 1024): string =>
 const number = (value: unknown): number =>
   typeof value === "number" && Number.isFinite(value) ? value : NaN;
 function captureAccessAvailable(permission: Record<string, unknown>, platform: string): boolean {
+  if (platform === "win32") {
+    // Windows has no screen-recording consent gate. UIA is the upstream
+    // availability prerequisite, not proof of successful capture; a failed
+    // screenshot stays latched until a validated frame arrives.
+    return permission.uia === true;
+  }
   if (platform !== "linux" || typeof permission.screen_recording === "boolean")
     return permission.screen_recording === true;
   // These are display prerequisites, not proof that every compositor exposes
@@ -122,7 +128,11 @@ function missingComputerPermissions(
   const accessibility =
     platform === "linux"
       ? (permission.atspi ?? permission.accessibility)
-      : permission.accessibility;
+      : platform === "win32"
+        ? // The upstream Windows driver reports UIA availability instead of an
+          // accessibility grant; Windows needs no accessibility consent prompt.
+          permission.uia
+        : permission.accessibility;
   if (accessibility !== true) missing.push("accessibility");
   if (!captureAccessAvailable(permission, platform)) missing.push("screenRecording");
   // Only the macOS host with a physical input listener reports this grant.
@@ -791,7 +801,8 @@ export class CuaComputerBackend implements ComputerBackend {
       // pixels flow again, only a fresh probe saying so does.
       // Only macOS's fresh grant proves its capture prerequisite recovered.
       // A Linux compositor connection alone must not erase a capture failure.
-      if (hostPlatform !== "linux" && permission.screen_recording === true)
+      // Windows reports a static UIA flag, not capture recovery evidence.
+      if (hostPlatform === "darwin" && permission.screen_recording === true)
         this.captureFailed = false;
       const bundleId = text(record(permission.source).host_bundle_id, 256);
       const signature = this.buildSignature();
@@ -1108,9 +1119,10 @@ export class CuaComputerBackend implements ComputerBackend {
     const scale = dimensions.width / region.width;
     if (Math.abs(dimensions.height / region.height - scale) > 0.01)
       throw new Error("Cua screenshot dimensions disagree with its geometry.");
-    // Linux has no TCC grant that proves capture recovered. A validated frame
-    // does; a mere connection to the compositor must not clear a prior failure.
-    if ((this.hostPlatform ?? process.platform) === "linux" && this.captureFailed) {
+    // Linux and Windows have no TCC grant that proves capture recovered.
+    // Require real pixels rather than a compositor connection or static UIA flag.
+    const platform = this.hostPlatform ?? process.platform;
+    if ((platform === "linux" || platform === "win32") && this.captureFailed) {
       this.captureFailed = false;
       this.setHealth({
         ...this.currentHealth,
