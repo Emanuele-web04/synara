@@ -253,3 +253,19 @@ describe("toast focus and visible lifetime", () => {
     expect(onNoUndo).toHaveBeenCalledOnce();
   });
 });
+
+describe("collapsed top-center stack", () => {
+  it("hides toasts behind the front one so wider ones do not peek out", () => {
+    flushSync(() =>
+      toastManager.add({ title: "A much longer older notification title", timeout: 0 }),
+    );
+    flushSync(() => toastManager.add({ title: "Newer", timeout: 0 }));
+    const [front, behind] = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-slot="toast-viewport"] > [data-position]'),
+    );
+    expect(front!.textContent).toContain("Newer");
+    expect(getComputedStyle(front!).pointerEvents).not.toBe("none");
+    expect(behind!.textContent).toContain("older notification");
+    expect(getComputedStyle(behind!).pointerEvents).toBe("none");
+  });
+});
