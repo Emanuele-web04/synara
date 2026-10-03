@@ -17,6 +17,7 @@ import {
   hasLiveTurnTailWork,
   isLatestTurnSettled,
   PROVIDER_OPTIONS,
+  countOutstandingBackgroundWork,
 } from "./session-logic";
 import { makeActivity } from "./storeTestFixtures";
 
@@ -301,6 +302,58 @@ describe("deriveActiveBackgroundTasksState", () => {
     ];
 
     expect(deriveActiveBackgroundTasksState(activities, TurnId.makeUnsafe("turn-1"))).toBeNull();
+  });
+});
+
+describe("countOutstandingBackgroundWork", () => {
+  const movedToBackground = (taskId: string) =>
+    makeActivity({
+      id: `moved-${taskId}`,
+      createdAt: "2026-02-23T00:00:01.000Z",
+      kind: "runtime.warning",
+      summary: "Moved to background",
+      tone: "info",
+      turnId: "turn-1",
+      payload: {
+        nativeEventType: "background_tasks_changed",
+        data: { tasks: [{ task_id: taskId, task_type: "local_agent", description: taskId }] },
+      },
+    });
+  const completed = (taskId: string, status = "completed") =>
+    makeActivity({
+      id: `done-${taskId}`,
+      createdAt: "2026-02-23T00:01:00.000Z",
+      kind: "task.completed",
+      summary: "Task completed",
+      tone: "info",
+      payload: { taskId, status },
+    });
+  const activities = [
+    movedToBackground("agent-a"),
+    movedToBackground("agent-b"),
+    completed("agent-a"),
+  ];
+
+  it.each(["completed", "stopped"])(
+    "counts older subagents until %s evidence settles them in a live replacement session",
+    (status) => {
+      expect(
+        countOutstandingBackgroundWork({ activities, session: { orchestrationStatus: "ready" } }),
+      ).toBe(1);
+      expect(
+        countOutstandingBackgroundWork({
+          activities: [...activities, completed("agent-b", status)],
+          session: { orchestrationStatus: "ready" },
+        }),
+      ).toBe(0);
+    },
+  );
+
+  it("stops counting once the session can no longer finish them", () => {
+    expect(
+      countOutstandingBackgroundWork({ activities, session: { orchestrationStatus: "stopped" } }),
+    ).toBe(0);
+    expect(countOutstandingBackgroundWork({ activities, session: null })).toBe(0);
   });
 });
 

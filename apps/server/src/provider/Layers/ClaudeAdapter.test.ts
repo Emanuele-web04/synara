@@ -5407,11 +5407,33 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
 
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
+      const noticed = yield* Deferred.make<void>();
+      const observed: ProviderRuntimeEvent[] = [];
+      const exited = yield* adapter.streamEvents.pipe(
+        Stream.tap((event) => {
+          observed.push(event);
+          return event.type === "runtime.warning"
+            ? Deferred.succeed(noticed, undefined)
+            : Effect.void;
+        }),
+        Stream.takeUntil((event) => event.type === "session.exited"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
       yield* adapter.startSession({
         threadId: THREAD_ID,
         provider: "claudeAgent",
         runtimeMode: "full-access",
       });
+
+      query.emit({
+        type: "system",
+        subtype: "background_tasks_changed",
+        tasks: [{ task_id: "retired-agent", task_type: "local_agent", description: "Working" }],
+        session_id: "sdk-session-retired",
+        uuid: "retired-agent-backgrounded",
+      } as unknown as SDKMessage);
+      yield* Deferred.await(noticed);
 
       const stopping = yield* adapter.stopSession(THREAD_ID).pipe(Effect.forkChild);
       yield* Effect.yieldNow;
@@ -5420,10 +5442,20 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       assert.equal(query.closeCalls, 1);
       assert.equal(teardownCalls, 1);
       assert.equal((yield* adapter.listSessions()).length, 1);
+      assert.deepEqual(
+        observed.filter((event) => event.type === "task.completed"),
+        [],
+      );
 
       proveExit?.();
       yield* Fiber.join(stopping);
+      yield* Fiber.join(exited);
       assert.equal((yield* adapter.listSessions()).length, 0);
+      const completions = observed.filter((event) => event.type === "task.completed");
+      assert.equal(completions.length, 1);
+      assert.equal(completions[0]?.threadId, THREAD_ID);
+      assert.equal(String(completions[0]?.payload.taskId), "retired-agent");
+      assert.equal(completions[0]?.payload.status, "stopped");
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(layer),

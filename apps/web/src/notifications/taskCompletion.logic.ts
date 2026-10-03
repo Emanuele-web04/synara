@@ -12,6 +12,7 @@ import { pendingRequestInstanceKey } from "@synara/shared/threadSummary";
 import type { Thread, ThreadSession } from "../types";
 import {
   derivePendingApprovals,
+  countOutstandingBackgroundWork,
   derivePendingBackgroundWork,
   derivePendingUserInputs,
   hasLiveLatestTurn,
@@ -547,12 +548,24 @@ function isCompletionNotificationSettled(thread: Thread | undefined): boolean {
 export function collectCompletedThreadCandidates(
   previousThreads: readonly Thread[],
   nextThreads: readonly Thread[],
+  options: {
+    /**
+     * Notify once the agent and every background subagent it launched have
+     * finished, instead of each time the agent or one of its subagents stops.
+     */
+    readonly waitForSubagents?: boolean;
+  } = {},
 ): CompletedThreadCandidate[] {
   const previousById = new Map(previousThreads.map((thread) => [thread.id, thread] as const));
   const candidates: CompletedThreadCandidate[] = [];
 
   for (const thread of nextThreads) {
     if (thread.snoozedUntil != null) continue;
+    // A subagent's own thread finishing is a step of its parent's work, and
+    // its result reaches the parent thread anyway.
+    if (options.waitForSubagents && thread.parentThreadId) {
+      continue;
+    }
     const previousThread = previousById.get(thread.id);
     if (!previousThread) {
       continue;
@@ -583,6 +596,12 @@ export function collectCompletedThreadCandidates(
     ) {
       continue;
     }
+    if (
+      options.waitForSubagents &&
+      countOutstandingBackgroundWork({ activities: thread.activities, session: thread.session }) > 0
+    ) {
+      continue;
+    }
     if (!previousThread.session && !previousThread.latestTurn?.completedAt) {
       continue;
     }
@@ -591,7 +610,17 @@ export function collectCompletedThreadCandidates(
     }
     if (
       previousThread.latestTurn?.turnId === thread.latestTurn?.turnId &&
-      isCompletionNotificationSettled(previousThread)
+      isCompletionNotificationSettled(previousThread) &&
+      // A held completion can be released by the final task or session settling
+      // without the parent entering another turn. Only dedupe a previously
+      // settled snapshot if it was already eligible for the alert.
+      !(
+        options.waitForSubagents &&
+        countOutstandingBackgroundWork({
+          activities: previousThread.activities,
+          session: previousThread.session,
+        }) > 0
+      )
     ) {
       continue;
     }

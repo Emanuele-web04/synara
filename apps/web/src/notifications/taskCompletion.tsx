@@ -275,10 +275,9 @@ export function TaskCompletionNotifications() {
       return;
     }
 
-    const completions = collectCompletedThreadCandidates(
-      previousThreadsRef.current,
-      threads,
-    ).filter(
+    const completions = collectCompletedThreadCandidates(previousThreadsRef.current, threads, {
+      waitForSubagents: settings.notifyAfterSubagentsFinish,
+    }).filter(
       (candidate) =>
         isNotificationRuntimeFreshTimestamp(candidate.completedAt, runtimeStartedAtMs) &&
         !snoozedThreadIds.has(candidate.threadId) &&
@@ -389,6 +388,7 @@ export function TaskCompletionNotifications() {
     navigate,
     settings.enableSystemTaskCompletionNotifications,
     settings.enableTaskCompletionToasts,
+    settings.notifyAfterSubagentsFinish,
     terminalStateByThreadId,
     snoozedThreadIds,
     threads,
