@@ -56,6 +56,17 @@ The tools surrounding an agent session remain available from the same task surfa
 | **Files / Editor** | Browse, inspect, and edit project files in context.                                               |
 | **Git**            | Work with branches, commits, pushes, and pull requests.                                           |
 
+To dictate into the chat composer, open **Settings → Keybindings**, find
+**Dictation: start/stop** or **Dictation: hold to talk**, and click **Set shortcut**
+on that row. Assign a combination such as Option+Space (`alt+space`). Start/stop mode transcribes on the
+second press; hold mode transcribes when you release the key or a modifier.
+Neither action has a default shortcut. These shortcuts work while Synara is
+focused and voice transcription is available through a ChatGPT-authenticated
+Codex session. They insert text into the draft without sending it. Hold mode
+cancels if the window loses focus or you release before the microphone opens.
+Press Escape to discard the recording, just like the cancel button, including
+while the microphone is starting.
+
 ### 3. Split views and previews
 
 Keep an active conversation alongside the surface it is changing. Split views, browser previews, and device previews make the result part of the working context.

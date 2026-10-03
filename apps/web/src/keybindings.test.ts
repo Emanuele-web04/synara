@@ -1028,6 +1028,29 @@ describe("plus key parsing", () => {
   });
 });
 
+it("matches physical Option+Space with a layout-dependent key value", () => {
+  assert.equal(
+    resolveShortcutCommand(
+      event({ key: "\u00a0", code: "Space", altKey: true }),
+      [
+        {
+          command: "composer.voice.toggle",
+          shortcut: {
+            key: " ",
+            modKey: false,
+            metaKey: false,
+            ctrlKey: false,
+            shiftKey: false,
+            altKey: true,
+          },
+        },
+      ],
+      { platform: "MacIntel" },
+    ),
+    "composer.voice.toggle",
+  );
+});
+
 describe("unassigned commands", () => {
   // What the server sends for a command whose shortcut the user removed.
   const unassignedNewThread = compile([

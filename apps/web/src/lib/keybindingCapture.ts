@@ -49,10 +49,11 @@ export function normalizeShortcutKeyToken(key: string): string | null {
  * modifier-only keydowns from committing an incomplete binding.
  */
 export function keybindingFromKeyboardEvent(
-  event: Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "shiftKey" | "altKey">,
+  event: Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "shiftKey" | "altKey"> &
+    Partial<Pick<KeyboardEvent, "code">>,
   platform = getNavigatorPlatform(),
 ): string | null {
-  const keyToken = normalizeShortcutKeyToken(event.key);
+  const keyToken = normalizeShortcutKeyToken(event.code === "Space" ? " " : event.key);
   if (!keyToken) return null;
 
   const parts: string[] = [];
