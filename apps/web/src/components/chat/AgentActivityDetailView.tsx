@@ -164,7 +164,10 @@ function AgentActivityEventRow(props: {
 }) {
   const preview = formatAgentActivityEntryPreview(props.entry);
   const title = formatAgentActivityEntryTitle(props.entry);
-  const body = isReasoningUpdateWorkEntry(props.entry) ? preview : (preview ?? props.entry.detail);
+  const body =
+    isReasoningUpdateWorkEntry(props.entry) || props.entry.activityKind === "tool.summary"
+      ? (props.entry.detail ?? preview)
+      : (preview ?? props.entry.detail);
 
   return (
     <div className="py-3 first:pt-0 last:pb-0">

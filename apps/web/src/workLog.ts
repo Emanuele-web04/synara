@@ -503,6 +503,10 @@ function shouldKeepActivityForWorkLog(
     return true;
   }
 
+  // Authentication can start or finish outside a turn. Keep its latest state
+  // visible even when the transcript has turn-scoped assistant messages.
+  if (activity.kind === "auth.status") return true;
+
   // Thread-level compaction progress has no provider turn id but should stay visible.
   if (activity.kind === "context-compaction" && activity.turnId === null) {
     return true;
@@ -924,6 +928,9 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (runtimeWarningMessage) {
     entry.detail = runtimeWarningMessage;
     entry.runtimeWarningMessage = runtimeWarningMessage;
+  }
+  if (activity.kind === "auth.status") {
+    entry.collapseKey = `auth:${asTrimmedString(payload?.provider) ?? "provider"}`;
   }
   if (activity.kind === "turn.tasks.updated") {
     const tasks = parseTaskListTasks(payload);
@@ -1357,7 +1364,8 @@ function collapseDerivedWorkLogEntries(
   // turn: each update replaces the row's content while the row itself stays
   // anchored at the first update's position, so the transcript shows a single
   // progressing checklist row instead of one "Tasks updated" row per snapshot.
-  const taskListIndexByKey = new Map<string, number>();
+  // Authentication uses the same replacement rule for its latest provider state.
+  const snapshotIndexByKey = new Map<string, number>();
   for (const entry of entries) {
     const runtimeReconciliationKey = entry.collapseKey?.startsWith("provider-runtime-reconcile:")
       ? entry.collapseKey
@@ -1368,14 +1376,17 @@ function collapseDerivedWorkLogEntries(
       }
       seenRuntimeReconciliationKeys.add(runtimeReconciliationKey);
     }
-    const taskListKey = entry.collapseKey?.startsWith("taskList:") ? entry.collapseKey : undefined;
-    if (taskListKey !== undefined) {
-      const existingIndex = taskListIndexByKey.get(taskListKey);
+    const snapshotKey =
+      entry.collapseKey?.startsWith("taskList:") || entry.collapseKey?.startsWith("auth:")
+        ? entry.collapseKey
+        : undefined;
+    if (snapshotKey !== undefined) {
+      const existingIndex = snapshotIndexByKey.get(snapshotKey);
       if (existingIndex !== undefined) {
-        collapsed[existingIndex] = mergeTaskListEntries(collapsed[existingIndex]!, entry);
+        collapsed[existingIndex] = mergeSnapshotEntries(collapsed[existingIndex]!, entry);
         continue;
       }
-      taskListIndexByKey.set(taskListKey, collapsed.length);
+      snapshotIndexByKey.set(snapshotKey, collapsed.length);
       collapsed.push(entry);
       continue;
     }
@@ -1464,14 +1475,14 @@ function mergeRuntimeWarningEntries(
   };
 }
 
-// A later task-list snapshot supersedes the earlier one wholesale (providers
-// resend the full checklist), so keep the newest content while preserving the
+// Authentication and task-list snapshots supersede earlier content wholesale. Task providers
+// resend the full checklist, so keep the newest content while preserving the
 // first row's id and createdAt: the id keeps React rows stable across updates
 // and the createdAt keeps the row anchored where the checklist first appeared.
 // A snapshot without readable tasks (explicit clear, or an unreadable payload)
 // carries no progress copy, so it must not overwrite a progressed row with the
 // generic "Tasks updated" label — keep the previous row's content instead.
-function mergeTaskListEntries(
+function mergeSnapshotEntries(
   previous: DerivedWorkLogEntry,
   next: DerivedWorkLogEntry,
 ): DerivedWorkLogEntry {

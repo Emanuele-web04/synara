@@ -55,6 +55,65 @@ function expectSchemaValidActivities(event: ProviderRuntimeEvent, sessionSequenc
   }
 }
 
+it("projects tool summaries with stable group identity and no empty rows", () => {
+  const event = runtimeEvent({
+    provider: "claudeAgent",
+    type: "tool.summary",
+    eventId: "summary-1",
+    turnId: TURN_ID,
+    payload: {
+      summary: "Reviewed the provider.\n\nCancellation is covered.",
+      precedingToolUseIds: ["read-1", "test-1"],
+    },
+  });
+  const [activity] = projectProviderRuntimeActivities(event);
+  expect(activity).toMatchObject({
+    kind: "tool.summary",
+    tone: "info",
+    summary: "Tool summary",
+    payload: { detail: "Reviewed the provider.\n\nCancellation is covered." },
+  });
+  expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
+  expect(
+    projectProviderRuntimeActivities({
+      ...event,
+      eventId: EventId.makeUnsafe("summary-repeated"),
+    })[0]?.id,
+  ).toBe(activity?.id);
+  expect(
+    projectProviderRuntimeActivities(
+      runtimeEvent({
+        provider: "claudeAgent",
+        type: "tool.summary",
+        eventId: "empty",
+        payload: { summary: "  " },
+      }),
+    ),
+  ).toEqual([]);
+});
+
+it.each([
+  [{ isAuthenticating: true }, "Claude authentication started", "info"],
+  [{ isAuthenticating: false }, "Claude authentication finished", "info"],
+  [
+    { isAuthenticating: false, error: "secret-login-token" },
+    "Claude authentication needs attention.",
+    "error",
+  ],
+] as const)("projects safe authentication status %j", (status, summary, tone) => {
+  const [activity] = projectProviderRuntimeActivities(
+    runtimeEvent({
+      provider: "claudeAgent",
+      type: "auth.status",
+      eventId: "auth-status",
+      payload: { ...status, output: ["https://login.example/?token=secret-login-token"] },
+    }),
+  );
+  expect(activity).toMatchObject({ kind: "auth.status", summary, tone, turnId: null });
+  expect(JSON.stringify(activity)).not.toContain("secret-login-token");
+  expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
+});
+
 it.each(["info", "warning"])("projects Pi %s notifications as notices", (type) => {
   const [activity] = projectProviderRuntimeActivities(
     runtimeEvent({

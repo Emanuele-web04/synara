@@ -197,7 +197,6 @@ export { claudeHomeEnvironment } from "../claudeEnvironment.ts";
 
 const PROVIDER = "claudeAgent" as const;
 const CLAUDE_DISCOVERY_THREAD_ID = ThreadId.makeUnsafe("claude:discovery");
-type ClaudeTextStreamKind = Extract<RuntimeContentStreamKind, "assistant_text" | "reasoning_text">;
 type ClaudeToolResultStreamKind = Extract<
   RuntimeContentStreamKind,
   "command_output" | "file_change_output"
@@ -237,6 +236,11 @@ interface ClaudeTurnState {
   compactionInProgress?: boolean;
   readonly items: Array<unknown>;
   readonly assistantTextBlocks: Map<number, AssistantTextBlockState>;
+  readonly reasoningBlocks: Map<
+    string,
+    { itemId: string; text: string; completed: boolean; snapshotReceived?: boolean }
+  >;
+  reasoningMessageId?: string;
   readonly assistantTextBlockOrder: Array<AssistantTextBlockState>;
   readonly capturedProposedPlanKeys: Set<string>;
   readonly sawFileChange: boolean;
@@ -1586,10 +1590,6 @@ function turnStatusFromResult(result: SDKResultMessage): ProviderRuntimeTurnStat
     return "cancelled";
   }
   return "failed";
-}
-
-function streamKindFromDeltaType(deltaType: string): ClaudeTextStreamKind {
-  return deltaType.includes("thinking") ? "reasoning_text" : "assistant_text";
 }
 
 function nativeProviderRefs(
@@ -3655,6 +3655,86 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
       });
 
+    // A turn contains several API messages, each of which reuses block indices.
+    const emitReasoning = (
+      context: ClaudeSessionContext,
+      index: number,
+      text: string,
+      complete: boolean,
+      snapshot?: { key: string },
+    ): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const turn = context.turnState;
+        if (!turn) return;
+        const key = snapshot?.key ?? `${turn.reasoningMessageId ?? "partial"}:${index}`;
+        let block = turn.reasoningBlocks.get(key);
+        if ((!snapshot && block?.completed) || (!block && text.length === 0)) return;
+        if (snapshot && block) {
+          block.snapshotReceived = true;
+          if (block.completed && block.text === text.slice(0, 8_000)) return;
+        }
+        if (!block) {
+          block = { itemId: yield* Random.nextUUIDv4, text: "", completed: false };
+          turn.reasoningBlocks.set(key, block);
+          const stamp = yield* makeEventStamp();
+          yield* offerRuntimeEvent(context, {
+            type: "item.started",
+            ...stamp,
+            provider: PROVIDER,
+            threadId: context.session.threadId,
+            turnId: turn.turnId,
+            itemId: asRuntimeItemId(block.itemId),
+            payload: { itemType: "reasoning", status: "inProgress", title: "Thinking" },
+            providerRefs: nativeProviderRefs(context),
+          });
+        }
+        const snapshotText = snapshot ? text.slice(0, 8_000) : undefined;
+        const delta =
+          snapshotText !== undefined
+            ? snapshotText.startsWith(block.text)
+              ? snapshotText.slice(block.text.length)
+              : ""
+            : text.slice(0, Math.max(0, 8_000 - block.text.length));
+        if (snapshotText !== undefined) {
+          block.text = snapshotText;
+          block.snapshotReceived = true;
+        } else {
+          block.text += delta;
+        }
+        if (delta.length > 0) {
+          const stamp = yield* makeEventStamp();
+          yield* offerRuntimeEvent(context, {
+            type: "content.delta",
+            ...stamp,
+            provider: PROVIDER,
+            threadId: context.session.threadId,
+            turnId: turn.turnId,
+            itemId: asRuntimeItemId(block.itemId),
+            payload: { streamKind: "reasoning_text", delta },
+            providerRefs: nativeProviderRefs(context),
+          });
+        }
+        if (complete) {
+          block.completed = true;
+          const stamp = yield* makeEventStamp();
+          yield* offerRuntimeEvent(context, {
+            type: "item.completed",
+            ...stamp,
+            provider: PROVIDER,
+            threadId: context.session.threadId,
+            turnId: turn.turnId,
+            itemId: asRuntimeItemId(block.itemId),
+            payload: {
+              itemType: "reasoning",
+              status: "completed",
+              title: "Thinking",
+              detail: block.text,
+            },
+            providerRefs: nativeProviderRefs(context),
+          });
+        }
+      });
+
     const handleStreamEvent = (
       context: ClaudeSessionContext,
       message: SDKMessage,
@@ -3665,38 +3745,32 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
 
         const { event } = message;
+        if (event.type === "message_start" && context.turnState) {
+          context.turnState.reasoningMessageId = event.message.id;
+        }
+        if (event.type === "content_block_start" && event.content_block.type === "thinking") {
+          yield* emitReasoning(context, event.index, event.content_block.thinking, false);
+          return;
+        }
+        if (event.type === "content_block_delta" && event.delta.type === "thinking_delta") {
+          yield* emitReasoning(context, event.index, event.delta.thinking ?? "", false);
+          return;
+        }
+        if (event.type === "content_block_stop") {
+          yield* emitReasoning(context, event.index, "", true);
+        }
 
         if (event.type === "message_start" && !context.subagentRefs) {
           context.cacheRequestStartedAt = { messageId: event.message.id, at: yield* nowIso };
         }
 
         if (event.type === "content_block_delta") {
-          if (
-            (event.delta.type === "text_delta" || event.delta.type === "thinking_delta") &&
-            context.turnState
-          ) {
-            const deltaText =
-              event.delta.type === "text_delta"
-                ? event.delta.text
-                : typeof event.delta.thinking === "string"
-                  ? event.delta.thinking
-                  : "";
-            if (deltaText.length === 0) {
-              return;
-            }
-            const streamKind = streamKindFromDeltaType(event.delta.type);
-            const assistantBlockEntry =
-              event.delta.type === "text_delta"
-                ? yield* ensureAssistantTextBlock(context, event.index)
-                : context.turnState.assistantTextBlocks.get(event.index)
-                  ? {
-                      blockIndex: event.index,
-                      block: context.turnState.assistantTextBlocks.get(
-                        event.index,
-                      ) as AssistantTextBlockState,
-                    }
-                  : undefined;
-            if (assistantBlockEntry?.block && event.delta.type === "text_delta") {
+          if (event.delta.type === "text_delta" && context.turnState) {
+            const deltaText = event.delta.text;
+            if (deltaText.length === 0) return;
+            const streamKind = "assistant_text" as const;
+            const assistantBlockEntry = yield* ensureAssistantTextBlock(context, event.index);
+            if (assistantBlockEntry?.block) {
               assistantBlockEntry.block.emittedTextDelta = true;
             }
             const stamp = yield* makeEventStamp();
@@ -4048,6 +4122,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           synthetic: true,
           items: [],
           assistantTextBlocks: new Map(),
+          reasoningBlocks: new Map(),
           assistantTextBlockOrder: [],
           capturedProposedPlanKeys: new Set(),
           sawFileChange: false,
@@ -4221,6 +4296,32 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
         if (context.turnState) {
           context.turnState.items.push(stripDiagnosticImages(message.message));
+          if (Array.isArray(content)) {
+            for (const [index, block] of content.entries()) {
+              if (block.type !== "thinking" || typeof block.thinking !== "string") continue;
+              const messageId = message.message.id ?? message.uuid;
+              // Singleton snapshots omit the stream index. Reconcile them in
+              // streamed block order, including blocks that have already stopped.
+              // A repeated snapshot then matches its already-reconciled text.
+              const candidates = Array.from(context.turnState.reasoningBlocks.entries()).filter(
+                ([key]) => key.startsWith(`${messageId}:`),
+              );
+              const exact =
+                candidates.find(
+                  ([, value]) =>
+                    !value.snapshotReceived && value.text === block.thinking.slice(0, 8_000),
+                ) ?? candidates.find(([, value]) => value.text === block.thinking.slice(0, 8_000));
+              const streamed = candidates.find(([, value]) => !value.snapshotReceived);
+              yield* emitReasoning(context, index, block.thinking, true, {
+                key:
+                  content.length > 1
+                    ? `${messageId}:${index}`
+                    : (exact?.[0] ??
+                      streamed?.[0] ??
+                      `${messageId}:snapshot:${message.uuid}:${index}`),
+              });
+            }
+          }
           yield* backfillAssistantTextBlocksFromSnapshot(context, message);
         }
 
@@ -4689,6 +4790,17 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               },
             });
             return;
+          case "api_retry": {
+            const delaySeconds = Math.ceil(message.retry_delay_ms / 1000);
+            const reason =
+              message.error_status === null ? "connection error" : `HTTP ${message.error_status}`;
+            yield* emitRuntimeWarning(
+              context,
+              `Request retry ${message.attempt}/${message.max_retries} in ${delaySeconds}s (${reason}).`,
+              message,
+            );
+            return;
+          }
           case "permission_denied": {
             const reason =
               message.decision_reason?.trim() ||
@@ -5033,11 +5145,13 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
 
         if (message.type === "tool_use_summary") {
+          const summary = message.summary.trim();
+          if (!summary) return;
           yield* offerRuntimeEvent(context, {
             ...base,
             type: "tool.summary",
             payload: {
-              summary: message.summary,
+              summary,
               ...(message.preceding_tool_use_ids.length > 0
                 ? { precedingToolUseIds: message.preceding_tool_use_ids }
                 : {}),
@@ -6723,6 +6837,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             : {}),
           items: [],
           assistantTextBlocks: new Map(),
+          reasoningBlocks: new Map(),
           assistantTextBlockOrder: [],
           capturedProposedPlanKeys: new Set(),
           sawFileChange: false,

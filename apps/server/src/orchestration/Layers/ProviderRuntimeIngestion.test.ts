@@ -2839,6 +2839,251 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.messages).toHaveLength(0);
   });
 
+  it("streams one coalesced Claude reasoning row and keeps its position when it completes", async () => {
+    const harness = await createHarness({ startIngestion: false });
+    const base = {
+      provider: "claudeAgent" as const,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-claude-reasoning"),
+      itemId: asItemId("claude-thought-1"),
+    };
+    const activityId = "provider-reasoning:thread-1:claude-thought-1";
+    const firstAt = "2026-10-03T10:00:00.000Z";
+    const appendDelta = (eventId: string, createdAt: string, delta: string) =>
+      Effect.runPromise(
+        harness.runtimeEventRepository.append({
+          ...base,
+          type: "content.delta",
+          eventId: asEventId(eventId),
+          createdAt,
+          payload: { streamKind: "reasoning_text", delta },
+        }),
+      );
+    const first = await appendDelta("claude-preview-1", firstAt, "While the worker runs, ");
+    await harness.startIngestion();
+    await harness.drain();
+    const live = await harness.readProjectedThread();
+    expect(live?.activities.find((activity) => activity.id === activityId)).toMatchObject({
+      createdAt: firstAt,
+      sequence: first.sequence,
+      payload: { status: "inProgress", detail: "While the worker runs," },
+    });
+    expect(live?.messages).toHaveLength(0);
+
+    await appendDelta("claude-preview-2", "2026-10-03T10:00:00.050Z", "I will ");
+    await appendDelta("claude-preview-3", "2026-10-03T10:00:00.300Z", "check the tests.");
+    await harness.drain();
+    const updates = Array.from(
+      await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
+    ).filter(
+      (event) =>
+        event.type === "thread.activity-appended" && event.payload.activity.id === activityId,
+    );
+    expect(updates).toHaveLength(2);
+    expect(
+      (await harness.readProjectedThread())?.activities.find(
+        (activity) => activity.id === activityId,
+      )?.payload,
+    ).toMatchObject({
+      status: "inProgress",
+      detail: "While the worker runs, I will check the tests.",
+    });
+
+    await Effect.runPromise(
+      harness.runtimeEventRepository.append({
+        ...base,
+        type: "item.started",
+        eventId: asEventId("claude-next-tool"),
+        itemId: asItemId("claude-command"),
+        createdAt: "2026-10-03T10:00:00.350Z",
+        payload: {
+          itemType: "command_execution",
+          status: "inProgress",
+          title: "Run tests",
+          data: { command: "npm test" },
+        },
+      }),
+    );
+    await Effect.runPromise(
+      harness.runtimeEventRepository.append({
+        ...base,
+        type: "item.completed",
+        eventId: asEventId("claude-thought-complete"),
+        createdAt: "2026-10-03T10:00:00.400Z",
+        payload: {
+          itemType: "reasoning",
+          status: "completed",
+          detail: "While the worker runs, I will check the tests and their setup.",
+        },
+      }),
+    );
+    await harness.drain();
+    const settled = await harness.readProjectedThread();
+    const thoughts = settled?.activities.filter((activity) => activity.id === activityId);
+    expect(thoughts).toHaveLength(1);
+    expect(thoughts?.[0]).toMatchObject({
+      createdAt: firstAt,
+      sequence: first.sequence,
+      payload: {
+        status: "completed",
+        detail: "While the worker runs, I will check the tests and their setup.",
+      },
+    });
+    expect(settled?.activities.findIndex((activity) => activity.id === activityId)).toBeLessThan(
+      settled!.activities.findIndex((activity) => activity.kind === "tool.started"),
+    );
+    expect(settled?.messages).toHaveLength(0);
+  });
+
+  it.each([
+    { type: "turn.aborted", payload: { reason: "User interrupted" }, status: "failed" },
+    { type: "runtime.error", payload: { message: "Provider disconnected" }, status: "failed" },
+    { type: "session.exited", payload: { exitKind: "error" }, status: "failed" },
+    { type: "turn.completed", payload: { state: "completed" }, status: "completed" },
+  ] as const)("recovers accepted Claude reasoning and settles it on $type", async (terminal) => {
+    const harness = await createHarness({ startIngestion: false });
+    const base = {
+      provider: "claudeAgent" as const,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-claude-recovered"),
+      createdAt: "2026-10-03T10:01:00.000Z",
+    };
+    const persisted = await Effect.runPromise(
+      harness.runtimeEventRepository.append({
+        ...base,
+        type: "content.delta",
+        itemId: asItemId("recovered-thought"),
+        eventId: asEventId("claude-accepted-thought"),
+        payload: { streamKind: "reasoning_text", delta: "Checking the remaining cases." },
+      }),
+    );
+    await Effect.runPromise(
+      harness.runtimeEventRepository.advanceConsumerCursor({
+        consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+        eventSequence: persisted.sequence,
+        updatedAt: base.createdAt,
+      }),
+    );
+    await harness.startIngestion();
+    await harness.drain();
+    expect((await harness.readProjectedThread())?.activities[0]?.payload).toMatchObject({
+      status: "inProgress",
+      detail: "Checking the remaining cases.",
+    });
+    await Effect.runPromise(
+      harness.runtimeEventRepository.append({
+        ...base,
+        type: terminal.type,
+        eventId: asEventId("claude-recovered-terminal"),
+        createdAt: "2026-10-03T10:01:01.000Z",
+        payload: terminal.payload,
+      } as ProviderRuntimeEvent),
+    );
+    await harness.drain();
+    // The turn is already settled when a queued provider completion arrives.
+    await Effect.runPromise(
+      harness.runtimeEventRepository.append({
+        ...base,
+        type: "item.completed",
+        eventId: asEventId("claude-late-reasoning-completion"),
+        itemId: asItemId("recovered-thought"),
+        createdAt: "2026-10-03T10:01:02.000Z",
+        payload: { itemType: "reasoning", status: "completed", detail: "Late completion" },
+      }),
+    );
+    await harness.drain();
+    // A still-later delta must not reopen the terminal row.
+    await Effect.runPromise(
+      harness.runtimeEventRepository.append({
+        ...base,
+        type: "content.delta",
+        eventId: asEventId("claude-late-reasoning-delta"),
+        itemId: asItemId("recovered-thought"),
+        createdAt: "2026-10-03T10:01:03.000Z",
+        payload: { streamKind: "reasoning_text", delta: "Late delta" },
+      }),
+    );
+    await harness.drain();
+    const thoughts = (await harness.readProjectedThread())?.activities.filter(
+      (activity) => activity.id === "provider-reasoning:thread-1:recovered-thought",
+    );
+    expect(thoughts).toHaveLength(1);
+    expect(thoughts?.[0]).toMatchObject({
+      createdAt: base.createdAt,
+      sequence: persisted.sequence,
+      payload: {
+        status: terminal.status,
+        detail:
+          terminal.status === "completed" ? "Late completion" : "Checking the remaining cases.",
+      },
+    });
+  });
+
+  it.each([0, 2_001])(
+    "preserves durable failed Claude reasoning with %s newer rows when ingestion receives a late completion",
+    async (newerRows) => {
+      const harness = await createHarness({ startIngestion: false });
+      const createdAt = "2026-10-03T10:02:00.000Z";
+      const activity = {
+        id: asEventId("provider-reasoning:thread-1:persisted-thought"),
+        tone: "tool" as const,
+        kind: "task.progress",
+        summary: "Reasoning trace",
+        payload: { status: "failed", detail: "Interrupted thought" },
+        turnId: asTurnId("persisted-turn"),
+        createdAt,
+        sequence: 1,
+      };
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.makeUnsafe("seed-settled-reasoning"),
+          threadId: asThreadId("thread-1"),
+          activity,
+          createdAt,
+        }),
+      );
+      const sql = await runtime!.runPromise(Effect.service(SqlClient.SqlClient));
+      if (newerRows > 0) {
+        await Effect.runPromise(sql`
+        WITH RECURSIVE newer(n) AS (
+          SELECT 1 UNION ALL SELECT n + 1 FROM newer WHERE n < ${newerRows}
+        )
+        INSERT INTO projection_thread_activities (
+          activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+        )
+        SELECT 'newer-' || n, 'thread-1', 'persisted-turn', 'info', 'runtime.warning',
+          'Later activity', '{}', n + 1, '2026-10-03T10:02:01.000Z' FROM newer
+      `);
+        expect(
+          (await harness.readProjectedThread())?.activities.some((row) => row.id === activity.id),
+        ).toBe(false);
+      }
+      const readDurableThought = () =>
+        Effect.runPromise(sql`
+      SELECT payload_json, created_at, sequence FROM projection_thread_activities
+      WHERE activity_id = ${activity.id}
+    `);
+      const persisted = await readDurableThought();
+      expect(persisted).toHaveLength(1);
+      await Effect.runPromise(
+        harness.runtimeEventRepository.append({
+          type: "item.completed",
+          provider: "claudeAgent",
+          eventId: asEventId("late-persisted-thought-completion"),
+          threadId: asThreadId("thread-1"),
+          turnId: activity.turnId,
+          itemId: asItemId("persisted-thought"),
+          createdAt: "2026-10-03T10:02:01.000Z",
+          payload: { itemType: "reasoning", status: "completed", detail: "Late success" },
+        }),
+      );
+      await harness.startIngestion();
+      await harness.drain();
+      expect(await readDurableThought()).toEqual(persisted);
+    },
+  );
+
   it("projects only completed Codex reasoning with a readable summary", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

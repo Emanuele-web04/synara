@@ -2202,7 +2202,8 @@ describe("ClaudeAdapterLive", () => {
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
 
-      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 11).pipe(
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed"),
         Stream.runCollect,
         Effect.forkChild,
       );
@@ -2222,17 +2223,113 @@ describe("ClaudeAdapterLive", () => {
       harness.query.emit({
         type: "stream_event",
         session_id: "sdk-session-tool-streams",
+        uuid: "thinking-message-start",
+        parent_tool_use_id: null,
+        event: { type: "message_start", message: { id: "thinking-message" } },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-tool-streams",
+        uuid: "thinking-block-start",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_start",
+          index: 2,
+          content_block: { type: "thinking", thinking: "First ", signature: "never-display" },
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-tool-streams",
         uuid: "stream-thinking",
         parent_tool_use_id: null,
         event: {
           type: "content_block_delta",
-          index: 0,
+          index: 2,
           delta: {
             type: "thinking_delta",
             thinking: "Let",
           },
         },
       } as unknown as SDKMessage);
+
+      for (let snapshot = 0; snapshot < 2; snapshot += 1) {
+        harness.query.emit({
+          type: "assistant",
+          session_id: "sdk-session-tool-streams",
+          uuid: `thinking-snapshot-${snapshot}`,
+          parent_tool_use_id: null,
+          message: {
+            id: "thinking-message",
+            role: "assistant",
+            content: [
+              { type: "thinking", thinking: "First Let us check", signature: "never-display" },
+            ],
+          },
+        } as unknown as SDKMessage);
+      }
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-tool-streams",
+        uuid: "thinking-stop",
+        parent_tool_use_id: null,
+        event: { type: "content_block_stop", index: 2 },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-tool-streams",
+        uuid: "second-message-start",
+        parent_tool_use_id: null,
+        event: { type: "message_start", message: { id: "second-message" } },
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-tool-streams",
+        uuid: "second-thinking",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_delta",
+          index: 2,
+          delta: { type: "thinking_delta", thinking: "Next" },
+        },
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-tool-streams",
+        uuid: "second-thinking-stop",
+        parent_tool_use_id: null,
+        event: { type: "content_block_stop", index: 2 },
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "assistant",
+        session_id: "sdk-session-tool-streams",
+        uuid: "second-thinking-snapshot",
+        parent_tool_use_id: null,
+        message: {
+          id: "second-message",
+          role: "assistant",
+          content: [{ type: "thinking", thinking: "Next revised", signature: "never-display" }],
+        },
+      } as unknown as SDKMessage);
+      for (const uuid of ["snapshot-only", "snapshot-only-repeat"]) {
+        harness.query.emit({
+          type: "assistant",
+          session_id: "sdk-session-tool-streams",
+          uuid,
+          parent_tool_use_id: null,
+          message: {
+            id: "snapshot-only-message",
+            role: "assistant",
+            content: [
+              { type: "thinking", thinking: "Snapshot only", signature: "never-display" },
+              { type: "redacted_thinking", data: "never-display" },
+            ],
+          },
+        } as unknown as SDKMessage);
+      }
 
       harness.query.emit({
         type: "stream_event",
@@ -2312,7 +2409,19 @@ describe("ClaudeAdapterLive", () => {
           "session.state.changed",
           "turn.started",
           "thread.started",
+          "item.started",
           "content.delta",
+          "content.delta",
+          "content.delta",
+          "item.completed",
+          "item.started",
+          "content.delta",
+          "item.completed",
+          "content.delta",
+          "item.completed",
+          "item.started",
+          "content.delta",
+          "item.completed",
           "item.started",
           "item.updated",
           "item.updated",
@@ -2326,11 +2435,33 @@ describe("ClaudeAdapterLive", () => {
       );
       assert.equal(reasoningDelta?.type, "content.delta");
       if (reasoningDelta?.type === "content.delta") {
-        assert.equal(reasoningDelta.payload.delta, "Let");
+        assert.equal(reasoningDelta.payload.delta, "First ");
         assert.equal(String(reasoningDelta.turnId), String(turn.turnId));
       }
 
-      const toolStarted = runtimeEvents.find((event) => event.type === "item.started");
+      const reasoningStarted = runtimeEvents.find(
+        (event) => event.type === "item.started" && event.payload.itemType === "reasoning",
+      );
+      const reasoningCompleted = runtimeEvents.find(
+        (event) => event.type === "item.completed" && event.payload.itemType === "reasoning",
+      );
+      assert.equal(reasoningDelta?.itemId, reasoningStarted?.itemId);
+      assert.equal(reasoningCompleted?.itemId, reasoningStarted?.itemId);
+      if (reasoningCompleted?.type === "item.completed") {
+        assert.equal(reasoningCompleted.payload.detail, "First Let us check");
+      }
+      const completedReasoning = runtimeEvents.filter(
+        (event): event is Extract<ProviderRuntimeEvent, { type: "item.completed" }> =>
+          event.type === "item.completed" && event.payload.itemType === "reasoning",
+      );
+      assert.deepEqual(
+        completedReasoning.map((event) => event.payload.detail),
+        ["First Let us check", "Next", "Next revised", "Snapshot only"],
+      );
+      assert.equal(new Set(completedReasoning.map((event) => event.itemId)).size, 3);
+      const toolStarted = runtimeEvents.find(
+        (event) => event.type === "item.started" && event.payload.itemType === "dynamic_tool_call",
+      );
       assert.equal(toolStarted?.type, "item.started");
       if (toolStarted?.type === "item.started") {
         assert.equal(toolStarted.payload.itemType, "dynamic_tool_call");
@@ -6030,6 +6161,20 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           } as unknown as SDKMessage);
         }
 
+        for (const attempt of [1, 2]) {
+          harness.query.emit({
+            type: "system",
+            subtype: "api_retry",
+            attempt,
+            max_retries: 3,
+            retry_delay_ms: 1500,
+            error_status: 503,
+            error: "overloaded",
+            session_id: "sdk-session-retry",
+            uuid: `retry-${attempt}`,
+          } as SDKMessage);
+        }
+
         // Two distinct unknown subtypes, each emitted twice — each must surface
         // exactly one warning (per-kind de-dup), so two warnings in total.
         for (const subtype of ["future_unknown_subtype", "another_unknown_subtype"]) {
@@ -6059,7 +6204,11 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           event.type === "runtime.warning" ? [event.payload.message] : [],
         );
 
-        assert.equal(warningMessages.length, 2);
+        assert.equal(warningMessages.length, 4);
+        assert.deepEqual(
+          warningMessages.filter((message) => message.includes("Request retry")),
+          ["Request retry 1/3 in 2s (HTTP 503).", "Request retry 2/3 in 2s (HTTP 503)."],
+        );
         assert.equal(
           warningMessages.some((message) => message.includes("thinking_tokens")),
           false,

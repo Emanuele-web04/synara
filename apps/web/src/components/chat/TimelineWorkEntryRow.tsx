@@ -449,7 +449,8 @@ function workEntryDisplayParts(workEntry: TimelineWorkEntry): {
       : rawPreview;
   const displayText = webFetchUrl
     ? describeLinkChip(webFetchUrl).label
-    : isReasoningUpdateWorkEntry(workEntry) && preview
+    : (isReasoningUpdateWorkEntry(workEntry) || workEntry.activityKind === "tool.summary") &&
+        preview
       ? preview
       : combineWorkEntryDisplayText(heading, preview);
   return { heading, preview, displayText };

@@ -13,6 +13,57 @@ import { makeActivity } from "./storeTestFixtures";
 import { isComputerToolName } from "./lib/computerToolPresentation";
 
 describe("deriveWorkLogEntries", () => {
+  it.each([false, true])(
+    "keeps the latest authentication state visible between turns (finished: %s)",
+    (finished) => {
+      const rows = deriveWorkLogEntries(
+        [
+          makeActivity({
+            id: "auth-start",
+            sequence: 1,
+            tone: "info",
+            kind: "auth.status",
+            summary: "Claude authentication started",
+            payload: { provider: "claudeAgent" },
+          }),
+          makeActivity({
+            id: "auth-error",
+            sequence: 2,
+            kind: "auth.status",
+            summary: "Claude authentication needs attention.",
+            tone: "error",
+            payload: { provider: "claudeAgent", detail: "Check your Claude account in Settings." },
+          }),
+          ...(finished
+            ? [
+                makeActivity({
+                  id: "auth-finished",
+                  sequence: 3,
+                  tone: "info",
+                  kind: "auth.status",
+                  summary: "Claude authentication finished",
+                  payload: { provider: "claudeAgent" },
+                }),
+              ]
+            : []),
+        ],
+        TurnId.makeUnsafe("turn-1"),
+        { visibleTurnIds: new Set([TurnId.makeUnsafe("turn-1")]) },
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject(
+        finished
+          ? { label: "Claude authentication finished", tone: "info" }
+          : {
+              label: "Claude authentication needs attention.",
+              detail: "Check your Claude account in Settings.",
+              tone: "error",
+            },
+      );
+      if (finished) expect(rows[0]?.detail).toBeUndefined();
+    },
+  );
+
   it("strips terminal formatting from persisted provider activity details", () => {
     const [entry] = deriveWorkLogEntries(
       [
