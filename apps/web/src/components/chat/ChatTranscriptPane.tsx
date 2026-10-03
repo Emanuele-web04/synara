@@ -56,6 +56,8 @@ interface ChatTranscriptPaneProps {
   hasMessages: boolean;
   isRevertingCheckpoint: boolean;
   isTemporaryThread?: boolean;
+  /** A new chat the server has not created yet. The server refuses history requests for it. */
+  isLocalDraft?: boolean;
   isWorking: boolean;
   workingLabel?: ComponentProps<typeof MessagesTimeline>["workingLabel"];
   followLiveOutput: boolean;
@@ -145,6 +147,7 @@ export function ChatTranscriptPane({
   hasMessages,
   isRevertingCheckpoint,
   isTemporaryThread,
+  isLocalDraft,
   isWorking,
   workingLabel,
   followLiveOutput,
@@ -239,7 +242,7 @@ export function ChatTranscriptPane({
   useEffect(() => {
     activeTrailStore.set(null);
   }, [activeThreadId, activeTrailStore]);
-  const importedHistory = useImportedHistory(activeThreadId, !isTemporaryThread);
+  const importedHistory = useImportedHistory(activeThreadId, !isTemporaryThread && !isLocalDraft);
   const olderTimelineEntries = useMemo(
     () =>
       importedHistory.messages.map((message) => ({
