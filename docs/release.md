@@ -94,7 +94,9 @@ Checklist:
 - Optional jobs stay disabled unless repository variables enable them:
   - `SYNARA_PUBLISH_CLI=1`
   - `SYNARA_FINALIZE_RELEASE=1`
-  - `SYNARA_AUTO_BETA=1` — tag the next `vX.Y.(Z+1)-beta.1` on the stable commit after each stable publish (see [BETA.md](../BETA.md)).
+- Beta cutting is on by default; set these repository variables to `0` to pause it:
+  - `SYNARA_AUTO_BETA` — tag the next `vX.Y.(Z+1)-beta.1` on the stable commit after each stable publish (see [BETA.md](../BETA.md)).
+  - `SYNARA_BETA_CADENCE` — `beta-cadence.yml` continues the beta series off `main` every six hours.
 
 ## 1) Build-only native CI validation
 

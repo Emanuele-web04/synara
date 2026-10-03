@@ -11,6 +11,9 @@ inputs:
   turbo:
     description: Persist Turbo build artifacts for jobs that use Turbo.
     default: "false"
+  install-args:
+    description: Extra flags appended to the bun install command for the resolved scope.
+    default: ""
 
 runs:
   using: composite
@@ -91,6 +94,7 @@ runs:
       env:
         ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
         WORKSPACE_SCOPE: ${{ inputs.scope }}
+        INSTALL_ARGS: ${{ inputs.install-args }}
       run: |
         # Hosted Windows checks out on D:, while Bun's default home cache is on C:.
         # Match the measured setup so package hardlinks can stay on one volume.
@@ -99,9 +103,9 @@ runs:
           echo "Bun install cache: $BUN_INSTALL_CACHE_DIR"
         fi
         case "$WORKSPACE_SCOPE" in
-          full) bun install --frozen-lockfile ;;
-          static) bun install --frozen-lockfile --filter './' --filter '@synara/scripts' ;;
-          runtime) bun install --frozen-lockfile --filter '!@synara/marketing' ;;
+          full) bun install --frozen-lockfile $INSTALL_ARGS ;;
+          static) bun install --frozen-lockfile --filter './' --filter '@synara/scripts' $INSTALL_ARGS ;;
+          runtime) bun install --frozen-lockfile --filter '!@synara/marketing' $INSTALL_ARGS ;;
         esac
 
     - name: Install Electron test runtime
