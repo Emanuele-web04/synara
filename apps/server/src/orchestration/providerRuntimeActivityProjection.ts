@@ -345,7 +345,9 @@ function buildToolProgressActivityPayload(
   return toActivityPayload({
     itemType: "mcp_tool_call" as const,
     title: "MCP tool call",
-    ...(event.payload.summary ? { detail: truncateDetail(event.payload.summary) } : {}),
+    ...(event.payload.summary
+      ? { detail: truncateDetail(event.payload.summary, MAX_ACTIVITY_DATA_STRING_CHARS) }
+      : {}),
     data: {
       ...(event.payload.toolUseId ? { toolUseId: event.payload.toolUseId } : {}),
       ...(event.payload.toolName ? { toolName: event.payload.toolName } : {}),
@@ -750,7 +752,7 @@ export function projectProviderRuntimeActivities(
             ...(requestKind ? { requestKind } : {}),
             requestType: event.payload.requestType,
             ...(event.type === "request.opened" && event.payload.detail
-              ? { detail: truncateDetail(event.payload.detail) }
+              ? { detail: truncateDetail(event.payload.detail, MAX_ACTIVITY_DATA_STRING_CHARS) }
               : {}),
             ...(permissionProfile ? { permissionProfile } : {}),
             ...toolCallPresentation,

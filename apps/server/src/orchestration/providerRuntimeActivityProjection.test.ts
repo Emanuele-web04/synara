@@ -114,6 +114,84 @@ it("keeps the full runtime warning message so the row's hover card can reveal it
   expect(cappedPayload.message.endsWith("...")).toBe(true);
 });
 
+it("keeps the full approval detail so the pending-approval panel shows the whole command", () => {
+  // The Claude adapter deliberately allows ~400 chars of command text in the
+  // approval detail; the panel can only render what the server stored, so the
+  // payload must carry the full string rather than a 180-char row-sized cut.
+  const approvalDetail =
+    `Bash: ${"git -C /workspace status && ".repeat(14)}git push origin main`.slice(0, 400);
+  const [activity] = projectProviderRuntimeActivities(
+    runtimeEvent({
+      type: "request.opened",
+      eventId: "approval-full-detail",
+      turnId: TURN_ID,
+      requestId: ApprovalRequestId.makeUnsafe("request-full-detail"),
+      payload: { requestType: "command_execution_approval", detail: approvalDetail },
+    }),
+  );
+
+  expect(activity).toMatchObject({
+    kind: "approval.requested",
+    payload: { detail: approvalDetail },
+  });
+  expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
+
+  // The shared activity-data cap still bounds oversized details.
+  const oversized = `prefix-${"x".repeat(2_100)}`;
+  const [capped] = projectProviderRuntimeActivities(
+    runtimeEvent({
+      type: "request.opened",
+      eventId: "approval-oversized-detail",
+      turnId: TURN_ID,
+      payload: { requestType: "command_execution_approval", detail: oversized },
+    }),
+  );
+  const cappedPayload = capped?.payload as { detail: string };
+  expect(cappedPayload.detail).toHaveLength(2_000);
+  expect(cappedPayload.detail.endsWith("...")).toBe(true);
+});
+
+it("keeps the full tool progress summary so the hover card can reveal it", () => {
+  // The work-log row clips the progress detail to one line with CSS `truncate`;
+  // the hover card can only show what the server stored, so the payload must
+  // carry the full summary rather than a 180-char row-sized cut.
+  const progressSummary = `mcp__long-runner__sync: fetched 1,204 records across 17 pages; last checkpoint at offset 9,216 (page 14 of 17) — resuming pagination for shard eu-west after the rate-limit window resets`;
+  expect(progressSummary.length).toBeGreaterThan(180);
+  const [activity] = projectProviderRuntimeActivities(
+    runtimeEvent({
+      type: "tool.progress",
+      eventId: "tool-progress-full-summary",
+      turnId: TURN_ID,
+      payload: {
+        toolUseId: "tool-progress-full",
+        toolName: "mcp__long-runner__sync",
+        summary: progressSummary,
+        elapsedSeconds: 4.8,
+      },
+    }),
+  );
+
+  expect(activity).toMatchObject({
+    kind: "tool.updated",
+    payload: { detail: progressSummary },
+  });
+  expect(() => decodeActivityAppendCommand(activity!)).not.toThrow();
+
+  // The shared activity-data cap still bounds oversized summaries.
+  const oversized = `prefix-${"y".repeat(2_100)}`;
+  const [capped] = projectProviderRuntimeActivities(
+    runtimeEvent({
+      type: "tool.progress",
+      eventId: "tool-progress-oversized",
+      turnId: TURN_ID,
+      payload: { toolUseId: "tool-oversized", toolName: "mcp__x", summary: oversized },
+    }),
+  );
+  const cappedPayload = capped?.payload as { detail: string };
+  expect(cappedPayload.detail).toHaveLength(2_000);
+  expect(cappedPayload.detail.endsWith("...")).toBe(true);
+});
+
 describe("projected activities satisfy the orchestration command schema", () => {
   it("omits an absent approval request id instead of emitting an explicit undefined", () => {
     expectSchemaValidActivities(
