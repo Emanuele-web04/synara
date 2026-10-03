@@ -6509,6 +6509,7 @@ export default function ChatView({
                     chatFontSizePx={settings.chatFontSizePx}
                     timestampFormat={timestampFormat}
                     messageTrailAudioSource={settings.messageTrailAudioSource}
+                    messageTrailMicrophoneId={settings.messageTrailMicrophoneId}
                     workspaceRoot={threadArtifactWorkspaceRoot ?? undefined}
                     keybindings={keybindings}
                     availableEditors={availableEditors}

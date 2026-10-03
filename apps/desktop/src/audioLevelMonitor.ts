@@ -1,9 +1,23 @@
 import * as ChildProcess from "node:child_process";
 import * as Readline from "node:readline";
 
-import type { DesktopAudioLevelSource, DesktopAudioLevelStatus } from "@synara/contracts";
+import type {
+  DesktopAudioInputDevice,
+  DesktopAudioLevelSource,
+  DesktopAudioLevelStatus,
+} from "@synara/contracts";
 
 const MAX_HELPER_STDERR_CHARS = 4_000;
+const LIST_INPUTS_TIMEOUT_MS = 5_000;
+/** Core Audio UIDs are short; anything longer is not a device the helper listed. */
+export const MAX_MICROPHONE_ID_LENGTH = 512;
+
+/** What one renderer asked for: a source and, for the microphone, which device. */
+export interface AudioLevelSubscription {
+  source: DesktopAudioLevelSource;
+  /** Core Audio UID; `null` follows the Mac's default input. */
+  microphoneId: string | null;
+}
 
 export type AudioLevelHelperMessage =
   | { type: "ready" }
@@ -53,11 +67,91 @@ export function combineAudioLevelSources(
   return null;
 }
 
-function helperArguments(source: DesktopAudioLevelSource): string[] {
+/**
+ * Combines every subscription. Sources merge as in `combineAudioLevelSources`;
+ * every renderer reads the same setting, so the newest microphone choice wins.
+ */
+export function combineAudioLevelSubscriptions(
+  subscriptions: Iterable<AudioLevelSubscription>,
+): AudioLevelSubscription | null {
+  const all = [...subscriptions];
+  const source = combineAudioLevelSources(all.map((subscription) => subscription.source));
+  if (!source) return null;
+  let microphoneId: string | null = null;
+  if (source !== "system") {
+    for (const subscription of all) {
+      if (subscription.source !== "system") microphoneId = subscription.microphoneId;
+    }
+  }
+  return { source, microphoneId };
+}
+
+function sameSubscription(
+  left: AudioLevelSubscription | null,
+  right: AudioLevelSubscription | null,
+): boolean {
+  return left?.source === right?.source && left?.microphoneId === right?.microphoneId;
+}
+
+function helperArguments({ source, microphoneId }: AudioLevelSubscription): string[] {
   const args = ["--audio-level"];
   if (source !== "microphone") args.push("--source", "system");
-  if (source !== "system") args.push("--source", "microphone");
+  if (source !== "system") {
+    args.push("--source", "microphone");
+    if (microphoneId) args.push("--input-device", microphoneId);
+  }
   return args;
+}
+
+export function parseAudioInputsMessage(output: string): DesktopAudioInputDevice[] {
+  for (const line of output.split("\n")) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== "object") continue;
+    const value = parsed as Record<string, unknown>;
+    if (value.type !== "audio-inputs" || !Array.isArray(value.devices)) continue;
+    const devices: DesktopAudioInputDevice[] = [];
+    for (const raw of value.devices as unknown[]) {
+      if (!raw || typeof raw !== "object") continue;
+      const device = raw as Record<string, unknown>;
+      if (
+        typeof device.id !== "string" ||
+        device.id.length === 0 ||
+        device.id.length > MAX_MICROPHONE_ID_LENGTH
+      ) {
+        continue;
+      }
+      devices.push({
+        id: device.id,
+        name: typeof device.name === "string" && device.name.length > 0 ? device.name : device.id,
+        bluetooth: device.bluetooth === true,
+        default: device.default === true,
+      });
+    }
+    return devices;
+  }
+  return [];
+}
+
+/** Asks the helper for the Mac's input devices. Opens no device; fails closed to an empty list. */
+export function listAudioInputDevices(
+  helperPath: string,
+  execFile: typeof ChildProcess.execFile = ChildProcess.execFile,
+): Promise<DesktopAudioInputDevice[]> {
+  return new Promise((resolve) => {
+    execFile(
+      helperPath,
+      ["--list-audio-inputs"],
+      { timeout: LIST_INPUTS_TIMEOUT_MS, encoding: "utf8" },
+      (error, stdout) => {
+        resolve(error ? [] : parseAudioInputsMessage(String(stdout)));
+      },
+    );
+  });
 }
 
 export interface AudioLevelMonitorOptions {
@@ -73,7 +167,7 @@ export interface AudioLevelMonitorOptions {
  * Owns the `--audio-level` helper process for the desktop.
  *
  * The helper only runs while some renderer has asked for levels: the first
- * subscriber spawns it, a change of source restarts it with the new sources,
+ * subscriber spawns it, a change of source or microphone restarts it,
  * and the last one leaving terminates it, so an idle app holds no audio tap or
  * microphone and shows no recording indicator. A helper that fails (old macOS,
  * missing grant) is not respawned; the next subscription change tries again.
@@ -82,8 +176,8 @@ export class AudioLevelMonitor {
   #options: AudioLevelMonitorOptions;
   #spawn: typeof ChildProcess.spawn;
   #child: ChildProcess.ChildProcess | null = null;
-  #childSource: DesktopAudioLevelSource | null = null;
-  #subscribers = new Map<number, DesktopAudioLevelSource>();
+  #childSubscription: AudioLevelSubscription | null = null;
+  #subscribers = new Map<number, AudioLevelSubscription>();
   #status: DesktopAudioLevelStatus = "off";
 
   constructor(options: AudioLevelMonitorOptions) {
@@ -103,17 +197,18 @@ export class AudioLevelMonitor {
   setSubscription(
     subscriberId: number,
     source: DesktopAudioLevelSource | null,
+    microphoneId: string | null = null,
   ): DesktopAudioLevelStatus {
-    if (source) this.#subscribers.set(subscriberId, source);
+    if (source) this.#subscribers.set(subscriberId, { source, microphoneId });
     else this.#subscribers.delete(subscriberId);
 
-    const wanted = combineAudioLevelSources(this.#subscribers.values());
+    const wanted = combineAudioLevelSubscriptions(this.#subscribers.values());
     if (!wanted) {
       this.#stopHelper();
       this.#status = "off";
       return "off";
     }
-    if (wanted !== this.#childSource) {
+    if (!sameSubscription(wanted, this.#childSubscription)) {
       this.#stopHelper();
       this.#startHelper(wanted);
     }
@@ -126,10 +221,10 @@ export class AudioLevelMonitor {
     this.#status = "off";
   }
 
-  #startHelper(source: DesktopAudioLevelSource): void {
+  #startHelper(subscription: AudioLevelSubscription): void {
     this.#status = "active";
-    this.#childSource = source;
-    const child = this.#spawn(this.#options.helperPath, helperArguments(source), {
+    this.#childSubscription = subscription;
+    const child = this.#spawn(this.#options.helperPath, helperArguments(subscription), {
       stdio: ["ignore", "pipe", "pipe"],
     });
     this.#child = child;
@@ -156,14 +251,14 @@ export class AudioLevelMonitor {
     child.once("error", () => {
       if (this.#child !== child) return;
       this.#child = null;
-      this.#childSource = null;
+      this.#childSubscription = null;
       this.#status = "unavailable";
       this.#options.onError?.("The audio level helper could not start.");
     });
     child.once("close", (code) => {
       if (this.#child !== child) return;
       this.#child = null;
-      this.#childSource = null;
+      this.#childSubscription = null;
       this.#status = "unavailable";
       // A dead reader leaves the trail at rest instead of frozen mid-swing.
       this.#options.onLevel(0);
@@ -177,7 +272,7 @@ export class AudioLevelMonitor {
   #stopHelper(): void {
     const child = this.#child;
     this.#child = null;
-    this.#childSource = null;
+    this.#childSubscription = null;
     if (!child) return;
     try {
       child.kill("SIGTERM");
