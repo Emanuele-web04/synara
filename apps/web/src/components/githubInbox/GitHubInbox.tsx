@@ -448,7 +448,7 @@ export function GitHubInbox({
     return project ? (
       <span className="relative flex size-3 shrink-0 items-center justify-center">
         <ProjectSidebarIcon
-          cwd={project.cwd}
+          projectId={project.id}
           expanded={false}
           appearance={project.appearance}
           glyphClassName="size-3"
