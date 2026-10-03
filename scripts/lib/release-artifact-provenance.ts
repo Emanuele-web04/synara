@@ -136,6 +136,23 @@ function requireSingleArtifact(
   return matches[0]!;
 }
 
+/**
+ * Artifact suffixes a Linux release leg must produce for its build target.
+ * AppImage keeps the updater feed; deb/rpm are package-manager updates only.
+ */
+export function linuxPackageArtifacts(target: string): ReadonlyArray<string> {
+  return target
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .map((entry) => {
+      if (entry !== "AppImage" && entry !== "deb" && entry !== "rpm") {
+        throw new Error(`Unsupported Linux package target: ${entry}.`);
+      }
+      return entry === "AppImage" ? ".AppImage" : `.${entry}`;
+    });
+}
+
 export async function collectReleaseArtifactDigests(
   assetsDirectory: string,
   artifactFileNames?: ReadonlyArray<string>,
@@ -378,12 +395,17 @@ function resolveSigningEvidence(
     if (input.signed) {
       throw new Error("Linux release provenance cannot claim an unsupported signing scheme.");
     }
-    requireSingleArtifact(artifacts, ".AppImage");
+    // The AppImage leg owns the update feed, so it must always ship its
+    // payload. A deb/rpm leg proves its packages instead; it has no updater.
+    const checks = linuxPackageArtifacts(input.target).map((suffix) => {
+      requireSingleArtifact(artifacts, suffix);
+      return `${suffix.slice(1)} payload present`;
+    });
     return {
       status: "not-applicable",
       scheme: "none",
       identity: null,
-      checks: ["AppImage payload present"],
+      checks,
     };
   }
 

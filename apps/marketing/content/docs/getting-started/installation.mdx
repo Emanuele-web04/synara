@@ -14,7 +14,15 @@ Download the latest stable build from the [Synara download page](/install). If t
 | macOS on Apple Silicon | Arm64 `.dmg`         |
 | macOS on Intel         | x64 `.dmg`           |
 | Windows                | x64 `.exe` installer |
-| Linux                  | x86_64 `.AppImage`   |
+| Linux (any distro)     | x86_64 `.AppImage`   |
+| Debian / Ubuntu        | x86_64 `.deb`        |
+| Fedora / RHEL          | x86_64 `.rpm`        |
+
+<Callout type="info" title="Linux updates come from one place per format">
+  The AppImage updates itself from inside Synara. The `.deb` and `.rpm` packages are updated by your
+  package manager (`apt`, `dnf`) instead, so Synara never installs over your distribution's copy.
+  Pick the format you already update; they are all built from the same release.
+</Callout>
 
 <Callout type="info" title="Synara does not include a model subscription">
   Synara uses provider runtimes installed on your machine. Install and authenticate at least one
@@ -38,10 +46,39 @@ Use the [download page](/install) or an official GitHub release. Avoid third-par
 
 Open the downloaded installer and complete the normal installation flow for your operating system.
 
-On Linux, your desktop environment may require making the AppImage executable before opening it:
+On Linux with the AppImage, your desktop environment may require making it executable before
+opening it:
 
 ```bash
 chmod +x Synara*.AppImage
+```
+
+The AppImage needs FUSE 2 to mount itself. On Arch and Omarchy, install it with:
+
+```bash
+sudo pacman -S fuse2
+```
+
+If FUSE is unavailable or you cannot install it, extract and run Synara without mounting:
+
+```bash
+./Synara*.AppImage --appimage-extract-and-run
+```
+
+</Step>
+<Step>
+
+### Install the Linux package (alternative)
+
+Instead of the AppImage, install the distribution package. It registers a launcher and desktop
+entry, which the AppImage does not.
+
+```bash
+# Debian, Ubuntu
+sudo apt install ./synara-desktop_*_amd64.deb
+
+# Fedora, RHEL
+sudo dnf install ./synara-desktop-*.x86_64.rpm
 ```
 
 </Step>
